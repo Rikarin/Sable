@@ -1,32 +1,7 @@
 using System.Collections.Immutable;
+using Sable.Syntax.Green;
 
 namespace Sable.Syntax;
-
-/// <summary>
-/// A span of non-token source text attached to an adjacent token. Trivia is
-/// retained rather than discarded so that the full-fidelity round-trip
-/// invariant holds: concatenating <see cref="SyntaxToken.ToFullString"/> over
-/// every token of a file reproduces that file byte for byte.
-/// </summary>
-public sealed class SyntaxTrivia(SyntaxKind kind, string text, int position)
-{
-    public SyntaxKind Kind { get; } = kind;
-    public string Text { get; } = text;
-    public int Position { get; } = position;
-
-    public int Width => Text.Length;
-    public TextSpan Span => new(Position, Width);
-
-    public bool IsComment => Kind is SyntaxKind.LineCommentTrivia
-        or SyntaxKind.BlockCommentTrivia
-        or SyntaxKind.DocCommentTrivia
-        or SyntaxKind.ModuleDocCommentTrivia;
-
-    public bool IsDocumentation => Kind is SyntaxKind.DocCommentTrivia
-        or SyntaxKind.ModuleDocCommentTrivia;
-
-    public override string ToString() => Text;
-}
 
 /// <summary>The kind of a segment inside an interpolated string literal.</summary>
 public enum StringPartKind { Literal, Interpolation }
@@ -35,6 +10,11 @@ public enum StringPartKind { Literal, Interpolation }
 /// One piece of a string literal: either cooked literal text, or the source
 /// span of an interpolation hole, which the parser re-enters recursively.
 /// </summary>
+/// <remarks>
+/// Inside a green token the <see cref="Span"/> is relative to the start of the
+/// token's text. <see cref="SyntaxToken.Parts"/> returns copies whose spans
+/// have been offset to absolute positions.
+/// </remarks>
 public sealed record StringPart(StringPartKind Kind, string Text, TextSpan Span)
 {
     public override string ToString() =>
@@ -42,75 +22,92 @@ public sealed record StringPart(StringPartKind Kind, string Text, TextSpan Span)
 }
 
 /// <summary>
-/// A lexical token together with its attached trivia.
+/// A lexical token: a red facade over a green token, adding a parent pointer
+/// and an absolute position.
 /// </summary>
 /// <remarks>
-/// <para>Positions: <see cref="FullSpan"/> covers leading trivia, the token text
-/// and trailing trivia. <see cref="Span"/> covers only the token text, and is
-/// what diagnostics point at.</para>
+/// <para><see cref="FullSpan"/> covers leading trivia, the token text and
+/// trailing trivia. <see cref="Span"/> covers only the token text, and is what
+/// diagnostics point at.</para>
 /// <para><see cref="TerminatesStatement"/> implements the newline rule of
 /// spec/lexical.md §4: it is set on the last token of a statement, whether that
 /// statement ended at a newline or at an explicit semicolon.</para>
 /// </remarks>
-public sealed class SyntaxToken
+public readonly struct SyntaxToken : IEquatable<SyntaxToken>
 {
-    public SyntaxKind Kind { get; }
+    private readonly GreenToken? _green;
+
+    internal SyntaxToken(GreenToken? green, SyntaxNode? parent, int position)
+    {
+        _green = green;
+        Parent = parent;
+        Position = position;
+    }
+
+    internal GreenToken? Green => _green;
+
+    /// <summary>The node this token belongs to, or null for a free-standing token.</summary>
+    public SyntaxNode? Parent { get; }
+
+    /// <summary>Absolute start of the token including its leading trivia.</summary>
+    public int Position { get; }
+
+    public SyntaxKind Kind => _green?.Kind ?? SyntaxKind.None;
 
     /// <summary>The exact source text of the token, excluding trivia.</summary>
-    public string Text { get; }
+    public string Text => _green?.Text ?? string.Empty;
 
     /// <summary>
     /// The decoded value: <c>ulong</c> for integers, <c>double</c> for floats,
-    /// <c>Rune</c> for chars, <c>string</c> for non-interpolated strings,
-    /// <c>bool</c> for <c>true</c>/<c>false</c>, otherwise <see langword="null"/>.
+    /// <c>Rune</c> for chars, <c>string</c> for non-interpolated strings and
+    /// escaped identifiers, <c>bool</c> for <c>true</c>/<c>false</c>, otherwise
+    /// <see langword="null"/>.
     /// </summary>
-    public object? Value { get; }
+    public object? Value => _green?.Value;
 
-    /// <summary>Segments of an interpolated string; empty for every other token.</summary>
-    public ImmutableArray<StringPart> Parts { get; }
+    public bool TerminatesStatement => _green?.TerminatesStatement ?? false;
 
-    public ImmutableArray<SyntaxTrivia> LeadingTrivia { get; }
-    public ImmutableArray<SyntaxTrivia> TrailingTrivia { get; }
+    /// <summary>True when this token was synthesised by error recovery.</summary>
+    public bool IsMissing => _green?.IsMissing ?? false;
 
-    /// <summary>Start of the token text itself (after leading trivia).</summary>
-    public int Position { get; }
+    /// <summary>True when there is no underlying token at all.</summary>
+    public bool IsNone => _green is null;
 
-    /// <summary>True when a statement break occurs immediately after this token.</summary>
-    public bool TerminatesStatement { get; internal set; }
+    public int Width => _green?.Text.Length ?? 0;
+    public int FullWidth => _green?.FullWidth ?? 0;
 
-    /// <summary>True when this token is synthesised by error recovery.</summary>
-    public bool IsMissing { get; init; }
+    /// <summary>Absolute start of the token text, after any leading trivia.</summary>
+    public int SpanStart => Position + (_green?.LeadingTriviaWidth ?? 0);
 
-    public SyntaxToken(
-        SyntaxKind kind,
-        string text,
-        int position,
-        ImmutableArray<SyntaxTrivia> leadingTrivia,
-        ImmutableArray<SyntaxTrivia> trailingTrivia,
-        object? value = null,
-        ImmutableArray<StringPart> parts = default)
+    public TextSpan Span => new(SpanStart, Width);
+    public TextSpan FullSpan => new(Position, FullWidth);
+
+    public int FullStart => Position;
+    public int FullEnd => Position + FullWidth;
+
+    public SyntaxTriviaList LeadingTrivia =>
+        _green is null ? default : new SyntaxTriviaList(_green.Leading, Position);
+
+    public SyntaxTriviaList TrailingTrivia =>
+        _green is null ? default : new SyntaxTriviaList(_green.Trailing, SpanStart + Width);
+
+    /// <summary>Segments of an interpolated string, with absolute spans.</summary>
+    public ImmutableArray<StringPart> Parts
     {
-        Kind = kind;
-        Text = text;
-        Position = position;
-        LeadingTrivia = leadingTrivia;
-        TrailingTrivia = trailingTrivia;
-        Value = value;
-        Parts = parts.IsDefault ? [] : parts;
+        get
+        {
+            if (_green is null || _green.Parts.IsEmpty) return [];
+            var start = SpanStart;
+            var builder = ImmutableArray.CreateBuilder<StringPart>(_green.Parts.Length);
+            foreach (var part in _green.Parts)
+            {
+                builder.Add(part.Kind == StringPartKind.Interpolation
+                    ? part with { Span = new TextSpan(part.Span.Start + start, part.Span.Length) }
+                    : part);
+            }
+            return builder.MoveToImmutable();
+        }
     }
-
-    public int Width => Text.Length;
-    public TextSpan Span => new(Position, Width);
-
-    public int FullStart =>
-        LeadingTrivia.Length > 0 ? LeadingTrivia[0].Position : Position;
-
-    public int FullEnd =>
-        TrailingTrivia.Length > 0
-            ? TrailingTrivia[^1].Position + TrailingTrivia[^1].Width
-            : Position + Width;
-
-    public TextSpan FullSpan => TextSpan.FromBounds(FullStart, FullEnd);
 
     public bool IsKeyword => SyntaxFacts.IsKeyword(Kind);
     public bool IsReservedKeyword => SyntaxFacts.IsReservedKeyword(Kind);
@@ -118,28 +115,24 @@ public sealed class SyntaxToken
     public bool IsLiteral => SyntaxFacts.IsLiteral(Kind);
 
     /// <summary>True when a newline appears in this token's leading trivia.</summary>
-    public bool HasLeadingNewLine
-    {
-        get
-        {
-            foreach (var t in LeadingTrivia)
-                if (t.Kind == SyntaxKind.NewLineTrivia) return true;
-            return false;
-        }
-    }
+    public bool HasLeadingNewLine => LeadingTrivia.Any(SyntaxKind.NewLineTrivia);
+
+    /// <summary>True when a newline appears in this token's trailing trivia.</summary>
+    public bool HasTrailingNewLine => TrailingTrivia.Any(SyntaxKind.NewLineTrivia);
 
     /// <summary>The token text alone.</summary>
     public override string ToString() => Text;
 
     /// <summary>Leading trivia, token text and trailing trivia, concatenated.</summary>
-    public string ToFullString()
-    {
-        if (LeadingTrivia.IsEmpty && TrailingTrivia.IsEmpty) return Text;
+    public string ToFullString() => _green?.ToFullString() ?? string.Empty;
 
-        var builder = new System.Text.StringBuilder(Text.Length + 16);
-        foreach (var t in LeadingTrivia) builder.Append(t.Text);
-        builder.Append(Text);
-        foreach (var t in TrailingTrivia) builder.Append(t.Text);
-        return builder.ToString();
-    }
+    public bool Equals(SyntaxToken other) =>
+        ReferenceEquals(_green, other._green)
+        && ReferenceEquals(Parent, other.Parent)
+        && Position == other.Position;
+
+    public override bool Equals(object? obj) => obj is SyntaxToken other && Equals(other);
+    public override int GetHashCode() => HashCode.Combine(_green, Parent, Position);
+    public static bool operator ==(SyntaxToken left, SyntaxToken right) => left.Equals(right);
+    public static bool operator !=(SyntaxToken left, SyntaxToken right) => !left.Equals(right);
 }

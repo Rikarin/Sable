@@ -11,5 +11,6 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../../src/Sable.Syntax/Sable.Syntax.csproj" />
+    <ProjectReference Include="../../tools/Sable.Syntax.Generator/Sable.Syntax.Generator.csproj" />
   </ItemGroup>
 </Project>

@@ -38,6 +38,14 @@ public enum ErrorCode
     ERR_InvalidDigitForBase = 22,
     ERR_MultilineDelimiterMustBeOnOwnLine = 23,
     ERR_InsufficientIndentation = 24,
+
+    // ---- Syntactic (S1000-S1999) -----------------------------------------
+    ERR_UnexpectedToken = 1000,
+    ERR_ExpectedToken = 1001,
+    ERR_ExpectedExpression = 1002,
+    ERR_ExpectedType = 1003,
+    ERR_ExpectedIdentifier = 1004,
+    ERR_UnexpectedTrailingTokens = 1005,
 }
 
 public enum DiagnosticSeverity { Hidden, Info, Warning, Error }

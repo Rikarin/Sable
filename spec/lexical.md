@@ -80,7 +80,8 @@ guard      if         import     in         init       inout      internal
 is         lazy       let        match      module     move       mutating
 none       nonisolated nonmutating open     operator   out        override
 package    postfix    precondition prefix   private    protocol   public
-region     repeat     required   rethrows   return     sealed     self
+ref        region     repeat     required   rethrows   return     sealed
+self
 Self       some       static     struct     subscript  super      switch
 throw      throws     true       try        typealias  union      unowned
 unsafe     using      var        weak       where      while

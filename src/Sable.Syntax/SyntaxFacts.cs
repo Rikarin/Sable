@@ -68,6 +68,7 @@ public static class SyntaxFacts
             ["prefix"] = SyntaxKind.PrefixKeyword,
             ["private"] = SyntaxKind.PrivateKeyword,
             ["protocol"] = SyntaxKind.ProtocolKeyword,
+            ["ref"] = SyntaxKind.RefKeyword,
             ["public"] = SyntaxKind.PublicKeyword,
             ["region"] = SyntaxKind.RegionKeyword,
             ["repeat"] = SyntaxKind.RepeatKeyword,
@@ -124,7 +125,7 @@ public static class SyntaxFacts
         IsReservedKeyword(kind) || IsContextualKeyword(kind);
 
     public static bool IsReservedKeyword(SyntaxKind kind) =>
-        kind >= SyntaxKind.AbstractKeyword && kind <= SyntaxKind.WhileKeyword;
+        kind >= SyntaxKind.AbstractKeyword && kind <= SyntaxKind.RefKeyword;
 
     public static bool IsContextualKeyword(SyntaxKind kind) =>
         kind >= SyntaxKind.AssociatedtypeKeyword && kind <= SyntaxKind.UncheckedKeyword;

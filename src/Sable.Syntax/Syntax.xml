@@ -1,0 +1,395 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The syntax node schema. `tools/SyntaxGen` turns this into
+  src/Sable.Syntax/Generated/Syntax.g.cs: a green class, a red class and a
+  visitor method for every node.
+
+  Field Type is one of:
+    Token                 a SyntaxToken slot
+    <NodeName>            a child node slot
+    List:<NodeName>       a SyntaxList<T> slot
+    SeparatedList:<Name>  a SeparatedSyntaxList<T> slot
+
+  Optional="true" makes the slot nullable: the parser may pass null and the red
+  property is nullable (for tokens, a default SyntaxToken whose IsNone is true).
+
+  Every Kind must exist in SyntaxKind.cs; the generator checks.
+-->
+<Syntax>
+
+  <Abstract Name="ExpressionSyntax" Base="SyntaxNode"
+            Doc="Any expression." />
+  <Abstract Name="SimpleNameSyntax" Base="ExpressionSyntax"
+            Doc="An identifier used as an expression, with or without type arguments." />
+  <Abstract Name="TypeSyntax" Base="SyntaxNode"
+            Doc="Any type reference." />
+
+  <!-- ==================================================================== -->
+  <!-- Types                                                                -->
+  <!-- ==================================================================== -->
+
+  <Node Name="SimpleNameTypeSyntax" Base="TypeSyntax" Kind="SimpleNameType"
+        Doc="A type name, optionally with type arguments: `Int`, `List&lt;T&gt;`.">
+    <Field Name="Identifier" Type="Token" />
+    <Field Name="TypeArgumentList" Type="TypeArgumentListSyntax" Optional="true" />
+  </Node>
+
+  <Node Name="QualifiedNameSyntax" Base="TypeSyntax" Kind="QualifiedName"
+        Doc="A dotted type name: `Sable.Collections.List&lt;T&gt;`.">
+    <Field Name="Left" Type="TypeSyntax" />
+    <Field Name="DotToken" Type="Token" />
+    <Field Name="Right" Type="SimpleNameTypeSyntax" />
+  </Node>
+
+  <Node Name="TypeArgumentListSyntax" Base="SyntaxNode" Kind="TypeArgumentList"
+        Doc="A generic argument list: `&lt;Int, String&gt;`.">
+    <Field Name="LessThanToken" Type="Token" />
+    <Field Name="Arguments" Type="SeparatedList:TypeSyntax" />
+    <Field Name="GreaterThanToken" Type="Token" />
+  </Node>
+
+  <Node Name="OptionalTypeSyntax" Base="TypeSyntax" Kind="OptionalType"
+        Doc="An optional type: `T?`.">
+    <Field Name="ElementType" Type="TypeSyntax" />
+    <Field Name="QuestionToken" Type="Token" />
+  </Node>
+
+  <Node Name="ImplicitlyUnwrappedTypeSyntax" Base="TypeSyntax" Kind="ImplicitlyUnwrappedType"
+        Doc="An implicitly unwrapped optional, for interop only: `T!`.">
+    <Field Name="ElementType" Type="TypeSyntax" />
+    <Field Name="BangToken" Type="Token" />
+  </Node>
+
+  <Node Name="ReferenceTypeSyntax" Base="TypeSyntax" Kind="ReferenceType"
+        Doc="A reference type: `T&amp;`, `T&amp;&lt;u32&gt;`, `T&amp;&lt;u16 in pool&gt;?`.">
+    <Field Name="ElementType" Type="TypeSyntax" />
+    <Field Name="AmpersandToken" Type="Token" />
+    <Field Name="RelativeSpec" Type="RelativeReferenceSpecSyntax" Optional="true" />
+    <Field Name="QuestionToken" Type="Token" Optional="true" />
+  </Node>
+
+  <Node Name="RelativeReferenceSpecSyntax" Base="SyntaxNode" Kind="RelativeReferenceSpec"
+        Doc="The width and pool of a relative reference: `&lt;u32 in pool&gt;`.">
+    <Field Name="LessThanToken" Type="Token" />
+    <Field Name="WidthToken" Type="Token" />
+    <Field Name="InKeyword" Type="Token" Optional="true" />
+    <Field Name="PoolToken" Type="Token" Optional="true" />
+    <Field Name="GreaterThanToken" Type="Token" />
+  </Node>
+
+  <Node Name="FixedSizeArrayTypeSyntax" Base="TypeSyntax" Kind="FixedSizeArrayType"
+        Doc="`T[]` or `T[k]`: size fixed at construction, or at compile time.">
+    <Field Name="ElementType" Type="TypeSyntax" />
+    <Field Name="OpenBracketToken" Type="Token" />
+    <Field Name="Size" Type="ExpressionSyntax" Optional="true" />
+    <Field Name="CloseBracketToken" Type="Token" />
+  </Node>
+
+  <Node Name="InlineArrayTypeSyntax" Base="TypeSyntax" Kind="InlineArrayType"
+        Doc="`T[..]` or `T[..k]`: inline capacity, resizable within it.">
+    <Field Name="ElementType" Type="TypeSyntax" />
+    <Field Name="OpenBracketToken" Type="Token" />
+    <Field Name="DotDotToken" Type="Token" />
+    <Field Name="Capacity" Type="ExpressionSyntax" Optional="true" />
+    <Field Name="CloseBracketToken" Type="Token" />
+  </Node>
+
+  <Node Name="GrowArrayTypeSyntax" Base="TypeSyntax" Kind="GrowArrayType"
+        Doc="`T[&gt;..]` grow-only, or `T[&gt;..&lt;]` grow and shrink.">
+    <Field Name="ElementType" Type="TypeSyntax" />
+    <Field Name="OpenBracketToken" Type="Token" />
+    <Field Name="GreaterThanToken" Type="Token" />
+    <!-- '..' for grow-only, '..&lt;' for grow-and-shrink: the lexer produces
+         '..&lt;' as a single token, so the form is read from this token's kind. -->
+    <Field Name="RangeToken" Type="Token" />
+    <Field Name="CloseBracketToken" Type="Token" />
+  </Node>
+
+  <Node Name="SliceTypeSyntax" Base="TypeSyntax" Kind="SliceType"
+        Doc="`T[:]`: a non-copying slice view.">
+    <Field Name="ElementType" Type="TypeSyntax" />
+    <Field Name="OpenBracketToken" Type="Token" />
+    <Field Name="ColonToken" Type="Token" />
+    <Field Name="CloseBracketToken" Type="Token" />
+  </Node>
+
+  <Node Name="DictionaryTypeSyntax" Base="TypeSyntax" Kind="DictionaryType"
+        Doc="`[K: V]`.">
+    <Field Name="OpenBracketToken" Type="Token" />
+    <Field Name="KeyType" Type="TypeSyntax" />
+    <Field Name="ColonToken" Type="Token" />
+    <Field Name="ValueType" Type="TypeSyntax" />
+    <Field Name="CloseBracketToken" Type="Token" />
+  </Node>
+
+  <Node Name="TupleTypeSyntax" Base="TypeSyntax" Kind="TupleType"
+        Doc="`(A, B)` or `(label: A, b: B)`; also a function type's parameter list.">
+    <Field Name="OpenParenToken" Type="Token" />
+    <Field Name="Elements" Type="SeparatedList:TupleTypeElementSyntax" />
+    <Field Name="CloseParenToken" Type="Token" />
+  </Node>
+
+  <Node Name="TupleTypeElementSyntax" Base="SyntaxNode" Kind="TupleTypeElement"
+        Doc="One element of a tuple type, with an optional label.">
+    <Field Name="NameToken" Type="Token" Optional="true" />
+    <Field Name="ColonToken" Type="Token" Optional="true" />
+    <Field Name="Type" Type="TypeSyntax" />
+  </Node>
+
+  <Node Name="FunctionTypeSyntax" Base="TypeSyntax" Kind="FunctionType"
+        Doc="`(A, B) throws(E) -&gt; C`, optionally `async`.">
+    <Field Name="AsyncKeyword" Type="Token" Optional="true" />
+    <Field Name="Parameters" Type="TupleTypeSyntax" />
+    <Field Name="ThrowsSpec" Type="ThrowsSpecSyntax" Optional="true" />
+    <Field Name="ArrowToken" Type="Token" />
+    <Field Name="ReturnType" Type="TypeSyntax" />
+  </Node>
+
+  <Node Name="ThrowsSpecSyntax" Base="SyntaxNode" Kind="ThrowsSpec"
+        Doc="`throws`, `throws(E)` or `rethrows`.">
+    <Field Name="ThrowsKeyword" Type="Token" />
+    <Field Name="OpenParenToken" Type="Token" Optional="true" />
+    <Field Name="ErrorType" Type="TypeSyntax" Optional="true" />
+    <Field Name="CloseParenToken" Type="Token" Optional="true" />
+  </Node>
+
+  <Node Name="OpaqueTypeSyntax" Base="TypeSyntax" Kind="OpaqueType"
+        Doc="`some P`: monomorphised, statically dispatched.">
+    <Field Name="SomeKeyword" Type="Token" />
+    <Field Name="ConstraintType" Type="TypeSyntax" />
+  </Node>
+
+  <Node Name="ExistentialTypeSyntax" Base="TypeSyntax" Kind="ExistentialType"
+        Doc="`any P`: boxed, dynamically dispatched through a witness table.">
+    <Field Name="AnyKeyword" Type="Token" />
+    <Field Name="ConstraintType" Type="TypeSyntax" />
+  </Node>
+
+  <Node Name="RefTypeSyntax" Base="TypeSyntax" Kind="RefType"
+        Doc="`ref T`: a borrowed reference whose root is inferred.">
+    <Field Name="RefKeyword" Type="Token" />
+    <Field Name="ElementType" Type="TypeSyntax" />
+  </Node>
+
+  <Node Name="CompositionTypeSyntax" Base="TypeSyntax" Kind="CompositionType"
+        Doc="`P &amp; Q`: protocol composition.">
+    <Field Name="Left" Type="TypeSyntax" />
+    <Field Name="AmpersandToken" Type="Token" />
+    <Field Name="Right" Type="TypeSyntax" />
+  </Node>
+
+  <Node Name="UnionTypeSyntax" Base="TypeSyntax" Kind="UnionType"
+        Doc="`A | B`: a structural union.">
+    <Field Name="Left" Type="TypeSyntax" />
+    <Field Name="PipeToken" Type="Token" />
+    <Field Name="Right" Type="TypeSyntax" />
+  </Node>
+
+  <Node Name="SelfTypeSyntax" Base="TypeSyntax" Kind="SelfType"
+        Doc="`Self`: the conforming type inside a protocol or extension.">
+    <Field Name="SelfKeyword" Type="Token" />
+  </Node>
+
+  <Node Name="ParenthesizedTypeSyntax" Base="TypeSyntax" Kind="ParenthesizedType"
+        Doc="`(T)`.">
+    <Field Name="OpenParenToken" Type="Token" />
+    <Field Name="Type" Type="TypeSyntax" />
+    <Field Name="CloseParenToken" Type="Token" />
+  </Node>
+
+  <!-- ==================================================================== -->
+  <!-- Expressions                                                          -->
+  <!-- ==================================================================== -->
+
+  <Node Name="LiteralExpressionSyntax" Base="ExpressionSyntax" Kind="LiteralExpression"
+        Doc="A literal. Interpolated strings are a single token for now; their holes are available through SyntaxToken.Parts.">
+    <Field Name="Token" Type="Token" />
+  </Node>
+
+  <Node Name="IdentifierNameSyntax" Base="SimpleNameSyntax" Kind="IdentifierName"
+        Doc="A bare identifier used as an expression.">
+    <Field Name="Identifier" Type="Token" />
+  </Node>
+
+  <Node Name="GenericNameSyntax" Base="SimpleNameSyntax" Kind="GenericName"
+        Doc="An identifier with explicit type arguments: `max&lt;Int&gt;`.">
+    <Field Name="Identifier" Type="Token" />
+    <Field Name="TypeArgumentList" Type="TypeArgumentListSyntax" />
+  </Node>
+
+  <Node Name="SelfExpressionSyntax" Base="ExpressionSyntax" Kind="SelfExpression">
+    <Field Name="SelfKeyword" Type="Token" />
+  </Node>
+
+  <Node Name="SuperExpressionSyntax" Base="ExpressionSyntax" Kind="SuperExpression">
+    <Field Name="SuperKeyword" Type="Token" />
+  </Node>
+
+  <Node Name="MemberAccessExpressionSyntax" Base="ExpressionSyntax" Kind="MemberAccessExpression"
+        Doc="`a.b` or `a?.b`; the operator token says which.">
+    <Field Name="Expression" Type="ExpressionSyntax" />
+    <Field Name="OperatorToken" Type="Token" />
+    <Field Name="Name" Type="SimpleNameSyntax" />
+  </Node>
+
+  <Node Name="ImplicitMemberAccessExpressionSyntax" Base="ExpressionSyntax"
+        Kind="ImplicitMemberAccessExpression"
+        Doc="`.Circle`: a member looked up in the contextual type.">
+    <Field Name="DotToken" Type="Token" />
+    <Field Name="Name" Type="SimpleNameSyntax" />
+  </Node>
+
+  <Node Name="InvocationExpressionSyntax" Base="ExpressionSyntax" Kind="InvocationExpression"
+        Doc="`f(x)` or `f?(x)`.">
+    <Field Name="Expression" Type="ExpressionSyntax" />
+    <Field Name="QuestionToken" Type="Token" Optional="true" />
+    <Field Name="ArgumentList" Type="ArgumentListSyntax" />
+  </Node>
+
+  <Node Name="ArgumentListSyntax" Base="SyntaxNode" Kind="ArgumentList"
+        Doc="A parenthesised or bracketed argument list.">
+    <Field Name="OpenToken" Type="Token" />
+    <Field Name="Arguments" Type="SeparatedList:ArgumentSyntax" />
+    <Field Name="CloseToken" Type="Token" />
+  </Node>
+
+  <Node Name="ArgumentSyntax" Base="SyntaxNode" Kind="Argument"
+        Doc="One argument, with an optional label and an optional `&amp;`, `out` or `move`.">
+    <Field Name="NameToken" Type="Token" Optional="true" />
+    <Field Name="ColonToken" Type="Token" Optional="true" />
+    <Field Name="ModifierToken" Type="Token" Optional="true" />
+    <Field Name="Expression" Type="ExpressionSyntax" />
+  </Node>
+
+  <Node Name="ElementAccessExpressionSyntax" Base="ExpressionSyntax" Kind="ElementAccessExpression"
+        Doc="`a[i]` or `a?[i]`.">
+    <Field Name="Expression" Type="ExpressionSyntax" />
+    <Field Name="QuestionToken" Type="Token" Optional="true" />
+    <Field Name="ArgumentList" Type="ArgumentListSyntax" />
+  </Node>
+
+  <Node Name="PrefixUnaryExpressionSyntax" Base="ExpressionSyntax" Kind="PrefixUnaryExpression"
+        Doc="`-x`, `!x`, `~x`, `&amp;x`, `await x`, `move x`.">
+    <Field Name="OperatorToken" Type="Token" />
+    <Field Name="Operand" Type="ExpressionSyntax" />
+  </Node>
+
+  <Node Name="PostfixUnaryExpressionSyntax" Base="ExpressionSyntax" Kind="PostfixUnaryExpression"
+        Doc="`x!`: force-unwrap.">
+    <Field Name="Operand" Type="ExpressionSyntax" />
+    <Field Name="OperatorToken" Type="Token" />
+  </Node>
+
+  <Node Name="TryExpressionSyntax" Base="ExpressionSyntax" Kind="TryExpression"
+        Doc="`try e`, `try? e` or `try! e`.">
+    <Field Name="TryKeyword" Type="Token" />
+    <Field Name="QuestionOrBangToken" Type="Token" Optional="true" />
+    <Field Name="Expression" Type="ExpressionSyntax" />
+  </Node>
+
+  <Node Name="BinaryExpressionSyntax" Base="ExpressionSyntax" Kind="BinaryExpression">
+    <Field Name="Left" Type="ExpressionSyntax" />
+    <Field Name="OperatorToken" Type="Token" />
+    <Field Name="Right" Type="ExpressionSyntax" />
+  </Node>
+
+  <Node Name="AssignmentExpressionSyntax" Base="ExpressionSyntax" Kind="AssignmentExpression">
+    <Field Name="Left" Type="ExpressionSyntax" />
+    <Field Name="OperatorToken" Type="Token" />
+    <Field Name="Right" Type="ExpressionSyntax" />
+  </Node>
+
+  <Node Name="ConditionalExpressionSyntax" Base="ExpressionSyntax" Kind="ConditionalExpression"
+        Doc="`c ? a : b`.">
+    <Field Name="Condition" Type="ExpressionSyntax" />
+    <Field Name="QuestionToken" Type="Token" />
+    <Field Name="WhenTrue" Type="ExpressionSyntax" />
+    <Field Name="ColonToken" Type="Token" />
+    <Field Name="WhenFalse" Type="ExpressionSyntax" />
+  </Node>
+
+  <Node Name="RangeExpressionSyntax" Base="ExpressionSyntax" Kind="RangeExpression"
+        Doc="`a..&lt;b`, `a...b`, and the partial forms `..&lt;b` and `a...`.">
+    <Field Name="Left" Type="ExpressionSyntax" Optional="true" />
+    <Field Name="OperatorToken" Type="Token" />
+    <Field Name="Right" Type="ExpressionSyntax" Optional="true" />
+  </Node>
+
+  <Node Name="CastExpressionSyntax" Base="ExpressionSyntax" Kind="CastExpression"
+        Doc="`x as T`, `x as? T`, `x as! T`, `x unchecked as T`.">
+    <Field Name="Expression" Type="ExpressionSyntax" />
+    <Field Name="UncheckedKeyword" Type="Token" Optional="true" />
+    <Field Name="AsKeyword" Type="Token" />
+    <Field Name="QuestionOrBangToken" Type="Token" Optional="true" />
+    <Field Name="Type" Type="TypeSyntax" />
+  </Node>
+
+  <Node Name="TypeTestExpressionSyntax" Base="ExpressionSyntax" Kind="TypeTestExpression"
+        Doc="`x is T`.">
+    <Field Name="Expression" Type="ExpressionSyntax" />
+    <Field Name="IsKeyword" Type="Token" />
+    <Field Name="Type" Type="TypeSyntax" />
+  </Node>
+
+  <Node Name="TupleExpressionSyntax" Base="ExpressionSyntax" Kind="TupleExpression"
+        Doc="`(a, b)` or `(q: a, r: b)`.">
+    <Field Name="OpenParenToken" Type="Token" />
+    <Field Name="Elements" Type="SeparatedList:TupleElementSyntax" />
+    <Field Name="CloseParenToken" Type="Token" />
+  </Node>
+
+  <Node Name="TupleElementSyntax" Base="SyntaxNode" Kind="TupleElement">
+    <Field Name="NameToken" Type="Token" Optional="true" />
+    <Field Name="ColonToken" Type="Token" Optional="true" />
+    <Field Name="Expression" Type="ExpressionSyntax" />
+  </Node>
+
+  <Node Name="ParenthesizedExpressionSyntax" Base="ExpressionSyntax" Kind="ParenthesizedExpression">
+    <Field Name="OpenParenToken" Type="Token" />
+    <Field Name="Expression" Type="ExpressionSyntax" />
+    <Field Name="CloseParenToken" Type="Token" />
+  </Node>
+
+  <Node Name="ArrayExpressionSyntax" Base="ExpressionSyntax" Kind="ArrayExpression"
+        Doc="`[1, 2, 3]`.">
+    <Field Name="OpenBracketToken" Type="Token" />
+    <Field Name="Elements" Type="SeparatedList:ExpressionSyntax" />
+    <Field Name="CloseBracketToken" Type="Token" />
+  </Node>
+
+  <Node Name="DictionaryExpressionSyntax" Base="ExpressionSyntax" Kind="DictionaryExpression"
+        Doc="`[&quot;a&quot;: 1]`, or `[:]` for the empty dictionary.">
+    <Field Name="OpenBracketToken" Type="Token" />
+    <Field Name="ColonToken" Type="Token" Optional="true" />
+    <Field Name="Entries" Type="SeparatedList:KeyValuePairSyntax" />
+    <Field Name="CloseBracketToken" Type="Token" />
+  </Node>
+
+  <Node Name="KeyValuePairSyntax" Base="SyntaxNode" Kind="KeyValuePair">
+    <Field Name="Key" Type="ExpressionSyntax" />
+    <Field Name="ColonToken" Type="Token" />
+    <Field Name="Value" Type="ExpressionSyntax" />
+  </Node>
+
+  <Node Name="RecordExpressionSyntax" Base="ExpressionSyntax" Kind="RecordExpression"
+        Doc="`Point { x: 1, y: 2 }`.">
+    <Field Name="Type" Type="TypeSyntax" />
+    <Field Name="OpenBraceToken" Type="Token" />
+    <Field Name="Fields" Type="SeparatedList:FieldInitializerSyntax" />
+    <Field Name="CloseBraceToken" Type="Token" />
+  </Node>
+
+  <Node Name="FieldInitializerSyntax" Base="SyntaxNode" Kind="FieldInitializer"
+        Doc="`x: 1`, or the shorthand `x`.">
+    <Field Name="NameToken" Type="Token" />
+    <Field Name="ColonToken" Type="Token" Optional="true" />
+    <Field Name="Expression" Type="ExpressionSyntax" Optional="true" />
+  </Node>
+
+  <Node Name="BuiltinExpressionSyntax" Base="ExpressionSyntax" Kind="BuiltinExpression"
+        Doc="A compiler builtin: `#file`, `#line`, `#column`, `#function`, `#module`.">
+    <Field Name="HashToken" Type="Token" />
+    <Field Name="NameToken" Type="Token" />
+  </Node>
+
+</Syntax>

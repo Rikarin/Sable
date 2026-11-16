@@ -2,6 +2,9 @@
   <Folder Name="/src/">
     <Project Path="src/Sable.Syntax/Sable.Syntax.csproj" />
   </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/Sable.Syntax.Generator/Sable.Syntax.Generator.csproj" />
+  </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Sable.Syntax.Tests/Sable.Syntax.Tests.csproj" />
   </Folder>

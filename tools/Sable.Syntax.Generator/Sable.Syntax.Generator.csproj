@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>Sable.Syntax.Generator</RootNamespace>
+    <AssemblyName>Sable.Syntax.Generator</AssemblyName>
+  </PropertyGroup>
+</Project>

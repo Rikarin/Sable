@@ -54,8 +54,18 @@ docs/      design documents
 spec/      the language specification
 examples/  sample programs, also used as the lexer test corpus
 src/       the compiler, written in C# (see docs/04 for why)
+tools/     build-time tooling (the syntax node generator)
 tests/     the test suite
 ```
+
+Node classes are generated from [src/Sable.Syntax/Syntax.xml](src/Sable.Syntax/Syntax.xml).
+After changing the schema:
+
+```bash
+dotnet run --project tools/Sable.Syntax.Generator
+```
+
+The generated files are committed, and a test fails if they drift from the schema.
 
 ## Building
 
@@ -77,18 +87,38 @@ dotnet test Sable.slnx
 |---|---|
 | `Sable.Syntax` — source text, spans, diagnostics | done |
 | `Sable.Syntax` — tokens, trivia, `SyntaxFacts` | done |
-| `Sable.Syntax` — lexer | done, 207 tests green |
-| `Sable.Syntax` — green/red syntax tree | not started |
-| `Sable.Syntax` — parser | not started |
+| `Sable.Syntax` — lexer | done |
+| `Sable.Syntax` — green/red tree, lists, visitor | done |
+| `Sable.Syntax` — node generator | done |
+| `Sable.Syntax` — parser: types and expressions | done |
+| `Sable.Syntax` — parser: declarations, statements, patterns | not started |
 | `Sable.Syntax` — incremental reparse | not started |
 | Everything downstream (symbols, binder, SIL, codegen) | not started |
 
+**378 tests green.**
+
 The lexer covers all of [spec/lexical.md](spec/lexical.md): full-fidelity
 trivia, nested block comments, every literal form including interpolated and
-raw strings, and the statement-terminator rule. The full-fidelity round-trip
-invariant — concatenating every token's full text reproduces the source byte
-for byte — is enforced by the test suite over the `examples/` corpus.
+raw strings, and the statement-terminator rule.
 
-Not yet handled by the lexer: conditional-compilation directives are lexed as
-`#` plus an identifier rather than being turned into `DisabledText` trivia.
-That is a separate pass, due with the parser.
+The tree is Roslyn's red/green design: immutable, position-independent green
+nodes shared between tree versions, with thin red facades created on demand.
+The parser is hand-written recursive descent with error recovery that never
+drops text — unusable tokens become skipped-token trivia and absent ones are
+inserted as zero-width missing tokens.
+
+The full-fidelity round-trip invariant — concatenating every token's full text
+reproduces the source byte for byte — is enforced over the `examples/` corpus,
+a table of hand-written cases, deliberately malformed input, and 400 rounds of
+random token soup.
+
+Not implemented yet, and deliberately so:
+
+- **Declarations, statements, patterns and closures.** The parser's entry
+  points are `SyntaxTree.ParseExpression` and `SyntaxTree.ParseType`.
+- **Structured string interpolation.** An interpolated string is a single
+  literal token; its holes are available through `SyntaxToken.Parts` but are
+  not yet parsed into child nodes, because doing that properly means lexing
+  the string into a token sequence rather than one token.
+- **Conditional compilation.** `#if` lexes as `#` plus an identifier rather
+  than turning inactive regions into `DisabledText` trivia.

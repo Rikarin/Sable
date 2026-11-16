@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Globalization;
 using System.Text;
+using Sable.Syntax.Green;
 
 namespace Sable.Syntax;
 
@@ -24,6 +25,9 @@ public sealed class Lexer
 
     /// <summary>Nesting depth of <c>(</c> and <c>[</c>; suppresses terminators.</summary>
     private int _bracketDepth;
+
+    /// <summary>Start of the current token's text, for relative part spans.</summary>
+    private int _tokenStart;
 
     private Lexer(SourceText source) => _source = source;
 
@@ -74,39 +78,47 @@ public sealed class Lexer
             _position = 1;
         }
 
-        var tokens = ImmutableArray.CreateBuilder<SyntaxToken>();
+        var green = new List<GreenToken>();
         while (true)
         {
             var token = LexToken();
-            tokens.Add(token);
+            green.Add(token);
             if (token.Kind == SyntaxKind.EndOfFile) break;
         }
 
-        var result = tokens.ToImmutable();
-        MarkStatementTerminators(result);
-        return result;
+        MarkStatementTerminators(green);
+
+        var tokens = ImmutableArray.CreateBuilder<SyntaxToken>(green.Count);
+        var position = 0;
+        foreach (var token in green)
+        {
+            tokens.Add(new SyntaxToken(token, parent: null, position));
+            position += token.FullWidth;
+        }
+        return tokens.MoveToImmutable();
     }
 
-    private SyntaxToken LexToken()
+    private GreenToken LexToken()
     {
         var leading = LexTrivia(isTrailing: false);
 
+        _tokenStart = _position;
         var start = _position;
         var (kind, value, parts) = ScanToken();
         var text = TextBetween(start, _position);
 
         var trailing = LexTrivia(isTrailing: true);
 
-        return new SyntaxToken(kind, text, start, leading, trailing, value, parts);
+        return new GreenToken(kind, text, leading, trailing, value, parts);
     }
 
     // -----------------------------------------------------------------------
     // Trivia
     // -----------------------------------------------------------------------
 
-    private ImmutableArray<SyntaxTrivia> LexTrivia(bool isTrailing)
+    private ImmutableArray<GreenTrivia> LexTrivia(bool isTrailing)
     {
-        var builder = ImmutableArray.CreateBuilder<SyntaxTrivia>();
+        var builder = ImmutableArray.CreateBuilder<GreenTrivia>();
 
         while (!AtEnd)
         {
@@ -164,8 +176,8 @@ public sealed class Lexer
         return builder.ToImmutable();
     }
 
-    private SyntaxTrivia Trivia(SyntaxKind kind, int start) =>
-        new(kind, TextBetween(start, _position), start);
+    private GreenTrivia Trivia(SyntaxKind kind, int start) =>
+        new(kind, TextBetween(start, _position));
 
     /// <summary>Scans a block comment, honouring nesting per spec/lexical.md §8.</summary>
     private void ScanBlockComment(int start)
@@ -879,7 +891,8 @@ public sealed class Lexer
         parts.Add(new StringPart(
             StringPartKind.Interpolation,
             TextBetween(innerStart, innerEnd),
-            TextSpan.FromBounds(innerStart, innerEnd)));
+            // Relative to the token's text; SyntaxToken.Parts makes it absolute.
+            TextSpan.FromBounds(innerStart - _tokenStart, innerEnd - _tokenStart)));
     }
 
     private void SkipNestedString()
@@ -1051,11 +1064,11 @@ public sealed class Lexer
     // Statement terminators — spec/lexical.md §4
     // -----------------------------------------------------------------------
 
-    private static void MarkStatementTerminators(ImmutableArray<SyntaxToken> tokens)
+    private static void MarkStatementTerminators(List<GreenToken> tokens)
     {
         var depth = 0;
 
-        for (var i = 0; i < tokens.Length; i++)
+        for (var i = 0; i < tokens.Count; i++)
         {
             var token = tokens[i];
 
@@ -1070,14 +1083,14 @@ public sealed class Lexer
                     if (depth > 0) depth--;
                     break;
                 case SyntaxKind.SemicolonToken:
-                    token.TerminatesStatement = true;
+                    tokens[i] = token.WithTerminatesStatement(true);
                     continue;
             }
 
-            if (i + 1 >= tokens.Length) continue;
+            if (i + 1 >= tokens.Count) continue;
 
             var next = tokens[i + 1];
-            var separatedByNewLine = HasNewLine(token.TrailingTrivia) || HasNewLine(next.LeadingTrivia);
+            var separatedByNewLine = HasNewLine(token.Trailing) || HasNewLine(next.Leading);
             if (!separatedByNewLine) continue;
 
             // Rule 3: inside unbalanced ( or [, newlines never terminate.
@@ -1087,7 +1100,7 @@ public sealed class Lexer
             // JavaScript automatic-semicolon-insertion hazard.
             if (SyntaxFacts.AlwaysTerminates(token.Kind))
             {
-                token.TerminatesStatement = true;
+                tokens[i] = token.WithTerminatesStatement(true);
                 continue;
             }
 
@@ -1097,13 +1110,13 @@ public sealed class Lexer
             // Rule 2: the next line must not open with a continuation token.
             if (SyntaxFacts.ContinuesStatement(next.Kind)) continue;
 
-            token.TerminatesStatement = true;
+            tokens[i] = token.WithTerminatesStatement(true);
         }
 
-        if (tokens.Length > 0) tokens[^1].TerminatesStatement = true;
+        if (tokens.Count > 0) tokens[^1] = tokens[^1].WithTerminatesStatement(true);
     }
 
-    private static bool HasNewLine(ImmutableArray<SyntaxTrivia> trivia)
+    private static bool HasNewLine(ImmutableArray<GreenTrivia> trivia)
     {
         foreach (var t in trivia)
             if (t.Kind == SyntaxKind.NewLineTrivia) return true;

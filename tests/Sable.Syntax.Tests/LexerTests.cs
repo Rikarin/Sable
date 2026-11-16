@@ -205,7 +205,7 @@ public sealed class LexerTests
     public void BlockCommentsNest()
     {
         var tokens = TestHelpers.LexAll("/* a /* b */ c */ x");
-        var trivia = Assert.Single(tokens[0].LeadingTrivia.Where(t => t.IsComment));
+        var trivia = Assert.Single(tokens[0].LeadingTrivia, t => t.IsComment);
         Assert.Equal("/* a /* b */ c */", trivia.Text);
         Assert.Equal(SyntaxKind.IdentifierToken, tokens[0].Kind);
     }

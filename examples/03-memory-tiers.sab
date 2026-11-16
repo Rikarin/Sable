@@ -1,0 +1,146 @@
+module Examples.MemoryTiers
+
+import Sable.IO
+import Sable.Collections
+
+// ===========================================================================
+// Tier 0 — inline, contiguous, no header, no refcount.
+// @inline_layout makes the whole nested structure one pointer-free block.
+// ===========================================================================
+
+@inline_layout
+@derive(Equatable, Hashable)
+public struct OrderLine {
+    public var sku:   U8[..16]      // inline, bounded
+    public var qty:   U16
+    public var price: U32           // cents
+}
+
+@inline_layout
+public struct Order {
+    public var id:       U64
+    public var customer: U8[..32]
+    public var lines:    OrderLine[>..]    // grow-only, stored inline
+    public var parent:   Order&<u32>?      // 4-byte relative ref, 0 == null
+
+    public var total: U64 {
+        get {
+            var t: U64 = 0
+            for line in lines { t += U64(line.qty) * U64(line.price) }
+            return t
+        }
+    }
+}
+
+/// Zero-copy persistence: the value is already bytes.
+fn save(_ order: Order, to path: String) throws(IoError) {
+    try Files.write(path, Bytes.of(order))
+}
+
+fn load(_ path: String) throws(IoError) -> Order? {
+    let buf = try Files.read(path)
+    // fromBytes validates framing, tags, lengths and every relative link
+    // before returning. Corrupt input yields .Invalid, never a bad reference.
+    return match Order.fromBytes(buf) {
+        case .Ok(let o)        => o
+        case .Invalid(let why) => { log.warn("rejected order file: \(why)"); none }
+    }
+}
+
+// ===========================================================================
+// Tier 1 — regions. Bump-allocated, freed in one store at scope exit.
+// References into a region have an inferred root; nothing escapes.
+// ===========================================================================
+
+public union Ast.. {                 // variant-sized: each node is exactly its size
+    Number(value: F64)
+    Ident(name: U8[..24])
+    Binary(op: U8, left: Ast&<u32>, right: Ast&<u32>)
+    Call(callee: Ast&<u32>, args: Ast&<u32>[>..])
+}
+
+fn parse(_ source: String) -> OwnedAst {
+    region arena {
+        let tokens = arena.alloc(Token[>..])
+        lex(source, into: tokens)
+        let root = parseExpr(tokens, in: arena)   // root inferred as 'arena'
+        return root.toOwned()                      // copies out before release
+    }                                              // entire arena freed: one store
+}
+
+// This would be rejected — the compiler infers that the returned reference is
+// rooted in a region that dies at the end of the function:
+//
+//   fn bad() -> ref Ast {
+//       region r { return parseExpr(tokens, in: r) }
+//   }
+//
+//   error[S4012]: cannot return a reference rooted in region 'r'
+//     help: return an owned value with .toOwned(), or take the region as a
+//           parameter:  fn ok(in r: region) -> ref Ast
+
+// ===========================================================================
+// Tier 2 — classes. Identity, ARC, weak references, reflection.
+// ===========================================================================
+
+@reflectable
+public class Workspace {
+    public private(set) var documents: List<Document> = []
+    private let frameArena = Region(reserving: .megabytes(16))
+
+    public fn open(_ path: String) throws(IoError) -> Document {
+        let doc = Document(path: path, owner: self)
+        documents.append(doc)
+        return doc
+    }
+
+    /// Per-frame work: no allocation, no retain/release in the hot loop.
+    public fn render(dt: F32) {
+        frameArena.reset()
+        region frame = frameArena {
+            let visible = frame.alloc(Document&[>..])
+            for d in documents where d.isVisible { visible.append(&d) }
+            for d in visible { d.draw(dt) }     // borrowed — zero ARC traffic
+        }
+    }
+}
+
+public class Document {
+    public var path: String
+    public weak var owner: Workspace?       // breaks the reference cycle
+    public var isVisible = true
+
+    public init(path: String, owner: Workspace) {
+        self.path = path
+        self.owner = owner
+    }
+
+    deinit { log.debug("closing \(path)") }
+
+    fn draw(_ dt: F32) { }
+}
+
+// ===========================================================================
+// Move-only resources: use-after-move is a compile error.
+// ===========================================================================
+
+@noncopy
+public struct FileHandle {
+    private let fd: I32
+
+    public static fn open(_ path: String) throws(IoError) -> FileHandle { }
+    public fn read(into buf: inout U8[]) throws(IoError) -> Int { }
+    deinit { sys.close(fd) }
+}
+
+fn copyFile(from src: String, to dst: String) throws(IoError) {
+    using let input  = try FileHandle.open(src)
+    using let output = try FileHandle.open(dst)
+    var buf = U8[8192]()
+    while true {
+        let n = try input.read(into: &buf)
+        if n == 0 { break }
+        try output.write(buf[0..<n])
+    }
+    // both handles released here, in reverse order
+}

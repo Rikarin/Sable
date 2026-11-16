@@ -1,0 +1,501 @@
+(* ========================================================================== *)
+(*  The Sable Programming Language — Formal Grammar                           *)
+(*  Version 0.1 (design draft)                                                *)
+(*                                                                            *)
+(*  Notation:                                                                 *)
+(*    =            definition                                                 *)
+(*    |            alternation                                                *)
+(*    [ x ]        optional                                                   *)
+(*    { x }        zero or more                                               *)
+(*    ( x )        grouping                                                   *)
+(*    "x"          terminal                                                   *)
+(*    (* ... *)    comment                                                    *)
+(*                                                                            *)
+(*  The grammar is LL(k) with a small number of parser-directed decisions,     *)
+(*  noted inline. Newlines are significant only as statement terminators       *)
+(*  (see lexical.md §4); NL below denotes a statement break.                   *)
+(* ========================================================================== *)
+
+
+(* -------------------------------------------------------------------------- *)
+(* 1. Compilation unit                                                        *)
+(* -------------------------------------------------------------------------- *)
+
+CompilationUnit   = [ ShebangLine ] ModuleDecl { ImportDecl } { TopLevelDecl } EOF ;
+
+ModuleDecl        = { Attribute } "module" QualifiedName NL ;
+
+ImportDecl        = [ "public" ] "import" ImportTarget NL ;
+ImportTarget      = QualifiedName [ "as" Identifier ]
+                  | QualifiedName "." "{" ImportItem { "," ImportItem } "}"
+                  | QualifiedName "." "{" "*" "}" ;
+                    (* the wildcard is braced so that the statement cannot end
+                       on '*', which is not a statement-ending token *)
+ImportItem        = Identifier [ "as" Identifier ] ;
+
+QualifiedName     = Identifier { "." Identifier } ;
+
+TopLevelDecl      = Declaration
+                  | ComptimeBlock
+                  | ConditionalCompilation ;
+
+
+(* -------------------------------------------------------------------------- *)
+(* 2. Declarations                                                            *)
+(* -------------------------------------------------------------------------- *)
+
+Declaration       = { Attribute } { Modifier } DeclarationKind ;
+
+DeclarationKind   = FunctionDecl
+                  | StructDecl
+                  | ClassDecl
+                  | ActorDecl
+                  | ProtocolDecl
+                  | UnionDecl
+                  | EnumDecl
+                  | ExtensionDecl
+                  | AliasDecl
+                  | VariableDecl
+                  | ConstDecl
+                  | InitDecl
+                  | DeinitDecl
+                  | PropertyDecl
+                  | SubscriptDecl
+                  | OperatorDecl ;
+
+Modifier          = Visibility
+                  | "static" | "open" | "sealed" | "abstract" | "final"
+                  | "override" | "required" | "convenience" | "mutating"
+                  | "nonmutating" | "lazy" | "async" | "const" | "nonisolated"
+                  | "weak" | "unowned" [ "(" ( "safe" | "unsafe" ) ")" ] ;
+
+Visibility        = "public" | "package" | "internal" | "private"
+                  | "private" "(" "set" ")" ;
+
+Attribute         = "@" QualifiedName [ "(" [ AttributeArgs ] ")" ] ;
+AttributeArgs     = AttributeArg { "," AttributeArg } ;
+AttributeArg      = [ Identifier ":" ] Expression ;
+
+
+(* -- 2.1 Functions --------------------------------------------------------- *)
+
+FunctionDecl      = "fn" FunctionName [ GenericParams ] "(" [ ParamList ] ")"
+                    [ EffectSpec ] [ "->" ReturnType ]
+                    [ WhereClause ]
+                    FunctionBody ;
+
+FunctionName      = Identifier | QualifiedName ;   (* QualifiedName: explicit
+                                                      protocol implementation,
+                                                      e.g. fn Drawable.render *)
+
+FunctionBody      = Block
+                  | "=>" Expression NL
+                  | NL ;                            (* no body: protocol / abstract *)
+
+EffectSpec        = { "async" | ThrowsSpec } ;
+ThrowsSpec        = "throws" [ "(" Type ")" ] | "rethrows" ;
+
+ReturnType        = [ "ref" ] Type ;
+
+ParamList         = Param { "," Param } [ "," ] ;
+Param             = { Attribute } [ ParamModifier ] [ ParamLabel ] Identifier
+                    ":" Type [ "..." ] [ "=" Expression ] ;
+ParamModifier     = "inout" | "out" | "consuming" | "borrowing" | "ref"
+                  | "ref" "mut" | "in" ;
+ParamLabel        = Identifier | "_" ;              (* external label *)
+
+
+(* -- 2.2 Types ------------------------------------------------------------- *)
+
+StructDecl        = "struct" Identifier [ GenericParams ] [ ":" TypeList ]
+                    [ WhereClause ] TypeBody ;
+
+ClassDecl         = "class" Identifier [ GenericParams ] [ ":" TypeList ]
+                    [ WhereClause ] TypeBody ;
+
+ActorDecl         = "actor" Identifier [ GenericParams ] [ ":" TypeList ]
+                    [ WhereClause ] TypeBody ;
+
+ProtocolDecl      = "protocol" Identifier [ GenericParams ] [ ":" TypeList ]
+                    [ WhereClause ] ProtocolBody ;
+
+UnionDecl         = "union" Identifier [ ".." ] [ GenericParams ]
+                    [ ":" TypeList ] [ WhereClause ] UnionBody ;
+                    (* ".." marks a variant-sized union *)
+
+EnumDecl          = "enum" Identifier [ ":" Type ] EnumBody ;
+
+ExtensionDecl     = "extension" Type [ ":" TypeList ] [ WhereClause ] TypeBody ;
+
+AliasDecl         = "alias" Identifier [ GenericParams ] "=" Type NL ;
+
+TypeBody          = "{" { MemberDecl } "}" ;
+ProtocolBody      = "{" { ProtocolMember } "}" ;
+
+MemberDecl        = Declaration
+                  | AssociatedTypeDecl
+                  | TypeAliasDecl
+                  | ConditionalCompilation ;
+
+ProtocolMember    = { Attribute } { Modifier }
+                    ( AssociatedTypeDecl
+                    | FunctionDecl            (* body optional = default impl *)
+                    | PropertyDecl
+                    | SubscriptDecl
+                    | InitDecl
+                    | OperatorDecl ) ;
+
+AssociatedTypeDecl = "associatedtype" Identifier [ ":" TypeList ]
+                     [ "=" Type ] NL ;
+TypeAliasDecl      = "typealias" Identifier "=" Type NL ;
+
+UnionBody         = "{" { UnionCase } { MemberDecl } "}" ;
+UnionCase         = { Attribute } Identifier [ "(" [ CasePayload ] ")" ] NL ;
+CasePayload       = CaseField { "," CaseField } ;
+CaseField         = [ Identifier ":" ] Type ;
+
+EnumBody          = "{" EnumCase { [ "," ] EnumCase } "}" ;
+EnumCase          = { Attribute } Identifier [ "=" Expression ] ;
+
+
+(* -- 2.3 Members ----------------------------------------------------------- *)
+
+VariableDecl      = ( "let" | "var" ) BindingPattern [ ":" Type ]
+                    [ "=" Expression ] [ Accessors ] NL ;
+
+ConstDecl         = "const" Identifier [ ":" Type ] "=" Expression NL ;
+
+PropertyDecl      = ( "let" | "var" ) Identifier ":" Type Accessors ;
+
+Accessors         = "{" ( GetSetBlock | ObserverBlock | "get" [ "set" ] ) "}" ;
+GetSetBlock       = GetAccessor [ SetAccessor ] | SetAccessor GetAccessor ;
+GetAccessor       = { Attribute } [ Visibility ] "get" ( Block | "=>" Expression | NL ) ;
+SetAccessor       = { Attribute } [ Visibility ] "set" [ "(" Identifier ")" ]
+                    ( Block | NL ) ;
+ObserverBlock     = { ( "willSet" | "didSet" ) [ "(" Identifier ")" ] Block } ;
+
+InitDecl          = "init" [ "?" ] [ GenericParams ] "(" [ ParamList ] ")"
+                    [ ThrowsSpec ] [ WhereClause ] ( Block | NL ) ;
+
+DeinitDecl        = "deinit" Block ;
+
+SubscriptDecl     = "subscript" [ GenericParams ] "(" [ ParamList ] ")"
+                    "->" Type [ WhereClause ] ( Accessors | "=>" Expression NL ) ;
+
+OperatorDecl      = [ "prefix" | "postfix" ] "operator" OperatorSymbol
+                    "(" [ ParamList ] ")" "->" Type ( Block | "=>" Expression NL ) ;
+
+OperatorSymbol    = "+" | "-" | "*" | "/" | "%" | "&" | "|" | "^"
+                  | "<<" | ">>" | "==" | "!=" | "<" | "<=" | ">" | ">="
+                  | "[" "]" | "(" ")" | "!" | "~" ;
+
+
+(* -------------------------------------------------------------------------- *)
+(* 3. Generics                                                                *)
+(* -------------------------------------------------------------------------- *)
+
+GenericParams     = "<" GenericParam { "," GenericParam } ">" ;
+GenericParam      = { Attribute } [ "out" | "in" ] Identifier
+                    [ ":" TypeList ] [ "=" Type ] ;
+
+WhereClause       = "where" WhereItem { "," WhereItem } ;
+WhereItem         = Type ":" TypeList            (* conformance / inheritance *)
+                  | Type "==" Type               (* same-type constraint      *)
+                  | Expression ;                 (* const generic predicate   *)
+
+TypeList          = Type { "&" Type } ;          (* composition in constraints *)
+
+
+(* -------------------------------------------------------------------------- *)
+(* 4. Types                                                                   *)
+(* -------------------------------------------------------------------------- *)
+
+Type              = UnionType ;
+
+UnionType         = IntersectionType { "|" IntersectionType } ;    (* structural union *)
+IntersectionType  = PostfixType { "&" PostfixType } ;              (* composition *)
+
+PostfixType       = PrimaryType { TypeSuffix } ;
+
+TypeSuffix        = "?"                                   (* optional *)
+                  | "!"                                   (* iuo *)
+                  | "&" [ "<" RelRefSpec ">" ] [ "?" ]    (* reference *)
+                  | ArraySuffix
+                  | "." Identifier [ GenericArgs ] ;      (* nested / associated *)
+
+RelRefSpec        = ( "u8" | "u16" | "u32" | "i8" | "i16" | "i32" )
+                    [ "in" Identifier ] ;
+
+ArraySuffix       = "[" "]"                               (* T[]      *)
+                  | "[" Expression "]"                    (* T[k]     *)
+                  | "[" ".." [ Expression ] "]"           (* T[..] T[..k] *)
+                  | "[" ">" ".." "]"                      (* T[>..]   *)
+                  | "[" ">" ".." "<" "]"                  (* T[>..<]  *)
+                  | "[" ":" "]"                           (* T[:]     *)
+                  | "[" Type ":" Type "]" ;               (* [K: V]   *)
+
+PrimaryType       = QualifiedName [ GenericArgs ]
+                  | "some" Type
+                  | "any" Type
+                  | "ref" Type
+                  | TupleType
+                  | FunctionType
+                  | "(" Type ")"
+                  | "Self" ;
+
+TupleType         = "(" [ TupleTypeElem { "," TupleTypeElem } ] ")" ;
+TupleTypeElem     = [ Identifier ":" ] Type ;
+
+FunctionType      = [ "async" ] TupleType [ ThrowsSpec ] "->" Type ;
+
+GenericArgs       = "<" Type { "," Type } ">" ;
+                    (* parser-directed: on '<' after a type name, scan for a
+                       balanced '>' not interrupted by a statement terminator *)
+
+
+(* -------------------------------------------------------------------------- *)
+(* 5. Statements                                                              *)
+(* -------------------------------------------------------------------------- *)
+
+Block             = "{" { Statement } "}" ;
+
+Statement         = Declaration
+                  | ExpressionStatement
+                  | IfStatement
+                  | GuardStatement
+                  | WhileStatement
+                  | RepeatStatement
+                  | ForStatement
+                  | MatchStatement
+                  | SwitchStatement
+                  | DoStatement
+                  | RegionStatement
+                  | UsingStatement
+                  | DeferStatement
+                  | ReturnStatement
+                  | ThrowStatement
+                  | BreakStatement
+                  | ContinueStatement
+                  | FallthroughStatement
+                  | UnsafeBlock
+                  | ComptimeBlock
+                  | ConditionalCompilation
+                  | LabeledStatement
+                  | Block
+                  | NL ;
+
+LabeledStatement  = Identifier ":" ( WhileStatement | ForStatement
+                                   | RepeatStatement | Block ) ;
+
+ExpressionStatement = Expression NL ;
+
+IfStatement       = "if" ConditionList Block
+                    { "else" "if" ConditionList Block }
+                    [ "else" Block ] ;
+
+GuardStatement    = "guard" ConditionList "else" Block ;
+
+ConditionList     = Condition { "," Condition } ;
+Condition         = "let" BindingPattern [ ":" Type ] [ "=" Expression ]
+                  | "var" BindingPattern [ ":" Type ] [ "=" Expression ]
+                  | "case" Pattern "=" Expression
+                  | Expression ;
+
+WhileStatement    = "while" ConditionList Block ;
+RepeatStatement   = "repeat" Block "while" Expression NL ;
+
+ForStatement      = "for" [ "await" ] BindingPattern "in" Expression
+                    [ "where" Expression ] Block ;
+
+MatchStatement    = "match" Expression "{" { MatchCase } "}" ;
+MatchCase         = "case" PatternList [ "where" Expression ]
+                    ( "=>" ( Expression | Block ) | ":" { Statement } )
+                  | "default" ( "=>" ( Expression | Block ) | ":" { Statement } ) ;
+PatternList       = Pattern { "," Pattern } ;
+
+SwitchStatement   = "switch" Expression "{" { SwitchCase } "}" ;
+SwitchCase        = "case" ExpressionList ":" { Statement }
+                  | "default" ":" { Statement } ;
+ExpressionList    = Expression { "," Expression } ;
+
+DoStatement       = "do" Block { CatchClause } ;
+CatchClause       = "catch" [ Pattern [ "where" Expression ] ] Block ;
+
+RegionStatement   = "region" [ Identifier [ "=" Expression ] ] Block ;
+
+UsingStatement    = "using" ( "let" | "var" ) BindingPattern [ ":" Type ]
+                    "=" Expression [ Block ] NL ;
+
+DeferStatement    = "defer" Block ;
+
+ReturnStatement   = "return" [ Expression ] NL ;
+ThrowStatement    = "throw" Expression NL ;
+BreakStatement    = "break" [ Identifier ] NL ;
+ContinueStatement = "continue" [ Identifier ] NL ;
+FallthroughStatement = "fallthrough" NL ;
+
+UnsafeBlock       = "unsafe" Block ;
+ComptimeBlock     = "comptime" Block ;
+
+ConditionalCompilation =
+      "#if" CompileCondition { Statement | Declaration }
+    { "#elseif" CompileCondition { Statement | Declaration } }
+    [ "#else" { Statement | Declaration } ]
+      "#endif" ;
+
+CompileCondition  = Expression ;   (* restricted: identifiers, os(), arch(),
+                                      feature(), !, &&, ||, parentheses *)
+
+
+(* -------------------------------------------------------------------------- *)
+(* 6. Patterns                                                                *)
+(* -------------------------------------------------------------------------- *)
+
+Pattern           = OrPattern ;
+
+OrPattern         = PrimaryPattern { "|" PrimaryPattern } ;
+
+PrimaryPattern    = WildcardPattern
+                  | BindingPattern
+                  | LiteralPattern
+                  | RangePattern
+                  | TuplePattern
+                  | UnionCasePattern
+                  | RecordPattern
+                  | ArrayPattern
+                  | TypeTestPattern
+                  | "(" Pattern ")" ;
+
+WildcardPattern   = "_" ;
+BindingPattern    = [ "let" | "var" ] Identifier
+                  | TuplePattern
+                  | RecordPattern ;
+LiteralPattern    = Literal | "-" NumericLiteral ;
+RangePattern      = Expression ( "..." | "..<" ) Expression
+                  | ( "..." | "..<" ) Expression
+                  | Expression ( "..." ) ;
+TuplePattern      = "(" [ Pattern { "," Pattern } ] ")" ;
+UnionCasePattern  = [ QualifiedName ] "." Identifier
+                    [ "(" [ SubPattern { "," SubPattern } ] ")" ] ;
+SubPattern        = [ Identifier ":" ] Pattern ;
+RecordPattern     = QualifiedName "{" [ FieldPattern { "," FieldPattern } ] "}" ;
+FieldPattern      = Identifier [ ":" Pattern ] ;
+ArrayPattern      = "[" [ ArrayPatternElem { "," ArrayPatternElem } ] "]" ;
+ArrayPatternElem  = Pattern | "..." [ "let" Identifier ] ;
+TypeTestPattern   = "is" Type
+                  | "let" Identifier "as" Type ;
+
+
+(* -------------------------------------------------------------------------- *)
+(* 7. Expressions                                                             *)
+(*    Listed loosest-binding first; each level is left-associative unless      *)
+(*    noted. This mirrors SYNTAX.md §16.                                      *)
+(* -------------------------------------------------------------------------- *)
+
+Expression        = AssignExpr ;
+
+AssignExpr        = TernaryExpr [ AssignOp AssignExpr ] ;        (* right assoc *)
+AssignOp          = "=" | "+=" | "-=" | "*=" | "/=" | "%=" | "&=" | "|="
+                  | "^=" | "<<=" | ">>=" | "??=" ;
+
+TernaryExpr       = CoalesceExpr [ "?" Expression ":" TernaryExpr ] ;
+
+CoalesceExpr      = LogicalOrExpr { "??" LogicalOrExpr } ;       (* right assoc *)
+LogicalOrExpr     = LogicalAndExpr { "||" LogicalAndExpr } ;
+LogicalAndExpr    = BitOrExpr { "&&" BitOrExpr } ;
+BitOrExpr         = BitXorExpr { "|" BitXorExpr } ;
+BitXorExpr        = BitAndExpr { "^" BitAndExpr } ;
+BitAndExpr        = EqualityExpr { "&" EqualityExpr } ;
+EqualityExpr      = RelationalExpr { ( "==" | "!=" | "===" | "!==" ) RelationalExpr } ;
+RelationalExpr    = RangeExpr { ( "<" | "<=" | ">" | ">=" ) RangeExpr } ;
+RangeExpr         = ShiftExpr [ ( "..<" | "..." ) [ ShiftExpr ] ]
+                  | ( "..<" | "..." ) ShiftExpr ;
+ShiftExpr         = AdditiveExpr { ( "<<" | ">>" ) AdditiveExpr } ;
+AdditiveExpr      = MultiplicativeExpr { ( "+" | "-" ) MultiplicativeExpr } ;
+MultiplicativeExpr= CastExpr { ( "*" | "/" | "%" ) CastExpr } ;
+
+CastExpr          = UnaryExpr { CastOp Type } ;
+CastOp            = "as" | "as" "?" | "as" "!" | "unchecked" "as" | "is" ;
+
+UnaryExpr         = PrefixOp UnaryExpr | PostfixExpr ;
+PrefixOp          = "-" | "+" | "!" | "~" | "&"
+                  | "await" | "try" | "try" "?" | "try" "!" | "move" ;
+
+PostfixExpr       = PrimaryExpr { PostfixOp } ;
+PostfixOp         = "." Identifier [ GenericArgs ]
+                  | "?" "." Identifier
+                  | "!"
+                  | "(" [ ArgumentList ] ")" [ TrailingClosure ]
+                  | "?" "(" [ ArgumentList ] ")"
+                  | "[" ArgumentList "]"
+                  | "?" "[" ArgumentList "]"
+                  | TrailingClosure ;
+
+ArgumentList      = Argument { "," Argument } [ "," ] ;
+Argument          = [ Identifier ":" ] [ "&" | "out" | "move" ] Expression ;
+
+TrailingClosure   = ClosureExpr { Identifier ":" ClosureExpr } ;
+
+PrimaryExpr       = Literal
+                  | Identifier [ GenericArgs ]
+                  | "self" | "super" | "Self"
+                  | "." Identifier [ "(" [ ArgumentList ] ")" ]   (* inferred member *)
+                  | "(" Expression ")"
+                  | TupleExpr
+                  | ArrayLiteral
+                  | DictLiteral
+                  | RecordLiteral
+                  | ClosureExpr
+                  | MatchExpr
+                  | IfExpr
+                  | AsyncLetExpr
+                  | "unsafe" Block
+                  | Type "." "self"
+                  | "#" Identifier ;                (* compiler builtins: #file, #line *)
+
+TupleExpr         = "(" [ TupleElem { "," TupleElem } ] ")" ;
+TupleElem         = [ Identifier ":" ] Expression ;
+
+ArrayLiteral      = "[" [ Expression { "," Expression } [ "," ] ] "]" ;
+DictLiteral       = "[" ":" "]"
+                  | "[" KeyValue { "," KeyValue } [ "," ] "]" ;
+KeyValue          = Expression ":" Expression ;
+
+RecordLiteral     = QualifiedName "{" [ FieldInit { "," FieldInit } [ "," ] ] "}" ;
+FieldInit         = Identifier ":" Expression | Identifier ;
+
+MatchExpr         = MatchStatement ;      (* usable in expression position *)
+IfExpr            = IfStatement ;         (* usable in expression position when
+                                             every branch yields a value *)
+
+AsyncLetExpr      = "async" "let" Identifier "=" Expression ;
+
+ClosureExpr       = [ CaptureList ] ClosureSignature "=>" ( Expression | Block )
+                  | [ CaptureList ] "{" [ ClosureHeader ] { Statement } "}" ;
+
+ClosureSignature  = "(" [ ClosureParams ] ")" [ "->" Type ]
+                  | Identifier ;
+ClosureParams     = ClosureParam { "," ClosureParam } ;
+ClosureParam      = Identifier [ ":" Type ] ;
+ClosureHeader     = ClosureParams [ "->" Type ] "in" ;
+
+CaptureList       = "[" CaptureItem { "," CaptureItem } "]" ;
+CaptureItem       = [ "weak" | "unowned" ] ( "self" | Identifier [ "=" Expression ] ) ;
+
+
+(* -------------------------------------------------------------------------- *)
+(* 8. Literals (see lexical.md for the token definitions)                     *)
+(* -------------------------------------------------------------------------- *)
+
+Literal           = NumericLiteral
+                  | StringLiteral
+                  | CharLiteral
+                  | BoolLiteral
+                  | "none" ;
+
+NumericLiteral    = IntegerLiteral | FloatLiteral ;
+BoolLiteral       = "true" | "false" ;
+
+StringLiteral     = SimpleString | MultilineString | RawString ;
+                    (* interpolation segments \( Expression ) are parsed
+                       recursively by the lexer/parser pair *)

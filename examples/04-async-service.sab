@@ -1,0 +1,121 @@
+module Examples.Service
+
+import Sable.Net
+import Sable.Concurrency
+import Sable.Serialize
+import Sable.Time
+
+// ---------------------------------------------------------------------------
+// Typed errors. 'throws(E)' compiles to a discriminated return, not unwinding.
+// ---------------------------------------------------------------------------
+
+public union ServiceError {
+    NotFound(id: U64)
+    Upstream(HttpError)
+    Timeout(after: Duration)
+    Invalid(reason: String)
+}
+
+extension ServiceError : From<HttpError> {
+    public static fn from(_ e: HttpError) -> ServiceError => .Upstream(e)
+}
+
+// ---------------------------------------------------------------------------
+// An actor: its state is isolated, so data races are a compile error.
+// ---------------------------------------------------------------------------
+
+public actor Cache<Key: Hashable & Sendable, Value: Sendable> {
+    private var entries: [Key: (value: Value, at: Instant)] = [:]
+    private let ttl: Duration
+
+    public init(ttl: Duration) { self.ttl = ttl }
+
+    public fn get(_ key: Key) -> Value? {
+        guard let entry = entries[key] else { return none }
+        if Instant.now - entry.at > ttl {
+            entries.remove(key)
+            return none
+        }
+        return entry.value
+    }
+
+    public fn set(_ key: Key, _ value: Value) {
+        entries[key] = (value: value, at: Instant.now)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Structured concurrency: children cannot outlive the scope.
+// ---------------------------------------------------------------------------
+
+@derive(Serializable, Equatable)
+public struct User { public let id: U64, public let name: String }
+
+public class UserService {
+    private let http: HttpClient
+    private let cache: Cache<U64, User>
+
+    public init(http: HttpClient) {
+        self.http = http
+        self.cache = Cache(ttl: .minutes(5))
+    }
+
+    public async fn fetch(_ id: U64) throws(ServiceError) -> User {
+        if let hit = await cache.get(id) { return hit }
+
+        let response = try await withTimeout(.seconds(3)) {
+            try await http.get("/users/\(id)")       // HttpError converts via From
+        }
+
+        guard response.status == 200 else {
+            throw .NotFound(id: id)
+        }
+
+        let user = try Json.decode(User.self, from: response.body)
+            catch { throw ServiceError.Invalid(reason: "malformed user payload") }
+
+        await cache.set(id, user)
+        return user
+    }
+
+    /// Fan out, bounded by the scope. Every child is awaited or cancelled here.
+    public async fn fetchMany(_ ids: U64[]) -> [U64: User] {
+        return await withTaskGroup(of: (U64, User)?.self) { group in
+            for id in ids {
+                group.spawn {
+                    return try? await (id, self.fetch(id))
+                }
+            }
+            var out: [U64: User] = [:]
+            for await result in group {
+                if let (id, user) = result { out[id] = user }
+            }
+            return out
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+
+@main
+async fn main() throws {
+    let service = UserService(http: HttpClient())
+
+    async let a = service.fetch(1)
+    async let b = service.fetch(2)
+    let (first, second) = try await (a, b)
+    print("\(first.name), \(second.name)")
+
+    let many = await service.fetchMany([3, 4, 5, 6, 7])
+    print("fetched \(many.count)")
+
+    let listener = try TcpListener.bind("0.0.0.0:8080")
+    for await conn in listener.connections {
+        Task.spawn { await handle(conn, service) }
+    }
+}
+
+async fn handle(_ conn: TcpConnection, _ service: UserService) {
+    using let c = conn
+    // ...
+}

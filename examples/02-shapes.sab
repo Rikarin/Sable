@@ -1,0 +1,95 @@
+module Examples.Shapes
+
+import Sable.Math
+
+/// A protocol with an associated type, a default implementation,
+/// and a static requirement.
+public protocol Shape {
+    associatedtype Unit: Numeric = F64
+
+    var area: Unit { get }
+    var perimeter: Unit { get }
+
+    static fn unitShape() -> Self
+
+    /// Default implementation — statically dispatched.
+    var describe: String { get => "\(Self.self): area \(area)" }
+}
+
+// ---------------------------------------------------------------------------
+// A closed union with payloads. Exhaustively matched.
+// ---------------------------------------------------------------------------
+
+public union Geometry {
+    Circle(radius: F64)
+    Rect(width: F64, height: F64)
+    Triangle(a: Vec2, b: Vec2, c: Vec2)
+    Compound(parts: Geometry[>..])
+}
+
+extension Geometry : Shape {
+    public var area: F64 {
+        get => match self {
+            case .Circle(let r)            => F64.pi * r * r
+            case .Rect(let w, let h)       => w * h
+            case .Triangle(let a, let b, let c) =>
+                ((b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y)).abs() / 2
+            case .Compound(let parts)      => parts.sum { $0.area }
+        }
+    }
+
+    public var perimeter: F64 {
+        get => match self {
+            case .Circle(let r)      => 2 * F64.pi * r
+            case .Rect(let w, let h) => 2 * (w + h)
+            case .Triangle(let a, let b, let c) =>
+                a.distance(to: b) + b.distance(to: c) + c.distance(to: a)
+            case .Compound(let parts) => parts.sum { $0.perimeter }
+        }
+    }
+
+    public static fn unitShape() -> Geometry => .Circle(radius: 1)
+}
+
+// ---------------------------------------------------------------------------
+// 'some' is monomorphised and free. 'any' is boxed and dynamic.
+// ---------------------------------------------------------------------------
+
+fn totalArea(_ shapes: some Sequence<Geometry>) -> F64 {
+    var sum = 0.0
+    for s in shapes { sum += s.area }
+    return sum
+}
+
+fn describeAll(_ shapes: any Shape[]) {
+    for s in shapes { print(s.describe) }
+}
+
+// ---------------------------------------------------------------------------
+// Structural unions and flow-sensitive narrowing.
+// ---------------------------------------------------------------------------
+
+alias Dimension = F64 | String | None
+
+fn resolve(_ d: Dimension, relativeTo parent: F64) -> F64 {
+    if d is F64 { return d }                       // narrowed to F64
+    if d is String {
+        guard d.hasSuffix("%") else { return 0 }   // narrowed to String
+        let pct = F64.parse(d.dropLast(1)) ?? 0
+        return parent * pct / 100
+    }
+    return 0                                        // d is None here
+}
+
+@test
+fn testAreas() {
+    let shapes: Geometry[] = [
+        .Circle(radius: 2),
+        .Rect(width: 3, height: 4),
+        .Compound(parts: [.Rect(width: 1, height: 1), .Circle(radius: 1)]),
+    ]
+    assert(totalArea(shapes) > 0)
+    assert(resolve("50%", relativeTo: 200) == 100)
+    assert(resolve(42.0, relativeTo: 200) == 42)
+    assert(resolve(none, relativeTo: 200) == 0)
+}

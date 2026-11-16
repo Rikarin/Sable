@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Sable.Syntax/Sable.Syntax.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Sable.Syntax.Tests/Sable.Syntax.Tests.csproj" />
+  </Folder>
+</Solution>

@@ -1,0 +1,23 @@
+# Build output
+bin/
+obj/
+target/
+artifacts/
+*.user
+*.suo
+
+# Tooling
+.vs/
+.vscode/
+.idea/
+*.DotSettings.user
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test output
+TestResults/
+*.trx
+*.coverage
+coverage/

@@ -99,13 +99,24 @@ public sealed class NamedTypeSymbol : TypeSymbol
         internal set => _baseTypes = value;
     }
 
-    internal void AddMember(Symbol member) => _members.Add(member);
+    /// <summary>Members by name, built on demand; see <see cref="ModuleSymbol"/>.</summary>
+    private Dictionary<string, List<Symbol>>? _byName;
+
+    internal void AddMember(Symbol member)
+    {
+        _members.Add(member);
+
+        if (_byName is null) return;
+        if (!_byName.TryGetValue(member.Name, out var bucket))
+            _byName[member.Name] = bucket = [];
+        bucket.Add(member);
+    }
 
     /// <summary>Members declared with a given name, in declaration order.</summary>
     public IEnumerable<Symbol> GetMembers(string name)
     {
-        foreach (var member in _members)
-            if (string.Equals(member.Name, name, StringComparison.Ordinal)) yield return member;
+        _byName ??= ModuleSymbol.BuildIndex(_members);
+        return _byName.TryGetValue(name, out var bucket) ? bucket : [];
     }
 
     public NamedTypeSymbol Construct(ImmutableArray<TypeSymbol> typeArguments) =>

@@ -24,6 +24,17 @@ public sealed class ModuleSymbol(string name) : Symbol
 {
     private readonly List<Symbol> _members = [];
 
+    /// <summary>
+    /// Members by name, built on demand and dropped when one is added.
+    /// </summary>
+    /// <remarks>
+    /// A module may hold thousands of declarations and every name lookup asks
+    /// it. Scanning the list made declaring a module quadratic in the number
+    /// of things it declares, which is the shape that only shows up on a real
+    /// program.
+    /// </remarks>
+    private Dictionary<string, List<Symbol>>? _byName;
+
     public override SymbolKind Kind => SymbolKind.Module;
     public override string Name { get; } = name;
     public override Accessibility DeclaredAccessibility => Accessibility.Public;
@@ -33,24 +44,40 @@ public sealed class ModuleSymbol(string name) : Symbol
     /// <summary>Modules this one imports, in declaration order.</summary>
     public List<ModuleSymbol> Imports { get; } = [];
 
-    internal void AddMember(Symbol member) => _members.Add(member);
+    internal void AddMember(Symbol member)
+    {
+        _members.Add(member);
+
+        if (_byName is null) return;
+        if (!_byName.TryGetValue(member.Name, out var bucket))
+            _byName[member.Name] = bucket = [];
+        bucket.Add(member);
+    }
 
     public IEnumerable<Symbol> GetMembers(string name)
     {
-        foreach (var member in _members)
-            if (string.Equals(member.Name, name, StringComparison.Ordinal)) yield return member;
+        _byName ??= BuildIndex(_members);
+        return _byName.TryGetValue(name, out var bucket)
+            ? bucket
+            : [];
+    }
+
+    internal static Dictionary<string, List<Symbol>> BuildIndex(List<Symbol> members)
+    {
+        var index = new Dictionary<string, List<Symbol>>(StringComparer.Ordinal);
+        foreach (var member in members)
+        {
+            if (!index.TryGetValue(member.Name, out var bucket))
+                index[member.Name] = bucket = [];
+            bucket.Add(member);
+        }
+        return index;
     }
 
     public NamedTypeSymbol? GetType(string name)
     {
-        foreach (var member in _members)
-        {
-            if (member is NamedTypeSymbol type
-                && string.Equals(type.Name, name, StringComparison.Ordinal))
-            {
-                return type;
-            }
-        }
+        foreach (var member in GetMembers(name))
+            if (member is NamedTypeSymbol type) return type;
         return null;
     }
 

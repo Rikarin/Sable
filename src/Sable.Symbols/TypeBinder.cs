@@ -516,7 +516,7 @@ internal sealed class TypeBinder(Compilation compilation)
                 case NamedTypeSymbol type:
                     if (Match(type.TypeParameters, name) is { } typeParameter)
                         return typeParameter;
-                    if (FindTypeMember(type.Members, name) is { } nested) return nested;
+                    if (FindTypeMember(type.GetMembers(name)) is { } nested) return nested;
                     break;
 
                 case FunctionSymbol function:
@@ -541,7 +541,7 @@ internal sealed class TypeBinder(Compilation compilation)
 
         if (scope is not null)
         {
-            if (FindTypeMember(scope.Module.Members, name) is { } moduleMember)
+            if (FindTypeMember(scope.Module.GetMembers(name)) is { } moduleMember)
                 return moduleMember;
 
             if (scope.ImportedNames.TryGetValue(name, out var imported)) return imported;
@@ -549,7 +549,7 @@ internal sealed class TypeBinder(Compilation compilation)
             Symbol? fromImports = null;
             foreach (var module in scope.Imports)
             {
-                var candidate = FindTypeMember(module.Members, name, publicOnly: true);
+                var candidate = FindTypeMember(module.GetMembers(name), publicOnly: true);
                 if (candidate is null) continue;
 
                 if (fromImports is not null && !ReferenceEquals(fromImports, candidate))
@@ -567,7 +567,7 @@ internal sealed class TypeBinder(Compilation compilation)
         }
 
         // The core module is in scope everywhere.
-        return FindTypeMember(compilation.Core.Module.Members, name, publicOnly: true);
+        return FindTypeMember(compilation.Core.Module.GetMembers(name), publicOnly: true);
     }
 
     private static TypeParameterSymbol? Match(
@@ -579,12 +579,11 @@ internal sealed class TypeBinder(Compilation compilation)
     }
 
     private static Symbol? FindTypeMember(
-        IReadOnlyList<Symbol> members, string name, bool publicOnly = false)
+        IEnumerable<Symbol> named, bool publicOnly = false)
     {
-        foreach (var member in members)
+        foreach (var member in named)
         {
             if (member is not (NamedTypeSymbol or AliasSymbol)) continue;
-            if (!string.Equals(member.Name, name, StringComparison.Ordinal)) continue;
             if (publicOnly && member.DeclaredAccessibility != Accessibility.Public) continue;
             return member;
         }

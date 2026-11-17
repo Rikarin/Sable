@@ -302,7 +302,27 @@ internal sealed class TypeBinder(Compilation compilation) {
             var left = BindType(constraint.Left, context, scope);
             var right = BindType(constraint.Right, context, scope);
 
-            if (left is TypeParameterSymbol parameter && !right.IsError) {
+            if (left.IsError || right.IsError) {
+                continue;
+            }
+
+            // 'S.Element == T' makes two types one; it is not a conformance.
+            if (constraint.OperatorToken.Kind == SyntaxKind.EqualsEqualsToken) {
+                var requirement = new SameTypeRequirement(left, right);
+                switch (context) {
+                    case FunctionSymbol function:
+                        function.SameTypeRequirements = function.SameTypeRequirements.Add(requirement);
+                        break;
+
+                    case NamedTypeSymbol type:
+                        type.SameTypeRequirements = type.SameTypeRequirements.Add(requirement);
+                        break;
+                }
+
+                continue;
+            }
+
+            if (left is TypeParameterSymbol parameter) {
                 parameter.Constraints = parameter.Constraints.Add(right);
             }
         }

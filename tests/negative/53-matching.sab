@@ -80,7 +80,7 @@ fn matchingAnArray(_ xs: Int[]) -> Int {
         case [] => 0
         case [let only] => only
         case [let first, ...] => first
-        default => 0
+        default => 0                    //! S6006
     }
 }
 

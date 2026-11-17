@@ -10,11 +10,22 @@ namespace Sable.Symbols;
 ///     no type of its own until the context gives it one.
 /// </remarks>
 internal sealed class Conversions(CoreTypes core) {
+    /// <summary>
+    ///     The same-type requirements in force where the conversion happens:
+    ///     inside <c>where A.Item == B.Item</c> the two are one type.
+    /// </summary>
+    public TypeEquivalence Equivalence { get; set; } = TypeEquivalence.Empty;
+
     /// <summary>The conversion from source to target, or null when there is none.</summary>
     public ConversionKind? Classify(TypeSymbol source, TypeSymbol target, bool sourceIsLiteral) {
         // An error on either side converts, so one mistake stays one mistake.
         if (source.IsError || target.IsError) {
             return ConversionKind.Identity;
+        }
+
+        if (!Equivalence.IsEmpty) {
+            source = Equivalence.Canonical(source);
+            target = Equivalence.Canonical(target);
         }
 
         if (source.Equals(target)) {

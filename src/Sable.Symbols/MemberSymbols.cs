@@ -128,6 +128,9 @@ public sealed class FunctionSymbol : Symbol {
     /// </summary>
     public bool IsRethrows { get; internal set; }
 
+    /// <summary>The <c>where A == B</c> requirements on this function's parameters.</summary>
+    public ImmutableArray<SameTypeRequirement> SameTypeRequirements { get; internal set; } = [];
+
     readonly List<Symbol> _localTypes = [];
 
     /// <summary>

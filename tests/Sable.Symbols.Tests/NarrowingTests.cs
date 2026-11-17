@@ -189,4 +189,85 @@ public sealed class NarrowingTests {
         );
         Assert.Contains(errors, static e => e.Code == ErrorCode.ERR_NameNotFound);
     }
+
+    // ---- writes and closures ------------------------------------------------
+
+    [Fact]
+    public void AnAssignmentInsideTheNarrowedBranchMayStoreAnything() =>
+        AssertClean(
+            """
+            fn probe(_ start: Circle?) {
+                var c = start
+                if c != none {
+                    c = none
+                }
+            }
+            """
+        );
+
+    [Fact]
+    public void ACallToAClosureThatWritesTheBindingEndsTheNarrowing() {
+        var errors = ErrorsIn(
+            """
+            fn probe(_ start: Circle?) -> F64 {
+                var c = start
+                let clear = () => { c = none }
+                if c != none {
+                    clear()
+                    return c.radius
+                }
+                return 0
+            }
+            """
+        );
+        Assert.Contains(errors, static e => e.Code == ErrorCode.ERR_NotOptional);
+    }
+
+    [Fact]
+    public void ANarrowingStillHoldsWhenNoClosureWritesTheBinding() =>
+        AssertClean(
+            """
+            fn probe(_ start: Circle?) -> F64 {
+                var c = start
+                let other = () => { }
+                if c != none {
+                    other()
+                    return c.radius
+                }
+                return 0
+            }
+            """
+        );
+
+    [Fact]
+    public void AClosureDoesNotSeeAVarNarrowedOutsideIt() {
+        // The closure runs later, when 'c' may be none again.
+        var errors = ErrorsIn(
+            """
+            fn probe(_ start: Circle?) -> () -> F64 {
+                var c = start
+                if c != none {
+                    let f = () => c.radius
+                    c = none
+                    return f
+                }
+                return () => 0
+            }
+            """
+        );
+        Assert.Contains(errors, static e => e.Code == ErrorCode.ERR_NotOptional);
+    }
+
+    [Fact]
+    public void AClosureDoesSeeALetNarrowedOutsideIt() =>
+        AssertClean(
+            """
+            fn probe(_ c: Circle?) -> () -> F64 {
+                if c != none {
+                    return () => c.radius
+                }
+                return () => 0
+            }
+            """
+        );
 }

@@ -280,4 +280,32 @@ public sealed class RethrowsTests {
             }
             """
         );
+
+    // ---- A binding that can be reassigned ----------------------------------
+
+    [Fact]
+    public void AVarThatHeldTheParameterIsNotASource() =>
+        // 'k' may hold 'boom' by the time it is called, which throws on its own.
+        AssertError(
+            ErrorCode.ERR_RethrowsThrowsItsOwn,
+            """
+            fn boom() throws(IoError) -> Int { return 1 }
+            fn run(_ g: () throws(IoError) -> Int) rethrows -> Int {
+                var k = g
+                k = boom
+                return try k()
+            }
+            """
+        );
+
+    [Fact]
+    public void ALetThatHoldsTheParameterIsASource() =>
+        AssertClean(
+            """
+            fn run(_ g: () throws(IoError) -> Int) rethrows -> Int {
+                let k = g
+                return try k()
+            }
+            """
+        );
 }

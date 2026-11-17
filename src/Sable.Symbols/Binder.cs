@@ -27,7 +27,19 @@ public sealed class Binder {
     readonly List<Dictionary<string, Symbol>> _locals = [];
     readonly Dictionary<SyntaxNode, BoundNode> _bound = [];
 
-    Symbol _containingSymbol;
+    /// <summary>
+    ///     The declaration whose body is being bound. Setting it also brings
+    ///     that declaration's same-type requirements into force.
+    /// </summary>
+    Symbol _containingSymbol {
+        get => _containingSymbolField;
+        set {
+            _containingSymbolField = value;
+            _conversions.Equivalence = TypeEquivalence.For(TypeEquivalence.RequirementsOf(value));
+        }
+    }
+
+    Symbol _containingSymbolField = null!;
     TypeSymbol _returnType;
     int _loopDepth;
 
@@ -104,8 +116,8 @@ public sealed class Binder {
     internal Binder(Compilation compilation, FileScope scope, Symbol containingSymbol) {
         _compilation = compilation;
         _scope = scope;
-        _containingSymbol = containingSymbol;
         _conversions = new(compilation.Core);
+        _containingSymbol = containingSymbol;
         _returnType = compilation.Core.Void;
     }
 
@@ -303,6 +315,75 @@ public sealed class Binder {
         }
     }
 
+    /// <summary>
+    ///     Mutable bindings that a closure or local function writes from
+    ///     outside its own body.
+    /// </summary>
+    /// <remarks>
+    ///     Such a body can run during any call, so a call ends whatever a test
+    ///     established about them: after <c>let clear = () => { p = none }</c>,
+    ///     <c>if p != none { clear(); p.x }</c> must not read <c>p</c> as narrowed.
+    /// </remarks>
+    readonly HashSet<Symbol> _writtenByNestedBodies = [];
+
+    /// <summary>
+    ///     The expression read as its type's representative under the same-type
+    ///     requirements in force, or unchanged when they say nothing about it.
+    /// </summary>
+    BoundExpression AsCanonical(BoundExpression expression) {
+        var canonical = _conversions.Equivalence.Canonical(expression.Type);
+        return canonical.Equals(expression.Type)
+            ? expression
+            : new BoundConversion(expression.Syntax, canonical, expression, ConversionKind.Identity);
+    }
+
+    /// <summary>A call may run a nested body that writes these, so forget them.</summary>
+    BoundExpression AfterCall(BoundExpression call) {
+        foreach (var symbol in _writtenByNestedBodies) {
+            DropNarrowing(symbol);
+        }
+
+        return call;
+    }
+
+    /// <summary>
+    ///     Enters a closure or local function body, which keeps only the
+    ///     narrowings that cannot go stale.
+    /// </summary>
+    /// <remarks>
+    ///     The body runs later, when a <c>var</c> may hold something else, so a
+    ///     test outside it says nothing about the <c>var</c> inside. A
+    ///     <c>let</c> cannot change, so what was learnt about it stays true.
+    /// </remarks>
+    List<Dictionary<Symbol, TypeSymbol>> EnterNestedBody() {
+        var saved = _narrowed.ToList();
+        var stable = new Dictionary<Symbol, TypeSymbol>();
+
+        foreach (var frame in saved) {
+            foreach (var (symbol, type) in frame) {
+                if (IsStableBinding(symbol)) {
+                    stable[symbol] = type;
+                }
+            }
+        }
+
+        _narrowed.Clear();
+        _narrowed.Add(stable);
+        return saved;
+    }
+
+    void ExitNestedBody(List<Dictionary<Symbol, TypeSymbol>> saved) {
+        _narrowed.Clear();
+        _narrowed.AddRange(saved);
+    }
+
+    static bool IsStableBinding(Symbol symbol) =>
+        symbol switch {
+            LocalSymbol local => !local.IsMutable,
+            ParameterSymbol parameter => parameter.Modifier is not (ParameterModifier.InOut or ParameterModifier.Out),
+            _ => false,
+        };
+
     Symbol? LookupLocal(string name) {
         for (var i = _locals.Count - 1; i >= 0; i--) {
             if (_locals[i].TryGetValue(name, out var symbol)) {
@@ -487,6 +568,13 @@ public sealed class Binder {
             return;
         }
 
+        // A binding that can be reassigned may end up holding any closure at
+        // all by the time it is called, so only one that cannot counts:
+        // after 'var k = body; k = boom', calling 'k' throws on its own.
+        if (!IsStableBinding(name)) {
+            return;
+        }
+
         if (IsRethrowSource(value)) {
             _rethrowSources.Add(name);
         }
@@ -506,7 +594,7 @@ public sealed class Binder {
                 ? optional.UnderlyingType
                 : parameter.Type;
 
-            if (type is FunctionTypeSymbol { ThrownType: not null }) {
+            if (type is FunctionTypeSymbol { ThrownType: not null } && IsStableBinding(parameter)) {
                 _rethrowSources.Add(parameter);
             }
         }
@@ -952,11 +1040,14 @@ public sealed class Binder {
         Declare(function.Name, function);
 
         BoundBlock? body = null;
+        var outerNarrowing = EnterNestedBody();
         if (declaration.Body is { } block) {
             body = BindFunctionBody(function, block);
         } else if (declaration.ExpressionBody is { } expression) {
             body = BindExpressionBody(function, expression);
         }
+
+        ExitNestedBody(outerNarrowing);
 
         return Record(statement, new BoundLocalFunction(statement, function, body));
     }
@@ -1532,7 +1623,7 @@ public sealed class Binder {
             MemberAccessExpressionSyntax member => BindMemberAccess(member),
             ImplicitMemberAccessExpressionSyntax implicitMember =>
                 BindImplicitMemberAccess(implicitMember, expectedType),
-            InvocationExpressionSyntax invocation => BindInvocation(invocation, expectedType),
+            InvocationExpressionSyntax invocation => AfterCall(BindInvocation(invocation, expectedType)),
             ElementAccessExpressionSyntax element => BindElementAccess(element),
             BinaryExpressionSyntax binary => BindBinary(binary),
             PrefixUnaryExpressionSyntax unary => BindPrefixUnary(unary),
@@ -2105,6 +2196,8 @@ public sealed class Binder {
     ///     <c>Derived : Base&lt;Int&gt;</c> still reports Int.
     /// </remarks>
     MemberLookup? LookupMember(TypeSymbol type, string name) {
+        // After 'where T == Int' a T has Int's members.
+        type = _conversions.Equivalence.Canonical(type);
         var visited = new HashSet<TypeSymbol>();
         return LookupMemberCore(type, name, TypeSubstitution.Empty, visited, type);
     }
@@ -2893,8 +2986,38 @@ public sealed class Binder {
             }
         }
 
+        // 'where A.Item == B.Item' holds only when the arguments make the two
+        // the same, as the caller's own requirements understand sameness.
+        foreach (var (left, right) in candidate.SameTypeRequirements) {
+            var leftType = substitution.Apply(left);
+            var rightType = substitution.Apply(right);
+
+            if (ContainsUninferred(leftType, candidate) || ContainsUninferred(rightType, candidate)) {
+                continue;
+            }
+
+            if (!_conversions.Equivalence.AreSame(leftType, rightType)) {
+                return null;
+            }
+        }
+
         return cost;
     }
+
+    /// <summary>True when a type still names one of the candidate's own, uninferred, parameters.</summary>
+    static bool ContainsUninferred(TypeSymbol type, FunctionSymbol candidate) =>
+        type switch {
+            TypeParameterSymbol parameter => candidate.TypeParameters.Contains(parameter),
+            DependentMemberTypeSymbol member => ContainsUninferred(member.BaseType, candidate),
+            NamedTypeSymbol named => named.TypeArguments.Any(a => ContainsUninferred(a, candidate)),
+            OptionalTypeSymbol optional => ContainsUninferred(optional.UnderlyingType, candidate),
+            ArrayTypeSymbol array => ContainsUninferred(array.ElementType, candidate),
+            TupleTypeSymbol tuple => tuple.ElementTypes.Any(e => ContainsUninferred(e, candidate)),
+            FunctionTypeSymbol function =>
+                function.ParameterTypes.Any(p => ContainsUninferred(p, candidate))
+                || ContainsUninferred(function.ReturnType, candidate),
+            _ => false,
+        };
 
     /// <summary>
     ///     True for an expression whose type the context may still decide.
@@ -3222,7 +3345,9 @@ public sealed class Binder {
         var inferring = returnType is null;
         symbol.ReturnTypeResolver = () => returnType ?? Core.Void;
 
+        var outerNarrowing = EnterNestedBody();
         var bound = BindClosureBody(symbol, body, returnType ?? Core.Void, inferring, captures);
+        ExitNestedBody(outerNarrowing);
 
         var type = new FunctionTypeSymbol(
             [..symbol.Parameters.Select(static p => p.Type)],
@@ -3743,6 +3868,20 @@ public sealed class Binder {
 
     BoundExpression BindAssignment(AssignmentExpressionSyntax syntax) {
         var target = BindExpression(syntax.Left);
+
+        // A plain store replaces the value, so it may store anything the
+        // binding's declared type holds: inside 'if p != none', 'p = none' is
+        // fine. What a test narrowed applies to reads, not to the slot.
+        if (syntax.OperatorToken.Kind == SyntaxKind.EqualsToken) {
+            target = target switch {
+                BoundLocalAccess { IsNarrowed: true } local =>
+                    Record(syntax.Left, new BoundLocalAccess(syntax.Left, local.Local)),
+                BoundParameterAccess { IsNarrowed: true } parameter =>
+                    Record(syntax.Left, new BoundParameterAccess(syntax.Left, parameter.Parameter)),
+                _ => target,
+            };
+        }
+
         var value = BindExpression(syntax.Right, target.Type);
 
         if (!target.HasError && !target.IsAssignable) {
@@ -3754,9 +3893,20 @@ public sealed class Binder {
         }
 
         // Whatever a test established about this binding, the write ends it.
-        switch (target) {
-            case BoundLocalAccess local: DropNarrowing(local.Local); break;
-            case BoundParameterAccess parameter: DropNarrowing(parameter.Parameter); break;
+        Symbol? written = target switch {
+            BoundLocalAccess local => local.Local,
+            BoundParameterAccess parameter => parameter.Parameter,
+            _ => null,
+        };
+
+        if (written is not null) {
+            DropNarrowing(written);
+
+            // Written from inside a closure or local function: that body can
+            // run during any later call.
+            if (!ReferenceEquals(written.ContainingSymbol, _containingSymbol)) {
+                _writtenByNestedBodies.Add(written);
+            }
         }
 
         if (syntax.OperatorToken.Kind != SyntaxKind.EqualsToken) {
@@ -3962,6 +4112,10 @@ public sealed class Binder {
         if (left.HasError || right.HasError) {
             return new BoundError(syntax, left, right);
         }
+
+        // After 'where T == Int' a T is an Int, operators and all.
+        left = AsCanonical(left);
+        right = AsCanonical(right);
 
         if (kind == BinaryOperatorKind.Coalesce) {
             if (left.Type is not OptionalTypeSymbol optional) {
@@ -4724,16 +4878,16 @@ public sealed class Binder {
     }
 
     /// <summary>
-    ///     Reports a match that does not cover its subject, naming a case it
+    ///     Reports a match that does not cover its subject, with values it
     ///     misses, and an arm that earlier arms already cover.
     /// </summary>
     /// <remarks>
-    ///     Exhaustiveness and redundancy are the same question asked twice: is
-    ///     this arm useful given the ones before it, and is anything left after
-    ///     the last one. This covers unions, enums and booleans, which is where
-    ///     both actually bite. The general algorithm — Maranget's usefulness,
-    ///     with a witness built from the uncovered constructors — replaces it
-    ///     when nested patterns need checking too.
+    ///     Both are Maranget's usefulness question, asked by
+    ///     <see cref="Exhaustiveness" />: an arm is redundant when none of its
+    ///     patterns is useful after the arms before it, and the match is
+    ///     exhaustive when a wildcard is not useful after all of them. A guard
+    ///     can fail, so a guarded arm is checked for redundancy but covers
+    ///     nothing.
     /// </remarks>
     void CheckExhaustive(BoundMatch match) {
         var subject = match.Subject.Type;
@@ -4741,62 +4895,32 @@ public sealed class Binder {
             return;
         }
 
-        var covered = new HashSet<string>(StringComparer.Ordinal);
-        var total = false;
+        var checker = new Exhaustiveness(Core);
+        var rows = new List<Exhaustiveness.Pat>();
 
         foreach (var arm in match.Arms) {
-            // A guard can fail, so a guarded arm neither covers nor is covered.
-            if (arm.Guard is not null) {
-                continue;
-            }
+            var patterns = arm.IsDefault
+                ? [checker.Lower(new BoundWildcardPattern(arm.Syntax, subject))]
+                : arm.Patterns.Select(checker.Lower).ToList();
 
-            if (total) {
-                ReportCovered(arm);
-                continue;
-            }
-
-            var isCatchAll = arm.IsDefault || arm.Patterns.Any(static p => p.IsIrrefutable);
-
-            if (isCatchAll) {
-                if (NothingLeft(subject, covered)) {
-                    ReportCovered(arm);
-                }
-
-                total = true;
-                continue;
-            }
-
-            var names = new HashSet<string>(StringComparer.Ordinal);
-            foreach (var pattern in arm.Patterns) {
-                CollectCovered(pattern, names);
-            }
-
-            if (names.Count > 0 && names.All(covered.Contains)) {
+            if (!patterns.Any(p => checker.IsUseful(rows, p, subject)) && !checker.GaveUp) {
                 ReportCovered(arm);
             }
 
-            foreach (var name in names) {
-                covered.Add(name);
-            }
-
-            if (NothingLeft(subject, covered)) {
-                total = true;
+            if (arm.Guard is null) {
+                rows.AddRange(patterns);
             }
         }
 
-        if (total) {
-            return;
-        }
-
-        var missing = MissingCases(subject, covered);
-        if (missing is null || missing.Count == 0) {
+        var missing = checker.Missing(rows, subject);
+        if (missing.Count == 0 || checker.GaveUp || checker.HasErrors) {
             return;
         }
 
         var witness = missing.Count == 1
             ? $"'{missing[0]}'"
             : $"'{string.Join("', '", missing.Take(3))}'"
-            + (missing.Count > 3 ? $" and {missing.Count - 3} more" : string.Empty);
+            + (missing.Count > 3 ? " and more" : string.Empty);
 
         _diagnostics.Error(
             ErrorCode.ERR_MatchNotExhaustive,
@@ -4813,83 +4937,4 @@ public sealed class Binder {
                 "earlier arms already cover this one, so it can never run"
             )
         );
-
-    bool NothingLeft(TypeSymbol subject, HashSet<string> covered) => MissingCases(subject, covered) is { Count: 0 };
-
-    static void CollectCovered(BoundPattern pattern, HashSet<string> covered) {
-        switch (pattern) {
-            case BoundUnionCasePattern unionCase:
-                if (unionCase.Payload.All(static p => p.IsIrrefutable)) {
-                    covered.Add(unionCase.UnionCase.Name);
-                }
-
-                return;
-
-            case BoundEnumCasePattern enumCase:
-                covered.Add(enumCase.EnumCase.Name);
-                return;
-
-            case BoundLiteralPattern literal when literal.Value is bool value:
-                covered.Add(value ? "true" : "false");
-                return;
-
-            // A structural union is covered case by case, and a case is a
-            // type, so a type test is what covers one.
-            case BoundTypeTestPattern test:
-                covered.Add(test.TestedType.ToDisplayString());
-                return;
-
-            case BoundOrPattern or:
-                CollectCovered(or.Left, covered);
-                CollectCovered(or.Right, covered);
-                return;
-        }
-    }
-
-    List<string>? MissingCases(TypeSymbol subject, HashSet<string> covered) {
-        if (subject.Equals(Core.Bool)) {
-            var missing = new List<string>();
-            if (!covered.Contains("true")) {
-                missing.Add("true");
-            }
-
-            if (!covered.Contains("false")) {
-                missing.Add("false");
-            }
-
-            return missing;
-        }
-
-        if (subject is StructuralUnionTypeSymbol union) {
-            return [
-                ..union.Cases
-                    .Select(static c => c.ToDisplayString())
-                    .Where(name => !covered.Contains(name))
-            ];
-        }
-
-        if (subject is not NamedTypeSymbol named) {
-            return null;
-        }
-
-        if (named.TypeKind == TypeKind.Union) {
-            return [
-                ..named.Members.OfType<UnionCaseSymbol>()
-                    .Select(static c => c.Name)
-                    .Where(name => !covered.Contains(name))
-            ];
-        }
-
-        if (named.TypeKind == TypeKind.Enum) {
-            return [
-                ..named.Members.OfType<EnumCaseSymbol>()
-                    .Select(static c => c.Name)
-                    .Where(name => !covered.Contains(name))
-            ];
-        }
-
-        // Any other type has too many values to enumerate, so a match on one
-        // needs a wildcard or a default, which the caller already checked for.
-        return ["_"];
-    }
 }

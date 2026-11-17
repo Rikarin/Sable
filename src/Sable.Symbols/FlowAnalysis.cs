@@ -1,3 +1,5 @@
+using Sable.Syntax;
+
 namespace Sable.Symbols;
 
 /// <summary>
@@ -27,11 +29,11 @@ internal static class FlowAnalysis {
                 && AlwaysExits(ifStatement.Alternative),
 
             // 'while true' only ends by breaking out, and a 'break' is not an exit.
-            BoundWhile loop => IsAlwaysTrue(loop.Condition) && !ContainsBreak(loop.Body),
+            BoundWhile loop => IsAlwaysTrue(loop.Condition) && !CanBreakOut(loop, loop.Body),
 
             BoundRepeat loop =>
-                AlwaysExits(loop.Body)
-                || (IsAlwaysTrue(loop.Condition) && !ContainsBreak(loop.Body)),
+                (AlwaysExits(loop.Body) && !CanBreakOut(loop, loop.Body))
+                || (IsAlwaysTrue(loop.Condition) && !CanBreakOut(loop, loop.Body)),
 
             BoundExpressionStatement expression => AlwaysExits(expression.Expression),
 
@@ -82,24 +84,40 @@ internal static class FlowAnalysis {
     static bool IsAlwaysTrue(BoundExpression condition) => condition is BoundLiteral { Value: true };
 
     /// <summary>True when a loop body can break out of that loop.</summary>
-    static bool ContainsBreak(BoundNode node) {
-        if (node is BoundBreak) {
-            return true;
+    /// <remarks>
+    ///     An unlabelled <c>break</c> leaves the innermost loop, so one inside a
+    ///     nested loop belongs to that loop. A labelled one leaves the loop with
+    ///     that label wherever it sits: <c>break outer</c> from an inner loop
+    ///     still ends <c>outer</c>.
+    /// </remarks>
+    static bool CanBreakOut(BoundStatement loop, BoundStatement body) =>
+        ContainsBreak(body, LabelOf(loop), nested: false);
+
+    static bool ContainsBreak(BoundNode node, string? label, bool nested) {
+        if (node is BoundBreak jump) {
+            return jump.Label is null
+                ? !nested
+                : string.Equals(jump.Label, label, StringComparison.Ordinal);
         }
 
         foreach (var child in node.Children) {
-            // A nested loop's breaks belong to it, not to this one.
-            if (child is BoundWhile or BoundRepeat or BoundForEach) {
+            // A closure or local function cannot jump out of the code around it.
+            if (child is BoundClosure or BoundLocalFunction) {
                 continue;
             }
 
-            if (ContainsBreak(child)) {
+            var inner = nested || child is BoundWhile or BoundRepeat or BoundForEach;
+            if (ContainsBreak(child, label, inner)) {
                 return true;
             }
         }
 
         return false;
     }
+
+    /// <summary>The label written before a loop, as in <c>outer: while true { }</c>.</summary>
+    static string? LabelOf(BoundStatement loop) =>
+        loop.Syntax.Parent is LabeledStatementSyntax { Label.Text: { Length: > 0 } label } ? label : null;
 
     /// <summary>
     ///     The first statement anywhere in a body that can never be reached.

@@ -176,7 +176,7 @@ edit. Phase 1 is nearly done** — see
 | `Sable.SIL` — lowering from the bound tree | value types, `match`, optionals, errors, `defer`; 59 of the corpus's 343 functions lower — the rest need the heap (arrays, strings, classes) or generics |
 | `Sable.SIL` — interpreter, so tests run lowered code | done for the subset |
 | `Sable.CodeGen` — LLVM IR text: phis, aggregates, tagged enums, discriminated returns for `throws`, traps | done for the subset |
-| `Sable.CodeGen` — DWARF debug information (`sable build -g`) | done: frames, locals and types in lldb |
+| `Sable.CodeGen` — DWARF debug information (`sable build -g`, `sable debug`) | done: frames, locals, stepping, and an lldb formatter plugin (`tools/lldb/sable_lldb.py`) for strings, lists, unions, optionals, classes, closures and existentials |
 | `runtime/` — C runtime: print, trap | started |
 | `sable build` / `sable run` — native executables via clang | done for the subset; hello world is 34 KB |
 

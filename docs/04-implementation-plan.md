@@ -1123,6 +1123,71 @@ Full design in [05-toolchain.md](05-toolchain.md).
 - Debugger: DWARF plus an lldb formatter plugin for `String`, `List`, unions,
   and existentials.
 
+### Debugging, as implemented
+
+`sable build -g` (and `sable debug`) builds at `-O0` with the SIL passes off,
+so every local stays in its slot (`src/Sable.CodeGen/LlvmEmitter.Debug.cs`).
+Every function has a `DISubprogram` named by its full Sable name —
+`Demo.Point.length`, `Demo.main$closure0` — with no linkage name: the symbol
+is the same name behind `sable.`, nothing to demangle, and `b Demo.describe`
+finds it. A compiler-made function (a protocol witness) is artificial, at
+line 0, and `step` goes through it. Parameters are spilled to slots as clang
+does, so they read correctly anywhere in the function; slots are made in
+the prologue at the function's line, so a line breakpoint and `next` land on
+statements, one line at a time; a local a closure captures by reference is
+read through its box, and inside a closure each capture reads as a local of
+its own name (the context's fields are now named for what they captured).
+The runtime is compiled apart, optimised and without `-g`, so stepping goes
+over it as over libc. `dwarfdump --verify` passes.
+
+Every type is described as laid out. Sable's name is a typedef over a type
+whose name says its kind, which the formatters match by regex: `String` →
+`SableString *`; `[T]` → `[T]$list`, holding the buffer pointer (dictionaries
+are `[(K, V)]`); a class → `C$ref`, holding a pointer to `C$object` (header,
+then fields); a union → `U$union`, a `$tag` enumeration of the case names and
+a `$payload` C union; `T?` → `T?$optional` (an optional class is the nullable
+reference); a closure → `$closure` (`$function`, `$context`); `any P` →
+`any P$existential`. An enum without payloads is a DWARF enumeration; a tuple
+a struct with members `0`, `1`, …; `Char` is `char32_t`. Every class's type is
+also a member of an unread global, `sable.debug.classes`, which keeps it past
+`dsymutil` and lets the plugin find a dynamic type by the name in an
+object's metadata.
+
+`tools/lldb/sable_lldb.py` (summaries and synthetic children, Python 3.9+):
+
+```
+(String) greeting = "hello, world"
+([Int]) numbers = count = 3 { [0] = 10  [1] = 20  [2] = 30 }
+(Values.Shape) rect = Rect(2, 3)
+(Int?) absent = none
+(any Values.Named) bird = Values.Bird { [value] = Values.Bird { legs = 2  [strong] = 1 } }
+(Values.Node) node = Values.Node { value = 7  label = "seven"  next = none  [strong] = 2 }
+(Sable.Collections.HashMap$of$String$Int) map = … count = 2 { ["one"] = 1  ["two"] = 2 }
+((Int) -> Int) times = Values.main$closure0
+```
+
+A class reference shows its dynamic class's fields and `[strong]`, its
+reference count; an existential its dynamic type and `[value]`; a closure its
+function, and its captures as children. Load it with `command script import
+tools/lldb/sable_lldb.py` (or put that in `~/.lldbinit`). On macOS `sable
+build -g` also copies it into the `.dSYM` (`Contents/Resources/Python`), which
+lldb loads after `settings set target.load-script-from-symbol-file true`;
+Linux has no such place — lldb does not read `.debug_gdb_scripts` — so it is
+imported by hand there. `sable debug <file.sab> [--batch] [-o <command>]… [--
+<arguments>]` builds with `-g` into a temporary directory and starts lldb
+(`$LLDB`, else `lldb`) with the plugin loaded.
+`tests/Sable.CodeGen.Tests/DebuggerFormatterTests.cs` drives the real lldb;
+it passes vacuously where lldb cannot trace a process — as in the emulated
+x64 container on an arm64 Mac.
+
+Not yet: lexical scopes (every local is in its function's scope, so a
+shadowed name shows twice); union payload field names (SIL keeps a tuple, so
+`Rect(2, 3)` not `Rect(width: 2, height: 3)`); readable names for generic
+instances (`HashMap$of$String$Int`); `@inline_layout` values, which show as a
+pointer to their bytes; the standard library's own source lines (its
+functions name a file the debugger cannot find); expression evaluation in
+Sable syntax (`expression` is lldb's C); and gdb.
+
 ### Exit criteria
 - [ ] Cold build of a 100-package graph < 60 s; warm incremental < 1 s
 - [ ] LSP responds to completion in < 50 ms at p95 on a 200k-line project

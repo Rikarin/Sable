@@ -97,7 +97,10 @@ def _class_types(target):
     if key in _class_cache:
         return _class_cache[key]
     classes = {}
-    holder = target.FindFirstGlobalVariable("sable.debug.classes")
+    # Looked for in the program alone: asked of the whole target, lldb also
+    # searches the system's Swift libraries, and tries to load Swift for them.
+    module = target.FindModule(target.GetExecutable())
+    holder = module.FindFirstGlobalVariable(target, "sable.debug.classes") if module.IsValid() else lldb.SBValue()
     if holder.IsValid():
         sbtype = holder.GetType()
         for i in range(sbtype.GetNumberOfFields()):
@@ -134,12 +137,6 @@ def _reference_of_type(valobj, name, address):
     dynamic = _metadata_name(valobj.GetProcess(), address)
     sbtype = _find_type(valobj.GetTarget(), dynamic) if dynamic else None
     return _pointer_value(valobj, name, address, sbtype) if sbtype is not None else None
-
-
-def _unsigned_value(valobj, name, number):
-    target = valobj.GetTarget()
-    data = lldb.SBData.CreateDataFromUInt64Array(target.GetByteOrder(), target.GetAddressByteSize(), [number])
-    return valobj.CreateValueFromData(name, data, target.GetBasicType(lldb.eBasicTypeUnsignedLongLong))
 
 
 def _describe(value):
@@ -400,9 +397,13 @@ class ObjectProvider(object):
                 child = body.GetChildAtIndex(i)
                 if child.GetName() != "$header":
                     self.children.append(child)
-        strong = _strong_count(self.valobj.GetProcess(), address)
-        if isinstance(strong, int):
-            self.children.append(_unsigned_value(self.valobj, "[strong]", strong))
+        # The count is the header's own field, so its type comes from the
+        # program's DWARF: a basic type asked of the target would set up every
+        # language's scratch context, Swift's included, which can hang.
+        if _strong_count(self.valobj.GetProcess(), address) != "immortal":
+            strong = body.GetChildMemberWithName("$header").GetChildMemberWithName("strong")
+            if strong.IsValid():
+                self.children.append(strong.Clone("[strong]"))
         return False
 
     def num_children(self, max_children=None):

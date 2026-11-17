@@ -379,8 +379,11 @@ public sealed class DebuggerFormatterTests {
     /// <summary>The DWARF itself is well formed, as the platform's verifier sees it.</summary>
     [Fact]
     public async Task DwarfVerifies() {
-        var verifier = OperatingSystem.IsMacOS() ? "dwarfdump" : "llvm-dwarfdump";
-        if (!Programs.CanBuild || !Exists(verifier)) {
+        // Apple's dwarfdump, or LLVM's, perhaps under its version's name.
+        string[] candidates = OperatingSystem.IsMacOS()
+            ? ["dwarfdump"]
+            : ["llvm-dwarfdump", ..Enumerable.Range(14, 10).Reverse().Select(static v => $"llvm-dwarfdump-{v}")];
+        if (!Programs.CanBuild || candidates.FirstOrDefault(Exists) is not { } verifier) {
             return;
         }
 

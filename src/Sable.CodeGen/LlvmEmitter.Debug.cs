@@ -228,6 +228,17 @@ public sealed partial class LlvmEmitter {
                 return reference;
             }
 
+            // And a struct or a union, through a closure whose signature names
+            // it: its node is reserved first, then given what was described.
+            if (type is StructType or EnumType) {
+                var reference = Reserve();
+                _types[type] = reference;
+                var described = Describe(type)!;
+                var body = _nodes[int.Parse(described.AsSpan(1), System.Globalization.CultureInfo.InvariantCulture)];
+                Define(reference, body[(body.IndexOf(" = ", StringComparison.Ordinal) + 3)..]);
+                return reference;
+            }
+
             var node = Describe(type);
             _types[type] = node;
             return node;

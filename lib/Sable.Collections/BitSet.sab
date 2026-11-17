@@ -1,0 +1,151 @@
+module Sable.Collections
+
+/// A set of small non-negative integers, a bit each: 64 to a word, the
+/// words growing to hold the largest member. Membership is a shift and a
+/// mask; union and intersection work a word at a time.
+public class BitSet {
+    var words: U64[>..] = []
+    var members: Int = 0
+
+    public init() { }
+
+    /// A set of the values.
+    public init(_ values: Int[>..]) {
+        for value in values {
+            insert(value)
+        }
+    }
+
+    /// How many integers it holds.
+    public var count: Int { get { return members } }
+    public var isEmpty: Bool { get { return members == 0 } }
+
+    fn bit(_ value: Int) -> U64 {
+        return U64(1) << U64(value & 63)
+    }
+
+    /// Adds the value, which must not be negative; true if it was not there.
+    public fn insert(_ value: Int) -> Bool {
+        if value < 0 {
+            let nothing: Int[>..] = []
+            return nothing[value] > 0
+        }
+        let word = value >> 6
+        while words.count <= word {
+            words.append(0)
+        }
+        let mask = bit(value)
+        if (words[word] & mask) != 0 {
+            return false
+        }
+        words[word] = words[word] | mask
+        members = members + 1
+        return true
+    }
+
+    /// Removes the value; true if it was there.
+    public fn remove(_ value: Int) -> Bool {
+        if !contains(value) {
+            return false
+        }
+        let word = value >> 6
+        words[word] = words[word] & ~bit(value)
+        members = members - 1
+        return true
+    }
+
+    public fn contains(_ value: Int) -> Bool {
+        let word = value >> 6
+        return value >= 0 && word < words.count && (words[word] & bit(value)) != 0
+    }
+
+    /// Removes every value.
+    public fn removeAll() {
+        words = []
+        members = 0
+    }
+
+    /// The members, ascending.
+    public fn elements() -> Int[>..] {
+        var result: Int[>..] = []
+        var word = 0
+        while word < words.count {
+            var bits = words[word]
+            var at = 0
+            while bits != 0 {
+                if (bits & 1) != 0 {
+                    result.append(word * 64 + at)
+                }
+                bits = bits >> 1
+                at = at + 1
+            }
+            word = word + 1
+        }
+        return result
+    }
+
+    /// The values in this set or the other, or both.
+    public fn union(_ other: BitSet) -> BitSet {
+        let result = BitSet()
+        var i = 0
+        while i < words.count || i < other.words.count {
+            let mine: U64 = i < words.count ? words[i] : 0
+            let theirs: U64 = i < other.words.count ? other.words[i] : 0
+            result.words.append(mine | theirs)
+            i = i + 1
+        }
+        result.members = BitSet.population(result.words)
+        return result
+    }
+
+    /// The values in both sets.
+    public fn intersection(_ other: BitSet) -> BitSet {
+        let result = BitSet()
+        var i = 0
+        while i < words.count && i < other.words.count {
+            result.words.append(words[i] & other.words[i])
+            i = i + 1
+        }
+        result.members = BitSet.population(result.words)
+        return result
+    }
+
+    /// The values in this set and not the other.
+    public fn subtracting(_ other: BitSet) -> BitSet {
+        let result = BitSet()
+        var i = 0
+        while i < words.count {
+            let theirs: U64 = i < other.words.count ? other.words[i] : 0
+            result.words.append(words[i] & ~theirs)
+            i = i + 1
+        }
+        result.members = BitSet.population(result.words)
+        return result
+    }
+
+    /// Whether every value in this set is in the other.
+    public fn isSubset(of other: BitSet) -> Bool {
+        var i = 0
+        while i < words.count {
+            let theirs: U64 = i < other.words.count ? other.words[i] : 0
+            if (words[i] & ~theirs) != 0 {
+                return false
+            }
+            i = i + 1
+        }
+        return true
+    }
+
+    /// The bits set in the words: each word's lowest set bit cleared until none is left.
+    static fn population(_ words: U64[>..]) -> Int {
+        var total = 0
+        for word in words {
+            var bits = word
+            while bits != 0 {
+                bits = bits & (bits - 1)
+                total = total + 1
+            }
+        }
+        return total
+    }
+}

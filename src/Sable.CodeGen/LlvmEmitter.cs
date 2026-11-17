@@ -259,6 +259,7 @@ public sealed class LlvmEmitter {
                                 declare ptr @sable_weak_load(ptr)
                                 declare zeroext i1 @sable_string_equal(ptr, ptr)
                                 declare ptr @sable_string_concat(ptr, ptr)
+                                declare ptr @sable_string_concat_many(i64, ptr)
                                 declare i64 @sable_string_count(ptr)
                                 declare i32 @sable_string_at(ptr, i64)
                                 declare ptr @sable_string_slice(ptr, i64, i64)
@@ -290,6 +291,8 @@ public sealed class LlvmEmitter {
                                 declare zeroext i1 @sable_process_change_directory(ptr)
                                 declare i64 @sable_process_id()
                                 declare ptr @sable_string_split(ptr, i32)
+                                declare i64 @sable_string_hash(ptr)
+                                declare i64 @sable_string_compare(ptr, ptr)
                                 declare ptr @sable_string_from_char(i32)
                                 declare ptr @sable_string_from_int(i64)
                                 declare ptr @sable_string_from_f64(double)
@@ -1889,8 +1892,29 @@ public sealed class LlvmEmitter {
                     Line($"{Result()} = call ptr @sable_string_concat(ptr {operands[0]}, ptr {operands[1]})");
                     return;
 
+                // The pieces in an array in the frame, joined by one call.
+                case "string_concat_many": {
+                    var pieces = Scratch($"[{operands.Length} x ptr]");
+                    for (var i = 0; i < operands.Length; i++) {
+                        var at = Fresh();
+                        Line($"{at} = getelementptr inbounds [{operands.Length} x ptr], ptr {pieces}, i64 0, i64 {i}");
+                        Line($"store ptr {operands[i]}, ptr {at}");
+                    }
+
+                    Line($"{Result()} = call ptr @sable_string_concat_many(i64 {operands.Length}, ptr {pieces})");
+                    return;
+                }
+
                 case "string_count":
                     Line($"{Result()} = call i64 @sable_string_count(ptr {operands[0]})");
+                    return;
+
+                case "string_hash":
+                    Line($"{Result()} = call i64 @sable_string_hash(ptr {operands[0]})");
+                    return;
+
+                case "string_compare":
+                    Line($"{Result()} = call i64 @sable_string_compare(ptr {operands[0]}, ptr {operands[1]})");
                     return;
 
                 case "string_at":
@@ -2104,8 +2128,7 @@ public sealed class LlvmEmitter {
 
                 case "array_remove_last": {
                     var arrayType = (ArrayType)((AddressType)builtin.Operands[0].Type).Pointee;
-                    var element = Fresh();
-                    Line($"{element} = call ptr @sable_array_remove_last(ptr {operands[0]}, ptr {module.ArrayMetadata(arrayType)})");
+                    var element = LastSlot(operands[0], arrayType);
                     Line($"{Result()} = load {Type(arrayType.Element)}, ptr {element}");
                     return;
                 }
@@ -2717,6 +2740,64 @@ public sealed class LlvmEmitter {
             Continue(slow);
             var called = Fresh();
             Line($"{called} = call ptr @sable_array_append_slot(ptr {slot}, ptr {module.ArrayMetadata(arrayType)})");
+            Line($"br label %{done}");
+
+            Continue(done);
+            var element = Fresh();
+            Line($"{element} = phi ptr [ {direct}, %{fast} ], [ {called}, %{slow} ]");
+            return element;
+        }
+
+        /// <summary>
+        ///     The last element, moved out, for <c>removeLast</c>: the count
+        ///     lowered in place when the array is the only reference to a
+        ///     buffer that is not empty, through the runtime — which copies
+        ///     it, or traps — otherwise. A stack's pop is then a few
+        ///     instructions, as an append is.
+        /// </summary>
+        string LastSlot(string slot, ArrayType arrayType) {
+            var array = Fresh();
+            var isNull = Fresh();
+            Line($"{array} = load ptr, ptr {slot}");
+            Line($"{isNull} = icmp eq ptr {array}, null");
+            var check = NewLabel("last");
+            var fast = NewLabel("pop");
+            var slow = NewLabel("popslow");
+            var done = NewLabel("popped");
+            Line($"br i1 {isNull}, label %{slow}, label %{check}");
+
+            Continue(check);
+            var countField = Fresh();
+            var count = Fresh();
+            var strongField = Fresh();
+            var strong = Fresh();
+            var some = Fresh();
+            var unique = Fresh();
+            var both = Fresh();
+            Line($"{countField} = getelementptr inbounds i8, ptr {array}, i64 16");
+            Line($"{count} = load i64, ptr {countField}, !tbaa {TbaaHeader}");
+            Line($"{some} = icmp sgt i64 {count}, 0");
+            Line($"{strongField} = getelementptr inbounds i8, ptr {array}, i64 8");
+            Line($"{strong} = load i32, ptr {strongField}, !tbaa {TbaaHeader}");
+            Line($"{unique} = icmp eq i32 {strong}, 1");
+            Line($"{both} = and i1 {some}, {unique}");
+            Line($"br i1 {both}, label %{fast}, label %{slow}");
+
+            Continue(fast);
+            var elementsField = Fresh();
+            var elements = Fresh();
+            var lowered = Fresh();
+            var direct = Fresh();
+            Line($"{elementsField} = getelementptr inbounds i8, ptr {array}, i64 32");
+            Line($"{elements} = load ptr, ptr {elementsField}, !tbaa {TbaaHeader}");
+            Line($"{lowered} = sub nsw i64 {count}, 1");
+            Line($"store i64 {lowered}, ptr {countField}, !tbaa {TbaaHeader}");
+            Line($"{direct} = getelementptr inbounds {Type(arrayType.Element)}, ptr {elements}, i64 {lowered}");
+            Line($"br label %{done}");
+
+            Continue(slow);
+            var called = Fresh();
+            Line($"{called} = call ptr @sable_array_remove_last(ptr {slot}, ptr {module.ArrayMetadata(arrayType)})");
             Line($"br label %{done}");
 
             Continue(done);

@@ -59,6 +59,11 @@ enum {
     // changes size without walking itself for references to measure again.
     SABLE_LINKED = 16u,
 
+    // Bits 5 to 7: the size class the object's memory came from (see
+    // Memory, below); zero for memory from malloc.
+    SABLE_CLASS_SHIFT = 5,
+    SABLE_CLASS_MASK = 7u << SABLE_CLASS_SHIFT,
+
     SABLE_UNOWNED_ONE = 1u << 8,
 };
 
@@ -92,11 +97,195 @@ __attribute__((destructor)) static void sable_report(void) {
     }
 }
 
-// A new object, its count one and the rest of it zero: every field empty.
-void *sable_alloc(const SableMetadata *type, int64_t size) {
-    SableObject *object = calloc(1, (size_t)size);
-    if (object == NULL) {
+// ---- Memory ------------------------------------------------------------
+
+// Small blocks — most objects, and the elements of most arrays — come from
+// size classes kept here rather than from malloc: a free list per class,
+// refilled by carving slabs in order. Programs that make and drop many
+// small strings and arrays otherwise spend most of their time in malloc and
+// free, where a .NET program bumps a pointer (docs/04 §4.1 names a
+// size-class allocator; this is its first, smallest form). One task runs at
+// a time (see Concurrency), so the lists need no locks. A freed block goes
+// back on its class's list and stays there: the memory is the program's
+// until it ends, as a garbage-collected heap's is.
+//
+// An object records its class in its flags, so freeing one needs no lookup;
+// an array's elements are freed with their size, which the array knows.
+
+enum { SMALL_CLASSES = 8, SMALL_LARGEST = 256, SLAB_SIZE = 256 * 1024 };
+
+static const int64_t small_sizes[SMALL_CLASSES] = { 0, 32, 48, 64, 96, 128, 192, 256 };
+
+// The class for a size, by sixteenths: the smallest that holds it.
+static const uint8_t small_class_of[SMALL_LARGEST / 16 + 1] = { 1, 1, 1, 2, 3, 4, 4, 5, 5, 6, 6, 6, 6, 7, 7, 7, 7 };
+
+static void *small_free[SMALL_CLASSES];
+static char *slab_next, *slab_end;
+
+_Noreturn void sable_trap(const char *message);
+
+// The class for 'size' bytes, or zero: too large, or nothing at all.
+static inline unsigned small_class(int64_t size) {
+    return size > 0 && size <= SMALL_LARGEST ? small_class_of[(size + 15) >> 4] : 0;
+}
+
+static void *small_alloc(unsigned class) {
+    void *block = small_free[class];
+    if (block != NULL) {
+        small_free[class] = *(void **)block;
+        return block;
+    }
+
+    // What is left of the slab, too little for this class, is let go.
+    int64_t size = small_sizes[class];
+    if (slab_end - slab_next < size) {
+        slab_next = malloc(SLAB_SIZE);
+        if (slab_next == NULL) {
+            sable_trap("out of memory");
+        }
+
+        slab_end = slab_next + SLAB_SIZE;
+    }
+
+    block = slab_next;
+    slab_next += size;
+    return block;
+}
+
+static inline void small_release(void *block, unsigned class) {
+    *(void **)block = small_free[class];
+    small_free[class] = block;
+}
+
+// The large buffer freed last, kept rather than given back to the system: a
+// program that builds a large array, drops it and builds another — as a
+// loop over batches does — would otherwise have the system map and zero the
+// same memory afresh each time, which costs more than filling it. A
+// collected heap keeps its memory the same way. Its size is what its last
+// owner asked for: the block may be larger, never smaller.
+enum { LARGE_BUFFER = 1 << 20 };
+static void *large_spare;
+static int64_t large_spare_size;
+
+// The spare, if it holds 'size' bytes without wasting more than as much again.
+static void *take_spare(int64_t size) {
+    if (large_spare == NULL || large_spare_size < size || large_spare_size > 2 * size) {
+        return NULL;
+    }
+
+    void *buffer = large_spare;
+    large_spare = NULL;
+    return buffer;
+}
+
+// A large buffer let go: kept as the spare if it is the larger, freed otherwise.
+static void keep_spare(void *buffer, int64_t size) {
+    if (large_spare != NULL && large_spare_size >= size) {
+        free(buffer);
+        return;
+    }
+
+    free(large_spare);
+    large_spare = buffer;
+    large_spare_size = size;
+}
+
+// An array's elements: 'size' bytes, uninitialised.
+static void *buffer_alloc(int64_t size) {
+    unsigned class = small_class(size);
+    if (class != 0) {
+        return small_alloc(class);
+    }
+
+    void *buffer = size >= LARGE_BUFFER ? take_spare(size) : NULL;
+    if (buffer == NULL) {
+        buffer = malloc((size_t)(size > 0 ? size : 1));
+    }
+
+    if (buffer == NULL) {
         sable_trap("out of memory");
+    }
+
+    return buffer;
+}
+
+static void buffer_free(void *buffer, int64_t size) {
+    if (buffer == NULL) {
+        return;
+    }
+
+    unsigned class = small_class(size);
+    if (class != 0) {
+        small_release(buffer, class);
+    } else if (size >= LARGE_BUFFER) {
+        keep_spare(buffer, size);
+    } else {
+        free(buffer);
+    }
+}
+
+// Elements grown from 'old' bytes to 'size', kept as they were.
+static void *buffer_resize(void *buffer, int64_t old, int64_t size) {
+    unsigned from = buffer == NULL ? 0 : small_class(old), to = small_class(size);
+    if (buffer != NULL && from == 0 && to == 0) {
+        // Into the spare, when it fits: its pages are already the program's.
+        void *spare = size >= LARGE_BUFFER ? take_spare(size) : NULL;
+        if (spare != NULL) {
+            memcpy(spare, buffer, (size_t)(old < size ? old : size));
+            buffer_free(buffer, old);
+            return spare;
+        }
+
+        void *grown = realloc(buffer, (size_t)size);
+        if (grown == NULL) {
+            sable_trap("out of memory");
+        }
+
+        return grown;
+    }
+
+    if (buffer != NULL && from == to) {
+        return buffer;
+    }
+
+    void *grown = buffer_alloc(size);
+    if (buffer != NULL) {
+        memcpy(grown, buffer, (size_t)(old < size ? old : size));
+        buffer_free(buffer, old);
+    }
+
+    return grown;
+}
+
+// An object's memory, given back: to its class, or to malloc.
+static void object_free(SableObject *object) {
+    unsigned class = (object->flags & SABLE_CLASS_MASK) >> SABLE_CLASS_SHIFT;
+    if (class != 0) {
+        small_release(object, class);
+    } else {
+        free(object);
+    }
+}
+
+// A new object, its count one; the rest zero when 'zero' is set, and
+// otherwise whatever was there, for the caller to write.
+static void *alloc_object(const SableMetadata *type, int64_t size, bool zero) {
+    unsigned class = small_class(size);
+    SableObject *object;
+    if (class != 0) {
+        object = small_alloc(class);
+        if (zero) {
+            memset(object, 0, (size_t)size);
+        }
+
+        object->flags = class << SABLE_CLASS_SHIFT;
+    } else {
+        object = zero ? calloc(1, (size_t)size) : malloc((size_t)size);
+        if (object == NULL) {
+            sable_trap("out of memory");
+        }
+
+        object->flags = 0;
     }
 
     object->type = type;
@@ -104,6 +293,11 @@ void *sable_alloc(const SableMetadata *type, int64_t size) {
     live_objects++;
     allocations++;
     return object;
+}
+
+// A new object, its count one and the rest of it zero: every field empty.
+void *sable_alloc(const SableMetadata *type, int64_t size) {
+    return alloc_object(type, size, true);
 }
 
 // An object in the caller's frame: the header, and the rest zero.
@@ -159,7 +353,7 @@ void sable_release(void *pointer) {
 
     live_objects--;
     if (!(object->flags & SABLE_STACK)) {
-        free(object);
+        object_free(object);
     }
 }
 
@@ -389,7 +583,7 @@ void sable_unowned_release(void *pointer) {
     object->flags -= SABLE_UNOWNED_ONE;
     if (unowned_count(object) == 0 && (object->flags & SABLE_DEINITED)) {
         live_objects--;
-        free(object);
+        object_free(object);
     }
 }
 
@@ -605,12 +799,24 @@ static int64_t count_scalars(const char *bytes, int64_t length) {
     return count;
 }
 
-static SableString *make_string(const char *bytes, int64_t length) {
-    SableString *string = sable_alloc(&sable_string_metadata, (int64_t)sizeof(SableString) + length);
-    memcpy(string->bytes, bytes, (size_t)length);
+// A string of 'length' bytes still to be written, holding 'count' scalars:
+// the bytes are not zeroed first, as every caller writes them all.
+static SableString *new_string(int64_t length, int64_t count) {
+    SableString *string = alloc_object(&sable_string_metadata, (int64_t)sizeof(SableString) + length, false);
     string->length = length;
-    string->count = count_scalars(bytes, length);
+    string->count = count;
     return string;
+}
+
+// A string of bytes whose scalars are known to number 'count'.
+static SableString *make_counted(const char *bytes, int64_t length, int64_t count) {
+    SableString *string = new_string(length, count);
+    memcpy(string->bytes, bytes, (size_t)length);
+    return string;
+}
+
+static SableString *make_string(const char *bytes, int64_t length) {
+    return make_counted(bytes, length, count_scalars(bytes, length));
 }
 
 static SableString *make_cstring(const char *text) {
@@ -690,12 +896,86 @@ bool sable_string_equal(const SableString *a, const SableString *b) {
     return a->length == b->length && memcmp(a->bytes, b->bytes, (size_t)a->length) == 0;
 }
 
+// The pieces end to end, in one allocation: an interpolation, or 'a + b + c',
+// rather than a string for every '+'.
+SableString *sable_string_concat_many(int64_t n, SableString *const *pieces) {
+    int64_t length = 0, count = 0;
+    for (int64_t i = 0; i < n; i++) {
+        length += pieces[i]->length;
+        count += pieces[i]->count;
+    }
+
+    SableString *s = new_string(length, count);
+    char *end = s->bytes;
+    for (int64_t i = 0; i < n; i++) {
+        memcpy(end, pieces[i]->bytes, (size_t)pieces[i]->length);
+        end += pieces[i]->length;
+    }
+
+    return s;
+}
+
+// A hash of the bytes, eight at a time, never negative: what Sable.Core's
+// String.hash() gives. The interpreter computes exactly this
+// (SilInterpreter.StringHash), so the two print the same.
+int64_t sable_string_hash(const SableString *s) {
+    const uint64_t multiplier = 0x9E3779B97F4A7C15ull;
+    const unsigned char *bytes = (const unsigned char *)s->bytes;
+    uint64_t h = 0x243F6A8885A308D3ull ^ (uint64_t)s->length;
+    int64_t i = 0;
+    for (; i + 8 <= s->length; i += 8) {
+        uint64_t word = 0;
+        for (int b = 0; b < 8; b++) {
+            word |= (uint64_t)bytes[i + b] << (8 * b);
+        }
+
+        h = (h ^ word) * multiplier;
+        h ^= h >> 29;
+    }
+
+    if (i < s->length) {
+        uint64_t tail = 0;
+        for (int shift = 0; i < s->length; i++, shift += 8) {
+            tail |= (uint64_t)bytes[i] << shift;
+        }
+
+        h = (h ^ tail) * multiplier;
+        h ^= h >> 29;
+    }
+
+    h ^= h >> 32;
+    h *= 0xD6E8FEB86659FD93ull;
+    h ^= h >> 32;
+    return (int64_t)(h & INT64_MAX);
+}
+
+// -1, 0 or 1 as 'a' orders before, with or after 'b': byte by byte, which
+// for UTF-8 is scalar by scalar, a prefix first.
+int64_t sable_string_compare(const SableString *a, const SableString *b) {
+    int64_t shorter = a->length < b->length ? a->length : b->length;
+
+    // Most strings that are sorted are short, and differ early: a byte loop
+    // decides those without the call to memcmp.
+    int64_t i = 0;
+    for (; i < shorter && i < 16; i++) {
+        unsigned char x = (unsigned char)a->bytes[i], y = (unsigned char)b->bytes[i];
+        if (x != y) {
+            return x < y ? -1 : 1;
+        }
+    }
+
+    int order = i < shorter ? memcmp(a->bytes + i, b->bytes + i, (size_t)(shorter - i)) : 0;
+    if (order != 0) {
+        return order < 0 ? -1 : 1;
+    }
+
+    return a->length < b->length ? -1 : a->length > b->length ? 1 : 0;
+}
+
 SableString *sable_string_concat(const SableString *a, const SableString *b) {
-    SableString *s = sable_alloc(&sable_string_metadata, (int64_t)sizeof(SableString) + a->length + b->length);
+    SableString *s = new_string(a->length + b->length, a->count + b->count);
     memcpy(s->bytes, a->bytes, (size_t)a->length);
     memcpy(s->bytes + a->length, b->bytes, (size_t)b->length);
-    s->length = a->length + b->length;
-    s->count = a->count + b->count;
     return s;
 }
 
@@ -715,6 +995,11 @@ int32_t sable_string_at(const SableString *s, int64_t index) {
 SableString *sable_string_slice(const SableString *s, int64_t from, int64_t to) {
     if (from < 0 || to > s->count || from > to) {
         sable_trap("string slice out of range");
+    }
+
+    // Of an ASCII string, scalars are bytes: nothing to count.
+    if (s->count == s->length) {
+        return make_counted(s->bytes + from, to - from, to - from);
     }
 
     int64_t start = offset_of(s, from);
@@ -764,10 +1049,22 @@ SableString *sable_string_from_char(int32_t scalar) {
     return make_string(bytes, encode(scalar, bytes));
 }
 
+// Digits written backwards into a buffer, not through snprintf: an
+// interpolated number is common, and the format machinery is most of its cost.
 SableString *sable_string_from_int(int64_t value) {
-    char text[32];
-    snprintf(text, sizeof text, "%lld", (long long)value);
-    return make_cstring(text);
+    char text[24];
+    char *end = text + sizeof text, *start = end;
+    uint64_t magnitude = value < 0 ? 0 - (uint64_t)value : (uint64_t)value;
+    do {
+        *--start = (char)('0' + magnitude % 10);
+        magnitude /= 10;
+    } while (magnitude != 0);
+
+    if (value < 0) {
+        *--start = '-';
+    }
+
+    return make_counted(start, end - start, end - start);
 }
 
 // The shortest %.Ng that reads back as the same double — 0.1, not
@@ -987,7 +1284,7 @@ void sable_array_destroy(void *pointer) {
         }
     }
 
-    free(array->elements);
+    buffer_free(array->elements, array->capacity * type->element_size);
 }
 
 int64_t sable_array_count(const SableArray *array) {
@@ -1014,7 +1311,7 @@ static SableArray *unique(SableArray **slot, const SableMetadata *type, int64_t 
     if (array != NULL) {
         int64_t size = type->element_size;
         copy->capacity = array->count + room;
-        copy->elements = malloc((size_t)(copy->capacity * size));
+        copy->elements = buffer_alloc(copy->capacity * size);
         for (int64_t i = 0; i < array->count; i++) {
             if (type->copy_element != NULL) {
                 type->copy_element(copy->elements + i * size, array->elements + i * size);
@@ -1043,11 +1340,9 @@ void sable_array_make_unique(SableArray **slot, const SableMetadata *type) {
 void *sable_array_append_slot(SableArray **slot, const SableMetadata *type) {
     SableArray *array = unique(slot, type, 1);
     if (array->count == array->capacity) {
+        int64_t old = array->capacity * type->element_size;
         array->capacity = array->capacity < 4 ? 4 : array->capacity * 2;
-        array->elements = realloc(array->elements, (size_t)(array->capacity * type->element_size));
-        if (array->elements == NULL) {
-            sable_trap("out of memory");
-        }
+        array->elements = buffer_resize(array->elements, old, array->capacity * type->element_size);
     }
 
     return array->elements + array->count++ * type->element_size;
@@ -1087,7 +1382,7 @@ SableArray *sable_array_slice(const SableArray *array, int64_t from, int64_t to,
     SableArray *copy = sable_alloc(type, (int64_t)sizeof(SableArray));
     copy->capacity = to - from;
     copy->count = to - from;
-    copy->elements = malloc((size_t)(copy->capacity * size));
+    copy->elements = buffer_alloc(copy->capacity * size);
     for (int64_t i = 0; i < copy->count; i++) {
         const char *source = array->elements + (from + i) * size;
         if (type->copy_element != NULL) {
@@ -1114,6 +1409,33 @@ static const SableMetadata string_array_metadata = {
 };
 
 SableArray *sable_string_split(const SableString *s, int32_t separator) {
+    // An ASCII separator is a byte that never occurs inside another scalar's
+    // encoding: the parts are found with memchr, counted first so that the
+    // array is made once at its size, and an ASCII string's parts need no
+    // scalars counted.
+    if (separator < 0x80) {
+        int64_t n = 1;
+        for (const char *at = s->bytes, *end = s->bytes + s->length;
+             (at = memchr(at, separator, (size_t)(end - at))) != NULL; at++) {
+            n++;
+        }
+
+        SableArray *parts = sable_alloc(&string_array_metadata, (int64_t)sizeof(SableArray));
+        parts->elements = buffer_alloc(n * (int64_t)sizeof(SableString *));
+        parts->capacity = n;
+        bool ascii = s->count == s->length;
+        const char *start = s->bytes, *end = s->bytes + s->length;
+        for (int64_t i = 0; i < n; i++) {
+            const char *stop = i + 1 < n ? memchr(start, separator, (size_t)(end - start)) : end;
+            int64_t length = stop - start;
+            ((SableString **)parts->elements)[i] = ascii ? make_counted(start, length, length) : make_string(start, length);
+            parts->count = i + 1;
+            start = stop + 1;
+        }
+
+        return parts;
+    }
+
     SableArray *parts = NULL;
     int64_t start = 0;
     for (int64_t i = 0; i <= s->length;) {
@@ -1362,7 +1684,9 @@ static SableBlock *unique_block(SableBlock **slot, int64_t room) {
     }
 
     int64_t capacity = needed <= block->capacity ? block->capacity : needed < 2 * block->capacity ? 2 * block->capacity : needed;
-    if (block->header.strong == 1 && !(block->header.flags & (SABLE_IMMORTAL | SABLE_STACK))) {
+    // Grown in place, by realloc, only when it came from malloc: one from a
+    // size class is copied below, as a shared one is.
+    if (block->header.strong == 1 && !(block->header.flags & (SABLE_IMMORTAL | SABLE_STACK | SABLE_CLASS_MASK))) {
         SableBlock *grown = realloc(block, sizeof(SableBlock) + (size_t)capacity);
         if (grown == NULL) {
             sable_trap("out of memory");
@@ -1674,7 +1998,7 @@ SableArray *sable_inline_bytes(const SableInlineLayout *layout, const uint8_t *p
 
     SableArray *array = sable_alloc(type, (int64_t)sizeof(SableArray));
     array->count = array->capacity = size;
-    array->elements = malloc((size_t)size);
+    array->elements = buffer_alloc(size);
     memcpy(array->elements, p, (size_t)size);
     return array;
 }

@@ -485,18 +485,31 @@ public sealed class ForwardCopies : ISilPass {
             return false;
         }
 
+        // A borrow that ends before the destroy is carried on past it —
+        // 'before(a[i], a[j])' borrows the array for each read and ends it at
+        // once — as long as nothing between could change what it borrows:
+        // for a local slot, nothing writes the slot; for anything else, the
+        // rule below, nothing calls out.
+        EndBorrowInst? early = null;
         for (var k = index + 1; k < end; k++) {
             var instruction = block.Instructions[k];
+            if (instruction is EndBorrowInst { Borrowed: var endedHere } endsRoot && ReferenceEquals(endedHere, root)
+                && root is LoadBorrowInst && early is null) {
+                early = endsRoot;
+                continue;
+            }
+
             if (root is not null && (Uses.Consumes(instruction, root) || instruction is EndBorrowInst { Borrowed: var ended } && ReferenceEquals(ended, root))) {
                 return false;
             }
 
             // Anything that could change the array in place. An owned array is
             // ours alone; one borrowed from a local slot changes only through
-            // the slot's address; one borrowed from a parameter, through
-            // anything that calls out or is given an address.
+            // the slot's address — reading it again, by a borrow, does not;
+            // one borrowed from a parameter, through anything that calls out
+            // or is given an address.
             if (root is LoadBorrowInst { Address: AllocStackInst slot }) {
-                if (instruction.Operands.Any(o => ReferenceEquals(o, slot))) {
+                if (instruction is not LoadBorrowInst && instruction.Operands.Any(o => ReferenceEquals(o, slot))) {
                     return false;
                 }
             } else if ((root is null || root is LoadBorrowInst)
@@ -506,6 +519,11 @@ public sealed class ForwardCopies : ISilPass {
         }
 
         read.Rename("array_get_borrowed");
+        if (early is not null) {
+            block.Instructions.Remove(early);
+            block.Instructions.Insert(block.Instructions.IndexOf(destroy) + 1, early);
+        }
+
         block.Instructions.Remove(destroy);
         return true;
     }

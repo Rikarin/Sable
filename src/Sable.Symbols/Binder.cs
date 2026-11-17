@@ -4564,7 +4564,12 @@ public sealed partial class Binder {
         // A type of the program's own, or a type parameter, uses the operators
         // it declares, or its constraints require: 'a == b' on two Moneys is
         // Money's '=='. '!=', '>', '<=' and '>=' follow from '==' and '<'.
-        if (!IsBuiltinOperand(left.Type) || !IsBuiltinOperand(right.Type)) {
+        // Strings are ordered the same way: there is no ordering builtin for
+        // them, only Sable.Core's '<'.
+        var stringOrdering = kind is BinaryOperatorKind.LessThan or BinaryOperatorKind.LessThanOrEqual
+                or BinaryOperatorKind.GreaterThan or BinaryOperatorKind.GreaterThanOrEqual
+            && left.Type.Equals(Core.String) && right.Type.Equals(Core.String);
+        if (!IsBuiltinOperand(left.Type) || !IsBuiltinOperand(right.Type) || stringOrdering) {
             if (FindUserOperator(operatorToken.Text, left.Type, right.Type) is { } own) {
                 return new BoundBinaryOperator(syntax, UserResultType(own, left.Type), BinaryOperatorKind.UserDefined, left, right, own);
             }

@@ -847,8 +847,19 @@ public sealed partial class SilInterpreter(SilModule module, int stepLimit = 10_
             case "string_concat":
                 return Allocate(new HeapString(Text(operands[0]).Value + Text(operands[1]).Value));
 
+            case "string_concat_many":
+                return Allocate(new HeapString(string.Concat(operands.Select(o => Text(o).Value))));
+
             case "string_count":
                 return (long)Text(operands[0]).Scalars.Count;
+
+            case "string_hash":
+                return StringHash(Encoding.UTF8.GetBytes(Text(operands[0]).Value));
+
+            // UTF-8's byte order is the scalars' order, as the runtime compares.
+            case "string_compare":
+                return (long)Math.Sign(Encoding.UTF8.GetBytes(Text(operands[0]).Value).AsSpan()
+                    .SequenceCompareTo(Encoding.UTF8.GetBytes(Text(operands[1]).Value)));
 
             case "string_at": {
                 var scalars = Text(operands[0]).Scalars;
@@ -1395,6 +1406,38 @@ public sealed partial class SilInterpreter(SilModule module, int stepLimit = 10_
 
     /// <summary>The whitespace the runtime knows: ASCII's.</summary>
     static bool IsWhitespace(Rune c) => c.Value is ' ' or '\t' or '\n' or '\r' or '\v' or '\f';
+
+    /// <summary>
+    ///     A string's hash, from its UTF-8 bytes: <c>sable_string_hash</c>
+    ///     exactly, eight bytes at a time, so a program prints the same hash
+    ///     natively and interpreted.
+    /// </summary>
+    static long StringHash(byte[] bytes) {
+        unchecked {
+            const ulong multiplier = 0x9E3779B97F4A7C15;
+            var h = 0x243F6A8885A308D3UL ^ (ulong)bytes.Length;
+            var i = 0;
+            for (; i + 8 <= bytes.Length; i += 8) {
+                h = (h ^ System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(bytes.AsSpan(i))) * multiplier;
+                h ^= h >> 29;
+            }
+
+            if (i < bytes.Length) {
+                ulong tail = 0;
+                for (var shift = 0; i < bytes.Length; i++, shift += 8) {
+                    tail |= (ulong)bytes[i] << shift;
+                }
+
+                h = (h ^ tail) * multiplier;
+                h ^= h >> 29;
+            }
+
+            h ^= h >> 32;
+            h *= 0xD6E8FEB86659FD93;
+            h ^= h >> 32;
+            return (long)(h & long.MaxValue);
+        }
+    }
 
     /// <summary>An optional sign and decimal digits: what <c>toInt</c> reads, and nothing else.</summary>
     static bool IsInteger(string text) {

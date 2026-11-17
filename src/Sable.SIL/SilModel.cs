@@ -1183,6 +1183,11 @@ public static class SilBuiltins {
                 return new([], SilType.Unit);
         }
 
+        // Strings joined end to end in one allocation: an interpolation, or 'a + b + c'.
+        if (name == "string_concat_many") {
+            return operands.Count >= 2 && operands.All(static o => o == SilType.String) ? new([..operands], SilType.String) : null;
+        }
+
         // 'x is Dog': whether the object is of the class named, or a subclass of it.
         if (name.StartsWith("class_is:", StringComparison.Ordinal)) {
             return operands is [ClassType] ? new([operands[0]], SilType.Bool) : null;
@@ -1396,6 +1401,8 @@ public static class SilBuiltins {
         Add("string_index_of", SilType.Int, SilType.String, SilType.Char);
         Add("string_trimmed", SilType.String, SilType.String);
         Add("string_split", new ArrayType(SilType.String), SilType.String, SilType.Char);
+        Add("string_hash", SilType.Int, SilType.String);
+        Add("string_compare", SilType.Int, SilType.String, SilType.String);
         Add("string_from_Char", SilType.String, SilType.Char);
         foreach (var number in SilType.Numbers) {
             Add($"string_from_{number}", SilType.String, number);

@@ -1,0 +1,94 @@
+module Sable.Collections
+
+/// Keys to values, in the order the keys were added — an order that
+/// removing a key closes up rather than leaving a gap in, and that can be
+/// read by position. The keys and values are arrays in that order, with a
+/// HashMap from each key to its position. Looking up, adding and changing
+/// are constant time; removing is linear, as every later position moves
+/// down one.
+public class OrderedDictionary<Key: Hashable, Value> {
+    var orderedKeys: Key[>..] = []
+    var orderedValues: Value[>..] = []
+    var positions: HashMap<Key, Int> = HashMap<Key, Int>()
+
+    public init() { }
+
+    public var count: Int { get { return orderedKeys.count } }
+    public var isEmpty: Bool { get { return orderedKeys.count == 0 } }
+
+    /// The value for the key, or none.
+    public fn get(_ key: Key) -> Value? {
+        if let position = positions.get(key) {
+            return orderedValues[position]
+        }
+        return none
+    }
+
+    public fn contains(_ key: Key) -> Bool {
+        return positions.contains(key)
+    }
+
+    /// Where the key is in the order, or none.
+    public fn index(of key: Key) -> Int? {
+        return positions.get(key)
+    }
+
+    /// Sets the key's value: a new key goes at the end, a key already there
+    /// keeps its place.
+    public fn set(_ key: Key, _ value: Value) {
+        if let position = positions.get(key) {
+            orderedValues[position] = value
+            return
+        }
+        positions.set(key, orderedKeys.count)
+        orderedKeys.append(key)
+        orderedValues.append(value)
+    }
+
+    /// Removes the key, closing up the order behind it; its value, or none
+    /// if it was not there.
+    public fn remove(_ key: Key) -> Value? {
+        if let position = positions.get(key) {
+            let value = orderedValues[position]
+            positions.remove(key)
+            var i = position
+            while i + 1 < orderedKeys.count {
+                orderedKeys[i] = orderedKeys[i + 1]
+                orderedValues[i] = orderedValues[i + 1]
+                positions.set(orderedKeys[i], i)
+                i = i + 1
+            }
+            orderedKeys.removeLast()
+            orderedValues.removeLast()
+            return value
+        }
+        return none
+    }
+
+    /// The key at 'position' in the order; traps outside 0..<count.
+    public fn key(at position: Int) -> Key {
+        return orderedKeys[position]
+    }
+
+    /// The value at 'position' in the order; traps outside 0..<count.
+    public fn value(at position: Int) -> Value {
+        return orderedValues[position]
+    }
+
+    /// The keys, in order.
+    public fn keys() -> Key[>..] {
+        return orderedKeys
+    }
+
+    /// The values, in their keys' order.
+    public fn values() -> Value[>..] {
+        return orderedValues
+    }
+
+    /// Removes every key.
+    public fn removeAll() {
+        orderedKeys = []
+        orderedValues = []
+        positions.removeAll()
+    }
+}

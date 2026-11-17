@@ -1,0 +1,42 @@
+module Sort
+
+// Sorting against .NET's List.Sort: a million pseudo-random Ints, then
+// 200,000 Strings, each sorted and checked.
+
+import Sable.Collections
+
+@main
+fn main() {
+    var numbers: Int[>..] = []
+    var x = 42
+    var i = 0
+    while i < 1000000 {
+        x = (x * 1103515245 + 12345) % 2147483648
+        numbers.append(x)
+        i = i + 1
+    }
+
+    var words: String[>..] = []
+    i = 0
+    while i < 200000 {
+        x = (x * 1103515245 + 12345) % 2147483648
+        words.append("w\(x % 1000000)")
+        i = i + 1
+    }
+
+    let a = sorted(numbers)
+    let b = sorted(words)
+    var ordered = true
+    i = 1
+    while i < a.count {
+        if a[i] < a[i - 1] { ordered = false }
+        i = i + 1
+    }
+    i = 1
+    while i < b.count {
+        if b[i] < b[i - 1] { ordered = false }
+        i = i + 1
+    }
+
+    print("\(ordered) \(a[0]) \(a[a.count / 2]) \(b[0]) \(b[b.count - 1])")
+}

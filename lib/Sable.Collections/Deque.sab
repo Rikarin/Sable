@@ -1,0 +1,152 @@
+module Sable.Collections
+
+/// A double-ended queue: adding and removing at either end in constant
+/// time, and reading by position. A ring buffer — the elements run from
+/// 'head' round the end of the slots and back to the start — whose slots
+/// are optional, so that a removed element is released when it is removed
+/// rather than when its slot is next written.
+public class Deque<Element> {
+    var slots: Element?[>..] = []
+    var head: Int = 0
+    var used: Int = 0
+
+    public init() { }
+
+    /// A deque of the values, in their order.
+    public init(_ values: Element[>..]) {
+        for value in values {
+            slots.append(value)
+        }
+        used = values.count
+    }
+
+    public var count: Int { get { return used } }
+    public var isEmpty: Bool { get { return used == 0 } }
+
+    /// The slot of the element at 'index' from the front.
+    fn slot(_ index: Int) -> Int {
+        let at = head + index
+        return at < slots.count ? at : at - slots.count
+    }
+
+    /// Twice the slots, the elements moved to the start of them in order.
+    fn grow() {
+        var size = slots.count * 2
+        if size < 8 {
+            size = 8
+        }
+        var grown: Element?[>..] = []
+        var i = 0
+        while i < used {
+            grown.append(slots[slot(i)])
+            i = i + 1
+        }
+        while i < size {
+            grown.append(none)
+            i = i + 1
+        }
+        slots = grown
+        head = 0
+    }
+
+    /// Adds the value at the back.
+    public fn append(_ value: Element) {
+        if used == slots.count {
+            grow()
+        }
+        slots[slot(used)] = value
+        used = used + 1
+    }
+
+    /// Adds the value at the front.
+    public fn prepend(_ value: Element) {
+        if used == slots.count {
+            grow()
+        }
+        head = head == 0 ? slots.count - 1 : head - 1
+        slots[head] = value
+        used = used + 1
+    }
+
+    /// Removes the front element and gives it back, or none when empty.
+    public fn removeFirst() -> Element? {
+        if used == 0 {
+            return none
+        }
+        let value = slots[head]
+        slots[head] = none
+        head = head + 1 == slots.count ? 0 : head + 1
+        used = used - 1
+        return value
+    }
+
+    /// Removes the back element and gives it back, or none when empty.
+    public fn removeLast() -> Element? {
+        if used == 0 {
+            return none
+        }
+        let at = slot(used - 1)
+        let value = slots[at]
+        slots[at] = none
+        used = used - 1
+        return value
+    }
+
+    /// The front element, or none.
+    public var first: Element? {
+        get {
+            if used == 0 {
+                return none
+            }
+            return slots[head]
+        }
+    }
+
+    /// The back element, or none.
+    public var last: Element? {
+        get {
+            if used == 0 {
+                return none
+            }
+            return slots[slot(used - 1)]
+        }
+    }
+
+    /// The slot of the element at 'index', which must be one: outside
+    /// 0..<count it traps, as indexing an array does — by indexing one.
+    fn checked(_ index: Int) -> Int {
+        if index < 0 || index >= used {
+            let nothing: Int[>..] = []
+            return nothing[index]
+        }
+        return slot(index)
+    }
+
+    /// The element 'index' places from the front; traps outside 0..<count.
+    public fn at(_ index: Int) -> Element {
+        return slots[checked(index)]!
+    }
+
+    /// Replaces the element 'index' places from the front; traps outside 0..<count.
+    public fn set(_ index: Int, _ value: Element) {
+        slots[checked(index)] = value
+    }
+
+    /// Removes every element.
+    public fn removeAll() {
+        slots = []
+        head = 0
+        used = 0
+    }
+
+    /// The elements, front to back, in an array.
+    public fn elements() -> Element[>..] {
+        var result: Element[>..] = []
+        var i = 0
+        while i < used {
+            result.append(slots[slot(i)]!)
+            i = i + 1
+        }
+        return result
+    }
+}

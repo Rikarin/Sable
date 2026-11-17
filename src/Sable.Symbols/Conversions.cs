@@ -92,10 +92,16 @@ internal sealed class Conversions(CoreTypes core)
         if (constraint is CompositionTypeSymbol composition)
             return composition.Parts.All(part => Satisfies(source, part));
 
-        // A type parameter stands for a type nothing is known about yet.
-        if (constraint is TypeParameterSymbol || source is TypeParameterSymbol) return true;
+        // A constraint that is itself a parameter stands for a type nothing
+        // is known about yet, so anything may satisfy it.
+        if (constraint is TypeParameterSymbol) return true;
 
         if (source.Equals(constraint)) return true;
+
+        // A type parameter satisfies only what it was constrained to: an
+        // unconstrained one conforms to nothing.
+        if (source is TypeParameterSymbol parameter)
+            return parameter.Constraints.Any(c => Satisfies(c, constraint));
 
         if (source is OpaqueTypeSymbol sourceOpaque)
             return Satisfies(sourceOpaque.Constraint, constraint);

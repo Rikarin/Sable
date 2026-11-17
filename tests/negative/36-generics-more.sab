@@ -1,0 +1,78 @@
+module Negative.GenericsMore
+
+public protocol Named { fn name() -> String }
+public protocol Sized { fn size() -> Int }
+
+public struct Person: Named {
+    public var label: String
+    public fn name() -> String { return label }
+}
+
+public struct Tag: Named, Sized {
+    public fn name() -> String { return "tag" }
+    public fn size() -> Int { return 1 }
+}
+
+public struct Box<Item> {
+    public var item: Item
+
+    public fn held() -> Item {
+        return item
+    }
+
+    public fn mapped<Other>(_ f: (Item) -> Other) -> Box<Other> {
+        return Box { item: f(item) }
+    }
+}
+
+fn needsBoth<T: Named & Sized>(_ value: T) -> String { return value.name() }
+
+fn onlyOne(_ p: Person) -> String {
+    return needsBoth(p)                 //! S3007 cannot be called
+}
+
+fn bothSatisfied(_ t: Tag) -> String {
+    return needsBoth(t)
+}
+
+fn aBoxIsInvariant(_ b: Box<Person>) -> Box<any Named> {
+    return b                            //! S3004
+}
+
+fn aNestedCallInfers(_ b: Box<Int>) -> Box<String> {
+    return b.mapped(x => x.toString())
+}
+
+fn aNestedCallStillChecks(_ b: Box<Int>) -> Box<Int> {
+    return b.mapped(x => x.toString())  //! S3004
+}
+
+fn aTypeParameterIsNotAValue<T>(_ value: T) -> Int {
+    return T                            //! S2002 no symbol named 'T'
+}
+
+fn aMethodTypeParameterIsSeparate<T>(_ b: Box<T>) -> T {
+    return b.held()
+}
+
+fn constraintsCombine<T: Named>(_ value: T) -> String {
+    return describeNamed(value)
+}
+
+fn describeNamed(_ value: some Named) -> String { return value.name() }
+
+fn constraintsDoNotAppearFromNowhere<T>(_ value: T) -> String {
+    return describeNamed(value)         //! S3007 cannot be called
+}
+
+fn recursiveGenericCall<T>(_ value: T) -> Int {
+    return recursiveGenericCall(value)
+}
+
+fn genericWithDefaultArgument<T>(_ value: T, _ times: Int = 1) -> Int {
+    return times
+}
+
+fn callingItWithoutTheDefault(_ p: Person) -> Int {
+    return genericWithDefaultArgument(p)
+}

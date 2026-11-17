@@ -83,7 +83,8 @@ dotnet test Sable.slnx
 
 ## Status
 
-**Phase 0, in progress** — see [docs/04-implementation-plan.md](docs/04-implementation-plan.md).
+**Phase 0 complete; Phase 1 nearly so** — see
+[docs/04-implementation-plan.md](docs/04-implementation-plan.md).
 
 | Component | State |
 |---|---|
@@ -117,6 +118,16 @@ dotnet test Sable.slnx
 | `Sable.Symbols` — negative-diagnostic corpus (601 cases) | done |
 | `Sable.Symbols` — throughput: 100,000 lines in under 5 s | done |
 | Everything downstream (SIL, codegen, runtime) | not started |
+
+Phase 1's exit criteria, as docs/04 §1.4 states them:
+
+| Criterion | State |
+|---|---|
+| The full type system of `docs/03` is checked | done, bar `rethrows` |
+| ≥ 600 negative programs, each asserting code, span and message | 601, over 95 diagnostics |
+| `AnalyzeDataFlow` correct on a 300-case corpus | 25 cases so far |
+| Type-checking 100,000 lines in under 5 s | 0.93 s |
+| Go/no-go: 10,000 lines of real Sable | ~2,000 in `tests/corpus/` |
 
 **1,097 tests green**, and every file in [examples/](examples/) parses as a
 complete compilation unit with no diagnostics and an exact round-trip.

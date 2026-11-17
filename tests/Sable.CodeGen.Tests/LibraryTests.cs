@@ -222,6 +222,91 @@ fn main() {
         Assert.Contains("argument index out of range", run.Stderr, StringComparison.Ordinal);
     }
 
+    /// <summary>Sable.Time: durations, the monotonic clock, sleeping, and UTC dates either side of the epoch.</summary>
+    [Fact]
+    public void TimeIsWrittenInSable() =>
+        Assert.Equal(
+            "1m 30.250s\n1.500s\n3.250ms\n17ns\n2h 0m 0.000s\n-12.000ms\ntrue\n90\n1970-01-01T00:00:00Z\n4\n2026-11-18T11:06:40Z\n322\n1969-12-31T23:59:59Z\n2000-02-29T00:00:00Z\n1709251199\n2024-03-01T00:00:00Z\n4\ntrue\n1600-03-01\n235620h 30m 0.000s\ntrue\nfalse\n29\ntrue\ntrue\ntrue\n",
+            AssertAgree("""
+                module P
+                import Sable.Time
+
+                @main
+                fn main() {
+                    let d = Duration.seconds(90) + Duration.milliseconds(250)
+                    print(d.toString())
+                    print(Duration.milliseconds(1500).toString())
+                    print(Duration.microseconds(3250).toString())
+                    print(Duration.nanoseconds(17).toString())
+                    print(Duration.hours(2).toString())
+                    print((Duration.zero() - Duration.milliseconds(12)).toString())
+                    print(d > Duration.minutes(1))
+                    print(d.totalSeconds)
+                    let epoch = DateTime.fromUnix(0)
+                    print(epoch.iso8601())
+                    print(epoch.weekday)
+                    let t = DateTime.fromUnix(1795000000)
+                    print(t.iso8601())
+                    print(t.dayOfYear)
+                    print(DateTime.fromUnix(-1).iso8601())
+                    print(DateTime.fromUnix(951782400).iso8601())
+                    if let leap = DateTime.parse("2024-02-29T23:59:59Z") {
+                        print(leap.secondsSinceEpoch)
+                        print(leap.adding(Duration.seconds(1)).iso8601())
+                        print(leap.weekday)
+                    }
+                    print(DateTime.parse("2023-02-29") == none)
+                    print(DateTime.parse("1600-03-01")?.isoDate() ?? "-")
+                    let a = DateTime.of(year: 2000, month: 1, day: 1, hour: 0, minute: 0, second: 0) ?? epoch
+                    let b = DateTime.of(year: 2026, month: 11, day: 17, hour: 12, minute: 30, second: 0) ?? epoch
+                    print(b.durationSince(a).toString())
+                    print(a < b)
+                    print(isLeapYear(1900))
+                    print(daysInMonth(2024, 2))
+                    let start = Instant.now()
+                    Clock.sleep(Duration.milliseconds(20))
+                    print(start.elapsed >= Duration.milliseconds(20))
+                    let took = Clock.measure({ Clock.sleep(Duration.milliseconds(5)) })
+                    print(took >= Duration.milliseconds(5))
+                    print(DateTime.now().year >= 2026)
+                }
+                """).Stdout
+        );
+
+    /// <summary>'?.' reaches a field or a method through any optional, not only a local's.</summary>
+    [Fact]
+    public void OptionalChainingReachesThroughACallsResult() =>
+        Assert.Equal(
+            "6\n8\n-1\n",
+            AssertAgree("""
+                module P
+                struct Box {
+                    var n: Int
+                    fn twice() -> Int { return n * 2 }
+                    static fn make(_ ok: Bool) -> Box? {
+                        if ok { return Box { n: 4 } }
+                        return none
+                    }
+                }
+                @main
+                fn main() {
+                    let b: Box? = Box { n: 3 }
+                    print(b?.twice() ?? -1)
+                    print(Box.make(true)?.twice() ?? -1)
+                    print(Box.make(false)?.n ?? -1)
+                }
+                """).Stdout
+        );
+
+    /// <summary>An error in the library is reported in the library's file, whatever its offset.</summary>
+    [Fact]
+    public void AnErrorInTheLibraryIsNotPlacedInTheProgram() {
+        var result = Pipeline.Compile(new SourceText("module H\nimport Sable.Time\n@main\nfn main() {\n    let d: Duration = 5\n}\n", "test.sab"));
+        Assert.False(result.Succeeded);
+        Assert.Contains(result.Errors, static e => e.Contains("test.sab:5:", StringComparison.Ordinal));
+        Assert.DoesNotContain(result.Errors, static e => e.Contains("lib/", StringComparison.Ordinal));
+    }
+
     /// <summary>Only what a program reaches is built: the library costs a program that does not use it nothing.</summary>
     [Fact]
     public void WhatAProgramDoesNotUseIsNotBuilt() {

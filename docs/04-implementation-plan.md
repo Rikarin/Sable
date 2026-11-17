@@ -747,9 +747,19 @@ Written so far (`tests/Sable.CodeGen.Tests/LibraryTests.cs`):
   that may fail gives a value either way and `io_succeeded` says whether to
   keep it. `main` now takes `argc`/`argv`. The test harness gives programs
   standard input and compares standard error between the two.
+- `Sable.Time`: `Duration` (to the nanosecond, Comparable and Hashable,
+  printed in its largest whole unit), `Instant` on the monotonic clock,
+  `Clock.sleep` and `Clock.measure`, and `DateTime` in UTC — fields,
+  ISO 8601 weekday and day of the year, `iso8601()`, `parse`, arithmetic —
+  over proleptic Gregorian 400-year eras, so dates before 1970 work. Over
+  three more runtime calls (`time_monotonic`, `time_wall_clock`,
+  `time_sleep`). Not yet: time zones, and a sleep that lets other tasks run
+  (it holds the scheduler's baton).
 
-What it took from the compiler: generic initialisers inferring their type
-arguments, user operators found through a type parameter's constraints,
+What it took from the compiler: `?.` on any optional rather than only a
+local's, diagnostics placed in the file they are in rather than by offset
+(offsets overlap between the program and the library), generic initialisers
+inferring their type arguments, user operators found through a type parameter's constraints,
 operators and witnesses on primitive types lowered, and reachability-based
 emission. Next: reflection (4.2), streaming I/O (`Stream`, buffered
 readers and writers, memory-mapped files), and the names the plan lists that are not yet here

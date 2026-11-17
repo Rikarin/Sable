@@ -2878,6 +2878,21 @@ public sealed partial class SilGen {
                 case BoundConversion { ConversionKind: ConversionKind.LiteralTyping, Operand: BoundArray array } conversion:
                     return ArrayLiteral(array, conversion.Type);
 
+                // 'x?.member' and 'x?.call()': reached through the optional.
+                case BoundFieldAccess { Receiver: { } chainedFrom, Type: OptionalTypeSymbol reached } chained
+                    when IsChainedThrough(chainedFrom, chained.Field):
+                    return OptionalChain(chained, chainedFrom, through => new BoundFieldAccess(chained.Syntax, through, chained.Field, reached.UnderlyingType));
+
+                case BoundConversion { ConversionKind: ConversionKind.OptionalWrap, Operand: BoundCall { Receiver: { } chainedFrom } chainedCall }
+                    when IsChainedThrough(chainedFrom, chainedCall.Function):
+                    return OptionalChain(
+                        expression,
+                        chainedFrom,
+                        through => new BoundCall(chainedCall.Syntax, through, chainedCall.Function, chainedCall.Arguments, chainedCall.Type) {
+                            Substitution = chainedCall.Substitution,
+                        }
+                    );
+
                 case BoundConversion { ConversionKind: ConversionKind.OptionalWrap } conversion:
                     return Wrap(conversion);
 
@@ -3855,6 +3870,46 @@ public sealed partial class SilGen {
         }
 
         /// <summary>'a ?? b': a's value when there is one; b, evaluated only then, when there is not.</summary>
+        /// <summary>A member reached through '?.': the receiver is optional, and the member is not the optional's own.</summary>
+        bool IsChainedThrough(BoundExpression receiver, Symbol member) =>
+            Sub(receiver.Type) is OptionalTypeSymbol
+            && !(member.ContainingSymbol is NamedTypeSymbol owner && ReferenceEquals(owner.OriginalDefinition, Core.Optional));
+
+        /// <summary>
+        ///     '?.': the receiver unwrapped into a temporary, the member reached
+        ///     through it and its result wrapped; none when the receiver is none.
+        /// </summary>
+        SilValue? OptionalChain(BoundExpression chained, BoundExpression receiver, Func<BoundExpression, BoundExpression> through) {
+            if (Expression(receiver) is not { Type: EnumType optional } value || LowerType(chained.Type) is not EnumType resultType) {
+                return Missing(chained, "this '?.'");
+            }
+
+            var some = optional.CaseIndex("Some");
+            var present = function.AddBlock();
+            var payload = Payload(present, optional.Cases[some].Payload!);
+            var absent = function.AddBlock();
+            var after = function.AddBlock();
+            var result = after.AddArgument(resultType);
+            Jump(new SwitchEnumInst(value, [(some, present)], absent));
+
+            _current = present;
+            var unwrappedType = ((OptionalTypeSymbol)Sub(receiver.Type)).UnderlyingType;
+            var temporary = new LocalSymbol("$chained", Core.Module, null, false);
+            _slots[temporary] = NewSlot(payload.Type, "$chained");
+            BindLocal(temporary, payload, chained.Syntax, declaration: true);
+            Destroy(value);
+            if (Expression(through(new BoundLocalAccess(receiver.Syntax, temporary, unwrappedType))) is { } reached) {
+                Branch(after, Emit(new EnumInst(resultType, resultType.CaseIndex("Some"), Owned(reached))));
+            }
+
+            _current = absent;
+            Destroy(value);
+            Branch(after, Emit(new EnumInst(resultType, resultType.CaseIndex("None"), null)));
+
+            _current = after;
+            return result;
+        }
+
         SilValue? Coalesce(BoundBinaryOperator coalesce) {
             if (Expression(coalesce.Left) is not { Type: EnumType optional } value || LowerType(coalesce.Type) is not { } type) {
                 return Missing(coalesce, "this '??'");
@@ -4957,6 +5012,9 @@ public sealed partial class SilGen {
                 "environment" => ("io_environment", SilType.String, true),
                 "argumentCount" => ("io_argument_count", SilType.Int, false),
                 "argument" => ("io_argument", SilType.String, false),
+                "monotonicNanoseconds" => ("time_monotonic", SilType.Int, false),
+                "wallClockNanoseconds" => ("time_wall_clock", SilType.Int, false),
+                "sleep" => ("time_sleep", SilType.Unit, false),
                 _ => (null!, SilType.Unit, false),
             };
 

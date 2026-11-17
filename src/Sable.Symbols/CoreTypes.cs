@@ -217,6 +217,12 @@ public sealed class CoreTypes {
         Method(Runtime, "environment", [("name", String)], text, true);
         Method(Runtime, "argumentCount", [], Int, true);
         Method(Runtime, "argument", [("index", Int)], String, true);
+
+        // Time: a monotonic clock for measuring, the wall clock for dates,
+        // both in nanoseconds; and sleeping, for at least as long as asked.
+        Method(Runtime, "monotonicNanoseconds", [], Int, true);
+        Method(Runtime, "wallClockNanoseconds", [], Int, true);
+        Method(Runtime, "sleep", [("nanoseconds", Int)], Void, true);
     }
 
     /// <summary><c>Runtime</c>: the operating system's calls, which Sable.IO wraps.</summary>

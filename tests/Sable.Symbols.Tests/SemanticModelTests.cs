@@ -323,4 +323,22 @@ public sealed class SemanticModelTests {
             static d => d.Code == ErrorCode.ERR_ExpressionTooComplex
         );
     }
+
+    /// <summary>
+    ///     Offsets overlap between files: a body's error says which file it is
+    ///     in, so that a driver does not place one file's error in another.
+    /// </summary>
+    [Fact]
+    public void ADiagnosticKnowsItsFile() {
+        var program = SyntaxTree.Parse(new("module P\nfn main() {\n    let a = 1\n    let b = 2\n}\n", "p.sab"));
+        var other = SyntaxTree.Parse(new("module Q\nfn f() -> Int { return true }\n", "q.sab"));
+
+        var found = Compilation.Create([program, other])
+            .GetAllDiagnosticsByFile()
+            .Where(static d => d.Diagnostic.Severity == DiagnosticSeverity.Error)
+            .ToList();
+
+        Assert.NotEmpty(found);
+        Assert.All(found, d => Assert.Same(other, d.Tree));
+    }
 }

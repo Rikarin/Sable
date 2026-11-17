@@ -994,6 +994,22 @@ public sealed partial class SilInterpreter(SilModule module, int stepLimit = 10_
                 return Allocate(new HeapString(value ?? ""));
             }
 
+            case "time_monotonic":
+                return System.Diagnostics.Stopwatch.GetTimestamp() * (1_000_000_000L / System.Diagnostics.Stopwatch.Frequency);
+
+            case "time_wall_clock":
+                return (DateTimeOffset.UtcNow - DateTimeOffset.UnixEpoch).Ticks * 100;
+
+            case "time_sleep": {
+                var nanoseconds = (long)operands[0]!;
+                if (nanoseconds > 0) {
+                    // Rounded up: never shorter than asked.
+                    Thread.Sleep(TimeSpan.FromTicks((nanoseconds + 99) / 100));
+                }
+
+                return null;
+            }
+
             case "io_argument_count":
                 return (long)Arguments.Count;
 

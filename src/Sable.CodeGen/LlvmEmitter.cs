@@ -280,6 +280,9 @@ public sealed class LlvmEmitter {
                                 declare ptr @sable_io_argument(i64)
                                 declare zeroext i1 @sable_io_succeeded()
                                 declare void @sable_set_arguments(i32, ptr)
+                                declare i64 @sable_time_monotonic()
+                                declare i64 @sable_time_wall_clock()
+                                declare void @sable_time_sleep(i64)
                                 declare ptr @sable_string_split(ptr, i32)
                                 declare ptr @sable_string_from_char(i32)
                                 declare ptr @sable_string_from_int(i64)
@@ -1918,6 +1921,14 @@ public sealed class LlvmEmitter {
 
                 case "io_write_file":
                     Line($"{Result()} = call zeroext i1 @sable_io_write_file(ptr {operands[0]}, ptr {operands[1]}, i1 zeroext {operands[2]})");
+                    return;
+
+                case "time_monotonic" or "time_wall_clock":
+                    Line($"{Result()} = call i64 @sable_{builtin.Name}()");
+                    return;
+
+                case "time_sleep":
+                    Line($"call void @sable_time_sleep(i64 {operands[0]})");
                     return;
 
                 case "io_argument":

@@ -2282,3 +2282,30 @@ SableString *sable_io_environment(const SableString *variable) {
     io_last_failed = value == NULL;
     return value == NULL ? make_string("", 0) : make_cstring(value);
 }
+
+// ---- Time (Sable.Time's floor) ------------------------------------------
+
+#include <time.h>
+
+int64_t sable_time_monotonic(void) {
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return (int64_t)now.tv_sec * 1000000000 + now.tv_nsec;
+}
+
+int64_t sable_time_wall_clock(void) {
+    struct timespec now;
+    clock_gettime(CLOCK_REALTIME, &now);
+    return (int64_t)now.tv_sec * 1000000000 + now.tv_nsec;
+}
+
+// At least as long as asked: nanosleep resumes after a signal.
+void sable_time_sleep(int64_t nanoseconds) {
+    if (nanoseconds <= 0) {
+        return;
+    }
+
+    struct timespec wait = { (time_t)(nanoseconds / 1000000000), (long)(nanoseconds % 1000000000) };
+    while (nanosleep(&wait, &wait) != 0 && errno == EINTR) {
+    }
+}

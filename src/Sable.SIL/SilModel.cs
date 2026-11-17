@@ -1423,6 +1423,9 @@ public static class SilBuiltins {
         Add("io_argument_count", SilType.Int);
         Add("io_argument", SilType.String, SilType.Int);
         Add("io_succeeded", SilType.Bool);
+        Add("time_monotonic", SilType.Int);
+        Add("time_wall_clock", SilType.Int);
+        Add("time_sleep", SilType.Unit, SilType.Int);
 
         Add("region_create", SilType.Region);
 

@@ -213,6 +213,30 @@ public sealed class Compilation {
         return all;
     }
 
+    /// <summary>
+    ///     Every diagnostic with the file it is in, where that is known: a
+    ///     span is an offset into one file, and several files' offsets overlap.
+    ///     Parse and body diagnostics know their file; those from declaring
+    ///     and from lazily bound signatures do not yet, and come without one.
+    /// </summary>
+    public IReadOnlyList<(Diagnostic Diagnostic, SyntaxTree? Tree)> GetAllDiagnosticsByFile() {
+        var all = new List<(Diagnostic, SyntaxTree?)>();
+        foreach (var tree in SyntaxTrees) {
+            all.AddRange(tree.Diagnostics.Select(d => (d, (SyntaxTree?)tree)));
+        }
+
+        foreach (var tree in SyntaxTrees) {
+            if (_fileScopes.ContainsKey(tree)) {
+                all.AddRange(GetSemanticModel(tree).GetDiagnostics().Select(d => (d, (SyntaxTree?)tree)));
+            }
+        }
+
+        TypeBinder.ForceAll();
+        all.AddRange(_declarationDiagnostics.Select(static d => (d, (SyntaxTree?)null)));
+        all.AddRange(TypeBinder.Diagnostics.Select(static d => (d, (SyntaxTree?)null)));
+        return all;
+    }
+
     internal void ReportDeclaration(ErrorCode code, TextSpan span, string message) =>
         _declarationDiagnostics.Error(code, span, message);
 

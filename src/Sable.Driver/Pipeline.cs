@@ -33,9 +33,11 @@ public static class Pipeline {
         // The standard library the program uses comes with it (docs/04 §4.3).
         var compilation = Compilation.Create([tree, ..Library.For(tree)]);
 
-        var errors = compilation.GetAllDiagnostics()
-            .Where(static d => d.Severity == DiagnosticSeverity.Error)
-            .Select(d => Format(d, source))
+        var errors = compilation.GetAllDiagnosticsByFile()
+            .Where(static d => d.Diagnostic.Severity == DiagnosticSeverity.Error)
+            .OrderBy(d => d.Tree == tree ? 0 : 1)
+            .ThenBy(static d => d.Diagnostic.Span.Start)
+            .Select(d => d.Tree is { } file && file != tree ? d.Diagnostic.Format(file.Text) : Format(d.Diagnostic, source))
             .ToList();
         if (errors.Count > 0) {
             return new(null, null, errors);

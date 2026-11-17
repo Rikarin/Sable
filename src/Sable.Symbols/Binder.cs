@@ -633,11 +633,14 @@ public sealed class Binder
         SyntaxNode syntax,
         BoundExpression? receiver,
         IReadOnlyList<Symbol> members,
-        NamedTypeSymbol? containingType)
+        NamedTypeSymbol? containingType,
+        TypeSubstitution? substitution = null)
     {
+        substitution ??= TypeSubstitution.Empty;
+
         var functions = members.OfType<FunctionSymbol>().ToImmutableArray();
         if (!functions.IsEmpty)
-            return new BoundFunctionGroup(syntax, receiver, functions);
+            return new BoundFunctionGroup(syntax, receiver, functions) { Substitution = substitution };
 
         var member = members[0];
         switch (member)
@@ -645,7 +648,8 @@ public sealed class Binder
             case FieldSymbol field:
                 if (receiver is null && !field.IsStatic && containingType is not null)
                     receiver = new BoundSelfAccess(syntax, containingType);
-                return new BoundFieldAccess(syntax, receiver, field);
+                return new BoundFieldAccess(
+                    syntax, receiver, field, substitution.Apply(field.Type));
 
             case NamedTypeSymbol type:
                 return new BoundTypeExpression(syntax, type);
@@ -716,7 +720,8 @@ public sealed class Binder
             return new BoundError(syntax, receiver);
         }
 
-        return BindMemberGroup(syntax, receiver, members, owner);
+        return BindMemberGroup(
+            syntax, receiver, members, owner, TypeSubstitution.For(owner));
     }
 
     private BoundExpression BindImplicitMemberAccess(
@@ -803,12 +808,14 @@ public sealed class Binder
         ImmutableArray<BoundExpression> arguments,
         ImmutableArray<string?> labels)
     {
-        var resolved = ResolveOverload(group.Candidates, arguments, labels, syntax);
+        var outer = group.Substitution ?? TypeSubstitution.Empty;
+        var resolved = ResolveOverload(group.Candidates, arguments, labels, syntax, outer);
 
-        if (resolved is null)
-        {
-            return new BoundError(syntax, arguments.ToArray());
-        }
+        if (resolved is null) return new BoundError(syntax, arguments.ToArray());
+
+        // The receiver's substitution, plus whatever the arguments imply for
+        // the function's own type parameters.
+        var substitution = Combine(outer, Infer(resolved, arguments, outer));
 
         var converted = ImmutableArray.CreateBuilder<BoundExpression>(arguments.Length);
         for (var i = 0; i < arguments.Length; i++)
@@ -816,10 +823,55 @@ public sealed class Binder
             var parameter = i < resolved.Parameters.Length ? resolved.Parameters[i] : null;
             converted.Add(parameter is null
                 ? arguments[i]
-                : Convert(arguments[i], parameter.Type, arguments[i].Syntax));
+                : Convert(arguments[i], substitution.Apply(parameter.Type),
+                    arguments[i].Syntax));
         }
 
-        return new BoundCall(syntax, group.Receiver, resolved, converted.ToImmutable());
+        if (!resolved.TypeParameters.IsEmpty)
+        {
+            foreach (var typeParameter in resolved.TypeParameters)
+            {
+                if (substitution.Lookup(typeParameter) is not null) continue;
+
+                _diagnostics.Error(ErrorCode.ERR_CannotInferTypeArgument, syntax.Span,
+                    $"cannot infer '{typeParameter.Name}' from these arguments");
+            }
+        }
+
+        return new BoundCall(syntax, group.Receiver, resolved, converted.ToImmutable(),
+            substitution.Apply(resolved.ReturnType));
+    }
+
+    /// <summary>Works out a generic function's type arguments from the call.</summary>
+    private static TypeSubstitution Infer(
+        FunctionSymbol function,
+        ImmutableArray<BoundExpression> arguments,
+        TypeSubstitution outer)
+    {
+        if (function.TypeParameters.IsEmpty) return TypeSubstitution.Empty;
+
+        var map = new Dictionary<TypeParameterSymbol, TypeSymbol>();
+        for (var i = 0; i < arguments.Length && i < function.Parameters.Length; i++)
+        {
+            TypeSubstitution.Unify(
+                outer.Apply(function.Parameters[i].Type),
+                arguments[i].Type,
+                function.TypeParameters,
+                map);
+        }
+
+        return new TypeSubstitution(map);
+    }
+
+    private static TypeSubstitution Combine(TypeSubstitution outer, TypeSubstitution inner)
+    {
+        if (outer.IsEmpty) return inner;
+        if (inner.IsEmpty) return outer;
+
+        var map = new Dictionary<TypeParameterSymbol, TypeSymbol>();
+        foreach (var parameter in inner.Parameters) map[parameter] = inner.Apply(parameter);
+        foreach (var parameter in outer.Parameters) map[parameter] = outer.Apply(parameter);
+        return new TypeSubstitution(map);
     }
 
     /// <summary>
@@ -830,7 +882,8 @@ public sealed class Binder
         ImmutableArray<FunctionSymbol> candidates,
         ImmutableArray<BoundExpression> arguments,
         ImmutableArray<string?> labels,
-        SyntaxNode syntax)
+        SyntaxNode syntax,
+        TypeSubstitution outer)
     {
         FunctionSymbol? best = null;
         var bestCost = int.MaxValue;
@@ -838,7 +891,7 @@ public sealed class Binder
 
         foreach (var candidate in candidates)
         {
-            var cost = Score(candidate, arguments, labels);
+            var cost = Score(candidate, arguments, labels, outer);
             if (cost is null) continue;
 
             if (cost < bestCost) { best = candidate; bestCost = cost.Value; ambiguous = false; }
@@ -867,8 +920,10 @@ public sealed class Binder
     private int? Score(
         FunctionSymbol candidate,
         ImmutableArray<BoundExpression> arguments,
-        ImmutableArray<string?> labels)
+        ImmutableArray<string?> labels,
+        TypeSubstitution outer)
     {
+        var substitution = Combine(outer, Infer(candidate, arguments, outer));
         var parameters = candidate.Parameters;
 
         var required = parameters.Count(p => !p.HasDefaultValue && !p.IsVariadic);
@@ -900,7 +955,7 @@ public sealed class Binder
             }
 
             var conversion = _conversions.Classify(
-                arguments[i].Type, parameter.Type, IsLiteral(arguments[i]));
+                arguments[i].Type, substitution.Apply(parameter.Type), IsLiteral(arguments[i]));
 
             if (conversion is null) return null;
             cost += Conversions.Cost(conversion.Value);

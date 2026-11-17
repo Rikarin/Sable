@@ -512,6 +512,9 @@ public sealed class Compilation
             IsStatic = declaration.Modifiers.Any(SyntaxKind.StaticKeyword),
             IsLazy = declaration.Modifiers.Any(SyntaxKind.LazyKeyword),
             IsComputed = declaration.Accessors is not null,
+            IsAbstract = declaration.Accessors is { } accessors
+                && accessors.Accessors.All(
+                    a => a.Body is null && a.ExpressionBody is null),
             HasInitializer = declaration.Declarator.Initializer is not null,
         };
 

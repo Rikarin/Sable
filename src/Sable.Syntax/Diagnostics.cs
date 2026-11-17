@@ -89,6 +89,12 @@ public enum ErrorCode
     ERR_SelfOutsideType = 3019,
     ERR_NotAValue = 3020,
     ERR_NoContextualType = 3021,
+    ERR_CannotInferTypeArgument = 3022,
+    ERR_DoesNotConform = 3023,
+    ERR_NotAProtocol = 3024,
+    ERR_MultipleBaseClasses = 3025,
+    ERR_CircularInheritance = 3026,
+    ERR_RequirementSignatureMismatch = 3027,
     ERR_NotSupportedYet = 3099,
 
     // ---- Patterns and flow (S6000-S6999) ---------------------------------

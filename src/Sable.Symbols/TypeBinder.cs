@@ -23,11 +23,14 @@ internal sealed class TypeBinder(Compilation compilation)
 
     public IReadOnlyList<Diagnostic> Diagnostics => _diagnostics.ToList();
 
+    private int _forced;
+
     /// <summary>Binds every deferred signature, so diagnostics are complete.</summary>
     public void ForceAll()
     {
-        // Binding one signature can add more work, so drain by index.
-        for (var i = 0; i < _forcers.Count; i++) _forcers[i]();
+        // Binding one signature can add more work, so drain by index; and the
+        // cursor persists, so a second call does not repeat the diagnostics.
+        while (_forced < _forcers.Count) _forcers[_forced++]();
     }
 
     private void Defer(Action force) => _forcers.Add(force);
@@ -127,6 +130,10 @@ internal sealed class TypeBinder(Compilation compilation)
             BindTypeParameterConstraints(type.TypeParameters, type, scope);
             BindWhereClause(WhereClauseOf(declaration), type, scope);
         });
+
+        // Conformance is checked after every signature is bound, so that the
+        // comparison sees real types rather than unresolved ones.
+        Defer(() => ConformanceChecker.Check(type, _diagnostics, compilation.Core));
     }
 
     private static BaseTypeListSyntax? BaseTypeListOf(SyntaxNode declaration) => declaration switch

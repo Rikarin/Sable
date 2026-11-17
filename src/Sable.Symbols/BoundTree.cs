@@ -78,8 +78,8 @@ public sealed class BoundParameterAccess(SyntaxNode syntax, ParameterSymbol para
 }
 
 public sealed class BoundFieldAccess(
-    SyntaxNode syntax, BoundExpression? receiver, FieldSymbol field)
-    : BoundExpression(syntax, field.Type)
+    SyntaxNode syntax, BoundExpression? receiver, FieldSymbol field, TypeSymbol? type = null)
+    : BoundExpression(syntax, type ?? field.Type)
 {
     public BoundExpression? Receiver { get; } = receiver;
     public FieldSymbol Field { get; } = field;
@@ -105,8 +105,9 @@ public sealed class BoundCall(
     SyntaxNode syntax,
     BoundExpression? receiver,
     FunctionSymbol function,
-    ImmutableArray<BoundExpression> arguments)
-    : BoundExpression(syntax, function.ReturnType)
+    ImmutableArray<BoundExpression> arguments,
+    TypeSymbol? type = null)
+    : BoundExpression(syntax, type ?? function.ReturnType)
 {
     public BoundExpression? Receiver { get; } = receiver;
     public FunctionSymbol Function { get; } = function;
@@ -407,6 +408,10 @@ public sealed class BoundFunctionGroup(
 {
     public BoundExpression? Receiver { get; } = receiver;
     public ImmutableArray<FunctionSymbol> Candidates { get; } = candidates;
+
+    /// <summary>What the receiver's type arguments bind, if it was constructed.</summary>
+    internal TypeSubstitution? Substitution { get; init; }
+
     public override IEnumerable<BoundNode> Children => Nodes(Receiver);
 }
 

@@ -202,3 +202,75 @@ public fn newestVersion(_ versions: Version[>..]) -> Version? {
 public fn sameVersion(_ a: Version, _ b: Version) -> Bool {
     return a.equals(b)
 }
+
+// ---- Associated types ----------------------------------------------------
+
+public protocol Container {
+    associatedtype Item
+    associatedtype Size: Comparable = Version
+
+    fn count() -> Int
+    fn first() -> Item?
+    fn holds(_ item: Item) -> Bool
+}
+
+public struct IntBag: Container {
+    public alias Item = Int
+
+    public var values: Int[>..]
+
+    public fn count() -> Int {
+        return values.count
+    }
+
+    public fn first() -> Int? {
+        for value in values {
+            return value
+        }
+        return none
+    }
+
+    public fn holds(_ item: Int) -> Bool {
+        return values.contains(item)
+    }
+}
+
+public struct WordBag: Container {
+    public alias Item = String
+
+    public var words: String[>..]
+
+    public fn count() -> Int {
+        return words.count
+    }
+
+    public fn first() -> String? {
+        for word in words {
+            return word
+        }
+        return none
+    }
+
+    public fn holds(_ item: String) -> Bool {
+        return words.contains(item)
+    }
+}
+
+public fn sizeOf<C: Container>(_ container: C) -> Int {
+    return container.count()
+}
+
+public fn firstOrDefault<C: Container>(_ container: C, _ fallback: C.Item) -> C.Item {
+    guard let value = container.first() else {
+        return fallback
+    }
+    return value
+}
+
+public fn bagSizes(_ ints: IntBag, _ words: WordBag) -> Int {
+    return sizeOf(ints) + sizeOf(words)
+}
+
+public fn firstWord(_ words: WordBag) -> String {
+    return firstOrDefault(words, "none")
+}

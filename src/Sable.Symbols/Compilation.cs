@@ -370,6 +370,11 @@ public sealed class Compilation
                 DeclareDeinitializer(declaration, type);
                 return;
 
+            case AssociatedTypeDeclarationSyntax declaration
+                when container is NamedTypeSymbol protocol:
+                DeclareAssociatedType(declaration, protocol);
+                return;
+
             case ExtensionDeclarationSyntax declaration:
                 // Members of an extension are declared on the extended type once
                 // type binding exists; recorded for now so they are not lost.
@@ -852,6 +857,39 @@ public sealed class Compilation
         function.ReturnTypeResolver = () => Core.Void;
         RecordDeclaration(declaration, function);
         type.AddMember(function);
+    }
+
+    /// <summary>
+    /// Declares an <c>associatedtype</c>: a type the conformer supplies.
+    /// </summary>
+    private void DeclareAssociatedType(
+        AssociatedTypeDeclarationSyntax declaration, NamedTypeSymbol protocol)
+    {
+        var name = declaration.Identifier.Text;
+        if (name.Length == 0) return;
+
+        var parameter = new TypeParameterSymbol(
+            name, protocol, declaration, protocol.AssociatedTypes.Length);
+
+        var scope = CurrentScope;
+
+        TypeBinder.Defer(() =>
+        {
+            if (declaration.BaseTypes is { } constraints)
+            {
+                parameter.Constraints =
+                [
+                    .. constraints.Types.Select(
+                        syntax => TypeBinder.BindType(syntax, protocol, scope)),
+                ];
+            }
+
+            if (declaration.DefaultType is { } fallback)
+                parameter.DefaultType = TypeBinder.BindType(fallback, protocol, scope);
+        });
+
+        protocol.AssociatedTypes = protocol.AssociatedTypes.Add(parameter);
+        RecordDeclaration(declaration, parameter);
     }
 
     private void DeclareExtension(ExtensionDeclarationSyntax declaration, Symbol container)

@@ -69,9 +69,50 @@ internal static class ConformanceChecker
         }
     }
 
+    /// <summary>
+    /// What a type binds a protocol's associated types to.
+    /// </summary>
+    /// <remarks>
+    /// A conformer names them: <c>alias Element = Int</c>, or a nested type
+    /// called Element. Failing that the declaration's own default applies, and
+    /// failing that the conformance is not met.
+    /// </remarks>
+    public static TypeSymbol? ResolveAssociated(
+        NamedTypeSymbol conformer, TypeParameterSymbol associated)
+    {
+        foreach (var member in conformer.GetMembers(associated.Name))
+        {
+            switch (member)
+            {
+                case AliasSymbol alias: return alias.AliasedType;
+                case NamedTypeSymbol nested: return nested;
+            }
+        }
+
+        foreach (var baseType in conformer.BaseTypes)
+        {
+            if (baseType is NamedTypeSymbol { TypeKind: not TypeKind.Protocol } baseClass
+                && ResolveAssociated(baseClass, associated) is { } inherited)
+            {
+                return inherited;
+            }
+        }
+
+        return associated.DefaultType;
+    }
+
     private static void CheckProtocol(
         NamedTypeSymbol type, NamedTypeSymbol protocol, DiagnosticBag diagnostics)
     {
+        foreach (var associated in protocol.AssociatedTypes)
+        {
+            if (ResolveAssociated(type, associated) is not null) continue;
+
+            Report(diagnostics, ErrorCode.ERR_DoesNotConform, type,
+                $"'{type.Name}' does not conform to '{protocol.Name}': "
+                + $"it does not say what '{associated.Name}' is");
+        }
+
         foreach (var requirement in protocol.Members)
         {
             switch (requirement)
@@ -162,12 +203,22 @@ internal static class ConformanceChecker
     /// A protocol writes <c>Self</c> for the conforming type, and binding
     /// resolved it to the protocol; swap it back.
     /// </summary>
+    /// <summary>
+    /// A requirement's type as the conformer sees it: <c>Self</c> becomes the
+    /// conforming type and each associated type becomes what it bound.
+    /// </summary>
     private static TypeSymbol SubstituteSelf(
         TypeSymbol type, NamedTypeSymbol protocol, NamedTypeSymbol conformer)
     {
         if (type.Equals(protocol)) return conformer;
         if (protocol.SelfTypeParameter is { } self && ReferenceEquals(type, self))
             return conformer;
+
+        if (type is TypeParameterSymbol parameter
+            && protocol.AssociatedTypes.Contains(parameter))
+        {
+            return ResolveAssociated(conformer, parameter) ?? type;
+        }
 
         return type switch
         {

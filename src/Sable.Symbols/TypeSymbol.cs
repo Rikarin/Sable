@@ -104,6 +104,17 @@ public sealed class NamedTypeSymbol : TypeSymbol
     /// </remarks>
     public TypeParameterSymbol? SelfTypeParameter { get; internal set; }
 
+    /// <summary>
+    /// A protocol's <c>associatedtype</c> declarations.
+    /// </summary>
+    /// <remarks>
+    /// Like <c>Self</c> these are type parameters, and like <c>Self</c> they
+    /// stay out of <see cref="TypeParameters"/>: a conformer supplies them by
+    /// name rather than positionally, so they are not part of the protocol's
+    /// arity.
+    /// </remarks>
+    public ImmutableArray<TypeParameterSymbol> AssociatedTypes { get; internal set; } = [];
+
     public ImmutableArray<TypeSymbol> BaseTypes
     {
         get => _baseTypes;
@@ -179,6 +190,12 @@ public sealed class TypeParameterSymbol(
 
     /// <summary>Variance, from <c>out T</c> or <c>in T</c>.</summary>
     public VarianceKind Variance { get; internal set; } = VarianceKind.None;
+
+    /// <summary>
+    /// What an <c>associatedtype</c> falls back to when a conformer does not
+    /// name it, as in <c>associatedtype Index: Comparable = Int</c>.
+    /// </summary>
+    public TypeSymbol? DefaultType { get; internal set; }
 
     public override string ToDisplayString() => Name;
 

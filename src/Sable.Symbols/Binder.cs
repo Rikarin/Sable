@@ -1246,12 +1246,25 @@ public sealed class Binder
                 // the lookup started from.
                 if (named.SelfTypeParameter is { } self)
                 {
-                    substitution = Combine(
-                        substitution,
-                        new TypeSubstitution(new Dictionary<TypeParameterSymbol, TypeSymbol>
+                    var map = new Dictionary<TypeParameterSymbol, TypeSymbol>
+                    {
+                        [self] = selfType,
+                    };
+
+                    // The conformer also says what the associated types are.
+                    if (Unwrap(selfType) is NamedTypeSymbol conformer)
+                    {
+                        foreach (var associated in named.AssociatedTypes)
                         {
-                            [self] = selfType,
-                        }));
+                            if (ConformanceChecker.ResolveAssociated(conformer, associated)
+                                is { } bound)
+                            {
+                                map[associated] = bound;
+                            }
+                        }
+                    }
+
+                    substitution = Combine(substitution, new TypeSubstitution(map));
                 }
 
                 var members = named.GetMembers(name).ToList();
@@ -1639,7 +1652,39 @@ public sealed class Binder
                 map);
         }
 
+        ExpandAssociated(function.TypeParameters, map);
         return new TypeSubstitution(map);
+    }
+
+    /// <summary>
+    /// Once a constrained parameter is known, so are its associated types.
+    /// </summary>
+    /// <remarks>
+    /// A signature may say <c>C.Item</c>, which binds to the protocol's
+    /// associated type. Inferring <c>C = WordBag</c> settles that too, since
+    /// WordBag is what says what Item is.
+    /// </remarks>
+    private static void ExpandAssociated(
+        ImmutableArray<TypeParameterSymbol> parameters,
+        Dictionary<TypeParameterSymbol, TypeSymbol> map)
+    {
+        foreach (var parameter in parameters)
+        {
+            if (!map.TryGetValue(parameter, out var argument)) continue;
+            if (Unwrap(argument) is not NamedTypeSymbol conformer) continue;
+
+            foreach (var constraint in parameter.Constraints)
+            {
+                if (constraint is not NamedTypeSymbol protocol) continue;
+
+                foreach (var associated in protocol.AssociatedTypes)
+                {
+                    if (map.ContainsKey(associated)) continue;
+                    if (ConformanceChecker.ResolveAssociated(conformer, associated) is { } bound)
+                        map[associated] = bound;
+                }
+            }
+        }
     }
 
     private static TypeSubstitution Combine(TypeSubstitution outer, TypeSubstitution inner)
@@ -2131,6 +2176,14 @@ public sealed class Binder
             $"'{name}' is only available inside a closure whose parameter types are known");
         return new BoundError(syntax);
     }
+
+    /// <summary>The concrete type behind an opaque or existential wrapper.</summary>
+    private static TypeSymbol Unwrap(TypeSymbol type) => type switch
+    {
+        OpaqueTypeSymbol opaque => Unwrap(opaque.Constraint),
+        ExistentialTypeSymbol existential => Unwrap(existential.Constraint),
+        _ => type,
+    };
 
     /// <summary>True for a type inference has not settled yet.</summary>
     private bool IsOpen(TypeSymbol type) =>

@@ -72,12 +72,14 @@ internal sealed class TypeBinder(Compilation compilation)
 
         Defer(() =>
         {
+            // Constraints first: a signature may mention 'T.Associated',
+            // which is only findable once T knows what it is constrained to.
+            BindTypeParameterConstraints(function.TypeParameters, function, scope);
+            BindWhereClause(declaration.WhereClause, function, scope);
+
             _ = function.ReturnType;
             _ = function.ThrownType;
             foreach (var parameter in function.Parameters) _ = parameter.Type;
-
-            BindTypeParameterConstraints(function.TypeParameters, function, scope);
-            BindWhereClause(declaration.WhereClause, function, scope);
         });
     }
 
@@ -156,6 +158,8 @@ internal sealed class TypeBinder(Compilation compilation)
 
         Defer(() =>
         {
+            BindTypeParameterConstraints(type.TypeParameters, type, scope);
+
             var baseTypes = BaseTypeListOf(declaration);
             if (baseTypes is not null)
             {
@@ -163,7 +167,6 @@ internal sealed class TypeBinder(Compilation compilation)
                     [.. baseTypes.Types.Select(syntax => BindType(syntax, type, scope))];
             }
 
-            BindTypeParameterConstraints(type.TypeParameters, type, scope);
             BindWhereClause(WhereClauseOf(declaration), type, scope);
         });
 
@@ -438,6 +441,27 @@ internal sealed class TypeBinder(Compilation compilation)
         var left = BindType(syntax.Left, context, scope);
         if (left.IsError) return left;
 
+        // 'C.Item' where C is constrained: the associated type of whatever
+        // protocol declares it.
+        if (left is TypeParameterSymbol parameter)
+        {
+            var wanted = syntax.Right.Identifier.Text;
+
+            foreach (var constraint in parameter.Constraints)
+            {
+                if (constraint is not NamedTypeSymbol protocol) continue;
+
+                foreach (var associated in protocol.AssociatedTypes)
+                {
+                    if (string.Equals(associated.Name, wanted, StringComparison.Ordinal))
+                        return associated;
+                }
+            }
+
+            return Error(ErrorCode.ERR_TypeNotFound, syntax.Right.Span,
+                $"'{parameter.Name}' has no associated type named '{wanted}'");
+        }
+
         if (left is not NamedTypeSymbol named)
         {
             return Error(ErrorCode.ERR_NotAType, syntax.Right.Span,
@@ -532,6 +556,13 @@ internal sealed class TypeBinder(Compilation compilation)
                 case NamedTypeSymbol type:
                     if (Match(type.TypeParameters, name) is { } typeParameter)
                         return typeParameter;
+                    if (Match(type.AssociatedTypes, name) is { } associated)
+                        return associated;
+                    if (type.SelfTypeParameter is { } self
+                        && string.Equals(self.Name, name, StringComparison.Ordinal))
+                    {
+                        return self;
+                    }
                     if (FindTypeMember(type.GetMembers(name)) is { } nested) return nested;
                     break;
 

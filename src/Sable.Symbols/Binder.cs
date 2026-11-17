@@ -1166,7 +1166,8 @@ public sealed class Binder
         BuiltinExpressionSyntax builtin => BindBuiltin(builtin),
         ClosureExpressionSyntax closure => BindClosure(
             closure, closure.CaptureList, closure.Signature.Parameters,
-            closure.Signature.ReturnType, closure.Body, expectedType),
+            closure.Signature.ReturnType, closure.Body, expectedType,
+            hasParameterList: !closure.Signature.OpenParenToken.IsNone),
         BraceClosureExpressionSyntax brace => BindBraceClosure(brace, expectedType),
         ImplicitParameterExpressionSyntax implicitParameter =>
             BindImplicitParameter(implicitParameter),
@@ -2394,7 +2395,8 @@ public sealed class Binder
             syntax.Header?.Parameters ?? default,
             syntax.Header?.ReturnType,
             syntax,
-            expectedType);
+            expectedType,
+            hasParameterList: syntax.Header is not null);
 
     /// <summary>
     /// Binds a closure in either spelling, against the type the context wants.
@@ -2411,7 +2413,8 @@ public sealed class Binder
         SeparatedSyntaxList<ClosureParameterSyntax> declared,
         TypeSyntax? returnTypeSyntax,
         SyntaxNode body,
-        TypeSymbol? expectedType)
+        TypeSymbol? expectedType,
+        bool hasParameterList)
     {
         var expected = Expand(expectedType) as FunctionTypeSymbol;
 
@@ -2461,8 +2464,12 @@ public sealed class Binder
             parameters.Add(parameter);
         }
 
-        // No parameter list: the expected type names them, and '$0' finds them.
-        if (count == 0 && expected is not null && !expected.ParameterTypes.Any(IsOpen))
+        // No parameter list at all: the expected type names them, and '$0'
+        // finds them. An empty one that was written means no parameters.
+        if (count == 0
+            && !hasParameterList
+            && expected is not null
+            && !expected.ParameterTypes.Any(IsOpen))
         {
             for (var i = 0; i < expected.ParameterTypes.Length; i++)
             {

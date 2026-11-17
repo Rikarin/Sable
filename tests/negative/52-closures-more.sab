@@ -1,0 +1,68 @@
+module Negative.ClosuresMore
+
+public struct Point { public var x: Int }
+
+fn apply(_ n: Int, _ f: (Int) -> Int) -> Int { return f(n) }
+fn applyTwo(_ a: Int, _ b: Int, _ f: (Int, Int) -> Int) -> Int { return f(a, b) }
+fn make() -> (Int) -> Int { return x => x }
+fn consume(_ f: () -> Void) { f() }
+
+fn aShorthandIndexBeyondTheSignature() -> Int {
+    return apply(1) { $1 }              //! S2002 only available inside a closure
+}
+
+fn shorthandWithTwoParameters() -> Int {
+    return applyTwo(1, 2) { $0 + $1 }
+}
+
+fn aNamedClosureParameterShadows(_ x: Int) -> Int {
+    return apply(1) { x in x + 1 }
+}
+
+fn aClosureResultFeedsTheCall() -> Int {
+    return apply(1) { "text" }          //! S3004 expected 'Int'
+}
+
+fn returningAClosure() -> (Int) -> Int {
+    return x => x * 2
+}
+
+fn returningTheWrongClosure() -> (Int) -> String {
+    return x => x * 2                   //! S3004 expected 'String'
+}
+
+fn callingAReturnedClosure() -> Int {
+    return make()(1)
+}
+
+fn aVoidClosureMayNotReturnAValue() {
+    consume(() => { return 1 })         //! S3017 takes no value
+}
+
+fn aClosureMayCaptureItself() -> Int {
+    var f: (Int) -> Int = x => x
+    f = x => f(x)
+    return f(1)
+}
+
+fn aClosureParameterCountMustMatch() -> Int {
+    return apply(1, (a: Int, b: Int) => a)   //! S3004
+}
+
+fn aClosureWithNoParametersWhereOneIsWanted() -> Int {
+    return apply(1, () => 1)            //! S3004
+}
+
+fn capturingAField(_ p: Point) -> Int {
+    let f = () => { return p.x }
+    return f()
+}
+
+fn aCaptureListOnABraceClosure(_ n: Int) -> Int {
+    let f = [copied = n] { copied }
+    return f()
+}
+
+fn anEscapingClosureOutlivesTheCall(_ n: Int) -> (Int) -> Int {
+    return x => x + n
+}

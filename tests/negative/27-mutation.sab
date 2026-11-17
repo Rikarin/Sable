@@ -1,0 +1,75 @@
+module Negative.Mutation
+
+public struct Counter {
+    public var n: Int
+
+    public mutating fn bump() {
+        n = n + 1
+    }
+
+    public fn peek() -> Int {
+        return n
+    }
+
+    public fn writeWithoutMutating() {
+        n = n + 1                       //! S3010 must be a mutable binding
+    }
+}
+
+public class Box {
+    public var value: Int
+
+    public init(value: Int) {
+        self.value = value
+    }
+
+    public fn write() {
+        value = 1
+    }
+}
+
+fn writingThroughALet() {
+    let counter = Counter { n: 0 }
+    counter.n = 1                       //! S3010
+}
+
+fn writingThroughAVar() {
+    var counter = Counter { n: 0 }
+    counter.n = 1
+}
+
+fn mutatingALet() {
+    let counter = Counter { n: 0 }
+    counter.bump()                      //! S3041 is mutating
+}
+
+fn mutatingAVar() {
+    var counter = Counter { n: 0 }
+    counter.bump()
+}
+
+fn mutatingAParameter(_ counter: Counter) {
+    counter.bump()                      //! S3041 is mutating
+}
+
+fn mutatingAnInOutParameter(inout counter: Counter) {
+    counter.bump()
+}
+
+fn aClassInALetIsStillWritable(_ box: Box) {
+    let held = box
+    held.value = 2
+}
+
+fn readingIsAlwaysFine(_ counter: Counter) -> Int {
+    return counter.peek()
+}
+
+fn writingAComputedWithoutASetter(_ t: Temperature) {
+    t.label = "hot"                     //! S3010
+}
+
+public struct Temperature {
+    public var celsius: F64
+    public var label: String { get => "warm" }
+}

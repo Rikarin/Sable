@@ -350,7 +350,7 @@ public sealed class BindingTests
             module M
             struct Counter {
                 var n: Int
-                fn bump() -> Int {
+                mutating fn bump() -> Int {
                     n = n + 1
                     return self.n
                 }

@@ -240,6 +240,29 @@ public sealed class Binder
         return null;
     }
 
+    /// <summary>
+    /// Whether <c>self</c> can be written through here.
+    /// </summary>
+    /// <remarks>
+    /// A class or actor is a reference, so self is always writable through.
+    /// A struct is a value, so only a <c>mutating</c> member — or an
+    /// initialiser, which is building it — may change it.
+    /// </remarks>
+    private bool SelfIsMutable(NamedTypeSymbol type)
+    {
+        if (type.IsReferenceType) return true;
+
+        for (var symbol = _containingSymbol; symbol is not null; symbol = symbol.ContainingSymbol)
+        {
+            if (symbol is not FunctionSymbol function) continue;
+            return function.IsMutating
+                   || function.FunctionKind
+                       is FunctionKind.Initializer or FunctionKind.Deinitializer;
+        }
+
+        return false;
+    }
+
     private NamedTypeSymbol? EnclosingType()
     {
         for (var symbol = _containingSymbol; symbol is not null; symbol = symbol.ContainingSymbol)
@@ -957,7 +980,8 @@ public sealed class Binder
 
     private BoundExpression BindSelf(SelfExpressionSyntax syntax)
     {
-        if (EnclosingType() is { } type) return new BoundSelfAccess(syntax, type);
+        if (EnclosingType() is { } type)
+            return new BoundSelfAccess(syntax, type, SelfIsMutable(type));
 
         _diagnostics.Error(ErrorCode.ERR_SelfOutsideType, syntax.Span,
             "'self' is only available inside a type");
@@ -1049,7 +1073,8 @@ public sealed class Binder
         {
             case FieldSymbol field:
                 if (receiver is null && !field.IsStatic && containingType is not null)
-                    receiver = new BoundSelfAccess(syntax, containingType);
+                    receiver = new BoundSelfAccess(
+                        syntax, containingType, SelfIsMutable(containingType));
                 return new BoundFieldAccess(
                     syntax, receiver, field, substitution.Apply(field.Type));
 
@@ -1695,6 +1720,13 @@ public sealed class Binder
             }
         }
 
+        if (resolved.IsMutating && group.Receiver is { } mutated
+            && !mutated.Type.IsReferenceType && !mutated.IsAssignable)
+        {
+            _diagnostics.Error(ErrorCode.ERR_NotMutable, syntax.Span,
+                $"'{resolved.Name}' is mutating, so it needs a value it can change");
+        }
+
         if (resolved.ThrownType is { } thrown)
             MarkThrows(syntax.Span, $"'{resolved.Name}'", substitution.Apply(thrown));
         if (resolved.IsAsync) MarkAsync(syntax.Span, $"'{resolved.Name}'");
@@ -2260,7 +2292,8 @@ public sealed class Binder
                 if (EnclosingType() is { } enclosing)
                 {
                     captures.Add(new BoundCapture(
-                        item, enclosing, kind, new BoundSelfAccess(item, enclosing)));
+                        item, enclosing, kind,
+                        new BoundSelfAccess(item, enclosing, SelfIsMutable(enclosing))));
                 }
                 continue;
             }

@@ -84,15 +84,35 @@ public sealed class BoundFieldAccess(
     public BoundExpression? Receiver { get; } = receiver;
     public FieldSymbol Field { get; } = field;
 
-    // A computed member is assignable only where it declares a setter.
+    /// <summary>
+    /// Assignable when the field is mutable, the member has a setter if it is
+    /// computed, and the value it belongs to can be written through.
+    /// </summary>
+    /// <remarks>
+    /// A struct in a <c>let</c> is immutable all the way down, so
+    /// <c>p.x = 1</c> is refused for <c>let p: Point</c>. A class is a
+    /// reference, so the binding's mutability says nothing about the object's.
+    /// </remarks>
     public override bool IsAssignable =>
-        Field.IsMutable && (!Field.IsComputed || Field.HasSetter);
+        Field.IsMutable
+        && (!Field.IsComputed || Field.HasSetter)
+        && (Field.IsStatic
+            || Receiver is null
+            || Receiver.Type.IsReferenceType
+            || Receiver.IsAssignable);
     public override IEnumerable<BoundNode> Children => Nodes(Receiver);
 }
 
-public sealed class BoundSelfAccess(SyntaxNode syntax, TypeSymbol type)
+public sealed class BoundSelfAccess(
+    SyntaxNode syntax, TypeSymbol type, bool isMutable = false)
     : BoundExpression(syntax, type)
 {
+    /// <summary>
+    /// True inside a <c>mutating</c> member, or wherever self is a reference.
+    /// </summary>
+    public bool IsMutable { get; } = isMutable;
+
+    public override bool IsAssignable => IsMutable;
     public override IEnumerable<BoundNode> Children => [];
 }
 

@@ -263,7 +263,11 @@ public sealed class SemanticModel
             var name = accessor.Keyword.Text;
 
             var function = new FunctionSymbol(
-                name, owner, accessor, owner.DeclaredAccessibility, FunctionKind.Accessor);
+                name, owner, accessor, owner.DeclaredAccessibility, FunctionKind.Accessor)
+            {
+                // A setter writes the value it belongs to; a getter does not.
+                IsMutating = !isGetter,
+            };
 
             if (!isGetter)
             {

@@ -695,6 +695,15 @@ public sealed class Binder
         var body = BindStatement(statement.Body);
         PopNarrowing();
 
+        // The point of 'guard' is that there is no way past it with the
+        // condition false.
+        if (!FlowAnalysis.AlwaysExits(body))
+        {
+            _diagnostics.Error(ErrorCode.ERR_NotAllPathsReturn, statement.Body.Span,
+                "the body of a 'guard' must not fall through: return, throw, "
+                + "break or continue");
+        }
+
         // What the guard established holds for the rest of the enclosing
         // block, because the only way past it is with the condition true.
         foreach (var (symbol, type) in NarrowingsWhen(condition, holds: true))

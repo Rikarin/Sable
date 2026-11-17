@@ -1,0 +1,79 @@
+module Negative.Flow
+
+public struct Point { public var x: Int }
+public union Shape { Circle(radius: F64), Empty }
+
+fn unreachableAfterThrow() throws -> Int {
+    throw Shape.Empty
+    return 1                            //! S6005 never be reached
+}
+
+fn unreachableAfterBreak(_ xs: Int[]) {
+    for x in xs {
+        break
+        let dead = x                    //! S6005 never be reached
+    }
+}
+
+fn unreachableAfterContinue(_ xs: Int[]) {
+    for x in xs {
+        continue
+        let dead = x                    //! S6005 never be reached
+    }
+}
+
+fn unreachableAfterAnExhaustiveMatch(_ s: Shape) -> Int {
+    match s {
+        case .Circle(let r) => { return 1 }
+        case .Empty => { return 0 }
+    }
+    return 2                            //! S6005 never be reached
+}
+
+fn missingReturnInOneBranch(_ flag: Bool) -> Int {
+    if flag {
+        return 1
+    } else {
+    }
+}                                       //! S6004 not all paths return
+
+fn missingReturnAfterALoop(_ xs: Int[]) -> Int {
+    for x in xs {
+        return x
+    }
+}                                       //! S6004 not all paths return
+
+fn aWhileTrueNeedsNoReturn() -> Int {
+    while true {
+        return 1
+    }
+}
+
+fn aWhileTrueWithABreakDoes() -> Int {
+    while true {
+        break
+    }
+}                                       //! S6004 not all paths return
+
+fn guardWithoutExiting(_ n: Int?) -> Int {
+    guard let value = n else {          //! S6004 must not fall through
+    }
+    return value                        //! S6008 before anything assigns
+}
+
+fn readingAfterAConditionalAssignment(_ flag: Bool) -> Int {
+    var n: Int
+    if flag {
+        n = 1
+    }
+    return n                            //! S6008 before anything assigns
+}
+
+fn readingInsideADeferredBlock() -> Int {
+    var n: Int
+    defer {
+        let copy = n                    //! S6008 before anything assigns
+    }
+    n = 1
+    return n
+}

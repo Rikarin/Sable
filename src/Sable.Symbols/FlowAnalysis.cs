@@ -16,6 +16,10 @@ internal static class FlowAnalysis
         BoundReturn => true,
         BoundThrow => true,
 
+        // Not an exit from the function, but an exit from the statement
+        // sequence it sits in, which is what "unreachable after" means.
+        BoundBreak or BoundContinue => true,
+
         BoundBlock block => block.Statements.Any(AlwaysExits),
 
         BoundIf ifStatement =>
@@ -82,14 +86,31 @@ internal static class FlowAnalysis
     }
 
     /// <summary>
-    /// The first statement in a block that can never be reached, or null.
+    /// The first statement anywhere in a body that can never be reached.
     /// </summary>
-    public static BoundStatement? FirstUnreachable(BoundBlock block)
+    /// <remarks>
+    /// Every block is looked at, not only the outermost: a <c>break</c>
+    /// followed by a statement is just as dead inside a loop as a
+    /// <c>return</c> is at the top.
+    /// </remarks>
+    public static BoundStatement? FirstUnreachable(BoundNode node)
     {
-        for (var i = 0; i < block.Statements.Length - 1; i++)
+        if (node is BoundBlock block)
         {
-            if (AlwaysExits(block.Statements[i])) return block.Statements[i + 1];
+            for (var i = 0; i < block.Statements.Length - 1; i++)
+            {
+                if (AlwaysExits(block.Statements[i])) return block.Statements[i + 1];
+            }
         }
+
+        foreach (var child in node.Children)
+        {
+            // A closure or a local function has its own body and its own
+            // reachability; it is checked when it is bound.
+            if (child is BoundClosure or BoundLocalFunction) continue;
+            if (FirstUnreachable(child) is { } found) return found;
+        }
+
         return null;
     }
 }

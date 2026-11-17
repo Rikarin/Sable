@@ -6,6 +6,9 @@
 // object starts with the header of docs/06 §6.2. Counts are not atomic yet:
 // there is one thread until the concurrency runtime arrives.
 
+// glibc declares dladdr (for a trap's backtrace) only for GNU sources.
+#define _GNU_SOURCE
+
 #include <errno.h>
 #include <math.h>
 #include <pthread.h>

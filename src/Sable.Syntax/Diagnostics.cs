@@ -136,6 +136,7 @@ public enum ErrorCode {
     ERR_PartialMove = 3059,
     ERR_ReferenceNeedsPlace = 3060,
     ERR_ReferenceOutlivesRoot = 3061,
+    ERR_OverlappingAccess = 3062,
     ERR_NotSupportedYet = 3099,
 
     // ---- Patterns and flow (S6000-S6999) ---------------------------------

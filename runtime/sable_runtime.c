@@ -46,6 +46,15 @@ enum {
     // Weak references to it share an entry in the side table.
     SABLE_HAS_SIDE = 4u,
 
+    // Made in a frame it does not outlive (docs/04 §3.7): counted as any
+    // object is, its contents destroyed at the last release, never freed.
+    SABLE_STACK = 8u,
+
+    // An inline block that may hold a relative reference: one has been set
+    // in it, or it came from bytes or another block. A block without one
+    // changes size without walking itself for references to measure again.
+    SABLE_LINKED = 16u,
+
     SABLE_UNOWNED_ONE = 1u << 8,
 };
 
@@ -93,6 +102,17 @@ void *sable_alloc(const SableMetadata *type, int64_t size) {
     return object;
 }
 
+// An object in the caller's frame: the header, and the rest zero.
+void *sable_stack_object(void *memory, const SableMetadata *type, int64_t size) {
+    memset(memory, 0, (size_t)size);
+    SableObject *object = memory;
+    object->type = type;
+    object->strong = 1;
+    object->flags = SABLE_STACK;
+    live_objects++;
+    return object;
+}
+
 void sable_retain(void *pointer) {
     SableObject *object = pointer;
     if (object != NULL && !(object->flags & SABLE_IMMORTAL)) {
@@ -134,7 +154,50 @@ void sable_release(void *pointer) {
     }
 
     live_objects--;
-    free(object);
+    if (!(object->flags & SABLE_STACK)) {
+        free(object);
+    }
+}
+
+// ---- Exclusivity -----------------------------------------------------------
+
+// The accesses in progress to storage inside objects (docs/02 §2.3): an
+// inout or ref argument's, for the length of its call. One that overlaps
+// an access in progress, either of them a change, is a trap. Kept in
+// checked builds only; the compiler proves what it can without them.
+typedef struct SableAccess {
+    void *storage;
+    int32_t modify;
+} SableAccess;
+
+static SableAccess *accesses;
+static int64_t access_count, access_capacity;
+
+void sable_access_begin(void *storage, int32_t modify) {
+    for (int64_t i = 0; i < access_count; i++) {
+        if (accesses[i].storage == storage && (modify || accesses[i].modify)) {
+            sable_trap("overlapping accesses to the same storage");
+        }
+    }
+
+    if (access_count == access_capacity) {
+        access_capacity = access_capacity < 16 ? 16 : access_capacity * 2;
+        accesses = realloc(accesses, (size_t)access_capacity * sizeof(SableAccess));
+        if (accesses == NULL) {
+            sable_trap("out of memory");
+        }
+    }
+
+    accesses[access_count++] = (SableAccess){ storage, modify };
+}
+
+void sable_access_end(void *storage) {
+    for (int64_t i = access_count - 1; i >= 0; i--) {
+        if (accesses[i].storage == storage) {
+            accesses[i] = accesses[--access_count];
+            return;
+        }
+    }
 }
 
 // ---- Regions -------------------------------------------------------------
@@ -152,11 +215,20 @@ typedef struct SableCleanup {
     void (*destroy)(void *value);
 } SableCleanup;
 
+// Where a 'region frame = pool' block began: what it gives back as it ends.
+typedef struct SableRegionMark {
+    SableChunk *chunk;
+    size_t used;
+    int64_t cleanup_count;
+} SableRegionMark;
+
 typedef struct SableRegion {
     SableObject header;
     SableChunk *chunk;
     SableCleanup *cleanups;
     int64_t cleanup_count, cleanup_capacity;
+    SableRegionMark *marks;
+    int64_t mark_count, mark_capacity;
 } SableRegion;
 
 static void sable_region_destroy(void *pointer) {
@@ -166,6 +238,7 @@ static void sable_region_destroy(void *pointer) {
     }
 
     free(region->cleanups);
+    free(region->marks);
     for (SableChunk *chunk = region->chunk; chunk != NULL;) {
         SableChunk *next = chunk->next;
         free(chunk);
@@ -214,6 +287,70 @@ void *sable_region_alloc(void *pointer, int64_t size, void (*destroy)(void *valu
     }
 
     return value;
+}
+
+// Destroys what was allocated since cleanup 'count', last first, and frees
+// the chunks begun since 'chunk', bumping back to 'used' in it.
+static void region_back_to(SableRegion *region, SableChunk *chunk, size_t used, int64_t count) {
+    for (int64_t i = region->cleanup_count - 1; i >= count; i--) {
+        region->cleanups[i].destroy(region->cleanups[i].value);
+    }
+
+    region->cleanup_count = count;
+    while (region->chunk != chunk) {
+        SableChunk *next = region->chunk->next;
+        free(region->chunk);
+        region->chunk = next;
+    }
+
+    if (chunk != NULL) {
+        chunk->used = used;
+        memset(chunk->bytes + used, 0, chunk->size - used);
+    }
+}
+
+// 'arena.reset()': everything in it destroyed; the newest chunk kept, empty,
+// for what comes next — a frame's worth of churn in one store.
+void sable_region_reset(void *pointer) {
+    SableRegion *region = pointer;
+    SableChunk *newest = region->chunk;
+    region_back_to(region, newest, 0, 0);
+    if (newest != NULL) {
+        for (SableChunk *older = newest->next; older != NULL;) {
+            SableChunk *next = older->next;
+            free(older);
+            older = next;
+        }
+
+        newest->next = NULL;
+    }
+
+    region->mark_count = 0;
+}
+
+void sable_region_push(void *pointer) {
+    SableRegion *region = pointer;
+    if (region->mark_count == region->mark_capacity) {
+        region->mark_capacity = region->mark_capacity < 4 ? 4 : region->mark_capacity * 2;
+        region->marks = realloc(region->marks, (size_t)region->mark_capacity * sizeof(SableRegionMark));
+        if (region->marks == NULL) {
+            sable_trap("out of memory");
+        }
+    }
+
+    region->marks[region->mark_count++] = (SableRegionMark){
+        region->chunk, region->chunk == NULL ? 0 : region->chunk->used, region->cleanup_count,
+    };
+}
+
+void sable_region_pop(void *pointer) {
+    SableRegion *region = pointer;
+    if (region->mark_count == 0) {
+        return;
+    }
+
+    SableRegionMark mark = region->marks[--region->mark_count];
+    region_back_to(region, mark.chunk, mark.used, mark.cleanup_count);
 }
 
 // ---- Unowned references --------------------------------------------------
@@ -610,6 +747,35 @@ SableString *sable_string_from_f64(double value) {
     return make_cstring(text);
 }
 
+// F32 the same way, against a float: 1.1, not 1.10000002.
+static void format_f32(float value, char *text, size_t size) {
+    if (isnan(value)) {
+        snprintf(text, size, "nan");
+        return;
+    }
+
+    for (int precision = 1; precision < 9; precision++) {
+        snprintf(text, size, "%.*g", precision, (double)value);
+        if (strtof(text, NULL) == value) {
+            return;
+        }
+    }
+
+    snprintf(text, size, "%.9g", (double)value);
+}
+
+SableString *sable_string_from_f32(float value) {
+    char text[40];
+    format_f32(value, text, sizeof text);
+    return make_cstring(text);
+}
+
+SableString *sable_string_from_uint(uint64_t value) {
+    char text[32];
+    snprintf(text, sizeof text, "%llu", (unsigned long long)value);
+    return make_cstring(text);
+}
+
 SableString *sable_string_from_bool(bool value) {
     return make_cstring(value ? "true" : "false");
 }
@@ -732,6 +898,16 @@ bool sable_char_is_whitespace(int32_t c) {
 
 void sable_print_int(int64_t value) {
     printf("%lld\n", (long long)value);
+}
+
+void sable_print_uint(uint64_t value) {
+    printf("%llu\n", (unsigned long long)value);
+}
+
+void sable_print_f32(float value) {
+    char text[40];
+    format_f32(value, text, sizeof text);
+    puts(text);
 }
 
 void sable_print_f64(double value) {
@@ -897,4 +1073,778 @@ SableArray *sable_string_split(const SableString *s, int32_t separator) {
     }
 
     return parts;
+}
+
+// ---- Inline layout -------------------------------------------------------
+
+// An @inline_layout value (docs/02 §2.5) is a block: one counted object
+// holding the value's bytes, copied on write. The bytes are the layout the
+// compiler describes for the runtime: the fixed-size fields first, packed,
+// then each variable-size field in declaration order — a bounded array's
+// count in the fewest bytes its bound needs, a grow-only one's as a LEB128
+// varint, then the elements; a relative reference a signed offset from its
+// own address, 0 for null. Nothing in it is an absolute pointer, so the
+// bytes are the value wherever they are copied to.
+
+enum {
+    INLINE_SCALAR = 0, INLINE_BOOL = 1, INLINE_CHAR = 2, INLINE_REF = 3,
+    INLINE_STRUCT = 4, INLINE_BOUNDED = 5, INLINE_GROW = 6,
+};
+
+typedef struct SableInlineLayout SableInlineLayout;
+
+typedef struct SableInlineSlot {
+    int32_t offset;        // in the prefix; -1 for a variable-size field
+    int32_t kind;
+    int32_t width;         // a scalar's or a reference's bytes; a bounded count's
+    int32_t optional;      // a reference that may be null
+    int32_t capacity;      // a bounded array's bound
+    int32_t element_kind;  // an array's element: scalar, Bool, Char or struct
+    int32_t element_width; // its bytes, when not a struct
+    const SableInlineLayout *layout; // a struct's, an element's, a reference's target
+} SableInlineSlot;
+
+struct SableInlineLayout {
+    const char *name;
+    int32_t prefix;     // the fixed-size fields' bytes
+    int32_t fixed_size; // every value's size, or -1 when it varies
+    int32_t count;
+    SableInlineSlot slots[];
+};
+
+typedef struct SableBlock {
+    SableObject header;
+    int64_t length, capacity;
+    uint8_t bytes[];
+} SableBlock;
+
+static const SableMetadata sable_block_metadata = { NULL, "inline block", 0, NULL, NULL };
+
+static uint32_t read_unsigned(const uint8_t *p, int width) {
+    uint32_t value = 0;
+    for (int i = 0; i < width; i++) {
+        value |= (uint32_t)p[i] << (8 * i);
+    }
+
+    return value;
+}
+
+static void write_unsigned(uint8_t *p, int width, uint32_t value) {
+    for (int i = 0; i < width; i++) {
+        p[i] = (uint8_t)(value >> (8 * i));
+    }
+}
+
+// A varint's value and bytes, trusting it: the block was validated or built here.
+static int64_t read_varint(const uint8_t *p, int *size) {
+    int64_t value = 0;
+    int i = 0;
+    do {
+        value |= (int64_t)(p[i] & 0x7F) << (7 * i);
+    } while (p[i++] & 0x80);
+    *size = i;
+    return value;
+}
+
+static int write_varint(uint8_t *p, int64_t value) {
+    int i = 0;
+    do {
+        uint8_t byte = value & 0x7F;
+        value >>= 7;
+        p[i++] = byte | (value != 0 ? 0x80 : 0);
+    } while (value != 0);
+    return i;
+}
+
+static int varint_size(int64_t value) {
+    uint8_t scratch[10];
+    return write_varint(scratch, value);
+}
+
+static const uint8_t *skip_value(const SableInlineLayout *layout, const uint8_t *p);
+
+// An array's count, and where its elements start.
+static int64_t array_count(const SableInlineSlot *slot, const uint8_t *array, const uint8_t **elements) {
+    if (slot->kind == INLINE_BOUNDED) {
+        *elements = array + slot->width;
+        return read_unsigned(array, slot->width);
+    }
+
+    int size;
+    int64_t count = read_varint(array, &size);
+    *elements = array + size;
+    return count;
+}
+
+static const uint8_t *skip_element(const SableInlineSlot *slot, const uint8_t *p) {
+    return slot->element_kind == INLINE_STRUCT ? skip_value(slot->layout, p) : p + slot->element_width;
+}
+
+static const uint8_t *skip_slot(const SableInlineSlot *slot, const uint8_t *p) {
+    if (slot->kind == INLINE_STRUCT) {
+        return skip_value(slot->layout, p);
+    }
+
+    const uint8_t *element;
+    int64_t count = array_count(slot, p, &element);
+    if (slot->element_kind != INLINE_STRUCT) {
+        return element + count * slot->element_width;
+    }
+
+    if (slot->layout->fixed_size >= 0) {
+        return element + count * slot->layout->fixed_size;
+    }
+
+    for (int64_t i = 0; i < count; i++) {
+        element = skip_value(slot->layout, element);
+    }
+
+    return element;
+}
+
+static const uint8_t *skip_value(const SableInlineLayout *layout, const uint8_t *p) {
+    if (layout->fixed_size >= 0) {
+        return p + layout->fixed_size;
+    }
+
+    const uint8_t *q = p + layout->prefix;
+    for (int32_t i = 0; i < layout->count; i++) {
+        if (layout->slots[i].offset < 0) {
+            q = skip_slot(&layout->slots[i], q);
+        }
+    }
+
+    return q;
+}
+
+// The empty value's size: zero counts, and so on down.
+static int64_t empty_size(const SableInlineLayout *layout) {
+    int64_t size = layout->prefix;
+    for (int32_t i = 0; i < layout->count; i++) {
+        const SableInlineSlot *slot = &layout->slots[i];
+        if (slot->offset < 0) {
+            size += slot->kind == INLINE_BOUNDED ? slot->width : slot->kind == INLINE_GROW ? 1 : empty_size(slot->layout);
+        }
+    }
+
+    return size;
+}
+
+uint8_t *sable_inline_field(const SableInlineLayout *layout, uint8_t *p, int32_t slot) {
+    if (layout->slots[slot].offset >= 0) {
+        return p + layout->slots[slot].offset;
+    }
+
+    const uint8_t *q = p + layout->prefix;
+    for (int32_t i = 0; i < slot; i++) {
+        if (layout->slots[i].offset < 0) {
+            q = skip_slot(&layout->slots[i], q);
+        }
+    }
+
+    return (uint8_t *)q;
+}
+
+int64_t sable_inline_count(const SableInlineSlot *s, const uint8_t *array) {
+    const uint8_t *elements;
+    return array_count(s, array, &elements);
+}
+
+uint8_t *sable_inline_first(const SableInlineSlot *s, uint8_t *array) {
+    const uint8_t *elements;
+    array_count(s, array, &elements);
+    return (uint8_t *)elements;
+}
+
+uint8_t *sable_inline_next(const SableInlineSlot *s, uint8_t *element) {
+    return (uint8_t *)skip_element(s, element);
+}
+
+uint8_t *sable_inline_at(const SableInlineSlot *s, uint8_t *array, int64_t index) {
+    const uint8_t *elements;
+    int64_t count = array_count(s, array, &elements);
+    if (index < 0 || index >= count) {
+        sable_trap("array index out of range");
+    }
+
+    int64_t size = s->element_kind == INLINE_STRUCT ? s->layout->fixed_size : s->element_width;
+    return (uint8_t *)elements + index * size;
+}
+
+static SableBlock *new_block(int64_t length, int64_t capacity) {
+    SableBlock *block = sable_alloc(&sable_block_metadata, (int64_t)sizeof(SableBlock) + capacity);
+    block->length = length;
+    block->capacity = capacity;
+    return block;
+}
+
+SableBlock *sable_inline_new(const SableInlineLayout *layout) {
+    int64_t size = empty_size(layout);
+    return new_block(size, size);
+}
+
+// A block in the caller's frame, with room for 'capacity' bytes; one that
+// outgrows it is copied to the heap, as a shared one is.
+SableBlock *sable_inline_new_stack(void *memory, const SableInlineLayout *layout, int64_t capacity) {
+    int64_t size = empty_size(layout);
+    if (size > capacity) {
+        return sable_inline_new(layout);
+    }
+
+    SableBlock *block = sable_stack_object(memory, &sable_block_metadata, (int64_t)sizeof(SableBlock) + capacity);
+    block->length = size;
+    block->capacity = capacity;
+    return block;
+}
+
+// The block at '*slot', made the only reference to its bytes, with room
+// for 'room' more: a copy of a shared one, a larger one for a full one.
+static SableBlock *unique_block(SableBlock **slot, int64_t room) {
+    SableBlock *block = *slot;
+    int64_t needed = block->length + room;
+    if (block->header.strong == 1 && !(block->header.flags & SABLE_IMMORTAL) && needed <= block->capacity) {
+        return block;
+    }
+
+    int64_t capacity = needed <= block->capacity ? block->capacity : needed < 2 * block->capacity ? 2 * block->capacity : needed;
+    if (block->header.strong == 1 && !(block->header.flags & (SABLE_IMMORTAL | SABLE_STACK))) {
+        SableBlock *grown = realloc(block, sizeof(SableBlock) + (size_t)capacity);
+        if (grown == NULL) {
+            sable_trap("out of memory");
+        }
+
+        grown->capacity = capacity;
+        *slot = grown;
+        return grown;
+    }
+
+    SableBlock *copy = new_block(block->length, capacity);
+    memcpy(copy->bytes, block->bytes, (size_t)block->length);
+    copy->header.flags |= block->header.flags & SABLE_LINKED;
+    sable_release(block);
+    *slot = copy;
+    return copy;
+}
+
+uint8_t *sable_inline_unique(SableBlock **slot) {
+    return unique_block(slot, 0)->bytes;
+}
+
+SableBlock *sable_inline_copy(const SableInlineLayout *layout, const uint8_t *p) {
+    int64_t size = skip_value(layout, p) - p;
+    SableBlock *block = new_block(size, size);
+    block->header.flags |= SABLE_LINKED;
+    memcpy(block->bytes, p, (size_t)size);
+    return block;
+}
+
+// Every relative reference in a value: where it is, and where it points.
+typedef struct InlineLink {
+    int64_t at, target;
+    int32_t width;
+} InlineLink;
+
+typedef struct InlineLinks {
+    InlineLink *links;
+    int64_t count, capacity;
+} InlineLinks;
+
+static void collect_value(const SableInlineLayout *layout, const uint8_t *base, const uint8_t *p, InlineLinks *links);
+
+static void collect_element(const SableInlineSlot *slot, const uint8_t *base, const uint8_t *p, InlineLinks *links) {
+    if (slot->element_kind == INLINE_STRUCT) {
+        collect_value(slot->layout, base, p, links);
+    }
+}
+
+static void collect_value(const SableInlineLayout *layout, const uint8_t *base, const uint8_t *p, InlineLinks *links) {
+    const uint8_t *q = p + layout->prefix;
+    for (int32_t i = 0; i < layout->count; i++) {
+        const SableInlineSlot *slot = &layout->slots[i];
+        const uint8_t *field = slot->offset >= 0 ? p + slot->offset : q;
+        if (slot->kind == INLINE_REF) {
+            int32_t offset = slot->width == 2 ? (int16_t)read_unsigned(field, 2) : slot->width == 1 ? (int8_t)field[0] : (int32_t)read_unsigned(field, 4);
+            if (offset != 0) {
+                if (links->count == links->capacity) {
+                    links->capacity = links->capacity < 8 ? 8 : links->capacity * 2;
+                    links->links = realloc(links->links, (size_t)links->capacity * sizeof(InlineLink));
+                }
+
+                links->links[links->count++] = (InlineLink){ field - base, field - base + offset, slot->width };
+            }
+        } else if (slot->kind == INLINE_STRUCT) {
+            collect_value(slot->layout, base, field, links);
+        } else if (slot->kind == INLINE_BOUNDED || slot->kind == INLINE_GROW) {
+            const uint8_t *element;
+            int64_t count = array_count(slot, field, &element);
+            for (int64_t j = 0; j < count; j++) {
+                collect_element(slot, base, element, links);
+                element = skip_element(slot, element);
+            }
+        }
+
+        if (slot->offset < 0) {
+            q = skip_slot(slot, q);
+        }
+    }
+}
+
+// Replaces 'removed' bytes at 'at' with 'inserted' ones, moving what
+// follows, and keeps every relative reference pointing where it did: one
+// whose field or target moved is measured again; one whose target went
+// is a trap.
+static SableBlock *splice(SableBlock **slot, const SableInlineLayout *layout, int64_t at, int64_t removed, const uint8_t *inserted, int64_t count) {
+    SableBlock *block = unique_block(slot, count > removed ? count - removed : 0);
+    InlineLinks links = { NULL, 0, 0 };
+    if (block->header.flags & SABLE_LINKED) {
+        collect_value(layout, block->bytes, block->bytes, &links);
+    }
+
+    int64_t delta = count - removed;
+    memmove(block->bytes + at + count, block->bytes + at + removed, (size_t)(block->length - at - removed));
+    memcpy(block->bytes + at, inserted, (size_t)count);
+    block->length += delta;
+
+    for (int64_t i = 0; i < links.count; i++) {
+        InlineLink link = links.links[i];
+        if (link.at >= at && link.at < at + removed) {
+            continue; // the reference itself was replaced
+        }
+
+        if (link.target >= at && link.target < at + removed && removed > 0) {
+            sable_trap("a relative reference's target was replaced");
+        }
+
+        int64_t from = link.at >= at + removed ? link.at + delta : link.at;
+        int64_t to = link.target >= at + removed ? link.target + delta : link.target;
+        int64_t offset = to - from;
+        if ((link.width == 2 && (offset < INT16_MIN || offset > INT16_MAX)) || (link.width == 1 && (offset < INT8_MIN || offset > INT8_MAX))) {
+            sable_trap("a relative reference no longer fits its width");
+        }
+
+        write_unsigned(block->bytes + from, link.width, (uint32_t)offset);
+    }
+
+    free(links.links);
+    return block;
+}
+
+// True when a value of the layout can hold a relative reference.
+static bool layout_has_references(const SableInlineLayout *layout, int depth) {
+    if (depth > 64) {
+        return true;
+    }
+
+    for (int32_t i = 0; i < layout->count; i++) {
+        const SableInlineSlot *slot = &layout->slots[i];
+        if (slot->kind == INLINE_REF) {
+            return true;
+        }
+
+        if (slot->layout != NULL && slot->kind != INLINE_REF && layout_has_references(slot->layout, depth + 1)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+void sable_inline_append(SableBlock **slot, const SableInlineLayout *root, const SableInlineSlot *s,
+    uint8_t *array, const uint8_t *element, int64_t size) {
+    int64_t at = array - (*slot)->bytes;
+    const uint8_t *elements;
+    int64_t count = array_count(s, array, &elements);
+    if (s->kind == INLINE_BOUNDED && count >= s->capacity) {
+        sable_trap("inline array is full");
+    }
+
+    int64_t end = skip_slot(s, array) - (*slot)->bytes;
+
+    // A struct's size is read from it.
+    if (size < 0) {
+        size = skip_value(s->layout, element) - element;
+    }
+
+    // An element copied in from somewhere else in this block goes through a
+    // copy of its own, since the splice may move or grow the block under it.
+    SableBlock *block = *slot;
+    uint8_t *copy = NULL;
+    if (element >= block->bytes && element < block->bytes + block->length) {
+        copy = malloc((size_t)(size > 0 ? size : 1));
+        memcpy(copy, element, (size_t)size);
+        element = copy;
+    }
+
+    // An element that may hold references of its own makes the block one that may.
+    if (s->element_kind == INLINE_STRUCT && layout_has_references(s->layout, 0)) {
+        block->header.flags |= SABLE_LINKED;
+    }
+
+    // The element first, then the count, which may take another byte.
+    block = splice(slot, root, end, 0, element, size);
+    free(copy);
+
+    uint8_t encoded[10];
+    int old_size = (int)(elements - array);
+    int new_size;
+    if (s->kind == INLINE_BOUNDED) {
+        write_unsigned(encoded, s->width, (uint32_t)(count + 1));
+        new_size = s->width;
+    } else {
+        new_size = write_varint(encoded, count + 1);
+    }
+
+    if (new_size == old_size) {
+        memcpy(block->bytes + at, encoded, (size_t)new_size);
+    } else {
+        splice(slot, root, at, old_size, encoded, new_size);
+    }
+}
+
+// Bytes as a bounded U8 array's elements: a string, as UTF-8.
+void sable_inline_assign_bytes(SableBlock **slot, const SableInlineLayout *root, const SableInlineSlot *s,
+    uint8_t *array, const uint8_t *bytes, int64_t count) {
+    if (s->kind == INLINE_BOUNDED && count > s->capacity) {
+        sable_trap("too many bytes for the inline array");
+    }
+
+    int64_t at = array - (*slot)->bytes;
+    int64_t old_size = skip_slot(s, array) - array;
+    int width = s->kind == INLINE_BOUNDED ? s->width : varint_size(count);
+    uint8_t *encoded = malloc((size_t)(width + count));
+    if (s->kind == INLINE_BOUNDED) {
+        write_unsigned(encoded, width, (uint32_t)count);
+    } else {
+        write_varint(encoded, count);
+    }
+
+    memcpy(encoded + width, bytes, (size_t)count);
+    splice(slot, root, at, old_size, encoded, width + count);
+    free(encoded);
+}
+
+void sable_inline_assign_string(SableBlock **slot, const SableInlineLayout *root, const SableInlineSlot *s,
+    uint8_t *array, const SableString *text) {
+    sable_inline_assign_bytes(slot, root, s, array, (const uint8_t *)text->bytes, text->length);
+}
+
+// A nested struct replaced by another value of it.
+void sable_inline_assign(SableBlock **slot, const SableInlineLayout *root, const SableInlineLayout *layout, uint8_t *field, const uint8_t *value) {
+    int64_t at = field - (*slot)->bytes;
+    int64_t old_size = skip_value(layout, field) - field;
+    int64_t size = skip_value(layout, value) - value;
+    SableBlock *block = *slot;
+    uint8_t *copy = NULL;
+    if (value >= block->bytes && value < block->bytes + block->length) {
+        copy = malloc((size_t)(size > 0 ? size : 1));
+        memcpy(copy, value, (size_t)size);
+        value = copy;
+    }
+
+    // A value from another block may hold references of its own.
+    block->header.flags |= SABLE_LINKED;
+    splice(slot, root, at, old_size, value, size);
+    free(copy);
+}
+
+uint8_t *sable_inline_ref_get(const uint8_t *field, int32_t width) {
+    int32_t offset = width == 2 ? (int16_t)read_unsigned(field, 2) : width == 1 ? (int8_t)field[0] : (int32_t)read_unsigned(field, 4);
+    return offset == 0 ? NULL : (uint8_t *)field + offset;
+}
+
+void sable_inline_ref_set(SableBlock **slot, uint8_t *field, int32_t width, const uint8_t *target) {
+    SableBlock *block = *slot;
+    if (target < block->bytes || target >= block->bytes + block->length) {
+        sable_trap("a relative reference must point into its own block");
+    }
+
+    int64_t offset = target - field;
+    if (offset == 0) {
+        sable_trap("a relative reference cannot point at itself");
+    }
+
+    if ((width == 2 && (offset < INT16_MIN || offset > INT16_MAX)) || (width == 1 && (offset < INT8_MIN || offset > INT8_MAX))) {
+        sable_trap("a relative reference does not fit its width");
+    }
+
+    write_unsigned(field, width, (uint32_t)offset);
+    block->header.flags |= SABLE_LINKED;
+}
+
+// Bytes as text: UTF-8, each byte of an ill-formed sequence read as U+FFFD.
+SableString *sable_inline_to_string(const SableInlineSlot *s, const uint8_t *array) {
+    const uint8_t *bytes;
+    int64_t count = array_count(s, array, &bytes);
+    char *text = malloc((size_t)(count * 3 + 1));
+    int64_t length = 0;
+    for (int64_t i = 0; i < count;) {
+        uint8_t b = bytes[i];
+        int need = b < 0x80 ? 0 : b >= 0xC2 && b <= 0xDF ? 1 : b >= 0xE0 && b <= 0xEF ? 2 : b >= 0xF0 && b <= 0xF4 ? 3 : -1;
+        bool ok = need >= 0 && i + need < count;
+        for (int k = 1; ok && k <= need; k++) {
+            uint8_t c = bytes[i + k];
+            uint8_t low = 0x80, high = 0xBF;
+            if (k == 1 && b == 0xE0) low = 0xA0;
+            if (k == 1 && b == 0xED) high = 0x9F;
+            if (k == 1 && b == 0xF0) low = 0x90;
+            if (k == 1 && b == 0xF4) high = 0x8F;
+            ok = c >= low && c <= high;
+        }
+
+        if (ok) {
+            memcpy(text + length, bytes + i, (size_t)(need + 1));
+            length += need + 1;
+            i += need + 1;
+        } else {
+            memcpy(text + length, "\xEF\xBF\xBD", 3);
+            length += 3;
+            i++;
+        }
+    }
+
+    SableString *result = make_string(text, length);
+    free(text);
+    return result;
+}
+
+SableArray *sable_inline_bytes(const SableInlineLayout *layout, const uint8_t *p, const SableMetadata *type) {
+    int64_t size = skip_value(layout, p) - p;
+    if (size == 0) {
+        return NULL;
+    }
+
+    SableArray *array = sable_alloc(type, (int64_t)sizeof(SableArray));
+    array->count = array->capacity = size;
+    array->elements = malloc((size_t)size);
+    memcpy(array->elements, p, (size_t)size);
+    return array;
+}
+
+SableBlock *sable_inline_from(const SableArray *bytes) {
+    int64_t size = sable_array_count(bytes);
+    SableBlock *block = new_block(size, size);
+    block->header.flags |= SABLE_LINKED;
+    if (size > 0) {
+        memcpy(block->bytes, bytes->elements, (size_t)size);
+    }
+
+    return block;
+}
+
+// ---- Validation ----------------------------------------------------------
+
+// Trust nothing: every count, tag and length is checked against the end of
+// the bytes before it is used, and every relative reference must point at
+// the start of a value of its target's type, one the walk found.
+
+typedef struct InlinePlace {
+    int64_t at;
+    const SableInlineLayout *layout;
+} InlinePlace;
+
+typedef struct InlineCheck {
+    const uint8_t *base, *end;
+    InlinePlace *places;
+    int64_t place_count, place_capacity;
+    InlineLink *links;
+    const SableInlineLayout **targets;
+    int64_t link_count, link_capacity;
+    const char *why;
+} InlineCheck;
+
+static bool fail(InlineCheck *check, const char *why) {
+    if (check->why == NULL) {
+        check->why = why;
+    }
+
+    return false;
+}
+
+static bool check_value(InlineCheck *check, const SableInlineLayout *layout, const uint8_t *p, const uint8_t **out, int depth);
+
+static bool check_scalar(InlineCheck *check, int kind, int width, const uint8_t *p) {
+    if (check->end - p < width) {
+        return fail(check, "truncated");
+    }
+
+    if (kind == INLINE_BOOL && p[0] > 1) {
+        return fail(check, "a Bool that is neither 0 nor 1");
+    }
+
+    if (kind == INLINE_CHAR) {
+        uint32_t c = read_unsigned(p, 4);
+        if (c > 0x10FFFF || (c >= 0xD800 && c <= 0xDFFF)) {
+            return fail(check, "a Char that is not a Unicode scalar value");
+        }
+    }
+
+    return true;
+}
+
+static bool check_slot(InlineCheck *check, const SableInlineSlot *slot, const uint8_t *p, const uint8_t **out, int depth) {
+    switch (slot->kind) {
+        case INLINE_SCALAR:
+        case INLINE_BOOL:
+        case INLINE_CHAR:
+            *out = p + slot->width;
+            return check_scalar(check, slot->kind, slot->width, p);
+
+        case INLINE_REF: {
+            if (check->end - p < slot->width) {
+                return fail(check, "truncated");
+            }
+
+            int32_t offset = slot->width == 2 ? (int16_t)read_unsigned(p, 2) : slot->width == 1 ? (int8_t)p[0] : (int32_t)read_unsigned(p, 4);
+            if (offset == 0 && !slot->optional) {
+                return fail(check, "a relative reference that may not be null is null");
+            }
+
+            if (offset != 0) {
+                if (check->link_count == check->link_capacity) {
+                    check->link_capacity = check->link_capacity < 8 ? 8 : check->link_capacity * 2;
+                    check->links = realloc(check->links, (size_t)check->link_capacity * sizeof(InlineLink));
+                    check->targets = realloc(check->targets, (size_t)check->link_capacity * sizeof(*check->targets));
+                }
+
+                check->links[check->link_count] = (InlineLink){ p - check->base, (p - check->base) + offset, slot->width };
+                check->targets[check->link_count++] = slot->layout;
+            }
+
+            *out = p + slot->width;
+            return true;
+        }
+
+        case INLINE_STRUCT:
+            return check_value(check, slot->layout, p, out, depth + 1);
+
+        default: {
+            int64_t count;
+            const uint8_t *element;
+            if (slot->kind == INLINE_BOUNDED) {
+                if (check->end - p < slot->width) {
+                    return fail(check, "truncated");
+                }
+
+                count = read_unsigned(p, slot->width);
+                if (count > slot->capacity) {
+                    return fail(check, "an inline array longer than its bound");
+                }
+
+                element = p + slot->width;
+            } else {
+                count = 0;
+                int i = 0;
+                for (;; i++) {
+                    if (i == 5) {
+                        return fail(check, "a count that is not a varint");
+                    }
+
+                    if (p + i >= check->end) {
+                        return fail(check, "truncated");
+                    }
+
+                    count |= (int64_t)(p[i] & 0x7F) << (7 * i);
+                    if (!(p[i] & 0x80)) {
+                        break;
+                    }
+                }
+
+                if (count > INT32_MAX) {
+                    return fail(check, "a count that is not a varint");
+                }
+
+                element = p + i + 1;
+            }
+
+            // Every element takes a byte at least, or the count is a lie.
+            int64_t least = slot->element_kind == INLINE_STRUCT ? empty_size(slot->layout) : slot->element_width;
+            if (least > 0 ? count > (check->end - element) / least : count > 65536) {
+                return fail(check, "a count longer than the bytes");
+            }
+
+            for (int64_t i = 0; i < count; i++) {
+                if (slot->element_kind == INLINE_STRUCT) {
+                    if (!check_value(check, slot->layout, element, &element, depth + 1)) {
+                        return false;
+                    }
+                } else {
+                    if (!check_scalar(check, slot->element_kind, slot->element_width, element)) {
+                        return false;
+                    }
+
+                    element += slot->element_width;
+                }
+            }
+
+            *out = element;
+            return true;
+        }
+    }
+}
+
+static bool check_value(InlineCheck *check, const SableInlineLayout *layout, const uint8_t *p, const uint8_t **out, int depth) {
+    if (depth > 64) {
+        return fail(check, "nested too deeply");
+    }
+
+    if (check->end - p < layout->prefix) {
+        return fail(check, "truncated");
+    }
+
+    if (check->place_count == check->place_capacity) {
+        check->place_capacity = check->place_capacity < 8 ? 8 : check->place_capacity * 2;
+        check->places = realloc(check->places, (size_t)check->place_capacity * sizeof(InlinePlace));
+    }
+
+    check->places[check->place_count++] = (InlinePlace){ p - check->base, layout };
+
+    const uint8_t *q = p + layout->prefix;
+    for (int32_t i = 0; i < layout->count; i++) {
+        const SableInlineSlot *slot = &layout->slots[i];
+        const uint8_t *after;
+        if (slot->offset >= 0) {
+            if (!check_slot(check, slot, p + slot->offset, &after, depth)) {
+                return false;
+            }
+        } else {
+            if (!check_slot(check, slot, q, &q, depth)) {
+                return false;
+            }
+        }
+    }
+
+    *out = q;
+    return true;
+}
+
+static int compare_places(const void *a, const void *b) {
+    const InlinePlace *x = a, *y = b;
+    return x->at < y->at ? -1 : x->at > y->at ? 1 : x->layout < y->layout ? -1 : x->layout > y->layout ? 1 : 0;
+}
+
+static const SableString empty_string_object = { { &sable_string_metadata, 1, SABLE_IMMORTAL }, 0, 0 };
+
+// Null when the block holds a valid value of the layout; why not, otherwise.
+SableString *sable_inline_invalid(const SableInlineLayout *layout, const SableBlock *block) {
+    InlineCheck check = { block->bytes, block->bytes + block->length, NULL, 0, 0, NULL, NULL, 0, 0, NULL };
+    const uint8_t *end;
+    if (check_value(&check, layout, block->bytes, &end, 0) && end != check.end) {
+        fail(&check, "bytes after the value");
+    }
+
+    if (check.why == NULL) {
+        qsort(check.places, (size_t)check.place_count, sizeof(InlinePlace), compare_places);
+        for (int64_t i = 0; i < check.link_count && check.why == NULL; i++) {
+            InlinePlace key = { check.links[i].target, check.targets[i] };
+            if (key.at < 0 || key.at >= block->length
+                || bsearch(&key, check.places, (size_t)check.place_count, sizeof(InlinePlace), compare_places) == NULL) {
+                fail(&check, "a relative reference that does not point at a value of its type");
+            }
+        }
+    }
+
+    free(check.places);
+    free(check.links);
+    free(check.targets);
+    return check.why == NULL ? (SableString *)&empty_string_object : make_cstring(check.why);
 }

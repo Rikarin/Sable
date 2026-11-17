@@ -332,7 +332,7 @@ public sealed class LoweringTests {
         var compilation = Compilation.Create(
             """
             module M
-            struct Point { var x: U8 }
+            struct Point { var x: U128 }
             fn origin(_ p: Point) -> Int { return 0 }
             """
         );

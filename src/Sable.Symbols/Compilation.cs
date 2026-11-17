@@ -491,8 +491,14 @@ public sealed class Compilation {
             IsSealed = modifiers.Any(SyntaxKind.SealedKeyword),
             IsAbstract = modifiers.Any(SyntaxKind.AbstractKeyword),
             IsNoncopyable = typeKind is TypeKind.Struct or TypeKind.Union
-                && attributes.Any(static a => a.Name.ToString().Trim() == "noncopy")
+                && attributes.Any(static a => a.Name.ToString().Trim() == "noncopy"),
+            IsInlineLayout = typeKind is TypeKind.Struct
+                && attributes.Any(static a => a.Name.ToString().Trim() == "inline_layout")
         };
+
+        if (type.IsInlineLayout) {
+            type.AddMember(Core.FromBytes(type));
+        }
 
         if (typeParameters is not null) {
             type.TypeParameters = [

@@ -30,7 +30,7 @@ public sealed class SilTrap(string message) : Exception(message);
 ///         <see cref="LiveObjects" /> above zero.
 ///     </para>
 /// </remarks>
-public sealed class SilInterpreter(SilModule module, int stepLimit = 10_000_000, int depthLimit = 2_000) {
+public sealed partial class SilInterpreter(SilModule module, int stepLimit = 10_000_000, int depthLimit = 2_000) {
     int _steps;
     readonly HashSet<Counted> _live = [];
     readonly Dictionary<StringLiteralInst, HeapString> _literals = [];
@@ -90,18 +90,25 @@ public sealed class SilInterpreter(SilModule module, int stepLimit = 10_000_000,
     /// <summary>A region: the cells allocated in it, released in reverse when it goes.</summary>
     sealed class RegionObject : Counted {
         public List<RegionCell> Cells { get; } = [];
+
+        /// <summary>Where each 'region frame = pool' block in progress began.</summary>
+        public Stack<int> Marks { get; } = [];
     }
 
     /// <summary>A value in a region: storage that is gone once the region is.</summary>
     sealed class RegionCell(RegionObject region, SilType type) : IReference {
         object? _value;
         public SilType Type { get; } = type;
+
+        /// <summary>Given back: the region was reset, or the block that took it ended.</summary>
+        public bool Released;
+
         public object? Get() => Peek() ?? throw new SilTrap("load from uninitialised storage");
 
         public object? Peek() =>
-            region.Freed ? throw new SilTrap("use of a region's memory after the region ended") : _value;
+            region.Freed || Released ? throw new SilTrap("use of a region's memory after the region ended") : _value;
 
-        public void Set(object? value) => _value = region.Freed ? throw new SilTrap("use of a region's memory after the region ended") : value;
+        public void Set(object? value) => _value = region.Freed || Released ? throw new SilTrap("use of a region's memory after the region ended") : value;
 
         /// <summary>What the cell holds, for the region to destroy as it goes.</summary>
         public object? Take() {
@@ -116,9 +123,12 @@ public sealed class SilInterpreter(SilModule module, int stepLimit = 10_000_000,
         public List<object?> Elements { get; } = elements;
     }
 
-    T Allocate<T>(T value) where T : Counted {
+    T Allocate<T>(T value, bool onStack = false) where T : Counted {
         _live.Add(value);
-        Allocations++;
+        if (!onStack) {
+            Allocations++;
+        }
+
         return value;
     }
 
@@ -333,6 +343,9 @@ public sealed class SilInterpreter(SilModule module, int stepLimit = 10_000_000,
     ///     that was never written traps.
     /// </remarks>
     sealed class Element(IReference parent, int index, int count) : IReference {
+        public IReference Parent => parent;
+        public int Index => index;
+
         public object? Get() => Peek() ?? throw new SilTrap("load from uninitialised storage");
 
         public object? Peek() => parent.Peek() is object?[] whole ? whole[index] : null;
@@ -345,7 +358,35 @@ public sealed class SilInterpreter(SilModule module, int stepLimit = 10_000_000,
     }
 
     /// <summary>A field of an object.</summary>
+    /// <summary>The accesses in progress (docs/02 §2.3): where, and whether each is a change.</summary>
+    readonly List<(object Storage, bool Modify)> _accesses = [];
+
+    void Access(string name, IReference address) {
+        var storage = StorageOf(address);
+        if (name == "access_end") {
+            _accesses.RemoveAt(_accesses.FindLastIndex(a => Equals(a.Storage, storage)));
+            return;
+        }
+
+        var modify = name == "access_begin_modify";
+        if (_accesses.Any(a => Equals(a.Storage, storage) && (modify || a.Modify))) {
+            throw new SilTrap("overlapping accesses to the same storage");
+        }
+
+        _accesses.Add((storage, modify));
+    }
+
+    /// <summary>What an address is the storage of: an object's field, the same whichever reference reached it.</summary>
+    static object StorageOf(IReference address) =>
+        address switch {
+            Field field => (field.Instance, field.Index),
+            Element element => (StorageOf(element.Parent), element.Index),
+            _ => address,
+        };
+
     sealed class Field(HeapObject instance, int index) : IReference {
+        public HeapObject Instance => instance;
+        public int Index => index;
         public object? Get() => Peek() ?? throw new SilTrap("load from uninitialised storage");
         public object? Peek() => Alive(instance).Fields[index];
         public void Set(object? value) => Alive(instance).Fields[index] = value;
@@ -438,11 +479,12 @@ public sealed class SilInterpreter(SilModule module, int stepLimit = 10_000_000,
                     case IntegerLiteralInst literal:
                         values[literal] = literal.Type == SilType.Bool ? literal.Value != 0
                             : literal.Type == SilType.Char ? new Rune((int)literal.Value)
+                            : literal.Type == SilType.U64 || literal.Type == SilType.UInt ? unchecked((ulong)literal.Value)
                             : literal.Value;
                         break;
 
                     case FloatLiteralInst literal:
-                        values[literal] = literal.Value;
+                        values[literal] = literal.Type == SilType.F32 ? (object)(float)literal.Value : literal.Value;
                         break;
 
                     case StringLiteralInst literal:
@@ -582,7 +624,7 @@ public sealed class SilInterpreter(SilModule module, int stepLimit = 10_000_000,
                         break;
 
                     case AllocRefInst alloc:
-                        values[alloc] = Allocate(new HeapObject(alloc.ClassType));
+                        values[alloc] = Allocate(new HeapObject(alloc.ClassType), alloc.OnStack);
                         break;
 
                     case RefElementAddrInst element:
@@ -742,6 +784,26 @@ public sealed class SilInterpreter(SilModule module, int stepLimit = 10_000_000,
             case "region_create":
                 return Allocate(new RegionObject());
 
+            case "region_reset" or "region_pop": {
+                var region = Alive((RegionObject)operands[0]!);
+                var keep = builtin.Name == "region_reset" ? 0 : region.Marks.Count > 0 ? region.Marks.Pop() : region.Cells.Count;
+                if (builtin.Name == "region_reset") {
+                    region.Marks.Clear();
+                }
+
+                for (var i = region.Cells.Count - 1; i >= keep; i--) {
+                    Release(region.Cells[i].Type, region.Cells[i].Take(), depth);
+                    region.Cells[i].Released = true;
+                }
+
+                region.Cells.RemoveRange(keep, region.Cells.Count - keep);
+                return null;
+            }
+
+            case "region_push":
+                Alive((RegionObject)operands[0]!).Marks.Push(((RegionObject)operands[0]!).Cells.Count);
+                return null;
+
             case "region_alloc": {
                 var region = Alive((RegionObject)operands[0]!);
                 var cell = new RegionCell(region, ((AddressType)builtin.Type).Pointee);
@@ -801,7 +863,7 @@ public sealed class SilInterpreter(SilModule module, int stepLimit = 10_000_000,
             case "string_from_Char":
                 return Allocate(new HeapString(((Rune)operands[0]!).ToString()));
 
-            case "string_from_Int" or "string_from_F64" or "string_from_Bool":
+            case var _ when builtin.Name.StartsWith("string_from_", StringComparison.Ordinal) && builtin.Name != "string_from_Char":
                 return Allocate(new HeapString(Format(operands[0])));
 
             case "string_to_Int": {
@@ -921,7 +983,140 @@ public sealed class SilInterpreter(SilModule module, int stepLimit = 10_000_000,
             return Builtin(builtin.Name.Replace("_Char", "_Int", StringComparison.Ordinal), [(long)left.Value, (long)right.Value]);
         }
 
-        return Builtin(builtin.Name, operands);
+        if (builtin.Name.StartsWith("inline_", StringComparison.Ordinal)) {
+            return Inline(builtin, operands, depth);
+        }
+
+        if (builtin.Name.StartsWith("access_", StringComparison.Ordinal)) {
+            Access(builtin.Name, (IReference)operands[0]!);
+            return null;
+        }
+
+        return Numeric(builtin.Name, operands) ?? Builtin(builtin.Name, operands);
+    }
+
+    /// <summary>
+    ///     The sized integers and F32, as the native code computes them:
+    ///     through Int128, trapping where the result does not fit. A U64 or
+    ///     UInt is held as a ulong, any other integer as a long, an F32 as a float.
+    /// </summary>
+    static object? Numeric(string name, object?[] operands) {
+        static SilType? Find(string typeName) => SilType.Numbers.FirstOrDefault(n => n.ToString() == typeName);
+
+        if (name.StartsWith("convert_", StringComparison.Ordinal)) {
+            var parts = name.Split('_');
+            if (name is "convert_Int_F64" or "convert_F64_Int" || Find(parts[1]) is not { } from || Find(parts[2]) is not { } to) {
+                return null;
+            }
+
+            return ConvertNumber(operands[0], from, to);
+        }
+
+        var separator = name.LastIndexOf('_');
+        if (separator < 0 || Find(name[(separator + 1)..]) is not { } type || type == SilType.Int || type == SilType.F64) {
+            return null;
+        }
+
+        var op = name[..separator];
+        if (type == SilType.F32) {
+            var a = (float)operands[0]!;
+            var b = operands.Length > 1 ? (float)operands[1]! : 0f;
+            return op switch {
+                "add" => a + b,
+                "sub" => a - b,
+                "mul" => a * b,
+                "div" => a / b,
+                "neg" => -a,
+                "abs" => Math.Abs(a),
+                "min" => float.IsNaN(a) ? b : float.IsNaN(b) ? a : Math.Min(a, b),
+                "max" => float.IsNaN(a) ? b : float.IsNaN(b) ? a : Math.Max(a, b),
+                "cmp_eq" => a == b,
+                "cmp_ne" => a != b,
+                "cmp_lt" => a < b,
+                "cmp_le" => a <= b,
+                "cmp_gt" => a > b,
+                "cmp_ge" => a >= b,
+                _ => null,
+            };
+        }
+
+        var (bits, signed) = SilType.IntegerInfo(type)!.Value;
+        var x = Wide(operands[0]);
+        var y = operands.Length > 1 ? Wide(operands[1]) : Int128.Zero;
+        object Fit(Int128 value) => InRange(value, bits, signed) ? Narrow(value, type) : throw new SilTrap("integer overflow");
+        object Wrap(Int128 value) => Narrow(Wrapped(value, bits, signed), type);
+
+        switch (op) {
+            case "add": return Fit(x + y);
+            case "sub": return Fit(x - y);
+            case "mul": return Fit(x * y);
+            case "neg": return Fit(-x);
+            case "abs": return Fit(x < 0 ? -x : x);
+            case "div" or "rem":
+                return y == 0 ? throw new SilTrap("division by zero") : Fit(op == "div" ? x / y : x % y);
+            case "shl" or "shr":
+                return y < 0 || y >= bits ? throw new SilTrap("shift out of range") : Wrap(op == "shl" ? x << (int)y : x >> (int)y);
+            case "and": return Wrap(x & y);
+            case "or": return Wrap(x | y);
+            case "xor": return Wrap(x ^ y);
+            case "not": return Wrap(~x);
+            case "min": return Narrow(x < y ? x : y, type);
+            case "max": return Narrow(x < y ? y : x, type);
+            case "cmp_eq": return x == y;
+            case "cmp_ne": return x != y;
+            case "cmp_lt": return x < y;
+            case "cmp_le": return x <= y;
+            case "cmp_gt": return x > y;
+            case "cmp_ge": return x >= y;
+            default: return null;
+        }
+    }
+
+    static Int128 Wide(object? value) =>
+        value switch {
+            long l => l,
+            ulong u => u,
+            _ => throw new SilTrap($"not an integer: {value}"),
+        };
+
+    static bool InRange(Int128 value, int bits, bool signed) =>
+        signed
+            ? value >= -(Int128.One << (bits - 1)) && value < (Int128.One << (bits - 1))
+            : value >= 0 && value < (Int128.One << bits);
+
+    static Int128 Wrapped(Int128 value, int bits, bool signed) {
+        var modulus = Int128.One << bits;
+        var reduced = ((value % modulus) + modulus) % modulus;
+        return signed && reduced >= (Int128.One << (bits - 1)) ? reduced - modulus : reduced;
+    }
+
+    static object Narrow(Int128 value, SilType type) =>
+        type == SilType.U64 || type == SilType.UInt ? (object)(ulong)value : (long)value;
+
+    static object ConvertNumber(object? value, SilType from, SilType to) {
+        var fromInteger = SilType.IntegerInfo(from);
+        var toInteger = SilType.IntegerInfo(to);
+        var failed = new SilTrap($"{from} does not fit in {to}");
+
+        if (fromInteger is not null && toInteger is var (bits, signed)) {
+            var wide = Wide(value);
+            return InRange(wide, bits, signed) ? Narrow(wide, to) : throw failed;
+        }
+
+        if (fromInteger is not null) {
+            var wide = Wide(value);
+            return to == SilType.F32 ? (object)(float)wide : (double)wide;
+        }
+
+        var real = value is float f ? f : (double)value!;
+        if (toInteger is var (toBits, toSigned)) {
+            var (low, high) = toSigned
+                ? (-Math.Pow(2, toBits - 1), Math.Pow(2, toBits - 1))
+                : (0.0, Math.Pow(2, toBits));
+            return real >= low && real < high ? Narrow((Int128)Math.Truncate(real), to) : throw failed;
+        }
+
+        return to == SilType.F32 ? (object)(float)real : real;
     }
 
     /// <summary>The array at an address, made unique — copied if it is shared — so that it can be changed.</summary>
@@ -1071,6 +1266,8 @@ public sealed class SilInterpreter(SilModule module, int stepLimit = 10_000_000,
     public static string Format(object? value) =>
         value switch {
             long n => n.ToString(CultureInfo.InvariantCulture),
+            ulong n => n.ToString(CultureInfo.InvariantCulture),
+            float f => FormatFloat(f),
             bool b => b ? "true" : "false",
             double d => FormatDouble(d),
             string s => s,
@@ -1084,6 +1281,25 @@ public sealed class SilInterpreter(SilModule module, int stepLimit = 10_000_000,
     ///     same value — <c>0.1</c>, not <c>0.10000000000000001</c> — as the
     ///     runtime writes it.
     /// </summary>
+    static string FormatFloat(float value) {
+        if (float.IsNaN(value)) {
+            return "nan";
+        }
+
+        if (float.IsInfinity(value)) {
+            return value > 0 ? "inf" : "-inf";
+        }
+
+        for (var precision = 1; precision < 9; precision++) {
+            var candidate = FormatG(value, precision);
+            if (float.Parse(candidate, NumberStyles.Float, CultureInfo.InvariantCulture) == value) {
+                return candidate;
+            }
+        }
+
+        return FormatG(value, 9);
+    }
+
     static string FormatDouble(double value) {
         if (double.IsNaN(value)) {
             return "nan";

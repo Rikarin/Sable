@@ -284,6 +284,11 @@ public sealed class SilParser {
     void ParseStruct() {
         var type = (StructType)_module.FindType(Expect(TokenKind.Word, "a struct name").Text)!;
         type.IsNoncopyable = AcceptNoncopy();
+        if (Current is { Kind: TokenKind.Global, Text: "inline" }) {
+            Next();
+            type.IsInline = true;
+        }
+
         Expect("{");
         if (!At("}")) {
             do {
@@ -502,7 +507,30 @@ public sealed class SilParser {
         }
 
         if (Accept("*")) {
+            if (Accept("inline")) {
+                return new InlinePointerType(ParseTypeBody());
+            }
+
             return SilType.Address(ParseTypeBody());
+        }
+
+        if (Current is { Kind: TokenKind.Global, Text: "inline_array" }) {
+            Next();
+            Expect("(");
+            var element = ParseTypeBody();
+            int? capacity = Accept(",") ? int.Parse(Expect(TokenKind.Number, "a capacity").Text, CultureInfo.InvariantCulture) : null;
+            Expect(")");
+            return new InlineArrayType(element, capacity);
+        }
+
+        if (Current is { Kind: TokenKind.Global, Text: "relative" or "relative_optional" } relative) {
+            Next();
+            Expect("(");
+            var target = ParseTypeBody() as StructType ?? throw Error("a relative reference needs an inline struct");
+            Expect(",");
+            var width = int.Parse(Expect(TokenKind.Number, "a width").Text, CultureInfo.InvariantCulture);
+            Expect(")");
+            return new RelativeReferenceType(target, width, relative.Text == "relative_optional");
         }
 
         if (Accept("[")) {
@@ -556,6 +584,7 @@ public sealed class SilParser {
             "Char" => SilType.Char,
             "Object" => SilType.Object,
             "Region" => SilType.Region,
+            _ when SilType.Numbers.FirstOrDefault(n => n.ToString() == name) is { } number => number,
             _ => _module.FindType(name) ?? throw Error($"unknown type '{name}'"),
         };
     }
@@ -617,14 +646,14 @@ public sealed class SilParser {
             }
 
             case "float_literal": {
-                ParseType();
+                var floatType = ParseType();
                 Expect(",");
                 var text = Expect(TokenKind.Number, "a number").Text;
                 if (!double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var value)) {
                     throw new SilParseException($"'{text}' is not a number", line);
                 }
 
-                instruction = new FloatLiteralInst(value);
+                instruction = new FloatLiteralInst(value, floatType);
                 break;
             }
 
@@ -856,10 +885,17 @@ public sealed class SilParser {
                 instruction = new DestroyAddrInst(Operand(0));
                 break;
 
-            case "alloc_ref":
+            case "alloc_ref": {
+                var onStack = Accept("[");
+                if (onStack) {
+                    Expect("stack");
+                    Expect("]");
+                }
+
                 instruction = new AllocRefInst(ParseType() as ClassType
-                    ?? throw new SilParseException("alloc_ref needs a class type", line));
+                    ?? throw new SilParseException("alloc_ref needs a class type", line)) { OnStack = onStack };
                 break;
+            }
 
             case "ref_element_addr": {
                 var reference = Defined(Operand(0), opcode, line);

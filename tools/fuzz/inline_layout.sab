@@ -1,0 +1,217 @@
+module Fuzz
+
+// docs/04 §3.8: "Round-trip Bytes.of / fromBytes survives a 10M-case fuzzer
+// with no memory-safety failure on corrupt input". Valid records of two
+// shapes — orders with nested lines and a relative parent link, trees of
+// nodes linked to each other — are written out as bytes, mutated, and
+// handed to fromBytes. What it accepts is then walked completely: every
+// field, every element, every relative reference followed. And it must
+// write back out as exactly the bytes it was read from. tools/fuzz/run.sh
+// builds this with AddressSanitizer and UndefinedBehaviorSanitizer over the
+// runtime, so a read outside the block is a crash, not a quiet pass.
+
+@inline_layout
+struct OrderLine {
+    var sku: U8[..16]
+    var qty: U16
+    var price: U32
+    var gift: Bool
+}
+
+@inline_layout
+struct Order {
+    var id: U64
+    var customer: U8[..32]
+    var lines: OrderLine[>..]
+    var parent: Order&<u32>?
+    var initial: Char
+}
+
+@inline_layout
+struct Node {
+    var value: I32
+    var parent: Node&<u16>?
+    var tag: U8
+}
+
+@inline_layout
+struct Tree {
+    var root: Node&<u32>?
+    var name: U8[..8]
+    var nodes: Node[>..]
+    var weight: F32
+}
+
+// A linear congruential generator: small enough to stay inside Int.
+fn next(_ state: Int) -> Int {
+    return (state * 1103515245 + 12345) % 2147483648
+}
+
+fn same(_ a: U8[>..], _ b: U8[>..]) -> Bool {
+    if a.count != b.count {
+        return false
+    }
+    for i in 0..<a.count {
+        if a[i] != b[i] {
+            return false
+        }
+    }
+    return true
+}
+
+fn walkOrder(_ order: Order) -> Int {
+    var sum = Int(order.id % 1000) + order.customer.toString().count + Int(order.initial.codePoint % 7)
+    for line in order.lines {
+        sum = sum + line.sku.count + Int(line.qty) + Int(line.price % 97) + (line.gift ? 1 : 0)
+    }
+    if let parent = order.parent {
+        sum = sum + Int(parent.id % 13) + parent.lines.count + parent.customer.count
+    }
+    return sum
+}
+
+fn walkTree(_ tree: Tree) -> Int {
+    var sum = tree.nodes.count + (tree.weight > 0 ? 1 : 0)
+    if let root = tree.root {
+        sum = sum + Int(root.value % 11)
+    }
+    for node in tree.nodes {
+        sum = sum + Int(node.value % 5) + Int(node.tag) + tree.name.count
+        // A cycle of parents is valid data: follow it no further than there are nodes.
+        var steps = 0
+        var current = node.parent
+        while current != none && steps <= tree.nodes.count {
+            sum = sum + Int(current!.value % 3)
+            current = current!.parent
+            steps = steps + 1
+        }
+    }
+    return sum
+}
+
+fn seedOrder(_ n: Int) -> U8[>..] {
+    var order = Order { id: U64(n * 7919), customer: "Customer", lines: [], parent: none, initial: 'C' }
+    for i in 0..<(n % 4) {
+        order.lines.append(OrderLine { sku: "SKU", qty: U16(i + 1), price: U32(n * 13 + i), gift: i % 2 == 0 })
+    }
+    if n % 2 == 0 {
+        order.parent = &order
+    }
+    return Bytes.of(order)
+}
+
+fn seedTree(_ n: Int) -> U8[>..] {
+    var tree = Tree { root: none, name: "tree", nodes: [], weight: 1.5 }
+    for i in 0..<(n % 6 + 1) {
+        tree.nodes.append(Node { value: I32(i * 3 - 4), parent: none, tag: U8(i) })
+    }
+    for i in 1..<tree.nodes.count {
+        tree.nodes[i].parent = &tree.nodes[(i - 1) / 2]
+    }
+    tree.root = &tree.nodes[0]
+    if n % 3 == 0 {
+        tree.nodes[0].parent = &tree.nodes[tree.nodes.count - 1]
+    }
+    return Bytes.of(tree)
+}
+
+// One mutation: a byte changed, a byte added or dropped, the end cut off,
+// or a count-shaped byte made large.
+fn mutate(_ bytes: U8[>..], _ state: Int) -> U8[>..] {
+    var r = state
+    var result = bytes
+    let kind = r % 6
+    r = next(r)
+    if result.count == 0 {
+        result.append(U8(r % 256))
+        return result
+    }
+    let at = r % result.count
+    r = next(r)
+    if kind == 0 || kind == 1 {
+        result[at] = U8(r % 256)
+    } else if kind == 2 {
+        var grown: U8[>..] = []
+        for i in 0..<result.count {
+            if i == at {
+                grown.append(U8(r % 256))
+            }
+            grown.append(result[i])
+        }
+        result = grown
+    } else if kind == 3 {
+        var shrunk: U8[>..] = []
+        for i in 0..<result.count {
+            if i != at {
+                shrunk.append(result[i])
+            }
+        }
+        result = shrunk
+    } else if kind == 4 {
+        var cut: U8[>..] = []
+        for i in 0..<at {
+            cut.append(result[i])
+        }
+        result = cut
+    } else {
+        result[at] = U8(255 - r % 3)
+    }
+    return result
+}
+
+@main
+fn main() {
+    let cases = 10000000
+    var state = 20261117
+    var accepted = 0
+    var rejected = 0
+    var walked = 0
+    var seeds: U8[>..][>..] = []
+    for n in 0..<24 {
+        seeds.append(n % 2 == 0 ? seedOrder(n) : seedTree(n))
+    }
+
+    for c in 0..<cases {
+        let seed = c % seeds.count
+        var bytes = seeds[seed]
+        // One to three mutations, stacked.
+        let rounds = state % 3 + 1
+        for round in 0..<rounds {
+            state = next(state)
+            bytes = mutate(bytes, state)
+            state = next(state)
+        }
+
+        if seed % 2 == 0 {
+            match Order.fromBytes(bytes) {
+                case .Ok(let order) => {
+                    accepted = accepted + 1
+                    walked = walked + walkOrder(order) % 3
+                    if !same(Bytes.of(order), bytes) {
+                        print("an order did not write back as it was read")
+                        return
+                    }
+                }
+                case .Invalid(let why) => {
+                    rejected = rejected + 1
+                }
+            }
+        } else {
+            match Tree.fromBytes(bytes) {
+                case .Ok(let tree) => {
+                    accepted = accepted + 1
+                    walked = walked + walkTree(tree) % 3
+                    if !same(Bytes.of(tree), bytes) {
+                        print("a tree did not write back as it was read")
+                        return
+                    }
+                }
+                case .Invalid(let why) => {
+                    rejected = rejected + 1
+                }
+            }
+        }
+    }
+
+    print("cases \(cases), accepted \(accepted), rejected \(rejected), walked \(walked)")
+}

@@ -1517,6 +1517,10 @@ internal sealed class Parser {
             case SyntaxKind.RefKeyword:
                 return new RefTypeGreen(EatToken(), ParsePostfixType());
 
+            // 'region' names the region type too: 'fn f(in r: region)' (docs/02 §2.8).
+            case SyntaxKind.RegionKeyword:
+                return new SimpleNameTypeGreen(EatToken(), null);
+
             case SyntaxKind.AsyncKeyword: {
                 var asyncKeyword = EatToken();
                 return ParseFunctionTypeTail(asyncKeyword);
@@ -1715,6 +1719,7 @@ internal sealed class Parser {
             SyntaxKind.CapitalSelfKeyword => true,
             SyntaxKind.SomeKeyword or SyntaxKind.AnyKeyword or SyntaxKind.RefKeyword => true,
             SyntaxKind.AsyncKeyword => true,
+            SyntaxKind.RegionKeyword => true,
             SyntaxKind.OpenParenToken or SyntaxKind.OpenBracketToken => true,
             _ => false,
         };

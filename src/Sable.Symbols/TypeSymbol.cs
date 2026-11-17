@@ -126,6 +126,12 @@ public sealed class NamedTypeSymbol : TypeSymbol {
     /// </summary>
     public bool IsNoncopyable { get; internal set; }
 
+    /// <summary>
+    ///     <c>@inline_layout</c> (docs/02 §2.5): a struct laid out as one
+    ///     contiguous, pointer-free block, variable-size fields in place.
+    /// </summary>
+    public bool IsInlineLayout { get; internal set; }
+
     /// <summary>True for <c>sealed class</c>: it may not be subclassed.</summary>
     public bool IsSealed { get; internal set; }
 
@@ -294,7 +300,7 @@ public enum ArrayKind {
     Slice
 }
 
-public sealed class ArrayTypeSymbol(TypeSymbol elementType, ArrayKind arrayKind) : TypeSymbol {
+public sealed class ArrayTypeSymbol(TypeSymbol elementType, ArrayKind arrayKind, int? capacity = null) : TypeSymbol {
     public override SymbolKind Kind => SymbolKind.ArrayType;
     public override string Name => string.Empty;
     public override TypeKind TypeKind => TypeKind.Struct;
@@ -302,10 +308,13 @@ public sealed class ArrayTypeSymbol(TypeSymbol elementType, ArrayKind arrayKind)
     public TypeSymbol ElementType { get; } = elementType;
     public ArrayKind ArrayKind { get; } = arrayKind;
 
+    /// <summary>The <c>k</c> of <c>T[..k]</c> or <c>T[k]</c>, when it was written.</summary>
+    public int? Capacity { get; } = capacity;
+
     public override string ToDisplayString() =>
         ArrayKind switch {
-            ArrayKind.Fixed => $"{ElementType.ToDisplayString()}[]",
-            ArrayKind.Inline => $"{ElementType.ToDisplayString()}[..]",
+            ArrayKind.Fixed => $"{ElementType.ToDisplayString()}[{Capacity}]",
+            ArrayKind.Inline => $"{ElementType.ToDisplayString()}[..{Capacity}]",
             ArrayKind.Grow => $"{ElementType.ToDisplayString()}[>..]",
             ArrayKind.GrowShrink => $"{ElementType.ToDisplayString()}[>..<]",
             _ => $"{ElementType.ToDisplayString()}[:]",
@@ -314,9 +323,10 @@ public sealed class ArrayTypeSymbol(TypeSymbol elementType, ArrayKind arrayKind)
     public override bool Equals(TypeSymbol? other) =>
         other is ArrayTypeSymbol array
         && array.ArrayKind == ArrayKind
+        && array.Capacity == Capacity
         && array.ElementType.Equals(ElementType);
 
-    public override int GetHashCode() => HashCode.Combine(ElementType, ArrayKind);
+    public override int GetHashCode() => HashCode.Combine(ElementType, ArrayKind, Capacity);
 }
 
 public sealed class OptionalTypeSymbol(TypeSymbol underlyingType) : TypeSymbol {

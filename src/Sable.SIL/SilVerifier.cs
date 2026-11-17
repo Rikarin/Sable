@@ -165,8 +165,11 @@ public static class SilVerifier {
         static string Types(IEnumerable<SilValue> values) => string.Join(", ", values.Select(static v => v.Type));
 
         switch (instruction) {
-            case IntegerLiteralInst literal when literal.Type != SilType.Int && literal.Type != SilType.Bool && literal.Type != SilType.Char:
-                return $"integer_literal of type {literal.Type}; only Int, Bool and Char";
+            case IntegerLiteralInst literal when !SilType.IsInteger(literal.Type) && literal.Type != SilType.Bool && literal.Type != SilType.Char:
+                return $"integer_literal of type {literal.Type}; only an integer, Bool and Char";
+
+            case FloatLiteralInst literal when !SilType.IsFloat(literal.Type):
+                return $"float_literal of type {literal.Type}; only F64 and F32";
 
             case IntegerLiteralInst { Value: < 0 or > 0x10FFFF or (>= 0xD800 and <= 0xDFFF) } literal when literal.Type == SilType.Char:
                 return $"integer_literal $Char must be a Unicode scalar value, not {literal.Value}";

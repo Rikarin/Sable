@@ -54,7 +54,7 @@ namespace Sable.SIL;
 ///         <c>try … catch</c>, or the function's own <c>throw</c>.
 ///     </para>
 /// </remarks>
-public sealed class SilGen {
+public sealed partial class SilGen {
     readonly Compilation _compilation;
     readonly DiagnosticBag _diagnostics = new();
     readonly SilModule _module = new();
@@ -553,6 +553,12 @@ public sealed class SilGen {
             return SilType.F64;
         }
 
+        if (type is NamedTypeSymbol { TypeArguments.IsEmpty: true } primitive
+            && (Core.Integers.Contains(primitive) || primitive.Equals(Core.F32))
+            && SilType.Numbers.FirstOrDefault(n => n.ToString() == primitive.Name) is { } number) {
+            return number;
+        }
+
         if (type.Equals(Core.Char)) {
             return SilType.Char;
         }
@@ -607,6 +613,10 @@ public sealed class SilGen {
             case ExistentialTypeSymbol { Constraint: NamedTypeSymbol { TypeKind: TypeKind.Protocol } protocol }:
                 return ExistentialLayout(protocol);
 
+            // A reference to an inline value, absolute or relative: a view of its bytes.
+            case ReferenceTypeSymbol reference when Lower(reference.ReferencedType) is StructType { IsInline: true } inline:
+                return new InlinePointerType(inline);
+
             // A reference: the address of what it refers to. Root inference
             // checks it does not outlive that.
             case ReferenceTypeSymbol { RelativeWidth: null } reference:
@@ -650,6 +660,9 @@ public sealed class SilGen {
                 enumType.Cases.Add(("None", null));
                 return HoldsItself(enumType) ? null : enumType;
             }
+
+            case NamedTypeSymbol { IsGenericDefinition: false, TypeKind: TypeKind.Struct } named when named.OriginalDefinition.IsInlineLayout:
+                return LowerInline(named);
 
             case NamedTypeSymbol { IsGenericDefinition: false, TypeKind: TypeKind.Struct } named: {
                 var structType = Begin(named, new StructType(TypeName(named)) { IsNoncopyable = named.OriginalDefinition.IsNoncopyable });
@@ -739,6 +752,56 @@ public sealed class SilGen {
                 return null;
         }
     }
+
+    /// <summary>
+    ///     An <c>@inline_layout</c> struct: its fields as they are stored —
+    ///     scalars, inline arrays of scalars or inline structs, inline structs,
+    ///     relative references to inline structs. Nothing with a pointer in it.
+    /// </summary>
+    StructType? LowerInline(NamedTypeSymbol named) {
+        var structType = Begin(named, new StructType(TypeName(named)) { IsInline = true });
+        var members = TypeSubstitution.For(named);
+        foreach (var field in StoredFields(named.OriginalDefinition)) {
+            if (InlineField(members.Apply(field.Type)) is not { } fieldType) {
+                return null;
+            }
+
+            structType.Fields.Add((field.Name, fieldType));
+        }
+
+        return HoldsItself(structType) ? null : structType;
+    }
+
+    SilType? InlineField(TypeSymbol type) {
+        static int? Width(string? width) => width switch { "u8" or "U8" => 1, "u16" or "U16" => 2, "u32" or "U32" => 4, _ => null };
+
+        switch (type) {
+            case OptionalTypeSymbol { UnderlyingType: ReferenceTypeSymbol { RelativeWidth: var width, Pool: null } reference }
+                when Width(width) is { } bytes && Lower(reference.ReferencedType) is StructType { IsInline: true } target:
+                return new RelativeReferenceType(target, bytes, true);
+
+            case ReferenceTypeSymbol { RelativeWidth: var width, Pool: null } reference
+                when Width(width) is { } bytes && Lower(reference.ReferencedType) is StructType { IsInline: true } target:
+                return new RelativeReferenceType(target, bytes, false);
+
+            case ArrayTypeSymbol { ArrayKind: ArrayKind.Inline, Capacity: { } capacity } array:
+                return InlineElement(array.ElementType) is { } bounded ? new InlineArrayType(bounded, capacity) : null;
+
+            case ArrayTypeSymbol { ArrayKind: ArrayKind.Grow } array:
+                return InlineElement(array.ElementType) is { } grown ? new InlineArrayType(grown, null) : null;
+
+            default:
+                return InlineElement(type);
+        }
+    }
+
+    /// <summary>What an inline array, or a field, may hold by value: a scalar or an inline struct.</summary>
+    SilType? InlineElement(TypeSymbol type) =>
+        Lower(type) switch {
+            StructType { IsInline: true } inline => inline,
+            { } scalar when InlineLayout.Scalar(scalar) is not null => scalar,
+            _ => null,
+        };
 
     /// <summary>
     ///     The box a local lives in when a closure captures it by reference:
@@ -1238,6 +1301,8 @@ public sealed class SilGen {
     internal static IEnumerable<FieldSymbol> StoredFields(NamedTypeSymbol type) =>
         type.Members.OfType<FieldSymbol>().Where(static f => f is { IsStatic: false, IsComputed: false });
 
+    internal void Report(ErrorCode code, Sable.Syntax.TextSpan span, string message) => _diagnostics.Error(code, span, message);
+
     T? Unsupported<T>(SyntaxNode at, string what) where T : class {
         _diagnostics.Error(ErrorCode.ERR_NotLoweredYet, at.Span, $"SIL lowering does not handle {what} yet");
         return null;
@@ -1248,7 +1313,7 @@ public sealed class SilGen {
     /// <summary>What a closure's code knows of its context: its class, and where each capture is in it.</summary>
     sealed record ClosureInfo(ClassType? Context, Dictionary<object, Capture> Captures);
 
-    sealed class FunctionLowering(
+    sealed partial class FunctionLowering(
         SilGen generator,
         FunctionSymbol symbol,
         SilFunction function,
@@ -1633,6 +1698,11 @@ public sealed class SilGen {
 
         /// <summary>The end of a borrow: a temporary is taken off the temporaries and destroyed, a load_borrow ended.</summary>
         void End(SilValue value) {
+            if (value is AccessMarker marker) {
+                Emit(new BuiltinInst("access_end", SilType.Unit, marker.Address));
+                return;
+            }
+
             if (value is LoadBorrowInst borrowed) {
                 Unhold(borrowed);
                 Emit(new EndBorrowInst(borrowed));
@@ -1655,6 +1725,10 @@ public sealed class SilGen {
         ///     and held as a temporary, to be <see cref="End" />ed after the use.
         /// </summary>
         SilValue? Borrow(BoundExpression expression) {
+            if (UsesLent(expression)) {
+                return null;
+            }
+
             // A move-only variable is borrowed where it is: a copy, destroyed
             // after, would run its deinit.
             if (MoveOnlyPlace(expression) is { } place) {
@@ -1677,7 +1751,7 @@ public sealed class SilGen {
 
                 // A stored field of something borrowed is itself borrowed.
                 case BoundFieldAccess { Receiver: { } receiver, Field: { IsComputed: false, IsStatic: false } field }
-                    when Sub(receiver.Type).TypeKind == TypeKind.Struct && IsBorrowable(receiver): {
+                    when Sub(receiver.Type).TypeKind == TypeKind.Struct && IsBorrowable(receiver) && !IsInlineType(receiver.Type): {
                     if (Borrow(receiver) is not { Type: StructType structType } value) {
                         return null;
                     }
@@ -1777,12 +1851,45 @@ public sealed class SilGen {
                         case AllocStackInst slot:
                             Emit(new DestroyAddrInst(slot));
                             break;
+
+                        case RegionPop pop: {
+                            var frameRegion = Emit(new LoadBorrowInst(pop.Slot));
+                            Emit(new BuiltinInst("region_pop", SilType.Unit, frameRegion));
+                            Emit(new EndBorrowInst(frameRegion));
+                            break;
+                        }
                     }
                 }
             }
 
             _scopes.Clear();
             _scopes.AddRange(saved);
+        }
+
+        /// <summary>A region block's frame, given back to the region it was lent from as the block ends.</summary>
+        sealed record RegionPop(AllocStackInst Slot);
+
+        /// <summary>Regions lent to a 'region frame = pool' block, by the frame's name: not to be used directly inside it.</summary>
+        readonly Dictionary<Symbol, string> _lent = [];
+
+        /// <summary>A use of a region lent to a block's frame: an error, since what it allocates would go with the frame.</summary>
+        bool UsesLent(BoundExpression expression) {
+            Symbol? symbol = expression switch {
+                BoundLocalAccess local => local.Local,
+                BoundParameterAccess parameter => parameter.Parameter,
+                _ => null,
+            };
+
+            if (symbol is null || !_lent.TryGetValue(symbol, out var frame)) {
+                return false;
+            }
+
+            generator.Report(
+                ErrorCode.ERR_ReferenceOutlivesRoot,
+                expression.Syntax.Span,
+                $"'{symbol.Name}' is lent to '{frame}' for this block: allocate through '{frame}', whose allocations end with the block"
+            );
+            return true;
         }
 
         /// <summary>Gives a local's slot to the innermost scope, to be destroyed as it closes.</summary>
@@ -1997,6 +2104,10 @@ public sealed class SilGen {
                     ForRange(loop, range);
                     return;
 
+                case BoundForEach { Sequence.Type: ArrayTypeSymbol } loop when IsInlineArray(loop.Sequence):
+                    ForInline(loop);
+                    return;
+
                 case BoundForEach { Sequence.Type: ArrayTypeSymbol } loop:
                     ForArray(loop);
                     return;
@@ -2022,6 +2133,43 @@ public sealed class SilGen {
                     _scopes.Add([]);
                     BindLocal(arena, Emit(new BuiltinInst("region_create", SilType.Region)), region.Syntax);
                     Statement(region.Body);
+                    if (_current is not null) {
+                        RunDefers(_scopes.Count - 1);
+                    }
+
+                    _scopes.RemoveAt(_scopes.Count - 1);
+                    return;
+                }
+
+                // 'region frame = pool { … }': the block allocates in 'pool' through
+                // 'frame', and gives back what it took as it ends. 'pool' is lent
+                // to 'frame' meanwhile: what the block allocates is rooted in
+                // 'frame', and dies with it.
+                case BoundScopedBlock { ScopeKind: ScopeKind.Region, Source: { } source, Name: { } frame } region: {
+                    if (Expression(source) is not { Type: var regionType } lent || regionType != SilType.Region) {
+                        Fail(region.Syntax, "a region block whose source is not a region");
+                        return;
+                    }
+
+                    Emit(new BuiltinInst("region_push", SilType.Unit, lent));
+                    _scopes.Add([]);
+                    BindLocal(frame, lent, region.Syntax);
+                    _scopes[^1].Add(new RegionPop(_slots[frame]));
+                    var lentSymbol = source switch {
+                        BoundLocalAccess local => (Symbol)local.Local,
+                        BoundParameterAccess parameter => parameter.Parameter,
+                        _ => null,
+                    };
+
+                    if (lentSymbol is not null) {
+                        _lent[lentSymbol] = frame.Name;
+                    }
+
+                    Statement(region.Body);
+                    if (lentSymbol is not null) {
+                        _lent.Remove(lentSymbol);
+                    }
+
                     if (_current is not null) {
                         RunDefers(_scopes.Count - 1);
                     }
@@ -2520,6 +2668,10 @@ public sealed class SilGen {
 
         /// <summary>Lowers an expression to an owned value — or a trivial one, or <see cref="UnitValue" />.</summary>
         SilValue? Expression(BoundExpression expression) {
+            if (UsesLent(expression)) {
+                return null;
+            }
+
             if (_failed) {
                 return null;
             }
@@ -2587,6 +2739,10 @@ public sealed class SilGen {
                 case BoundParameterAccess access when _parameters.TryGetValue(access.Parameter, out var parameter):
                     return IsByAddress(access.Parameter) ? Emit(new LoadInst(parameter)) : Owned(parameter);
 
+                // A loop's element of an inline array, wanted as a value: a block of its own.
+                case BoundLocalAccess access when _views.Contains(access.Local):
+                    return Emit(new BuiltinInst("inline_copy", ((InlinePointerType)_slots[access.Local].ElementType).Pointee, Emit(new LoadInst(_slots[access.Local]))));
+
                 case BoundLocalAccess access:
                     return LoadLocal(access);
 
@@ -2616,8 +2772,14 @@ public sealed class SilGen {
                 case BoundAssignment assignment:
                     return Assignment(assignment);
 
+                case BoundFieldAccess { Receiver: { } receiver, Field: { IsComputed: true, Name: var member } } when IsInlineArray(receiver):
+                    return InlineArrayMember(receiver, member, expression);
+
                 case BoundFieldAccess { Receiver: { } receiver, Field.IsComputed: true } access:
                     return ComputedProperty(access, receiver);
+
+                case BoundFieldAccess access when IsInlineMember(access):
+                    return InlineRead(access);
 
                 case BoundFieldAccess { Receiver: { } receiver, Field: { IsComputed: false, IsStatic: false } field } access:
                     return FieldAccess(access, receiver, field);
@@ -2722,6 +2884,11 @@ public sealed class SilGen {
         }
 
         SilValue? Assignment(BoundAssignment assignment) {
+            if (IsInlineMember(assignment.Target)
+                || assignment.Target is BoundIndexAccess { Receiver: var indexed } && IsInlineArray(indexed)) {
+                return InlineAssign(assignment.Target, assignment.Value);
+            }
+
             if (Expression(assignment.Value) is not { } value) {
                 return null;
             }
@@ -2857,6 +3024,18 @@ public sealed class SilGen {
         ///     its own — which root inference then knows dies with the function.
         /// </summary>
         SilValue? ReferenceTo(BoundExpression expression) {
+            // A reference to a part of inline bytes: a view of it. A whole
+            // block is referred to where it is held, as any value is.
+            if (IsInlineType(expression.Type) && LowerType(expression.Type) is StructType { IsInline: true }
+                && (IsInlineMember(expression)
+                    || Unwrapped(expression) is BoundIndexAccess { Receiver: var indexed } && IsInlineArray(indexed)
+                    || Unwrapped(expression) is BoundLocalAccess viewed && _views.Contains(viewed.Local))) {
+                var ends = new List<SilValue>();
+                var view = View(expression, ends);
+                EndAll(ends);
+                return view;
+            }
+
             if (LowerType(expression.Type) is AddressType) {
                 return Expression(expression); // already a reference
             }
@@ -2910,6 +3089,10 @@ public sealed class SilGen {
         }
 
         SilValue? FieldAccess(BoundFieldAccess access, BoundExpression receiver, FieldSymbol field) {
+            if (IsInlineType(receiver.Type)) {
+                return InlineRead(access);
+            }
+
             // A field of an object: through its address, while the object is borrowed.
             if (Sub(receiver.Type).TypeKind == TypeKind.Class) {
                 if (Borrow(receiver) is not { Type: ClassType classType } reference) {
@@ -2975,7 +3158,7 @@ public sealed class SilGen {
                     return self;
 
                 case BoundFieldAccess { Receiver: { } receiver, Field: { IsComputed: false, IsStatic: false } field }
-                    when Sub(receiver.Type).TypeKind == TypeKind.Struct: {
+                    when Sub(receiver.Type).TypeKind == TypeKind.Struct && !IsInlineType(receiver.Type): {
                     if (Place(receiver) is not { Type: AddressType { Pointee: StructType structType } } address) {
                         return null;
                     }
@@ -3028,7 +3211,7 @@ public sealed class SilGen {
                         : Emit(new RefElementAddrInst(reference, index));
                 }
 
-                case BoundFieldAccess { Receiver: { } receiver, Field: { IsComputed: false, IsStatic: false } field }: {
+                case BoundFieldAccess { Receiver: { } receiver, Field: { IsComputed: false, IsStatic: false } field } when !IsInlineType(receiver.Type): {
                     if (Address(receiver, borrows) is not { } address) {
                         return null;
                     }
@@ -3097,9 +3280,25 @@ public sealed class SilGen {
                 return Emit(new IntegerLiteralInst(SilType.Int, (long)number));
             }
 
-            if (type == SilType.F64 && value is double or long or int or ulong) {
+            if (SilType.IntegerInfo(type) is var (bits, signed) && value is long or int or ulong) {
+                var number = (System.Numerics.BigInteger)System.Convert.ToDecimal(value);
+                if (negative) {
+                    number = -number;
+                }
+
+                var low = signed ? -(System.Numerics.BigInteger.One << (bits - 1)) : 0;
+                var high = signed ? (System.Numerics.BigInteger.One << (bits - 1)) - 1 : (System.Numerics.BigInteger.One << bits) - 1;
+                if (number < low || number > high) {
+                    Fail(at, $"the integer '{(negative ? "-" : "")}{value}', which does not fit in {type}");
+                    return null;
+                }
+
+                return Emit(new IntegerLiteralInst(type, number > long.MaxValue ? unchecked((long)(ulong)number) : (long)number));
+            }
+
+            if (SilType.IsFloat(type) && value is double or long or int or ulong) {
                 var number = System.Convert.ToDouble(value);
-                return Emit(new FloatLiteralInst(negative ? -number : number));
+                return Emit(new FloatLiteralInst(negative ? -number : number, type));
             }
 
             Fail(at, $"the literal '{Describe(at)}' of type {type}");
@@ -3214,6 +3413,10 @@ public sealed class SilGen {
         }
 
         SilValue? Record(BoundRecordExpression record) {
+            if (LowerType(record.Type) is StructType { IsInline: true } inline) {
+                return InlineRecord(record, inline);
+            }
+
             if (LowerType(record.Type) is not StructType structType) {
                 return Missing(record, $"a record of type '{record.Type.ToDisplayString()}'");
             }
@@ -3301,6 +3504,10 @@ public sealed class SilGen {
         }
 
         SilValue? IndexRead(BoundIndexAccess index) {
+            if (IsInlineArray(index.Receiver)) {
+                return InlineRead(index);
+            }
+
             if (IsDictionary(index.Receiver.Type) && index.Indices is [var keyExpression]) {
                 if (Dictionary(index.Receiver.Type, index) is not { } functions
                     || Borrow(index.Receiver) is not { Type: ArrayType } entries) {
@@ -3742,6 +3949,19 @@ public sealed class SilGen {
 
             var callee = call.Function;
 
+            // Inline layout: the bytes of a value, a value from bytes, an inline array's members.
+            if (callee is { Name: "of", IsStatic: true } && ReferenceEquals(callee.ContainingSymbol, Core.Bytes)) {
+                return BytesOf(call);
+            }
+
+            if (callee is { Name: "fromBytes", IsStatic: true, ContainingSymbol: NamedTypeSymbol { IsInlineLayout: true } }) {
+                return FromBytes(call);
+            }
+
+            if (call.Receiver is { } inlineArray && IsInlineArray(inlineArray)) {
+                return callee.Name == "append" ? InlineAppend(call) : InlineArrayMember(inlineArray, callee.Name, call);
+            }
+
             // A member of a core type: a builtin.
             if (CoreMember(call) is { } handled) {
                 return handled.Value;
@@ -3848,6 +4068,11 @@ public sealed class SilGen {
                 passed = variadicAt;
             }
 
+            CheckExclusivity(call, callee, type.Parameters.Length > 0 && type.Parameters[0] is AddressType && HasSelf(callee));
+            if (arguments.Count > 0 && arguments[0].Type is AddressType && HasSelf(callee)) {
+                BeginAccess(arguments[0], modify: true, borrows);
+            }
+
             for (var i = 0; i < passed; i++) {
                 // A ref argument passes where it is, or a temporary when it is nowhere.
                 if (i < callee.Parameters.Length && callee.Parameters[i].Modifier == ParameterModifier.Ref) {
@@ -3856,6 +4081,10 @@ public sealed class SilGen {
                     }
 
                     arguments.Add(referred);
+                    if (referred.Type is AddressType) {
+                        BeginAccess(referred, modify: false, borrows);
+                    }
+
                     continue;
                 }
 
@@ -3866,6 +4095,7 @@ public sealed class SilGen {
                     }
 
                     arguments.Add(address);
+                    BeginAccess(address, modify: true, borrows);
                     continue;
                 }
 
@@ -3984,7 +4214,14 @@ public sealed class SilGen {
 
         /// <summary>The member of the receiver's concrete type that implements a protocol requirement.</summary>
         FunctionSymbol? Witness(BoundCall call) {
-            var self = call.Receiver is { } receiver ? Sub(receiver.Type) : null;
+            // 'T.decode(…)': a static requirement, on the type 'T' stands for.
+            var self = call.Receiver switch {
+                BoundTypeExpression typeExpression => Sub(typeExpression.ReferencedType),
+                { } receiver => Sub(receiver.Type),
+                null => OwnerOf(call.Function)?.OriginalDefinition is { TypeKind: TypeKind.Protocol, SelfTypeParameter: { } selfParameter }
+                    ? CallSubstitution(call, call.Function).Lookup(selfParameter)
+                    : null,
+            };
             return self is NamedTypeSymbol concrete ? Implementation(concrete, call.Function) : null;
         }
 
@@ -4241,6 +4478,17 @@ public sealed class SilGen {
 
                 EndAll(borrows);
                 return new(result);
+            }
+
+            // 'arena.reset()': everything in it destroyed, its memory kept.
+            if (Sub(receiver.Type).Equals(Core.Region) && callee.Name == "reset") {
+                if (Borrow(receiver) is not { } emptied) {
+                    return new((SilValue?)null);
+                }
+
+                Emit(new BuiltinInst("region_reset", SilType.Unit, emptied));
+                End(emptied);
+                return new(UnitValue.Instance);
             }
 
             // 'arena.alloc(value)': room in the region, the value moved there, its address back.

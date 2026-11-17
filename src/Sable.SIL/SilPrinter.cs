@@ -30,7 +30,7 @@ public static class SilPrinter {
 
             switch (type) {
                 case StructType structType:
-                    builder.Append("sil_struct ").Append(structType.Name).Append(structType.IsNoncopyable ? " @noncopy" : "").Append(" { ")
+                    builder.Append("sil_struct ").Append(structType.Name).Append(structType.IsNoncopyable ? " @noncopy" : "").Append(structType.IsInline ? " @inline" : "").Append(" { ")
                         .Append(string.Join(", ", structType.Fields.Select(static f => $"{f.Name}: ${f.Type}")))
                         .Append(" }");
                     if (structType.Deinit is { } structDeinit) {
@@ -202,7 +202,7 @@ public static class SilPrinter {
                         break;
 
                     case FloatLiteralInst literal:
-                        builder.Append(" $F64, ").Append(literal.Value.ToString("R", CultureInfo.InvariantCulture));
+                        builder.Append(" $").Append(literal.Type).Append(", ").Append(literal.Value.ToString("R", CultureInfo.InvariantCulture));
                         break;
 
                     case BuiltinInst builtin:
@@ -330,7 +330,7 @@ public static class SilPrinter {
                         break;
 
                     case AllocRefInst alloc:
-                        builder.Append(" $").Append(alloc.ClassType);
+                        builder.Append(alloc.OnStack ? " [stack]" : "").Append(" $").Append(alloc.ClassType);
                         break;
 
                     case RefElementAddrInst element:

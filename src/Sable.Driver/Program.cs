@@ -4,8 +4,8 @@ using Sable.Driver;
 using Sable.SIL;
 using Sable.Syntax;
 
-// sable build <file.sab> [-o <output>] [--emit sil|llvm-ir] [-O0] [-g]
-// sable run   <file.sab> [-O0] [-g]
+// sable build <file.sab> [-o <output>] [--emit sil|llvm-ir] [-O0] [-g] [--exclusivity=checked|unchecked]
+// sable run   <file.sab> [-O0] [-g] [--exclusivity=checked|unchecked]
 //
 // The single toolchain binary of docs/05, as far as Phase 2 takes it:
 // compile one file to a native executable, or compile and run it.
@@ -20,6 +20,7 @@ string? output = null;
 string? emit = null;
 var optimise = true;
 var debug = false;
+bool? exclusivity = null;
 
 for (var i = 1; i < args.Length; i++) {
     switch (args[i]) {
@@ -27,6 +28,8 @@ for (var i = 1; i < args.Length; i++) {
         case "--emit" when i + 1 < args.Length: emit = args[++i]; break;
         case "-O0": optimise = false; break;
         case "-g": debug = true; break;
+        case "--exclusivity=checked": exclusivity = true; break;
+        case "--exclusivity=unchecked": exclusivity = false; break;
         default:
             if (input is not null || args[i].StartsWith('-')) {
                 return Usage(2);
@@ -47,7 +50,13 @@ if (!File.Exists(input)) {
 }
 
 var source = new SourceText(File.ReadAllText(input), Path.GetFileName(input));
-var result = Pipeline.Compile(source, debug ? Path.GetDirectoryName(Path.GetFullPath(input)) : null);
+// Dynamic exclusivity checks: on in a debug build, off in a release one,
+// unless asked for (docs/02 §2.3).
+var result = Pipeline.Compile(
+    source,
+    debug ? Path.GetDirectoryName(Path.GetFullPath(input)) : null,
+    exclusivity ?? (debug || !optimise)
+);
 
 // --emit shows a stage's output, even when a later stage could not run.
 if (emit == "sil" && result.Sil is { } sil) {
@@ -103,8 +112,8 @@ static void Report(IReadOnlyList<string> errors) {
 
 static int Usage(int code) {
     var writer = code == 0 ? Console.Out : Console.Error;
-    writer.WriteLine("usage: sable build <file.sab> [-o <output>] [--emit sil|llvm-ir] [-O0] [-g]");
-    writer.WriteLine("       sable run   <file.sab> [-O0] [-g]");
+    writer.WriteLine("usage: sable build <file.sab> [-o <output>] [--emit sil|llvm-ir] [-O0] [-g] [--exclusivity=checked|unchecked]");
+    writer.WriteLine("       sable run   <file.sab> [-O0] [-g] [--exclusivity=checked|unchecked]");
     writer.WriteLine();
     writer.WriteLine("  build              compile to a native executable (default name: the file's)");
     writer.WriteLine("  run                compile, run, and exit with the program's exit code");
@@ -112,5 +121,7 @@ static int Usage(int code) {
     writer.WriteLine("  --emit llvm-ir     print the LLVM IR instead of building");
     writer.WriteLine("  -O0                build without LLVM's optimiser");
     writer.WriteLine("  -g                 build with debug information, for lldb");
+    writer.WriteLine("  --exclusivity=...  keep the dynamic exclusivity checks, or drop them; by default");
+    writer.WriteLine("                     kept in a debug or -O0 build, dropped in an optimised one");
     return code;
 }

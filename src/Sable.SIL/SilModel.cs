@@ -19,6 +19,41 @@ public abstract class SilType : IEquatable<SilType> {
     public static readonly SilType Int = new ScalarType("Int");
     public static readonly SilType Bool = new ScalarType("Bool");
     public static readonly SilType F64 = new ScalarType("F64");
+    public static readonly SilType F32 = new ScalarType("F32");
+
+    // The sized integers (docs/03 §3.1): the widths inline layout stores.
+    public static readonly SilType I8 = new ScalarType("I8");
+    public static readonly SilType I16 = new ScalarType("I16");
+    public static readonly SilType I32 = new ScalarType("I32");
+    public static readonly SilType I64 = new ScalarType("I64");
+    public static readonly SilType U8 = new ScalarType("U8");
+    public static readonly SilType U16 = new ScalarType("U16");
+    public static readonly SilType U32 = new ScalarType("U32");
+    public static readonly SilType U64 = new ScalarType("U64");
+    public static readonly SilType UInt = new ScalarType("UInt");
+
+    /// <summary>Every integer type, <c>Int</c> first.</summary>
+    public static readonly ImmutableArray<SilType> Integers = [Int, I8, I16, I32, I64, U8, U16, U32, U64, UInt];
+
+    /// <summary>The integer and floating-point types.</summary>
+    public static readonly ImmutableArray<SilType> Numbers = [..Integers, F64, F32];
+
+    /// <summary>An integer type's width in bits and whether it is signed; null for anything else.</summary>
+    public static (int Bits, bool Signed)? IntegerInfo(SilType type) =>
+        (type as ScalarType)?.Name switch {
+            "Int" or "I64" => (64, true),
+            "I8" => (8, true),
+            "I16" => (16, true),
+            "I32" => (32, true),
+            "U8" => (8, false),
+            "U16" => (16, false),
+            "U32" => (32, false),
+            "U64" or "UInt" => (64, false),
+            _ => null,
+        };
+
+    public static bool IsInteger(SilType type) => IntegerInfo(type) is not null;
+    public static bool IsFloat(SilType type) => type == F64 || type == F32;
 
     /// <summary>One Unicode scalar value.</summary>
     public static readonly SilType Char = new ScalarType("Char");
@@ -184,7 +219,168 @@ public sealed class StructType(string name) : NominalType(name) {
     /// <summary>A move-only struct's deinit, run as a value of it is destroyed, before its fields; or null.</summary>
     public string? Deinit { get; set; }
 
-    public override bool IsTrivial => !IsNoncopyable && Fields.All(static f => f.Type.IsTrivial);
+    /// <summary>
+    ///     <c>@inline_layout</c> (docs/02 §2.5): a value of it is one
+    ///     contiguous, pointer-free block of bytes, held in a counted buffer
+    ///     that is copied on write — its fields are read and written in place,
+    ///     at the offsets <see cref="InlineLayout"/> gives, never as SSA values.
+    /// </summary>
+    public bool IsInline { get; set; }
+
+    public override bool IsTrivial => !IsInline && !IsNoncopyable && Fields.All(static f => f.Type.IsTrivial);
+}
+
+/// <summary>
+///     An inline array field of an <c>@inline_layout</c> struct: <c>T[..k]</c>,
+///     bounded at <c>k</c>, or <c>T[&gt;..]</c>, grow-only. Its count and then its
+///     elements are stored in place; there is no SSA value of it, only a
+///     pointer to where it is.
+/// </summary>
+public sealed class InlineArrayType(SilType element, int? capacity) : SilType {
+    public SilType Element { get; } = element;
+
+    /// <summary>The bound of <c>T[..k]</c>; null for the grow-only kind.</summary>
+    public int? Capacity { get; } = capacity;
+
+    public override string ToString() => Capacity is { } k ? $"@inline_array({Element}, {k})" : $"@inline_array({Element})";
+}
+
+/// <summary>
+///     A relative reference field, <c>T&amp;&lt;u32&gt;?</c>: a signed offset from the
+///     field's own address to the start of a <c>T</c> in the same block,
+///     2 or 4 bytes; 0 is null.
+/// </summary>
+public sealed class RelativeReferenceType(StructType target, int width, bool optional) : SilType {
+    public StructType Target { get; } = target;
+    public int Width { get; } = width;
+    public bool Optional { get; } = optional;
+
+    public override string ToString() => $"@relative{(Optional ? "_optional" : "")}({Target}, {Width})";
+}
+
+/// <summary>
+///     A view into inline bytes: where an inline struct, an inline array or a
+///     scalar of one is, inside some block. Like an address, it borrows: it
+///     is valid while the block it points into is neither freed nor changed.
+/// </summary>
+public sealed class InlinePointerType(SilType pointee) : SilType {
+    public SilType Pointee { get; } = pointee;
+    public override string ToString() => $"*inline {Pointee}";
+}
+
+/// <summary>
+///     How an <c>@inline_layout</c> struct is laid out: its fixed-size fields
+///     first, packed in declaration order — the prefix, each at an offset
+///     known here — and then its variable-size fields in declaration order,
+///     each found by walking past the ones before it. Scalars are
+///     little-endian; a bounded array's count is the fewest bytes that hold
+///     its bound, a grow-only one's a LEB128 varint; a relative reference is
+///     a signed offset from itself. The emitter writes this as a descriptor
+///     the runtime walks; the interpreter walks it here.
+/// </summary>
+public sealed class InlineLayout {
+    public const int ScalarKind = 0, BoolKind = 1, CharKind = 2, ReferenceKind = 3, StructKind = 4, BoundedKind = 5, GrowKind = 6;
+
+    public sealed record Slot(
+        int Field,
+        string Name,
+        SilType Type,
+        int Offset,
+        int Kind,
+        int Width,
+        bool Optional,
+        int Capacity,
+        int ElementKind,
+        int ElementWidth,
+        StructType? Layout
+    ) {
+        public bool IsFixed => Offset >= 0;
+    }
+
+    static readonly System.Runtime.CompilerServices.ConditionalWeakTable<StructType, InlineLayout> Cache = new();
+
+    InlineLayout(StructType type) {
+        Type = type;
+        var fixedSlots = new List<Slot>();
+        var variableSlots = new List<Slot>();
+        var offset = 0;
+        for (var i = 0; i < type.Fields.Count; i++) {
+            var (name, fieldType) = type.Fields[i];
+            if (FixedSizeOf(fieldType) is { } size) {
+                fixedSlots.Add(Describe(i, name, fieldType, offset));
+                offset += size;
+            } else {
+                variableSlots.Add(Describe(i, name, fieldType, -1));
+            }
+        }
+
+        Prefix = offset;
+        Slots = [..fixedSlots, ..variableSlots];
+        FixedSize = variableSlots.Count == 0 ? offset : null;
+    }
+
+    public StructType Type { get; }
+
+    /// <summary>The fields in the order they are stored: fixed ones first.</summary>
+    public ImmutableArray<Slot> Slots { get; }
+
+    /// <summary>The bytes the fixed-size fields take, at the start.</summary>
+    public int Prefix { get; }
+
+    /// <summary>The size of every value of it, when that does not vary.</summary>
+    public int? FixedSize { get; }
+
+    public int SlotOf(int field) => Slots.IndexOf(Slots.First(s => s.Field == field));
+
+    public static InlineLayout Of(StructType type) => Cache.GetValue(type, static t => new InlineLayout(t));
+
+    /// <summary>A scalar's kind and width, as stored inline; null for anything that is not one.</summary>
+    public static (int Kind, int Width)? Scalar(SilType type) =>
+        type == SilType.Bool ? (BoolKind, 1)
+        : type == SilType.Char ? (CharKind, 4)
+        : type == SilType.F64 ? (ScalarKind, 8)
+        : type == SilType.F32 ? (ScalarKind, 4)
+        : SilType.IntegerInfo(type) is var (bits, _) ? (ScalarKind, bits / 8)
+        : null;
+
+    /// <summary>The bytes a value of the type always takes inline; null when that varies.</summary>
+    public static int? FixedSizeOf(SilType type) =>
+        type switch {
+            _ when Scalar(type) is var (_, width) => width,
+            RelativeReferenceType reference => reference.Width,
+            StructType { IsInline: true } nested => Of(nested).FixedSize,
+            _ => null,
+        };
+
+    /// <summary>The fewest bytes that hold a bounded array's count.</summary>
+    public static int CountWidth(int capacity) => capacity < 256 ? 1 : capacity < 65536 ? 2 : 4;
+
+    /// <summary>An inline array's description, as the runtime walks one: its count, its elements.</summary>
+    public static Slot DescribeArray(InlineArrayType array) => Describe(-1, "", array, -1);
+
+    static Slot Describe(int field, string name, SilType type, int offset) {
+        switch (type) {
+            case RelativeReferenceType reference:
+                return new(field, name, type, offset, ReferenceKind, reference.Width, reference.Optional, 0, 0, 0, reference.Target);
+
+            case StructType { IsInline: true } nested:
+                return new(field, name, type, offset, StructKind, 0, false, 0, 0, 0, nested);
+
+            case InlineArrayType array: {
+                var (elementKind, elementWidth, layout) = Scalar(array.Element) is var (kind, width)
+                    ? (kind, width, (StructType?)null)
+                    : (StructKind, 0, (StructType)array.Element);
+                return array.Capacity is { } capacity
+                    ? new(field, name, type, offset, BoundedKind, CountWidth(capacity), false, capacity, elementKind, elementWidth, layout)
+                    : new(field, name, type, offset, GrowKind, 0, false, 0, elementKind, elementWidth, layout);
+            }
+
+            default: {
+                var (kind, width) = Scalar(type) ?? throw new InvalidOperationException($"{type} is not stored inline");
+                return new(field, name, type, offset, kind, width, false, 0, 0, 0, null);
+            }
+        }
+    }
 }
 
 /// <summary>
@@ -327,8 +523,8 @@ public sealed class IntegerLiteralInst(SilType type, long value) : SilInstructio
 }
 
 /// <summary><c>float_literal $F64, 1.5</c>.</summary>
-public sealed class FloatLiteralInst(double value) : SilInstruction {
-    public override SilType Type => SilType.F64;
+public sealed class FloatLiteralInst(double value, SilType? type = null) : SilInstruction {
+    public override SilType Type { get; } = type ?? SilType.F64;
     public double Value { get; } = value;
     public override string Opcode => "float_literal";
 }
@@ -346,7 +542,10 @@ public sealed class StringLiteralInst(string value) : SilInstruction {
 ///     such as <c>print_String</c>, is run for its effect and names nothing.
 /// </summary>
 public sealed class BuiltinInst(string name, SilType type, params SilValue[] operands) : SilInstruction(operands) {
-    public string Name { get; } = name;
+    public string Name { get; private set; } = name;
+
+    /// <summary>The same operation, differently made: <c>inline_new</c> on the stack.</summary>
+    public void Rename(string name) => Name = name;
     public override SilType Type { get; } = type;
     public override bool HasResult => Type != SilType.Unit;
     public override string Opcode => "builtin";
@@ -550,6 +749,9 @@ public sealed class DestroyAddrInst(SilValue address) : SilInstruction(address) 
 /// <summary><c>alloc_ref $Node</c>: a new object, its count one and every field empty.</summary>
 public sealed class AllocRefInst(ClassType type) : SilInstruction {
     public ClassType ClassType { get; } = type;
+
+    /// <summary><c>alloc_ref [stack]</c>: made in the frame, which it does not outlive (docs/04 §3.7).</summary>
+    public bool OnStack { get; set; }
     public override SilType Type => ClassType;
     public override string Opcode => "alloc_ref";
 }
@@ -800,6 +1002,12 @@ public sealed class SilModule {
 
     public List<SilFunction> Functions { get; } = [];
 
+    /// <summary>
+    ///     Whether the dynamic exclusivity markers are kept (docs/02 §2.3): on
+    ///     in debug builds, off in release unless <c>--exclusivity=checked</c>.
+    /// </summary>
+    public bool CheckExclusivity { get; set; } = true;
+
     /// <summary>The function a program starts in: the one marked <c>@main</c>, or else <c>main</c>.</summary>
     public string? EntryPoint { get; set; }
 
@@ -915,6 +1123,16 @@ public static class SilBuiltins {
             return operands.Count == 0 && result is ArrayType ? new([], result) : null;
         }
 
+        if (name.StartsWith("inline_", StringComparison.Ordinal)) {
+            return InlineSignature(name, operands, result);
+        }
+
+        // The dynamic exclusivity markers (docs/02 §2.3): an access to storage
+        // begins, read or modify, and ends — a conflict with one in progress traps.
+        if (name is "access_begin_read" or "access_begin_modify" or "access_end") {
+            return operands is [AddressType address] ? new([address], SilType.Unit) : null;
+        }
+
         // Room for a value in a region: its address, which the caller initialises.
         if (name == "region_alloc") {
             return operands is [var region] && region == SilType.Region && result is AddressType ? new([SilType.Region], result) : null;
@@ -957,7 +1175,87 @@ public static class SilBuiltins {
         }
     }
 
-    public static IEnumerable<string> Names => Table.Keys.Concat(ArrayOperations);
+    public static IEnumerable<string> Names => Table.Keys.Concat(ArrayOperations).Concat(["access_begin_read", "access_begin_modify", "access_end"]);
+
+    static SilType? Pointee(SilType? type) => (type as InlinePointerType)?.Pointee;
+
+    static bool IsInline(SilType? type) => type is StructType { IsInline: true };
+
+    /// <summary>The element of an inline array, as a pointer to one: a struct's view, or a scalar's place.</summary>
+    static SilType? ElementPointer(SilType? array) =>
+        Pointee(array) is InlineArrayType inlineArray ? new InlinePointerType(inlineArray.Element) : null;
+
+    /// <summary>
+    ///     The inline-layout operations (docs/02 §2.5). Blocks are counted and
+    ///     copied on write; everything inside one is reached through a
+    ///     pointer — <c>inline_base</c> to read, <c>inline_unique</c> to write —
+    ///     and those that change its size take the address it is held at.
+    /// </summary>
+    static Signature? InlineSignature(string name, IReadOnlyList<SilType> operands, SilType? result) {
+        SilType? Operand(int i) => i < operands.Count ? operands[i] : null;
+        var rootSlot = (Operand(0) as AddressType)?.Pointee;
+        var bytes = new ArrayType(SilType.U8);
+
+        var field = name.StartsWith("inline_field.", StringComparison.Ordinal)
+            && int.TryParse(name["inline_field.".Length..], out var index)
+            ? index
+            : -1;
+        if (field >= 0) {
+            return Pointee(Operand(0)) is StructType { IsInline: true } owner && field < owner.Fields.Count
+                ? new([operands[0]], new InlinePointerType(owner.Fields[field].Type))
+                : null;
+        }
+
+        switch (name) {
+            case "inline_new" or "inline_new_stack" when operands.Count == 0 && IsInline(result):
+                return new([], result!);
+            case "inline_base" when IsInline(Operand(0)):
+                return new([operands[0]], new InlinePointerType(operands[0]));
+            case "inline_unique" when IsInline(rootSlot):
+                return new([operands[0]], new InlinePointerType(rootSlot!));
+            case "inline_copy" when IsInline(Pointee(Operand(0))):
+                return new([operands[0]], Pointee(operands[0])!);
+            case "inline_load" when InlineLayout.Scalar(Pointee(Operand(0)) ?? SilType.Unit) is not null:
+                return new([operands[0]], Pointee(operands[0])!);
+            case "inline_store" when operands.Count == 2 && Pointee(Operand(0)) == Operand(1) && InlineLayout.Scalar(operands[1]) is not null:
+                return new([operands[0], operands[1]], SilType.Unit);
+            case "inline_count" when Pointee(Operand(0)) is InlineArrayType:
+                return new([operands[0]], SilType.Int);
+            case "inline_first" when ElementPointer(Operand(0)) is { } first:
+                return new([operands[0]], first);
+            case "inline_next" when ElementPointer(Operand(0)) is { } element && Operand(1) == element:
+                return new([operands[0], element], element);
+            case "inline_at" when ElementPointer(Operand(0)) is { } element && Operand(1) == SilType.Int:
+                return new([operands[0], SilType.Int], element);
+            case "inline_append" when IsInline(rootSlot) && Pointee(Operand(1)) is InlineArrayType array
+                && (Operand(2) == array.Element || Operand(2) == new InlinePointerType(array.Element)):
+                return new([operands[0], operands[1], operands[2]], SilType.Unit);
+            case "inline_assign_string" when IsInline(rootSlot) && Pointee(Operand(1)) is InlineArrayType { Element: var u8 } && u8 == SilType.U8 && Operand(2) == SilType.String:
+                return new([operands[0], operands[1], SilType.String], SilType.Unit);
+            case "inline_assign" when IsInline(rootSlot) && Pointee(Operand(1)) is StructType { IsInline: true } nested
+                && (Operand(2) == nested || Operand(2) == operands[1]):
+                return new([operands[0], operands[1], operands[2]], SilType.Unit);
+            case "inline_ref_get" when Pointee(Operand(0)) is RelativeReferenceType reference:
+                return new([operands[0]], new InlinePointerType(reference.Target));
+            case "inline_is_null" when Operand(0) is InlinePointerType:
+                return new([operands[0]], SilType.Bool);
+            case "inline_ref_set" when IsInline(rootSlot) && Pointee(Operand(1)) is RelativeReferenceType reference
+                && Operand(2) == new InlinePointerType(reference.Target):
+                return new([operands[0], operands[1], operands[2]], SilType.Unit);
+            case "inline_ref_clear" when Pointee(Operand(0)) is RelativeReferenceType:
+                return new([operands[0]], SilType.Unit);
+            case "inline_to_string" when Pointee(Operand(0)) is InlineArrayType { Element: var element } && element == SilType.U8:
+                return new([operands[0]], SilType.String);
+            case "inline_bytes" when IsInline(Pointee(Operand(0))):
+                return new([operands[0]], bytes);
+            case "inline_from" when Operand(0) == bytes && IsInline(result):
+                return new([bytes], result!);
+            case "inline_invalid" when IsInline(Operand(0)):
+                return new([operands[0]], SilType.String);
+            default:
+                return null;
+        }
+    }
 
     static Dictionary<string, Signature> Build() {
         var table = new Dictionary<string, Signature>(StringComparer.Ordinal);
@@ -969,42 +1267,56 @@ public static class SilBuiltins {
 
         void Add(string name, SilType result, params SilType[] operands) => table[name] = new([..operands], result);
 
-        foreach (var op in new[] { "add", "sub", "mul", "div", "rem", "and", "or", "xor", "shl", "shr", "min", "max" }) {
-            Binary(op, SilType.Int, SilType.Int);
+        foreach (var integer in SilType.Integers) {
+            foreach (var op in new[] { "add", "sub", "mul", "div", "rem", "and", "or", "xor", "shl", "shr", "min", "max" }) {
+                Binary(op, integer, integer);
+            }
+
+            Unary("neg", integer);
+            Unary("not", integer);
+            if (SilType.IntegerInfo(integer)!.Value.Signed) {
+                Unary("abs", integer);
+            }
         }
 
-        foreach (var op in new[] { "add", "sub", "mul", "div", "min", "max" }) {
-            Binary(op, SilType.F64, SilType.F64);
+        foreach (var real in new[] { SilType.F64, SilType.F32 }) {
+            foreach (var op in new[] { "add", "sub", "mul", "div", "min", "max" }) {
+                Binary(op, real, real);
+            }
+
+            Unary("neg", real);
+            Unary("abs", real);
         }
 
         foreach (var op in new[] { "and", "or", "xor" }) {
             Binary(op, SilType.Bool, SilType.Bool);
         }
 
-        foreach (var type in new[] { SilType.Int, SilType.F64, SilType.Bool, SilType.Char, SilType.String }) {
+        foreach (var type in SilType.Numbers.Concat([SilType.Bool, SilType.Char, SilType.String])) {
             Binary("cmp_eq", type, SilType.Bool);
             Binary("cmp_ne", type, SilType.Bool);
         }
 
-        foreach (var type in new[] { SilType.Int, SilType.F64, SilType.Char }) {
+        foreach (var type in SilType.Numbers.Append(SilType.Char)) {
             foreach (var op in new[] { "cmp_lt", "cmp_le", "cmp_gt", "cmp_ge" }) {
                 Binary(op, type, SilType.Bool);
             }
         }
 
-        foreach (var printable in new[] { SilType.String, SilType.Int, SilType.F64, SilType.Bool }) {
+        foreach (var printable in SilType.Numbers.Concat([SilType.String, SilType.Bool])) {
             table[$"print_{printable}"] = new([printable], SilType.Unit);
         }
 
-        table["convert_Int_F64"] = new([SilType.Int], SilType.F64);
-        table["convert_F64_Int"] = new([SilType.F64], SilType.Int);
+        // Between any two numeric types: trapping when the value does not fit.
+        foreach (var from in SilType.Numbers) {
+            foreach (var to in SilType.Numbers) {
+                if (from != to) {
+                    table[$"convert_{from}_{to}"] = new([from], to);
+                }
+            }
+        }
 
-        Unary("neg", SilType.Int);
-        Unary("neg", SilType.F64);
-        Unary("not", SilType.Int);
         Unary("not", SilType.Bool);
-        Unary("abs", SilType.Int);
-        Unary("abs", SilType.F64);
 
         // Strings. A string is indexed by Unicode scalar: 'count' scalars,
         // 'at' one of them, 'slice' a run of them.
@@ -1017,8 +1329,10 @@ public static class SilBuiltins {
         Add("string_trimmed", SilType.String, SilType.String);
         Add("string_split", new ArrayType(SilType.String), SilType.String, SilType.Char);
         Add("string_from_Char", SilType.String, SilType.Char);
-        Add("string_from_Int", SilType.String, SilType.Int);
-        Add("string_from_F64", SilType.String, SilType.F64);
+        foreach (var number in SilType.Numbers) {
+            Add($"string_from_{number}", SilType.String, number);
+        }
+
         Add("string_from_Bool", SilType.String, SilType.Bool);
 
         // Parsing gives whether it worked, and the value when it did.
@@ -1026,6 +1340,11 @@ public static class SilBuiltins {
         Add("string_to_F64", SilType.Tuple([SilType.Bool, SilType.F64]), SilType.String);
 
         Add("region_create", SilType.Region);
+
+        // Emptying a region, all of it or back to a mark: what a 'region frame = pool' block took.
+        Add("region_reset", SilType.Unit, SilType.Region);
+        Add("region_push", SilType.Unit, SilType.Region);
+        Add("region_pop", SilType.Unit, SilType.Region);
         Add("char_to_Int", SilType.Int, SilType.Char);
         Add("char_from_Int", SilType.Tuple([SilType.Bool, SilType.Char]), SilType.Int);
         Add("char_is_digit", SilType.Bool, SilType.Char);

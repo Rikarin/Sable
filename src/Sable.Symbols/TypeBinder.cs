@@ -407,10 +407,10 @@ internal sealed class TypeBinder(Compilation compilation) {
                 return new ReferenceTypeSymbol(BindType(borrowed.ElementType, context, scope));
 
             case FixedSizeArrayTypeSyntax array:
-                return new ArrayTypeSymbol(BindType(array.ElementType, context, scope), ArrayKind.Fixed);
+                return new ArrayTypeSymbol(BindType(array.ElementType, context, scope), ArrayKind.Fixed, CapacityOf(array.Size));
 
             case InlineArrayTypeSyntax array:
-                return new ArrayTypeSymbol(BindType(array.ElementType, context, scope), ArrayKind.Inline);
+                return new ArrayTypeSymbol(BindType(array.ElementType, context, scope), ArrayKind.Inline, CapacityOf(array.Capacity));
 
             case GrowArrayTypeSyntax array:
                 return new ArrayTypeSymbol(
@@ -544,6 +544,11 @@ internal sealed class TypeBinder(Compilation compilation) {
         var name = syntax.Identifier.Text;
         if (name.Length == 0) {
             return ErrorTypeSymbol.Instance;
+        }
+
+        // The keyword 'region' in a type's place is the region type.
+        if (syntax.Identifier.Kind == SyntaxKind.RegionKeyword) {
+            return compilation.Core.Region;
         }
 
         var found = Lookup(name, context, scope, syntax.Identifier.Span);
@@ -905,4 +910,10 @@ internal sealed class TypeBinder(Compilation compilation) {
         _diagnostics.Error(code, span, message);
         return ErrorTypeSymbol.Instance;
     }
+
+    /// <summary>The <c>k</c> of <c>T[..k]</c>: a literal count, or none.</summary>
+    static int? CapacityOf(ExpressionSyntax? size) =>
+        size is LiteralExpressionSyntax literal && int.TryParse(literal.Token.Text.Replace("_", ""), out var count) && count > 0
+            ? count
+            : null;
 }

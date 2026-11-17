@@ -1,0 +1,59 @@
+module Orders
+
+// Inline layout (docs/02 §2.5): order records built, read and serialised —
+// a nested record of variable-size fields in one pointer-free block. Each
+// record is built in the frame of the function that uses it, so the hot
+// loop allocates nothing; every thousandth is written out as bytes and
+// read back through fromBytes's validation.
+
+@inline_layout
+struct OrderLine {
+    var sku: U8[..16]
+    var qty: U16
+    var price: U32
+}
+
+@inline_layout
+struct Order {
+    var id: U64
+    var customer: U8[..32]
+    var lines: OrderLine[>..]
+    var parent: Order&<u32>?
+}
+
+fn total(_ order: Order) -> U64 {
+    var t: U64 = 0
+    for line in order.lines {
+        t = t + U64(line.qty) * U64(line.price)
+    }
+    return t
+}
+
+fn priced(_ i: Int) -> U64 {
+    var order = Order { id: U64(i), customer: "Ann", lines: [], parent: none }
+    order.lines.append(OrderLine { sku: "A-1", qty: U16(i % 5 + 1), price: 1999 })
+    order.lines.append(OrderLine { sku: "B-22", qty: 1, price: U32(i % 1000) })
+    order.lines.append(OrderLine { sku: "C-333", qty: 3, price: 250 })
+    return total(order)
+}
+
+fn roundTrip(_ i: Int) -> U64 {
+    var order = Order { id: U64(i), customer: "Bob", lines: [], parent: none }
+    order.lines.append(OrderLine { sku: "Z-9", qty: 2, price: U32(i % 100) })
+    return match Order.fromBytes(Bytes.of(order)) {
+        case .Ok(let copy) => total(copy)
+        case .Invalid(let why) => 0
+    }
+}
+
+@main
+fn main() {
+    var sum: U64 = 0
+    for i in 0..<1000000 {
+        sum = sum + priced(i)
+        if i % 1000 == 0 {
+            sum = sum + roundTrip(i)
+        }
+    }
+    print(sum)
+}

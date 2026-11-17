@@ -23,7 +23,11 @@ public static class Pipeline {
     ///     When set, emit DWARF debug information, with source file names
     ///     relative to this directory.
     /// </param>
-    public static CompileResult Compile(SourceText source, string? debugDirectory = null) {
+    /// <param name="checkExclusivity">
+    ///     Keep the dynamic exclusivity checks (docs/02 §2.3): on unless a
+    ///     release build turns them off.
+    /// </param>
+    public static CompileResult Compile(SourceText source, string? debugDirectory = null, bool checkExclusivity = true) {
         var tree = SyntaxTree.Parse(source);
         var compilation = Compilation.Create([tree]);
 
@@ -36,6 +40,7 @@ public static class Pipeline {
         }
 
         var (module, lowering) = SilGen.Lower(compilation);
+        module.CheckExclusivity = checkExclusivity;
         errors.AddRange(lowering.Select(d => d.Format(source)));
         if (errors.Count > 0) {
             return new(module, null, errors);

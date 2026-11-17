@@ -107,4 +107,86 @@ public sealed class RegionTests {
             """,
             "this reference refers to region 'arena', which is gone — the region ended at line"
         );
+
+    const string Linked = """
+                          struct Link {
+                              var value: Int
+                              var next: Link&?
+                          }
+
+                          fn chain(in r: region, _ n: Int) -> ref Link {
+                              var head = r.alloc(Link { value: 0, next: none })
+                              for i in 1..<n {
+                                  head = r.alloc(Link { value: i, next: head })
+                              }
+                              return head
+                          }
+
+                          fn sum(_ head: ref Link) -> Int {
+                              var total = head.value
+                              var current = head.next
+                              while current != none {
+                                  total = total + current!.value
+                                  current = current!.next
+                              }
+                              return total
+                          }
+                          """;
+
+    [Fact]
+    public void ALinkedStructureLivesInOneRegion() =>
+        Assert.Equal(
+            "4950\n45\n",
+            AssertAgree(
+                Program(
+                    Linked,
+                    """
+                        region arena {
+                            print(sum(chain(arena, 100)))
+                            print(sum(chain(arena, 10)))
+                        }
+                    """
+                )
+            ).Stdout
+        );
+
+    [Theory]
+    [InlineData("fn bad(in r: region) -> ref Link {\n    var local = Link { value: 1, next: none }\n    return r.alloc(Link { value: 2, next: &local })\n}", "cannot store a reference rooted in local 'local' into region 'r', passed in")]
+    [InlineData("fn bad(in r: region, in s: region) -> ref Link {\n    let first = r.alloc(Link { value: 1, next: none })\n    return s.alloc(Link { value: 2, next: first })\n}", "cannot store a reference rooted in parameter 'r' into region 's', passed in")]
+    [InlineData("fn bad() -> Link {\n    let inner = Link { value: 1, next: none }\n    return Link { value: 2, next: &inner }\n}", "cannot return a reference rooted in local 'inner'")]
+    public void AReferenceInAFieldIsHeldToItsRoot(string declaration, string message) =>
+        Rejects(Linked + "\n" + declaration, "", message);
+
+    [Fact]
+    public void AResetRegionIsReusedAndASourcedBlockGivesBackWhatItTook() =>
+        Assert.Equal(
+            "0\n1\n2\nframe 13\nleft 3\n",
+            AssertAgree(
+                Program(
+                    Linked,
+                    """
+                        region pool {
+                            var keep = pool.alloc(Link { value: 7, next: none })
+                            for i in 0..<3 {
+                                pool.reset()
+                                keep = chain(pool, i + 1)
+                                print(keep.value)
+                            }
+                            region frame = pool {
+                                print("frame \(sum(chain(frame, 5)) + keep.value + 1)")
+                            }
+                            print("left \(sum(keep))")
+                        }
+                    """
+                )
+            ).Stdout
+        );
+
+    [Theory]
+    [InlineData("let a = pool.alloc(Link { value: 1, next: none })\npool.reset()\nprint(a.value)", "the region was reset at line")]
+    [InlineData("var keep = pool.alloc(Link { value: 1, next: none })\nfor i in 0..<3 {\n    pool.reset()\n    print(keep.value)\n}", "the region was reset at line")]
+    [InlineData("region frame = pool {\n    let x = pool.alloc(Link { value: 1, next: none })\n}", "'pool' is lent to 'frame' for this block")]
+    [InlineData("var outer = pool.alloc(Link { value: 0, next: none })\nregion frame = pool {\n    outer = frame.alloc(Link { value: 2, next: none })\n}\nprint(outer.value)", "refers to region 'frame', which is gone — the region ended")]
+    public void WhatAResetOrABlockTookCannotBeUsed(string body, string message) =>
+        Rejects(Linked, "region pool {\n" + body + "\n}", message);
 }

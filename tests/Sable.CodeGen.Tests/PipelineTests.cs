@@ -14,7 +14,7 @@ public sealed class PipelineTests {
 
     [Fact]
     public void SomethingNotLoweredYetSaysWhat() {
-        var result = Compile("module M\nstruct P { var x: U8 }\n@main\nfn main() { let p: P? = none }\n");
+        var result = Compile("module M\nstruct P { var x: U128 }\n@main\nfn main() { let p: P? = none }\n");
         Assert.False(result.Succeeded);
         Assert.Contains(result.Errors, static e => e.Contains("S7000", StringComparison.Ordinal));
     }

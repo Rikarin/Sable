@@ -62,6 +62,11 @@ public sealed class CoreTypes {
         Optional = DeclareGeneric("Optional", TypeKind.Union, "Wrapped");
         Dictionary = DeclareGeneric("Dictionary", TypeKind.Struct, "Key", "Value");
 
+        // What 'fromBytes' gives (docs/02 §2.5): the value, or why the bytes were refused.
+        Decoded = DeclareGeneric("Decoded", TypeKind.Union, "Value");
+        Bytes = new NamedTypeSymbol("Bytes", TypeKind.Struct, Module, accessibility: Accessibility.Public);
+        Module.AddMember(Bytes);
+
         Integers = [I8, I16, I32, I64, I128, Int, U8, U16, U32, U64, U128, UInt];
         Floats = [F16, F32, F64];
         Numerics = [..Integers, ..Floats];
@@ -111,6 +116,25 @@ public sealed class CoreTypes {
         alloc.ReturnTypeResolver = () => new ReferenceTypeSymbol(element);
         Region.AddMember(alloc);
 
+        // 'arena.reset()': everything in it destroyed, its memory kept for what comes next.
+        Method(Region, "reset", [], Void);
+
+        // 'Decoded<T>': '.Ok(value)' or '.Invalid(why)'.
+        var ok = new UnionCaseSymbol("Ok", Decoded, null);
+        ok.Payload = [new ParameterSymbol("value", null, ok, null, 0) { TypeResolver = () => Decoded.TypeParameters[0] }];
+        Decoded.AddMember(ok);
+        var invalid = new UnionCaseSymbol("Invalid", Decoded, null);
+        invalid.Payload = [new ParameterSymbol("why", null, invalid, null, 0) { TypeResolver = () => String }];
+        Decoded.AddMember(invalid);
+
+        // 'Bytes.of(value)': an @inline_layout value's bytes, as they are — no serialising pass.
+        var of = new FunctionSymbol("of", Bytes, null, Accessibility.Public, FunctionKind.Ordinary) { IsStatic = true };
+        var serialised = new TypeParameterSymbol("T", of, null, 0);
+        of.TypeParameters = [serialised];
+        of.Parameters = [new ParameterSymbol("value", "_", of, null, 0) { TypeResolver = () => serialised }];
+        of.ReturnTypeResolver = () => new ArrayTypeSymbol(U8, ArrayKind.Grow);
+        Bytes.AddMember(of);
+
         Property(Range, "lowerBound", Range.TypeParameters[0]);
         Property(Range, "upperBound", Range.TypeParameters[0]);
         Property(Range, "isEmpty", Bool);
@@ -141,7 +165,7 @@ public sealed class CoreTypes {
 
         // Writing a line to standard output: what hello world needs, before
         // Sable.IO exists to own it (docs/06 §6.4).
-        foreach (var printable in new[] { String, Int, F64, Bool }) {
+        foreach (var printable in new[] { String, Int, F64, Bool, I8, I16, I32, I64, U8, U16, U32, U64, UInt, F32 }) {
             Print = Print.Add(Function("print", [("value", printable)], Void));
         }
     }
@@ -195,7 +219,13 @@ public sealed class CoreTypes {
             new ArrayTypeSymbol(array.ElementType, ArrayKind.Slice)
         );
 
-        if (array.ArrayKind is ArrayKind.Grow or ArrayKind.GrowShrink) {
+        // Bytes read as text: UTF-8, decoded.
+        if (array.ElementType.Equals(U8)) {
+            Method(owner, "toString", [], String);
+        }
+
+        // A bounded inline array grows within its bound.
+        if (array.ArrayKind is ArrayKind.Grow or ArrayKind.GrowShrink or ArrayKind.Inline) {
             Method(owner, "append", [("element", array.ElementType)], Void);
             Method(owner, "removeLast", [], array.ElementType);
             Method(owner, "clear", [], Void);
@@ -241,6 +271,23 @@ public sealed class CoreTypes {
     }
 
     public ModuleSymbol Module { get; }
+
+    /// <summary><c>Decoded&lt;T&gt;</c>: what <c>fromBytes</c> gives.</summary>
+    public NamedTypeSymbol Decoded { get; }
+
+    /// <summary><c>Bytes</c>: where <c>Bytes.of</c> lives.</summary>
+    public NamedTypeSymbol Bytes { get; }
+
+    /// <summary>
+    ///     <c>T.fromBytes(bytes)</c> for an <c>@inline_layout</c> struct: the
+    ///     bytes, validated — framing, lengths, tags and every relative link.
+    /// </summary>
+    public FunctionSymbol FromBytes(NamedTypeSymbol type) {
+        var function = new FunctionSymbol("fromBytes", type, null, Accessibility.Public, FunctionKind.Ordinary) { IsStatic = true };
+        function.Parameters = [new ParameterSymbol("bytes", "_", function, null, 0) { TypeResolver = () => new ArrayTypeSymbol(U8, ArrayKind.Grow) }];
+        function.ReturnTypeResolver = () => Decoded.Construct([type]);
+        return function;
+    }
 
     public NamedTypeSymbol Bool { get; }
     public NamedTypeSymbol I8 { get; }

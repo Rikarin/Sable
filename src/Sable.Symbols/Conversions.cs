@@ -32,6 +32,12 @@ internal sealed class Conversions(CoreTypes core) {
             return ConversionKind.Identity;
         }
 
+        // A reference stored as a relative one, or read back as absolute:
+        // the same target, measured differently (docs/02 §2.5).
+        if (SameReferent(source, target)) {
+            return ConversionKind.Identity;
+        }
+
         // 'Never' is the bottom type: an expression that does not return fits
         // anywhere.
         if (source.Equals(core.Never)) {
@@ -42,17 +48,26 @@ internal sealed class Conversions(CoreTypes core) {
             return ConversionKind.LiteralTyping;
         }
 
+        // A string literal as inline bytes: 'customer: "Ann"' for a 'U8[..32]'.
+        if (sourceIsLiteral
+            && source.Equals(core.String)
+            && target is ArrayTypeSymbol { ElementType: var bytes, ArrayKind: ArrayKind.Inline or ArrayKind.Grow }
+            && bytes.Equals(core.U8)) {
+            return ConversionKind.LiteralTyping;
+        }
+
         // An array literal has no storage kind of its own, so it fits any of
         // them as long as the elements match.
         if (sourceIsLiteral
             && source is ArrayTypeSymbol sourceArray
             && target is ArrayTypeSymbol targetArray
-            && sourceArray.ElementType.Equals(targetArray.ElementType)) {
+            && (sourceArray.ElementType.Equals(targetArray.ElementType)
+                || IsLiteralCompatible(sourceArray.ElementType, targetArray.ElementType))) {
             return ConversionKind.LiteralTyping;
         }
 
         if (target is OptionalTypeSymbol optional) {
-            if (source.Equals(optional.UnderlyingType)) {
+            if (source.Equals(optional.UnderlyingType) || SameReferent(source, optional.UnderlyingType)) {
                 return ConversionKind.OptionalWrap;
             }
 
@@ -238,4 +253,10 @@ internal sealed class Conversions(CoreTypes core) {
 
         return false;
     }
+
+    static bool SameReferent(TypeSymbol source, TypeSymbol target) =>
+        source is ReferenceTypeSymbol from
+        && target is ReferenceTypeSymbol to
+        && (from.RelativeWidth is not null || to.RelativeWidth is not null)
+        && from.ReferencedType.Equals(to.ReferencedType);
 }

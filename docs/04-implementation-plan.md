@@ -336,11 +336,12 @@ Order matters; each of these is a self-contained lowering:
       and in the interpreter, which agree, with nothing leaked
 - [ ] SIL verifier is clean on the corpus — clean on everything that lowers,
       before and after the passes, ownership included (every owned value
-      consumed exactly once on every path); 240 of the corpus's 345 function
-      declarations lower so far — dictionaries, slices, existentials, class
-      inheritance and computed properties now among them — the rest waiting
-      on the integer types other than Int, recursive generic unions, mutating
-      requirements through existentials, and async (Phase 5)
+      consumed exactly once on every path); 284 of the 334 `fn` declarations
+      in `tests/corpus` and `examples` lower so far — dictionaries, slices,
+      existentials, class inheritance, computed properties and, since Phase
+      3, the sized integers and inline layout among them — the rest waiting
+      on recursive generic unions, mutating requirements through
+      existentials, a few operators on enums, and async (Phase 5)
 - [x] `lldb` shows correct frames, locals and types — on macOS, checked by a
       test that drives lldb: `gcd(a=1071, b=462)`, `(Int) t = 147`,
       `(Debug.Point) p = (x = 1071, y = 462)`
@@ -385,12 +386,18 @@ Status:
       entry per object, cleared when it dies; unowned ones count in the
       header's flags word, holding the memory, not the object, and trap on
       a read once it is gone. Not yet: in structs, or in capture lists.
-- [ ] 6 — deinit ordering (subclass first, fields last to first) and the
-      immortal fast path are done; atomic counts wait for threads.
+- [x] 6 — deinit ordering (subclass first, fields last to first), the
+      immortal fast path, and a stack fast path (§3.7: an object made in
+      its frame is counted as any other, and never freed). Atomic counts
+      are deferred to the concurrency runtime (Phase 4.3, `Sable.Concurrency`):
+      with one thread there is nothing for the flag bit of docs/02 §2.8 to
+      choose between, and nothing to measure its cost against.
 
 Measured by `tools/bench/run.py` (`benchmarks/history.tsv`): against naive
 insertion, retains fall by 75% (binary trees), 92% (sort), 77% (shapes),
-71% (JSON), 49% (words) and 100% (n-body), and time by 7–44%.
+71% (JSON), 49% (words) and 100% (n-body), and time by 7–44%. Against a
+hand-written C port of each benchmark that frees by hand (`benchmarks/c`),
+see §3.8.
 
 ### 3.2 Move checking (~3 weeks)
 
@@ -410,8 +417,10 @@ naming the move (`'a' is used after its value was moved out of it, at line
 is an error. Natively a struct with a deinit carries a hidden live byte, so
 the storage a move empties is not deinited. Locals now die at the end of the
 block that declared them, on every way out, which a move-only value needs and
-deterministic destruction (docs/02 §2.2) asked for. Not yet: partial moves out
-of fields, `using`, and move-only values in arrays or generic parameters.
+deterministic destruction (docs/02 §2.2) asked for. Deferred: partial moves
+out of fields, `using`, and move-only values in arrays or generic
+parameters — none is needed by anything Phase 3 delivers, and each is a
+use of the same dataflow rather than a new one.
 
 ### 3.3 Root inference / borrow checking (~10 weeks) ★
 
@@ -447,11 +456,19 @@ function (`roots(0, 1)` in SIL — `longest`'s `{a, b}`, with nothing written).
 Checking (3) rejects a returned reference rooted in a local, a temporary or a
 by-value parameter, with the fixes named, and — flow-sensitively — a
 reference used after its local's scope ended or its value was moved out.
-Not yet: references in fields or arrays (and so rule 4's stores into
-regions), regions themselves (§3.5) and the specialisation by root shape
-that needs them (5), summaries serialised into a `.sabi`, a fuller
-diagnostic with secondary labels, and using non-escape to delete ARC
-traffic.
+References are now values like any other: a struct may hold one (`next:
+Node&?`), and a value holding references carries their anchors through
+construction, extraction, copies, joins and the switch on an optional, so
+returning one is held to rule 3 as a bare reference is. Rule 4 is in:
+references stored into a region's memory may refer only into that region,
+and into an object's only into the heap — `r.alloc(Node { next: &local })`
+is rejected naming the local and the region, as is linking one region's
+node from another's — so a linked structure lives in one region and
+nothing in it points out. Non-escape now deletes allocations rather than
+ARC traffic (§3.7), from summaries of the same shape. Deferred: references
+in arrays, summaries serialised into a `.sabi` (the `.sabi` itself is
+Phase 5's), secondary diagnostic labels, and rule 5's specialisation by
+root shape, which waits on code generation that would differ by shape.
 
 **Risk note:** budget 10 weeks, expect 16. This pass is where an ambitious
 schedule goes to die, and it is also the only part of the design that has not
@@ -463,6 +480,21 @@ toy IR, *before* Phase 3 starts — ideally during Phase 1 as a side project.
 Static checking where accesses are to provably distinct storage; dynamic
 `begin_access`/`end_access` markers otherwise, elided in release builds.
 
+Status: done for the accesses a call makes (`src/Sable.SIL/SilGen.Exclusivity.cs`).
+Statically, each `inout` and `ref` argument, and a mutating method's
+receiver, is a path from a variable through fields and elements (an
+element is the whole collection); two that overlap, one of them a change,
+are error S3062, naming both arguments and the fix — `bump(&p.a, &p.a)`,
+`swap(&a[i], &a[j])`, `copy(&n, &n)`, `p.absorb(&p.a)` are rejected, and
+`bump(&p.a, &p.b)` is not. Where the compiler cannot tell — storage inside
+an object, reached through two references — the call is bracketed by
+`access_begin_modify`/`access_begin_read` and `access_end`, and the
+runtime traps on an access that conflicts with one in progress. The
+markers are kept in debug and `-O0` builds and dropped from optimised
+ones unless `--exclusivity=checked` keeps them (docs/02 §2.3); the
+interpreter always checks. Deferred: instrumenting plain reads of object
+fields during an access — only accesses passed to calls are tracked.
+
 ### 3.5 Regions (~4 weeks)
 
 - `region` as a value type with a bump allocator in the runtime.
@@ -471,20 +503,26 @@ Static checking where accesses are to provably distinct storage; dynamic
 - `reset()`, nested regions, region-to-owned copy-out (`toOwned()`).
 - Thread affinity by construction (a region anchor is not `Sendable`).
 
-Status: the core is in. `region arena { … }` makes a `Region` — a counted
-runtime arena of chunks — that ends with its block on every way out;
-`arena.alloc(value)` moves a value into it and gives back a `T&`; an
-`in r: Region` parameter borrows a caller's. Ending a region runs the
-destroys of what it holds, last first, then frees its chunks at once. And,
-as promised, it fell out of 3.3: what a region allocates is anchored where
-the region is — a local region's slot, or the parameter it came in as — so
-returning a reference into a local region is rejected with its fixes, a
-reference used after its region ended is rejected, and `build(in r) -> ref
-Node` has `roots(0)`: "root inferred as 'r'". Not yet: references in fields
-(so no linked structures in a region yet), `reset()`, nested regions as
-values, `toOwned()` beyond a dereference's copy, region sources
-(`region frame = pool`), and the lowercase `region` spelling in type
-position.
+Status: done but for `toOwned()`. `region arena { … }` makes a `Region` — a
+counted runtime arena of chunks — that ends with its block on every way
+out; `arena.alloc(value)` moves a value into it and gives back a `T&`; an
+`in r: region` parameter (either spelling) borrows a caller's. Ending a
+region runs the destroys of what it holds, last first, then frees its
+chunks at once. And, as promised, it fell out of 3.3: what a region
+allocates is anchored where the region is, so returning a reference into
+a local region is rejected with its fixes, a reference used after its
+region ended is rejected, and `build(in r) -> ref Node` has `roots(0)`.
+Linked structures live in regions (`Link { next: Link&? }`, rule 4 above).
+`pool.reset()` destroys what the region holds and keeps its newest chunk
+for what comes next; root inference knows a reference made before the
+reset is dead after it and one made after is not, through variables and
+loops — the per-frame `reset()`-then-allocate loop compiles, and reading a
+node kept across a reset does not. `region frame = pool { … }` is a nested
+region in the same memory: the block allocates through `frame`, `pool` is
+lent to it meanwhile (a direct use is an error), and as the block ends
+what it took is given back — destroyed, its chunks freed, the bump pointer
+restored. Deferred: `toOwned()` as a method (a dereference already copies
+out), and thread affinity, which waits for threads.
 
 ### 3.6 Inline layout (~6 weeks)
 
@@ -499,11 +537,60 @@ position.
 - In-place construction: a value is built at its final destination, never
   constructed-then-copied.
 
+Status: done for structs (`src/Sable.SIL/SilGen.Inline.cs`, `InlineLayout`
+in `SilModel.cs`, the runtime's inline section, and its mirror in the
+interpreter). It needed the sized integers first: `U8`…`U64`, `I8`…`I64`,
+`UInt` and `F32` now lower, with arithmetic that traps on overflow at
+each width, comparisons by signedness, `U64(x)` conversions that trap
+when the value does not fit, and `-5` a literal of whatever type is
+wanted. An `@inline_layout` struct is a block: one counted object holding
+the value's bytes, copied on write. Fixed-size fields come first, packed,
+at offsets the compiler knows; then each variable-size field in
+declaration order — `T[..k]` with its count in the fewest bytes its bound
+needs, `T[>..]` with a LEB128 count, then the elements, nested inline
+structs in place. Everything inside is reached through views
+(`$*inline Order`): a field, an element, a loop's element are views into
+their owner, never copies. `T&<u32>?` and `T&<u16>?` are signed offsets
+from the field, 0 for null, set from `&tree.nodes[0]` and read back as
+references; a change of size that moves bytes measures every relative
+reference again. `Bytes.of(v)` is the bytes; `T.fromBytes(b)` gives
+`.Ok(value)` or `.Invalid(why)` after checking framing, every count
+against its bound and the bytes left, every Bool and Char, and that every
+relative reference points at the start of a value of its type found by
+the same walk. Values are built where they will live: a record is an
+empty block filled field by field, and with §3.7 that block is in the
+frame. Views are references, held to root inference: one is rooted where
+its block is held, so returning a view into a local block, or into a
+block passed by value, is rejected (a `ref` parameter's is fine); and a
+change to a block — copied on write, or grown and moved — makes every
+view taken from it before stale, as a region's reset does its references,
+so `let kept = &bag.items[0]; bag.items.append(…); kept.value`, or
+appending to an array while iterating it, is rejected. Deferred: variant-sized unions (`union X..`), `&<u16 in pool>`
+(pools are regions of inline values, which wait on them), fixed `T[k]`
+and the slice and shrink kinds inside inline structs, indexing elements
+that vary in size (they are iterated; docs/02 says so), and generic
+inline structs.
+
 ### 3.7 Escape analysis and promotion (~4 weeks)
 
 The pass that makes idiomatic code fast: a `class` that does not escape its
 frame becomes a stack value with no header and no refcount. Driven by the same
 summaries as 3.3.
+
+Status: done, keeping the header and the count (`src/Sable.SIL/EscapeAnalysis.cs`).
+A value escapes if it, or a copy, may be returned, thrown, stored anywhere
+but a local slot, put inside another value, captured, held weakly, or
+passed to a parameter that escapes or to a callee not known here; which
+parameters escape is a per-function summary computed for the module to a
+fixed point. A class's allocating initialiser is made where it is called,
+so the caller owns the allocation; then `alloc_ref [stack]` and
+`inline_new_stack` put what does not escape — and is not made in a loop —
+in the frame. ARC is unchanged: the last release runs the deinit and the
+fields' releases, in order, and frees nothing; an inline block that
+outgrows its room in the frame moves to the heap. The JSON program loses
+187 allocations; the order record of §3.8 loses all of them. Deferred:
+dropping the header and the count for promoted objects whose count is
+provably never read, and promotion inside loops.
 
 ### 3.8 Exit criteria
 
@@ -512,12 +599,45 @@ summaries as 3.3.
       program), run by `tools/bench/run.py --record`, which appends time,
       allocations, retains and releases per commit to
       `benchmarks/history.tsv`
-- [ ] ARC overhead on the suite < 5% vs a manually-managed equivalent
-- [ ] Root inference rejects no program in the corpus that should compile
-- [ ] `@inline_layout` reproduces the Goose order-record result: a nested
-      record in **0 allocations**, within 20% of Goose's byte count
-- [ ] Round-trip `Bytes.of` / `fromBytes` survives a 10M-case fuzzer with no
-      memory-safety failure on corrupt input
+- [ ] ARC overhead on the suite < 5% vs a manually-managed equivalent —
+      not met. `benchmarks/c` holds a C port of each benchmark that frees by
+      hand, with the same allocations, overflow checks and bounds checks and
+      byte-identical output; Sable is 1.45× (binary trees) to 1.9× (words)
+      its time, but n-body, which does no reference counting at all, is
+      1.65×, so most of that gap is code generation (array elements reached
+      through out-of-line runtime calls, `calloc`, the object header), not
+      ARC. Isolating ARC instead — the same Sable build against one whose
+      retain and release do nothing (and so free nothing: an upper bound) —
+      puts it at 1% (n-body), 9% (orders), 15% (sort), 27% (shapes), 37%
+      (words) and 42% (binary trees). Closing it needs what the measurement
+      points at: inlining the count operations and the array accessors,
+      dropping retain/release pairs across calls whose summaries say the
+      argument does not escape (§3.7's summaries; docs/01's "every reference
+      the checker proves non-escaping is a pair deleted"), and promotion
+      inside loops
+- [x] Root inference rejects no program in the corpus that should compile —
+      `CorpusLoweringTests` holds every corpus file, example and the JSON
+      program to producing no diagnostic but "not lowered yet": root
+      inference, the move checker and the exclusivity check reject none of
+      them
+- [x] `@inline_layout` reproduces the Goose order-record result: a nested
+      record in **0 allocations**, within 20% of Goose's byte count — the
+      order of docs/02 §2.5 (`id: U64`, `customer: U8[..32]`,
+      `lines: OrderLine[>..]`, `parent: Order&<u32>?`) for customer "Ann"
+      with one line is 26 bytes against Goose's 29, and building it, reading
+      it and totalling it allocates nothing (`SABLE_STATS`: allocations 0);
+      `benchmarks/orders.sab` builds a million of them with 2,000
+      allocations, all in the thousand that go out as bytes and back
+- [x] Round-trip `Bytes.of` / `fromBytes` survives a 10M-case fuzzer with no
+      memory-safety failure on corrupt input — `tools/fuzz/run.sh` builds
+      `tools/fuzz/inline_layout.sab` with AddressSanitizer and
+      UndefinedBehaviorSanitizer over the runtime and feeds `fromBytes`
+      ten million mutations of valid orders and trees (with relative links,
+      cycles among them): about 990,000 are accepted, each walked entirely,
+      every reference followed, and written back byte for byte; the rest
+      are refused with a reason. No sanitizer report, no leak. A test runs
+      the same fuzzer for 3,000 cases through the interpreter and natively,
+      and the two validators agree on every one
 
 ---
 

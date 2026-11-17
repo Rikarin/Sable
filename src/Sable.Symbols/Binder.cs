@@ -2051,7 +2051,7 @@ public sealed class Binder {
         var receiver = BindExpression(syntax.Expression);
 
         // A member of a reference is the member of what it refers to.
-        if (receiver.Type is ReferenceTypeSymbol { RelativeWidth: null } reference) {
+        if (receiver.Type is ReferenceTypeSymbol reference) {
             receiver = new BoundConversion(syntax.Expression, reference.ReferencedType, receiver, ConversionKind.Dereference);
         }
         var name = syntax.Name switch {
@@ -2555,6 +2555,16 @@ public sealed class Binder {
 
             case BoundTypeExpression typeExpression
                 when typeExpression.ReferencedType is NamedTypeSymbol namedType: {
+                // 'U64(x)': a numeric conversion, as 'x as U64'; 'U64(1)': a literal of that type.
+                if (Core.IsNumeric(namedType)
+                    && arguments is [var converted]
+                    && labels is [null]
+                    && Core.IsNumeric(converted.Type)) {
+                    return converted is BoundLiteral literalArgument && _conversions.HasImplicitConversion(literalArgument.Type, namedType, true)
+                        ? new BoundConversion(syntax, namedType, literalArgument, ConversionKind.LiteralTyping)
+                        : new BoundConversion(syntax, namedType, converted, ConversionKind.Explicit);
+                }
+
                 var initializers = namedType.GetMembers("init")
                     .OfType<FunctionSymbol>()
                     .ToImmutableArray();
@@ -4203,6 +4213,22 @@ public sealed class Binder {
             return new BoundError(syntax, operand);
         }
 
+        // '-5' is a literal, so that it takes the type its context wants,
+        // 'let c: I16 = -5', as '5' does.
+        if (kind == UnaryOperatorKind.Negate && operand is BoundLiteral literal) {
+            object? negated = literal.Value switch {
+                long l => -l,
+                int i => -(long)i,
+                ulong u when u <= 1UL << 63 => unchecked(-(long)u),
+                double d => -d,
+                _ => null,
+            };
+
+            if (negated is not null) {
+                return new BoundLiteral(syntax, type, negated);
+            }
+        }
+
         return new BoundUnaryOperator(syntax, type, kind, operand);
     }
 
@@ -4498,6 +4524,22 @@ public sealed class Binder {
 
         if (expression.Type.Equals(target)) {
             return expression;
+        }
+
+        // '[1, 2, 3]' where a 'U16[]' is wanted: each element takes the element type.
+        if (expression is BoundArray { Type: ArrayTypeSymbol literalArray } arrayLiteral
+            && target is ArrayTypeSymbol wantedArray
+            && !literalArray.ElementType.Equals(wantedArray.ElementType)
+            && !arrayLiteral.Elements.IsEmpty
+            && arrayLiteral.Elements.All(static e => e is BoundLiteral)) {
+            expression = new BoundArray(
+                arrayLiteral.Syntax,
+                new ArrayTypeSymbol(wantedArray.ElementType, literalArray.ArrayKind),
+                [..arrayLiteral.Elements.Select(e => Convert(e, wantedArray.ElementType, e.Syntax))]
+            );
+            if (expression.Type.Equals(target)) {
+                return expression;
+            }
         }
 
         var conversion = _conversions.Classify(expression.Type, target, IsLiteral(expression));

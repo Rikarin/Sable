@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>Sable.LspBench</RootNamespace>
+    <AssemblyName>sable-lsp-bench</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- The driver: its sable.dll is what the benchmark starts, as an editor would. -->
+    <ProjectReference Include="../../src/Sable.Driver/Sable.Driver.csproj" />
+  </ItemGroup>
+</Project>

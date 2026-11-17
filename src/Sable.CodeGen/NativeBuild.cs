@@ -27,6 +27,20 @@ public static class NativeBuild {
         }
     }
 
+    /// <summary>
+    ///     The lldb formatter plugin (<c>tools/lldb/sable_lldb.py</c>), carried
+    ///     inside this assembly so that a debug build can ship it beside the
+    ///     program and <c>sable debug</c> can load it.
+    /// </summary>
+    public static string LldbPluginSource {
+        get {
+            using var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("Sable.CodeGen.sable_lldb.py")
+                ?? throw new InvalidOperationException("the lldb plugin is missing from Sable.CodeGen");
+            using var reader = new StreamReader(stream);
+            return reader.ReadToEnd();
+        }
+    }
+
     public static string CompilerPath => Environment.GetEnvironmentVariable("CC") is { Length: > 0 } cc ? cc : "clang";
 
     /// <summary>True when a C compiler can be run here.</summary>
@@ -40,8 +54,12 @@ public static class NativeBuild {
 
     /// <param name="debug">
     ///     Build for a debugger: <c>-g</c> at <c>-O0</c>, so that every variable
-    ///     stays where the debug information says it is. On macOS clang then
-    ///     writes a <c>.dSYM</c> beside the executable.
+    ///     stays where the debug information says it is. The runtime is
+    ///     compiled apart, optimised and without debug information — it is
+    ///     not the program's code, and stepping goes over it as over a
+    ///     system library. On macOS clang then writes a <c>.dSYM</c> beside
+    ///     the executable, and the lldb formatter plugin goes into it, where
+    ///     lldb finds it once <c>target.load-script-from-symbol-file</c> is on.
     /// </param>
     public static NativeBuildResult Build(string llvmIr, string outputPath, bool optimise = true, bool debug = false) {
         var directory = Directory.CreateTempSubdirectory("sable-build-");
@@ -71,14 +89,49 @@ public static class NativeBuild {
                 arguments.Add("-rdynamic");
             }
 
-            arguments.AddRange(["-Wno-override-module", irPath, runtimePath, "-o", outputPath]);
+            var runtime = runtimePath;
+            if (debug) {
+                runtime = Path.Combine(directory.FullName, "sable_runtime.o");
+                var (runtimeExit, runtimeOutput) = Run(CompilerPath, ["-c", "-O2", runtimePath, "-o", runtime]);
+                if (runtimeExit != 0) {
+                    return new(false, runtimeOutput);
+                }
+            }
+
+            arguments.AddRange(["-Wno-override-module", irPath, runtime, "-o", outputPath]);
 
             var (exitCode, output) = Run(CompilerPath, arguments);
+            if (exitCode == 0 && debug) {
+                ShipLldbPlugin(outputPath);
+            }
 
             return new(exitCode == 0, output);
         } finally {
             directory.Delete(true);
         }
+    }
+
+    /// <summary>
+    ///     Puts the formatter plugin where lldb looks for a program's scripts:
+    ///     in its <c>.dSYM</c>, as <c>Contents/Resources/Python/&lt;name&gt;.py</c>,
+    ///     the name the executable's with what Python cannot import made <c>_</c>.
+    ///     There is no such place on Linux — lldb does not read a
+    ///     <c>.debug_gdb_scripts</c> section — so there it is loaded by hand.
+    /// </summary>
+    static void ShipLldbPlugin(string executable) {
+        var dsym = executable + ".dSYM";
+        if (!Directory.Exists(dsym)) {
+            return;
+        }
+
+        var python = Path.Combine(dsym, "Contents", "Resources", "Python");
+        Directory.CreateDirectory(python);
+        var name = new string([..Path.GetFileName(executable).Select(static c => char.IsAsciiLetterOrDigit(c) ? c : '_')]);
+        if (name.Length == 0 || char.IsAsciiDigit(name[0])) {
+            name = "_" + name;
+        }
+
+        File.WriteAllText(Path.Combine(python, name + ".py"), LldbPluginSource);
     }
 
     /// <summary>

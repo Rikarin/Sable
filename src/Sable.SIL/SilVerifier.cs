@@ -63,6 +63,12 @@ public static class SilVerifier {
         }
 
         var blocks = new HashSet<SilBlock>(function.Blocks);
+        if (function.Blocks.Any(block => block.Successors.Contains(entry))) {
+            // The entry block's arguments are the parameters; a branch to it
+            // would give them second values, which no backend can express.
+            Error(entry, "the entry block cannot be branched to");
+        }
+
         foreach (var block in function.Blocks) {
             if (block.Terminator is null) {
                 Error(block, "does not end in a terminator");

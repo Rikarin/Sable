@@ -95,7 +95,8 @@ verified, instead of the tree.
 
 ## Building
 
-Requires the .NET 11 SDK.
+Requires the .NET 11 SDK. Building native programs also needs `clang`
+(`$CC` if set); the native tests pass vacuously without it.
 
 ```bash
 dotnet build Sable.slnx
@@ -104,6 +105,24 @@ dotnet build Sable.slnx
 ```bash
 dotnet test Sable.slnx
 ```
+
+### Compiling a program
+
+`sable` compiles one file to a native executable through SIL and LLVM IR,
+linking the small C runtime in [runtime/](runtime/):
+
+```bash
+dotnet run --project src/Sable.Driver -- build hello.sab -o hello
+```
+
+```bash
+dotnet run --project src/Sable.Driver -- run hello.sab
+```
+
+`--emit sil` and `--emit llvm-ir` print a stage's output instead. Only the
+first subset of the language lowers so far — `Int`, `Bool`, `F64`, string
+literals, `print`, functions and control flow; anything else is reported as
+`S7000` by construct.
 
 ## Status
 
@@ -153,7 +172,9 @@ edit. Phase 1 is nearly done** — see
 | `Sable.SIL` — verifier: structure, SSA dominance, types, stack discipline | done for the subset; ownership checks wait for owned values |
 | `Sable.SIL` — lowering from the bound tree | started: `Int`/`Bool`/`F64`, locals, calls, `if`/`guard`/`while`/`repeat`, labelled jumps, `?:`, short-circuit |
 | `Sable.SIL` — interpreter, so tests run lowered code | done for the subset |
-| Codegen (LLVM), runtime | not started |
+| `Sable.CodeGen` — LLVM IR text: phis for block arguments, overflow / division / shift traps | done for the subset |
+| `runtime/` — C runtime: print, trap | started |
+| `sable build` / `sable run` — native executables via clang | done for the subset; hello world is 34 KB |
 
 Phase 1's exit criteria, as docs/04 §1.4 states them:
 
@@ -165,7 +186,7 @@ Phase 1's exit criteria, as docs/04 §1.4 states them:
 | Type-checking 100,000 lines in under 5 s | 0.98 s |
 | Go/no-go: 10,000 lines of real Sable | ~2,900 in `tests/corpus/` |
 
-**1,643 tests green**, and every file in [examples/](examples/) parses as a
+**1,664 tests green**, and every file in [examples/](examples/) parses as a
 complete compilation unit with no diagnostics and an exact round-trip.
 [tests/corpus/](tests/corpus/) holds programs that must type-check with
 nothing to say, and [tests/negative/](tests/negative/) holds programs that

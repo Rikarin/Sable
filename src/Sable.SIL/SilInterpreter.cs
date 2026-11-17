@@ -18,6 +18,9 @@ public sealed class SilTrap(string message) : Exception(message);
 public sealed class SilInterpreter(SilModule module, int stepLimit = 10_000_000, int depthLimit = 2_000) {
     int _steps;
 
+    /// <summary>Where <c>print</c> writes: one line per call, as the native runtime does.</summary>
+    public System.Text.StringBuilder Output { get; } = new();
+
     sealed class Slot {
         public object? Value;
     }
@@ -60,6 +63,14 @@ public sealed class SilInterpreter(SilModule module, int stepLimit = 10_000_000,
 
                     case FloatLiteralInst literal:
                         values[literal] = literal.Value;
+                        break;
+
+                    case StringLiteralInst literal:
+                        values[literal] = literal.Value;
+                        break;
+
+                    case BuiltinInst { Name: var name } builtin when name.StartsWith("print_", StringComparison.Ordinal):
+                        Output.Append(Format(Get(builtin.Operands[0]))).Append('\n');
                         break;
 
                     case BuiltinInst builtin:
@@ -169,6 +180,41 @@ public sealed class SilInterpreter(SilModule module, int stepLimit = 10_000_000,
                 _ => throw new SilTrap($"builtin \"{name}\" cannot take these operands"),
             };
         }
+    }
+
+    /// <summary>
+    ///     A printed value, exactly as the native runtime writes it: integers in
+    ///     decimal, Booleans as words, and floating point as C's <c>%.17g</c>.
+    /// </summary>
+    public static string Format(object? value) =>
+        value switch {
+            long n => n.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            bool b => b ? "true" : "false",
+            double d => FormatDouble(d),
+            string s => s,
+            _ => "?",
+        };
+
+    static string FormatDouble(double value) {
+        if (double.IsNaN(value)) {
+            return "nan";
+        }
+
+        if (double.IsInfinity(value)) {
+            return value > 0 ? "inf" : "-inf";
+        }
+
+        // .NET's G17 is C's %.17g but for the exponent's case and padding:
+        // C writes at least two exponent digits, 'e+05'.
+        var text = value.ToString("G17", System.Globalization.CultureInfo.InvariantCulture).Replace('E', 'e');
+        var e = text.IndexOf('e', StringComparison.Ordinal);
+        if (e >= 0) {
+            var sign = text[e + 1];
+            var digits = text[(e + 2)..];
+            text = text[..(e + 1)] + sign + digits.PadLeft(2, '0');
+        }
+
+        return text;
     }
 
     static object Wrap(Func<long> operation) {

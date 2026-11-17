@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>Sable.CodeGen</RootNamespace>
+    <AssemblyName>Sable.CodeGen</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Sable.SIL/Sable.SIL.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="../../runtime/sable_runtime.c" LogicalName="Sable.CodeGen.sable_runtime.c" />
+  </ItemGroup>
+</Project>

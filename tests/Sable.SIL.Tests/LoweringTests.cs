@@ -342,7 +342,7 @@ public sealed class LoweringTests {
             """
             module M
             fn label(_ n: Int) -> Int {
-                let s = "text"
+                let xs = [n, n]
                 return n
             }
             """

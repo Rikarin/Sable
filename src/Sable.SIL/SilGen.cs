@@ -70,9 +70,20 @@ public sealed class SilGen {
             _names[symbol] = Mangle(symbol, functions.Count(f => f.Symbol.Name == symbol.Name) > 1);
         }
 
+        // '@main' marks where a program starts; failing that, a function
+        // called main does.
+        var entry = functions.FirstOrDefault(static f =>
+                f.Syntax.Attributes.Any(static a => a.Name.ToString().Trim() == "main")
+            ).Symbol
+            ?? functions.FirstOrDefault(static f => f.Symbol.Name == "main").Symbol;
+
         foreach (var (symbol, syntax, model) in functions) {
             if (SignatureOf(symbol, syntax) is not { } type) {
                 continue;
+            }
+
+            if (ReferenceEquals(symbol, entry)) {
+                _module.EntryPoint = _names[symbol];
             }
 
             if (model.GetBoundBody(syntax) is not { } body) {
@@ -143,6 +154,10 @@ public sealed class SilGen {
 
         if (type.Equals(core.Void)) {
             return SilType.Unit;
+        }
+
+        if (type.Equals(core.String)) {
+            return SilType.String;
         }
 
         return null;
@@ -504,6 +519,10 @@ public sealed class SilGen {
         }
 
         SilValue? Literal(BoundLiteral literal, TypeSymbol type) {
+            if (type.Equals(Core.String) && literal.Value is string text) {
+                return Emit(new StringLiteralInst(text));
+            }
+
             if (type.Equals(Core.Bool) && literal.Value is bool flag) {
                 return Emit(new IntegerLiteralInst(SilType.Bool, flag ? 1 : 0));
             }
@@ -602,6 +621,15 @@ public sealed class SilGen {
         }
 
         SilValue? Call(BoundCall call) {
+            // The core's print is a builtin: the runtime owns the writing.
+            if (Core.Print.Contains(call.Function)) {
+                if (Expression(call.Arguments[0]) is not { } printed) {
+                    return null;
+                }
+
+                return Emit(new BuiltinInst($"print_{printed.Type}", SilType.Unit, printed));
+            }
+
             if (call.Receiver is not null || !generator._names.TryGetValue(call.Function, out var name)) {
                 Fail(call.Syntax, $"the call '{Describe(call.Syntax)}'");
                 return null;

@@ -21,6 +21,13 @@ public abstract class SilType : IEquatable<SilType> {
     public static readonly SilType Bool = new ScalarType("Bool");
     public static readonly SilType F64 = new ScalarType("F64");
 
+    /// <summary>
+    ///     A string. In this first subset every string is a literal, which is
+    ///     immortal (docs/02 §2.2) — no count to keep — so it is trivial: a
+    ///     pointer to UTF-8 bytes and their length. Built strings bring ARC.
+    /// </summary>
+    public static readonly SilType String = new ScalarType("String");
+
     /// <summary><c>()</c>: no value. What a function that returns nothing returns.</summary>
     public static readonly SilType Unit = new ScalarType("()");
 
@@ -121,13 +128,22 @@ public sealed class FloatLiteralInst(double value) : SilInstruction {
     public override string Opcode => "float_literal";
 }
 
+/// <summary><c>string_literal "hello"</c>: an immortal string.</summary>
+public sealed class StringLiteralInst(string value) : SilInstruction {
+    public override SilType Type => SilType.String;
+    public string Value { get; } = value;
+    public override string Opcode => "string_literal";
+}
+
 /// <summary>
 ///     <c>builtin "add_Int"(%0, %1) : $Int</c>: an operation the compiler
-///     knows, named in <see cref="SilBuiltins" />.
+///     knows, named in <see cref="SilBuiltins" />. One that gives <c>()</c>,
+///     such as <c>print_String</c>, is run for its effect and names nothing.
 /// </summary>
 public sealed class BuiltinInst(string name, SilType type, params SilValue[] operands) : SilInstruction(operands) {
     public string Name { get; } = name;
     public override SilType Type { get; } = type;
+    public override bool HasResult => Type != SilType.Unit;
     public override string Opcode => "builtin";
 }
 
@@ -299,6 +315,9 @@ public sealed class SilModule {
 
     public List<SilFunction> Functions { get; } = [];
 
+    /// <summary>The function a program starts in: the one marked <c>@main</c>, or else <c>main</c>.</summary>
+    public string? EntryPoint { get; set; }
+
     public SilFunction? Find(string name) => _byName.GetValueOrDefault(name);
 
     public SilFunction Add(SilFunction function) {
@@ -357,6 +376,10 @@ public static class SilBuiltins {
             foreach (var op in new[] { "cmp_lt", "cmp_le", "cmp_gt", "cmp_ge" }) {
                 Binary(op, type, SilType.Bool);
             }
+        }
+
+        foreach (var printable in new[] { SilType.String, SilType.Int, SilType.F64, SilType.Bool }) {
+            table[$"print_{printable}"] = new([printable], SilType.Unit);
         }
 
         Unary("neg", SilType.Int);

@@ -323,12 +323,15 @@ Order matters; each of these is a self-contained lowering:
 
 ### 2.5 Exit criteria
 
-- [ ] Hello world links and runs on macOS arm64 and Linux x64
+- [ ] Hello world links and runs on macOS arm64 and Linux x64 — macOS arm64
+      done (`sable build hello.sab && ./hello`); Linux x64 not yet tried
 - [ ] A 2,000-line program (JSON parser + pretty printer) compiles and passes
       its tests
 - [ ] SIL verifier is clean on the corpus
 - [ ] `lldb` shows correct frames, locals and types
-- [ ] Startup time < 2 ms, hello-world binary < 400 KB stripped
+- [ ] Startup time < 2 ms, hello-world binary < 400 KB stripped — 34 KB
+      stripped; start to exit is ~3.2 ms against ~2.1 ms for `/usr/bin/true`
+      measured the same way, so ~1 ms over the process-launch floor
 
 ---
 

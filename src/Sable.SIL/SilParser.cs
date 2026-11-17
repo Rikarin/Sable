@@ -85,15 +85,47 @@ public sealed class SilParser {
 
             if (c == '"') {
                 i++;
+                var value = new System.Text.StringBuilder();
                 while (i < text.Length && text[i] != '"' && text[i] != '\n') {
-                    i++;
+                    if (text[i] != '\\') {
+                        value.Append(text[i++]);
+                        continue;
+                    }
+
+                    if (i + 1 >= text.Length) {
+                        break;
+                    }
+
+                    var escape = text[i + 1];
+                    i += 2;
+                    switch (escape) {
+                        case '"': value.Append('"'); break;
+                        case '\\': value.Append('\\'); break;
+                        case 'n': value.Append('\n'); break;
+                        case 't': value.Append('\t'); break;
+                        case 'u' when i < text.Length && text[i] == '{': {
+                            var close = text.IndexOf('}', i);
+                            if (close < 0
+                                || !int.TryParse(text[(i + 1)..close], NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var code)
+                                || !System.Text.Rune.IsValid(code)) {
+                                throw new SilParseException("malformed \\u{…} escape", line);
+                            }
+
+                            value.Append(new System.Text.Rune(code).ToString());
+                            i = close + 1;
+                            break;
+                        }
+
+                        default:
+                            throw new SilParseException($"unknown escape '\\{escape}'", line);
+                    }
                 }
 
                 if (i >= text.Length || text[i] != '"') {
                     throw new SilParseException("unterminated string", line);
                 }
 
-                tokens.Add(new(TokenKind.String, text[(start + 1)..i], line));
+                tokens.Add(new(TokenKind.String, value.ToString(), line));
                 i++;
                 continue;
             }
@@ -328,6 +360,7 @@ public sealed class SilParser {
             "Int" => SilType.Int,
             "Bool" => SilType.Bool,
             "F64" => SilType.F64,
+            "String" => SilType.String,
             _ => throw Error($"unknown type '{name}'"),
         };
     }
@@ -399,6 +432,10 @@ public sealed class SilParser {
                 instruction = new FloatLiteralInst(value);
                 break;
             }
+
+            case "string_literal":
+                instruction = new StringLiteralInst(Expect(TokenKind.String, "a string").Text);
+                break;
 
             case "builtin": {
                 var name = Expect(TokenKind.String, "a builtin name").Text;

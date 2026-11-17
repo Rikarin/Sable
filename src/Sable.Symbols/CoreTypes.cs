@@ -119,6 +119,34 @@ public sealed class CoreTypes {
 
         Method(String, "toF64", [], new OptionalTypeSymbol(F64));
         Method(Bool, "toString", [], String);
+
+        // Writing a line to standard output: what hello world needs, before
+        // Sable.IO exists to own it (docs/06 §6.4).
+        foreach (var printable in new[] { String, Int, F64, Bool }) {
+            Print = Print.Add(Function("print", [("value", printable)], Void));
+        }
+    }
+
+    /// <summary>The <c>print</c> overloads, which code generation recognises.</summary>
+    public ImmutableArray<FunctionSymbol> Print { get; private set; } = [];
+
+    /// <summary>A function the core module declares at its top level.</summary>
+    FunctionSymbol Function(string name, (string Name, TypeSymbol Type)[] parameters, TypeSymbol returnType) {
+        var function = new FunctionSymbol(name, Module, null, Accessibility.Public, FunctionKind.Ordinary);
+
+        function.Parameters = [
+            ..parameters.Select((parameter, i) => {
+                    // Label '_': the argument is written bare, as in print(x).
+                    var symbol = new ParameterSymbol(parameter.Name, "_", function, null, i);
+                    symbol.TypeResolver = () => parameter.Type;
+                    return symbol;
+                }
+            )
+        ];
+
+        function.ReturnTypeResolver = () => returnType;
+        Module.AddMember(function);
+        return function;
     }
 
     /// <summary>The members every array has, built for one element type.</summary>

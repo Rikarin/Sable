@@ -86,6 +86,10 @@ public static class SilPrinter {
                             .Append(literal.Value.ToString(CultureInfo.InvariantCulture));
                         break;
 
+                    case StringLiteralInst literal:
+                        builder.Append(' ').Append(Quote(literal.Value));
+                        break;
+
                     case FloatLiteralInst literal:
                         builder.Append(" $F64, ").Append(literal.Value.ToString("R", CultureInfo.InvariantCulture));
                         break;
@@ -144,5 +148,24 @@ public static class SilPrinter {
         }
 
         builder.Append("}\n");
+    }
+
+    /// <summary>A string as SIL text writes it: quoted, with escapes for what cannot appear bare.</summary>
+    public static string Quote(string value) {
+        var builder = new StringBuilder("\"");
+        foreach (var rune in value.EnumerateRunes()) {
+            switch (rune.Value) {
+                case '"': builder.Append("\\\""); break;
+                case '\\': builder.Append("\\\\"); break;
+                case '\n': builder.Append("\\n"); break;
+                case '\t': builder.Append("\\t"); break;
+                case < 0x20 or 0x7F:
+                    builder.Append("\\u{").Append(rune.Value.ToString("X", CultureInfo.InvariantCulture)).Append('}');
+                    break;
+                default: builder.Append(rune.ToString()); break;
+            }
+        }
+
+        return builder.Append('"').ToString();
     }
 }

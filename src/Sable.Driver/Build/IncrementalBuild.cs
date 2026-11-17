@@ -186,10 +186,6 @@ public static class IncrementalBuild {
         File.WriteAllLines(record, [buildKey, info.Length.ToString(), info.LastWriteTimeUtc.Ticks.ToString(), HashFile(executable)]);
     }
 
-    /// <summary>Forgets the executable's build, so that the next build is not skipped.</summary>
-    public static void Invalidate(string cacheDirectory, string executable) =>
-        File.Delete(Path.Combine(cacheDirectory, "builds", Sanitise(Path.GetFileName(executable)) + ".txt"));
-
     // =======================================================================
     // The whole program
     // =======================================================================
@@ -267,7 +263,7 @@ public static class IncrementalBuild {
 
         for (var i = 0; i < units.Count; i++) {
             var unit = units[i];
-            unit.Key = Hash($"{settingsKey}\nunit {unit.Name} #{i} entry={i == 0}\n{unit.ContentHash}\n{programInterface}");
+            unit.Key = Hash($"{settingsKey}\nunit {unit.Name}\n{unit.ContentHash}\n{programInterface}");
             unit.ObjectPath = Path.Combine(objects, unit.Key + ".o");
             unit.Cached = File.Exists(unit.ObjectPath) && File.Exists(unit.AbiPath);
         }
@@ -283,7 +279,7 @@ public static class IncrementalBuild {
             : Task.Run(() => NativeObjects.CompileRuntime(runtime, settings.Optimise, settings.Debug));
 
         var compiling = new List<(Unit Unit, Task<NativeBuildResult> Task)>();
-        using var throttle = new SemaphoreSlim(Environment.ProcessorCount);
+        var throttle = new SemaphoreSlim(Environment.ProcessorCount);
         if (stale.Count > 0) {
             Compilation compilation;
             List<string> errors;
@@ -370,7 +366,35 @@ public static class IncrementalBuild {
             return Whole(trees.SelectMany(static t => t).ToList(), settings, executable, timings);
         }
 
+        using (BuildTimings.Of(timings, "cache upkeep")) {
+            Collect(objects, units);
+        }
+
         return new(true, [], "incremental", stale.Count, units.Count - stale.Count);
+    }
+
+    /// <summary>
+    ///     Keeps the object cache from growing without end: each build marks
+    ///     the objects it used (through their <c>.abi</c> files — an object's
+    ///     own time is in the executable's debug map, and must not change),
+    ///     and past a limit the least recently used go.
+    /// </summary>
+    static void Collect(string objects, IReadOnlyList<Unit> used) {
+        var now = DateTime.UtcNow;
+        foreach (var unit in used) {
+            File.SetLastWriteTimeUtc(unit.AbiPath, now);
+        }
+
+        var limit = Math.Max(256, 8 * used.Count);
+        var markers = new DirectoryInfo(objects).GetFiles("*.abi");
+        if (markers.Length <= limit) {
+            return;
+        }
+
+        foreach (var marker in markers.OrderBy(static m => m.LastWriteTimeUtc).Take(markers.Length - limit)) {
+            File.Delete(Path.ChangeExtension(marker.FullName, ".o"));
+            marker.Delete();
+        }
     }
 
     /// <summary>A type two units laid out differently, or null when they all agree.</summary>

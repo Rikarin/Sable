@@ -218,6 +218,26 @@ public sealed class SilParser {
     SilModule ParseModule() {
         var module = new SilModule();
         _module = module;
+
+        // Every type's name first: a class or an array may name a type that
+        // contains it, so no order of declarations would do.
+        for (var i = 0; i + 1 < _tokens.Count; i++) {
+            if (_tokens[i] is { Kind: TokenKind.Word, Text: "sil_struct" or "sil_enum" or "sil_class" } keyword
+                && (i == 0 || _tokens[i - 1].Text != "$")
+                && _tokens[i + 1].Kind == TokenKind.Word) {
+                var name = _tokens[i + 1].Text;
+                if (module.FindType(name) is not null || name is "Int" or "Bool" or "F64" or "String" or "Char") {
+                    throw new SilParseException($"the type {name} is declared twice", _tokens[i + 1].Line);
+                }
+
+                module.AddType<NominalType>(keyword.Text switch {
+                    "sil_struct" => new StructType(name),
+                    "sil_enum" => new EnumType(name),
+                    _ => new ClassType(name),
+                });
+            }
+        }
+
         while (Current.Kind != TokenKind.End) {
             if (Accept("sil_struct")) {
                 ParseStruct();
@@ -226,6 +246,11 @@ public sealed class SilParser {
 
             if (Accept("sil_enum")) {
                 ParseEnum();
+                continue;
+            }
+
+            if (Accept("sil_class")) {
+                ParseClass();
                 continue;
             }
 
@@ -248,9 +273,7 @@ public sealed class SilParser {
     SilFunction _function = null!;
 
     void ParseStruct() {
-        var name = Expect(TokenKind.Word, "a struct name").Text;
-        DeclareType(name);
-        var type = _module.AddType(new StructType(name));
+        var type = (StructType)_module.FindType(Expect(TokenKind.Word, "a struct name").Text)!;
         Expect("{");
         if (!At("}")) {
             do {
@@ -263,10 +286,25 @@ public sealed class SilParser {
         Expect("}");
     }
 
+    void ParseClass() {
+        var type = (ClassType)_module.FindType(Expect(TokenKind.Word, "a class name").Text)!;
+        Expect("{");
+        if (!At("}")) {
+            do {
+                var field = Expect(TokenKind.Word, "a field name").Text;
+                Expect(":");
+                type.Fields.Add((field, ParseType()));
+            } while (Accept(","));
+        }
+
+        Expect("}");
+        if (Accept("deinit")) {
+            type.Deinit = Expect(TokenKind.Global, "the deinit function").Text;
+        }
+    }
+
     void ParseEnum() {
-        var name = Expect(TokenKind.Word, "an enum name").Text;
-        DeclareType(name);
-        var type = _module.AddType(new EnumType(name));
+        var type = (EnumType)_module.FindType(Expect(TokenKind.Word, "an enum name").Text)!;
         Expect("{");
         if (!At("}")) {
             do {
@@ -282,12 +320,6 @@ public sealed class SilParser {
         }
 
         Expect("}");
-    }
-
-    void DeclareType(string name) {
-        if (_module.FindType(name) is not null || name is "Int" or "Bool" or "F64" or "String") {
-            throw Error($"the type {name} is declared twice");
-        }
     }
 
     SilFunction ParseFunction() {
@@ -363,7 +395,12 @@ public sealed class SilParser {
             do {
                 var name = Expect(TokenKind.Local, "an argument name").Text;
                 Expect(":");
-                Define(name, block.AddArgument(ParseType()));
+                var guaranteed = Current is { Kind: TokenKind.Global, Text: "guaranteed" };
+                if (guaranteed) {
+                    Next();
+                }
+
+                Define(name, block.AddArgument(ParseType(), guaranteed));
                 if (Accept("var")) {
                     _function.ParameterNames.Add(Expect(TokenKind.String, "a parameter name").Text);
                 }
@@ -402,6 +439,12 @@ public sealed class SilParser {
             return SilType.Address(ParseTypeBody());
         }
 
+        if (Accept("[")) {
+            var element = ParseTypeBody();
+            Expect("]");
+            return new ArrayType(element);
+        }
+
         if (Accept("(")) {
             var parts = ImmutableArray.CreateBuilder<SilType>();
             if (!At(")")) {
@@ -437,6 +480,7 @@ public sealed class SilParser {
             "Bool" => SilType.Bool,
             "F64" => SilType.F64,
             "String" => SilType.String,
+            "Char" => SilType.Char,
             _ => _module.FindType(name) ?? throw Error($"unknown type '{name}'"),
         };
     }
@@ -651,12 +695,50 @@ public sealed class SilParser {
                 instruction = new DeallocStackInst(Operand(0));
                 break;
 
-            case "load":
+            case "load": {
                 Expect("[");
-                Expect("trivial");
+                var kind = Expect(TokenKind.Word, "'trivial', 'copy' or 'take'").Text switch {
+                    "trivial" => LoadKind.Trivial,
+                    "copy" => LoadKind.Copy,
+                    "take" => LoadKind.Take,
+                    var other => throw new SilParseException($"'{other}' is not a load kind", line),
+                };
                 Expect("]");
-                instruction = new LoadInst(Operand(0));
+                instruction = new LoadInst(Operand(0), kind);
                 break;
+            }
+
+            case "copy_value":
+                instruction = new CopyValueInst(Defined(Operand(0), opcode, line));
+                break;
+
+            case "destroy_value":
+                instruction = new DestroyValueInst(Operand(0));
+                break;
+
+            case "destroy_addr":
+                instruction = new DestroyAddrInst(Operand(0));
+                break;
+
+            case "alloc_ref":
+                instruction = new AllocRefInst(ParseType() as ClassType
+                    ?? throw new SilParseException("alloc_ref needs a class type", line));
+                break;
+
+            case "ref_element_addr": {
+                var reference = Defined(Operand(0), opcode, line);
+                Expect(",");
+                var field = Expect(TokenKind.Member, "a field").Text;
+                var classType = reference.Type as ClassType
+                    ?? throw new SilParseException("ref_element_addr needs a class reference", line);
+                var index = classType.FieldIndex(field);
+                if (index < 0) {
+                    throw new SilParseException($"{classType.Name} has no field #{field}", line);
+                }
+
+                instruction = new RefElementAddrInst(reference, index);
+                break;
+            }
 
             case "store": {
                 var value = Operand(0);

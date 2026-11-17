@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Text;
 using Sable.Symbols;
 using Sable.Syntax;
 
@@ -9,16 +10,18 @@ namespace Sable.SIL;
 /// </summary>
 /// <remarks>
 ///     <para>
-///         What lowers so far: <c>Int</c>, <c>Bool</c>, <c>F64</c>, string
-///         literals; structs, with their methods, <c>mutating</c> methods and
-///         initialisers; tuples; unions, enums and optionals, with
-///         <c>match</c>, <c>if let</c>, <c>if case</c>, <c>??</c> and
-///         <c>!</c>; <c>throws</c>, <c>try</c>, <c>try?</c>, <c>try!</c>,
-///         <c>try … catch</c>, <c>do</c>/<c>catch</c> and <c>throw</c>;
-///         <c>defer</c>; <c>if</c>, <c>guard</c>, <c>while</c>,
-///         <c>repeat</c>, <c>for</c> over a range, labelled jumps. Anything
-///         else is reported as not lowered yet, by construct, rather than
-///         lowered wrong.
+///         What lowers so far: <c>Int</c>, <c>Bool</c>, <c>F64</c>,
+///         <c>Char</c>; strings, with interpolation and the core's string
+///         members; growable arrays; structs, with their methods,
+///         <c>mutating</c> methods and initialisers; classes without
+///         inheritance, with initialisers, methods and <c>deinit</c>; tuples;
+///         unions, enums and optionals, with <c>match</c>, <c>if let</c>,
+///         <c>if case</c>, <c>??</c> and <c>!</c>; <c>throws</c>, <c>try</c>,
+///         <c>try?</c>, <c>try!</c>, <c>try … catch</c>, <c>do</c>/<c>catch</c>
+///         and <c>throw</c>; <c>defer</c>; <c>if</c>, <c>guard</c>,
+///         <c>while</c>, <c>repeat</c>, <c>for</c> over a range or an array,
+///         labelled jumps. Anything else is reported as not lowered yet, by
+///         construct, rather than lowered wrong.
 ///     </para>
 ///     <para>
 ///         Every local gets a stack slot: <c>alloc_stack</c> in the entry
@@ -26,6 +29,18 @@ namespace Sable.SIL;
 ///         <c>dealloc_stack</c> for each, in reverse, wherever the function
 ///         leaves. That is SIL's raw form, as Swift's SILGen produces it;
 ///         promotion to SSA values is a pass of its own.
+///     </para>
+///     <para>
+///         Ownership is naive and explicit (docs/04 §2.1, docs/02 §2.2): an
+///         expression's value is owned, +1; a parameter is borrowed, and copied
+///         where something must own it; a temporary is destroyed after its
+///         last use. A slot of a non-trivial type starts empty and is written
+///         with <c>store [assign]</c>, which destroys what it held, so a loop
+///         that declares a local releases the last iteration's value; every
+///         such slot is destroyed where the function leaves. Owned temporaries
+///         an expression holds while it evaluates the rest are kept on a stack,
+///         so that a <c>throw</c> or <c>return</c> partway through destroys
+///         them on its way out.
 ///     </para>
 ///     <para>
 ///         <c>defer</c> is lowered by emitting each deferred body on every
@@ -64,7 +79,7 @@ public sealed class SilGen {
         foreach (var tree in _compilation.SyntaxTrees) {
             var model = _compilation.GetSemanticModel(tree);
             foreach (var declaration in tree.Root.DescendantNodes()) {
-                if (declaration is not (FunctionDeclarationSyntax or InitDeclarationSyntax)) {
+                if (declaration is not (FunctionDeclarationSyntax or InitDeclarationSyntax or DeinitDeclarationSyntax)) {
                     continue;
                 }
 
@@ -117,20 +132,29 @@ public sealed class SilGen {
             new FunctionLowering(this, symbol, function, source).Lower(body);
             function.RemoveUnreachableBlocks();
             _module.Add(function);
+
+            if (symbol.FunctionKind == FunctionKind.Deinitializer && Lower(SelfType(symbol)) is ClassType classType) {
+                classType.Deinit = function.Name;
+            }
         }
     }
 
     /// <summary>
-    ///     A function of the module, or a member of a struct, union or enum.
-    ///     Local functions, class members and generics wait for closures,
-    ///     reference counting and specialisation.
+    ///     A function of the module, or a member of a struct, union, enum or
+    ///     class. Local functions, generics and classes that take part in
+    ///     inheritance wait for closures, specialisation and dynamic dispatch.
     /// </summary>
     static bool IsLowerable(FunctionSymbol symbol) =>
         symbol.ContainingSymbol switch {
             ModuleSymbol => true,
             NamedTypeSymbol { TypeKind: TypeKind.Struct or TypeKind.Union or TypeKind.Enum, TypeParameters.IsEmpty: true } => true,
+            NamedTypeSymbol { TypeKind: TypeKind.Class, TypeParameters.IsEmpty: true } type => IsFinalClass(type),
             _ => false,
         };
+
+    /// <summary>A class that neither inherits nor can be inherited from: every call to its members is direct.</summary>
+    static bool IsFinalClass(NamedTypeSymbol type) =>
+        !type.IsOpen && !type.IsAbstract && !type.BaseTypes.Any(static b => b.TypeKind == TypeKind.Class);
 
     /// <summary>
     ///     <c>Module.name</c>, <c>Module.Type.name</c> for a member, and the
@@ -143,7 +167,7 @@ public sealed class SilGen {
             var other => other?.Name,
         };
 
-        var name = $"{owner}.{symbol.Name}";
+        var name = $"{owner}.{(symbol.FunctionKind == FunctionKind.Deinitializer ? "deinit" : symbol.Name)}";
         return overloaded
             ? name + string.Concat(symbol.Parameters.Select(static p => "$" + Sanitise(p.Type.ToDisplayString())))
             : name;
@@ -173,7 +197,7 @@ public sealed class SilGen {
                 return Unsupported<FunctionType>(at, $"a member of '{SelfType(symbol).ToDisplayString()}'");
             }
 
-            parameters.Add(symbol.IsMutating ? SilType.Address(self) : self);
+            parameters.Add(symbol.IsMutating && self is not ClassType ? SilType.Address(self) : self);
         }
 
         foreach (var parameter in symbol.Parameters) {
@@ -207,18 +231,51 @@ public sealed class SilGen {
 
     static TypeSymbol SelfType(FunctionSymbol symbol) => (NamedTypeSymbol)symbol.ContainingSymbol!;
 
+    // =======================================================================
+    // Types
+    // =======================================================================
+
+    /// <summary>The language types lowered so far, in order, so that a failure can take back what it started.</summary>
+    readonly List<TypeSymbol> _lowered = [];
+
     /// <summary>The SIL type for a language type, or null when there is none yet.</summary>
+    /// <remarks>
+    ///     A named type is entered before its members are lowered, so that a
+    ///     member reaching it again through a reference — a class's own type,
+    ///     an array of it — finds it. One that holds itself by value has no
+    ///     size and no SIL type; nor has one with a member that has none, and
+    ///     every type begun while lowering it is taken back with it.
+    /// </remarks>
     internal SilType? Lower(TypeSymbol type) {
         if (_types.TryGetValue(type, out var cached)) {
             return cached;
         }
 
-        // A type that holds itself would need indirection; until there is
-        // some, meeting it again on the way down means no SIL type.
-        _types[type] = null;
-        var lowered = LowerUncached(type);
-        _types[type] = lowered;
-        return lowered;
+        var lowered = _lowered.Count;
+        var types = _module.Types.Count;
+        var result = LowerUncached(type);
+        if (result is null) {
+            // Take back every type begun inside this one.
+            foreach (var begun in _lowered.Skip(lowered)) {
+                _types.Remove(begun);
+            }
+
+            _lowered.RemoveRange(lowered, _lowered.Count - lowered);
+            foreach (var added in _module.Types.Skip(types).ToList()) {
+                _module.RemoveType(added);
+            }
+        }
+
+        _types[type] = result;
+        _lowered.Add(type);
+        return result;
+    }
+
+    /// <summary>Enters a named type before its members, so that they may refer to it.</summary>
+    T Begin<T>(TypeSymbol symbol, T type) where T : NominalType {
+        _types[symbol] = type;
+        _lowered.Add(symbol);
+        return _module.AddType(type);
     }
 
     SilType? LowerUncached(TypeSymbol type) {
@@ -232,6 +289,10 @@ public sealed class SilGen {
 
         if (type.Equals(Core.F64)) {
             return SilType.F64;
+        }
+
+        if (type.Equals(Core.Char)) {
+            return SilType.Char;
         }
 
         if (type.Equals(Core.Void)) {
@@ -256,6 +317,10 @@ public sealed class SilGen {
                 return SilType.Tuple(elements.ToImmutable());
             }
 
+            // The growable kinds, and the fixed one, share a counted buffer.
+            case ArrayTypeSymbol { ArrayKind: ArrayKind.Grow or ArrayKind.GrowShrink or ArrayKind.Fixed } array:
+                return Lower(array.ElementType) is { } elementType ? new ArrayType(elementType) : null;
+
             case OptionalTypeSymbol optional: {
                 if (Lower(optional.UnderlyingType) is not { } wrapped) {
                     return null;
@@ -266,29 +331,40 @@ public sealed class SilGen {
                     return existing;
                 }
 
-                var enumType = new EnumType(name);
+                var enumType = Begin(type, new EnumType(name));
                 enumType.Cases.Add(("Some", wrapped));
                 enumType.Cases.Add(("None", null));
-                return _module.AddType(enumType);
+                return HoldsItself(enumType) ? null : enumType;
             }
 
             case NamedTypeSymbol { TypeParameters.IsEmpty: true, TypeKind: TypeKind.Struct } named: {
-                var fields = new List<(string, SilType)>();
+                var structType = Begin(named, new StructType(TypeName(named)));
                 foreach (var field in StoredFields(named)) {
                     if (Lower(field.Type) is not { } fieldType) {
                         return null;
                     }
 
-                    fields.Add((field.Name, fieldType));
+                    structType.Fields.Add((field.Name, fieldType));
                 }
 
-                var structType = _module.AddType(new StructType(TypeName(named)));
-                structType.Fields.AddRange(fields);
-                return structType;
+                return HoldsItself(structType) ? null : structType;
+            }
+
+            case NamedTypeSymbol { TypeParameters.IsEmpty: true, TypeKind: TypeKind.Class } named when IsFinalClass(named): {
+                var classType = Begin(named, new ClassType(TypeName(named)));
+                foreach (var field in StoredFields(named)) {
+                    if (Lower(field.Type) is not { } fieldType) {
+                        return null;
+                    }
+
+                    classType.Fields.Add((field.Name, fieldType));
+                }
+
+                return classType;
             }
 
             case NamedTypeSymbol { TypeParameters.IsEmpty: true, TypeKind: TypeKind.Union } named: {
-                var cases = new List<(string, SilType?)>();
+                var enumType = Begin(named, new EnumType(TypeName(named)));
                 foreach (var unionCase in named.Members.OfType<UnionCaseSymbol>()) {
                     SilType? payload = null;
                     if (unionCase.Payload.Length > 0) {
@@ -304,16 +380,14 @@ public sealed class SilGen {
                         payload = parts.Count == 1 ? parts[0] : SilType.Tuple(parts.ToImmutable());
                     }
 
-                    cases.Add((unionCase.Name, payload));
+                    enumType.Cases.Add((unionCase.Name, payload));
                 }
 
-                var enumType = _module.AddType(new EnumType(TypeName(named)));
-                enumType.Cases.AddRange(cases);
-                return enumType;
+                return HoldsItself(enumType) ? null : enumType;
             }
 
             case NamedTypeSymbol { TypeKind: TypeKind.Enum } named: {
-                var enumType = _module.AddType(new EnumType(TypeName(named)));
+                var enumType = Begin(named, new EnumType(TypeName(named)));
                 foreach (var enumCase in named.Members.OfType<EnumCaseSymbol>()) {
                     enumType.Cases.Add((enumCase.Name, null));
                 }
@@ -324,6 +398,33 @@ public sealed class SilGen {
             default:
                 return null;
         }
+    }
+
+    /// <summary>True when a type contains itself by value — through no reference — and so has no size.</summary>
+    static bool HoldsItself(NominalType type) {
+        var seen = new HashSet<SilType>();
+        bool Reaches(SilType part) {
+            if (ReferenceEquals(part, type)) {
+                return true;
+            }
+
+            if (!seen.Add(part)) {
+                return false;
+            }
+
+            return part switch {
+                StructType structType => structType.Fields.Any(f => Reaches(f.Type)),
+                TupleType tuple => tuple.Elements.Any(Reaches),
+                EnumType enumType => enumType.Cases.Any(c => c.Payload is { } payload && Reaches(payload)),
+                _ => false, // a scalar, or something reached through a reference
+            };
+        }
+
+        return type switch {
+            StructType structType => structType.Fields.Any(f => Reaches(f.Type)),
+            EnumType enumType => enumType.Cases.Any(c => c.Payload is { } payload && Reaches(payload)),
+            _ => false,
+        };
     }
 
     static string TypeName(NamedTypeSymbol type) => $"{type.ContainingSymbol?.Name}.{type.Name}";
@@ -345,10 +446,10 @@ public sealed class SilGen {
             public override SilType Type => SilType.Unit;
         }
 
-        sealed record Loop(string? Label, SilBlock Break, SilBlock Continue, int Scopes);
+        sealed record Loop(string? Label, SilBlock Break, SilBlock Continue, int Scopes, int Temporaries);
 
-        /// <summary>Where an error goes: a block taking it, and how many defer scopes were open there.</summary>
-        sealed record Handler(SilBlock Block, SilType Type, int Scopes);
+        /// <summary>Where an error goes: a block taking it, and how many defer scopes and temporaries were open there.</summary>
+        sealed record Handler(SilBlock Block, SilType Type, int Scopes, int Temporaries);
 
         readonly Dictionary<ParameterSymbol, SilValue> _parameters = [];
         readonly Dictionary<LocalSymbol, AllocStackInst> _slots = [];
@@ -359,8 +460,19 @@ public sealed class SilGen {
         /// <summary>The deferred bodies of each open scope, innermost last.</summary>
         readonly List<List<BoundStatement>> _scopes = [];
 
+        /// <summary>
+        ///     Owned values an expression holds while it evaluates the rest of
+        ///     itself: what a <c>throw</c> or <c>return</c> from inside it must
+        ///     destroy on the way out.
+        /// </summary>
+        readonly List<SilValue> _temporaries = [];
+
         SilValue? _selfValue;
         SilValue? _selfAddress;
+
+        /// <summary>In a class's initialiser, the slot holding the object being built.</summary>
+        AllocStackInst? _selfObject;
+
         SilBlock? _current;
 
         /// <summary>The source position instructions emitted now belong to.</summary>
@@ -370,6 +482,7 @@ public sealed class SilGen {
             var position = source.GetLinePosition(syntax.Span.Start);
             _location = new SilLocation(position.Line, position.Column);
         }
+
         SilBlock _entry = null!;
         bool _failed;
 
@@ -382,7 +495,7 @@ public sealed class SilGen {
 
             if (HasSelf(symbol)) {
                 var self = _entry.AddArgument(parameterTypes[next++]);
-                if (symbol.IsMutating) {
+                if (self.Type is AddressType) {
                     _selfAddress = self;
                 } else {
                     _selfValue = self;
@@ -395,9 +508,15 @@ public sealed class SilGen {
 
             _current = _entry;
 
-            // An initialiser builds 'self' in a slot of its own, field by field.
+            // An initialiser builds 'self' in a slot of its own: a struct field
+            // by field, a class as an object whose fields are then written.
             if (symbol.FunctionKind == FunctionKind.Initializer) {
-                _selfAddress = NewSlot(function.Type.Result, "self");
+                if (function.Type.Result is ClassType classType) {
+                    _selfObject = NewSlot(classType, "self");
+                    Emit(new StoreInst(Emit(new AllocRefInst(classType)), _selfObject, StoreKind.Assign));
+                } else {
+                    _selfAddress = NewSlot(function.Type.Result, "self");
+                }
             }
 
             Statement(body);
@@ -408,7 +527,7 @@ public sealed class SilGen {
             // cannot be reached.
             if (_current is not null) {
                 if (symbol.FunctionKind == FunctionKind.Initializer) {
-                    Return(Emit(new LoadInst(_selfAddress!)));
+                    Return(TakeSelf());
                 } else if (function.Type.Result == SilType.Unit) {
                     Return(null);
                 } else {
@@ -440,6 +559,13 @@ public sealed class SilGen {
 
                 stub.Append(new UnreachableInst());
             }
+        }
+
+        /// <summary>What an initialiser returns: the value or object it built, taken out of its slot.</summary>
+        SilValue TakeSelf() {
+            var slot = _selfObject ?? _selfAddress!;
+            var type = ((AddressType)slot.Type).Pointee;
+            return Emit(new LoadInst(slot, type.IsTrivial ? LoadKind.Trivial : LoadKind.Take));
         }
 
         SilBlock? _throwBlock;
@@ -492,10 +618,146 @@ public sealed class SilGen {
             return _slots[local] = NewSlot(type, local.Name);
         }
 
+        /// <summary>Destroys what every non-trivial slot holds, then frees the slots, in reverse.</summary>
         void Deallocate() {
+            for (var i = _allocations.Count - 1; i >= 0; i--) {
+                if (!_allocations[i].ElementType.IsTrivial) {
+                    Emit(new DestroyAddrInst(_allocations[i]));
+                }
+            }
+
             for (var i = _allocations.Count - 1; i >= 0; i--) {
                 Emit(new DeallocStackInst(_allocations[i]));
             }
+        }
+
+        // -------------------------------------------------------------------
+        // Ownership
+        // -------------------------------------------------------------------
+
+        static bool IsOwned(SilValue value) =>
+            value is not UnitValue && SilVerifier.OwnershipOf(value) == Ownership.Owned;
+
+        /// <summary>A value something can take ownership of: itself if owned or trivial, else a copy.</summary>
+        SilValue Owned(SilValue value) =>
+            value is UnitValue || SilVerifier.OwnershipOf(value) != Ownership.Guaranteed
+                ? value
+                : Emit(new CopyValueInst(value));
+
+        /// <summary>The end of an owned value's life; nothing for a borrowed or trivial one.</summary>
+        void Destroy(SilValue value) {
+            if (IsOwned(value)) {
+                Emit(new DestroyValueInst(value));
+            }
+        }
+
+        /// <summary>Keeps an owned value on the temporaries while more of the expression is evaluated.</summary>
+        SilValue Hold(SilValue value) {
+            if (IsOwned(value)) {
+                _temporaries.Add(value);
+            }
+
+            return value;
+        }
+
+        /// <summary>Takes a held value back off the temporaries, for whatever consumes it next.</summary>
+        SilValue Unhold(SilValue value) {
+            if (IsOwned(value)) {
+                _temporaries.RemoveAt(_temporaries.LastIndexOf(value));
+            }
+
+            return value;
+        }
+
+        /// <summary>The end of a borrow: a temporary is taken off the temporaries and destroyed.</summary>
+        void End(SilValue value) => Destroy(Unhold(value));
+
+        /// <summary>Destroys, on the path being emitted, the temporaries above a depth, without forgetting them.</summary>
+        void DestroyTemporaries(int depth) {
+            for (var i = _temporaries.Count - 1; i >= depth; i--) {
+                Emit(new DestroyValueInst(_temporaries[i]));
+            }
+        }
+
+        /// <summary>
+        ///     An expression's value to use without taking it: a parameter or
+        ///     <c>self</c>, or a field of one, as it is; anything else evaluated
+        ///     and held as a temporary, to be <see cref="End" />ed after the use.
+        /// </summary>
+        SilValue? Borrow(BoundExpression expression) {
+            switch (expression) {
+                case BoundParameterAccess access when _parameters.TryGetValue(access.Parameter, out var parameter):
+                    return parameter;
+
+                case BoundSelfAccess when _selfValue is not null:
+                    return _selfValue;
+
+                case BoundConversion { ConversionKind: ConversionKind.Identity } conversion:
+                    return Borrow(conversion.Operand);
+
+                // A stored field of something borrowed is itself borrowed.
+                case BoundFieldAccess { Receiver: { } receiver, Field: { IsComputed: false, IsStatic: false } field }
+                    when receiver.Type.TypeKind == TypeKind.Struct && IsBorrowable(receiver): {
+                    if (Borrow(receiver) is not { Type: StructType structType } value) {
+                        return null;
+                    }
+
+                    var index = structType.FieldIndex(field.Name);
+                    return index < 0 ? Missing(expression, $"the member '{field.Name}'") : Emit(new StructExtractInst(value, index));
+                }
+
+                default:
+                    return Expression(expression) is { } owned ? Hold(owned) : null;
+            }
+        }
+
+        /// <summary>True for an expression <see cref="Borrow" /> reaches without evaluating anything owned.</summary>
+        bool IsBorrowable(BoundExpression expression) =>
+            expression switch {
+                BoundParameterAccess access => _parameters.ContainsKey(access.Parameter),
+                BoundSelfAccess => _selfValue is not null,
+                BoundConversion { ConversionKind: ConversionKind.Identity } conversion => IsBorrowable(conversion.Operand),
+                BoundFieldAccess { Receiver: { } receiver, Field: { IsComputed: false, IsStatic: false } }
+                    => receiver.Type.TypeKind == TypeKind.Struct && IsBorrowable(receiver),
+                _ => false,
+            };
+
+        /// <summary>Evaluates expressions in order, holding each while the next is evaluated.</summary>
+        List<SilValue>? Evaluate(IEnumerable<BoundExpression> expressions) {
+            var values = new List<SilValue>();
+            foreach (var expression in expressions) {
+                if (Expression(expression) is not { } value) {
+                    values.ForEach(v => Unhold(v));
+                    return null;
+                }
+
+                values.Add(Hold(value));
+            }
+
+            // Whatever consumes them next owns them.
+            for (var i = values.Count - 1; i >= 0; i--) {
+                Unhold(values[i]);
+            }
+
+            return values;
+        }
+
+        /// <summary>A payload argument for a <c>switch_enum</c> case block: borrowed from the enum.</summary>
+        static SilArgument Payload(SilBlock block, SilType type) => block.AddArgument(type, !type.IsTrivial);
+
+        /// <summary>A block that destroys a value and goes on to another; or the other itself, when there is nothing to destroy.</summary>
+        SilBlock Destroying(SilValue value, SilBlock target) {
+            if (!IsOwned(value)) {
+                return target;
+            }
+
+            var saved = _current;
+            var block = function.AddBlock();
+            _current = block;
+            Destroy(value);
+            Branch(target);
+            _current = saved;
+            return block;
         }
 
         /// <summary>Runs the deferred bodies of every scope deeper than <paramref name="depth" />, innermost first.</summary>
@@ -521,6 +783,8 @@ public sealed class SilGen {
         SilBlock? _returnBlock;
 
         void Return(SilValue? value) {
+            // A return from inside an expression leaves its temporaries behind.
+            DestroyTemporaries(0);
             RunDefers(0);
 
             if (_returnBlock is null) {
@@ -533,7 +797,7 @@ public sealed class SilGen {
             if (function.Type.Result == SilType.Unit) {
                 Branch(_returnBlock);
             } else if (value is not null and not UnitValue) {
-                Branch(_returnBlock, value);
+                Branch(_returnBlock, Owned(value));
             }
         }
 
@@ -549,8 +813,9 @@ public sealed class SilGen {
                 return;
             }
 
+            DestroyTemporaries(handler.Temporaries);
             RunDefers(handler.Scopes);
-            Branch(handler.Block, error);
+            Branch(handler.Block, Owned(error));
         }
 
         /// <summary>The function's own throw, as a handler.</summary>
@@ -566,7 +831,7 @@ public sealed class SilGen {
             }
 
             _ = errorType;
-            return new(_throwBlock, thrown, 0);
+            return new(_throwBlock, thrown, 0, 0);
         }
 
         // -------------------------------------------------------------------
@@ -604,9 +869,7 @@ public sealed class SilGen {
                     if (declaration.Initializer is { } initializer
                         && SlotFor(declaration.Local, declaration.Syntax) is { } slot
                         && Expression(initializer) is { } initial) {
-                        // A declaration fills an empty slot; only a later
-                        // assignment replaces a value.
-                        Emit(new StoreInst(initial, slot, StoreKind.Init));
+                        Store(initial, slot, declaration: true);
                     }
 
                     return;
@@ -619,15 +882,21 @@ public sealed class SilGen {
                     // Irrefutable, so the failing branch cannot be taken.
                     var matched = function.AddBlock();
                     var failed = function.AddBlock();
+                    Hold(value);
                     Pattern(declaration.Pattern, value, matched, failed);
+                    Unhold(value);
                     _current = failed;
                     Jump(new UnreachableInst());
                     _current = matched;
+                    Destroy(value);
                     return;
                 }
 
                 case BoundExpressionStatement expression:
-                    Expression(expression.Expression);
+                    if (Expression(expression.Expression) is { } discarded) {
+                        Destroy(discarded);
+                    }
+
                     return;
 
                 case BoundReturn returnStatement: {
@@ -636,7 +905,7 @@ public sealed class SilGen {
                             Return(value);
                         }
                     } else if (symbol.FunctionKind == FunctionKind.Initializer) {
-                        Return(Emit(new LoadInst(_selfAddress!)));
+                        Return(TakeSelf());
                     } else {
                         Return(null);
                     }
@@ -697,12 +966,18 @@ public sealed class SilGen {
                     ForRange(loop, range);
                     return;
 
+                case BoundForEach { Sequence.Type: ArrayTypeSymbol } loop:
+                    ForArray(loop);
+                    return;
+
                 case BoundBreak jump when FindLoop(jump.Label) is { } breakLoop:
+                    DestroyTemporaries(breakLoop.Temporaries);
                     RunDefers(breakLoop.Scopes);
                     Branch(breakLoop.Break);
                     return;
 
                 case BoundContinue jump when FindLoop(jump.Label) is { } continueLoop:
+                    DestroyTemporaries(continueLoop.Temporaries);
                     RunDefers(continueLoop.Scopes);
                     Branch(continueLoop.Continue);
                     return;
@@ -716,6 +991,14 @@ public sealed class SilGen {
                     return;
             }
         }
+
+        /// <summary>
+        ///     Stores an owned value: <c>[init]</c> for a trivial declaration, as
+        ///     its slot is fresh; <c>[assign]</c> otherwise, which destroys any
+        ///     value the storage held — the last iteration's, in a loop.
+        /// </summary>
+        void Store(SilValue value, SilValue address, bool declaration = false) =>
+            Emit(new StoreInst(Owned(value), address, declaration && value.Type.IsTrivial ? StoreKind.Init : StoreKind.Assign));
 
         void If(BoundIf ifStatement) {
             var after = function.AddBlock();
@@ -820,9 +1103,63 @@ public sealed class SilGen {
             _current = after;
         }
 
+        /// <summary>
+        ///     <c>for x in array</c>: a counting loop over the array, which is
+        ///     kept in a slot of its own so that every way out of the loop
+        ///     releases it with the rest.
+        /// </summary>
+        void ForArray(BoundForEach loop) {
+            if (loop.Element is null || Expression(loop.Sequence) is not { Type: ArrayType arrayType } sequence
+                || SlotFor(loop.Element, loop.Syntax) is not { } element) {
+                Fail(loop.Syntax, "this 'for' over an array");
+                return;
+            }
+
+            var array = NewSlot(arrayType);
+            Emit(new StoreInst(sequence, array, StoreKind.Assign));
+            var counter = NewSlot(SilType.Int);
+            Emit(new StoreInst(Emit(new IntegerLiteralInst(SilType.Int, 0)), counter, StoreKind.Init));
+
+            var header = function.AddBlock();
+            var body = function.AddBlock();
+            var step = function.AddBlock();
+            var after = function.AddBlock();
+            Branch(header);
+
+            _current = header;
+            var current = Emit(new LoadInst(counter));
+            var held = Emit(new LoadInst(array));
+            var count = Emit(new BuiltinInst("array_count", SilType.Int, held));
+            Destroy(held);
+            Jump(new CondBranchInst(Emit(new BuiltinInst("cmp_lt_Int", SilType.Bool, current, count)), body, [], after, []));
+
+            _current = body;
+            var again = Emit(new LoadInst(array));
+            var value = Emit(new BuiltinInst("array_get", arrayType.Element, again, Emit(new LoadInst(counter))));
+            Destroy(again);
+            Store(value, element);
+            if (loop.Filter is { } filter) {
+                var filtered = function.AddBlock();
+                Condition(filter, filtered, step);
+                _current = filtered;
+            }
+
+            InLoop(loop, after, step, () => Statement(loop.Body));
+            if (_current is not null) {
+                Branch(step);
+            }
+
+            _current = step;
+            var one = Emit(new IntegerLiteralInst(SilType.Int, 1));
+            Emit(new StoreInst(Emit(new BuiltinInst("add_Int", SilType.Int, Emit(new LoadInst(counter)), one)), counter, StoreKind.Assign));
+            Branch(header);
+
+            _current = after;
+        }
+
         void InLoop(BoundStatement loop, SilBlock breakTarget, SilBlock continueTarget, Action body) {
             var label = loop.Syntax.Parent is LabeledStatementSyntax { Label.Text: { Length: > 0 } text } ? text : null;
-            _loops.Add(new(label, breakTarget, continueTarget, _scopes.Count));
+            _loops.Add(new(label, breakTarget, continueTarget, _scopes.Count, _temporaries.Count));
             body();
             _loops.RemoveAt(_loops.Count - 1);
         }
@@ -860,7 +1197,7 @@ public sealed class SilGen {
             var dispatch = function.AddBlock();
             var error = dispatch.AddArgument(errorType);
 
-            _handlers.Add(new(dispatch, errorType, _scopes.Count));
+            _handlers.Add(new(dispatch, errorType, _scopes.Count, _temporaries.Count));
             Statement(doStatement.Body);
             _handlers.RemoveAt(_handlers.Count - 1);
             if (_current is not null) {
@@ -869,12 +1206,13 @@ public sealed class SilGen {
 
             // Each catch in turn; one that does not match, or whose guard
             // fails, passes the error to the next, and the last to whatever
-            // handles errors outside.
+            // handles errors outside. The error lives until a catch is chosen.
             _current = dispatch;
             foreach (var clause in doStatement.Catches) {
                 var handler = function.AddBlock();
                 var next = function.AddBlock();
 
+                Hold(error);
                 if (clause.Pattern is { } pattern) {
                     Pattern(pattern, error, handler, next);
                 } else {
@@ -883,7 +1221,7 @@ public sealed class SilGen {
 
                 _current = handler;
                 if (clause.ErrorLocal is { } local && SlotFor(local, clause.Syntax) is { } slot) {
-                    Emit(new StoreInst(error, slot, StoreKind.Assign));
+                    Store(error.Type.IsTrivial ? error : Emit(new CopyValueInst(error)), slot);
                 }
 
                 if (clause.Guard is { } guard) {
@@ -892,6 +1230,8 @@ public sealed class SilGen {
                     _current = guarded;
                 }
 
+                Unhold(error);
+                Destroy(error);
                 Statement(clause.Body);
                 if (_current is not null) {
                     Branch(after);
@@ -902,8 +1242,10 @@ public sealed class SilGen {
 
             // Nothing caught it: on to whatever handles errors outside — unless
             // the last catch takes everything, when nothing gets this far.
+            // Where nothing outside could take it, the binder has checked
+            // that the catches cover every error.
             var last = doStatement.Catches[^1];
-            if (last.Pattern is null && last.Guard is null) {
+            if (last.Pattern is null && last.Guard is null || _handlers.Count == 0 && function.Type.Thrown is null) {
                 Jump(new UnreachableInst());
             } else {
                 RouteError(error, doStatement.Syntax);
@@ -968,10 +1310,11 @@ public sealed class SilGen {
                     }
 
                     var bound = function.AddBlock();
-                    var payload = bound.AddArgument(optionalType.Cases[some].Payload!);
-                    Jump(new SwitchEnumInst(optional, [(some, bound)], whenFalse));
+                    var payload = Payload(bound, optionalType.Cases[some].Payload!);
+                    Jump(new SwitchEnumInst(optional, [(some, bound)], Destroying(optional, whenFalse)));
                     _current = bound;
-                    Emit(new StoreInst(payload, slot, StoreKind.Assign));
+                    Emit(new StoreInst(Owned(payload), slot, StoreKind.Assign));
+                    Destroy(optional);
                     Branch(whenTrue);
                     return;
                 }
@@ -979,7 +1322,9 @@ public sealed class SilGen {
                 // 'if case .Circle(let r) = shape'.
                 case BoundConditionBinding { Pattern: { } pattern } binding: {
                     if (Expression(binding.Source) is { } value) {
-                        Pattern(pattern, value, whenTrue, whenFalse);
+                        Hold(value);
+                        Pattern(pattern, value, Destroying(value, whenTrue), Destroying(value, whenFalse));
+                        Unhold(value);
                     }
 
                     return;
@@ -997,6 +1342,7 @@ public sealed class SilGen {
         /// <summary>
         ///     Tests a value against a pattern, binding what it names, and goes
         ///     to <paramref name="matched" /> or <paramref name="failed" />.
+        ///     The value is borrowed; a binding stores a copy.
         /// </summary>
         void Pattern(BoundPattern pattern, SilValue value, SilBlock matched, SilBlock failed) {
             if (_failed) {
@@ -1010,7 +1356,7 @@ public sealed class SilGen {
 
                 case BoundBindingPattern binding:
                     if (SlotFor(binding.Local, binding.Syntax) is { } slot) {
-                        Emit(new StoreInst(value, slot, StoreKind.Assign));
+                        Emit(new StoreInst(Owned(value), slot, StoreKind.Assign));
                         Branch(matched);
                     }
 
@@ -1026,6 +1372,7 @@ public sealed class SilGen {
                     }
 
                     var equal = Emit(new BuiltinInst($"cmp_eq_{value.Type}", SilType.Bool, value, constant));
+                    Destroy(constant);
                     Jump(new CondBranchInst(equal, matched, [], failed, []));
                     return;
                 }
@@ -1066,7 +1413,7 @@ public sealed class SilGen {
                     var index = enumType.CaseIndex(unionCase.UnionCase.Name);
                     var target = function.AddBlock();
                     var payloadType = enumType.Cases[index].Payload;
-                    var payload = payloadType is null ? null : target.AddArgument(payloadType);
+                    var payload = payloadType is null ? null : Payload(target, payloadType);
                     Jump(new SwitchEnumInst(value, [(index, target)], failed));
                     _current = target;
 
@@ -1122,6 +1469,7 @@ public sealed class SilGen {
         // Expressions
         // -------------------------------------------------------------------
 
+        /// <summary>Lowers an expression to an owned value — or a trivial one, or <see cref="UnitValue" />.</summary>
         SilValue? Expression(BoundExpression expression) {
             if (_failed) {
                 return null;
@@ -1131,12 +1479,19 @@ public sealed class SilGen {
                 case BoundLiteral literal:
                     return Literal(literal, literal.Type);
 
+                case BoundInterpolatedString interpolated:
+                    return Interpolation(interpolated);
+
                 case BoundConversion { ConversionKind: ConversionKind.Identity } conversion:
                     return Expression(conversion.Operand);
 
                 // A literal taking the type the context asked for: 'let x: F64 = 1'.
                 case BoundConversion { ConversionKind: ConversionKind.LiteralTyping, Operand: BoundLiteral literal } conversion:
                     return Literal(literal, conversion.Type);
+
+                // An array literal taking the kind of array the context asked for.
+                case BoundConversion { ConversionKind: ConversionKind.LiteralTyping, Operand: BoundArray array } conversion:
+                    return ArrayLiteral(array, conversion.Type);
 
                 case BoundConversion { ConversionKind: ConversionKind.OptionalWrap } conversion:
                     return Wrap(conversion);
@@ -1149,51 +1504,58 @@ public sealed class SilGen {
                     return NumericConversion(conversion);
 
                 case BoundParameterAccess access when _parameters.TryGetValue(access.Parameter, out var parameter):
-                    return parameter;
+                    return Owned(parameter);
 
                 case BoundLocalAccess access when _slots.TryGetValue(access.Local, out var slot):
                     return Emit(new LoadInst(slot));
 
                 case BoundSelfAccess:
-                    return _selfValue ?? (_selfAddress is { } self ? Emit(new LoadInst(self)) : Missing(expression, "'self' here"));
-
-                case BoundAssignment assignment: {
-                    if (Expression(assignment.Value) is not { } value || Address(assignment.Target) is not { } address) {
-                        return null;
+                    if (_selfValue is { } selfValue) {
+                        return Owned(selfValue);
                     }
 
-                    Emit(new StoreInst(value, address, StoreKind.Assign));
-                    return value;
-                }
-
-                case BoundFieldAccess { Receiver: { } receiver, Field: { IsComputed: false, IsStatic: false } field }: {
-                    if (Expression(receiver) is not { } value) {
-                        return null;
+                    if ((_selfObject ?? _selfAddress) is { } selfSlot) {
+                        return Emit(new LoadInst(selfSlot));
                     }
 
-                    var index = (value.Type as StructType)?.FieldIndex(field.Name) ?? -1;
-                    return index < 0
-                        ? Missing(expression, $"the member '{field.Name}'")
-                        : Emit(new StructExtractInst(value, index));
+                    return Missing(expression, "'self' here");
+
+                case BoundAssignment assignment:
+                    return Assignment(assignment);
+
+                case BoundFieldAccess { Receiver: { } receiver, Field.IsComputed: true } access:
+                    return ComputedProperty(access, receiver);
+
+                case BoundFieldAccess { Receiver: { } receiver, Field: { IsComputed: false, IsStatic: false } field } access:
+                    return FieldAccess(access, receiver, field);
+
+                case BoundTupleElementAccess element: {
+                    if (element.Receiver.Type is TupleTypeSymbol && !IsTrivialType(element.Receiver.Type) && Place(element) is { } place) {
+                        return Emit(new LoadInst(place));
+                    }
+
+                    if (Borrow(element.Receiver) is not { Type: TupleType } elementOf) {
+                        return Missing(expression, "this tuple element");
+                    }
+
+                    var extracted = Owned(Emit(new TupleExtractInst(elementOf, element.Index)));
+                    End(elementOf);
+                    return extracted;
                 }
 
-                case BoundTupleElementAccess element:
-                    return Expression(element.Receiver) is { Type: TupleType } elementOf
-                        ? Emit(new TupleExtractInst(elementOf, element.Index))
-                        : Missing(expression, "this tuple element");
+                case BoundIndexAccess index:
+                    return IndexRead(index);
 
                 case BoundTuple tuple: {
-                    var elements = new List<SilValue>();
-                    foreach (var element in tuple.Elements) {
-                        if (Expression(element) is not { } value) {
-                            return null;
-                        }
-
-                        elements.Add(value);
+                    if (Evaluate(tuple.Elements) is not { } elements) {
+                        return null;
                     }
 
                     return Emit(new TupleInst(new TupleType([..elements.Select(static e => e.Type)]), [..elements]));
                 }
+
+                case BoundArray array:
+                    return ArrayLiteral(array, array.Type);
 
                 case BoundRecordExpression record:
                     return Record(record);
@@ -1252,17 +1614,138 @@ public sealed class SilGen {
                     return Call(call);
 
                 default:
-                    return Missing(expression, $"the expression '{Describe(expression.Syntax)}'");
+                    return Missing(expression, $"the expression '{Describe(expression.Syntax)}' ({expression.GetType().Name}{(expression is BoundConversion c ? " " + c.ConversionKind : "")})");
             }
         }
+
+        bool IsTrivialType(TypeSymbol type) => generator.Lower(type)?.IsTrivial ?? true;
 
         SilValue? Missing(BoundNode node, string what) {
             Fail(node.Syntax, what);
             return null;
         }
 
-        /// <summary>Where an assignment stores: a local, <c>self</c>, or a field or element inside one.</summary>
-        SilValue? Address(BoundExpression target) {
+        SilValue? Assignment(BoundAssignment assignment) {
+            if (Expression(assignment.Value) is not { } value) {
+                return null;
+            }
+
+            Hold(value);
+
+            // 'a[i] = v': the array, made unique, takes the value.
+            if (assignment.Target is BoundIndexAccess { Indices: [var indexExpression] } indexAccess
+                && indexAccess.Receiver.Type is ArrayTypeSymbol) {
+                var ends = new List<SilValue>();
+                if (Address(indexAccess.Receiver, ends) is not { } arrayAddress || Expression(indexExpression) is not { } index) {
+                    return null;
+                }
+
+                Unhold(value);
+                Emit(new BuiltinInst("array_set", SilType.Unit, arrayAddress, index, value));
+                EndAll(ends);
+                return UnitValue.Instance;
+            }
+
+            var borrows = new List<SilValue>();
+            if (Address(assignment.Target, borrows) is not { } address) {
+                return null;
+            }
+
+            Unhold(value);
+            Emit(new StoreInst(value, address, StoreKind.Assign));
+            EndAll(borrows);
+            return value.Type.IsTrivial ? value : UnitValue.Instance;
+        }
+
+        void EndAll(List<SilValue> borrows) {
+            for (var i = borrows.Count - 1; i >= 0; i--) {
+                End(borrows[i]);
+            }
+        }
+
+        SilValue? FieldAccess(BoundFieldAccess access, BoundExpression receiver, FieldSymbol field) {
+            // A field of an object: through its address, while the object is borrowed.
+            if (receiver.Type.TypeKind == TypeKind.Class) {
+                if (Borrow(receiver) is not { Type: ClassType classType } reference) {
+                    return null;
+                }
+
+                var index = classType.FieldIndex(field.Name);
+                if (index < 0) {
+                    return Missing(access, $"the member '{field.Name}'");
+                }
+
+                var loaded = Emit(new LoadInst(Emit(new RefElementAddrInst(reference, index))));
+                End(reference);
+                return loaded;
+            }
+
+            // A field of something in memory, read without copying the whole of it.
+            if (!IsTrivialType(receiver.Type) && !IsBorrowable(access) && Place(access) is { } place) {
+                return Emit(new LoadInst(place));
+            }
+
+            if (!IsTrivialType(receiver.Type)) {
+                if (Borrow(receiver) is not { Type: StructType borrowedType } borrowed) {
+                    return null;
+                }
+
+                var borrowedIndex = borrowedType.FieldIndex(field.Name);
+                if (borrowedIndex < 0) {
+                    return Missing(access, $"the member '{field.Name}'");
+                }
+
+                var copy = Owned(Emit(new StructExtractInst(borrowed, borrowedIndex)));
+                End(borrowed);
+                return copy;
+            }
+
+            if (Expression(receiver) is not { } value) {
+                return null;
+            }
+
+            var fieldIndex = (value.Type as StructType)?.FieldIndex(field.Name) ?? -1;
+            return fieldIndex < 0
+                ? Missing(access, $"the member '{field.Name}'")
+                : Emit(new StructExtractInst(value, fieldIndex));
+        }
+
+        /// <summary>
+        ///     The address of a local, of <c>self</c> in memory, or of a field or
+        ///     element inside one — reached without evaluating anything — or null.
+        /// </summary>
+        SilValue? Place(BoundExpression expression) {
+            switch (expression) {
+                case BoundLocalAccess local when _slots.TryGetValue(local.Local, out var slot):
+                    return slot;
+
+                case BoundSelfAccess when _selfAddress is { } self:
+                    return self;
+
+                case BoundFieldAccess { Receiver: { } receiver, Field: { IsComputed: false, IsStatic: false } field }
+                    when receiver.Type.TypeKind == TypeKind.Struct: {
+                    if (Place(receiver) is not { Type: AddressType { Pointee: StructType structType } } address) {
+                        return null;
+                    }
+
+                    var index = structType.FieldIndex(field.Name);
+                    return index < 0 ? null : Emit(new StructElementAddrInst(address, index));
+                }
+
+                case BoundTupleElementAccess element when Place(element.Receiver) is { Type: AddressType { Pointee: TupleType } } tuple:
+                    return Emit(new TupleElementAddrInst(tuple, element.Index));
+
+                default:
+                    return null;
+            }
+        }
+
+        /// <summary>
+        ///     Where an assignment stores: a local, <c>self</c>, or a field or
+        ///     element inside one, or a field of an object. An object reached
+        ///     on the way is borrowed until the caller ends <paramref name="borrows" />.
+        /// </summary>
+        SilValue? Address(BoundExpression target, List<SilValue> borrows) {
             switch (target) {
                 case BoundLocalAccess local:
                     return SlotFor(local.Local, local.Syntax);
@@ -1270,8 +1753,21 @@ public sealed class SilGen {
                 case BoundSelfAccess when _selfAddress is { } self:
                     return self;
 
+                case BoundFieldAccess { Receiver: { } receiver, Field: { IsComputed: false, IsStatic: false } field }
+                    when receiver.Type.TypeKind == TypeKind.Class: {
+                    if (Borrow(receiver) is not { Type: ClassType classType } reference) {
+                        return null;
+                    }
+
+                    borrows.Add(reference);
+                    var index = classType.FieldIndex(field.Name);
+                    return index < 0
+                        ? Missing(target, $"storing to '{field.Name}'")
+                        : Emit(new RefElementAddrInst(reference, index));
+                }
+
                 case BoundFieldAccess { Receiver: { } receiver, Field: { IsComputed: false, IsStatic: false } field }: {
-                    if (Address(receiver) is not { } address) {
+                    if (Address(receiver, borrows) is not { } address) {
                         return null;
                     }
 
@@ -1283,7 +1779,7 @@ public sealed class SilGen {
                 }
 
                 case BoundTupleElementAccess element:
-                    return Address(element.Receiver) is { } tuple
+                    return Address(element.Receiver, borrows) is { } tuple
                         ? Emit(new TupleElementAddrInst(tuple, element.Index))
                         : null;
 
@@ -1321,6 +1817,10 @@ public sealed class SilGen {
                 return Emit(new IntegerLiteralInst(SilType.Bool, flag ? 1 : 0));
             }
 
+            if (type == SilType.Char && value is Rune scalar) {
+                return Emit(new IntegerLiteralInst(SilType.Char, scalar.Value));
+            }
+
             if (type == SilType.Int && value is long or int or ulong) {
                 var number = System.Convert.ToDecimal(value);
                 if (negative) {
@@ -1344,6 +1844,64 @@ public sealed class SilGen {
             return null;
         }
 
+        /// <summary>
+        ///     <c>"x = \(x)"</c>: the text and the holes, each as a string,
+        ///     joined left to right.
+        /// </summary>
+        SilValue? Interpolation(BoundInterpolatedString interpolated) {
+            if (interpolated.Syntax is not InterpolatedStringExpressionSyntax syntax) {
+                return Missing(interpolated, "this interpolated string");
+            }
+
+            SilValue? result = null;
+            var hole = 0;
+            foreach (var content in syntax.Contents) {
+                SilValue? piece;
+                if (content is InterpolatedTextSyntax text) {
+                    var value = text.TextToken.Value as string ?? "";
+                    if (value.Length == 0) {
+                        continue;
+                    }
+
+                    piece = Emit(new StringLiteralInst(value));
+                } else {
+                    if (hole >= interpolated.Parts.Length || Expression(interpolated.Parts[hole]) is not { } part) {
+                        return null;
+                    }
+
+                    piece = Stringify(part, interpolated.Parts[hole]);
+                    hole++;
+                    if (piece is null) {
+                        return null;
+                    }
+                }
+
+                if (result is null) {
+                    result = Hold(piece);
+                    continue;
+                }
+
+                var joined = Emit(new BuiltinInst("string_concat", SilType.String, result, piece));
+                Destroy(piece);
+                End(result);
+                result = Hold(joined);
+            }
+
+            return result is null ? Emit(new StringLiteralInst("")) : Unhold(result);
+        }
+
+        /// <summary>A value as a string, for interpolation: a string itself, or the scalars written out.</summary>
+        SilValue? Stringify(SilValue value, BoundNode at) {
+            if (value.Type == SilType.String) {
+                return value;
+            }
+
+            var name = $"string_from_{value.Type}";
+            return SilBuiltins.Find(name) is not null
+                ? Emit(new BuiltinInst(name, SilType.String, value))
+                : Missing(at, $"interpolating a value of type {value.Type}");
+        }
+
         SilValue? Wrap(BoundConversion conversion) {
             if (generator.Lower(conversion.Type) is not EnumType optional) {
                 return Missing(conversion, $"an optional of '{conversion.Operand.Type.ToDisplayString()}'");
@@ -1364,7 +1922,7 @@ public sealed class SilGen {
 
             var some = optional.CaseIndex("Some");
             var present = function.AddBlock();
-            var payload = present.AddArgument(optional.Cases[some].Payload!);
+            var payload = Payload(present, optional.Cases[some].Payload!);
             var absent = function.AddBlock();
             Jump(new SwitchEnumInst(value, [(some, present)], absent));
 
@@ -1373,7 +1931,9 @@ public sealed class SilGen {
             Jump(new UnreachableInst());
 
             _current = present;
-            return payload;
+            var result = Owned(payload);
+            Destroy(value);
+            return result;
         }
 
         SilValue? NumericConversion(BoundConversion conversion) {
@@ -1396,18 +1956,21 @@ public sealed class SilGen {
                 return Missing(record, $"a record of type '{record.Type.ToDisplayString()}'");
             }
 
-            var fields = new SilValue?[structType.Fields.Count];
-            foreach (var (field, initializer) in record.Fields) {
-                if (Expression(initializer) is not { } value) {
-                    return null;
-                }
-
-                fields[structType.FieldIndex(field.Name)] = value;
+            if (Evaluate(record.Fields.Select(static f => f.Value)) is not { } values) {
+                return null;
             }
 
-            return fields.Any(static f => f is null)
-                ? Missing(record, "a record that leaves a field to its default")
-                : Emit(new StructInst(structType, [..fields!]));
+            var fields = new SilValue?[structType.Fields.Count];
+            for (var i = 0; i < values.Count; i++) {
+                fields[structType.FieldIndex(record.Fields[i].Field.Name)] = values[i];
+            }
+
+            if (fields.Any(static f => f is null)) {
+                values.ForEach(Destroy);
+                return Missing(record, "a record that leaves a field to its default");
+            }
+
+            return Emit(new StructInst(structType, [..fields!]));
         }
 
         SilValue? UnionCase(TypeSymbol unionType, string name, IReadOnlyList<BoundExpression> arguments, BoundNode at) {
@@ -1417,13 +1980,8 @@ public sealed class SilGen {
                 return Missing(at, $"the case '{name}'");
             }
 
-            var values = new List<SilValue>();
-            foreach (var argument in arguments) {
-                if (Expression(argument) is not { } value) {
-                    return null;
-                }
-
-                values.Add(value);
+            if (Evaluate(arguments) is not { } values) {
+                return null;
             }
 
             SilValue? payload = values.Count switch {
@@ -1435,6 +1993,48 @@ public sealed class SilGen {
             return Emit(new EnumInst(enumType, index, payload));
         }
 
+        /// <summary><c>[a, b]</c>: an empty array in a slot of its own, each element appended, then taken out.</summary>
+        SilValue? ArrayLiteral(BoundArray array, TypeSymbol type) {
+            if (generator.Lower(type) is not ArrayType arrayType) {
+                return Missing(array, $"an array of type '{type.ToDisplayString()}'");
+            }
+
+            var empty = Emit(new BuiltinInst("array_empty", arrayType));
+            if (array.Elements.IsEmpty) {
+                return empty;
+            }
+
+            var slot = NewSlot(arrayType);
+            Emit(new StoreInst(empty, slot, StoreKind.Assign));
+            foreach (var element in array.Elements) {
+                if (Expression(element) is not { } value) {
+                    return null;
+                }
+
+                Emit(new BuiltinInst("array_append", SilType.Unit, slot, value));
+            }
+
+            return Emit(new LoadInst(slot, LoadKind.Take));
+        }
+
+        SilValue? IndexRead(BoundIndexAccess index) {
+            if (index.Receiver.Type is not ArrayTypeSymbol || index.Indices is not [var indexExpression]) {
+                return Missing(index, $"indexing '{index.Receiver.Type.ToDisplayString()}'");
+            }
+
+            if (Borrow(index.Receiver) is not { Type: ArrayType arrayType } array) {
+                return null;
+            }
+
+            if (Expression(indexExpression) is not { } position) {
+                return null;
+            }
+
+            var element = Emit(new BuiltinInst("array_get", arrayType.Element, array, position));
+            End(array);
+            return element;
+        }
+
         /// <summary>'a ?? b': a's value when there is one; b, evaluated only then, when there is not.</summary>
         SilValue? Coalesce(BoundBinaryOperator coalesce) {
             if (Expression(coalesce.Left) is not { Type: EnumType optional } value || generator.Lower(coalesce.Type) is not { } type) {
@@ -1443,16 +2043,19 @@ public sealed class SilGen {
 
             var some = optional.CaseIndex("Some");
             var present = function.AddBlock();
-            var payload = present.AddArgument(optional.Cases[some].Payload!);
+            var payload = Payload(present, optional.Cases[some].Payload!);
             var absent = function.AddBlock();
             var after = function.AddBlock();
             var result = after.AddArgument(type);
             Jump(new SwitchEnumInst(value, [(some, present)], absent));
 
             _current = present;
-            Branch(after, payload);
+            var unwrapped = Owned(payload);
+            Destroy(value);
+            Branch(after, unwrapped);
 
             _current = absent;
+            Destroy(value);
             if (Expression(coalesce.Right) is { } fallback) {
                 Branch(after, fallback);
             }
@@ -1479,11 +2082,65 @@ public sealed class SilGen {
         }
 
         SilValue? Binary(BoundBinaryOperator binary) {
-            if (Expression(binary.Left) is not { } left || Expression(binary.Right) is not { } right) {
+            // 'x == none': only the case matters, so any optional compares.
+            if (binary.OperatorKind is BinaryOperatorKind.Equal or BinaryOperatorKind.NotEqual
+                && (IsNone(binary.Right) ? binary.Left : IsNone(binary.Left) ? binary.Right : null) is { } tested) {
+                if (Borrow(tested) is not { Type: EnumType testedType } testedValue) {
+                    return Missing(binary, "this comparison with 'none'");
+                }
+
+                var noneCase = testedType.CaseIndex("None");
+                var isNone = function.AddBlock();
+                var isSome = function.AddBlock();
+                var joined = function.AddBlock();
+                var answer = joined.AddArgument(SilType.Bool);
+                var equal = binary.OperatorKind == BinaryOperatorKind.Equal;
+                Jump(new SwitchEnumInst(testedValue, [(noneCase, isNone)], isSome));
+                _current = isNone;
+                Branch(joined, Emit(new IntegerLiteralInst(SilType.Bool, equal ? 1 : 0)));
+                _current = isSome;
+                Branch(joined, Emit(new IntegerLiteralInst(SilType.Bool, equal ? 0 : 1)));
+                _current = joined;
+                End(testedValue);
+                return answer;
+            }
+
+            if (Borrow(binary.Left) is not { } left) {
                 return null;
             }
 
+            if (Borrow(binary.Right) is not { } right) {
+                End(left);
+                return null;
+            }
+
+            // An optional compared with a plain value: the value, wrapped.
+            if (binary.OperatorKind is BinaryOperatorKind.Equal or BinaryOperatorKind.NotEqual) {
+                if (left.Type is EnumType { Cases: [("Some", { } leftPayload), ("None", null)] } leftOptional && right.Type == leftPayload) {
+                    right = Hold(Emit(new EnumInst(leftOptional, 0, Owned(Unhold(right)))));
+                } else if (right.Type is EnumType { Cases: [("Some", { } rightPayload), ("None", null)] } rightOptional && left.Type == rightPayload) {
+                    // Left was borrowed first; keep the temporaries in order.
+                    Unhold(right);
+                    left = Emit(new EnumInst(rightOptional, 0, Owned(Unhold(left))));
+                    Hold(left);
+                    Hold(right);
+                }
+            }
+
+            // Optionals compare equal when both are none, or both hold equal values.
+            if (binary.OperatorKind is BinaryOperatorKind.Equal or BinaryOperatorKind.NotEqual
+                && left.Type is EnumType { Cases: [("Some", { } payloadType), ("None", null)] } optional
+                && right.Type == left.Type) {
+                var equal = OptionalEquals(optional, payloadType, left, right, binary);
+                End(right);
+                End(left);
+                return equal is null || binary.OperatorKind == BinaryOperatorKind.Equal
+                    ? equal
+                    : Emit(new BuiltinInst("not_Bool", SilType.Bool, equal));
+            }
+
             var op = binary.OperatorKind switch {
+                BinaryOperatorKind.Add when left.Type == SilType.String => "string_concat",
                 BinaryOperatorKind.Add => "add",
                 BinaryOperatorKind.Subtract => "sub",
                 BinaryOperatorKind.Multiply => "mul",
@@ -1503,12 +2160,65 @@ public sealed class SilGen {
                 _ => null,
             };
 
-            var name = op is null ? null : $"{op}_{left.Type}";
+            var name = op is null or "string_concat" ? op : $"{op}_{left.Type}";
             if (name is null || SilBuiltins.Find(name) is not { } signature || left.Type != right.Type) {
+                End(right);
+                End(left);
                 return Missing(binary, $"the operator in '{Describe(binary.Syntax)}' on '{binary.Left.Type.ToDisplayString()}'");
             }
 
-            return Emit(new BuiltinInst(name, signature.Result, left, right));
+            var result = Emit(new BuiltinInst(name, signature.Result, left, right));
+            End(right);
+            End(left);
+            return result;
+        }
+
+        static bool IsNone(BoundExpression expression) =>
+            expression switch {
+                BoundLiteral { Value: null } => true,
+                BoundConversion conversion => IsNone(conversion.Operand),
+                _ => false,
+            };
+
+        /// <summary>Two optionals of a comparable type compared: by case, and then by value.</summary>
+        SilValue? OptionalEquals(EnumType optional, SilType payloadType, SilValue left, SilValue right, BoundNode at) {
+            var compare = $"cmp_eq_{payloadType}";
+            if (SilBuiltins.Find(compare) is null) {
+                return Missing(at, $"comparing optionals of {payloadType}");
+            }
+
+            var some = optional.CaseIndex("Some");
+            var leftSome = function.AddBlock();
+            var leftValue = Payload(leftSome, payloadType);
+            var leftNone = function.AddBlock();
+            var after = function.AddBlock();
+            var result = after.AddArgument(SilType.Bool);
+            Jump(new SwitchEnumInst(left, [(some, leftSome)], leftNone));
+
+            // Left holds a value: equal only if right holds an equal one.
+            _current = leftSome;
+            var bothSome = function.AddBlock();
+            var rightValue = Payload(bothSome, payloadType);
+            var differ = function.AddBlock();
+            Jump(new SwitchEnumInst(right, [(some, bothSome)], differ));
+            _current = bothSome;
+            Branch(after, Emit(new BuiltinInst(compare, SilType.Bool, leftValue, rightValue)));
+            _current = differ;
+            Branch(after, Emit(new IntegerLiteralInst(SilType.Bool, 0)));
+
+            // Left is none: equal only if right is too.
+            _current = leftNone;
+            var rightSome = function.AddBlock();
+            Payload(rightSome, payloadType);
+            var bothNone = function.AddBlock();
+            Jump(new SwitchEnumInst(right, [(some, rightSome)], bothNone));
+            _current = rightSome;
+            Branch(after, Emit(new IntegerLiteralInst(SilType.Bool, 0)));
+            _current = bothNone;
+            Branch(after, Emit(new IntegerLiteralInst(SilType.Bool, 1)));
+
+            _current = after;
+            return result;
         }
 
         SilValue? Unary(BoundUnaryOperator unary) {
@@ -1537,7 +2247,7 @@ public sealed class SilGen {
         /// <summary>
         ///     A <c>match</c>: arms tried in order, each pattern in turn, then the
         ///     guard. The binder has checked it is exhaustive, so failing every
-        ///     arm cannot happen.
+        ///     arm cannot happen. The subject lives until an arm is chosen.
         /// </summary>
         SilValue? Match(BoundMatch match) {
             if (Expression(match.Subject) is not { } subject) {
@@ -1553,6 +2263,7 @@ public sealed class SilGen {
                 var body = function.AddBlock();
                 var nextArm = function.AddBlock();
 
+                Hold(subject);
                 if (arm.IsDefault) {
                     Branch(body);
                 } else {
@@ -1570,6 +2281,9 @@ public sealed class SilGen {
                     _current = guarded;
                 }
 
+                Unhold(subject);
+                Destroy(subject);
+
                 switch (arm.Body) {
                     case BoundStatement statement:
                         Statement(statement);
@@ -1586,6 +2300,7 @@ public sealed class SilGen {
                     case BoundExpression value:
                         if (Expression(value) is { } armValue && _current is not null) {
                             if (!producesValue) {
+                                Destroy(armValue);
                                 Branch(after);
                             } else if (armValue is not UnitValue && armValue.Type == resultType) {
                                 Branch(after, armValue);
@@ -1629,7 +2344,7 @@ public sealed class SilGen {
             var after = function.AddBlock();
             var result = resultType == SilType.Unit ? null : after.AddArgument(resultType);
 
-            _handlers.Add(new(handler, errorType, _scopes.Count));
+            _handlers.Add(new(handler, errorType, _scopes.Count, _temporaries.Count));
             var value = Expression(tryExpression.Expression);
             _handlers.RemoveAt(_handlers.Count - 1);
 
@@ -1647,6 +2362,7 @@ public sealed class SilGen {
             _current = handler;
             switch (tryExpression.TryKind) {
                 case TryKind.Optional: {
+                    Destroy(error);
                     var optional = (EnumType)resultType;
                     Branch(after, Emit(new EnumInst(optional, optional.CaseIndex("None"), null)));
                     break;
@@ -1659,12 +2375,15 @@ public sealed class SilGen {
 
                 case TryKind.Fallback when tryExpression.Fallback is { } fallback: {
                     if (tryExpression.ErrorLocal is { } local && SlotFor(local, tryExpression.Syntax) is { } slot) {
-                        Emit(new StoreInst(error, slot, StoreKind.Assign));
+                        Store(error, slot);
+                    } else {
+                        Destroy(error);
                     }
 
                     var alternative = Expression(fallback);
                     if (alternative is not null && _current is not null) {
                         if (result is null) {
+                            Destroy(alternative);
                             Branch(after);
                         } else {
                             Branch(after, alternative);
@@ -1698,17 +2417,30 @@ public sealed class SilGen {
             return null;
         }
 
+        // -------------------------------------------------------------------
+        // Calls
+        // -------------------------------------------------------------------
+
         SilValue? Call(BoundCall call) {
             Locate(call.Syntax);
 
             // The core's print is a builtin: the runtime owns the writing.
             if (Core.Print.Contains(call.Function)) {
-                return Expression(call.Arguments[0]) is { } printed
-                    ? Emit(new BuiltinInst($"print_{printed.Type}", SilType.Unit, printed))
-                    : null;
+                if (Borrow(call.Arguments[0]) is not { } printed) {
+                    return null;
+                }
+
+                Emit(new BuiltinInst($"print_{printed.Type}", SilType.Unit, printed));
+                End(printed);
+                return UnitValue.Instance;
             }
 
             var callee = call.Function;
+
+            // A member of a core type: a builtin.
+            if (CoreMember(call) is { } handled) {
+                return handled.Value;
+            }
 
             // A synthesised memberwise initialiser is the struct, built from its fields.
             if (callee is { FunctionKind: FunctionKind.Initializer, DeclaringSyntax.IsEmpty: true }) {
@@ -1716,18 +2448,16 @@ public sealed class SilGen {
                     return Missing(call, $"initialising '{SelfType(callee).ToDisplayString()}'");
                 }
 
-                var fields = new List<SilValue>();
-                foreach (var argument in call.Arguments) {
-                    if (Expression(argument) is not { } value) {
-                        return null;
-                    }
-
-                    fields.Add(value);
+                if (Evaluate(call.Arguments) is not { } fields) {
+                    return null;
                 }
 
-                return fields.Count == structType.Fields.Count
-                    ? Emit(new StructInst(structType, [..fields]))
-                    : Missing(call, "a memberwise initialiser that leaves a field to its default");
+                if (fields.Count != structType.Fields.Count) {
+                    fields.ForEach(Destroy);
+                    return Missing(call, "a memberwise initialiser that leaves a field to its default");
+                }
+
+                return Emit(new StructInst(structType, [..fields]));
             }
 
             if (!generator._names.TryGetValue(callee, out var name)) {
@@ -1740,15 +2470,24 @@ public sealed class SilGen {
                 return null;
             }
 
+            // Everything passed is borrowed for the call: a parameter as it
+            // is, anything evaluated as a temporary destroyed after.
             var arguments = new List<SilValue>();
+            var borrows = new List<SilValue>();
             if (HasSelf(callee)) {
                 SilValue? self;
-                if (callee.IsMutating) {
-                    self = call.Receiver is null or BoundSelfAccess ? _selfAddress : Address(call.Receiver);
-                } else if (call.Receiver is null or BoundSelfAccess) {
-                    self = _selfValue ?? (_selfAddress is { } address ? Emit(new LoadInst(address)) : null);
+                if (type.Parameters[0] is AddressType) {
+                    self = call.Receiver is null or BoundSelfAccess ? _selfAddress : Address(call.Receiver, borrows);
+                } else if (call.Receiver is null) {
+                    self = _selfValue ?? ((_selfObject ?? _selfAddress) is { } address ? Hold(Emit(new LoadInst(address))) : null);
+                    if (self is not null && IsOwned(self)) {
+                        borrows.Add(self);
+                    }
                 } else {
-                    self = Expression(call.Receiver);
+                    self = Borrow(call.Receiver);
+                    if (self is not null) {
+                        borrows.Add(self);
+                    }
                 }
 
                 if (self is null) {
@@ -1759,33 +2498,227 @@ public sealed class SilGen {
             }
 
             foreach (var argument in call.Arguments) {
-                if (Expression(argument) is not { } value) {
+                if (Borrow(argument) is not { } value) {
                     return null;
                 }
 
                 arguments.Add(value);
+                borrows.Add(value);
             }
 
             var reference = Emit(new FunctionRefInst(name, type));
 
             if (type.Thrown is null) {
                 var apply = Emit(new ApplyInst(reference, type.Result, [..arguments]));
+                EndAll(borrows);
                 return type.Result == SilType.Unit ? UnitValue.Instance : apply;
             }
 
             // A throwing call: on to the normal block with the result, or the
-            // error to whatever handles it here.
+            // error to whatever handles it here. Its borrows end on both.
             var normal = function.AddBlock();
             var result = type.Result == SilType.Unit ? null : normal.AddArgument(type.Result);
             var errorBlock = function.AddBlock();
             var error = errorBlock.AddArgument(type.Thrown);
+            for (var i = borrows.Count - 1; i >= 0; i--) {
+                Unhold(borrows[i]);
+            }
+
             Jump(new TryApplyInst(reference, type.Result, [..arguments], normal, errorBlock));
 
             _current = errorBlock;
+            for (var i = borrows.Count - 1; i >= 0; i--) {
+                Destroy(borrows[i]);
+            }
+
             RouteError(error, call.Syntax);
 
             _current = normal;
+            for (var i = borrows.Count - 1; i >= 0; i--) {
+                Destroy(borrows[i]);
+            }
+
             return result ?? (SilValue)UnitValue.Instance;
+        }
+
+        /// <summary>A result, which may be nothing because lowering failed; null means "not a core member".</summary>
+        sealed record Handled(SilValue? Value);
+
+        /// <summary>
+        ///     The members the core gives its own types — strings, numbers,
+        ///     characters, arrays — as builtins on the receiver.
+        /// </summary>
+        Handled? CoreMember(BoundCall call) {
+            var callee = call.Function;
+            var owner = callee.ContainingSymbol;
+
+            // String.fromChar(c): a static member, with no receiver.
+            if (callee is { Name: "fromChar", IsStatic: true } && ReferenceEquals(owner, Core.String)) {
+                return new(Expression(call.Arguments[0]) is { } c ? Emit(new BuiltinInst("string_from_Char", SilType.String, c)) : null);
+            }
+
+            if (call.Receiver is not { } receiver) {
+                return null;
+            }
+
+            // Mutating array members work on the array where it is.
+            if (receiver.Type is ArrayTypeSymbol && callee.Name is "append" or "removeLast" or "clear") {
+                var borrows = new List<SilValue>();
+                if (Address(receiver, borrows) is not { Type: AddressType { Pointee: ArrayType arrayType } } address) {
+                    return new((SilValue?)null);
+                }
+
+                SilValue? result;
+                switch (callee.Name) {
+                    case "append":
+                        if (Expression(call.Arguments[0]) is not { } element) {
+                            return new((SilValue?)null);
+                        }
+
+                        Emit(new BuiltinInst("array_append", SilType.Unit, address, element));
+                        result = UnitValue.Instance;
+                        break;
+
+                    case "removeLast":
+                        result = Emit(new BuiltinInst("array_remove_last", arrayType.Element, address));
+                        break;
+
+                    default:
+                        Emit(new BuiltinInst("array_clear", SilType.Unit, address));
+                        result = UnitValue.Instance;
+                        break;
+                }
+
+                EndAll(borrows);
+                return new(result);
+            }
+
+            var isCore = receiver.Type is ArrayTypeSymbol
+                || receiver.Type.Equals(Core.String) || receiver.Type.Equals(Core.Bool) || receiver.Type.Equals(Core.Char)
+                || Core.Numerics.Any(n => n.Equals(receiver.Type));
+            if (!isCore) {
+                return null;
+            }
+
+            if (Borrow(receiver) is not { } self) {
+                return new((SilValue?)null);
+            }
+
+            var arguments = new List<SilValue>();
+            foreach (var argument in call.Arguments) {
+                if (Borrow(argument) is not { } value) {
+                    return new((SilValue?)null);
+                }
+
+                arguments.Add(value);
+            }
+
+            var lowered = CoreMethod(callee.Name, self, arguments, call);
+            for (var i = arguments.Count - 1; i >= 0; i--) {
+                End(arguments[i]);
+            }
+
+            End(self);
+            return new(lowered);
+        }
+
+        SilValue? CoreMethod(string name, SilValue self, List<SilValue> arguments, BoundCall call) {
+            SilValue Builtin(string builtin, SilType result, params SilValue[] operands) =>
+                Emit(new BuiltinInst(builtin, result, operands));
+
+            switch (self.Type, name, arguments.Count) {
+                case (_, "toString", 0) when SilBuiltins.Find($"string_from_{self.Type}") is not null:
+                    return Builtin($"string_from_{self.Type}", SilType.String, self);
+
+                case (_, "abs", 0) when self.Type == SilType.Int || self.Type == SilType.F64:
+                    return Builtin($"abs_{self.Type}", self.Type, self);
+
+                case (_, "min" or "max", 1) when self.Type == SilType.Int || self.Type == SilType.F64:
+                    return Builtin($"{name}_{self.Type}", self.Type, self, arguments[0]);
+
+                case (_, "at", 1) when self.Type == SilType.String:
+                    return Builtin("string_at", SilType.Char, self, arguments[0]);
+
+                case (_, "slice", 2) when self.Type == SilType.String:
+                    return Builtin("string_slice", SilType.String, self, arguments[0], arguments[1]);
+
+                case (_, "appending", 1) when self.Type == SilType.String:
+                    return Builtin("string_concat", SilType.String, self, arguments[0]);
+
+                case (_, "contains", 1) when self.Type == SilType.String:
+                    return Builtin("string_contains", SilType.Bool, self, arguments[0]);
+
+                case (_, "trimmed", 0) when self.Type == SilType.String:
+                    return Builtin("string_trimmed", SilType.String, self);
+
+                case (_, "split", 1) when self.Type == SilType.String:
+                    return Builtin("string_split", new ArrayType(SilType.String), self, arguments[0]);
+
+                case (_, "indexOf", 1) when self.Type == SilType.String: {
+                    var index = Builtin("string_index_of", SilType.Int, self, arguments[0]);
+                    var found = Builtin("cmp_ge_Int", SilType.Bool, index, Emit(new IntegerLiteralInst(SilType.Int, 0)));
+                    return MakeOptional(call.Type, found, index, call);
+                }
+
+                case (_, "toInt" or "toF64", 0) when self.Type == SilType.String: {
+                    var target = name == "toInt" ? SilType.Int : SilType.F64;
+                    var parsed = Builtin($"string_to_{target}", SilType.Tuple([SilType.Bool, target]), self);
+                    return MakeOptional(call.Type, Emit(new TupleExtractInst(parsed, 0)), Emit(new TupleExtractInst(parsed, 1)), call);
+                }
+
+                default:
+                    return Missing(call, $"the member '{name}' of '{call.Receiver?.Type.ToDisplayString()}'");
+            }
+        }
+
+        /// <summary>An optional holding the value when the flag is set, and none otherwise.</summary>
+        SilValue? MakeOptional(TypeSymbol type, SilValue present, SilValue value, BoundNode at) {
+            if (generator.Lower(type) is not EnumType optional) {
+                return Missing(at, $"an optional of type '{type.ToDisplayString()}'");
+            }
+
+            var some = function.AddBlock();
+            var none = function.AddBlock();
+            var after = function.AddBlock();
+            var result = after.AddArgument(optional);
+            Jump(new CondBranchInst(present, some, [], none, []));
+            _current = some;
+            Branch(after, Emit(new EnumInst(optional, optional.CaseIndex("Some"), value)));
+            _current = none;
+            Branch(after, Emit(new EnumInst(optional, optional.CaseIndex("None"), null)));
+            _current = after;
+            return result;
+        }
+
+        /// <summary>The computed properties the core gives its own types.</summary>
+        SilValue? ComputedProperty(BoundFieldAccess access, BoundExpression receiver) {
+            var name = access.Field.Name;
+            string? builtin = (receiver.Type, name) switch {
+                (ArrayTypeSymbol, "count" or "isEmpty") => "array_count",
+                (_, "count" or "isEmpty") when receiver.Type.Equals(Core.String) => "string_count",
+                (_, "isDigit") when receiver.Type.Equals(Core.Char) => "char_is_digit",
+                (_, "isLetter") when receiver.Type.Equals(Core.Char) => "char_is_letter",
+                (_, "isWhitespace") when receiver.Type.Equals(Core.Char) => "char_is_whitespace",
+                _ => null,
+            };
+
+            if (builtin is null) {
+                return Missing(access, $"the property '{name}' of '{receiver.Type.ToDisplayString()}'");
+            }
+
+            if (Borrow(receiver) is not { } self) {
+                return null;
+            }
+
+            var resultType = builtin.EndsWith("count", StringComparison.Ordinal) ? SilType.Int : SilType.Bool;
+            SilValue result = Emit(new BuiltinInst(builtin, resultType, self));
+            End(self);
+
+            if (name == "isEmpty") {
+                result = Emit(new BuiltinInst("cmp_eq_Int", SilType.Bool, result, Emit(new IntegerLiteralInst(SilType.Int, 0))));
+            }
+
+            return result;
         }
 
         static string Describe(SyntaxNode syntax) {

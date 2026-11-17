@@ -11,22 +11,24 @@ namespace Sable.SIL;
 ///     convention, after the language's types have been lowered.
 /// </summary>
 /// <remarks>
-///     The first subset has scalars, addresses and function types. Aggregates,
-///     references and existentials arrive with the lowerings that need them.
-///     Written with a leading <c>$</c> in SIL text: <c>$Int</c>,
-///     <c>$*Int</c>, <c>$(Int, Bool) -&gt; Int</c>.
+///     Scalars, addresses, functions, tuples, structs, enums, classes and
+///     arrays. Written with a leading <c>$</c> in SIL text: <c>$Int</c>,
+///     <c>$*Int</c>, <c>$(Int, Bool) -&gt; Int</c>, <c>$[String]</c>.
 /// </remarks>
 public abstract class SilType : IEquatable<SilType> {
     public static readonly SilType Int = new ScalarType("Int");
     public static readonly SilType Bool = new ScalarType("Bool");
     public static readonly SilType F64 = new ScalarType("F64");
 
+    /// <summary>One Unicode scalar value.</summary>
+    public static readonly SilType Char = new ScalarType("Char");
+
     /// <summary>
-    ///     A string. In this first subset every string is a literal, which is
-    ///     immortal (docs/02 §2.2) — no count to keep — so it is trivial: a
-    ///     pointer to UTF-8 bytes and their length. Built strings bring ARC.
+    ///     A string: a reference to a counted heap object holding UTF-8 bytes.
+    ///     A literal is an immortal object (docs/02 §2.2), whose count is never
+    ///     touched; a built one is freed when its last reference goes.
     /// </summary>
-    public static readonly SilType String = new ScalarType("String");
+    public static readonly SilType String = new ScalarType("String", trivial: false);
 
     /// <summary><c>()</c>: no value. What a function that returns nothing returns.</summary>
     public static readonly SilType Unit = new ScalarType("()");
@@ -52,9 +54,21 @@ public abstract class SilType : IEquatable<SilType> {
     public static bool operator !=(SilType? a, SilType? b) => !(a == b);
 }
 
-public sealed class ScalarType(string name) : SilType {
+public sealed class ScalarType(string name, bool trivial = true) : SilType {
     public string Name { get; } = name;
+    public override bool IsTrivial => trivial;
     public override string ToString() => Name;
+}
+
+/// <summary>
+///     <c>[T]</c>: a growable array with value semantics — a reference to a
+///     counted buffer, copied on write when shared. The empty array is no
+///     buffer at all.
+/// </summary>
+public sealed class ArrayType(SilType element) : SilType {
+    public SilType Element { get; } = element;
+    public override bool IsTrivial => false;
+    public override string ToString() => $"[{Element}]";
 }
 
 /// <summary><c>*T</c>: the address of storage holding a <c>T</c>.</summary>
@@ -83,7 +97,7 @@ public sealed class TupleType(ImmutableArray<SilType> elements) : SilType {
     public override string ToString() => $"({string.Join(", ", Elements)})";
 }
 
-/// <summary>A named type a module declares: a struct or an enum.</summary>
+/// <summary>A named type a module declares: a struct, an enum or a class.</summary>
 public abstract class NominalType(string name) : SilType {
     public string Name { get; } = name;
     public override string ToString() => Name;
@@ -114,6 +128,23 @@ public sealed class EnumType(string name) : NominalType(name) {
     public override bool IsTrivial => Cases.All(static c => c.Payload?.IsTrivial ?? true);
 }
 
+/// <summary>
+///     A class: a reference to a counted heap object with identity, whose
+///     fields live in the object. Declared as
+///     <c>sil_class Node { value: $Int, next: $Optional$Node }</c>; a field
+///     may name the class itself, since it is reached through a reference.
+/// </summary>
+public sealed class ClassType(string name) : NominalType(name) {
+    public List<(string Name, SilType Type)> Fields { get; } = [];
+
+    public int FieldIndex(string field) => Fields.FindIndex(f => f.Name == field);
+
+    /// <summary>The function that runs as an object dies, before its fields are destroyed, or null.</summary>
+    public string? Deinit { get; set; }
+
+    public override bool IsTrivial => false;
+}
+
 // ===========================================================================
 // Values
 // ===========================================================================
@@ -123,10 +154,32 @@ public abstract class SilValue {
     public abstract SilType Type { get; }
 }
 
+/// <summary>
+///     How a value is held (docs/04 §2.1). A trivial value has nothing to
+///     track. An owned one must be consumed exactly once on every path — by a
+///     store, a return, a branch, an aggregate taking it in, or
+///     <c>destroy_value</c>. A guaranteed one is borrowed: it may be used, and
+///     copied, while whatever it was borrowed from is alive, but never consumed.
+/// </summary>
+public enum Ownership {
+    Trivial,
+    Owned,
+    Guaranteed,
+}
+
 /// <summary>A value passed into a block: a function's parameters, or what a branch sends.</summary>
-public sealed class SilArgument(SilBlock block, SilType type) : SilValue {
+/// <remarks>
+///     A function's parameters are guaranteed: the caller keeps them alive for
+///     the call. Other arguments are owned, except where a <c>switch_enum</c>
+///     hands a block the payload it borrows from the enum, marked
+///     <c>@guaranteed</c> in SIL text.
+/// </remarks>
+public sealed class SilArgument(SilBlock block, SilType type, bool guaranteed = false) : SilValue {
     public SilBlock Block { get; } = block;
     public override SilType Type { get; } = type;
+
+    /// <summary>True for an argument that borrows rather than owns, outside the entry block.</summary>
+    public bool IsGuaranteed { get; } = guaranteed;
 }
 
 // ===========================================================================
@@ -267,6 +320,13 @@ public sealed class CondFailInst(SilValue condition, string message) : SilInstru
 }
 
 /// <summary><c>alloc_stack $T</c>: storage in the current frame, popped by <c>dealloc_stack</c>.</summary>
+/// <remarks>
+///     Storage for a non-trivial type starts <i>empty</i>, holding no value
+///     and nothing to release: <c>store [assign]</c> into it destroys nothing,
+///     and <c>destroy_addr</c> of it does nothing. So a slot can be assigned
+///     on every path without knowing whether it was assigned before, and
+///     destroyed once where the function leaves. Natively, empty is all zeros.
+/// </remarks>
 public sealed class AllocStackInst(SilType elementType) : SilInstruction {
     public SilType ElementType { get; } = elementType;
 
@@ -283,10 +343,25 @@ public sealed class DeallocStackInst(SilValue address) : SilInstruction(address)
     public override string Opcode => "dealloc_stack";
 }
 
-/// <summary><c>load [trivial] %0</c>: reads the value at an address.</summary>
-public sealed class LoadInst(SilValue address) : SilInstruction(address) {
+public enum LoadKind {
+    /// <summary>A trivial value: its bits.</summary>
+    Trivial,
+
+    /// <summary>A copy of the value, which the storage keeps.</summary>
+    Copy,
+
+    /// <summary>The value itself, leaving the storage empty.</summary>
+    Take,
+}
+
+/// <summary><c>load [trivial|copy|take] %0</c>: reads the value at an address.</summary>
+public sealed class LoadInst(SilValue address, LoadKind? kind = null) : SilInstruction(address) {
     public SilValue Address => Operands[0];
     public override SilType Type => (Address.Type as AddressType)?.Pointee ?? SilType.Unit;
+
+    /// <summary>Unless given, trivial for a trivial type and a copy otherwise.</summary>
+    public LoadKind Kind { get; } = kind ?? ((address.Type as AddressType)?.Pointee.IsTrivial ?? true ? LoadKind.Trivial : LoadKind.Copy);
+
     public override string Opcode => "load";
 }
 
@@ -294,7 +369,7 @@ public enum StoreKind {
     /// <summary>The storage held nothing before.</summary>
     Init,
 
-    /// <summary>The storage held a value, which this replaces.</summary>
+    /// <summary>The storage may hold a value, which this destroys and replaces.</summary>
     Assign,
 }
 
@@ -305,6 +380,42 @@ public sealed class StoreInst(SilValue value, SilValue address, StoreKind kind) 
     public StoreKind Kind { get; } = kind;
     public override bool HasResult => false;
     public override string Opcode => "store";
+}
+
+/// <summary><c>copy_value %0</c>: a new owned copy of a value — a retain, for a reference.</summary>
+public sealed class CopyValueInst(SilValue value) : SilInstruction(value) {
+    public SilValue Value => Operands[0];
+    public override SilType Type => Value.Type;
+    public override string Opcode => "copy_value";
+}
+
+/// <summary><c>destroy_value %0</c>: consumes an owned value — a release, for a reference.</summary>
+public sealed class DestroyValueInst(SilValue value) : SilInstruction(value) {
+    public SilValue Value => Operands[0];
+    public override bool HasResult => false;
+    public override string Opcode => "destroy_value";
+}
+
+/// <summary><c>destroy_addr %0</c>: destroys the value in storage, leaving it empty.</summary>
+public sealed class DestroyAddrInst(SilValue address) : SilInstruction(address) {
+    public SilValue Address => Operands[0];
+    public override bool HasResult => false;
+    public override string Opcode => "destroy_addr";
+}
+
+/// <summary><c>alloc_ref $Node</c>: a new object, its count one and every field empty.</summary>
+public sealed class AllocRefInst(ClassType type) : SilInstruction {
+    public ClassType ClassType { get; } = type;
+    public override SilType Type => ClassType;
+    public override string Opcode => "alloc_ref";
+}
+
+/// <summary><c>ref_element_addr %0, #next</c>: the address of a field inside an object.</summary>
+public sealed class RefElementAddrInst(SilValue reference, int field) : SilInstruction(reference) {
+    public SilValue Reference => Operands[0];
+    public int Field { get; } = field;
+    public override SilType Type => SilType.Address(((ClassType)Reference.Type).Fields[Field].Type);
+    public override string Opcode => "ref_element_addr";
 }
 
 /// <summary><c>function_ref @f : $(Int) -&gt; Int</c>: a function as a value.</summary>
@@ -426,8 +537,8 @@ public sealed class SilBlock(SilFunction function) {
             _ => [],
         };
 
-    public SilArgument AddArgument(SilType type) {
-        var argument = new SilArgument(this, type);
+    public SilArgument AddArgument(SilType type, bool guaranteed = false) {
+        var argument = new SilArgument(this, type, guaranteed);
         Arguments.Add(argument);
         return argument;
     }
@@ -503,6 +614,11 @@ public sealed class SilModule {
         return type;
     }
 
+    public void RemoveType(NominalType type) {
+        Types.Remove(type);
+        _types.Remove(type.Name);
+    }
+
     public SilFunction? Find(string name) => _byName.GetValueOrDefault(name);
 
     public SilFunction Add(SilFunction function) {
@@ -520,17 +636,79 @@ public sealed class SilModule {
 
 /// <summary>
 ///     The operations <c>builtin</c> may name: arithmetic, comparison and
-///     logic on the scalar types. Integer arithmetic traps on overflow, as
-///     the language's safety promises; floating-point does not.
+///     logic on the scalar types, the string and character operations the
+///     runtime provides, and the array operations. Integer arithmetic traps on
+///     overflow, as the language's safety promises; floating-point does not.
 /// </summary>
+/// <remarks>
+///     A builtin borrows its operands, except those its signature says it
+///     consumes — the element <c>array_append</c> stores — and gives an owned
+///     result. The array operations work for any element type, so their
+///     signatures are worked out from the operands.
+/// </remarks>
 public static class SilBuiltins {
-    public sealed record Signature(ImmutableArray<SilType> Operands, SilType Result);
+    public sealed record Signature(ImmutableArray<SilType> Operands, SilType Result) {
+        /// <summary>The operands the builtin takes ownership of.</summary>
+        public ImmutableArray<int> Consumed { get; init; } = [];
+    }
 
     static readonly Dictionary<string, Signature> Table = Build();
 
+    /// <summary>The names whose signature depends on the element type of the array they work on.</summary>
+    public static readonly ImmutableArray<string> ArrayOperations =
+        ["array_empty", "array_count", "array_get", "array_append", "array_set", "array_remove_last", "array_clear"];
+
+    /// <summary>A builtin with fixed operand types, by name.</summary>
     public static Signature? Find(string name) => Table.GetValueOrDefault(name);
 
-    public static IEnumerable<string> Names => Table.Keys;
+    /// <summary>
+    ///     The signature of a builtin applied to operands of these types, or
+    ///     null when it does not apply. <c>array_empty</c> takes nothing, so
+    ///     its element type comes from the result it is declared to give.
+    /// </summary>
+    public static Signature? Resolve(string name, IReadOnlyList<SilType> operands, SilType? result = null) {
+        if (Table.TryGetValue(name, out var fixedSignature)) {
+            return fixedSignature;
+        }
+
+        if (name == "array_empty") {
+            return operands.Count == 0 && result is ArrayType ? new([], result) : null;
+        }
+
+        SilType? Element(int index, bool address) {
+            if (index >= operands.Count) {
+                return null;
+            }
+
+            var type = address ? (operands[index] as AddressType)?.Pointee : operands[index];
+            return (type as ArrayType)?.Element;
+        }
+
+        switch (name) {
+            case "array_count" when Element(0, false) is not null:
+                return new([operands[0]], SilType.Int);
+
+            case "array_get" when Element(0, false) is { } element:
+                return new([operands[0], SilType.Int], element);
+
+            case "array_append" when Element(0, true) is { } element:
+                return new([operands[0], element], SilType.Unit) { Consumed = [1] };
+
+            case "array_set" when Element(0, true) is { } element:
+                return new([operands[0], SilType.Int, element], SilType.Unit) { Consumed = [2] };
+
+            case "array_remove_last" when Element(0, true) is { } element:
+                return new([operands[0]], element);
+
+            case "array_clear" when Element(0, true) is not null:
+                return new([operands[0]], SilType.Unit);
+
+            default:
+                return null;
+        }
+    }
+
+    public static IEnumerable<string> Names => Table.Keys.Concat(ArrayOperations);
 
     static Dictionary<string, Signature> Build() {
         var table = new Dictionary<string, Signature>(StringComparer.Ordinal);
@@ -540,11 +718,13 @@ public static class SilBuiltins {
 
         void Unary(string op, SilType operand) => table[$"{op}_{operand}"] = new([operand], operand);
 
-        foreach (var op in new[] { "add", "sub", "mul", "div", "rem", "and", "or", "xor", "shl", "shr" }) {
+        void Add(string name, SilType result, params SilType[] operands) => table[name] = new([..operands], result);
+
+        foreach (var op in new[] { "add", "sub", "mul", "div", "rem", "and", "or", "xor", "shl", "shr", "min", "max" }) {
             Binary(op, SilType.Int, SilType.Int);
         }
 
-        foreach (var op in new[] { "add", "sub", "mul", "div" }) {
+        foreach (var op in new[] { "add", "sub", "mul", "div", "min", "max" }) {
             Binary(op, SilType.F64, SilType.F64);
         }
 
@@ -552,12 +732,12 @@ public static class SilBuiltins {
             Binary(op, SilType.Bool, SilType.Bool);
         }
 
-        foreach (var type in new[] { SilType.Int, SilType.F64, SilType.Bool }) {
+        foreach (var type in new[] { SilType.Int, SilType.F64, SilType.Bool, SilType.Char, SilType.String }) {
             Binary("cmp_eq", type, SilType.Bool);
             Binary("cmp_ne", type, SilType.Bool);
         }
 
-        foreach (var type in new[] { SilType.Int, SilType.F64 }) {
+        foreach (var type in new[] { SilType.Int, SilType.F64, SilType.Char }) {
             foreach (var op in new[] { "cmp_lt", "cmp_le", "cmp_gt", "cmp_ge" }) {
                 Binary(op, type, SilType.Bool);
             }
@@ -567,8 +747,6 @@ public static class SilBuiltins {
             table[$"print_{printable}"] = new([printable], SilType.Unit);
         }
 
-        Binary("cmp_eq", SilType.String, SilType.Bool);
-        Binary("cmp_ne", SilType.String, SilType.Bool);
         table["convert_Int_F64"] = new([SilType.Int], SilType.F64);
         table["convert_F64_Int"] = new([SilType.F64], SilType.Int);
 
@@ -576,6 +754,31 @@ public static class SilBuiltins {
         Unary("neg", SilType.F64);
         Unary("not", SilType.Int);
         Unary("not", SilType.Bool);
+        Unary("abs", SilType.Int);
+        Unary("abs", SilType.F64);
+
+        // Strings. A string is indexed by Unicode scalar: 'count' scalars,
+        // 'at' one of them, 'slice' a run of them.
+        Add("string_concat", SilType.String, SilType.String, SilType.String);
+        Add("string_count", SilType.Int, SilType.String);
+        Add("string_at", SilType.Char, SilType.String, SilType.Int);
+        Add("string_slice", SilType.String, SilType.String, SilType.Int, SilType.Int);
+        Add("string_contains", SilType.Bool, SilType.String, SilType.Char);
+        Add("string_index_of", SilType.Int, SilType.String, SilType.Char);
+        Add("string_trimmed", SilType.String, SilType.String);
+        Add("string_split", new ArrayType(SilType.String), SilType.String, SilType.Char);
+        Add("string_from_Char", SilType.String, SilType.Char);
+        Add("string_from_Int", SilType.String, SilType.Int);
+        Add("string_from_F64", SilType.String, SilType.F64);
+        Add("string_from_Bool", SilType.String, SilType.Bool);
+
+        // Parsing gives whether it worked, and the value when it did.
+        Add("string_to_Int", SilType.Tuple([SilType.Bool, SilType.Int]), SilType.String);
+        Add("string_to_F64", SilType.Tuple([SilType.Bool, SilType.F64]), SilType.String);
+
+        Add("char_is_digit", SilType.Bool, SilType.Char);
+        Add("char_is_letter", SilType.Bool, SilType.Char);
+        Add("char_is_whitespace", SilType.Bool, SilType.Char);
 
         return table;
     }

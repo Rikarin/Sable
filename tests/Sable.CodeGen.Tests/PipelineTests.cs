@@ -14,7 +14,7 @@ public sealed class PipelineTests {
 
     [Fact]
     public void SomethingNotLoweredYetSaysWhat() {
-        var result = Compile("module M\nclass P { }\n@main\nfn main() { let p: P? = none }\n");
+        var result = Compile("module M\nopen class P { }\n@main\nfn main() { let p: P? = none }\n");
         Assert.False(result.Succeeded);
         Assert.Contains(result.Errors, static e => e.Contains("S7000", StringComparison.Ordinal));
     }
@@ -37,7 +37,7 @@ public sealed class PipelineTests {
     public void TheIrDeclaresTheRuntimeAndDefinesMain() {
         var result = Compile("module M\n@main\nfn start() { print(\"x\") }\n");
         Assert.True(result.Succeeded, string.Join("\n", result.Errors));
-        Assert.Contains("declare void @sable_print_string(ptr, i64)", result.LlvmIr, StringComparison.Ordinal);
+        Assert.Contains("declare void @sable_print_string(ptr)", result.LlvmIr, StringComparison.Ordinal);
         Assert.Contains("define i32 @main()", result.LlvmIr, StringComparison.Ordinal);
         Assert.Contains("call void @\"sable.M.start\"()", result.LlvmIr, StringComparison.Ordinal);
     }

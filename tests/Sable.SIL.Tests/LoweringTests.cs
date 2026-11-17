@@ -332,7 +332,7 @@ public sealed class LoweringTests {
         var compilation = Compilation.Create(
             """
             module M
-            class Point { var x: Int = 0 }
+            open class Point { var x: Int = 0 }
             fn origin(_ p: Point) -> Int { return p.x }
             """
         );
@@ -349,9 +349,10 @@ public sealed class LoweringTests {
         var compilation = Compilation.Create(
             """
             module M
+            fn same<T>(_ x: T) -> T { return x }
             fn label(_ n: Int) -> Int {
-                let xs = [n, n]
-                return n
+                let x = same(n)
+                return x
             }
             """
         );

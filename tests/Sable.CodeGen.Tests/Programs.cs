@@ -20,7 +20,9 @@ internal static class Programs {
             var build = NativeBuild.Build(result.LlvmIr!, executable, optimise);
             Assert.True(build.Succeeded, build.Output + "\n\n" + result.LlvmIr);
 
+            // Every test program is held to freeing what it allocates.
             var start = new ProcessStartInfo(executable) { RedirectStandardOutput = true, RedirectStandardError = true };
+            start.Environment["SABLE_CHECK_LEAKS"] = "1";
             using var process = Process.Start(start)!;
             var stdout = process.StandardOutput.ReadToEndAsync();
             var stderr = process.StandardError.ReadToEnd();
@@ -37,6 +39,7 @@ internal static class Programs {
         var interpreter = new SilInterpreter(result.Sil!);
         try {
             interpreter.Run(result.Sil!.EntryPoint!);
+            Assert.True(interpreter.LiveObjects == 0, $"the interpreter found {interpreter.LiveObjects} object(s) leaked");
             return (interpreter.Output.ToString(), null);
         } catch (SilTrap trap) {
             return (interpreter.Output.ToString(), trap.Message);
@@ -62,6 +65,7 @@ internal static class Programs {
         Assert.Equal(output, native.Stdout);
         if (trap is null) {
             Assert.Equal(0, native.ExitCode);
+            Assert.Equal("", native.Stderr);
         } else {
             Assert.NotEqual(0, native.ExitCode);
             Assert.Equal($"fatal error: {trap}\n", native.Stderr);

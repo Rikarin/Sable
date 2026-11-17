@@ -78,8 +78,13 @@ public sealed class PromoteSlots : ISilPass {
 
         foreach (var block in function.Blocks) {
             foreach (var instruction in block.Instructions) {
+                // A non-trivial slot's storage is what holds its value alive,
+                // and starts empty: it stays in memory.
                 if (instruction is AllocStackInst slot) {
-                    slots.Add(slot);
+                    if (slot.ElementType.IsTrivial) {
+                        slots.Add(slot);
+                    }
+
                     continue;
                 }
 
@@ -359,7 +364,7 @@ public sealed class PromoteSlots : ISilPass {
     static void SplitEdges(SilFunction function, SilBlock from, SilBlock to) {
         SilBlock NewEdge() {
             var edge = function.AddBlock();
-            var passed = to.Arguments.Select(a => edge.AddArgument(a.Type)).ToArray<SilValue>();
+            var passed = to.Arguments.Select(a => edge.AddArgument(a.Type, a.IsGuaranteed)).ToArray<SilValue>();
             edge.Append(new BranchInst(to, passed) { Location = from.Terminator?.Location });
             return edge;
         }

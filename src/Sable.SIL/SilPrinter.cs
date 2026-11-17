@@ -40,10 +40,24 @@ public static class SilPrinter {
                         .Append(string.Join(", ", enumType.Cases.Select(static c => c.Payload is null ? c.Name : $"{c.Name}(${c.Payload})")))
                         .Append(" }\n");
                     break;
+
+                case ClassType classType:
+                    builder.Append("sil_class ").Append(classType.Name).Append(" { ")
+                        .Append(string.Join(", ", classType.Fields.Select(static f => $"{f.Name}: ${f.Type}")))
+                        .Append(" }");
+                    if (classType.Deinit is { } deinit) {
+                        builder.Append(" deinit @").Append(deinit);
+                    }
+
+                    builder.Append('\n');
+                    break;
             }
         }
 
-        foreach (var type in module.Types) {
+        // From the roots in name order, so that the text depends only on
+        // which types there are — a cycle through a class or an array would
+        // otherwise print differently for each order they were made in.
+        foreach (var type in module.Types.OrderBy(static t => t.Name, StringComparer.Ordinal)) {
             Declare(type);
         }
 
@@ -62,12 +76,19 @@ public static class SilPrinter {
         return builder.ToString();
     }
 
-    /// <summary>The named types a type holds by value, directly or inside tuples.</summary>
+    /// <summary>The named types a type mentions, directly or inside tuples and arrays.</summary>
+    /// <remarks>
+    ///     Only an order for reading: the parser knows every declared name
+    ///     before it reads any, since a class or an array may name a type that
+    ///     contains it.
+    /// </remarks>
     static IEnumerable<NominalType> Contained(SilType type) {
         IEnumerable<SilType> parts = type switch {
             StructType structType => structType.Fields.Select(static f => f.Type),
+            ClassType classType => classType.Fields.Select(static f => f.Type),
             EnumType enumType => enumType.Cases.Where(static c => c.Payload is not null).Select(static c => c.Payload!),
             TupleType tuple => tuple.Elements,
+            ArrayType array => [array.Element],
             _ => [],
         };
 
@@ -133,7 +154,9 @@ public static class SilPrinter {
                     .Append(string.Join(", ", block.Arguments.Select((a, i) =>
                         isEntry && i < function.ParameterNames.Count
                             ? $"{Name(a)} : ${a.Type} var {Quote(function.ParameterNames[i])}"
-                            : $"{Name(a)} : ${a.Type}")))
+                            : a.IsGuaranteed
+                                ? $"{Name(a)} : @guaranteed ${a.Type}"
+                                : $"{Name(a)} : ${a.Type}")))
                     .Append(')');
             }
 
@@ -246,7 +269,28 @@ public static class SilPrinter {
                         break;
 
                     case LoadInst load:
-                        builder.Append(" [trivial] ").Append(Name(load.Address));
+                        builder.Append(" [").Append(load.Kind.ToString().ToLowerInvariant()).Append("] ").Append(Name(load.Address));
+                        break;
+
+                    case CopyValueInst copy:
+                        builder.Append(' ').Append(Name(copy.Value));
+                        break;
+
+                    case DestroyValueInst destroy:
+                        builder.Append(' ').Append(Name(destroy.Value));
+                        break;
+
+                    case DestroyAddrInst destroy:
+                        builder.Append(' ').Append(Name(destroy.Address));
+                        break;
+
+                    case AllocRefInst alloc:
+                        builder.Append(" $").Append(alloc.ClassType);
+                        break;
+
+                    case RefElementAddrInst element:
+                        builder.Append(' ').Append(Name(element.Reference)).Append(", #")
+                            .Append(((ClassType)element.Reference.Type).Fields[element.Field].Name);
                         break;
 
                     case StoreInst store:

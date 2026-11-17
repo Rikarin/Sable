@@ -1123,6 +1123,54 @@ Full design in [05-toolchain.md](05-toolchain.md).
 - Debugger: DWARF plus an lldb formatter plugin for `String`, `List`, unions,
   and existentials.
 
+### Formatting, docs, explain, repl and lints, as implemented
+
+- **`sable fmt [paths…] [--check]`** (and `sable fmt -` for a filter) formats
+  in place with `SyntaxFormatter`, skipping `target/` and hidden directories,
+  and refuses a file with syntax errors. The formatter is tested idempotent,
+  tree- and token-preserving and comment-keeping on every `.sab` file in the
+  repository and every `sable` block in `docs/` and `spec/`. Running it over
+  all of them found and fixed: `else if` split across lines, a label split
+  from its loop, `try?`/`as?` glued to the next token, `- 1` patterns, a `}`
+  written into a line comment, inactive `#if` regions growing a blank line
+  per pass and double-indented (and the lexer not seeing an indented
+  directive in one), blank lines after comments lost, closure headers moved
+  off the brace's line. Rules added: the author's line breaks inside
+  expressions are kept, with one continuation indent (gofmt's rule, since
+  there is no line width); a declaration's, an expression's or a guard's
+  one-statement body written on one line stays there; `operator == (`.
+  `lib/` is not reformatted yet (others were editing it): once it is, a test
+  that `sable fmt --check lib` is clean should follow.
+- **`sable explain <code>`** prints `docs/diagnostics/S####.md`, embedded in
+  the driver; `--list` lists them. There is a page for every code but five no
+  user can meet (S1005, S3082, S3099, S7001, S7002). `ExplainTests` compiles
+  each page's example and requires exactly its code, and its fix to be clean;
+  a few pages (S0001, S1002, S1009, S2003, S3038, S7000) explain without an
+  example, since no short program isolates them. Compiler output does not yet
+  point at `sable explain`; `sable lint` does.
+- **`sable doc [paths] [--std] [--out dir] [--json]`**: HTML (index with a
+  filter box, a page per module and per type, signatures rendered from the
+  symbols with type names linked, `///` and `//!` comments as light Markdown)
+  or a JSON symbol graph (symbols, `memberOf`/`conformsTo`/`extends` edges).
+  Tested on the whole standard library: every public declaration appears and
+  every link resolves. Not yet: `--open`, doc tests, search beyond the index.
+- **`sable repl`**: `ReplSession` (separate from the console) keeps imports,
+  declarations and the statements that ran, and runs each entry as the next
+  statement of a `main` that replays them, under the SIL interpreter; an
+  expression is bound to `resN` and shown with its type; `:type`, `:reset`,
+  `:help`, `:quit`. Replay re-runs side effects (I/O, clocks); a smarter
+  scheme would snapshot the interpreter's state instead.
+- **Lints** (`src/Sable.Symbols/Lints/`): `Lint` over a file's
+  `SemanticModel` and bound bodies, `LintConfiguration` (levels by name,
+  `FromTable` for a `[lints]` table), `@allow(name)`/`@warn(name)` on any
+  declaration, unknown names reported (S3399). Five lints, S3300-S3304:
+  `unused_local`, `unused_parameter` (not for overrides or protocol
+  requirements), `unused_import`, `var_never_mutated`, `shadowed_parameter`.
+  Unreachable code is already the compiler's warning S6005. Entry point
+  `Lints.Run(compilation, configuration)`; **`sable check` should call it**
+  — `sable lint` stands in until then. Plugin loading of third-party lints is
+  not built.
+
 ### Exit criteria
 - [ ] Cold build of a 100-package graph < 60 s; warm incremental < 1 s
 - [ ] LSP responds to completion in < 50 ms at p95 on a 200k-line project

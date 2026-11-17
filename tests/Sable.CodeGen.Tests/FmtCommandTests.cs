@@ -32,7 +32,7 @@ public sealed class FmtCommandTests : IDisposable {
 
     [Fact]
     public void FormatsADirectoryInPlaceSkippingTargetAndHiddenDirectories() {
-        var messy = Write("src/main.sab", "module M\nfn f(){let x=1}");
+        var messy = Write("src/main.sab", "module M\nfn f(){let x=1\nlet y=x}");
         var tidy = Write("src/tidy.sab", "module M\n\nfn g() { }\n");
         var built = Write("target/gen.sab", "module M\nfn f(){}");
         var hidden = Write(".cache/x.sab", "module M\nfn f(){}");
@@ -42,7 +42,7 @@ public sealed class FmtCommandTests : IDisposable {
 
         Assert.Equal(0, exit);
         Assert.Equal("", errors);
-        Assert.Equal("module M\nfn f() {\n    let x = 1\n}\n", File.ReadAllText(messy));
+        Assert.Equal("module M\nfn f() {\n    let x = 1\n    let y = x\n}\n", File.ReadAllText(messy));
         Assert.Equal("module M\n\nfn g() { }\n", File.ReadAllText(tidy));
         Assert.Equal("module M\nfn f(){}", File.ReadAllText(built));
         Assert.Equal("module M\nfn f(){}", File.ReadAllText(hidden));

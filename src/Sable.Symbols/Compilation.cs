@@ -107,13 +107,22 @@ public sealed class Compilation
     /// </summary>
     public IReadOnlyList<Diagnostic> GetAllDiagnostics()
     {
-        var all = new List<Diagnostic>(GetDiagnostics());
+        var all = new List<Diagnostic>();
 
+        foreach (var tree in SyntaxTrees) all.AddRange(tree.Diagnostics);
+        all.AddRange(_declarationDiagnostics);
+
+        // Bodies first, then the type binder's bag: binding a body resolves
+        // types too — a local's annotation, a cast, a pattern's type — and
+        // those complaints land in the same place as a signature's.
         foreach (var tree in SyntaxTrees)
         {
             if (!_fileScopes.ContainsKey(tree)) continue;
             all.AddRange(GetSemanticModel(tree).GetDiagnostics());
         }
+
+        TypeBinder.ForceAll();
+        all.AddRange(TypeBinder.Diagnostics);
 
         all.Sort((a, b) => a.Span.Start.CompareTo(b.Span.Start));
         return all;

@@ -1,0 +1,67 @@
+module Negative.Collections
+
+struct Point { var x: Int, var y: Int }
+
+fn indexAnArrayWithAString(_ xs: Int[], _ s: String) -> Int {
+    return xs[s]                        //! S3004 expected 'Int'
+}
+
+fn indexADictionaryWithTheWrongKey(_ d: [String: Int]) -> Int? {
+    return d[1]                         //! S3004 expected 'String'
+}
+
+fn aDictionaryLookupIsOptional(_ d: [String: Int]) -> Int {
+    return d["a"]                       //! S3004 expected 'Int'
+}
+
+fn arrayElementsMustAgree() {
+    let xs = [1, "two", 3.0]            //! S3015 but the array holds
+}
+
+fn anEmptyArrayNeedsAType() {
+    let xs = []                         //! S3005 needs a type annotation
+}
+
+fn arrayKindsAreDistinct(_ grow: Int[>..]) -> Int[] {
+    return grow                         //! S3004
+}
+
+fn elementTypesAreInvariant(_ xs: Int[]) -> I64[] {
+    return xs                           //! S3004
+}
+
+fn tupleArityIsChecked(_ pair: (Int, Int)) -> (Int, Int, Int) {
+    return pair                         //! S3004
+}
+
+fn tupleElementTypesAreChecked(_ pair: (Int, Int)) -> (Int, String) {
+    return pair                         //! S3004
+}
+
+fn aTupleHasNoSuchElement(_ pair: (a: Int, b: Int)) -> Int {
+    return pair.c                       //! S2002 has no element named 'c'
+}
+
+fn aTupleIndexIsInRange(_ pair: (Int, Int)) -> Int {
+    return pair.5                       //! S2002 has no element named '5'
+}
+
+fn indexingATuple(_ pair: (Int, Int)) -> Int {
+    return pair[0]                      //! S3012 cannot be indexed
+}
+
+fn appendingToAFixedArray(_ xs: Int[]) {
+    xs.append(1)                        //! S2002 has no member named 'append'
+}
+
+fn appendingTheWrongElement(_ xs: Int[>..]) {
+    xs.append("one")                    //! S3007 cannot be called
+}
+
+fn iteratingAPoint(_ p: Point) {
+    for part in p { }                   //! S3013 cannot be iterated
+}
+
+fn arrayCountIsNotAMethod(_ xs: Int[]) -> Int {
+    return xs.count()                   //! S3006 is not callable
+}

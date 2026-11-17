@@ -2244,7 +2244,11 @@ public sealed class Binder
 
     private BoundExpression BindRecordExpression(RecordExpressionSyntax syntax)
     {
-        var type = _compilation.TypeBinder.BindType(syntax.Type, _containingSymbol, _scope);
+        // 'Pair { first: 1, second: "a" }' names a generic type without its
+        // arguments, which the field values settle — so the name is resolved
+        // first and the arguments inferred, rather than demanded up front.
+        var type = InferredRecordType(syntax)
+            ?? _compilation.TypeBinder.BindType(syntax.Type, _containingSymbol, _scope);
 
         if (type is not NamedTypeSymbol named)
         {
@@ -2304,6 +2308,48 @@ public sealed class Binder
         }
 
         return new BoundRecordExpression(syntax, named, fields.ToImmutable());
+    }
+
+    /// <summary>
+    /// A generic type written without its arguments in a record literal, with
+    /// the arguments read off the field values.
+    /// </summary>
+    private NamedTypeSymbol? InferredRecordType(RecordExpressionSyntax syntax)
+    {
+        if (syntax.Type is not SimpleNameTypeSyntax { TypeArgumentList: null } name) return null;
+
+        var found = _compilation.TypeBinder.Lookup(
+            name.Identifier.Text, _containingSymbol, _scope, name.Span);
+
+        if (found is not NamedTypeSymbol { TypeArguments.IsEmpty: true } definition) return null;
+        if (definition.TypeParameters.IsEmpty) return null;
+
+        var map = new Dictionary<TypeParameterSymbol, TypeSymbol>();
+
+        // The field values are bound again below, in the position they turn
+        // out to have, so this pass asks rather than tells.
+        using (_diagnostics.Suppress())
+        {
+            foreach (var initializer in syntax.Fields)
+            {
+                if (initializer.Expression is not { } expression) continue;
+
+                var field = definition
+                    .GetMembers(initializer.NameToken.Text)
+                    .OfType<FieldSymbol>()
+                    .FirstOrDefault();
+
+                if (field is null) continue;
+
+                TypeSubstitution.Unify(
+                    field.Type, BindExpression(expression).Type, definition.TypeParameters, map);
+            }
+        }
+
+        if (map.Count != definition.TypeParameters.Length) return null;
+
+        var substitution = new TypeSubstitution(map);
+        return definition.Construct([.. definition.TypeParameters.Select(substitution.Apply)]);
     }
 
     private BoundExpression BindCast(CastExpressionSyntax syntax)

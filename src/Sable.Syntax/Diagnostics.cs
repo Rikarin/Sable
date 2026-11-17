@@ -171,17 +171,45 @@ public sealed record Diagnostic(
 public sealed class DiagnosticBag : IReadOnlyCollection<Diagnostic>
 {
     private readonly List<Diagnostic> _items = [];
+    private int _suppressed;
 
     public int Count => _items.Count;
     public bool HasErrors => _items.Exists(d => d.Severity == DiagnosticSeverity.Error);
 
-    public void Add(Diagnostic diagnostic) => _items.Add(diagnostic);
+    /// <summary>
+    /// Stops recording until the returned handle is disposed.
+    /// </summary>
+    /// <remarks>
+    /// Bidirectional inference sometimes binds an expression to find out what
+    /// it is, then binds it again in the position it turned out to have. The
+    /// first pass is a question, not a claim, so its complaints are not the
+    /// user's problem.
+    /// </remarks>
+    public Suppression Suppress() => new(this);
+
+    public readonly struct Suppression : IDisposable
+    {
+        private readonly DiagnosticBag _bag;
+
+        internal Suppression(DiagnosticBag bag)
+        {
+            _bag = bag;
+            bag._suppressed++;
+        }
+
+        public void Dispose() => _bag._suppressed--;
+    }
+
+    public void Add(Diagnostic diagnostic)
+    {
+        if (_suppressed == 0) _items.Add(diagnostic);
+    }
 
     public void Error(ErrorCode code, TextSpan span, string message) =>
-        _items.Add(Diagnostic.Error(code, span, message));
+        Add(Diagnostic.Error(code, span, message));
 
     public void Error(ErrorCode code, int start, int length, string message) =>
-        _items.Add(Diagnostic.Error(code, new TextSpan(start, length), message));
+        Add(Diagnostic.Error(code, new TextSpan(start, length), message));
 
     public void AddRange(IEnumerable<Diagnostic> diagnostics) => _items.AddRange(diagnostics);
 

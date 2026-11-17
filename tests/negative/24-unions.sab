@@ -1,0 +1,81 @@
+module Negative.Unions
+
+union Shape {
+    Circle(radius: F64)
+    Rect(width: F64, height: F64)
+    Empty
+}
+
+enum Direction { North, South, East, West }
+enum Code: U8 { Ok = 0, Failed = 1 }
+
+struct Point { var x: Int }
+
+fn anUnknownCase() -> Shape {
+    return Shape.Triangle               //! S2002 has no member named 'Triangle'
+}
+
+fn anUnknownEnumCase() -> Direction {
+    return Direction.Up                 //! S2002 has no member named 'Up'
+}
+
+fn aCaseNeedsItsPayload() -> Shape {
+    return Shape.Circle                 //! S6002 so it needs them here
+}
+
+fn tooFewPayloadValues() -> Shape {
+    return Shape.Rect(width: 1.0)       //! S6002 takes 2 value(s)
+}
+
+fn tooManyPayloadValues() -> Shape {
+    return Shape.Circle(radius: 1.0, extra: 2.0)   //! S6002 takes 1 value(s)
+}
+
+fn theWrongPayloadType() -> Shape {
+    return Shape.Circle(radius: "big")  //! S3004 expected 'F64'
+}
+
+fn theWrongPayloadLabel() -> Shape {
+    return Shape.Circle(r: 1.0)         //! S2002 has no field named 'r'
+}
+
+fn anEnumCaseTakesNoPayload() -> Direction {
+    return Direction.North(1)           //! S3006
+}
+
+fn aUnionIsNotItsCase(_ s: Shape) -> F64 {
+    return s                            //! S3004
+}
+
+fn matchingAnEnumAgainstAUnion(_ d: Direction) {
+    match d {
+        case .Circle => { }             //! S6001
+        default => { }
+    }
+}
+
+fn aPatternOfTheWrongType(_ s: Shape) {
+    match s {
+        case "text" => { }              //! S6000
+        default => { }
+    }
+}
+
+fn payloadBindingCountIsChecked(_ s: Shape) {
+    match s {
+        case .Rect(let w, let h, let d) => { }   //! S6002
+        default => { }
+    }
+}
+
+fn structuralUnionMembersAreNotReachable(_ value: Int | String) -> Int {
+    return value.count                  //! S2002 has no member named 'count'
+}
+
+fn aStructuralUnionNeedsAMatchingCase(_ value: Int | String) -> Bool {
+    return value == 1                   //! S3009
+}
+
+fn assigningTheWrongCase() -> Int | String {
+    return 1.5                          //! S3004
+}

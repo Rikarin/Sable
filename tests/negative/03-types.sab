@@ -82,13 +82,11 @@ fn noContextForALeadingDot() {
     let d = .North                      //! S3021
 }
 
-fn cannotInferTheTypeArgument() {
-    let b = makeBox()                   //! S3022 cannot infer
+fn cannotInferTheTypeArgument() -> Int {
+    return nothingToInferFrom()         //! S3022 cannot infer
 }
 
-fn makeBox<T>() -> Box<T> { return Box { item: missingValue() } }
-
-fn missingValue<T>() -> T { return missingValue() }   //! S3022 cannot infer
+fn nothingToInferFrom<T>() -> Int { return 0 }
 
 fn missingFieldInitializer() -> Point {
     return Point { x: 1 }               //! S3028 'y' is not initialised

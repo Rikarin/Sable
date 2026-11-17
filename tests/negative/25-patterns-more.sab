@@ -1,0 +1,87 @@
+module Negative.PatternsMore
+
+union Shape { Circle(radius: F64), Rect(width: F64, height: F64), Empty }
+enum Direction { North, South, East, West }
+struct Point { var x: Int, var y: Int }
+
+fn aRangePatternNeedsNumbers(_ s: String) {
+    match s {
+        case 1..<5 => { }               //! S6000 //! S6000
+        default => { }
+    }
+}
+
+fn aTuplePatternArityIsChecked(_ pair: (Int, Int)) {
+    match pair {
+        case (let a, let b, let c) => { }   //! S6000
+        default => { }                  //! S6006
+    }
+}
+
+fn aRecordPatternFieldMustExist(_ p: Point) {
+    match p {
+        case Point { z: let n } => { }  //! S2002 has no field named 'z'
+        default => { }
+    }
+}
+
+fn aRecordPatternFieldTypeIsChecked(_ p: Point) {
+    match p {
+        case Point { x: "text" } => { } //! S6000
+        default => { }
+    }
+}
+
+fn anOrPatternChecksBothSides(_ s: Shape) {
+    match s {
+        case .Empty | .Triangle => { }  //! S6001
+        default => { }
+    }
+}
+
+fn aTypeTestPatternNeedsAType(_ s: Shape) {
+    match s {
+        case let x as Nowhere => { }    //! S2001 no type named 'Nowhere'
+        default => { }
+    }
+}
+
+fn aGuardMustBeBool(_ s: Shape, _ n: Int) {
+    match s {
+        case .Empty where n => { }      //! S3004 expected 'Bool'
+        default => { }
+    }
+}
+
+fn armsAfterADefault(_ s: Shape) {
+    match s {
+        default => { }
+        case .Empty => { }              //! S6006
+    }
+}
+
+fn aRepeatedCase(_ s: Shape) {
+    match s {
+        case .Empty => { }
+        case .Empty => { }              //! S6006
+        default => { }
+    }
+}
+
+fn anEmptyMatchIsNotExhaustive(_ s: Shape) {
+    match s {                           //! S6003
+    }
+}
+
+fn matchAsAnExpressionNeedsArms(_ s: Shape) -> Int {
+    return match s {                    //! S6003
+        case .Empty => 0
+    }
+}
+
+fn bindingTheSameNameTwice(_ pair: (Int, Int)) {
+    match pair {
+        case (let a, let a) => { }      //! S2000 already declared
+        default => { }                  //! S6006
+    }
+}

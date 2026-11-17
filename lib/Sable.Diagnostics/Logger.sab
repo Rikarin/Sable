@@ -1,0 +1,183 @@
+module Sable.Diagnostics
+
+import Sable.Time
+
+// Structured logging (docs/06 §6.4): a line per event on standard error,
+// "LEVEL name: message key=value ...", with values quoted when they hold a
+// space, a quote or an '='. Written in Sable over the runtime's calls.
+
+public union Level {
+    Trace
+    Debug
+    Info
+    Warning
+    Error
+}
+
+/// A level's rank, so that one can be compared with the logger's threshold.
+public fn rank(_ level: Level) -> Int {
+    return match level {
+        case .Trace => 0
+        case .Debug => 1
+        case .Info => 2
+        case .Warning => 3
+        case .Error => 4
+    }
+}
+
+public fn levelName(_ level: Level) -> String {
+    return match level {
+        case .Trace => "TRACE"
+        case .Debug => "DEBUG"
+        case .Info => "INFO"
+        case .Warning => "WARN"
+        case .Error => "ERROR"
+    }
+}
+
+/// A key and its value, already text.
+public struct Field {
+    public var key: String
+    public var value: String
+}
+
+public fn field(_ key: String, _ value: String) -> Field {
+    return Field { key: key, value: value }
+}
+
+public fn field(_ key: String, _ value: Int) -> Field {
+    return Field { key: key, value: value.toString() }
+}
+
+public fn field(_ key: String, _ value: Bool) -> Field {
+    return Field { key: key, value: value.toString() }
+}
+
+public class Logger {
+    public var name: String
+    public var threshold: Level
+
+    /// Stamp each line with the UTC time, to the second.
+    public var timestamps: Bool
+
+    /// The fields every line from this logger carries.
+    var context: Field[>..] = []
+
+    /// Every line written, when kept, as well as written: for tests.
+    var kept: String[>..] = []
+    var keeping: Bool = false
+
+    public init(_ name: String) {
+        self.name = name
+        self.threshold = Level.Info
+        self.timestamps = false
+    }
+
+    /// The level, from SABLE_LOG when it names one ("debug", "warn", ...).
+    public fn configureFromEnvironment() {
+        if let wanted = Runtime.environment("SABLE_LOG") {
+            if let level = parseLevel(wanted) {
+                threshold = level
+            }
+        }
+    }
+
+    /// A logger that adds these fields to every line, sharing the rest.
+    public fn with(_ fields: Field[>..]) -> Logger {
+        let child = Logger(name)
+        child.threshold = threshold
+        child.timestamps = timestamps
+        for f in context {
+            child.context.append(f)
+        }
+        for f in fields {
+            child.context.append(f)
+        }
+        return child
+    }
+
+    /// Keep the lines as well as writing them, for `lines()` to give back.
+    public fn keepLines() {
+        keeping = true
+    }
+
+    public fn lines() -> String[>..] {
+        return kept
+    }
+
+    public fn isEnabled(_ level: Level) -> Bool {
+        return rank(level) >= rank(threshold)
+    }
+
+    public fn log(_ level: Level, _ message: String, _ fields: Field[>..]) {
+        if !isEnabled(level) {
+            return
+        }
+        var line = ""
+        if timestamps {
+            line = DateTime.now().iso8601() + " "
+        }
+        line = line + levelName(level) + " " + name + ": " + message
+        for f in context {
+            line = line + " " + f.key + "=" + quoted(f.value)
+        }
+        for f in fields {
+            line = line + " " + f.key + "=" + quoted(f.value)
+        }
+        if keeping {
+            kept.append(line)
+        }
+        Runtime.writeError(line + "\n")
+    }
+
+    public fn trace(_ message: String) { log(Level.Trace, message, []) }
+    public fn debug(_ message: String) { log(Level.Debug, message, []) }
+    public fn info(_ message: String) { log(Level.Info, message, []) }
+    public fn warning(_ message: String) { log(Level.Warning, message, []) }
+    public fn error(_ message: String) { log(Level.Error, message, []) }
+
+    public fn info(_ message: String, _ fields: Field[>..]) { log(Level.Info, message, fields) }
+    public fn warning(_ message: String, _ fields: Field[>..]) { log(Level.Warning, message, fields) }
+    public fn error(_ message: String, _ fields: Field[>..]) { log(Level.Error, message, fields) }
+}
+
+public fn parseLevel(_ text: String) -> Level? {
+    let t = text.trimmed()
+    if t == "trace" || t == "TRACE" { return Level.Trace }
+    if t == "debug" || t == "DEBUG" { return Level.Debug }
+    if t == "info" || t == "INFO" { return Level.Info }
+    if t == "warn" || t == "warning" || t == "WARN" { return Level.Warning }
+    if t == "error" || t == "ERROR" { return Level.Error }
+    return none
+}
+
+/// The value as written, or in quotes with '"' and '\' escaped where it would be misread.
+fn quoted(_ value: String) -> String {
+    var plain = value.count > 0
+    var i = 0
+    while i < value.count {
+        let c = value.at(i)
+        if c == ' ' || c == '"' || c == '=' || c == '\\' || c == '\n' {
+            plain = false
+        }
+        i += 1
+    }
+    if plain {
+        return value
+    }
+    var text = "\""
+    i = 0
+    while i < value.count {
+        let c = value.at(i)
+        if c == '"' || c == '\\' {
+            text = text + "\\"
+        }
+        if c == '\n' {
+            text = text + "\\n"
+        } else {
+            text = text + String.fromChar(c)
+        }
+        i += 1
+    }
+    return text + "\""
+}

@@ -394,6 +394,38 @@ fn main() {
                 """).Stdout
         );
 
+    /// <summary>Sable.Diagnostics: levels, a threshold, context fields, and values quoted where they would be misread.</summary>
+    [Fact]
+    public void LoggingIsWrittenInSable() {
+        var run = AssertAgree("""
+                module P
+                import Sable.Diagnostics
+
+                @main
+                fn main() {
+                    let log = Logger("app")
+                    log.keepLines()
+                    log.debug("hidden")
+                    log.info("started", [field("port", 8080), field("tls", false)])
+                    let request = log.with([field("id", "r-1")])
+                    request.keepLines()
+                    request.warning("slow", [field("path", "/a b"), field("note", "say \"hi\"")])
+                    log.threshold = Level.Debug
+                    log.debug("now shown")
+                    log.error("")
+                    print(log.lines().count)
+                    print(request.lines()[0])
+                    print(parseLevel("warn") != none)
+                    print(log.isEnabled(Level.Trace))
+                }
+                """);
+        Assert.Equal("3\nWARN app: slow id=r-1 path=\"/a b\" note=\"say \\\"hi\\\"\"\ntrue\nfalse\n", run.Stdout);
+        Assert.Equal(
+            "INFO app: started port=8080 tls=false\nWARN app: slow id=r-1 path=\"/a b\" note=\"say \\\"hi\\\"\"\nDEBUG app: now shown\nERROR app: \n",
+            run.Stderr
+        );
+    }
+
     /// <summary>Only what a program reaches is built: the library costs a program that does not use it nothing.</summary>
     [Fact]
     public void WhatAProgramDoesNotUseIsNotBuilt() {

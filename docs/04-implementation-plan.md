@@ -779,6 +779,11 @@ Written so far (`tests/Sable.CodeGen.Tests/LibraryTests.cs`):
   cleanly beside Sable.Text and Sable.Collections. Not yet: the `Encoder` and
   `Decoder` protocols, binary formats, and namespacing the free functions
   (`parse`, `render`) under a type.
+- `Sable.Diagnostics`: `Logger` writes one structured line per event to
+  standard error, as `LEVEL name: message key=value`. It has a level
+  threshold (or `SABLE_LOG`), context fields that `with` carries to child
+  loggers, optional UTC timestamps, and quotes values where they would be
+  misread. Not yet: tracing spans and metrics.
 
 What it took from the compiler: `[]` as an argument typed by the parameter
 (overloaded or not), `?.` on any optional rather than only a

@@ -1,0 +1,12 @@
+module Negative.Strings
+
+fn openingDelimiterNotAlone() -> String {
+    return """text                      //! S0023 on the line after //! S0024 indented less
+        """
+}
+
+fn insufficientIndentation() -> String {
+    return """   //! S0023 on the line after //! S0024 indented less //! S0024 indented less
+    text
+        """
+}

@@ -13,7 +13,7 @@ fn expectedExpression() -> Int {
     return + ,   //! S1002 expected an expression //! S1002 expected an expression //! S2002 no symbol //! S2002 no symbol //! S6005
 }
 
-fn expectedTypeAfterColon(_ x: ) { }    //! S1004 expected an identifier
+fn expectedTypeAfterColon(_ x: ) { }    //! S1003 expected a type
 
 fn expectedIdentifier() {
     let = 1                             //! S1004 expected an identifier

@@ -1151,6 +1151,14 @@ internal sealed class Parser
                 return ParseDictionaryType();
 
             default:
+                if (!At(SyntaxKind.IdentifierToken) && !SyntaxFacts.IsKeyword(Current.Kind))
+                {
+                    _diagnostics.Error(ErrorCode.ERR_ExpectedType, CurrentSpan,
+                        $"expected a type but found '{DescribeCurrent()}'");
+                    return new SimpleNameTypeGreen(
+                        CreateMissing(SyntaxKind.IdentifierToken), null);
+                }
+
                 return ParseSimpleNameType();
         }
     }

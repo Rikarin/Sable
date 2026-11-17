@@ -1,0 +1,26 @@
+module Negative.NamesMore
+
+protocol Named { fn name() -> String }
+struct Point { var x: Int }
+alias Alias = Point
+
+fn aFieldIsNotAType(_ p: Point.x) { }   //! S2004
+
+fn anAliasIsNotAValue() -> Int {
+    return Alias                        //! S3004
+}
+
+public union Variable..: Named {
+    Small(a: Int)
+    Big(a: Int, b: Int, c: Int)
+
+    fn name() -> String { return "v" }
+}
+
+fn aVariableSizeValueCannotBeBoxed(_ v: Variable) -> any Named {
+    return v                            //! S3003 variable-size
+}
+
+fn notSupportedYet() -> Int {
+    return #file                        //! S3099 is not bound yet
+}

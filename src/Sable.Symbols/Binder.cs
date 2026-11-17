@@ -2543,6 +2543,18 @@ public sealed class Binder
             return new BoundError(syntax, expression);
         }
 
+        // docs/02 §2.5: a variable-mode value is exactly its variant's size,
+        // so nothing can box it behind a fixed-size existential.
+        if (conversion == ConversionKind.Existential
+            && target is ExistentialTypeSymbol
+            && expression.Type is NamedTypeSymbol { IsVariableSize: true } variable)
+        {
+            _diagnostics.Error(ErrorCode.ERR_VariableSizeNotAllowed, syntax.Span,
+                $"'{variable.ToDisplayString()}' is variable-size, so it cannot be held "
+                + $"as '{target.ToDisplayString()}'");
+            return new BoundError(syntax, expression);
+        }
+
         if (conversion == ConversionKind.Identity) return expression;
 
         var converted = new BoundConversion(syntax, target, expression, conversion.Value);

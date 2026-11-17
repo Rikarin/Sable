@@ -1,0 +1,5 @@
+module Negative.SyntaxMore
+
+fn expectedAType(_ x: 1) { }   //! S1003 expected a type //! S1001 expected ')' //! S1008 //! S1008 //! S1008 //! S1008
+
+fn afterRecovery() -> Int { return 1 }

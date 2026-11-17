@@ -113,7 +113,7 @@ dotnet test Sable.slnx
 | `Sable.Symbols` — negative-diagnostic corpus | in progress |
 | Everything downstream (SIL, codegen, runtime) | not started |
 
-**973 tests green**, and every file in [examples/](examples/) parses as a
+**976 tests green**, and every file in [examples/](examples/) parses as a
 complete compilation unit with no diagnostics and an exact round-trip.
 [tests/corpus/](tests/corpus/) holds programs that must type-check with
 nothing to say, and [tests/negative/](tests/negative/) holds programs that

@@ -48,14 +48,16 @@ public enum ErrorCode
     WRN_UserWarning = 30,
 
     // ---- Syntactic (S1000-S1999) -----------------------------------------
-    ERR_UnexpectedToken = 1000,
+    // 1000 was "unexpected token". Recovery never needs it: a token that
+    // cannot start what is expected is reported by whatever expected it.
     ERR_ExpectedToken = 1001,
     ERR_ExpectedExpression = 1002,
     ERR_ExpectedType = 1003,
     ERR_ExpectedIdentifier = 1004,
     ERR_UnexpectedTrailingTokens = 1005,
     ERR_ExpectedPattern = 1006,
-    ERR_ExpectedStatement = 1007,
+    // 1007 was "expected a statement". Anything may start one, so the
+    // parser never has to say this.
     ERR_ExpectedDeclaration = 1008,
 
     // ---- Name resolution (S2000-S2999) -----------------------------------

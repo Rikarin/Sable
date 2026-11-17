@@ -418,3 +418,165 @@ public sealed class BoundUnionCaseGroup(
     public UnionCaseSymbol UnionCase { get; } = unionCase;
     public override IEnumerable<BoundNode> Children => [];
 }
+
+// ---------------------------------------------------------------------------
+// Patterns
+// ---------------------------------------------------------------------------
+
+/// <summary>A pattern, bound against the type of the value it matches.</summary>
+public abstract class BoundPattern(SyntaxNode syntax, TypeSymbol inputType) : BoundNode(syntax)
+{
+    /// <summary>The type of the value this pattern is matched against.</summary>
+    public TypeSymbol InputType { get; } = inputType;
+
+    /// <summary>True when the pattern matches every value of its input type.</summary>
+    public virtual bool IsIrrefutable => false;
+}
+
+public sealed class BoundWildcardPattern(SyntaxNode syntax, TypeSymbol inputType)
+    : BoundPattern(syntax, inputType)
+{
+    public override bool IsIrrefutable => true;
+    public override IEnumerable<BoundNode> Children => [];
+}
+
+public sealed class BoundBindingPattern(
+    SyntaxNode syntax, TypeSymbol inputType, LocalSymbol local)
+    : BoundPattern(syntax, inputType)
+{
+    public LocalSymbol Local { get; } = local;
+    public override bool IsIrrefutable => true;
+    public override IEnumerable<BoundNode> Children => [];
+}
+
+public sealed class BoundLiteralPattern(
+    SyntaxNode syntax, TypeSymbol inputType, object? value, bool isNegative)
+    : BoundPattern(syntax, inputType)
+{
+    public object? Value { get; } = value;
+    public bool IsNegative { get; } = isNegative;
+    public override IEnumerable<BoundNode> Children => [];
+}
+
+public sealed class BoundRangePattern(
+    SyntaxNode syntax, TypeSymbol inputType, BoundPattern? lower, BoundPattern? upper)
+    : BoundPattern(syntax, inputType)
+{
+    public BoundPattern? Lower { get; } = lower;
+    public BoundPattern? Upper { get; } = upper;
+    public override IEnumerable<BoundNode> Children => Nodes(Lower, Upper);
+}
+
+public sealed class BoundTuplePattern(
+    SyntaxNode syntax, TypeSymbol inputType, ImmutableArray<BoundPattern> elements)
+    : BoundPattern(syntax, inputType)
+{
+    public ImmutableArray<BoundPattern> Elements { get; } = elements;
+    public override bool IsIrrefutable => Elements.All(e => e.IsIrrefutable);
+    public override IEnumerable<BoundNode> Children => Elements;
+}
+
+public sealed class BoundUnionCasePattern(
+    SyntaxNode syntax,
+    TypeSymbol inputType,
+    UnionCaseSymbol unionCase,
+    ImmutableArray<BoundPattern> payload)
+    : BoundPattern(syntax, inputType)
+{
+    public UnionCaseSymbol UnionCase { get; } = unionCase;
+    public ImmutableArray<BoundPattern> Payload { get; } = payload;
+    public override IEnumerable<BoundNode> Children => Payload;
+}
+
+public sealed class BoundEnumCasePattern(
+    SyntaxNode syntax, TypeSymbol inputType, EnumCaseSymbol enumCase)
+    : BoundPattern(syntax, inputType)
+{
+    public EnumCaseSymbol EnumCase { get; } = enumCase;
+    public override IEnumerable<BoundNode> Children => [];
+}
+
+public sealed class BoundRecordPattern(
+    SyntaxNode syntax,
+    TypeSymbol inputType,
+    ImmutableArray<(FieldSymbol Field, BoundPattern Pattern)> fields)
+    : BoundPattern(syntax, inputType)
+{
+    public ImmutableArray<(FieldSymbol Field, BoundPattern Pattern)> Fields { get; } = fields;
+    public override IEnumerable<BoundNode> Children => Fields.Select(f => f.Pattern);
+}
+
+public sealed class BoundArrayPattern(
+    SyntaxNode syntax,
+    TypeSymbol inputType,
+    ImmutableArray<BoundPattern> elements,
+    int restIndex)
+    : BoundPattern(syntax, inputType)
+{
+    public ImmutableArray<BoundPattern> Elements { get; } = elements;
+
+    /// <summary>Index of the <c>...</c> element, or -1 when there is none.</summary>
+    public int RestIndex { get; } = restIndex;
+
+    public override IEnumerable<BoundNode> Children => Elements;
+}
+
+public sealed class BoundTypeTestPattern(
+    SyntaxNode syntax, TypeSymbol inputType, TypeSymbol testedType, LocalSymbol? local)
+    : BoundPattern(syntax, inputType)
+{
+    public TypeSymbol TestedType { get; } = testedType;
+    public LocalSymbol? Local { get; } = local;
+    public override IEnumerable<BoundNode> Children => [];
+}
+
+public sealed class BoundOrPattern(
+    SyntaxNode syntax, TypeSymbol inputType, BoundPattern left, BoundPattern right)
+    : BoundPattern(syntax, inputType)
+{
+    public BoundPattern Left { get; } = left;
+    public BoundPattern Right { get; } = right;
+    public override bool IsIrrefutable => Left.IsIrrefutable || Right.IsIrrefutable;
+    public override IEnumerable<BoundNode> Children => Nodes(Left, Right);
+}
+
+public sealed class BoundErrorPattern(SyntaxNode syntax)
+    : BoundPattern(syntax, ErrorTypeSymbol.Instance)
+{
+    public override IEnumerable<BoundNode> Children => [];
+}
+
+// ---------------------------------------------------------------------------
+// match
+// ---------------------------------------------------------------------------
+
+public sealed class BoundMatchArm(
+    SyntaxNode syntax,
+    ImmutableArray<BoundPattern> patterns,
+    BoundExpression? guard,
+    BoundNode body)
+    : BoundNode(syntax)
+{
+    public ImmutableArray<BoundPattern> Patterns { get; } = patterns;
+    public BoundExpression? Guard { get; } = guard;
+
+    /// <summary>An expression or a block, depending on how the arm was written.</summary>
+    public BoundNode Body { get; } = body;
+
+    /// <summary>True for <c>default</c>, which has no patterns.</summary>
+    public bool IsDefault => Patterns.IsEmpty;
+
+    public override IEnumerable<BoundNode> Children => Nodes([.. Patterns, Guard, Body]);
+}
+
+public sealed class BoundMatch(
+    SyntaxNode syntax,
+    TypeSymbol type,
+    BoundExpression subject,
+    ImmutableArray<BoundMatchArm> arms)
+    : BoundExpression(syntax, type)
+{
+    public BoundExpression Subject { get; } = subject;
+    public ImmutableArray<BoundMatchArm> Arms { get; } = arms;
+    public override IEnumerable<BoundNode> Children => Nodes([Subject, .. Arms]);
+}

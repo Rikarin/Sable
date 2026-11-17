@@ -90,6 +90,16 @@ public enum ErrorCode
     ERR_NotAValue = 3020,
     ERR_NoContextualType = 3021,
     ERR_NotSupportedYet = 3099,
+
+    // ---- Patterns and flow (S6000-S6999) ---------------------------------
+    ERR_PatternTypeMismatch = 6000,
+    ERR_UnknownUnionCase = 6001,
+    ERR_WrongPayloadCount = 6002,
+    ERR_MatchNotExhaustive = 6003,
+    ERR_NotAllPathsReturn = 6004,
+    WRN_UnreachableCode = 6005,
+    WRN_PatternAlreadyCovered = 6006,
+    ERR_MatchArmTypesDiffer = 6007,
 }
 
 public enum DiagnosticSeverity { Hidden, Info, Warning, Error }

@@ -71,11 +71,31 @@ public sealed class Binder
         foreach (var parameter in function.Parameters) Declare(parameter.Name, parameter);
 
         var bound = BindBlock(body);
+        CheckFlow(function, body, bound);
 
         PopScope();
         _containingSymbol = savedSymbol;
         _returnType = savedReturn;
         return bound;
+    }
+
+    /// <summary>Checks that a function returns on every path, and warns on dead code.</summary>
+    private void CheckFlow(FunctionSymbol function, BlockSyntax body, BoundBlock bound)
+    {
+        if (FlowAnalysis.FirstUnreachable(bound) is { } unreachable)
+        {
+            _diagnostics.Add(Diagnostic.Warning(
+                ErrorCode.WRN_UnreachableCode, unreachable.Syntax.Span,
+                "this statement can never be reached"));
+        }
+
+        if (function.ReturnType.Equals(Core.Void) || function.ReturnType.IsError) return;
+        if (FlowAnalysis.AlwaysExits(bound)) return;
+
+        // Point at the closing brace, which is where the path runs out.
+        _diagnostics.Error(ErrorCode.ERR_NotAllPathsReturn, body.CloseBraceToken.Span,
+            $"not all paths return a value of type "
+            + $"'{function.ReturnType.ToDisplayString()}'");
     }
 
     /// <summary>Binds an expression-bodied function, as if it returned its value.</summary>
@@ -329,6 +349,7 @@ public sealed class Binder
             case CasePatternConditionSyntax casePattern:
             {
                 var subject = BindExpression(casePattern.Expression);
+                BindPattern(casePattern.Pattern, subject.Type);
                 return new BoundTypeTest(casePattern, Core.Bool, subject, subject.Type);
             }
 
@@ -495,6 +516,7 @@ public sealed class Binder
         ArrayExpressionSyntax array => BindArray(array, expectedType),
         CastExpressionSyntax cast => BindCast(cast),
         TypeTestExpressionSyntax test => BindTypeTest(test),
+        MatchExpressionSyntax match => BindMatch(match, expectedType),
         TryExpressionSyntax tryExpression => BindExpression(tryExpression.Expression, expectedType),
         _ => Unsupported(expression),
     };
@@ -1308,5 +1330,518 @@ public sealed class Binder
         if (syntax == expression.Syntax) _bound[syntax] = converted;
 
         return converted;
+    }
+
+    // =======================================================================
+    // Patterns
+    // =======================================================================
+
+    /// <summary>Binds a pattern against the type of the value it will match.</summary>
+    /// <remarks>
+    /// Binding a pattern declares its bindings in the current scope, so the
+    /// caller pushes a scope for each arm.
+    /// </remarks>
+    public BoundPattern BindPattern(PatternSyntax pattern, TypeSymbol inputType)
+    {
+        var bound = BindPatternCore(pattern, inputType);
+        _bound[pattern] = bound;
+        return bound;
+    }
+
+    private BoundPattern BindPatternCore(PatternSyntax pattern, TypeSymbol inputType)
+    {
+        switch (pattern)
+        {
+            case WildcardPatternSyntax wildcard:
+                return new BoundWildcardPattern(wildcard, inputType);
+
+            case ParenthesizedPatternSyntax parenthesized:
+                return BindPattern(parenthesized.Pattern, inputType);
+
+            case BindingPatternSyntax binding:
+            {
+                var local = new LocalSymbol(
+                    binding.Identifier.Text, _containingSymbol, binding,
+                    binding.LetOrVarKeyword.Kind == SyntaxKind.VarKeyword)
+                {
+                    TypeResolver = () => inputType,
+                };
+
+                Declare(local.Name, local);
+                return new BoundBindingPattern(binding, inputType, local);
+            }
+
+            case LiteralPatternSyntax literal:
+                return BindLiteralPattern(literal, inputType);
+
+            case RangePatternSyntax range:
+            {
+                var lower = range.Left is null ? null : BindPattern(range.Left, inputType);
+                var upper = range.Right is null ? null : BindPattern(range.Right, inputType);
+                return new BoundRangePattern(range, inputType, lower, upper);
+            }
+
+            case TuplePatternSyntax tuple:
+                return BindTuplePattern(tuple, inputType);
+
+            case UnionCasePatternSyntax unionCase:
+                return BindUnionCasePattern(unionCase, inputType);
+
+            case RecordPatternSyntax record:
+                return BindRecordPattern(record, inputType);
+
+            case ArrayPatternSyntax array:
+                return BindArrayPattern(array, inputType);
+
+            case TypeTestPatternSyntax test:
+            {
+                var tested = _compilation.TypeBinder.BindType(
+                    test.Type, _containingSymbol, _scope);
+                return new BoundTypeTestPattern(test, inputType, tested, null);
+            }
+
+            case BindingTypeTestPatternSyntax test:
+            {
+                var tested = _compilation.TypeBinder.BindType(
+                    test.Type, _containingSymbol, _scope);
+
+                var local = new LocalSymbol(
+                    test.Identifier.Text, _containingSymbol, test,
+                    test.LetOrVarKeyword.Kind == SyntaxKind.VarKeyword)
+                {
+                    TypeResolver = () => tested,
+                };
+
+                Declare(local.Name, local);
+                return new BoundTypeTestPattern(test, inputType, tested, local);
+            }
+
+            case OrPatternSyntax or:
+            {
+                var left = BindPattern(or.Left, inputType);
+                var right = BindPattern(or.Right, inputType);
+                return new BoundOrPattern(or, inputType, left, right);
+            }
+
+            case RestPatternSyntax rest:
+                return new BoundWildcardPattern(rest, inputType);
+
+            default:
+                return new BoundErrorPattern(pattern);
+        }
+    }
+
+    private BoundPattern BindLiteralPattern(
+        LiteralPatternSyntax pattern, TypeSymbol inputType)
+    {
+        var token = pattern.Token;
+
+        TypeSymbol literalType = token.Kind switch
+        {
+            SyntaxKind.IntegerLiteralToken => Core.Int,
+            SyntaxKind.FloatLiteralToken => Core.F64,
+            SyntaxKind.CharLiteralToken => Core.Char,
+            SyntaxKind.StringLiteralToken or SyntaxKind.MultilineStringLiteralToken
+                or SyntaxKind.RawStringLiteralToken => Core.String,
+            SyntaxKind.TrueKeyword or SyntaxKind.FalseKeyword => Core.Bool,
+            SyntaxKind.NoneKeyword => inputType,
+            _ => ErrorTypeSymbol.Instance,
+        };
+
+        if (!inputType.IsError && !literalType.IsError
+            && !_conversions.HasImplicitConversion(literalType, inputType, true))
+        {
+            _diagnostics.Error(ErrorCode.ERR_PatternTypeMismatch, pattern.Span,
+                $"a '{literalType.ToDisplayString()}' pattern cannot match "
+                + $"'{inputType.ToDisplayString()}'");
+        }
+
+        return new BoundLiteralPattern(
+            pattern, inputType, token.Value, !pattern.MinusToken.IsNone);
+    }
+
+    private BoundPattern BindTuplePattern(TuplePatternSyntax pattern, TypeSymbol inputType)
+    {
+        var elementTypes = inputType is TupleTypeSymbol tuple
+            ? tuple.ElementTypes
+            : ImmutableArray<TypeSymbol>.Empty;
+
+        if (inputType is not TupleTypeSymbol && !inputType.IsError)
+        {
+            _diagnostics.Error(ErrorCode.ERR_PatternTypeMismatch, pattern.Span,
+                $"'{inputType.ToDisplayString()}' is not a tuple");
+        }
+        else if (!elementTypes.IsEmpty && elementTypes.Length != pattern.Elements.Count)
+        {
+            _diagnostics.Error(ErrorCode.ERR_PatternTypeMismatch, pattern.Span,
+                $"this tuple has {elementTypes.Length} element(s), "
+                + $"but the pattern has {pattern.Elements.Count}");
+        }
+
+        var elements = ImmutableArray.CreateBuilder<BoundPattern>(pattern.Elements.Count);
+        for (var i = 0; i < pattern.Elements.Count; i++)
+        {
+            var elementType = i < elementTypes.Length
+                ? elementTypes[i]
+                : ErrorTypeSymbol.Instance;
+            elements.Add(BindPattern(pattern.Elements[i], elementType));
+        }
+
+        return new BoundTuplePattern(pattern, inputType, elements.ToImmutable());
+    }
+
+    private BoundPattern BindUnionCasePattern(
+        UnionCasePatternSyntax pattern, TypeSymbol inputType)
+    {
+        var name = pattern.Identifier.Text;
+
+        // A qualifier names the union explicitly; otherwise the input type does.
+        TypeSymbol owner = pattern.Qualifier is { } qualifier
+            ? _compilation.TypeBinder.BindType(qualifier, _containingSymbol, _scope)
+            : inputType;
+
+        if (owner is not NamedTypeSymbol named)
+        {
+            if (!owner.IsError)
+            {
+                _diagnostics.Error(ErrorCode.ERR_PatternTypeMismatch, pattern.Span,
+                    $"'{owner.ToDisplayString()}' has no cases to match");
+            }
+            return new BoundErrorPattern(pattern);
+        }
+
+        var member = named.GetMembers(name).FirstOrDefault();
+
+        if (member is EnumCaseSymbol enumCase)
+            return new BoundEnumCasePattern(pattern, inputType, enumCase);
+
+        if (member is not UnionCaseSymbol unionCase)
+        {
+            _diagnostics.Error(ErrorCode.ERR_UnknownUnionCase, pattern.Identifier.Span,
+                $"'{named.ToDisplayString()}' has no case named '{name}'");
+            return new BoundErrorPattern(pattern);
+        }
+
+        var payload = ImmutableArray.CreateBuilder<BoundPattern>();
+        if (pattern.ArgumentList is { } arguments)
+        {
+            if (arguments.Arguments.Count != unionCase.Payload.Length)
+            {
+                _diagnostics.Error(ErrorCode.ERR_WrongPayloadCount, pattern.Span,
+                    $"'{name}' carries {unionCase.Payload.Length} value(s), "
+                    + $"but the pattern names {arguments.Arguments.Count}");
+            }
+
+            for (var i = 0; i < arguments.Arguments.Count; i++)
+            {
+                var fieldType = i < unionCase.Payload.Length
+                    ? unionCase.Payload[i].Type
+                    : ErrorTypeSymbol.Instance;
+                payload.Add(BindPattern(arguments.Arguments[i].Pattern, fieldType));
+            }
+        }
+        else if (unionCase.HasPayload)
+        {
+            _diagnostics.Error(ErrorCode.ERR_WrongPayloadCount, pattern.Span,
+                $"'{name}' carries {unionCase.Payload.Length} value(s), "
+                + "but the pattern names none");
+        }
+
+        return new BoundUnionCasePattern(pattern, inputType, unionCase, payload.ToImmutable());
+    }
+
+    private BoundPattern BindRecordPattern(RecordPatternSyntax pattern, TypeSymbol inputType)
+    {
+        var owner = pattern.Type is { } typeSyntax
+            ? _compilation.TypeBinder.BindType(typeSyntax, _containingSymbol, _scope)
+            : inputType;
+
+        var fields = ImmutableArray.CreateBuilder<(FieldSymbol, BoundPattern)>();
+
+        if (owner is not NamedTypeSymbol named)
+        {
+            if (!owner.IsError)
+            {
+                _diagnostics.Error(ErrorCode.ERR_PatternTypeMismatch, pattern.Span,
+                    $"'{owner.ToDisplayString()}' has no fields to match");
+            }
+            return new BoundErrorPattern(pattern);
+        }
+
+        foreach (var field in pattern.Fields)
+        {
+            var name = field.NameToken.Text;
+            var member = named.GetMembers(name).OfType<FieldSymbol>().FirstOrDefault();
+
+            if (member is null)
+            {
+                _diagnostics.Error(ErrorCode.ERR_NameNotFound, field.NameToken.Span,
+                    $"'{named.ToDisplayString()}' has no field named '{name}'");
+                continue;
+            }
+
+            if (field.Pattern is { } sub)
+            {
+                fields.Add((member, BindPattern(sub, member.Type)));
+                continue;
+            }
+
+            // '{ name }' binds the field to a local of the same name.
+            var local = new LocalSymbol(name, _containingSymbol, field, false)
+            {
+                TypeResolver = () => member.Type,
+            };
+            Declare(name, local);
+            fields.Add((member, new BoundBindingPattern(field, member.Type, local)));
+        }
+
+        return new BoundRecordPattern(pattern, inputType, fields.ToImmutable());
+    }
+
+    private BoundPattern BindArrayPattern(ArrayPatternSyntax pattern, TypeSymbol inputType)
+    {
+        var elementType = inputType is ArrayTypeSymbol array
+            ? array.ElementType
+            : ErrorTypeSymbol.Instance;
+
+        if (inputType is not ArrayTypeSymbol && !inputType.IsError)
+        {
+            _diagnostics.Error(ErrorCode.ERR_PatternTypeMismatch, pattern.Span,
+                $"'{inputType.ToDisplayString()}' is not an array");
+        }
+
+        var elements = ImmutableArray.CreateBuilder<BoundPattern>(pattern.Elements.Count);
+        var restIndex = -1;
+
+        for (var i = 0; i < pattern.Elements.Count; i++)
+        {
+            var element = pattern.Elements[i];
+
+            if (element is RestPatternSyntax rest)
+            {
+                restIndex = i;
+                if (!rest.Identifier.IsNone)
+                {
+                    var restType = new ArrayTypeSymbol(elementType, ArrayKind.Slice);
+                    var local = new LocalSymbol(
+                        rest.Identifier.Text, _containingSymbol, rest, false)
+                    {
+                        TypeResolver = () => restType,
+                    };
+                    Declare(local.Name, local);
+                    elements.Add(new BoundBindingPattern(rest, restType, local));
+                    continue;
+                }
+
+                elements.Add(new BoundWildcardPattern(rest, elementType));
+                continue;
+            }
+
+            elements.Add(BindPattern(element, elementType));
+        }
+
+        return new BoundArrayPattern(
+            pattern, inputType, elements.ToImmutable(), restIndex);
+    }
+
+    // =======================================================================
+    // match
+    // =======================================================================
+
+    private BoundExpression BindMatch(MatchExpressionSyntax syntax, TypeSymbol? expectedType)
+    {
+        var subject = BindExpression(syntax.Expression);
+        var arms = ImmutableArray.CreateBuilder<BoundMatchArm>();
+
+        TypeSymbol? resultType = expectedType;
+        var sawValue = false;
+
+        foreach (var armSyntax in syntax.Arms)
+        {
+            PushScope();
+
+            var patterns = ImmutableArray.CreateBuilder<BoundPattern>();
+            BoundExpression? guard = null;
+            BoundNode body;
+
+            switch (armSyntax)
+            {
+                case MatchArmSyntax arm:
+                {
+                    foreach (var pattern in arm.Patterns)
+                        patterns.Add(BindPattern(pattern, subject.Type));
+
+                    if (arm.WhereClause is { } where)
+                    {
+                        guard = Convert(
+                            BindExpression(where.Condition, Core.Bool),
+                            Core.Bool, where.Condition);
+                    }
+
+                    if (arm.Body is BlockSyntax block)
+                    {
+                        body = BindBlock(block);
+                    }
+                    else if (arm.Body is ExpressionSyntax expression)
+                    {
+                        var value = BindExpression(expression, resultType);
+                        resultType ??= value.Type;
+                        sawValue = true;
+
+                        if (!value.Type.Equals(resultType))
+                        {
+                            if (_conversions.HasImplicitConversion(
+                                    value.Type, resultType, value is BoundLiteral))
+                            {
+                                value = Convert(value, resultType, expression);
+                            }
+                            else
+                            {
+                                _diagnostics.Error(ErrorCode.ERR_MatchArmTypesDiffer,
+                                    expression.Span,
+                                    $"this arm gives '{value.Type.ToDisplayString()}' but "
+                                    + $"earlier arms gave '{resultType.ToDisplayString()}'");
+                                resultType = ErrorTypeSymbol.Instance;
+                            }
+                        }
+
+                        body = value;
+                    }
+                    else
+                    {
+                        body = new BoundError(arm);
+                    }
+
+                    arms.Add(new BoundMatchArm(
+                        arm, patterns.ToImmutable(), guard, body));
+                    break;
+                }
+
+                case MatchCaseBlockSyntax caseBlock:
+                {
+                    foreach (var pattern in caseBlock.Patterns)
+                        patterns.Add(BindPattern(pattern, subject.Type));
+
+                    if (caseBlock.WhereClause is { } where)
+                    {
+                        guard = Convert(
+                            BindExpression(where.Condition, Core.Bool),
+                            Core.Bool, where.Condition);
+                    }
+
+                    var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+                    foreach (var statement in caseBlock.Statements)
+                        statements.Add(BindStatement(statement));
+
+                    body = new BoundBlock(caseBlock, [], statements.ToImmutable());
+                    arms.Add(new BoundMatchArm(
+                        caseBlock, patterns.ToImmutable(), guard, body));
+                    break;
+                }
+            }
+
+            PopScope();
+        }
+
+        var type = sawValue ? resultType ?? Core.Void : Core.Void;
+        var bound = new BoundMatch(syntax, type, subject, arms.ToImmutable());
+
+        CheckExhaustive(bound);
+        return bound;
+    }
+
+    /// <summary>
+    /// Reports a match that does not cover its subject, naming a case it
+    /// misses.
+    /// </summary>
+    /// <remarks>
+    /// This covers unions, enums and booleans, which is where exhaustiveness
+    /// actually bites. The general algorithm — Maranget's usefulness, with a
+    /// witness built from the uncovered constructors — replaces it when
+    /// nested patterns need checking too.
+    /// </remarks>
+    private void CheckExhaustive(BoundMatch match)
+    {
+        if (match.Subject.Type.IsError) return;
+
+        foreach (var arm in match.Arms)
+        {
+            if (arm.Guard is not null) continue;
+            if (arm.IsDefault) return;
+            if (arm.Patterns.Any(p => p.IsIrrefutable)) return;
+        }
+
+        var covered = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var arm in match.Arms)
+        {
+            if (arm.Guard is not null) continue;
+            foreach (var pattern in arm.Patterns) CollectCovered(pattern, covered);
+        }
+
+        var missing = MissingCases(match.Subject.Type, covered);
+        if (missing is null || missing.Count == 0) return;
+
+        var witness = missing.Count == 1
+            ? $"'{missing[0]}'"
+            : $"'{string.Join("', '", missing.Take(3))}'"
+              + (missing.Count > 3 ? $" and {missing.Count - 3} more" : "");
+
+        _diagnostics.Error(ErrorCode.ERR_MatchNotExhaustive, match.Syntax.Span,
+            $"match is not exhaustive: {witness} not covered");
+    }
+
+    private static void CollectCovered(BoundPattern pattern, HashSet<string> covered)
+    {
+        switch (pattern)
+        {
+            case BoundUnionCasePattern unionCase:
+                if (unionCase.Payload.All(p => p.IsIrrefutable))
+                    covered.Add(unionCase.UnionCase.Name);
+                return;
+
+            case BoundEnumCasePattern enumCase:
+                covered.Add(enumCase.EnumCase.Name);
+                return;
+
+            case BoundLiteralPattern literal when literal.Value is bool value:
+                covered.Add(value ? "true" : "false");
+                return;
+
+            case BoundOrPattern or:
+                CollectCovered(or.Left, covered);
+                CollectCovered(or.Right, covered);
+                return;
+        }
+    }
+
+    private List<string>? MissingCases(TypeSymbol subject, HashSet<string> covered)
+    {
+        if (subject.Equals(Core.Bool))
+        {
+            var missing = new List<string>();
+            if (!covered.Contains("true")) missing.Add("true");
+            if (!covered.Contains("false")) missing.Add("false");
+            return missing;
+        }
+
+        if (subject is not NamedTypeSymbol named) return null;
+
+        if (named.TypeKind == TypeKind.Union)
+        {
+            return [.. named.Members.OfType<UnionCaseSymbol>()
+                .Select(c => c.Name)
+                .Where(name => !covered.Contains(name))];
+        }
+
+        if (named.TypeKind == TypeKind.Enum)
+        {
+            return [.. named.Members.OfType<EnumCaseSymbol>()
+                .Select(c => c.Name)
+                .Where(name => !covered.Contains(name))];
+        }
+
+        // Any other type has too many values to enumerate, so a match on one
+        // needs a wildcard or a default, which the caller already checked for.
+        return ["_"];
     }
 }

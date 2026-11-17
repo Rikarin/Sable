@@ -35,14 +35,24 @@ public static class Pipeline {
     ///     together. The first tree is the one that should hold the entry
     ///     point: '@main', or a function called main, is looked for there first.
     /// </summary>
-    public static CompileResult Compile(IReadOnlyList<SyntaxTree> program, string? debugDirectory = null, bool checkExclusivity = true) {
-        var compilation = CompilationOf(program);
-        var errors = Errors(compilation, program);
+    public static CompileResult Compile(IReadOnlyList<SyntaxTree> program, string? debugDirectory = null, bool checkExclusivity = true, BuildTimings? timings = null) {
+        Compilation compilation;
+        List<string> errors;
+        using (BuildTimings.Of(timings, "bind")) {
+            compilation = CompilationOf(program);
+            errors = Errors(compilation, program);
+        }
+
         if (errors.Count > 0) {
             return new(null, null, errors);
         }
 
-        var (module, lowering) = SilGen.Lower(compilation);
+        SilModule module;
+        IReadOnlyList<Diagnostic> lowering;
+        using (BuildTimings.Of(timings, "sil")) {
+            (module, lowering) = SilGen.Lower(compilation);
+        }
+
         module.CheckExclusivity = checkExclusivity;
         errors.AddRange(lowering.Select(d => program.Count == 1 ? Format(d, program[0].Text) : $"error[{d.Id}]: {d.Message}"));
         if (errors.Count > 0) {
@@ -51,7 +61,7 @@ public static class Pipeline {
 
         // The verifier runs on everything that leaves the front end: a SIL
         // problem is the compiler's bug, and it must not reach LLVM.
-        var problems = SilVerifier.Verify(module);
+        var problems = timings is null ? SilVerifier.Verify(module) : timings.Measure("verify", () => SilVerifier.Verify(module));
         if (problems.Count > 0) {
             return new(module, null, [..problems.Select(static p => $"internal error: SIL verification failed: {p}")]);
         }
@@ -64,13 +74,18 @@ public static class Pipeline {
         // every local in its slot, where the debug information says it is.
         if (debugDirectory is null) {
             try {
+                using var _ = BuildTimings.Of(timings, "passes");
                 SilPassManager.Run(module, SilPassManager.Default);
             } catch (SilPassException failure) {
                 return new(module, null, [$"internal error: {failure.Message}"]);
             }
         }
 
-        var ir = debugDirectory is null ? LlvmEmitter.Emit(module) : LlvmEmitter.EmitWithDebugInfo(module, debugDirectory);
+        string ir;
+        using (BuildTimings.Of(timings, "emit")) {
+            ir = debugDirectory is null ? LlvmEmitter.Emit(module) : LlvmEmitter.EmitWithDebugInfo(module, debugDirectory);
+        }
+
         return new(module, ir, []);
     }
 

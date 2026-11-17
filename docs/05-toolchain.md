@@ -205,6 +205,19 @@ therefore does not invalidate downstream modules.
 - Function-level: SIL passes and IRGen are embarrassingly parallel.
 - Target: linear scaling to 16 cores on a 100-module build.
 
+### As built (Phase 5)
+
+The first implementation (docs/04, "Incremental builds, as implemented")
+is a fingerprint-keyed cache rather than the query engine: the unit is the
+package's library (and a binary's entry file), each compiled to an object
+from a compilation of the whole program and cached in
+`target/<profile>/cache` under `(toolchain, profile, target, fingerprint)`,
+where the fingerprint is the unit's content and the program's interface. The
+interface is a hash of each file's public surface — declarations,
+signatures and the bodies other units lower — not yet a `.sabi` file, and an
+interface change invalidates every unit rather than only the dependents.
+Clang runs on units in parallel; lowering is still one unit at a time.
+
 ---
 
 ## 5.5 The registry

@@ -61,8 +61,10 @@ public sealed partial class LlvmEmitter {
         _checkExclusivity = module.CheckExclusivity;
         _debug?.Begin(module);
 
-        // Only what the program reaches is built: the library's other functions are not.
-        _reachable = SilPassManager.Reachable(module);
+        // Only what the program reaches is built: the library's other functions
+        // are not. One unit of a separately compiled program cannot know what
+        // the rest reaches, so it builds everything it has.
+        _reachable = module.Unit is null ? SilPassManager.Reachable(module) : null;
         var functions = new StringBuilder();
         foreach (var function in module.Functions.Where(f => _reachable?.Contains(f.Name) ?? true)) {
             functions.Append(new FunctionEmitter(this, function).Emit()).Append('\n');
@@ -77,8 +79,10 @@ public sealed partial class LlvmEmitter {
         output.Append("%SableMetadata = type { ptr, ptr, i64, ptr, ptr }\n");
         output.Append("%SableInlineSlot = type { i32, i32, i32, i32, i32, i32, i32, ptr }\n\n");
         // Globals: zero until the entry point's start initialises them.
+        // Separately compiled, every unit has the globals, and the linker keeps one of each.
         foreach (var (globalName, globalType) in module.Globals) {
-            output.Append('@').Append(Global("global." + globalName)).Append(" = internal global ").Append(Type(globalType)).Append(" zeroinitializer\n");
+            output.Append('@').Append(Global("global." + globalName)).Append(module.Unit is null ? " = internal global " : " = linkonce_odr global ")
+                .Append(Type(globalType)).Append(" zeroinitializer\n");
         }
 
         output.Append(_globals);
@@ -90,6 +94,9 @@ public sealed partial class LlvmEmitter {
         output.Append('\n');
         output.Append(functions);
         output.Append(_helpers);
+        if (module.Unit is { } unit) {
+            output.Append(ExternalDeclarations(unit, output));
+        }
 
         // Type-based alias information (docs/04 §3.8): an array's header —
         // its count, its buffer, its strong count — is never an element, so a
@@ -580,9 +587,58 @@ public sealed partial class LlvmEmitter {
         var superclass = type.Superclass is { } parent ? ClassMetadata(parent) : "null";
         // A method no reachable code can call was not built: its slot is empty.
         var vtable = string.Join(", ", type.VTable.Select(m => _reachable?.Contains(m.Function) == false ? "ptr null" : $"ptr @{Global(m.Function)}"));
-        _globals.Append($"{name} = internal constant {MetadataType(type)} {{ ptr {destroy}, ptr {typeName}, i64 0, ptr {superclass}, ptr null, [{type.VTable.Count} x ptr] [{vtable}] }}\n");
+        _globals.Append($"{name} = {SharedLinkage} constant {MetadataType(type)} {{ ptr {destroy}, ptr {typeName}, i64 0, ptr {superclass}, ptr null, [{type.VTable.Count} x ptr] [{vtable}] }}\n");
         return name;
     }
+
+    /// <summary>
+    ///     How metadata is linked: kept to the module, or — when the module is
+    ///     one unit of several — one copy for the program, since a class's
+    ///     metadata is its identity to <c>is</c> and <c>as?</c>.
+    /// </summary>
+    string SharedLinkage => _module?.Unit is null ? "internal" : "linkonce_odr";
+
+    /// <summary>
+    ///     How a function is linked: from a unit of several, one only it
+    ///     defines is the program's; one another unit may define as well — a
+    ///     generic instance, a thunk — is kept once by the linker.
+    /// </summary>
+    string Linkage(string function) => _module?.Unit is { } unit && !unit.Owned.Contains(function) ? "linkonce_odr " : "";
+
+    /// <summary>
+    ///     A <c>declare</c> for every function the unit refers to and does not
+    ///     define: the program's other functions, with the signatures their
+    ///     own units give them.
+    /// </summary>
+    static string ExternalDeclarations(SilUnitInfo unit, StringBuilder output) {
+        var text = output.ToString();
+        var defined = new HashSet<string>(StringComparer.Ordinal);
+        foreach (System.Text.RegularExpressions.Match match in DefinedSymbol().Matches(text)) {
+            defined.Add(match.Groups[1].Value);
+        }
+
+        var declarations = new StringBuilder("\n");
+        var declared = new HashSet<string>(StringComparer.Ordinal);
+        foreach (System.Text.RegularExpressions.Match match in ReferencedSymbol().Matches(text)) {
+            var symbol = match.Groups[1].Value;
+            if (defined.Contains(symbol) || !declared.Add(symbol)) {
+                continue;
+            }
+
+            var name = symbol[SymbolPrefix.Length..];
+            declarations.Append(unit.External.TryGetValue(name, out var type)
+                ? $"declare {ReturnType(type)} @{Global(name)}({string.Join(", ", type.Parameters.Select(static p => p is AddressType ? "ptr noalias" : Type(p)))})\n"
+                : $"declare void @{Global(name)}()\n");
+        }
+
+        return declarations.ToString();
+    }
+
+    [System.Text.RegularExpressions.GeneratedRegex("^(?:define [^@\\n]*@|@)\"(sable\\.[^\"]+)\"(?: = |\\()", System.Text.RegularExpressions.RegexOptions.Multiline)]
+    private static partial System.Text.RegularExpressions.Regex DefinedSymbol();
+
+    [System.Text.RegularExpressions.GeneratedRegex("@\"(sable\\.[^\"]+)\"")]
+    private static partial System.Text.RegularExpressions.Regex ReferencedSymbol();
 
     /// <summary>A class's metadata: the runtime's record, then its vtable.</summary>
     static string MetadataType(ClassType type) => $"{{ ptr, ptr, i64, ptr, ptr, [{type.VTable.Count} x ptr] }}";
@@ -626,7 +682,7 @@ public sealed partial class LlvmEmitter {
 
         var size = $"ptrtoint (ptr getelementptr ({llvmElement}, ptr null, i32 1) to i64)";
         var typeName = TrapMessage(type.ToString());
-        _globals.Append($"{name} = internal constant %SableMetadata {{ ptr @sable_array_destroy, ptr {typeName}, i64 {size}, ptr {copy}, ptr {destroy} }}\n");
+        _globals.Append($"{name} = {SharedLinkage} constant %SableMetadata {{ ptr @sable_array_destroy, ptr {typeName}, i64 {size}, ptr {copy}, ptr {destroy} }}\n");
         return name;
     }
 
@@ -948,7 +1004,7 @@ public sealed partial class LlvmEmitter {
             }
 
             var text = new StringBuilder();
-            text.Append("define ").Append(ReturnType(function.Type)).Append(" @").Append(Global(function.Name))
+            text.Append("define ").Append(module.Linkage(function.Name)).Append(ReturnType(function.Type)).Append(" @").Append(Global(function.Name))
                 .Append('(').Append(string.Join(", ", parameters)).Append(')');
             if (_scope is not null) {
                 text.Append(" !dbg ").Append(_scope);

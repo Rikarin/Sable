@@ -31,7 +31,7 @@ public sealed partial class SilGen {
     /// <summary>Checks every <c>@builtin</c> declaration against the builtin it names.</summary>
     void CheckBuiltins() {
         foreach (var tree in _compilation.SyntaxTrees) {
-            foreach (var declaration in tree.Root.DescendantNodes()) {
+            foreach (var declaration in Declarations(tree)) {
                 switch (declaration) {
                     case FunctionDeclarationSyntax function
                         when _compilation.GetDeclaredSymbol(function) is FunctionSymbol { Builtin: { } name } symbol:

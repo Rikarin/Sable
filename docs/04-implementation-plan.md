@@ -1455,6 +1455,158 @@ Sable syntax (`expression` is lldb's C); and gdb.
 - [x] LSP responds to completion in < 50 ms at p95 on a 200k-line project —
       p95 5.2–9.4 ms on 205k lines, typing into function bodies while the
       server rebuilds in the background (`tools/Sable.LspBench`)
+
+### Incremental builds, as implemented
+
+In `src/Sable.Driver/Build/` (`IncrementalBuild`, `InterfaceFingerprint`),
+`SilGen.LowerUnit` and `SilUnit.cs` in Sable.SIL, and `NativeObjects` in
+Sable.CodeGen. `sable build` and `sable run` on a package go through it;
+`--timings` prints each phase's time and what was compiled or reused.
+
+- **Units.** A binary is compiled as units: its entry file, each package's
+  library (its own first), and the standard library it imports (with the
+  core). Each unit becomes one object file; the objects and a cached
+  runtime object are linked by clang. The compilation is still the whole
+  program's — every declaration of every unit, so names, signatures,
+  layouts and vtables come out the same everywhere — but a unit's lowering
+  (`SilGen.LowerUnit`) binds and lowers only its own files' bodies and
+  declares the rest. What several units may need is made in each that
+  needs it and linked `linkonce_odr`, so the linker keeps one: generic
+  instances (lowered where they are used, like C++ templates), witness
+  thunks, reflection functions, globals' storage, and class metadata, whose
+  address is a class's identity to `is` and `as?`. The unit with the entry
+  point sets up and tears down every global. This is the dev profile's
+  path (a debug build runs no SIL passes and no LTO, so nothing needs the
+  whole program); a release build is compiled whole, as before, and only
+  an unchanged one is skipped.
+- **The cache** is `target/<profile>/cache/`. Every key is a SHA-256 over
+  the toolchain — the compiler's assemblies (which embed the standard
+  library), `clang --version` with `$CC`, the OS and architecture — the
+  profile's settings (optimisation, debug directory, exclusivity), and
+  content: each file's name, text and the features it is parsed with.
+  Timestamps are never part of a key.
+  - `builds/<binary>.txt`: the key over every input of the last build and
+    the executable's size, time and hash. A build whose inputs hash to it,
+    with the executable as it was left (size and time, else content), does
+    nothing more: it reads and hashes the files and stops.
+  - `objects/<key>.o` and `.abi`: one per unit, keyed by its own files'
+    content and the **program's interface fingerprint**. The interface is
+    not a binary `.sabi` file (docs/05 §5.4) but a hash per file
+    (`InterfaceFingerprint`) of its tokens with the bodies left out that
+    only their own unit lowers: functions, initialisers, deinits, operators
+    and getters with no type parameters, no `some` or `ref` in the
+    signature and no attribute, at module level or in a non-generic struct,
+    class, union, enum or actor, or in an extension of a type the program
+    declares only as such. Generic bodies, protocol defaults, subscripts,
+    setters, initial values and default arguments count as interface, since
+    other units lower them; where such code is, its tokens' line and column
+    count too (they reach debug information and the units that instantiate
+    it), and elsewhere they do not, so a body growing by a line moves
+    nothing. So a change to an ordinary body recompiles one unit; anything
+    else recompiles every unit of the program (finer, dependents-only
+    invalidation is the query engine's job — below).
+  - `objects/runtime-<key>.o`: the C runtime, compiled once per settings.
+  - `target/resolution.txt`: the last resolution of a graph of local
+    packages, keyed by every local manifest, the lock file and the
+    request; while they are unchanged the resolver does not run. A graph
+    with registry packages is resolved every time.
+- **Checks on the way.** Units whose objects are cached are not
+  type-checked again (they passed with the same inputs); the program's
+  declaration-level diagnostics are always collected. A unit's root
+  inference cannot see other units' summaries and assumes the worst of
+  them, so it may reject what the whole program accepts: then — or if the
+  units' records of each class's vtable and each struct's deinit (the
+  `.abi` files) disagree, or the link fails — the program is compiled whole
+  instead, with a note. A stale or inconsistent object never reaches an
+  executable. (Today a class declared inside a function body that
+  subclasses another unit's class always ends this way: the other unit
+  does not bind that body, so it thinks the superclass has no subclasses.
+  So does a static stored property of a type declared in a body.) Objects are written to a temporary name and renamed into
+  place; past `max(256, 8 × units)` objects the least recently used go (an
+  object's own time is left alone: lldb's debug map checks it).
+- **Parallel.** Files are read, hashed and parsed in parallel; the
+  program's declarations are bound while its interface is fingerprinted;
+  units' IR goes to clang in parallel (one process per core); the
+  toolchain's hash is worked out while packages resolve. Lowering and
+  emission run one unit at a time on the one compilation, which is not
+  thread-safe. `sable` uses the server GC (parsing on every core
+  allocates fast).
+- **Fixed on the way:** debug information gives every variable and member a
+  type (clang 21 crashed on a closure's or a `String` field's without);
+  `SilGen` named overloads by a scan per function (quadratic: 0.5 s on this
+  program, per unit); `SemanticModel.GetAccessorDeclaration` gives a
+  getter's symbol without binding its file's bodies; the resolver asked
+  the package source for versions, and built every candidate list, at
+  every step.
+- **Proved** by `tests/Sable.CodeGen.Tests/IncrementalTests.cs`: after a
+  private body change, a public signature change, a generic function's
+  change, a global's initial value changing, adding and removing a file
+  (removing one still used fails the build), pointing a dependency
+  elsewhere, toggling a feature, switching profile, reverting an edit, an
+  error and its fix, and corrupted cached objects, the program prints what
+  a whole build of the same sources from nothing prints; unchanged builds
+  are `fresh`; reverted states compile nothing. Interface fingerprints are
+  tested directly, and programs from `examples/` and `benchmarks/` dealt
+  into up to six units behave as when compiled whole. Before landing, every
+  program the CodeGen tests build (227 of them) was also built split into
+  one, three and eight units against the whole program: no difference.
+
+**Measured** on an Apple M1 Max (10 cores, 64 GB), macOS, Apple clang 21,
+.NET 11, `sable` built Release (JIT; other work running, load ≈ 8), on
+`tools/incremental/genworkspace.py`'s workspace: 100 library packages in a
+DAG (each depends on up to three earlier ones, always the previous) of
+about 1,100 lines each — structs, unions, a class, a generic function,
+closures, loops, string interpolation — and an app using all of them:
+110,382 lines, 501 files (`genworkspace.py <dir>`, then `sable build
+--timings` in `<dir>/app`). Wall-clock times of `sable build`, median of 3–5:
+
+| Build (dev profile unless said)              | Before (whole program) | After        |
+|----------------------------------------------|------------------------|--------------|
+| Cold                                         | 11.6 s                 | 5.7 s        |
+| No change                                    | 11.6 s                 | 0.12 s       |
+| A function body in one package               | 11.6 s                 | **0.88 s**   |
+| … in the package every other depends on      | 11.6 s                 | 0.86 s       |
+| … in the app's `main`                        | 11.6 s                 | 0.78 s       |
+| A new public function (interface change)     | 11.6 s                 | 5.8 s        |
+| Release, cold / no change                    | 38 s / 38 s            | 34 s / 0.13 s|
+
+With `sable` published ReadyToRun (`dotnet publish -c Release -r osx-arm64
+-p:PublishReadyToRun=true`) a body edit takes 0.62 s. Where the 0.88 s goes
+(`--timings`): resolution 12 ms (cached), reading and hashing 14 ms,
+parsing 150 ms, interface fingerprints 130 ms alongside binding the
+declarations 165 ms, checking the changed unit 100 ms, lowering it 115 ms,
+verifying 26 ms, emitting 30 ms, clang 73 ms, linking 63 ms, and about
+100 ms of process start. Before, a cold dev build was parse 1.2 s, bind
+2.9 s, SIL 4.2 s, verify 1.0 s, emit 2.3 s and clang 9.3 s single-threaded
+(under heavier load; 11.6 s with less).
+
+**Deferred.** The query engine with red-green marking (docs/05 §5.4) is not
+built: the cache-and-partition design meets the target, because a warm
+build's remaining cost is the front end over the whole program's
+declarations (parse, bind signatures, ~0.3 s here), not lowering or
+codegen. What a query engine would add: invalidation by dependency rather
+than "every unit" when an interface changes (today a signature change
+anywhere is a ~6 s rebuild here); keeping parsed trees and bound
+declarations in a long-lived process (a build daemon, or the LSP server)
+so a warm build re-parses only what changed; and early cut-off when a
+change's result is unchanged. Also deferred: a binary `.sabi` (the
+interface is a fingerprint, and each unit still binds every file's
+declarations from source); separate compilation for optimised builds
+(they need the whole program for the SIL passes and LTO — ThinLTO over
+units would parallelise their 26 s of clang); escape and root summaries
+across units (a unit assumes the worst, and the program is compiled whole
+when that rejects it); lowering units in parallel; packages built once
+for several binaries or members (a unit's key includes the whole
+program's interface, so each binary has its own objects); a `.dSYM` for
+separately compiled builds (lldb reads DWARF from the cached objects
+through the debug map; `sable clean` removes them); `sable test` and
+`sable bench` still compile whole.
+
+### Exit criteria
+- [x] Cold build of a 100-package graph < 60 s; warm incremental < 1 s
+  (5.7 s cold and 0.88 s after a function body edit, on the 110k-line
+  graph above; an edit to an interface still rebuilds every unit, 5.8 s)
+- [ ] LSP responds to completion in < 50 ms at p95 on a 200k-line project
 - [ ] A third party publishes a package without talking to the team
 
 ---

@@ -1051,6 +1051,9 @@ public sealed class SilModule {
     /// <summary>The function a program starts in: the one marked <c>@main</c>, or else <c>main</c>.</summary>
     public string? EntryPoint { get; set; }
 
+    /// <summary>Set when the module is one unit of a program compiled separately (<see cref="SilUnit" />).</summary>
+    public SilUnitInfo? Unit { get; set; }
+
     readonly Dictionary<string, NominalType> _types = new(StringComparer.Ordinal);
 
     /// <summary>The structs and enums the module declares, in declaration order.</summary>

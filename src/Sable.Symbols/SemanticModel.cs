@@ -74,6 +74,28 @@ public sealed partial class SemanticModel {
         return _accessors.GetValueOrDefault(accessor);
     }
 
+    /// <summary>
+    ///     The same symbol, without binding any body: what a unit of a
+    ///     separately compiled program needs of another unit's accessors — to
+    ///     name them and call them. Binding later gives the same symbol.
+    /// </summary>
+    public FunctionSymbol? GetAccessorDeclaration(AccessorSyntax accessor) {
+        if (_accessors.TryGetValue(accessor, out var known) || _bodiesBound) {
+            return known;
+        }
+
+        if (accessor.Body is null && accessor.ExpressionBody is null) {
+            return null;
+        }
+
+        return accessor.Parent?.Parent switch {
+            FieldDeclarationSyntax declaration when _compilation.GetDeclaredSymbol(declaration) is FieldSymbol field => AccessorFunction(accessor, field, field.Type),
+            SubscriptDeclarationSyntax { ExpressionBody: null } declaration when _compilation.GetDeclaredSymbol(declaration) is FunctionSymbol subscript =>
+                AccessorFunction(accessor, subscript, subscript.ReturnType),
+            _ => null,
+        };
+    }
+
     /// <summary>The symbol an expression refers to, if it refers to one.</summary>
     /// <remarks>
     ///     A declaration answers with what it declares; a name in a type's
@@ -478,42 +500,8 @@ public sealed partial class SemanticModel {
                 continue;
             }
 
-            var isGetter = accessor.Keyword.Kind == SyntaxKind.GetKeyword;
-            var name = accessor.Keyword.Text;
-
-            var function = new FunctionSymbol(
-                name,
-                owner,
-                accessor,
-                owner.DeclaredAccessibility,
-                FunctionKind.Accessor
-            ) {
-                // A setter writes the value it belongs to; a getter does not.
-                IsMutating = !isGetter
-            };
-
-            // A subscript's accessors see its indices.
-            var parameters = owner is FunctionSymbol { FunctionKind: FunctionKind.Subscript } sub
-                ? sub.Parameters
-                : [];
-
-            if (!isGetter) {
-                var parameterName = accessor.ParameterName.IsNone
-                    ? DefaultParameterName(accessor.Keyword.Kind)
-                    : accessor.ParameterName.Text;
-
-                var parameter = new ParameterSymbol(parameterName, null, function, accessor, parameters.Length);
-                parameter.TypeResolver = () => valueType;
-                parameters = parameters.Add(parameter);
-            }
-
-            function.Parameters = parameters;
-
-            var returnType = isGetter ? valueType : _compilation.Core.Void;
-            function.ReturnTypeResolver = () => returnType;
-
+            var function = AccessorFunction(accessor, owner, valueType);
             var binder = NewBinder(scope, function);
-            _accessors[accessor] = function;
 
             _bound[accessor] = accessor.Body is { } body
                 ? binder.BindFunctionBody(function, body)
@@ -521,6 +509,49 @@ public sealed partial class SemanticModel {
 
             Collect(binder);
         }
+    }
+
+    /// <summary>An accessor's function, made the first time it is asked for: binding its body and declaring it share one.</summary>
+    FunctionSymbol AccessorFunction(AccessorSyntax accessor, Symbol owner, TypeSymbol valueType) {
+        if (_accessors.TryGetValue(accessor, out var existing)) {
+            return existing;
+        }
+
+        var isGetter = accessor.Keyword.Kind == SyntaxKind.GetKeyword;
+        var name = accessor.Keyword.Text;
+
+        var function = new FunctionSymbol(
+            name,
+            owner,
+            accessor,
+            owner.DeclaredAccessibility,
+            FunctionKind.Accessor
+        ) {
+            // A setter writes the value it belongs to; a getter does not.
+            IsMutating = !isGetter
+        };
+
+        // A subscript's accessors see its indices.
+        var parameters = owner is FunctionSymbol { FunctionKind: FunctionKind.Subscript } sub
+            ? sub.Parameters
+            : [];
+
+        if (!isGetter) {
+            var parameterName = accessor.ParameterName.IsNone
+                ? DefaultParameterName(accessor.Keyword.Kind)
+                : accessor.ParameterName.Text;
+
+            var parameter = new ParameterSymbol(parameterName, null, function, accessor, parameters.Length);
+            parameter.TypeResolver = () => valueType;
+            parameters = parameters.Add(parameter);
+        }
+
+        function.Parameters = parameters;
+
+        var returnType = isGetter ? valueType : _compilation.Core.Void;
+        function.ReturnTypeResolver = () => returnType;
+        _accessors[accessor] = function;
+        return function;
     }
 
     /// <summary>What a setter-like accessor calls its incoming value.</summary>

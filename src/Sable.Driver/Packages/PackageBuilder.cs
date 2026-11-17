@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Sable.CodeGen;
+using Sable.Driver.Build;
 using Sable.Syntax;
 
 namespace Sable.Driver.Packages;
@@ -10,15 +11,17 @@ public sealed record BuildRequest(
     FeatureRequest? Features = null,
     string? Package = null,
     string? Bin = null,
-    bool Locked = false);
+    bool Locked = false,
+    bool Timings = false);
 
 /// <summary>An executable a build made.</summary>
 public sealed record BuiltBinary(string Package, string Name, string Path, Profile Profile);
 
 /// <summary>
 ///     Builds packages: each binary is its entry file, the package's library
-///     files, and every dependency's library files, compiled as one program
-///     (docs/05 §5.4 will make that incremental; today it is whole-program).
+///     files, and every dependency's library files, compiled as one program —
+///     incrementally (<see cref="IncrementalBuild" />, docs/05 §5.4): in a
+///     debug build each package separately, and only what changed.
 ///     Executables go to <c>target/&lt;profile&gt;/</c>.
 /// </summary>
 public static class PackageBuilder {
@@ -29,14 +32,15 @@ public static class PackageBuilder {
         : workspace.Members;
 
     internal static PackageGraph Resolve(Workspace workspace, PackageEnvironment environment, BuildRequest request) =>
-        PackageGraph.Resolve(workspace, environment, new(request.Features, null, request.Locked, [..Selected(workspace, request.Package).Select(static m => m.Name)]));
+        PackageGraph.ResolveCached(workspace, environment, new(request.Features, null, request.Locked, [..Selected(workspace, request.Package).Select(static m => m.Name)]));
 
     /// <summary>
     ///     The trees of one target: the binary's entry file first (where the
     ///     entry point is looked for), then the package's library files, then
     ///     its dependencies' — each parsed with its own package's features.
     /// </summary>
-    public static IReadOnlyList<SyntaxTree> Program(PackageGraph graph, string member, BinTarget? bin) {
+    public static IReadOnlyList<SyntaxTree> Program(PackageGraph graph, string member, BinTarget? bin, BuildTimings? timings = null) {
+        using var _ = BuildTimings.Of(timings, "parse");
         var trees = new List<SyntaxTree>();
         var own = graph.Packages[member];
         if (bin is not null) {
@@ -74,6 +78,13 @@ public static class PackageBuilder {
     }
 
     static SyntaxTree Parse(PackageGraph graph, ResolvedPackage package, string file) {
+        var source = SourceOf(graph, package, file);
+        var options = ParseOptions.Default with { Features = [..source.Features] };
+        return SyntaxTree.Parse(new SourceText(File.ReadAllText(file), source.Name), options);
+    }
+
+    /// <summary>A file of a package, with the name its diagnostics give it and the features it is parsed with.</summary>
+    static SourceFile SourceOf(PackageGraph graph, ResolvedPackage package, string file) {
         if (!File.Exists(file)) {
             throw new PackageException($"{package.Name}: no such file '{file}'");
         }
@@ -81,8 +92,22 @@ public static class PackageBuilder {
         var name = package.IsLocal
             ? Path.GetRelativePath(graph.Workspace.Root, file).Replace(Path.DirectorySeparatorChar, '/')
             : $"{package.Name}-{package.Version}/{Path.GetRelativePath(package.Package.Directory, file).Replace(Path.DirectorySeparatorChar, '/')}";
-        var options = ParseOptions.Default with { Features = [..package.Features] };
-        return SyntaxTree.Parse(new SourceText(File.ReadAllText(file), name), options);
+        return new(file, name, [..package.Features.Order(StringComparer.Ordinal)]);
+    }
+
+    /// <summary>
+    ///     A binary's units of separate compilation, in the order of
+    ///     <see cref="Program" />: its entry file, then each package's library,
+    ///     its own first.
+    /// </summary>
+    public static IReadOnlyList<UnitPlan> Units(PackageGraph graph, string member, BinTarget bin) {
+        var own = graph.Packages[member];
+        var units = new List<UnitPlan> { new($"bin {member}/{bin.Name}", [SourceOf(graph, own, bin.Path)]) };
+        foreach (var package in graph.Closure(member)) {
+            units.Add(new($"lib {package.Name}-{package.Version}", [..package.Package.LibrarySources().Select(file => SourceOf(graph, package, file))]));
+        }
+
+        return units;
     }
 
     static string Describe(ResolvedPackage package, Workspace workspace) =>
@@ -138,7 +163,16 @@ public static class PackageBuilder {
     /// </summary>
     public static IReadOnlyList<BuiltBinary>? Build(Workspace workspace, PackageEnvironment environment, BuildRequest request) {
         var clock = Stopwatch.StartNew();
-        var graph = Resolve(workspace, environment, request);
+        var timings = request.Timings ? new BuildTimings() : null;
+
+        // What the build cache is keyed by — the compiler's assemblies, clang's
+        // version — is worked out while the packages are resolved.
+        _ = Task.Run(() => IncrementalBuild.Toolchain);
+        PackageGraph graph;
+        using (BuildTimings.Of(timings, "resolve")) {
+            graph = Resolve(workspace, environment, request);
+        }
+
         var profile = workspace.RootManifest.ProfileFor(request.Release);
         var output = Path.Combine(workspace.TargetDirectory, profile.Name);
         var built = new List<BuiltBinary>();
@@ -171,25 +205,24 @@ public static class PackageBuilder {
             }
 
             foreach (var bin in bins) {
-                var result = Pipeline.Compile(Program(graph, member.Name, bin), profile.Debug ? workspace.Root : null, profile.Exclusivity);
-                if (!result.Succeeded) {
-                    Report(environment, result.Errors);
-                    environment.Error.WriteLine($"error: could not compile {member.Name}");
-                    return null;
-                }
-
-                if (!NativeBuild.IsAvailable()) {
+                if (!NativeObjects.CompilerAvailable) {
                     environment.Error.WriteLine($"error: cannot run '{NativeBuild.CompilerPath}'; set CC to a clang that can link for this platform");
                     return null;
                 }
 
+                // Incrementally (docs/05 §5.4): the cache in target/<profile>/cache.
                 Directory.CreateDirectory(output);
                 var executable = Path.Combine(output, bin.Name);
-                var native = NativeBuild.Build(result.LlvmIr!, executable, profile.Optimise, profile.Debug);
-                if (!native.Succeeded) {
-                    environment.Error.WriteLine("internal error: the native build failed:");
-                    environment.Error.Write(native.Output);
+                var buildSettings = new BuildSettings(profile.Name, profile.Optimise, profile.Debug ? workspace.Root : null, profile.Exclusivity);
+                var outcome = IncrementalBuild.Build(Units(graph, member.Name, bin), buildSettings, executable, Path.Combine(output, "cache"), timings, environment.Error);
+                if (!outcome.Succeeded) {
+                    Report(environment, outcome.Errors);
+                    environment.Error.WriteLine($"error: could not compile {member.Name}");
                     return null;
+                }
+
+                if (timings is not null) {
+                    environment.Error.WriteLine($"       Built {bin.Name}: {outcome.Kind}, {outcome.Compiled} unit(s) compiled, {outcome.Reused} reused");
                 }
 
                 built.Add(new(member.Name, bin.Name, executable, profile));
@@ -202,6 +235,7 @@ public static class PackageBuilder {
 
         var settings = $"{(profile.Optimise ? "optimised" : "unoptimised")}{(profile.Debug ? " + debuginfo" : "")}";
         environment.Error.WriteLine($"    Finished `{profile.Name}` profile [{settings}] target(s) in {clock.Elapsed.TotalSeconds:0.00}s");
+        timings?.Write(environment.Error);
         return built;
     }
 

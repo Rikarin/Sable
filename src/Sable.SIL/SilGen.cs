@@ -89,12 +89,32 @@ public sealed partial class SilGen {
 
     FunctionSymbol? _entryOverride;
 
+    /// <summary>
+    ///     Lowers one unit of a program compiled separately: the functions of
+    ///     the files it owns, and whatever instances of generic functions they
+    ///     use; the program's other functions are only declared. The module's
+    ///     <see cref="SilModule.Unit" /> says which is which.
+    /// </summary>
+    /// <param name="program">The program's declarations, gathered once for all its units; gathered here when not given.</param>
+    public static (SilModule Module, IReadOnlyList<Diagnostic> Diagnostics) LowerUnit(Compilation compilation, SilUnit unit, SilProgram? program = null, FunctionSymbol? entryPoint = null) {
+        var generator = new SilGen(compilation) { _entryOverride = entryPoint, _unit = unit, _program = program };
+        generator._module.Unit = new();
+        generator.LowerAll();
+        return (generator._module, generator.Diagnostics);
+    }
+
+    SilUnit? _unit;
+    SilProgram? _program;
+
+    /// <summary>A file's declarations that lowering looks at — and perhaps other nodes, which each use filters out.</summary>
+    IEnumerable<SyntaxNode> Declarations(SyntaxTree tree) => _program?.Declarations(tree, _unit is null || _unit.Owns(tree)) ?? tree.Root.DescendantNodes();
+
     void LowerAll() {
         var functions = new List<(FunctionSymbol Symbol, SyntaxNode Syntax, SemanticModel Model)>();
 
         foreach (var tree in _compilation.SyntaxTrees) {
             var model = _compilation.GetSemanticModel(tree);
-            foreach (var declaration in tree.Root.DescendantNodes()) {
+            foreach (var declaration in Declarations(tree)) {
                 if (declaration is not (FunctionDeclarationSyntax or InitDeclarationSyntax or DeinitDeclarationSyntax or OperatorDeclarationSyntax)) {
                     continue;
                 }
@@ -108,9 +128,10 @@ public sealed partial class SilGen {
 
             // A computed property's getter: a method of the type, named for
             // the property, that reading the property calls.
-            foreach (var accessor in tree.Root.DescendantNodes().OfType<AccessorSyntax>()) {
+            foreach (var accessor in Declarations(tree).OfType<AccessorSyntax>()) {
                 if (accessor.Keyword.Kind != SyntaxKind.GetKeyword
-                    || model.GetAccessorSymbol(accessor) is not { ContainingSymbol: FieldSymbol { IsStatic: false } field } getter
+                    || (_unit is null || _unit.Owns(tree) ? model.GetAccessorSymbol(accessor) : model.GetAccessorDeclaration(accessor))
+                        is not { ContainingSymbol: FieldSymbol { IsStatic: false } field } getter
                     || !IsLowerable(getter)) {
                     continue;
                 }
@@ -123,15 +144,28 @@ public sealed partial class SilGen {
         AddDerived(functions);
         CheckBuiltins();
 
+        // Overloads: functions of one name in one container (counted once per
+        // pair, not by a scan per function — a large program has thousands).
+        // The container is compared by reference, as a symbol is itself.
+        var none = new object();
+        var sharing = new Dictionary<object, Dictionary<string, int>>(ReferenceEqualityComparer.Instance);
         foreach (var (symbol, _, _) in functions) {
-            var overloaded = functions.Count(f => f.Symbol.Name == symbol.Name
-                && ReferenceEquals(f.Symbol.ContainingSymbol, symbol.ContainingSymbol)) > 1;
+            var container = (object?)symbol.ContainingSymbol ?? none;
+            if (!sharing.TryGetValue(container, out var names)) {
+                sharing[container] = names = new(StringComparer.Ordinal);
+            }
+
+            names[symbol.Name] = names.GetValueOrDefault(symbol.Name) + 1;
+        }
+
+        foreach (var (symbol, _, _) in functions) {
+            var overloaded = sharing[(object?)symbol.ContainingSymbol ?? none][symbol.Name] > 1;
             _names[symbol] = Mangle(symbol, overloaded);
         }
 
         // Which classes something inherits from: their methods dispatch.
         foreach (var tree in _compilation.SyntaxTrees) {
-            foreach (var declaration in tree.Root.DescendantNodes().OfType<ClassDeclarationSyntax>()) {
+            foreach (var declaration in Declarations(tree).OfType<ClassDeclarationSyntax>()) {
                 if (_compilation.GetDeclaredSymbol(declaration) is NamedTypeSymbol type && SuperclassOf(type) is { } superclass) {
                     for (var ancestor = (NamedTypeSymbol?)superclass; ancestor is not null; ancestor = SuperclassOf(ancestor)) {
                         _inherited.Add(ancestor.OriginalDefinition);
@@ -162,6 +196,11 @@ public sealed partial class SilGen {
                 continue;
             }
 
+            if (_unit is not null && !_unit.Owns(model.SyntaxTree)) {
+                DeclareExternal(symbol, syntax, _names[symbol]);
+                continue;
+            }
+
             if (SignatureOf(symbol, syntax, TypeSubstitution.Empty) is not { } type) {
                 continue;
             }
@@ -170,7 +209,19 @@ public sealed partial class SilGen {
                 _module.EntryPoint = _names[symbol];
             }
 
+            var before = _module.Functions.Count;
             LowerBody(symbol, syntax, model, _names[symbol], type, TypeSubstitution.Empty);
+            if (_module.Unit is { } info) {
+                // The function, its closures and an initialiser's two halves
+                // are this unit's alone; a thunk or a reflection function made
+                // on the way may be made by another unit too.
+                var own = _names[symbol];
+                foreach (var made in _module.Functions.Skip(before)) {
+                    if (made.Name == own || made.Name.StartsWith(own + "$", StringComparison.Ordinal) && !made.Name.EndsWith("$thunk", StringComparison.Ordinal)) {
+                        info.Owned.Add(made.Name);
+                    }
+                }
+            }
         }
 
         while (_pending.Count > 0) {
@@ -179,9 +230,128 @@ public sealed partial class SilGen {
             LowerBody(symbol, syntax, model, name, type, substitution);
         }
 
-        LowerGlobalLifetimes();
+        // Separately, the globals are set up by the unit the program starts in.
+        if (_unit is null || _module.EntryPoint is not null) {
+            LowerGlobalLifetimes();
+        }
+
         BuildVTables();
         RootChecker.Check(_module, _sources, _diagnostics);
+        if (_module.Unit is { } unitInfo) {
+            DeclareReferenced(unitInfo);
+            RecordAbi(unitInfo);
+        }
+    }
+
+    /// <summary>
+    ///     Functions other units define, by name, with how to work out the
+    ///     signature each will have there — worked out only for those this
+    ///     unit refers to, since a large program has thousands.
+    /// </summary>
+    readonly Dictionary<string, Func<FunctionType?>> _external = new(StringComparer.Ordinal);
+
+    readonly Dictionary<string, FunctionType?> _externalTypes = new(StringComparer.Ordinal);
+
+    /// <summary>The signature of a function another unit defines, or null when there is none to call.</summary>
+    FunctionType? External(string name) {
+        if (_externalTypes.TryGetValue(name, out var known)) {
+            return known;
+        }
+
+        var type = _external.TryGetValue(name, out var signature) ? signature() : null;
+        _externalTypes[name] = type;
+        return type;
+    }
+
+    /// <summary>
+    ///     A function another unit lowers, declared here as that unit will
+    ///     define it — with the side effects lowering it would have had on the
+    ///     types (a deinit), so that every unit lays them out alike.
+    /// </summary>
+    void DeclareExternal(FunctionSymbol symbol, SyntaxNode syntax, string name) {
+        // LowerBody makes nothing of a declaration without a body.
+        var hasBody = syntax switch {
+            FunctionDeclarationSyntax f => f.Body is not null || f.ExpressionBody is not null,
+            InitDeclarationSyntax i => i.Body is not null,
+            DeinitDeclarationSyntax => true,
+            OperatorDeclarationSyntax o => o.Body is not null || o.ExpressionBody is not null,
+            AccessorSyntax a => a.Body is not null || a.ExpressionBody is not null,
+            _ => false,
+        };
+        if (!hasBody && _compilation.GetDerivedBody(symbol) is null) {
+            return;
+        }
+
+        // As the first loop would: no signature, nothing lowered.
+        FunctionType? Signature() => SignatureOf(symbol, syntax, TypeSubstitution.Empty);
+        _external[name] = Signature;
+
+        // A class's initialiser is two functions: the allocator, and the half that initialises.
+        if (symbol.FunctionKind == FunctionKind.Initializer) {
+            _external[InitializerName(name)] = () => External(name) is { Result: ClassType } allocator ? InitializerType(allocator) : null;
+        }
+
+        if (symbol.FunctionKind == FunctionKind.Deinitializer && External(name) is not null) {
+            switch (Lower(SelfType(symbol, TypeSubstitution.Empty))) {
+                case ClassType owner:
+                    owner.Deinit = name;
+                    break;
+                case StructType owner:
+                    owner.Deinit = name;
+                    break;
+            }
+        }
+    }
+
+    /// <summary>
+    ///     Records the signature of every function of another unit this one
+    ///     refers to — by a call, a reference, a vtable or a deinit — for the
+    ///     verifier and the code generator.
+    /// </summary>
+    void DeclareReferenced(SilUnitInfo info) {
+        var referenced = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var function in _module.Functions) {
+            foreach (var block in function.Blocks) {
+                foreach (var instruction in block.Instructions) {
+                    if (instruction is FunctionRefInst reference) {
+                        referenced.Add(reference.Function);
+                    }
+                }
+            }
+        }
+
+        foreach (var type in _classes.Keys) {
+            referenced.UnionWith(type.VTable.Select(static m => m.Function));
+            if (type.Deinit is { } deinit) {
+                referenced.Add(deinit);
+            }
+        }
+
+        foreach (var type in _module.Types.OfType<StructType>()) {
+            if (type.Deinit is { } deinit) {
+                referenced.Add(deinit);
+            }
+        }
+
+        foreach (var name in referenced) {
+            if (_module.Find(name) is null && External(name) is { } type) {
+                info.External[name] = type;
+            }
+        }
+    }
+
+    /// <summary>What this unit took the program's classes and structs to be: every unit must agree.</summary>
+    void RecordAbi(SilUnitInfo info) {
+        static string Fields(IEnumerable<(string Name, SilType Type)> fields) => string.Join(",", fields.Select(static f => $"{f.Name}:{f.Type}"));
+        foreach (var type in _classes.Keys) {
+            info.Abi["class " + type.Name] = $"super={type.Superclass?.Name} deinit={type.Deinit} fields={Fields(type.Fields)} vtable={string.Join(",", type.VTable.Select(static m => $"{m.Method}={m.Function}"))}";
+        }
+
+        // A struct's fields come from its declaration, which every unit
+        // sees; its deinit is what lowering decides.
+        foreach (var type in _module.Types.OfType<StructType>().Where(static t => t.Deinit is not null)) {
+            info.Abi["struct " + type.Name] = $"deinit={type.Deinit} fields={Fields(type.Fields)}";
+        }
     }
 
     // ---- Globals --------------------------------------------------------------
@@ -199,9 +369,17 @@ public sealed partial class SilGen {
     void DeclareGlobals() {
         foreach (var tree in _compilation.SyntaxTrees) {
             var model = _compilation.GetSemanticModel(tree);
-            foreach (var declaration in tree.Root.DescendantNodes().Where(static d => d is FieldDeclarationSyntax or ConstDeclarationSyntax)) {
+            foreach (var declaration in Declarations(tree).Where(static d => d is FieldDeclarationSyntax or ConstDeclarationSyntax)) {
                 if (_compilation.GetDeclaredSymbol(declaration) is not FieldSymbol field || !IsGlobal(field)
                     || field.ContainingSymbol is NamedTypeSymbol { IsGenericDefinition: true } || Lower(field.Type) is not { } type) {
+                    continue;
+                }
+
+                // Separately, the unit the program starts in sets up every
+                // global, and sees no other unit's bodies: a static of a type
+                // declared in one is the whole program's to compile.
+                if (_unit is not null && InsideBody(declaration)) {
+                    Unsupported<object>(declaration, "a static stored property of a type declared in a function, compiled separately");
                     continue;
                 }
 
@@ -212,6 +390,16 @@ public sealed partial class SilGen {
                 _module.Globals.Add((name, type));
             }
         }
+    }
+
+    static bool InsideBody(SyntaxNode node) {
+        for (var parent = node.Parent; parent is not null; parent = parent.Parent) {
+            if (parent is DeclarationStatementSyntax) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     internal (string Name, SilType Type)? GlobalOf(FieldSymbol field) => _globalsByField.TryGetValue(field, out var global) ? global : null;
@@ -474,7 +662,7 @@ public sealed partial class SilGen {
                 }
 
                 if (method is not { FunctionKind: FunctionKind.Ordinary, IsStatic: false } || method.ContainingSymbol is not NamedTypeSymbol
-                    || !_names.TryGetValue(method, out var name) || _module.Find(name) is null) {
+                    || !_names.TryGetValue(method, out var name) || _module.Find(name) is null && (_unit is null || External(name) is null)) {
                     continue;
                 }
 

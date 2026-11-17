@@ -57,6 +57,9 @@ public abstract class PackageCommand : Command {
                 case "--locked":
                     request = request with { Locked = true };
                     break;
+                case "--timings":
+                    request = request with { Timings = true };
+                    break;
                 case "--no-default-features":
                     noDefault = true;
                     break;
@@ -133,5 +136,6 @@ public abstract class PackageCommand : Command {
           -p, --package <name>     the workspace member to build (default: the one you are in, else all)
           --bin <name>             only this binary
           --locked                 fail rather than change sable.lock
+          --timings                print the time each phase of the build took
         """;
 }

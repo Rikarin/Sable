@@ -524,6 +524,35 @@ fn main() {
                 """).Stdout
         );
 
+    /// <summary>joined is one runtime call, sized once: none, one and many parts, and a separator of any width.</summary>
+    [Fact]
+    public void JoiningIsLinear() =>
+        Assert.Equal(
+            "[]\n[a]\n[a·b·é]\n15000 4999\nxyz\n",
+            AssertAgree("""
+                module P
+                import Sable.Text
+                @main
+                fn main() {
+                    let empty: String[>..] = []
+                    print("[" + joined(empty, separator: "·") + "]")
+                    print("[" + joined(["a"], separator: "·") + "]")
+                    print("[" + joined(["a", "b", "é"], separator: "·") + "]")
+                    var many: String[>..] = []
+                    for i in 0..<5000 {
+                        many.append("abc")
+                    }
+                    let all = joined(many, separator: "·")
+                    print("\(all.count - 4999) \(all.count - 15000)")
+                    let builder = TextBuilder()
+                    builder.append("x")
+                    builder.append("y")
+                    builder.append("z")
+                    print(builder.build())
+                }
+                """).Stdout
+        );
+
     /// <summary>Only what a program reaches is built: the library costs a program that does not use it nothing.</summary>
     [Fact]
     public void WhatAProgramDoesNotUseIsNotBuilt() {

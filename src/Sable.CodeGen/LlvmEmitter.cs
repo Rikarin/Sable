@@ -292,6 +292,7 @@ public sealed class LlvmEmitter {
                                 declare i64 @sable_process_id()
                                 declare ptr @sable_string_split(ptr, i32)
                                 declare i64 @sable_string_hash(ptr)
+                                declare ptr @sable_string_join(ptr, ptr)
                                 declare i64 @sable_string_compare(ptr, ptr)
                                 declare ptr @sable_string_from_char(i32)
                                 declare ptr @sable_string_from_int(i64)
@@ -1907,6 +1908,10 @@ public sealed class LlvmEmitter {
 
                 case "string_count":
                     Line($"{Result()} = call i64 @sable_string_count(ptr {operands[0]})");
+                    return;
+
+                case "string_join":
+                    Line($"{Result()} = call ptr @sable_string_join(ptr {operands[0]}, ptr {operands[1]})");
                     return;
 
                 case "string_hash":

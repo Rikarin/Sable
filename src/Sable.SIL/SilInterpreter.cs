@@ -853,6 +853,11 @@ public sealed partial class SilInterpreter(SilModule module, int stepLimit = 10_
             case "string_count":
                 return (long)Text(operands[0]).Scalars.Count;
 
+            case "string_join": {
+                var parts = operands[0] is HeapArray given ? Alive(given).Elements.Select(p => Text(p).Value) : [];
+                return Allocate(new HeapString(string.Join(Text(operands[1]).Value, parts)));
+            }
+
             case "string_hash":
                 return StringHash(Encoding.UTF8.GetBytes(Text(operands[0]).Value));
 

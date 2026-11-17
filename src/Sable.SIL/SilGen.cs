@@ -5167,6 +5167,7 @@ public sealed partial class SilGen {
                 "processId" => ("process_id", SilType.Int, false),
 
                 "hashString" => ("string_hash", SilType.Int, false),
+                "joinStrings" => ("string_join", SilType.String, false),
                 "compareStrings" => ("string_compare", SilType.Int, false),
                 _ => (null!, SilType.Unit, false),
             };

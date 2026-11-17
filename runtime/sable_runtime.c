@@ -2935,3 +2935,36 @@ bool sable_process_change_directory(const SableString *path) {
 int64_t sable_process_id(void) {
     return (int64_t)getpid();
 }
+
+// ---- Joining (Sable.Text's floor) ------------------------------------
+
+// The parts with the separator between them, in one string made at its size:
+// what Sable.Text's joined and TextBuilder build on, linear in the result.
+SableString *sable_string_join(const SableArray *parts, const SableString *separator) {
+    int64_t n = parts == NULL ? 0 : parts->count;
+    SableString *const *pieces = n == 0 ? NULL : (SableString *const *)parts->elements;
+    int64_t length = 0, count = 0;
+    for (int64_t i = 0; i < n; i++) {
+        length += pieces[i]->length;
+        count += pieces[i]->count;
+    }
+
+    if (n > 1) {
+        length += (n - 1) * separator->length;
+        count += (n - 1) * separator->count;
+    }
+
+    SableString *s = new_string(length, count);
+    char *end = s->bytes;
+    for (int64_t i = 0; i < n; i++) {
+        if (i > 0) {
+            memcpy(end, separator->bytes, (size_t)separator->length);
+            end += separator->length;
+        }
+
+        memcpy(end, pieces[i]->bytes, (size_t)pieces[i]->length);
+        end += pieces[i]->length;
+    }
+
+    return s;
+}

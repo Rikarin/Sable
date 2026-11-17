@@ -961,8 +961,8 @@ introsort, and pays a bounds check and a uniqueness check on every move;
 `list` is mostly the operating system faulting in fresh pages, which .NET's
 warmed-up heap already has; a `HashMap<String, _>` hit still copies the key
 across the call to `==`, which SIL cannot yet inline. `Sable.Text`'s
-`joined` (and so `TextBuilder.build`) is quadratic — `result = result + part`
-— and is not in the set; it wants `string_concat_many` over the parts.
+`joined` (and so `TextBuilder.build`) was quadratic, `result = result + part`;
+it is now one runtime call (`Runtime.joinStrings`) that sizes the result once.
 
 ### Async, as implemented
 

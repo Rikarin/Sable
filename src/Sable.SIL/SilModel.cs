@@ -1402,6 +1402,7 @@ public static class SilBuiltins {
         Add("string_trimmed", SilType.String, SilType.String);
         Add("string_split", new ArrayType(SilType.String), SilType.String, SilType.Char);
         Add("string_hash", SilType.Int, SilType.String);
+        Add("string_join", SilType.String, new ArrayType(SilType.String), SilType.String);
         Add("string_compare", SilType.Int, SilType.String, SilType.String);
         Add("string_from_Char", SilType.String, SilType.Char);
         foreach (var number in SilType.Numbers) {

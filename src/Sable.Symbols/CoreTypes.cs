@@ -242,6 +242,7 @@ public sealed class CoreTypes {
         // What Sable.Core's String conformances are written over: hashing and
         // ordering by the UTF-8 bytes, in one call rather than a call per scalar.
         Method(Runtime, "hashString", [("text", String)], Int, true);
+        Method(Runtime, "joinStrings", [("parts", new ArrayTypeSymbol(String, ArrayKind.Grow)), ("separator", String)], String, true);
         Method(Runtime, "compareStrings", [("left", String), ("right", String)], Int, true);
     }
 

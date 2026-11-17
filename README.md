@@ -56,7 +56,8 @@ examples/  sample programs, also used as the lexer test corpus
 src/       the compiler, written in C# (see docs/04 for why)
              Sable.Syntax   lexer, parser, trees, formatter
              Sable.Symbols  symbols, declaration table, type binding
-tools/     build-time tooling (the syntax node generator)
+tools/     Sable.Syntax.Generator  generates the node classes
+             Sable.Visualiser        the syntax-tree visualiser
 tests/     the test suite
 ```
 
@@ -68,6 +69,27 @@ dotnet run --project tools/Sable.Syntax.Generator
 ```
 
 The generated files are committed, and a test fails if they drift from the schema.
+
+### Seeing what the compiler made of a file
+
+`sable-visualise` is the syntax-tree visualiser — Roslyn's Syntax Visualiser,
+for Sable. It shows every node, token and trivia, including the missing
+tokens and skipped text error recovery produces, and what the semantic model
+says about each node: its type and the symbol it binds to.
+
+```bash
+dotnet run --project tools/Sable.Visualiser -- examples/01-hello.sab
+```
+
+```bash
+dotnet run --project tools/Sable.Visualiser -- examples/01-hello.sab --html hello.html
+```
+
+The first prints the tree as indented text (`--trivia` adds whitespace and
+comments). The second writes one self-contained page: the source beside a
+collapsible tree and a property pane, where selecting a node highlights its
+span and clicking the source selects the deepest node under the caret.
+`--syntax-only` skips binding.
 
 ## Building
 
@@ -113,23 +135,25 @@ dotnet test Sable.slnx
 | `Sable.Symbols` — flow-sensitive narrowing | done |
 | `Sable.Symbols` — closures and function values | done |
 | `Sable.Symbols` — extensions and memberwise initialisers | done |
-| `Sable.Symbols` — effects: `throws` and `async` | done |
+| `Sable.Symbols` — local types, destructuring, generic aliases | done |
+| `Sable.Symbols` — effects: `throws`, `rethrows` and `async` | done |
 | `Sable.Symbols` — definite assignment and the flow-analysis API | done |
-| `Sable.Symbols` — negative-diagnostic corpus (606 cases) | done |
+| `Sable.Symbols` — negative-diagnostic corpus (631 cases) | done |
 | `Sable.Symbols` — throughput: 100,000 lines in under 5 s | done |
+| `tools/Sable.Visualiser` — syntax-tree visualiser | done |
 | Everything downstream (SIL, codegen, runtime) | not started |
 
 Phase 1's exit criteria, as docs/04 §1.4 states them:
 
 | Criterion | State |
 |---|---|
-| The full type system of `docs/03` is checked | done, bar `rethrows` |
-| ≥ 600 negative programs, each asserting code, span and message | 606, over 95 diagnostics |
+| The full type system of `docs/03` is checked | done |
+| ≥ 600 negative programs, each asserting code, span and message | 631, over 99 diagnostics |
 | `AnalyzeDataFlow` correct on a 300-case corpus | 59 cases so far |
-| Type-checking 100,000 lines in under 5 s | 0.93 s |
+| Type-checking 100,000 lines in under 5 s | 0.98 s |
 | Go/no-go: 10,000 lines of real Sable | ~2,900 in `tests/corpus/` |
 
-**1,135 tests green**, and every file in [examples/](examples/) parses as a
+**1,247 tests green**, and every file in [examples/](examples/) parses as a
 complete compilation unit with no diagnostics and an exact round-trip.
 [tests/corpus/](tests/corpus/) holds programs that must type-check with
 nothing to say, and [tests/negative/](tests/negative/) holds programs that

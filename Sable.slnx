@@ -5,6 +5,7 @@
   </Folder>
   <Folder Name="/tools/">
     <Project Path="tools/Sable.Syntax.Generator/Sable.Syntax.Generator.csproj" />
+    <Project Path="tools/Sable.Visualiser/Sable.Visualiser.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Sable.Syntax.Tests/Sable.Syntax.Tests.csproj" />

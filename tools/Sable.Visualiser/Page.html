@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sable Syntax Visualiser</title>
+<style>
+:root {
+  --bg: #fbfaf8; --panel: #ffffff; --line: #e4e1db; --text: #1f1d1a; --muted: #6f6a62;
+  --node: #2952a3; --token: #1d7a52; --trivia: #8a8377; --missing: #b3261e;
+  --select: #fff1b8; --select-row: #e9eefb; --hover: #f3f1ed; --error: #b3261e; --warning: #9a6700;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #161514; --panel: #1d1c1a; --line: #33302c; --text: #ece8e1; --muted: #a29b90;
+    --node: #8fb0f5; --token: #6fd1a4; --trivia: #8a8377; --missing: #ff8a80;
+    --select: #5a4a12; --select-row: #24314d; --hover: #26241f; --error: #ff8a80; --warning: #e3b341;
+  }
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, sans-serif;
+  display: grid; grid-template-rows: auto 1fr auto; }
+header { display: flex; gap: 16px; align-items: center; padding: 10px 16px;
+  border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+header h1 { font-size: 15px; margin: 0; font-weight: 600; }
+header .file { font-family: var(--mono); color: var(--muted); }
+header label { color: var(--muted); display: flex; gap: 6px; align-items: center; cursor: pointer; }
+main { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(220px, 300px);
+  min-height: 0; }
+section { min-height: 0; overflow: auto; border-right: 1px solid var(--line); background: var(--panel); }
+section:last-child { border-right: 0; }
+section h2 { position: sticky; top: 0; margin: 0; padding: 8px 12px; font-size: 12px;
+  text-transform: uppercase; letter-spacing: .04em; color: var(--muted);
+  background: var(--panel); border-bottom: 1px solid var(--line); z-index: 1; }
+#source { margin: 0; padding: 12px; font: 13px/1.5 var(--mono); white-space: pre; tab-size: 4;
+  cursor: text; }
+#source mark { background: var(--select); color: inherit; border-radius: 2px; }
+#tree { font: 13px/1.5 var(--mono); padding: 4px 0; }
+.row { display: flex; gap: 6px; padding: 0 8px; white-space: nowrap; cursor: pointer; }
+.row:hover { background: var(--hover); }
+.row.selected { background: var(--select-row); }
+.twisty { width: 1em; flex: none; color: var(--muted); text-align: center; }
+.k0 { color: var(--node); } .k1 { color: var(--token); } .k2 { color: var(--trivia); }
+.span { color: var(--muted); }
+.text { color: var(--text); opacity: .8; overflow: hidden; text-overflow: ellipsis; }
+.missing { color: var(--missing); }
+#props { padding: 10px 12px; }
+#props dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; }
+#props dt { color: var(--muted); }
+#props dd { margin: 0; font-family: var(--mono); font-size: 13px; overflow-wrap: anywhere; }
+#props .empty { color: var(--muted); }
+footer { border-top: 1px solid var(--line); max-height: 22vh; overflow: auto; background: var(--panel); }
+footer h2 { margin: 0; padding: 6px 16px; font-size: 12px; text-transform: uppercase;
+  letter-spacing: .04em; color: var(--muted); }
+.diag { padding: 2px 16px; font: 13px/1.5 var(--mono); cursor: pointer; }
+.diag:hover { background: var(--hover); }
+.diag .Error { color: var(--error); } .diag .Warning { color: var(--warning); }
+@media (max-width: 800px) {
+  main { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr auto; }
+  section { border-right: 0; border-bottom: 1px solid var(--line); }
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>Sable Syntax Visualiser</h1>
+  <span class="file" id="file"></span>
+  <label><input type="checkbox" id="showTrivia"> Trivia</label>
+  <label><input type="checkbox" id="showTokens" checked> Tokens</label>
+</header>
+<main>
+  <section><h2>Source</h2><pre id="source"></pre></section>
+  <section><h2>Tree</h2><div id="tree"></div></section>
+  <section><h2>Properties</h2><div id="props"><p class="empty">Select a node in the tree or the source.</p></div></section>
+</main>
+<footer id="diagnostics"></footer>
+<script>
+const DATA = /*__SABLE_DATA__*/null;
+const CAT = ["Node", "Token", "Trivia"];
+// Positional fields of an encoded item.
+const C = 0, KIND = 1, S = 2, E = 3, FS = 4, FE = 5, TEXT = 6, MISSING = 7,
+      TYPE = 8, SYMBOL = 9, SYMKIND = 10, KIDS = 11;
+
+const sourceEl = document.getElementById("source");
+const treeEl = document.getElementById("tree");
+const propsEl = document.getElementById("props");
+const showTrivia = document.getElementById("showTrivia");
+const showTokens = document.getElementById("showTokens");
+document.getElementById("file").textContent = DATA.file;
+
+// Parents, so selecting from the source can open the path to an item.
+const parent = new Map();
+(function link(item) {
+  for (const child of item[KIDS]) { parent.set(child, item); link(child); }
+})(DATA.root);
+
+const rows = new Map();   // item -> row element, for what has been rendered
+const open = new Set([DATA.root]);
+let selected = null;
+
+function visible(item) {
+  if (item[C] === 2) return showTrivia.checked;
+  if (item[C] === 1) return showTokens.checked || showTrivia.checked;
+  return true;
+}
+
+function hasVisibleChildren(item) { return item[KIDS].some(visible); }
+
+function describe(text) {
+  return JSON.stringify(text).slice(1, -1);
+}
+
+function renderTree() {
+  rows.clear();
+  treeEl.replaceChildren();
+  const fragment = document.createDocumentFragment();
+  (function walk(item, depth) {
+    if (!visible(item)) return;
+    const row = document.createElement("div");
+    row.className = "row" + (item === selected ? " selected" : "");
+    row.style.paddingLeft = (8 + depth * 14) + "px";
+
+    const twisty = document.createElement("span");
+    twisty.className = "twisty";
+    const expandable = hasVisibleChildren(item);
+    twisty.textContent = expandable ? (open.has(item) ? "▾" : "▸") : "";
+    row.append(twisty);
+
+    const kind = document.createElement("span");
+    kind.className = "k" + item[C] + (item[MISSING] ? " missing" : "");
+    kind.textContent = item[KIND] + (item[MISSING] ? " (missing)" : "");
+    row.append(kind);
+
+    const span = document.createElement("span");
+    span.className = "span";
+    span.textContent = "[" + item[S] + ".." + item[E] + ")";
+    row.append(span);
+
+    if (item[TEXT] !== null && item[TEXT] !== "") {
+      const text = document.createElement("span");
+      text.className = "text";
+      text.textContent = describe(item[TEXT]);
+      row.append(text);
+    }
+
+    row.addEventListener("click", (event) => {
+      if (event.target === twisty && expandable) {
+        open.has(item) ? open.delete(item) : open.add(item);
+        renderTree();
+        return;
+      }
+      select(item, false);
+    });
+    row.addEventListener("dblclick", () => {
+      if (!expandable) return;
+      open.has(item) ? open.delete(item) : open.add(item);
+      renderTree();
+    });
+
+    rows.set(item, row);
+    fragment.append(row);
+    if (open.has(item)) for (const child of item[KIDS]) walk(child, depth + 1);
+  })(DATA.root, 0);
+  treeEl.append(fragment);
+}
+
+function highlight(start, end) {
+  const text = DATA.source;
+  const mark = document.createElement("mark");
+  // A zero-width item, such as a missing token, still gets a visible caret.
+  mark.textContent = start === end ? "​" : text.slice(start, end);
+  sourceEl.replaceChildren(text.slice(0, start), mark, text.slice(end));
+  mark.scrollIntoView({ block: "nearest", inline: "nearest" });
+}
+
+function property(list, name, value) {
+  const dt = document.createElement("dt"); dt.textContent = name;
+  const dd = document.createElement("dd"); dd.textContent = value;
+  list.append(dt, dd);
+}
+
+function showProperties(item) {
+  const list = document.createElement("dl");
+  property(list, "Kind", item[KIND]);
+  property(list, "Category", CAT[item[C]]);
+  property(list, "Span", "[" + item[S] + ".." + item[E] + ")  " + (item[E] - item[S]) + " chars");
+  property(list, "Full span", "[" + item[FS] + ".." + item[FE] + ")");
+  if (item[TEXT] !== null) property(list, "Text", JSON.stringify(item[TEXT]));
+  if (item[MISSING]) property(list, "Missing", "inserted by error recovery");
+  if (item[C] === 0) {
+    property(list, "Children", String(item[KIDS].length));
+    if (DATA.semantics) {
+      property(list, "Type", item[TYPE] ?? "—");
+      property(list, "Symbol", item[SYMBOL] ? item[SYMKIND] + " " + item[SYMBOL] : "—");
+    }
+  }
+  propsEl.replaceChildren(list);
+}
+
+function select(item, fromSource) {
+  selected = item;
+  // Open every ancestor so the row exists to be shown.
+  for (let p = parent.get(item); p; p = parent.get(p)) open.add(p);
+  if (!visible(item)) {
+    if (item[C] === 2) showTrivia.checked = true; else showTokens.checked = true;
+  }
+  renderTree();
+  highlight(item[S], item[E]);
+  showProperties(item);
+  const row = rows.get(item);
+  if (row) row.scrollIntoView({ block: fromSource ? "center" : "nearest" });
+}
+
+// The deepest visible item whose span holds the offset; a token beats the
+// node around it, trivia only wins when it is showing.
+function itemAt(offset) {
+  let best = DATA.root;
+  (function walk(item) {
+    for (const child of item[KIDS]) {
+      const within = child[FS] <= offset && offset < Math.max(child[FE], child[FS] + 1);
+      if (!within) continue;
+      if (child[C] === 2 && !showTrivia.checked) continue;
+      if (child[C] === 1 && !(showTokens.checked || showTrivia.checked)) continue;
+      if (child[C] !== 2 && !(child[S] <= offset && offset <= child[E])) {
+        // In the leading trivia of a token or node: look inside, but do not
+        // select it unless trivia is shown.
+        walk(child);
+        continue;
+      }
+      best = child;
+      walk(child);
+      return;
+    }
+  })(DATA.root);
+  return best;
+}
+
+sourceEl.addEventListener("click", () => {
+  const selection = window.getSelection();
+  if (!selection || selection.rangeCount === 0) return;
+  const range = selection.getRangeAt(0);
+  const before = document.createRange();
+  before.selectNodeContents(sourceEl);
+  before.setEnd(range.startContainer, range.startOffset);
+  // The highlight may hold a zero-width space; it is not source.
+  const offset = before.toString().replace(/​/g, "").length;
+  select(itemAt(offset), true);
+});
+
+showTrivia.addEventListener("change", renderTree);
+showTokens.addEventListener("change", renderTree);
+
+function renderDiagnostics() {
+  const footer = document.getElementById("diagnostics");
+  if (DATA.diagnostics.length === 0) { footer.hidden = true; return; }
+  const title = document.createElement("h2");
+  title.textContent = "Diagnostics (" + DATA.diagnostics.length + ")";
+  footer.append(title);
+  for (const [id, severity, start, end, message] of DATA.diagnostics) {
+    const row = document.createElement("div");
+    row.className = "diag";
+    const code = document.createElement("span");
+    code.className = severity;
+    code.textContent = id;
+    row.append(code, " [" + start + ".." + end + ") " + message);
+    row.addEventListener("click", () => {
+      select(itemAt(start), true);
+      highlight(start, end);
+    });
+    footer.append(row);
+  }
+}
+
+sourceEl.textContent = DATA.source;
+renderTree();
+renderDiagnostics();
+</script>
+</body>
+</html>

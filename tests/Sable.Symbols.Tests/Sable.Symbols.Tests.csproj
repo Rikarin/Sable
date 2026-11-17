@@ -11,5 +11,6 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../../src/Sable.Symbols/Sable.Symbols.csproj" />
+    <ProjectReference Include="../../tools/Sable.Visualiser/Sable.Visualiser.csproj" />
   </ItemGroup>
 </Project>

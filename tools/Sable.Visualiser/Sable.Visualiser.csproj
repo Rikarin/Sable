@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>Sable.Visualiser</RootNamespace>
+    <AssemblyName>sable-visualise</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/Sable.Syntax/Sable.Syntax.csproj" />
+    <ProjectReference Include="../../src/Sable.Symbols/Sable.Symbols.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Page.html" LogicalName="Sable.Visualiser.Page.html" />
+  </ItemGroup>
+</Project>

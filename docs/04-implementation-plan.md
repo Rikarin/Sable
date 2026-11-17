@@ -181,7 +181,8 @@ Copy Roslyn's **red/green tree** design exactly:
 - [ ] Incremental reparse of a 10,000-line file after a one-character edit
       completes in < 2 ms
 - [ ] `sable fmt` is idempotent and reproduces the corpus modulo normalisation
-- [ ] A syntax-tree visualiser exists (Roslyn's Syntax Visualiser equivalent)
+- [x] A syntax-tree visualiser exists (Roslyn's Syntax Visualiser equivalent)
+      — `tools/Sable.Visualiser`
 - [ ] Fuzzer runs for 24h without a crash or an assertion failure
 
 ---
@@ -228,11 +229,11 @@ with no code generation.**
 
 ### 1.4 Exit criteria
 
-- [ ] The full type system of `03-type-system.md` is checked
-- [ ] Negative-test corpus: ≥ 600 programs that must fail, each asserting an
+- [x] The full type system of `03-type-system.md` is checked
+- [x] Negative-test corpus: ≥ 600 programs that must fail, each asserting an
       exact error code, span, and message
 - [ ] `AnalyzeDataFlow` is correct on a 300-case corpus
-- [ ] Type-checking 100,000 lines completes in < 5 s single-threaded
+- [x] Type-checking 100,000 lines completes in < 5 s single-threaded
 - [ ] **Go/no-go: is the language actually pleasant?** Write 10,000 lines of
       real Sable (a JSON parser, an HTTP client, a small game) against the type
       checker alone, before any backend exists. Fix the language now, not later.

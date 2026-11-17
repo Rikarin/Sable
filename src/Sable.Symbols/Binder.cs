@@ -3861,6 +3861,21 @@ public sealed class Binder
         var type = sawValue ? resultType ?? Core.Void : Core.Void;
         var bound = new BoundMatch(syntax, type, subject, arms.ToImmutable());
 
+        // When the match is a value, an arm whose body is a block has to
+        // produce one too — or leave, which a 'throw' or 'return' does.
+        if (sawValue && !type.Equals(Core.Void) && !type.IsError)
+        {
+            foreach (var arm in bound.Arms)
+            {
+                if (arm.Body is not BoundStatement statement) continue;
+                if (FlowAnalysis.AlwaysExits(statement)) continue;
+
+                _diagnostics.Error(ErrorCode.ERR_MatchArmTypesDiffer, arm.Syntax.Span,
+                    $"this arm gives nothing, but earlier arms gave "
+                    + $"'{type.ToDisplayString()}'");
+            }
+        }
+
         CheckExhaustive(bound);
         return bound;
     }

@@ -1,0 +1,115 @@
+module Negative.Matching
+
+public union Shape {
+    Circle(radius: F64)
+    Rect(width: F64, height: F64)
+    Empty
+}
+
+public enum Direction { North, South, East, West }
+public struct Point { public var x: Int, public var y: Int }
+
+fn aMatchIsAnExpressionOrAStatement(_ s: Shape) -> Int {
+    match s {
+        case .Circle(let r) => { }
+        case .Rect(let w, let h) => { }
+        case .Empty => { }
+    }
+    return 0
+}
+
+fn asAnExpressionEveryArmGivesAValue(_ s: Shape) -> Int {
+    return match s {
+        case .Circle(let r) => 1
+        case .Rect(let w, let h) => { }   //! S6007
+        case .Empty => 3
+    }
+}
+
+fn aGuardDoesNotCover(_ s: Shape, _ flag: Bool) -> Int {
+    return match s {                    //! S6003
+        case .Circle(let r) where flag => 1
+        case .Rect(let w, let h) => 2
+        case .Empty => 3
+    }
+}
+
+fn aWildcardCovers(_ s: Shape) -> Int {
+    return match s {
+        case .Circle(let r) => 1
+        case _ => 0
+    }
+}
+
+fn aBindingCovers(_ s: Shape) -> Int {
+    return match s {
+        case let other => 0
+    }
+}
+
+fn nestedPayloadPatterns(_ s: Shape) -> F64 {
+    return match s {
+        case .Rect(let w, 0.0) => w
+        default => 0.0
+    }
+}
+
+fn aLiteralPayloadIsTyped(_ s: Shape) -> F64 {
+    return match s {
+        case .Rect(let w, "tall") => w  //! S6000
+        default => 0.0
+    }
+}
+
+fn matchingAStruct(_ p: Point) -> Int {
+    return match p {
+        case Point { x: 0, y: let y } => y
+        default => 0
+    }
+}
+
+fn aStructPatternFieldIsTyped(_ p: Point) -> Int {
+    return match p {
+        case Point { x: "zero" } => 0   //! S6000
+        default => 0
+    }
+}
+
+fn matchingAnArray(_ xs: Int[]) -> Int {
+    return match xs {
+        case [] => 0
+        case [let only] => only
+        case [let first, ...] => first
+        default => 0
+    }
+}
+
+fn anArrayPatternElementIsTyped(_ xs: Int[]) -> Int {
+    return match xs {
+        case ["a"] => 0                 //! S6000
+        default => 0
+    }
+}
+
+fn matchingAnOptional(_ n: Int?) -> Int {
+    return match n {
+        case none => 0
+        case let value => 1
+    }
+}
+
+fn exhaustiveOverBool(_ flag: Bool) -> Int {
+    return match flag {
+        case true => 1
+        case false => 0
+    }
+}
+
+fn exhaustiveOverAnEnum(_ d: Direction) -> Int {
+    return match d {
+        case .North => 0
+        case .South => 1
+        case .East => 2
+        case .West => 3
+    }
+}

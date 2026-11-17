@@ -169,7 +169,9 @@ public sealed class LlvmEmitter {
             Node($"!DILocation(line: {line}, column: {column}, scope: {scope})");
 
         public string Variable(string name, string scope, string file, int line, SilType type, int argument = 0) {
-            var typePart = Type(type) is { } typeNode ? $", type: {typeNode}" : "";
+            // Clang 21 crashes on a variable without a type: one DWARF has no
+            // better description of is shown as its bytes.
+            var typePart = $", type: {Type(type) ?? Opaque(type)}";
             var argumentPart = argument > 0 ? $", arg: {argument}" : "";
             return Node($"!DILocalVariable(name: {Quote(name)}{argumentPart}, scope: {scope}, file: {file}, line: {line}{typePart})");
         }
@@ -199,10 +201,10 @@ public sealed class LlvmEmitter {
                     foreach (var (fieldName, fieldType) in structType.Fields) {
                         var align = Align(fieldType);
                         offset = (offset + align - 1) / align * align;
-                        var fieldNode = Type(fieldType);
+                        var fieldNode = Type(fieldType) ?? Opaque(fieldType);
                         members.Add(Node(
                             $"!DIDerivedType(tag: DW_TAG_member, name: {Quote(fieldName)}, "
-                            + (fieldNode is null ? "" : $"baseType: {fieldNode}, ")
+                            + $"baseType: {fieldNode}, "
                             + $"size: {Size(fieldType) * 8}, offset: {offset * 8})"
                         ));
                         offset += Size(fieldType);
@@ -218,6 +220,10 @@ public sealed class LlvmEmitter {
                     return null;
             }
         }
+
+        /// <summary>A type DWARF is not told the shape of: its bytes, under its SIL name.</summary>
+        string Opaque(SilType type) =>
+            Node($"!DIBasicType(name: {Quote(type.ToString())}, size: {Math.Max(Size(type), 1) * 8}, encoding: DW_ATE_unsigned)");
 
         string Named(string name, string basic) =>
             Node($"!DIDerivedType(tag: DW_TAG_typedef, name: {Quote(name)}, baseType: {Node(basic)})");

@@ -471,4 +471,58 @@ public sealed class LanguageTests {
                 print(Client(base: 30).connect("h"))
             """
         );
+
+    /// <summary>
+    ///     A store into part of an array element — 'a[i].p.x = v', '+=' too —
+    ///     reads the element out, stores into it, and writes it back; a copy of
+    ///     the array taken before keeps what it had.
+    /// </summary>
+    [Fact]
+    public void AStoreReachesIntoAnArrayElement() =>
+        Assert.Equal(
+            "a 20 2\nbee 6 9\nb 1\n",
+            AssertAgree("""
+                module P
+                struct Point { var x: Int
+                 var y: Int }
+                struct Item { var name: String
+                 var at: Point }
+                @main
+                fn main() {
+                    var items: Item[>..] = [Item { name: "a", at: Point { x: 1, y: 2 } }, Item { name: "b", at: Point { x: 3, y: 4 } }]
+                    let copy = items
+                    items[1].name = "bee"
+                    items[0].at.x = 10
+                    items[1].at.y += 5
+                    var i = 0
+                    while i < items.count {
+                        items[i].at.x = items[i].at.x * 2
+                        i += 1
+                    }
+                    print("\(items[0].name) \(items[0].at.x) \(items[0].at.y)")
+                    print("\(items[1].name) \(items[1].at.x) \(items[1].at.y)")
+                    print("\(copy[1].name) \(copy[0].at.x)")
+                }
+                """).Stdout
+        );
+
+    /// <summary>'none' in one branch of '?:' takes the other branch's type, made optional.</summary>
+    [Fact]
+    public void NoneInAConditionalTakesTheOtherBranchesType() =>
+        Assert.Equal(
+            "5\n0\nnone\n",
+            AssertAgree("""
+                module P
+                @main
+                fn main() {
+                    let c = true
+                    let x: Int? = c ? 5 : none
+                    let y = !c ? 5 : none
+                    let z = c ? none : "s"
+                    print(x ?? 0)
+                    print(y ?? 0)
+                    print(z ?? "none")
+                }
+                """).Stdout
+        );
 }

@@ -3119,6 +3119,10 @@ public sealed partial class SilGen {
                 return InlineAssign(assignment.Target, assignment.Value);
             }
 
+            if (ArrayElementWithin(assignment.Target) is { } element) {
+                return ElementPartAssignment(assignment, element);
+            }
+
             if (Expression(assignment.Value) is not { } value) {
                 return null;
             }
@@ -3171,6 +3175,81 @@ public sealed partial class SilGen {
 
             EndAll(borrows);
             return value.Type.IsTrivial ? value : UnitValue.Instance;
+        }
+
+        /// <summary>
+        ///     The array element a store reaches into, through value fields
+        ///     and tuple elements — 'a[i]' in 'a[i].p.x = v' — or null when the
+        ///     target is not inside one. An element has no address of its own,
+        ///     and an object's field is reached through the reference instead.
+        /// </summary>
+        BoundIndexAccess? ArrayElementWithin(BoundExpression target) {
+            var current = target switch {
+                BoundFieldAccess { Receiver: { } receiver, Field: { IsComputed: false, IsStatic: false } } => receiver,
+                BoundTupleElementAccess element => element.Receiver,
+                _ => null,
+            };
+
+            while (current is not null) {
+                switch (current) {
+                    case BoundIndexAccess { Indices: [_] } index when Sub(index.Receiver.Type) is ArrayTypeSymbol && !IsInlineArray(index.Receiver):
+                        return index;
+
+                    case BoundFieldAccess { Receiver: { } receiver, Field: { IsComputed: false, IsStatic: false } }
+                        when Sub(receiver.Type).TypeKind is not (TypeKind.Class or TypeKind.Actor) && !IsInlineType(receiver.Type):
+                        current = receiver;
+                        break;
+
+                    case BoundTupleElementAccess element:
+                        current = element.Receiver;
+                        break;
+
+                    default:
+                        return null;
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        ///     'a[i].x = v': the element read out into a slot of its own, the
+        ///     store made there, and the element written back — one 'array_set',
+        ///     which makes the array unique first, as 'a[i] = e' does.
+        /// </summary>
+        SilValue? ElementPartAssignment(BoundAssignment assignment, BoundIndexAccess element) {
+            var ends = new List<SilValue>();
+            if (Address(element.Receiver, ends) is not { Type: AddressType { Pointee: ArrayType arrayType } } arrayAddress
+                || Expression(element.Indices[0]) is not { } position) {
+                return null;
+            }
+
+            var array = Emit(new LoadBorrowInst(arrayAddress));
+            var current = Emit(new BuiltinInst("array_get", arrayType.Element, array, position));
+            Emit(new EndBorrowInst(array));
+
+            var slot = NewSlot(arrayType.Element, "$element");
+            Emit(new StoreInst(current, slot, StoreKind.Init));
+            var temporary = new LocalSymbol("$element", Core.Module, null, true);
+            _slots[temporary] = slot;
+
+            var within = Replace(assignment.Target, element, new BoundLocalAccess(element.Syntax, temporary, element.Type));
+            if (Assignment(new BoundAssignment(assignment.Syntax, within, assignment.Value)) is not { } result) {
+                return null;
+            }
+
+            Emit(new BuiltinInst("array_set", SilType.Unit, arrayAddress, position, Emit(new LoadInst(slot, LoadKind.Take))));
+            EndAll(ends);
+            return result;
+
+            static BoundExpression Replace(BoundExpression node, BoundExpression old, BoundExpression replacement) =>
+                ReferenceEquals(node, old)
+                    ? replacement
+                    : node switch {
+                        BoundFieldAccess field => new BoundFieldAccess(field.Syntax, Replace(field.Receiver!, old, replacement), field.Field, field.Type),
+                        BoundTupleElementAccess part => new BoundTupleElementAccess(part.Syntax, part.Type, Replace(part.Receiver, old, replacement), part.Index),
+                        _ => node,
+                    };
         }
 
         bool IsDictionary(TypeSymbol type) => Sub(type) is NamedTypeSymbol named && named.OriginalDefinition.Equals(Core.Dictionary);
@@ -3893,7 +3972,6 @@ public sealed partial class SilGen {
             return element;
         }
 
-        /// <summary>'a ?? b': a's value when there is one; b, evaluated only then, when there is not.</summary>
         /// <summary>A member reached through '?.': the receiver is optional, and the member is not the optional's own.</summary>
         bool IsChainedThrough(BoundExpression receiver, Symbol member) =>
             Sub(receiver.Type) is OptionalTypeSymbol
@@ -3934,6 +4012,7 @@ public sealed partial class SilGen {
             return result;
         }
 
+        /// <summary>'a ?? b': a's value when there is one; b, evaluated only then, when there is not.</summary>
         SilValue? Coalesce(BoundBinaryOperator coalesce) {
             if (Expression(coalesce.Left) is not { Type: EnumType optional } value || LowerType(coalesce.Type) is not { } type) {
                 return Missing(coalesce, "this '??'");

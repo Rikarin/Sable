@@ -1742,7 +1742,7 @@ public sealed partial class Binder {
             PrefixUnaryExpressionSyntax unary => BindPrefixUnary(unary),
             PostfixUnaryExpressionSyntax unary => BindPostfixUnary(unary),
             AssignmentExpressionSyntax assignment => BindAssignment(assignment),
-            ConditionalExpressionSyntax conditional => BindConditionalExpression(conditional),
+            ConditionalExpressionSyntax conditional => BindConditionalExpression(conditional, expectedType),
             TupleExpressionSyntax tuple => BindTuple(tuple, expectedType),
             ArrayExpressionSyntax array => BindArray(array, expectedType),
             RecordExpressionSyntax record => BindRecordExpression(record),
@@ -4338,11 +4338,22 @@ public sealed partial class Binder {
             _ => null,
         };
 
-    BoundExpression BindConditionalExpression(ConditionalExpressionSyntax syntax) {
+    BoundExpression BindConditionalExpression(ConditionalExpressionSyntax syntax, TypeSymbol? expectedType = null) {
         var condition = Convert(BindExpression(syntax.Condition, Core.Bool), Core.Bool, syntax.Condition);
 
-        var whenTrue = BindExpression(syntax.WhenTrue);
-        var whenFalse = BindExpression(syntax.WhenFalse, whenTrue.Type);
+        // 'c ? 5 : none' is an Int?: 'none' is no particular optional until
+        // the other branch, or the context, says which.
+        BoundExpression whenTrue, whenFalse;
+        if (IsNoneLiteral(syntax.WhenTrue) && !IsNoneLiteral(syntax.WhenFalse)) {
+            whenFalse = BindExpression(syntax.WhenFalse, expectedType);
+            whenTrue = BindExpression(syntax.WhenTrue, expectedType ?? Optional(whenFalse.Type));
+        } else {
+            whenTrue = BindExpression(syntax.WhenTrue, expectedType);
+            whenFalse = BindExpression(
+                syntax.WhenFalse,
+                expectedType ?? (IsNoneLiteral(syntax.WhenFalse) ? Optional(whenTrue.Type) : whenTrue.Type)
+            );
+        }
 
         var type = whenTrue.Type;
         if (!whenFalse.Type.Equals(type)) {
@@ -4364,6 +4375,17 @@ public sealed partial class Binder {
 
         return new BoundConditional(syntax, type, condition, whenTrue, whenFalse);
     }
+
+    static bool IsNoneLiteral(ExpressionSyntax expression) =>
+        expression switch {
+            LiteralExpressionSyntax { Token.Kind: SyntaxKind.NoneKeyword } => true,
+            ParenthesizedExpressionSyntax parenthesized => IsNoneLiteral(parenthesized.Expression),
+            _ => false,
+        };
+
+    /// <summary>The type as an optional, unless it is one already (or an error).</summary>
+    static TypeSymbol Optional(TypeSymbol type) =>
+        type is OptionalTypeSymbol || type.IsError ? type : new OptionalTypeSymbol(type);
 
     BoundExpression BindPrefixUnary(PrefixUnaryExpressionSyntax syntax) {
         if (syntax.OperatorToken.Kind == SyntaxKind.AwaitKeyword) {

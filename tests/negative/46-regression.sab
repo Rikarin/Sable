@@ -1,0 +1,89 @@
+module Negative.Regression
+
+// Cases that each stood for a bug once. Keeping them stops the bug coming
+// back, which is the other half of what a corpus is for.
+
+public struct Point { public var x: Int, public var y: Int }
+public struct Box<Item> { public var item: Item }
+public union Tree<Value> { Leaf, Node(value: Value, next: Tree<Value>) }
+public protocol Named { fn name() -> String }
+public struct Person: Named { public fn name() -> String { return "p" } }
+
+// A record literal's fields are checked, not just counted.
+fn recordFieldTypes() -> Point {
+    return Point { x: 1, y: "two" }     //! S3004 expected 'Int'
+}
+
+// A generic record literal infers from its values, and still checks them.
+fn genericRecordInference() -> Box<String> {
+    return Box { item: 1 }              //! S3004
+}
+
+// A closure's body is checked against the parameter type the context gives.
+fn closureBody() -> Int {
+    return apply(1) { $0 && true }      //! S3009
+}
+
+fn apply(_ n: Int, _ f: (Int) -> Int) -> Int { return f(n) }
+
+// An array literal takes the context's storage kind but not its element type.
+fn arrayKindAndElement() -> String[>..] {
+    return [1, 2]                       //! S3004 //! S3004
+}
+
+// A union case through the definition infers; a mismatch still reports.
+fn unionInference() -> Tree<Int> {
+    return Tree.Node(value: "x", next: Tree.Leaf)   //! S3004 found 'Tree<String>'
+}
+
+// 'Self' in a protocol is the conformer, so a different type does not fit.
+fn selfIsTheConformer(_ p: Person, _ q: Point) -> String {
+    return describe(p)
+}
+
+fn describe(_ value: some Named) -> String { return value.name() }
+
+fn selfIsNotAnything(_ q: Point) -> String {
+    return describe(q)                  //! S3007 cannot be called
+}
+
+// A private member is private even from the same file.
+public struct Hidden {
+    private var secret: Int
+}
+
+fn privacy(_ h: Hidden) -> Int {
+    return h.secret                     //! S3040 is private
+}
+
+// A struct in a 'let' is immutable through its fields.
+fn letIsDeep() {
+    let p = Point { x: 1, y: 2 }
+    p.x = 3                             //! S3010
+}
+
+// An enum is not its representation.
+public enum Code: U8 { Ok = 0 }
+
+fn enumRepresentation(_ c: Code) -> U8 {
+    return c                            //! S3004 expected 'U8'
+}
+
+// An optional needs '?.' and '?()'.
+fn optionalAccess(_ p: Point?) -> Int {
+    return p.x                          //! S3011 may hold nothing
+}
+
+// A variadic checks every argument.
+fn variadic(_ values: Int...) -> Int { return 0 }
+
+fn variadicArguments() -> Int {
+    return variadic(1, "two")           //! S3007 cannot be called
+}
+
+// A guard must not fall through.
+fn guardFallsThrough(_ n: Int?) -> Int {
+    guard let value = n else {          //! S6004 must not fall through
+    }
+    return 0
+}

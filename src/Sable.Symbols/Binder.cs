@@ -2249,7 +2249,16 @@ public sealed class Binder
             .Select(e => BindExpression(e, expectedElement)).ToImmutableArray();
 
         TypeSymbol elementType;
-        if (expectedElement is not null) elementType = expectedElement;
+        if (expectedElement is not null)
+        {
+            // The context says what the elements are, so each one is checked
+            // against that rather than taken on trust.
+            elements =
+            [
+                .. elements.Select(e => Convert(e, expectedElement, e.Syntax)),
+            ];
+            elementType = expectedElement;
+        }
         else if (elements.IsEmpty) elementType = ErrorTypeSymbol.Instance;
         else
         {

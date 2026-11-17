@@ -1,0 +1,35 @@
+module Negative.Recovery
+
+// Each declaration here is broken in a different way; recovery must keep the
+// ones after it intact, which the claims below check by being reached at all.
+
+fn missingReturnType(_ n: Int) -> {     //! S1003 expected a type
+    return n
+}
+
+fn afterTheFirst(_ n: Int) -> Int {
+    return n
+}
+
+// '_ : Int' is a parameter with no name but a label, which parses.
+fn unnamedParameter(_ : Int) -> Int {
+    return 1
+}
+
+fn afterTheSecond(_ n: Int) -> Int {
+    return n
+}
+
+fn missingBody() -> Int
+
+fn afterTheThird(_ n: Int) -> Int {
+    return n
+}
+
+struct MissingSeparator {
+    var a: Int var b: Int
+}
+
+fn afterTheFourth(_ n: Int) -> Int {
+    return n
+}

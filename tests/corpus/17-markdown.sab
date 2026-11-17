@@ -1,0 +1,300 @@
+module Corpus.Markdown
+
+// A small document renderer: a lexer that is a state machine, a tree of
+// blocks, and a writer. String handling end to end.
+
+public union Block {
+    Heading(level: Int, text: String)
+    Paragraph(text: String)
+    Code(language: String, lines: String[>..])
+    Quote(blocks: Block[>..])
+    List(ordered: Bool, items: String[>..])
+    Rule
+}
+
+public union Inline {
+    Text(value: String)
+    Emphasis(value: String)
+    Strong(value: String)
+    Code(value: String)
+    Link(label: String, target: String)
+}
+
+public struct Scanner {
+    public var lines: String[>..]
+    public var index: Int
+
+    public fn atEnd() -> Bool {
+        return index >= lines.count
+    }
+
+    public fn current() -> String? {
+        if atEnd() {
+            return none
+        }
+        return lines.removeLast()
+    }
+
+    public mutating fn advance() {
+        index = index + 1
+    }
+
+    public mutating fn take() -> String {
+        guard let line = current() else {
+            return ""
+        }
+        advance()
+        return line
+    }
+}
+
+public fn headingLevel(_ line: String) -> Int {
+    var level = 0
+    var i = 0
+    while i < line.count && line.at(i) == '#' {
+        level = level + 1
+        i = i + 1
+    }
+    return level
+}
+
+public fn isRule(_ line: String) -> Bool {
+    if line.count < 3 {
+        return false
+    }
+
+    var i = 0
+    while i < line.count {
+        if line.at(i) != '-' {
+            return false
+        }
+        i = i + 1
+    }
+    return true
+}
+
+public fn isQuote(_ line: String) -> Bool {
+    return !line.isEmpty && line.at(0) == '>'
+}
+
+public fn isBullet(_ line: String) -> Bool {
+    return line.count > 1 && line.at(0) == '-' && line.at(1) == ' '
+}
+
+public fn isFence(_ line: String) -> Bool {
+    return line.count >= 3 && line.at(0) == '`' && line.at(1) == '`' && line.at(2) == '`'
+}
+
+public fn parse(_ source: String) -> Block[>..] {
+    var scanner = Scanner { lines: source.split('\n'), index: 0 }
+    var blocks: Block[>..] = []
+
+    while !scanner.atEnd() {
+        let line = scanner.take()
+
+        if line.isEmpty {
+            continue
+        }
+
+        if isRule(line) {
+            blocks.append(Block.Rule)
+            continue
+        }
+
+        if isFence(line) {
+            blocks.append(parseCode(line, scanner))
+            continue
+        }
+
+        let level = headingLevel(line)
+        if level > 0 {
+            blocks.append(Block.Heading(
+                level: level,
+                text: line.slice(from: level, to: line.count).trimmed()))
+            continue
+        }
+
+        if isBullet(line) {
+            blocks.append(parseList(line, scanner))
+            continue
+        }
+
+        if isQuote(line) {
+            blocks.append(parseQuote(line, scanner))
+            continue
+        }
+
+        blocks.append(Block.Paragraph(text: line.trimmed()))
+    }
+
+    return blocks
+}
+
+public fn parseCode(_ fence: String, _ scanner: Scanner) -> Block {
+    var inner = scanner
+    var lines: String[>..] = []
+
+    while !inner.atEnd() {
+        let line = inner.take()
+        if isFence(line) {
+            return Block.Code(
+                language: fence.slice(from: 3, to: fence.count).trimmed(),
+                lines: lines)
+        }
+        lines.append(line)
+    }
+
+    return Block.Code(
+        language: fence.slice(from: 3, to: fence.count).trimmed(),
+        lines: lines)
+}
+
+public fn parseList(_ first: String, _ scanner: Scanner) -> Block {
+    var inner = scanner
+    var items: String[>..] = []
+    items.append(first.slice(from: 2, to: first.count))
+
+    while !inner.atEnd() {
+        guard let line = inner.current() else {
+            return Block.List(ordered: false, items: items)
+        }
+
+        if !isBullet(line) {
+            return Block.List(ordered: false, items: items)
+        }
+
+        inner.advance()
+        items.append(line.slice(from: 2, to: line.count))
+    }
+
+    return Block.List(ordered: false, items: items)
+}
+
+public fn parseQuote(_ first: String, _ scanner: Scanner) -> Block {
+    var text = first.slice(from: 1, to: first.count).trimmed()
+    var inner = scanner
+
+    while !inner.atEnd() {
+        guard let line = inner.current() else {
+            return Block.Quote(blocks: parse(text))
+        }
+
+        if !isQuote(line) {
+            return Block.Quote(blocks: parse(text))
+        }
+
+        inner.advance()
+        text = text + "\n" + line.slice(from: 1, to: line.count).trimmed()
+    }
+
+    return Block.Quote(blocks: parse(text))
+}
+
+// ---- Rendering -----------------------------------------------------------
+
+public fn render(_ blocks: Block[>..]) -> String {
+    var result = ""
+    for block in blocks {
+        result = result + renderBlock(block) + "\n"
+    }
+    return result
+}
+
+public fn renderBlock(_ block: Block) -> String {
+    return match block {
+        case .Heading(let level, let text) =>
+            openTag("h" + level.toString()) + text + closeTag("h" + level.toString())
+
+        case .Paragraph(let text) => openTag("p") + text + closeTag("p")
+
+        case .Code(let language, let lines) => renderCode(language, lines)
+
+        case .Quote(let blocks) =>
+            openTag("blockquote") + render(blocks) + closeTag("blockquote")
+
+        case .List(let ordered, let items) => renderList(ordered, items)
+
+        case .Rule => "<hr/>"
+    }
+}
+
+public fn renderCode(_ language: String, _ lines: String[>..]) -> String {
+    var body = ""
+    for line in lines {
+        body = body + escape(line) + "\n"
+    }
+
+    let tag = language.isEmpty ? "pre" : "pre class=\"" + language + "\""
+    return "<" + tag + ">" + body + "</pre>"
+}
+
+public fn renderList(_ ordered: Bool, _ items: String[>..]) -> String {
+    let tag = ordered ? "ol" : "ul"
+    var body = ""
+    for item in items {
+        body = body + openTag("li") + item + closeTag("li")
+    }
+    return openTag(tag) + body + closeTag(tag)
+}
+
+public fn renderInline(_ inline: Inline) -> String {
+    return match inline {
+        case .Text(let value) => escape(value)
+        case .Emphasis(let value) => openTag("em") + escape(value) + closeTag("em")
+        case .Strong(let value) => openTag("strong") + escape(value) + closeTag("strong")
+        case .Code(let value) => openTag("code") + escape(value) + closeTag("code")
+        case .Link(let label, let target) =>
+            "<a href=\"" + escape(target) + "\">" + escape(label) + "</a>"
+    }
+}
+
+public fn openTag(_ name: String) -> String {
+    return "<" + name + ">"
+}
+
+public fn closeTag(_ name: String) -> String {
+    return "</" + name + ">"
+}
+
+public fn escape(_ text: String) -> String {
+    var result = ""
+    var i = 0
+
+    while i < text.count {
+        let c = text.at(i)
+        result = result + escapeChar(c)
+        i = i + 1
+    }
+
+    return result
+}
+
+public fn escapeChar(_ c: Char) -> String {
+    return match c {
+        case '<' => "&lt;"
+        case '>' => "&gt;"
+        case '&' => "&amp;"
+        case '"' => "&quot;"
+        default => String.fromChar(c)
+    }
+}
+
+public fn summarise(_ blocks: Block[>..]) -> [String: Int] {
+    var counts: [String: Int] = [:]
+    for block in blocks {
+        let key = kindOf(block)
+        counts[key] = (counts[key] ?? 0) + 1
+    }
+    return counts
+}
+
+public fn kindOf(_ block: Block) -> String {
+    return match block {
+        case .Heading(let level, let text) => "heading"
+        case .Paragraph(let text) => "paragraph"
+        case .Code(let language, let lines) => "code"
+        case .Quote(let blocks) => "quote"
+        case .List(let ordered, let items) => "list"
+        case .Rule => "rule"
+    }
+}

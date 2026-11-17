@@ -1,0 +1,228 @@
+module Corpus.Matrix
+
+// Numeric code: operators on value types, fixed-size storage, and the kind
+// of arithmetic that shows up whether a language's number handling is
+// bearable.
+
+public struct Vec2 {
+    public var x: F64
+    public var y: F64
+
+    public fn length() -> F64 {
+        return (x * x + y * y).abs()
+    }
+
+    public fn dot(_ other: Vec2) -> F64 {
+        return x * other.x + y * other.y
+    }
+
+    public fn scaled(by factor: F64) -> Vec2 {
+        return Vec2 { x: x * factor, y: y * factor }
+    }
+
+    public fn normalized() -> Vec2 {
+        let len = length()
+        if len == 0.0 {
+            return self
+        }
+        return scaled(by: 1.0 / len)
+    }
+
+    operator + (a: Vec2, b: Vec2) -> Vec2 {
+        return Vec2 { x: a.x + b.x, y: a.y + b.y }
+    }
+
+    operator - (a: Vec2, b: Vec2) -> Vec2 {
+        return Vec2 { x: a.x - b.x, y: a.y - b.y }
+    }
+
+    operator * (a: Vec2, b: F64) -> Vec2 {
+        return a.scaled(by: b)
+    }
+
+    operator == (a: Vec2, b: Vec2) -> Bool {
+        return a.x == b.x && a.y == b.y
+    }
+
+    prefix operator - (a: Vec2) -> Vec2 {
+        return Vec2 { x: 0.0 - a.x, y: 0.0 - a.y }
+    }
+}
+
+public struct Vec3 {
+    public var x: F64
+    public var y: F64
+    public var z: F64
+
+    public fn dot(_ other: Vec3) -> F64 {
+        return x * other.x + y * other.y + z * other.z
+    }
+
+    public fn cross(_ other: Vec3) -> Vec3 {
+        return Vec3 {
+            x: y * other.z - z * other.y,
+            y: z * other.x - x * other.z,
+            z: x * other.y - y * other.x,
+        }
+    }
+
+    operator + (a: Vec3, b: Vec3) -> Vec3 {
+        return Vec3 { x: a.x + b.x, y: a.y + b.y, z: a.z + b.z }
+    }
+}
+
+public struct Matrix2 {
+    public var a: F64
+    public var b: F64
+    public var c: F64
+    public var d: F64
+
+    public static fn identity() -> Matrix2 {
+        return Matrix2 { a: 1.0, b: 0.0, c: 0.0, d: 1.0 }
+    }
+
+    public fn determinant() -> F64 {
+        return a * d - b * c
+    }
+
+    public fn transposed() -> Matrix2 {
+        return Matrix2 { a: a, b: c, c: b, d: d }
+    }
+
+    public fn apply(_ v: Vec2) -> Vec2 {
+        return Vec2 { x: a * v.x + b * v.y, y: c * v.x + d * v.y }
+    }
+
+    public fn inverse() -> Matrix2? {
+        let det = determinant()
+        if det == 0.0 {
+            return none
+        }
+
+        let scale = 1.0 / det
+        return Matrix2 {
+            a: d * scale,
+            b: 0.0 - b * scale,
+            c: 0.0 - c * scale,
+            d: a * scale,
+        }
+    }
+
+    operator * (left: Matrix2, right: Matrix2) -> Matrix2 {
+        return Matrix2 {
+            a: left.a * right.a + left.b * right.c,
+            b: left.a * right.b + left.b * right.d,
+            c: left.c * right.a + left.d * right.c,
+            d: left.c * right.b + left.d * right.d,
+        }
+    }
+}
+
+// ---- A dense matrix of any size ------------------------------------------
+
+public union MatrixError {
+    ShapeMismatch(rows: Int, columns: Int)
+    Singular
+    OutOfRange(index: Int)
+}
+
+public struct Dense {
+    public var rows: Int
+    public var columns: Int
+    public var values: F64[>..]
+
+    public static fn zeros(_ rows: Int, _ columns: Int) -> Dense {
+        var values: F64[>..] = []
+        var i = 0
+        while i < rows * columns {
+            values.append(0.0)
+            i = i + 1
+        }
+        return Dense { rows: rows, columns: columns, values: values }
+    }
+
+    public fn at(_ row: Int, _ column: Int) throws(MatrixError) -> F64 {
+        let index = row * columns + column
+        if index < 0 || index >= values.count {
+            throw MatrixError.OutOfRange(index: index)
+        }
+        return values.removeLast()
+    }
+
+    public fn times(_ other: Dense) throws(MatrixError) -> Dense {
+        if columns != other.rows {
+            throw MatrixError.ShapeMismatch(rows: other.rows, columns: columns)
+        }
+
+        var result = Dense.zeros(rows, other.columns)
+        var row = 0
+
+        while row < rows {
+            var column = 0
+            while column < other.columns {
+                var total = 0.0
+                var k = 0
+                while k < columns {
+                    total = total + (try at(row, k)) * (try other.at(k, column))
+                    k = k + 1
+                }
+                result.values.append(total)
+                column = column + 1
+            }
+            row = row + 1
+        }
+
+        return result
+    }
+
+    public fn trace() throws(MatrixError) -> F64 {
+        if rows != columns {
+            throw MatrixError.ShapeMismatch(rows: rows, columns: columns)
+        }
+
+        var total = 0.0
+        for i in 0..<rows {
+            total = total + (try at(i, i))
+        }
+        return total
+    }
+}
+
+// ---- Using it ------------------------------------------------------------
+
+public fn reflect(_ v: Vec2, _ normal: Vec2) -> Vec2 {
+    let unit = normal.normalized()
+    return v - unit * (2.0 * v.dot(unit))
+}
+
+public fn rotate(_ v: Vec2, _ cosine: F64, _ sine: F64) -> Vec2 {
+    let m = Matrix2 { a: cosine, b: 0.0 - sine, c: sine, d: cosine }
+    return m.apply(v)
+}
+
+public fn compose(_ first: Matrix2, _ second: Matrix2) -> Matrix2 {
+    return second * first
+}
+
+public fn invertOrIdentity(_ m: Matrix2) -> Matrix2 {
+    return m.inverse() ?? Matrix2.identity()
+}
+
+public fn multiplyOrZero(_ a: Dense, _ b: Dense) -> Dense {
+    return try a.times(b) catch { Dense.zeros(a.rows, b.columns) }
+}
+
+public fn describeError(_ e: MatrixError) -> String {
+    return match e {
+        case .ShapeMismatch(let rows, let columns) =>
+            "shape " + rows.toString() + "x" + columns.toString()
+        case .Singular => "singular"
+        case .OutOfRange(let index) => "out of range " + index.toString()
+    }
+}
+
+public fn normal(_ a: Vec3, _ b: Vec3, _ c: Vec3) -> Vec3 {
+    let first = Vec3 { x: b.x - a.x, y: b.y - a.y, z: b.z - a.z }
+    let second = Vec3 { x: c.x - a.x, y: c.y - a.y, z: c.z - a.z }
+    return first.cross(second)
+}

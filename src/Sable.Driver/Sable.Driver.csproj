@@ -11,7 +11,8 @@
     <InternalsVisibleTo Include="Sable.CodeGen.Tests" />
   </ItemGroup>
   <ItemGroup>
-    <!-- The standard library: Sable source, compiled with every program that imports it. -->
-    <EmbeddedResource Include="../../lib/**/*.sab" LogicalName="lib/%(RecursiveDir)%(Filename)%(Extension)" />
+    <!-- The standard library: Sable source, compiled with every program that imports it.
+         Sable.Core is not here: every compilation has it, so Sable.Symbols carries it. -->
+    <EmbeddedResource Include="../../lib/**/*.sab" Exclude="../../lib/Sable.Core/*.sab" LogicalName="lib/%(RecursiveDir)%(Filename)%(Extension)" />
   </ItemGroup>
 </Project>

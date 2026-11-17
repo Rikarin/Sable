@@ -5,27 +5,8 @@ namespace Sable.Symbols.Tests;
 ///     conditional conformance it gives a generic type.
 /// </summary>
 public sealed class DeriveTests {
-    /// <summary>The core protocols, as lib/Sable.Core declares them, with a few conformers.</summary>
-    const string Core = """
-                        module Sable.Core
-                        public protocol Equatable { operator == (lhs: Self, rhs: Self) -> Bool }
-                        public protocol Comparable: Equatable { operator < (lhs: Self, rhs: Self) -> Bool }
-                        public protocol Hashable: Equatable { fn hash() -> Int }
-                        public protocol Debug { fn debugDescription() -> String }
-                        extension Int: Comparable, Hashable, Debug {
-                            public operator == (lhs: Int, rhs: Int) -> Bool { return lhs == rhs }
-                            public operator < (lhs: Int, rhs: Int) -> Bool { return lhs < rhs }
-                            public fn hash() -> Int { return self }
-                            public fn debugDescription() -> String { return "\(self)" }
-                        }
-                        extension Bool: Equatable, Hashable {
-                            public operator == (lhs: Bool, rhs: Bool) -> Bool { return lhs == rhs }
-                            public fn hash() -> Int { return self ? 1 : 0 }
-                        }
-                        """;
-
     static IReadOnlyList<Diagnostic> ErrorsIn(string source) => [
-        ..Compilation.Create(Core, "module M\n" + source)
+        ..Compilation.Create("module M\n" + source)
             .GetAllDiagnostics()
             .Where(static d => d.Severity == DiagnosticSeverity.Error)
     ];
@@ -57,7 +38,7 @@ public sealed class DeriveTests {
             """
         );
 
-        var compilation = Compilation.Create(Core, "module M\n@derive(Hashable) struct Point { var x: Int }");
+        var compilation = Compilation.Create("module M\n@derive(Hashable) struct Point { var x: Int }");
         var point = compilation.GetTypeByQualifiedName("M.Point")!;
         Assert.Contains(point.Members, static m => m is FunctionSymbol { Name: "==", FunctionKind: FunctionKind.Operator });
         Assert.Contains(point.Members, static m => m is FunctionSymbol { Name: "hash" });
@@ -153,15 +134,6 @@ public sealed class DeriveTests {
             fn probe(_ m: Money) -> Bool { return m == m && m.hash() == 0 }
             """
         );
-
-    [Fact]
-    public void WithoutTheCoreProtocolsDeriveSaysSo() {
-        var errors = Compilation.Create("module M\n@derive(Equatable) struct P { var x: Int }")
-            .GetAllDiagnostics()
-            .Where(static d => d.Severity == DiagnosticSeverity.Error)
-            .ToList();
-        Assert.Contains(errors, static e => e.Code == ErrorCode.ERR_CannotDerive && e.Message.Contains("Sable.Core", StringComparison.Ordinal));
-    }
 
     // ---- Generic types: conditional conformance --------------------------
 

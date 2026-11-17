@@ -1,0 +1,39 @@
+module Sable.Core
+
+// Char's own members: a Unicode scalar, its classes and its code point.
+
+extension Char {
+    /// Whether the scalar is a decimal digit, '0' to '9'.
+    @builtin("char_is_digit")
+    public var isDigit: Bool { get }
+
+    /// Whether the scalar is a letter, in any script.
+    @builtin("char_is_letter")
+    public var isLetter: Bool { get }
+
+    /// Whether the scalar is white space: a space, a tab, a line break and their kin.
+    @builtin("char_is_whitespace")
+    public var isWhitespace: Bool { get }
+
+    /// The scalar's code point, as an Int: what decoding and writing '\u'
+    /// escapes work in.
+    @builtin("char_to_Int")
+    public var codePoint: Int { get }
+
+    /// The scalar's code point, as the 21 bits it needs.
+    public var code: U32 { get { return U32(self.codePoint) } }
+
+    /// The scalar with this code point, or none when it is not one: past
+    /// U+10FFFF, negative, or a surrogate.
+    public static fn fromCodePoint(value: Int) -> Char? {
+        let (valid, scalar) = Char.scalar(value)
+        if valid {
+            return scalar
+        }
+        return none
+    }
+
+    /// Whether the code point is a scalar, and the scalar when it is.
+    @builtin("char_from_Int")
+    static fn scalar(_ value: Int) -> (Bool, Char)
+}

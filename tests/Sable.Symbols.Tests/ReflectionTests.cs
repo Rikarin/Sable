@@ -3,23 +3,12 @@ namespace Sable.Symbols.Tests;
 /// <summary>
 ///     <c>@reflectable</c> (docs/06 §6.3): a conformance to Sable.Core's
 ///     <c>Reflectable</c>, which <c>TypeInfo.of</c> asks of its argument.
-///     The library's reflection file is compiled with each program, as the
-///     driver compiles it.
+///     The library's reflection file is part of every compilation, as the
+///     rest of Sable.Core is.
 /// </summary>
 public sealed class ReflectionTests {
-    static string Library {
-        get {
-            var dir = new DirectoryInfo(AppContext.BaseDirectory);
-            while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "Sable.slnx"))) {
-                dir = dir.Parent;
-            }
-
-            return File.ReadAllText(Path.Combine(dir!.FullName, "lib", "Sable.Core", "Reflection.sab"));
-        }
-    }
-
     static IReadOnlyList<Diagnostic> ErrorsIn(string source) => [
-        ..Compilation.Create(Library, $"module M\n{source}")
+        ..Compilation.Create($"module M\n{source}")
             .GetAllDiagnostics()
             .Where(static d => d.Severity == DiagnosticSeverity.Error)
     ];

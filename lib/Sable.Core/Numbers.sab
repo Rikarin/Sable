@@ -1,0 +1,223 @@
+module Sable.Core
+
+// The numbers' own members: each written, abs'd and compared with its own
+// kind. A signed integer's abs traps where it does not fit (the smallest
+// value has no positive twin); an unsigned one's is itself. A float's min
+// and max prefer a number to a NaN.
+
+extension Int {
+    /// The number in decimal.
+    @builtin("string_from_Int")
+    public fn toString() -> String
+
+    /// The number's distance from zero.
+    @builtin("abs_Int")
+    public fn abs() -> Int
+
+    /// The smaller of the two.
+    @builtin("min_Int")
+    public fn min(other: Int) -> Int
+
+    /// The larger of the two.
+    @builtin("max_Int")
+    public fn max(other: Int) -> Int
+}
+
+extension I8 {
+    /// The number in decimal.
+    @builtin("string_from_I8")
+    public fn toString() -> String
+
+    /// The number's distance from zero.
+    @builtin("abs_I8")
+    public fn abs() -> I8
+
+    /// The smaller of the two.
+    @builtin("min_I8")
+    public fn min(other: I8) -> I8
+
+    /// The larger of the two.
+    @builtin("max_I8")
+    public fn max(other: I8) -> I8
+}
+
+extension I16 {
+    /// The number in decimal.
+    @builtin("string_from_I16")
+    public fn toString() -> String
+
+    /// The number's distance from zero.
+    @builtin("abs_I16")
+    public fn abs() -> I16
+
+    /// The smaller of the two.
+    @builtin("min_I16")
+    public fn min(other: I16) -> I16
+
+    /// The larger of the two.
+    @builtin("max_I16")
+    public fn max(other: I16) -> I16
+}
+
+extension I32 {
+    /// The number in decimal.
+    @builtin("string_from_I32")
+    public fn toString() -> String
+
+    /// The number's distance from zero.
+    @builtin("abs_I32")
+    public fn abs() -> I32
+
+    /// The smaller of the two.
+    @builtin("min_I32")
+    public fn min(other: I32) -> I32
+
+    /// The larger of the two.
+    @builtin("max_I32")
+    public fn max(other: I32) -> I32
+}
+
+extension I64 {
+    /// The number in decimal.
+    @builtin("string_from_I64")
+    public fn toString() -> String
+
+    /// The number's distance from zero.
+    @builtin("abs_I64")
+    public fn abs() -> I64
+
+    /// The smaller of the two.
+    @builtin("min_I64")
+    public fn min(other: I64) -> I64
+
+    /// The larger of the two.
+    @builtin("max_I64")
+    public fn max(other: I64) -> I64
+}
+
+extension U8 {
+    /// The number in decimal.
+    @builtin("string_from_U8")
+    public fn toString() -> String
+
+    /// The number itself: an unsigned one is never below zero.
+    public fn abs() -> U8 { return self }
+
+    /// The smaller of the two.
+    @builtin("min_U8")
+    public fn min(other: U8) -> U8
+
+    /// The larger of the two.
+    @builtin("max_U8")
+    public fn max(other: U8) -> U8
+}
+
+extension U16 {
+    /// The number in decimal.
+    @builtin("string_from_U16")
+    public fn toString() -> String
+
+    /// The number itself: an unsigned one is never below zero.
+    public fn abs() -> U16 { return self }
+
+    /// The smaller of the two.
+    @builtin("min_U16")
+    public fn min(other: U16) -> U16
+
+    /// The larger of the two.
+    @builtin("max_U16")
+    public fn max(other: U16) -> U16
+}
+
+extension U32 {
+    /// The number in decimal.
+    @builtin("string_from_U32")
+    public fn toString() -> String
+
+    /// The number itself: an unsigned one is never below zero.
+    public fn abs() -> U32 { return self }
+
+    /// The smaller of the two.
+    @builtin("min_U32")
+    public fn min(other: U32) -> U32
+
+    /// The larger of the two.
+    @builtin("max_U32")
+    public fn max(other: U32) -> U32
+}
+
+extension U64 {
+    /// The number in decimal.
+    @builtin("string_from_U64")
+    public fn toString() -> String
+
+    /// The number itself: an unsigned one is never below zero.
+    public fn abs() -> U64 { return self }
+
+    /// The smaller of the two.
+    @builtin("min_U64")
+    public fn min(other: U64) -> U64
+
+    /// The larger of the two.
+    @builtin("max_U64")
+    public fn max(other: U64) -> U64
+}
+
+extension UInt {
+    /// The number in decimal.
+    @builtin("string_from_UInt")
+    public fn toString() -> String
+
+    /// The number itself: an unsigned one is never below zero.
+    public fn abs() -> UInt { return self }
+
+    /// The smaller of the two.
+    @builtin("min_UInt")
+    public fn min(other: UInt) -> UInt
+
+    /// The larger of the two.
+    @builtin("max_UInt")
+    public fn max(other: UInt) -> UInt
+}
+
+extension F64 {
+    /// The number in decimal.
+    @builtin("string_from_F64")
+    public fn toString() -> String
+
+    /// The number's distance from zero.
+    @builtin("abs_F64")
+    public fn abs() -> F64
+
+    /// The smaller of the two.
+    @builtin("min_F64")
+    public fn min(other: F64) -> F64
+
+    /// The larger of the two.
+    @builtin("max_F64")
+    public fn max(other: F64) -> F64
+}
+
+extension F32 {
+    /// The number in decimal.
+    @builtin("string_from_F32")
+    public fn toString() -> String
+
+    /// The number's distance from zero.
+    @builtin("abs_F32")
+    public fn abs() -> F32
+
+    /// The smaller of the two.
+    @builtin("min_F32")
+    public fn min(other: F32) -> F32
+
+    /// The larger of the two.
+    @builtin("max_F32")
+    public fn max(other: F32) -> F32
+}
+
+extension Bool {
+    /// 'true' or 'false'.
+    @builtin("string_from_Bool")
+    public fn toString() -> String
+}

@@ -700,7 +700,8 @@ small program is inlined into `main`, so expect few frames.
 #### Reflection, as implemented
 
 A first slice, in `lib/Sable.Core/Reflection.sab` over `Reflect`, a struct
-of `@intrinsic` members whose bodies the compiler writes
+of `@intrinsic` members whose bodies the compiler writes, per type (unlike
+`@builtin`, which names one SIL builtin; see "Sable.Core in Sable")
 (`src/Sable.SIL/SilGen.Reflection.cs`; tests in
 `tests/Sable.CodeGen.Tests/ReflectionTests.cs` and
 `tests/Sable.Symbols.Tests/ReflectionTests.cs`):
@@ -803,10 +804,12 @@ Written so far (`tests/Sable.CodeGen.Tests/LibraryTests.cs`):
   agrees — and remove), `Path` (join, fileName, directory, extension,
   withoutExtension), `Console` (the standard streams, `readLine`,
   `readLines`) and `Environment` (variables, arguments), failing with
-  `IoError`. It is written over `Runtime`, a core type of static calls the
-  runtime implements in C (`sable_io_*`) and the interpreter in .NET; a call
-  that may fail gives a value either way and `io_succeeded` says whether to
-  keep it. `main` now takes `argc`/`argv`. The test harness gives programs
+  `IoError`. It is written over `Runtime`, a `Sable.Core` struct of static
+  `@builtin` calls (`lib/Sable.Core/Runtime.sab`, see "Sable.Core in Sable"
+  below) that the runtime implements in C (`sable_io_*`) and the interpreter
+  in .NET; a call that may fail gives a value either way and `io_succeeded`
+  says whether to keep it, which `Runtime`'s Sable wrappers turn into an
+  optional. `main` now takes `argc`/`argv`. The test harness gives programs
   standard input and compares standard error between the two.
 - `Sable.Time`: `Duration` (to the nanosecond, Comparable and Hashable,
   printed in its largest whole unit), `Instant` on the monotonic clock,
@@ -857,6 +860,59 @@ operators and witnesses on primitive types lowered, and reachability-based
 emission. A first slice of reflection (4.2) has followed. Next: streaming I/O (`Stream`, buffered
 readers and writers, memory-mapped files), and the names the plan lists that are not yet here
 (Unicode tables, regex).
+
+### Sable.Core in Sable, as implemented
+
+The primitive types (`Int`, `String`, `Char`, …) are the compiler's, since
+every layer knows them by sight; their members are now Sable, in
+`lib/Sable.Core` — `String.sab`, `Char.sab`, `Numbers.sab` and
+`Runtime.sab`, beside `Protocols.sab` and `Reflection.sab`. At the floor is
+`@builtin("name")` on a bodiless declaration, naming the SIL builtin it is:
+
+```sable
+extension String {
+    @builtin("string_count")
+    public var count: Int { get }
+
+    @builtin("string_trimmed")
+    public fn trimmed() -> String
+
+    /// Sable over a raw builtin: -1 becomes none.
+    public fn indexOf(character: Char) -> Int? { … }
+}
+```
+
+A call is that builtin, applied where it is called to the receiver (if
+any) and then the arguments, in order, each borrowed for it — no function
+is generated, so it costs what the special case in `SilGen` it replaces
+cost: hello world (52,392 bytes for `print("hello, world")` on the machine
+this was measured on) and every benchmark in `benchmarks` and
+`benchmarks/versus-dotnet` build to the same number of bytes, and run at the
+same speed, before and after. A builtin that answers with a flag — parsing,
+a fallible runtime call — is a raw, internal `@builtin` with a public Sable
+function over it (`toInt`, `Char.fromCodePoint`, `Runtime.readFile`), which
+LTO inlines. Writing them in Sable gave real bodies to members the compiler
+used to declare and could not lower: `toI8`…`toUInt`, `abs`/`min`/`max` on
+every width, `Char.code`.
+
+Misuse is caught where it is written: S3081 for `@builtin` outside
+`Sable.Core` (a builtin trusts its operands); S3082 for a malformed one (not
+one string literal, a body, a generic, a property other than a lone bodiless
+`get`); and, from SIL lowering, which owns the table, S7001 for a name
+`SilBuiltins` does not have and S7002 for a declaration whose receiver,
+parameters and result do not lower to the builtin's operands and result
+(`tests/Sable.Symbols.Tests/BuiltinTests.cs`,
+`tests/Sable.SIL.Tests/BuiltinLoweringTests.cs`). `@intrinsic`, which
+reflection uses, stays apart: its body is synthesised per type, not one
+builtin.
+
+To make this possible `Sable.Core` is now part of every compilation —
+embedded in `Sable.Symbols` and appended to whatever trees a compilation is
+given (`CoreLibrary`) — rather than something the driver adds, so a test
+binding three lines sees the same `String` a program does. Deleted from C#:
+`CoreTypes`' declarations of those members and of `Runtime` and `print`,
+and `SilGen`'s `CoreMethod`, `RuntimeCall`, the string and character cases
+of `ComputedProperty`, the `print` special case and `MakeOptional`.
 
 ### The first real program
 
@@ -1018,7 +1074,21 @@ to the state machine where tasks are many.
 
 ### 4.4 Exit criteria
 
-- [ ] Stdlib is self-hosted Sable, no C# in the shipping library
+- [ ] Stdlib is self-hosted Sable, no C# in the shipping library — every
+      module is Sable, and so are the primitives' members: `String`,
+      `Char`, the numbers, `Bool`, `print`, `Runtime` and `Region.reset`
+      are declared in `lib/Sable.Core`, over `@builtin`s (see "Sable.Core
+      in Sable"). The primitive types themselves stay compiler-known, as
+      the plan allows. What is still declared in C# (`CoreTypes`), and why:
+      the array family's members (`count`, `append`, `slice`, …), built per
+      element type, since a declaration cannot yet range over every array
+      type; `Region.alloc`, generic and giving a reference into the region;
+      `Task` (`spawn` builds the task object around a closure, `value` is an
+      async getter); `Bytes.of`, `fromBytes` and `Decoded`, inline layout's,
+      synthesised per type; and `Range`'s bounds, declared beside the type
+      the binder makes of `a..<b` (and not yet lowered). The I128, U128 and F16 types no
+      longer declare `toString`, `abs`, `min` and `max`: nothing could lower
+      them, and SIL has no such types yet
 - [x] Reflection: hello-world binary grows < 50 KB with reflection off —
       it grows not at all (51,736 bytes either way): reflection is code
       synthesised per type a program reflects on, and nothing else

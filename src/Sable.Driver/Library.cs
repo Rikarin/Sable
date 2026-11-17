@@ -1,4 +1,5 @@
 using System.Reflection;
+using Sable.Symbols;
 using Sable.Syntax;
 
 namespace Sable.Driver;
@@ -6,11 +7,11 @@ namespace Sable.Driver;
 /// <summary>
 ///     The standard library (docs/04 §4.3): Sable source in <c>lib/</c>,
 ///     embedded in the compiler. <c>Sable.Core</c>'s files are part of every
-///     program; any other module is part of a program that imports it, with
-///     whatever that module imports in turn.
+///     compilation, and come with Sable.Symbols; any other module is part of
+///     a program that imports it, with whatever that module imports in turn.
 /// </summary>
 public static class Library {
-    public const string Core = "Sable.Core";
+    public const string Core = CoreLibrary.ModuleName;
 
     static readonly Lazy<IReadOnlyDictionary<string, IReadOnlyList<SyntaxTree>>> Modules = new(Load);
 
@@ -39,11 +40,15 @@ public static class Library {
         return modules.ToDictionary(static m => m.Key, static m => (IReadOnlyList<SyntaxTree>)m.Value, StringComparer.Ordinal);
     }
 
-    /// <summary>The library's trees a program needs: the core, and every module it imports, transitively.</summary>
+    /// <summary>
+    ///     The library's trees a program needs: every module it imports,
+    ///     transitively. The core is not among them: every compilation has it
+    ///     already (<see cref="CoreLibrary" />).
+    /// </summary>
     public static IReadOnlyList<SyntaxTree> For(SyntaxTree program) {
         var needed = new List<SyntaxTree>();
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-        var pending = new Queue<string>([Core, ..ImportsOf(program)]);
+        var seen = new HashSet<string>(StringComparer.Ordinal) { Core };
+        var pending = new Queue<string>(ImportsOf(program));
         while (pending.TryDequeue(out var module)) {
             if (!seen.Add(module) || !Modules.Value.TryGetValue(module, out var files)) {
                 continue;

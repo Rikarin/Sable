@@ -141,6 +141,8 @@ public enum ErrorCode {
     ERR_CannotDerive = 3071,
     ERR_DerivedFieldDoesNotConform = 3072,
     ERR_NotReflectableKind = 3080,
+    ERR_BuiltinOutsideCore = 3081,
+    ERR_MalformedBuiltin = 3082,
     ERR_NotSupportedYet = 3099,
 
     // ---- Patterns and flow (S6000-S6999) ---------------------------------
@@ -157,6 +159,8 @@ public enum ErrorCode {
 
     // ---- Code generation (S7000-S7999) ---------------------------------
     ERR_NotLoweredYet = 7000,
+    ERR_UnknownBuiltin = 7001,
+    ERR_BuiltinSignatureMismatch = 7002,
 }
 
 public enum DiagnosticSeverity {

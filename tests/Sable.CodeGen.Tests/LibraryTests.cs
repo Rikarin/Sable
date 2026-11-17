@@ -33,6 +33,32 @@ fn main() {
 """).Stdout
         );
 
+    /// <summary>
+    ///     The primitives' members are Sable.Core's, in Sable: builtins applied
+    ///     in place, and Sable over them — among them the narrower parses, the
+    ///     other widths' abs, min and max, and Char.code, which the compiler
+    ///     used to declare and could not lower.
+    /// </summary>
+    [Fact]
+    public void ThePrimitivesMembersAreWrittenInSable() =>
+        Assert.Equal(
+            "3 false 3 2\n42 -1 none -7 200 none 4000000000\n5 3 9 3 1.5 -2.5\ntrue 7 65 A qr\nnone 2.5\n",
+            AssertAgree("""
+module P
+@main
+fn main() {
+    let t = "  a,b,c  ".trimmed()
+    print("\(t.count == 5 ? 3 : 0) \(t.isEmpty) \(t.split(',').count) \(t.indexOf('b') ?? -1)")
+    let narrow = "300".toU8() == none ? "none" : "some"
+    print("\("42".toInt() ?? 0) \("x".toInt() ?? -1) \(narrow) \("-7".toI8() ?? 0) \("200".toU8() ?? 0) \("-1".toU32() == none ? "none" : "some") \("4000000000".toU64() ?? 0)")
+    print("\((-5).abs()) \(I32(3).min(7)) \(I16(9).max(-2)) \(U8(3).abs()) \(F32(1.5).max(0.5)) \((-2.5).min(1.0))")
+    print("\(true.toString()) \(Char.fromCodePoint(55) ?? 'z') \('A'.code) \(Char.fromCodePoint(65) ?? 'z') \(String.fromChar('q').appending("r"))")
+    let surrogate = Char.fromCodePoint(55296) == none ? "none" : "some"
+    print("\(surrogate) \("2.5".toF64() ?? 0.0)")
+}
+""").Stdout
+        );
+
     [Fact]
     public void TextIsWrittenInSable() =>
         Assert.Equal(

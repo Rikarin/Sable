@@ -157,6 +157,15 @@ public sealed class FunctionSymbol : Symbol {
     /// <summary>True when the declaration has no body, as in a protocol.</summary>
     public bool IsAbstract { get; internal set; }
 
+    /// <summary>
+    ///     The SIL builtin a <c>Sable.Core</c> declaration written
+    ///     <c>@builtin("name")</c> lowers to, or null. Such a function has no
+    ///     body: each call is the builtin, applied to the receiver and then the
+    ///     arguments, in place — no function is made for it, so it costs what
+    ///     the operation costs and nothing more.
+    /// </summary>
+    public string? Builtin { get; internal set; }
+
     TypeSymbol? _returnType;
     internal Func<TypeSymbol>? ReturnTypeResolver { get; set; }
 
@@ -294,6 +303,13 @@ public sealed class FieldSymbol(
     ///     body, so a conforming type has to supply one.
     /// </summary>
     public bool IsAbstract { get; internal set; }
+
+    /// <summary>
+    ///     For a computed property <c>Sable.Core</c> declares
+    ///     <c>@builtin("name")</c>, with a bodiless <c>get</c>: the SIL builtin
+    ///     a read lowers to, applied to the receiver.
+    /// </summary>
+    public string? Builtin { get; internal set; }
 
     public bool HasInitializer { get; internal set; }
 }

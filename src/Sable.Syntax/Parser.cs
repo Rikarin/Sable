@@ -167,7 +167,8 @@ internal sealed class Parser {
             parser._diagnostics.ToList(),
             options,
             tokens,
-            hasDirectives
+            hasDirectives,
+            diagnostics
         );
     }
 
@@ -213,9 +214,88 @@ internal sealed class Parser {
         if (_index < _tokens.Length - 1) {
             _index++;
             _tokenPosition += token.FullWidth;
+            return AttachSkipped(token);
         }
 
+        // The end of file cannot advance, so eating it twice would put its
+        // trivia in the tree twice. Whoever eats it first gets it; anyone
+        // after gets a zero-width stand-in, and the text stays exact.
+        if (_endOfFileEaten) {
+            return CreateMissing(SyntaxKind.EndOfFile);
+        }
+
+        _endOfFileEaten = true;
         return AttachSkipped(token);
+    }
+
+    /// <summary>True once the end-of-file token is in the tree.</summary>
+    bool _endOfFileEaten;
+
+    /// <summary>
+    ///     How deeply expressions, types, patterns and statements may nest.
+    /// </summary>
+    /// <remarks>
+    ///     Recursive descent spends stack per level, and a stack overflow kills
+    ///     the process rather than throwing — no IDE can survive a file of five
+    ///     thousand parentheses otherwise. Real code never comes close.
+    /// </remarks>
+    const int MaxNesting = 256;
+
+    int _nesting;
+    bool _reportedTooDeep;
+
+    static GreenNode MissingExpression() => new IdentifierNameGreen(CreateMissing(SyntaxKind.IdentifierToken));
+
+    /// <summary>
+    ///     True when the token before the current one ends a statement, per
+    ///     the newline rule of spec/lexical.md §4, so the current token starts
+    ///     a new one and nothing may extend the expression before it.
+    /// </summary>
+    bool AtStatementStart => _index > 0 && TokenAt(_index - 1).TerminatesStatement;
+
+    /// <summary>At the nesting limit: skips this level's text and says so.</summary>
+    bool TooDeep() {
+        if (_nesting < MaxNesting) {
+            return false;
+        }
+
+        SkipTooDeep();
+        return true;
+    }
+
+    /// <summary>
+    ///     Past the nesting limit: reports it once, then skips to the bracket
+    ///     that closes the group this level sits in. The skipped text rides on
+    ///     the next token as trivia, so nothing is lost, and every outer level
+    ///     then finds its own closing bracket and unwinds normally.
+    /// </summary>
+    void SkipTooDeep() {
+        if (!_reportedTooDeep) {
+            _reportedTooDeep = true;
+            ReportUnexpected(
+                ErrorCode.ERR_NestedTooDeeply,
+                $"this is nested more than {MaxNesting} levels deep; the rest of it is not parsed"
+            );
+        }
+
+        var depth = 0;
+        while (!At(SyntaxKind.EndOfFile)) {
+            switch (Current.Kind) {
+                case SyntaxKind.OpenParenToken or SyntaxKind.OpenBracketToken or SyntaxKind.OpenBraceToken:
+                    depth++;
+                    break;
+
+                case SyntaxKind.CloseParenToken or SyntaxKind.CloseBracketToken or SyntaxKind.CloseBraceToken:
+                    if (depth == 0) {
+                        return;
+                    }
+
+                    depth--;
+                    break;
+            }
+
+            SkipCurrentToken();
+        }
     }
 
     /// <summary>Consumes the expected token, or inserts a zero-width missing one.</summary>
@@ -278,7 +358,13 @@ internal sealed class Parser {
     GreenToken SplitLeadingCharacter(SyntaxKind firstKind, SyntaxKind remainderKind) {
         var token = TokenAt(_index);
         var first = new GreenToken(firstKind, token.Text[..1], token.Leading, []);
-        var remainder = new GreenToken(remainderKind, token.Text[1..], [], token.Trailing);
+        var remainder = new GreenToken(
+            remainderKind,
+            token.Text[1..],
+            [],
+            token.Trailing,
+            terminatesStatement: token.TerminatesStatement
+        );
 
         (_split ??= [])[_index] = remainder;
         _tokenPosition += token.LeadingTriviaWidth + 1;
@@ -308,7 +394,7 @@ internal sealed class Parser {
 
     GreenNode ParseAssignment() {
         var left = ParseTernary();
-        if (!SyntaxFacts.IsAssignmentOperator(Current.Kind)) {
+        if (!SyntaxFacts.IsAssignmentOperator(Current.Kind) || AtStatementStart) {
             return left;
         }
 
@@ -319,7 +405,7 @@ internal sealed class Parser {
 
     GreenNode ParseTernary() {
         var condition = ParseCoalesce();
-        if (!At(SyntaxKind.QuestionToken)) {
+        if (!At(SyntaxKind.QuestionToken) || AtStatementStart) {
             return condition;
         }
 
@@ -332,7 +418,7 @@ internal sealed class Parser {
 
     GreenNode ParseCoalesce() {
         var left = ParseLogicalOr();
-        if (!At(SyntaxKind.QuestionQuestionToken)) {
+        if (!At(SyntaxKind.QuestionQuestionToken) || AtStatementStart) {
             return left;
         }
 
@@ -341,33 +427,77 @@ internal sealed class Parser {
         return new BinaryExpressionGreen(left, op, right);
     }
 
-    GreenNode ParseLogicalOr() => ParseLeftAssociative(ParseLogicalAnd, SyntaxKind.PipePipeToken);
+    /// <summary>
+    ///     The left-associative binary precedence levels, loosest first, per
+    ///     spec/SYNTAX.md §16. Ranges sit between relational and shift, and are
+    ///     parsed by <see cref="ParseRange" /> since they do not associate.
+    /// </summary>
+    enum BinaryLevel {
+        LogicalOr,
+        LogicalAnd,
+        BitOr,
+        BitXor,
+        BitAnd,
+        Equality,
+        Relational,
+        Shift,
+        Additive,
+        Multiplicative,
+        None,
+    }
 
-    GreenNode ParseLogicalAnd() => ParseLeftAssociative(ParseBitOr, SyntaxKind.AmpersandAmpersandToken);
+    static BinaryLevel LevelOf(SyntaxKind kind) =>
+        kind switch {
+            SyntaxKind.PipePipeToken => BinaryLevel.LogicalOr,
+            SyntaxKind.AmpersandAmpersandToken => BinaryLevel.LogicalAnd,
+            SyntaxKind.PipeToken => BinaryLevel.BitOr,
+            SyntaxKind.CaretToken => BinaryLevel.BitXor,
+            SyntaxKind.AmpersandToken => BinaryLevel.BitAnd,
+            SyntaxKind.EqualsEqualsToken
+                or SyntaxKind.BangEqualsToken
+                or SyntaxKind.EqualsEqualsEqualsToken
+                or SyntaxKind.BangEqualsEqualsToken => BinaryLevel.Equality,
+            SyntaxKind.LessToken
+                or SyntaxKind.LessEqualsToken
+                or SyntaxKind.GreaterToken
+                or SyntaxKind.GreaterEqualsToken => BinaryLevel.Relational,
+            SyntaxKind.LessLessToken or SyntaxKind.GreaterGreaterToken => BinaryLevel.Shift,
+            SyntaxKind.PlusToken or SyntaxKind.MinusToken => BinaryLevel.Additive,
+            SyntaxKind.StarToken or SyntaxKind.SlashToken or SyntaxKind.PercentToken => BinaryLevel.Multiplicative,
+            _ => BinaryLevel.None,
+        };
 
-    GreenNode ParseBitOr() => ParseLeftAssociative(ParseBitXor, SyntaxKind.PipeToken);
+    GreenNode ParseLogicalOr() => ParseBinary(BinaryLevel.LogicalOr);
 
-    GreenNode ParseBitXor() => ParseLeftAssociative(ParseBitAnd, SyntaxKind.CaretToken);
+    GreenNode ParseShift() => ParseBinary(BinaryLevel.Shift);
 
-    GreenNode ParseBitAnd() => ParseLeftAssociative(ParseEquality, SyntaxKind.AmpersandToken);
+    /// <summary>
+    ///     One left-associative level: operands from the next tighter level,
+    ///     joined by this level's operators.
+    /// </summary>
+    /// <remarks>
+    ///     One method for every level, dispatched on an enum, rather than a
+    ///     method per level that hands a delegate and an operator array to a
+    ///     shared helper: that allocated both for every operand of every
+    ///     expression, on the parser's hottest path.
+    /// </remarks>
+    GreenNode ParseBinary(BinaryLevel level) {
+        var left = ParseOperand(level);
+        while (LevelOf(Current.Kind) == level && !AtStatementStart) {
+            var op = EatToken();
+            var right = ParseOperand(level);
+            left = new BinaryExpressionGreen(left, op, right);
+        }
 
-    GreenNode ParseEquality() =>
-        ParseLeftAssociative(
-            ParseRelational,
-            SyntaxKind.EqualsEqualsToken,
-            SyntaxKind.BangEqualsToken,
-            SyntaxKind.EqualsEqualsEqualsToken,
-            SyntaxKind.BangEqualsEqualsToken
-        );
+        return left;
+    }
 
-    GreenNode ParseRelational() =>
-        ParseLeftAssociative(
-            ParseRange,
-            SyntaxKind.LessToken,
-            SyntaxKind.LessEqualsToken,
-            SyntaxKind.GreaterToken,
-            SyntaxKind.GreaterEqualsToken
-        );
+    GreenNode ParseOperand(BinaryLevel level) =>
+        level switch {
+            BinaryLevel.Relational => ParseRange(),
+            BinaryLevel.Multiplicative => ParseUnary(),
+            _ => ParseBinary(level + 1),
+        };
 
     /// <summary>Ranges are non-associative and may omit either operand.</summary>
     GreenNode ParseRange() {
@@ -378,40 +508,31 @@ internal sealed class Parser {
         }
 
         var left = ParseShift();
-        if (!IsRangeOperator(Current.Kind)) {
+        if (!IsRangeOperator(Current.Kind) || AtStatementStart) {
             return left;
         }
 
         var op = EatToken();
-        var right = CanStartExpression(Current.Kind) ? ParseShift() : null;
+        var right = CanStartExpression(Current.Kind) && !AtStatementStart ? ParseShift() : null;
         return new RangeExpressionGreen(left, op, right);
     }
 
     static bool IsRangeOperator(SyntaxKind kind) => kind is SyntaxKind.DotDotLessToken or SyntaxKind.DotDotDotToken;
 
-    GreenNode ParseShift() =>
-        ParseLeftAssociative(ParseAdditive, SyntaxKind.LessLessToken, SyntaxKind.GreaterGreaterToken);
-
-    GreenNode ParseAdditive() => ParseLeftAssociative(ParseMultiplicative, SyntaxKind.PlusToken, SyntaxKind.MinusToken);
-
-    GreenNode ParseMultiplicative() =>
-        ParseLeftAssociative(ParseUnary, SyntaxKind.StarToken, SyntaxKind.SlashToken, SyntaxKind.PercentToken);
-
-    GreenNode ParseLeftAssociative(
-        Func<GreenNode> operand,
-        params SyntaxKind[] operators
-    ) {
-        var left = operand();
-        while (Array.IndexOf(operators, Current.Kind) >= 0) {
-            var op = EatToken();
-            var right = operand();
-            left = new BinaryExpressionGreen(left, op, right);
+    GreenNode ParseUnary() {
+        if (TooDeep()) {
+            return MissingExpression();
         }
 
-        return left;
+        _nesting++;
+        try {
+            return ParseUnaryCore();
+        } finally {
+            _nesting--;
+        }
     }
 
-    GreenNode ParseUnary() {
+    GreenNode ParseUnaryCore() {
         if (At(SyntaxKind.TryKeyword)) {
             var tryKeyword = EatToken();
             var marker = Current.Kind is SyntaxKind.QuestionToken or SyntaxKind.BangToken
@@ -453,6 +574,12 @@ internal sealed class Parser {
 
     GreenNode ParsePostfix(GreenNode expression) {
         while (true) {
+            // A new line that starts a new statement: '(1, 2)' or '[0]' there
+            // is not a call or a subscript of what came before.
+            if (AtStatementStart) {
+                return expression;
+            }
+
             switch (Current.Kind) {
                 case SyntaxKind.DotToken:
                 case SyntaxKind.QuestionDotToken: {
@@ -729,7 +856,11 @@ internal sealed class Parser {
         var index = _index;
         var tokenPosition = _tokenPosition;
         var split = _split is null ? null : new Dictionary<int, GreenToken>(_split);
-        var skipped = _skipped.Count;
+        // A copy, not a count: the speculative parse may attach the pending
+        // skipped text to a token it then throws away, which empties the
+        // list, and truncating would not bring that text back.
+        var skipped = _skipped.ToArray();
+        var endOfFileEaten = _endOfFileEaten;
 
         using (_diagnostics.Suppress()) {
             try {
@@ -740,9 +871,9 @@ internal sealed class Parser {
                 _index = index;
                 _tokenPosition = tokenPosition;
                 _split = split;
-                if (_skipped.Count > skipped) {
-                    _skipped.RemoveRange(skipped, _skipped.Count - skipped);
-                }
+                _skipped.Clear();
+                _skipped.AddRange(skipped);
+                _endOfFileEaten = endOfFileEaten;
             }
         }
     }
@@ -1356,6 +1487,19 @@ internal sealed class Parser {
     }
 
     GreenNode ParsePrimaryType() {
+        if (TooDeep()) {
+            return new SimpleNameTypeGreen(CreateMissing(SyntaxKind.IdentifierToken), null);
+        }
+
+        _nesting++;
+        try {
+            return ParsePrimaryTypeCore();
+        } finally {
+            _nesting--;
+        }
+    }
+
+    GreenNode ParsePrimaryTypeCore() {
         switch (Current.Kind) {
             case SyntaxKind.CapitalSelfKeyword:
                 return new SelfTypeGreen(EatToken());
@@ -1658,7 +1802,12 @@ internal sealed class Parser {
     /// <summary>A brace right after an argument list is the call's last argument.</summary>
     GreenNode? TryParseTrailingClosure() => CanTakeTrailingClosure() ? ParseBraceClosure(null) : null;
 
-    bool CanTakeTrailingClosure() => !_noBrace && At(SyntaxKind.OpenBraceToken) && !IsAccessorBlockAhead();
+    /// <remarks>
+    ///     A brace on a new line is never a trailing closure: the line before
+    ///     it ended a statement, so the brace starts something else.
+    /// </remarks>
+    bool CanTakeTrailingClosure() =>
+        !_noBrace && At(SyntaxKind.OpenBraceToken) && !AtStatementStart && !IsAccessorBlockAhead();
 
     /// <summary>
     ///     True when the brace at the current token opens a property's accessors.
@@ -2004,6 +2153,19 @@ internal sealed class Parser {
     }
 
     GreenNode ParsePrimaryPattern() {
+        if (TooDeep()) {
+            return new BindingPatternGreen(null, CreateMissing(SyntaxKind.IdentifierToken));
+        }
+
+        _nesting++;
+        try {
+            return ParsePrimaryPatternCore();
+        } finally {
+            _nesting--;
+        }
+    }
+
+    GreenNode ParsePrimaryPatternCore() {
         switch (Current.Kind) {
             case SyntaxKind.UnderscoreToken:
                 return new WildcardPatternGreen(EatToken());
@@ -2238,7 +2400,24 @@ internal sealed class Parser {
     // Statements
     // =======================================================================
 
-    public GreenNode ParseBlock() =>
+    /// <summary>Parses the body of a statement or declaration.</summary>
+    /// <remarks>
+    ///     A body's <c>{</c> must be on its header's line (spec/lexical.md §4):
+    ///     one that starts a line would read as a trailing closure or a block of
+    ///     its own. It is still taken as the body, so the rest parses sensibly.
+    /// </remarks>
+    public GreenNode ParseBlock() {
+        if (At(SyntaxKind.OpenBraceToken) && AtStatementStart) {
+            ReportUnexpected(
+                ErrorCode.ERR_BraceOnNewLine,
+                "'{' must be on the same line as what it belongs to"
+            );
+        }
+
+        return ParseBlockCore();
+    }
+
+    GreenNode ParseBlockCore() =>
         WithBracesAllowed<GreenNode>(() => {
                 var open = EatToken(SyntaxKind.OpenBraceToken);
                 var statements = ParseStatements(SyntaxKind.CloseBraceToken);
@@ -2255,9 +2434,29 @@ internal sealed class Parser {
         var items = ImmutableArray.CreateBuilder<GreenNode>();
         while (!At(SyntaxKind.EndOfFile) && Array.IndexOf(terminators, Current.Kind) < 0) {
             var before = _index;
+            var reported = _diagnostics.Count;
             items.Add(ParseStatement());
             if (_index == before) {
                 SkipCurrentToken();
+                continue;
+            }
+
+            // Two statements on one line need a ';' between them. After a '}'
+            // the next statement may follow on the same line, as in one-line
+            // bodies, so only a statement that ends on something else counts.
+            // A statement that already reported an error usually stopped
+            // early, and saying so twice helps nobody.
+            if (!AtStatementStart
+                && _diagnostics.Count == reported
+                && !At(SyntaxKind.BadToken)
+                && !At(SyntaxKind.EndOfFile)
+                && !At(SyntaxKind.SemicolonToken)
+                && Array.IndexOf(terminators, Current.Kind) < 0
+                && TokenAt(_index - 1).Kind is not (SyntaxKind.CloseBraceToken or SyntaxKind.SemicolonToken)) {
+                ReportUnexpected(
+                    ErrorCode.ERR_ExpectedStatementEnd,
+                    $"expected a new line or ';' before '{DescribeCurrent()}'"
+                );
             }
         }
 
@@ -2265,9 +2464,23 @@ internal sealed class Parser {
     }
 
     public GreenNode ParseStatement() {
+        if (TooDeep()) {
+            return new ExpressionStatementGreen(MissingExpression(), null);
+        }
+
+        _nesting++;
+        try {
+            return ParseStatementCore();
+        } finally {
+            _nesting--;
+        }
+    }
+
+    GreenNode ParseStatementCore() {
         switch (Current.Kind) {
+            // A block on its own is a statement, wherever it starts.
             case SyntaxKind.OpenBraceToken:
-                return ParseBlock();
+                return ParseBlockCore();
 
             case SyntaxKind.SemicolonToken:
                 return new EmptyStatementGreen(EatToken());
@@ -2976,7 +3189,14 @@ internal sealed class Parser {
 
         var asyncKeyword = TryEatToken(SyntaxKind.AsyncKeyword);
         var throwsSpec = ParseThrowsSpecOrNull();
-        asyncKeyword ??= TryEatToken(SyntaxKind.AsyncKeyword);
+
+        // 'throws async' has the effects the wrong way round. The tree has
+        // one place for 'async', before 'throws', so a late one is kept as
+        // skipped text rather than moved — moving it would change the source.
+        if (throwsSpec is not null && At(SyntaxKind.AsyncKeyword)) {
+            ReportUnexpected(ErrorCode.ERR_ExpectedToken, "'async' goes before 'throws', not after it");
+            SkipCurrentToken();
+        }
 
         var returnClause = At(SyntaxKind.ArrowToken) ? ParseReturnClause() : null;
         var whereClause = At(SyntaxKind.WhereKeyword) ? ParseWhereClause() : null;
@@ -3418,7 +3638,23 @@ internal sealed class Parser {
             : null;
 
         var operatorKeyword = EatToken(SyntaxKind.OperatorKeyword);
-        var operatorToken = EatToken();
+
+        // Anything can be the operator being declared, except what plainly ends
+        // the declaration.
+        GreenToken operatorToken;
+        if (Current.Kind is SyntaxKind.EndOfFile
+            or SyntaxKind.OpenBraceToken
+            or SyntaxKind.CloseBraceToken
+            or SyntaxKind.SemicolonToken) {
+            _diagnostics.Error(
+                ErrorCode.ERR_ExpectedToken,
+                CurrentSpan,
+                $"expected the operator being declared but found '{DescribeCurrent()}'"
+            );
+            operatorToken = CreateMissing(SyntaxKind.PlusToken);
+        } else {
+            operatorToken = EatToken();
+        }
 
         // '[]' and '()' are written as two tokens.
         var second = operatorToken.Kind switch {
@@ -3545,12 +3781,14 @@ internal sealed class Parser {
         var parts = token.Parts;
         var text = token.Text;
 
-        EatToken();
+        // The eaten token, not 'token': eating attaches any pending skipped
+        // text to its leading trivia, and that text must reach the tree.
+        var eaten = EatToken();
 
         var firstRaw = parts[0].Span.Start;
         var lastRaw = parts[^1].Span.End;
 
-        var open = new GreenToken(SyntaxKind.InterpolatedStringStartToken, text[..firstRaw], token.Leading, []);
+        var open = new GreenToken(SyntaxKind.InterpolatedStringStartToken, text[..firstRaw], eaten.Leading, []);
 
         var contents = ImmutableArray.CreateBuilder<GreenNode>(parts.Length);
 
@@ -3580,9 +3818,12 @@ internal sealed class Parser {
     }
 
     GreenNode ParseInterpolationHole(StringPart part, string raw, int tokenTextStart) {
-        // raw is '\(' + inner + ')'.
-        var openText = raw[..2];
-        var inner = part.Text;
+        // raw is '\(' + inner + ')', except that an unterminated hole has no
+        // ')'. The inner text is read off raw rather than the part, so the
+        // pieces always add back up to exactly what the source said.
+        var openText = raw[..Math.Min(2, raw.Length)];
+        var terminated = raw.Length > openText.Length && raw[^1] == ')';
+        var inner = raw[openText.Length..(terminated ? raw.Length - 1 : raw.Length)];
 
         var holeStart = tokenTextStart + part.Span.Start + openText.Length;
 
@@ -3590,8 +3831,13 @@ internal sealed class Parser {
         var inner_parser = new Parser(source, _options);
         var expression = inner_parser.ParseExpression();
 
-        foreach (var diagnostic in inner_parser._diagnostics) {
-            _diagnostics.Add(diagnostic with { Span = new(diagnostic.Span.Start + holeStart, diagnostic.Span.Length) });
+        // An unterminated hole is already reported, and what it swallowed up
+        // to the end of the line is rarely an expression; its own complaints
+        // would only repeat the one that matters.
+        if (terminated) {
+            foreach (var diagnostic in inner_parser._diagnostics) {
+                _diagnostics.Add(diagnostic with { Span = new(diagnostic.Span.Start + holeStart, diagnostic.Span.Length) });
+            }
         }
 
         // Whatever the expression did not cover rides on the closing paren, so
@@ -3611,7 +3857,13 @@ internal sealed class Parser {
             ];
 
         var open = new GreenToken(SyntaxKind.InterpolationStartToken, openText, [], []);
-        var close = new GreenToken(SyntaxKind.InterpolationEndToken, raw[^1..], closeLeading, []);
+        var close = new GreenToken(
+            SyntaxKind.InterpolationEndToken,
+            terminated ? ")" : string.Empty,
+            closeLeading,
+            [],
+            isMissing: !terminated
+        );
 
         return new InterpolationGreen(open, expression, close);
     }

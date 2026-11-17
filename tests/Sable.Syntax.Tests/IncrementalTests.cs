@@ -387,4 +387,105 @@ public sealed class IncrementalTests {
         var tree = SyntaxTree.Parse(new(source, "d.sab"));
         AssertSameAsFullParse(tree, TextChange.Insert(source.Length, "\nfn c() { }\n"));
     }
+
+    // ---- Chained edits ------------------------------------------------------
+
+    /// <summary>
+    ///     Every token with its full text and both flags, then every diagnostic:
+    ///     stricter than <see cref="TreeDump" />, which drops punctuation and
+    ///     trivia, because the bugs that survive it live exactly there.
+    /// </summary>
+    static string StrictDump(SyntaxTree tree) {
+        var builder = new StringBuilder();
+
+        void Walk(SyntaxNodeOrToken item, int depth) {
+            if (item.IsToken) {
+                var token = item.AsToken();
+                builder.Append(' ', depth).Append(token.Kind).Append(" [").Append(token.ToFullString()).Append(']')
+                    .Append(token.IsMissing ? " missing" : "")
+                    .Append(token.TerminatesStatement ? " ends" : "")
+                    .Append('\n');
+                return;
+            }
+
+            var node = item.AsNode()!;
+            builder.Append(' ', depth).Append(node.Kind).Append('\n');
+            foreach (var child in node.ChildNodesAndTokens()) {
+                Walk(child, depth + 1);
+            }
+        }
+
+        Walk(tree.Root, 0);
+        foreach (var diagnostic in tree.Diagnostics) {
+            builder.Append(diagnostic.Id).Append('@').Append(diagnostic.Span).Append('\n');
+        }
+
+        return builder.ToString();
+    }
+
+    /// <summary>
+    ///     Edits applied one after another to the same tree — each from the
+    ///     previous incremental result, never from a fresh parse — including
+    ///     edits to files that already have errors. Garbage accumulates, which
+    ///     is what an editor's buffer actually looks like.
+    /// </summary>
+    [Fact]
+    public void ChainedEditsMatchAFullParseExactly() {
+        string[] snippets = [
+            "", " ", "\n", "x", "(", ")", "{", "}", "[", "]", ".", ",", ";", "fn ", "let ", "struct ",
+            "+", "=", "\"", "\\(", "<", ">", "?", "//", "/*", "*/", "case ", "=>", "1", "_", "while ", "else ",
+        ];
+
+        var files = Directory.GetFiles(Path.Combine(TestHelpers.RepositoryRoot, "tests", "corpus"), "*.sab")
+            .Concat(Directory.GetFiles(Path.Combine(TestHelpers.RepositoryRoot, "examples"), "*.sab"))
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
+        var random = new Random(20261121);
+        for (var round = 0; round < 60; round++) {
+            var tree = SyntaxTree.Parse(File.ReadAllText(files[random.Next(files.Length)]));
+            var history = new List<string>();
+
+            for (var step = 0; step < 25; step++) {
+                var length = tree.Text.Length;
+                var start = random.Next(length + 1);
+                var deleted = random.Next(4) == 0 ? Math.Min(random.Next(6), length - start) : 0;
+                var inserted = snippets[random.Next(snippets.Length)];
+                history.Add($"@{start}-{deleted}+{inserted}");
+
+                tree = tree.WithChange(TextChange.Replace(new TextSpan(start, deleted), inserted));
+                var full = SyntaxTree.Parse(tree.Text.Text);
+
+                var expected = StrictDump(full);
+                var actual = StrictDump(tree);
+                Assert.True(
+                    expected == actual,
+                    $"round {round}, step {step}: incremental differs from a full parse after {string.Join(" ", history)}"
+                );
+            }
+        }
+    }
+
+    [Fact]
+    public void AnErrorReportedAtTheNextMemberSurvivesAnEditElsewhere() {
+        // 'let a = 1 +' is reported at 'fn', the next member's first token;
+        // the member that caused it must not be reused without it.
+        var tree = SyntaxTree.Parse("module M\nlet a = 1 +\nfn b() { }\nfn c() { }\n");
+        Assert.NotEmpty(tree.Diagnostics);
+
+        var edited = tree.WithChange(TextChange.Insert(tree.Text.Length - 2, " "));
+        Assert.Equal(StrictDump(SyntaxTree.Parse(edited.Text.Text)), StrictDump(edited));
+    }
+
+    [Fact]
+    public void ABracketOpenedEarlierChangesWhereLaterStatementsEnd() {
+        // Inside an unbalanced '(' newlines do not end statements, so opening
+        // one at the top changes the flags of every token after it.
+        var tree = SyntaxTree.Parse("module M\nfn f() {\n    let a = 1\n    let b = 2\n}\nfn g() { }\n");
+        var edited = tree.WithChange(TextChange.Insert(tree.Text.Text.IndexOf("let a", StringComparison.Ordinal), "("));
+        Assert.Equal(StrictDump(SyntaxTree.Parse(edited.Text.Text)), StrictDump(edited));
+
+        var closed = edited.WithChange(TextChange.Delete(new TextSpan(edited.Text.Text.IndexOf('('), 1)));
+        Assert.Equal(StrictDump(SyntaxTree.Parse(closed.Text.Text)), StrictDump(closed));
+    }
 }

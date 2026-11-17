@@ -10,7 +10,8 @@ internal readonly record struct IncrementalLexResult(
     int ReusedPrefixCount,
     int ReusedSuffixCount,
     int OldSuffixStartIndex,
-    int[] OldPositions) {
+    int[] OldPositions,
+    int[] ReflaggedIndices) {
     /// <summary>The new index at which the reused suffix begins.</summary>
     public int NewSuffixStartIndex => Tokens.Length - ReusedSuffixCount;
 }
@@ -92,6 +93,25 @@ internal static class IncrementalLexer {
         }
 
         Lexer.MarkTerminators(array);
+
+        // The copied tokens whose statement-ending flag the edit changed, in
+        // new-stream indices. Re-marking replaces exactly those, so a
+        // reference comparison finds them; a member spanning one cannot be
+        // reused, and this lets reuse ask with a binary search.
+        var reflagged = new List<int>();
+        for (var i = 0; i < prefixCount; i++) {
+            if (!ReferenceEquals(array[i], oldTokens[i])) {
+                reflagged.Add(i);
+            }
+        }
+
+        var newSuffixStart = prefixCount + middle.Count;
+        for (var i = 0; i < reusedSuffix; i++) {
+            if (!ReferenceEquals(array[newSuffixStart + i], oldTokens[oldSuffixStart + i])) {
+                reflagged.Add(newSuffixStart + i);
+            }
+        }
+
         var tokens = System.Runtime.InteropServices.ImmutableCollectionsMarshal
             .AsImmutableArray(array);
 
@@ -103,7 +123,7 @@ internal static class IncrementalLexer {
             change.Delta
         );
 
-        return new(tokens, diagnostics, prefixCount, reusedSuffix, oldSuffixStart, oldPositions);
+        return new(tokens, diagnostics, prefixCount, reusedSuffix, oldSuffixStart, oldPositions, [..reflagged]);
     }
 
     /// <summary>Prefix sums of token widths; entry i is where token i starts.</summary>

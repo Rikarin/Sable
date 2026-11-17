@@ -1279,6 +1279,16 @@ public sealed class Lexer {
                 new(start, Math.Max(2, _position - start)),
                 "unterminated string interpolation; expected ')'"
             );
+
+            // Still a part: without one the '\(' and what follows it would
+            // belong to nothing, and the token's text would not tile.
+            parts.Add(
+                new(
+                    StringPartKind.Interpolation,
+                    TextBetween(innerStart, _position),
+                    TextSpan.FromBounds(start - _tokenStart, _position - _tokenStart)
+                )
+            );
             return;
         }
 
@@ -1619,66 +1629,83 @@ public sealed class Lexer {
     // -----------------------------------------------------------------------
 
     static void MarkStatementTerminators(Span<GreenToken> tokens) {
+        // Rule 3 counts unbalanced ( and [ — but a '{' inside them opens a
+        // body of statements, as in 'xs.map({ x in … })', where newlines end
+        // statements again. So each brace starts a fresh count, and its '}'
+        // puts the outer one back.
         var depth = 0;
+        var outer = new Stack<int>();
 
+        // Every token is assigned, not just the ones that terminate: an
+        // incremental lex copies old tokens in, and a flag that was true
+        // before the edit may have to become false.
         for (var i = 0; i < tokens.Length; i++) {
             var token = tokens[i];
-
-            switch (token.Kind) {
-                case SyntaxKind.OpenParenToken:
-                case SyntaxKind.OpenBracketToken:
-                    depth++;
-                    break;
-                case SyntaxKind.CloseParenToken:
-                case SyntaxKind.CloseBracketToken:
-                    if (depth > 0) {
-                        depth--;
-                    }
-
-                    break;
-                case SyntaxKind.SemicolonToken:
-                    tokens[i] = token.WithTerminatesStatement(true);
-                    continue;
-            }
-
-            if (i + 1 >= tokens.Length) {
-                continue;
-            }
-
-            var next = tokens[i + 1];
-            var separatedByNewLine = HasNewLine(token.Trailing) || HasNewLine(next.Leading);
-            if (!separatedByNewLine) {
-                continue;
-            }
-
-            // Rule 3: inside unbalanced ( or [, newlines never terminate.
-            if (depth > 0) {
-                continue;
-            }
-
-            // Jump keywords terminate unconditionally, guarding against the
-            // JavaScript automatic-semicolon-insertion hazard.
-            if (SyntaxFacts.AlwaysTerminates(token.Kind)) {
-                tokens[i] = token.WithTerminatesStatement(true);
-                continue;
-            }
-
-            // Rule 1: the statement must be able to end here.
-            if (!SyntaxFacts.CanEndStatement(token.Kind)) {
-                continue;
-            }
-
-            // Rule 2: the next line must not open with a continuation token.
-            if (SyntaxFacts.ContinuesStatement(next.Kind)) {
-                continue;
-            }
-
-            tokens[i] = token.WithTerminatesStatement(true);
+            tokens[i] = token.WithTerminatesStatement(Terminates(tokens, i, ref depth, outer));
         }
 
         if (tokens.Length > 0) {
             tokens[^1] = tokens[^1].WithTerminatesStatement(true);
         }
+    }
+
+    static bool Terminates(Span<GreenToken> tokens, int i, ref int depth, Stack<int> outer) {
+        var token = tokens[i];
+
+        switch (token.Kind) {
+            case SyntaxKind.OpenParenToken:
+            case SyntaxKind.OpenBracketToken:
+                depth++;
+                break;
+            case SyntaxKind.CloseParenToken:
+            case SyntaxKind.CloseBracketToken:
+                if (depth > 0) {
+                    depth--;
+                }
+
+                break;
+            case SyntaxKind.OpenBraceToken:
+                outer.Push(depth);
+                depth = 0;
+                break;
+            case SyntaxKind.CloseBraceToken:
+                depth = outer.Count > 0 ? outer.Pop() : 0;
+                break;
+            case SyntaxKind.SemicolonToken:
+                return true;
+        }
+
+        if (i + 1 >= tokens.Length) {
+            return false;
+        }
+
+        var next = tokens[i + 1];
+        var separatedByNewLine = HasNewLine(token.Trailing) || HasNewLine(next.Leading);
+        if (!separatedByNewLine) {
+            return false;
+        }
+
+        // Rule 3: inside unbalanced ( or [, newlines never terminate.
+        if (depth > 0) {
+            return false;
+        }
+
+        // Jump keywords terminate unconditionally, guarding against the
+        // JavaScript automatic-semicolon-insertion hazard.
+        if (SyntaxFacts.AlwaysTerminates(token.Kind)) {
+            return true;
+        }
+
+        // Rule 1: the statement must be able to end here.
+        if (!SyntaxFacts.CanEndStatement(token.Kind)) {
+            return false;
+        }
+
+        // Rule 2: the next line must not open with a continuation token.
+        // 'while' also starts a statement of its own, so it continues
+        // only the 'repeat { }' its '}' closes.
+        return !(SyntaxFacts.ContinuesStatement(next.Kind)
+            && (next.Kind != SyntaxKind.WhileKeyword || token.Kind == SyntaxKind.CloseBraceToken));
     }
 
     static bool HasNewLine(ImmutableArray<GreenTrivia> trivia) {

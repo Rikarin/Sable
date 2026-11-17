@@ -59,6 +59,10 @@ internal sealed class IncrementalReuse {
 
     int[] _diagnosticPositions = [];
 
+    ImmutableArray<GreenToken> _oldTokens;
+    int _newTokenCount;
+    int[] _reflagged = [];
+
     public static IncrementalReuse Build(
         GreenNode oldRoot,
         ImmutableArray<GreenToken> oldTokens,
@@ -66,11 +70,13 @@ internal sealed class IncrementalReuse {
         in IncrementalLexResult lexResult
     ) {
         var reuse = new IncrementalReuse {
+            _oldTokens = oldTokens,
+            _newTokenCount = lexResult.Tokens.Length,
+            _reflagged = lexResult.ReflaggedIndices,
             // Members that produced a diagnostic are never reused, so that the
             // parser's diagnostics can simply be regenerated.
             _diagnosticPositions = [
                 ..oldDiagnostics
-                    .Where(static d => (int)d.Code >= 1000)
                     .Select(static d => d.Span.Start)
                     .Order()
             ]
@@ -200,7 +206,16 @@ internal sealed class IncrementalReuse {
             return;
         }
 
-        if (HasDiagnosticIn(childPosition, childPosition + child.FullWidth)) {
+        // A parse error is often reported at the token after the member that
+        // caused it — 'expected X but found Y' points at Y. So the window runs
+        // to the end of that next token's text, inclusive: a member whose
+        // parse may have produced such an error is reparsed, and says it again.
+        var windowEnd = childPosition + child.FullWidth;
+        if (endIndex < _oldTokens.Length) {
+            windowEnd += _oldTokens[endIndex].LeadingTriviaWidth + _oldTokens[endIndex].Width;
+        }
+
+        if (HasDiagnosticIn(childPosition, windowEnd + 1)) {
             return;
         }
 
@@ -208,15 +223,46 @@ internal sealed class IncrementalReuse {
 
         // Entirely inside the untouched prefix: indices are unchanged.
         if (endIndex <= prefixCount) {
-            _entries[startIndex] = new(child, tokenCount, context);
+            if (SameTokens(startIndex, tokenCount)) {
+                _entries[startIndex] = new(child, tokenCount, context);
+            }
+
             return;
         }
 
         // Entirely inside the reused suffix: shift into new-stream indices.
         if (startIndex >= oldSuffixStart) {
             var newStart = startIndex - oldSuffixStart + newSuffixStart;
-            _entries[newStart] = new(child, tokenCount, context);
+            if (SameTokens(newStart, tokenCount)) {
+                _entries[newStart] = new(child, tokenCount, context);
+            }
         }
+    }
+
+    /// <summary>
+    ///     True when the new stream holds the very same tokens the member was
+    ///     parsed from — and the same one after it.
+    /// </summary>
+    /// <remarks>
+    ///     Text alone is not enough. Whether a token ends a statement depends on
+    ///     the line after it and on brackets far before it (spec/lexical.md §4),
+    ///     and an edit elsewhere can change that. The incremental lexer lists
+    ///     the copied tokens whose flag changed; none may fall inside the
+    ///     member, nor be the token after it, since a member ends where its
+    ///     last token's flag and the next token say it does.
+    /// </remarks>
+    bool SameTokens(int newStart, int count) {
+        var last = newStart + count;
+        if (last >= _newTokenCount) {
+            last = _newTokenCount - 1;
+        }
+
+        var index = Array.BinarySearch(_reflagged, newStart);
+        if (index < 0) {
+            index = ~index;
+        }
+
+        return index >= _reflagged.Length || _reflagged[index] > last;
     }
 
     static bool IsMemberList(GreenList list) {

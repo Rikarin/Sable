@@ -93,6 +93,9 @@ public sealed class ParserRecoveryTests {
     [InlineData("[weak self]")]
     [InlineData("outer:")]
     [InlineData("let { a,")]
+    [InlineData("{ let k = \\(f.self) }")]
+    [InlineData("{ let k = \\ List<Int>.self }")]
+    [InlineData("{ x = @ (a.self) }")]
     public void MalformedStatementsStillRoundTrip(string source) {
         var tree = SyntaxTree.ParseStatement(source);
         AssertRoundTrips(tree, source);
@@ -373,5 +376,51 @@ public sealed class ParserRecoveryTests {
             var type = SyntaxTree.ParseType(source);
             AssertRoundTrips(type, source);
         }
+    }
+
+    /// <summary>
+    ///     Every token kind the parser treats specially, mixed with newlines, so
+    ///     that speculative parsing, splitting and recovery all meet garbage.
+    /// </summary>
+    [Fact]
+    public void WideSoupRoundTrips() {
+        string[] pieces = [
+            "fn", "struct", "let", "var", "if", "match", "case", "{", "}", "(", ")", "[", "]",
+            "<", ">", ">>", ">=", "?", "??", "!", "&", "&<u32>", "\\", "\\(", ".self", "self",
+            "Self", ".", "..", "...", "..<", "->", "=>", "=", "==", ",", ":", ";", "@", "#if",
+            "#endif", "a", "List", "Int", "1", "0x1F", "\"s\"", "\"\\(x)\"", "/*", "*/", "//c",
+            "\n", "\n", " ", "try", "await", "some", "any", "is", "as", "$0", "in",
+        ];
+
+        var random = new Random(20261120);
+        for (var iteration = 0; iteration < 3000; iteration++) {
+            var builder = new StringBuilder();
+            var length = random.Next(1, 30);
+            for (var i = 0; i < length; i++) {
+                builder.Append(pieces[random.Next(pieces.Length)]);
+                if (random.Next(3) > 0) {
+                    builder.Append(' ');
+                }
+            }
+
+            var source = builder.ToString();
+            AssertRoundTrips(SyntaxTree.Parse(source), source);
+            AssertRoundTrips(SyntaxTree.ParseStatement(source), source);
+            AssertRoundTrips(SyntaxTree.ParseExpression(source), source);
+        }
+    }
+
+    /// <summary>Inputs the wide fuzzer found losing or duplicating text, minimised.</summary>
+    [Theory]
+    [InlineData("{->\"\\()")]                  // skipped text before an interpolated string
+    [InlineData("operator\n//")]                 // 'operator' at the end of the file
+    [InlineData("operator\n ")]
+    [InlineData("fn t throws async")]            // effects in the wrong order
+    [InlineData("guard\"\"\"\\()\\(\n")]  // an unterminated hole in a multi-line string
+    [InlineData("\"a\\(b")]                    // ...and in a one-line string
+    public void FuzzerFindingsRoundTrip(string source) {
+        AssertRoundTrips(SyntaxTree.Parse(source), source);
+        AssertRoundTrips(SyntaxTree.ParseStatement(source), source);
+        AssertRoundTrips(SyntaxTree.ParseExpression(source), source);
     }
 }

@@ -55,7 +55,8 @@ public sealed class SyntaxTree {
         IReadOnlyList<Diagnostic> diagnostics,
         ParseOptions options,
         ImmutableArray<GreenToken> tokens = default,
-        bool hasDirectives = false
+        bool hasDirectives = false,
+        IReadOnlyList<Diagnostic>? lexicalDiagnostics = null
     ) {
         Text = text;
         Root = root;
@@ -72,6 +73,27 @@ public sealed class SyntaxTree {
         ];
         Tokens = tokens.IsDefault ? [] : tokens;
         HasDirectives = hasDirectives;
+        LexicalDiagnostics = lexicalDiagnostics ?? [];
+    }
+
+    /// <summary>
+    ///     The diagnostics the lexer of the whole file produced, kept apart
+    ///     from the parser's.
+    /// </summary>
+    /// <remarks>
+    ///     An edit splices old lexer diagnostics back in and regenerates the
+    ///     parser's, so it must know which are which. The code range does not
+    ///     say: an interpolation hole is lexed by the parser, and its lexer
+    ///     errors are the parser's to regenerate.
+    /// </remarks>
+    internal IReadOnlyList<Diagnostic> LexicalDiagnostics { get; }
+
+    /// <summary>The diagnostics the parser produced, holes included.</summary>
+    internal IEnumerable<Diagnostic> ParserDiagnostics {
+        get {
+            var lexical = LexicalDiagnostics.ToHashSet();
+            return Diagnostics.Where(d => !lexical.Contains(d));
+        }
     }
 
     /// <summary>
@@ -91,9 +113,9 @@ public sealed class SyntaxTree {
             return Parse(newText, Options);
         }
 
-        var lexResult = IncrementalLexer.Lex(newText, Options, Tokens, Diagnostics, HasDirectives, change);
+        var lexResult = IncrementalLexer.Lex(newText, Options, Tokens, LexicalDiagnostics, HasDirectives, change);
 
-        var reuse = IncrementalReuse.Build(Root.Green, Tokens, Diagnostics, lexResult);
+        var reuse = IncrementalReuse.Build(Root.Green, Tokens, [..ParserDiagnostics], lexResult);
 
         // Conservative: an added '#' may have introduced a directive.
         var hasDirectives = HasDirectives || change.NewText.Contains('#');

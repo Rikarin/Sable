@@ -148,4 +148,14 @@ public sealed class TypeRuleTests {
         Assert.Contains("'show(_: Int)'", message, StringComparison.Ordinal);
         Assert.Contains("'show(_: String)'", message, StringComparison.Ordinal);
     }
+
+    // ---- Deep nesting -------------------------------------------------------
+
+    [Fact]
+    public void ADeeplyNestedFileBindsWithoutOverflowing() {
+        const int deep = 20_000;
+        var nested = new string('(', deep) + "1" + new string(')', deep);
+        var diagnostics = Compilation.Create($"module M\nfn f() -> Int {{ return {nested} }}").GetAllDiagnostics();
+        Assert.Contains(diagnostics, static d => d.Code == ErrorCode.ERR_NestedTooDeeply);
+    }
 }

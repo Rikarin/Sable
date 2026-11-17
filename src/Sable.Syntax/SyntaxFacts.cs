@@ -168,6 +168,7 @@ public static class SyntaxFacts {
             SyntaxKind.QuestionToken => true,
             SyntaxKind.BangToken => true,
             SyntaxKind.GreaterToken => true,
+            SyntaxKind.GreaterGreaterToken => true, // List<List<Int>>
             SyntaxKind.DotDotDotToken => true,
 
             SyntaxKind.SelfKeyword => true,

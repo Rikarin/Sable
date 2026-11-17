@@ -91,8 +91,7 @@ public sealed class DeclarationParserTests {
             fn zip<A, B, S1, S2>(_ a: S1, _ b: S2) -> some Sequence<(A, B)>
                 where S1: Sequence<A>,
                       S2: Sequence<B>,
-                      A: Sendable
-            { }
+                      A: Sendable { }
             """
         );
 

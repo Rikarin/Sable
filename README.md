@@ -105,7 +105,9 @@ dotnet test Sable.slnx
 
 ## Status
 
-**Phase 0 complete; Phase 1 nearly so** — see
+**Phase 0's syntax layer works, but three of its exit criteria are open: a
+2,000-file round-trip corpus, a 24-hour fuzz run, and a < 2 ms incremental
+edit. Phase 1 is nearly done** — see
 [docs/04-implementation-plan.md](docs/04-implementation-plan.md).
 
 | Component | State |
@@ -155,7 +157,7 @@ Phase 1's exit criteria, as docs/04 §1.4 states them:
 | Type-checking 100,000 lines in under 5 s | 0.98 s |
 | Go/no-go: 10,000 lines of real Sable | ~2,900 in `tests/corpus/` |
 
-**1,312 tests green**, and every file in [examples/](examples/) parses as a
+**1,352 tests green**, and every file in [examples/](examples/) parses as a
 complete compilation unit with no diagnostics and an exact round-trip.
 [tests/corpus/](tests/corpus/) holds programs that must type-check with
 nothing to say, and [tests/negative/](tests/negative/) holds programs that
@@ -173,15 +175,26 @@ inserted as zero-width missing tokens.
 
 The full-fidelity round-trip invariant — concatenating every token's full text
 reproduces the source byte for byte — is enforced over the `examples/` corpus,
-a table of hand-written cases, deliberately malformed input, and 400 rounds of
-random token soup.
+a table of hand-written cases, deliberately malformed input, and several
+thousand rounds of random token soup that mixes every token the parser treats
+specially with newlines. Inputs the soup has found losing or duplicating text
+are kept, minimised, as regression tests. Nesting past 256 levels is reported
+and skipped rather than overflowing the stack.
+
+The newline rule of [spec/lexical.md §4](spec/lexical.md) is applied by the
+parser, not only computed by the lexer: a line that ends a statement ends it,
+so `foo` followed by `(1, 2)` on the next line is two statements, and two
+statements on one line need a `;`.
 
 `SyntaxTree.Parse` reads a whole file; `ParseExpression`, `ParseType` and
 `ParseStatement` read a single construct, which is what most of the tests use.
 `SyntaxTree.WithChange` applies an edit, reusing everything it did not touch:
-a one-character edit in a 10,000-line file reparses in **under 2 ms**, against
-about 30 ms for a full parse. The contract is that the result is exactly the
-tree a full parse would have produced, and every incremental test asserts it.
+a one-character edit in a 10,000-line file reparses in about 4 ms (Release),
+against about 55 ms for a full parse — short of the plan's 2 ms. The contract
+is that the result is exactly the tree a full parse would have produced, token
+flags and diagnostics included, and every incremental test asserts it — among
+them chains of edits applied one after another, to files that already have
+errors.
 
 `SyntaxFormatter.Format` renders a tree as canonical source. It has no options,
 by design. Two properties are tested over the corpus rather than asserted on

@@ -42,12 +42,16 @@ line cannot yet be a complete statement. Concretely, the lexer suppresses the
 statement terminator when:
 
 1. The last token on the line is one of:
-   `( [ { , . ? : = => -> | & && || + - * / % << >> == != < <= > >= ?? as is where`
+   `( [ { , . : = => -> | & && || + - * / % << == != < <= >= ?? as is where`
    or any assignment operator, or any keyword that must be followed by more
-   (`return` on its own line *does* terminate — see below).
+   (`return` on its own line *does* terminate — see below). `>`, `>>` and `?`
+   are deliberately absent: they close a type, so they can end a statement.
 2. The first token on the next line is one of:
-   `. ?. : => -> , ) ]`, `else`, `catch`, `while`, `where`, or a binary operator.
-3. The lexer is inside unbalanced `(` or `[`.
+   `. ?. : => -> , ) ]`, `else`, `catch`, `where`, or a binary operator — or
+   `while` directly after a `}`, which continues `repeat { }`. A `while`
+   anywhere else starts a loop of its own.
+3. The lexer is inside unbalanced `(` or `[`. A `{` inside them opens a body of
+   statements, where newlines end statements again until its `}`.
 
 `return`, `break`, `continue`, `throw` and `fallthrough` always terminate at the
 newline — a value must be on the same line. This avoids JavaScript's ASI hazard.
@@ -60,9 +64,10 @@ Three consequences are deliberate and worth stating:
 - **`{` must be on the same line as its header.** An opening brace that starts a
   line would be ambiguous with a trailing closure, so Sable takes Go's rule
   rather than Swift's and rejects Allman style. The diagnostic says so.
-- **`>` and `?` can end a statement**, so that `var xs: List<Int>` and
-  `var x: Int?` terminate at the newline. The cost is that a multi-line
-  expression may not end a line on `>` or `?`; parenthesise it instead.
+- **`>`, `>>` and `?` can end a statement**, so that `var xs: List<Int>`,
+  `List<List<Int>>` and `var x: Int?` terminate at the newline. The cost is
+  that a multi-line expression may not end a line on `>`, `>>` or `?`;
+  parenthesise it instead.
 
 A `;` may be written explicitly to put several statements on one line. The
 formatter removes redundant ones.

@@ -110,6 +110,7 @@ public enum ErrorCode
     WRN_NothingThrowsHere = 3036,
     ERR_ExpressionTooComplex = 3038,
     ERR_MemberAccessMismatch = 3039,
+    ERR_NotAccessible = 3040,
     ERR_NotSupportedYet = 3099,
 
     // ---- Patterns and flow (S6000-S6999) ---------------------------------

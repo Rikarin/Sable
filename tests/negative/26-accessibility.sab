@@ -1,0 +1,70 @@
+module Negative.Accessibility
+
+public struct Account {
+    public var id: Int
+    private var secret: String
+    internal var note: String
+
+    private fn audit() -> String {
+        return secret
+    }
+
+    public fn visible() -> String {
+        return audit()
+    }
+}
+
+public extension Account {
+    public fn alsoVisible() -> String {
+        return audit()
+    }
+}
+
+fn readingAPrivateField(_ a: Account) -> String {
+    return a.secret                     //! S3040 is private
+}
+
+fn callingAPrivateMethod(_ a: Account) -> String {
+    return a.audit()                    //! S3040 is private
+}
+
+fn readingAPublicField(_ a: Account) -> Int {
+    return a.id
+}
+
+fn readingAnInternalFieldInTheSameModule(_ a: Account) -> String {
+    return a.note
+}
+
+public struct Outer {
+    private var hidden: Int
+
+    // A nested type is inside the declaration that holds the member, so it
+    // sees it: "visible within the enclosing declaration".
+    public struct Inner {
+        public fn reach(_ outer: Outer) -> Int {
+            return outer.hidden
+        }
+    }
+}
+
+public struct Unrelated {
+    public fn reach(_ outer: Outer) -> Int {
+        return outer.hidden             //! S3040 is private
+    }
+}
+
+public class Base {
+    private var secret: Int
+    public var shared: Int
+}
+
+public class Derived: Base {
+    public fn readShared() -> Int {
+        return shared
+    }
+}
+
+fn aPrivateMemberOfAnotherTypeIsHidden(_ b: Base) -> Int {
+    return b.secret                     //! S3040 is private
+}

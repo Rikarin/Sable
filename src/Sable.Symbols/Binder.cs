@@ -1105,7 +1105,11 @@ public sealed class Binder
                 var statics = members.Where(IsStaticMember).ToList();
 
                 if (statics.Count > 0)
-                    return BindMemberGroup(syntax, null, statics, namedType);
+                {
+                    return CheckAccessible(statics[0], syntax.Name)
+                        ? BindMemberGroup(syntax, null, statics, namedType)
+                        : new BoundError(syntax, receiver);
+                }
 
                 if (members.Count > 0)
                 {
@@ -1174,6 +1178,9 @@ public sealed class Binder
             return new BoundError(syntax, receiver);
         }
 
+        if (!CheckAccessible(instanceMembers[0], syntax.Name))
+            return new BoundError(syntax, receiver);
+
         var member = BindMemberGroup(
             syntax, receiver, instanceMembers, found.Owner, found.Substitution);
 
@@ -1186,6 +1193,68 @@ public sealed class Binder
         }
 
         return member;
+    }
+
+    /// <summary>
+    /// Reports a member the code here is not allowed to see.
+    /// </summary>
+    /// <remarks>
+    /// Per spec/SYNTAX.md §2: public everywhere, package across the
+    /// workspace, internal within the module, private within the declaration
+    /// that holds it — and, since an extension's members belong to the type
+    /// they extend, within that type's extensions in the same module too.
+    /// </remarks>
+    private bool CheckAccessible(Symbol member, SyntaxNode syntax)
+    {
+        if (IsAccessible(member)) return true;
+
+        _diagnostics.Error(ErrorCode.ERR_NotAccessible, syntax.Span,
+            $"'{member.Name}' is {Describe(member.DeclaredAccessibility)} to "
+            + $"'{member.ContainingSymbol?.Name ?? "its module"}'");
+        return false;
+    }
+
+    private static string Describe(Accessibility accessibility) => accessibility switch
+    {
+        Accessibility.Private => "private",
+        Accessibility.Internal => "internal",
+        Accessibility.Package => "visible only",
+        _ => "visible",
+    };
+
+    private bool IsAccessible(Symbol member)
+    {
+        switch (member.DeclaredAccessibility)
+        {
+            case Accessibility.Public or Accessibility.Package:
+                return true;
+
+            case Accessibility.Internal:
+                return ReferenceEquals(member.ContainingModule, _scope.Module)
+                       || member.ContainingModule is null;
+
+            default:
+            {
+                // Private: somewhere inside the declaration that holds it.
+                var owner = member.ContainingSymbol;
+                if (owner is null) return true;
+
+                for (var here = _containingSymbol; here is not null; here = here.ContainingSymbol)
+                {
+                    if (ReferenceEquals(here, owner)) return true;
+
+                    // An extension's members are the extended type's, and a
+                    // private member is visible to them in the same module.
+                    if (here is ExtensionSymbol extension
+                        && ReferenceEquals(extension.ExtendedType, owner))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+        }
     }
 
     /// <summary>

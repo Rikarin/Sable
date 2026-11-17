@@ -67,7 +67,7 @@ internal sealed class TypeBinder(Compilation compilation)
             if (declaration.ThrowsSpec is not { } spec) return null;
             return spec.ErrorType is { } errorType
                 ? BindType(errorType, function, scope)
-                : compilation.Core.Never;   // 'throws' with no type, refined later
+                : compilation.Core.AnyError;   // bare 'throws' is 'throws(any Error)' 
         };
 
         Defer(() =>
@@ -280,7 +280,7 @@ internal sealed class TypeBinder(Compilation compilation)
                 {
                     thrown = spec.ErrorType is { } errorType
                         ? BindType(errorType, context, scope)
-                        : compilation.Core.Never;
+                        : compilation.Core.AnyError;
                 }
 
                 return new FunctionTypeSymbol(

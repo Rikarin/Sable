@@ -32,6 +32,11 @@ internal static class FlowAnalysis
 
         BoundExpressionStatement expression => AlwaysExits(expression.Expression),
 
+        // A 'do' exits only if every way out of it does, the catches too.
+        BoundDo doStatement =>
+            AlwaysExits(doStatement.Body)
+            && doStatement.Catches.All(clause => AlwaysExits(clause.Body)),
+
         BoundDefer => false,
 
         _ => false,
@@ -42,6 +47,10 @@ internal static class FlowAnalysis
         // An expression of type 'Never' does not come back.
         _ when expression.Type is NamedTypeSymbol { Name: "Never", TypeKind: TypeKind.Builtin }
             => true,
+
+        // 'try e' is as final as what it wraps; a fallback gives it a way back.
+        BoundTry { TryKind: not TryKind.Fallback } tryExpression =>
+            AlwaysExits(tryExpression.Expression),
 
         BoundMatch match =>
             match.Arms.Length > 0 && match.Arms.All(arm => arm.Body switch

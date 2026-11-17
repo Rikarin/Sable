@@ -552,7 +552,7 @@ public sealed class Compilation
             if (declaration.ThrowsSpec is not { } spec) return null;
             return spec.ErrorType is { } errorType
                 ? TypeBinder.BindType(errorType, function, scope)
-                : Core.Never;
+                : Core.AnyError;
         };
 
         RecordDeclaration(declaration, function);

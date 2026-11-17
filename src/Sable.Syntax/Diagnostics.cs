@@ -99,6 +99,12 @@ public enum ErrorCode
     ERR_ExtensionStoredProperty = 3029,
     ERR_ExtensionInitializer = 3030,
     ERR_CannotExtend = 3031,
+    ERR_MustUseTry = 3032,
+    ERR_ThrowsNotDeclared = 3033,
+    ERR_MustUseAwait = 3034,
+    ERR_AwaitOutsideAsync = 3035,
+    WRN_NothingThrowsHere = 3036,
+    ERR_NotThrowing = 3037,
     ERR_NotSupportedYet = 3099,
 
     // ---- Patterns and flow (S6000-S6999) ---------------------------------

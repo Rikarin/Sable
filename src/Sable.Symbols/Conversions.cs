@@ -43,6 +43,28 @@ internal sealed class Conversions(CoreTypes core)
             }
         }
 
+        // A function that throws less, or does not suspend, fits where one
+        // that may is wanted. Parameters and result stay invariant: variance
+        // there is a separate decision, and docs/03 §3.8 does not take it.
+        if (source is FunctionTypeSymbol from && target is FunctionTypeSymbol to)
+        {
+            if (from.ParameterTypes.Length == to.ParameterTypes.Length
+                && from.ReturnType.Equals(to.ReturnType)
+                && (!from.IsAsync || to.IsAsync)
+                && (from.ThrownType is null || to.ThrownType is not null))
+            {
+                var parametersMatch = true;
+                for (var i = 0; i < from.ParameterTypes.Length; i++)
+                {
+                    if (from.ParameterTypes[i].Equals(to.ParameterTypes[i])) continue;
+                    parametersMatch = false;
+                    break;
+                }
+
+                if (parametersMatch) return ConversionKind.Upcast;
+            }
+        }
+
         // 'any P' and 'some P' accept whatever conforms to P.
         if (target is ExistentialTypeSymbol existential)
         {

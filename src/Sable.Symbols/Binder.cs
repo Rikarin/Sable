@@ -43,6 +43,30 @@ public sealed class Binder
     /// </summary>
     private ImmutableArray<TypeParameterSymbol> _openTypeParameters = [];
 
+    /// <summary>
+    /// The error type the enclosing function declared, or null when it does
+    /// not throw. An error has to reach one of these, or a <c>catch</c>.
+    /// </summary>
+    private TypeSymbol? _declaredThrows;
+
+    private bool _inAsyncContext;
+
+    /// <summary>Depth of <c>try</c> and <c>await</c> operands being bound.</summary>
+    private int _tryDepth;
+    private int _awaitDepth;
+
+    /// <summary>Depth of <c>do</c> bodies that have a <c>catch</c>.</summary>
+    private int _catchDepth;
+
+    /// <summary>True when something under the innermost <c>try</c> can throw.</summary>
+    private bool _threwInTry;
+
+    /// <summary>
+    /// What the innermost <c>do</c> body can throw, which is what its
+    /// <c>catch</c> clauses match against.
+    /// </summary>
+    private TypeSymbol? _thrownInBody;
+
     internal Binder(Compilation compilation, FileScope scope, Symbol containingSymbol)
     {
         _compilation = compilation;
@@ -79,8 +103,12 @@ public sealed class Binder
         var savedSymbol = _containingSymbol;
         var savedReturn = _returnType;
 
+        var savedEffects = SaveEffects();
+
         _containingSymbol = function;
         _returnType = function.ReturnType;
+        _declaredThrows = function.ThrownType;
+        _inAsyncContext = function.IsAsync;
 
         PushScope();
         foreach (var parameter in function.Parameters) Declare(parameter.Name, parameter);
@@ -89,6 +117,7 @@ public sealed class Binder
         CheckFlow(function, body, bound);
 
         PopScope();
+        RestoreEffects(savedEffects);
         _containingSymbol = savedSymbol;
         _returnType = savedReturn;
         return bound;
@@ -119,8 +148,12 @@ public sealed class Binder
         var savedSymbol = _containingSymbol;
         var savedReturn = _returnType;
 
+        var savedEffects = SaveEffects();
+
         _containingSymbol = function;
         _returnType = function.ReturnType;
+        _declaredThrows = function.ThrownType;
+        _inAsyncContext = function.IsAsync;
 
         PushScope();
         foreach (var parameter in function.Parameters) Declare(parameter.Name, parameter);
@@ -129,6 +162,7 @@ public sealed class Binder
         if (!_returnType.Equals(Core.Void)) value = Convert(value, _returnType, expression);
 
         PopScope();
+        RestoreEffects(savedEffects);
         _containingSymbol = savedSymbol;
         _returnType = savedReturn;
 
@@ -191,6 +225,226 @@ public sealed class Binder
     }
 
     // -----------------------------------------------------------------------
+    // Effects: 'throws' and 'async'
+    // -----------------------------------------------------------------------
+
+    private readonly record struct Effects(
+        TypeSymbol? Throws, bool Async, int Try, int Await, int Catch, bool Threw);
+
+    /// <summary>
+    /// The thrown types seen so far, reset around anything that has its own
+    /// handler.
+    /// </summary>
+
+    private Effects SaveEffects() => new(
+        _declaredThrows, _inAsyncContext, _tryDepth, _awaitDepth, _catchDepth, _threwInTry);
+
+    private void RestoreEffects(Effects saved)
+    {
+        _declaredThrows = saved.Throws;
+        _inAsyncContext = saved.Async;
+        _tryDepth = saved.Try;
+        _awaitDepth = saved.Await;
+        _catchDepth = saved.Catch;
+        _threwInTry = saved.Threw;
+    }
+
+    /// <summary>
+    /// Records that the expression being bound can throw, and complains if
+    /// nothing marked it.
+    /// </summary>
+    /// <remarks>
+    /// The mark is lexical, as in Swift: <c>try</c> covers everything in the
+    /// expression it is written on, so one <c>try</c> can stand for several
+    /// calls. What it does not do is let the error leave silently — that is
+    /// checked where the <c>try</c> itself is bound.
+    /// </remarks>
+    private void MarkThrows(TextSpan span, string what, TypeSymbol thrown)
+    {
+        // One 'do' body may call several throwing functions. When they do not
+        // agree, what reaches the catches is the union of them.
+        _thrownInBody = _thrownInBody is null || _thrownInBody.Equals(thrown)
+            ? thrown
+            : new StructuralUnionTypeSymbol([_thrownInBody, thrown]);
+
+        if (_tryDepth > 0)
+        {
+            _threwInTry = true;
+            return;
+        }
+
+        _diagnostics.Error(ErrorCode.ERR_MustUseTry, span,
+            $"{what} can throw, so the expression needs 'try'");
+    }
+
+    /// <summary>Records that the expression being bound suspends.</summary>
+    private void MarkAsync(TextSpan span, string what)
+    {
+        if (!_inAsyncContext)
+        {
+            _diagnostics.Error(ErrorCode.ERR_AwaitOutsideAsync, span,
+                $"{what} is async, and this is not an async context");
+            return;
+        }
+
+        if (_awaitDepth == 0)
+        {
+            _diagnostics.Error(ErrorCode.ERR_MustUseAwait, span,
+                $"{what} is async, so the expression needs 'await'");
+        }
+    }
+
+    /// <summary>True when an error thrown here has somewhere to go.</summary>
+    private bool CanThrowHere() => _catchDepth > 0 || _declaredThrows is not null;
+
+    private BoundExpression BindTry(TryExpressionSyntax syntax, TypeSymbol? expectedType)
+    {
+        var kind = syntax.QuestionOrBangToken.Kind switch
+        {
+            SyntaxKind.QuestionToken => TryKind.Optional,
+            SyntaxKind.BangToken => TryKind.Force,
+            _ => syntax.CatchBody is null ? TryKind.Propagate : TryKind.Fallback,
+        };
+
+        // 'try? e' is an optional, so the operand is not the context's type.
+        var inner = kind == TryKind.Optional ? null : expectedType;
+
+        var outerThrew = _threwInTry;
+        _threwInTry = false;
+        _tryDepth++;
+
+        var value = BindExpression(syntax.Expression, inner);
+
+        _tryDepth--;
+        var threw = _threwInTry;
+        _threwInTry = outerThrew || (threw && _tryDepth > 0);
+
+        if (!threw && !value.HasError)
+        {
+            _diagnostics.Add(Diagnostic.Warning(
+                ErrorCode.WRN_NothingThrowsHere, syntax.TryKeyword.Span,
+                "nothing in this expression can throw"));
+        }
+
+        switch (kind)
+        {
+            case TryKind.Optional:
+                return Record(syntax, new BoundTry(
+                    syntax, new OptionalTypeSymbol(value.Type), value, kind, null));
+
+            case TryKind.Force:
+                return Record(syntax, new BoundTry(syntax, value.Type, value, kind, null));
+
+            case TryKind.Fallback:
+            {
+                var fallback = BindCatchBody(syntax.CatchBody!, value.Type);
+                return Record(syntax, new BoundTry(
+                    syntax, value.Type, value, kind, fallback));
+            }
+
+            default:
+                if (threw && !CanThrowHere())
+                {
+                    _diagnostics.Error(ErrorCode.ERR_ThrowsNotDeclared, syntax.Span,
+                        "this error has nowhere to go: declare 'throws', "
+                        + "catch it, or use 'try?'");
+                }
+                return Record(syntax, new BoundTry(syntax, value.Type, value, kind, null));
+        }
+    }
+
+    /// <summary>Binds the value an inline <c>catch</c> supplies.</summary>
+    private BoundExpression BindCatchBody(SyntaxNode body, TypeSymbol expected)
+    {
+        switch (body)
+        {
+            case ExpressionSyntax expression:
+                return Convert(BindExpression(expression, expected), expected, expression);
+
+            case BlockSyntax block:
+            {
+                // The block's value is what its last expression statement
+                // produces, which is how the spec writes it.
+                var saved = SaveEffects();
+                _catchDepth++;
+
+                PushScope();
+                BoundExpression? value = null;
+                foreach (var statement in block.Statements)
+                {
+                    if (statement is ExpressionStatementSyntax last
+                        && ReferenceEquals(last, block.Statements[^1]))
+                    {
+                        value = Convert(
+                            BindExpression(last.Expression, expected), expected, last.Expression);
+                        continue;
+                    }
+                    BindStatement(statement);
+                }
+                PopScope();
+
+                RestoreEffects(saved);
+
+                if (value is not null) return value;
+
+                _diagnostics.Error(ErrorCode.ERR_CannotInferType, block.Span,
+                    $"this 'catch' has to end in a value of type "
+                    + $"'{expected.ToDisplayString()}'");
+                return new BoundError(block);
+            }
+
+            default:
+                return new BoundError(body);
+        }
+    }
+
+    private BoundStatement BindDo(DoStatementSyntax statement)
+    {
+        var saved = SaveEffects();
+        var savedThrown = _thrownInBody;
+        if (statement.Catches.Count > 0) _catchDepth++;
+        _thrownInBody = null;
+
+        var body = BindBlock(statement.Body);
+
+        // The catches match what the body can actually throw; failing that,
+        // what the enclosing function declares; failing that, anything.
+        var errorType = _thrownInBody ?? _declaredThrows ?? Core.AnyError;
+
+        RestoreEffects(saved);
+        _thrownInBody = savedThrown;
+        var catches = ImmutableArray.CreateBuilder<BoundCatch>();
+
+        foreach (var clause in statement.Catches)
+        {
+            PushScope();
+
+            var pattern = clause.Pattern is null
+                ? null
+                : BindPattern(clause.Pattern, errorType);
+
+            // A bare 'catch' binds the error as 'error', per SYNTAX.md §18.
+            if (pattern is null)
+            {
+                var local = new LocalSymbol("error", _containingSymbol, clause, false);
+                local.TypeResolver = () => errorType;
+                Declare("error", local);
+            }
+
+            var guard = clause.WhereClause is { } where
+                ? Convert(BindExpression(where.Condition, Core.Bool), Core.Bool, where.Condition)
+                : null;
+
+            var clauseBody = BindBlock(clause.Body);
+            PopScope();
+
+            catches.Add(new BoundCatch(clause, pattern, guard, clauseBody));
+        }
+
+        return Record(statement, new BoundDo(statement, body, catches.ToImmutable()));
+    }
+
+    // -----------------------------------------------------------------------
     // Statements
     // -----------------------------------------------------------------------
 
@@ -205,8 +459,7 @@ public sealed class Binder
         RepeatStatementSyntax repeat => BindRepeat(repeat),
         ForStatementSyntax forStatement => BindForEach(forStatement),
         ReturnStatementSyntax returnStatement => BindReturn(returnStatement),
-        ThrowStatementSyntax throwStatement => Record(throwStatement,
-            new BoundThrow(throwStatement, BindExpression(throwStatement.Expression))),
+        ThrowStatementSyntax throwStatement => BindThrow(throwStatement),
         BreakStatementSyntax breakStatement => BindBreak(breakStatement),
         ContinueStatementSyntax continueStatement => BindContinue(continueStatement),
         DeferStatementSyntax defer => Record(defer,
@@ -214,6 +467,7 @@ public sealed class Binder
         GuardStatementSyntax guard => BindGuard(guard),
         LabeledStatementSyntax labeled => BindStatement(labeled.Statement),
         DeclarationStatementSyntax declaration => BindDeclarationStatement(declaration),
+        DoStatementSyntax doStatement => BindDo(doStatement),
         EmptyStatementSyntax empty => new BoundBlock(empty, [], []),
         _ => new BoundErrorStatement(statement),
     };
@@ -229,6 +483,19 @@ public sealed class Binder
         PopScope();
 
         return Record(block, new BoundBlock(block, locals, statements.ToImmutable()));
+    }
+
+    private BoundStatement BindThrow(ThrowStatementSyntax statement)
+    {
+        var value = BindExpression(statement.Expression, _declaredThrows);
+
+        if (!CanThrowHere())
+        {
+            _diagnostics.Error(ErrorCode.ERR_ThrowsNotDeclared, statement.ThrowKeyword.Span,
+                "this function does not declare 'throws', so it cannot throw");
+        }
+
+        return Record(statement, new BoundThrow(statement, value));
     }
 
     /// <summary>Binds a declaration written inside a body.</summary>
@@ -573,7 +840,7 @@ public sealed class Binder
         BraceClosureExpressionSyntax brace => BindBraceClosure(brace, expectedType),
         ImplicitParameterExpressionSyntax implicitParameter =>
             BindImplicitParameter(implicitParameter),
-        TryExpressionSyntax tryExpression => BindExpression(tryExpression.Expression, expectedType),
+        TryExpressionSyntax tryExpression => BindTry(tryExpression, expectedType),
         _ => Unsupported(expression),
     };
 
@@ -999,6 +1266,9 @@ public sealed class Binder
             converted.Add(Convert(argument, type.ParameterTypes[i], argument.Syntax));
         }
 
+        if (type.ThrownType is { } thrown) MarkThrows(syntax.Span, "this call", thrown);
+        if (type.IsAsync) MarkAsync(syntax.Span, "this call");
+
         return new BoundIndirectCall(
             syntax, type.ReturnType, callee, converted.ToImmutable());
     }
@@ -1082,6 +1352,10 @@ public sealed class Binder
                     $"cannot infer '{typeParameter.Name}' from these arguments");
             }
         }
+
+        if (resolved.ThrownType is { } thrown)
+            MarkThrows(syntax.Span, $"'{resolved.Name}'", substitution.Apply(thrown));
+        if (resolved.IsAsync) MarkAsync(syntax.Span, $"'{resolved.Name}'");
 
         return new BoundCall(syntax, group.Receiver, resolved, converted.ToImmutable(),
             substitution.Apply(resolved.ReturnType));
@@ -1334,6 +1608,10 @@ public sealed class Binder
             IsAsync = expected?.IsAsync ?? false,
         };
 
+        // A closure passed where '() throws -> T' is wanted may throw.
+        var thrown = expected?.ThrownType;
+        symbol.ThrownTypeResolver = () => thrown;
+
         // Captures are bound in the enclosing scope, before the closure's own
         // scope exists, because that is where their names are written.
         var captures = BindCaptures(captureList);
@@ -1399,7 +1677,8 @@ public sealed class Binder
         var type = new FunctionTypeSymbol(
             [.. symbol.Parameters.Select(p => p.Type)],
             symbol.ReturnType,
-            symbol.IsAsync);
+            symbol.IsAsync,
+            symbol.ThrownType);
 
         return Record(syntax, new BoundClosure(syntax, type, symbol, captures, bound));
     }
@@ -1417,12 +1696,20 @@ public sealed class Binder
         var savedInferring = _inferringReturn;
         var savedLoopDepth = _loopDepth;
         var savedOpen = _openTypeParameters;
+        var savedEffects = SaveEffects();
 
         _containingSymbol = symbol;
         _returnType = returnType;
         _inferringReturn = inferring;
         _loopDepth = 0;
         _openTypeParameters = [];
+        _declaredThrows = symbol.ThrownType;
+        _inAsyncContext = symbol.IsAsync;
+        _tryDepth = 0;
+        _awaitDepth = 0;
+        _catchDepth = 0;
+        _threwInTry = false;
+        _thrownInBody = null;
 
         PushScope();
         foreach (var parameter in symbol.Parameters) Declare(parameter.Name, parameter);
@@ -1480,6 +1767,7 @@ public sealed class Binder
         symbol.ReturnTypeResolver = () => resolved;
 
         PopScope();
+        RestoreEffects(savedEffects);
         _openTypeParameters = savedOpen;
         _loopDepth = savedLoopDepth;
         _inferringReturn = savedInferring;
@@ -1722,6 +2010,22 @@ public sealed class Binder
 
     private BoundExpression BindPrefixUnary(PrefixUnaryExpressionSyntax syntax)
     {
+        if (syntax.OperatorToken.Kind == SyntaxKind.AwaitKeyword)
+        {
+            if (!_inAsyncContext)
+            {
+                _diagnostics.Error(ErrorCode.ERR_AwaitOutsideAsync, syntax.OperatorToken.Span,
+                    "'await' is only available in an async context");
+            }
+
+            _awaitDepth++;
+            var awaited = BindExpression(syntax.Operand);
+            _awaitDepth--;
+
+            return new BoundUnaryOperator(
+                syntax, awaited.Type, UnaryOperatorKind.Await, awaited);
+        }
+
         var operand = BindExpression(syntax.Operand);
 
         var kind = syntax.OperatorToken.Kind switch

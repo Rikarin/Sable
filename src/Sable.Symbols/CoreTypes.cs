@@ -42,6 +42,13 @@ public sealed class CoreTypes
         Void = Primitive("Void");
         Never = Primitive("Never");
 
+        // Every thrown value conforms to Error; bare 'throws' means
+        // 'throws(any Error)', per SYNTAX.md §18.
+        Error = new NamedTypeSymbol(
+            "Error", TypeKind.Protocol, Module, accessibility: Accessibility.Public);
+        Module.AddMember(Error);
+        AnyError = new ExistentialTypeSymbol(Error);
+
         // 'Optional<T>' exists so that 'T?' has a nominal form to desugar to.
         Optional = DeclareGeneric("Optional", TypeKind.Union, "Wrapped");
         Dictionary = DeclareGeneric("Dictionary", TypeKind.Struct, "Key", "Value");
@@ -73,6 +80,11 @@ public sealed class CoreTypes
     public NamedTypeSymbol String { get; }
     public NamedTypeSymbol Void { get; }
     public NamedTypeSymbol Never { get; }
+    public NamedTypeSymbol Error { get; }
+
+    /// <summary>What a bare <c>throws</c> means.</summary>
+    public TypeSymbol AnyError { get; }
+
     public NamedTypeSymbol Optional { get; }
     public NamedTypeSymbol Dictionary { get; }
 

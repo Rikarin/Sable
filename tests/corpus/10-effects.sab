@@ -1,0 +1,69 @@
+module Corpus.Effects
+
+public union IoError {
+    NotFound(path: String)
+    Denied
+}
+
+
+public fn read(_ path: String) throws(IoError) -> String {
+    if path == "" {
+        throw IoError.Denied
+    }
+    return path
+}
+
+public fn safe(_ path: String) -> String {
+    let value = try? read(path)
+    return value ?? ""
+}
+
+public fn withFallback(_ path: String) -> String {
+    return try read(path) catch { "" }
+}
+
+public fn forced(_ path: String) -> String {
+    return try! read(path)
+}
+
+public fn propagates(_ path: String) throws(IoError) -> String {
+    let first = try read(path)
+    let second = try read(first)
+    return second
+}
+
+public fn oneTryCoversTheExpression(_ a: String, _ b: String) throws(IoError) -> String {
+    return try read(a) + read(b)
+}
+
+public fn handled(_ path: String) -> Int {
+    var count = 0
+    do {
+        let text = try read(path)
+        count = 1
+    } catch .NotFound(let p) {
+        count = 2
+    } catch {
+        count = 3
+    }
+    return count
+}
+
+public fn bareThrows(_ path: String) throws -> String {
+    return try read(path)
+}
+
+public async fn fetch(_ url: String) -> String {
+    return url
+}
+
+public async fn useAsync(_ url: String) -> String {
+    let body = await fetch(url)
+    return body
+}
+
+public async fn both(_ url: String) throws(IoError) -> String {
+    let body = await fetch(url)
+    let text = try read(body)
+    return text
+}

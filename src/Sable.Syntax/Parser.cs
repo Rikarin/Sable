@@ -395,7 +395,10 @@ internal sealed class Parser
             var marker = Current.Kind is SyntaxKind.QuestionToken or SyntaxKind.BangToken
                 ? EatToken()
                 : null;
-            var operand = ParseUnary();
+            // 'try' covers the whole expression it is written on, as in
+            // Swift: one 'try' can stand for several calls. It stops short of
+            // assignment, so 'x = try f()' still assigns.
+            var operand = ParseTernary();
 
             GreenToken? catchKeyword = null;
             GreenNode? catchBody = null;

@@ -414,6 +414,71 @@ public sealed class BoundDefer(SyntaxNode syntax, BoundStatement body) : BoundSt
     public override IEnumerable<BoundNode> Children => Nodes(Body);
 }
 
+/// <summary>
+/// <c>try e</c>, <c>try? e</c>, <c>try! e</c>, or <c>try e catch { ... }</c>.
+/// </summary>
+public sealed class BoundTry(
+    SyntaxNode syntax,
+    TypeSymbol type,
+    BoundExpression expression,
+    TryKind tryKind,
+    BoundExpression? fallback) : BoundExpression(syntax, type)
+{
+    public BoundExpression Expression { get; } = expression;
+    public TryKind TryKind { get; } = tryKind;
+
+    /// <summary>The value an inline <c>catch</c> supplies instead.</summary>
+    public BoundExpression? Fallback { get; } = fallback;
+
+    public override IEnumerable<BoundNode> Children =>
+        Fallback is null ? Nodes(Expression) : Nodes(Expression, Fallback);
+}
+
+/// <summary>What a <c>try</c> does with the error, per SYNTAX.md §18.</summary>
+public enum TryKind
+{
+    /// <summary>Propagates to the caller.</summary>
+    Propagate,
+
+    /// <summary>Becomes an optional.</summary>
+    Optional,
+
+    /// <summary>Asserts it cannot happen.</summary>
+    Force,
+
+    /// <summary>Replaced by an inline fallback value.</summary>
+    Fallback,
+}
+
+/// <summary>A <c>do</c> block with its <c>catch</c> clauses.</summary>
+public sealed class BoundDo(
+    SyntaxNode syntax,
+    BoundBlock body,
+    ImmutableArray<BoundCatch> catches) : BoundStatement(syntax)
+{
+    public BoundBlock Body { get; } = body;
+    public ImmutableArray<BoundCatch> Catches { get; } = catches;
+
+    public override IEnumerable<BoundNode> Children =>
+        Nodes(Body).Concat(Catches.Select(c => (BoundNode)c.Body));
+}
+
+/// <summary>One <c>catch</c> clause of a <c>do</c>.</summary>
+public sealed class BoundCatch(
+    SyntaxNode syntax,
+    BoundPattern? pattern,
+    BoundExpression? guard,
+    BoundBlock body)
+{
+    public SyntaxNode Syntax { get; } = syntax;
+
+    /// <summary>Null for a bare <c>catch</c>, which takes everything.</summary>
+    public BoundPattern? Pattern { get; } = pattern;
+
+    public BoundExpression? Guard { get; } = guard;
+    public BoundBlock Body { get; } = body;
+}
+
 /// <summary>A call through a value of function type, with no symbol to name.</summary>
 public sealed class BoundIndirectCall(
     SyntaxNode syntax,

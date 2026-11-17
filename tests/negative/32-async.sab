@@ -1,0 +1,44 @@
+module Negative.Async
+
+public struct Response { public var body: String }
+
+async fn fetch(_ url: String) -> Response {
+    return Response { body: url }
+}
+
+fn plain(_ url: String) -> Response {
+    return Response { body: url }
+}
+
+fn callingAsyncFromSync(_ url: String) -> Response {
+    return fetch(url)                   //! S3035 is async
+}
+
+async fn missingAwait(_ url: String) -> Response {
+    return fetch(url)                   //! S3034 needs 'await'
+}
+
+fn awaitWithoutAsync(_ url: String) -> Response {
+    return await fetch(url)   //! S3035 'await' is only available //! S3035 is async
+}
+
+async fn awaitingSomethingSynchronous(_ url: String) -> Response {
+    return await plain(url)
+}
+
+async fn asyncResultIsChecked(_ url: String) -> String {
+    return await fetch(url)             //! S3004 expected 'String'
+}
+
+async fn aClosureIsNotAsyncByDefault(_ url: String) -> Response {
+    let f = () => { return fetch(url) } //! S3035 is async
+    return await fetch(url)
+}
+
+async fn anAsyncClosureParameterCarriesIt(_ url: String) -> Response {
+    return await run(() => { return await fetch(url) })
+}
+
+fn run(_ body: async () -> Response) -> Response {
+    return body()                       //! S3035 is async
+}

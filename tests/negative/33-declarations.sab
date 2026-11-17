@@ -1,0 +1,71 @@
+module Negative.Declarations
+
+public struct Point { public var x: Int }
+
+public alias Coordinate = Int
+public alias Pair = (Int, Int)
+public alias Transform = (Int) -> Int
+
+const Limit: Int = 10
+const Wrong: Int = "ten"                //! S3004 expected 'Int'
+
+public struct Container {
+    public static let shared = Container { n: 0 }
+    public var n: Int
+
+    public struct Nested {
+        public var m: Int
+    }
+
+    public alias Inner = Nested
+}
+
+fn anAliasIsTransparent(_ c: Coordinate) -> Int {
+    return c
+}
+
+fn anAliasStillChecks(_ c: Coordinate) -> String {
+    return c                            //! S3004 expected 'String'
+}
+
+fn aTupleAlias(_ p: Pair) -> Int {
+    return p.0
+}
+
+fn aFunctionAliasIsCallable(_ f: Transform) -> Int {
+    return f(1)
+}
+
+fn aFunctionAliasChecksItsArgument(_ f: Transform) -> Int {
+    return f("one")                     //! S3004 expected 'Int'
+}
+
+fn aNestedTypeIsReachedThroughItsOwner(_ n: Container.Nested) -> Int {
+    return n.m
+}
+
+fn aNestedAliasToo(_ n: Container.Inner) -> Int {
+    return n.m
+}
+
+fn anUnknownNestedType(_ n: Container.Missing) { }   //! S2001
+
+fn aStaticMemberIsReachedThroughTheType() -> Container {
+    return Container.shared
+}
+
+fn aStaticMemberIsNotOnTheValue(_ c: Container) -> Container {
+    return c.shared                     //! S3039 is a static member
+}
+
+fn aConstantIsAValue() -> Int {
+    return Limit
+}
+
+fn aConstantIsNotAssignable() {
+    Limit = 1                           //! S3010
+}
+
+fn duplicateParameters(_ a: Int, _ a: Int) -> Int {   //! S2000 already declared
+    return a
+}

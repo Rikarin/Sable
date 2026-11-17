@@ -695,6 +695,7 @@ public sealed class Compilation
         };
 
         TypeBinder.BindConstantType(field, declaration);
+        RecordDeclaration(declaration, field);
         AddTo(container, field);
     }
 

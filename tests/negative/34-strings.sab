@@ -1,0 +1,47 @@
+module Negative.Strings2
+
+public struct Point { public var x: Int }
+
+fn interpolationIsChecked(_ p: Point) -> String {
+    return "x is \(p.missing)"          //! S2002 has no member named 'missing'
+}
+
+fn interpolationBindsExpressions(_ n: Int) -> String {
+    return "n is \(n + "one")"          //! S3009
+}
+
+fn interpolationOfAnything(_ p: Point) -> String {
+    return "p is \(p)"
+}
+
+fn concatenationNeedsStrings(_ s: String, _ n: Int) -> String {
+    return s + n                        //! S3009
+}
+
+fn stringMembers(_ s: String) -> Int {
+    return s.count
+}
+
+fn anUnknownStringMember(_ s: String) -> Int {
+    return s.length                     //! S2002 has no member named 'length'
+}
+
+fn stringAtTakesAnIndex(_ s: String) -> Char {
+    return s.at("a")                    //! S3007
+}
+
+fn charMembers(_ c: Char) -> Bool {
+    return c.isDigit
+}
+
+fn charIsNotAString(_ c: Char) -> String {
+    return c                            //! S3004 expected 'String'
+}
+
+fn parsingReturnsAnOptional(_ s: String) -> Int {
+    return s.toInt()                    //! S3004 expected 'Int'
+}
+
+fn parsingUnwrapped(_ s: String) -> Int {
+    return s.toInt() ?? 0
+}

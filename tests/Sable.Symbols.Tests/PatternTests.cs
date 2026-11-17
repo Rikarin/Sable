@@ -15,7 +15,7 @@ public sealed class PatternTests
 
     private static IReadOnlyList<Diagnostic> ErrorsIn(string body, string extra = Shapes)
     {
-        var source = $"module M\n{extra}\nfn probe() {{\n{body}\n}}";
+        var source = TestSource.Probe(body, extra);
         var compilation = Compilation.Create(source);
         return [.. compilation.GetAllDiagnostics()
             .Where(d => d.Severity == DiagnosticSeverity.Error)];
@@ -30,7 +30,7 @@ public sealed class PatternTests
 
     private static string TypeOfMatch(string body, string extra = Shapes)
     {
-        var source = $"module M\n{extra}\nfn probe() {{\n{body}\n}}";
+        var source = TestSource.Probe(body, extra);
         var compilation = Compilation.Create(source);
 
         var errors = compilation.GetAllDiagnostics()

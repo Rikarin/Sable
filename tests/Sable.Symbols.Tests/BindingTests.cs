@@ -7,7 +7,7 @@ public sealed class BindingTests
     /// <summary>Binds a function body and reports the type of its last expression.</summary>
     private static string TypeOfLast(string body, string extra = "")
     {
-        var source = $"module M\n{extra}\nfn probe() {{\n{body}\n}}";
+        var source = TestSource.Probe(body, extra);
         var compilation = Compilation.Create(source);
         var tree = compilation.SyntaxTrees[0];
         var model = compilation.GetSemanticModel(tree);
@@ -36,7 +36,7 @@ public sealed class BindingTests
 
     private static IReadOnlyList<Diagnostic> ErrorsIn(string body, string extra = "")
     {
-        var source = $"module M\n{extra}\nfn probe() {{\n{body}\n}}";
+        var source = TestSource.Probe(body, extra);
         var compilation = Compilation.Create(source);
         return [.. compilation.GetAllDiagnostics()
             .Where(d => d.Severity == DiagnosticSeverity.Error)];

@@ -468,15 +468,44 @@ public sealed class BoundCatch(
     SyntaxNode syntax,
     BoundPattern? pattern,
     BoundExpression? guard,
-    BoundBlock body)
+    BoundBlock body,
+    LocalSymbol? errorLocal)
 {
     public SyntaxNode Syntax { get; } = syntax;
 
     /// <summary>Null for a bare <c>catch</c>, which takes everything.</summary>
     public BoundPattern? Pattern { get; } = pattern;
 
+    /// <summary>The implicit <c>error</c> a bare <c>catch</c> binds.</summary>
+    public LocalSymbol? ErrorLocal { get; } = errorLocal;
+
     public BoundExpression? Guard { get; } = guard;
     public BoundBlock Body { get; } = body;
+}
+
+/// <summary>
+/// A condition that binds a name: <c>if let x = e</c> or <c>if case p = e</c>.
+/// </summary>
+/// <remarks>
+/// It is an expression of type Bool, so a condition list can combine several
+/// with <c>&amp;&amp;</c>, but it carries what it binds — which is what lets
+/// definite assignment see that the name is set when the branch is taken.
+/// </remarks>
+public sealed class BoundConditionBinding(
+    SyntaxNode syntax,
+    TypeSymbol type,
+    BoundExpression source,
+    BoundPattern? pattern,
+    LocalSymbol? local) : BoundExpression(syntax, type)
+{
+    public BoundExpression Source { get; } = source;
+    public BoundPattern? Pattern { get; } = pattern;
+
+    /// <summary>The local an optional binding introduces.</summary>
+    public LocalSymbol? Local { get; } = local;
+
+    public override IEnumerable<BoundNode> Children =>
+        Pattern is null ? Nodes(Source) : Nodes(Source, Pattern);
 }
 
 /// <summary>A call through a value of function type, with no symbol to name.</summary>

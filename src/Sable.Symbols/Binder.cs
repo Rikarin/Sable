@@ -115,6 +115,7 @@ public sealed class Binder
 
         var bound = BindBlock(body);
         CheckFlow(function, body, bound);
+        DefiniteAssignment.Analyze(bound, function.Parameters, _diagnostics);
 
         PopScope();
         RestoreEffects(savedEffects);
@@ -424,11 +425,12 @@ public sealed class Binder
                 : BindPattern(clause.Pattern, errorType);
 
             // A bare 'catch' binds the error as 'error', per SYNTAX.md §18.
+            LocalSymbol? errorLocal = null;
             if (pattern is null)
             {
-                var local = new LocalSymbol("error", _containingSymbol, clause, false);
-                local.TypeResolver = () => errorType;
-                Declare("error", local);
+                errorLocal = new LocalSymbol("error", _containingSymbol, clause, false);
+                errorLocal.TypeResolver = () => errorType;
+                Declare("error", errorLocal);
             }
 
             var guard = clause.WhereClause is { } where
@@ -438,7 +440,7 @@ public sealed class Binder
             var clauseBody = BindBlock(clause.Body);
             PopScope();
 
-            catches.Add(new BoundCatch(clause, pattern, guard, clauseBody));
+            catches.Add(new BoundCatch(clause, pattern, guard, clauseBody, errorLocal));
         }
 
         return Record(statement, new BoundDo(statement, body, catches.ToImmutable()));
@@ -651,14 +653,16 @@ public sealed class Binder
                 };
 
                 Declare(name, local);
-                return new BoundTypeTest(binding, Core.Bool, source, unwrapped);
+                return new BoundConditionBinding(
+                    binding, Core.Bool, source, null, local);
             }
 
             case CasePatternConditionSyntax casePattern:
             {
                 var subject = BindExpression(casePattern.Expression);
-                BindPattern(casePattern.Pattern, subject.Type);
-                return new BoundTypeTest(casePattern, Core.Bool, subject, subject.Type);
+                var pattern = BindPattern(casePattern.Pattern, subject.Type);
+                return new BoundConditionBinding(
+                    casePattern, Core.Bool, subject, pattern, null);
             }
 
             default:

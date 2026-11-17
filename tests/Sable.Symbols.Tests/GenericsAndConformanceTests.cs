@@ -42,8 +42,7 @@ public sealed class GenericsAndConformanceTests
     public void AConstructedTypesFieldIsSubstituted() =>
         Assert.Equal("Int", TypeOfLast("""
             struct Box<T> { var item: T }
-            fn probe() {
-                let b: Box<Int>
+            fn probe(_ b: Box<Int>) {
                 let v = b.item
             }
             """));
@@ -52,8 +51,7 @@ public sealed class GenericsAndConformanceTests
     public void NestedSubstitutionWorks() =>
         Assert.Equal("Box<String>", TypeOfLast("""
             struct Box<T> { var item: T }
-            fn probe() {
-                let b: Box<Box<String>>
+            fn probe(_ b: Box<Box<String>>) {
                 let v = b.item
             }
             """));
@@ -62,8 +60,7 @@ public sealed class GenericsAndConformanceTests
     public void SubstitutionReachesIntoStructuralTypes() =>
         Assert.Equal("Int[]", TypeOfLast("""
             struct Holder<T> { var items: T[] }
-            fn probe() {
-                let h: Holder<Int>
+            fn probe(_ h: Holder<Int>) {
                 let v = h.items
             }
             """));
@@ -75,8 +72,7 @@ public sealed class GenericsAndConformanceTests
                 var item: T
                 fn get() -> T { return item }
             }
-            fn probe() {
-                let b: Box<Int>
+            fn probe(_ b: Box<Int>) {
                 let v = b.get()
             }
             """));
@@ -88,8 +84,7 @@ public sealed class GenericsAndConformanceTests
             struct Box<T> {
                 fn put(_ value: T) { }
             }
-            fn probe() {
-                let b: Box<Int>
+            fn probe(_ b: Box<Int>) {
                 b.put(1)
             }
             """);
@@ -98,8 +93,7 @@ public sealed class GenericsAndConformanceTests
             struct Box<T> {
                 fn put(_ value: T) { }
             }
-            fn probe() {
-                let b: Box<Int>
+            fn probe(_ b: Box<Int>) {
                 b.put("s")
             }
             """), e => e.Code == ErrorCode.ERR_NoMatchingOverload);
@@ -140,8 +134,7 @@ public sealed class GenericsAndConformanceTests
         Assert.Equal("Int", TypeOfLast("""
             struct Box<T> { }
             fn unwrap<T>(_ box: Box<T>) -> T
-            fn probe() {
-                let b: Box<Int>
+            fn probe(_ b: Box<Int>) {
                 let v = unwrap(b)
             }
             """));
@@ -271,8 +264,7 @@ public sealed class GenericsAndConformanceTests
             class Base { }
             class Derived: Base { }
             fn take(_ b: Base) { }
-            fn probe() {
-                let d: Derived
+            fn probe(_ d: Derived) {
                 take(d)
             }
             """);

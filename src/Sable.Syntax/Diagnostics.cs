@@ -116,6 +116,7 @@ public enum ErrorCode
     WRN_UnreachableCode = 6005,
     WRN_PatternAlreadyCovered = 6006,
     ERR_MatchArmTypesDiffer = 6007,
+    ERR_UseBeforeAssignment = 6008,
 }
 
 public enum DiagnosticSeverity { Hidden, Info, Warning, Error }

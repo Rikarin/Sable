@@ -50,7 +50,10 @@ public sealed class ExplainTests {
     }
 
     /// <summary>The ids of every error and warning a program produces, front end and lowering.</summary>
-    static List<string> Diagnose(string source) {
+    static bool IsLint(string code) => code.CompareTo("S3300") >= 0 && code.CompareTo("S3399") <= 0;
+
+    /// <remarks>A lint's page (S3300-S3399) is checked with the lints run too, at their default levels.</remarks>
+    static List<string> Diagnose(string source, bool lints = false) {
         var tree = SyntaxTree.Parse(new SourceText(source, "example.sab"));
         var compilation = Compilation.Create([tree, ..Library.For(tree)]);
         var found = compilation.GetAllDiagnosticsByFile()
@@ -61,6 +64,10 @@ public sealed class ExplainTests {
 
         if (!found.Exists(static d => d.Severity == DiagnosticSeverity.Error)) {
             found.AddRange(SilGen.Lower(compilation).Diagnostics);
+        }
+
+        if (lints && !found.Exists(static d => d.Severity == DiagnosticSeverity.Error)) {
+            found.AddRange(Lints.Run(compilation, LintConfiguration.Default, [tree]));
         }
 
         return [..found.Select(static d => $"{d.Id}: {d.Message}")];
@@ -86,7 +93,7 @@ public sealed class ExplainTests {
             return;
         }
 
-        var found = Diagnose(example);
+        var found = Diagnose(example, IsLint(code));
         Assert.True(found.Count > 0, $"{code}'s example compiles cleanly");
         Assert.True(
             found.TrueForAll(d => d.StartsWith(code + ":", StringComparison.Ordinal)),
@@ -102,7 +109,7 @@ public sealed class ExplainTests {
             return;
         }
 
-        var found = Diagnose(fix);
+        var found = Diagnose(fix, IsLint(code));
         Assert.True(found.Count == 0, $"{code}'s fix still reports:\n{string.Join("\n", found)}");
     }
 

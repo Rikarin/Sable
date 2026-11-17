@@ -145,6 +145,15 @@ public enum ErrorCode {
     ERR_MalformedBuiltin = 3082,
     ERR_NotSupportedYet = 3099,
 
+    // ---- Lints (S3300-S3399): reported by Sable.Symbols' Lints, which
+    // 'sable check' runs, never by compiling. Their severity is configured.
+    LNT_UnusedLocal = 3300,
+    LNT_UnusedParameter = 3301,
+    LNT_UnusedImport = 3302,
+    LNT_VarNeverMutated = 3303,
+    LNT_ShadowedParameter = 3304,
+    LNT_UnknownLint = 3399,
+
     // ---- Patterns and flow (S6000-S6999) ---------------------------------
     ERR_PatternTypeMismatch = 6000,
     ERR_UnknownUnionCase = 6001,

@@ -1,0 +1,57 @@
+module Negative.ProtocolsMore
+
+public protocol Drawable {
+    fn draw() -> String
+    fn describe() -> String { return draw() }
+    static fn defaultStyle() -> String
+    var size: Int { get }
+    var label: String { get set }
+}
+
+public struct MissingEverything: Drawable { }   //! S3023 //! S3023 //! S3023 //! S3023
+
+public struct MissingStatic: Drawable {         //! S3023 defaultStyle
+    public fn draw() -> String { return "x" }
+    public var size: Int { get => 1 }
+    public var label: String { get => "" set { } }
+}
+
+public struct MissingSetter: Drawable {         //! S3027 label
+    public fn draw() -> String { return "x" }
+    public static fn defaultStyle() -> String { return "plain" }
+    public var size: Int { get => 1 }
+    public var label: String { get => "" }
+}
+
+public struct Complete: Drawable {
+    public fn draw() -> String { return "x" }
+    public static fn defaultStyle() -> String { return "plain" }
+    public var size: Int { get => 1 }
+    public var label: String { get => "" set { } }
+}
+
+fn aDefaultIsNotARequirement(_ d: Complete) -> String {
+    return d.describe()
+}
+
+public protocol Refines: Drawable {
+    fn extra() -> Int
+}
+
+public struct OnlyTheRefinement: Refines {      //! S3023 //! S3023 //! S3023 //! S3023
+    public fn extra() -> Int { return 1 }
+}
+
+fn conformingToSomethingThatIsNotAProtocol(_ c: Complete) -> String {
+    return c.draw()
+}
+
+public struct NotAProtocolBase: Complete { }    //! S3024
+
+public protocol WithStatic {
+    static fn make() -> Int
+}
+
+public struct Instance: WithStatic {            //! S3027 make
+    public fn make() -> Int { return 1 }
+}

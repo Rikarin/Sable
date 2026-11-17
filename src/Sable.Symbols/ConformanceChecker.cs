@@ -206,8 +206,21 @@ internal static class ConformanceChecker
     }
 
     private static void CheckProtocol(
-        NamedTypeSymbol type, NamedTypeSymbol protocol, DiagnosticBag diagnostics)
+        NamedTypeSymbol type,
+        NamedTypeSymbol protocol,
+        DiagnosticBag diagnostics,
+        HashSet<NamedTypeSymbol>? seen = null)
     {
+        // A protocol that refines another requires everything the other does.
+        seen ??= [];
+        if (!seen.Add(protocol)) return;
+
+        foreach (var refined in protocol.BaseTypes)
+        {
+            if (refined is NamedTypeSymbol { TypeKind: TypeKind.Protocol } parent)
+                CheckProtocol(type, parent, diagnostics, seen);
+        }
+
         foreach (var associated in protocol.AssociatedTypes)
         {
             if (ResolveAssociated(type, associated) is not null) continue;
@@ -251,6 +264,18 @@ internal static class ConformanceChecker
         foreach (var candidate in candidates)
             if (Matches(requirement, candidate, protocol, type)) return;
 
+        // A static requirement is not met by an instance member, nor the
+        // other way round.
+        if (candidates.TrueForAll(c => c.IsStatic != requirement.IsStatic))
+        {
+            Report(diagnostics, ErrorCode.ERR_RequirementSignatureMismatch, type,
+                $"'{type.Name}.{requirement.Name}' is "
+                + $"{(requirement.IsStatic ? "an instance" : "a static")} member, but "
+                + $"'{protocol.Name}' requires "
+                + $"{(requirement.IsStatic ? "a static" : "an instance")} one");
+            return;
+        }
+
         Report(diagnostics, ErrorCode.ERR_RequirementSignatureMismatch, type,
             $"'{type.Name}.{requirement.Name}' does not match the signature "
             + $"'{protocol.Name}' requires: '{Describe(requirement)}'");
@@ -273,6 +298,18 @@ internal static class ConformanceChecker
             return;
         }
 
+        // A '{ get set }' requirement is not met by a read-only member.
+        var requiresSetter = requirement.IsComputed ? requirement.HasSetter : requirement.IsMutable;
+        var hasSetter = candidate.IsComputed ? candidate.HasSetter : candidate.IsMutable;
+
+        if (requiresSetter && !hasSetter)
+        {
+            Report(diagnostics, ErrorCode.ERR_RequirementSignatureMismatch, type,
+                $"'{type.Name}.{requirement.Name}' cannot be written, but "
+                + $"'{protocol.Name}' requires '{requirement.Name}' to have a setter");
+            return;
+        }
+
         var expected = SubstituteSelf(requirement.Type, protocol, type);
         if (candidate.Type.Equals(expected) || candidate.Type.IsError || expected.IsError) return;
 
@@ -288,6 +325,7 @@ internal static class ConformanceChecker
         NamedTypeSymbol protocol,
         NamedTypeSymbol conformer)
     {
+        if (candidate.IsStatic != requirement.IsStatic) return false;
         if (candidate.Parameters.Length != requirement.Parameters.Length) return false;
 
         for (var i = 0; i < requirement.Parameters.Length; i++)

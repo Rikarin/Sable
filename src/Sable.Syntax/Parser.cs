@@ -563,6 +563,10 @@ internal sealed class Parser
     {
         switch (Current.Kind)
         {
+            case SyntaxKind.StringLiteralToken when HasInterpolation(Current):
+            case SyntaxKind.MultilineStringLiteralToken when HasInterpolation(Current):
+                return ParseInterpolatedString();
+
             case SyntaxKind.IntegerLiteralToken:
             case SyntaxKind.FloatLiteralToken:
             case SyntaxKind.CharLiteralToken:
@@ -574,7 +578,10 @@ internal sealed class Parser
             case SyntaxKind.NoneKeyword:
                 return new LiteralExpressionGreen(EatToken());
 
+            // 'self' and 'Self' both stand for a value here; the token says
+            // which, and 'Self.self' is how a metatype is written.
             case SyntaxKind.SelfKeyword:
+            case SyntaxKind.CapitalSelfKeyword:
                 return new SelfExpressionGreen(EatToken());
 
             case SyntaxKind.SuperKeyword:
@@ -868,6 +875,13 @@ internal sealed class Parser
         return GreenList.Create(items.ToImmutable());
     }
 
+    private static bool HasInterpolation(GreenToken token)
+    {
+        foreach (var part in token.Parts)
+            if (part.Kind == StringPartKind.Interpolation) return true;
+        return false;
+    }
+
     private static bool CanStartExpression(SyntaxKind kind) => kind switch
     {
         SyntaxKind.IdentifierToken => true,
@@ -876,7 +890,8 @@ internal sealed class Parser
             or SyntaxKind.MultilineStringLiteralToken
             or SyntaxKind.RawStringLiteralToken => true,
         SyntaxKind.TrueKeyword or SyntaxKind.FalseKeyword or SyntaxKind.NoneKeyword => true,
-        SyntaxKind.SelfKeyword or SyntaxKind.SuperKeyword => true,
+        SyntaxKind.SelfKeyword or SyntaxKind.CapitalSelfKeyword
+            or SyntaxKind.SuperKeyword => true,
         SyntaxKind.OpenParenToken or SyntaxKind.OpenBracketToken => true,
         SyntaxKind.DotToken or SyntaxKind.HashToken => true,
         SyntaxKind.MinusToken or SyntaxKind.PlusToken or SyntaxKind.BangToken
@@ -3034,6 +3049,103 @@ internal sealed class Parser
 
         return new AccessorGreen(attributes, modifiers, keyword, open, parameterName, close,
             body, arrow, expressionBody);
+    }
+
+    // =======================================================================
+    // Interpolated strings
+    // =======================================================================
+
+    /// <summary>
+    /// Rebuilds a string literal token whose text contains <c>\(...)</c> holes
+    /// into a node whose holes are real expressions.
+    /// </summary>
+    /// <remarks>
+    /// <para>The lexer keeps an interpolated string as one token, because the
+    /// holes nest arbitrarily and tracking that in the lexer would make it
+    /// stateful. The parser takes the token apart again here, slicing the
+    /// original characters so that the pieces tile the token exactly, and
+    /// re-entering itself for each hole.</para>
+    /// <para>Diagnostics from inside a hole are shifted into file
+    /// coordinates, so they point where the reader is looking.</para>
+    /// </remarks>
+    private GreenNode ParseInterpolatedString()
+    {
+        var token = Current;
+        var tokenTextStart = _tokenPosition + token.LeadingTriviaWidth;
+        var parts = token.Parts;
+        var text = token.Text;
+
+        EatToken();
+
+        var firstRaw = parts[0].Span.Start;
+        var lastRaw = parts[^1].Span.End;
+
+        var open = new GreenToken(
+            SyntaxKind.InterpolatedStringStartToken, text[..firstRaw], token.Leading, []);
+
+        var contents = ImmutableArray.CreateBuilder<GreenNode>(parts.Length);
+
+        for (var i = 0; i < parts.Length; i++)
+        {
+            var part = parts[i];
+            var raw = text[part.Span.Start..part.Span.End];
+
+            if (part.Kind == StringPartKind.Literal)
+            {
+                contents.Add(new InterpolatedTextGreen(new GreenToken(
+                    SyntaxKind.InterpolatedTextToken, raw, [], [], part.Text)));
+                continue;
+            }
+
+            contents.Add(ParseInterpolationHole(part, raw, tokenTextStart));
+        }
+
+        var close = new GreenToken(
+            SyntaxKind.InterpolatedStringEndToken, text[lastRaw..], [], token.Trailing,
+            terminatesStatement: token.TerminatesStatement);
+
+        return new InterpolatedStringExpressionGreen(
+            open, GreenList.Create(contents.ToImmutable()), close);
+    }
+
+    private GreenNode ParseInterpolationHole(StringPart part, string raw, int tokenTextStart)
+    {
+        // raw is '\(' + inner + ')'.
+        var openText = raw[..2];
+        var inner = part.Text;
+
+        var holeStart = tokenTextStart + part.Span.Start + openText.Length;
+
+        var source = new SourceText(inner, "<interpolation>");
+        var inner_parser = new Parser(source, _options);
+        var expression = inner_parser.ParseExpression();
+
+        foreach (var diagnostic in inner_parser._diagnostics)
+        {
+            _diagnostics.Add(diagnostic with
+            {
+                Span = new TextSpan(diagnostic.Span.Start + holeStart, diagnostic.Span.Length),
+            });
+        }
+
+        // Whatever the expression did not cover rides on the closing paren, so
+        // the hole still tiles.
+        var covered = expression.FullWidth;
+        var leftover = covered < inner.Length ? inner[covered..] : string.Empty;
+
+        ImmutableArray<GreenTrivia> closeLeading = leftover.Length == 0
+            ? []
+            : [new GreenTrivia(
+                leftover.Trim().Length == 0
+                    ? SyntaxKind.WhitespaceTrivia
+                    : SyntaxKind.SkippedTokensTrivia,
+                leftover)];
+
+        var open = new GreenToken(SyntaxKind.InterpolationStartToken, openText, [], []);
+        var close = new GreenToken(
+            SyntaxKind.InterpolationEndToken, raw[^1..], closeLeading, []);
+
+        return new InterpolationGreen(open, expression, close);
     }
 
 }

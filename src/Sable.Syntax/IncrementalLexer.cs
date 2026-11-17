@@ -146,9 +146,15 @@ internal static class IncrementalLexer
     }
 
     /// <summary>
-    /// Keeps the diagnostics of the regions that were not re-lexed, shifting
-    /// the ones after the edit.
+    /// Keeps the lexical diagnostics of the regions that were not re-lexed,
+    /// shifting the ones after the edit.
     /// </summary>
+    /// <remarks>
+    /// Only lexical ones. The parser runs over the whole spliced stream, so it
+    /// re-reports its own diagnostics for everything it did not reuse — and a
+    /// member it did reuse is never one that had a parser diagnostic, which is
+    /// what <see cref="IncrementalReuse"/> guarantees.
+    /// </remarks>
     private static IReadOnlyList<Diagnostic> MergeDiagnostics(
         IReadOnlyList<Diagnostic> old,
         IReadOnlyList<Diagnostic> fresh,
@@ -156,23 +162,28 @@ internal static class IncrementalLexer
         int oldSuffixStart,
         int delta)
     {
-        var merged = new List<Diagnostic>();
-
-        foreach (var diagnostic in old)
-            if (diagnostic.Span.End <= prefixEnd) merged.Add(diagnostic);
-
-        merged.AddRange(fresh);
+        var merged = new List<Diagnostic>(fresh);
 
         foreach (var diagnostic in old)
         {
-            if (diagnostic.Span.Start < oldSuffixStart) continue;
-            merged.Add(diagnostic with
+            if (!IsLexical(diagnostic)) continue;
+
+            if (diagnostic.Span.End <= prefixEnd)
             {
-                Span = new TextSpan(diagnostic.Span.Start + delta, diagnostic.Span.Length),
-            });
+                merged.Add(diagnostic);
+            }
+            else if (diagnostic.Span.Start >= oldSuffixStart)
+            {
+                merged.Add(diagnostic with
+                {
+                    Span = new TextSpan(diagnostic.Span.Start + delta, diagnostic.Span.Length),
+                });
+            }
         }
 
-        merged.Sort((a, b) => a.Span.Start.CompareTo(b.Span.Start));
         return merged;
     }
+
+    /// <summary>Lexical diagnostics occupy S0001-S0999; see ErrorCode.</summary>
+    private static bool IsLexical(Diagnostic diagnostic) => (int)diagnostic.Code < 1000;
 }

@@ -94,12 +94,12 @@ dotnet test Sable.slnx
 | `Sable.Syntax` — parser: statements, patterns, closures | done |
 | `Sable.Syntax` — parser: declarations and compilation units | done |
 | `Sable.Syntax` — conditional compilation | done |
-| `Sable.Syntax` — structured string interpolation | not started |
+| `Sable.Syntax` — structured string interpolation | done |
 | `Sable.Syntax` — incremental reparse | done |
 | `Sable.Syntax` — formatter | done |
 | Everything downstream (symbols, binder, SIL, codegen) | not started |
 
-**646 tests green**, and every file in [examples/](examples/) parses as a
+**662 tests green**, and every file in [examples/](examples/) parses as a
 complete compilation unit with no diagnostics and an exact round-trip.
 
 The lexer covers all of [spec/lexical.md](spec/lexical.md): full-fidelity
@@ -130,9 +130,5 @@ sample output: formatting is idempotent, and formatting never changes the tree.
 
 Not implemented yet, and deliberately so:
 
-- **Structured string interpolation.** An interpolated string is a single
-  literal token; its holes are available through `SyntaxToken.Parts` but are
-  not yet parsed into child nodes, because doing that properly means lexing
-  the string into a token sequence rather than one token.
 - **Compound metatype expressions.** `T.self` parses for a simple name, but a
   compound type in expression position (`Token[>..].self`) does not.

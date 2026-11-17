@@ -793,6 +793,7 @@ public sealed class Lexer
 
         var parts = ImmutableArray.CreateBuilder<StringPart>();
         var builder = new StringBuilder();
+        var rawStart = _position;
 
         while (true)
         {
@@ -804,12 +805,13 @@ public sealed class Lexer
                 break;
             }
 
-            if (Current == '"') { _position++; break; }
+            if (Current == '"') { FlushLiteral(parts, builder, rawStart); _position++; break; }
 
             if (Current == '\\' && Next == '(')
             {
-                FlushLiteral(parts, builder);
+                FlushLiteral(parts, builder, rawStart);
                 ScanInterpolation(parts);
+                rawStart = _position;
                 continue;
             }
 
@@ -819,7 +821,7 @@ public sealed class Lexer
             _position++;
         }
 
-        FlushLiteral(parts, builder);
+        FlushLiteral(parts, builder, rawStart);
         return Finish(SyntaxKind.StringLiteralToken, parts);
     }
 
@@ -847,12 +849,14 @@ public sealed class Lexer
         var builder = new StringBuilder();
         var terminated = false;
         var closingIndent = 0;
+        var rawStart = _position;
 
         while (!AtEnd)
         {
             // A closing delimiter is the first non-whitespace text on its line.
             if (Matches("\"\"\"") && IsAtLineStartIgnoringWhitespace(_position, out closingIndent))
             {
+                FlushLiteral(parts, builder, rawStart);
                 _position += 3;
                 terminated = true;
                 break;
@@ -860,8 +864,9 @@ public sealed class Lexer
 
             if (Current == '\\' && Next == '(')
             {
-                FlushLiteral(parts, builder);
+                FlushLiteral(parts, builder, rawStart);
                 ScanInterpolation(parts);
+                rawStart = _position;
                 continue;
             }
 
@@ -886,9 +891,8 @@ public sealed class Lexer
         {
             _diagnostics.Error(ErrorCode.ERR_UnterminatedString, new TextSpan(start, 3),
                 "unterminated multi-line string literal");
+            FlushLiteral(parts, builder, rawStart);
         }
-
-        FlushLiteral(parts, builder);
 
         var dedented = Dedent(parts, closingIndent, new TextSpan(start, _position - start));
         return Finish(SyntaxKind.MultilineStringLiteralToken, dedented);
@@ -1032,8 +1036,9 @@ public sealed class Lexer
         parts.Add(new StringPart(
             StringPartKind.Interpolation,
             TextBetween(innerStart, innerEnd),
-            // Relative to the token's text; SyntaxToken.Parts makes it absolute.
-            TextSpan.FromBounds(innerStart - _tokenStart, innerEnd - _tokenStart)));
+            // The whole hole, '\(' and ')' included, so that the parts tile
+            // the token's text and the parser can rebuild it exactly.
+            TextSpan.FromBounds(start - _tokenStart, _position - _tokenStart)));
     }
 
     private void SkipNestedString()
@@ -1066,11 +1071,21 @@ public sealed class Lexer
         if (!AtEnd && Current == '\'') _position++;
     }
 
-    private static void FlushLiteral(
-        ImmutableArray<StringPart>.Builder parts, StringBuilder builder)
+    /// <summary>
+    /// Ends a run of literal text. The raw span is recorded as well as the
+    /// cooked text, because the parser rebuilds an interpolated string from
+    /// the original characters and the pieces have to tile the token exactly.
+    /// </summary>
+    private void FlushLiteral(
+        ImmutableArray<StringPart>.Builder parts, StringBuilder builder, int rawStart)
     {
         if (builder.Length == 0) return;
-        parts.Add(new StringPart(StringPartKind.Literal, builder.ToString(), default));
+
+        parts.Add(new StringPart(
+            StringPartKind.Literal,
+            builder.ToString(),
+            TextSpan.FromBounds(rawStart - _tokenStart, _position - _tokenStart)));
+
         builder.Clear();
     }
 

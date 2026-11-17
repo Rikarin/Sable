@@ -1310,6 +1310,61 @@ public sealed class CaptureItemSyntax : SyntaxNode
     public override void Accept(SyntaxVisitor visitor) => visitor.VisitCaptureItem(this);
 }
 
+/// <summary>A string with `\(...)` holes, rebuilt from the literal token so that each hole is a real expression node.</summary>
+public sealed class InterpolatedStringExpressionSyntax : ExpressionSyntax
+{
+    internal InterpolatedStringExpressionSyntax(GreenNode green, SyntaxNode? parent, int position)
+        : base(green, parent, position) { }
+
+    public SyntaxToken OpenToken => GetToken(0);
+    public SyntaxList<SyntaxNode> Contents => GetList<SyntaxNode>(1);
+    public SyntaxToken CloseToken => GetToken(2);
+
+    internal override SyntaxNode? GetNodeSlot(int index) => index switch
+    {
+        _ => null,
+    };
+
+    public override void Accept(SyntaxVisitor visitor) => visitor.VisitInterpolatedStringExpression(this);
+}
+
+/// <summary>A run of literal characters inside an interpolated string.</summary>
+public sealed class InterpolatedTextSyntax : SyntaxNode
+{
+    internal InterpolatedTextSyntax(GreenNode green, SyntaxNode? parent, int position)
+        : base(green, parent, position) { }
+
+    public SyntaxToken TextToken => GetToken(0);
+
+    internal override SyntaxNode? GetNodeSlot(int index) => index switch
+    {
+        _ => null,
+    };
+
+    public override void Accept(SyntaxVisitor visitor) => visitor.VisitInterpolatedText(this);
+}
+
+/// <summary>One `\(expr)` hole.</summary>
+public sealed class InterpolationSyntax : SyntaxNode
+{
+    private ExpressionSyntax? _expression;
+
+    internal InterpolationSyntax(GreenNode green, SyntaxNode? parent, int position)
+        : base(green, parent, position) { }
+
+    public SyntaxToken OpenToken => GetToken(0);
+    public ExpressionSyntax Expression => GetRed(ref _expression, 1);
+    public SyntaxToken CloseToken => GetToken(2);
+
+    internal override SyntaxNode? GetNodeSlot(int index) => index switch
+    {
+        1 => Expression,
+        _ => null,
+    };
+
+    public override void Accept(SyntaxVisitor visitor) => visitor.VisitInterpolation(this);
+}
+
 /// <summary>`$0`, `$1`: a positional closure parameter.</summary>
 public sealed class ImplicitParameterExpressionSyntax : ExpressionSyntax
 {
@@ -3407,6 +3462,9 @@ public abstract class SyntaxVisitor
     public virtual void VisitClosureHeader(ClosureHeaderSyntax node) => DefaultVisit(node);
     public virtual void VisitCaptureList(CaptureListSyntax node) => DefaultVisit(node);
     public virtual void VisitCaptureItem(CaptureItemSyntax node) => DefaultVisit(node);
+    public virtual void VisitInterpolatedStringExpression(InterpolatedStringExpressionSyntax node) => DefaultVisit(node);
+    public virtual void VisitInterpolatedText(InterpolatedTextSyntax node) => DefaultVisit(node);
+    public virtual void VisitInterpolation(InterpolationSyntax node) => DefaultVisit(node);
     public virtual void VisitImplicitParameterExpression(ImplicitParameterExpressionSyntax node) => DefaultVisit(node);
     public virtual void VisitMatchExpression(MatchExpressionSyntax node) => DefaultVisit(node);
     public virtual void VisitMatchArm(MatchArmSyntax node) => DefaultVisit(node);

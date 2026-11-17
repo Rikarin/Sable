@@ -462,6 +462,26 @@
     <Field Name="Expression" Type="ExpressionSyntax" Optional="true" />
   </Node>
 
+  <Node Name="InterpolatedStringExpressionSyntax" Base="ExpressionSyntax"
+        Kind="InterpolatedStringExpression"
+        Doc="A string with `\(...)` holes, rebuilt from the literal token so that each hole is a real expression node.">
+    <Field Name="OpenToken" Type="Token" />
+    <Field Name="Contents" Type="List:SyntaxNode" />
+    <Field Name="CloseToken" Type="Token" />
+  </Node>
+
+  <Node Name="InterpolatedTextSyntax" Base="SyntaxNode" Kind="InterpolatedText"
+        Doc="A run of literal characters inside an interpolated string.">
+    <Field Name="TextToken" Type="Token" />
+  </Node>
+
+  <Node Name="InterpolationSyntax" Base="SyntaxNode" Kind="Interpolation"
+        Doc="One `\(expr)` hole.">
+    <Field Name="OpenToken" Type="Token" />
+    <Field Name="Expression" Type="ExpressionSyntax" />
+    <Field Name="CloseToken" Type="Token" />
+  </Node>
+
   <Node Name="ImplicitParameterExpressionSyntax" Base="ExpressionSyntax"
         Kind="ImplicitParameterExpression"
         Doc="`$0`, `$1`: a positional closure parameter.">

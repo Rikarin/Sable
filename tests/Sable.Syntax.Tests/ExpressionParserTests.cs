@@ -252,12 +252,30 @@ public sealed class ExpressionParserTests
     }
 
     [Fact]
-    public void InterpolatedStringIsOneLiteralTokenWithAccessibleHoles()
+    public void InterpolatedStringHolesAreRealExpressions()
     {
         var tree = SyntaxTree.ParseExpression("\"a \\(x + 1) b\"");
-        var literal = Assert.IsType<LiteralExpressionSyntax>(tree.Root);
-        Assert.Equal(3, literal.Token.Parts.Length);
-        Assert.Equal("x + 1", literal.Token.Parts[1].Text);
+        Assert.False(tree.HasErrors, tree.FormatDiagnostics());
+
+        var interpolated = Assert.IsType<InterpolatedStringExpressionSyntax>(tree.Root);
+        Assert.Equal(3, interpolated.Contents.Count);
+
+        Assert.Equal("a ", Assert.IsType<InterpolatedTextSyntax>(
+            interpolated.Contents[0]).TextToken.Text);
+
+        var hole = Assert.IsType<InterpolationSyntax>(interpolated.Contents[1]);
+        Assert.Equal(
+            "(Binary (IdentifierName x) + (Literal 1))",
+            TreeDump.Dump(hole.Expression));
+
+        Assert.Equal("\"a \\(x + 1) b\"", tree.ToFullString());
+    }
+
+    [Fact]
+    public void AStringWithoutHolesStaysALiteral()
+    {
+        var tree = SyntaxTree.ParseExpression("\"plain\"");
+        Assert.IsType<LiteralExpressionSyntax>(tree.Root);
     }
 
     // ---- A dense, realistic expression ------------------------------------

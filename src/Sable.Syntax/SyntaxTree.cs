@@ -89,7 +89,7 @@ public sealed class SyntaxTree
         var lexResult = IncrementalLexer.Lex(
             newText, Options, Tokens, Diagnostics, HasDirectives, change);
 
-        var reuse = IncrementalReuse.Build(Root.Green, Tokens, lexResult);
+        var reuse = IncrementalReuse.Build(Root.Green, Tokens, Diagnostics, lexResult);
 
         // Conservative: an added '#' may have introduced a directive.
         var hasDirectives = HasDirectives || change.NewText.Contains('#');

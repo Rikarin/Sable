@@ -1945,6 +1945,94 @@ internal sealed class CaptureItemGreen : GreenNode
         new CaptureItemSyntax(this, parent, position);
 }
 
+/// <summary>Green node for <see cref="InterpolatedStringExpressionSyntax"/>.</summary>
+internal sealed class InterpolatedStringExpressionGreen : GreenNode
+{
+    private readonly GreenToken? _openToken;
+    private readonly GreenList? _contents;
+    private readonly GreenToken? _closeToken;
+
+    public InterpolatedStringExpressionGreen(GreenToken? openToken, GreenList? contents, GreenToken? closeToken)
+        : base(SyntaxKind.InterpolatedStringExpression, 0)
+    {
+        _openToken = openToken;
+        _contents = contents;
+        _closeToken = closeToken;
+        FullWidth = (openToken?.FullWidth ?? 0)
+                    + (contents?.FullWidth ?? 0)
+                    + (closeToken?.FullWidth ?? 0);
+    }
+
+    public override int SlotCount => 3;
+
+    public override GreenNode? GetSlot(int index) => index switch
+    {
+        0 => _openToken,
+        1 => _contents,
+        2 => _closeToken,
+        _ => null,
+    };
+
+    public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
+        new InterpolatedStringExpressionSyntax(this, parent, position);
+}
+
+/// <summary>Green node for <see cref="InterpolatedTextSyntax"/>.</summary>
+internal sealed class InterpolatedTextGreen : GreenNode
+{
+    private readonly GreenToken? _textToken;
+
+    public InterpolatedTextGreen(GreenToken? textToken)
+        : base(SyntaxKind.InterpolatedText, 0)
+    {
+        _textToken = textToken;
+        FullWidth = (textToken?.FullWidth ?? 0);
+    }
+
+    public override int SlotCount => 1;
+
+    public override GreenNode? GetSlot(int index) => index switch
+    {
+        0 => _textToken,
+        _ => null,
+    };
+
+    public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
+        new InterpolatedTextSyntax(this, parent, position);
+}
+
+/// <summary>Green node for <see cref="InterpolationSyntax"/>.</summary>
+internal sealed class InterpolationGreen : GreenNode
+{
+    private readonly GreenToken? _openToken;
+    private readonly GreenNode? _expression;
+    private readonly GreenToken? _closeToken;
+
+    public InterpolationGreen(GreenToken? openToken, GreenNode? expression, GreenToken? closeToken)
+        : base(SyntaxKind.Interpolation, 0)
+    {
+        _openToken = openToken;
+        _expression = expression;
+        _closeToken = closeToken;
+        FullWidth = (openToken?.FullWidth ?? 0)
+                    + (expression?.FullWidth ?? 0)
+                    + (closeToken?.FullWidth ?? 0);
+    }
+
+    public override int SlotCount => 3;
+
+    public override GreenNode? GetSlot(int index) => index switch
+    {
+        0 => _openToken,
+        1 => _expression,
+        2 => _closeToken,
+        _ => null,
+    };
+
+    public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
+        new InterpolationSyntax(this, parent, position);
+}
+
 /// <summary>Green node for <see cref="ImplicitParameterExpressionSyntax"/>.</summary>
 internal sealed class ImplicitParameterExpressionGreen : GreenNode
 {

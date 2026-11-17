@@ -385,6 +385,11 @@ public static class SyntaxFormatter
 
         private static bool NoSpaceBefore(SyntaxKind kind, SyntaxKind parentKind) => kind switch
         {
+            // Nothing inside an interpolated string takes added whitespace.
+            SyntaxKind.InterpolatedTextToken or SyntaxKind.InterpolationStartToken
+                or SyntaxKind.InterpolationEndToken
+                or SyntaxKind.InterpolatedStringEndToken => true,
+
             SyntaxKind.CommaToken or SyntaxKind.SemicolonToken => true,
             SyntaxKind.CloseParenToken or SyntaxKind.CloseBracketToken => true,
             SyntaxKind.DotToken => parentKind is not
@@ -427,6 +432,10 @@ public static class SyntaxFormatter
 
         private static bool NoSpaceAfter(SyntaxKind kind, SyntaxKind parentKind) => kind switch
         {
+            SyntaxKind.InterpolatedStringStartToken or SyntaxKind.InterpolatedTextToken
+                or SyntaxKind.InterpolationStartToken
+                or SyntaxKind.InterpolationEndToken => true,
+
             SyntaxKind.DotToken or SyntaxKind.QuestionDotToken => true,
             SyntaxKind.AtToken or SyntaxKind.HashToken or SyntaxKind.DollarToken => true,
 

@@ -159,12 +159,31 @@ public sealed class LiteralTests
     }
 
     [Fact]
-    public void InterpolationSpanPointsAtTheInnerSource()
+    public void InterpolationSpanCoversTheWholeHole()
     {
         const string source = "\"v=\\(value)\"";
         var token = TestHelpers.LexSingle(source);
         var hole = token.Parts[1];
-        Assert.Equal("value", source.Substring(hole.Span.Start, hole.Span.Length));
+
+        // The span tiles the token text, so it includes the delimiters; the
+        // part's Text is the expression alone.
+        Assert.Equal("\\(value)", source.Substring(hole.Span.Start, hole.Span.Length));
+        Assert.Equal("value", hole.Text);
+    }
+
+    [Fact]
+    public void StringPartsTileTheTokenText()
+    {
+        const string source = "\"a \\(x) b \\(y)\"";
+        var token = TestHelpers.LexSingle(source);
+
+        var expected = token.Span.Start + 1;   // after the opening quote
+        foreach (var part in token.Parts)
+        {
+            Assert.Equal(expected, part.Span.Start);
+            expected = part.Span.End;
+        }
+        Assert.Equal(token.Span.End - 1, expected);   // before the closing quote
     }
 
     [Fact]

@@ -57,12 +57,23 @@ internal sealed class IncrementalReuse
     /// </summary>
     private int _cursor;
 
+    private int[] _diagnosticPositions = [];
+
     public static IncrementalReuse Build(
         GreenNode oldRoot,
         ImmutableArray<GreenToken> oldTokens,
+        IReadOnlyList<Diagnostic> oldDiagnostics,
         in IncrementalLexResult lexResult)
     {
-        var reuse = new IncrementalReuse();
+        var reuse = new IncrementalReuse
+        {
+            // Members that produced a diagnostic are never reused, so that the
+            // parser's diagnostics can simply be regenerated.
+            _diagnosticPositions = [.. oldDiagnostics
+                .Where(d => (int)d.Code >= 1000)
+                .Select(d => d.Span.Start)
+                .Order()],
+        };
 
         reuse.Collect(oldRoot, 0, MemberContext.Declaration, lexResult.OldPositions,
             lexResult.ReusedPrefixCount,
@@ -115,7 +126,7 @@ internal sealed class IncrementalReuse
 
                     var endIndex = Advance(positions, childOffset + child.FullWidth);
 
-                    Record(child, startIndex, endIndex, childContext,
+                    Record(child, childOffset, startIndex, endIndex, childContext,
                         prefixCount, oldSuffixStart, newSuffixStart);
 
                     childOffset += child.FullWidth;
@@ -131,8 +142,18 @@ internal sealed class IncrementalReuse
         }
     }
 
+    private bool HasDiagnosticIn(int start, int end)
+    {
+        if (_diagnosticPositions.Length == 0) return false;
+
+        var index = Array.BinarySearch(_diagnosticPositions, start);
+        if (index < 0) index = ~index;
+        return index < _diagnosticPositions.Length && _diagnosticPositions[index] < end;
+    }
+
     private void Record(
         GreenNode child,
+        int childPosition,
         int startIndex,
         int endIndex,
         MemberContext context,
@@ -142,6 +163,7 @@ internal sealed class IncrementalReuse
     {
         if (child.FullWidth == 0) return;
         if (startIndex < 0 || endIndex < 0 || endIndex <= startIndex) return;
+        if (HasDiagnosticIn(childPosition, childPosition + child.FullWidth)) return;
 
         var tokenCount = endIndex - startIndex;
 

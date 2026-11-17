@@ -44,6 +44,13 @@ public enum SyntaxKind : ushort
     MultilineStringLiteralToken = 105,
     RawStringLiteralToken = 106,
 
+    // Pieces an interpolated string is rebuilt from by the parser.
+    InterpolatedStringStartToken = 107,
+    InterpolatedTextToken = 108,
+    InterpolationStartToken = 109,
+    InterpolationEndToken = 110,
+    InterpolatedStringEndToken = 111,
+
     // ---- Punctuation ------------------------------------------------------
     OpenParenToken = 200,           // (
     CloseParenToken = 201,          // )
@@ -276,6 +283,9 @@ public enum SyntaxKind : ushort
     MatchCaseBlock = 1138,
     PatternWhereClause = 1139,
     ImplicitParameterExpression = 1140,
+    InterpolatedStringExpression = 1141,
+    InterpolatedText = 1142,
+    Interpolation = 1143,
 
     // ---- Pattern nodes (1200-1299) ----------------------------------------
     WildcardPattern = 1200,

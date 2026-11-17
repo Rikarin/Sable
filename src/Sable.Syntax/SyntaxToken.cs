@@ -11,9 +11,14 @@ public enum StringPartKind { Literal, Interpolation }
 /// span of an interpolation hole, which the parser re-enters recursively.
 /// </summary>
 /// <remarks>
-/// Inside a green token the <see cref="Span"/> is relative to the start of the
-/// token's text. <see cref="SyntaxToken.Parts"/> returns copies whose spans
-/// have been offset to absolute positions.
+/// <para>Inside a green token the <see cref="Span"/> is relative to the start
+/// of the token's text. <see cref="SyntaxToken.Parts"/> returns copies whose
+/// spans have been offset to absolute positions.</para>
+/// <para>The spans tile the token's text: a literal part spans its raw
+/// characters, and an interpolation spans the whole hole including
+/// <c>\(</c> and <c>)</c>, while its <see cref="Text"/> is just the
+/// expression inside. That is what lets the parser rebuild the token as a
+/// node without losing a character.</para>
 /// </remarks>
 public sealed record StringPart(StringPartKind Kind, string Text, TextSpan Span)
 {
@@ -101,9 +106,10 @@ public readonly struct SyntaxToken : IEquatable<SyntaxToken>
             var builder = ImmutableArray.CreateBuilder<StringPart>(_green.Parts.Length);
             foreach (var part in _green.Parts)
             {
-                builder.Add(part.Kind == StringPartKind.Interpolation
-                    ? part with { Span = new TextSpan(part.Span.Start + start, part.Span.Length) }
-                    : part);
+                builder.Add(part with
+                {
+                    Span = new TextSpan(part.Span.Start + start, part.Span.Length),
+                });
             }
             return builder.MoveToImmutable();
         }

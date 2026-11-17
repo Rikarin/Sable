@@ -3,6 +3,9 @@
     <OutputType>Exe</OutputType>
     <RootNamespace>Sable.Driver</RootNamespace>
     <AssemblyName>sable</AssemblyName>
+    <!-- A build parses, binds and lowers on every core at once, allocating as it
+         goes: the server collector keeps up with that (docs/04, incremental builds). -->
+    <ServerGarbageCollection>true</ServerGarbageCollection>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../Sable.CodeGen/Sable.CodeGen.csproj" />

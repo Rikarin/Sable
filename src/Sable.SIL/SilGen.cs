@@ -109,9 +109,7 @@ public sealed partial class SilGen {
     /// <summary>A file's declarations that lowering looks at — and perhaps other nodes, which each use filters out.</summary>
     IEnumerable<SyntaxNode> Declarations(SyntaxTree tree) => _program?.Declarations(tree, _unit is null || _unit.Owns(tree)) ?? tree.Root.DescendantNodes();
 
-    static void P(System.Diagnostics.Stopwatch w, string what) { if (Environment.GetEnvironmentVariable("SABLE_PROF") is not null) { Console.Error.WriteLine($"  {what} {w.Elapsed.TotalMilliseconds:0.0}"); } w.Restart(); }
     void LowerAll() {
-        var pw = System.Diagnostics.Stopwatch.StartNew();
         var functions = new List<(FunctionSymbol Symbol, SyntaxNode Syntax, SemanticModel Model)>();
 
         foreach (var tree in _compilation.SyntaxTrees) {
@@ -143,11 +141,8 @@ public sealed partial class SilGen {
             }
         }
 
-        P(pw, "collect");
         AddDerived(functions);
-        P(pw, "derived");
         CheckBuiltins();
-        P(pw, "builtins");
 
         // Overloads: functions of one name in one container (counted once per
         // pair, not by a scan per function — a large program has thousands).
@@ -187,13 +182,11 @@ public sealed partial class SilGen {
             ).Symbol
             ?? functions.FirstOrDefault(static f => f.Symbol is { Name: "main", ContainingSymbol: ModuleSymbol }).Symbol;
 
-        P(pw, "names+inherited");
         foreach (var (symbol, syntax, model) in functions) {
             _declarations[symbol] = (syntax, model);
         }
 
         DeclareGlobals();
-        P(pw, "globals");
         _entrySymbol = entry;
 
         // What is not generic is lowered as it is; what is, once for each set
@@ -231,7 +224,6 @@ public sealed partial class SilGen {
             }
         }
 
-        P(pw, "first loop");
         while (_pending.Count > 0) {
             var (symbol, name, type, substitution) = _pending.Dequeue();
             var (syntax, model) = _declarations[symbol];
@@ -243,11 +235,8 @@ public sealed partial class SilGen {
             LowerGlobalLifetimes();
         }
 
-        P(pw, "pending+globals");
         BuildVTables();
-        P(pw, "vtables");
         RootChecker.Check(_module, _sources, _diagnostics);
-        P(pw, "roots");
         if (_module.Unit is { } unitInfo) {
             RecordAbi(unitInfo);
         }

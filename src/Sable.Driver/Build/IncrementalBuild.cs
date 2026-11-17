@@ -29,7 +29,10 @@ public sealed record BuildSettings(string Profile, bool Optimise, string? DebugD
     ///     runs no SIL passes and no link-time optimisation. Otherwise the
     ///     program is compiled whole, and only an unchanged build is skipped.
     /// </summary>
-    public bool Separate => Debug;
+    public bool Separate => Debug && !Whole;
+
+    /// <summary>Compile the program whole even where it could be compiled separately: what a separate build is checked against.</summary>
+    public bool Whole { get; init; }
 }
 
 /// <summary>What a build did.</summary>
@@ -104,7 +107,7 @@ public static class IncrementalBuild {
             _ = Toolchain;
         }
 
-        var settingsKey = $"{CacheVersion}|{Toolchain}|{settings.Profile}|opt={settings.Optimise}|debug={settings.DebugDirectory}|exclusivity={settings.Exclusivity}";
+        var settingsKey = $"{CacheVersion}|{Toolchain}|{settings.Profile}|opt={settings.Optimise}|debug={settings.DebugDirectory}|exclusivity={settings.Exclusivity}|whole={settings.Whole}";
 
         // ---- Read and hash every file --------------------------------------
         string[][] texts;
@@ -142,16 +145,9 @@ public static class IncrementalBuild {
         var program = trees.SelectMany(static t => t).ToList();
         var library = Library.For(program);
 
-        BuildOutcome outcome;
-        if (settings.Separate && SpansUnits(trees, library) is null) {
-            outcome = Separately(units, trees, fileHashes, library, settings, settingsKey, executable, cacheDirectory, timings, log);
-        } else {
-            if (settings.Separate && SpansUnits(trees, library) is { } module) {
-                log?.WriteLine($"note: module '{module}' is declared by more than one package, so the program is compiled whole");
-            }
-
-            outcome = Whole(program, settings, executable, timings);
-        }
+        var outcome = settings.Separate
+            ? Separately(units, trees, fileHashes, library, settings, settingsKey, executable, cacheDirectory, timings, log)
+            : Whole(program, settings, executable, timings);
 
         if (outcome.Succeeded) {
             using var _ = BuildTimings.Of(timings, "record");
@@ -214,33 +210,6 @@ public static class IncrementalBuild {
             ? new(true, [], "whole", 1, 0)
             : BuildOutcome.Failed([$"internal error: the native build failed:\n{native.Output}"]);
     }
-
-    /// <summary>
-    ///     A module more than one unit declares, or null: separately, each unit
-    ///     would mangle its part of the module without seeing the rest.
-    /// </summary>
-    static string? SpansUnits(SyntaxTree[][] units, IReadOnlyList<SyntaxTree> library) {
-        var owner = new Dictionary<string, int>(StringComparer.Ordinal);
-        foreach (var tree in library.Concat(CoreLibrary.Trees)) {
-            owner[ModuleOf(tree)] = -1;
-        }
-
-        for (var i = 0; i < units.Length; i++) {
-            foreach (var tree in units[i]) {
-                var module = ModuleOf(tree);
-                if (owner.TryGetValue(module, out var other) && other != i) {
-                    return module;
-                }
-
-                owner[module] = i;
-            }
-        }
-
-        return null;
-    }
-
-    static string ModuleOf(SyntaxTree tree) =>
-        tree.Root is CompilationUnitSyntax { Module: { } module } ? module.Name.ToString().Trim() : "";
 
     // =======================================================================
     // Separately

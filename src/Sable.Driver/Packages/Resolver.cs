@@ -115,6 +115,17 @@ public sealed class Resolver {
     readonly IReadOnlyDictionary<string, SemVersion> _preferred;
     readonly Dictionary<string, List<Incompatibility>> _incompatibilities = new(StringComparer.Ordinal);
     readonly Dictionary<(string, SemVersion), IReadOnlyList<(string Package, VersionReq Requirement)>> _dependencies = [];
+
+    /// <summary>A package's versions, asked of the source once: choosing asks for every undecided package's at every step.</summary>
+    readonly Dictionary<string, IReadOnlyList<SemVersion>> _versions = new(StringComparer.Ordinal);
+
+    IReadOnlyList<SemVersion> VersionsOf(string package) {
+        if (!_versions.TryGetValue(package, out var versions)) {
+            _versions[package] = versions = _source.Versions(package);
+        }
+
+        return versions;
+    }
     readonly HashSet<string> _prereleasesAllowed = new(StringComparer.Ordinal);
     readonly PartialSolution _solution = new();
 
@@ -282,11 +293,14 @@ public sealed class Resolver {
         }
 
         // The package with the fewest versions left: its conflicts show soonest.
-        var (package, set, candidates) = undecided
-            .Select(t => (t.Package, t.Set, Candidates: Candidates(t.Package, t.Set)))
-            .OrderBy(static c => c.Candidates.Count)
+        // Counted without building each list: only the chosen one's is needed.
+        var (package, set) = undecided
+            .Select(t => (t.Package, t.Set, Count: CandidateCount(t.Package, t.Set)))
+            .OrderBy(static c => c.Count)
             .ThenBy(static c => c.Package, StringComparer.Ordinal)
+            .Select(static c => (c.Package, c.Set))
             .First();
+        var candidates = Candidates(package, set);
 
         if (candidates.Count == 0) {
             AddIncompatibility(new(
@@ -315,12 +329,29 @@ public sealed class Resolver {
             return set.Contains(_rootVersion) ? [_rootVersion] : [];
         }
 
-        var all = _source.Versions(package).Where(set.Contains).ToList();
+        var all = VersionsOf(package).Where(set.Contains).ToList();
         var allowPrerelease = _prereleasesAllowed.Contains(package);
         return [
             ..all.Where(v => !v.IsPrerelease).OrderDescending(),
             ..all.Where(v => v.IsPrerelease && (allowPrerelease || _preferred.GetValueOrDefault(package) == v)).OrderDescending(),
         ];
+    }
+
+    /// <summary>How many <see cref="Candidates" /> there are.</summary>
+    int CandidateCount(string package, VersionSet set) {
+        if (package == _root) {
+            return set.Contains(_rootVersion) ? 1 : 0;
+        }
+
+        var allowPrerelease = _prereleasesAllowed.Contains(package);
+        var count = 0;
+        foreach (var version in VersionsOf(package)) {
+            if (set.Contains(version) && (!version.IsPrerelease || allowPrerelease || _preferred.GetValueOrDefault(package) == version)) {
+                count++;
+            }
+        }
+
+        return count;
     }
 
     IReadOnlyList<(string Package, VersionReq Requirement)> DependenciesOf(string package, SemVersion version) {
@@ -337,7 +368,7 @@ public sealed class Resolver {
     ///     so an explanation can say "image 0.6.x depends on …".
     /// </summary>
     IEnumerable<Incompatibility> DependencyIncompatibilities(string package, SemVersion version) {
-        var all = package == _root ? [_rootVersion] : _source.Versions(package).Order().ToList();
+        var all = package == _root ? [_rootVersion] : VersionsOf(package).Order().ToList();
         var index = all.IndexOf(version);
         foreach (var (dependency, requirement) in DependenciesOf(package, version)) {
             if (requirement.MentionsPrerelease) {

@@ -238,6 +238,21 @@ public static class IncrementalBuild {
         var standard = new Unit("std", [..library, ..CoreLibrary.Trees], Hash(string.Join("\n", library.Select(static t => t.Text.FileName))));
         units.Add(standard);
 
+        // Binding the program's declarations — every unit compiled needs them —
+        // runs while the interface is fingerprinted: a body changed, or the
+        // build would not have got this far, so something is likely compiled.
+        // (A compilation is used by one thread at a time: this one, then the
+        // build's, once it has waited for it.)
+        var program = trees.SelectMany(static t => t).ToList();
+        var binding = Task.Run(() => {
+            var started = System.Diagnostics.Stopwatch.GetTimestamp();
+            var created = Compilation.Create([..program, ..library]);
+            created.GetDiagnostics();
+            timings?.Add("declarations (alongside)", System.Diagnostics.Stopwatch.GetElapsedTime(started));
+            return created;
+        });
+        var indexing = Task.Run(() => SilProgram.Index([..program, ..library, ..CoreLibrary.Trees]));
+
         // ---- The program's interface ----------------------------------------
         string programInterface;
         using (BuildTimings.Of(timings, "interface")) {
@@ -270,11 +285,10 @@ public static class IncrementalBuild {
         var compiling = new List<(Unit Unit, Task<NativeBuildResult> Task)>();
         using var throttle = new SemaphoreSlim(Environment.ProcessorCount);
         if (stale.Count > 0) {
-            var program = trees.SelectMany(static t => t).ToList();
             Compilation compilation;
             List<string> errors;
             using (BuildTimings.Of(timings, "bind")) {
-                compilation = Compilation.Create([..program, ..library]);
+                compilation = binding.Result;
                 errors = Errors(compilation, program, stale.SelectMany(static u => u.Trees).ToHashSet());
             }
 
@@ -282,7 +296,7 @@ public static class IncrementalBuild {
                 return BuildOutcome.Failed(errors);
             }
 
-            var index = timings is null ? SilProgram.Index(compilation.SyntaxTrees) : timings.Measure("index", () => SilProgram.Index(compilation.SyntaxTrees));
+            var index = indexing.Result;
             foreach (var unit in stale) {
                 var owned = unit.Trees.ToHashSet();
                 SilModule module;

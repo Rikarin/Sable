@@ -196,12 +196,12 @@ public sealed partial class SilGen {
                 continue;
             }
 
-            if (SignatureOf(symbol, syntax, TypeSubstitution.Empty) is not { } type) {
+            if (_unit is not null && !_unit.Owns(model.SyntaxTree)) {
+                DeclareExternal(symbol, syntax, _names[symbol]);
                 continue;
             }
 
-            if (_unit is not null && !_unit.Owns(model.SyntaxTree)) {
-                DeclareExternal(symbol, syntax, _names[symbol], type);
+            if (SignatureOf(symbol, syntax, TypeSubstitution.Empty) is not { } type) {
                 continue;
             }
 
@@ -238,8 +238,29 @@ public sealed partial class SilGen {
         BuildVTables();
         RootChecker.Check(_module, _sources, _diagnostics);
         if (_module.Unit is { } unitInfo) {
+            DeclareReferenced(unitInfo);
             RecordAbi(unitInfo);
         }
+    }
+
+    /// <summary>
+    ///     Functions other units define, by name, with how to work out the
+    ///     signature each will have there — worked out only for those this
+    ///     unit refers to, since a large program has thousands.
+    /// </summary>
+    readonly Dictionary<string, Func<FunctionType?>> _external = new(StringComparer.Ordinal);
+
+    readonly Dictionary<string, FunctionType?> _externalTypes = new(StringComparer.Ordinal);
+
+    /// <summary>The signature of a function another unit defines, or null when there is none to call.</summary>
+    FunctionType? External(string name) {
+        if (_externalTypes.TryGetValue(name, out var known)) {
+            return known;
+        }
+
+        var type = _external.TryGetValue(name, out var signature) ? signature() : null;
+        _externalTypes[name] = type;
+        return type;
     }
 
     /// <summary>
@@ -247,7 +268,7 @@ public sealed partial class SilGen {
     ///     define it — with the side effects lowering it would have had on the
     ///     types (a deinit), so that every unit lays them out alike.
     /// </summary>
-    void DeclareExternal(FunctionSymbol symbol, SyntaxNode syntax, string name, FunctionType type) {
+    void DeclareExternal(FunctionSymbol symbol, SyntaxNode syntax, string name) {
         // LowerBody makes nothing of a declaration without a body.
         var hasBody = syntax switch {
             FunctionDeclarationSyntax f => f.Body is not null || f.ExpressionBody is not null,
@@ -261,15 +282,16 @@ public sealed partial class SilGen {
             return;
         }
 
-        var external = _module.Unit!.External;
-        if (symbol.FunctionKind == FunctionKind.Initializer && type.Result is ClassType) {
-            external[name] = type;
-            external[InitializerName(name)] = InitializerType(type);
-            return;
+        // As the first loop would: no signature, nothing lowered.
+        FunctionType? Signature() => SignatureOf(symbol, syntax, TypeSubstitution.Empty);
+        _external[name] = Signature;
+
+        // A class's initialiser is two functions: the allocator, and the half that initialises.
+        if (symbol.FunctionKind == FunctionKind.Initializer) {
+            _external[InitializerName(name)] = () => External(name) is { Result: ClassType } allocator ? InitializerType(allocator) : null;
         }
 
-        external[name] = type;
-        if (symbol.FunctionKind == FunctionKind.Deinitializer) {
+        if (symbol.FunctionKind == FunctionKind.Deinitializer && External(name) is not null) {
             switch (Lower(SelfType(symbol, TypeSubstitution.Empty))) {
                 case ClassType owner:
                     owner.Deinit = name;
@@ -277,6 +299,43 @@ public sealed partial class SilGen {
                 case StructType owner:
                     owner.Deinit = name;
                     break;
+            }
+        }
+    }
+
+    /// <summary>
+    ///     Records the signature of every function of another unit this one
+    ///     refers to — by a call, a reference, a vtable or a deinit — for the
+    ///     verifier and the code generator.
+    /// </summary>
+    void DeclareReferenced(SilUnitInfo info) {
+        var referenced = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var function in _module.Functions) {
+            foreach (var block in function.Blocks) {
+                foreach (var instruction in block.Instructions) {
+                    if (instruction is FunctionRefInst reference) {
+                        referenced.Add(reference.Function);
+                    }
+                }
+            }
+        }
+
+        foreach (var type in _classes.Keys) {
+            referenced.UnionWith(type.VTable.Select(static m => m.Function));
+            if (type.Deinit is { } deinit) {
+                referenced.Add(deinit);
+            }
+        }
+
+        foreach (var type in _module.Types.OfType<StructType>()) {
+            if (type.Deinit is { } deinit) {
+                referenced.Add(deinit);
+            }
+        }
+
+        foreach (var name in referenced) {
+            if (_module.Find(name) is null && External(name) is { } type) {
+                info.External[name] = type;
             }
         }
     }
@@ -603,7 +662,7 @@ public sealed partial class SilGen {
                 }
 
                 if (method is not { FunctionKind: FunctionKind.Ordinary, IsStatic: false } || method.ContainingSymbol is not NamedTypeSymbol
-                    || !_names.TryGetValue(method, out var name) || _module.Find(name) is null && _module.Unit?.External.ContainsKey(name) != true) {
+                    || !_names.TryGetValue(method, out var name) || _module.Find(name) is null && (_unit is null || External(name) is null)) {
                     continue;
                 }
 

@@ -31,7 +31,7 @@ public static class PackageBuilder {
         : workspace.Members;
 
     internal static PackageGraph Resolve(Workspace workspace, PackageEnvironment environment, BuildRequest request) =>
-        PackageGraph.Resolve(workspace, environment, new(request.Features, null, request.Locked, [..Selected(workspace, request.Package).Select(static m => m.Name)]));
+        PackageGraph.ResolveCached(workspace, environment, new(request.Features, null, request.Locked, [..Selected(workspace, request.Package).Select(static m => m.Name)]));
 
     /// <summary>
     ///     The trees of one target: the binary's entry file first (where the
@@ -157,6 +157,10 @@ public static class PackageBuilder {
     public static IReadOnlyList<BuiltBinary>? Build(Workspace workspace, PackageEnvironment environment, BuildRequest request) {
         var clock = Stopwatch.StartNew();
         var timings = request.Timings ? new BuildTimings() : null;
+
+        // What the build cache is keyed by — the compiler's assemblies, clang's
+        // version — is worked out while the packages are resolved.
+        _ = Task.Run(() => IncrementalBuild.Toolchain);
         PackageGraph graph;
         using (BuildTimings.Of(timings, "resolve")) {
             graph = Resolve(workspace, environment, request);
@@ -194,7 +198,7 @@ public static class PackageBuilder {
             }
 
             foreach (var bin in bins) {
-                if (!(timings is null ? NativeBuild.IsAvailable() : timings.Measure("find clang", NativeBuild.IsAvailable))) {
+                if (!NativeObjects.CompilerAvailable) {
                     environment.Error.WriteLine($"error: cannot run '{NativeBuild.CompilerPath}'; set CC to a clang that can link for this platform");
                     return null;
                 }

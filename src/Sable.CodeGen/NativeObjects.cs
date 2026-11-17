@@ -14,12 +14,17 @@ public static class NativeObjects {
     /// </summary>
     public static string CompilerIdentity => Identity.Value;
 
+    /// <summary>Whether the C compiler runs: <see cref="NativeBuild.IsAvailable" />, from the same one question.</summary>
+    public static bool CompilerAvailable => !Identity.Value.EndsWith(Unavailable, StringComparison.Ordinal);
+
+    const string Unavailable = ": unavailable";
+
     static readonly Lazy<string> Identity = new(() => {
         try {
             var (exitCode, output) = Run(NativeBuild.CompilerPath, ["--version"]);
-            return exitCode == 0 ? $"{NativeBuild.CompilerPath}\n{output}" : $"{NativeBuild.CompilerPath}: unavailable";
+            return exitCode == 0 ? $"{NativeBuild.CompilerPath}\n{output}" : NativeBuild.CompilerPath + Unavailable;
         } catch (System.ComponentModel.Win32Exception) {
-            return $"{NativeBuild.CompilerPath}: unavailable";
+            return NativeBuild.CompilerPath + Unavailable;
         }
     });
 

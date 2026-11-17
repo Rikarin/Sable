@@ -55,7 +55,7 @@ public sealed record ResolvedPackage(
 ///     A workspace with its dependencies resolved, the lock file brought up to
 ///     date, and every package's source on disk — what a build compiles.
 /// </summary>
-public sealed class PackageGraph {
+public sealed partial class PackageGraph {
     readonly SourceStore _store;
 
     PackageGraph(Workspace workspace, IReadOnlyDictionary<string, ResolvedPackage> packages, LockFile lockFile, SourceStore store) {

@@ -26,6 +26,16 @@ internal sealed class Conversions(CoreTypes core)
         if (sourceIsLiteral && IsLiteralCompatible(source, target))
             return ConversionKind.LiteralTyping;
 
+        // An array literal has no storage kind of its own, so it fits any of
+        // them as long as the elements match.
+        if (sourceIsLiteral
+            && source is ArrayTypeSymbol sourceArray
+            && target is ArrayTypeSymbol targetArray
+            && sourceArray.ElementType.Equals(targetArray.ElementType))
+        {
+            return ConversionKind.LiteralTyping;
+        }
+
         if (target is OptionalTypeSymbol optional)
         {
             if (source.Equals(optional.UnderlyingType)) return ConversionKind.OptionalWrap;

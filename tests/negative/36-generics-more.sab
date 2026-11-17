@@ -48,7 +48,7 @@ fn aNestedCallStillChecks(_ b: Box<Int>) -> Box<Int> {
 }
 
 fn aTypeParameterIsNotAValue<T>(_ value: T) -> Int {
-    return T                            //! S2002 no symbol named 'T'
+    return T                            //! S3004 expected 'Int' but found 'T'
 }
 
 fn aMethodTypeParameterIsSeparate<T>(_ b: Box<T>) -> T {
@@ -75,4 +75,27 @@ fn genericWithDefaultArgument<T>(_ value: T, _ times: Int = 1) -> Int {
 
 fn callingItWithoutTheDefault(_ p: Person) -> Int {
     return genericWithDefaultArgument(p)
+}
+
+fn aTypeParameterReachesStaticMembers<T: Makeable>(_ ignored: T) -> T {
+    return T.make()
+}
+
+public protocol Makeable {
+    static fn make() -> Self
+}
+
+fn anUnconstrainedParameterHasNone<T>(_ ignored: T) -> T {
+    return T.make()                     //! S2002 has no member named 'make'
+}
+
+fn theResultSettlesAParameter() -> Int? {
+    return pick()
+}
+
+fn pick<T>() -> T? { return none }
+
+fn andIsStillChecked() -> String {
+    let value: Int? = pick()
+    return value                        //! S3004 expected 'String'
 }

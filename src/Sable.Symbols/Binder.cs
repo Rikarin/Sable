@@ -1202,7 +1202,7 @@ public sealed class Binder
         MemberAccessExpressionSyntax member => BindMemberAccess(member),
         ImplicitMemberAccessExpressionSyntax implicitMember =>
             BindImplicitMemberAccess(implicitMember, expectedType),
-        InvocationExpressionSyntax invocation => BindInvocation(invocation),
+        InvocationExpressionSyntax invocation => BindInvocation(invocation, expectedType),
         ElementAccessExpressionSyntax element => BindElementAccess(element),
         BinaryExpressionSyntax binary => BindBinary(binary),
         PrefixUnaryExpressionSyntax unary => BindPrefixUnary(unary),
@@ -1359,6 +1359,14 @@ public sealed class Binder
         var coreMembers = Core.Module.GetMembers(name).ToList();
         if (coreMembers.Count > 0) return BindMemberGroup(syntax, null, coreMembers, null);
 
+        // A type parameter can be named, to reach a static member through
+        // what it is constrained to: 'T.decode(from: reader)'.
+        if (_compilation.TypeBinder.Lookup(name, _containingSymbol, _scope, syntax.Span)
+            is TypeParameterSymbol named)
+        {
+            return new BoundTypeExpression(syntax, named);
+        }
+
         _diagnostics.Error(ErrorCode.ERR_NameNotFound, syntax.Span,
             $"no symbol named '{name}' is in scope");
         return new BoundError(syntax);
@@ -1433,25 +1441,25 @@ public sealed class Binder
         {
             if (name == "self") return new BoundTypeExpression(syntax, typeExpression.Type);
 
-            if (typeExpression.ReferencedType is NamedTypeSymbol namedType)
+            // A type parameter reaches the static members of its constraints,
+            // so the lookup is the same one a value uses.
+            if (LookupMember(typeExpression.ReferencedType, name) is { } onType)
             {
-                var members = namedType.GetMembers(name).ToList();
-                var statics = members.Where(IsStaticMember).ToList();
+                var statics = onType.Members.Where(IsStaticMember).ToList();
 
                 if (statics.Count > 0)
                 {
                     return CheckAccessible(statics[0], syntax.Name)
-                        ? BindMemberGroup(syntax, null, statics, namedType)
+                        ? BindMemberGroup(
+                            syntax, null, statics, onType.Owner, onType.Substitution)
                         : new BoundError(syntax, receiver);
                 }
 
-                if (members.Count > 0)
-                {
-                    _diagnostics.Error(ErrorCode.ERR_MemberAccessMismatch, syntax.Name.Span,
-                        $"'{name}' is an instance member of "
-                        + $"'{namedType.ToDisplayString()}', so it needs a value to read it from");
-                    return new BoundError(syntax, receiver);
-                }
+                _diagnostics.Error(ErrorCode.ERR_MemberAccessMismatch, syntax.Name.Span,
+                    $"'{name}' is an instance member of "
+                    + $"'{typeExpression.ReferencedType.ToDisplayString()}', "
+                    + "so it needs a value to read it from");
+                return new BoundError(syntax, receiver);
             }
 
             _diagnostics.Error(ErrorCode.ERR_NameNotFound, syntax.Name.Span,
@@ -1817,7 +1825,8 @@ public sealed class Binder
         return new BoundError(syntax);
     }
 
-    private BoundExpression BindInvocation(InvocationExpressionSyntax syntax)
+    private BoundExpression BindInvocation(
+        InvocationExpressionSyntax syntax, TypeSymbol? expectedType = null)
     {
         // A closure argument is left unbound: its parameter types come from
         // the signature that is chosen, which is not known yet.
@@ -1851,7 +1860,7 @@ public sealed class Binder
         switch (callee)
         {
             case BoundFunctionGroup group:
-                return BindCallToGroup(syntax, group, arguments, labels, syntaxes);
+                return BindCallToGroup(syntax, group, arguments, labels, syntaxes, expectedType);
 
             case BoundUnionCaseGroup unionCase:
                 return BindUnionCaseConstruction(syntax, unionCase, arguments, labels);
@@ -1901,7 +1910,7 @@ public sealed class Binder
                 }
 
                 var group = new BoundFunctionGroup(syntax, null, initializers);
-                return BindCallToGroup(syntax, group, arguments, labels, syntaxes);
+                return BindCallToGroup(syntax, group, arguments, labels, syntaxes, expectedType);
             }
 
             default:
@@ -2037,7 +2046,8 @@ public sealed class Binder
         BoundFunctionGroup group,
         ImmutableArray<BoundExpression> arguments,
         ImmutableArray<string?> labels,
-        ImmutableArray<ExpressionSyntax> syntaxes)
+        ImmutableArray<ExpressionSyntax> syntaxes,
+        TypeSymbol? expectedType = null)
     {
         var outer = group.Substitution ?? TypeSubstitution.Empty;
         var resolved = ResolveOverload(group.Candidates, arguments, labels, syntax, outer);
@@ -2106,6 +2116,22 @@ public sealed class Binder
             converted.Add(Convert(arguments[i], wanted, arguments[i].Syntax));
         }
 
+        // A parameter that appears only in the result is settled by what the
+        // context asked for: 'let p: Point? = decodeOne(bytes)'.
+        if (expectedType is not null
+            && resolved.TypeParameters.Any(p => substitution.Lookup(p) is null))
+        {
+            var map = new Dictionary<TypeParameterSymbol, TypeSymbol>();
+            foreach (var parameter in resolved.TypeParameters)
+                if (substitution.Lookup(parameter) is { } bound) map[parameter] = bound;
+
+            TypeSubstitution.Unify(
+                resolved.ReturnType, expectedType, resolved.TypeParameters, map);
+
+            ExpandAssociated(resolved.TypeParameters, map);
+            substitution = Combine(outer, new TypeSubstitution(map));
+        }
+
         if (!resolved.TypeParameters.IsEmpty)
         {
             foreach (var typeParameter in resolved.TypeParameters)
@@ -2149,16 +2175,29 @@ public sealed class Binder
         var map = new Dictionary<TypeParameterSymbol, TypeSymbol>();
         for (var i = 0; i < arguments.Length && i < function.Parameters.Length; i++)
         {
+            var wanted = outer.Apply(function.Parameters[i].Type);
+
             TypeSubstitution.Unify(
-                outer.Apply(function.Parameters[i].Type),
-                arguments[i].Type,
-                function.TypeParameters,
-                map);
+                wanted, AdaptForInference(wanted, arguments[i]), function.TypeParameters, map);
         }
 
         ExpandAssociated(function.TypeParameters, map);
         return new TypeSubstitution(map);
     }
+
+    /// <summary>
+    /// An argument's type as inference should see it.
+    /// </summary>
+    /// <remarks>
+    /// An array literal's storage kind comes from the context, so it must not
+    /// be the thing that stops a parameter being inferred.
+    /// </remarks>
+    private static TypeSymbol AdaptForInference(TypeSymbol parameter, BoundExpression argument) =>
+        parameter is ArrayTypeSymbol wanted
+        && argument is BoundArray { Type: ArrayTypeSymbol actual }
+        && actual.ArrayKind != wanted.ArrayKind
+            ? new ArrayTypeSymbol(actual.ElementType, wanted.ArrayKind)
+            : argument.Type;
 
     /// <summary>
     /// Once a constrained parameter is known, so are its associated types.
@@ -2338,8 +2377,15 @@ public sealed class Binder
         return cost;
     }
 
+    /// <summary>
+    /// True for an expression whose type the context may still decide.
+    /// </summary>
+    /// <remarks>
+    /// A numeric literal has no type until something asks for one, and an
+    /// array literal has no storage kind; both bend to fit.
+    /// </remarks>
     private static bool IsLiteral(BoundExpression expression) =>
-        expression is BoundLiteral;
+        expression is BoundLiteral or BoundArray or BoundDictionary;
 
     private BoundExpression BindElementAccess(ElementAccessExpressionSyntax syntax)
     {

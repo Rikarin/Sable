@@ -368,9 +368,15 @@ internal static class ConformanceChecker
     private static TypeSymbol SubstituteSelf(
         TypeSymbol type, NamedTypeSymbol protocol, NamedTypeSymbol conformer)
     {
-        if (type.Equals(protocol)) return conformer;
+        // 'Self' is the conforming type as it names itself, which for a
+        // generic conformer means with its own parameters applied.
+        var asItself = conformer.TypeParameters.IsEmpty
+            ? conformer
+            : conformer.Construct([.. conformer.TypeParameters.Cast<TypeSymbol>()]);
+
+        if (type.Equals(protocol)) return asItself;
         if (protocol.SelfTypeParameter is { } self && ReferenceEquals(type, self))
-            return conformer;
+            return asItself;
 
         if (type is TypeParameterSymbol parameter
             && protocol.AssociatedTypes.Contains(parameter))

@@ -82,7 +82,7 @@ public sealed class DataFlowCorpusTests
             data.Add(new Case("var total = 0\nwhile total < n { total = total + 1 }", 1,
                 Read: "total,n", Written: "total", In: "total,n"));
             data.Add(new Case("var total = 0\nfor i in xs { total = total + i }", 1,
-                Declared: "i", Read: "xs,total,i", Written: "total", In: "xs,total"));
+                Declared: "i", Read: "xs,total,i", Written: "total,i", In: "xs,total"));
 
             // ---- Closures -------------------------------------------------------
             data.Add(new Case("let f = () => { return n }", 0,
@@ -99,9 +99,92 @@ public sealed class DataFlowCorpusTests
             data.Add(new Case("let a = match n { case 1 => n default => 0 }", 0,
                 Declared: "a", Read: "n", Written: "a", In: "n"));
 
+            // ---- Operators ---------------------------------------------------------
+            data.Add(new Case("let a = n + n", 0, Declared: "a", Read: "n", Written: "a", In: "n"));
+            data.Add(new Case("let a = -n", 0, Declared: "a", Read: "n", Written: "a", In: "n"));
+            data.Add(new Case("let a = !(n > 0)", 0,
+                Declared: "a", Read: "n", Written: "a", In: "n"));
+            data.Add(new Case("let a = n > 0 && n < 9", 0,
+                Declared: "a", Read: "n", Written: "a", In: "n"));
+            data.Add(new Case("let a = n > 0 ? n : 0", 0,
+                Declared: "a", Read: "n", Written: "a", In: "n"));
+            data.Add(new Case("let a = n as I64", 0,
+                Declared: "a", Read: "n", Written: "a", In: "n"));
+            data.Add(new Case("let a = n is Int", 0,
+                Declared: "a", Read: "n", Written: "a", In: "n"));
+
+            // ---- Compound shapes ----------------------------------------------------
+            data.Add(new Case("let a = (n, n)", 0,
+                Declared: "a", Read: "n", Written: "a", In: "n"));
+            data.Add(new Case("let a = [n, n]", 0,
+                Declared: "a", Read: "n", Written: "a", In: "n"));
+            data.Add(new Case("let a = [\"k\": n]", 0,
+                Declared: "a", Read: "n", Written: "a", In: "n"));
+            data.Add(new Case("let a = Point { x: n, y: n }", 0,
+                Declared: "a", Read: "n", Written: "a", In: "n"));
+            data.Add(new Case("let a = 0..<n", 0,
+                Declared: "a", Read: "n", Written: "a", In: "n"));
+            data.Add(new Case("let a = \"v: \\(n)\"", 0,
+                Declared: "a", Read: "n", Written: "a", In: "n"));
+
+            // ---- Reading through things --------------------------------------------
+            data.Add(new Case("let a = p.x + p.y", 0,
+                Declared: "a", Read: "p", Written: "a", In: "p"));
+            data.Add(new Case("let a = xs[n]", 0,
+                Declared: "a", Read: "xs,n", Written: "a", In: "xs,n"));
+            data.Add(new Case("var q = p\nq.x = n", 1,
+                Read: "n", Written: "q", In: "n"));
+
+            // ---- Several statements at once ----------------------------------------
+            data.Add(new Case("var a = 0\nvar b = 0\na = b", 2,
+                Read: "b", Written: "a", In: "b"));
+            data.Add(new Case("var a = 0\nvar b = 0\nb = a\nlet c = b", 2,
+                Read: "a", Written: "b", In: "a", Out: "b"));
+            data.Add(new Case("var a = 0\nif n > 0 { a = 1 } else { a = 2 }", 1,
+                Read: "n", Written: "a", In: "n"));
+
+            // ---- Loops in more shapes ----------------------------------------------
+            data.Add(new Case("var a = 0\nfor i in 0..<n { a = a + i }", 1,
+                Declared: "i", Read: "n,a,i", Written: "a,i", In: "n,a"));
+            data.Add(new Case("var a = 0\nfor i in xs where i > 0 { a = a + i }", 1,
+                Declared: "i", Read: "xs,a,i", Written: "a,i", In: "xs,a"));
+            data.Add(new Case("var a = 0\nrepeat { a = a + 1 } while a < n", 1,
+                Read: "a,n", Written: "a", In: "a,n"));
+            data.Add(new Case("var a = 0\nwhile a < n { a = a + 1 }\nlet b = a", 1,
+                Read: "a,n", Written: "a", In: "a,n", Out: "a"));
+
+            // ---- Conditions that bind ----------------------------------------------
+            data.Add(new Case("let m: Int? = n\nif let v = m { use(v) }", 1,
+                Declared: "v", Read: "m,v", Written: "v", In: "m"));
+            data.Add(new Case("let m: Int? = n\nguard let v = m else { return 0 }", 1,
+                Declared: "v", Read: "m", Written: "v", In: "m"));
+
+            // ---- Patterns -----------------------------------------------------------
+            data.Add(new Case("match n { case let k => { use(k) } }", 0,
+                Declared: "k", Read: "n,k", Written: "k", In: "n"));
+            data.Add(new Case("let t = pair()\nmatch t { case (let a, let b) => { use(a) } }", 1,
+                Declared: "a,b", Read: "t,a", Written: "a,b", In: "t"));
+
+            // ---- Closures -----------------------------------------------------------
+            data.Add(new Case("let f = (k: Int) => { return k + n }", 0,
+                Declared: "f,k", Read: "n,k", Written: "f,k", In: "n", Captured: "n"));
+            data.Add(new Case("let f = () => { let inner = n\nreturn inner }", 0,
+                Declared: "f,inner", Read: "n,inner", Written: "f,inner",
+                In: "n", Captured: "n"));
+            data.Add(new Case("var a = 0\nlet f = () => { return a + n }", 1,
+                Declared: "f", Read: "a,n", Written: "f", In: "a,n", Captured: "a,n"));
+
+            // ---- Local functions ------------------------------------------------------
+            data.Add(new Case("fn inner() -> Int { return n }", 0, Read: "n", In: "n"));
+
+            // ---- Defer and do ----------------------------------------------------------
+            data.Add(new Case("var a = 0\ndefer { a = 1 }", 1, Written: "a"));
+            data.Add(new Case("var a = 0\ndo { a = 1 } catch { a = 2 }", 1, Written: "a"));
+
             // ---- Nothing at all -----------------------------------------------------
             data.Add(new Case("let a = 1", 0, Declared: "a", Written: "a"));
             data.Add(new Case("use(1)", 0));
+            data.Add(new Case("return 0", 0));
 
             return data;
         }

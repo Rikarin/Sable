@@ -125,11 +125,11 @@ Phase 1's exit criteria, as docs/04 §1.4 states them:
 |---|---|
 | The full type system of `docs/03` is checked | done, bar `rethrows` |
 | ≥ 600 negative programs, each asserting code, span and message | 601, over 95 diagnostics |
-| `AnalyzeDataFlow` correct on a 300-case corpus | 25 cases so far |
+| `AnalyzeDataFlow` correct on a 300-case corpus | 59 cases so far |
 | Type-checking 100,000 lines in under 5 s | 0.93 s |
 | Go/no-go: 10,000 lines of real Sable | ~2,000 in `tests/corpus/` |
 
-**1,097 tests green**, and every file in [examples/](examples/) parses as a
+**1,131 tests green**, and every file in [examples/](examples/) parses as a
 complete compilation unit with no diagnostics and an exact round-trip.
 [tests/corpus/](tests/corpus/) holds programs that must type-check with
 nothing to say, and [tests/negative/](tests/negative/) holds programs that

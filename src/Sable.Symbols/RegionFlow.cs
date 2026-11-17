@@ -89,12 +89,15 @@ internal static class RegionFlow
 
             case BoundLocalAccess access:
                 read.Add(access.Local);
-                if (insideClosure) captured.Add(access.Local);
+                // A name the closure declared itself is not a capture.
+                if (insideClosure && !declared.Contains(access.Local))
+                    captured.Add(access.Local);
                 return;
 
             case BoundParameterAccess access:
                 read.Add(access.Parameter);
-                if (insideClosure) captured.Add(access.Parameter);
+                if (insideClosure && !declared.Contains(access.Parameter))
+                    captured.Add(access.Parameter);
                 return;
 
             case BoundAssignment assignment:
@@ -105,13 +108,27 @@ internal static class RegionFlow
                 {
                     case BoundLocalAccess target:
                         written.Add(target.Local);
-                        if (insideClosure) captured.Add(target.Local);
+                        if (insideClosure && !declared.Contains(target.Local))
+                            captured.Add(target.Local);
                         return;
+
                     case BoundParameterAccess target:
                         written.Add(target.Parameter);
-                        if (insideClosure) captured.Add(target.Parameter);
+                        if (insideClosure && !declared.Contains(target.Parameter))
+                            captured.Add(target.Parameter);
                         return;
+
                     default:
+                        // 'q.x = 1' writes q, since a struct's field is part
+                        // of it; the receiver itself is still evaluated.
+                        if (BaseBinding(assignment.Target) is { } owner)
+                        {
+                            written.Add(owner);
+                            if (insideClosure && !declared.Contains(owner))
+                                captured.Add(owner);
+                            return;
+                        }
+
                         Collect(
                             assignment.Target, declared, read, written, captured, insideClosure);
                         return;
@@ -119,6 +136,12 @@ internal static class RegionFlow
             }
 
             case BoundClosure closure:
+                foreach (var parameter in closure.Symbol.Parameters)
+                {
+                    declared.Add(parameter);
+                    written.Add(parameter);
+                }
+
                 foreach (var capture in closure.Captures)
                 {
                     if (capture.Initializer is { } value)
@@ -138,7 +161,27 @@ internal static class RegionFlow
                 return;
 
             case BoundForEach loop:
-                if (loop.Element is { } element) declared.Add(element);
+                if (loop.Element is { } element)
+                {
+                    declared.Add(element);
+                    written.Add(element);
+                }
+                break;
+
+            case BoundConditionBinding binding:
+                if (binding.Local is { } bound)
+                {
+                    declared.Add(bound);
+                    written.Add(bound);
+                }
+                if (binding.Pattern is { } conditionPattern)
+                    DeclarePattern(conditionPattern, declared, written);
+                break;
+
+            case BoundMatch match:
+                foreach (var arm in match.Arms)
+                    foreach (var pattern in arm.Patterns)
+                        DeclarePattern(pattern, declared, written);
                 break;
 
             case BoundBlock block:
@@ -148,6 +191,38 @@ internal static class RegionFlow
 
         foreach (var child in node.Children)
             Collect(child, declared, read, written, captured, insideClosure);
+    }
+
+    /// <summary>The binding a member or element access ultimately reads from.</summary>
+    private static Symbol? BaseBinding(BoundExpression expression) => expression switch
+    {
+        BoundLocalAccess local => local.Local,
+        BoundParameterAccess parameter => parameter.Parameter,
+        BoundFieldAccess { Receiver: { } receiver } => BaseBinding(receiver),
+        BoundIndexAccess index => BaseBinding(index.Receiver),
+        BoundTupleElementAccess tuple => BaseBinding(tuple.Receiver),
+        _ => null,
+    };
+
+    /// <summary>Records every name a pattern brings into scope.</summary>
+    private static void DeclarePattern(
+        BoundPattern pattern, List<Symbol> declared, List<Symbol> written)
+    {
+        switch (pattern)
+        {
+            case BoundBindingPattern binding:
+                declared.Add(binding.Local);
+                written.Add(binding.Local);
+                break;
+
+            case BoundTypeTestPattern { Local: { } tested }:
+                declared.Add(tested);
+                written.Add(tested);
+                break;
+        }
+
+        foreach (var child in pattern.Children)
+            if (child is BoundPattern nested) DeclarePattern(nested, declared, written);
     }
 
     /// <summary>Walks everything but the region, for what happens around it.</summary>

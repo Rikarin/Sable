@@ -217,6 +217,11 @@ public sealed class CoreTypes {
         Method(Runtime, "environment", [("name", String)], text, true);
         Method(Runtime, "argumentCount", [], Int, true);
         Method(Runtime, "argument", [("index", Int)], String, true);
+
+        // What Sable.Core's String conformances are written over: hashing and
+        // ordering by the UTF-8 bytes, in one call rather than a call per scalar.
+        Method(Runtime, "hashString", [("text", String)], Int, true);
+        Method(Runtime, "compareStrings", [("left", String), ("right", String)], Int, true);
     }
 
     /// <summary><c>Runtime</c>: the operating system's calls, which Sable.IO wraps.</summary>

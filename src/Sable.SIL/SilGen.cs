@@ -4957,6 +4957,8 @@ public sealed partial class SilGen {
                 "environment" => ("io_environment", SilType.String, true),
                 "argumentCount" => ("io_argument_count", SilType.Int, false),
                 "argument" => ("io_argument", SilType.String, false),
+                "hashString" => ("string_hash", SilType.Int, false),
+                "compareStrings" => ("string_compare", SilType.Int, false),
                 _ => (null!, SilType.Unit, false),
             };
 

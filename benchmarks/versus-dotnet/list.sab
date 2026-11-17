@@ -1,0 +1,36 @@
+module List
+
+// The growable array against .NET's List<long>: ten million appends, then
+// iteration by for-in and by index, then removing from the end; three times.
+
+@main
+fn main() {
+    var total = 0
+    var round = 0
+    while round < 3 {
+        var values: Int[>..] = []
+        var i = 0
+        while i < 10000000 {
+            values.append(i ^ round)
+            i = i + 1
+        }
+
+        for v in values {
+            total = total + v
+        }
+
+        i = 0
+        while i < values.count {
+            total = total + values[i] % 7
+            i = i + 1
+        }
+
+        while values.count > 5000000 {
+            total = total - values.removeLast()
+        }
+        total = total + values.count
+        round = round + 1
+    }
+
+    print(total)
+}

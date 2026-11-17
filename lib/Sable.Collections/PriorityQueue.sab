@@ -1,0 +1,90 @@
+module Sable.Collections
+
+/// The element that goes first, in logarithmic time: a binary heap in an
+/// array, each element ahead of — or level with — its two children. By
+/// default the smallest goes first; an initialiser takes the ordering
+/// instead, as a closure that says whether its first argument goes ahead
+/// of its second. Elements that tie come out in no particular order.
+public class PriorityQueue<Element: Comparable> {
+    var items: Element[>..] = []
+    var before: (Element, Element) -> Bool
+
+    /// Smallest first.
+    public init() {
+        before = (a: Element, b: Element) => a < b
+    }
+
+    /// First whatever 'before' puts ahead: '(a, b) => a > b' for largest first.
+    public init(by before: (Element, Element) -> Bool) {
+        self.before = before
+    }
+
+    public var count: Int { get { return items.count } }
+    public var isEmpty: Bool { get { return items.count == 0 } }
+
+    /// The element that goes first, left where it is; none when empty.
+    public fn peek() -> Element? {
+        if items.count == 0 {
+            return none
+        }
+        return items[0]
+    }
+
+    /// Adds the value: at the end, then up past every parent it goes ahead of.
+    public fn push(_ value: Element) {
+        items.append(value)
+        var child = items.count - 1
+        while child > 0 {
+            let parent = (child - 1) / 2
+            if !before(value, items[parent]) {
+                break
+            }
+            items[child] = items[parent]
+            child = parent
+        }
+        items[child] = value
+    }
+
+    /// Removes the element that goes first and gives it back; none when
+    /// empty. The last element takes its place and sinks to where it belongs.
+    public fn pop() -> Element? {
+        if items.count == 0 {
+            return none
+        }
+        let last = items.removeLast()
+        if items.count == 0 {
+            return last
+        }
+        let first = items[0]
+        let n = items.count
+        var parent = 0
+        while true {
+            var child = parent * 2 + 1
+            if child >= n {
+                break
+            }
+            if child + 1 < n && before(items[child + 1], items[child]) {
+                child = child + 1
+            }
+            if !before(items[child], last) {
+                break
+            }
+            items[parent] = items[child]
+            parent = child
+        }
+        items[parent] = last
+        return first
+    }
+
+    /// Removes every element.
+    public fn removeAll() {
+        items = []
+    }
+
+    /// The elements in the order they would come out, leaving the queue as it is.
+    public fn sortedElements() -> Element[>..] {
+        var result = items
+        sort(&result, by: before)
+        return result
+    }
+}

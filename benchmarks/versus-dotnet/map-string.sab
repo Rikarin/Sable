@@ -1,0 +1,49 @@
+module MapString
+
+// HashMap<String, Int> against .NET's Dictionary<string, long>: 200,000
+// distinct keys made by interpolation, inserted, looked up five times over,
+// half removed, and counted again.
+
+import Sable.Collections
+
+@main
+fn main() {
+    let n = 200000
+    var keys: String[>..] = []
+    var i = 0
+    while i < n {
+        keys.append("key-\(i * 7919 % 1000003)")
+        i = i + 1
+    }
+
+    let map = HashMap<String, Int>()
+    i = 0
+    while i < n {
+        map.set(keys[i], i)
+        i = i + 1
+    }
+
+    var sum = 0
+    var round = 0
+    while round < 5 {
+        for key in keys {
+            sum = sum + (map.get(key) ?? 0)
+        }
+        round = round + 1
+    }
+
+    i = 0
+    while i < n {
+        map.remove(keys[i])
+        i = i + 2
+    }
+
+    var hits = 0
+    for key in keys {
+        if map.contains(key) {
+            hits = hits + 1
+        }
+    }
+
+    print("\(map.count) \(sum) \(hits)")
+}

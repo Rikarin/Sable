@@ -104,29 +104,17 @@ extension F64: Comparable, Hashable {
 extension String: Comparable, Hashable {
     public operator == (lhs: String, rhs: String) -> Bool { return lhs == rhs }
 
-    /// By Unicode scalar, the first that differs deciding; a prefix comes first.
+    /// By Unicode scalar, the first that differs deciding; a prefix comes
+    /// first. UTF-8's byte order is the scalars' order, so the runtime
+    /// compares the bytes.
     public operator < (lhs: String, rhs: String) -> Bool {
-        let shorter = lhs.count < rhs.count ? lhs.count : rhs.count
-        var i = 0
-        while i < shorter {
-            let a = lhs.at(i).codePoint
-            let b = rhs.at(i).codePoint
-            if a != b {
-                return a < b
-            }
-            i = i + 1
-        }
-        return lhs.count < rhs.count
+        return Runtime.compareStrings(lhs, rhs) < 0
     }
 
+    /// From the UTF-8 bytes, in the runtime: a scalar at a time, in Sable,
+    /// costs a call per scalar and overflows on long strings.
     public fn hash() -> Int {
-        var h = 5381
-        var i = 0
-        while i < self.count {
-            h = (h * 33 + self.at(i).codePoint) % 2305843009213693951
-            i = i + 1
-        }
-        return h
+        return Runtime.hashString(self)
     }
 }
 

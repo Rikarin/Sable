@@ -40,7 +40,7 @@ This guarantees at most one conformance per pair, globally, which is what makes
 The escape hatch for the third-party case is a wrapper struct:
 
 ```sable
-struct JsonWrapper<T> : Serializable { let inner: T }
+struct JsonWrapper<T>: Serializable { let inner: T }
 ```
 
 ### Representation

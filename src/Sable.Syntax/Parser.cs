@@ -274,6 +274,9 @@ internal sealed class Parser
             SplitLeadingCharacter(SyntaxKind.GreaterToken, SyntaxKind.GreaterToken),
         SyntaxKind.GreaterGreaterEqualsToken =>
             SplitLeadingCharacter(SyntaxKind.GreaterToken, SyntaxKind.GreaterEqualsToken),
+        // 'List<Int>=x' with no spaces lexes the close bracket into '>='.
+        SyntaxKind.GreaterEqualsToken =>
+            SplitLeadingCharacter(SyntaxKind.GreaterToken, SyntaxKind.EqualsToken),
         _ => EatToken(SyntaxKind.GreaterToken),
     };
 
@@ -1240,6 +1243,7 @@ internal sealed class Parser
     private bool IsTypeArgumentListEnd() =>
         Current.Kind is SyntaxKind.GreaterToken
             or SyntaxKind.GreaterGreaterToken
+            or SyntaxKind.GreaterEqualsToken
             or SyntaxKind.GreaterGreaterEqualsToken;
 
     /// <summary>

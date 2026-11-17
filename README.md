@@ -96,9 +96,10 @@ dotnet test Sable.slnx
 | `Sable.Syntax` — conditional compilation | done |
 | `Sable.Syntax` — structured string interpolation | not started |
 | `Sable.Syntax` — incremental reparse | done |
+| `Sable.Syntax` — formatter | done |
 | Everything downstream (symbols, binder, SIL, codegen) | not started |
 
-**611 tests green**, and every file in [examples/](examples/) parses as a
+**646 tests green**, and every file in [examples/](examples/) parses as a
 complete compilation unit with no diagnostics and an exact round-trip.
 
 The lexer covers all of [spec/lexical.md](spec/lexical.md): full-fidelity
@@ -122,6 +123,10 @@ random token soup.
 a one-character edit in a 10,000-line file reparses in **under 2 ms**, against
 about 30 ms for a full parse. The contract is that the result is exactly the
 tree a full parse would have produced, and every incremental test asserts it.
+
+`SyntaxFormatter.Format` renders a tree as canonical source. It has no options,
+by design. Two properties are tested over the corpus rather than asserted on
+sample output: formatting is idempotent, and formatting never changes the tree.
 
 Not implemented yet, and deliberately so:
 

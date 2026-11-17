@@ -27,7 +27,7 @@ public union Geometry {
     Compound(parts: Geometry[>..])
 }
 
-extension Geometry : Shape {
+extension Geometry: Shape {
     public var area: F64 {
         get => match self {
             case .Circle(let r)            => F64.pi * r * r

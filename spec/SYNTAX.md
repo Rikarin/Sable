@@ -77,7 +77,7 @@ Inheritance/override control, Swift-style:
 
 ```sable
 public open class Widget { }        // may be subclassed outside the module
-public sealed class Button : Widget { }   // may not be subclassed further
+public sealed class Button: Widget { }   // may not be subclassed further
 public abstract class Shape { }     // cannot be instantiated
 ```
 
@@ -318,7 +318,7 @@ enum cases.
 ## 7. Classes
 
 ```sable
-public open class Document : Serializable, Equatable {
+public open class Document: Serializable, Equatable {
     public var title: String
     private var revisions: Revision[>..] = []
     public weak var owner: Workspace?
@@ -352,7 +352,7 @@ public open class Document : Serializable, Equatable {
 When two protocols collide, C#-style explicit implementation disambiguates:
 
 ```sable
-class Shape : Drawable, Printable {
+class Shape: Drawable, Printable {
     fn Drawable.render() -> Image { }
     fn Printable.render() -> Page { }
 }
@@ -385,7 +385,7 @@ public protocol Drawable where Self: Sized {
 ### Conformance
 
 ```sable
-struct Range : Collection {
+struct Range: Collection {
     typealias Element = Int
     typealias Index = Int
     var count: Int { get => upper - lower }
@@ -480,14 +480,14 @@ Simple, payload-free, with an underlying integer representation.
 ```sable
 public enum Direction { North, South, East, West }
 
-public enum Status : U8 {
+public enum Status: U8 {
     Pending = 0
     Active  = 1
     Closed  = 9
 }
 
 @flags
-public enum Permissions : U32 {
+public enum Permissions: U32 {
     None    = 0
     Read    = 1
     Write   = 2
@@ -514,7 +514,7 @@ extension String {
 }
 
 // retroactive conformance
-extension Vec3 : Serializable {
+extension Vec3: Serializable {
     fn encode(to e: inout Encoder) { e.write(x); e.write(y); e.write(z) }
 }
 
@@ -568,8 +568,8 @@ let p: any Producer<Animal> = DogProducer()     // legal: T is 'out'
 ### Conditional conformance
 
 ```sable
-extension Array<T> : Equatable where T: Equatable { }
-extension Optional<T> : Serializable where T: Serializable { }
+extension Array<T>: Equatable where T: Equatable { }
+extension Optional<T>: Serializable where T: Serializable { }
 ```
 
 ---

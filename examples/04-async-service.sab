@@ -16,7 +16,7 @@ public union ServiceError {
     Invalid(reason: String)
 }
 
-extension ServiceError : From<HttpError> {
+extension ServiceError: From<HttpError> {
     public static fn from(_ e: HttpError) -> ServiceError => .Upstream(e)
 }
 

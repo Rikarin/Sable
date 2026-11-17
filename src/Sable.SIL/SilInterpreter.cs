@@ -53,7 +53,11 @@ public sealed class SilInterpreter(SilModule module, int stepLimit = 10_000_000,
     }
 
     sealed class HeapString(string value) : Counted {
+        List<Rune>? _scalars;
         public string Value { get; } = value;
+
+        /// <summary>The string's scalars, decoded once: indexing by scalar is then constant time, as it is natively for ASCII.</summary>
+        public List<Rune> Scalars => _scalars ??= [..Value.EnumerateRunes()];
     }
 
     sealed class HeapObject(ClassType type) : Counted {
@@ -266,6 +270,32 @@ public sealed class SilInterpreter(SilModule module, int stepLimit = 10_000_000,
         if (module.Find(function) is not { } target) {
             throw new ArgumentException($"no function @{function}", nameof(function));
         }
+
+        // Each SIL call is a .NET call here, and a deep program — a parser
+        // given 500 nested arrays — needs more stack than a thread is given
+        // by default. The depth limit, not the stack, is what stops a
+        // runaway recursion.
+        object? result = null;
+        Exception? failure = null;
+        var thread = new Thread(() => {
+                try {
+                    result = RunHere(target, arguments);
+                } catch (Exception exception) {
+                    failure = exception;
+                }
+            },
+            512 * 1024 * 1024
+        );
+        thread.Start();
+        thread.Join();
+        if (failure is not null) {
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
+        }
+
+        return result;
+    }
+
+    object? RunHere(SilFunction target, object[] arguments) {
 
         _steps = 0;
         var passed = arguments.Select(static a => a is string s ? new HeapString(s) { Immortal = true } : a).ToArray();
@@ -539,16 +569,16 @@ public sealed class SilInterpreter(SilModule module, int stepLimit = 10_000_000,
                 return Allocate(new HeapString(Text(operands[0]).Value + Text(operands[1]).Value));
 
             case "string_count":
-                return (long)Scalars(Text(operands[0]).Value).Count;
+                return (long)Text(operands[0]).Scalars.Count;
 
             case "string_at": {
-                var scalars = Scalars(Text(operands[0]).Value);
+                var scalars = Text(operands[0]).Scalars;
                 var index = (long)operands[1]!;
                 return index >= 0 && index < scalars.Count ? scalars[(int)index] : throw new SilTrap("string index out of range");
             }
 
             case "string_slice": {
-                var scalars = Scalars(Text(operands[0]).Value);
+                var scalars = Text(operands[0]).Scalars;
                 var (from, to) = ((long)operands[1]!, (long)operands[2]!);
                 if (from < 0 || to > scalars.Count || from > to) {
                     throw new SilTrap("string slice out of range");
@@ -558,13 +588,13 @@ public sealed class SilInterpreter(SilModule module, int stepLimit = 10_000_000,
             }
 
             case "string_contains":
-                return Scalars(Text(operands[0]).Value).Contains((Rune)operands[1]!);
+                return Text(operands[0]).Scalars.Contains((Rune)operands[1]!);
 
             case "string_index_of":
-                return (long)Scalars(Text(operands[0]).Value).IndexOf((Rune)operands[1]!);
+                return (long)Text(operands[0]).Scalars.IndexOf((Rune)operands[1]!);
 
             case "string_trimmed": {
-                var scalars = Scalars(Text(operands[0]).Value);
+                var scalars = Text(operands[0]).Scalars;
                 var start = 0;
                 var end = scalars.Count;
                 while (start < end && IsWhitespace(scalars[start])) {
@@ -599,7 +629,9 @@ public sealed class SilInterpreter(SilModule module, int stepLimit = 10_000_000,
 
             case "string_to_F64": {
                 var text = Text(operands[0]).Value;
+                // Too large for an F64 does not fit, as for toInt.
                 return IsDecimal(text) && double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var value)
+                    && double.IsFinite(value)
                     ? new object?[] { true, value }
                     : new object?[] { false, 0.0 };
             }
@@ -609,6 +641,16 @@ public sealed class SilInterpreter(SilModule module, int stepLimit = 10_000_000,
 
             case "cmp_ne_String":
                 return Text(operands[0]).Value != Text(operands[1]).Value;
+
+            case "char_to_Int":
+                return (long)((Rune)operands[0]!).Value;
+
+            case "char_from_Int": {
+                var code = (long)operands[0]!;
+                return code is >= 0 and <= 0x10FFFF and not (>= 0xD800 and <= 0xDFFF)
+                    ? new object?[] { true, new Rune((int)code) }
+                    : new object?[] { false, new Rune(0) };
+            }
 
             case "char_is_digit":
                 return (Rune)operands[0]! is { Value: >= '0' and <= '9' };
@@ -700,8 +742,6 @@ public sealed class SilInterpreter(SilModule module, int stepLimit = 10_000_000,
         address.Set(copy);
         return copy;
     }
-
-    static List<Rune> Scalars(string text) => [..text.EnumerateRunes()];
 
     /// <summary>The whitespace the runtime knows: ASCII's.</summary>
     static bool IsWhitespace(Rune c) => c.Value is ' ' or '\t' or '\n' or '\r' or '\v' or '\f';
@@ -834,6 +874,11 @@ public sealed class SilInterpreter(SilModule module, int stepLimit = 10_000_000,
             _ => "?",
         };
 
+    /// <summary>
+    ///     The shortest of C's <c>%.1g</c> … <c>%.17g</c> that reads back as the
+    ///     same value — <c>0.1</c>, not <c>0.10000000000000001</c> — as the
+    ///     runtime writes it.
+    /// </summary>
     static string FormatDouble(double value) {
         if (double.IsNaN(value)) {
             return "nan";
@@ -843,9 +888,21 @@ public sealed class SilInterpreter(SilModule module, int stepLimit = 10_000_000,
             return value > 0 ? "inf" : "-inf";
         }
 
-        // .NET's G17 is C's %.17g but for the exponent's case and padding:
-        // C writes at least two exponent digits, 'e+05'.
-        var text = value.ToString("G17", CultureInfo.InvariantCulture).Replace('E', 'e');
+        for (var precision = 1; precision < 17; precision++) {
+            var candidate = FormatG(value, precision);
+            if (double.Parse(candidate, NumberStyles.Float, CultureInfo.InvariantCulture) == value) {
+                return candidate;
+            }
+        }
+
+        return FormatG(value, 17);
+    }
+
+    /// <summary>C's <c>%.{precision}g</c>.</summary>
+    static string FormatG(double value, int precision) {
+        // .NET's G is C's %g but for the exponent's case and padding: C
+        // writes at least two exponent digits, 'e+05'.
+        var text = value.ToString("G" + precision, CultureInfo.InvariantCulture).Replace('E', 'e');
         var e = text.IndexOf('e', StringComparison.Ordinal);
         if (e >= 0) {
             var sign = text[e + 1];

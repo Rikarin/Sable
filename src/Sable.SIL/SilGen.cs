@@ -272,7 +272,7 @@ public sealed class SilGen {
         }
 
         foreach (var parameter in symbol.Parameters) {
-            if (parameter.Modifier != ParameterModifier.None) {
+            if (parameter.Modifier is not (ParameterModifier.None or ParameterModifier.InOut)) {
                 return Unsupported<FunctionType>(at, $"the '{parameter.Modifier}' parameter '{parameter.Name}'");
             }
 
@@ -280,7 +280,8 @@ public sealed class SilGen {
                 return Unsupported<FunctionType>(at, $"a parameter of type '{parameter.Type.ToDisplayString()}'");
             }
 
-            parameters.Add(type);
+            // An inout parameter is the address of the caller's storage.
+            parameters.Add(parameter.Modifier == ParameterModifier.InOut ? SilType.Address(type) : type);
         }
 
         var resultSymbol = symbol.FunctionKind == FunctionKind.Initializer ? SelfType(symbol, substitution) : symbol.ReturnType;
@@ -1033,7 +1034,7 @@ public sealed class SilGen {
         /// </summary>
         SilValue? Borrow(BoundExpression expression) {
             switch (expression) {
-                case BoundParameterAccess access when _parameters.TryGetValue(access.Parameter, out var parameter):
+                case BoundParameterAccess access when _parameters.TryGetValue(access.Parameter, out var parameter) && parameter.Type is not AddressType:
                     return parameter;
 
                 case BoundSelfAccess when _selfValue is not null:
@@ -1061,7 +1062,7 @@ public sealed class SilGen {
         /// <summary>True for an expression <see cref="Borrow" /> reaches without evaluating anything owned.</summary>
         bool IsBorrowable(BoundExpression expression) =>
             expression switch {
-                BoundParameterAccess access => _parameters.ContainsKey(access.Parameter),
+                BoundParameterAccess access => _parameters.TryGetValue(access.Parameter, out var parameter) && parameter.Type is not AddressType,
                 BoundSelfAccess => _selfValue is not null,
                 BoundConversion { ConversionKind: ConversionKind.Identity } conversion => IsBorrowable(conversion.Operand),
                 BoundFieldAccess { Receiver: { } receiver, Field: { IsComputed: false, IsStatic: false } }
@@ -1853,7 +1854,7 @@ public sealed class SilGen {
                     return NumericConversion(conversion);
 
                 case BoundParameterAccess access when _parameters.TryGetValue(access.Parameter, out var parameter):
-                    return Owned(parameter);
+                    return parameter.Type is AddressType ? Emit(new LoadInst(parameter)) : Owned(parameter);
 
                 case BoundLocalAccess access:
                     return LoadLocal(access);
@@ -2080,6 +2081,9 @@ public sealed class SilGen {
                 case BoundLocalAccess local when _slots.TryGetValue(local.Local, out var slot) && !_boxed.Contains(local.Local):
                     return slot;
 
+                case BoundParameterAccess access when _parameters.TryGetValue(access.Parameter, out var inout) && inout.Type is AddressType:
+                    return inout;
+
                 case BoundSelfAccess when _selfAddress is { } self:
                     return self;
 
@@ -2110,6 +2114,9 @@ public sealed class SilGen {
             switch (target) {
                 case BoundLocalAccess local:
                     return LocalAddress(local.Local, local.Syntax, borrows);
+
+                case BoundParameterAccess access when _parameters.TryGetValue(access.Parameter, out var inout) && inout.Type is AddressType:
+                    return inout;
 
                 case BoundSelfAccess when _selfAddress is { } self:
                     return self;
@@ -2881,8 +2888,18 @@ public sealed class SilGen {
                 arguments.Add(self);
             }
 
-            foreach (var argument in call.Arguments) {
-                if (Borrow(argument) is not { } value) {
+            for (var i = 0; i < call.Arguments.Length; i++) {
+                // An inout argument passes where it is; the rest are borrowed.
+                if (i < callee.Parameters.Length && callee.Parameters[i].Modifier == ParameterModifier.InOut) {
+                    if (Address(call.Arguments[i], borrows) is not { } address) {
+                        return null;
+                    }
+
+                    arguments.Add(address);
+                    continue;
+                }
+
+                if (Borrow(call.Arguments[i]) is not { } value) {
                     return null;
                 }
 
@@ -3116,6 +3133,16 @@ public sealed class SilGen {
                 return new(Expression(call.Arguments[0]) is { } c ? Emit(new BuiltinInst("string_from_Char", SilType.String, c)) : null);
             }
 
+            // Char.fromCodePoint(n): the scalar, when n is one.
+            if (callee is { Name: "fromCodePoint", IsStatic: true } && ReferenceEquals(owner, Core.Char)) {
+                if (Expression(call.Arguments[0]) is not { } code) {
+                    return new((SilValue?)null);
+                }
+
+                var made = Emit(new BuiltinInst("char_from_Int", SilType.Tuple([SilType.Bool, SilType.Char]), code));
+                return new(MakeOptional(call.Type, Emit(new TupleExtractInst(made, 0)), Emit(new TupleExtractInst(made, 1)), call));
+            }
+
             if (call.Receiver is not { } receiver) {
                 return null;
             }
@@ -3256,6 +3283,7 @@ public sealed class SilGen {
                 (ArrayTypeSymbol, "count" or "isEmpty") => "array_count",
                 (var t, "count" or "isEmpty") when t.Equals(Core.String) => "string_count",
                 (_, "isDigit") when Sub(receiver.Type).Equals(Core.Char) => "char_is_digit",
+                (_, "codePoint") when Sub(receiver.Type).Equals(Core.Char) => "char_to_Int",
                 (_, "isLetter") when Sub(receiver.Type).Equals(Core.Char) => "char_is_letter",
                 (_, "isWhitespace") when Sub(receiver.Type).Equals(Core.Char) => "char_is_whitespace",
                 _ => null,
@@ -3269,7 +3297,7 @@ public sealed class SilGen {
                 return null;
             }
 
-            var resultType = builtin.EndsWith("count", StringComparison.Ordinal) ? SilType.Int : SilType.Bool;
+            var resultType = builtin.EndsWith("count", StringComparison.Ordinal) || builtin == "char_to_Int" ? SilType.Int : SilType.Bool;
             SilValue result = Emit(new BuiltinInst(builtin, resultType, self));
             End(self);
 

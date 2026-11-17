@@ -825,6 +825,8 @@ public static class SilBuiltins {
         Add("string_to_Int", SilType.Tuple([SilType.Bool, SilType.Int]), SilType.String);
         Add("string_to_F64", SilType.Tuple([SilType.Bool, SilType.F64]), SilType.String);
 
+        Add("char_to_Int", SilType.Int, SilType.Char);
+        Add("char_from_Int", SilType.Tuple([SilType.Bool, SilType.Char]), SilType.Int);
         Add("char_is_digit", SilType.Bool, SilType.Char);
         Add("char_is_letter", SilType.Bool, SilType.Char);
         Add("char_is_whitespace", SilType.Bool, SilType.Char);

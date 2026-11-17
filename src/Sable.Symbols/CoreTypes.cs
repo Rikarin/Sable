@@ -106,6 +106,11 @@ public sealed class CoreTypes {
         Property(Char, "isWhitespace", Bool);
         Property(Char, "code", U32);
 
+        // The scalar as an Int, and back: what decoding and writing '\u' escapes
+        // needs before the integer types other than Int lower.
+        Property(Char, "codePoint", Int);
+        Method(Char, "fromCodePoint", [("value", Int)], new OptionalTypeSymbol(Char), true);
+
         foreach (var numeric in Numerics) {
             Method(numeric, "toString", [], String);
             Method(numeric, "abs", [], numeric);

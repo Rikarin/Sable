@@ -325,12 +325,13 @@ Order matters; each of these is a self-contained lowering:
 
 - [ ] Hello world links and runs on macOS arm64 and Linux x64 — macOS arm64
       done (`sable build hello.sab && ./hello`); Linux x64 not yet tried
-- [ ] A 2,000-line program (JSON parser + pretty printer) compiles and passes
-      its tests — the corpus's 300-line JSON parser and renderer
-      (`tests/corpus/11-json.sab`) compiles and runs natively, agreeing with
-      the interpreter and freeing everything it allocates; generics
-      (monomorphised) and closures (boxed captures, counted contexts) now
-      lower too, so the full-size program is what remains
+- [x] A 2,000-line program (JSON parser + pretty printer) compiles and passes
+      its tests — `tests/programs/json.sab`, 2,100 lines: strict RFC 8259
+      parsing with line/column errors and opt-in comments, trailing commas,
+      duplicate-key and depth checks; compact, pretty, sorted and ASCII-only
+      printing; JSON Pointer (RFC 6901); Merge Patch (RFC 7386); comparison,
+      transforms and statistics. Its own suite of 237 checks passes natively
+      and in the interpreter, which agree, with nothing leaked
 - [ ] SIL verifier is clean on the corpus — clean on everything that lowers,
       before and after the passes, ownership included (every owned value
       consumed exactly once on every path); 196 of the corpus's 345 function
@@ -339,9 +340,11 @@ Order matters; each of these is a self-contained lowering:
 - [x] `lldb` shows correct frames, locals and types — on macOS, checked by a
       test that drives lldb: `gcd(a=1071, b=462)`, `(Int) t = 147`,
       `(Debug.Point) p = (x = 1071, y = 462)`
-- [ ] Startup time < 2 ms, hello-world binary < 400 KB stripped — 34 KB
-      stripped; start to exit is ~3.2 ms against ~2.1 ms for `/usr/bin/true`
-      measured the same way, so ~1 ms over the process-launch floor
+- [x] Startup time < 2 ms, hello-world binary < 400 KB stripped — on macOS
+      arm64, 35 KB stripped and 1.69 ms median start to exit
+      (`tools/startup/spawn.c`: posix_spawn to waitpid), against 1.59 ms for
+      the same program in C and 0.95 ms for `/usr/bin/true`; the earlier
+      ~3.2 ms included the measuring script's own spawn cost
 
 ---
 

@@ -228,6 +228,7 @@ public sealed class LlvmEmitter {
                                 declare zeroext i1 @sable_string_to_int(ptr, ptr)
                                 declare zeroext i1 @sable_string_to_f64(ptr, ptr)
                                 declare zeroext i1 @sable_char_is_digit(i32)
+                                declare zeroext i1 @sable_char_from_int(i64, ptr)
                                 declare zeroext i1 @sable_char_is_letter(i32)
                                 declare zeroext i1 @sable_char_is_whitespace(i32)
                                 declare i64 @sable_array_count(ptr)
@@ -1271,6 +1272,22 @@ public sealed class LlvmEmitter {
                     Line($"{value} = load {target}, ptr {slot}");
                     Line($"{partial} = insertvalue {{ i1, {target} }} poison, i1 {ok}, 0");
                     Line($"{Result()} = insertvalue {{ i1, {target} }} {partial}, {target} {value}, 1");
+                    return;
+                }
+
+                case "char_to_Int":
+                    Line($"{Result()} = sext i32 {operands[0]} to i64");
+                    return;
+
+                case "char_from_Int": {
+                    var slot = Scratch("i32");
+                    var ok = Fresh();
+                    var value = Fresh();
+                    var partial = Fresh();
+                    Line($"{ok} = call zeroext i1 @sable_char_from_int(i64 {operands[0]}, ptr {slot})");
+                    Line($"{value} = load i32, ptr {slot}");
+                    Line($"{partial} = insertvalue {{ i1, i32 }} poison, i1 {ok}, 0");
+                    Line($"{Result()} = insertvalue {{ i1, i32 }} {partial}, i32 {value}, 1");
                     return;
                 }
 

@@ -33,10 +33,10 @@ internal static class Programs {
         }
     }
 
-    public static (string Output, string? Trap) Interpret(string source) {
+    public static (string Output, string? Trap) Interpret(string source, int stepLimit = 10_000_000) {
         var result = Pipeline.Compile(new SourceText(source, "test.sab"));
         Assert.True(result.Succeeded, string.Join("\n", result.Errors));
-        var interpreter = new SilInterpreter(result.Sil!);
+        var interpreter = new SilInterpreter(result.Sil!, stepLimit);
         try {
             interpreter.Run(result.Sil!.EntryPoint!);
             Assert.True(interpreter.LiveObjects == 0, $"the interpreter found {interpreter.LiveObjects} object(s) leaked");
@@ -50,8 +50,8 @@ internal static class Programs {
     ///     Runs the program both ways and requires the same output and the same
     ///     trap. Without a C compiler, the interpreter's answer is all there is.
     /// </summary>
-    public static Execution AssertAgree(string source) {
-        var (output, trap) = Interpret(source);
+    public static Execution AssertAgree(string source, int stepLimit = 10_000_000) {
+        var (output, trap) = Interpret(source, stepLimit);
         if (!CanBuild) {
             return new(output, trap is null ? "" : $"fatal error: {trap}\n", trap is null ? 0 : 134);
         }

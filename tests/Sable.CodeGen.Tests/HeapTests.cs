@@ -34,7 +34,7 @@ public sealed class HeapTests {
     [Fact]
     public void TheCoreStringMembersMatchTheInterpreter() =>
         Prints(
-            "héllo, world\n12\né\nhéllo\ntrue\n5\n-1\n12\n25\n-7\n2\nb\ntrue\n0.10000000000000001\n",
+            "héllo, world\n12\né\nhéllo\ntrue\n5\n-1\n12\n25\n-7\n2\nb\ntrue\n0.1\n",
             "",
             """
                 let t = "  héllo, world  ".trimmed()

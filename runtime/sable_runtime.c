@@ -294,13 +294,22 @@ SableString *sable_string_from_int(int64_t value) {
     return make_cstring(text);
 }
 
-// %.17g round-trips every double; the interpreter formats the same way.
+// The shortest %.Ng that reads back as the same double — 0.1, not
+// 0.10000000000000001. %.17g always does. The interpreter formats the same way.
 static void format_f64(double value, char *text, size_t size) {
     if (isnan(value)) {
         snprintf(text, size, "nan");
-    } else {
-        snprintf(text, size, "%.17g", value);
+        return;
     }
+
+    for (int precision = 1; precision < 17; precision++) {
+        snprintf(text, size, "%.*g", precision, value);
+        if (strtod(text, NULL) == value) {
+            return;
+        }
+    }
+
+    snprintf(text, size, "%.17g", value);
 }
 
 SableString *sable_string_from_f64(double value) {
@@ -340,7 +349,8 @@ bool sable_string_to_int(const SableString *s, int64_t *out) {
 }
 
 // A decimal number — sign, digits, fraction, exponent — and nothing else: no
-// infinities, NaN, hex or surrounding space, which strtod would also take.
+// infinities, NaN, hex or surrounding space, which strtod would also take —
+// that is finite as a double.
 bool sable_string_to_f64(const SableString *s, double *out) {
     const char *b = s->bytes;
     int64_t n = s->length, i = 0, digits = 0;
@@ -389,8 +399,30 @@ bool sable_string_to_f64(const SableString *s, double *out) {
     char *text = malloc((size_t)n + 1);
     memcpy(text, b, (size_t)n);
     text[n] = '\0';
-    *out = strtod(text, NULL);
+    double value = strtod(text, NULL);
     free(text);
+
+    // Too large for a double does not fit, as for sable_string_to_int.
+    if (isinf(value)) {
+        return false;
+    }
+
+    *out = value;
+    return true;
+}
+
+int64_t sable_char_to_int(int32_t c) {
+    return c;
+}
+
+// The scalar for a code point, if it is one: not a surrogate, not past U+10FFFF.
+bool sable_char_from_int(int64_t code, int32_t *out) {
+    if (code < 0 || code > 0x10FFFF || (code >= 0xD800 && code <= 0xDFFF)) {
+        *out = 0;
+        return false;
+    }
+
+    *out = (int32_t)code;
     return true;
 }
 

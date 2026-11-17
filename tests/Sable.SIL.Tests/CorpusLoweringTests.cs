@@ -9,7 +9,7 @@ public sealed class CorpusLoweringTests {
     public static TheoryData<string> Files {
         get {
             var data = new TheoryData<string>();
-            foreach (var directory in new[] { "tests/corpus", "examples" }) {
+            foreach (var directory in new[] { "tests/corpus", "examples", "tests/programs" }) {
                 foreach (var file in Directory.GetFiles(Path.Combine(Root, directory), "*.sab").Order(StringComparer.Ordinal)) {
                     data.Add(Path.GetRelativePath(Root, file));
                 }

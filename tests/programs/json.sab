@@ -1,0 +1,2100 @@
+module Json
+
+// A JSON library and its test suite, in one file: the Phase 2 exit program of
+// docs/04 §2.5 — "a 2,000-line program (JSON parser + pretty printer)
+// compiles and passes its tests".
+//
+// It parses RFC 8259 JSON strictly (with a few opt-in relaxations), reports
+// errors by line and column, prints compactly or prettily, escapes as asked,
+// sorts keys, answers JSON Pointer queries (RFC 6901), applies JSON Merge
+// Patch (RFC 7386), compares documents and measures them. Running it runs the
+// tests, which print one line per group and a summary.
+
+// ===========================================================================
+// The value model
+// ===========================================================================
+
+public union JsonValue {
+    Null
+    Bool(value: Bool)
+    Number(value: F64)
+    Text(value: String)
+    Array(items: JsonValue[>..])
+    Object(members: Member[>..])
+}
+
+// An object keeps its members in the order they were written; lookups take
+// the first with the key.
+public struct Member {
+    public var key: String
+    public var value: JsonValue
+}
+
+public fn kindOf(_ value: JsonValue) -> String {
+    return match value {
+        case .Null => "null"
+        case .Bool(_) => "boolean"
+        case .Number(_) => "number"
+        case .Text(_) => "string"
+        case .Array(_) => "array"
+        case .Object(_) => "object"
+    }
+}
+
+// ---- Building values ------------------------------------------------------
+
+public fn null() -> JsonValue {
+    return JsonValue.Null
+}
+
+public fn boolean(_ value: Bool) -> JsonValue {
+    return JsonValue.Bool(value: value)
+}
+
+public fn number(_ value: F64) -> JsonValue {
+    return JsonValue.Number(value: value)
+}
+
+public fn integer(_ value: Int) -> JsonValue {
+    return JsonValue.Number(value: value as F64)
+}
+
+public fn text(_ value: String) -> JsonValue {
+    return JsonValue.Text(value: value)
+}
+
+public fn array(_ items: JsonValue[>..]) -> JsonValue {
+    return JsonValue.Array(items: items)
+}
+
+public fn member(_ key: String, _ value: JsonValue) -> Member {
+    return Member { key: key, value: value }
+}
+
+public fn object(_ members: Member[>..]) -> JsonValue {
+    return JsonValue.Object(members: members)
+}
+
+// ---- Reading values -----------------------------------------------------
+
+public fn asBool(_ value: JsonValue) -> Bool? {
+    return match value {
+        case .Bool(let b) => b
+        default => none
+    }
+}
+
+public fn asNumber(_ value: JsonValue) -> F64? {
+    return match value {
+        case .Number(let n) => n
+        default => none
+    }
+}
+
+public fn asText(_ value: JsonValue) -> String? {
+    return match value {
+        case .Text(let t) => t
+        default => none
+    }
+}
+
+public fn isNull(_ value: JsonValue) -> Bool {
+    return match value {
+        case .Null => true
+        default => false
+    }
+}
+
+public fn itemsOf(_ value: JsonValue) -> JsonValue[>..] {
+    return match value {
+        case .Array(let items) => items
+        default => []
+    }
+}
+
+public fn membersOf(_ value: JsonValue) -> Member[>..] {
+    return match value {
+        case .Object(let members) => members
+        default => []
+    }
+}
+
+public fn field(_ value: JsonValue, _ key: String) -> JsonValue? {
+    for m in membersOf(value) {
+        if m.key == key {
+            return m.value
+        }
+    }
+    return none
+}
+
+public fn element(_ value: JsonValue, _ index: Int) -> JsonValue? {
+    let items = itemsOf(value)
+    if index < 0 || index >= items.count {
+        return none
+    }
+    return items[index]
+}
+
+public fn keysOf(_ value: JsonValue) -> String[>..] {
+    var keys: String[>..] = []
+    for m in membersOf(value) {
+        keys.append(m.key)
+    }
+    return keys
+}
+
+public fn countOf(_ value: JsonValue) -> Int {
+    return match value {
+        case .Array(let items) => items.count
+        case .Object(let members) => members.count
+        default => 0
+    }
+}
+
+// ===========================================================================
+// Text utilities
+// ===========================================================================
+
+// Strings are joined in a balanced tree, so that building a long text from
+// many small pieces costs n log n rather than n squared.
+public struct TextBuilder {
+    var parts: String[>..]
+
+    public mutating fn add(_ piece: String) {
+        parts.append(piece)
+    }
+
+    public mutating fn addChar(_ c: Char) {
+        parts.append(String.fromChar(c))
+    }
+
+    public fn build() -> String {
+        return joinRange(parts, 0, parts.count)
+    }
+
+    public fn isEmpty() -> Bool {
+        return parts.count == 0
+    }
+}
+
+public fn newBuilder() -> TextBuilder {
+    return TextBuilder { parts: [] }
+}
+
+fn joinRange(_ parts: String[>..], _ from: Int, _ to: Int) -> String {
+    let count = to - from
+    if count <= 0 {
+        return ""
+    }
+    if count == 1 {
+        return parts[from]
+    }
+    if count == 2 {
+        return parts[from] + parts[from + 1]
+    }
+    let middle = from + count / 2
+    return joinRange(parts, from, middle) + joinRange(parts, middle, to)
+}
+
+public fn join(_ parts: String[>..], _ separator: String) -> String {
+    var builder = newBuilder()
+    var first = true
+    for part in parts {
+        if !first {
+            builder.add(separator)
+        }
+        builder.add(part)
+        first = false
+    }
+    return builder.build()
+}
+
+public fn repeated(_ piece: String, _ times: Int) -> String {
+    var builder = newBuilder()
+    var i = 0
+    while i < times {
+        builder.add(piece)
+        i = i + 1
+    }
+    return builder.build()
+}
+
+public fn hexDigit(_ value: Int) -> String {
+    let digits = "0123456789abcdef"
+    return String.fromChar(digits.at(value % 16))
+}
+
+public fn hex4(_ value: Int) -> String {
+    return hexDigit(value / 4096) + hexDigit(value / 256 % 16) + hexDigit(value / 16 % 16) + hexDigit(value % 16)
+}
+
+public fn hexValue(_ c: Char) -> Int? {
+    let code = c.codePoint
+    if code >= 48 && code <= 57 {
+        return code - 48
+    }
+    if code >= 97 && code <= 102 {
+        return code - 87
+    }
+    if code >= 65 && code <= 70 {
+        return code - 55
+    }
+    return none
+}
+
+public fn charsOf(_ s: String) -> Char[>..] {
+    var result: Char[>..] = []
+    var i = 0
+    let n = s.count
+    while i < n {
+        result.append(s.at(i))
+        i = i + 1
+    }
+    return result
+}
+
+// Orders strings by Unicode scalar, as JSON's sorted-key output wants.
+public fn compareText(_ a: String, _ b: String) -> Int {
+    let n = a.count.min(b.count)
+    var i = 0
+    while i < n {
+        let x = a.at(i).codePoint
+        let y = b.at(i).codePoint
+        if x != y {
+            return x < y ? -1 : 1
+        }
+        i = i + 1
+    }
+    if a.count == b.count {
+        return 0
+    }
+    return a.count < b.count ? -1 : 1
+}
+
+// A stable merge sort, for anything with an order.
+public fn sorted<T>(_ items: T[>..], _ before: (T, T) -> Bool) -> T[>..] {
+    if items.count <= 1 {
+        return items
+    }
+    let middle = items.count / 2
+    var left: T[>..] = []
+    var right: T[>..] = []
+    var i = 0
+    for item in items {
+        if i < middle {
+            left.append(item)
+        } else {
+            right.append(item)
+        }
+        i = i + 1
+    }
+    return merge(sorted(left, before), sorted(right, before), before)
+}
+
+fn merge<T>(_ left: T[>..], _ right: T[>..], _ before: (T, T) -> Bool) -> T[>..] {
+    var result: T[>..] = []
+    var i = 0
+    var j = 0
+    while i < left.count && j < right.count {
+        // Taking from the left on ties keeps the sort stable.
+        if before(right[j], left[i]) {
+            result.append(right[j])
+            j = j + 1
+        } else {
+            result.append(left[i])
+            i = i + 1
+        }
+    }
+    while i < left.count {
+        result.append(left[i])
+        i = i + 1
+    }
+    while j < right.count {
+        result.append(right[j])
+        j = j + 1
+    }
+    return result
+}
+
+// ===========================================================================
+// Errors
+// ===========================================================================
+
+public struct Position {
+    public var offset: Int
+    public var line: Int
+    public var column: Int
+}
+
+public fn describePosition(_ at: Position) -> String {
+    return "line \(at.line), column \(at.column)"
+}
+
+public union ParseError {
+    UnexpectedEnd(at: Position, expected: String)
+    UnexpectedCharacter(at: Position, found: Char, expected: String)
+    InvalidNumber(at: Position, reason: String)
+    InvalidEscape(at: Position, found: Char)
+    InvalidUnicode(at: Position, reason: String)
+    ControlCharacter(at: Position, code: Int)
+    TooDeep(at: Position, limit: Int)
+    TrailingText(at: Position)
+    DuplicateKey(at: Position, key: String)
+}
+
+public fn describeChar(_ c: Char) -> String {
+    let code = c.codePoint
+    if code < 32 || code == 127 {
+        return "U+" + hex4(code)
+    }
+    return "'" + String.fromChar(c) + "'"
+}
+
+public fn describeError(_ error: ParseError) -> String {
+    return match error {
+        case .UnexpectedEnd(let at, let expected) =>
+            "\(describePosition(at)): the text ends where \(expected) was expected"
+        case .UnexpectedCharacter(let at, let found, let expected) =>
+            "\(describePosition(at)): found \(describeChar(found)) where \(expected) was expected"
+        case .InvalidNumber(let at, let reason) =>
+            "\(describePosition(at)): invalid number: \(reason)"
+        case .InvalidEscape(let at, let found) =>
+            "\(describePosition(at)): \\\(String.fromChar(found)) is not an escape"
+        case .InvalidUnicode(let at, let reason) =>
+            "\(describePosition(at)): invalid \\u escape: \(reason)"
+        case .ControlCharacter(let at, let code) =>
+            "\(describePosition(at)): control character U+\(hex4(code)) must be escaped"
+        case .TooDeep(let at, let limit) =>
+            "\(describePosition(at)): nested more than \(limit) deep"
+        case .TrailingText(let at) =>
+            "\(describePosition(at)): text after the value"
+        case .DuplicateKey(let at, let key) =>
+            "\(describePosition(at)): the key \"\(key)\" appears twice"
+    }
+}
+
+public fn errorLine(_ error: ParseError) -> Int {
+    return positionOf(error).line
+}
+
+public fn positionOf(_ error: ParseError) -> Position {
+    return match error {
+        case .UnexpectedEnd(let at, _) => at
+        case .UnexpectedCharacter(let at, _, _) => at
+        case .InvalidNumber(let at, _) => at
+        case .InvalidEscape(let at, _) => at
+        case .InvalidUnicode(let at, _) => at
+        case .ControlCharacter(let at, _) => at
+        case .TooDeep(let at, _) => at
+        case .TrailingText(let at) => at
+        case .DuplicateKey(let at, _) => at
+    }
+}
+
+// ===========================================================================
+// Parsing
+// ===========================================================================
+
+public struct ParseOptions {
+    public var maxDepth: Int
+    public var allowComments: Bool
+    public var allowTrailingCommas: Bool
+    public var rejectDuplicateKeys: Bool
+}
+
+public fn strict() -> ParseOptions {
+    return ParseOptions { maxDepth: 512, allowComments: false, allowTrailingCommas: false, rejectDuplicateKeys: false }
+}
+
+public fn relaxed() -> ParseOptions {
+    return ParseOptions { maxDepth: 512, allowComments: true, allowTrailingCommas: true, rejectDuplicateKeys: false }
+}
+
+// The parser is an object: one cursor, shared by every method it calls.
+public class Parser {
+    var chars: Char[>..]
+    var offset: Int
+    var line: Int
+    var column: Int
+    var options: ParseOptions
+
+    init(_ text: String, _ options: ParseOptions) {
+        self.chars = charsOf(text)
+        self.offset = 0
+        self.line = 1
+        self.column = 1
+        self.options = options
+    }
+
+    fn position() -> Position {
+        return Position { offset: offset, line: line, column: column }
+    }
+
+    fn atEnd() -> Bool {
+        return offset >= chars.count
+    }
+
+    fn peek() -> Char? {
+        if atEnd() {
+            return none
+        }
+        return chars[offset]
+    }
+
+    fn peekIs(_ c: Char) -> Bool {
+        return peek() == c
+    }
+
+    fn advance() -> Char {
+        let c = chars[offset]
+        offset = offset + 1
+        if c == '\n' {
+            line = line + 1
+            column = 1
+        } else {
+            column = column + 1
+        }
+        return c
+    }
+
+    fn next(_ expected: String) throws(ParseError) -> Char {
+        if atEnd() {
+            throw ParseError.UnexpectedEnd(at: position(), expected: expected)
+        }
+        return advance()
+    }
+
+    fn expect(_ wanted: Char, _ expected: String) throws(ParseError) {
+        let at = position()
+        let c = try next(expected)
+        if c != wanted {
+            throw ParseError.UnexpectedCharacter(at: at, found: c, expected: expected)
+        }
+    }
+
+    // Whitespace, and comments when they are allowed: '// ...' to the end
+    // of the line, and '/* ... */'.
+    fn skipSpace() throws(ParseError) {
+        while !atEnd() {
+            let c = chars[offset]
+            if c == ' ' || c == '\t' || c == '\n' || c == '\r' {
+                advance()
+                continue
+            }
+            if c == '/' && options.allowComments {
+                try skipComment()
+                continue
+            }
+            return
+        }
+    }
+
+    fn skipComment() throws(ParseError) {
+        let at = position()
+        advance()
+        let kind = try next("'/' or '*' after '/'")
+        if kind == '/' {
+            while !atEnd() && !peekIs('\n') {
+                advance()
+            }
+            return
+        }
+        if kind != '*' {
+            throw ParseError.UnexpectedCharacter(at: at, found: kind, expected: "a comment")
+        }
+        while true {
+            let c = try next("the end of the comment")
+            if c == '*' && peekIs('/') {
+                advance()
+                return
+            }
+        }
+    }
+
+    public fn parseDocument() throws(ParseError) -> JsonValue {
+        try skipSpace()
+        let value = try parseValue(0)
+        try skipSpace()
+        if !atEnd() {
+            throw ParseError.TrailingText(at: position())
+        }
+        return value
+    }
+
+    fn parseValue(_ depth: Int) throws(ParseError) -> JsonValue {
+        let at = position()
+        guard let c = peek() else {
+            throw ParseError.UnexpectedEnd(at: at, expected: "a value")
+        }
+
+        if c == '{' {
+            return try parseObject(depth + 1)
+        }
+        if c == '[' {
+            return try parseArray(depth + 1)
+        }
+        if c == '"' {
+            return JsonValue.Text(value: try parseString())
+        }
+        if c == 't' {
+            try parseWord("true")
+            return JsonValue.Bool(value: true)
+        }
+        if c == 'f' {
+            try parseWord("false")
+            return JsonValue.Bool(value: false)
+        }
+        if c == 'n' {
+            try parseWord("null")
+            return JsonValue.Null
+        }
+        if c == '-' || c.isDigit {
+            return JsonValue.Number(value: try parseNumber())
+        }
+        throw ParseError.UnexpectedCharacter(at: at, found: c, expected: "a value")
+    }
+
+    fn parseWord(_ word: String) throws(ParseError) {
+        var i = 0
+        while i < word.count {
+            try expect(word.at(i), "'\(word)'")
+            i = i + 1
+        }
+    }
+
+    fn checkDepth(_ depth: Int) throws(ParseError) {
+        if depth > options.maxDepth {
+            throw ParseError.TooDeep(at: position(), limit: options.maxDepth)
+        }
+    }
+
+    fn parseArray(_ depth: Int) throws(ParseError) -> JsonValue {
+        try checkDepth(depth)
+        try expect('[', "'['")
+        try skipSpace()
+
+        var items: JsonValue[>..] = []
+        if peekIs(']') {
+            advance()
+            return JsonValue.Array(items: items)
+        }
+
+        while true {
+            try skipSpace()
+            items.append(try parseValue(depth))
+            try skipSpace()
+
+            let at = position()
+            let c = try next("',' or ']'")
+            if c == ']' {
+                return JsonValue.Array(items: items)
+            }
+            if c != ',' {
+                throw ParseError.UnexpectedCharacter(at: at, found: c, expected: "',' or ']'")
+            }
+
+            try skipSpace()
+            if options.allowTrailingCommas && peekIs(']') {
+                advance()
+                return JsonValue.Array(items: items)
+            }
+        }
+    }
+
+    fn parseObject(_ depth: Int) throws(ParseError) -> JsonValue {
+        try checkDepth(depth)
+        try expect('{', "'{'")
+        try skipSpace()
+
+        var members: Member[>..] = []
+        if peekIs('}') {
+            advance()
+            return JsonValue.Object(members: members)
+        }
+
+        while true {
+            try skipSpace()
+            let keyAt = position()
+            guard let first = peek() else {
+                throw ParseError.UnexpectedEnd(at: keyAt, expected: "a key")
+            }
+            if first != '"' {
+                throw ParseError.UnexpectedCharacter(at: keyAt, found: first, expected: "a key")
+            }
+
+            let key = try parseString()
+            if options.rejectDuplicateKeys {
+                for existing in members {
+                    if existing.key == key {
+                        throw ParseError.DuplicateKey(at: keyAt, key: key)
+                    }
+                }
+            }
+
+            try skipSpace()
+            try expect(':', "':'")
+            try skipSpace()
+            let value = try parseValue(depth)
+            members.append(Member { key: key, value: value })
+            try skipSpace()
+
+            let at = position()
+            let c = try next("',' or '}'")
+            if c == '}' {
+                return JsonValue.Object(members: members)
+            }
+            if c != ',' {
+                throw ParseError.UnexpectedCharacter(at: at, found: c, expected: "',' or '}'")
+            }
+
+            try skipSpace()
+            if options.allowTrailingCommas && peekIs('}') {
+                advance()
+                return JsonValue.Object(members: members)
+            }
+        }
+    }
+
+    fn parseString() throws(ParseError) -> String {
+        try expect('"', "'\"'")
+        var builder = newBuilder()
+
+        while true {
+            let at = position()
+            let c = try next("the end of the string")
+            if c == '"' {
+                return builder.build()
+            }
+            if c == '\\' {
+                builder.addChar(try parseEscape(at))
+                continue
+            }
+            if c.codePoint < 32 {
+                throw ParseError.ControlCharacter(at: at, code: c.codePoint)
+            }
+            builder.addChar(c)
+        }
+    }
+
+    // 'at' is where the backslash is: what an error points to.
+    fn parseEscape(_ at: Position) throws(ParseError) -> Char {
+        let c = try next("an escape")
+        return match c {
+            case '"' => '"'
+            case '\\' => '\\'
+            case '/' => '/'
+            case 'b' => Char.fromCodePoint(8)!
+            case 'f' => Char.fromCodePoint(12)!
+            case 'n' => '\n'
+            case 'r' => '\r'
+            case 't' => '\t'
+            case 'u' => try parseUnicode(at)
+            default => {
+                throw ParseError.InvalidEscape(at: at, found: c)
+            }
+        }
+    }
+
+    fn parseHex4() throws(ParseError) -> Int {
+        var value = 0
+        var i = 0
+        while i < 4 {
+            let at = position()
+            let c = try next("a hex digit")
+            guard let digit = hexValue(c) else {
+                throw ParseError.UnexpectedCharacter(at: at, found: c, expected: "a hex digit")
+            }
+            value = value * 16 + digit
+            i = i + 1
+        }
+        return value
+    }
+
+    // '\uXXXX', and the pair of them a scalar above U+FFFF takes.
+    fn parseUnicode(_ at: Position) throws(ParseError) -> Char {
+        let high = try parseHex4()
+        if high >= 0xDC00 && high <= 0xDFFF {
+            throw ParseError.InvalidUnicode(at: at, reason: "a low surrogate with no high one before it")
+        }
+        if high < 0xD800 || high > 0xDBFF {
+            return Char.fromCodePoint(high)!
+        }
+
+        if !peekIs('\\') {
+            throw ParseError.InvalidUnicode(at: at, reason: "a high surrogate with no low one after it")
+        }
+        advance()
+        try expect('u', "'u' of a low surrogate")
+        let low = try parseHex4()
+        if low < 0xDC00 || low > 0xDFFF {
+            throw ParseError.InvalidUnicode(at: at, reason: "a high surrogate followed by something else")
+        }
+        return Char.fromCodePoint(0x10000 + (high - 0xD800) * 1024 + (low - 0xDC00))!
+    }
+
+    // RFC 8259's grammar, exactly: '-'? ('0' | [1-9][0-9]*) ('.' [0-9]+)?
+    // ([eE] [+-]? [0-9]+)?
+    fn parseNumber() throws(ParseError) -> F64 {
+        let at = position()
+        var builder = newBuilder()
+
+        if peekIs('-') {
+            builder.addChar(advance())
+        }
+
+        guard let first = peek() else {
+            throw ParseError.InvalidNumber(at: at, reason: "no digits")
+        }
+        if !first.isDigit {
+            throw ParseError.InvalidNumber(at: at, reason: "no digits")
+        }
+
+        if first == '0' {
+            builder.addChar(advance())
+            if let after = peek() {
+                if after.isDigit {
+                    throw ParseError.InvalidNumber(at: at, reason: "a leading zero")
+                }
+            }
+        } else {
+            while !atEnd() && chars[offset].isDigit {
+                builder.addChar(advance())
+            }
+        }
+
+        if peekIs('.') {
+            builder.addChar(advance())
+            var fraction = 0
+            while !atEnd() && chars[offset].isDigit {
+                builder.addChar(advance())
+                fraction = fraction + 1
+            }
+            if fraction == 0 {
+                throw ParseError.InvalidNumber(at: at, reason: "no digits after the point")
+            }
+        }
+
+        if peekIs('e') || peekIs('E') {
+            builder.addChar(advance())
+            if peekIs('+') || peekIs('-') {
+                builder.addChar(advance())
+            }
+            var exponent = 0
+            while !atEnd() && chars[offset].isDigit {
+                builder.addChar(advance())
+                exponent = exponent + 1
+            }
+            if exponent == 0 {
+                throw ParseError.InvalidNumber(at: at, reason: "no digits in the exponent")
+            }
+        }
+
+        guard let value = builder.build().toF64() else {
+            throw ParseError.InvalidNumber(at: at, reason: "out of range")
+        }
+        return value
+    }
+}
+
+public fn parse(_ text: String) throws(ParseError) -> JsonValue {
+    let parser = Parser(text, strict())
+    return try parser.parseDocument()
+}
+
+public fn parseWith(_ text: String, _ options: ParseOptions) throws(ParseError) -> JsonValue {
+    let parser = Parser(text, options)
+    return try parser.parseDocument()
+}
+
+// ===========================================================================
+// Printing
+// ===========================================================================
+
+public struct PrintOptions {
+    // Spaces per level; zero writes everything on one line.
+    public var indent: Int
+    public var sortKeys: Bool
+    // Escape everything outside ASCII as '\uXXXX'.
+    public var asciiOnly: Bool
+    // A space after ':' and ',' in one-line output.
+    public var spaced: Bool
+}
+
+public fn compact() -> PrintOptions {
+    return PrintOptions { indent: 0, sortKeys: false, asciiOnly: false, spaced: false }
+}
+
+public fn pretty(_ indent: Int) -> PrintOptions {
+    return PrintOptions { indent: indent, sortKeys: false, asciiOnly: false, spaced: true }
+}
+
+public fn canonical() -> PrintOptions {
+    return PrintOptions { indent: 0, sortKeys: true, asciiOnly: true, spaced: false }
+}
+
+public fn render(_ value: JsonValue) -> String {
+    return renderWith(value, compact())
+}
+
+public fn renderWith(_ value: JsonValue, _ options: PrintOptions) -> String {
+    var builder = newBuilder()
+    write(value, options, 0, builder)
+    return builder.build()
+}
+
+fn write(_ value: JsonValue, _ options: PrintOptions, _ level: Int, _ sink: inout TextBuilder) {
+    match value {
+        case .Null => sink.add("null")
+        case .Bool(let b) => sink.add(b ? "true" : "false")
+        case .Number(let n) => sink.add(formatNumber(n))
+        case .Text(let t) => sink.add(quote(t, options.asciiOnly))
+        case .Array(let items) => writeArray(items, options, level, sink)
+        case .Object(let members) => writeObject(members, options, level, sink)
+    }
+}
+
+fn newline(_ options: PrintOptions, _ level: Int, _ sink: inout TextBuilder) {
+    sink.add("\n")
+    sink.add(repeated(" ", options.indent * level))
+}
+
+fn writeArray(_ items: JsonValue[>..], _ options: PrintOptions, _ level: Int, _ sink: inout TextBuilder) {
+    if items.count == 0 {
+        sink.add("[]")
+        return
+    }
+
+    sink.add("[")
+    var first = true
+    for item in items {
+        if !first {
+            sink.add(options.spaced && options.indent == 0 ? ", " : ",")
+        }
+        if options.indent > 0 {
+            newline(options, level + 1, sink)
+        }
+        write(item, options, level + 1, sink)
+        first = false
+    }
+    if options.indent > 0 {
+        newline(options, level, sink)
+    }
+    sink.add("]")
+}
+
+fn writeObject(_ members: Member[>..], _ options: PrintOptions, _ level: Int, _ sink: inout TextBuilder) {
+    if members.count == 0 {
+        sink.add("{}")
+        return
+    }
+
+    let ordered = options.sortKeys ? sortedMembers(members) : members
+    sink.add("{")
+    var first = true
+    for m in ordered {
+        if !first {
+            sink.add(options.spaced && options.indent == 0 ? ", " : ",")
+        }
+        if options.indent > 0 {
+            newline(options, level + 1, sink)
+        }
+        sink.add(quote(m.key, options.asciiOnly))
+        sink.add(options.spaced ? ": " : ":")
+        write(m.value, options, level + 1, sink)
+        first = false
+    }
+    if options.indent > 0 {
+        newline(options, level, sink)
+    }
+    sink.add("}")
+}
+
+public fn sortedMembers(_ members: Member[>..]) -> Member[>..] {
+    return sorted(members, (a: Member, b: Member) => compareText(a.key, b.key) < 0)
+}
+
+// A string as JSON writes it: quoted, with what must be escaped escaped, and
+// with everything past ASCII escaped too when asked — as a surrogate pair
+// above U+FFFF.
+public fn quote(_ s: String, _ asciiOnly: Bool) -> String {
+    var builder = newBuilder()
+    builder.add("\"")
+    var run = 0
+    var start = 0
+    let n = s.count
+    var i = 0
+    while i < n {
+        let c = s.at(i)
+        let code = c.codePoint
+        let plain = code >= 32 && code != 34 && code != 92 && (code < 127 || !asciiOnly)
+        if plain {
+            run = run + 1
+            i = i + 1
+            continue
+        }
+
+        if run > 0 {
+            builder.add(s.slice(from: start, to: i))
+        }
+        builder.add(escape(c))
+        i = i + 1
+        start = i
+        run = 0
+    }
+    if run > 0 {
+        builder.add(s.slice(from: start, to: n))
+    }
+    builder.add("\"")
+    return builder.build()
+}
+
+public fn escape(_ c: Char) -> String {
+    let code = c.codePoint
+    if code == 34 {
+        return "\\\""
+    }
+    if code == 92 {
+        return "\\\\"
+    }
+    if code == 10 {
+        return "\\n"
+    }
+    if code == 13 {
+        return "\\r"
+    }
+    if code == 9 {
+        return "\\t"
+    }
+    if code == 8 {
+        return "\\b"
+    }
+    if code == 12 {
+        return "\\f"
+    }
+    if code < 0x10000 {
+        return "\\u" + hex4(code)
+    }
+    let shifted = code - 0x10000
+    return "\\u" + hex4(0xD800 + shifted / 1024) + "\\u" + hex4(0xDC00 + shifted % 1024)
+}
+
+// Numbers as JSON writes them: whole numbers that an F64 holds exactly
+// without a point, the rest in the shortest form that reads back the same.
+// JSON has no NaN or infinity; they are written as null.
+public fn formatNumber(_ n: F64) -> String {
+    if n != n {
+        return "null"
+    }
+    if n > 1.7976931348623157e308 || n < -1.7976931348623157e308 {
+        return "null"
+    }
+    if n == n.abs() * 0.0 + n && n.abs() < 9007199254740992.0 {
+        let whole = n as Int
+        if whole as F64 == n {
+            if whole == 0 && 1.0 / n < 0.0 {
+                return "-0"
+            }
+            return whole.toString()
+        }
+    }
+    return n.toString()
+}
+
+// ===========================================================================
+// JSON Pointer (RFC 6901)
+// ===========================================================================
+
+public union PointerError {
+    Malformed(pointer: String)
+    NotFound(pointer: String, at: String)
+}
+
+public fn describePointerError(_ error: PointerError) -> String {
+    return match error {
+        case .Malformed(let pointer) => "'\(pointer)' is not a JSON pointer"
+        case .NotFound(let pointer, let at) => "'\(pointer)' finds nothing at '\(at)'"
+    }
+}
+
+// "/a/b~1c/0" is ["a", "b/c", "0"]: '~1' stands for '/', and '~0' for '~'.
+public fn pointerTokens(_ pointer: String) throws(PointerError) -> String[>..] {
+    var tokens: String[>..] = []
+    if pointer.isEmpty {
+        return tokens
+    }
+    if pointer.at(0) != '/' {
+        throw PointerError.Malformed(pointer: pointer)
+    }
+
+    var current = newBuilder()
+    var i = 1
+    let n = pointer.count
+    while i < n {
+        let c = pointer.at(i)
+        if c == '/' {
+            tokens.append(current.build())
+            current = newBuilder()
+        } else if c == '~' {
+            if i + 1 >= n {
+                throw PointerError.Malformed(pointer: pointer)
+            }
+            let after = pointer.at(i + 1)
+            if after == '0' {
+                current.add("~")
+            } else if after == '1' {
+                current.add("/")
+            } else {
+                throw PointerError.Malformed(pointer: pointer)
+            }
+            i = i + 1
+        } else {
+            current.addChar(c)
+        }
+        i = i + 1
+    }
+    tokens.append(current.build())
+    return tokens
+}
+
+// An array index as a pointer writes it: digits, and no leading zero.
+public fn arrayIndex(_ token: String) -> Int? {
+    if token.isEmpty {
+        return none
+    }
+    if token.count > 1 && token.at(0) == '0' {
+        return none
+    }
+    var i = 0
+    while i < token.count {
+        if !token.at(i).isDigit {
+            return none
+        }
+        i = i + 1
+    }
+    return token.toInt()
+}
+
+public fn resolve(_ document: JsonValue, _ pointer: String) throws(PointerError) -> JsonValue {
+    let tokens = try pointerTokens(pointer)
+    var current = document
+    var walked = ""
+    for token in tokens {
+        walked = walked + "/" + token
+        let next = step(current, token)
+        guard let found = next else {
+            throw PointerError.NotFound(pointer: pointer, at: walked)
+        }
+        current = found
+    }
+    return current
+}
+
+fn step(_ value: JsonValue, _ token: String) -> JsonValue? {
+    return match value {
+        case .Object(_) => field(value, token)
+        case .Array(_) => stepIndex(value, token)
+        default => none
+    }
+}
+
+fn stepIndex(_ value: JsonValue, _ token: String) -> JsonValue? {
+    guard let index = arrayIndex(token) else {
+        return none
+    }
+    return element(value, index)
+}
+
+// A copy of the document with the value at the pointer replaced, or added
+// when the last step names a new key, or '-', the end of an array.
+public fn replacing(_ document: JsonValue, _ pointer: String, _ value: JsonValue) throws(PointerError) -> JsonValue {
+    let tokens = try pointerTokens(pointer)
+    return try replaceAt(document, tokens, 0, value, pointer)
+}
+
+fn replaceAt(_ current: JsonValue, _ tokens: String[>..], _ depth: Int, _ value: JsonValue, _ pointer: String) throws(PointerError) -> JsonValue {
+    if depth == tokens.count {
+        return value
+    }
+    let token = tokens[depth]
+    var walked = ""
+    var k = 0
+    while k <= depth {
+        walked = walked + "/" + escapePointerToken(tokens[k])
+        k = k + 1
+    }
+
+    match current {
+        case .Object(let members) => {
+            var result: Member[>..] = []
+            var found = false
+            for m in members {
+                if m.key == token && !found {
+                    result.append(Member { key: m.key, value: try replaceAt(m.value, tokens, depth + 1, value, pointer) })
+                    found = true
+                } else {
+                    result.append(m)
+                }
+            }
+            if !found {
+                if depth + 1 != tokens.count {
+                    throw PointerError.NotFound(pointer: pointer, at: walked)
+                }
+                result.append(Member { key: token, value: value })
+            }
+            return JsonValue.Object(members: result)
+        }
+        case .Array(let items) => {
+            if token == "-" && depth + 1 == tokens.count {
+                var appended = items
+                appended.append(value)
+                return JsonValue.Array(items: appended)
+            }
+            guard let index = arrayIndex(token) else {
+                throw PointerError.NotFound(pointer: pointer, at: walked)
+            }
+            if index >= items.count {
+                throw PointerError.NotFound(pointer: pointer, at: walked)
+            }
+            var changed = items
+            changed[index] = try replaceAt(items[index], tokens, depth + 1, value, pointer)
+            return JsonValue.Array(items: changed)
+        }
+        default => {
+            throw PointerError.NotFound(pointer: pointer, at: walked)
+        }
+    }
+}
+
+// ===========================================================================
+// JSON Merge Patch (RFC 7386)
+// ===========================================================================
+
+// A patch that is an object merges into the target, member by member: null
+// removes, an object merges, anything else replaces. Any other patch
+// replaces the target whole.
+public fn mergePatch(_ target: JsonValue, _ patch: JsonValue) -> JsonValue {
+    let patchMembers = match patch {
+        case .Object(let members) => members
+        default => {
+            return patch
+        }
+    }
+
+    var result: Member[>..] = []
+    let base = match target {
+        case .Object(let members) => members
+        default => []
+    }
+
+    for m in base {
+        let change = field(patch, m.key)
+        if let replacement = change {
+            if !isNull(replacement) {
+                result.append(Member { key: m.key, value: mergePatch(m.value, replacement) })
+            }
+        } else {
+            result.append(m)
+        }
+    }
+
+    for p in patchMembers {
+        if field(target, p.key) == none && !isNull(p.value) {
+            result.append(Member { key: p.key, value: mergePatch(JsonValue.Null, p.value) })
+        }
+    }
+
+    return JsonValue.Object(members: result)
+}
+
+// ===========================================================================
+// Comparing
+// ===========================================================================
+
+// Equal as JSON: numbers by value, strings by content, arrays in order, and
+// objects by their members whatever their order.
+public fn same(_ a: JsonValue, _ b: JsonValue) -> Bool {
+    match a {
+        case .Null => {
+            return isNull(b)
+        }
+        case .Bool(let x) => {
+            if let y = asBool(b) {
+                return x == y
+            }
+            return false
+        }
+        case .Number(let x) => {
+            if let y = asNumber(b) {
+                return x == y
+            }
+            return false
+        }
+        case .Text(let x) => {
+            if let y = asText(b) {
+                return x == y
+            }
+            return false
+        }
+        case .Array(let xs) => {
+            let ys = match b {
+                case .Array(let items) => items
+                default => {
+                    return false
+                }
+            }
+            if xs.count != ys.count {
+                return false
+            }
+            var i = 0
+            while i < xs.count {
+                if !same(xs[i], ys[i]) {
+                    return false
+                }
+                i = i + 1
+            }
+            return true
+        }
+        case .Object(let xs) => {
+            let ys = match b {
+                case .Object(let members) => members
+                default => {
+                    return false
+                }
+            }
+            if xs.count != ys.count {
+                return false
+            }
+            for m in xs {
+                guard let other = field(b, m.key) else {
+                    return false
+                }
+                if !same(m.value, other) {
+                    return false
+                }
+            }
+            return true
+        }
+    }
+}
+
+// The pointers at which two documents differ, in document order.
+public fn differences(_ a: JsonValue, _ b: JsonValue) -> String[>..] {
+    var found: String[>..] = []
+    collectDifferences(a, b, "", found)
+    return found
+}
+
+fn collectDifferences(_ a: JsonValue, _ b: JsonValue, _ at: String, _ found: inout String[>..]) {
+    if kindOf(a) != kindOf(b) {
+        found.append(at)
+        return
+    }
+
+    match a {
+        case .Array(let xs) => {
+            let ys = itemsOf(b)
+            let n = xs.count.max(ys.count)
+            var i = 0
+            while i < n {
+                let path = at + "/\(i)"
+                if i >= xs.count || i >= ys.count {
+                    found.append(path)
+                } else {
+                    collectDifferences(xs[i], ys[i], path, found)
+                }
+                i = i + 1
+            }
+        }
+        case .Object(let xs) => {
+            for m in xs {
+                let path = at + "/" + escapePointerToken(m.key)
+                if let other = field(b, m.key) {
+                    collectDifferences(m.value, other, path, found)
+                } else {
+                    found.append(path)
+                }
+            }
+            for m in membersOf(b) {
+                if field(a, m.key) == none {
+                    found.append(at + "/" + escapePointerToken(m.key))
+                }
+            }
+        }
+        default => {
+            if !same(a, b) {
+                found.append(at)
+            }
+        }
+    }
+}
+
+public fn escapePointerToken(_ token: String) -> String {
+    var builder = newBuilder()
+    var i = 0
+    while i < token.count {
+        let c = token.at(i)
+        if c == '~' {
+            builder.add("~0")
+        } else if c == '/' {
+            builder.add("~1")
+        } else {
+            builder.addChar(c)
+        }
+        i = i + 1
+    }
+    return builder.build()
+}
+
+// ===========================================================================
+// Measuring and transforming
+// ===========================================================================
+
+public struct Statistics {
+    public var values: Int
+    public var depth: Int
+    public var nulls: Int
+    public var booleans: Int
+    public var numbers: Int
+    public var strings: Int
+    public var arrays: Int
+    public var objects: Int
+    public var longestString: Int
+}
+
+public fn measure(_ value: JsonValue) -> Statistics {
+    var stats = Statistics {
+        values: 0, depth: 0, nulls: 0, booleans: 0, numbers: 0,
+        strings: 0, arrays: 0, objects: 0, longestString: 0
+    }
+    tally(value, 1, stats)
+    return stats
+}
+
+fn tally(_ value: JsonValue, _ depth: Int, _ stats: inout Statistics) {
+    stats.values = stats.values + 1
+    stats.depth = stats.depth.max(depth)
+    match value {
+        case .Null => {
+            stats.nulls = stats.nulls + 1
+        }
+        case .Bool(_) => {
+            stats.booleans = stats.booleans + 1
+        }
+        case .Number(_) => {
+            stats.numbers = stats.numbers + 1
+        }
+        case .Text(let t) => {
+            stats.strings = stats.strings + 1
+            stats.longestString = stats.longestString.max(t.count)
+        }
+        case .Array(let items) => {
+            stats.arrays = stats.arrays + 1
+            for item in items {
+                tally(item, depth + 1, stats)
+            }
+        }
+        case .Object(let members) => {
+            stats.objects = stats.objects + 1
+            for m in members {
+                tally(m.value, depth + 1, stats)
+            }
+        }
+    }
+}
+
+// The same document with every value a function of the old one, applied
+// leaves first.
+public fn transform(_ value: JsonValue, _ f: (JsonValue) -> JsonValue) -> JsonValue {
+    return match value {
+        case .Array(let items) => f(JsonValue.Array(items: mapValues(items, f)))
+        case .Object(let members) => f(JsonValue.Object(members: mapMembers(members, f)))
+        default => f(value)
+    }
+}
+
+fn mapValues(_ items: JsonValue[>..], _ f: (JsonValue) -> JsonValue) -> JsonValue[>..] {
+    var result: JsonValue[>..] = []
+    for item in items {
+        result.append(transform(item, f))
+    }
+    return result
+}
+
+fn mapMembers(_ members: Member[>..], _ f: (JsonValue) -> JsonValue) -> Member[>..] {
+    var result: Member[>..] = []
+    for m in members {
+        result.append(Member { key: m.key, value: transform(m.value, f) })
+    }
+    return result
+}
+
+// Every member whose key passes the test, at every level.
+public fn filterKeys(_ value: JsonValue, _ keep: (String) -> Bool) -> JsonValue {
+    return match value {
+        case .Array(let items) => JsonValue.Array(items: filterItems(items, keep))
+        case .Object(let members) => JsonValue.Object(members: filterMembers(members, keep))
+        default => value
+    }
+}
+
+fn filterItems(_ items: JsonValue[>..], _ keep: (String) -> Bool) -> JsonValue[>..] {
+    var result: JsonValue[>..] = []
+    for item in items {
+        result.append(filterKeys(item, keep))
+    }
+    return result
+}
+
+fn filterMembers(_ members: Member[>..], _ keep: (String) -> Bool) -> Member[>..] {
+    var result: Member[>..] = []
+    for m in members {
+        if keep(m.key) {
+            result.append(Member { key: m.key, value: filterKeys(m.value, keep) })
+        }
+    }
+    return result
+}
+
+// Every leaf with the pointer that reaches it, in document order.
+public fn flatten(_ value: JsonValue) -> String[>..] {
+    var lines: String[>..] = []
+    flattenInto(value, "", lines)
+    return lines
+}
+
+fn flattenInto(_ value: JsonValue, _ at: String, _ lines: inout String[>..]) {
+    match value {
+        case .Array(let items) => {
+            if items.count == 0 {
+                lines.append(at + " = []")
+            }
+            var i = 0
+            for item in items {
+                flattenInto(item, at + "/\(i)", lines)
+                i = i + 1
+            }
+        }
+        case .Object(let members) => {
+            if members.count == 0 {
+                lines.append(at + " = {}")
+            }
+            for m in members {
+                flattenInto(m.value, at + "/" + escapePointerToken(m.key), lines)
+            }
+        }
+        default => lines.append(at + " = " + render(value))
+    }
+}
+
+// ===========================================================================
+// The test suite
+// ===========================================================================
+
+// Counts what passed and failed, says what failed, and prints one line per
+// group, so that a run's output is short when everything works and specific
+// when something does not.
+public class Suite {
+    var passed: Int
+    var failed: Int
+    var group: String
+    var groupFailed: Int
+    var groupChecks: Int
+
+    init() {
+        self.passed = 0
+        self.failed = 0
+        self.group = ""
+        self.groupFailed = 0
+        self.groupChecks = 0
+    }
+
+    fn begin(_ name: String) {
+        group = name
+        groupFailed = 0
+        groupChecks = 0
+    }
+
+    fn end() {
+        if groupFailed == 0 {
+            print("ok   \(group) (\(groupChecks))")
+        } else {
+            print("FAIL \(group): \(groupFailed) of \(groupChecks)")
+        }
+    }
+
+    fn check(_ label: String, _ ok: Bool) {
+        groupChecks = groupChecks + 1
+        if ok {
+            passed = passed + 1
+            return
+        }
+        failed = failed + 1
+        groupFailed = groupFailed + 1
+        print("  failed: \(label)")
+    }
+
+    fn equal(_ label: String, _ actual: String, _ expected: String) {
+        check(label, actual == expected)
+        if actual != expected {
+            print("    expected: \(expected)")
+            print("    actual:   \(actual)")
+        }
+    }
+
+    fn equalInt(_ label: String, _ actual: Int, _ expected: Int) {
+        equal(label, "\(actual)", "\(expected)")
+    }
+
+    // Parses, and renders compactly; or says why it would not parse.
+    fn parsesTo(_ input: String, _ expected: String) {
+        equal(input, outcome(input, strict()), expected)
+    }
+
+    fn parsesWith(_ input: String, _ options: ParseOptions, _ expected: String) {
+        equal(input, outcome(input, options), expected)
+    }
+
+    fn rejects(_ input: String, _ expected: String) {
+        equal(input, outcome(input, strict()), "error: " + expected)
+    }
+
+    fn summary() -> Int {
+        print("")
+        print("\(passed) passed, \(failed) failed")
+        return failed
+    }
+}
+
+public fn outcome(_ input: String, _ options: ParseOptions) -> String {
+    do {
+        return render(try parseWith(input, options))
+    } catch {
+        return "error: " + describeError(error)
+    }
+}
+
+fn mustParse(_ input: String) -> JsonValue {
+    do {
+        return try parse(input)
+    } catch {
+        print("could not parse a test document: " + describeError(error))
+        return JsonValue.Null
+    }
+}
+
+fn pointerOutcome(_ document: JsonValue, _ pointer: String) -> String {
+    do {
+        return render(try resolve(document, pointer))
+    } catch {
+        return "error: " + describePointerError(error)
+    }
+}
+
+fn replacedOutcome(_ document: JsonValue, _ pointer: String, _ value: JsonValue) -> String {
+    do {
+        return render(try replacing(document, pointer, value))
+    } catch {
+        return "error: " + describePointerError(error)
+    }
+}
+
+// ---- Values ---------------------------------------------------------------
+
+fn testLiterals(_ t: Suite) {
+    t.begin("literals")
+    t.parsesTo("null", "null")
+    t.parsesTo("true", "true")
+    t.parsesTo("false", "false")
+    t.parsesTo("  \t\r\n true \n", "true")
+    t.parsesTo("\"\"", "\"\"")
+    t.parsesTo(#""hello""#, #""hello""#)
+    t.rejects("nul", "line 1, column 4: the text ends where 'null' was expected")
+    t.rejects("tru e", "line 1, column 4: found ' ' where 'true' was expected")
+    t.rejects("True", "line 1, column 1: found 'T' where a value was expected")
+    t.rejects("", "line 1, column 1: the text ends where a value was expected")
+    t.rejects("   ", "line 1, column 4: the text ends where a value was expected")
+    t.end()
+}
+
+fn testNumbers(_ t: Suite) {
+    t.begin("numbers")
+    t.parsesTo("0", "0")
+    t.parsesTo("-0", "-0")
+    t.parsesTo("42", "42")
+    t.parsesTo("-17", "-17")
+    t.parsesTo("1.5", "1.5")
+    t.parsesTo("0.1", "0.1")
+    t.parsesTo("-0.25", "-0.25")
+    t.parsesTo("1e2", "100")
+    t.parsesTo("1E2", "100")
+    t.parsesTo("1e+2", "100")
+    t.parsesTo("1E-2", "0.01")
+    t.parsesTo("2.5e-3", "0.0025")
+    t.parsesTo("-12.5e+3", "-12500")
+    t.parsesTo("1e100", "1e+100")
+    t.parsesTo("123456789", "123456789")
+    t.parsesTo("9007199254740991", "9007199254740991")
+    t.parsesTo("[1, 2.0, 3.25]", "[1,2,3.25]")
+    t.equal("whole", formatNumber(7.0), "7")
+    t.equal("third", formatNumber(1.0 / 3.0), "0.3333333333333333")
+    t.equal("large", formatNumber(1.0e21), "1e+21")
+    t.equal("small", formatNumber(0.000001), "1e-06")
+    t.end()
+}
+
+fn testInvalidNumbers(_ t: Suite) {
+    t.begin("invalid numbers")
+    t.rejects("01", "line 1, column 1: invalid number: a leading zero")
+    t.rejects("-01", "line 1, column 1: invalid number: a leading zero")
+    t.rejects("1.", "line 1, column 1: invalid number: no digits after the point")
+    t.rejects("1.e3", "line 1, column 1: invalid number: no digits after the point")
+    t.rejects(".5", "line 1, column 1: found '.' where a value was expected")
+    t.rejects("+1", "line 1, column 1: found '+' where a value was expected")
+    t.rejects("-", "line 1, column 1: invalid number: no digits")
+    t.rejects("--1", "line 1, column 1: invalid number: no digits")
+    t.rejects("1e", "line 1, column 1: invalid number: no digits in the exponent")
+    t.rejects("1e+", "line 1, column 1: invalid number: no digits in the exponent")
+    t.rejects("0x10", "line 1, column 2: text after the value")
+    t.rejects("NaN", "line 1, column 1: found 'N' where a value was expected")
+    t.rejects("Infinity", "line 1, column 1: found 'I' where a value was expected")
+    t.rejects("1e999", "line 1, column 1: invalid number: out of range")
+    t.end()
+}
+
+fn testStrings(_ t: Suite) {
+    t.begin("strings and escapes")
+    t.parsesTo(#""a\"b""#, #""a\"b""#)
+    t.parsesTo(#""a\\b""#, #""a\\b""#)
+    t.parsesTo(#""a\/b""#, #""a/b""#)
+    t.parsesTo(#""\b\f\n\r\t""#, #""\b\f\n\r\t""#)
+    t.parsesTo(#""\u0041\u00e9""#, #""Aé""#)
+    t.parsesTo(#""\u20AC""#, #""€""#)
+    t.parsesTo(#""\ud83d\ude00""#, #""😀""#)
+    t.parsesTo(#""\u0000""#, #""\u0000""#)
+    t.parsesTo(#""\u001f""#, #""\u001f""#)
+    t.parsesTo(#""héllo wörld""#, #""héllo wörld""#)
+    t.rejects(#""\x""#, #"line 1, column 2: \x is not an escape"#)
+    t.rejects(#""\u12""#, "line 1, column 6: found '\"' where a hex digit was expected")
+    t.rejects(#""\u12g4""#, "line 1, column 6: found 'g' where a hex digit was expected")
+    t.rejects(#""\ud83d""#, #"line 1, column 2: invalid \u escape: a high surrogate with no low one after it"#)
+    t.rejects(#""\ud83dx""#, #"line 1, column 2: invalid \u escape: a high surrogate with no low one after it"#)
+    t.rejects(#""\ud83d\u0041""#, #"line 1, column 2: invalid \u escape: a high surrogate followed by something else"#)
+    t.rejects(#""\ude00""#, #"line 1, column 2: invalid \u escape: a low surrogate with no high one before it"#)
+    t.rejects("\"a\tb\"", "line 1, column 3: control character U+0009 must be escaped")
+    t.rejects("\"a\nb\"", "line 1, column 3: control character U+000a must be escaped")
+    t.rejects(#""abc"#, "line 1, column 5: the text ends where the end of the string was expected")
+    t.end()
+}
+
+// ---- Structure ------------------------------------------------------------
+
+fn testArrays(_ t: Suite) {
+    t.begin("arrays")
+    t.parsesTo("[]", "[]")
+    t.parsesTo("[ ]", "[]")
+    t.parsesTo("[1]", "[1]")
+    t.parsesTo("[1,2,3]", "[1,2,3]")
+    t.parsesTo(" [ 1 , \"two\" , [ 3 ] , { } ] ", #"[1,"two",[3],{}]"#)
+    t.parsesTo("[[[[]]]]", "[[[[]]]]")
+    t.parsesTo("[null,true,false]", "[null,true,false]")
+    t.rejects("[", "line 1, column 2: the text ends where a value was expected")
+    t.rejects("[1", "line 1, column 3: the text ends where ',' or ']' was expected")
+    t.rejects("[1,", "line 1, column 4: the text ends where a value was expected")
+    t.rejects("[1 2]", "line 1, column 4: found '2' where ',' or ']' was expected")
+    t.rejects("[1,]", "line 1, column 4: found ']' where a value was expected")
+    t.rejects("[,1]", "line 1, column 2: found ',' where a value was expected")
+    t.rejects("[1]]", "line 1, column 4: text after the value")
+    t.end()
+}
+
+fn testObjects(_ t: Suite) {
+    t.begin("objects")
+    t.parsesTo("{}", "{}")
+    t.parsesTo(#"{"a":1}"#, #"{"a":1}"#)
+    t.parsesTo(#"{ "a" : 1 , "b" : [ true ] }"#, #"{"a":1,"b":[true]}"#)
+    t.parsesTo(#"{"b":1,"a":2}"#, #"{"b":1,"a":2}"#)
+    t.parsesTo(#"{"a":{"b":{"c":{}}}}"#, #"{"a":{"b":{"c":{}}}}"#)
+    t.parsesTo(#"{"":0}"#, #"{"":0}"#)
+    t.parsesTo(#"{"a":1,"a":2}"#, #"{"a":1,"a":2}"#)
+    t.rejects("{", "line 1, column 2: the text ends where a key was expected")
+    t.rejects("{a:1}", "line 1, column 2: found 'a' where a key was expected")
+    t.rejects(#"{"a" 1}"#, "line 1, column 6: found '1' where ':' was expected")
+    t.rejects(#"{"a":}"#, "line 1, column 6: found '}' where a value was expected")
+    t.rejects(#"{"a":1,}"#, "line 1, column 8: found '}' where a key was expected")
+    t.rejects(#"{"a":1 "b":2}"#, "line 1, column 8: found '\"' where ',' or '}' was expected")
+    t.rejects(#"{1:2}"#, "line 1, column 2: found '1' where a key was expected")
+    t.end()
+}
+
+fn testPositions(_ t: Suite) {
+    t.begin("error positions")
+    let document = "{\n  \"name\": \"Sable\",\n  \"tags\": [\"fast\" \"safe\"]\n}"
+    t.equal("a missing comma", outcome(document, strict()), "error: line 3, column 19: found '\"' where ',' or ']' was expected")
+
+    let deep = "[\n[\n[\n  tru\n]\n]\n]"
+    t.equal("a bad literal", outcome(deep, strict()), "error: line 4, column 6: found U+000a where 'true' was expected")
+
+    let trailing = "{}\n\n   x"
+    t.equal("trailing text", outcome(trailing, strict()), "error: line 3, column 4: text after the value")
+    t.end()
+}
+
+fn testOptions(_ t: Suite) {
+    t.begin("options")
+    let commented = "// settings\n{\n  \"a\": 1, /* the first */\n  \"b\": [2, 3,],\n}"
+    t.equal("strict rejects comments", outcome(commented, strict()), "error: line 1, column 1: found '/' where a value was expected")
+    t.parsesWith(commented, relaxed(), #"{"a":1,"b":[2,3]}"#)
+    t.parsesWith("[1, 2,]", relaxed(), "[1,2]")
+    t.parsesWith("/* only */ 7", relaxed(), "7")
+    t.parsesWith("[1 /* unclosed", relaxed(), "error: line 1, column 15: the text ends where the end of the comment was expected")
+
+    var unique = strict()
+    unique.rejectDuplicateKeys = true
+    t.parsesWith(#"{"a":1,"b":2}"#, unique, #"{"a":1,"b":2}"#)
+    t.parsesWith(#"{"a":1,"a":2}"#, unique, #"error: line 1, column 8: the key "a" appears twice"#)
+
+    var shallow = strict()
+    shallow.maxDepth = 3
+    t.parsesWith("[[[1]]]", shallow, "[[[1]]]")
+    t.parsesWith("[[[[1]]]]", shallow, "error: line 1, column 4: nested more than 3 deep")
+    t.parsesWith(#"{"a":{"b":{"c":{}}}}"#, shallow, "error: line 1, column 16: nested more than 3 deep")
+    t.end()
+}
+
+fn testDeepNesting(_ t: Suite) {
+    t.begin("deep nesting")
+    let depth = 400
+    let text = repeated("[", depth) + "0" + repeated("]", depth)
+    let value = mustParse(text)
+    t.equalInt("depth", measure(value).depth, depth + 1)
+    t.equal("round trip", render(value), text)
+    t.equal("too deep", outcome(repeated("[", 600) + repeated("]", 600), strict()), "error: line 1, column 513: nested more than 512 deep")
+    t.end()
+}
+
+// ---- Printing -------------------------------------------------------------
+
+fn testPretty(_ t: Suite) {
+    t.begin("pretty printing")
+    let value = mustParse(#"{"name":"Sable","version":2,"tags":["fast","safe"],"meta":{},"list":[],"nested":{"x":[1,{"y":null}]}}"#)
+    let two = "{\n  \"name\": \"Sable\",\n  \"version\": 2,\n  \"tags\": [\n    \"fast\",\n    \"safe\"\n  ],\n  \"meta\": {},\n  \"list\": [],\n  \"nested\": {\n    \"x\": [\n      1,\n      {\n        \"y\": null\n      }\n    ]\n  }\n}"
+    t.equal("indent 2", renderWith(value, pretty(2)), two)
+
+    let four = renderWith(mustParse("[1,[2]]"), pretty(4))
+    t.equal("indent 4", four, "[\n    1,\n    [\n        2\n    ]\n]")
+
+    var spaced = compact()
+    spaced.spaced = true
+    t.equal("spaced", renderWith(value, spaced), #"{"name": "Sable", "version": 2, "tags": ["fast", "safe"], "meta": {}, "list": [], "nested": {"x": [1, {"y": null}]}}"#)
+    t.equal("scalars ignore indent", renderWith(mustParse("3"), pretty(2)), "3")
+    t.end()
+}
+
+fn testSortedAndAscii(_ t: Suite) {
+    t.begin("sorted keys and ASCII output")
+    let value = mustParse(#"{"zeta":1,"alpha":{"b":2,"a":1},"Mid":3,"é":4,"":5}"#)
+    var sortedOptions = compact()
+    sortedOptions.sortKeys = true
+    t.equal("sorted", renderWith(value, sortedOptions), #"{"":5,"Mid":3,"alpha":{"a":1,"b":2},"zeta":1,"é":4}"#)
+    t.equal("canonical", renderWith(value, canonical()), #"{"":5,"Mid":3,"alpha":{"a":1,"b":2},"zeta":1,"\u00e9":4}"#)
+    t.equal("astral", quote("😀", true), #""\ud83d\ude00""#)
+    t.equal("astral kept", quote("😀", false), #""😀""#)
+    t.equal("controls", quote("\u{1}\u{1f}", false), #""\u0001\u001f""#)
+    t.equal("delete in ASCII", quote("\u{7f}", true), #""\u007f""#)
+    t.equal("quotes", quote("say \"hi\" \\ bye", false), #""say \"hi\" \\ bye""#)
+    t.end()
+}
+
+fn testRoundTrips(_ t: Suite) {
+    t.begin("round trips")
+    let documents: String[>..] = [
+        "null",
+        "[1,2.5,-3e-7,1e+300]",
+        #"{"a":[true,false,null],"b":{"c":"d"}}"#,
+        #"["\u0000","\n","😀","é","\\","\""]"#,
+        #"[{},[],"",0,{"":{"":[]}}]"#,
+        #"{"numbers":[0.1,0.2,0.30000000000000004,1.7976931348623157e+308,5e-324]}"#,
+    ]
+    for document in documents {
+        let value = mustParse(document)
+        t.check("compact " + document, same(mustParse(render(value)), value))
+        t.check("pretty " + document, same(mustParse(renderWith(value, pretty(3))), value))
+        t.check("canonical " + document, same(mustParse(renderWith(value, canonical())), value))
+    }
+    t.equal("shortest", render(mustParse("[0.1,0.2,0.30000000000000004]")), "[0.1,0.2,0.30000000000000004]")
+    t.end()
+}
+
+// ---- Queries --------------------------------------------------------------
+
+fn rfc6901() -> JsonValue {
+    return mustParse(#"{"foo": ["bar", "baz"], "": 0, "a/b": 1, "c%d": 2, "e^f": 3, "g|h": 4, "i\\j": 5, "k\"l": 6, " ": 7, "m~n": 8}"#)
+}
+
+fn testPointers(_ t: Suite) {
+    t.begin("JSON pointer (RFC 6901)")
+    let doc = rfc6901()
+    t.equal("whole", pointerOutcome(doc, ""), render(doc))
+    t.equal("/foo", pointerOutcome(doc, "/foo"), #"["bar","baz"]"#)
+    t.equal("/foo/0", pointerOutcome(doc, "/foo/0"), #""bar""#)
+    t.equal("/", pointerOutcome(doc, "/"), "0")
+    t.equal("/a~1b", pointerOutcome(doc, "/a~1b"), "1")
+    t.equal("/c%d", pointerOutcome(doc, "/c%d"), "2")
+    t.equal("/e^f", pointerOutcome(doc, "/e^f"), "3")
+    t.equal("/g|h", pointerOutcome(doc, "/g|h"), "4")
+    t.equal("/i\\j", pointerOutcome(doc, "/i\\j"), "5")
+    t.equal("/k\"l", pointerOutcome(doc, "/k\"l"), "6")
+    t.equal("/ ", pointerOutcome(doc, "/ "), "7")
+    t.equal("/m~0n", pointerOutcome(doc, "/m~0n"), "8")
+    t.equal("missing", pointerOutcome(doc, "/foo/2"), "error: '/foo/2' finds nothing at '/foo/2'")
+    t.equal("leading zero", pointerOutcome(doc, "/foo/01"), "error: '/foo/01' finds nothing at '/foo/01'")
+    t.equal("through a scalar", pointerOutcome(doc, "/foo/0/x"), "error: '/foo/0/x' finds nothing at '/foo/0/x'")
+    t.equal("no slash", pointerOutcome(doc, "foo"), "error: 'foo' is not a JSON pointer")
+    t.equal("bad tilde", pointerOutcome(doc, "/m~2n"), "error: '/m~2n' is not a JSON pointer")
+    t.equal("lone tilde", pointerOutcome(doc, "/m~"), "error: '/m~' is not a JSON pointer")
+    t.end()
+}
+
+fn testReplacing(_ t: Suite) {
+    t.begin("replacing by pointer")
+    let doc = mustParse(#"{"a":{"b":[1,2,3]},"c":true}"#)
+    t.equal("replace", replacedOutcome(doc, "/a/b/1", text("two")), #"{"a":{"b":[1,"two",3]},"c":true}"#)
+    t.equal("append", replacedOutcome(doc, "/a/b/-", integer(4)), #"{"a":{"b":[1,2,3,4]},"c":true}"#)
+    t.equal("add key", replacedOutcome(doc, "/a/d", null()), #"{"a":{"b":[1,2,3],"d":null},"c":true}"#)
+    t.equal("whole", replacedOutcome(doc, "", integer(1)), "1")
+    t.equal("missing parent", replacedOutcome(doc, "/x/y", integer(1)), "error: '/x/y' finds nothing at '/x'")
+    t.equal("past the end", replacedOutcome(doc, "/a/b/3", integer(1)), "error: '/a/b/3' finds nothing at '/a/b/3'")
+    t.equal("the original is unchanged", render(doc), #"{"a":{"b":[1,2,3]},"c":true}"#)
+    t.end()
+}
+
+fn testMergePatch(_ t: Suite) {
+    t.begin("merge patch (RFC 7386)")
+    let cases: String[>..] = [
+        #"{"a":"b"}"#, #"{"a":"c"}"#, #"{"a":"c"}"#,
+        #"{"a":"b"}"#, #"{"b":"c"}"#, #"{"a":"b","b":"c"}"#,
+        #"{"a":"b"}"#, #"{"a":null}"#, #"{}"#,
+        #"{"a":"b","b":"c"}"#, #"{"a":null}"#, #"{"b":"c"}"#,
+        #"{"a":["b"]}"#, #"{"a":"c"}"#, #"{"a":"c"}"#,
+        #"{"a":"c"}"#, #"{"a":["b"]}"#, #"{"a":["b"]}"#,
+        #"{"a":{"b":"c"}}"#, #"{"a":{"b":"d","c":null}}"#, #"{"a":{"b":"d"}}"#,
+        #"{"a":[{"b":"c"}]}"#, #"{"a":[1]}"#, #"{"a":[1]}"#,
+        #"["a","b"]"#, #"["c","d"]"#, #"["c","d"]"#,
+        #"{"a":"b"}"#, #"["c"]"#, #"["c"]"#,
+        #"{"a":"foo"}"#, "null", "null",
+        #"{"a":"foo"}"#, #""bar""#, #""bar""#,
+        #"{"e":null}"#, #"{"a":1}"#, #"{"e":null,"a":1}"#,
+        #"[1,2]"#, #"{"a":"b","c":null}"#, #"{"a":"b"}"#,
+        #"{}"#, #"{"a":{"bb":{"ccc":null}}}"#, #"{"a":{"bb":{}}}"#,
+    ]
+    var i = 0
+    while i + 2 < cases.count {
+        let merged = mergePatch(mustParse(cases[i]), mustParse(cases[i + 1]))
+        t.equal(cases[i] + " + " + cases[i + 1], render(merged), cases[i + 2])
+        i = i + 3
+    }
+    t.end()
+}
+
+fn testComparing(_ t: Suite) {
+    t.begin("comparing")
+    t.check("same objects in another order", same(mustParse(#"{"a":1,"b":[2]}"#), mustParse(#"{"b":[2],"a":1}"#)))
+    t.check("arrays keep their order", !same(mustParse("[1,2]"), mustParse("[2,1]")))
+    t.check("numbers by value", same(mustParse("1.0"), mustParse("1")))
+    t.check("kinds differ", !same(mustParse("0"), mustParse("false")))
+    t.check("missing member", !same(mustParse(#"{"a":1}"#), mustParse(#"{"a":1,"b":2}"#)))
+    t.check("null is null", same(null(), mustParse("null")))
+    t.equal("differences",
+        join(differences(mustParse(#"{"a":[1,2,3],"b":{"c":1},"d":"x"}"#), mustParse(#"{"a":[1,5],"b":{"c":1,"e/f":2},"d":3,"g":0}"#)), " "),
+        "/a/1 /a/2 /b/e~1f /d /g")
+    t.equal("no differences", join(differences(rfc6901(), rfc6901()), " "), "")
+    t.end()
+}
+
+// ---- Measuring and transforming -------------------------------------------
+
+fn testStatistics(_ t: Suite) {
+    t.begin("statistics")
+    let stats = measure(mustParse(#"{"a":[1,"two",null,true,{"b":"three!"}],"c":{}}"#))
+    t.equalInt("values", stats.values, 9)
+    t.equalInt("depth", stats.depth, 4)
+    t.equalInt("nulls", stats.nulls, 1)
+    t.equalInt("booleans", stats.booleans, 1)
+    t.equalInt("numbers", stats.numbers, 1)
+    t.equalInt("strings", stats.strings, 2)
+    t.equalInt("arrays", stats.arrays, 1)
+    t.equalInt("objects", stats.objects, 3)
+    t.equalInt("longest string", stats.longestString, 6)
+    t.end()
+}
+
+fn doubleNumbers(_ value: JsonValue) -> JsonValue {
+    if let n = asNumber(value) {
+        return number(n * 2.0)
+    }
+    return value
+}
+
+fn testTransforming(_ t: Suite) {
+    t.begin("transforming")
+    let doc = mustParse(#"{"a":1,"secret":2,"b":[3,{"secret":4,"c":5}]}"#)
+    t.equal("double", render(transform(doc, doubleNumbers)), #"{"a":2,"secret":4,"b":[6,{"secret":8,"c":10}]}"#)
+    t.equal("filter", render(filterKeys(doc, (key: String) => key != "secret")), #"{"a":1,"b":[3,{"c":5}]}"#)
+
+    var seen = 0
+    let counted = transform(doc, (v: JsonValue) => {
+        seen = seen + 1
+        return v
+    })
+    t.equalInt("visits every value", seen, 8)
+    t.check("unchanged", same(counted, doc))
+
+    t.equal("flatten", join(flatten(doc), "; "), "/a = 1; /secret = 2; /b/0 = 3; /b/1/secret = 4; /b/1/c = 5")
+    t.equal("flatten empties", join(flatten(mustParse(#"{"x":[],"y":{}}"#)), "; "), "/x = []; /y = {}")
+    t.end()
+}
+
+fn testBuilding(_ t: Suite) {
+    t.begin("building")
+    let built = object([
+        member("name", text("Sable")),
+        member("tags", array([text("fast"), text("safe")])),
+        member("stable", boolean(false)),
+        member("version", integer(2)),
+        member("ratio", number(0.5)),
+        member("parent", null())
+    ])
+    t.equal("rendered", render(built), #"{"name":"Sable","tags":["fast","safe"],"stable":false,"version":2,"ratio":0.5,"parent":null}"#)
+    t.equal("kind", kindOf(built), "object")
+    t.equalInt("count", countOf(built), 6)
+    t.equal("keys", join(keysOf(built), ","), "name,tags,stable,version,ratio,parent")
+    t.equal("field", asText(field(built, "name") ?? null()) ?? "?", "Sable")
+    t.check("no field", field(built, "nope") == none)
+    t.equal("element", asText(element(field(built, "tags") ?? null(), 1) ?? null()) ?? "?", "safe")
+    t.check("no element", element(field(built, "tags") ?? null(), 2) == none)
+    t.check("negative element", element(field(built, "tags") ?? null(), -1) == none)
+    t.end()
+}
+
+// ---- The pieces underneath -----------------------------------------------
+
+fn testText(_ t: Suite) {
+    t.begin("text utilities")
+    t.equal("hex", hex4(0) + " " + hex4(255) + " " + hex4(0xBEEF), "0000 00ff beef")
+    t.equalInt("hex value", (hexValue('7') ?? -1) + (hexValue('a') ?? -1) + (hexValue('F') ?? -1), 7 + 10 + 15)
+    t.check("not hex", hexValue('g') == none)
+    t.equalInt("less", compareText("abc", "abd"), -1)
+    t.equalInt("greater", compareText("b", "abc"), 1)
+    t.equalInt("prefix", compareText("ab", "abc"), -1)
+    t.equalInt("equal", compareText("é", "é"), 0)
+    t.equal("join", join(["a", "b", "c"], ", "), "a, b, c")
+    t.equal("join one", join(["a"], ", "), "a")
+    let nothing: String[>..] = []
+    t.equal("join none", join(nothing, ", "), "")
+    t.equal("repeat", repeated("ab", 3), "ababab")
+
+    var builder = newBuilder()
+    var i = 0
+    while i < 1000 {
+        builder.add("\(i % 10)")
+        i = i + 1
+    }
+    let long = builder.build()
+    t.equalInt("builder length", long.count, 1000)
+    t.equal("builder end", long.slice(from: 995, to: 1000), "56789")
+    t.end()
+}
+
+fn testSorting(_ t: Suite) {
+    t.begin("sorting")
+    let numbers: Int[>..] = [5, 3, 9, 1, 5, 7, 2, 8, 0, 6, 4]
+    let ascending = sorted(numbers, (a: Int, b: Int) => a < b)
+    var line = ""
+    for n in ascending {
+        line = line + "\(n)"
+    }
+    t.equal("ints", line, "01234556789")
+
+    let words: String[>..] = ["pear", "Apple", "fig", "apple", "banana"]
+    t.equal("strings", join(sorted(words, (a: String, b: String) => compareText(a, b) < 0), " "), "Apple apple banana fig pear")
+    t.equal("by length, stable", join(sorted(words, (a: String, b: String) => a.count < b.count), " "), "fig pear Apple apple banana")
+
+    let empty: Int[>..] = []
+    t.equalInt("empty", sorted(empty, (a: Int, b: Int) => a < b).count, 0)
+    t.end()
+}
+
+// ---- A larger document ----------------------------------------------------
+
+fn makeRecords(_ count: Int) -> JsonValue {
+    var records: JsonValue[>..] = []
+    var i = 0
+    while i < count {
+        records.append(object([
+            member("id", integer(i)),
+            member("name", text("record \(i)")),
+            member("score", number((i * 37 % 101) as F64 / 4.0)),
+            member("active", boolean(i % 3 == 0)),
+            member("tags", array([text("t\(i % 5)"), text("t\(i % 7)")]))
+        ]))
+        i = i + 1
+    }
+    return object([member("records", array(records)), member("count", integer(count))])
+}
+
+fn testLargeDocument(_ t: Suite) {
+    t.begin("a larger document")
+    let doc = makeRecords(300)
+    let compactText = render(doc)
+    let prettyText = renderWith(doc, pretty(2))
+    let back = mustParse(prettyText)
+    t.check("pretty round trip", same(back, doc))
+    t.check("compact round trip", same(mustParse(compactText), doc))
+    t.equal("same compact text", render(back), compactText)
+
+    let stats = measure(doc)
+    t.equalInt("values", stats.values, 3 + 300 * 8)
+    t.equalInt("depth", stats.depth, 5)
+
+    var active = 0
+    var total = 0.0
+    for record in itemsOf(field(doc, "records") ?? null()) {
+        if asBool(field(record, "active") ?? null()) ?? false {
+            active = active + 1
+        }
+        total = total + (asNumber(field(record, "score") ?? null()) ?? 0.0)
+    }
+    t.equalInt("active", active, 100)
+    t.equal("score total", formatNumber(total), "3742")
+    t.equal("pointer", pointerOutcome(doc, "/records/123/tags/1"), #""t4""#)
+    t.end()
+}
+
+@main
+fn main() -> Int {
+    let t = Suite()
+    testLiterals(t)
+    testNumbers(t)
+    testInvalidNumbers(t)
+    testStrings(t)
+    testArrays(t)
+    testObjects(t)
+    testPositions(t)
+    testOptions(t)
+    testDeepNesting(t)
+    testPretty(t)
+    testSortedAndAscii(t)
+    testRoundTrips(t)
+    testPointers(t)
+    testReplacing(t)
+    testMergePatch(t)
+    testComparing(t)
+    testStatistics(t)
+    testTransforming(t)
+    testBuilding(t)
+    testText(t)
+    testSorting(t)
+    testLargeDocument(t)
+    return t.summary()
+}

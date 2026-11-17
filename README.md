@@ -106,11 +106,18 @@ dotnet test Sable.slnx
 | `Sable.Symbols` — patterns, match, exhaustiveness, flow | done |
 | `Sable.Symbols` — generic substitution and inference | done |
 | `Sable.Symbols` — protocol conformance | done |
-| `Sable.Symbols` — definite assignment, closures, extensions | not started |
+| `Sable.Symbols` — closures and function values | done |
+| `Sable.Symbols` — extensions and memberwise initialisers | done |
+| `Sable.Symbols` — effects: `throws` and `async` | done |
+| `Sable.Symbols` — definite assignment and the flow-analysis API | done |
+| `Sable.Symbols` — negative-diagnostic corpus | in progress |
 | Everything downstream (SIL, codegen, runtime) | not started |
 
-**855 tests green**, and every file in [examples/](examples/) parses as a
+**973 tests green**, and every file in [examples/](examples/) parses as a
 complete compilation unit with no diagnostics and an exact round-trip.
+[tests/corpus/](tests/corpus/) holds programs that must type-check with
+nothing to say, and [tests/negative/](tests/negative/) holds programs that
+must fail, each claiming the exact diagnostic its line produces.
 
 The lexer covers all of [spec/lexical.md](spec/lexical.md): full-fidelity
 trivia, nested block comments, every literal form including interpolated and

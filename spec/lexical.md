@@ -227,7 +227,9 @@ them and the IDE can offer to switch configurations. The directive lines
 themselves are `Directive` trivia.
 
 A directive must be the first thing on its line, which is what separates it
-from the `#file`-style builtins. The condition after `#if` and `#elseif` may
+from the `#file`-style builtins — those five names are read as builtins
+wherever they appear, and any other `#name` at the start of a line is a
+directive, reported as unknown if it is not one of the six above. The condition after `#if` and `#elseif` may
 use identifiers, `true`, `false`, `os(...)`, `arch(...)`, `feature(...)`, `!`,
 `&&`, `||` and parentheses, and nothing else: it is evaluated before any
 semantic analysis exists. A malformed condition disables its region and reports

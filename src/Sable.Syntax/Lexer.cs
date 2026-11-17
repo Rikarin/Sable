@@ -468,6 +468,8 @@ public sealed class Lexer
         var span = new TextSpan(start, _position - start);
         CheckUnderscores(text, span);
 
+        CheckNoTrailingDigits(start, 10);
+
         var cleaned = text.Replace("_", "", StringComparison.Ordinal);
 
         if (isFloat)
@@ -512,27 +514,31 @@ public sealed class Lexer
     }
 
     /// <summary>
-    /// Reports a character that would have been part of the literal in another
-    /// base.
+    /// Reports a literal that runs straight into letters or digits.
     /// </summary>
     /// <remarks>
-    /// The grammar in spec/lexical.md §"Integer" stops a binary literal at the
-    /// first non-binary digit, so <c>0b12</c> would otherwise lex as
-    /// <c>0b1</c> followed by <c>2</c> and mean something. Saying so is always
-    /// better than silently agreeing with it.
+    /// The grammar in spec/lexical.md §6 stops a literal at the first
+    /// character it cannot use, so <c>0b12</c> would lex as <c>0b1</c>
+    /// followed by <c>2</c>, and <c>1.0f</c> as <c>1.0</c> followed by a name.
+    /// Since suffixes are not supported, neither of those is ever what was
+    /// meant, and saying so beats silently agreeing with it.
     /// </remarks>
     private void CheckNoTrailingDigits(int start, int radix)
     {
         if (AtEnd || !char.IsAsciiLetterOrDigit(Current)) return;
 
         var bad = Current;
-        var from = _position;
         while (!AtEnd && (char.IsAsciiLetterOrDigit(Current) || Current == '_')) _position++;
 
-        _diagnostics.Error(ErrorCode.ERR_InvalidDigitForBase,
-            new TextSpan(start, _position - start),
-            $"'{bad}' is not a valid base-{radix} digit");
-        _ = from;
+        var code = char.IsAsciiDigit(bad) && radix != 10
+            ? ErrorCode.ERR_InvalidDigitForBase
+            : ErrorCode.ERR_InvalidFloatLiteral;
+
+        _diagnostics.Error(code, new TextSpan(start, _position - start),
+            char.IsAsciiDigit(bad) && radix != 10
+                ? $"'{bad}' is not a valid base-{radix} digit"
+                : $"'{TextBetween(start, _position)}' is not a valid numeric literal; "
+                    + "suffixes are not supported, so write a type annotation or 'as'");
     }
 
     private (SyntaxKind, object?, ImmutableArray<StringPart>) ScanRadixOrHexFloat(int start, int radix)
@@ -612,6 +618,34 @@ public sealed class Lexer
             _diagnostics.Error(ErrorCode.ERR_TrailingUnderscoreInNumber, span,
                 "numeric literal may not end with '_'");
         }
+
+        // "Underscores are separators and may not lead" (spec/lexical.md §6).
+        // A decimal literal cannot start with one — that is an identifier —
+        // but '0x_1' can, and the digits after a '.' or an 'e' can too.
+        if (LeadsWithUnderscore(text))
+        {
+            _diagnostics.Error(ErrorCode.ERR_LeadingUnderscoreInNumber, span,
+                "'_' is a separator in a numeric literal, so it may not lead a digit run");
+        }
+    }
+
+    private static bool LeadsWithUnderscore(string text)
+    {
+        // '0x', '0o' and '0b' are the literal's prefix, not a digit run.
+        var start = text.Length > 1 && text[0] == '0'
+            && text[1] is 'x' or 'X' or 'o' or 'O' or 'b' or 'B'
+                ? 2
+                : 0;
+
+        for (var i = start; i < text.Length; i++)
+        {
+            if (text[i] != '_') continue;
+
+            // An underscore leads when what precedes it is not a digit: the
+            // start of the literal, or a '.', 'e' or prefix just before it.
+            if (i == start || !char.IsAsciiHexDigit(text[i - 1])) return true;
+        }
+        return false;
     }
 
     private ulong ParseRadix(string digits, int radix, TextSpan span)
@@ -1363,8 +1397,14 @@ public sealed class Lexer
         var start = i;
         while (i < _source.Length && SyntaxFacts.IsIdentifierContinue(_source[i])) i++;
 
-        return TextBetween(start, i) is
-            "if" or "elseif" or "else" or "endif" or "error" or "warning";
+        // Per spec/lexical.md §9 a directive is first on its line, and the
+        // name does not have to be one we know: an unrecognised directive is
+        // reported as one rather than falling through to the parser as a
+        // stray '#'. The builtins are the exception, so that an expression
+        // may still begin a line with '#file'.
+        var name = TextBetween(start, i);
+        return name.Length > 0 && name is not
+            ("file" or "line" or "column" or "function" or "module");
     }
 
     /// <summary>Consumes a directive line and applies it to the conditional stack.</summary>

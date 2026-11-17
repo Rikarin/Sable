@@ -62,12 +62,22 @@ public sealed class LiteralTests
     }
 
     [Fact]
-    public void BareExponentLetterIsNotConsumed()
+    public void ALiteralRunningIntoLettersIsReported()
     {
-        // '1e' is an integer followed by an identifier, not a malformed float.
-        Assert.Equal(
-            [SyntaxKind.IntegerLiteralToken, SyntaxKind.IdentifierToken],
-            TestHelpers.Kinds("1e"));
+        // '1e' would lex as the integer 1 followed by the name 'e'. Since
+        // spec/lexical.md §6 has no suffixes, that is never what was meant.
+        var (_, diagnostics) = TestHelpers.LexWithDiagnostics("1e");
+        Assert.Contains(diagnostics, d => d.Code == ErrorCode.ERR_InvalidFloatLiteral);
+    }
+
+    [Theory]
+    [InlineData("1.0f")]
+    [InlineData("12abc")]
+    [InlineData("1_000u")]
+    public void NoSuffixIsAccepted(string text)
+    {
+        var (_, diagnostics) = TestHelpers.LexWithDiagnostics(text);
+        Assert.Contains(diagnostics, d => d.Code == ErrorCode.ERR_InvalidFloatLiteral);
     }
 
     [Fact]

@@ -1,0 +1,5 @@
+module Negative.Modules
+
+import Nowhere                          //! S2006 no module named
+
+fn useAnUnknownImport() -> Int { return 1 }

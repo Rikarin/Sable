@@ -1,0 +1,6 @@
+module Negative.LexicalMore
+
+fn unterminatedBlockComment() -> Int {
+    return 1
+}
+/* this comment never ends                //! S0002

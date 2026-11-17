@@ -1,0 +1,16 @@
+module Negative.Directives
+
+#unknown                                //! S0025
+fn afterUnknownDirective() -> Int { return 1 }
+
+#endif                                  //! S0026
+
+#if os(                                 //! S0028
+fn insideBadCondition() -> Int { return 1 }
+#endif
+
+#error "stop here"                      //! S0029
+#warning "careful"                      //! S0030
+
+#if DEBUG
+fn neverClosed() -> Int { return 1 }    //! S0027

@@ -1,0 +1,74 @@
+module Negative.Interop
+
+public protocol Shape { fn area() -> F64 }
+public protocol Scalable { mutating fn scale(by factor: F64) }
+
+public struct Circle: Shape, Scalable {
+    public var radius: F64
+    public fn area() -> F64 { return radius * radius }
+    public mutating fn scale(by factor: F64) { radius = radius * factor }
+}
+
+public struct Square: Shape {
+    public var side: F64
+    public fn area() -> F64 { return side * side }
+}
+
+fn totalArea(_ shapes: (any Shape)[>..]) -> F64 {
+    var total = 0.0
+    for shape in shapes {
+        total = total + shape.area()
+    }
+    return total
+}
+
+fn scalingThroughTheWrongProtocol(_ shapes: (any Shape)[>..]) {
+    for shape in shapes {
+        shape.scale(by: 2.0)            //! S2002 has no member named 'scale'
+    }
+}
+
+fn aSquareIsNotScalable(_ s: Square) {
+    scaleIt(s)                          //! S3007 cannot be called
+}
+
+fn scaleIt(_ value: some Scalable) { }
+
+// An existential is a box, which is a reference, so mutating through one
+// is allowed here. Whether the box may be shared is Phase 3's question.
+fn mutatingThroughAnExistential(_ shape: any Scalable) {
+    shape.scale(by: 2.0)
+}
+
+fn aProtocolCompositionNeedsBoth(_ value: any Shape & Scalable) -> F64 {
+    return value.area()
+}
+
+fn aCircleSatisfiesBoth(_ c: Circle) -> F64 {
+    return describe(c)
+}
+
+fn describe(_ value: some Shape & Scalable) -> F64 {
+    return value.area()
+}
+
+fn aSquareDoesNot(_ s: Square) -> F64 {
+    return describe(s)                  //! S3007 cannot be called
+}
+
+fn anExistentialArrayIsNotAConcreteArray(_ shapes: Circle[>..]) -> (any Shape)[>..] {
+    return shapes                       //! S3004
+}
+
+fn mappingToExistentials(_ shapes: Circle[>..]) -> (any Shape)[>..] {
+    var result: (any Shape)[>..] = []
+    for shape in shapes {
+        result.append(shape)
+    }
+    return result
+}
+
+fn callingAMutatingRequirementOnALet(_ c: Circle) {
+    let copy = c
+    copy.scale(by: 2.0)                 //! S3041 is mutating
+}

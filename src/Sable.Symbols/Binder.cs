@@ -551,7 +551,7 @@ public sealed class Binder
         DeferStatementSyntax defer => Record(defer,
             new BoundDefer(defer, BindStatement(defer.Body))),
         GuardStatementSyntax guard => BindGuard(guard),
-        LabeledStatementSyntax labeled => BindStatement(labeled.Statement),
+        LabeledStatementSyntax labeled => BindLabeled(labeled),
         DeclarationStatementSyntax declaration => BindDeclarationStatement(declaration),
         DoStatementSyntax doStatement => BindDo(doStatement),
         SwitchStatementSyntax switchStatement => BindSwitch(switchStatement),
@@ -1084,13 +1084,24 @@ public sealed class Binder
         return Record(statement, new BoundReturn(statement, value));
     }
 
+    /// <summary>Labels of the loops this statement sits inside, innermost last.</summary>
+    private readonly List<string> _loopLabels = [];
+
+    private BoundStatement BindLabeled(LabeledStatementSyntax statement)
+    {
+        var label = statement.Label.Text;
+        var labelled = label.Length > 0;
+
+        if (labelled) _loopLabels.Add(label);
+        var bound = BindStatement(statement.Statement);
+        if (labelled) _loopLabels.RemoveAt(_loopLabels.Count - 1);
+
+        return bound;
+    }
+
     private BoundStatement BindBreak(BreakStatementSyntax statement)
     {
-        if (_loopDepth == 0)
-        {
-            _diagnostics.Error(ErrorCode.ERR_NoEnclosingLoop, statement.Span,
-                "'break' is only allowed inside a loop");
-        }
+        CheckJump(statement.Span, statement.Label, "break");
 
         return Record(statement, new BoundBreak(
             statement, statement.Label.IsNone ? null : statement.Label.Text));
@@ -1098,14 +1109,27 @@ public sealed class Binder
 
     private BoundStatement BindContinue(ContinueStatementSyntax statement)
     {
-        if (_loopDepth == 0)
-        {
-            _diagnostics.Error(ErrorCode.ERR_NoEnclosingLoop, statement.Span,
-                "'continue' is only allowed inside a loop");
-        }
+        CheckJump(statement.Span, statement.Label, "continue");
 
         return Record(statement, new BoundContinue(
             statement, statement.Label.IsNone ? null : statement.Label.Text));
+    }
+
+    /// <summary>A jump needs a loop, and a labelled one needs that label.</summary>
+    private void CheckJump(TextSpan span, SyntaxToken label, string keyword)
+    {
+        if (_loopDepth == 0)
+        {
+            _diagnostics.Error(ErrorCode.ERR_NoEnclosingLoop, span,
+                $"'{keyword}' is only allowed inside a loop");
+            return;
+        }
+
+        if (label.IsNone || label.Text.Length == 0) return;
+        if (_loopLabels.Contains(label.Text)) return;
+
+        _diagnostics.Error(ErrorCode.ERR_NameNotFound, label.Span,
+            $"no enclosing loop is labelled '{label.Text}'");
     }
 
     // -----------------------------------------------------------------------

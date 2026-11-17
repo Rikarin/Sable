@@ -1,0 +1,117 @@
+module Negative.Corners
+
+public struct Point { public var x: Int }
+public union Shape { Circle(radius: F64), Empty }
+public protocol Named { fn name() -> String }
+
+fn anEmptyBlockIsAStatement() {
+    {
+    }
+}
+
+fn aSemicolonIsAStatement() {
+    ;
+}
+
+fn aNestedFunctionCanRecurse(_ n: Int) -> Int {
+    fn down(_ k: Int) -> Int {
+        if k <= 0 {
+            return 0
+        }
+        return down(k - 1)
+    }
+    return down(n)
+}
+
+fn aNestedFunctionIsNotMutuallyRecursive(_ n: Int) -> Int {
+    fn first(_ k: Int) -> Int {
+        return second(k)                //! S2002 no symbol named 'second'
+    }
+    fn second(_ k: Int) -> Int {
+        return first(k)
+    }
+    return first(n)
+}
+
+fn aLabelBelongsToALoop(_ xs: Int[], _ ys: Int[]) -> Int {
+    outer: for x in xs {
+        for y in ys {
+            if x == y {
+                break outer
+            }
+        }
+    }
+    return 0
+}
+
+fn breakingAnUnknownLabel(_ xs: Int[]) {
+    for x in xs {
+        break missing                   //! S2002 no enclosing loop is labelled
+    }
+}
+
+fn continuingAnUnknownLabel(_ xs: Int[]) {
+    for x in xs {
+        continue missing                //! S2002 no enclosing loop is labelled
+    }
+}
+
+fn aDeeplyNestedExpression(_ n: Int) -> Int {
+    return ((((((((n))))))))
+}
+
+fn aVeryLongChain(_ p: Point) -> Int {
+    return p.x + p.x + p.x + p.x + p.x + p.x + p.x + p.x
+}
+
+fn aMatchOnAMatch(_ s: Shape) -> Int {
+    return match match s {
+        case .Circle(let r) => 1
+        case .Empty => 0
+    } {
+        case 1 => 10
+        default => 0
+    }
+}
+
+fn aClosureReturningAClosure() -> (Int) -> (Int) -> Int {
+    return a => b => a + b
+}
+
+fn callingIt() -> Int {
+    return aClosureReturningAClosure()(1)(2)
+}
+
+fn anArrayOfClosures(_ fs: ((Int) -> Int)[>..]) -> Int {
+    var total = 0
+    for f in fs {
+        total = total + f(1)
+    }
+    return total
+}
+
+fn anArrayOfClosuresIsChecked(_ fs: ((Int) -> Int)[>..]) -> String {
+    for f in fs {
+        return f(1)                     //! S3004 expected 'String'
+    }
+    return ""
+}
+
+fn aTupleOfUnions(_ p: (Int | String, Shape)) -> Int {
+    return match p.1 {
+        case .Circle(let r) => 1
+        case .Empty => 0
+    }
+}
+
+fn aGenericClosureParameter<T>(_ value: T, _ f: (T) -> T) -> T {
+    return f(value)
+}
+
+fn usingIt(_ n: Int) -> Int {
+    return aGenericClosureParameter(n) { $0 + 1 }
+}
+
+fn usingItWrongly(_ n: Int) -> Int {
+    return aGenericClosureParameter(n) { "text" }   //! S3004 expected 'Int'
+}

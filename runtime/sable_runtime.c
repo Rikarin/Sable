@@ -984,6 +984,14 @@ static SableArray *unique(SableArray **slot, const SableMetadata *type, int64_t 
     return copy;
 }
 
+// Made the only reference to its buffer, before a loop that writes it in
+// place: the empty array stays empty, and the loop's index checks trap.
+void sable_array_make_unique(SableArray **slot, const SableMetadata *type) {
+    if (*slot != NULL && (*slot)->header.strong != 1) {
+        unique(slot, type, 0);
+    }
+}
+
 // Room for one more element at the end; the caller stores it.
 void *sable_array_append_slot(SableArray **slot, const SableMetadata *type) {
     SableArray *array = unique(slot, type, 1);
@@ -1108,6 +1116,8 @@ struct SableInlineLayout {
     const char *name;
     int32_t prefix;     // the fixed-size fields' bytes
     int32_t fixed_size; // every value's size, or -1 when it varies
+    int32_t empty_size; // the empty value's size: zero counts, and so on down
+    int32_t references; // whether a value of it can hold a relative reference
     int32_t count;
     SableInlineSlot slots[];
 };
@@ -1217,17 +1227,9 @@ static const uint8_t *skip_value(const SableInlineLayout *layout, const uint8_t 
     return q;
 }
 
-// The empty value's size: zero counts, and so on down.
+// The empty value's size: zero counts, and so on down — worked out by the compiler.
 static int64_t empty_size(const SableInlineLayout *layout) {
-    int64_t size = layout->prefix;
-    for (int32_t i = 0; i < layout->count; i++) {
-        const SableInlineSlot *slot = &layout->slots[i];
-        if (slot->offset < 0) {
-            size += slot->kind == INLINE_BOUNDED ? slot->width : slot->kind == INLINE_GROW ? 1 : empty_size(slot->layout);
-        }
-    }
-
-    return size;
+    return layout->empty_size;
 }
 
 uint8_t *sable_inline_field(const SableInlineLayout *layout, uint8_t *p, int32_t slot) {
@@ -1291,9 +1293,15 @@ SableBlock *sable_inline_new_stack(void *memory, const SableInlineLayout *layout
         return sable_inline_new(layout);
     }
 
-    SableBlock *block = sable_stack_object(memory, &sable_block_metadata, (int64_t)sizeof(SableBlock) + capacity);
+    // The header and the empty value's bytes: the rest is written before it is read.
+    SableBlock *block = memory;
+    block->header.type = &sable_block_metadata;
+    block->header.strong = 1;
+    block->header.flags = SABLE_STACK;
+    live_objects++;
     block->length = size;
     block->capacity = capacity;
+    memset(block->bytes, 0, (size_t)size);
     return block;
 }
 
@@ -1401,7 +1409,10 @@ static SableBlock *splice(SableBlock **slot, const SableInlineLayout *layout, in
     }
 
     int64_t delta = count - removed;
-    memmove(block->bytes + at + count, block->bytes + at + removed, (size_t)(block->length - at - removed));
+    if (block->length - at - removed > 0 && delta != 0) {
+        memmove(block->bytes + at + count, block->bytes + at + removed, (size_t)(block->length - at - removed));
+    }
+
     memcpy(block->bytes + at, inserted, (size_t)count);
     block->length += delta;
 
@@ -1429,28 +1440,24 @@ static SableBlock *splice(SableBlock **slot, const SableInlineLayout *layout, in
     return block;
 }
 
-// True when a value of the layout can hold a relative reference.
+// True when a value of the layout can hold a relative reference — worked out by the compiler.
 static bool layout_has_references(const SableInlineLayout *layout, int depth) {
-    if (depth > 64) {
-        return true;
-    }
-
-    for (int32_t i = 0; i < layout->count; i++) {
-        const SableInlineSlot *slot = &layout->slots[i];
-        if (slot->kind == INLINE_REF) {
-            return true;
-        }
-
-        if (slot->layout != NULL && slot->kind != INLINE_REF && layout_has_references(slot->layout, depth + 1)) {
-            return true;
-        }
-    }
-
-    return false;
+    (void)depth;
+    return layout->references != 0;
 }
+
+void sable_inline_append_at(SableBlock **slot, const SableInlineLayout *root, const SableInlineSlot *s,
+    uint8_t *array, const uint8_t *end, const uint8_t *element, int64_t size);
 
 void sable_inline_append(SableBlock **slot, const SableInlineLayout *root, const SableInlineSlot *s,
     uint8_t *array, const uint8_t *element, int64_t size) {
+    sable_inline_append_at(slot, root, s, array, skip_slot(s, array), element, size);
+}
+
+// As sable_inline_append, with where the array ends already found: the
+// compiler's own walker, specialised to the layout, finds it.
+void sable_inline_append_at(SableBlock **slot, const SableInlineLayout *root, const SableInlineSlot *s,
+    uint8_t *array, const uint8_t *array_end, const uint8_t *element, int64_t size) {
     int64_t at = array - (*slot)->bytes;
     const uint8_t *elements;
     int64_t count = array_count(s, array, &elements);
@@ -1458,7 +1465,7 @@ void sable_inline_append(SableBlock **slot, const SableInlineLayout *root, const
         sable_trap("inline array is full");
     }
 
-    int64_t end = skip_slot(s, array) - (*slot)->bytes;
+    int64_t end = array_end - (*slot)->bytes;
 
     // A struct's size is read from it.
     if (size < 0) {
@@ -1511,7 +1518,10 @@ void sable_inline_assign_bytes(SableBlock **slot, const SableInlineLayout *root,
     int64_t at = array - (*slot)->bytes;
     int64_t old_size = skip_slot(s, array) - array;
     int width = s->kind == INLINE_BOUNDED ? s->width : varint_size(count);
-    uint8_t *encoded = malloc((size_t)(width + count));
+
+    // Short text, the usual case, is encoded on the stack.
+    uint8_t small[256];
+    uint8_t *encoded = width + count <= (int64_t)sizeof small ? small : malloc((size_t)(width + count));
     if (s->kind == INLINE_BOUNDED) {
         write_unsigned(encoded, width, (uint32_t)count);
     } else {
@@ -1520,7 +1530,9 @@ void sable_inline_assign_bytes(SableBlock **slot, const SableInlineLayout *root,
 
     memcpy(encoded + width, bytes, (size_t)count);
     splice(slot, root, at, old_size, encoded, width + count);
-    free(encoded);
+    if (encoded != small) {
+        free(encoded);
+    }
 }
 
 void sable_inline_assign_string(SableBlock **slot, const SableInlineLayout *root, const SableInlineSlot *s,

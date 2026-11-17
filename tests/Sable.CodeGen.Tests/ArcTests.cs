@@ -112,4 +112,34 @@ public sealed class ArcTests {
         // An optional class reference is one word.
         Assert.Contains("icmp eq ptr", result.LlvmIr!, StringComparison.Ordinal);
     }
+
+    /// <summary>A loop's writes, checked for sharing once before it: a copy made then, as each write would have.</summary>
+    [Fact]
+    public void AnArraySharedBeforeALoopIsCopiedNotWrittenThrough() {
+        var source = Program(
+            """
+            fn zero(_ values: inout Int[>..]) {
+                var i = 0
+                while i < values.count {
+                    values[i] = values[i] * 0 + i
+                    i = i + 1
+                }
+            }
+            """,
+            """
+                var a: Int[>..] = [7, 8, 9]
+                let b = a
+                zero(&a)
+                var c = a
+                var i = 0
+                while i < c.count {
+                    c[i] = c[i] + 10
+                    i = i + 1
+                }
+                print("\(a[0]) \(a[1]) \(a[2]) \(b[0]) \(b[1]) \(b[2]) \(c[0]) \(c[2])")
+            """
+        );
+        Assert.Equal("0 1 2 7 8 9 10 12\n", AssertAgree(source).Stdout);
+        Assert.Contains("array_set_unique", SilPrinter.Print(Pipeline.Compile(new SourceText(source, "test.sab")).Sil!), StringComparison.Ordinal);
+    }
 }

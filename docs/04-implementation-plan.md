@@ -618,10 +618,18 @@ provably never read, and promotion inside loops.
       (shapes: 903K to 2.6K); `return result` a move; and an optional class
       reference one nullable word rather than a tag and a payload. The C
       ports in `benchmarks/c` — same allocations, checks and output — are
-      timed beside it: Sable is 1.06× (shapes) to 1.6× (n-body) their time,
-      and 4.7× on orders, whose inline-layout runtime is generic where the
-      port is written for two record types. n-body does no reference
-      counting at all, so that gap is code generation, not memory management
+      timed beside it. Closing that gap was code generation, not ARC:
+      inout and ref parameters are LLVM `noalias` (exclusivity guarantees
+      it), array headers and elements carry distinct TBAA tags, array
+      count, element access and append are emitted inline, a loop that only
+      reads an array and writes its elements makes it unique once before
+      the loop (`HoistUniqueness`), string equality decides by identity and
+      length inline, inline layouts get walkers generated per layout rather
+      than a descriptor walked at run time, and optimised macOS builds link
+      the runtime with LTO. Sable is now 1.0× C on n-body, about 1.25× on
+      binary trees, sort and words, 1.4× on shapes (a 5 ms run) and 2× on
+      orders, down from 1.45–1.9× and 4.7×; binary trees' remainder is
+      layout, a 16-byte object header on a 16-byte node
 - [x] Root inference rejects no program in the corpus that should compile —
       `CorpusLoweringTests` holds every corpus file, example and the JSON
       program to producing no diagnostic but "not lowered yet": root

@@ -20,7 +20,7 @@ public static class SilPassManager {
     ///     Copies are forwarded before loads are borrowed and after: each
     ///     uncovers more of the other.
     /// </remarks>
-    public static IReadOnlyList<ISilPass> Default { get; } = [new PromoteSlots(), new ForwardCopies(), new BorrowLoads(), new ForwardCopies(), new BorrowFields(), new PromoteToStack()];
+    public static IReadOnlyList<ISilPass> Default { get; } = [new PromoteSlots(), new ForwardCopies(), new BorrowLoads(), new ForwardCopies(), new BorrowFields(), new PromoteToStack(), new HoistUniqueness()];
 
     public static void Run(SilModule module, IEnumerable<ISilPass> passes) {
         foreach (var pass in passes) {

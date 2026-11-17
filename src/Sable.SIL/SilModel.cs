@@ -332,6 +332,26 @@ public sealed class InlineLayout {
 
     public int SlotOf(int field) => Slots.IndexOf(Slots.First(s => s.Field == field));
 
+    /// <summary>The empty value's size: every count zero, and so on down.</summary>
+    public int EmptySize =>
+        Prefix + Slots.Where(static s => !s.IsFixed).Sum(static s =>
+            s.Kind switch {
+                BoundedKind => s.Width,
+                GrowKind => 1,
+                _ => Of(s.Layout!).EmptySize,
+            });
+
+    /// <summary>Whether a value of it can hold a relative reference, here or nested.</summary>
+    public bool HasReferences => HoldsReferences(this, []);
+
+    static bool HoldsReferences(InlineLayout layout, HashSet<StructType> seen) {
+        if (!seen.Add(layout.Type)) {
+            return false;
+        }
+
+        return layout.Slots.Any(s => s.Kind == ReferenceKind || s.Layout is { } nested && HoldsReferences(Of(nested), seen));
+    }
+
     public static InlineLayout Of(StructType type) => Cache.GetValue(type, static t => new InlineLayout(t));
 
     /// <summary>A scalar's kind and width, as stored inline; null for anything that is not one.</summary>
@@ -1112,7 +1132,7 @@ public static class SilBuiltins {
 
     /// <summary>The names whose signature depends on the element type of the array they work on.</summary>
     public static readonly ImmutableArray<string> ArrayOperations =
-        ["array_empty", "array_count", "array_get", "array_get_borrowed", "array_append", "array_set", "array_remove_last", "array_clear", "array_slice", "region_alloc"];
+        ["array_empty", "array_count", "array_get", "array_get_borrowed", "array_append", "array_set_unique", "array_make_unique", "array_set", "array_remove_last", "array_clear", "array_slice", "region_alloc"];
 
     /// <summary>A builtin with fixed operand types, by name.</summary>
     public static Signature? Find(string name) => Table.GetValueOrDefault(name);
@@ -1167,8 +1187,12 @@ public static class SilBuiltins {
             case "array_append" when Element(0, true) is { } element:
                 return new([operands[0], element], SilType.Unit) { Consumed = [1] };
 
-            case "array_set" when Element(0, true) is { } element:
+            // In place, on an array already made the only reference to its buffer.
+            case "array_set" or "array_set_unique" when Element(0, true) is { } element:
                 return new([operands[0], SilType.Int, element], SilType.Unit) { Consumed = [2] };
+
+            case "array_make_unique" when Element(0, true) is not null:
+                return new([operands[0]], SilType.Unit);
 
             case "array_remove_last" when Element(0, true) is { } element:
                 return new([operands[0]], element);

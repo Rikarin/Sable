@@ -934,7 +934,18 @@ public sealed partial class SilInterpreter(SilModule module, int stepLimit = 10_
                 Unique(builtin.Operands[0], (IReference)operands[0]!).Elements.Add(operands[1]);
                 return null;
 
-            case "array_set": {
+            case "array_make_unique":
+                if (((IReference)operands[0]!).Peek() is HeapArray) {
+                    Unique(builtin.Operands[0], (IReference)operands[0]!);
+                }
+
+                return null;
+
+            case "array_set" or "array_set_unique": {
+                if (builtin.Name == "array_set_unique" && ((IReference)operands[0]!).Peek() is HeapArray { Strong: > 1 }) {
+                    throw new SilTrap("array_set_unique on a shared array");
+                }
+
                 var array = Unique(builtin.Operands[0], (IReference)operands[0]!);
                 var index = (long)operands[1]!;
                 if (index < 0 || index >= array.Elements.Count) {

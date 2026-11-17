@@ -54,6 +54,13 @@ public static class NativeBuild {
             List<string> arguments = debug
                 ? ["-g", "-O0"]
                 : [optimise ? "-O2" : "-O0"];
+
+            // Link-time optimisation lets LLVM inline the runtime's small
+            // functions into the program — where the platform's linker takes
+            // LLVM bitcode, as Apple's does; elsewhere it needs a plugin.
+            if (optimise && !debug && OperatingSystem.IsMacOS()) {
+                arguments.Add("-flto");
+            }
             arguments.AddRange(["-Wno-override-module", irPath, runtimePath, "-o", outputPath]);
 
             var (exitCode, output) = Run(CompilerPath, arguments);

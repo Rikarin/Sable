@@ -49,6 +49,10 @@ public sealed class LlvmEmitter {
 
     bool _checkExclusivity = true;
 
+    // Numbered high, clear of the debug information's nodes.
+    const string TbaaRoot = "!9000000", TbaaHeaderType = "!9000001", TbaaElementType = "!9000002";
+    const string TbaaHeader = "!9000003", TbaaElement = "!9000004";
+
     string EmitModule(SilModule module) {
         _checkExclusivity = module.CheckExclusivity;
         var functions = new StringBuilder();
@@ -73,6 +77,15 @@ public sealed class LlvmEmitter {
         output.Append('\n');
         output.Append(functions);
         output.Append(_helpers);
+
+        // Type-based alias information (docs/04 §3.8): an array's header —
+        // its count, its buffer, its strong count — is never an element, so a
+        // store to an element leaves them where LLVM last read them.
+        output.Append($"\n{TbaaRoot} = !{{!\"Sable TBAA\"}}\n")
+            .Append($"{TbaaHeaderType} = !{{!\"array header\", {TbaaRoot}, i64 0}}\n")
+            .Append($"{TbaaElementType} = !{{!\"array element\", {TbaaRoot}, i64 0}}\n")
+            .Append($"{TbaaHeader} = !{{{TbaaHeaderType}, {TbaaHeaderType}, i64 0}}\n")
+            .Append($"{TbaaElement} = !{{{TbaaElementType}, {TbaaElementType}, i64 0}}\n");
 
         if (_debug is not null) {
             output.Append(_debug.Metadata());
@@ -253,9 +266,9 @@ public sealed class LlvmEmitter {
                                 declare zeroext i1 @sable_char_is_whitespace(i32)
                                 declare i64 @sable_array_count(ptr)
                                 declare ptr @sable_array_element(ptr, i64)
-                                declare ptr @sable_array_append_slot(ptr, ptr)
-                                declare ptr @sable_array_mutable_element(ptr, ptr, i64)
-                                declare ptr @sable_array_remove_last(ptr, ptr)
+                                declare ptr @sable_array_append_slot(ptr captures(none), ptr)
+                                declare ptr @sable_array_mutable_element(ptr captures(none), ptr, i64)
+                                declare ptr @sable_array_remove_last(ptr captures(none), ptr)
                                 declare ptr @sable_array_slice(ptr, i64, i64, ptr)
                                 declare ptr @sable_region_create()
                                 declare void @sable_region_reset(ptr)
@@ -291,6 +304,7 @@ public sealed class LlvmEmitter {
                                 declare { i64, i1 } @llvm.usub.with.overflow.i64(i64, i64)
                                 declare { i64, i1 } @llvm.umul.with.overflow.i64(i64, i64)
                                 declare ptr @sable_inline_new(ptr)
+                                declare void @sable_array_make_unique(ptr captures(none), ptr)
                                 @sable_empty_array_count = internal constant [3 x i64] zeroinitializer
                                 declare void @sable_access_begin(ptr, i32)
                                 declare void @sable_access_end(ptr)
@@ -304,6 +318,7 @@ public sealed class LlvmEmitter {
                                 declare ptr @sable_inline_next(ptr, ptr)
                                 declare ptr @sable_inline_at(ptr, ptr, i64)
                                 declare void @sable_inline_append(ptr, ptr, ptr, ptr, ptr, i64)
+                                declare void @sable_inline_append_at(ptr, ptr, ptr, ptr, ptr, ptr, i64)
                                 declare void @sable_inline_assign_string(ptr, ptr, ptr, ptr, ptr)
                                 declare void @sable_inline_assign(ptr, ptr, ptr, ptr, ptr)
                                 declare ptr @sable_inline_ref_get(ptr, i32)
@@ -484,7 +499,8 @@ public sealed class LlvmEmitter {
     ///     reference, to the type's witness function for an aggregate.
     /// </summary>
     void Ownership(StringBuilder output, string indent, bool copy, SilType type, string value, string dbg = "") {
-        if (type.IsTrivial) {
+        // Nothing to count in a value known to be null: the empty array, a none.
+        if (type.IsTrivial || value == "null") {
             return;
         }
 
@@ -691,8 +707,9 @@ public sealed class LlvmEmitter {
         var slots = string.Join(", ", layout.Slots.Select(SlotConstant));
         var count = layout.Slots.Length;
         var typeName = TrapMessage(type.Name);
-        _globals.Append($"{name} = internal constant {{ ptr, i32, i32, i32, [{count} x %SableInlineSlot] }} ")
-            .Append($"{{ ptr {typeName}, i32 {layout.Prefix}, i32 {layout.FixedSize ?? -1}, i32 {count}, [{count} x %SableInlineSlot] [{slots}] }}\n");
+        _globals.Append($"{name} = internal constant {{ ptr, i32, i32, i32, i32, i32, [{count} x %SableInlineSlot] }} ")
+            .Append($"{{ ptr {typeName}, i32 {layout.Prefix}, i32 {layout.FixedSize ?? -1}, i32 {layout.EmptySize}, i32 {(layout.HasReferences ? 1 : 0)}, ")
+            .Append($"i32 {count}, [{count} x %SableInlineSlot] [{slots}] }}\n");
         return name;
     }
 
@@ -709,6 +726,174 @@ public sealed class LlvmEmitter {
         }
 
         return name;
+    }
+
+    // ---- Inline layout walkers, specialised per layout ---------------------
+
+    /// <summary>A LEB128 count: its value, and where what follows it starts.</summary>
+    string VarintFunction() {
+        const string name = "@\"sable.inline.varint\"";
+        if (_emitted.Add(name)) {
+            _helpers.Append($$"""
+                define internal { i64, ptr } {{name}}(ptr %p) {
+                entry:
+                  br label %loop
+                loop:
+                  %i = phi i64 [ 0, %entry ], [ %next, %loop ]
+                  %v = phi i64 [ 0, %entry ], [ %value, %loop ]
+                  %at = getelementptr inbounds i8, ptr %p, i64 %i
+                  %b = load i8, ptr %at, align 1
+                  %low = and i8 %b, 127
+                  %wide = zext i8 %low to i64
+                  %shift = mul i64 %i, 7
+                  %part = shl i64 %wide, %shift
+                  %value = or i64 %v, %part
+                  %next = add i64 %i, 1
+                  %more = icmp uge i8 %b, -128
+                  br i1 %more, label %loop, label %done
+                done:
+                  %end = getelementptr inbounds i8, ptr %p, i64 %next
+                  %r0 = insertvalue { i64, ptr } poison, i64 %value, 0
+                  %r1 = insertvalue { i64, ptr } %r0, ptr %end, 1
+                  ret { i64, ptr } %r1
+                }
+
+
+                """);
+        }
+
+        return name;
+    }
+
+    /// <summary>Where a value of the layout ends.</summary>
+    internal string SkipFunction(StructType type) {
+        var name = $"@\"sable.inline.skip.{Mangled(type)}\"";
+        if (!_emitted.Add(name)) {
+            return name;
+        }
+
+        var layout = InlineLayout.Of(type);
+        var body = new StringBuilder($"define internal ptr {name}(ptr %p) {{\nentry:\n");
+        if (layout.FixedSize is { } size) {
+            body.Append($"  %end = getelementptr inbounds i8, ptr %p, i64 {size}\n  ret ptr %end\n}}\n\n");
+        } else {
+            body.Append($"  %q0 = getelementptr inbounds i8, ptr %p, i64 {layout.Prefix}\n");
+            var q = "%q0";
+            var n = 1;
+            foreach (var slot in layout.Slots.Where(static s => !s.IsFixed)) {
+                var next = $"%q{n++}";
+                body.Append($"  {next} = call ptr {SlotSkip(slot)}(ptr {q})\n");
+                q = next;
+            }
+
+            body.Append($"  ret ptr {q}\n}}\n\n");
+        }
+
+        _helpers.Append(body);
+        return name;
+    }
+
+    /// <summary>The function that skips a variable-size field: an inline array, or a nested struct.</summary>
+    string SlotSkip(InlineLayout.Slot slot) =>
+        slot.Kind == InlineLayout.StructKind ? SkipFunction(slot.Layout!) : ArraySkip((InlineArrayType)slot.Type);
+
+    /// <summary>An inline array's count and the start of its elements.</summary>
+    string ArrayHead(InlineArrayType array) {
+        var name = $"@\"sable.inline.head.{Mangled(array)}\"";
+        if (!_emitted.Add(name)) {
+            return name;
+        }
+
+        var slot = InlineLayout.DescribeArray(array);
+        var body = new StringBuilder($"define internal {{ i64, ptr }} {name}(ptr %a) {{\nentry:\n");
+        if (slot.Kind == InlineLayout.BoundedKind) {
+            body.Append($"  %raw = load i{slot.Width * 8}, ptr %a, align 1\n")
+                .Append($"  %count = zext i{slot.Width * 8} %raw to i64\n")
+                .Append($"  %elements = getelementptr inbounds i8, ptr %a, i64 {slot.Width}\n")
+                .Append("  %r0 = insertvalue { i64, ptr } poison, i64 %count, 0\n")
+                .Append("  %r1 = insertvalue { i64, ptr } %r0, ptr %elements, 1\n")
+                .Append("  ret { i64, ptr } %r1\n}\n\n");
+        } else {
+            body.Append($"  %r = call {{ i64, ptr }} {VarintFunction()}(ptr %a)\n  ret {{ i64, ptr }} %r\n}}\n\n");
+        }
+
+        _helpers.Append(body);
+        return name;
+    }
+
+    /// <summary>The size of an element that does not vary, or null.</summary>
+    static int? ElementSize(InlineArrayType array) =>
+        array.Element is StructType { IsInline: true } element ? InlineLayout.Of(element).FixedSize : InlineLayout.Scalar(array.Element)!.Value.Width;
+
+    /// <summary>Where an inline array ends: past its count and every element.</summary>
+    string ArraySkip(InlineArrayType array) {
+        var name = $"@\"sable.inline.skiparray.{Mangled(array)}\"";
+        if (!_emitted.Add(name)) {
+            return name;
+        }
+
+        var head = ArrayHead(array);
+        var body = new StringBuilder($"define internal ptr {name}(ptr %a) {{\nentry:\n")
+            .Append($"  %h = call {{ i64, ptr }} {head}(ptr %a)\n")
+            .Append("  %count = extractvalue { i64, ptr } %h, 0\n")
+            .Append("  %elements = extractvalue { i64, ptr } %h, 1\n");
+        if (ElementSize(array) is { } size) {
+            body.Append($"  %bytes = mul i64 %count, {size}\n")
+                .Append("  %end = getelementptr inbounds i8, ptr %elements, i64 %bytes\n  ret ptr %end\n}\n\n");
+        } else {
+            var skip = SkipFunction((StructType)array.Element);
+            body.Append("  br label %loop\nloop:\n")
+                .Append("  %i = phi i64 [ 0, %entry ], [ %i1, %step ]\n")
+                .Append("  %at = phi ptr [ %elements, %entry ], [ %after, %step ]\n")
+                .Append("  %more = icmp ult i64 %i, %count\n")
+                .Append("  br i1 %more, label %step, label %done\nstep:\n")
+                .Append($"  %after = call ptr {skip}(ptr %at)\n")
+                .Append("  %i1 = add i64 %i, 1\n  br label %loop\ndone:\n  ret ptr %at\n}\n\n");
+        }
+
+        _helpers.Append(body);
+        return name;
+    }
+
+    /// <summary>Where a variable-size field is: past the prefix and the variable fields before it.</summary>
+    internal string FieldFunction(StructType type, int slotIndex) {
+        var name = $"@\"sable.inline.field.{Mangled(type)}.{slotIndex}\"";
+        if (!_emitted.Add(name)) {
+            return name;
+        }
+
+        var layout = InlineLayout.Of(type);
+        var body = new StringBuilder($"define internal ptr {name}(ptr %p) {{\nentry:\n")
+            .Append($"  %q0 = getelementptr inbounds i8, ptr %p, i64 {layout.Prefix}\n");
+        var q = "%q0";
+        var n = 1;
+        for (var i = 0; i < slotIndex; i++) {
+            if (!layout.Slots[i].IsFixed) {
+                var next = $"%q{n++}";
+                body.Append($"  {next} = call ptr {SlotSkip(layout.Slots[i])}(ptr {q})\n");
+                q = next;
+            }
+        }
+
+        body.Append($"  ret ptr {q}\n}}\n\n");
+        _helpers.Append(body);
+        return name;
+    }
+
+    internal string InlineHead(InlineArrayType array) => ArrayHead(array);
+
+    internal string ArraySkipFunction(InlineArrayType array) => ArraySkip(array);
+
+    internal string InlineNext(InlineArrayType array, string element, Func<string> fresh, Action<string> line) {
+        if (ElementSize(array) is { } size) {
+            var next = fresh();
+            line($"{next} = getelementptr inbounds i8, ptr {element}, i64 {size}");
+            return next;
+        }
+
+        var after = fresh();
+        line($"{after} = call ptr {SkipFunction((StructType)array.Element)}(ptr {element})");
+        return after;
     }
 
     /// <summary>A NUL-terminated message for <c>sable_trap</c>.</summary>
@@ -792,7 +977,12 @@ public sealed class LlvmEmitter {
             for (var i = 0; i < function.Entry.Arguments.Count; i++) {
                 var argument = function.Entry.Arguments[i];
                 _names[argument] = $"%p{i}";
-                parameters.Add($"{Type(argument.Type)} %p{i}");
+
+                // An inout or ref parameter is exclusive for the call (docs/02
+                // §2.3): nothing else the callee can reach is the same storage.
+                // That is LLVM's noalias, and what lets it keep an array's
+                // buffer and count in registers across writes to elements.
+                parameters.Add(argument.Type is AddressType ? $"ptr noalias %p{i}" : $"{Type(argument.Type)} %p{i}");
             }
 
             foreach (var block in function.Blocks.Skip(1)) {
@@ -1579,8 +1769,33 @@ public sealed class LlvmEmitter {
                     return;
 
                 case "cmp_eq_String" or "cmp_ne_String": {
+                    // The same object, or lengths that differ, decide it without a call.
                     var equal = builtin.Name.StartsWith("cmp_eq", StringComparison.Ordinal) ? Result() : Fresh();
-                    Line($"{equal} = call zeroext i1 @sable_string_equal(ptr {operands[0]}, ptr {operands[1]})");
+                    var same = Fresh();
+                    var leftLength = Fresh();
+                    var rightLength = Fresh();
+                    var leftField = Fresh();
+                    var rightField = Fresh();
+                    var lengths = Fresh();
+                    var start = _currentLabel;
+                    var measure = NewLabel("lengths");
+                    var bytes = NewLabel("bytes");
+                    var decided = NewLabel("compared");
+                    Line($"{same} = icmp eq ptr {operands[0]}, {operands[1]}");
+                    Line($"br i1 {same}, label %{decided}, label %{measure}");
+                    Continue(measure);
+                    Line($"{leftField} = getelementptr inbounds i8, ptr {operands[0]}, i64 16");
+                    Line($"{rightField} = getelementptr inbounds i8, ptr {operands[1]}, i64 16");
+                    Line($"{leftLength} = load i64, ptr {leftField}");
+                    Line($"{rightLength} = load i64, ptr {rightField}");
+                    Line($"{lengths} = icmp eq i64 {leftLength}, {rightLength}");
+                    Line($"br i1 {lengths}, label %{bytes}, label %{decided}");
+                    Continue(bytes);
+                    var called = Fresh();
+                    Line($"{called} = call zeroext i1 @sable_string_equal(ptr {operands[0]}, ptr {operands[1]})");
+                    Line($"br label %{decided}");
+                    Continue(decided);
+                    Line($"{equal} = phi i1 [ true, %{start} ], [ false, %{measure} ], [ {called}, %{bytes} ]");
                     if (builtin.Name.StartsWith("cmp_ne", StringComparison.Ordinal)) {
                         Line($"{Result()} = xor i1 {equal}, true");
                     }
@@ -1711,7 +1926,7 @@ public sealed class LlvmEmitter {
                 case "array_get" or "array_get_borrowed": {
                     var element = InlineElement(operands[0], operands[1], ((ArrayType)builtin.Operands[0].Type).Element);
                     var value = Result();
-                    Line($"{value} = load {Type(builtin.Type)}, ptr {element}");
+                    Line($"{value} = load {Type(builtin.Type)}, ptr {element}, !tbaa {TbaaElement}");
                     if (builtin.Name == "array_get") {
                         Own(true, builtin.Type, value);
                     }
@@ -1721,9 +1936,28 @@ public sealed class LlvmEmitter {
 
                 case "array_append": {
                     var arrayType = (ArrayType)((AddressType)builtin.Operands[0].Type).Pointee;
-                    var element = Fresh();
-                    Line($"{element} = call ptr @sable_array_append_slot(ptr {operands[0]}, ptr {module.ArrayMetadata(arrayType)})");
-                    Line($"store {Type(arrayType.Element)} {operands[1]}, ptr {element}");
+                    var element = AppendSlot(operands[0], arrayType);
+                    Line($"store {Type(arrayType.Element)} {operands[1]}, ptr {element}, !tbaa {TbaaElement}");
+                    return;
+                }
+
+                case "array_make_unique": {
+                    var arrayType = (ArrayType)((AddressType)builtin.Operands[0].Type).Pointee;
+                    Line($"call void @sable_array_make_unique(ptr {operands[0]}, ptr {module.ArrayMetadata(arrayType)})");
+                    return;
+                }
+
+                // Unique already: the element written where it is, its index checked.
+                case "array_set_unique": {
+                    var arrayType = (ArrayType)((AddressType)builtin.Operands[0].Type).Pointee;
+                    var elementType = Type(arrayType.Element);
+                    var array = Fresh();
+                    Line($"{array} = load ptr, ptr {operands[0]}");
+                    var element = InlineElement(array, operands[1], arrayType.Element);
+                    var old = Fresh();
+                    Line($"{old} = load {elementType}, ptr {element}, !tbaa {TbaaElement}");
+                    Line($"store {elementType} {operands[2]}, ptr {element}, !tbaa {TbaaElement}");
+                    Own(false, arrayType.Element, old);
                     return;
                 }
 
@@ -1865,7 +2099,7 @@ public sealed class LlvmEmitter {
                 if (layout.Slots[slot].IsFixed) {
                     Line($"{Result()} = getelementptr inbounds i8, ptr {operands[0]}, i64 {layout.Slots[slot].Offset}");
                 } else {
-                    Line($"{Result()} = call ptr @sable_inline_field(ptr {module.InlineLayoutGlobal(owner)}, ptr {operands[0]}, i32 {slot})");
+                    Line($"{Result()} = call ptr {module.FieldFunction(owner, slot)}(ptr {operands[0]})");
                 }
 
                 return;
@@ -1888,9 +2122,44 @@ public sealed class LlvmEmitter {
                     Line($"{Result()} = getelementptr inbounds i8, ptr {operands[0]}, i64 {BytesOffset}");
                     return;
 
-                case "inline_unique":
-                    Line($"{Result()} = call ptr @sable_inline_unique(ptr {operands[0]})");
+                // Already the only reference, and not immortal: its bytes, with no call.
+                case "inline_unique": {
+                    var block = Fresh();
+                    var strongField = Fresh();
+                    var strong = Fresh();
+                    var flagsField = Fresh();
+                    var flags = Fresh();
+                    var immortal = Fresh();
+                    var isImmortal = Fresh();
+                    var sole = Fresh();
+                    var fast = Fresh();
+                    var start = NewLabel("sole");
+                    var slow = NewLabel("copy");
+                    var done = NewLabel("unique");
+                    Line($"{block} = load ptr, ptr {operands[0]}");
+                    Line($"{strongField} = getelementptr inbounds i8, ptr {block}, i64 8");
+                    Line($"{strong} = load i32, ptr {strongField}");
+                    Line($"{flagsField} = getelementptr inbounds i8, ptr {block}, i64 12");
+                    Line($"{flags} = load i32, ptr {flagsField}");
+                    Line($"{immortal} = and i32 {flags}, 1");
+                    Line($"{isImmortal} = icmp ne i32 {immortal}, 0");
+                    Line($"{sole} = icmp eq i32 {strong}, 1");
+                    var ok = Fresh();
+                    var notImmortal = Fresh();
+                    Line($"{notImmortal} = xor i1 {isImmortal}, true");
+                    Line($"{ok} = and i1 {sole}, {notImmortal}");
+                    Line($"br i1 {ok}, label %{start}, label %{slow}");
+                    Continue(start);
+                    Line($"{fast} = getelementptr inbounds i8, ptr {block}, i64 {BytesOffset}");
+                    Line($"br label %{done}");
+                    Continue(slow);
+                    var called = Fresh();
+                    Line($"{called} = call ptr @sable_inline_unique(ptr {operands[0]})");
+                    Line($"br label %{done}");
+                    Continue(done);
+                    Line($"{Result()} = phi ptr [ {fast}, %{start} ], [ {called}, %{slow} ]");
                     return;
+                }
 
                 case "inline_copy":
                     Line($"{Result()} = call ptr @sable_inline_copy(ptr {module.InlineLayoutGlobal((StructType)builtin.Type)}, ptr {operands[0]})");
@@ -1922,16 +2191,15 @@ public sealed class LlvmEmitter {
                     return;
                 }
 
-                case "inline_count":
-                    Line($"{Result()} = call i64 @sable_inline_count(ptr {module.InlineArrayGlobal((InlineArrayType)Pointee(builtin.Operands[0]))}, ptr {operands[0]})");
+                case "inline_count" or "inline_first": {
+                    var head = Fresh();
+                    Line($"{head} = call {{ i64, ptr }} {module.InlineHead((InlineArrayType)Pointee(builtin.Operands[0]))}(ptr {operands[0]})");
+                    Line($"{Result()} = extractvalue {{ i64, ptr }} {head}, {(name == "inline_count" ? 0 : 1)}");
                     return;
-
-                case "inline_first":
-                    Line($"{Result()} = call ptr @sable_inline_first(ptr {module.InlineArrayGlobal((InlineArrayType)Pointee(builtin.Operands[0]))}, ptr {operands[0]})");
-                    return;
+                }
 
                 case "inline_next":
-                    Line($"{Result()} = call ptr @sable_inline_next(ptr {module.InlineArrayGlobal((InlineArrayType)Pointee(builtin.Operands[0]))}, ptr {operands[1]})");
+                    _names[builtin] = module.InlineNext((InlineArrayType)Pointee(builtin.Operands[0]), operands[1], Fresh, Line);
                     return;
 
                 case "inline_at":
@@ -1960,7 +2228,24 @@ public sealed class LlvmEmitter {
                         size = -1;
                     }
 
-                    Line($"call void @sable_inline_append(ptr {operands[0]}, ptr {module.InlineLayoutGlobal(RootOf(builtin.Operands[0]))}, ptr {module.InlineArrayGlobal(array)}, ptr {operands[1]}, ptr {pointer}, i64 {size})");
+                    // The element's size, and where the array ends, found by the walkers made for these layouts.
+                    if (size < 0) {
+                        var after = Fresh();
+                        var start = Fresh();
+                        var end = Fresh();
+                        Line($"{after} = call ptr {module.SkipFunction((StructType)array.Element)}(ptr {pointer})");
+                        Line($"{start} = ptrtoint ptr {pointer} to i64");
+                        Line($"{end} = ptrtoint ptr {after} to i64");
+                        var measured = Fresh();
+                        Line($"{measured} = sub i64 {end}, {start}");
+                        var arrayEnd = Fresh();
+                        Line($"{arrayEnd} = call ptr {module.ArraySkipFunction(array)}(ptr {operands[1]})");
+                        Line($"call void @sable_inline_append_at(ptr {operands[0]}, ptr {module.InlineLayoutGlobal(RootOf(builtin.Operands[0]))}, ptr {module.InlineArrayGlobal(array)}, ptr {operands[1]}, ptr {arrayEnd}, ptr {pointer}, i64 {measured})");
+                    } else {
+                        var arrayEnd = Fresh();
+                        Line($"{arrayEnd} = call ptr {module.ArraySkipFunction(array)}(ptr {operands[1]})");
+                        Line($"call void @sable_inline_append_at(ptr {operands[0]}, ptr {module.InlineLayoutGlobal(RootOf(builtin.Operands[0]))}, ptr {module.InlineArrayGlobal(array)}, ptr {operands[1]}, ptr {arrayEnd}, ptr {pointer}, i64 {size})");
+                    }
                     return;
                 }
 
@@ -2245,9 +2530,69 @@ public sealed class LlvmEmitter {
             Line($"{isNull} = icmp eq ptr {array}, null");
             Line($"{safe} = select i1 {isNull}, ptr @sable_empty_array_count, ptr {array}");
             Line($"{field} = getelementptr inbounds i8, ptr {safe}, i64 16");
-            Line($"{stored} = load i64, ptr {field}");
+            Line($"{stored} = load i64, ptr {field}, !tbaa {TbaaHeader}");
             Line($"{count} = select i1 {isNull}, i64 0, i64 {stored}");
             return count;
+        }
+
+        /// <summary>
+        ///     Room for one more element: in place when the array is the only
+        ///     reference to a buffer with room left, through the runtime —
+        ///     which copies or grows it — otherwise.
+        /// </summary>
+        string AppendSlot(string slot, ArrayType arrayType) {
+            var array = Fresh();
+            var isNull = Fresh();
+            Line($"{array} = load ptr, ptr {slot}");
+            Line($"{isNull} = icmp eq ptr {array}, null");
+            var check = NewLabel("room");
+            var fast = NewLabel("append");
+            var slow = NewLabel("grow");
+            var done = NewLabel("appended");
+            Line($"br i1 {isNull}, label %{slow}, label %{check}");
+
+            Continue(check);
+            var countField = Fresh();
+            var count = Fresh();
+            var capacityField = Fresh();
+            var capacity = Fresh();
+            var strongField = Fresh();
+            var strong = Fresh();
+            var room = Fresh();
+            var unique = Fresh();
+            var both = Fresh();
+            Line($"{countField} = getelementptr inbounds i8, ptr {array}, i64 16");
+            Line($"{count} = load i64, ptr {countField}, !tbaa {TbaaHeader}");
+            Line($"{capacityField} = getelementptr inbounds i8, ptr {array}, i64 24");
+            Line($"{capacity} = load i64, ptr {capacityField}, !tbaa {TbaaHeader}");
+            Line($"{room} = icmp ult i64 {count}, {capacity}");
+            Line($"{strongField} = getelementptr inbounds i8, ptr {array}, i64 8");
+            Line($"{strong} = load i32, ptr {strongField}, !tbaa {TbaaHeader}");
+            Line($"{unique} = icmp eq i32 {strong}, 1");
+            Line($"{both} = and i1 {room}, {unique}");
+            Line($"br i1 {both}, label %{fast}, label %{slow}");
+
+            Continue(fast);
+            var elementsField = Fresh();
+            var elements = Fresh();
+            var direct = Fresh();
+            var grown = Fresh();
+            Line($"{elementsField} = getelementptr inbounds i8, ptr {array}, i64 32");
+            Line($"{elements} = load ptr, ptr {elementsField}, !tbaa {TbaaHeader}");
+            Line($"{direct} = getelementptr inbounds {Type(arrayType.Element)}, ptr {elements}, i64 {count}");
+            Line($"{grown} = add nuw i64 {count}, 1");
+            Line($"store i64 {grown}, ptr {countField}, !tbaa {TbaaHeader}");
+            Line($"br label %{done}");
+
+            Continue(slow);
+            var called = Fresh();
+            Line($"{called} = call ptr @sable_array_append_slot(ptr {slot}, ptr {module.ArrayMetadata(arrayType)})");
+            Line($"br label %{done}");
+
+            Continue(done);
+            var element = Fresh();
+            Line($"{element} = phi ptr [ {direct}, %{fast} ], [ {called}, %{slow} ]");
+            return element;
         }
 
         /// <summary>An element's address, its index checked against the count — inline, with no call.</summary>
@@ -2260,7 +2605,7 @@ public sealed class LlvmEmitter {
             var elements = Fresh();
             var element = Fresh();
             Line($"{elementsField} = getelementptr inbounds i8, ptr {array}, i64 32");
-            Line($"{elements} = load ptr, ptr {elementsField}");
+            Line($"{elements} = load ptr, ptr {elementsField}, !tbaa {TbaaHeader}");
             Line($"{element} = getelementptr inbounds {Type(elementType)}, ptr {elements}, i64 {index}");
             return element;
         }
@@ -2290,10 +2635,10 @@ public sealed class LlvmEmitter {
             var unique = Fresh();
             var both = Fresh();
             Line($"{countField} = getelementptr inbounds i8, ptr {array}, i64 16");
-            Line($"{count} = load i64, ptr {countField}");
+            Line($"{count} = load i64, ptr {countField}, !tbaa {TbaaHeader}");
             Line($"{inRange} = icmp ult i64 {index}, {count}");
             Line($"{strongField} = getelementptr inbounds i8, ptr {array}, i64 8");
-            Line($"{strong} = load i32, ptr {strongField}");
+            Line($"{strong} = load i32, ptr {strongField}, !tbaa {TbaaHeader}");
             Line($"{unique} = icmp eq i32 {strong}, 1");
             Line($"{both} = and i1 {inRange}, {unique}");
             Line($"br i1 {both}, label %{fast}, label %{slow}");
@@ -2303,7 +2648,7 @@ public sealed class LlvmEmitter {
             var elements = Fresh();
             var direct = Fresh();
             Line($"{elementsField} = getelementptr inbounds i8, ptr {array}, i64 32");
-            Line($"{elements} = load ptr, ptr {elementsField}");
+            Line($"{elements} = load ptr, ptr {elementsField}, !tbaa {TbaaHeader}");
             Line($"{direct} = getelementptr inbounds {Type(arrayType.Element)}, ptr {elements}, i64 {index}");
             Line($"br label %{done}");
 

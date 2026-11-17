@@ -1098,9 +1098,19 @@ public sealed class Binder
 
             if (typeExpression.ReferencedType is NamedTypeSymbol namedType)
             {
-                var staticMembers = namedType.GetMembers(name).ToList();
-                if (staticMembers.Count > 0)
-                    return BindMemberGroup(syntax, null, staticMembers, namedType);
+                var members = namedType.GetMembers(name).ToList();
+                var statics = members.Where(IsStaticMember).ToList();
+
+                if (statics.Count > 0)
+                    return BindMemberGroup(syntax, null, statics, namedType);
+
+                if (members.Count > 0)
+                {
+                    _diagnostics.Error(ErrorCode.ERR_MemberAccessMismatch, syntax.Name.Span,
+                        $"'{name}' is an instance member of "
+                        + $"'{namedType.ToDisplayString()}', so it needs a value to read it from");
+                    return new BoundError(syntax, receiver);
+                }
             }
 
             _diagnostics.Error(ErrorCode.ERR_NameNotFound, syntax.Name.Span,
@@ -1123,9 +1133,24 @@ public sealed class Binder
             return new BoundError(syntax, receiver);
         }
 
-        var receiverType = receiver.Type is OptionalTypeSymbol optional
-            ? optional.UnderlyingType
-            : receiver.Type;
+        var receiverType = receiver.Type;
+        var optionalChain = false;
+
+        if (receiverType is OptionalTypeSymbol optional)
+        {
+            // Optionality is in the type system, so reaching through it is
+            // written down: 'p?.x', not 'p.x'. docs/03 §3.7.
+            if (syntax.OperatorToken.Kind != SyntaxKind.QuestionDotToken)
+            {
+                _diagnostics.Error(ErrorCode.ERR_NotOptional, syntax.OperatorToken.Span,
+                    $"'{receiverType.ToDisplayString()}' may hold nothing, so reach "
+                    + "through it with '?.' or unwrap it first");
+                return new BoundError(syntax, receiver);
+            }
+
+            receiverType = optional.UnderlyingType;
+            optionalChain = true;
+        }
 
         if (receiverType is TupleTypeSymbol tuple)
             return BindTupleElementAccess(syntax, receiver, tuple, name);
@@ -1137,9 +1162,45 @@ public sealed class Binder
             return new BoundError(syntax, receiver);
         }
 
-        return BindMemberGroup(
-            syntax, receiver, found.Members, found.Owner, found.Substitution);
+        var instanceMembers = found.Members.Where(m => !IsStaticMember(m)).ToList();
+        if (instanceMembers.Count == 0)
+        {
+            _diagnostics.Error(ErrorCode.ERR_MemberAccessMismatch, syntax.Name.Span,
+                $"'{name}' is a static member of '{found.Owner.ToDisplayString()}', "
+                + "so it is reached through the type rather than a value");
+            return new BoundError(syntax, receiver);
+        }
+
+        var member = BindMemberGroup(
+            syntax, receiver, instanceMembers, found.Owner, found.Substitution);
+
+        // Reaching through an optional gives an optional: '?.' can produce
+        // nothing, and the type says so.
+        if (optionalChain && member is BoundFieldAccess field)
+        {
+            return new BoundFieldAccess(
+                syntax, field.Receiver, field.Field, new OptionalTypeSymbol(field.Type));
+        }
+
+        return member;
     }
+
+    /// <summary>
+    /// True for a member reached through the type rather than a value.
+    /// </summary>
+    /// <remarks>
+    /// Initialisers, nested types, aliases and the cases of a union or enum
+    /// are all named through the type, so they count as static here even
+    /// though none of them is written <c>static</c>.
+    /// </remarks>
+    private static bool IsStaticMember(Symbol member) => member switch
+    {
+        FunctionSymbol function =>
+            function.IsStatic || function.FunctionKind is FunctionKind.Initializer,
+        FieldSymbol field => field.IsStatic,
+        NamedTypeSymbol or AliasSymbol or UnionCaseSymbol or EnumCaseSymbol => true,
+        _ => false,
+    };
 
     /// <summary>What a member lookup found, and what it has to be read through.</summary>
     private readonly record struct MemberLookup(
@@ -1618,6 +1679,20 @@ public sealed class Binder
 
             if (conversion is null) return null;
             cost += Conversions.Cost(conversion.Value);
+        }
+
+        // A candidate whose constraints the inferred arguments do not meet is
+        // not a candidate: 'needsNamed(aPoint)' has no overload, rather than
+        // an overload that then complains.
+        foreach (var typeParameter in candidate.TypeParameters)
+        {
+            if (substitution.Lookup(typeParameter) is not { } argument) continue;
+
+            foreach (var constraint in typeParameter.Constraints)
+            {
+                if (!Conversions.Satisfies(argument, substitution.Apply(constraint)))
+                    return null;
+            }
         }
 
         return cost;

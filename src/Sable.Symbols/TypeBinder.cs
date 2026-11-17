@@ -209,14 +209,47 @@ internal sealed class TypeBinder(Compilation compilation)
         }
     }
 
+    /// <summary>
+    /// Applies a <c>where</c> clause to the parameters it names.
+    /// </summary>
+    /// <remarks>
+    /// <c>fn f&lt;T&gt;(x: T) where T: Named</c> and
+    /// <c>fn f&lt;T: Named&gt;(x: T)</c> say the same thing, so they end in
+    /// the same place: the parameter's constraint list.
+    /// </remarks>
     private void BindWhereClause(WhereClauseSyntax? clause, Symbol context, FileScope? scope)
     {
         if (clause is null) return;
 
         foreach (var constraint in clause.Constraints)
         {
-            _ = BindType(constraint.Left, context, scope);
-            _ = BindType(constraint.Right, context, scope);
+            var left = BindType(constraint.Left, context, scope);
+            var right = BindType(constraint.Right, context, scope);
+
+            if (left is TypeParameterSymbol parameter && !right.IsError)
+                parameter.Constraints = parameter.Constraints.Add(right);
+        }
+    }
+
+    /// <summary>
+    /// Checks that a constructed type's arguments meet the declaration's
+    /// constraints.
+    /// </summary>
+    private void CheckTypeArguments(
+        NamedTypeSymbol definition, ImmutableArray<TypeSymbol> arguments, TextSpan span)
+    {
+        for (var i = 0; i < arguments.Length && i < definition.TypeParameters.Length; i++)
+        {
+            foreach (var constraint in definition.TypeParameters[i].Constraints)
+            {
+                if (Conversions.Satisfies(arguments[i], constraint)) continue;
+
+                _diagnostics.Error(ErrorCode.ERR_DoesNotConform, span,
+                    $"'{arguments[i].ToDisplayString()}' does not conform to "
+                    + $"'{constraint.ToDisplayString()}', which "
+                    + $"'{definition.Name}' requires of "
+                    + $"'{definition.TypeParameters[i].Name}'");
+            }
         }
     }
 
@@ -457,6 +490,8 @@ internal sealed class TypeBinder(Compilation compilation)
                         + $"but {arguments.Length} were given");
                 }
 
+                // Constraints bind later than this, so the check waits.
+                DeferLate(() => CheckTypeArguments(named, arguments, span));
                 return named.Construct(arguments);
             }
 

@@ -83,7 +83,10 @@ public sealed class BoundFieldAccess(
 {
     public BoundExpression? Receiver { get; } = receiver;
     public FieldSymbol Field { get; } = field;
-    public override bool IsAssignable => Field.IsMutable;
+
+    // A computed member is assignable only where it declares a setter.
+    public override bool IsAssignable =>
+        Field.IsMutable && (!Field.IsComputed || Field.HasSetter);
     public override IEnumerable<BoundNode> Children => Nodes(Receiver);
 }
 

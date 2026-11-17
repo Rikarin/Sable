@@ -1,0 +1,57 @@
+module Negative.Generics
+
+protocol Named { fn name() -> String }
+protocol Aged { var age: Int { get } }
+struct Point { var x: Int }
+struct Person: Named { fn name() -> String { return "p" } }
+struct Box<Item> { var item: Item }
+
+fn needsNamed<T: Named>(_ value: T) -> String { return value.name() }
+
+fn unsatisfiedConstraint(_ p: Point) -> String {
+    return needsNamed(p)                //! S3007 cannot be called
+}
+
+fn satisfiedConstraint(_ p: Person) -> String {
+    return needsNamed(p)
+}
+
+fn needsTwo<T: Named & Aged>(_ value: T) -> String { return value.name() }
+
+fn onlyOneOfTwo(_ p: Person) -> String {
+    return needsTwo(p)                  //! S3007 cannot be called
+}
+
+fn constrainedByWhere<T>(_ value: T) -> String where T: Named {
+    return value.name()
+}
+
+fn unsatisfiedWhere(_ p: Point) -> String {
+    return constrainedByWhere(p)        //! S3007 cannot be called
+}
+
+fn aTypeParameterHasNoMembers<T>(_ value: T) -> String {
+    return value.name()                 //! S2002 has no member named 'name'
+}
+
+fn theWrongTypeArgument(_ b: Box<Int>) -> Box<String> {
+    return b                            //! S3004
+}
+
+fn missingTypeArguments(_ b: Box) { }   //! S3002
+
+fn constraintsAreCheckedOnTheType(_ holder: Holder<Point>) { }   //! S3023 does not conform
+
+struct Holder<T: Named> { var value: T }
+
+fn protocolAsAValue() -> Int {
+    return Named                        //! S3004 expected 'Int'
+}
+
+fn conformanceIsNotInheritance(_ value: any Named) -> Person {
+    return value                        //! S3004
+}
+
+fn opaqueIsNotTheConcreteType(_ value: some Named) -> Person {
+    return value                        //! S3004
+}

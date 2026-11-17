@@ -197,6 +197,9 @@ public sealed class FieldSymbol(
     /// <summary>True when the member has accessors rather than storage.</summary>
     public bool IsComputed { get; internal set; }
 
+    /// <summary>True when a computed member declares a <c>set</c>.</summary>
+    public bool HasSetter { get; internal set; }
+
     /// <summary>
     /// True for a protocol requirement: accessors are declared but none has a
     /// body, so a conforming type has to supply one.

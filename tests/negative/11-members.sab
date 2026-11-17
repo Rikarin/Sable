@@ -1,0 +1,57 @@
+module Negative.Members
+
+struct Counter {
+    var n: Int
+
+    fn peek() -> Int { return n }
+    mutating fn bump() { n = n + 1 }
+    static fn zero() -> Counter { return Counter { n: 0 } }
+}
+
+protocol Named { fn name() -> String }
+
+open class Base {
+    open fn describe() -> String { return "base" }
+}
+
+fn staticThroughAnInstance(_ c: Counter) -> Counter {
+    return c.zero()                     //! S3039 is a static member
+}
+
+fn instanceThroughTheType() -> Int {
+    return Counter.peek()               //! S3039 is an instance member
+}
+
+struct MissingOverride: Base {          //! S3024
+    fn describe() -> String { return "x" }
+}
+
+struct SetterOnAGetOnly {
+    var stored: Int
+    var readOnly: Int { get => stored }
+}
+
+fn assignToAGetOnly(_ s: SetterOnAGetOnly) {
+    s.readOnly = 1                      //! S3010
+}
+
+struct AccessorTypeMismatch {
+    var stored: Int
+    var wrong: String { get => stored } //! S3004 expected 'String'
+}
+
+struct SetterBodyIsChecked {
+    var stored: Int
+    var value: Int {
+        get => stored
+        set { stored = newValue + "x" } //! S3009
+    }
+}
+
+fn initialiserArgumentIsChecked() -> Counter {
+    return Counter(n: "one")            //! S3007
+}
+
+fn initialiserLabelIsChecked() -> Counter {
+    return Counter(count: 1)            //! S3007
+}

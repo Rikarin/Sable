@@ -107,6 +107,7 @@ public enum ErrorCode
     ERR_AwaitOutsideAsync = 3035,
     WRN_NothingThrowsHere = 3036,
     ERR_ExpressionTooComplex = 3038,
+    ERR_MemberAccessMismatch = 3039,
     ERR_NotSupportedYet = 3099,
 
     // ---- Patterns and flow (S6000-S6999) ---------------------------------

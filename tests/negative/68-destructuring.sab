@@ -1,0 +1,38 @@
+module Negative.Destructuring
+
+struct Person { var name: String, var age: Int }
+fn pair() -> (Int, String) { return (1, "a") }
+
+fn aDestructuredLetIsImmutable() {
+    let (n, _) = pair()
+    n = 2                                               //! S3010
+}
+
+fn aRecordDestructuredLetIsImmutableToo(_ p: Person) {
+    let { age } = p
+    age = 3                                             //! S3010
+}
+
+fn aPatternThatMightNotMatchCannotDeclare() {
+    let (1, label) = pair()                             //! S6009 if case
+}
+
+fn aDestructuringNeedsAValue() {
+    let (a, b): (Int, Int)                              //! S3005 needs one
+}
+
+fn theNamesHaveTheElementTypes() -> Int {
+    let (_, label) = pair()
+    return label                                        //! S3004 expected 'Int'
+}
+
+fn anUnknownFieldIsReported(_ p: Person) {
+    let { height } = p                                  //! S2002 no field named 'height'
+}
+
+fn aRecordPatternWithAnUnknownFieldIsNotACatchAll(_ p: Person) {
+    match p {
+        case Person { height: let h } => { }            //! S2002 height
+        default => { }
+    }
+}

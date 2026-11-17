@@ -403,6 +403,19 @@ public sealed class BoundBlock(
     public override IEnumerable<BoundNode> Children => Statements;
 }
 
+/// <summary>
+/// <c>let (a, b) = pair</c> or <c>let { name, age } = person</c>: a
+/// declaration whose left side is a pattern, which must always match.
+/// </summary>
+public sealed class BoundPatternDeclaration(
+    SyntaxNode syntax, BoundPattern pattern, BoundExpression initializer)
+    : BoundStatement(syntax)
+{
+    public BoundPattern Pattern { get; } = pattern;
+    public BoundExpression Initializer { get; } = initializer;
+    public override IEnumerable<BoundNode> Children => [Initializer, Pattern];
+}
+
 public sealed class BoundLocalDeclaration(
     SyntaxNode syntax, LocalSymbol local, BoundExpression? initializer)
     : BoundStatement(syntax)
@@ -859,6 +872,15 @@ public sealed class BoundRecordPattern(
     : BoundPattern(syntax, inputType)
 {
     public ImmutableArray<(FieldSymbol Field, BoundPattern Pattern)> Fields { get; } = fields;
+
+    /// <summary>True when the pattern names a narrower type than its input.</summary>
+    public bool TestsType { get; init; }
+
+    /// <summary>True when a field it named does not exist and was left out.</summary>
+    public bool IsIncomplete { get; init; }
+
+    public override bool IsIrrefutable =>
+        !TestsType && !IsIncomplete && Fields.All(f => f.Pattern.IsIrrefutable);
     public override IEnumerable<BoundNode> Children => Fields.Select(f => f.Pattern);
 }
 

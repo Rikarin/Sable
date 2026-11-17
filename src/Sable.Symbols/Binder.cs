@@ -887,16 +887,10 @@ public sealed class Binder
     {
         var declarator = declaration.Declarator;
 
-        if (declarator.Pattern is not BindingPatternSyntax binding)
-        {
-            // Destructuring needs pattern binding, which comes with match.
-            var value = declarator.Initializer is { } init
-                ? BindExpression(init.Value)
-                : null;
-            return new BoundExpressionStatement(declaration, value ?? new BoundError(declaration));
-        }
-
         var isMutable = declaration.LetOrVarKeyword.Kind == SyntaxKind.VarKeyword;
+
+        if (declarator.Pattern is not BindingPatternSyntax binding)
+            return BindPatternDeclaration(declaration, declarator, isMutable);
 
         TypeSymbol? declaredType = declarator.TypeAnnotation is { } annotation
             ? _compilation.TypeBinder.BindType(annotation.Type, _containingSymbol, _scope)
@@ -937,6 +931,66 @@ public sealed class Binder
         TrackRethrowSource(local, initializer);
         return Record(declaration, new BoundLocalDeclaration(declaration, local, initializer));
     }
+
+    /// <summary>
+    /// <c>let (a, b) = pair</c>, <c>var { x, y } = point</c>: the value is
+    /// taken apart by a pattern, which has to match whatever the value is.
+    /// </summary>
+    /// <remarks>
+    /// The names inside take their mutability from the declaration's own
+    /// keyword, since a pattern written here has no <c>let</c> or <c>var</c>
+    /// of its own. A pattern that might not match — a literal, a union case
+    /// — belongs in <c>if case</c> or <c>guard case</c>, where there is
+    /// somewhere to go when it does not.
+    /// </remarks>
+    private BoundStatement BindPatternDeclaration(
+        LocalDeclarationStatementSyntax declaration,
+        VariableDeclaratorSyntax declarator,
+        bool isMutable)
+    {
+        TypeSymbol? declaredType = declarator.TypeAnnotation is { } annotation
+            ? _compilation.TypeBinder.BindType(annotation.Type, _containingSymbol, _scope)
+            : null;
+
+        BoundExpression initializer;
+        if (declarator.Initializer is { } initSyntax)
+        {
+            initializer = BindExpression(initSyntax.Value, declaredType);
+            if (declaredType is not null)
+                initializer = Convert(initializer, declaredType, initSyntax.Value);
+        }
+        else
+        {
+            _diagnostics.Error(ErrorCode.ERR_CannotInferType, declarator.Pattern.Span,
+                "a pattern takes a value apart, so it needs one: add '= ...'");
+            initializer = new BoundError(declarator);
+        }
+
+        var saved = _declaringMutable;
+        _declaringMutable = isMutable;
+        var pattern = BindPattern(declarator.Pattern, declaredType ?? initializer.Type);
+        _declaringMutable = saved;
+
+        if (!pattern.IsIrrefutable && !ContainsErrorPattern(pattern) && !initializer.HasError)
+        {
+            _diagnostics.Error(ErrorCode.ERR_RefutablePatternInDeclaration,
+                declarator.Pattern.Span,
+                "this pattern might not match, so it cannot declare names here; "
+                + "use 'if case' or 'guard case'");
+        }
+
+        return Record(declaration, new BoundPatternDeclaration(declaration, pattern, initializer));
+    }
+
+    private static bool ContainsErrorPattern(BoundPattern pattern) =>
+        pattern is BoundErrorPattern or BoundRecordPattern { IsIncomplete: true }
+        || pattern.Children.OfType<BoundPattern>().Any(ContainsErrorPattern);
+
+    /// <summary>
+    /// The keyword of the declaration a pattern is being bound for, which the
+    /// names inside it inherit; false outside a declaration.
+    /// </summary>
+    private bool _declaringMutable;
 
     private BoundStatement BindIf(IfStatementSyntax statement)
     {
@@ -1383,7 +1437,7 @@ public sealed class Binder
         PostfixUnaryExpressionSyntax unary => BindPostfixUnary(unary),
         AssignmentExpressionSyntax assignment => BindAssignment(assignment),
         ConditionalExpressionSyntax conditional => BindConditionalExpression(conditional),
-        TupleExpressionSyntax tuple => BindTuple(tuple),
+        TupleExpressionSyntax tuple => BindTuple(tuple, expectedType),
         ArrayExpressionSyntax array => BindArray(array, expectedType),
         RecordExpressionSyntax record => BindRecordExpression(record),
         CastExpressionSyntax cast => BindCast(cast),
@@ -2739,10 +2793,27 @@ public sealed class Binder
         return [Convert(indices[0], expected, indices[0].Syntax)];
     }
 
-    private BoundExpression BindTuple(TupleExpressionSyntax syntax)
+    private BoundExpression BindTuple(TupleExpressionSyntax syntax, TypeSymbol? expectedType)
     {
+        // '(1, 2)' where '(I64, I64)' is wanted: each element is read against
+        // its own expected type, as an array literal's are, so a literal can
+        // take the type the context asks for.
+        var expected = Expand(expectedType) is TupleTypeSymbol wanted
+                       && wanted.ElementTypes.Length == syntax.Elements.Count
+            ? wanted.ElementTypes
+            : default;
+
         var elements = syntax.Elements
-            .Select(e => BindExpression(e.Expression)).ToImmutableArray();
+            .Select((e, i) =>
+            {
+                if (expected.IsDefault) return BindExpression(e.Expression);
+                var element = BindExpression(e.Expression, expected[i]);
+                return _conversions.HasImplicitConversion(
+                        element.Type, expected[i], IsLiteral(element))
+                    ? Convert(element, expected[i], e.Expression)
+                    : element;
+            })
+            .ToImmutableArray();
 
         var names = syntax.Elements
             .Select(e => e.NameToken.IsNone ? null : e.NameToken.Text).ToImmutableArray();
@@ -3897,9 +3968,12 @@ public sealed class Binder
 
             case BindingPatternSyntax binding:
             {
+                var mutable = binding.LetOrVarKeyword.IsNone
+                    ? _declaringMutable
+                    : binding.LetOrVarKeyword.Kind == SyntaxKind.VarKeyword;
+
                 var local = new LocalSymbol(
-                    binding.Identifier.Text, _containingSymbol, binding,
-                    binding.LetOrVarKeyword.Kind == SyntaxKind.VarKeyword)
+                    binding.Identifier.Text, _containingSymbol, binding, mutable)
                 {
                     TypeResolver = () => inputType,
                 };
@@ -4105,6 +4179,7 @@ public sealed class Binder
             : inputType;
 
         var fields = ImmutableArray.CreateBuilder<(FieldSymbol, BoundPattern)>();
+        var incomplete = false;
 
         if (owner is not NamedTypeSymbol named)
         {
@@ -4125,6 +4200,7 @@ public sealed class Binder
             {
                 _diagnostics.Error(ErrorCode.ERR_NameNotFound, field.NameToken.Span,
                     $"'{named.ToDisplayString()}' has no field named '{name}'");
+                incomplete = true;
                 continue;
             }
 
@@ -4135,7 +4211,7 @@ public sealed class Binder
             }
 
             // '{ name }' binds the field to a local of the same name.
-            var local = new LocalSymbol(name, _containingSymbol, field, false)
+            var local = new LocalSymbol(name, _containingSymbol, field, _declaringMutable)
             {
                 TypeResolver = () => member.Type,
             };
@@ -4143,7 +4219,13 @@ public sealed class Binder
             fields.Add((member, new BoundBindingPattern(field, member.Type, local)));
         }
 
-        return new BoundRecordPattern(pattern, inputType, fields.ToImmutable());
+        // Naming the input's own type, or none, tests nothing; naming a
+        // narrower one is a type test and can fail.
+        return new BoundRecordPattern(pattern, inputType, fields.ToImmutable())
+        {
+            TestsType = !owner.Equals(inputType),
+            IsIncomplete = incomplete,
+        };
     }
 
     private BoundPattern BindArrayPattern(ArrayPatternSyntax pattern, TypeSymbol inputType)

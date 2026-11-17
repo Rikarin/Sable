@@ -87,6 +87,11 @@ internal static class RegionFlow
                 }
                 return;
 
+            case BoundPatternDeclaration declaration:
+                Collect(declaration.Initializer, declared, read, written, captured, insideClosure);
+                DeclarePattern(declaration.Pattern, declared, written);
+                return;
+
             case BoundLocalAccess access:
                 read.Add(access.Local);
                 // A name the closure declared itself is not a capture.

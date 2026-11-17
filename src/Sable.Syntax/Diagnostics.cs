@@ -133,6 +133,7 @@ public enum ErrorCode
     WRN_PatternAlreadyCovered = 6006,
     ERR_MatchArmTypesDiffer = 6007,
     ERR_UseBeforeAssignment = 6008,
+    ERR_RefutablePatternInDeclaration = 6009,
 }
 
 public enum DiagnosticSeverity { Hidden, Info, Warning, Error }

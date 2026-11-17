@@ -103,6 +103,11 @@ internal sealed class DefiniteAssignment
                 }
                 return;
 
+            case BoundPatternDeclaration declaration:
+                Walk(declaration.Initializer, state);
+                foreach (var local in LocalsIn(declaration.Pattern)) state.Assign(local);
+                return;
+
             case BoundExpressionStatement expression:
                 Walk(expression.Expression, state);
                 return;

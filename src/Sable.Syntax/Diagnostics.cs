@@ -30,7 +30,9 @@ public enum ErrorCode
     ERR_IntegerLiteralOverflow = 14,
     ERR_InvalidFloatLiteral = 15,
     ERR_HexFloatNeedsExponent = 16,
-    ERR_FloatNeedsDigitsBothSides = 17,
+    // 17 was "a float needs digits on both sides". It cannot happen: by
+    // spec/lexical.md, '1.' is the integer 1 followed by '.', which is what
+    // makes 'x.0' and '1..<5' lex unambiguously.
     ERR_ByteOrderMarkNotAllowed = 18,
     ERR_UnterminatedEscapedIdentifier = 19,
     ERR_EmptyEscapedIdentifier = 20,
@@ -104,7 +106,6 @@ public enum ErrorCode
     ERR_MustUseAwait = 3034,
     ERR_AwaitOutsideAsync = 3035,
     WRN_NothingThrowsHere = 3036,
-    ERR_NotThrowing = 3037,
     ERR_ExpressionTooComplex = 3038,
     ERR_NotSupportedYet = 3099,
 

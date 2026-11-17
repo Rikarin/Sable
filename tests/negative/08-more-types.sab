@@ -1,0 +1,88 @@
+module Negative.MoreTypes
+
+struct Point { var x: Int, var y: Int }
+struct Box<Item> { var item: Item }
+union Shape { Circle(radius: F64), Square(side: F64) }
+protocol Named { fn name() -> String }
+
+fn noImplicitWidening() {
+    let small: I32 = 1
+    let wide: I64 = small               //! S3004 expected 'I64'
+}
+
+fn noImplicitNarrowing() {
+    let wide: I64 = 1
+    let small: I32 = wide               //! S3004 expected 'I32'
+}
+
+fn noArrayCovariance(_ points: Point[]) {
+    let anything: Named[] = points      //! S3004
+}
+
+fn optionalIsNotItsValue(_ maybe: Int?) -> Int {
+    return maybe                        //! S3004 expected 'Int'
+}
+
+fn aValueIsNotItsOptional(_ n: Int) -> Int? {
+    return n
+}
+
+fn stringPlusInt(_ s: String, _ n: Int) -> String {
+    return s + n                        //! S3009
+}
+
+fn boolArithmetic(_ a: Bool, _ b: Bool) -> Bool {
+    return a - b                        //! S3009
+}
+
+fn comparingDifferentTypes(_ a: Int, _ b: String) -> Bool {
+    return a < b                        //! S3009
+}
+
+fn callingAField(_ p: Point) -> Int {
+    return p.x()                        //! S3006 is not callable
+}
+
+fn tooFewArguments() -> Int {
+    return twoArguments(1)              //! S3007
+}
+
+fn twoArguments(_ a: Int, _ b: Int) -> Int { return a + b }
+
+fn wrongArgumentLabel() -> Point {
+    return Point(a: 1, b: 2)            //! S3007
+}
+
+fn assigningToAParameter(_ n: Int) {
+    n = 1                               //! S3010
+}
+
+fn assigningToALetField(_ s: Immutable) {
+    s.value = 1                         //! S3010
+}
+
+struct Immutable { let value: Int }
+
+fn indexingWithTheWrongType(_ xs: Int[], _ s: String) -> Int {
+    return xs[s]                        //! S3004
+}
+
+fn genericArgumentMismatch(_ b: Box<Int>) -> String {
+    return b.item                       //! S3004 expected 'String'
+}
+
+fn missingSelfOutsideAType() -> Int {
+    return Self.something               //! S3019
+}
+
+fn aUnionCaseNeedsItsPayload() -> Shape {
+    return Shape.Circle                 //! S6002 so it needs them here
+}
+
+fn aUnionCasePayloadIsChecked() -> Shape {
+    return Shape.Circle(radius: "big")  //! S3004 expected 'F64'
+}
+
+fn nestedGenericMismatch(_ b: Box<Box<Int>>) -> Box<String> {
+    return b.item                       //! S3004
+}

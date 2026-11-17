@@ -1,0 +1,49 @@
+module Negative.Lexical
+
+// The lexer's own complaints. An unterminated construct is reported where it
+// runs out, which is the start of the next line, so those claims sit there.
+
+fn unterminatedString() -> String {
+    return "no closing quote            //! S0003 unterminated string
+}
+
+fn unterminatedChar() -> Char {
+    return 'a                           //! S0004 unterminated character
+}
+
+fn badEscape() -> String {
+    return "\q"                         //! S0008 unrecognised escape
+}
+
+fn emptyChar() -> Char {
+    return ''                           //! S0006 cannot be empty
+}
+
+fn longChar() -> Char {
+    return 'ab'                         //! S0007
+}
+
+fn badUnicode() -> String {
+    return "\u{110000}"                 //! S0010 not a valid Unicode scalar
+}
+
+fn leadingUnderscore() -> Int {
+    return _1                           //! S2002
+}
+
+fn trailingUnderscore() -> Int {
+    return 1_                           //! S0013
+}
+
+fn noDigits() -> Int {
+    return 0x                           //! S0011
+}
+
+fn wrongDigit() -> Int {
+    return 0b12                         //! S0022
+}
+
+
+fn escapedIdentifier() -> Int {
+    return `x  //! S0019 unterminated escaped identifier //! S2002 no symbol named
+}

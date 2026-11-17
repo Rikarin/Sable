@@ -583,6 +583,13 @@ public sealed class Binder
                 initializer = Convert(initializer, declaredType, initSyntax.Value);
         }
 
+        // 'let f = someFunction' names the function rather than calling it.
+        if (initializer is BoundFunctionGroup group)
+        {
+            initializer = Materialize(group, null);
+            _bound[declarator.Initializer!.Value] = initializer;
+        }
+
         var type = declaredType
             ?? initializer?.Type
             ?? ErrorTypeSymbol.Instance;
@@ -1050,8 +1057,16 @@ public sealed class Binder
                 return new BoundTypeExpression(syntax, alias.AliasedType);
 
             case UnionCaseSymbol unionCase:
+            {
+                var union = (NamedTypeSymbol)unionCase.ContainingSymbol!;
                 return new BoundUnionCaseGroup(
-                    syntax, (NamedTypeSymbol)unionCase.ContainingSymbol!, unionCase);
+                    syntax,
+                    containingType is not null
+                        && containingType.OriginalDefinition.Equals(union)
+                            ? containingType
+                            : union,
+                    unionCase);
+            }
 
             case EnumCaseSymbol enumCase:
                 return new BoundLiteral(
@@ -1283,8 +1298,7 @@ public sealed class Binder
                 return BindCallToGroup(syntax, group, arguments, labels, syntaxes);
 
             case BoundUnionCaseGroup unionCase:
-                return new BoundUnionCaseConstruction(
-                    syntax, unionCase.Type, unionCase.UnionCase, arguments);
+                return BindUnionCaseConstruction(syntax, unionCase, arguments, labels);
 
             case BoundExpression value when Expand(value.Type) is FunctionTypeSymbol functionType:
                 return BindCallToValue(syntax, value, functionType, arguments, syntaxes);
@@ -1314,6 +1328,49 @@ public sealed class Binder
                 }
                 return new BoundError(syntax, [callee, .. arguments]);
         }
+    }
+
+    /// <summary>
+    /// Builds a union value, checking the payload against what the case
+    /// declared.
+    /// </summary>
+    private BoundExpression BindUnionCaseConstruction(
+        InvocationExpressionSyntax syntax,
+        BoundUnionCaseGroup group,
+        ImmutableArray<BoundExpression> arguments,
+        ImmutableArray<string?> labels)
+    {
+        var unionCase = group.UnionCase;
+        var substitution = group.Type is NamedTypeSymbol named
+            ? TypeSubstitution.For(named)
+            : TypeSubstitution.Empty;
+
+        if (arguments.Length != unionCase.Payload.Length)
+        {
+            _diagnostics.Error(ErrorCode.ERR_WrongPayloadCount, syntax.Span,
+                $"'{unionCase.Name}' takes {unionCase.Payload.Length} value(s), "
+                + $"not {arguments.Length}");
+            return new BoundError(syntax, arguments.ToArray());
+        }
+
+        var converted = ImmutableArray.CreateBuilder<BoundExpression>(arguments.Length);
+        for (var i = 0; i < arguments.Length; i++)
+        {
+            var field = unionCase.Payload[i];
+
+            if (i < labels.Length && labels[i] is { } label
+                && !string.Equals(label, field.Name, StringComparison.Ordinal))
+            {
+                _diagnostics.Error(ErrorCode.ERR_NameNotFound, arguments[i].Syntax.Span,
+                    $"'{unionCase.Name}' has no field named '{label}'");
+            }
+
+            converted.Add(Convert(
+                arguments[i], substitution.Apply(field.Type), arguments[i].Syntax));
+        }
+
+        return new BoundUnionCaseConstruction(
+            syntax, group.Type, unionCase, converted.ToImmutable());
     }
 
     /// <summary>True for a closure argument, through any parentheses.</summary>
@@ -1578,12 +1635,16 @@ public sealed class Binder
         if (receiver.HasError) return new BoundError(syntax, [receiver, .. indices]);
 
         if (receiver.Type is ArrayTypeSymbol array)
+        {
+            indices = CheckIndices(indices, Core.Int, syntax);
             return new BoundIndexAccess(syntax, array.ElementType, receiver, indices);
+        }
 
         if (receiver.Type is NamedTypeSymbol named
             && named.OriginalDefinition.Equals(Core.Dictionary)
             && named.TypeArguments.Length == 2)
         {
+            indices = CheckIndices(indices, named.TypeArguments[0], syntax);
             return new BoundIndexAccess(
                 syntax, new OptionalTypeSymbol(named.TypeArguments[1]), receiver, indices);
         }
@@ -1591,6 +1652,20 @@ public sealed class Binder
         _diagnostics.Error(ErrorCode.ERR_NotIndexable, syntax.Span,
             $"'{receiver.Type.ToDisplayString()}' cannot be indexed");
         return new BoundError(syntax, [receiver, .. indices]);
+    }
+
+    /// <summary>An index has a type too, and it is the one the receiver wants.</summary>
+    private ImmutableArray<BoundExpression> CheckIndices(
+        ImmutableArray<BoundExpression> indices, TypeSymbol expected, SyntaxNode syntax)
+    {
+        if (indices.Length != 1)
+        {
+            _diagnostics.Error(ErrorCode.ERR_NotIndexable, syntax.Span,
+                $"this takes one index, not {indices.Length}");
+            return indices;
+        }
+
+        return [Convert(indices[0], expected, indices[0].Syntax)];
     }
 
     private BoundExpression BindTuple(TupleExpressionSyntax syntax)
@@ -2366,6 +2441,19 @@ public sealed class Binder
     private BoundExpression Convert(
         BoundExpression expression, TypeSymbol target, SyntaxNode syntax)
     {
+        if (expression is BoundFunctionGroup group)
+            expression = Materialize(group, target);
+
+        // '.Circle' names a case that carries a radius; without one it is not
+        // a value of the union.
+        if (expression is BoundUnionCaseGroup { UnionCase.HasPayload: true } unionCase)
+        {
+            _diagnostics.Error(ErrorCode.ERR_WrongPayloadCount, expression.Syntax.Span,
+                $"'{unionCase.UnionCase.Name}' carries "
+                + $"{unionCase.UnionCase.Payload.Length} value(s), so it needs them here");
+            return new BoundError(expression.Syntax);
+        }
+
         if (expression.Type.Equals(target)) return expression;
 
         var conversion = _conversions.Classify(expression.Type, target, IsLiteral(expression));
@@ -2390,6 +2478,64 @@ public sealed class Binder
 
         return converted;
     }
+
+    /// <summary>
+    /// Turns a named function into a value of function type.
+    /// </summary>
+    /// <remarks>
+    /// A bare name that resolves to functions is a group until something says
+    /// which one is meant. A call says it by its arguments; everywhere else
+    /// the expected type says it, and with no expected type the group has to
+    /// hold exactly one function.
+    /// </remarks>
+    private BoundExpression Materialize(BoundFunctionGroup group, TypeSymbol? expected)
+    {
+        var substitution = group.Substitution ?? TypeSubstitution.Empty;
+
+        FunctionSymbol? chosen = null;
+
+        if (Expand(expected) is FunctionTypeSymbol wanted)
+        {
+            foreach (var candidate in group.Candidates)
+            {
+                var type = Apply(candidate.FunctionType, substitution);
+                if (!_conversions.HasImplicitConversion(type, wanted)) continue;
+                chosen = candidate;
+                break;
+            }
+        }
+        else if (group.Candidates.Length == 1)
+        {
+            chosen = group.Candidates[0];
+        }
+
+        if (chosen is null)
+        {
+            _diagnostics.Error(
+                group.Candidates.Length > 1
+                    ? ErrorCode.ERR_AmbiguousOverload
+                    : ErrorCode.ERR_TypeMismatch,
+                group.Syntax.Span,
+                group.Candidates.Length > 1
+                    ? $"several overloads of '{group.Candidates[0].Name}' could be meant here; "
+                        + "say which with a type annotation"
+                    : "this function does not have the type wanted here");
+            return new BoundError(group.Syntax);
+        }
+
+        return new BoundFunctionReference(
+            group.Syntax, Apply(chosen.FunctionType, substitution), group.Receiver, chosen);
+    }
+
+    private static FunctionTypeSymbol Apply(
+        FunctionTypeSymbol type, TypeSubstitution substitution) =>
+        substitution.IsEmpty
+            ? type
+            : new FunctionTypeSymbol(
+                [.. type.ParameterTypes.Select(substitution.Apply)],
+                substitution.Apply(type.ReturnType),
+                type.IsAsync,
+                type.ThrownType is null ? null : substitution.Apply(type.ThrownType));
 
     // =======================================================================
     // Patterns
@@ -2812,33 +2958,56 @@ public sealed class Binder
 
     /// <summary>
     /// Reports a match that does not cover its subject, naming a case it
-    /// misses.
+    /// misses, and an arm that earlier arms already cover.
     /// </summary>
     /// <remarks>
-    /// This covers unions, enums and booleans, which is where exhaustiveness
-    /// actually bites. The general algorithm — Maranget's usefulness, with a
-    /// witness built from the uncovered constructors — replaces it when
-    /// nested patterns need checking too.
+    /// Exhaustiveness and redundancy are the same question asked twice: is
+    /// this arm useful given the ones before it, and is anything left after
+    /// the last one. This covers unions, enums and booleans, which is where
+    /// both actually bite. The general algorithm — Maranget's usefulness,
+    /// with a witness built from the uncovered constructors — replaces it
+    /// when nested patterns need checking too.
     /// </remarks>
     private void CheckExhaustive(BoundMatch match)
     {
-        if (match.Subject.Type.IsError) return;
-
-        foreach (var arm in match.Arms)
-        {
-            if (arm.Guard is not null) continue;
-            if (arm.IsDefault) return;
-            if (arm.Patterns.Any(p => p.IsIrrefutable)) return;
-        }
+        var subject = match.Subject.Type;
+        if (subject.IsError) return;
 
         var covered = new HashSet<string>(StringComparer.Ordinal);
+        var total = false;
+
         foreach (var arm in match.Arms)
         {
+            // A guard can fail, so a guarded arm neither covers nor is covered.
             if (arm.Guard is not null) continue;
-            foreach (var pattern in arm.Patterns) CollectCovered(pattern, covered);
+
+            if (total)
+            {
+                ReportCovered(arm);
+                continue;
+            }
+
+            var isCatchAll = arm.IsDefault || arm.Patterns.Any(p => p.IsIrrefutable);
+
+            if (isCatchAll)
+            {
+                if (NothingLeft(subject, covered)) ReportCovered(arm);
+                total = true;
+                continue;
+            }
+
+            var names = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var pattern in arm.Patterns) CollectCovered(pattern, names);
+
+            if (names.Count > 0 && names.All(covered.Contains)) ReportCovered(arm);
+
+            foreach (var name in names) covered.Add(name);
+            if (NothingLeft(subject, covered)) total = true;
         }
 
-        var missing = MissingCases(match.Subject.Type, covered);
+        if (total) return;
+
+        var missing = MissingCases(subject, covered);
         if (missing is null || missing.Count == 0) return;
 
         var witness = missing.Count == 1
@@ -2849,6 +3018,14 @@ public sealed class Binder
         _diagnostics.Error(ErrorCode.ERR_MatchNotExhaustive, match.Syntax.Span,
             $"match is not exhaustive: {witness} not covered");
     }
+
+    private void ReportCovered(BoundMatchArm arm) =>
+        _diagnostics.Add(Diagnostic.Warning(
+            ErrorCode.WRN_PatternAlreadyCovered, arm.Syntax.Span,
+            "earlier arms already cover this one, so it can never run"));
+
+    private bool NothingLeft(TypeSymbol subject, HashSet<string> covered) =>
+        MissingCases(subject, covered) is { Count: 0 };
 
     private static void CollectCovered(BoundPattern pattern, HashSet<string> covered)
     {

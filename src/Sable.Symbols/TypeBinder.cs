@@ -121,10 +121,32 @@ internal sealed class TypeBinder(Compilation compilation)
         if (declaration.TypeAnnotation is not null) Defer(() => _ = field.Type);
     }
 
+    /// <summary>Aliases being resolved right now, to catch a cycle.</summary>
+    private readonly HashSet<AliasSymbol> _resolvingAliases = [];
+
     public void BindAliasTarget(AliasSymbol alias, TypeSyntax target)
     {
         var scope = compilation.CurrentScope;
-        alias.TypeResolver = () => BindType(target, alias, scope);
+
+        alias.TypeResolver = () =>
+        {
+            // 'alias A = A', or a longer ring, would otherwise resolve forever.
+            if (!_resolvingAliases.Add(alias))
+            {
+                return Error(ErrorCode.ERR_CircularAlias, target.Span,
+                    $"'{alias.Name}' is defined in terms of itself");
+            }
+
+            try
+            {
+                return BindType(target, alias, scope);
+            }
+            finally
+            {
+                _resolvingAliases.Remove(alias);
+            }
+        };
+
         Defer(() => _ = alias.Type);
     }
 

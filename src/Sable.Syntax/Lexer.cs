@@ -507,7 +507,32 @@ public sealed class Lexer
         }
 
         CheckUnderscores(TextBetween(start, _position), span);
+        CheckNoTrailingDigits(start, radix);
         return (SyntaxKind.IntegerLiteralToken, ParseRadix(digits, radix, span), default);
+    }
+
+    /// <summary>
+    /// Reports a character that would have been part of the literal in another
+    /// base.
+    /// </summary>
+    /// <remarks>
+    /// The grammar in spec/lexical.md §"Integer" stops a binary literal at the
+    /// first non-binary digit, so <c>0b12</c> would otherwise lex as
+    /// <c>0b1</c> followed by <c>2</c> and mean something. Saying so is always
+    /// better than silently agreeing with it.
+    /// </remarks>
+    private void CheckNoTrailingDigits(int start, int radix)
+    {
+        if (AtEnd || !char.IsAsciiLetterOrDigit(Current)) return;
+
+        var bad = Current;
+        var from = _position;
+        while (!AtEnd && (char.IsAsciiLetterOrDigit(Current) || Current == '_')) _position++;
+
+        _diagnostics.Error(ErrorCode.ERR_InvalidDigitForBase,
+            new TextSpan(start, _position - start),
+            $"'{bad}' is not a valid base-{radix} digit");
+        _ = from;
     }
 
     private (SyntaxKind, object?, ImmutableArray<StringPart>) ScanRadixOrHexFloat(int start, int radix)

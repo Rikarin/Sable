@@ -1,0 +1,48 @@
+module Negative.Effects
+
+union IoError { Denied }
+
+fn read(_ p: String) throws(IoError) -> String { return p }
+fn plain(_ p: String) -> String { return p }
+async fn fetch(_ p: String) -> String { return p }
+
+fn callWithoutTry() throws(IoError) -> String {
+    return read("a")                    //! S3032 needs 'try'
+}
+
+fn errorWithNowhereToGo() -> String {
+    return try read("a")                //! S3033 nowhere to go
+}
+
+fn throwWithoutDeclaring() {
+    throw IoError.Denied                //! S3033 cannot throw
+}
+
+fn tryOverNothing() -> String {
+    return try plain("a")               //! S3036 nothing in this expression
+}
+
+fn tryOptionalIsOptional() -> String {
+    return try? read("a")               //! S3004 expected 'String'
+}
+
+async fn callWithoutAwait() -> String {
+    return fetch("a")                   //! S3034 needs 'await'
+}
+
+fn awaitOutsideAsync() -> String {
+    return await fetch("a")             //! S3035 'await' is only available //! S3035 is async
+}
+
+fn namingAnOverloadedFunction() -> String {
+    let f = overloaded                  //! S3008 several overloads
+    return "x"
+}
+
+fn overloaded(_ n: Int) -> Int { return n }
+fn overloaded(_ s: String) -> String { return s }
+
+fn closureIsItsOwnContext() throws(IoError) -> String {
+    let f = () => { return try read("a") }   //! S3033 nowhere to go
+    return try read("b")
+}

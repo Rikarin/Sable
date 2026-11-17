@@ -1,0 +1,31 @@
+module Negative.Syntax
+
+// A parse error recovers at the next statement or member boundary, so each
+// case here sits in a declaration of its own. Claims sit on the line the
+// diagnostic lands on, which for a missing closing token is the line that
+// should have carried it.
+
+fn missingCloseParen() -> Int {
+    return (1 + 2
+}                                       //! S1001 expected ')'
+
+fn expectedExpression() -> Int {
+    return + ,   //! S1002 expected an expression //! S1002 expected an expression //! S2002 no symbol //! S2002 no symbol //! S6005
+}
+
+fn expectedTypeAfterColon(_ x: ) { }    //! S1004 expected an identifier
+
+fn expectedIdentifier() {
+    let = 1                             //! S1004 expected an identifier
+}
+
+fn expectedPattern(_ n: Int) {
+    match n {
+        case => { }                     //! S1006 expected a pattern
+        default => { }                  //! S6006 earlier arms
+    }
+}
+
+struct ExpectedDeclaration {
+    return 1   //! S1008 expected a declaration //! S1008 expected a declaration
+}

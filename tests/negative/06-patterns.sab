@@ -1,0 +1,78 @@
+module Negative.Patterns
+
+union Shape { Circle(radius: F64), Rect(width: F64, height: F64), Empty }
+enum Direction { North, South, East, West }
+struct Point { var x: Int, var y: Int }
+
+fn patternTypeMismatch(_ s: Shape) {
+    match s {
+        case 1 => { }                   //! S6000
+        default => { }
+    }
+}
+
+fn unknownUnionCase(_ s: Shape) {
+    match s {
+        case .Triangle => { }           //! S6001
+        default => { }
+    }
+}
+
+fn wrongPayloadCount(_ s: Shape) {
+    match s {
+        case .Rect(let w) => { }        //! S6002
+        default => { }
+    }
+}
+
+fn notExhaustive(_ s: Shape) {
+    match s {                           //! S6003
+        case .Circle(let r) => { }
+    }
+}
+
+fn enumNotExhaustive(_ d: Direction) {
+    match d {                           //! S6003
+        case .North => { }
+        case .South => { }
+    }
+}
+
+fn boolNotExhaustive(_ flag: Bool) {
+    match flag {                        //! S6003
+        case true => { }
+    }
+}
+
+fn notAllPathsReturn(_ flag: Bool) -> Int {
+    if flag {
+        return 1
+    }
+}                                       //! S6004 not all paths return
+
+fn unreachableAfterReturn() -> Int {
+    return 1
+    let dead = 2                        //! S6005 never be reached
+}
+
+fn armAlreadyCovered(_ s: Shape) {
+    match s {
+        case .Circle(let r) => { }
+        case .Rect(let w, let h) => { }
+        case .Empty => { }
+        default => { }                  //! S6006
+    }
+}
+
+fn armTypesDiffer(_ s: Shape) -> Int {
+    return match s {
+        case .Circle(let r) => 1
+        case .Rect(let w, let h) => "two"   //! S6007
+        case .Empty => 3
+    }
+}
+
+fn readBeforeAssignment() -> Int {
+    var n: Int
+    return n                            //! S6008 before anything assigns
+}

@@ -1,0 +1,45 @@
+module Negative.Names
+
+struct Point { var x: Int, var y: Int }
+protocol Named { fn name() -> String }
+alias Loop = Loop                       //! S2005 defined in terms of itself
+
+struct Duplicate { var a: Int }
+struct Duplicate { var b: Int }         //! S2000 already declared
+
+fn duplicateLocal() {
+    let x = 1
+    let x = 2                           //! S2000 already declared
+}
+
+fn unknownName() -> Int {
+    return missing                      //! S2002 no symbol named 'missing'
+}
+
+fn unknownType(_ p: Nowhere) { }        //! S2001 no type named 'Nowhere'
+
+fn unknownMember(_ p: Point) -> Int {
+    return p.z                          //! S2002 has no member named 'z'
+}
+
+fn unknownStaticMember() -> Int {
+    return Point.origin                 //! S2002 has no member named 'origin'
+}
+
+fn aTypeIsNotAValue() -> Int {
+    return Point                        //! S3004
+}
+
+fn superWithoutABase(_ p: Point) -> Int {
+    return 0
+}
+
+struct NoBase {
+    fn useSuper() -> Int {
+        return super.missing            //! S2002 has no base class
+    }
+}
+
+fn selfOutsideAType() -> Int {
+    return self.x                       //! S3019 only available inside a type
+}

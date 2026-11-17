@@ -1,0 +1,99 @@
+module Negative.Types
+
+struct Point { var x: Int, var y: Int }
+struct Box<Item> { var item: Item }
+union Shape { Circle(radius: F64), Square(side: F64) }
+enum Direction { North, South }
+
+fn wrongTypeArgumentCount(_ b: Box<Int, Int>) { }   //! S3000 type argument
+
+fn tooManyTypeArguments(_ p: Point<Int>) { }        //! S3000 takes 0 type argument
+
+fn typeArgumentsOnATypeParameter<T>(_ x: T<Int>) { } //! S3001 takes no type arguments
+
+fn annotationMismatch() {
+    let x: Int = "text"                 //! S3004 expected 'Int'
+}
+
+fn returnMismatch() -> Int {
+    return "text"                       //! S3004 expected 'Int'
+}
+
+fn emptyArrayNeedsAType() {
+    let xs = []                         //! S3005 needs a type annotation
+}
+
+fn notCallable(_ p: Point) -> Int {
+    return p()                          //! S3006 is not callable
+}
+
+fn wrongArguments(_ p: Point) -> Int {
+    return takesOne(1, 2)               //! S3007 cannot be called
+}
+
+fn takesOne(_ n: Int) -> Int { return n }
+
+fn operatorNotDefined(_ p: Point, _ q: Point) -> Point {
+    return p + q                        //! S3009 is not defined for
+}
+
+fn assignToALet() {
+    let x = 1
+    x = 2                               //! S3010 must be a mutable binding
+}
+
+fn unwrapANonOptional(_ n: Int) -> Int {
+    return n!                           //! S3011 is not optional
+}
+
+fn indexSomethingThatIsNot(_ p: Point) -> Int {
+    return p[0]                         //! S3012
+}
+
+fn iterateSomethingThatIsNot(_ p: Point) {
+    for item in p { }                   //! S3013
+}
+
+fn branchesDiffer(_ flag: Bool) -> Int {
+    return flag ? 1 : "two"             //! S3014
+}
+
+fn inconsistentElements() {
+    let xs = [1, "two"]                 //! S3015 but the array holds
+}
+
+fn returnNeedsAValue() -> Int {
+    return                              //! S3016 needs a value
+}
+
+fn returnTakesNoValue() {
+    return 1                            //! S3017 takes no value
+}
+
+fn breakOutsideALoop() {
+    break                               //! S3018
+}
+
+fn continueOutsideALoop() {
+    continue                            //! S3018
+}
+
+fn noContextForALeadingDot() {
+    let d = .North                      //! S3021
+}
+
+fn cannotInferTheTypeArgument() {
+    let b = makeBox()                   //! S3022 cannot infer
+}
+
+fn makeBox<T>() -> Box<T> { return Box { item: missingValue() } }
+
+fn missingValue<T>() -> T { return missingValue() }   //! S3022 cannot infer
+
+fn missingFieldInitializer() -> Point {
+    return Point { x: 1 }               //! S3028 'y' is not initialised
+}
+
+fn unknownFieldInitializer() -> Point {
+    return Point { x: 1, y: 2, z: 3 }   //! S2002 has no field named 'z'
+}

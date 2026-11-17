@@ -519,6 +519,18 @@ public sealed class BoundConditionBinding(
         Pattern is null ? Nodes(Source) : Nodes(Source, Pattern);
 }
 
+/// <summary>A function named but not called: the value is the function itself.</summary>
+public sealed class BoundFunctionReference(
+    SyntaxNode syntax,
+    FunctionTypeSymbol type,
+    BoundExpression? receiver,
+    FunctionSymbol function) : BoundExpression(syntax, type)
+{
+    public BoundExpression? Receiver { get; } = receiver;
+    public FunctionSymbol Function { get; } = function;
+    public override IEnumerable<BoundNode> Children => Nodes(Receiver);
+}
+
 /// <summary>A call through a value of function type, with no symbol to name.</summary>
 public sealed class BoundIndirectCall(
     SyntaxNode syntax,

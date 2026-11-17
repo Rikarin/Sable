@@ -1,0 +1,40 @@
+module Negative.Conformance
+
+protocol Named { fn name() -> String }
+protocol Aged { var age: Int { get } }
+struct Point { var x: Int }
+open class Base { }
+open class Other { }
+
+struct MissingRequirement: Named { }    //! S3023 does not conform
+
+struct WrongSignature: Named {          //! S3027 does not match the signature
+    fn name() -> Int { return 0 }
+}
+
+struct MissingProperty: Aged { }        //! S3023 does not conform
+
+struct NotAProtocol: Point { }          //! S3024
+
+class TwoBases: Base, Other { }         //! S3025 more than one base class
+
+class RingA: RingB { }                  //! S3026 inherits from itself
+class RingB: RingA { }                  //! S3026 inherits from itself
+
+extension Point {
+    var stored: Int                     //! S3029 cannot add stored properties
+}
+
+extension Point {
+    init(_ n: Int) { }                  //! S3030 cannot add a designated initialiser
+}
+
+extension (Int, Int) {                  //! S3031 only a named type
+    fn f() { }
+}
+
+fn conformanceIsRequired(_ p: Point) -> String {
+    return describe(p)                  //! S3007 cannot be called
+}
+
+fn describe(_ value: some Named) -> String { return value.name() }

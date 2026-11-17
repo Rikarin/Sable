@@ -161,7 +161,10 @@ every line. A trailing backslash joins lines. \(interpolation) works.
 ```
 
 Escapes: `\0 \\ \t \n \r \" \' \u{...}` and `\(expr)` for interpolation.
-Interpolation nests arbitrarily; the lexer tracks a brace-depth stack.
+Interpolation nests arbitrarily; the lexer tracks a brace-depth stack and
+keeps the whole string as one token. The parser then takes that token apart so
+that each hole is an ordinary expression in the tree, slicing the original
+characters so the pieces tile the token exactly.
 
 Strings are UTF-8. `String` indexing is by `String.Index`, not by integer —
 byte offsets are available through `.utf8`, scalars through `.scalars`, and

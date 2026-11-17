@@ -49,6 +49,10 @@ public sealed class CoreTypes
         Module.AddMember(Error);
         AnyError = new ExistentialTypeSymbol(Error);
 
+        // A range has a nominal form too, so that 'for i in 0..<n' iterates
+        // something rather than a shape the binder knows by sight.
+        Range = DeclareGeneric("Range", TypeKind.Struct, "Bound");
+
         // 'Optional<T>' exists so that 'T?' has a nominal form to desugar to.
         Optional = DeclareGeneric("Optional", TypeKind.Union, "Wrapped");
         Dictionary = DeclareGeneric("Dictionary", TypeKind.Struct, "Key", "Value");
@@ -88,6 +92,10 @@ public sealed class CoreTypes
         Method(String, "split", [("separator", Char)],
             new ArrayTypeSymbol(String, ArrayKind.Grow));
         Method(String, "fromChar", [("character", Char)], String, isStatic: true);
+
+        Property(Range, "lowerBound", Range.TypeParameters[0]);
+        Property(Range, "upperBound", Range.TypeParameters[0]);
+        Property(Range, "isEmpty", Bool);
 
         Property(Char, "isDigit", Bool);
         Property(Char, "isLetter", Bool);
@@ -206,6 +214,8 @@ public sealed class CoreTypes
 
     /// <summary>What a bare <c>throws</c> means.</summary>
     public TypeSymbol AnyError { get; }
+
+    public NamedTypeSymbol Range { get; }
 
     public NamedTypeSymbol Optional { get; }
     public NamedTypeSymbol Dictionary { get; }

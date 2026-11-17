@@ -287,6 +287,23 @@ public sealed class BoundTypeTest(
     public override IEnumerable<BoundNode> Children => Nodes(Operand);
 }
 
+/// <summary><c>a..&lt;b</c>, <c>a...b</c>, and the one-sided forms.</summary>
+public sealed class BoundRange(
+    SyntaxNode syntax,
+    TypeSymbol type,
+    BoundExpression? lower,
+    BoundExpression? upper,
+    bool isInclusive) : BoundExpression(syntax, type)
+{
+    public BoundExpression? Lower { get; } = lower;
+    public BoundExpression? Upper { get; } = upper;
+
+    /// <summary>True for <c>...</c>, false for <c>..&lt;</c>.</summary>
+    public bool IsInclusive { get; } = isInclusive;
+
+    public override IEnumerable<BoundNode> Children => Nodes(Lower, Upper);
+}
+
 /// <summary>A record literal: <c>Point { x: 1, y: 2 }</c>.</summary>
 public sealed class BoundRecordExpression(
     SyntaxNode syntax,

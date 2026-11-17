@@ -336,3 +336,29 @@ public fn joined(_ separator: String, _ parts: String...) -> String {
 public fn joinedExample() -> String {
     return joined(", ", "a", "b", "c")
 }
+
+// ---- Ranges --------------------------------------------------------------
+
+public fn sumTo(_ n: Int) -> Int {
+    var total = 0
+    for i in 0..<n {
+        total = total + i
+    }
+    return total
+}
+
+public fn inclusiveRange(_ n: Int) -> Int {
+    var total = 0
+    for i in 1...n {
+        total = total + i
+    }
+    return total
+}
+
+public fn aRangeIsAValue(_ n: Int) -> Range<Int> {
+    return 0..<n
+}
+
+public fn rangeBounds(_ r: Range<Int>) -> Int {
+    return r.lowerBound + r.upperBound
+}

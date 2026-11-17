@@ -1,0 +1,84 @@
+module Negative.Numbers
+
+fn mixingIntegerWidths(_ a: I32, _ b: I64) -> I64 {
+    return a + b                        //! S3009
+}
+
+fn mixingSignedness(_ a: Int, _ b: UInt) -> Int {
+    return a + b                        //! S3009
+}
+
+fn mixingFloatWidths(_ a: F32, _ b: F64) -> F64 {
+    return a + b                        //! S3009
+}
+
+fn mixingIntAndFloat(_ a: Int, _ b: F64) -> F64 {
+    return a + b                        //! S3009
+}
+
+fn literalsAdaptToEitherSide(_ a: U8) -> U8 {
+    return a + 1
+}
+
+fn aLiteralThatDoesNotFitTheContext() -> Bool {
+    return 1                            //! S3004 expected 'Bool'
+}
+
+fn shiftingByAFloat(_ a: Int, _ b: F64) -> Int {
+    return a << b                       //! S3009
+}
+
+fn bitwiseOnFloats(_ a: F64, _ b: F64) -> F64 {
+    return a & b                        //! S3009
+}
+
+fn bitwiseOnBools(_ a: Bool, _ b: Bool) -> Bool {
+    return a & b
+}
+
+fn remainderOnFloats(_ a: F64, _ b: F64) -> F64 {
+    return a % b
+}
+
+fn comparingIntAndF64(_ a: Int, _ b: F64) -> Bool {
+    return a < b                        //! S3009
+}
+
+fn negatingAnUnsigned(_ a: UInt) -> UInt {
+    return -a
+}
+
+fn aRangeOverStrings(_ a: String, _ b: String) -> Int {
+    var total = 0
+    for x in a..<b {                    //! S3013 cannot be iterated
+        total = total + 1
+    }
+    return total
+}
+
+fn aRangeOverInts() -> Int {
+    var total = 0
+    for x in 0..<10 {
+        total = total + x
+    }
+    return total
+}
+
+fn theLoopVariableIsTheElementType() -> String {
+    for x in 0..<10 {
+        return x                        //! S3004 expected 'String'
+    }
+    return ""
+}
+
+fn numericMembers(_ a: Int) -> String {
+    return a.toString()
+}
+
+fn anUnknownNumericMember(_ a: Int) -> Int {
+    return a.sqrt()                     //! S2002 has no member named 'sqrt'
+}
+
+fn absKeepsTheType(_ a: I32) -> I64 {
+    return a.abs()                      //! S3004 expected 'I64'
+}

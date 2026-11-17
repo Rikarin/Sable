@@ -938,8 +938,22 @@ public sealed class Binder
         if (sequence.IsError) return ErrorTypeSymbol.Instance;
         if (sequence is ArrayTypeSymbol array) return array.ElementType;
 
-        // Ranges and user sequences need the Iterable protocol, which arrives
-        // with the standard library.
+        if (sequence is NamedTypeSymbol named
+            && named.OriginalDefinition.Equals(Core.Range)
+            && !named.TypeArguments.IsEmpty)
+        {
+            // Only an integer range enumerates; a range of anything else is a
+            // test of membership, not a sequence.
+            if (Core.IsInteger(named.TypeArguments[0])) return named.TypeArguments[0];
+
+            _diagnostics.Error(ErrorCode.ERR_NotIterable, syntax.Span,
+                $"'{named.ToDisplayString()}' cannot be iterated: "
+                + "only a range of integers enumerates");
+            return ErrorTypeSymbol.Instance;
+        }
+
+        // User sequences need the Iterable protocol, which arrives with the
+        // standard library.
         if (Core.IsInteger(sequence)) return sequence;
 
         _diagnostics.Error(ErrorCode.ERR_NotIterable, syntax.Span,
@@ -1077,6 +1091,7 @@ public sealed class Binder
         CastExpressionSyntax cast => BindCast(cast),
         TypeTestExpressionSyntax test => BindTypeTest(test),
         MatchExpressionSyntax match => BindMatch(match, expectedType),
+        RangeExpressionSyntax range => BindRange(range, expectedType),
         ClosureExpressionSyntax closure => BindClosure(
             closure, closure.CaptureList, closure.Signature.Parameters,
             closure.Signature.ReturnType, closure.Body, expectedType),
@@ -2752,6 +2767,37 @@ public sealed class Binder
         var type = isOptional ? new OptionalTypeSymbol(target) : target;
 
         return new BoundConversion(syntax, type, operand, ConversionKind.Explicit);
+    }
+
+    /// <summary>Binds <c>a..&lt;b</c> and friends to a <c>Range&lt;T&gt;</c>.</summary>
+    private BoundExpression BindRange(RangeExpressionSyntax syntax, TypeSymbol? expectedType)
+    {
+        var bound = (expectedType as NamedTypeSymbol)?.OriginalDefinition.Equals(Core.Range)
+                    == true && !((NamedTypeSymbol)expectedType!).TypeArguments.IsEmpty
+            ? ((NamedTypeSymbol)expectedType).TypeArguments[0]
+            : null;
+
+        var lower = syntax.Left is { } left ? BindExpression(left, bound) : null;
+        var upper = syntax.Right is { } right ? BindExpression(right, bound ?? lower?.Type) : null;
+
+        var element = bound ?? lower?.Type ?? upper?.Type;
+
+        if (element is null)
+        {
+            _diagnostics.Error(ErrorCode.ERR_CannotInferType, syntax.Span,
+                "a range with no bounds has nothing to say what it ranges over");
+            return new BoundError(syntax);
+        }
+
+        if (lower is not null) lower = Convert(lower, element, lower.Syntax);
+        if (upper is not null) upper = Convert(upper, element, upper.Syntax);
+
+        return Record(syntax, new BoundRange(
+            syntax,
+            Core.Range.Construct([element]),
+            lower,
+            upper,
+            syntax.OperatorToken.Kind == SyntaxKind.DotDotDotToken));
     }
 
     private BoundExpression BindTypeTest(TypeTestExpressionSyntax syntax)

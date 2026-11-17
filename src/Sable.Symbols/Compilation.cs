@@ -427,6 +427,12 @@ public sealed class Compilation
             ];
         }
 
+        // A protocol carries 'Self' as a parameter, so that a member reached
+        // through a conformer, a type parameter or an existential can be
+        // substituted like any other generic.
+        if (typeKind == TypeKind.Protocol)
+            type.SelfTypeParameter = new TypeParameterSymbol("Self", type, declaration, -1);
+
         TypeBinder.BindTypeDeclaration(type, declaration);
         RecordDeclaration(declaration, type);
         AddTo(container, type);

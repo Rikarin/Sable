@@ -93,6 +93,17 @@ public sealed class NamedTypeSymbol : TypeSymbol
 
     public IReadOnlyList<Symbol> Members => _members;
 
+    /// <summary>
+    /// A protocol's implicit <c>Self</c>: the conforming type, as a parameter
+    /// so that every substitution mechanism already handles it.
+    /// </summary>
+    /// <remarks>
+    /// It is deliberately not in <see cref="TypeParameters"/>, because a
+    /// protocol with one associated type is written <c>P</c> and not
+    /// <c>P&lt;Self&gt;</c> — its arity is what the source says.
+    /// </remarks>
+    public TypeParameterSymbol? SelfTypeParameter { get; internal set; }
+
     public ImmutableArray<TypeSymbol> BaseTypes
     {
         get => _baseTypes;

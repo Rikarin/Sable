@@ -1223,11 +1223,15 @@ public sealed class Binder
     private MemberLookup? LookupMember(TypeSymbol type, string name)
     {
         var visited = new HashSet<TypeSymbol>();
-        return LookupMemberCore(type, name, TypeSubstitution.Empty, visited);
+        return LookupMemberCore(type, name, TypeSubstitution.Empty, visited, type);
     }
 
     private MemberLookup? LookupMemberCore(
-        TypeSymbol type, string name, TypeSubstitution outer, HashSet<TypeSymbol> visited)
+        TypeSymbol type,
+        string name,
+        TypeSubstitution outer,
+        HashSet<TypeSymbol> visited,
+        TypeSymbol selfType)
     {
         if (!visited.Add(type)) return null;
 
@@ -1237,13 +1241,29 @@ public sealed class Binder
             {
                 var substitution = Combine(outer, TypeSubstitution.For(named));
 
+                // A protocol's members speak of 'Self'; through a conformer,
+                // a constrained parameter or an existential, Self is whatever
+                // the lookup started from.
+                if (named.SelfTypeParameter is { } self)
+                {
+                    substitution = Combine(
+                        substitution,
+                        new TypeSubstitution(new Dictionary<TypeParameterSymbol, TypeSymbol>
+                        {
+                            [self] = selfType,
+                        }));
+                }
+
                 var members = named.GetMembers(name).ToList();
                 if (members.Count > 0) return new MemberLookup(members, named, substitution);
 
                 foreach (var baseType in named.BaseTypes)
                 {
-                    if (LookupMemberCore(baseType, name, substitution, visited) is { } inherited)
+                    if (LookupMemberCore(baseType, name, substitution, visited, selfType)
+                        is { } inherited)
+                    {
                         return inherited;
+                    }
                 }
                 return null;
             }
@@ -1265,21 +1285,22 @@ public sealed class Binder
             case TypeParameterSymbol parameter:
                 foreach (var constraint in parameter.Constraints)
                 {
-                    if (LookupMemberCore(constraint, name, outer, visited) is { } found)
+                    if (LookupMemberCore(constraint, name, outer, visited, selfType) is { } found)
                         return found;
                 }
                 return null;
 
             case OpaqueTypeSymbol opaque:
-                return LookupMemberCore(opaque.Constraint, name, outer, visited);
+                return LookupMemberCore(opaque.Constraint, name, outer, visited, selfType);
 
             case ExistentialTypeSymbol existential:
-                return LookupMemberCore(existential.Constraint, name, outer, visited);
+                return LookupMemberCore(existential.Constraint, name, outer, visited, selfType);
 
             case CompositionTypeSymbol composition:
                 foreach (var part in composition.Parts)
                 {
-                    if (LookupMemberCore(part, name, outer, visited) is { } found) return found;
+                    if (LookupMemberCore(part, name, outer, visited, selfType) is { } found)
+                        return found;
                 }
                 return null;
 
@@ -1420,9 +1441,29 @@ public sealed class Binder
         ImmutableArray<string?> labels)
     {
         var unionCase = group.UnionCase;
-        var substitution = group.Type is NamedTypeSymbol named
-            ? TypeSubstitution.For(named)
+        var union = group.Type as NamedTypeSymbol;
+        var substitution = union is not null
+            ? TypeSubstitution.For(union)
             : TypeSubstitution.Empty;
+
+        // 'Tree.Node(value: 1, ...)' names the definition, so the arguments
+        // say what its parameters are, exactly as they do for a call.
+        if (union is { TypeArguments.IsEmpty: true, TypeParameters.IsEmpty: false }
+            && arguments.Length == unionCase.Payload.Length)
+        {
+            var map = new Dictionary<TypeParameterSymbol, TypeSymbol>();
+            for (var i = 0; i < arguments.Length; i++)
+            {
+                TypeSubstitution.Unify(
+                    unionCase.Payload[i].Type, arguments[i].Type, union.TypeParameters, map);
+            }
+
+            if (map.Count == union.TypeParameters.Length)
+            {
+                substitution = new TypeSubstitution(map);
+                union = union.Construct([.. union.TypeParameters.Select(substitution.Apply)]);
+            }
+        }
 
         if (arguments.Length != unionCase.Payload.Length)
         {
@@ -1449,7 +1490,7 @@ public sealed class Binder
         }
 
         return new BoundUnionCaseConstruction(
-            syntax, group.Type, unionCase, converted.ToImmutable());
+            syntax, union ?? group.Type, unionCase, converted.ToImmutable());
     }
 
     /// <summary>True for a closure argument, through any parentheses.</summary>
@@ -2544,6 +2585,17 @@ public sealed class Binder
     {
         if (expression is BoundFunctionGroup group)
             expression = Materialize(group, target);
+
+        // 'Tree.Leaf' carries nothing to infer from, so the context says
+        // which Tree it is.
+        if (expression is BoundUnionCaseGroup { UnionCase.HasPayload: false } empty
+            && empty.Type is NamedTypeSymbol written
+            && target is NamedTypeSymbol wanted
+            && ReferenceEquals(written.OriginalDefinition, wanted.OriginalDefinition))
+        {
+            return new BoundUnionCaseConstruction(
+                expression.Syntax, wanted, empty.UnionCase, []);
+        }
 
         // '.Circle' names a case that carries a radius; without one it is not
         // a value of the union.

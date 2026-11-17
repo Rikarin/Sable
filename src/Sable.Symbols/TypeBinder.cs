@@ -376,10 +376,17 @@ internal sealed class TypeBinder(Compilation compilation)
                 ]);
 
             case SelfTypeSyntax self:
-                return EnclosingType(context) is { } enclosing
-                    ? enclosing
-                    : Error(ErrorCode.ERR_NotAType, self.Span,
+            {
+                if (EnclosingType(context) is not { } enclosing)
+                {
+                    return Error(ErrorCode.ERR_NotAType, self.Span,
                         "'Self' is only meaningful inside a type or an extension");
+                }
+
+                // Inside a protocol 'Self' is the conforming type, which is
+                // not known yet; everywhere else it is the type itself.
+                return enclosing.SelfTypeParameter ?? (TypeSymbol)enclosing;
+            }
 
             default:
                 return ErrorTypeSymbol.Instance;

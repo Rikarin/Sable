@@ -166,6 +166,8 @@ internal static class ConformanceChecker
         TypeSymbol type, NamedTypeSymbol protocol, NamedTypeSymbol conformer)
     {
         if (type.Equals(protocol)) return conformer;
+        if (protocol.SelfTypeParameter is { } self && ReferenceEquals(type, self))
+            return conformer;
 
         return type switch
         {

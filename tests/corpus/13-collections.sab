@@ -1,0 +1,204 @@
+module Corpus.Collections
+
+// Generic code, written against the type checker: the shapes a collections
+// library is made of.
+
+public protocol Equatable {
+    fn equals(_ other: Self) -> Bool
+}
+
+public protocol Comparable: Equatable {
+    fn lessThan(_ other: Self) -> Bool
+}
+
+public struct Stack<Element> {
+    public var items: Element[>..]
+
+    public fn isEmpty() -> Bool {
+        return items.count == 0
+    }
+
+    public fn depth() -> Int {
+        return items.count
+    }
+
+    public mutating fn push(_ element: Element) {
+        items.append(element)
+    }
+
+    public mutating fn pop() -> Element? {
+        if items.isEmpty {
+            return none
+        }
+        return items.removeLast()
+    }
+}
+
+public struct Pair<First, Second> {
+    public var first: First
+    public var second: Second
+
+    public fn swapped() -> Pair<Second, First> {
+        return Pair { first: second, second: first }
+    }
+}
+
+public union Tree<Value> {
+    Leaf
+    Node(value: Value, left: Tree<Value>, right: Tree<Value>)
+}
+
+public fn depth<Value>(_ tree: Tree<Value>) -> Int {
+    return match tree {
+        case .Leaf => 0
+        case .Node(let value, let left, let right) =>
+            1 + maxOf(depth(left), depth(right))
+    }
+}
+
+public fn maxOf(_ a: Int, _ b: Int) -> Int {
+    return a > b ? a : b
+}
+
+public fn count<Value>(_ tree: Tree<Value>) -> Int {
+    return match tree {
+        case .Leaf => 0
+        case .Node(let value, let left, let right) => 1 + count(left) + count(right)
+    }
+}
+
+// ---- The usual higher-order trio -----------------------------------------
+
+public fn mapped<T, U>(_ items: T[>..], _ transform: (T) -> U) -> U[>..] {
+    var result: U[>..] = []
+    for item in items {
+        result.append(transform(item))
+    }
+    return result
+}
+
+public fn filtered<T>(_ items: T[>..], _ keep: (T) -> Bool) -> T[>..] {
+    var result: T[>..] = []
+    for item in items {
+        if keep(item) {
+            result.append(item)
+        }
+    }
+    return result
+}
+
+public fn reduced<T, Accumulated>(
+    _ items: T[>..],
+    _ initial: Accumulated,
+    _ combine: (Accumulated, T) -> Accumulated,
+) -> Accumulated {
+    var total = initial
+    for item in items {
+        total = combine(total, item)
+    }
+    return total
+}
+
+public fn firstWhere<T>(_ items: T[>..], _ matches: (T) -> Bool) -> T? {
+    for item in items {
+        if matches(item) {
+            return item
+        }
+    }
+    return none
+}
+
+// ---- Using them ----------------------------------------------------------
+
+public fn doubledLengths(_ words: String[>..]) -> Int[>..] {
+    return mapped(words) { word in
+        return word.count * 2
+    }
+}
+
+public fn longWords(_ words: String[>..]) -> String[>..] {
+    return filtered(words) { $0.count > 4 }
+}
+
+public fn totalLength(_ words: String[>..]) -> Int {
+    return reduced(words, 0) { running, word in
+        return running + word.count
+    }
+}
+
+public fn firstLongWord(_ words: String[>..]) -> String? {
+    return firstWhere(words) { $0.count > 10 }
+}
+
+public fn roundTrip(_ a: Int, _ b: String) -> Pair<Int, String> {
+    let pair = Pair { first: a, second: b }
+    return pair.swapped().swapped()
+}
+
+public fn stackOfStacks() -> Int {
+    var outer = Stack<Stack<Int>> { items: [] }
+    var inner = Stack<Int> { items: [] }
+
+    inner.push(1)
+    inner.push(2)
+    outer.push(inner)
+
+    guard let top = outer.pop() else {
+        return 0
+    }
+    return top.depth()
+}
+
+public fn sampleTree() -> Tree<Int> {
+    return Tree.Node(
+        value: 1,
+        left: Tree.Node(value: 2, left: Tree.Leaf, right: Tree.Leaf),
+        right: Tree.Leaf)
+}
+
+public fn treeStats() -> Int {
+    let tree = sampleTree()
+    return depth(tree) + count(tree)
+}
+
+// ---- Constrained generics ------------------------------------------------
+
+public struct Version: Comparable {
+    public var major: Int
+    public var minor: Int
+
+    public fn equals(_ other: Version) -> Bool {
+        return major == other.major && minor == other.minor
+    }
+
+    public fn lessThan(_ other: Version) -> Bool {
+        if major != other.major {
+            return major < other.major
+        }
+        return minor < other.minor
+    }
+}
+
+public fn largest<T: Comparable>(_ items: T[>..]) -> T? {
+    var best: T? = none
+
+    for item in items {
+        guard let current = best else {
+            best = item
+            continue
+        }
+
+        if current.lessThan(item) {
+            best = item
+        }
+    }
+    return best
+}
+
+public fn newestVersion(_ versions: Version[>..]) -> Version? {
+    return largest(versions)
+}
+
+public fn sameVersion(_ a: Version, _ b: Version) -> Bool {
+    return a.equals(b)
+}

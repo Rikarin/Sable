@@ -174,6 +174,7 @@ internal sealed class TypeBinder(Compilation compilation)
         // comparison sees real types rather than unresolved ones — and so that
         // a conformance an extension added is checked along with the rest.
         DeferLate(() => ConformanceChecker.Check(type, _diagnostics, compilation.Core));
+        DeferLate(() => VarianceChecker.Check(type, _diagnostics));
     }
 
     private static BaseTypeListSyntax? BaseTypeListOf(SyntaxNode declaration) => declaration switch

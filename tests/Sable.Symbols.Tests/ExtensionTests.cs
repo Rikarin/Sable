@@ -118,6 +118,63 @@ public sealed class ExtensionTests
         Assert.Contains(errors, e => e.Code == ErrorCode.ERR_DoesNotConform);
     }
 
+    // ---- Coherence ---------------------------------------------------------
+
+    private static Compilation ThreeModules(string third) =>
+        Compilation.Create([
+            SyntaxTree.Parse(new SourceText(
+                """
+                module Types
+                public struct Point { public var x: Int }
+                """, "types.sab")),
+            SyntaxTree.Parse(new SourceText(
+                """
+                module Protocols
+                public protocol Named { fn name() -> String }
+                """, "protocols.sab")),
+            SyntaxTree.Parse(new SourceText(third, "third.sab")),
+        ]);
+
+    [Fact]
+    public void AConformanceMayBeDeclaredInTheTypesModule()
+    {
+        var compilation = ThreeModules("""
+            module Types
+            import Protocols
+            extension Point: Named { fn name() -> String { return "p" } }
+            """);
+
+        Assert.DoesNotContain(compilation.GetAllDiagnostics(),
+            d => d.Code == ErrorCode.ERR_IncoherentConformance);
+    }
+
+    [Fact]
+    public void AConformanceMayBeDeclaredInTheProtocolsModule()
+    {
+        var compilation = ThreeModules("""
+            module Protocols
+            import Types
+            extension Point: Named { fn name() -> String { return "p" } }
+            """);
+
+        Assert.DoesNotContain(compilation.GetAllDiagnostics(),
+            d => d.Code == ErrorCode.ERR_IncoherentConformance);
+    }
+
+    [Fact]
+    public void AConformanceMayNotBeDeclaredInAThirdModule()
+    {
+        var compilation = ThreeModules("""
+            module Elsewhere
+            import Types
+            import Protocols
+            extension Point: Named { fn name() -> String { return "p" } }
+            """);
+
+        Assert.Contains(compilation.GetAllDiagnostics(),
+            d => d.Code == ErrorCode.ERR_IncoherentConformance);
+    }
+
     [Fact]
     public void AnExtensionMayRenameTheTypeParameters() => AssertClean("""
         struct Box<Item> { var item: Item }

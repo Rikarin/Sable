@@ -110,11 +110,11 @@ public sealed class Compilation
         var all = new List<Diagnostic>();
 
         foreach (var tree in SyntaxTrees) all.AddRange(tree.Diagnostics);
-        all.AddRange(_declarationDiagnostics);
 
-        // Bodies first, then the type binder's bag: binding a body resolves
-        // types too — a local's annotation, a cast, a pattern's type — and
-        // those complaints land in the same place as a signature's.
+        // Bodies first, then the lazy bags: binding a body resolves types too
+        // — a local's annotation, a cast, a pattern's type — and a deferred
+        // declaration check may add to the declaration bag long after the
+        // table was built.
         foreach (var tree in SyntaxTrees)
         {
             if (!_fileScopes.ContainsKey(tree)) continue;
@@ -122,6 +122,7 @@ public sealed class Compilation
         }
 
         TypeBinder.ForceAll();
+        all.AddRange(_declarationDiagnostics);
         all.AddRange(TypeBinder.Diagnostics);
 
         all.Sort((a, b) => a.Span.Start.CompareTo(b.Span.Start));
@@ -187,10 +188,11 @@ public sealed class Compilation
         var all = new List<Diagnostic>();
 
         foreach (var tree in SyntaxTrees) all.AddRange(tree.Diagnostics);
-        all.AddRange(_declarationDiagnostics);
 
-        // Signatures bind lazily, so force them before collecting.
+        // Signatures bind lazily, and binding one can add to the declaration
+        // bag as well, so force before collecting either.
         TypeBinder.ForceAll();
+        all.AddRange(_declarationDiagnostics);
         all.AddRange(TypeBinder.Diagnostics);
 
         all.Sort((a, b) => a.Span.Start.CompareTo(b.Span.Start));
@@ -946,8 +948,9 @@ public sealed class Compilation
                 {
                     foreach (var baseType in baseTypes.Types)
                     {
-                        extended.BaseTypes = extended.BaseTypes.Add(
-                            TypeBinder.BindType(baseType, extension, written));
+                        var bound = TypeBinder.BindType(baseType, extension, written);
+                        CheckCoherence(extended, bound, written, baseType.Span);
+                        extended.BaseTypes = extended.BaseTypes.Add(bound);
                     }
                 });
             }
@@ -960,6 +963,32 @@ public sealed class Compilation
         }
 
         CurrentScope = null;
+    }
+
+    /// <summary>
+    /// A conformance belongs to the type's module or the protocol's, never a
+    /// third.
+    /// </summary>
+    /// <remarks>
+    /// docs/03 §3.2 takes the rule from Rust: it guarantees at most one
+    /// conformance per (type, protocol) pair globally, which is what makes
+    /// `any P` sound and conformance lookup a static map rather than a
+    /// search. The escape hatch for the third-party case is a wrapper struct.
+    /// </remarks>
+    private void CheckCoherence(
+        NamedTypeSymbol extended, TypeSymbol conformance, FileScope? scope, TextSpan span)
+    {
+        if (conformance is not NamedTypeSymbol { TypeKind: TypeKind.Protocol } protocol) return;
+        if (scope is null) return;
+
+        var here = scope.Module;
+        if (ReferenceEquals(here, extended.ContainingModule)) return;
+        if (ReferenceEquals(here, protocol.ContainingModule)) return;
+
+        ReportDeclaration(ErrorCode.ERR_IncoherentConformance, span,
+            $"'{extended.Name}: {protocol.Name}' may only be declared in "
+            + $"'{extended.ContainingModule?.Name}' or '{protocol.ContainingModule?.Name}', "
+            + "not here; wrap the type in a struct of your own instead");
     }
 
     /// <summary>Resolves the name an extension extends, without its arguments.</summary>

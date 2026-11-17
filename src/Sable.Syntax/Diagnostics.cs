@@ -116,6 +116,8 @@ public enum ErrorCode
     ERR_NothingToOverride = 3043,
     ERR_NotOpen = 3044,
     ERR_CannotInstantiate = 3045,
+    ERR_IncoherentConformance = 3046,
+    ERR_VarianceViolation = 3047,
     ERR_NotSupportedYet = 3099,
 
     // ---- Patterns and flow (S6000-S6999) ---------------------------------

@@ -1,0 +1,41 @@
+module Negative.Variance
+
+public struct Animal { public var legs: Int }
+
+public protocol Producer<out T> {
+    fn next() -> T?
+    fn accept(_ value: T)               //! S3047 may not appear in an input
+}
+
+public protocol Consumer<in T> {
+    fn accept(_ value: T)
+    fn next() -> T                      //! S3047 may not appear in an output
+}
+
+public protocol ArrayProducer<out T> {
+    fn next() -> T?
+    fn all() -> T[>..]                  //! S3047 may not appear in an invariant
+}
+
+// A callback consumes T, so the protocol's own use of T flips: a producer may
+// hand one out, a consumer may not.
+public protocol Callback<out T> {
+    fn register(_ callback: (T) -> Void)
+}
+
+public protocol FlippedCallback<in T> {
+    fn register(_ callback: (T) -> Void)   //! S3047 may not appear in an output
+}
+
+public protocol GettableOut<out T> {
+    var current: T { get }
+}
+
+public protocol SettableOut<out T> {
+    var latest: T { get set }           //! S3047 may not appear in an invariant
+}
+
+public protocol Invariant<T> {
+    fn next() -> T
+    fn accept(_ value: T)
+}

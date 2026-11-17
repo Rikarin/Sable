@@ -201,6 +201,8 @@ public sealed class DebuggerFormatterTests {
             foreach (var argument in (string[]) [
                          "--batch",
                          "--one-line-before-file", "settings set target.load-script-from-symbol-file false",
+                         // A container may not let lldb turn address randomisation off.
+                         "--one-line-before-file", "settings set target.disable-aslr false",
                          "--one-line-before-file", $"command script import \"{plugin}\"",
                      ]) {
                 start.ArgumentList.Add(argument);
@@ -367,6 +369,50 @@ public sealed class DebuggerFormatterTests {
         var output = await Run(lldb, Steps, "steps.sab", ["b Steps.triple", "run", "bt", "kill"]);
         Assert.Contains("Steps.triple(n=1) at steps.sab:4", output, StringComparison.Ordinal);
         Assert.Contains("Steps.main at steps.sab:13", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task TypesThatContainThemselvesAreDescribed() {
+        const string source = """
+                              module Rec
+
+                              struct Tree {
+                                  var label: String
+                                  var children: Tree[>..]
+                                  var score: (Tree) -> Int
+                              }
+
+                              class Node {
+                                  var value: Int
+                                  var next: Node?
+                                  init(_ value: Int) {
+                                      self.value = value
+                                      self.next = none
+                                  }
+                              }
+
+                              fn size(_ t: Tree) -> Int {
+                                  return t.children.count
+                              }
+
+                              @main
+                              fn main() {
+                                  let leaf = Tree { label: "leaf", children: [], score: size }
+                                  let root = Tree { label: "root", children: [leaf], score: size }
+                                  let n = Node(1)
+                                  n.next = Node(2)
+                                  print(root.score(root))
+                              }
+                              """;
+        if (Lldb.Value is not { } lldb) {
+            // Still: the description must be written without recursing forever.
+            Assert.True(Pipeline.Compile(new SourceText(source, "rec.sab"), Path.GetTempPath()).Succeeded);
+            return;
+        }
+
+        var output = await Run(lldb, source, "rec.sab", ["b rec.sab:28", "run", "frame variable root n", "kill"]);
+        Assert.Contains("children = count = 1 {\n    [0] = {\n      label = \"leaf\"", output, StringComparison.Ordinal);
+        Assert.Contains("next = Rec.Node {\n    value = 2\n    next = none", output, StringComparison.Ordinal);
     }
 
     [Fact]

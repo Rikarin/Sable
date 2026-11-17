@@ -245,13 +245,16 @@ public static class SilVerifier {
                     : $"global_addr names @{global.Global} : ${global.ValueType}, which the module does not declare";
 
             case FunctionRefInst reference when module is not null: {
-                if (module.Find(reference.Function) is not { } callee) {
+                // One unit of several may name what another unit defines.
+                var calleeType = module.Find(reference.Function)?.Type
+                    ?? (module.Unit?.External.TryGetValue(reference.Function, out var external) == true ? external : null);
+                if (calleeType is null) {
                     return $"function_ref names @{reference.Function}, which the module does not define";
                 }
 
-                return callee.Type == reference.Type
+                return calleeType == reference.Type
                     ? null
-                    : $"function_ref @{reference.Function} is {callee.Type}, not {reference.Type}";
+                    : $"function_ref @{reference.Function} is {calleeType}, not {reference.Type}";
             }
 
             case StructInst structInst:

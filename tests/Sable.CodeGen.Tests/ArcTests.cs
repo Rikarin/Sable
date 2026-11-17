@@ -42,10 +42,14 @@ public sealed class ArcTests {
                                 }
                                 """;
 
+    /// <summary>
+    ///     The loop's copy of 'boxes' keeps x and y alive after 'boxes = []',
+    ///     and goes as the loop ends: 'kept = []' is then their last reference.
+    /// </summary>
     [Fact]
     public void WhatIsHeldWithoutACountStaysAliveAsLongAsItIsUsed() =>
         Assert.Equal(
-            "3\n1\nxy\nbye a\nbye b\nbye c\nbye x\nbye y\n",
+            "3\n1\nxy\nbye x\nbye y\nbye a\nbye b\nbye c\n",
             AssertAgree(
                 Program(
                     Declarations,

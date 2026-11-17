@@ -259,6 +259,7 @@ public sealed class LlvmEmitter {
                                 declare ptr @sable_weak_load(ptr)
                                 declare zeroext i1 @sable_string_equal(ptr, ptr)
                                 declare ptr @sable_string_concat(ptr, ptr)
+                                declare ptr @sable_string_concat_many(i64, ptr)
                                 declare i64 @sable_string_count(ptr)
                                 declare i32 @sable_string_at(ptr, i64)
                                 declare ptr @sable_string_slice(ptr, i64, i64)
@@ -1881,6 +1882,19 @@ public sealed class LlvmEmitter {
                 case "string_concat":
                     Line($"{Result()} = call ptr @sable_string_concat(ptr {operands[0]}, ptr {operands[1]})");
                     return;
+
+                // The pieces in an array in the frame, joined by one call.
+                case "string_concat_many": {
+                    var pieces = Scratch($"[{operands.Length} x ptr]");
+                    for (var i = 0; i < operands.Length; i++) {
+                        var at = Fresh();
+                        Line($"{at} = getelementptr inbounds [{operands.Length} x ptr], ptr {pieces}, i64 0, i64 {i}");
+                        Line($"store ptr {operands[i]}, ptr {at}");
+                    }
+
+                    Line($"{Result()} = call ptr @sable_string_concat_many(i64 {operands.Length}, ptr {pieces})");
+                    return;
+                }
 
                 case "string_count":
                     Line($"{Result()} = call i64 @sable_string_count(ptr {operands[0]})");

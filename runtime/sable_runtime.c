@@ -213,19 +213,25 @@ static void object_free(SableObject *object) {
     }
 }
 
-// A new object, its count one and the rest of it zero: every field empty.
-void *sable_alloc(const SableMetadata *type, int64_t size) {
+// A new object, its count one; the rest zero when 'zero' is set, and
+// otherwise whatever was there, for the caller to write.
+static void *alloc_object(const SableMetadata *type, int64_t size, bool zero) {
     unsigned class = small_class(size);
     SableObject *object;
     if (class != 0) {
         object = small_alloc(class);
-        memset(object, 0, (size_t)size);
+        if (zero) {
+            memset(object, 0, (size_t)size);
+        }
+
         object->flags = class << SABLE_CLASS_SHIFT;
     } else {
-        object = calloc(1, (size_t)size);
+        object = zero ? calloc(1, (size_t)size) : malloc((size_t)size);
         if (object == NULL) {
             sable_trap("out of memory");
         }
+
+        object->flags = 0;
     }
 
     object->type = type;
@@ -233,6 +239,11 @@ void *sable_alloc(const SableMetadata *type, int64_t size) {
     live_objects++;
     allocations++;
     return object;
+}
+
+// A new object, its count one and the rest of it zero: every field empty.
+void *sable_alloc(const SableMetadata *type, int64_t size) {
+    return alloc_object(type, size, true);
 }
 
 // An object in the caller's frame: the header, and the rest zero.
@@ -705,12 +716,24 @@ static int64_t count_scalars(const char *bytes, int64_t length) {
     return count;
 }
 
-static SableString *make_string(const char *bytes, int64_t length) {
-    SableString *string = sable_alloc(&sable_string_metadata, (int64_t)sizeof(SableString) + length);
-    memcpy(string->bytes, bytes, (size_t)length);
+// A string of 'length' bytes still to be written, holding 'count' scalars:
+// the bytes are not zeroed first, as every caller writes them all.
+static SableString *new_string(int64_t length, int64_t count) {
+    SableString *string = alloc_object(&sable_string_metadata, (int64_t)sizeof(SableString) + length, false);
     string->length = length;
-    string->count = count_scalars(bytes, length);
+    string->count = count;
     return string;
+}
+
+// A string of bytes whose scalars are known to number 'count'.
+static SableString *make_counted(const char *bytes, int64_t length, int64_t count) {
+    SableString *string = new_string(length, count);
+    memcpy(string->bytes, bytes, (size_t)length);
+    return string;
+}
+
+static SableString *make_string(const char *bytes, int64_t length) {
+    return make_counted(bytes, length, count_scalars(bytes, length));
 }
 
 static SableString *make_cstring(const char *text) {
@@ -790,6 +813,25 @@ bool sable_string_equal(const SableString *a, const SableString *b) {
     return a->length == b->length && memcmp(a->bytes, b->bytes, (size_t)a->length) == 0;
 }
 
+// The pieces end to end, in one allocation: an interpolation, or 'a + b + c',
+// rather than a string for every '+'.
+SableString *sable_string_concat_many(int64_t n, SableString *const *pieces) {
+    int64_t length = 0, count = 0;
+    for (int64_t i = 0; i < n; i++) {
+        length += pieces[i]->length;
+        count += pieces[i]->count;
+    }
+
+    SableString *s = new_string(length, count);
+    char *end = s->bytes;
+    for (int64_t i = 0; i < n; i++) {
+        memcpy(end, pieces[i]->bytes, (size_t)pieces[i]->length);
+        end += pieces[i]->length;
+    }
+
+    return s;
+}
+
 // A hash of the bytes, eight at a time, never negative: what Sable.Core's
 // String.hash() gives. The interpreter computes exactly this
 // (SilInterpreter.StringHash), so the two print the same.
@@ -828,7 +870,18 @@ int64_t sable_string_hash(const SableString *s) {
 // for UTF-8 is scalar by scalar, a prefix first.
 int64_t sable_string_compare(const SableString *a, const SableString *b) {
     int64_t shorter = a->length < b->length ? a->length : b->length;
-    int order = memcmp(a->bytes, b->bytes, (size_t)shorter);
+
+    // Most strings that are sorted are short, and differ early: a byte loop
+    // decides those without the call to memcmp.
+    int64_t i = 0;
+    for (; i < shorter && i < 16; i++) {
+        unsigned char x = (unsigned char)a->bytes[i], y = (unsigned char)b->bytes[i];
+        if (x != y) {
+            return x < y ? -1 : 1;
+        }
+    }
+
+    int order = i < shorter ? memcmp(a->bytes + i, b->bytes + i, (size_t)(shorter - i)) : 0;
     if (order != 0) {
         return order < 0 ? -1 : 1;
     }
@@ -837,11 +890,9 @@ int64_t sable_string_compare(const SableString *a, const SableString *b) {
 }
 
 SableString *sable_string_concat(const SableString *a, const SableString *b) {
-    SableString *s = sable_alloc(&sable_string_metadata, (int64_t)sizeof(SableString) + a->length + b->length);
+    SableString *s = new_string(a->length + b->length, a->count + b->count);
     memcpy(s->bytes, a->bytes, (size_t)a->length);
     memcpy(s->bytes + a->length, b->bytes, (size_t)b->length);
-    s->length = a->length + b->length;
-    s->count = a->count + b->count;
     return s;
 }
 
@@ -861,6 +912,11 @@ int32_t sable_string_at(const SableString *s, int64_t index) {
 SableString *sable_string_slice(const SableString *s, int64_t from, int64_t to) {
     if (from < 0 || to > s->count || from > to) {
         sable_trap("string slice out of range");
+    }
+
+    // Of an ASCII string, scalars are bytes: nothing to count.
+    if (s->count == s->length) {
+        return make_counted(s->bytes + from, to - from, to - from);
     }
 
     int64_t start = offset_of(s, from);
@@ -910,10 +966,22 @@ SableString *sable_string_from_char(int32_t scalar) {
     return make_string(bytes, encode(scalar, bytes));
 }
 
+// Digits written backwards into a buffer, not through snprintf: an
+// interpolated number is common, and the format machinery is most of its cost.
 SableString *sable_string_from_int(int64_t value) {
-    char text[32];
-    snprintf(text, sizeof text, "%lld", (long long)value);
-    return make_cstring(text);
+    char text[24];
+    char *end = text + sizeof text, *start = end;
+    uint64_t magnitude = value < 0 ? 0 - (uint64_t)value : (uint64_t)value;
+    do {
+        *--start = (char)('0' + magnitude % 10);
+        magnitude /= 10;
+    } while (magnitude != 0);
+
+    if (value < 0) {
+        *--start = '-';
+    }
+
+    return make_counted(start, end - start, end - start);
 }
 
 // The shortest %.Ng that reads back as the same double — 0.1, not
@@ -1258,6 +1326,33 @@ static const SableMetadata string_array_metadata = {
 };
 
 SableArray *sable_string_split(const SableString *s, int32_t separator) {
+    // An ASCII separator is a byte that never occurs inside another scalar's
+    // encoding: the parts are found with memchr, counted first so that the
+    // array is made once at its size, and an ASCII string's parts need no
+    // scalars counted.
+    if (separator < 0x80) {
+        int64_t n = 1;
+        for (const char *at = s->bytes, *end = s->bytes + s->length;
+             (at = memchr(at, separator, (size_t)(end - at))) != NULL; at++) {
+            n++;
+        }
+
+        SableArray *parts = sable_alloc(&string_array_metadata, (int64_t)sizeof(SableArray));
+        parts->elements = buffer_alloc(n * (int64_t)sizeof(SableString *));
+        parts->capacity = n;
+        bool ascii = s->count == s->length;
+        const char *start = s->bytes, *end = s->bytes + s->length;
+        for (int64_t i = 0; i < n; i++) {
+            const char *stop = i + 1 < n ? memchr(start, separator, (size_t)(end - start)) : end;
+            int64_t length = stop - start;
+            ((SableString **)parts->elements)[i] = ascii ? make_counted(start, length, length) : make_string(start, length);
+            parts->count = i + 1;
+            start = stop + 1;
+        }
+
+        return parts;
+    }
+
     SableArray *parts = NULL;
     int64_t start = 0;
     for (int64_t i = 0; i <= s->length;) {

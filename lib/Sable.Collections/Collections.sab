@@ -58,22 +58,28 @@ public class Queue<Element> {
     }
 }
 
-/// Keys to values, by hash. The entries — keys, values, and whether each
-/// is still there — are kept in parallel arrays in the order they were
-/// added, so iteration is in insertion order; the table is open addressing
-/// with linear probing over a power of two of slots, at most half of them
-/// used, each holding an entry's index with 31 bits of its key's hash
-/// above it. A probe compares those bits before it looks at the key, so a
-/// miss rarely touches the entries at all, and growing the table never
-/// rehashes a key it does not have to.
+/// A HashMap's entry: the key, its value, and the 31 bits of the key's
+/// hash the table holds — kept here so that growing never hashes a key
+/// again, and -1 once the entry is removed. Key and value side by side, so
+/// that a lookup that finds its key touches one more line of memory, not two.
+struct HashEntry<Key, Value> {
+    var key: Key
+    var value: Value
+    var tag: Int
+}
+
+/// Keys to values, by hash. The entries are kept in an array in the order
+/// they were added, so iteration is in insertion order; the table is open
+/// addressing with linear probing over a power of two of slots, at most
+/// half of them used, each holding an entry's index with its tag — 31 bits
+/// of the key's hash — above it. A probe compares tags before it looks at
+/// a key, so a miss rarely touches the entries at all.
 ///
 /// A slot is -1 when empty and -2 when its entry was removed; a removed
-/// entry stays in the arrays, its value with it, until the map next grows
+/// entry stays in the array, its value with it, until the map next grows
 /// and drops what was removed.
 public class HashMap<Key: Hashable, Value> {
-    var keys: Key[>..] = []
-    var values: Value[>..] = []
-    var live: Bool[>..] = []
+    var entries: HashEntry<Key, Value>[>..] = []
     var table: Int[>..] = []
     var mask: Int = -1
     var used: Int = 0
@@ -86,18 +92,23 @@ public class HashMap<Key: Hashable, Value> {
 
     public var isEmpty: Bool { get { return used == 0 } }
 
-    /// 31 bits of the key's hash, the high ones folded into them, so that
-    /// keys differing only above bit 31 still differ here.
+    /// The key's hash, mixed — a xorshift, with no multiply to overflow —
+    /// so that keys differing only in their high bits, as small integers
+    /// times a power of two do, still spread over the slots; then folded to
+    /// 31 bits.
     fn tagOf(_ key: Key) -> Int {
-        let h = key.hash()
-        return (h ^ (h >> 31) ^ (h >> 62)) & 2147483647
+        var h = key.hash()
+        h = h ^ (h << 13)
+        h = h ^ (h >> 7)
+        h = h ^ (h << 17)
+        return (h ^ (h >> 32)) & 2147483647
     }
 
     /// Where the key is in the table, or, if it is not there, the slot it
     /// would go in: the first removed one passed, else the empty one that
     /// ended the search.
     fn probe(_ key: Key, _ tag: Int) -> Int {
-        var at = (tag ^ (tag >> 15)) & mask
+        var at = tag & mask
         var reuse = -1
         while true {
             let slot = table[at]
@@ -105,7 +116,7 @@ public class HashMap<Key: Hashable, Value> {
                 return reuse >= 0 ? reuse : at
             }
             if slot >= 0 {
-                if slot >> 32 == tag && keys[slot & 4294967295] == key {
+                if slot >> 32 == tag && entries[slot & 4294967295].key == key {
                     return at
                 }
             } else if reuse < 0 {
@@ -119,22 +130,14 @@ public class HashMap<Key: Hashable, Value> {
     /// The slots rebuilt, twice as many if the entries would fill more than
     /// half of them; what was removed is dropped from the entries first.
     fn grow() {
-        if used < keys.count {
-            var keptKeys: Key[>..] = []
-            var keptValues: Value[>..] = []
-            var keptLive: Bool[>..] = []
-            var index = 0
-            while index < keys.count {
-                if live[index] {
-                    keptKeys.append(keys[index])
-                    keptValues.append(values[index])
-                    keptLive.append(true)
+        if used < entries.count {
+            var kept: HashEntry<Key, Value>[>..] = []
+            for entry in entries {
+                if entry.tag >= 0 {
+                    kept.append(entry)
                 }
-                index = index + 1
             }
-            keys = keptKeys
-            values = keptValues
-            live = keptLive
+            entries = kept
         }
 
         var size = 8
@@ -154,9 +157,9 @@ public class HashMap<Key: Hashable, Value> {
         filled = used
 
         var index = 0
-        while index < keys.count {
-            let tag = tagOf(keys[index])
-            var at = (tag ^ (tag >> 15)) & mask
+        while index < entries.count {
+            let tag = entries[index].tag
+            var at = tag & mask
             while table[at] != -1 {
                 at = (at + 1) & mask
             }
@@ -170,16 +173,21 @@ public class HashMap<Key: Hashable, Value> {
         if used == 0 {
             return none
         }
-        let slot = table[probe(key, tagOf(key))]
+        let at = probe(key, tagOf(key))
+        let slot = table[at]
         if slot < 0 {
             return none
         }
-        return values[slot & 4294967295]
+        return entries[slot & 4294967295].value
     }
 
     /// Whether the map holds the key.
     public fn contains(_ key: Key) -> Bool {
-        return used > 0 && table[probe(key, tagOf(key))] >= 0
+        if used == 0 {
+            return false
+        }
+        let at = probe(key, tagOf(key))
+        return table[at] >= 0
     }
 
     /// Sets the key's value, adding the key if it is new.
@@ -191,16 +199,17 @@ public class HashMap<Key: Hashable, Value> {
         let at = probe(key, tag)
         let slot = table[at]
         if slot >= 0 {
-            values[slot & 4294967295] = value
+            let index = slot & 4294967295
+            var entry = entries[index]
+            entry.value = value
+            entries[index] = entry
             return
         }
         if slot == -1 {
             filled = filled + 1
         }
-        table[at] = (tag << 32) | keys.count
-        keys.append(key)
-        values.append(value)
-        live.append(true)
+        table[at] = (tag << 32) | entries.count
+        entries.append(HashEntry { key: key, value: value, tag: tag })
         used = used + 1
     }
 
@@ -214,7 +223,10 @@ public class HashMap<Key: Hashable, Value> {
         if slot < 0 {
             return false
         }
-        live[slot & 4294967295] = false
+        let index = slot & 4294967295
+        var entry = entries[index]
+        entry.tag = -1
+        entries[index] = entry
         table[at] = -2
         used = used - 1
         return true
@@ -222,9 +234,7 @@ public class HashMap<Key: Hashable, Value> {
 
     /// Removes every key, keeping nothing.
     public fn removeAll() {
-        keys = []
-        values = []
-        live = []
+        entries = []
         table = []
         mask = -1
         used = 0
@@ -234,12 +244,10 @@ public class HashMap<Key: Hashable, Value> {
     /// The keys, in the order they were first set.
     public fn allKeys() -> Key[>..] {
         var result: Key[>..] = []
-        var index = 0
-        while index < keys.count {
-            if live[index] {
-                result.append(keys[index])
+        for entry in entries {
+            if entry.tag >= 0 {
+                result.append(entry.key)
             }
-            index = index + 1
         }
         return result
     }
@@ -247,12 +255,10 @@ public class HashMap<Key: Hashable, Value> {
     /// The values, in the order their keys were first set.
     public fn allValues() -> Value[>..] {
         var result: Value[>..] = []
-        var index = 0
-        while index < values.count {
-            if live[index] {
-                result.append(values[index])
+        for entry in entries {
+            if entry.tag >= 0 {
+                result.append(entry.value)
             }
-            index = index + 1
         }
         return result
     }

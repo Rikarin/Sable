@@ -2530,7 +2530,11 @@ public sealed partial class SilGen {
             Emit(new StoreInst(Emit(new BuiltinInst("add_Int", SilType.Int, Emit(new LoadInst(counter)), one)), counter, StoreKind.Assign));
             Branch(header);
 
+            // The loop's copy goes as the loop ends: kept until the slot was
+            // next written, a loop run again later held the last run's array
+            // — all of its buffer — alive through everything in between.
             _current = after;
+            Emit(new StoreInst(Emit(new BuiltinInst("array_empty", arrayType)), array, StoreKind.Assign));
         }
 
         /// <summary>True when the code moves the local's value out: 'move x'.</summary>
@@ -3531,7 +3535,9 @@ public sealed partial class SilGen {
                 return Missing(interpolated, "this interpolated string");
             }
 
-            SilValue? result = null;
+            // Every piece first, then one string of them all: an
+            // interpolation of five pieces is one allocation, not four.
+            var pieces = new List<SilValue>();
             var hole = 0;
             foreach (var content in syntax.Contents) {
                 SilValue? piece;
@@ -3554,18 +3560,30 @@ public sealed partial class SilGen {
                     }
                 }
 
-                if (result is null) {
-                    result = Hold(piece);
-                    continue;
-                }
-
-                var joined = Emit(new BuiltinInst("string_concat", SilType.String, result, piece));
-                Destroy(piece);
-                End(result);
-                result = Hold(joined);
+                pieces.Add(Hold(piece));
             }
 
-            return result is null ? Emit(new StringLiteralInst("")) : Unhold(result);
+            return Joined(pieces);
+        }
+
+        /// <summary>
+        ///     Held strings, joined: the one itself, or one string of them
+        ///     all, each piece ended after — in the order they were held.
+        /// </summary>
+        SilValue Joined(List<SilValue> pieces) {
+            switch (pieces.Count) {
+                case 0:
+                    return Emit(new StringLiteralInst(""));
+                case 1:
+                    return Unhold(pieces[0]);
+            }
+
+            var joined = Emit(new BuiltinInst("string_concat_many", SilType.String, [..pieces]));
+            for (var i = pieces.Count - 1; i >= 0; i--) {
+                End(pieces[i]);
+            }
+
+            return joined;
         }
 
         /// <summary>A value as a string, for interpolation: a string itself, or the scalars written out.</summary>
@@ -3900,6 +3918,22 @@ public sealed partial class SilGen {
             return result;
         }
 
+        /// <summary>The built-in '+' of two strings.</summary>
+        bool IsStringConcat(BoundExpression expression) =>
+            expression is BoundBinaryOperator { OperatorKind: BinaryOperatorKind.Add, Method: null } concat
+            && Sub(concat.Left.Type).Equals(Core.String) && Sub(concat.Right.Type).Equals(Core.String);
+
+        /// <summary>The operands of a chain of string '+'s, left to right.</summary>
+        void Flatten(BoundExpression expression, List<BoundExpression> operands) {
+            if (IsStringConcat(expression)) {
+                var concat = (BoundBinaryOperator)expression;
+                Flatten(concat.Left, operands);
+                operands.Add(concat.Right);
+            } else {
+                operands.Add(expression);
+            }
+        }
+
         SilValue? Binary(BoundBinaryOperator binary) {
             // 'x == none': only the case matters, so any optional compares.
             if (binary.OperatorKind is BinaryOperatorKind.Equal or BinaryOperatorKind.NotEqual
@@ -3922,6 +3956,26 @@ public sealed partial class SilGen {
                 _current = joined;
                 End(testedValue);
                 return answer;
+            }
+
+            // 'a + b + c' on strings: one string of the three, not one for each '+'.
+            if (IsStringConcat(binary) && IsStringConcat(binary.Left)) {
+                var operands = new List<BoundExpression>();
+                Flatten(binary, operands);
+                var pieces = new List<SilValue>();
+                foreach (var operand in operands) {
+                    if (Borrow(operand) is not { } piece) {
+                        for (var i = pieces.Count - 1; i >= 0; i--) {
+                            End(pieces[i]);
+                        }
+
+                        return null;
+                    }
+
+                    pieces.Add(piece);
+                }
+
+                return Joined(pieces);
             }
 
             if (Borrow(binary.Left) is not { } left) {

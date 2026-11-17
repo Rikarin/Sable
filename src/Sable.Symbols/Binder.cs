@@ -1372,9 +1372,10 @@ public sealed class Binder
 
                 if (initializers.IsEmpty)
                 {
-                    // Every struct has a memberwise initialiser; synthesising
-                    // it needs field ordering, which belongs with lowering.
-                    return new BoundTypeExpression(syntax, namedType);
+                    _diagnostics.Error(ErrorCode.ERR_NotAValue, syntax.Expression.Span,
+                        $"'{namedType.ToDisplayString()}' declares no initialiser, "
+                        + "so it cannot be used as a value this way");
+                    return new BoundError(syntax, arguments.ToArray());
                 }
 
                 var group = new BoundFunctionGroup(syntax, null, initializers);

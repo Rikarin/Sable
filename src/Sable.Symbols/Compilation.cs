@@ -201,6 +201,16 @@ public sealed class Compilation
         {
             if (tree.Root is not CompilationUnitSyntax unit) continue;
 
+            // "One module declaration per file, first non-trivia item"
+            // (spec/SYNTAX.md §1). An empty file is let be; one that declares
+            // something has to say where it belongs.
+            if (unit.Module is null && unit.Members.Count > 0)
+            {
+                ReportDeclaration(ErrorCode.ERR_NoModuleDeclaration,
+                    new TextSpan(unit.Members[0].Span.Start, 0),
+                    "a file that declares anything needs a 'module' declaration first");
+            }
+
             var moduleName = unit.Module is null
                 ? string.Empty
                 : NameOf(unit.Module.Name);
@@ -444,8 +454,8 @@ public sealed class Compilation
             .Where(field => !field.IsStatic && !field.IsComputed)
             .ToList();
 
-        if (fields.Count == 0) return;
-
+        // A struct with no stored fields still gets one, taking nothing:
+        // 'Empty()' should mean what it looks like.
         var function = new FunctionSymbol(
             "init", type, null, type.DeclaredAccessibility, FunctionKind.Initializer);
 

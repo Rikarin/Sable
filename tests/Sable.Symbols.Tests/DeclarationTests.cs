@@ -42,10 +42,14 @@ public sealed class DeclarationTests
     }
 
     [Fact]
-    public void AFileWithoutAModuleJoinsTheRootModule()
+    public void AFileWithoutAModuleStillDeclaresItsTypes()
     {
+        // spec/SYNTAX.md §1 wants a module declaration, and says so, but the
+        // file is still bound: a missing one must not take the rest with it.
         var compilation = Compile("struct A { }");
-        AssertNoErrors(compilation);
+
+        Assert.Contains(compilation.GetDiagnostics(),
+            d => d.Code == ErrorCode.ERR_NoModuleDeclaration);
         Assert.NotNull(compilation.GetModule(""));
         Assert.NotNull(compilation.GetTypeByQualifiedName("A"));
     }

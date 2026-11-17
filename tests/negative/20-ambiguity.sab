@@ -1,0 +1,16 @@
+module Negative.Ambiguity
+
+struct Value { var n: Int }
+protocol Shape { fn area() -> F64 }
+
+fn ambiguousOverload(_ v: Value) -> Int {
+    return pick(v)                      //! S3008 ambiguous
+}
+
+fn pick(_ a: Value) -> Int { return 1 }
+fn pick(_ b: Value) -> Int { return 2 }
+
+fn aProtocolCannotBeConstructed() -> Int {
+    let s = Shape()                     //! S3020 cannot be used as a value
+    return 1
+}

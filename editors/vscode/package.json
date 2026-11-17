@@ -1,0 +1,46 @@
+{
+  "name": "sable",
+  "displayName": "Sable",
+  "description": "Sable language support: the sable language server, and syntax highlighting",
+  "version": "0.1.0",
+  "publisher": "sable-lang",
+  "license": "MIT OR Apache-2.0",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "main": "./extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "languages": [
+      {
+        "id": "sable",
+        "aliases": ["Sable", "sable"],
+        "extensions": [".sab"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "sable",
+        "scopeName": "source.sable",
+        "path": "./syntaxes/sable.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "title": "Sable",
+      "properties": {
+        "sable.path": {
+          "type": "string",
+          "default": "sable",
+          "description": "The sable binary that serves the editor: `sable lsp`."
+        }
+      }
+    }
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  }
+}

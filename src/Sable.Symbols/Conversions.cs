@@ -130,8 +130,8 @@ internal sealed class Conversions(CoreTypes core) {
 
         // A type parameter satisfies only what it was constrained to: an
         // unconstrained one conforms to nothing.
-        if (source is TypeParameterSymbol parameter) {
-            return parameter.Constraints.Any(c => Satisfies(c, constraint));
+        if (source is TypeParameterSymbol or DependentMemberTypeSymbol) {
+            return AssociatedTypes.ConstraintsOf(source).Any(c => Satisfies(c, constraint));
         }
 
         if (source is OpaqueTypeSymbol sourceOpaque) {

@@ -123,4 +123,91 @@ public sealed class AssociatedTypeTests {
         );
         Assert.NotEmpty(errors);
     }
+
+    [Fact]
+    public void TwoParametersHaveDifferentAssociatedTypes() {
+        // Nothing says two containers hold the same thing, so B's item is not
+        // an A.Item.
+        var errors = ErrorsIn(
+            """
+            fn mix<A: Container, B: Container>(_ a: A, _ b: B) -> A.Item? {
+                return b.first()
+            }
+            """
+        );
+        Assert.Contains(errors, static e => e.Message.Contains("B.Item", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ParametersOfTheSameParameterAgree() =>
+        AssertClean(
+            """
+            fn pick<A: Container, B: Container>(_ a: A, _ b: B, _ x: A.Item) -> Bool {
+                return a.holds(x)
+            }
+            """
+        );
+
+    [Fact]
+    public void PassingOneParametersItemToAnotherIsAnError() {
+        var errors = ErrorsIn(
+            """
+            fn cross<A: Container, B: Container>(_ a: A, _ b: B, _ x: A.Item) -> Bool {
+                return b.holds(x)
+            }
+            """
+        );
+        Assert.NotEmpty(errors);
+    }
+
+    const string Both = """
+                        struct Numbers: Container {
+                            alias Item = Int
+                            fn first() -> Int? { return none }
+                            fn holds(_ item: Int) -> Bool { return true }
+                        }
+                        fn both<A: Container, B: Container>(_ a: A, _ b: B, _ x: A.Item, _ y: B.Item) { }
+                        """;
+
+    [Fact]
+    public void EachParameterResolvesThroughItsOwnArgument() =>
+        AssertClean($"{Both}\nfn good(_ w: WordBag, _ n: Numbers) {{ both(w, n, \"word\", 1) }}");
+
+    [Fact]
+    public void SwappingTheirItemsIsAnError() =>
+        Assert.NotEmpty(ErrorsIn($"{Both}\nfn bad(_ w: WordBag, _ n: Numbers) {{ both(w, n, 1, \"word\") }}"));
+
+    [Fact]
+    public void AGenericCallerKeepsItDependent() =>
+        AssertClean(
+            """
+            fn firstOrDefault<C: Container>(_ c: C, _ fallback: C.Item) -> C.Item {
+                guard let value = c.first() else { return fallback }
+                return value
+            }
+            fn relay<D: Container>(_ d: D, _ x: D.Item) -> D.Item { return firstOrDefault(d, x) }
+            """
+        );
+
+    [Fact]
+    public void AnAssociatedTypesConstraintsAreUsable() =>
+        AssertClean(
+            """
+            protocol Keyed {
+                associatedtype Key: Container
+                fn key() -> Key
+            }
+            fn probe<K: Keyed>(_ k: K, _ x: K.Key.Item) -> Bool { return k.key().holds(x) }
+            """
+        );
+
+    [Fact]
+    public void ItDisplaysThroughItsBase() {
+        var errors = ErrorsIn(
+            """
+            fn wrong<C: Container>(_ c: C) -> Int { return c.first()! }
+            """
+        );
+        Assert.Contains(errors, static e => e.Message.Contains("C.Item", StringComparison.Ordinal));
+    }
 }

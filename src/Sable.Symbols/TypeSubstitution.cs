@@ -115,6 +115,15 @@ internal sealed class TypeSubstitution {
             case OpaqueTypeSymbol opaque:
                 return new OpaqueTypeSymbol(Apply(opaque.Constraint));
 
+            case DependentMemberTypeSymbol member: {
+                // 'C.Item' with C = WordBag is whatever WordBag says Item is;
+                // with C = D, another parameter, it is D.Item.
+                var baseType = Apply(member.BaseType);
+                return baseType.Equals(member.BaseType)
+                    ? member
+                    : AssociatedTypes.Member(baseType, member.Associated);
+            }
+
             default:
                 return type;
         }

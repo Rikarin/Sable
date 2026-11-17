@@ -225,6 +225,39 @@ public sealed class TypeParameterSymbol(
             .RuntimeHelpers.GetHashCode(this);
 }
 
+/// <summary>
+///     An associated type reached through a generic type, such as <c>C.Item</c>
+///     where <c>C: Container</c>.
+/// </summary>
+/// <remarks>
+///     The base is part of the type: for <c>A: Bag</c> and <c>B: Bag</c>,
+///     <c>A.Item</c> and <c>B.Item</c> are different types, because nothing says
+///     two bags hold the same thing. Substituting a concrete conformer for the
+///     base resolves it to whatever that conformer binds the associated type to;
+///     substituting another type parameter keeps it dependent.
+/// </remarks>
+public sealed class DependentMemberTypeSymbol(TypeSymbol baseType, TypeParameterSymbol associated) : TypeSymbol {
+    public override SymbolKind Kind => SymbolKind.DependentMemberType;
+    public override string Name => Associated.Name;
+    public override TypeKind TypeKind => TypeKind.Struct;
+    public override Symbol? ContainingSymbol => Associated.ContainingSymbol;
+
+    /// <summary>The type the associated type is read through: a type parameter, or another dependent member.</summary>
+    public TypeSymbol BaseType { get; } = baseType;
+
+    /// <summary>The protocol's <c>associatedtype</c> declaration.</summary>
+    public TypeParameterSymbol Associated { get; } = associated;
+
+    public override string ToDisplayString() => $"{BaseType.ToDisplayString()}.{Associated.Name}";
+
+    public override bool Equals(TypeSymbol? other) =>
+        other is DependentMemberTypeSymbol member
+        && ReferenceEquals(member.Associated, Associated)
+        && member.BaseType.Equals(BaseType);
+
+    public override int GetHashCode() => HashCode.Combine(BaseType, Associated, 0x0DE9);
+}
+
 public enum VarianceKind {
     None,
     Out,

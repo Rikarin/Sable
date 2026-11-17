@@ -549,26 +549,23 @@ internal sealed class TypeBinder(Compilation compilation) {
         }
 
         // 'C.Item' where C is constrained: the associated type of whatever
-        // protocol declares it.
-        if (left is TypeParameterSymbol parameter) {
+        // protocol declares it, read through C — so that A.Item and B.Item
+        // stay different types. 'C.Slice.Element' reads through C.Slice.
+        if (AssociatedTypes.IsAbstract(left)) {
             var wanted = syntax.Right.Identifier.Text;
 
-            foreach (var constraint in parameter.Constraints) {
-                if (constraint is not NamedTypeSymbol protocol) {
-                    continue;
-                }
+            var constraints = AssociatedTypes.IsProtocolSelf(left)
+                ? [(TypeSymbol)left.ContainingSymbol!]
+                : AssociatedTypes.ConstraintsOf(left);
 
-                foreach (var associated in protocol.AssociatedTypes) {
-                    if (string.Equals(associated.Name, wanted, StringComparison.Ordinal)) {
-                        return associated;
-                    }
-                }
+            if (AssociatedTypes.Find(constraints, wanted) is { } associated) {
+                return AssociatedTypes.Member(left, associated);
             }
 
             return Error(
                 ErrorCode.ERR_TypeNotFound,
                 syntax.Right.Span,
-                $"'{parameter.Name}' has no associated type named '{wanted}'"
+                $"'{left.ToDisplayString()}' has no associated type named '{wanted}'"
             );
         }
 

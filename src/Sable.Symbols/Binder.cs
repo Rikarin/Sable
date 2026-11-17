@@ -2131,7 +2131,14 @@ public sealed class Binder {
                     var map = new Dictionary<TypeParameterSymbol, TypeSymbol> { [self] = selfType };
 
                     // The conformer also says what the associated types are.
-                    if (Unwrap(selfType) is NamedTypeSymbol conformer) {
+                    // Through a generic parameter they are read through it:
+                    // 'b.first()' for B: Bag is a B.Item, not any bag's Item.
+                    if (AssociatedTypes.IsAbstract(selfType)
+                        && !AssociatedTypes.IsProtocolSelf(selfType)) {
+                        foreach (var associated in AssociatedTypes.All(named)) {
+                            map[associated] = AssociatedTypes.Member(selfType, associated);
+                        }
+                    } else if (Unwrap(selfType) is NamedTypeSymbol conformer) {
                         // 'alias Item = T' names the conformer's own
                         // parameter, so Tagged<String> binds Item to String.
                         var own = TypeSubstitution.For(conformer);
@@ -2176,8 +2183,8 @@ public sealed class Binder {
                     );
             }
 
-            case TypeParameterSymbol parameter:
-                foreach (var constraint in parameter.Constraints) {
+            case TypeParameterSymbol or DependentMemberTypeSymbol:
+                foreach (var constraint in AssociatedTypes.ConstraintsOf(type)) {
                     if (LookupMemberCore(constraint, name, outer, visited, selfType) is { } found) {
                         return found;
                     }
@@ -2629,7 +2636,6 @@ public sealed class Binder {
 
             TypeSubstitution.Unify(resolved.ReturnType, expectedType, resolved.TypeParameters, map);
 
-            ExpandAssociated(resolved.TypeParameters, map);
             substitution = Combine(outer, new(map));
         }
 
@@ -2702,7 +2708,6 @@ public sealed class Binder {
             TypeSubstitution.Unify(wanted, AdaptForInference(wanted, arguments[i]), function.TypeParameters, map);
         }
 
-        ExpandAssociated(function.TypeParameters, map);
         return new(map);
     }
 
@@ -2719,47 +2724,6 @@ public sealed class Binder {
         && actual.ArrayKind != wanted.ArrayKind
             ? new ArrayTypeSymbol(actual.ElementType, wanted.ArrayKind)
             : argument.Type;
-
-    /// <summary>
-    ///     Once a constrained parameter is known, so are its associated types.
-    /// </summary>
-    /// <remarks>
-    ///     A signature may say <c>C.Item</c>, which binds to the protocol's
-    ///     associated type. Inferring <c>C = WordBag</c> settles that too, since
-    ///     WordBag is what says what Item is.
-    /// </remarks>
-    static void ExpandAssociated(
-        ImmutableArray<TypeParameterSymbol> parameters,
-        Dictionary<TypeParameterSymbol, TypeSymbol> map
-    ) {
-        foreach (var parameter in parameters) {
-            if (!map.TryGetValue(parameter, out var argument)) {
-                continue;
-            }
-
-            if (Unwrap(argument) is not NamedTypeSymbol conformer) {
-                continue;
-            }
-
-            foreach (var constraint in parameter.Constraints) {
-                if (constraint is not NamedTypeSymbol protocol) {
-                    continue;
-                }
-
-                var own = TypeSubstitution.For(conformer);
-
-                foreach (var associated in protocol.AssociatedTypes) {
-                    if (map.ContainsKey(associated)) {
-                        continue;
-                    }
-
-                    if (ConformanceChecker.ResolveAssociated(conformer, associated) is { } bound) {
-                        map[associated] = own.Apply(bound);
-                    }
-                }
-            }
-        }
-    }
 
     static TypeSubstitution Combine(TypeSubstitution outer, TypeSubstitution inner) {
         if (outer.IsEmpty) {

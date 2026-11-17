@@ -19,7 +19,7 @@ namespace Sable.Symbols;
 ///         then the module, then imports, then <c>Sable.Core</c>.
 ///     </para>
 /// </remarks>
-public sealed class Binder {
+public sealed partial class Binder {
     readonly Compilation _compilation;
     readonly FileScope _scope;
     readonly Conversions _conversions;
@@ -3008,6 +3008,8 @@ public sealed class Binder {
             result = definition.Construct([..definition.TypeParameters.Select(p => substitution.Lookup(p)!)]);
         }
 
+        ReportUnmetDerivation(resolved, group.Receiver?.Type, syntax);
+
         var call = new BoundCall(syntax, group.Receiver, resolved, converted.ToImmutable(), result) {
             Substitution = substitution,
         };
@@ -4479,6 +4481,10 @@ public sealed class Binder {
             if (derivedFrom is not null && FindUserOperator(derivedFrom, left.Type, right.Type) is { } basis) {
                 return new BoundBinaryOperator(syntax, Core.Bool, kind, left, right, basis);
             }
+
+            if (ReportUnmetDerivedOperator(derivedFrom ?? operatorToken.Text, left.Type, syntax)) {
+                return new BoundError(syntax, left, right);
+            }
         }
 
         var type = ResultTypeOf(kind, left.Type, right.Type);
@@ -4657,8 +4663,12 @@ public sealed class Binder {
                     continue;
                 }
 
-                if (_conversions.HasImplicitConversion(left, function.Parameters[0].Type)
-                    && _conversions.HasImplicitConversion(right, function.Parameters[1].Type)) {
+                // A generic type's operator, seen through the operand's type
+                // arguments; a derived one only where its conformance holds.
+                var members = TypeSubstitution.For(named);
+                if (_conversions.HasImplicitConversion(left, members.Apply(function.Parameters[0].Type))
+                    && _conversions.HasImplicitConversion(right, members.Apply(function.Parameters[1].Type))
+                    && (_compilation.GetDerivation(function) is not { } derivation || Conversions.Satisfies(named, derivation.Protocol))) {
                     return function;
                 }
             }

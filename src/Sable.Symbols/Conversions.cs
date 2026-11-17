@@ -178,6 +178,13 @@ internal sealed class Conversions(CoreTypes core) {
             return Satisfies(sourceExistential.Constraint, constraint, context);
         }
 
+        // A conformance '@derive' gave a generic type is conditional: it
+        // holds where the construction's fields conform.
+        if (source is NamedTypeSymbol { IsConstructed: true } derived && constraint is NamedTypeSymbol protocol
+            && derived.OriginalDefinition.DerivedConformances.Contains(protocol)) {
+            return DerivedConformance.Holds(derived, protocol, context);
+        }
+
         return IsDerivedFrom(source, constraint);
     }
 

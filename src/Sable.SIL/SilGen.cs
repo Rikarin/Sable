@@ -108,6 +108,7 @@ public sealed partial class SilGen {
         }
 
         AddDerived(functions);
+        CheckBuiltins();
 
         foreach (var (symbol, _, _) in functions) {
             var overloaded = functions.Count(f => f.Symbol.Name == symbol.Name
@@ -2994,6 +2995,9 @@ public sealed partial class SilGen {
                 case BoundFieldAccess { Receiver: { } receiver, Field: { IsComputed: true, Name: var member } } when IsInlineArray(receiver):
                     return InlineArrayMember(receiver, member, expression);
 
+                case BoundFieldAccess { Field.Builtin: not null } builtin:
+                    return BuiltinProperty(builtin);
+
                 case BoundFieldAccess { Receiver: { } receiver, Field.IsComputed: true } access:
                     return ComputedProperty(access, receiver);
 
@@ -4441,18 +4445,12 @@ public sealed partial class SilGen {
         SilValue? Call(BoundCall call) {
             Locate(call.Syntax);
 
-            // The core's print is a builtin: the runtime owns the writing.
-            if (Core.Print.Contains(call.Function)) {
-                if (Borrow(call.Arguments[0]) is not { } printed) {
-                    return null;
-                }
-
-                Emit(new BuiltinInst($"print_{printed.Type}", SilType.Unit, printed));
-                End(printed);
-                return UnitValue.Instance;
-            }
-
             var callee = call.Function;
+
+            // Sable.Core's @builtin members: the builtin, here (SilGen.Builtins.cs).
+            if (callee.Builtin is not null) {
+                return BuiltinCall(call, callee);
+            }
 
             // Sable.Core's @intrinsic members: the compiler writes their bodies (SilGen.Reflection.cs).
             if (IsIntrinsic(callee)) {
@@ -4520,6 +4518,10 @@ public sealed partial class SilGen {
             // A protocol's requirement, called on a type parameter: the
             // concrete type's own member, now that the type is known.
             if (OwnerOf(callee) is { TypeKind: TypeKind.Protocol } && Witness(call) is { } witness) {
+                if (witness.Builtin is not null) {
+                    return BuiltinCall(call, witness);
+                }
+
                 callee = witness;
             }
 
@@ -4948,36 +4950,17 @@ public sealed partial class SilGen {
         sealed record Handled(SilValue? Value);
 
         /// <summary>
-        ///     The members the core gives its own types — strings, numbers,
-        ///     characters, arrays — as builtins on the receiver.
+        ///     The members the compiler gives arrays and regions, as builtins on
+        ///     the receiver. Strings', numbers' and characters' are Sable's
+        ///     (lib/Sable.Core), lowered as calls or as @builtins.
         /// </summary>
         Handled? CoreMember(BoundCall call) {
             var callee = call.Function;
-            var owner = callee.ContainingSymbol;
 
             // Written in Sable — a protocol's requirement, or an extension's
             // member — rather than built in: called as any function is.
             if (!callee.DeclaringSyntax.IsEmpty || OwnerOf(callee) is { TypeKind: TypeKind.Protocol }) {
                 return null;
-            }
-
-            // String.fromChar(c): a static member, with no receiver.
-            if (callee is { Name: "fromChar", IsStatic: true } && ReferenceEquals(owner, Core.String)) {
-                return new(Expression(call.Arguments[0]) is { } c ? Emit(new BuiltinInst("string_from_Char", SilType.String, c)) : null);
-            }
-
-            // Char.fromCodePoint(n): the scalar, when n is one.
-            if (callee is { Name: "fromCodePoint", IsStatic: true } && ReferenceEquals(owner, Core.Char)) {
-                if (Expression(call.Arguments[0]) is not { } code) {
-                    return new((SilValue?)null);
-                }
-
-                var made = Emit(new BuiltinInst("char_from_Int", SilType.Tuple([SilType.Bool, SilType.Char]), code));
-                return new(MakeOptional(call.Type, Emit(new TupleExtractInst(made, 0)), Emit(new TupleExtractInst(made, 1)), call));
-            }
-
-            if (callee.IsStatic && ReferenceEquals(owner, Core.Runtime)) {
-                return new(RuntimeCall(call));
             }
 
             if (call.Receiver is not { } receiver) {
@@ -5016,17 +4999,6 @@ public sealed partial class SilGen {
                 return new(result);
             }
 
-            // 'arena.reset()': everything in it destroyed, its memory kept.
-            if (Sub(receiver.Type).Equals(Core.Region) && callee.Name == "reset") {
-                if (Borrow(receiver) is not { } emptied) {
-                    return new((SilValue?)null);
-                }
-
-                Emit(new BuiltinInst("region_reset", SilType.Unit, emptied));
-                End(emptied);
-                return new(UnitValue.Instance);
-            }
-
             // 'arena.alloc(value)': room in the region, the value moved there, its address back.
             if (Sub(receiver.Type).Equals(Core.Region) && callee.Name == "alloc") {
                 if (Expression(call.Arguments[0]) is not { } allocated) {
@@ -5045,179 +5017,35 @@ public sealed partial class SilGen {
                 return new(room);
             }
 
-            var isCore = Sub(receiver.Type) is ArrayTypeSymbol
-                || Sub(receiver.Type).Equals(Core.String) || Sub(receiver.Type).Equals(Core.Bool) || Sub(receiver.Type).Equals(Core.Char)
-                || Core.Numerics.Any(n => n.Equals(Sub(receiver.Type)));
-            if (!isCore) {
+            if (Sub(receiver.Type) is not ArrayTypeSymbol) {
                 return null;
             }
 
-            if (Borrow(receiver) is not { } self) {
+            // 'array.slice(from, to)': a copy of the run, an array of its own.
+            if (callee.Name != "slice" || call.Arguments.Length != 2) {
+                return new(Missing(call, $"the member '{callee.Name}' of '{receiver.Type.ToDisplayString()}'"));
+            }
+
+            if (Borrow(receiver) is not { } array) {
                 return new((SilValue?)null);
             }
 
-            var arguments = new List<SilValue>();
+            var bounds = new List<SilValue>();
             foreach (var argument in call.Arguments) {
                 if (Borrow(argument) is not { } value) {
                     return new((SilValue?)null);
                 }
 
-                arguments.Add(value);
+                bounds.Add(value);
             }
 
-            var lowered = CoreMethod(callee.Name, self, arguments, call);
-            for (var i = arguments.Count - 1; i >= 0; i--) {
-                End(arguments[i]);
-            }
-
-            End(self);
-            return new(lowered);
+            var slice = Emit(new BuiltinInst("array_slice", array.Type, array, bounds[0], bounds[1]));
+            EndAll(bounds);
+            End(array);
+            return new(slice);
         }
 
-        SilValue? CoreMethod(string name, SilValue self, List<SilValue> arguments, BoundCall call) {
-            SilValue Builtin(string builtin, SilType result, params SilValue[] operands) =>
-                Emit(new BuiltinInst(builtin, result, operands));
-
-            switch (self.Type, name, arguments.Count) {
-                case (_, "toString", 0) when SilBuiltins.Find($"string_from_{self.Type}") is not null:
-                    return Builtin($"string_from_{self.Type}", SilType.String, self);
-
-                case (_, "abs", 0) when self.Type == SilType.Int || self.Type == SilType.F64:
-                    return Builtin($"abs_{self.Type}", self.Type, self);
-
-                case (_, "min" or "max", 1) when self.Type == SilType.Int || self.Type == SilType.F64:
-                    return Builtin($"{name}_{self.Type}", self.Type, self, arguments[0]);
-
-                case (_, "at", 1) when self.Type == SilType.String:
-                    return Builtin("string_at", SilType.Char, self, arguments[0]);
-
-                case (_, "slice", 2) when self.Type == SilType.String:
-                    return Builtin("string_slice", SilType.String, self, arguments[0], arguments[1]);
-
-                case (_, "appending", 1) when self.Type == SilType.String:
-                    return Builtin("string_concat", SilType.String, self, arguments[0]);
-
-                case (_, "contains", 1) when self.Type == SilType.String:
-                    return Builtin("string_contains", SilType.Bool, self, arguments[0]);
-
-                case (_, "trimmed", 0) when self.Type == SilType.String:
-                    return Builtin("string_trimmed", SilType.String, self);
-
-                case (ArrayType, "slice", 2):
-                    return Builtin("array_slice", self.Type, self, arguments[0], arguments[1]);
-
-                case (_, "split", 1) when self.Type == SilType.String:
-                    return Builtin("string_split", new ArrayType(SilType.String), self, arguments[0]);
-
-                case (_, "indexOf", 1) when self.Type == SilType.String: {
-                    var index = Builtin("string_index_of", SilType.Int, self, arguments[0]);
-                    var found = Builtin("cmp_ge_Int", SilType.Bool, index, Emit(new IntegerLiteralInst(SilType.Int, 0)));
-                    return MakeOptional(call.Type, found, index, call);
-                }
-
-                case (_, "toInt" or "toF64", 0) when self.Type == SilType.String: {
-                    var target = name == "toInt" ? SilType.Int : SilType.F64;
-                    var parsed = Builtin($"string_to_{target}", SilType.Tuple([SilType.Bool, target]), self);
-                    return MakeOptional(call.Type, Emit(new TupleExtractInst(parsed, 0)), Emit(new TupleExtractInst(parsed, 1)), call);
-                }
-
-                default:
-                    return Missing(call, $"the member '{name}' of '{call.Receiver?.Type.ToDisplayString()}'");
-            }
-        }
-
-        /// <summary>
-        ///     A call into the runtime: a builtin per call, its arguments
-        ///     borrowed. Those that may fail give their value regardless, and
-        ///     <c>io_succeeded</c> says whether they did; the value is then dropped.
-        /// </summary>
-        SilValue? RuntimeCall(BoundCall call) {
-            var arguments = new List<SilValue>();
-            foreach (var argument in call.Arguments) {
-                if (Borrow(argument) is not { } value) {
-                    return null;
-                }
-
-                arguments.Add(value);
-            }
-
-            var strings = new ArrayType(SilType.String);
-            var (builtin, result, fallible) = call.Function.Name switch {
-                "write" => ("io_write", SilType.Unit, false),
-                "writeError" => ("io_write_error", SilType.Unit, false),
-                "readLine" => ("io_read_line", SilType.String, true),
-                "readFile" => ("io_read_file", SilType.String, true),
-                "writeFile" => ("io_write_file", SilType.Bool, false),
-                "fileExists" => ("io_file_exists", SilType.Bool, false),
-                "isDirectory" => ("io_is_directory", SilType.Bool, false),
-                "removeFile" => ("io_remove_file", SilType.Bool, false),
-                "makeDirectory" => ("io_make_directory", SilType.Bool, false),
-                "listDirectory" => ("io_list_directory", (SilType)strings, true),
-                "environment" => ("io_environment", SilType.String, true),
-                "argumentCount" => ("io_argument_count", SilType.Int, false),
-                "argument" => ("io_argument", SilType.String, false),
-                "monotonicNanoseconds" => ("time_monotonic", SilType.Int, false),
-                "wallClockNanoseconds" => ("time_wall_clock", SilType.Int, false),
-                "sleep" => ("time_sleep", SilType.Unit, false),
-                "run" => ("process_run", SilType.String, true),
-                "lastExitStatus" => ("process_status", SilType.Int, false),
-                "lastErrorOutput" => ("process_error_output", SilType.String, false),
-                "currentDirectory" => ("process_current_directory", SilType.String, false),
-                "changeDirectory" => ("process_change_directory", SilType.Bool, false),
-                "processId" => ("process_id", SilType.Int, false),
-
-                "hashString" => ("string_hash", SilType.Int, false),
-                "joinStrings" => ("string_join", SilType.String, false),
-                "compareStrings" => ("string_compare", SilType.Int, false),
-                _ => (null!, SilType.Unit, false),
-            };
-
-            if (builtin is null) {
-                return Missing(call, $"the runtime call '{call.Function.Name}'");
-            }
-
-            var made = Emit(new BuiltinInst(builtin, result, [..arguments]));
-            for (var i = arguments.Count - 1; i >= 0; i--) {
-                End(arguments[i]);
-            }
-
-            if (result == SilType.Unit) {
-                return UnitValue.Instance;
-            }
-
-            if (!fallible) {
-                return made;
-            }
-
-            var present = Emit(new BuiltinInst("io_succeeded", SilType.Bool));
-            return MakeOptional(call.Type, present, made, call, owned: true);
-        }
-
-        /// <summary>An optional holding the value when the flag is set, and none otherwise.</summary>
-        SilValue? MakeOptional(TypeSymbol type, SilValue present, SilValue value, BoundNode at, bool owned = false) {
-            if (LowerType(type) is not EnumType optional) {
-                return Missing(at, $"an optional of type '{type.ToDisplayString()}'");
-            }
-
-            var some = function.AddBlock();
-            var none = function.AddBlock();
-            var after = function.AddBlock();
-            var result = after.AddArgument(optional);
-            Jump(new CondBranchInst(present, some, [], none, []));
-            _current = some;
-            Branch(after, Emit(new EnumInst(optional, optional.CaseIndex("Some"), value)));
-            _current = none;
-            if (owned) {
-                // Made either way; without the flag, nobody wants it.
-                Emit(new DestroyValueInst(value));
-            }
-
-            Branch(after, Emit(new EnumInst(optional, optional.CaseIndex("None"), null)));
-            _current = after;
-            return result;
-        }
-
-        /// <summary>The computed properties the core gives its own types, and a property read through an existential.</summary>
+        /// <summary>An array's computed properties, and a property read through an existential or a getter.</summary>
         SilValue? ComputedProperty(BoundFieldAccess access, BoundExpression receiver) {
             if (Sub(receiver.Type) is ExistentialTypeSymbol) {
                 return ExistentialCall(receiver, GetterSlot(access.Field), [], access);
@@ -5239,18 +5067,9 @@ public sealed partial class SilGen {
                 }
             }
 
+            // An array's count: the rest of the core's properties are Sable's (lib/Sable.Core).
             var name = access.Field.Name;
-            string? builtin = (Sub(receiver.Type), name) switch {
-                (ArrayTypeSymbol, "count" or "isEmpty") => "array_count",
-                (var t, "count" or "isEmpty") when t.Equals(Core.String) => "string_count",
-                (_, "isDigit") when Sub(receiver.Type).Equals(Core.Char) => "char_is_digit",
-                (_, "codePoint") when Sub(receiver.Type).Equals(Core.Char) => "char_to_Int",
-                (_, "isLetter") when Sub(receiver.Type).Equals(Core.Char) => "char_is_letter",
-                (_, "isWhitespace") when Sub(receiver.Type).Equals(Core.Char) => "char_is_whitespace",
-                _ => null,
-            };
-
-            if (builtin is null) {
+            if (Sub(receiver.Type) is not ArrayTypeSymbol || name is not ("count" or "isEmpty")) {
                 return Missing(access, $"the property '{name}' of '{receiver.Type.ToDisplayString()}'");
             }
 
@@ -5258,8 +5077,7 @@ public sealed partial class SilGen {
                 return null;
             }
 
-            var resultType = builtin.EndsWith("count", StringComparison.Ordinal) || builtin == "char_to_Int" ? SilType.Int : SilType.Bool;
-            SilValue result = Emit(new BuiltinInst(builtin, resultType, self));
+            SilValue result = Emit(new BuiltinInst("array_count", SilType.Int, self));
             End(self);
 
             if (name == "isEmpty") {

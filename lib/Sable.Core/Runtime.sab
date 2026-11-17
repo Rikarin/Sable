@@ -1,0 +1,191 @@
+module Sable.Core
+
+// What the operating system gives a program, through the runtime: the
+// calls Sable.IO, Sable.Time and Sable.Process are written over
+// (docs/06 §6.4), and 'print'. Each is a '@builtin', which the runtime
+// implements in C (sable_runtime.c) and the interpreter in .NET.
+
+/// Writes the value and a line break to standard output: what hello world
+/// needs, without importing Sable.IO.
+@builtin("print_String") public fn print(_ value: String)
+@builtin("print_Int") public fn print(_ value: Int)
+@builtin("print_F64") public fn print(_ value: F64)
+@builtin("print_Bool") public fn print(_ value: Bool)
+@builtin("print_I8") public fn print(_ value: I8)
+@builtin("print_I16") public fn print(_ value: I16)
+@builtin("print_I32") public fn print(_ value: I32)
+@builtin("print_I64") public fn print(_ value: I64)
+@builtin("print_U8") public fn print(_ value: U8)
+@builtin("print_U16") public fn print(_ value: U16)
+@builtin("print_U32") public fn print(_ value: U32)
+@builtin("print_U64") public fn print(_ value: U64)
+@builtin("print_UInt") public fn print(_ value: UInt)
+@builtin("print_F32") public fn print(_ value: F32)
+
+/// The runtime's own calls, all static: standard streams, files,
+/// directories, the environment, clocks and processes.
+///
+/// A call that can fail gives a value either way, and 'succeeded' then says
+/// whether the last one did; those are wrapped here into an optional, so
+/// that nothing above sees a value that is not one.
+public struct Runtime {
+    // ---- Standard streams ------------------------------------------------
+
+    /// Writes the text to standard output, as it is.
+    @builtin("io_write")
+    public static fn write(text: String)
+
+    /// Writes the text to standard error, as it is.
+    @builtin("io_write_error")
+    public static fn writeError(text: String)
+
+    /// The next line of standard input without its line break, or none at its end.
+    public static fn readLine() -> String? {
+        let line = Runtime.rawReadLine()
+        if Runtime.succeeded() {
+            return line
+        }
+        return none
+    }
+
+    // ---- Files and directories -------------------------------------------
+
+    /// The file's contents, or none when it cannot be read.
+    public static fn readFile(path: String) -> String? {
+        let text = Runtime.rawReadFile(path)
+        if Runtime.succeeded() {
+            return text
+        }
+        return none
+    }
+
+    /// Writes the text to the file, replacing it or adding to its end;
+    /// whether that worked.
+    @builtin("io_write_file")
+    public static fn writeFile(path: String, text: String, append: Bool) -> Bool
+
+    @builtin("io_file_exists")
+    public static fn fileExists(path: String) -> Bool
+
+    @builtin("io_is_directory")
+    public static fn isDirectory(path: String) -> Bool
+
+    @builtin("io_remove_file")
+    public static fn removeFile(path: String) -> Bool
+
+    @builtin("io_make_directory")
+    public static fn makeDirectory(path: String) -> Bool
+
+    /// The names in the directory, in no particular order, or none when it
+    /// cannot be read.
+    public static fn listDirectory(path: String) -> String[>..]? {
+        let names = Runtime.rawListDirectory(path)
+        if Runtime.succeeded() {
+            return names
+        }
+        return none
+    }
+
+    // ---- The environment -------------------------------------------------
+
+    /// The environment variable's value, or none when it is not set.
+    public static fn environment(name: String) -> String? {
+        let value = Runtime.rawEnvironment(name)
+        if Runtime.succeeded() {
+            return value
+        }
+        return none
+    }
+
+    /// How many arguments the program was given, its own name first.
+    @builtin("io_argument_count")
+    public static fn argumentCount() -> Int
+
+    @builtin("io_argument")
+    public static fn argument(index: Int) -> String
+
+    // ---- Time ------------------------------------------------------------
+    // A monotonic clock for measuring, the wall clock for dates, both in
+    // nanoseconds; and sleeping, for at least as long as asked.
+
+    @builtin("time_monotonic")
+    public static fn monotonicNanoseconds() -> Int
+
+    @builtin("time_wall_clock")
+    public static fn wallClockNanoseconds() -> Int
+
+    @builtin("time_sleep")
+    public static fn sleep(nanoseconds: Int)
+
+    // ---- Processes -------------------------------------------------------
+    // Another program run to its end, its output kept; and this one's
+    // directory and identity.
+
+    /// Runs the program found on PATH with the input written to it, and
+    /// gives its output; none when nothing by that name starts.
+    /// 'lastExitStatus' and 'lastErrorOutput' then say how it ended.
+    public static fn run(program: String, arguments: String[>..], input: String) -> String? {
+        let output = Runtime.rawRun(program, arguments, input)
+        if Runtime.succeeded() {
+            return output
+        }
+        return none
+    }
+
+    @builtin("process_status")
+    public static fn lastExitStatus() -> Int
+
+    @builtin("process_error_output")
+    public static fn lastErrorOutput() -> String
+
+    @builtin("process_current_directory")
+    public static fn currentDirectory() -> String
+
+    @builtin("process_change_directory")
+    public static fn changeDirectory(path: String) -> Bool
+
+    @builtin("process_id")
+    public static fn processId() -> Int
+
+    // ---- Strings, in one call --------------------------------------------
+    // What String's conformances and Sable.Text are written over: hashing
+    // and ordering by the UTF-8 bytes, and joining, in one call rather than
+    // a call per scalar or a copy per part.
+
+    @builtin("string_hash")
+    public static fn hashString(text: String) -> Int
+
+    @builtin("string_join")
+    public static fn joinStrings(parts: String[>..], separator: String) -> String
+
+    /// Negative, zero or positive as the left orders before, with or after the right.
+    @builtin("string_compare")
+    public static fn compareStrings(left: String, right: String) -> Int
+
+    // ---- The fallible calls, raw -----------------------------------------
+
+    /// Whether the last fallible call succeeded.
+    @builtin("io_succeeded")
+    static fn succeeded() -> Bool
+
+    @builtin("io_read_line")
+    static fn rawReadLine() -> String
+
+    @builtin("io_read_file")
+    static fn rawReadFile(_ path: String) -> String
+
+    @builtin("io_list_directory")
+    static fn rawListDirectory(_ path: String) -> String[>..]
+
+    @builtin("io_environment")
+    static fn rawEnvironment(_ name: String) -> String
+
+    @builtin("process_run")
+    static fn rawRun(_ program: String, _ arguments: String[>..], _ input: String) -> String
+}
+
+extension Region {
+    /// Everything in the region destroyed, its memory kept for what comes next.
+    @builtin("region_reset")
+    public fn reset()
+}

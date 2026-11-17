@@ -137,6 +137,13 @@ Sable.Interop       C FFI helpers, CString, CVarArg, callback shims
 Sable.Reflect       the reflection surface described above
 ```
 
+`Sable.Core` reaches the runtime through `@builtin("name")`: a bodiless
+declaration, allowed only in `Sable.Core`, whose calls are the named SIL
+builtin applied in place — `String.count`, `print`, `Runtime.readFile`'s
+floor — so the library is Sable down to the operations only the runtime can
+perform, at no cost over the compiler doing it by special case
+(docs/04, "Sable.Core in Sable").
+
 Outside the standard set, in the registry but team-maintained:
 
 ```

@@ -1,0 +1,152 @@
+module Sable.Core
+
+// String's own members (docs/06 §6.4). A string is UTF-8, indexed by
+// Unicode scalar: 'count' scalars, 'at' one of them, 'slice' a run of
+// them. What only the runtime can do is a '@builtin', applied where it is
+// called; the rest is Sable over those.
+
+extension String {
+    /// How many Unicode scalars the string has.
+    @builtin("string_count")
+    public var count: Int { get }
+
+    /// Whether the string has no scalars.
+    public var isEmpty: Bool { get { return self.count == 0 } }
+
+    /// The scalar at the index, counting from 0; out of range traps.
+    @builtin("string_at")
+    public fn at(index: Int) -> Char
+
+    /// The scalars from 'from' up to, not including, 'to'.
+    @builtin("string_slice")
+    public fn slice(from: Int, to: Int) -> String
+
+    /// This string, then the other.
+    @builtin("string_concat")
+    public fn appending(other: String) -> String
+
+    /// Whether the character occurs in the string.
+    @builtin("string_contains")
+    public fn contains(character: Char) -> Bool
+
+    /// Where the character first occurs, or none.
+    public fn indexOf(character: Char) -> Int? {
+        let index = self.firstIndex(character)
+        if index < 0 {
+            return none
+        }
+        return index
+    }
+
+    /// Where the character first occurs, or -1.
+    @builtin("string_index_of")
+    fn firstIndex(_ character: Char) -> Int
+
+    /// The string without the whitespace that begins and ends it.
+    @builtin("string_trimmed")
+    public fn trimmed() -> String
+
+    /// The runs between each occurrence of the separator, empty ones kept.
+    @builtin("string_split")
+    public fn split(separator: Char) -> String[>..]
+
+    /// A string of the one character.
+    @builtin("string_from_Char")
+    public static fn fromChar(character: Char) -> String
+
+    // ---- Parsing ---------------------------------------------------------
+    // Decimal, with an optional sign; none when the text is not a number of
+    // the type, or does not fit it. The runtime parses Int and F64; the
+    // narrower types are an Int that fits.
+
+    /// The integer the text writes, or none.
+    public fn toInt() -> Int? {
+        let (parsed, value) = self.parseInt()
+        if parsed {
+            return value
+        }
+        return none
+    }
+
+    /// The number the text writes, or none.
+    public fn toF64() -> F64? {
+        let (parsed, value) = self.parseF64()
+        if parsed {
+            return value
+        }
+        return none
+    }
+
+    public fn toI8() -> I8? {
+        if let value = self.toInt() {
+            if value >= -128 && value <= 127 { return I8(value) }
+        }
+        return none
+    }
+
+    public fn toI16() -> I16? {
+        if let value = self.toInt() {
+            if value >= -32768 && value <= 32767 { return I16(value) }
+        }
+        return none
+    }
+
+    public fn toI32() -> I32? {
+        if let value = self.toInt() {
+            if value >= -2147483648 && value <= 2147483647 { return I32(value) }
+        }
+        return none
+    }
+
+    public fn toI64() -> I64? {
+        if let value = self.toInt() {
+            return I64(value)
+        }
+        return none
+    }
+
+    public fn toU8() -> U8? {
+        if let value = self.toInt() {
+            if value >= 0 && value <= 255 { return U8(value) }
+        }
+        return none
+    }
+
+    public fn toU16() -> U16? {
+        if let value = self.toInt() {
+            if value >= 0 && value <= 65535 { return U16(value) }
+        }
+        return none
+    }
+
+    public fn toU32() -> U32? {
+        if let value = self.toInt() {
+            if value >= 0 && value <= 4294967295 { return U32(value) }
+        }
+        return none
+    }
+
+    /// Up to Int's largest: the runtime parses no wider.
+    public fn toU64() -> U64? {
+        if let value = self.toInt() {
+            if value >= 0 { return U64(value) }
+        }
+        return none
+    }
+
+    /// Up to Int's largest: the runtime parses no wider.
+    public fn toUInt() -> UInt? {
+        if let value = self.toInt() {
+            if value >= 0 { return UInt(value) }
+        }
+        return none
+    }
+
+    /// Whether the text is an Int, and the Int when it is.
+    @builtin("string_to_Int")
+    fn parseInt() -> (Bool, Int)
+
+    /// Whether the text is an F64, and the F64 when it is.
+    @builtin("string_to_F64")
+    fn parseF64() -> (Bool, F64)
+}

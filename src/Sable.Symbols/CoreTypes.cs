@@ -7,9 +7,11 @@ namespace Sable.Symbols;
 ///     file sees without importing it.
 /// </summary>
 /// <remarks>
-///     docs/06 has these written in Sable once the standard library exists. Until
-///     then the compiler supplies them, so that type binding has something to bind
-///     to; replacing this with a real <c>Sable.Core</c> changes nothing above it.
+///     The types are the compiler's, because the binder, SIL lowering and code
+///     generation all know them by sight: a literal's type, an integer's width,
+///     a string's representation. Their members are not: those are Sable, in
+///     <c>lib/Sable.Core</c> (<see cref="CoreLibrary" />), apart from the few
+///     <see cref="DeclarePrimitiveMembers" /> explains.
 /// </remarks>
 public sealed class CoreTypes {
     internal CoreTypes(ModuleSymbol module) {
@@ -71,17 +73,11 @@ public sealed class CoreTypes {
         Bytes = new NamedTypeSymbol("Bytes", TypeKind.Struct, Module, accessibility: Accessibility.Public);
         Module.AddMember(Bytes);
 
-        // What the operating system gives a program, through the runtime:
-        // the calls Sable.IO is written over (docs/06 §6.4).
-        Runtime = new NamedTypeSymbol("Runtime", TypeKind.Struct, Module, accessibility: Accessibility.Public);
-        Module.AddMember(Runtime);
-
         Integers = [I8, I16, I32, I64, I128, Int, U8, U16, U32, U64, U128, UInt];
         Floats = [F16, F32, F64];
         Numerics = [..Integers, ..Floats];
 
         DeclarePrimitiveMembers();
-        DeclareRuntimeMembers();
     }
 
     // -----------------------------------------------------------------------
@@ -89,33 +85,22 @@ public sealed class CoreTypes {
     // -----------------------------------------------------------------------
 
     /// <summary>
-    ///     Gives the built-in types the small surface a real program needs.
+    ///     The members of the core types that Sable cannot yet declare.
     /// </summary>
     /// <remarks>
-    ///     docs/06 §6.4 puts String, the array family and the core protocols in a
-    ///     <c>Sable.Core</c> written in Sable. Until that exists the compiler
-    ///     supplies the handful of members that nothing can be written without —
-    ///     enough to write a parser against the type checker, which is the
-    ///     go/no-go in docs/04 §1.4. Replacing this with the real module changes
-    ///     nothing above it.
+    ///     Everything a primitive does that Sable can say is in
+    ///     <c>lib/Sable.Core</c> — String's, Char's and the numbers' members,
+    ///     <c>print</c>, <c>Runtime</c> — written in Sable, the floor of it as
+    ///     <c>@builtin</c>s (Compilation.Builtins.cs). What is left here is
+    ///     generic in a way a declaration cannot write, or lowered by more
+    ///     than one builtin: a region's <c>alloc</c> (its result is a
+    ///     reference to whatever it is given), <c>Task</c>'s members (a spawn
+    ///     builds a closure's task object), <c>Bytes.of</c> and
+    ///     <c>Decoded</c> (inline layout's), <c>Range</c>'s bounds, and the
+    ///     array members, built per element type in
+    ///     <see cref="GetArrayMembers" />.
     /// </remarks>
     void DeclarePrimitiveMembers() {
-        Property(String, "count", Int);
-        Property(String, "isEmpty", Bool);
-        Method(String, "at", [("index", Int)], Char);
-        Method(String, "slice", [("from", Int), ("to", Int)], String);
-        Method(String, "appending", [("other", String)], String);
-        Method(String, "contains", [("character", Char)], Bool);
-        Method(String, "indexOf", [("character", Char)], new OptionalTypeSymbol(Int));
-        Method(String, "trimmed", [], String);
-        Method(
-            String,
-            "split",
-            [("separator", Char)],
-            new ArrayTypeSymbol(String, ArrayKind.Grow)
-        );
-        Method(String, "fromChar", [("character", Char)], String, true);
-
         // 'arena.alloc(value)': the value, moved into the region; a reference
         // to it, rooted in the region, back.
         var alloc = new FunctionSymbol("alloc", Region, null, Accessibility.Public, FunctionKind.Ordinary);
@@ -125,9 +110,6 @@ public sealed class CoreTypes {
         alloc.Parameters = [allocated];
         alloc.ReturnTypeResolver = () => new ReferenceTypeSymbol(element);
         Region.AddMember(alloc);
-
-        // 'arena.reset()': everything in it destroyed, its memory kept for what comes next.
-        Method(Region, "reset", [], Void);
 
         // 'Decoded<T>': '.Ok(value)' or '.Invalid(why)'.
         var ok = new UnionCaseSymbol("Ok", Decoded, null);
@@ -169,106 +151,6 @@ public sealed class CoreTypes {
         Property(Range, "lowerBound", Range.TypeParameters[0]);
         Property(Range, "upperBound", Range.TypeParameters[0]);
         Property(Range, "isEmpty", Bool);
-
-        Property(Char, "isDigit", Bool);
-        Property(Char, "isLetter", Bool);
-        Property(Char, "isWhitespace", Bool);
-        Property(Char, "code", U32);
-
-        // The scalar as an Int, and back: what decoding and writing '\u' escapes
-        // needs before the integer types other than Int lower.
-        Property(Char, "codePoint", Int);
-        Method(Char, "fromCodePoint", [("value", Int)], new OptionalTypeSymbol(Char), true);
-
-        foreach (var numeric in Numerics) {
-            Method(numeric, "toString", [], String);
-            Method(numeric, "abs", [], numeric);
-            Method(numeric, "min", [("other", numeric)], numeric);
-            Method(numeric, "max", [("other", numeric)], numeric);
-        }
-
-        foreach (var integer in Integers) {
-            Method(String, "to" + integer.Name, [], new OptionalTypeSymbol(integer));
-        }
-
-        Method(String, "toF64", [], new OptionalTypeSymbol(F64));
-        Method(Bool, "toString", [], String);
-
-        // Writing a line to standard output: what hello world needs, before
-        // Sable.IO exists to own it (docs/06 §6.4).
-        foreach (var printable in new[] { String, Int, F64, Bool, I8, I16, I32, I64, U8, U16, U32, U64, UInt, F32 }) {
-            Print = Print.Add(Function("print", [("value", printable)], Void));
-        }
-    }
-
-    /// <summary>The runtime's own calls, all static: standard streams, files, directories, the environment.</summary>
-    void DeclareRuntimeMembers() {
-        var text = new OptionalTypeSymbol(String);
-        Method(Runtime, "write", [("text", String)], Void, true);
-        Method(Runtime, "writeError", [("text", String)], Void, true);
-        Method(Runtime, "readLine", [], text, true);
-        Method(Runtime, "readFile", [("path", String)], text, true);
-        Method(Runtime, "writeFile", [("path", String), ("text", String), ("append", Bool)], Bool, true);
-        Method(Runtime, "fileExists", [("path", String)], Bool, true);
-        Method(Runtime, "isDirectory", [("path", String)], Bool, true);
-        Method(Runtime, "removeFile", [("path", String)], Bool, true);
-        Method(Runtime, "makeDirectory", [("path", String)], Bool, true);
-        Method(Runtime, "listDirectory", [("path", String)], new OptionalTypeSymbol(new ArrayTypeSymbol(String, ArrayKind.Grow)), true);
-        Method(Runtime, "environment", [("name", String)], text, true);
-        Method(Runtime, "argumentCount", [], Int, true);
-        Method(Runtime, "argument", [("index", Int)], String, true);
-
-        // Time: a monotonic clock for measuring, the wall clock for dates,
-        // both in nanoseconds; and sleeping, for at least as long as asked.
-        Method(Runtime, "monotonicNanoseconds", [], Int, true);
-        Method(Runtime, "wallClockNanoseconds", [], Int, true);
-        Method(Runtime, "sleep", [("nanoseconds", Int)], Void, true);
-
-        // Processes: another program run to its end, its output kept; and
-        // this one's directory and identity.
-        Method(
-            Runtime,
-            "run",
-            [("program", String), ("arguments", new ArrayTypeSymbol(String, ArrayKind.Grow)), ("input", String)],
-            new OptionalTypeSymbol(String),
-            true
-        );
-        Method(Runtime, "lastExitStatus", [], Int, true);
-        Method(Runtime, "lastErrorOutput", [], String, true);
-        Method(Runtime, "currentDirectory", [], String, true);
-        Method(Runtime, "changeDirectory", [("path", String)], Bool, true);
-        Method(Runtime, "processId", [], Int, true);
-
-        // What Sable.Core's String conformances are written over: hashing and
-        // ordering by the UTF-8 bytes, in one call rather than a call per scalar.
-        Method(Runtime, "hashString", [("text", String)], Int, true);
-        Method(Runtime, "joinStrings", [("parts", new ArrayTypeSymbol(String, ArrayKind.Grow)), ("separator", String)], String, true);
-        Method(Runtime, "compareStrings", [("left", String), ("right", String)], Int, true);
-    }
-
-    /// <summary><c>Runtime</c>: the operating system's calls, which Sable.IO wraps.</summary>
-    public NamedTypeSymbol Runtime { get; }
-
-    /// <summary>The <c>print</c> overloads, which code generation recognises.</summary>
-    public ImmutableArray<FunctionSymbol> Print { get; private set; } = [];
-
-    /// <summary>A function the core module declares at its top level.</summary>
-    FunctionSymbol Function(string name, (string Name, TypeSymbol Type)[] parameters, TypeSymbol returnType) {
-        var function = new FunctionSymbol(name, Module, null, Accessibility.Public, FunctionKind.Ordinary);
-
-        function.Parameters = [
-            ..parameters.Select((parameter, i) => {
-                    // Label '_': the argument is written bare, as in print(x).
-                    var symbol = new ParameterSymbol(parameter.Name, "_", function, null, i);
-                    symbol.TypeResolver = () => parameter.Type;
-                    return symbol;
-                }
-            )
-        ];
-
-        function.ReturnTypeResolver = () => returnType;
-        Module.AddMember(function);
-        return function;
     }
 
     /// <summary>The members every array has, built for one element type.</summary>

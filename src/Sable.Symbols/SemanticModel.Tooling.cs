@@ -389,7 +389,7 @@ public sealed partial class SemanticModel {
 
         // A declaration's own name, or one of its parameters'.
         for (var node = token.Parent; node is not null; node = node.Parent) {
-            if (node is StatementSyntax or ExpressionSyntax or PatternSyntax) {
+            if (node is StatementSyntax or ExpressionSyntax) {
                 break;
             }
 
@@ -411,6 +411,18 @@ public sealed partial class SemanticModel {
         }
 
         var model = ModelFor(token.SpanStart);
+
+        // 'Point { x: 1 }': the label names the field it initialises.
+        if (token.Parent is FieldInitializerSyntax { ColonToken.IsNone: false } initializer && initializer.NameToken == token) {
+            for (var node = initializer.Parent; node is not null; node = node.Parent) {
+                if (node is RecordExpressionSyntax record) {
+                    return model.GetBoundNode(record) is { } bound && Unconverted(bound) is BoundRecordExpression built
+                        ? built.Fields.Select(static f => f.Field).FirstOrDefault(f => f.Name == token.Text)
+                        : null;
+                }
+            }
+        }
+
         foreach (var candidate in UsesOf(token)) {
             if (model.GetSymbolOf(candidate) is { } symbol) {
                 return symbol;

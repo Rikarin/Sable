@@ -185,6 +185,12 @@ public sealed class ToolingTests {
         var point = model.GetSymbolAt(At(tree, "struct Point", 8))!;
         Assert.Equal(4, model.FindReferences(point).Count);
 
+        // A field: its declaration, its two uses, and the label that initialises it.
+        var x = model.GetSymbolAt(At(tree, "var x", 4))!;
+        Assert.Equal(SymbolKind.Field, x.Kind);
+        Assert.Equal(4, model.FindReferences(x).Count);
+        Assert.Same(x, model.GetSymbolAt(At(tree, "{ x: x", 2)));
+
         var doubled = model.GetSymbolAt(At(tree, "let doubled", 5))!;
         Assert.Equal(3, model.FindReferences(doubled).Count);
     }

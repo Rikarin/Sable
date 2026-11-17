@@ -1,0 +1,76 @@
+module Negative.TypeForms
+
+public struct Point { public var x: Int }
+public protocol Named { fn name() -> String }
+
+fn aReferenceIsNotItsTarget(_ r: Point&) -> Point {
+    return r                            //! S3004 expected 'Point'
+}
+
+fn aTargetIsNotAReference(_ p: Point) -> Point& {
+    return p                            //! S3004
+}
+
+fn anInlineArrayIsNotFixed(_ xs: Int[..8]) -> Int[] {
+    return xs                           //! S3004
+}
+
+fn aSliceIsNotGrowable(_ xs: Int[:]) -> Int[>..] {
+    return xs                           //! S3004
+}
+
+fn aGrowShrinkIsNotGrow(_ xs: Int[>..<]) -> Int[>..] {
+    return xs                           //! S3004
+}
+
+fn aDictionaryKeyIsChecked(_ d: [String: Int]) -> Int? {
+    return d[1]                         //! S3004 expected 'String'
+}
+
+fn aDictionaryIsNotAnArray(_ d: [String: Int]) -> Int[] {
+    return d                            //! S3004
+}
+
+fn aFunctionTypeArityIsChecked(_ f: (Int, Int) -> Int) -> (Int) -> Int {
+    return f                            //! S3004
+}
+
+fn aFunctionTypeResultIsChecked(_ f: (Int) -> Int) -> (Int) -> String {
+    return f                            //! S3004
+}
+
+fn anOptionalFunctionIsNotAFunction(_ f: ((Int) -> Int)?) -> Int {
+    return f(1)                         //! S3006 may hold nothing
+}
+
+fn aTupleLabelIsPartOfTheType(_ p: (a: Int, b: Int)) -> (Int, Int) {
+    return p                            //! S3004
+}
+
+fn aNestedOptionalArray(_ xs: Int?[]) -> Int[] {
+    return xs                           //! S3004
+}
+
+fn anArrayOfOptionalsIsNotAnOptionalArray(_ xs: Int?[]) -> Int[]? {
+    return xs                           //! S3004
+}
+
+fn aCompositionNeedsProtocols(_ v: any Point & Named) -> String {   //! S3024 takes a protocol
+    return v.name()
+}
+
+fn aCompositionOfProtocols(_ v: any Named & Named) -> String {
+    return v.name()
+}
+
+fn selfOutsideAnyType() -> Self {       //! S2004 only meaningful inside a type
+    return 0
+}
+
+fn anOptionalCallGivesAnOptional(_ f: ((Int) -> Int)?) -> Int {
+    return f?(1)                        //! S3004 expected 'Int'
+}
+
+fn anOptionalCallUnwrapped(_ f: ((Int) -> Int)?) -> Int {
+    return f?(1) ?? 0
+}

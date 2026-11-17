@@ -1684,8 +1684,28 @@ public sealed class Binder
             case BoundUnionCaseGroup unionCase:
                 return BindUnionCaseConstruction(syntax, unionCase, arguments, labels);
 
-            case BoundExpression value when Expand(value.Type) is FunctionTypeSymbol functionType:
+            case BoundExpression value when value.Type is FunctionTypeSymbol functionType:
                 return BindCallToValue(syntax, value, functionType, arguments, syntaxes);
+
+            // 'f?()' calls through an optional and gives an optional back.
+            case BoundExpression value
+                when value.Type is OptionalTypeSymbol { UnderlyingType: FunctionTypeSymbol inner }:
+            {
+                if (syntax.QuestionToken.IsNone)
+                {
+                    _diagnostics.Error(ErrorCode.ERR_NotCallable, syntax.Expression.Span,
+                        $"'{value.Type.ToDisplayString()}' may hold nothing, so call it "
+                        + "with '?()' or unwrap it first");
+                    return new BoundError(syntax, [value, .. arguments]);
+                }
+
+                var call = BindCallToValue(syntax, value, inner, arguments, syntaxes);
+                return call.HasError
+                    ? call
+                    : new BoundConversion(
+                        syntax, new OptionalTypeSymbol(call.Type), call,
+                        ConversionKind.OptionalWrap);
+            }
 
             case BoundTypeExpression typeExpression
                 when typeExpression.ReferencedType is NamedTypeSymbol namedType:

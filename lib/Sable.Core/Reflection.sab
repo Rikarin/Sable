@@ -1,0 +1,197 @@
+module Sable.Core
+
+// Reflection (docs/06 §6.3). 'Mirror(of:)' looks at any value, read-only;
+// 'TypeInfo.of(T.self)' describes a @reflectable type's declaration. Both
+// are written over 'Reflect', whose members the compiler supplies: each is
+// expanded for the type it is called with, so a program pays only for the
+// types it reflects on, and one that reflects on nothing pays nothing.
+
+/// The compiler's floor under 'Mirror' and 'TypeInfo': each member is
+/// generated, per type, where it is called.
+public struct Reflect {
+    /// The type's name as written in source: 'Point', 'Box<Int>', 'Int[>..]'.
+    @intrinsic
+    public static fn typeName<T>(_ subject: T) -> String
+
+    /// What sort of type it is: 'struct', 'class', 'actor', 'union',
+    /// 'enum', 'optional', 'tuple', 'array', 'dictionary', 'function',
+    /// 'existential' or 'primitive'.
+    @intrinsic
+    public static fn kind<T>(_ subject: T) -> String
+
+    /// The case a union, enum or optional value is ('some' or 'none' for an
+    /// optional); empty for anything else.
+    @intrinsic
+    public static fn caseName<T>(_ subject: T) -> String
+
+    /// The names of the value's parts: a struct's or class's stored fields,
+    /// a union case's payload, a tuple's elements, an array's indices, a
+    /// dictionary's keys (described). An unlabelled part is named by its
+    /// position.
+    @intrinsic
+    public static fn fieldNames<T>(_ subject: T) -> String[>..]
+
+    /// The type of each part, as 'typeName' writes it.
+    @intrinsic
+    public static fn fieldTypeNames<T>(_ subject: T) -> String[>..]
+
+    /// Each part, described as 'describe' describes it.
+    @intrinsic
+    public static fn fieldValues<T>(_ subject: T) -> String[>..]
+
+    /// The value written out: 'Point(x: 1, y: 2)', 'Shape.circle(radius: 2.0)',
+    /// '[1, 2]', '"text"'. Objects are followed eight levels deep, so a cycle
+    /// ends in '...'.
+    @intrinsic
+    public static fn describe<T>(_ subject: T) -> String
+}
+
+/// One part of a value, as a mirror sees it.
+public struct MirrorField {
+    public let name: String
+    public let typeName: String
+    public let value: String
+}
+
+/// A read-only view of any value: its type, its case, and its parts.
+/// Cheap, and available on every type; nothing is emitted for a type no
+/// mirror is made of.
+public struct Mirror<Subject> {
+    public private(set) var typeName: String
+    public private(set) var kind: String
+    public private(set) var caseName: String?
+    public private(set) var fields: MirrorField[>..]
+    public private(set) var description: String
+
+    public init(of subject: Subject) {
+        typeName = Reflect.typeName(subject)
+        kind = Reflect.kind(subject)
+        let named = Reflect.caseName(subject)
+        if named.isEmpty {
+            caseName = none
+        } else {
+            caseName = named
+        }
+        let names = Reflect.fieldNames(subject)
+        let types = Reflect.fieldTypeNames(subject)
+        let values = Reflect.fieldValues(subject)
+        var made: MirrorField[>..] = []
+        var i = 0
+        while i < names.count {
+            made.append(MirrorField(name: names[i], typeName: types[i], value: values[i]))
+            i = i + 1
+        }
+        fields = made
+        description = Reflect.describe(subject)
+    }
+
+    /// How many parts the value has.
+    public var count: Int { get { return fields.count } }
+
+    /// The part with this name, or none.
+    public fn field(named name: String) -> MirrorField? {
+        for field in fields {
+            if field.name == name {
+                return field
+            }
+        }
+        return none
+    }
+}
+
+/// What '@reflectable' gives a type: 'TypeInfo.of' accepts it. A type may
+/// also conform by hand.
+public protocol Reflectable { }
+
+/// A stored field of a @reflectable type.
+public struct FieldInfo {
+    public let name: String
+    public let typeName: String
+    public let isMutable: Bool
+    public let isPublic: Bool
+}
+
+/// A method, initialiser or operator of a @reflectable type.
+public struct MethodInfo {
+    public let name: String
+    /// As it would be declared: 'mutating fn move(by dx: Int, dy: Int)'.
+    public let signature: String
+    public let parameterNames: String[>..]
+    public let parameterTypeNames: String[>..]
+    public let returnTypeName: String
+    public let isStatic: Bool
+    public let isPublic: Bool
+    public let isMutating: Bool
+}
+
+/// A case of a @reflectable union or enum, with its payload's parts.
+public struct CaseInfo {
+    public let name: String
+    public let fieldNames: String[>..]
+    public let fieldTypeNames: String[>..]
+}
+
+/// A @reflectable type's declaration: its fields, methods, cases,
+/// conformances and attributes, as the compiler saw them.
+public struct TypeInfo {
+    public let name: String
+    public let kind: String
+    public let fields: FieldInfo[>..]
+    public let methods: MethodInfo[>..]
+    public let cases: CaseInfo[>..]
+    public let conformances: String[>..]
+    /// As written, without the '@': 'reflectable', 'derive(Equatable)'.
+    public let attributes: String[>..]
+
+    /// The type's information: 'TypeInfo.of(Point.self)'. Only a
+    /// @reflectable type has it, and only one asked for is emitted.
+    @intrinsic
+    public static fn of<T: Reflectable>(_ type: T) -> TypeInfo
+
+    /// The stored field with this name, or none.
+    public fn field(named name: String) -> FieldInfo? {
+        for field in fields {
+            if field.name == name {
+                return field
+            }
+        }
+        return none
+    }
+
+    /// The first method with this name, or none.
+    public fn method(named name: String) -> MethodInfo? {
+        for method in methods {
+            if method.name == name {
+                return method
+            }
+        }
+        return none
+    }
+
+    /// Whether the type declares a conformance to the protocol named.
+    public fn conforms(to name: String) -> Bool {
+        for conformance in conformances {
+            if conformance == name {
+                return true
+            }
+        }
+        return false
+    }
+
+    /// Whether the type carries the attribute named, with or without arguments.
+    public fn hasAttribute(_ name: String) -> Bool {
+        for attribute in attributes {
+            if attribute == name || TypeInfo.begins(attribute, with: name + "(") {
+                return true
+            }
+        }
+        return false
+    }
+
+    static fn begins(_ text: String, with start: String) -> Bool {
+        if start.count > text.count {
+            return false
+        }
+        return text.slice(from: 0, to: start.count) == start
+    }
+}

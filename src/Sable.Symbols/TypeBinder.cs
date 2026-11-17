@@ -275,6 +275,13 @@ internal sealed class TypeBinder(Compilation compilation) {
                         [..baseTypes.Types.Select(syntax => BindType(syntax, type, scope))];
                 }
 
+                // '@reflectable' is a conformance to Sable.Core's Reflectable,
+                // which 'TypeInfo.of' asks of its argument.
+                if (type.IsReflectable && compilation.Core.Module.GetType("Reflectable") is { TypeKind: TypeKind.Protocol } reflectable
+                    && !type.BaseTypes.Contains(reflectable)) {
+                    type.BaseTypes = type.BaseTypes.Add(reflectable);
+                }
+
                 BindWhereClause(WhereClauseOf(declaration), type, scope);
             }
         );

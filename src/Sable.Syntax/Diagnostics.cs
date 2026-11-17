@@ -137,6 +137,7 @@ public enum ErrorCode {
     ERR_ReferenceNeedsPlace = 3060,
     ERR_ReferenceOutlivesRoot = 3061,
     ERR_OverlappingAccess = 3062,
+    ERR_NotReflectableKind = 3080,
     ERR_NotSupportedYet = 3099,
 
     // ---- Patterns and flow (S6000-S6999) ---------------------------------

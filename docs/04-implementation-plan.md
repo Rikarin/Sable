@@ -1365,7 +1365,8 @@ Sable.CodeGen. `sable build` and `sable run` on a package go through it;
 DAG (each depends on up to three earlier ones, always the previous) of
 about 1,100 lines each — structs, unions, a class, a generic function,
 closures, loops, string interpolation — and an app using all of them:
-110,382 lines, 501 files. Wall-clock times of `sable build`, median of 3–5:
+110,382 lines, 501 files (`genworkspace.py <dir>`, then `sable build
+--timings` in `<dir>/app`). Wall-clock times of `sable build`, median of 3–5:
 
 | Build (dev profile unless said)              | Before (whole program) | After        |
 |----------------------------------------------|------------------------|--------------|

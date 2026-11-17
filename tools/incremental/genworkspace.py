@@ -6,8 +6,8 @@ unions, classes, generics, closures, loops, string interpolation), and an
 
     genworkspace.py <directory> [--packages 100] [--units 12] [--deps 3] [--seed 1]
 
-Each unit is ~75 lines; a package has --units units spread over several
-files, so 12 units is ~900 lines a package. Package i depends on up to
+Each unit is ~90 lines; a package has --units units spread over several
+files, so 12 units is ~1,100 lines a package. Package i depends on up to
 --deps packages with a smaller index, chosen by a seeded PRNG, so the graph
 is a DAG with a long critical path as well as wide layers.
 """

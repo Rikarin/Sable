@@ -1,0 +1,78 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Sable",
+  "scopeName": "source.sable",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#attributes" },
+    { "include": "#keywords" },
+    { "include": "#numbers" },
+    { "include": "#declarations" },
+    { "include": "#types" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        { "name": "comment.line.documentation.sable", "match": "///.*$" },
+        { "name": "comment.line.double-slash.sable", "match": "//.*$" },
+        { "name": "comment.block.sable", "begin": "/\\*", "end": "\\*/", "patterns": [{ "include": "#comments" }] }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.sable",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            { "name": "constant.character.escape.sable", "match": "\\\\[nrt0\\\\\"']|\\\\u\\{[0-9A-Fa-f]+\\}" },
+            {
+              "name": "meta.interpolation.sable",
+              "begin": "\\\\\\(",
+              "end": "\\)",
+              "beginCaptures": { "0": { "name": "punctuation.section.interpolation.begin.sable" } },
+              "endCaptures": { "0": { "name": "punctuation.section.interpolation.end.sable" } },
+              "patterns": [{ "include": "$self" }]
+            }
+          ]
+        },
+        { "name": "string.quoted.single.sable", "match": "'(\\\\.|[^'\\\\])'" }
+      ]
+    },
+    "attributes": {
+      "name": "entity.other.attribute-name.sable",
+      "match": "@[A-Za-z_][A-Za-z0-9_]*"
+    },
+    "keywords": {
+      "patterns": [
+        { "name": "keyword.control.sable", "match": "\\b(if|else|guard|while|repeat|for|in|match|case|switch|default|fallthrough|return|throw|try|await|break|continue|defer|do|catch|where)\\b" },
+        { "name": "keyword.declaration.sable", "match": "\\b(module|import|fn|let|var|const|struct|class|actor|union|enum|protocol|extension|alias|typealias|associatedtype|init|deinit|subscript|operator|region)\\b" },
+        { "name": "storage.modifier.sable", "match": "\\b(public|private|internal|package|static|mutating|nonmutating|override|open|final|sealed|abstract|required|lazy|weak|unowned|async|throws|rethrows|inout|out|ref|consuming|borrowing|move|unsafe|comptime|some|any|nonisolated|prefix|postfix|using)\\b" },
+        { "name": "constant.language.sable", "match": "\\b(true|false|none)\\b" },
+        { "name": "variable.language.sable", "match": "\\b(self|Self|super)\\b" },
+        { "name": "keyword.operator.type.sable", "match": "\\b(is|as)\\b[?!]?" }
+      ]
+    },
+    "numbers": {
+      "name": "constant.numeric.sable",
+      "match": "\\b(0x[0-9A-Fa-f_]+|0b[01_]+|0o[0-7_]+|[0-9][0-9_]*(\\.[0-9][0-9_]*)?([eE][+-]?[0-9_]+)?)([iIuUfF][0-9]+)?\\b"
+    },
+    "declarations": {
+      "patterns": [
+        {
+          "match": "\\b(fn)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": { "1": { "name": "keyword.declaration.sable" }, "2": { "name": "entity.name.function.sable" } }
+        },
+        {
+          "match": "\\b(struct|class|actor|union|enum|protocol|alias)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": { "1": { "name": "keyword.declaration.sable" }, "2": { "name": "entity.name.type.sable" } }
+        }
+      ]
+    },
+    "types": {
+      "name": "entity.name.type.sable",
+      "match": "\\b[A-Z][A-Za-z0-9_]*\\b"
+    }
+  }
+}

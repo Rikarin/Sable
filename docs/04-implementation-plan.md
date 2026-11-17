@@ -1264,9 +1264,79 @@ packages are accepted but unprefixed names are not reserved; module names
 are not namespaced by package, so two packages declaring the same module
 merge; the cache has no garbage collection; there is no network registry.
 
+### The language server, as implemented
+
+`sable lsp` (`src/Sable.LanguageServer`, `src/Sable.Driver/Commands/LspCommand.cs`):
+JSON-RPC 2.0 over stdio with `Content-Length` framing, System.Text.Json and
+nothing else. The workspace is the open documents plus the `.sab` files under
+the root, compiled together with the library modules they import (the
+library's trees are shared, parsed once). Edits are incremental
+(`TextDocumentSyncKind.Incremental`) and reparsed by the incremental parser;
+positions are UTF-16 columns, as the protocol defaults to. The message loop
+applies document changes in order; each request runs on the thread pool
+against the snapshot current when it arrived, and `$/cancelRequest` cancels
+it. A compilation is not thread-safe, so whatever binds holds its gate, one
+member at a time.
+
+- Diagnostics for open documents, debounced (250 ms of quiet), bound member by
+  member. Declaration and signature diagnostics carry no file
+  (`GetAllDiagnosticsByFile` says so); they are placed by span and the name
+  their message quotes.
+- Hover (signature, container, doc comment; an expression's type), definition
+  (into a copy of the library file when it lands there), references, rename
+  with `prepareRename` (refused for anything the library or the compiler
+  declares, and for keywords), document symbols, signature help.
+- Completion: members after `.` and `?.` (statics after a type name), the
+  names in scope — locals declared before the caret, parameters, the enclosing
+  types' members, the module, imports, `Sable.Core` — and keywords; module
+  names after `import`.
+- Inlay hints: the type of each `let`/`var` written without one, and the
+  inferred roots — after a function's reference result, `roots(a, b)`, the
+  parameters it may refer into, from root inference's summaries
+  (`SilFunction.ResultRoots`, read from a separate lowering so the server's
+  compilation is not held); and on a local reference, what it refers into
+  (`let q = &p` shows `roots(p)`), worked out in the front end through
+  fields, joins, other references and calls by those summaries. Lowering runs
+  only when the requested range has a function returning a reference or a `&`.
+
+The semantic model grew what an editor needs (`SemanticModel.Tooling.cs`,
+`tests/Sable.Symbols.Tests/ToolingTests.cs`): member models, which bind one
+declaration; speculative member models, which bind a declaration's new text
+against the symbols an older compilation has; `LookupSymbols(position)`
+(the binder records its scope where asked); `GetMembersOf(type)`;
+`GetSymbolAt` and `FindReferences`, type names included (the type binder
+records what each written name resolved to).
+
+**Latency.** A compilation is rebuilt only once the workspace has been quiet,
+with every signature bound before it is used. A completion or signature help
+never waits for one: it binds the member being edited, as it is now, against
+the newest compilation there is. Only a member the newest compilation does not
+have — one being written from scratch — waits for a new compilation; hover,
+references and rename always use one of exactly the current text.
+`tools/Sable.LspBench` writes a 205,180-line project (180 files, nine modules
+importing one another), starts `sable lsp` as a process, and types statements
+into function bodies a key at a time (40–120 ms apart), asking for completion
+after each and pausing so the server rebuilds in the background (two dozen rebuilds
+per run), timed at the client. Release build, macOS arm64, four runs of 831
+completions: p50 1.0–1.7 ms, **p95 5.2–9.4 ms**, p99 10–24 ms, max 15–34 ms;
+after a `.` alone, p95 2.7–12.6 ms. For contrast, a hover just after an edit,
+which waits for a compilation of the whole project, takes 125–170 ms, and the
+first diagnostics come 1.3–1.5 s after start (reading and parsing 205k lines
+included).
+
+Deferred: diagnostics for files that are not open; completion of argument
+labels, implicit members (`.Case` with no receiver) and snippets; references
+to argument labels; root hints when the workspace does not lower to SIL (a
+program with errors, or constructs the lowering does not take yet); code
+actions, formatting through the server (`sable fmt` is its own command),
+semantic tokens, workspace symbols, and watching files the client does not
+report.
+
 ### Exit criteria
 - [ ] Cold build of a 100-package graph < 60 s; warm incremental < 1 s
-- [ ] LSP responds to completion in < 50 ms at p95 on a 200k-line project
+- [x] LSP responds to completion in < 50 ms at p95 on a 200k-line project —
+      p95 5.2–9.4 ms on 205k lines, typing into function bodies while the
+      server rebuilds in the background (`tools/Sable.LspBench`)
 - [ ] A third party publishes a package without talking to the team
 
 ---

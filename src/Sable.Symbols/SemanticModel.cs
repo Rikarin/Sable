@@ -12,7 +12,7 @@ namespace Sable.Symbols;
 ///     the formatter's semantic rules, the linter and the documentation generator
 ///     all read it.
 /// </remarks>
-public sealed class SemanticModel {
+public sealed partial class SemanticModel {
     readonly Compilation _compilation;
     readonly List<Diagnostic> _diagnostics = [];
     readonly Dictionary<SyntaxNode, BoundNode> _bound = [];
@@ -75,17 +75,30 @@ public sealed class SemanticModel {
     }
 
     /// <summary>The symbol an expression refers to, if it refers to one.</summary>
+    /// <remarks>
+    ///     A declaration answers with what it declares; a name in a type's
+    ///     place with the type it resolved to; a call's callee with the
+    ///     function overload resolution chose.
+    /// </remarks>
     public Symbol? GetSymbolOf(SyntaxNode syntax) {
-        if (_compilation.GetDeclaredSymbol(syntax) is { } declared) {
+        if (DeclaredSymbol(syntax) is { } declared) {
             return declared;
         }
 
         EnsureBound();
+        if (_compilation.TypeBinder.ResolvedName(syntax) is { } named) {
+            return named;
+        }
+
         if (!_bound.TryGetValue(syntax, out var node)) {
             return null;
         }
 
-        return node switch {
+        return SymbolOf(node, syntax);
+    }
+
+    Symbol? SymbolOf(BoundNode node, SyntaxNode syntax) =>
+        node switch {
             BoundLocalAccess local => local.Local,
             BoundParameterAccess parameter => parameter.Parameter,
             BoundFieldAccess field => field.Field,
@@ -93,9 +106,29 @@ public sealed class SemanticModel {
             BoundUnionCaseConstruction construction => construction.UnionCase,
             BoundUnionCaseGroup group => group.UnionCase,
             BoundBinaryOperator { Method: { } method } => method,
+            BoundTypeExpression { ReferencedType: NamedTypeSymbol type } => type.OriginalDefinition,
+            BoundTypeExpression { ReferencedType: var type } => type,
+            BoundConversion conversion when ReferenceEquals(conversion.Operand.Syntax, syntax) => SymbolOf(conversion.Operand, syntax),
+            BoundFunctionGroup group => CalleeOf(group, syntax) ?? (group.Candidates.IsEmpty ? null : group.Candidates[0]),
             _ => null,
         };
+
+    /// <summary>The overload a call through a function group chose, when the group is a call's callee.</summary>
+    FunctionSymbol? CalleeOf(BoundFunctionGroup group, SyntaxNode syntax) {
+        // 'f(x)' and 'a.f(x)': the call is bound on the invocation, with the
+        // group's syntax as its callee.
+        var callee = syntax.Parent is MemberAccessExpressionSyntax access && ReferenceEquals(access.Name, syntax) ? access : syntax;
+        return callee.Parent is InvocationExpressionSyntax invocation
+               && ReferenceEquals(invocation.Expression, callee)
+               && _bound.TryGetValue(invocation, out var call)
+               && Unconverted(call) is BoundCall { Function: var function }
+               && group.Candidates.Contains(function)
+            ? function
+            : null;
     }
+
+    static BoundNode Unconverted(BoundNode node) =>
+        node is BoundConversion conversion ? Unconverted(conversion.Operand) : node;
 
     /// <summary>
     ///     What a statement does with the names around it: what it declares,
@@ -207,19 +240,25 @@ public sealed class SemanticModel {
         // base types and whatever extensions added elsewhere.
         _compilation.TypeBinder.ForceAll();
 
-        if (SyntaxTree.Root is not CompilationUnitSyntax unit) {
-            return;
-        }
-
+        SyntaxNode root;
         var scope = _compilation.GetFileScope(SyntaxTree);
-        foreach (var member in unit.Members) {
-            BindMember(member, scope);
+        if (_member is not null) {
+            // A member model binds its one declaration (Tooling).
+            root = _member;
+            BindMember(_member, scope);
+        } else if (SyntaxTree.Root is CompilationUnitSyntax unit) {
+            root = unit;
+            foreach (var member in unit.Members) {
+                BindMember(member, scope);
+            }
+        } else {
+            return;
         }
 
         // Types declared inside bodies exist once those bodies are bound, and
         // their own members can declare more. Document order visits an outer
         // one before anything inside it, so one pass reaches them all.
-        foreach (var statement in unit.DescendantNodes().OfType<DeclarationStatementSyntax>()) {
+        foreach (var statement in root.DescendantNodes().OfType<DeclarationStatementSyntax>()) {
             if (statement.Declaration is FunctionDeclarationSyntax) {
                 continue;
             }
@@ -308,7 +347,7 @@ public sealed class SemanticModel {
         ExpressionSyntax? expressionBody,
         FileScope scope
     ) {
-        if (_compilation.GetDeclaredSymbol(declaration) is not FunctionSymbol function) {
+        if (DeclaredSymbol(declaration) is not FunctionSymbol function) {
             return;
         }
 
@@ -318,7 +357,7 @@ public sealed class SemanticModel {
             return;
         }
 
-        var binder = new Binder(_compilation, scope, function);
+        var binder = NewBinder(scope, function);
 
         _bound[declaration] = body is not null
             ? binder.BindFunctionBody(function, body)
@@ -348,7 +387,7 @@ public sealed class SemanticModel {
                 continue;
             }
 
-            var binder = new Binder(_compilation, scope, function);
+            var binder = NewBinder(scope, function);
             binder.BindInitializer(clause.Value, parameter.Type);
             Collect(binder);
         }
@@ -360,7 +399,7 @@ public sealed class SemanticModel {
             return;
         }
 
-        if (_compilation.GetDeclaredSymbol(declaration) is not FunctionSymbol subscript) {
+        if (DeclaredSymbol(declaration) is not FunctionSymbol subscript) {
             return;
         }
 
@@ -368,7 +407,7 @@ public sealed class SemanticModel {
     }
 
     void BindField(FieldDeclarationSyntax declaration, FileScope scope) {
-        if (_compilation.GetDeclaredSymbol(declaration) is not FieldSymbol field) {
+        if (DeclaredSymbol(declaration) is not FieldSymbol field) {
             return;
         }
 
@@ -408,7 +447,7 @@ public sealed class SemanticModel {
     }
 
     void BindConstant(ConstDeclarationSyntax declaration, FileScope scope) {
-        if (_compilation.GetDeclaredSymbol(declaration) is not FieldSymbol constant) {
+        if (DeclaredSymbol(declaration) is not FieldSymbol constant) {
             return;
         }
 
@@ -473,7 +512,7 @@ public sealed class SemanticModel {
             var returnType = isGetter ? valueType : _compilation.Core.Void;
             function.ReturnTypeResolver = () => returnType;
 
-            var binder = new Binder(_compilation, scope, function);
+            var binder = NewBinder(scope, function);
             _accessors[accessor] = function;
 
             _bound[accessor] = accessor.Body is { } body
@@ -497,7 +536,7 @@ public sealed class SemanticModel {
         TypeSymbol expected,
         FileScope scope
     ) {
-        var binder = new Binder(_compilation, scope, owner);
+        var binder = NewBinder(scope, owner);
         var bound = binder.BindInitializer(value, expected);
         if (owner is FieldSymbol field) {
             _initializers[field] = bound;
@@ -518,6 +557,8 @@ public sealed class SemanticModel {
         foreach (var (syntax, node) in binder.BoundNodes) {
             _bound[syntax] = node;
         }
+
+        CollectScope(binder);
 
         _diagnostics.AddRange(binder.Diagnostics);
     }

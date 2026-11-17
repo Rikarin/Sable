@@ -6,6 +6,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../Sable.CodeGen/Sable.CodeGen.csproj" />
+    <ProjectReference Include="../Sable.LanguageServer/Sable.LanguageServer.csproj" />
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="Sable.CodeGen.Tests" />

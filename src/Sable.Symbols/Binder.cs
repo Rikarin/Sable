@@ -276,6 +276,64 @@ public sealed partial class Binder {
     // -----------------------------------------------------------------------
 
     void PushScope() => _locals.Add(new(StringComparer.Ordinal));
+
+    /// <summary>
+    ///     A position to record the names in scope at, for the language
+    ///     server's completion; negative for none. See <see cref="ScopeAtCapture" />.
+    /// </summary>
+    internal int CapturePosition { get; init; } = -1;
+
+    internal TextSpan? CapturedFor => _capturedFor;
+
+    /// <summary>The node the scope was last recorded for: the innermost one holding the position.</summary>
+    TextSpan? _capturedFor;
+
+    /// <summary>
+    ///     The locals and parameters in scope at <see cref="CapturePosition" />,
+    ///     innermost first and with shadowed names left out, or null when
+    ///     binding never passed it.
+    /// </summary>
+    internal IReadOnlyList<Symbol>? ScopeAtCapture { get; private set; }
+
+    /// <summary>Records the scope as it is on entering a node that holds the capture position.</summary>
+    void CaptureScope(SyntaxNode node) {
+        if (CapturePosition >= 0) {
+            CaptureScopeAt(node.Span);
+        }
+    }
+
+    /// <summary>Records the scope for a position between two statements of a block, or before the first, or after the last.</summary>
+    void CaptureScopeInGap(BlockSyntax block, int start, int end) {
+        if (CapturePosition >= 0 && CapturePosition >= start && CapturePosition <= end) {
+            CaptureScopeAt(block.Span);
+        }
+    }
+
+    void CaptureScopeAt(TextSpan span) {
+        // Ends are inclusive: a name being typed ends at the caret.
+        if (CapturePosition < span.Start || CapturePosition > span.End) {
+            return;
+        }
+
+        // Nodes holding the position nest, so a deeper one is never longer;
+        // one bound later that is longer is an outer one's gap, and loses.
+        if (_capturedFor is { } previous && previous.Length < span.Length) {
+            return;
+        }
+
+        _capturedFor = span;
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var symbols = new List<Symbol>();
+        for (var i = _locals.Count - 1; i >= 0; i--) {
+            foreach (var (name, symbol) in _locals[i]) {
+                if (seen.Add(name)) {
+                    symbols.Add(symbol);
+                }
+            }
+        }
+
+        ScopeAtCapture = symbols;
+    }
     void PopScope() => _locals.RemoveAt(_locals.Count - 1);
 
     void Declare(string name, Symbol symbol) {
@@ -868,6 +926,8 @@ public sealed partial class Binder {
     // -----------------------------------------------------------------------
 
     public BoundStatement BindStatement(StatementSyntax statement) {
+        CaptureScope(statement);
+
         // The budget is per statement, so a long body costs nothing extra and
         // the diagnostic points at the one expression that ran out.
         _steps = 0;
@@ -931,9 +991,14 @@ public sealed partial class Binder {
         PushScope();
 
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+        var gapStart = block.OpenBraceToken.Span.End;
         foreach (var statement in block.Statements) {
+            CaptureScopeInGap(block, gapStart, statement.Span.Start);
             statements.Add(BindStatement(statement));
+            gapStart = statement.Span.End;
         }
+
+        CaptureScopeInGap(block, gapStart, block.CloseBraceToken.IsMissing ? block.Span.End : block.CloseBraceToken.Span.Start);
 
         var locals = _locals[^1].Values.OfType<LocalSymbol>().ToImmutableArray();
         PopScope();
@@ -1049,6 +1114,13 @@ public sealed partial class Binder {
 
         var declared = false;
         foreach (var statement in LocalTypeDeclarations(body)) {
+            // Binding the same body again — the language server binds one
+            // member at a time, and again to see what is in scope — finds
+            // its types declared already.
+            if (_compilation.GetDeclaredSymbol(statement.Declaration) is not null) {
+                continue;
+            }
+
             _compilation.DeclareLocalType(statement.Declaration, function, _scope);
             declared = true;
         }
@@ -1701,6 +1773,8 @@ public sealed partial class Binder {
         ExpressionSyntax expression,
         TypeSymbol? expectedType = null
     ) {
+        CaptureScope(expression);
+
         if (++_steps > _compilation.BindOptions.StepBudget) {
             if (!_budgetSpent) {
                 _budgetSpent = true;

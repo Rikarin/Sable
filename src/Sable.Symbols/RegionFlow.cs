@@ -123,6 +123,15 @@ internal static class RegionFlow
                 {
                     if (capture.Initializer is { } value)
                         Collect(value, declared, read, written, captured, insideClosure);
+
+                    // '[copied = n]' declares a name of its own.
+                    if (capture.CaptureKind == CaptureKind.ByValue
+                        && capture.Symbol is LocalSymbol introduced)
+                    {
+                        declared.Add(introduced);
+                        written.Add(introduced);
+                    }
+
                     captured.Add(capture.Symbol);
                 }
                 Collect(closure.Body, declared, read, written, captured, insideClosure: true);

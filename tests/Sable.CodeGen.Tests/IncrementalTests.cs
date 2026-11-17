@@ -427,6 +427,40 @@ public sealed class IncrementalTests {
         Assert.Equal("whole", built.Kind);
     }
 
+    [Fact]
+    public void WhatAUnitCannotCheckAloneTheWholeProgramDecides() {
+        if (!CanBuild) {
+            return;
+        }
+
+        // Alone, the app's unit cannot see what 'first' returns a reference
+        // into, and must assume either argument; the whole program knows it is 'a'.
+        using var fixture = new PackageFixture();
+        fixture.Package("refs", "refs", "0.1.0", "",
+            ("src/lib.sab", "module Refs\n\npublic fn first(ref a: String, ref b: String) -> ref String {\n    return a\n}\n"));
+        fixture.Package("app", "app", "0.1.0", "[dependencies]\nrefs = { path = \"../refs\" }\n",
+            ("src/main.sab", """
+                module App
+
+                import Sable.IO
+                import Refs
+
+                fn choose(ref a: String) -> ref String {
+                    let local = "local"
+                    return first(a, local)
+                }
+
+                fn main() {
+                    let s = "kept"
+                    print(choose(s))
+                }
+                """));
+        var built = PackageBuilder.Build(fixture.Load("app"), fixture.Environment, new(Timings: true));
+        Assert.True(built is [_], fixture.Errors.ToString());
+        Assert.Contains("compiling the program whole", fixture.Errors.ToString());
+        Assert.Equal(("kept\n", 0), PackageFixture.Execute(built[0].Path));
+    }
+
     // ---- Interface fingerprints ---------------------------------------------
 
     static string Fingerprint(string source) {

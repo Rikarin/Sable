@@ -22,9 +22,19 @@ namespace Sable.Syntax;
 /// </remarks>
 internal sealed class Parser
 {
-    private readonly List<GreenToken> _tokens;
-    private readonly List<int> _positions;
+    private readonly ImmutableArray<GreenToken> _tokens;
+
+    /// <summary>
+    /// Tokens the parser split in place, such as the <c>&gt;&gt;</c> that
+    /// closes two generic argument lists. Splitting is rare, so an overlay
+    /// costs far less than copying the whole stream to make it mutable.
+    /// </summary>
+    private Dictionary<int, GreenToken>? _split;
+
+    /// <summary>Absolute offset of the token at <see cref="_index"/>.</summary>
+    private int _tokenPosition;
     private readonly ParseOptions _options;
+    private readonly IncrementalReuse? _reuse;
     private readonly DiagnosticBag _diagnostics = new();
     private int _index;
 
@@ -76,18 +86,29 @@ internal sealed class Parser
     }
 
     private Parser(SourceText source, ParseOptions options)
+        : this(options,
+               Lexer.TokenizeGreen(source, options, out var lexDiagnostics, out _),
+               lexDiagnostics,
+               reuse: null)
+    {
+    }
+
+    private Parser(
+        ParseOptions options,
+        ImmutableArray<GreenToken> tokens,
+        IReadOnlyList<Diagnostic> diagnostics,
+        IncrementalReuse? reuse)
     {
         _options = options;
-        var tokens = Lexer.Tokenize(source, options, out var lexDiagnostics);
-        _diagnostics.AddRange(lexDiagnostics);
+        _reuse = reuse;
+        _tokens = tokens;
+        _diagnostics.AddRange(diagnostics);
+    }
 
-        _tokens = new List<GreenToken>(tokens.Length);
-        _positions = new List<int>(tokens.Length);
-        foreach (var token in tokens)
-        {
-            _tokens.Add(token.Green!);
-            _positions.Add(token.Position);
-        }
+    private GreenToken TokenAt(int index)
+    {
+        if (_split is not null && _split.TryGetValue(index, out var replaced)) return replaced;
+        return _tokens[index];
     }
 
     public static SyntaxTree ParseExpression(SourceText source, ParseOptions options)
@@ -110,10 +131,27 @@ internal sealed class Parser
 
     public static SyntaxTree ParseCompilationUnit(SourceText source, ParseOptions options)
     {
-        var parser = new Parser(source, options);
+        var tokens = Lexer.TokenizeGreen(
+            source, options, out var diagnostics, out var hasDirectives);
+
+        return ParseCompilationUnitFrom(
+            source, options, tokens, diagnostics, hasDirectives, reuse: null);
+    }
+
+    /// <summary>Parses an already-lexed token stream, optionally reusing old nodes.</summary>
+    internal static SyntaxTree ParseCompilationUnitFrom(
+        SourceText source,
+        ParseOptions options,
+        ImmutableArray<GreenToken> tokens,
+        IReadOnlyList<Diagnostic> diagnostics,
+        bool hasDirectives,
+        IncrementalReuse? reuse)
+    {
+        var parser = new Parser(options, tokens, diagnostics, reuse);
         var unit = parser.ParseCompilationUnit();
+
         return new SyntaxTree(source, unit.CreateRed(null, 0), default,
-            parser._diagnostics.ToList(), options);
+            parser._diagnostics.ToList(), options, tokens, hasDirectives);
     }
 
     /// <summary>
@@ -139,19 +177,23 @@ internal sealed class Parser
     // Token stream
     // -----------------------------------------------------------------------
 
-    private GreenToken Current => _tokens[_index];
+    private GreenToken Current => TokenAt(_index);
     private GreenToken Peek(int offset) =>
-        _tokens[Math.Min(_index + offset, _tokens.Count - 1)];
+        TokenAt(Math.Min(_index + offset, _tokens.Length - 1));
 
     private TextSpan CurrentSpan =>
-        new(_positions[_index] + Current.LeadingTriviaWidth, Current.Text.Length);
+        new(_tokenPosition + Current.LeadingTriviaWidth, Current.Text.Length);
 
     private bool At(SyntaxKind kind) => Current.Kind == kind;
 
     private GreenToken EatToken()
     {
-        var token = _tokens[_index];
-        if (_index < _tokens.Count - 1) _index++;
+        var token = TokenAt(_index);
+        if (_index < _tokens.Length - 1)
+        {
+            _index++;
+            _tokenPosition += token.FullWidth;
+        }
         return AttachSkipped(token);
     }
 
@@ -178,9 +220,13 @@ internal sealed class Parser
     /// <summary>Moves the current token's text into the pending skipped-trivia buffer.</summary>
     private void SkipCurrentToken()
     {
-        var token = _tokens[_index];
+        var token = TokenAt(_index);
         _skipped.Add(new GreenTrivia(SyntaxKind.SkippedTokensTrivia, token.ToFullString()));
-        if (_index < _tokens.Count - 1) _index++;
+        if (_index < _tokens.Length - 1)
+        {
+            _index++;
+            _tokenPosition += token.FullWidth;
+        }
     }
 
     /// <summary>Prepends any pending skipped text to a token's leading trivia.</summary>
@@ -211,12 +257,12 @@ internal sealed class Parser
     /// </remarks>
     private GreenToken SplitLeadingCharacter(SyntaxKind firstKind, SyntaxKind remainderKind)
     {
-        var token = _tokens[_index];
+        var token = TokenAt(_index);
         var first = new GreenToken(firstKind, token.Text[..1], token.Leading, []);
         var remainder = new GreenToken(remainderKind, token.Text[1..], [], token.Trailing);
 
-        _tokens[_index] = remainder;
-        _positions[_index] += token.LeadingTriviaWidth + 1;
+        (_split ??= [])[_index] = remainder;
+        _tokenPosition += token.LeadingTriviaWidth + 1;
         return AttachSkipped(first);
     }
 
@@ -1274,7 +1320,7 @@ internal sealed class Parser
                         return false;   // not plausible as a type argument list
                 }
 
-                if (_index >= _tokens.Count - 1) return false;
+                if (_index >= _tokens.Length - 1) return false;
                 _index++;
             }
         }
@@ -2282,7 +2328,8 @@ internal sealed class Parser
         while (attributes.SlotCount == 0 && AtImportDeclaration())
             imports.Add(ParseImportDeclaration());
 
-        var members = ParseMembers(attributes, ParseMemberDeclaration, SyntaxKind.EndOfFile);
+        var members = ParseMembers(
+            attributes, ParseMemberDeclaration, SyntaxKind.EndOfFile, MemberContext.Declaration);
         var eof = EatToken();
 
         return new CompilationUnitGreen(
@@ -2393,13 +2440,28 @@ internal sealed class Parser
     /// progress. <paramref name="leading"/> carries attributes already read.
     /// </summary>
     private GreenList ParseMembers(
-        GreenList leading, Func<GreenList, GreenNode> parseMember, SyntaxKind terminator)
+        GreenList leading,
+        Func<GreenList, GreenNode> parseMember,
+        SyntaxKind terminator,
+        MemberContext context)
     {
         var items = ImmutableArray.CreateBuilder<GreenNode>();
         var pending = leading;
 
         while (!At(terminator) && !At(SyntaxKind.EndOfFile))
         {
+            // An untouched member from the previous tree can be dropped
+            // straight in: its green node is position-independent.
+            if (pending.SlotCount == 0 && _skipped.Count == 0 && _reuse is not null
+                && _reuse.TryGet(_index, context, out var reused, out var tokenCount)
+                && _index + tokenCount < _tokens.Length)
+            {
+                items.Add(reused);
+                _index += tokenCount;
+                _tokenPosition += reused.FullWidth;
+                continue;
+            }
+
             var before = _index;
             items.Add(parseMember(pending));
             pending = GreenList.Empty;
@@ -2742,8 +2804,8 @@ internal sealed class Parser
     {
         var kind = Current.Kind;
         var header = ParseTypeHeader();
-        var members = ParseMembers(
-            GreenList.Empty, ParseMemberDeclaration, SyntaxKind.CloseBraceToken);
+        var members = ParseMembers(GreenList.Empty, ParseMemberDeclaration,
+            SyntaxKind.CloseBraceToken, MemberContext.Declaration);
         var close = EatToken(SyntaxKind.CloseBraceToken);
 
         return kind switch
@@ -2774,8 +2836,8 @@ internal sealed class Parser
         var whereClause = At(SyntaxKind.WhereKeyword) ? ParseWhereClause() : null;
         var open = EatToken(SyntaxKind.OpenBraceToken);
 
-        var members = ParseMembers(
-            GreenList.Empty, ParseUnionMember, SyntaxKind.CloseBraceToken);
+        var members = ParseMembers(GreenList.Empty, ParseUnionMember,
+            SyntaxKind.CloseBraceToken, MemberContext.Union);
         var close = EatToken(SyntaxKind.CloseBraceToken);
 
         return new UnionDeclarationGreen(attributes, modifiers, keyword, identifier,
@@ -2824,8 +2886,8 @@ internal sealed class Parser
         var baseTypes = At(SyntaxKind.ColonToken) ? ParseBaseTypeList() : null;
         var open = EatToken(SyntaxKind.OpenBraceToken);
 
-        var members = ParseMembers(
-            GreenList.Empty, ParseEnumMember, SyntaxKind.CloseBraceToken);
+        var members = ParseMembers(GreenList.Empty, ParseEnumMember,
+            SyntaxKind.CloseBraceToken, MemberContext.Enum);
         var close = EatToken(SyntaxKind.CloseBraceToken);
 
         return new EnumDeclarationGreen(attributes, modifiers, keyword, identifier,
@@ -2853,8 +2915,8 @@ internal sealed class Parser
         var whereClause = At(SyntaxKind.WhereKeyword) ? ParseWhereClause() : null;
         var open = EatToken(SyntaxKind.OpenBraceToken);
 
-        var members = ParseMembers(
-            GreenList.Empty, ParseMemberDeclaration, SyntaxKind.CloseBraceToken);
+        var members = ParseMembers(GreenList.Empty, ParseMemberDeclaration,
+            SyntaxKind.CloseBraceToken, MemberContext.Declaration);
         var close = EatToken(SyntaxKind.CloseBraceToken);
 
         return new ExtensionDeclarationGreen(attributes, modifiers, keyword, type,

@@ -36,6 +36,46 @@ public sealed class Lexer
         _options = options;
     }
 
+    /// <summary>Creates a lexer positioned mid-file, for incremental re-lexing.</summary>
+    internal Lexer(SourceText source, ParseOptions options, int startPosition)
+    {
+        _source = source;
+        _options = options;
+        _position = startPosition;
+    }
+
+    /// <summary>The offset the next token will be read from.</summary>
+    internal int Position => _position;
+
+    internal IReadOnlyList<Diagnostic> Diagnostics => _diagnostics.ToList();
+
+    /// <summary>
+    /// True when no conditional-compilation region is open, which is the
+    /// condition for the incremental lexer to splice old tokens back in.
+    /// </summary>
+    internal bool IsResyncSafe => _conditionals.Count == 0;
+
+    internal GreenToken LexNextToken() => LexToken();
+
+    /// <summary>
+    /// Reports conditionals left open at end of file. The all-at-once path
+    /// does this inline; the incremental path calls it when it reaches the
+    /// end rather than resynchronising.
+    /// </summary>
+    internal void ReportUnterminatedConditionals()
+    {
+        if (_conditionals.Count == 0) return;
+
+        _diagnostics.Error(ErrorCode.ERR_UnterminatedConditional,
+            new TextSpan(Math.Max(0, _source.Length - 1), Math.Min(1, _source.Length)),
+            $"{_conditionals.Count} conditional-compilation directive(s) "
+            + "were never closed with '#endif'");
+    }
+
+    /// <summary>Applies the newline rule to an already-assembled token run.</summary>
+    internal static void MarkTerminators(Span<GreenToken> tokens) =>
+        MarkStatementTerminators(tokens);
+
     public static ImmutableArray<SyntaxToken> Tokenize(
         SourceText source,
         out IReadOnlyList<Diagnostic> diagnostics)
@@ -54,6 +94,25 @@ public sealed class Lexer
 
     public static ImmutableArray<SyntaxToken> Tokenize(string text, string fileName = "<test>") =>
         Tokenize(new SourceText(text, fileName), out _);
+
+    /// <summary>
+    /// Lexes to green tokens, which is what the parser and the incremental
+    /// path both work on.
+    /// </summary>
+    internal static ImmutableArray<GreenToken> TokenizeGreen(
+        SourceText source,
+        ParseOptions options,
+        out IReadOnlyList<Diagnostic> diagnostics,
+        out bool hasDirectives)
+    {
+        var lexer = new Lexer(source, options);
+        var tokens = lexer.LexAllGreen();
+        diagnostics = lexer._diagnostics.ToList();
+        hasDirectives = lexer._sawDirective;
+        return tokens;
+    }
+
+    private bool _sawDirective;
 
     // -----------------------------------------------------------------------
 
@@ -76,11 +135,37 @@ public sealed class Lexer
     }
 
     private string TextBetween(int start, int end) =>
-        _source.Text[start..end];
+        Intern(_source.Text.AsSpan(start, end - start));
+
+    /// <summary>
+    /// Interns identifier and literal text. Source repeats the same names over
+    /// and over, and reference-equal text is what lets the token cache compare
+    /// cheaply.
+    /// </summary>
+    private readonly Dictionary<string, string> _internTable = new(StringComparer.Ordinal);
+
+    private string Intern(ReadOnlySpan<char> text)
+    {
+        if (text.Length == 0) return string.Empty;
+        if (text.Length > 64) return text.ToString();
+
+        var lookup = _internTable.GetAlternateLookup<ReadOnlySpan<char>>();
+        if (lookup.TryGetValue(text, out var existing)) return existing;
+
+        var created = text.ToString();
+        _internTable[created] = created;
+        return created;
+    }
 
     // -----------------------------------------------------------------------
 
-    private ImmutableArray<SyntaxToken> LexAll()
+    private ImmutableArray<GreenToken> LexAllGreen()
+    {
+        var green = LexAllGreenCore();
+        return [.. green];
+    }
+
+    private List<GreenToken> LexAllGreenCore()
     {
         if (_source.Length > 0 && _source[0] == '﻿')
         {
@@ -105,8 +190,13 @@ public sealed class Lexer
                 + "were never closed with '#endif'");
         }
 
-        MarkStatementTerminators(green);
+        MarkStatementTerminators(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(green));
+        return green;
+    }
 
+    private ImmutableArray<SyntaxToken> LexAll()
+    {
+        var green = LexAllGreenCore();
         var tokens = ImmutableArray.CreateBuilder<SyntaxToken>(green.Count);
         var position = 0;
         foreach (var token in green)
@@ -124,20 +214,29 @@ public sealed class Lexer
         _tokenStart = _position;
         var start = _position;
         var (kind, value, parts) = ScanToken();
-        var text = TextBetween(start, _position);
+
+        // Punctuation and keywords always have the same spelling, so the
+        // canonical string can be shared instead of cut from the source.
+        var canonical = SyntaxFacts.GetText(kind);
+        var text = canonical is not null && canonical.Length == _position - start
+            ? canonical
+            : TextBetween(start, _position);
 
         var trailing = LexTrivia(isTrailing: true);
 
-        return new GreenToken(kind, text, leading, trailing, value, parts);
+        return GreenTokenCache.Create(kind, text, leading, trailing, value, parts);
     }
 
     // -----------------------------------------------------------------------
     // Trivia
     // -----------------------------------------------------------------------
 
+    private readonly List<GreenTrivia> _triviaBuffer = [];
+
     private ImmutableArray<GreenTrivia> LexTrivia(bool isTrailing)
     {
-        var builder = ImmutableArray.CreateBuilder<GreenTrivia>();
+        var builder = _triviaBuffer;
+        builder.Clear();
 
         while (!AtEnd)
         {
@@ -207,11 +306,11 @@ public sealed class Lexer
             break;
         }
 
-        return builder.ToImmutable();
+        return builder.Count == 0 ? [] : [.. builder];
     }
 
     private GreenTrivia Trivia(SyntaxKind kind, int start) =>
-        new(kind, TextBetween(start, _position));
+        GreenTrivia.Create(kind, _source.Text.AsSpan(start, _position - start));
 
     /// <summary>Scans a block comment, honouring nesting per spec/lexical.md §8.</summary>
     private void ScanBlockComment(int start)
@@ -609,6 +708,14 @@ public sealed class Lexer
         var start = _position;
         _position++; // backslash
 
+        // A backslash at end of file has nothing to escape.
+        if (AtEnd)
+        {
+            _diagnostics.Error(ErrorCode.ERR_InvalidEscapeSequence,
+                new TextSpan(start, 1), "a backslash must be followed by an escape character");
+            return;
+        }
+
         switch (Current)
         {
             case '0': builder.Append('\0'); _position++; return;
@@ -942,9 +1049,10 @@ public sealed class Lexer
         _position++; // opening quote
         while (!AtEnd && Current != '"' && Current is not ('\n' or '\r'))
         {
-            if (Current == '\\') _position += 2; else _position++;
+            _position += Current == '\\' ? 2 : 1;
         }
-        if (Current == '"') _position++;
+        _position = Math.Min(_position, _source.Length);
+        if (!AtEnd && Current == '"') _position++;
     }
 
     private void SkipNestedChar()
@@ -952,9 +1060,10 @@ public sealed class Lexer
         _position++;
         while (!AtEnd && Current != '\'' && Current is not ('\n' or '\r'))
         {
-            if (Current == '\\') _position += 2; else _position++;
+            _position += Current == '\\' ? 2 : 1;
         }
-        if (Current == '\'') _position++;
+        _position = Math.Min(_position, _source.Length);
+        if (!AtEnd && Current == '\'') _position++;
     }
 
     private static void FlushLiteral(
@@ -1098,11 +1207,11 @@ public sealed class Lexer
     // Statement terminators — spec/lexical.md §4
     // -----------------------------------------------------------------------
 
-    private static void MarkStatementTerminators(List<GreenToken> tokens)
+    private static void MarkStatementTerminators(Span<GreenToken> tokens)
     {
         var depth = 0;
 
-        for (var i = 0; i < tokens.Count; i++)
+        for (var i = 0; i < tokens.Length; i++)
         {
             var token = tokens[i];
 
@@ -1121,7 +1230,7 @@ public sealed class Lexer
                     continue;
             }
 
-            if (i + 1 >= tokens.Count) continue;
+            if (i + 1 >= tokens.Length) continue;
 
             var next = tokens[i + 1];
             var separatedByNewLine = HasNewLine(token.Trailing) || HasNewLine(next.Leading);
@@ -1147,7 +1256,7 @@ public sealed class Lexer
             tokens[i] = token.WithTerminatesStatement(true);
         }
 
-        if (tokens.Count > 0) tokens[^1] = tokens[^1].WithTerminatesStatement(true);
+        if (tokens.Length > 0) tokens[^1] = tokens[^1].WithTerminatesStatement(true);
     }
 
     private static bool HasNewLine(ImmutableArray<GreenTrivia> trivia)
@@ -1219,7 +1328,7 @@ public sealed class Lexer
     }
 
     /// <summary>Consumes a directive line and applies it to the conditional stack.</summary>
-    private void ScanDirective(ImmutableArray<GreenTrivia>.Builder builder)
+    private void ScanDirective(List<GreenTrivia> builder)
     {
         var start = _position;
         _position++; // '#'
@@ -1235,6 +1344,7 @@ public sealed class Lexer
         var span = new TextSpan(start, _position - start);
         ApplyDirective(name, argument, span);
 
+        _sawDirective = true;
         builder.Add(Trivia(SyntaxKind.DirectiveTrivia, start));
     }
 

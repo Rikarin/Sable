@@ -1,4 +1,6 @@
+using System.Collections.Immutable;
 using System.Text;
+using Sable.Syntax.Green;
 
 namespace Sable.Syntax;
 
@@ -31,18 +33,77 @@ public sealed class SyntaxTree
             ? unit.EndOfFileToken
             : _trailingEndOfFile;
 
+    /// <summary>
+    /// The token stream this tree was built from, kept so that an edit can
+    /// splice rather than re-lex.
+    /// </summary>
+    internal ImmutableArray<GreenToken> Tokens { get; }
+
+    /// <summary>
+    /// True when the file uses conditional compilation, which makes the lexer
+    /// stateful across tokens and so rules out splicing.
+    /// </summary>
+    internal bool HasDirectives { get; }
+
     internal SyntaxTree(
         SourceText text,
         SyntaxNode root,
         SyntaxToken endOfFileToken,
         IReadOnlyList<Diagnostic> diagnostics,
-        ParseOptions options)
+        ParseOptions options,
+        ImmutableArray<GreenToken> tokens = default,
+        bool hasDirectives = false)
     {
         Text = text;
         Root = root;
         _trailingEndOfFile = endOfFileToken;
-        Diagnostics = diagnostics;
         Options = options;
+
+        // Sorted so that a full parse and an incremental one, which collect
+        // diagnostics in different orders, report the same sequence.
+        Diagnostics = [.. diagnostics
+            .OrderBy(d => d.Span.Start)
+            .ThenBy(d => d.Span.Length)
+            .ThenBy(d => (int)d.Code)];
+        Tokens = tokens.IsDefault ? [] : tokens;
+        HasDirectives = hasDirectives;
+    }
+
+    /// <summary>
+    /// Applies an edit, reusing everything the edit did not touch.
+    /// </summary>
+    /// <remarks>
+    /// Tokens on both sides of the edit are spliced from the old stream, and
+    /// whole members that survive are dropped in as the very same green nodes.
+    /// The result is the tree a full parse would have produced; only the work
+    /// differs.
+    /// </remarks>
+    public SyntaxTree WithChange(TextChange change)
+    {
+        var newText = Text.WithChange(change);
+
+        // Only a compilation unit keeps the bookkeeping an edit needs.
+        if (Tokens.IsEmpty || Root is not CompilationUnitSyntax)
+            return Parse(newText, Options);
+
+        var lexResult = IncrementalLexer.Lex(
+            newText, Options, Tokens, Diagnostics, HasDirectives, change);
+
+        var reuse = IncrementalReuse.Build(Root.Green, Tokens, lexResult);
+
+        // Conservative: an added '#' may have introduced a directive.
+        var hasDirectives = HasDirectives || change.NewText.Contains('#');
+
+        return Parser.ParseCompilationUnitFrom(
+            newText, Options, lexResult.Tokens, lexResult.Diagnostics, hasDirectives, reuse);
+    }
+
+    /// <summary>Applies several edits in order.</summary>
+    public SyntaxTree WithChanges(IEnumerable<TextChange> changes)
+    {
+        var tree = this;
+        foreach (var change in changes) tree = tree.WithChange(change);
+        return tree;
     }
 
     public bool HasErrors

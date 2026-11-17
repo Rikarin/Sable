@@ -15,6 +15,13 @@ public abstract class SyntaxNode
 {
     internal GreenNode Green { get; }
 
+    /// <summary>
+    /// The underlying green node, exposed for identity checks: two red nodes
+    /// over the same green node are the same syntax, which is how incremental
+    /// reuse is observed.
+    /// </summary>
+    public object GreenIdentity => Green;
+
     /// <summary>The containing node, or null for the root.</summary>
     public SyntaxNode? Parent { get; }
 

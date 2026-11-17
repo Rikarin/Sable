@@ -264,8 +264,33 @@ public static class SyntaxFacts
         _ => false,
     };
 
+    /// <summary>
+    /// Canonical text by kind, built once. The lexer asks for this on every
+    /// token, so it must not be a search.
+    /// </summary>
+    private static readonly string?[] CanonicalText = BuildCanonicalText();
+
+    private static string?[] BuildCanonicalText()
+    {
+        var max = 0;
+        foreach (SyntaxKind kind in Enum.GetValues<SyntaxKind>())
+            if ((int)kind > max) max = (int)kind;
+
+        var table = new string?[max + 1];
+        foreach (SyntaxKind kind in Enum.GetValues<SyntaxKind>())
+            table[(int)kind] = ComputeText(kind);
+
+        return table;
+    }
+
     /// <summary>The canonical source text of a fixed-text token, or null.</summary>
-    public static string? GetText(SyntaxKind kind) => kind switch
+    public static string? GetText(SyntaxKind kind)
+    {
+        var index = (int)kind;
+        return (uint)index < (uint)CanonicalText.Length ? CanonicalText[index] : null;
+    }
+
+    private static string? ComputeText(SyntaxKind kind) => kind switch
     {
         SyntaxKind.OpenParenToken => "(",
         SyntaxKind.CloseParenToken => ")",

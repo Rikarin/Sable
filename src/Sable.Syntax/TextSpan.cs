@@ -32,7 +32,7 @@ public readonly record struct LinePosition(int Line, int Column)
 /// </summary>
 public sealed class SourceText
 {
-    private readonly int[] _lineStarts;
+    private int[]? _lineStarts;
 
     public string Text { get; }
     public string FileName { get; }
@@ -41,12 +41,31 @@ public sealed class SourceText
     {
         Text = text ?? throw new ArgumentNullException(nameof(text));
         FileName = fileName;
-        _lineStarts = ComputeLineStarts(text);
     }
+
+    /// <summary>
+    /// The line index, built on first use. An incremental reparse never needs
+    /// it, and scanning a quarter-megabyte file to build it would cost more
+    /// than the reparse itself.
+    /// </summary>
+    private int[] LineStarts => _lineStarts ??= ComputeLineStarts(Text);
 
     public int Length => Text.Length;
     public char this[int index] => Text[index];
-    public int LineCount => _lineStarts.Length;
+    public int LineCount => LineStarts.Length;
+
+    /// <summary>Applies an edit, returning the resulting text.</summary>
+    public SourceText WithChange(TextChange change)
+    {
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(change.Span.End, Text.Length);
+
+        var updated = string.Concat(
+            Text.AsSpan(0, change.Span.Start),
+            change.NewText,
+            Text.AsSpan(change.Span.End));
+
+        return new SourceText(updated, FileName);
+    }
 
     public ReadOnlySpan<char> Slice(TextSpan span) => Text.AsSpan(span.Start, span.Length);
     public string ToString(TextSpan span) => Text.Substring(span.Start, span.Length);
@@ -74,10 +93,11 @@ public sealed class SourceText
     public LinePosition GetLinePosition(int position)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(position);
-        var index = Array.BinarySearch(_lineStarts, position);
+        var lineStarts = LineStarts;
+        var index = Array.BinarySearch(lineStarts, position);
         if (index < 0) index = ~index - 1;
         if (index < 0) index = 0;
-        return new LinePosition(index + 1, position - _lineStarts[index] + 1);
+        return new LinePosition(index + 1, position - lineStarts[index] + 1);
     }
 
     /// <summary>Returns the text of a one-based line, without its terminator.</summary>
@@ -85,8 +105,9 @@ public sealed class SourceText
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(line, 1);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(line, LineCount);
-        var start = _lineStarts[line - 1];
-        var end = line < LineCount ? _lineStarts[line] : Text.Length;
+        var lineStarts = LineStarts;
+        var start = lineStarts[line - 1];
+        var end = line < lineStarts.Length ? lineStarts[line] : Text.Length;
         while (end > start && (Text[end - 1] == '\n' || Text[end - 1] == '\r')) end--;
         return Text[start..end];
     }

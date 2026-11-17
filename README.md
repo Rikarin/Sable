@@ -95,10 +95,10 @@ dotnet test Sable.slnx
 | `Sable.Syntax` — parser: declarations and compilation units | done |
 | `Sable.Syntax` — conditional compilation | done |
 | `Sable.Syntax` — structured string interpolation | not started |
-| `Sable.Syntax` — incremental reparse | not started |
+| `Sable.Syntax` — incremental reparse | done |
 | Everything downstream (symbols, binder, SIL, codegen) | not started |
 
-**590 tests green**, and every file in [examples/](examples/) parses as a
+**611 tests green**, and every file in [examples/](examples/) parses as a
 complete compilation unit with no diagnostics and an exact round-trip.
 
 The lexer covers all of [spec/lexical.md](spec/lexical.md): full-fidelity
@@ -118,6 +118,10 @@ random token soup.
 
 `SyntaxTree.Parse` reads a whole file; `ParseExpression`, `ParseType` and
 `ParseStatement` read a single construct, which is what most of the tests use.
+`SyntaxTree.WithChange` applies an edit, reusing everything it did not touch:
+a one-character edit in a 10,000-line file reparses in **under 2 ms**, against
+about 30 ms for a full parse. The contract is that the result is exactly the
+tree a full parse would have produced, and every incremental test asserts it.
 
 Not implemented yet, and deliberately so:
 

@@ -1192,6 +1192,76 @@ Full design in [05-toolchain.md](05-toolchain.md).
   (docs/06 lists them under Sable.Testing); test-only files excluded from
   ordinary package builds (with package mode).
 
+### Packages, as implemented
+
+In `src/Sable.Driver/Packages/`, with a command per file under `Commands/`.
+
+- **Manifest.** A TOML 1.0 reader (tables, arrays of tables, inline tables,
+  dotted and quoted keys, every string and integer form, floats, booleans,
+  arrays, comments; dates kept as text) whose errors carry file, line and
+  column. `sable.toml` is read into a `Manifest` — `[package]`, `[lib]`,
+  `[[bin]]`, the three dependency tables, `[features]`, `[profile.dev]` and
+  `[profile.release]`, `[workspace]`, `[build]`, `[registry] path` — and
+  every validation error names the file, the line and the key. Profiles act
+  on `opt-level`, `debug`, `exclusivity` and `leak-check` (`sable run` sets
+  `SABLE_CHECK_LEAKS`); `lto`, `codegen-units`, `panic`, `strip` and
+  `arc-checks` are recorded only, and `overflow-checks = false` is warned
+  about, since arithmetic is always checked.
+- **Packages of many files.** A package is every `.sab` under `src/`:
+  `src/main.sab` (or `[[bin]]`, or `src/bin/*.sab`) is a binary's entry, the
+  rest is the library. A binary is compiled with its package's library and
+  every dependency's, each file parsed with its own package's features (so
+  `#if feature(x)` works). `Pipeline.Compile` takes many trees, and reports
+  each error against its own file. Output goes to `target/dev/` or
+  `target/release/`.
+- **Commands.** `new`, `init`, `build` and `run` (no file: the package in or
+  above the current directory; a `.sab` argument keeps the single-file
+  behaviour), `check` (front end only), `clean`, `add` (registry or
+  `--path`, `--dev`; the manifest is edited as text so comments survive, and
+  an edit that does not resolve is undone), `remove`, `update [pkg]`,
+  `tree`, `publish [--dry-run] [--allow-dirty]`, `yank [--undo]`, `vendor`.
+- **Resolution.** Cargo's requirement syntax (`1.2` = `^1.2`, `~`, `=`,
+  comparisons, wildcards, comma-joined) over a version-set algebra; a
+  requirement's upper bound excludes the bound's pre-releases, and a
+  pre-release is chosen only when a requirement names one. PubGrub with
+  unit propagation, conflict-driven learning and pub's derivation-tree
+  explanations (numbered lines, "which depends on", "depends on both"),
+  plus a note when a failure comes from two major versions of one package.
+  Features are packages of their own (`name[feature]` depends on its
+  package at the same version and on what the feature turns on, `dep:`
+  included), so the resolver unifies them across the graph.
+- **Lock file.** `sable.lock`, written deterministically (sorted, no times,
+  same bytes for the same resolution), holds each package's version, source
+  and dependencies, and each registry package's sha256. It resolves with
+  every feature of every member, so feature flags do not churn it; builds
+  prefer its versions, `update` re-resolves, `--locked` refuses to change
+  it, and a checksum that disagrees with the registry is an error.
+- **Workspaces.** `[workspace] members` (with `*` globs) and `exclude`;
+  members share one lock and one `target/` at the root; a command run in a
+  member works on it, at the root on all of them, `-p` picks one. Path
+  dependencies resolve transitively.
+- **Registry.** A directory (`$SABLE_REGISTRY`, else `~/.sable/registry`,
+  else `[registry] path`): `index/<name>.json` and `blobs/<sha256>.tar`.
+  Archives are deterministic ustar; a version is immutable once published;
+  yanking hides a version from new resolutions but not from a lock that has
+  it. Each entry is signed with ECDSA P-256 (key at `~/.sable/key`, made on
+  first publish, mode 0600); the first publisher's key owns the package, and
+  fetching verifies the owner, the signature and the checksum. `publish`
+  type-checks first, refuses path-only dependencies and a dirty git tree,
+  and `--dry-run` lists every file, its size and the checksum. Fetched
+  packages are unpacked into `~/.sable/cache`; `vendor` copies them into
+  `vendor/`, which builds read first; with the cache or `vendor/` holding
+  what the lock names, nothing reads the registry.
+
+Deferred: build scripts (`[build]` is read and validated, and a build warns
+that it is not run — the capability sandbox needs runtime support); git
+dependencies (refused with an error); weak `dep?/feature` features (accepted,
+not acted on); `[build-dependencies]` are resolved but nothing uses them;
+`publish` checks neither for a tag nor for passing tests; `org/name`
+packages are accepted but unprefixed names are not reserved; module names
+are not namespaced by package, so two packages declaring the same module
+merge; the cache has no garbage collection; there is no network registry.
+
 ### Exit criteria
 - [ ] Cold build of a 100-package graph < 60 s; warm incremental < 1 s
 - [ ] LSP responds to completion in < 50 ms at p95 on a 200k-line project

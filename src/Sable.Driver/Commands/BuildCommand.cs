@@ -14,7 +14,14 @@ public class BuildCommand : Command {
     public override string Summary => "compile to a native executable";
 
     public override string Usage => """
-        usage: sable build <file.sab> [-o <output>] [--emit sil|llvm-ir] [-O0] [-g] [--exclusivity=checked|unchecked]
+        usage: sable build [--release] [--features <a,b>] [-p <package>] [--bin <name>]
+               sable build <file.sab> [-o <output>] [--emit sil|llvm-ir] [-O0] [-g] [--exclusivity=checked|unchecked]
+
+        Without a file, builds the package in this directory or the nearest above it (sable.toml).
+
+        """ + PackageCommand.BuildOptions + """
+
+        With a file, builds just that file:
 
           -o <output>        the executable's name (default: the file's)
           --emit sil         print the verified SIL instead of building
@@ -68,6 +75,10 @@ public class BuildCommand : Command {
     }
 
     public override int Run(IReadOnlyList<string> arguments) {
+        if (PackageCommand.IsPackageMode(arguments)) {
+            return PackageCommand.BuildPackage(arguments, Usage);
+        }
+
         if (Parse(arguments) is not { } options) {
             return BadUsage();
         }
@@ -149,7 +160,10 @@ public sealed class RunCommand : BuildCommand {
     public override string Summary => "compile and run, exiting with the program's exit code";
 
     public override string Usage => """
-        usage: sable run <file.sab> [-O0] [-g] [--exclusivity=checked|unchecked] [-- <arguments>]
+        usage: sable run [--release] [--features <a,b>] [-p <package>] [--bin <name>] [-- <arguments>]
+               sable run <file.sab> [-O0] [-g] [--exclusivity=checked|unchecked] [-- <arguments>]
+
+        Without a file, builds and runs the package's binary (see 'sable build --help').
 
           what follows '--' is passed to the program
         """;
@@ -157,6 +171,10 @@ public sealed class RunCommand : BuildCommand {
     protected override bool TakesProgramArguments => true;
 
     public override int Run(IReadOnlyList<string> arguments) {
+        if (PackageCommand.IsPackageMode(arguments)) {
+            return PackageCommand.RunPackage(arguments, Usage);
+        }
+
         if (Parse(arguments) is not { } options) {
             return BadUsage();
         }

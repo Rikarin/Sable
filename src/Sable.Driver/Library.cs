@@ -45,10 +45,13 @@ public static class Library {
     ///     transitively. The core is not among them: every compilation has it
     ///     already (<see cref="CoreLibrary" />).
     /// </summary>
-    public static IReadOnlyList<SyntaxTree> For(SyntaxTree program) {
+    public static IReadOnlyList<SyntaxTree> For(SyntaxTree program) => For([program]);
+
+    /// <summary>The library's trees a program of many files needs.</summary>
+    public static IReadOnlyList<SyntaxTree> For(IReadOnlyList<SyntaxTree> program) {
         var needed = new List<SyntaxTree>();
         var seen = new HashSet<string>(StringComparer.Ordinal) { Core };
-        var pending = new Queue<string>(ImportsOf(program));
+        var pending = new Queue<string>(program.SelectMany(ImportsOf));
         while (pending.TryDequeue(out var module)) {
             if (!seen.Add(module) || !Modules.Value.TryGetValue(module, out var files)) {
                 continue;

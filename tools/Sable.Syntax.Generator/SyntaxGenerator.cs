@@ -124,7 +124,8 @@ public static partial class SyntaxGenerator {
         }
     }
 
-    [GeneratedRegex(@"^\s{4}(\w+) = \d+,", RegexOptions.Multiline)]
+    // The comma is optional: a formatter may drop it after the last member.
+    [GeneratedRegex(@"^\s{4}(\w+) = \d+,?", RegexOptions.Multiline)]
     private static partial Regex KindMemberRegex();
 
     // -----------------------------------------------------------------------

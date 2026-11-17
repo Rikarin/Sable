@@ -281,7 +281,14 @@ sealed class GraphSource(Workspace workspace, IReadOnlyDictionary<string, LocalP
         return open < 0 ? (id, null) : (id[..open], id[(open + 1)..^1]);
     }
 
-    public string Display(string package) => package == PackageGraph.WorkspaceRoot ? "the workspace" : package;
+    /// <summary>
+    ///     A package as an explanation names it. Depending on <c>x[default]</c>
+    ///     at some versions is depending on <c>x</c> at them, so it is called <c>x</c>.
+    /// </summary>
+    public string Display(string package) =>
+        package == PackageGraph.WorkspaceRoot ? "the workspace"
+        : package.EndsWith("[default]", StringComparison.Ordinal) ? package[..^"[default]".Length]
+        : package;
 
     IReadOnlyList<IndexEntry> Entries(string name) {
         if (!_entries.TryGetValue(name, out var entries)) {
@@ -430,7 +437,12 @@ sealed class GraphSource(Workspace workspace, IReadOnlyDictionary<string, LocalP
             if (locals.TryGetValue(name, out var local)) {
                 packages.Add(new(name, version, $"path+{workspace.Relative(local.Directory)}", null, dependencies));
             } else {
-                var checksum = Entries(name).FirstOrDefault(e => e.Version == version)?.Checksum ?? Locked(name)?.Checksum;
+                var lockedChecksum = Locked(name) is { } held && held.Version == version ? held.Checksum : null;
+                var checksum = Entries(name).FirstOrDefault(e => e.Version == version)?.Checksum ?? lockedChecksum;
+                if (lockedChecksum is not null && checksum != lockedChecksum) {
+                    throw new RegistryException($"{name} {version} in the registry has checksum {checksum}, but {Workspace.LockName} has {lockedChecksum}: the registry has been tampered with, or the lock file has");
+                }
+
                 packages.Add(new(name, version, "registry", checksum, dependencies));
             }
         }

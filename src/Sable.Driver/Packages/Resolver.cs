@@ -359,10 +359,6 @@ public sealed class Resolver {
             var range = package == _root
                 ? VersionSet.Exactly(version)
                 : VersionSet.Between(low == 0 ? null : all[low], low != 0, high == all.Count - 1 ? null : all[high + 1], false);
-            if (low == index && high == index) {
-                range = VersionSet.Exactly(version);
-            }
-
             yield return new([new(package, range, true), new(dependency, requirement.Set, false)], IncompatibilityKind.Dependency);
         }
     }
@@ -538,12 +534,12 @@ public sealed class Resolver {
         /// </summary>
         string? MajorVersionNote() {
             var external = _derivations.Keys.Where(static i => i.Kind == IncompatibilityKind.Dependency).ToList();
-            foreach (var group in external.GroupBy(static i => i.Terms[1].Package)) {
+            foreach (var group in external.GroupBy(i => resolver.Display(i.Terms[1].Package))) {
                 var sets = group.Select(static i => i.Terms[1].Set).ToList();
                 foreach (var a in sets) {
                     foreach (var b in sets) {
                         if (a.IsDisjointFrom(b) && a.Intervals is [{ Lower: { } x }, ..] && b.Intervals is [{ Lower: { } y }, ..] && x.Major < y.Major) {
-                            return $"note: a dependency graph holds one major version of each package, so {resolver.Display(group.Key)} {a} and {resolver.Display(group.Key)} {b} cannot both be used (docs/05 §5.3)";
+                            return $"note: a dependency graph holds one major version of each package, so {group.Key} {a} and {group.Key} {b} cannot both be used (docs/05 §5.3)";
                         }
                     }
                 }

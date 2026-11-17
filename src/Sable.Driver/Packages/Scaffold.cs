@@ -147,8 +147,10 @@ public static partial class ManifestEditor {
             if (existing >= 0) {
                 lines[existing] = entry;
             } else {
+                // After the table's last entry: blank lines and the comments
+                // before the next header belong to what follows.
                 var last = end - 1;
-                while (last > header && lines[last].Trim().Length == 0) {
+                while (last > header && (lines[last].Trim().Length == 0 || lines[last].TrimStart().StartsWith('#'))) {
                     last--;
                 }
 

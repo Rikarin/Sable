@@ -265,6 +265,60 @@ public sealed class CollectionLibraryTests {
         );
 
     /// <summary>
+    ///     The merge takes from the left run on a tie, without a branch: a
+    ///     thousand values with ten keys stay in their first order within a key
+    ///     through every pass, Ints and Strings both — the Strings counted out
+    ///     and back by the leak check.
+    /// </summary>
+    [Fact]
+    public void SortStaysStableThroughEveryMergePass() =>
+        Assert.Equal(
+            "true true 1000\ntrue true 1000\n",
+            AssertAgree("""
+                module P
+                import Sable.Collections
+                @main
+                fn main() {
+                    var keyed: Int[>..] = []
+                    var tagged: String[>..] = []
+                    var x = 11
+                    var i = 0
+                    while i < 1000 {
+                        x = (x * 1103515245 + 12345) % 2147483648
+                        keyed.append(x % 10 * 10000 + i)
+                        tagged.append("\(x % 10)\(1000 + i)")
+                        i = i + 1
+                    }
+
+                    sort(&keyed, by: (a: Int, b: Int) => a / 10000 < b / 10000)
+                    var ordered = true
+                    var stable = true
+                    i = 1
+                    while i < keyed.count {
+                        if keyed[i] / 10000 < keyed[i - 1] / 10000 { ordered = false }
+                        if keyed[i] / 10000 == keyed[i - 1] / 10000 && keyed[i] < keyed[i - 1] { stable = false }
+                        i = i + 1
+                    }
+                    print("\(ordered) \(stable) \(keyed.count)")
+
+                    // The key is the first digit; the four after it, the first index.
+                    let byKey = sorted(tagged, by: (a: String, b: String) => a.slice(from: 0, to: 1) < b.slice(from: 0, to: 1))
+                    ordered = true
+                    stable = true
+                    i = 1
+                    while i < byKey.count {
+                        let here = byKey[i]
+                        let before = byKey[i - 1]
+                        if here.slice(from: 0, to: 1) < before.slice(from: 0, to: 1) { ordered = false }
+                        if here.slice(from: 0, to: 1) == before.slice(from: 0, to: 1) && here < before { stable = false }
+                        i = i + 1
+                    }
+                    print("\(ordered) \(stable) \(byKey.count)")
+                }
+                """).Stdout
+        );
+
+    /// <summary>
     ///     Growth with removals in between, keys that differ only above bit 31,
     ///     and long string keys — which overflowed the hash written in Sable.
     /// </summary>

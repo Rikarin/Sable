@@ -87,6 +87,50 @@ public sealed class PassTests {
         Assert.Equal(1, Count<AllocStackInst>(module));
     }
 
+    /// <summary>
+    ///     An array read whose index is chosen by '?:' is borrowed across the
+    ///     choice, not copied — unless something on the way can write it, as
+    ///     a call given the array inout can.
+    /// </summary>
+    [Fact]
+    public void AnElementReadAcrossAChoiceBorrowsTheArray() {
+        var module = Lowered(
+            """
+            fn grow(_ values: inout Int[>..]) -> Int {
+                values.append(40)
+                return 0
+            }
+            fn pick(_ c: Bool, _ i: Int, _ j: Int) -> Int {
+                var values: Int[>..] = [10, 20, 30]
+                values[0] = 5
+                return values[c ? i : j]
+            }
+            fn picked(_ c: Bool, _ j: Int) -> Int {
+                var values: Int[>..] = [10, 20, 30]
+                values[0] = 5
+                let old = values
+                return values[c ? grow(&values) : j] + old.count
+            }
+            """
+        );
+
+        SilPassManager.Run(module, SilPassManager.Default);
+
+        static int Copies(SilFunction function) =>
+            function.Blocks.Sum(static b => b.Instructions.Count(static i => i is LoadInst { Kind: LoadKind.Copy } or CopyValueInst));
+
+        var pick = module.Find("M.pick")!;
+        Assert.Equal(0, Copies(pick));
+        Assert.NotEmpty(pick.Blocks.SelectMany(static b => b.Instructions).OfType<LoadBorrowInst>());
+        Assert.Equal(5L, new SilInterpreter(module).Run("M.pick", true, 0L, 2L));
+        Assert.Equal(30L, new SilInterpreter(module).Run("M.pick", false, 0L, 2L));
+
+        // The array is read before 'grow' appends to it, and the read is of it as it was.
+        Assert.NotEqual(0, Copies(module.Find("M.picked")!));
+        Assert.Equal(8L, new SilInterpreter(module).Run("M.picked", true, 2L));
+        Assert.Equal(33L, new SilInterpreter(module).Run("M.picked", false, 2L));
+    }
+
     sealed class Vandal : ISilPass {
         public string Name => "vandal";
 

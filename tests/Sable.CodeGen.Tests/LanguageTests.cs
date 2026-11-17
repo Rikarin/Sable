@@ -444,6 +444,52 @@ public sealed class LanguageTests {
         );
 
     /// <summary>
+    ///     Strings of every length up to twenty, each a prefix of the next or
+    ///     differing from it at one byte — around the eight-byte words the
+    ///     runtime compares by — and some beyond ASCII, which order by scalar:
+    ///     every pair compared, natively as interpreted.
+    /// </summary>
+    [Fact]
+    public void StringsOrderByteByByteAtEveryLength() {
+        const string Letters = "abcdefghijklmnopqrstu";
+        List<string> words = ["é", "ü", "😀", "aé", "a😀b", "ab\\u{0}"];
+        for (var length = 0; length <= 20; length++) {
+            words.Add(Letters[..length]);
+            foreach (var at in new[] { 0, length / 2, length - 1 }.Where(i => i >= 0 && i < length).Distinct()) {
+                var chars = Letters[..length].ToCharArray();
+                chars[at] = (char)(chars[at] - 1);
+                words.Add(new(chars));
+            }
+        }
+
+        var expected = new System.Text.StringBuilder();
+        var scalars = words.Select(static w => w.Replace("\\u{0}", "\0", StringComparison.Ordinal)).ToList();
+        foreach (var a in scalars) {
+            foreach (var b in scalars) {
+                var order = string.CompareOrdinal(a, b);
+                expected.Append(order < 0 ? '<' : order > 0 ? '>' : '=');
+            }
+
+            expected.Append('\n');
+        }
+
+        Prints(
+            expected.ToString(),
+            "",
+            $$"""
+                let words: String[>..] = [{{string.Join(", ", words.Select(static w => $"\"{w}\""))}}]
+                for a in words {
+                    var line = ""
+                    for b in words {
+                        line = line + (a < b ? "<" : a > b ? ">" : "=")
+                    }
+                    print(line)
+                }
+            """
+        );
+    }
+
+    /// <summary>
     ///     A default is filled in where the call leaves it off, bound where it
     ///     was declared; a label may pass over defaults to the parameter it names.
     /// </summary>

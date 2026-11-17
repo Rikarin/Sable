@@ -924,27 +924,37 @@ which leans towards .NET on purpose. Apple M1 Max, macOS, 17 Nov 2026:
 
 | benchmark  | .NET ms | Sable ms | ratio |
 |------------|--------:|---------:|------:|
-| list       |   121.4 |    138.1 |  1.14 |
-| map-int    |   130.9 |    145.9 |  1.11 |
-| map-string |    48.4 |     52.7 |  1.09 |
-| sort       |   108.8 |    137.2 |  1.26 |
-| string     |    53.2 |     52.6 |  0.99 |
+| list       |   123.3 |    141.5 |  1.15 |
+| map-int    |   133.7 |    147.2 |  1.10 |
+| map-string |    50.0 |     51.1 |  1.02 |
+| sort       |   109.7 |    112.6 |  1.03 |
+| string     |    56.2 |     53.0 |  0.94 |
 
-The .NET side varies by up to 15% from run to run on `string` and
-`map-string` (46–60 ms); the Sable side by a few percent. Before this work
-`sort` was 4.6 times .NET (a merge sort that made two arrays a level),
+Measured on a busy machine (load average 11–30, other builds running); an
+earlier run the same evening gave the same ratios within 0.03. The .NET side
+varies by up to 15% from run to run on `string` and `map-string` (46–60 ms);
+the Sable side by a few percent, so `list` sits on the line, 1.14–1.15.
+Before this work `sort` was 4.6 times .NET (a merge sort that made two arrays a level),
 `string` 2.7 times, and `map-string` trapped: the Sable-written string hash
 overflowed past a dozen bytes. What closed the gap, by cause:
 
 - **Library.** `HashMap` is one array of entries (key, value, and the 31-bit
   tag that grows the table without rehashing) under a power-of-two table of
   index-and-tag slots, mixed with a xorshift since Sable has no wrapping
-  multiply; the sort is bottom-up over one scratch array.
+  multiply; the sort is bottom-up over one scratch array, and its merge
+  has no branch on the comparison: it moves `source[takeRight ? y : x]` and
+  steps both indices by the comparison's 0 or 1, which LLVM makes conditional
+  selects (a random merge mispredicts every other step otherwise). A tie
+  takes from the left, so the sort stays stable — no unstable variant was
+  needed to come within 15% of `List.Sort`'s introsort.
 - **Runtime.** A size-class allocator for objects and element buffers up to
   256 bytes (malloc and free were most of the string benchmark), and the
   large buffer freed last kept for the next (the system otherwise maps and
   zeroes it afresh); string hashing and comparison in C
-  (`Runtime.hashString`, `Runtime.compareStrings`); integers written without
+  (`Runtime.hashString`, `Runtime.compareStrings`), the comparison eight
+  bytes at a time as big-endian words — the last word ending at the shorter
+  string's end, reaching back into bytes already equal or the `count` field,
+  which a shift drops — where a byte loop mispredicted on short keys; integers written without
   `snprintf`; `split` on an ASCII separator by `memchr` into an array made at
   its size; strings not zeroed before they are written, nor their scalars
   counted when already known.
@@ -953,11 +963,21 @@ overflowed past a dozen bytes. What closed the gap, by cause:
   had; an array element read for a call is borrowed even where the array's
   own borrow ended first, which takes the retains and releases off a sort's
   comparisons and a `HashMap` probe's; a `for` over an array lets its copy
-  go as the loop ends. String `<` and its derived operators now bind to
+  go as the loop ends; a value read from storage whose use is after a
+  branch and a join — `values[c ? i : j]`, the array read before the index
+  is chosen — is borrowed across the blocks between, which write nothing,
+  rather than copied (`BorrowLoads`). String `<` and its derived operators now bind to
   Sable.Core's operator — there was no builtin to lower them to.
 
-What is left: `sort` is a stable merge sort against .NET's unstable
-introsort, and pays a bounds check and a uniqueness check on every move;
+`sort` went from 1.26 to 1.03 by the last three: the `Int` sort from about
+76 ms to 56 (.NET 55), the `String` sort from 51 to 44 (.NET 38). What is
+left: a `String` move in the sort is a retain and a release (the scratch
+array shares the elements), which an element swap without counts would take
+off; the merge's bounds checks stay, cheap and never taken. The runtime's
+`sable_retain` and `sable_release` are not inlined into Sable code even
+under LTO: the generated IR carries no `target-cpu`/`target-features`, and
+LLVM will not inline a callee built for more features than its caller —
+given the host's attributes the `String` sort is a further 2 ms faster.
 `list` is mostly the operating system faulting in fresh pages, which .NET's
 warmed-up heap already has; a `HashMap<String, _>` hit still copies the key
 across the call to `==`, which SIL cannot yet inline. `Sable.Text`'s
@@ -994,11 +1014,11 @@ to the state machine where tasks are many.
 - [x] Reflection: hello-world binary grows < 50 KB with reflection off —
       it grows not at all (51,736 bytes either way): reflection is code
       synthesised per type a program reflects on, and nothing else
-- [ ] Dictionary/List/String within 15% of their .NET equivalents on a
+- [x] Dictionary/List/String within 15% of their .NET equivalents on a
       standard benchmark set — Dictionary (`map-int` 1.11, `map-string`
-      1.09), List (`list` 1.14) and String (`string` 0.99) are met, by a
-      small margin for `list`; sorting (`sort` 1.26) is not (see "Against
-      .NET" above)
+      1.02), List (`list` 1.15) and String (`string` 0.94) are met, on
+      the line for `list`; so is sorting (`sort` 1.03, a stable merge sort
+      against `List.Sort`'s introsort) — see "Against .NET" above
 - [ ] A real program ships: a static site generator or an HTTP service, in
       Sable, used daily by the team — written (`examples/ssg`, see "The
       first real program"); daily use is still to come

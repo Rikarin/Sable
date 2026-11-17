@@ -949,24 +949,44 @@ int64_t sable_string_hash(const SableString *s) {
     return (int64_t)(h & INT64_MAX);
 }
 
+// Eight bytes from 'p' as one number whose order is the bytes' order: the
+// first byte the most significant.
+static inline uint64_t load_ordered(const char *p) {
+    uint64_t word;
+    memcpy(&word, p, sizeof word);
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+    word = __builtin_bswap64(word);
+#endif
+    return word;
+}
+
 // -1, 0 or 1 as 'a' orders before, with or after 'b': byte by byte, which
-// for UTF-8 is scalar by scalar, a prefix first.
+// for UTF-8 is scalar by scalar, a prefix first. Eight bytes are compared at
+// a time, as numbers whose order is the bytes' (a sort's keys are mostly
+// short and the byte loop's branches mispredict); the last eight end at the
+// shorter's end, reaching back over bytes already found equal or, when it is
+// shorter than eight, into the 'count' field before the bytes, which the
+// shift then drops.
 int64_t sable_string_compare(const SableString *a, const SableString *b) {
     int64_t shorter = a->length < b->length ? a->length : b->length;
+    if (shorter > 0) {
+        int64_t i = 0;
+        for (; i + 8 < shorter; i += 8) {
+            uint64_t x = load_ordered(a->bytes + i), y = load_ordered(b->bytes + i);
+            if (x != y) {
+                return x < y ? -1 : 1;
+            }
+        }
 
-    // Most strings that are sorted are short, and differ early: a byte loop
-    // decides those without the call to memcmp.
-    int64_t i = 0;
-    for (; i < shorter && i < 16; i++) {
-        unsigned char x = (unsigned char)a->bytes[i], y = (unsigned char)b->bytes[i];
+        unsigned drop = (unsigned)(8 - (shorter - i)) * 8;
+        uint64_t x = load_ordered(a->bytes + shorter - 8), y = load_ordered(b->bytes + shorter - 8);
+        if (drop != 0) {
+            x <<= drop;
+            y <<= drop;
+        }
         if (x != y) {
             return x < y ? -1 : 1;
         }
-    }
-
-    int order = i < shorter ? memcmp(a->bytes + i, b->bytes + i, (size_t)(shorter - i)) : 0;
-    if (order != 0) {
-        return order < 0 ? -1 : 1;
     }
 
     return a->length < b->length ? -1 : a->length > b->length ? 1 : 0;

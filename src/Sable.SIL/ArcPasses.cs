@@ -71,8 +71,9 @@ sealed class Uses {
 /// </summary>
 /// <remarks>
 ///     <para>
-///         Every use must be in the load's block, the only consuming one a
-///         <c>destroy_value</c>. Between the load and the destroy nothing may
+///         Every use must be in the load's block — or, where the block
+///         branches, after it in the one block the branches meet at — the
+///         only consuming one a <c>destroy_value</c>. Between the load and the destroy nothing may
 ///         write the storage: for a stack slot, nothing that is given its
 ///         address other than to read it; for any other storage — a field of
 ///         an object, an inout parameter — nothing that writes at all, calls
@@ -104,7 +105,9 @@ public sealed class BorrowLoads : ISilPass {
 
                 var ends = Destroyer(load, block, i, uses) is { } end
                     ? [end]
-                    : DestroyersAcrossBranch(load, block, i, uses, predecessors);
+                    : DestroyerAfterJoin(load, block, i, uses) is { } joined
+                        ? [joined]
+                        : DestroyersAcrossBranch(load, block, i, uses, predecessors);
                 if (ends is null) {
                     continue;
                 }
@@ -215,6 +218,103 @@ public sealed class BorrowLoads : ISilPass {
         }
 
         return [..ends.Values];
+    }
+
+    /// <summary>
+    ///     The destroy of a load used in one later block, which every way on
+    ///     from the load's block reaches through blocks that only branch —
+    ///     the shape of an index or argument computed by <c>?:</c>,
+    ///     <c>&amp;&amp;</c> or <c>||</c> after the array is read,
+    ///     <c>values[c ? i : j]</c>. Uses in the load's own block come after
+    ///     it; in the later block, before the destroy. Nothing on the way may
+    ///     write the storage.
+    /// </summary>
+    static DestroyValueInst? DestroyerAfterJoin(LoadInst load, SilBlock block, int index, Uses uses) {
+        if (block.Terminator is not (BranchInst or CondBranchInst)) {
+            return null;
+        }
+
+        SilBlock? join = null;
+        DestroyValueInst? destroy = null;
+        foreach (var user in uses.Of(load)) {
+            if (user.IsTerminator || user is not DestroyValueInst && Uses.Consumes(user, load)) {
+                return null;
+            }
+
+            if (user.Block == block) {
+                if (user is DestroyValueInst || block.Instructions.IndexOf(user) <= index) {
+                    return null;
+                }
+
+                continue;
+            }
+
+            join ??= user.Block;
+            if (user.Block != join) {
+                return null;
+            }
+
+            if (user is DestroyValueInst found) {
+                if (destroy is not null) {
+                    return null;
+                }
+
+                destroy = found;
+            }
+        }
+
+        if (join is null || destroy is null) {
+            return null;
+        }
+
+        var end = join.Instructions.IndexOf(destroy);
+        foreach (var user in uses.Of(load)) {
+            if (user.Block == join && join.Instructions.IndexOf(user) > end) {
+                return null;
+            }
+        }
+
+        var slot = SlotOf(load.Address);
+        var owner = Owner(load.Address);
+        for (var k = index + 1; k < block.Instructions.Count - 1; k++) {
+            if (MayWrite(block.Instructions[k], slot, owner)) {
+                return null;
+            }
+        }
+
+        for (var k = 0; k < end; k++) {
+            if (MayWrite(join.Instructions[k], slot, owner)) {
+                return null;
+            }
+        }
+
+        // The blocks between: each only branches on, towards the join, and
+        // writes nothing; none leads back to the load.
+        var between = new HashSet<SilBlock>();
+        var pending = new Stack<SilBlock>(block.Successors);
+        while (pending.TryPop(out var next)) {
+            if (next == join || between.Contains(next)) {
+                continue;
+            }
+
+            if (next == block || between.Count >= 32 || next.Terminator is not (BranchInst or CondBranchInst)) {
+                return null;
+            }
+
+            between.Add(next);
+
+            for (var k = 0; k < next.Instructions.Count - 1; k++) {
+                if (MayWrite(next.Instructions[k], slot, owner)) {
+                    return null;
+                }
+            }
+
+            foreach (var successor in next.Successors) {
+                pending.Push(successor);
+            }
+        }
+
+        return destroy;
     }
 
     /// <summary>The destroy that ends the load's life, if borrowing instead is safe.</summary>

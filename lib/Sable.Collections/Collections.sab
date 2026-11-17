@@ -303,7 +303,9 @@ public fn sort<T: Comparable>(_ values: inout T[>..]) {
 /// argument goes ahead of its second: a stable merge sort. Runs of 16 are
 /// put in order by insertion first; then runs are merged pairwise, back and
 /// forth between the values and one scratch array, until one run is left —
-/// a run already in order with the next is copied, not merged.
+/// a run already in order with the next is copied, not merged. The merge
+/// does not branch on 'before': it moves the element the comparison picks
+/// and steps both indices by it, taking from the left run on a tie.
 public fn sort<T>(_ values: inout T[>..], by before: (T, T) -> Bool) {
     let n = values.count
     if n < 2 {
@@ -354,13 +356,11 @@ public fn sort<T>(_ values: inout T[>..], by before: (T, T) -> Bool) {
                 var x = low
                 var y = middle
                 while x < middle && y < high {
-                    if before(source[y], source[x]) {
-                        target[k] = source[y]
-                        y = y + 1
-                    } else {
-                        target[k] = source[x]
-                        x = x + 1
-                    }
+                    let takeRight = before(source[y], source[x])
+                    target[k] = source[takeRight ? y : x]
+                    let step = takeRight ? 1 : 0
+                    y = y + step
+                    x = x + 1 - step
                     k = k + 1
                 }
                 while x < middle {

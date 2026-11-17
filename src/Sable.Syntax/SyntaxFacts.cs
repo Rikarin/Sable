@@ -218,6 +218,11 @@ public static class SyntaxFacts {
         kind switch {
             SyntaxKind.DotToken => true,
             SyntaxKind.QuestionDotToken => true,
+
+            // A conditional's '?' and ':' may each start a line, so a long
+            // 'a ? b : c' can be broken before either; no statement starts
+            // with '?'.
+            SyntaxKind.QuestionToken => true,
             SyntaxKind.ColonToken => true,
             SyntaxKind.FatArrowToken => true,
             SyntaxKind.ArrowToken => true,

@@ -2794,6 +2794,9 @@ public sealed class Binder {
             // 'tripled(none)' with tripled taking Int?.
             LiteralExpressionSyntax { Token.Kind: SyntaxKind.NoneKeyword } => true,
 
+            // Nor is '[]' any particular array: 'format(template, [])'.
+            ArrayExpressionSyntax { Elements.Count: 0 } => true,
+
             ParenthesizedExpressionSyntax parenthesized => IsClosure(parenthesized.Expression),
             _ => false,
         };
@@ -2886,7 +2889,8 @@ public sealed class Binder {
 
         // The receiver's substitution, plus whatever the arguments imply for
         // the function's own type parameters.
-        var substitution = Combine(outer, Infer(resolved, arguments, outer));
+        var substitution = Combine(outer, Infer(resolved, arguments, labels, outer));
+        var slots = Align(resolved, labels, arguments.Length);
 
         // Now that a signature is chosen, the closures have parameter types.
         if (arguments.Any(static a => a is BoundUnboundClosure)) {
@@ -2901,8 +2905,8 @@ public sealed class Binder {
                     continue;
                 }
 
-                var expected = i < resolved.Parameters.Length
-                    ? substitution.Apply(resolved.Parameters[i].Type)
+                var expected = slots[i] < resolved.Parameters.Length
+                    ? substitution.Apply(resolved.Parameters[slots[i]].Type)
                     : null;
                 rebound[i] = BindExpression(syntaxes[i], expected);
             }
@@ -2912,13 +2916,13 @@ public sealed class Binder {
 
             // A closure's return type can settle a type parameter nothing else
             // mentions, so inference runs again with them bound.
-            substitution = Combine(outer, Infer(resolved, arguments, outer));
+            substitution = Combine(outer, Infer(resolved, arguments, labels, outer));
         }
 
         var converted = ImmutableArray.CreateBuilder<BoundExpression>(arguments.Length);
         for (var i = 0; i < arguments.Length; i++) {
-            var parameter = i < resolved.Parameters.Length
-                ? resolved.Parameters[i]
+            var parameter = slots[i] < resolved.Parameters.Length
+                ? resolved.Parameters[slots[i]]
                 : resolved.Parameters.Length > 0 && resolved.Parameters[^1].IsVariadic
                     ? resolved.Parameters[^1]
                     : null;
@@ -2935,6 +2939,30 @@ public sealed class Binder {
 
             converted.Add(Convert(arguments[i], wanted, arguments[i].Syntax));
         }
+
+        // The parameters the call leaves off take their defaults, so every
+        // call passes every argument, in the parameters' order, and nothing
+        // past the binder need know defaults exist. Arguments only ever skip
+        // forward, so they are still evaluated as written.
+        var passed = ImmutableArray.CreateBuilder<BoundExpression>(resolved.Parameters.Length);
+        var next = 0;
+        for (var p = 0; p < resolved.Parameters.Length; p++) {
+            if (resolved.Parameters[p].IsVariadic) {
+                break;
+            }
+
+            if (next < converted.Count && slots[next] == p) {
+                passed.Add(converted[next++]);
+            } else if (DefaultArgument(resolved.Parameters[p], substitution) is { } value) {
+                passed.Add(value);
+            }
+        }
+
+        while (next < converted.Count) {
+            passed.Add(converted[next++]);
+        }
+
+        converted = passed;
 
         // A parameter that appears only in the result is settled by what the
         // context asked for: 'let p: Point? = decodeOne(bytes)'.
@@ -3017,10 +3045,27 @@ public sealed class Binder {
             : call;
     }
 
+    /// <summary>
+    ///     A left-off parameter's default value, bound afresh for this call in
+    ///     the file and the function that declare it — the default names what
+    ///     is visible there, not at the call. Its diagnostics were reported
+    ///     once, with the declaration, so they are not reported again here.
+    /// </summary>
+    BoundExpression? DefaultArgument(ParameterSymbol parameter, TypeSubstitution substitution) {
+        if (parameter.DeclaringSyntax is not [ParameterSyntax { DefaultValue: { } clause } syntax]
+            || _compilation.FileScopeOf(syntax) is not { } scope
+            || parameter.ContainingSymbol is not { } container) {
+            return null;
+        }
+
+        return new Binder(_compilation, scope, container).BindInitializer(clause.Value, substitution.Apply(parameter.Type));
+    }
+
     /// <summary>Works out a generic function's type arguments from the call.</summary>
     static TypeSubstitution Infer(
         FunctionSymbol function,
         ImmutableArray<BoundExpression> arguments,
+        ImmutableArray<string?> labels,
         TypeSubstitution outer
     ) {
         if (function.TypeParameters.IsEmpty) {
@@ -3028,8 +3073,13 @@ public sealed class Binder {
         }
 
         var map = new Dictionary<TypeParameterSymbol, TypeSymbol>();
-        for (var i = 0; i < arguments.Length && i < function.Parameters.Length; i++) {
-            var wanted = outer.Apply(function.Parameters[i].Type);
+        var slots = Align(function, labels, arguments.Length);
+        for (var i = 0; i < arguments.Length; i++) {
+            if (slots[i] >= function.Parameters.Length) {
+                break;
+            }
+
+            var wanted = outer.Apply(function.Parameters[slots[i]].Type);
 
             TypeSubstitution.Unify(wanted, AdaptForInference(wanted, arguments[i]), function.TypeParameters, map);
         }
@@ -3184,25 +3234,33 @@ public sealed class Binder {
         TypeSubstitution outer
     ) {
         _rejection = null;
-        var substitution = Combine(outer, Infer(candidate, arguments, outer));
+        var substitution = Combine(outer, Infer(candidate, arguments, labels, outer));
         var parameters = candidate.Parameters;
 
         var required = parameters.Count(static p => p is { HasDefaultValue: false, IsVariadic: false });
         var variadic = parameters.Any(static p => p.IsVariadic);
+        var slots = Align(candidate, labels, arguments.Length);
 
         if (arguments.Length < required) {
             return Reject($"it needs {Plural(required, "argument")}, and this passes {arguments.Length}");
         }
 
-        if (!variadic && arguments.Length > parameters.Length) {
+        if (!variadic && arguments.Length > 0 && slots[^1] >= parameters.Length) {
             return Reject($"it takes {Plural(parameters.Length, "argument")}, and this passes {arguments.Length}");
+        }
+
+        // A parameter a label passed over must have a default to take.
+        for (var p = 0; p < parameters.Length; p++) {
+            if (parameters[p] is { HasDefaultValue: false, IsVariadic: false } && Array.IndexOf(slots, p) < 0) {
+                return Reject($"'{parameters[p].Name}' has no default, and this passes nothing for it");
+            }
         }
 
         var cost = 0;
         for (var i = 0; i < arguments.Length; i++) {
             // Everything from a variadic parameter on is one of its elements.
-            var parameter = i < parameters.Length
-                ? parameters[i]
+            var parameter = slots[i] < parameters.Length
+                ? parameters[slots[i]]
                 : parameters.Length > 0 && parameters[^1].IsVariadic
                     ? parameters[^1]
                     : null;
@@ -3295,6 +3353,44 @@ public sealed class Binder {
         }
 
         return cost;
+    }
+
+    /// <summary>
+    ///     The parameter each argument is passed to, in order. Arguments fill
+    ///     the parameters left to right, but a labelled one may pass over
+    ///     parameters with defaults to reach the one its label names:
+    ///     <c>connect(host: h, timeout: t)</c> leaves <c>port</c> its default.
+    ///     Only a default written in a declaration is passed over: a memberwise
+    ///     initialiser's defaults are the fields', which lowering fills in
+    ///     only at the end of the list.
+    ///     An index past the last parameter is an argument with nowhere to go;
+    ///     from a variadic parameter on, every argument is one of its elements.
+    /// </summary>
+    static int[] Align(FunctionSymbol function, ImmutableArray<string?> labels, int count) {
+        var parameters = function.Parameters;
+        var slots = new int[count];
+        var next = 0;
+        for (var i = 0; i < count; i++) {
+            if (i < labels.Length && labels[i] is { } label) {
+                var reach = next;
+                while (reach < parameters.Length
+                       && parameters[reach].DeclaringSyntax is [ParameterSyntax { DefaultValue: not null, EllipsisToken.IsNone: true }]
+                       && !Names(parameters[reach], label)) {
+                    reach++;
+                }
+
+                if (reach < parameters.Length && Names(parameters[reach], label)) {
+                    next = reach;
+                }
+            }
+
+            slots[i] = next < parameters.Length && parameters[next].IsVariadic ? next : next++;
+        }
+
+        return slots;
+
+        static bool Names(ParameterSymbol parameter, string label) =>
+            string.Equals(parameter.Label ?? parameter.Name, label, StringComparison.Ordinal);
     }
 
     /// <summary>True when a type still names one of the candidate's own, uninferred, parameters.</summary>
@@ -4479,6 +4575,20 @@ public sealed class Binder {
             if (derivedFrom is not null && FindUserOperator(derivedFrom, left.Type, right.Type) is { } basis) {
                 return new BoundBinaryOperator(syntax, Core.Bool, kind, left, right, basis);
             }
+        }
+
+        // Strings have no ordering instruction: they order by Sable.Core's
+        // '<', written in Sable, and the other three follow from it.
+        if (kind is BinaryOperatorKind.LessThan
+                or BinaryOperatorKind.GreaterThan
+                or BinaryOperatorKind.LessThanOrEqual
+                or BinaryOperatorKind.GreaterThanOrEqual
+            && left.Type.Equals(Core.String)
+            && right.Type.Equals(Core.String)
+            && FindUserOperator("<", left.Type, right.Type) is { } order) {
+            return kind == BinaryOperatorKind.LessThan
+                ? new BoundBinaryOperator(syntax, Core.Bool, BinaryOperatorKind.UserDefined, left, right, order)
+                : new BoundBinaryOperator(syntax, Core.Bool, kind, left, right, order);
         }
 
         var type = ResultTypeOf(kind, left.Type, right.Type);

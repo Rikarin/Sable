@@ -250,6 +250,13 @@ public sealed class ExpressionParserTests {
             Parse("max<Int>(a, b)")
         );
 
+    /// <summary>The '>' of an array kind, '[>..]', closes no type argument list.</summary>
+    [Theory]
+    [InlineData("Map<String, String[>..]>()")]
+    [InlineData("Map<Int[..64], Int[>..<]>()")]
+    public void ArrayKindsInsideTypeArgumentsStayGeneric(string source) =>
+        Assert.StartsWith("(Invocation (GenericName Map (TypeArgumentList <", Parse(source), StringComparison.Ordinal);
+
     [Fact]
     public void LessThanIsComparisonWhenItIsNotATypeArgumentList() =>
         Assert.Equal(

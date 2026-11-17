@@ -93,6 +93,22 @@ public sealed class Compilation {
 
     public FileScope GetFileScope(SyntaxTree tree) => _fileScopes[tree];
 
+    /// <summary>The scope of the file a node was parsed from, if it is one of this compilation's.</summary>
+    internal FileScope? FileScopeOf(SyntaxNode node) {
+        var root = node;
+        while (root.Parent is { } parent) {
+            root = parent;
+        }
+
+        foreach (var (tree, scope) in _fileScopes) {
+            if (ReferenceEquals(tree.Root, root)) {
+                return scope;
+            }
+        }
+
+        return null;
+    }
+
     /// <summary>The symbol a declaration introduced, if it introduced one.</summary>
     public Symbol? GetDeclaredSymbol(SyntaxNode declaration) =>
         _symbolsBySyntax.TryGetValue(declaration, out var symbol) ? symbol : null;

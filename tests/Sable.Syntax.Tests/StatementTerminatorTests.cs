@@ -41,6 +41,12 @@ public sealed class StatementTerminatorTests {
     }
 
     [Fact]
+    public void LeadingQuestionMarkAndColonContinueAConditional() {
+        Assert.Empty(Terminators("let x = a\n    ? b\n    : c"));
+        Assert.Equal(["c"], Terminators("let x = a\n    ? b\n    : c\nlet y = 1"));
+    }
+
+    [Fact]
     public void NewlinesInsideParenthesesNeverTerminate() {
         Assert.Empty(Terminators("foo(\n    1,\n    2\n)"));
     }

@@ -173,3 +173,426 @@ public class TextBuilder {
         return joined(pieces, separator: "")
     }
 }
+
+// ---- Lines and trimming ----------------------------------------------------
+
+/// The text's lines, without their endings ("\n" or "\r\n"); a last empty
+/// line — what a final newline leaves — is not one.
+public fn lines(_ text: String) -> String[>..] {
+    var result: String[>..] = []
+    if text.count == 0 {
+        return result
+    }
+    for line in text.split('\n') {
+        if line.count > 0 && line.at(line.count - 1) == '\r' {
+            result.append(line.slice(from: 0, to: line.count - 1))
+        } else {
+            result.append(line)
+        }
+    }
+    if result[result.count - 1].count == 0 {
+        result.removeLast()
+    }
+    return result
+}
+
+/// The text without the whitespace it starts with.
+public fn trimmedStart(_ text: String) -> String {
+    var start = 0
+    while start < text.count && text.at(start).isWhitespace {
+        start = start + 1
+    }
+    return text.slice(from: start, to: text.count)
+}
+
+/// The text without the whitespace it ends with.
+public fn trimmedEnd(_ text: String) -> String {
+    var end = text.count
+    while end > 0 && text.at(end - 1).isWhitespace {
+        end = end - 1
+    }
+    return text.slice(from: 0, to: end)
+}
+
+/// Whether the text is empty or nothing but whitespace.
+public fn isBlank(_ text: String) -> Bool {
+    var i = 0
+    while i < text.count {
+        if !text.at(i).isWhitespace {
+            return false
+        }
+        i = i + 1
+    }
+    return true
+}
+
+/// The text without the prefix, when it starts with it; otherwise as it is.
+public fn removingPrefix(_ text: String, _ start: String) -> String {
+    return hasPrefix(text, start) ? text.slice(from: start.count, to: text.count) : text
+}
+
+/// The text without the suffix, when it ends with it; otherwise as it is.
+public fn removingSuffix(_ text: String, _ end: String) -> String {
+    return hasSuffix(text, end) ? text.slice(from: 0, to: text.count - end.count) : text
+}
+
+/// Where the part next occurs at or after the position, or none.
+public fn find(_ text: String, _ part: String, from start: Int) -> Int? {
+    var i = start < 0 ? 0 : start
+    while i + part.count <= text.count {
+        if text.slice(from: i, to: i + part.count) == part {
+            return i
+        }
+        i = i + 1
+    }
+    return none
+}
+
+/// Where the last occurrence of the part starts, or none.
+public fn findLast(_ text: String, _ part: String) -> Int? {
+    var i = text.count - part.count
+    while i >= 0 {
+        if text.slice(from: i, to: i + part.count) == part {
+            return i
+        }
+        i = i - 1
+    }
+    return none
+}
+
+/// How many times the part occurs, not overlapping, counted left to right.
+public fn occurrences(of part: String, within text: String) -> Int {
+    if part.count == 0 {
+        return 0
+    }
+    var count = 0
+    var i = 0
+    while i + part.count <= text.count {
+        if text.slice(from: i, to: i + part.count) == part {
+            count = count + 1
+            i = i + part.count
+        } else {
+            i = i + 1
+        }
+    }
+    return count
+}
+
+// ---- Escaping ----------------------------------------------------------------
+
+/// The text made safe to place in HTML, as content or inside a quoted
+/// attribute: '&', '<', '>', '"' and '\'' become character references.
+public fn escapedHtml(_ text: String) -> String {
+    // Most text has nothing to escape, and is given back as it is.
+    if !text.contains('&') && !text.contains('<') && !text.contains('>') && !text.contains('"') && !text.contains('\'') {
+        return text
+    }
+    let result = TextBuilder()
+    var start = 0
+    var i = 0
+    while i < text.count {
+        let c = text.at(i)
+        let escape = c == '&' ? "&amp;" : c == '<' ? "&lt;" : c == '>' ? "&gt;" : c == '"' ? "&quot;" : c == '\'' ? "&#39;" : ""
+        if escape.count > 0 {
+            result.append(text.slice(from: start, to: i))
+            result.append(escape)
+            start = i + 1
+        }
+        i = i + 1
+    }
+    result.append(text.slice(from: start, to: text.count))
+    return result.build()
+}
+
+// ---- Formatting and parsing -------------------------------------------------
+
+/// The template with each "{}" replaced by the next argument and each "{n}"
+/// by argument n, counting from 0; "{{" and "}}" stand for the braces
+/// themselves. A placeholder with no argument to fill it is left as written,
+/// so a mistake shows in the output rather than vanishing. (Interpolation,
+/// "\(x)", is the language's own; this is for templates chosen at run time.)
+public fn format(_ template: String, _ arguments: String[>..]) -> String {
+    let result = TextBuilder()
+    var next = 0
+    var start = 0
+    var i = 0
+    while i < template.count {
+        let c = template.at(i)
+        if (c == '{' || c == '}') && i + 1 < template.count && template.at(i + 1) == c {
+            result.append(template.slice(from: start, to: i + 1))
+            i = i + 2
+            start = i
+        } else if c == '{' {
+            var close = i + 1
+            while close < template.count && template.at(close).isDigit {
+                close = close + 1
+            }
+            if close < template.count && template.at(close) == '}' {
+                var index = next
+                if close == i + 1 {
+                    next = next + 1
+                } else {
+                    index = parseInt(template.slice(from: i + 1, to: close)) ?? -1
+                }
+                result.append(template.slice(from: start, to: i))
+                if index >= 0 && index < arguments.count {
+                    result.append(arguments[index])
+                } else {
+                    result.append(template.slice(from: i, to: close + 1))
+                }
+                i = close + 1
+                start = i
+            } else {
+                i = i + 1
+            }
+        } else {
+            i = i + 1
+        }
+    }
+    result.append(template.slice(from: start, to: template.count))
+    return result.build()
+}
+
+/// The integer written in the radix — 2 to 36, others taken as 10 — with
+/// digits past 9 as letters, lower case unless asked otherwise. Padded with
+/// the fill to the width; a '0' fill goes after the sign, as "-00ff" does.
+public fn formatted(_ value: Int, radix: Int = 10, width: Int = 0, fill: Char = ' ', uppercase: Bool = false) -> String {
+    let base = radix < 2 || radix > 36 ? 10 : radix
+    let letters = uppercase ? "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ" : "0123456789abcdefghijklmnopqrstuvwxyz"
+    // Digits are taken from the value made negative, which every Int can be;
+    // made positive, the least one could not.
+    var rest = value < 0 ? value : 0 - value
+    var digits = ""
+    while true {
+        digits = String.fromChar(letters.at(0 - rest % base)) + digits
+        rest = rest / base
+        if rest == 0 {
+            break
+        }
+    }
+    let sign = value < 0 ? "-" : ""
+    if fill == '0' {
+        return sign + paddedLeft(digits, to: width - sign.count, with: '0')
+    }
+    return paddedLeft(sign + digits, to: width, with: fill)
+}
+
+/// The integer the text spells in the radix — 2 to 36, others taken as 10 —
+/// with an optional sign and letters of either case; none for anything else,
+/// an empty text, or a number too big for an Int.
+public fn parseInt(_ text: String, radix: Int = 10) -> Int? {
+    let base = radix < 2 || radix > 36 ? 10 : radix
+    var i = 0
+    var negative = false
+    if text.count > 0 && (text.at(0) == '-' || text.at(0) == '+') {
+        negative = text.at(0) == '-'
+        i = 1
+    }
+    if i == text.count {
+        return none
+    }
+    // Accumulated negatively, which reaches the least Int; a positive result
+    // is negated at the end.
+    let limit = negative ? -9223372036854775807 - 1 : -9223372036854775807
+    let cutoff = limit / base
+    var total = 0
+    while i < text.count {
+        let code = text.at(i).codePoint
+        let digit = code >= 48 && code <= 57 ? code - 48 : code >= 97 && code <= 122 ? code - 87 : code >= 65 && code <= 90 ? code - 55 : 99
+        if digit >= base || total < cutoff {
+            return none
+        }
+        total = total * base
+        if total < limit + digit {
+            return none
+        }
+        total = total - digit
+        i = i + 1
+    }
+    return negative ? total : 0 - total
+}
+
+/// The number with exactly that many digits after the point, rounded to
+/// nearest with ties to even on its exact binary value — what C's "%.*f"
+/// writes. The digits are worked out here, in decimal arithmetic on the
+/// value's exact mantissa and exponent, rather than asked of the platform,
+/// so every platform and the interpreter write the same ones.
+public fn formatted(_ value: F64, decimals: Int) -> String {
+    let places = decimals < 0 ? 0 : decimals
+    if value != value {
+        return "nan"
+    }
+    // The sign is the sign bit's: -0.0 and what rounds to zero from below
+    // keep their '-', as "%f" keeps it.
+    let negative = value < 0.0 || value == 0.0 && 1.0 / value < 0.0
+    let magnitude = negative ? 0.0 - value : value
+    if magnitude > 1.7976931348623157e308 {
+        return negative ? "-inf" : "inf"
+    }
+    let digits = exactDigits(magnitude, places)
+    let result = TextBuilder()
+    if negative {
+        result.append("-")
+    }
+    // The digits run least first, with the lowest 'places' after the point
+    // and at least one before it; leading zeros are not written.
+    var top = digits.count - 1
+    while top > places && digits[top] == 0 {
+        top = top - 1
+    }
+    var i = top
+    while i >= 0 {
+        if i == places - 1 {
+            result.append(".")
+        }
+        result.append(String.fromChar(Char.fromCodePoint(48 + digits[i])!))
+        i = i - 1
+    }
+    return result.build()
+}
+
+/// The non-negative, finite value times 10^places, rounded to nearest with
+/// ties to even, as decimal digits least first — at least places + 1 of them.
+fn exactDigits(_ value: F64, _ places: Int) -> Int[>..] {
+    var digits: Int[>..] = []
+    // A value too small to round to anything but zero needs no exact
+    // arithmetic, which for the least doubles is long.
+    var scale = 1.0
+    var p = 0
+    while p < places {
+        scale = scale * 10.0
+        p = p + 1
+    }
+    if value * scale < 0.25 {
+        while digits.count <= places {
+            digits.append(0)
+        }
+        return digits
+    }
+    // value = mantissa × 2^exponent, the mantissa a whole number below 2^53.
+    // Halving and doubling a double are exact, so finding them is too.
+    var x = value
+    var exponent = 0
+    while x >= 9007199254740992.0 {
+        x = x / 2.0
+        exponent = exponent + 1
+    }
+    while F64(Int(x)) != x {
+        x = x * 2.0
+        exponent = exponent - 1
+    }
+    // The exact value, as limbs of nine decimal digits, least first: the
+    // mantissa times 2^exponent or, for a negative exponent, times
+    // 5^-exponent with -exponent digits after the point.
+    var limbs: Int[>..] = []
+    var m = Int(x)
+    while m > 0 {
+        limbs.append(m % 1000000000)
+        m = m / 1000000000
+    }
+    var point = 0
+    if exponent > 0 {
+        var left = exponent
+        while left > 0 {
+            let step = left < 20 ? left : 20
+            limbs = multiplied(limbs, integerPower(2, step))
+            left = left - step
+        }
+    } else {
+        point = 0 - exponent
+        var left = point
+        while left > 0 {
+            let step = left < 13 ? left : 13
+            limbs = multiplied(limbs, integerPower(5, step))
+            left = left - step
+        }
+    }
+    for limb in limbs {
+        var rest = limb
+        var k = 0
+        while k < 9 {
+            digits.append(rest % 10)
+            rest = rest / 10
+            k = k + 1
+        }
+    }
+    // Exactly 'places' digits are to follow the point: zeros go in below,
+    // or digits are rounded off.
+    if point < places {
+        var padded: Int[>..] = []
+        var k = point
+        while k < places {
+            padded.append(0)
+            k = k + 1
+        }
+        for d in digits {
+            padded.append(d)
+        }
+        digits = padded
+    } else if point > places {
+        let drop = point - places
+        let first = drop - 1 < digits.count ? digits[drop - 1] : 0
+        var sticky = false
+        var k = 0
+        while k < drop - 1 && k < digits.count {
+            if digits[k] != 0 {
+                sticky = true
+            }
+            k = k + 1
+        }
+        var kept: Int[>..] = []
+        k = drop
+        while k < digits.count {
+            kept.append(digits[k])
+            k = k + 1
+        }
+        if kept.count == 0 {
+            kept.append(0)
+        }
+        if first > 5 || first == 5 && (sticky || kept[0] % 2 == 1) {
+            var carry = 1
+            k = 0
+            while carry > 0 {
+                if k == kept.count {
+                    kept.append(0)
+                }
+                let sum = kept[k] + carry
+                kept[k] = sum % 10
+                carry = sum / 10
+                k = k + 1
+            }
+        }
+        digits = kept
+    }
+    while digits.count <= places {
+        digits.append(0)
+    }
+    return digits
+}
+
+/// The limbs (base 10^9, least first) times a factor small enough that a
+/// limb times it, plus a carry, fits an Int.
+fn multiplied(_ limbs: Int[>..], _ factor: Int) -> Int[>..] {
+    var result: Int[>..] = []
+    var carry = 0
+    for limb in limbs {
+        let product = limb * factor + carry
+        result.append(product % 1000000000)
+        carry = product / 1000000000
+    }
+    while carry > 0 {
+        result.append(carry % 1000000000)
+        carry = carry / 1000000000
+    }
+    return result
+}
+
+fn integerPower(_ base: Int, _ exponent: Int) -> Int {
+    var result = 1
+    var i = 0
+    while i < exponent {
+        result = result * base
+        i = i + 1
+    }
+    return result
+}

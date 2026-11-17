@@ -47,7 +47,7 @@ statement terminator when:
    (`return` on its own line *does* terminate — see below). `>`, `>>` and `?`
    are deliberately absent: they close a type, so they can end a statement.
 2. The first token on the next line is one of:
-   `. ?. : => -> , ) ]`, `else`, `catch`, `where`, or a binary operator — or
+   `. ?. ? : => -> , ) ]`, `else`, `catch`, `where`, or a binary operator — or
    `while` directly after a `}`, which continues `repeat { }`. A `while`
    anywhere else starts a loop of its own.
 3. The lexer is inside unbalanced `(` or `[`. A `{` inside them opens a body of

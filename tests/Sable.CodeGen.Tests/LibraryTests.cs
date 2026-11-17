@@ -426,6 +426,104 @@ fn main() {
         );
     }
 
+    /// <summary>
+    ///     Sable.Concurrency over the core's tasks: a channel between a producer
+    ///     and a consumer, a task group, and a sleep other tasks run through.
+    /// </summary>
+    [Fact]
+    public void ConcurrencyIsWrittenInSable() =>
+        Assert.Equal(
+            "sent 0\ngot 0\nsent 1\ngot 1\nsent 2\ngot 4\nsent 3\ngot 9\nsum 14 of 4\ntrue\n4\n4\n1 16\ntrue\ntrue\n",
+            AssertAgree("""
+                module P
+                import Sable.Concurrency
+                import Sable.Time
+
+                fn produce(_ channel: Channel<Int>, _ count: Int) async -> Int {
+                    for i in 0..<count {
+                        channel.send(i * i)
+                        print("sent \(i)")
+                        await yieldNow()
+                    }
+                    channel.close()
+                    return count
+                }
+
+                fn consume(_ channel: Channel<Int>) async -> Int {
+                    var total = 0
+                    while let value = await channel.receive() {
+                        print("got \(value)")
+                        total += value
+                    }
+                    return total
+                }
+
+                fn square(_ n: Int) async -> Int {
+                    await yieldNow()
+                    return n * n
+                }
+
+                @main
+                fn main() async {
+                    let channel = Channel<Int>()
+                    let consumer = Task.spawn { await consume(channel) }
+                    let producer = Task.spawn { await produce(channel, 4) }
+                    print("sum \(await consumer.value) of \(await producer.value)")
+                    print(channel.tryReceive() == none)
+
+                    let group = TaskGroup<Int>()
+                    for i in 1...4 {
+                        group.add(Task.spawn { await square(i) })
+                    }
+                    print(group.count)
+                    let results = await group.waitForAll()
+                    print(results.count)
+                    print("\(results[0]) \(results[3])")
+
+                    let start = Instant.now()
+                    let stop = Channel<Int>()
+                    let ticker = Task.spawn {
+                        var ticks = 0
+                        while !stop.isClosed {
+                            ticks += 1
+                            await yieldNow()
+                        }
+                        return ticks > 0
+                    }
+                    await sleep(Duration.milliseconds(10))
+                    stop.close()
+                    print(start.elapsed >= Duration.milliseconds(10))
+                    print(await ticker.value)
+                }
+                """).Stdout
+        );
+
+    /// <summary>
+    ///     A task spawned in a loop: forward-copies once folded the copy that
+    ///     task_spawn consumes into the task itself, which was then used after.
+    /// </summary>
+    [Fact]
+    public void ATaskSpawnedInALoopIsStillUsableAfterwards() =>
+        Assert.Equal(
+            "3\n0 1 4\n",
+            AssertAgree("""
+                module P
+                fn square(_ n: Int) async -> Int {
+                    await Task.yield()
+                    return n * n
+                }
+                @main
+                fn main() async {
+                    var tasks: Task<Int>[>..] = []
+                    for i in 0..<3 {
+                        tasks.append(Task.spawn { await square(i) })
+                    }
+                    print(tasks.count)
+                    print("\(await tasks[0].value) \(await tasks[1].value) \(await tasks[2].value)")
+                }
+                """).Stdout
+        );
+
     /// <summary>Only what a program reaches is built: the library costs a program that does not use it nothing.</summary>
     [Fact]
     public void WhatAProgramDoesNotUseIsNotBuilt() {

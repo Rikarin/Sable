@@ -784,8 +784,17 @@ Written so far (`tests/Sable.CodeGen.Tests/LibraryTests.cs`):
   threshold (or `SABLE_LOG`), context fields that `with` carries to child
   loggers, optional UTC timestamps, and quotes values where they would be
   misread. Not yet: tracing spans and metrics.
+- `Sable.Concurrency`, written in Sable over the core's `Task`: `Channel`
+  (unbounded, closable, `receive` awaits), `TaskGroup` (results in the order
+  the tasks were added), and a `sleep` that yields so that other tasks run
+  meanwhile. Tasks switch only where they await, so none of it needs a lock.
+  Not yet: bounded channels, cancellation, `Mutex` and `Atomic` (useless
+  until tasks run in parallel), and deadlock detection: a task waiting on
+  nothing yields for ever.
 
-What it took from the compiler: `[]` as an argument typed by the parameter
+What it took from the compiler: `forward-copies` no longer folds a copy into
+its source when the copy is consumed while the source is still in use (a
+task spawned in a loop), `[]` as an argument typed by the parameter
 (overloaded or not), `?.` on any optional rather than only a
 local's, diagnostics placed in the file they are in rather than by offset
 (offsets overlap between the program and the library), generic initialisers

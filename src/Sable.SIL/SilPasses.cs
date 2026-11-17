@@ -104,8 +104,14 @@ public static class SilPassManager {
 
             var problems = SilVerifier.Verify(module);
             if (problems.Count > 0) {
+                // With SABLE_PASS_DUMP set, the functions the problems name, as the pass left them.
+                var dump = Environment.GetEnvironmentVariable("SABLE_PASS_DUMP") is null
+                    ? ""
+                    : "\n\n" + string.Join("\n", module.Functions
+                        .Where(f => problems.Any(p => p.StartsWith("@" + f.Name + " ", StringComparison.Ordinal)))
+                        .Select(SilPrinter.Print));
                 throw new SilPassException(
-                    $"SIL failed verification after the '{pass.Name}' pass:\n{string.Join("\n", problems)}"
+                    $"SIL failed verification after the '{pass.Name}' pass:\n{string.Join("\n", problems)}{dump}"
                 );
             }
         }

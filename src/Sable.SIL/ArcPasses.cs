@@ -553,7 +553,21 @@ public sealed class ForwardCopies : ISilPass {
         }
 
         // Nothing may use the source after its destroy: the verifier holds
-        // that, so the copy simply carries the value on.
+        // that, so the copy simply carries the value on — provided the copy
+        // is not consumed while the source is still in use. Once the two are
+        // one value, a use of the source, or of anything borrowed from it,
+        // after the copy is consumed would use a value already given away:
+        // 'task_spawn(copy)' followed by a store into the task's field.
+        var destroyAt = block.Instructions.IndexOf(destroy);
+        foreach (var consumer in uses.Of(copy).Where(u => Uses.Consumes(u, copy) && u.Block == block)) {
+            var consumedAt = block.Instructions.IndexOf(consumer);
+            for (var k = consumedAt + 1; k < destroyAt; k++) {
+                if (block.Instructions[k].Operands.Any(o => DependsOn(o, source))) {
+                    return false;
+                }
+            }
+        }
+
         Uses.Replace(function, copy, source);
         block.Instructions.Remove(copy);
         block.Instructions.Remove(destroy);
@@ -600,6 +614,27 @@ public sealed class ForwardCopies : ISilPass {
         copy.Block.Instructions.Remove(copy);
         foreach (var destroy in destroys) {
             destroy.Block.Instructions.Remove(destroy);
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    ///     True when the value is the source, or reaches it through what is
+    ///     not owned on its own — a field's address, a borrow, a cast — and so
+    ///     is only good while the source is.
+    /// </summary>
+    static bool DependsOn(SilValue value, SilValue source) {
+        for (var depth = 0; depth < 32; depth++) {
+            if (ReferenceEquals(value, source)) {
+                return true;
+            }
+
+            if (value is not SilInstruction { Operands.Count: > 0 } instruction || SilVerifier.OwnershipOf(value) == Ownership.Owned) {
+                return false;
+            }
+
+            value = instruction.Operands[0];
         }
 
         return true;

@@ -1,0 +1,78 @@
+module Negative.Signatures
+
+public struct Point { public var x: Int }
+public protocol Named { fn name() -> String }
+
+fn anUnknownParameterType(_ p: Missing) { }       //! S2001 no type named 'Missing'
+
+fn anUnknownReturnType() -> Missing {             //! S2001 no type named 'Missing'
+    return 0
+}
+
+fn anUnknownThrownType() throws(Missing) { }      //! S2001 no type named 'Missing'
+
+fn anUnknownConstraint<T: Missing>(_ value: T) { }   //! S2001 no type named 'Missing'
+
+fn anUnknownWhereConstraint<T>(_ value: T) where T: Missing { }   //! S2001 no type named 'Missing'
+
+fn aNonProtocolConstraint<T: Point>(_ value: T) -> Int {
+    return value.x
+}
+
+fn theWrongTypeArgumentCount(_ b: Box<Int, String>) { }   //! S3000 takes 1 type argument
+
+fn missingTypeArguments(_ b: Box) { }             //! S3002 takes 1 type argument
+
+public struct Box<Item> { public var item: Item }
+
+fn aThrownTypeIsAType() throws(Int) -> Int {
+    return 1
+}
+
+fn aDefaultArgumentIsChecked(_ n: Int = "one") -> Int {   //! S3004 expected 'Int'
+    return n
+}
+
+fn aDefaultArgumentOfTheRightType(_ n: Int = 1) -> Int {
+    return n
+}
+
+fn aLabelAndAName(first n: Int) -> Int {
+    return n
+}
+
+fn callingWithTheLabel() -> Int {
+    return aLabelAndAName(first: 1)
+}
+
+fn callingWithTheName() -> Int {
+    return aLabelAndAName(n: 1)         //! S3007 cannot be called
+}
+
+fn callingWithNeither() -> Int {
+    return aLabelAndAName(1)            //! S3007 cannot be called
+}
+
+fn anUnderscoreMeansNoLabel(_ n: Int) -> Int {
+    return n
+}
+
+fn callingWithoutALabel() -> Int {
+    return anUnderscoreMeansNoLabel(1)
+}
+
+fn callingWithOne() -> Int {
+    return anUnderscoreMeansNoLabel(n: 1)   //! S3007 cannot be called
+}
+
+fn anInoutParameterIsWritable(inout n: Int) {
+    n = 1
+}
+
+fn aPlainParameterIsNot(_ n: Int) {
+    n = 1                               //! S3010
+}
+
+fn aBorrowingParameterIsNotEither(borrowing n: Point) {
+    n.x = 1                             //! S3010
+}

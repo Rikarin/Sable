@@ -1,0 +1,122 @@
+module Negative.Initialisation
+
+public struct Point { public var x: Int, public var y: Int }
+public union Shape { Circle(radius: F64), Empty }
+
+fn readBeforeWrite() -> Int {
+    var n: Int
+    return n                            //! S6008 before anything assigns
+}
+
+fn writeThenRead() -> Int {
+    var n: Int
+    n = 1
+    return n
+}
+
+fn oneBranchOnly(_ flag: Bool) -> Int {
+    var n: Int
+    if flag {
+        n = 1
+    }
+    return n                            //! S6008 before anything assigns
+}
+
+fn bothBranches(_ flag: Bool) -> Int {
+    var n: Int
+    if flag {
+        n = 1
+    } else {
+        n = 2
+    }
+    return n
+}
+
+fn oneBranchExits(_ flag: Bool) -> Int {
+    var n: Int
+    if flag {
+        n = 1
+    } else {
+        return 0
+    }
+    return n
+}
+
+fn aLoopMayNotRun(_ xs: Int[]) -> Int {
+    var n: Int
+    for x in xs {
+        n = x
+    }
+    return n                            //! S6008 before anything assigns
+}
+
+fn aRepeatAlwaysRuns() -> Int {
+    var n: Int
+    repeat {
+        n = 1
+    } while false
+    return n
+}
+
+fn everyMatchArmAssigns(_ s: Shape) -> Int {
+    var n: Int
+    match s {
+        case .Circle(let r) => { n = 1 }
+        case .Empty => { n = 0 }
+    }
+    return n
+}
+
+fn oneArmDoesNot(_ s: Shape) -> Int {
+    var n: Int
+    match s {
+        case .Circle(let r) => { n = 1 }
+        case .Empty => { }
+    }
+    return n                            //! S6008 before anything assigns
+}
+
+fn readingInsideTheAssignment() -> Int {
+    var n: Int
+    n = n + 1                           //! S6008 before anything assigns
+    return n
+}
+
+fn aFieldOfAnUninitialisedValue() -> Int {
+    var p: Point
+    return p.x                          //! S6008 before anything assigns
+}
+
+fn aGuardAssigns(_ n: Int?) -> Int {
+    guard let value = n else {
+        return 0
+    }
+    return value
+}
+
+fn anIfLetAssigns(_ n: Int?) -> Int {
+    if let value = n {
+        return value
+    }
+    return 0
+}
+
+fn aCatchCannotRelyOnTheBody() -> Int {
+    var n: Int
+    do {
+        n = 1
+        let t = try read()
+    } catch {
+        return n                        //! S6008 before anything assigns
+    }
+    return n
+}
+
+fn read() throws(Shape) -> Int { return 1 }
+
+fn aClosureCannotSeeTheFuture() -> Int {
+    var n: Int
+    let f = () => { return n }          //! S6008 before anything assigns
+    n = 1
+    return f()
+}

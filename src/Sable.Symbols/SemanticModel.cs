@@ -202,6 +202,9 @@ public sealed class SemanticModel
         FileScope scope)
     {
         if (_compilation.GetDeclaredSymbol(declaration) is not FunctionSymbol function) return;
+
+        BindParameterDefaults(function, scope);
+
         if (body is null && expressionBody is null) return;
 
         var binder = new Binder(_compilation, scope, function);
@@ -211,6 +214,27 @@ public sealed class SemanticModel
             : binder.BindExpressionBody(function, expressionBody!);
 
         Collect(binder);
+    }
+
+    /// <summary>
+    /// Binds a parameter's default value against the parameter's type.
+    /// </summary>
+    /// <remarks>
+    /// It is part of the signature rather than of the body, so it is bound
+    /// even for a declaration that has none.
+    /// </remarks>
+    private void BindParameterDefaults(FunctionSymbol function, FileScope scope)
+    {
+        foreach (var parameter in function.Parameters)
+        {
+            if (parameter.DeclaringSyntax.IsEmpty) continue;
+            if (parameter.DeclaringSyntax[0] is not ParameterSyntax syntax) continue;
+            if (syntax.DefaultValue is not { } clause) continue;
+
+            var binder = new Binder(_compilation, scope, function);
+            binder.BindInitializer(clause.Value, parameter.Type);
+            Collect(binder);
+        }
     }
 
     private void BindSubscript(SubscriptDeclarationSyntax declaration, FileScope scope)

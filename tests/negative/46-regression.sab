@@ -31,9 +31,10 @@ fn arrayKindAndElement() -> String[>..] {
     return [1, 2]                       //! S3004 //! S3004
 }
 
-// A union case through the definition infers; a mismatch still reports.
+// A union case through the definition takes its parameters from the context,
+// so a payload that disagrees is reported at the payload.
 fn unionInference() -> Tree<Int> {
-    return Tree.Node(value: "x", next: Tree.Leaf)   //! S3004 found 'Tree<String>'
+    return Tree.Node(value: "x", next: Tree.Leaf)   //! S3004 expected 'Int' but found 'String'
 }
 
 // 'Self' in a protocol is the conformer, so a different type does not fit.

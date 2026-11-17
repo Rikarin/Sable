@@ -1,0 +1,14 @@
+module Negative.Aliases
+
+union Outcome<T, E> { Ok(value: T), Failed(error: E) }
+union AppError { Broken }
+alias Result<T> = Outcome<T, AppError>
+alias Count = Int
+
+fn aGenericAliasNeedsItsArguments(_ r: Result) { }      //! S3000 takes 1
+fn andTheRightNumberOfThem(_ r: Result<Int, Int>) { }   //! S3000 takes 1
+fn aPlainAliasTakesNone(_ c: Count<Int>) { }            //! S3001 not generic
+
+fn aGenericAliasIsWhatItNames() -> Result<Int> {
+    return .Ok(value: "text")                           //! S3004 expected 'Int'
+}

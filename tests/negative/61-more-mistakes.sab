@@ -25,7 +25,7 @@ fn usingAGenericUnionWithoutArguments(_ m: Maybe) -> Int {   //! S3002 takes 1 t
 }
 
 fn theWrongPayloadForAGenericUnion() -> Maybe<Int> {
-    return Maybe.Some(value: "text")    //! S3004 found 'Maybe<String>'
+    return Maybe.Some(value: "text")    //! S3004 expected 'Int' but found 'String'
 }
 
 fn aNothingNeedsItsArguments() -> Maybe<Int> {

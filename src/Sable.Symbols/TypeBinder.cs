@@ -557,6 +557,18 @@ internal sealed class TypeBinder(Compilation compilation)
             nested, syntax.Right.TypeArgumentList, context, scope, syntax.Span);
     }
 
+    /// <summary>
+    /// A generic name written in an expression, <c>Outcome&lt;Int, E&gt;</c>,
+    /// read as the type it names.
+    /// </summary>
+    internal TypeSymbol BindGenericName(GenericNameSyntax syntax, Symbol context, FileScope? scope)
+    {
+        var symbol = Lookup(syntax.Identifier.Text, context, scope, syntax.Identifier.Span);
+        return symbol is null
+            ? ErrorTypeSymbol.Instance
+            : ApplyTypeArguments(symbol, syntax.TypeArgumentList, context, scope, syntax.Span);
+    }
+
     private TypeSymbol ApplyTypeArguments(
         Symbol symbol,
         TypeArgumentListSyntax? argumentList,
@@ -579,14 +591,32 @@ internal sealed class TypeBinder(Compilation compilation)
                 return typeParameter;
 
             case AliasSymbol alias:
-                // Aliases are transparent; a generic alias is not yet substituted.
-                if (!arguments.IsEmpty && alias.TypeParameters.Length != arguments.Length)
+            {
+                // An alias is transparent: it is the type it names, with its
+                // own parameters replaced by the arguments written here.
+                // 'alias Result<T> = Outcome<T, AppError>' makes
+                // 'Result<Int>' exactly 'Outcome<Int, AppError>'.
+                var expected = alias.TypeParameters.Length;
+
+                if (expected == 0)
+                {
+                    if (arguments.IsEmpty) return alias.AliasedType;
+                    return Error(ErrorCode.ERR_TypeArgumentsOnNonGeneric, span,
+                        $"'{alias.Name}' is not generic and takes no type arguments");
+                }
+
+                if (arguments.Length != expected)
                 {
                     return Error(ErrorCode.ERR_WrongTypeArgumentCount, span,
-                        $"'{alias.Name}' takes {alias.TypeParameters.Length} type argument(s), "
+                        $"'{alias.Name}' takes {expected} type argument(s), "
                         + $"but {arguments.Length} were given");
                 }
-                return alias.AliasedType;
+
+                var map = new Dictionary<TypeParameterSymbol, TypeSymbol>();
+                for (var i = 0; i < expected; i++) map[alias.TypeParameters[i]] = arguments[i];
+
+                return new TypeSubstitution(map).Apply(alias.AliasedType);
+            }
 
             case NamedTypeSymbol named:
             {

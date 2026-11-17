@@ -1422,7 +1422,7 @@ public sealed class Binder
         LiteralExpressionSyntax literal => BindLiteral(literal, expectedType),
         InterpolatedStringExpressionSyntax interpolated => BindInterpolatedString(interpolated),
         IdentifierNameSyntax name => BindName(name, name.Identifier.Text),
-        GenericNameSyntax name => BindName(name, name.Identifier.Text),
+        GenericNameSyntax name => BindGenericName(name),
         SelfExpressionSyntax self => BindSelf(self),
         SuperExpressionSyntax super => BindSuper(super),
         ParenthesizedExpressionSyntax parenthesized =>
@@ -1575,6 +1575,29 @@ public sealed class Binder
         }
 
         return [];
+    }
+
+    /// <summary>
+    /// <c>Outcome&lt;Int, AppError&gt;</c> in an expression: a generic type,
+    /// or an alias of one, with its arguments applied, so that a case or a
+    /// static member reached through it is of the constructed type.
+    /// </summary>
+    private BoundExpression BindGenericName(GenericNameSyntax syntax)
+    {
+        var name = syntax.Identifier.Text;
+
+        if (LookupLocal(name) is null
+            && _compilation.TypeBinder.Lookup(name, _containingSymbol, _scope, syntax.Span)
+                is NamedTypeSymbol or AliasSymbol)
+        {
+            var type = _compilation.TypeBinder.BindGenericName(
+                syntax, _containingSymbol, _scope);
+            return type.IsError
+                ? new BoundError(syntax)
+                : new BoundTypeExpression(syntax, type);
+        }
+
+        return BindName(syntax, name);
     }
 
     private BoundExpression BindName(ExpressionSyntax syntax, string name) =>
@@ -2126,7 +2149,7 @@ public sealed class Binder
             .Select(e => IsClosure(e) ? new BoundUnboundClosure(e) : BindExpression(e))
             .ToImmutableArray();
 
-        var callee = BindCallee(syntax.Expression, arguments);
+        var callee = BindCallee(syntax.Expression, expectedType);
 
         switch (callee)
         {
@@ -2134,7 +2157,8 @@ public sealed class Binder
                 return BindCallToGroup(syntax, group, arguments, labels, syntaxes, expectedType);
 
             case BoundUnionCaseGroup unionCase:
-                return BindUnionCaseConstruction(syntax, unionCase, arguments, labels);
+                return BindUnionCaseConstruction(
+                    syntax, unionCase, arguments, labels, expectedType);
 
             case BoundExpression value when value.Type is FunctionTypeSymbol functionType:
                 return BindCallToValue(syntax, value, functionType, arguments, syntaxes);
@@ -2202,7 +2226,8 @@ public sealed class Binder
         InvocationExpressionSyntax syntax,
         BoundUnionCaseGroup group,
         ImmutableArray<BoundExpression> arguments,
-        ImmutableArray<string?> labels)
+        ImmutableArray<string?> labels,
+        TypeSymbol? expectedType = null)
     {
         var unionCase = group.UnionCase;
         var union = group.Type as NamedTypeSymbol;
@@ -2216,6 +2241,21 @@ public sealed class Binder
             && arguments.Length == unionCase.Payload.Length)
         {
             var map = new Dictionary<TypeParameterSymbol, TypeSymbol>();
+
+            // What the context wants settles the parameters the payload does
+            // not mention: 'Outcome.Ok(value: 1)' where 'Outcome<Int, AppError>'
+            // is expected has nothing else to say what 'E' is.
+            var wanted = expectedType is OptionalTypeSymbol optional
+                ? optional.UnderlyingType
+                : expectedType;
+
+            if (Expand(wanted) is NamedTypeSymbol { IsConstructed: true } expected
+                && ReferenceEquals(expected.OriginalDefinition, union.OriginalDefinition))
+            {
+                for (var i = 0; i < union.TypeParameters.Length; i++)
+                    map[union.TypeParameters[i]] = expected.TypeArguments[i];
+            }
+
             for (var i = 0; i < arguments.Length; i++)
             {
                 TypeSubstitution.Unify(
@@ -2269,6 +2309,10 @@ public sealed class Binder
     {
         ClosureExpressionSyntax or BraceClosureExpressionSyntax => true,
         ImplicitMemberAccessExpressionSyntax => true,
+
+        // '.Full(value: 1)' as an argument: the dot still needs the parameter.
+        InvocationExpressionSyntax { Expression: ImplicitMemberAccessExpressionSyntax } => true,
+
         ParenthesizedExpressionSyntax parenthesized => IsClosure(parenthesized.Expression),
         _ => false,
     };
@@ -2323,12 +2367,15 @@ public sealed class Binder
             syntax, type.ReturnType, callee, converted.ToImmutable());
     }
 
-    private BoundExpression BindCallee(
-        ExpressionSyntax syntax, ImmutableArray<BoundExpression> arguments)
-    {
-        _ = arguments;
-        return BindExpression(syntax);
-    }
+    /// <summary>
+    /// Binds what is being called. A leading-dot callee, <c>.Ok(value: 1)</c>,
+    /// names a member of the type the call's context wants, so it is the one
+    /// callee that needs to see that type.
+    /// </summary>
+    private BoundExpression BindCallee(ExpressionSyntax syntax, TypeSymbol? expectedType) =>
+        syntax is ImplicitMemberAccessExpressionSyntax implicitMember
+            ? Record(implicitMember, BindImplicitMemberAccess(implicitMember, expectedType))
+            : BindExpression(syntax);
 
     private BoundExpression BindCallToGroup(
         InvocationExpressionSyntax syntax,

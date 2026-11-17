@@ -101,8 +101,12 @@ internal sealed class TypeSubstitution
 
                 return Changed(function.ParameterTypes, parameters)
                        || !returnType.Equals(function.ReturnType)
+                       || !Equals(thrown, function.ThrownType)
                     ? new FunctionTypeSymbol(
                         parameters, returnType, function.IsAsync, thrown)
+                    {
+                        IsRethrows = function.IsRethrows,
+                    }
                     : function;
             }
 

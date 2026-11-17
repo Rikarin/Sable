@@ -3396,7 +3396,17 @@ public sealed class Binder
         var member = named.GetMembers(name).FirstOrDefault();
 
         if (member is EnumCaseSymbol enumCase)
+        {
+            // An enum case carries nothing, so there is nothing to name.
+            if (pattern.ArgumentList is { } enumArguments)
+            {
+                _diagnostics.Error(ErrorCode.ERR_WrongPayloadCount, pattern.Span,
+                    $"'{name}' is an enum case and carries no values, "
+                    + $"but the pattern names {enumArguments.Arguments.Count}");
+            }
+
             return new BoundEnumCasePattern(pattern, inputType, enumCase);
+        }
 
         if (member is not UnionCaseSymbol unionCase)
         {

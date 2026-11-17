@@ -1,0 +1,66 @@
+module Negative.Enums
+
+public enum Direction { North, South, East, West }
+public enum Code: U8 { Ok = 0, Failed = 1 }
+public enum Level: Int { Low = 1, High = 10 }
+
+fn anEnumIsNotItsUnderlyingType(_ c: Code) -> U8 {
+    return c                            //! S3004 expected 'U8'
+}
+
+fn anUnderlyingTypeIsNotTheEnum(_ n: U8) -> Code {
+    return n                            //! S3004 expected 'Code'
+}
+
+fn twoEnumsAreDistinct(_ c: Code) -> Level {
+    return c                            //! S3004 expected 'Level'
+}
+
+fn anEnumCaseIsTheEnum() -> Direction {
+    return Direction.North
+}
+
+fn anUnknownCase() -> Direction {
+    return Direction.Up                 //! S2002 has no member named 'Up'
+}
+
+fn comparingEnums(_ a: Direction, _ b: Direction) -> Bool {
+    return a == b
+}
+
+fn comparingAcrossEnums(_ a: Direction, _ b: Code) -> Bool {
+    return a == b                       //! S3009
+}
+
+fn orderingEnums(_ a: Level, _ b: Level) -> Bool {
+    return a < b                        //! S3009
+}
+
+fn arithmeticOnEnums(_ a: Code, _ b: Code) -> Code {
+    return a + b                        //! S3009
+}
+
+fn matchingAnEnum(_ d: Direction) -> Int {
+    return match d {                    //! S6003
+        case .North => 0
+        case .South => 1
+    }
+}
+
+fn matchingWithALiteral(_ d: Direction) -> Int {
+    return match d {
+        case 0 => 0                     //! S6000
+        default => 1
+    }
+}
+
+fn anEnumHasNoPayload(_ d: Direction) -> Int {
+    return match d {
+        case .North(let n) => n         //! S6002 carries no values //! S2002 no symbol named
+        default => 1
+    }
+}
+
+fn enumCasesAreStatic(_ d: Direction) -> Direction {
+    return d.North                      //! S3039 is a static member
+}

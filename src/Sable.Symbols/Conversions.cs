@@ -155,6 +155,15 @@ internal sealed class Conversions(CoreTypes core)
 
             foreach (var baseType in current.BaseTypes)
             {
+                // An enum's base list names its underlying representation as
+                // well as its protocols, and that is not a supertype: going
+                // between an enum and its representation is written out.
+                if (current.TypeKind == TypeKind.Enum
+                    && baseType is NamedTypeSymbol { TypeKind: TypeKind.Builtin })
+                {
+                    continue;
+                }
+
                 if (baseType.Equals(target)) return true;
                 if (baseType is NamedTypeSymbol baseNamed) queue.Enqueue(baseNamed);
             }

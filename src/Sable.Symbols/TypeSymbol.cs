@@ -132,6 +132,12 @@ public sealed class NamedTypeSymbol : TypeSymbol {
     /// </summary>
     public bool IsInlineLayout { get; internal set; }
 
+    /// <summary>
+    ///     <c>@reflectable</c> (docs/06 §6.3): the type conforms to
+    ///     <c>Reflectable</c>, so <c>TypeInfo.of</c> describes it.
+    /// </summary>
+    public bool IsReflectable { get; internal set; }
+
     /// <summary>True for <c>sealed class</c>: it may not be subclassed.</summary>
     public bool IsSealed { get; internal set; }
 

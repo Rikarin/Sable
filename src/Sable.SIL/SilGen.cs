@@ -4260,6 +4260,11 @@ public sealed partial class SilGen {
 
             var callee = call.Function;
 
+            // Sable.Core's @intrinsic members: the compiler writes their bodies (SilGen.Reflection.cs).
+            if (IsIntrinsic(callee)) {
+                return Intrinsic(call);
+            }
+
             // Tasks: made, and yielded to.
             if (ReferenceEquals(Owner(callee)?.OriginalDefinition, Core.Task) && callee.IsStatic) {
                 if (callee.Name == "spawn") {

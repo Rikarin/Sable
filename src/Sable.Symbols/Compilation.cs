@@ -493,8 +493,19 @@ public sealed class Compilation {
             IsNoncopyable = typeKind is TypeKind.Struct or TypeKind.Union
                 && attributes.Any(static a => a.Name.ToString().Trim() == "noncopy"),
             IsInlineLayout = typeKind is TypeKind.Struct
-                && attributes.Any(static a => a.Name.ToString().Trim() == "inline_layout")
+                && attributes.Any(static a => a.Name.ToString().Trim() == "inline_layout"),
+            IsReflectable = attributes.Any(static a => a.Name.ToString().Trim() == "reflectable")
         };
+
+        // A protocol has no values to look at, and so nothing to describe.
+        if (type.IsReflectable && typeKind is not (TypeKind.Struct or TypeKind.Class or TypeKind.Actor or TypeKind.Union or TypeKind.Enum)) {
+            type.IsReflectable = false;
+            ReportDeclaration(
+                ErrorCode.ERR_NotReflectableKind,
+                attributes.First(static a => a.Name.ToString().Trim() == "reflectable").Span,
+                $"only a struct, class, actor, union or enum can be @reflectable, and '{name}' is a {typeKind.ToString().ToLowerInvariant()}"
+            );
+        }
 
         if (type.IsInlineLayout) {
             type.AddMember(Core.FromBytes(type));

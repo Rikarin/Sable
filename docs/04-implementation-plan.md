@@ -690,6 +690,45 @@ allocator (a size-class allocator — mimalloc is the reference to copy or embed
 - API shape: `Mirror(of:)` for read-only introspection (cheap, works on
   everything), `TypeInfo` for the full `@reflectable` surface.
 
+#### Reflection, as implemented
+
+A first slice, in `lib/Sable.Core/Reflection.sab` over `Reflect`, a struct
+of `@intrinsic` members whose bodies the compiler writes
+(`src/Sable.SIL/SilGen.Reflection.cs`; tests in
+`tests/Sable.CodeGen.Tests/ReflectionTests.cs` and
+`tests/Sable.Symbols.Tests/ReflectionTests.cs`):
+
+- `Mirror(of: value)` on any value: `typeName`, `kind` (struct, class,
+  actor, union, enum, optional, tuple, array, dictionary, function,
+  existential, primitive), `caseName`, `fields` (name, type name and value,
+  described) and `description` — `Point(x: 1, y: 2)`,
+  `Shape.Circle(radius: 2.5)`, `[1, 2]`, `["a": 1]`, `none`. A class's
+  superclass fields come first; weak and unowned fields are read without
+  keeping the object; objects are followed eight levels deep, so a cycle
+  ends in `...`. Closures, existentials, regions and `@inline_layout`
+  values are named, not taken apart: `<(Int) -> Int>`.
+- `@reflectable` is a conformance to `Reflectable` (writing `: Reflectable`
+  is the same), and `TypeInfo.of(T.self)` requires it — the binder's usual
+  constraint error otherwise, and `@reflectable` on a protocol is S3080.
+  `TypeInfo` gives the name, kind, stored fields (type, mutability,
+  visibility), methods, initialisers and operators (signature, parameter
+  names and types, return type, static/public/mutating), union and enum
+  cases with their payloads, declared conformances and the attributes as
+  written; generic code reaches it through `T: Reflectable`.
+- Nothing is emitted for a type until a program reflects on it: each
+  question is a SIL function synthesised per type on first use, shared by
+  later calls, and pruned with everything else unreachable. Hello world is
+  51,736 bytes before and after. Instead of the always-present field
+  descriptors of docs/06 §6.2, the answers are code generated where asked
+  for; the interpreter and the native build agree because both run it.
+
+Deferred: a class reference is described as its static type, not the
+subclass it is; `Mirror(of:)` on `()` (a generic parameter of type `()`
+does not lower yet); computed properties; attribute payloads as values;
+dynamic invoke and construction; `Runtime.lookupType` and the manifest's
+`reflect` list; `--explain-reflection` (there is no graph to print until
+metadata is emitted as data rather than code).
+
 ### 4.3 The core library (`Sable.Core`)
 
 Order of construction:
@@ -751,7 +790,7 @@ Written so far (`tests/Sable.CodeGen.Tests/LibraryTests.cs`):
 What it took from the compiler: generic initialisers inferring their type
 arguments, user operators found through a type parameter's constraints,
 operators and witnesses on primitive types lowered, and reachability-based
-emission. Next: reflection (4.2), streaming I/O (`Stream`, buffered
+emission. A first slice of reflection (4.2) has followed. Next: streaming I/O (`Stream`, buffered
 readers and writers, memory-mapped files), and the names the plan lists that are not yet here
 (`Deque`, `OrderedDictionary`, `Heap`, formatting and parsing).
 
@@ -782,7 +821,9 @@ to the state machine where tasks are many.
 ### 4.4 Exit criteria
 
 - [ ] Stdlib is self-hosted Sable, no C# in the shipping library
-- [ ] Reflection: hello-world binary grows < 50 KB with reflection off
+- [x] Reflection: hello-world binary grows < 50 KB with reflection off —
+      it grows not at all (51,736 bytes either way): reflection is code
+      synthesised per type a program reflects on, and nothing else
 - [ ] Dictionary/List/String within 15% of their .NET equivalents on a
       standard benchmark set
 - [ ] A real program ships: a static site generator or an HTTP service, in

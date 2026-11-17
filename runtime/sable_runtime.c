@@ -2391,6 +2391,50 @@ static void buffer_add(Buffer *buffer, const char *bytes, size_t length) {
     buffer->length += length;
 }
 
+// The program's path: the name itself when it holds a '/', else the first
+// executable of that name on PATH; NULL when there is none. Looked up here
+// rather than left to posix_spawnp, which does not report a failed exec
+// everywhere (under emulation, the child just exits 127).
+static char *find_program(const char *name) {
+    if (strchr(name, '/') != NULL) {
+        return access(name, X_OK) == 0 ? strdup(name) : NULL;
+    }
+
+    const char *path = getenv("PATH");
+    if (path == NULL || *name == '\0') {
+        return NULL;
+    }
+
+    size_t name_length = strlen(name);
+    while (*path != '\0') {
+        const char *end = strchr(path, ':');
+        size_t length = end == NULL ? strlen(path) : (size_t)(end - path);
+        char *candidate = malloc(length + name_length + 2);
+        if (length == 0) {
+            memcpy(candidate, ".", 1);
+            length = 1;
+        } else {
+            memcpy(candidate, path, length);
+        }
+
+        candidate[length] = '/';
+        memcpy(candidate + length + 1, name, name_length + 1);
+        struct stat info;
+        if (access(candidate, X_OK) == 0 && stat(candidate, &info) == 0 && S_ISREG(info.st_mode)) {
+            return candidate;
+        }
+
+        free(candidate);
+        if (end == NULL) {
+            break;
+        }
+
+        path = end + 1;
+    }
+
+    return NULL;
+}
+
 // Runs the program, found on PATH, to its end: the input written to it and
 // its output and errors read as they come, all three at once, so that
 // neither side waits on a full pipe. Gives what it wrote to standard
@@ -2404,6 +2448,17 @@ SableString *sable_process_run(const SableString *program, const SableArray *arg
     }
 
     argv[count + 1] = NULL;
+
+    char *found = find_program(argv[0]);
+    if (found == NULL) {
+        for (int64_t i = 0; i <= count; i++) {
+            free(argv[i]);
+        }
+
+        free(argv);
+        io_last_failed = true;
+        return make_string("", 0);
+    }
 
     int in[2], out[2], err[2];
     bool piped = pipe(in) == 0;
@@ -2425,7 +2480,7 @@ SableString *sable_process_run(const SableString *program, const SableArray *arg
 
         fflush(stdout);
         fflush(stderr);
-        spawned = posix_spawnp(&child, argv[0], &actions, NULL, argv, environ);
+        spawned = posix_spawn(&child, found, &actions, NULL, argv, environ);
         posix_spawn_file_actions_destroy(&actions);
         close(in[0]);
         close(out[1]);
@@ -2437,6 +2492,7 @@ SableString *sable_process_run(const SableString *program, const SableArray *arg
     }
 
     free(argv);
+    free(found);
 
     if (spawned != 0) {
         if (piped) {

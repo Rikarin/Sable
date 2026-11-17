@@ -50,6 +50,11 @@ public sealed partial class SilInterpreter(SilModule module, int stepLimit = 10_
     /// <summary>The program's arguments, after its own name.</summary>
     public IReadOnlyList<string> Arguments { get; init; } = [];
 
+    /// <summary>The last program <c>Runtime.run</c> ran: how it ended, and what it wrote to standard error.</summary>
+    long _lastStatus;
+
+    string _lastErrorOutput = "";
+
     /// <summary>Whether the last runtime call that can fail did.</summary>
     bool _ioFailed;
 
@@ -993,6 +998,66 @@ public sealed partial class SilInterpreter(SilModule module, int stepLimit = 10_
                 _ioFailed = value is null;
                 return Allocate(new HeapString(value ?? ""));
             }
+
+            case "process_run": {
+                var start = new System.Diagnostics.ProcessStartInfo(Text(operands[0]).Value) {
+                    RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false,
+                };
+                if (operands[1] is HeapArray given) {
+                    foreach (var argument in Alive(given).Elements) {
+                        start.ArgumentList.Add(Text(argument).Value);
+                    }
+                }
+
+                System.Diagnostics.Process? process;
+                try {
+                    process = System.Diagnostics.Process.Start(start);
+                } catch (System.ComponentModel.Win32Exception) {
+                    process = null;
+                }
+
+                if (process is null) {
+                    _ioFailed = true;
+                    return Allocate(new HeapString(""));
+                }
+
+                using (process) {
+                    var output = process.StandardOutput.ReadToEndAsync();
+                    var errors = process.StandardError.ReadToEndAsync();
+                    try {
+                        process.StandardInput.Write(Text(operands[2]).Value);
+                        process.StandardInput.Close();
+                    } catch (IOException) {
+                        // It stopped reading: what it was given is all it wanted.
+                    }
+
+                    process.WaitForExit();
+                    _lastStatus = process.ExitCode;
+                    _lastErrorOutput = errors.Result;
+                    _ioFailed = false;
+                    return Allocate(new HeapString(output.Result));
+                }
+            }
+
+            case "process_status":
+                return _lastStatus;
+
+            case "process_error_output":
+                return Allocate(new HeapString(_lastErrorOutput));
+
+            case "process_current_directory":
+                return Allocate(new HeapString(Directory.GetCurrentDirectory()));
+
+            case "process_change_directory":
+                try {
+                    Directory.SetCurrentDirectory(Text(operands[0]).Value);
+                    return true;
+                } catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException) {
+                    return false;
+                }
+
+            case "process_id":
+                return (long)Environment.ProcessId;
 
             case "time_monotonic":
                 return System.Diagnostics.Stopwatch.GetTimestamp() * (1_000_000_000L / System.Diagnostics.Stopwatch.Frequency);

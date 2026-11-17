@@ -2794,6 +2794,10 @@ public sealed class Binder {
             // 'tripled(none)' with tripled taking Int?.
             LiteralExpressionSyntax { Token.Kind: SyntaxKind.NoneKeyword } => true,
 
+            // Nor is '[]' any particular array: 'run(name, [])' takes the
+            // element type and the kind from the parameter.
+            ArrayExpressionSyntax { Elements.Count: 0 } => true,
+
             ParenthesizedExpressionSyntax parenthesized => IsClosure(parenthesized.Expression),
             _ => false,
         };

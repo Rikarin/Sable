@@ -1,0 +1,48 @@
+module Sable.Process
+
+// Running other programs, and this one's place in the system (docs/04 §4.3),
+// written in Sable over the runtime's calls (Sable.Core's Runtime).
+
+/// How a program ended, and what it wrote.
+public struct Completed {
+    /// Its exit status; 128 and the signal when a signal ended it.
+    public var status: Int
+    public var output: String
+    public var errors: String
+
+    public var succeeded: Bool { get { return status == 0 } }
+}
+
+public union ProcessError {
+    /// Nothing by that name could be started: not a path, and not on PATH.
+    NotFound(program: String),
+}
+
+public struct Process {
+    /// Runs the program, found on PATH unless the name is a path, to its end.
+    public static fn run(_ program: String, _ arguments: String[>..]) throws(ProcessError) -> Completed {
+        return try Process.run(program, arguments, input: "")
+    }
+
+    /// Runs the program with the input given to it.
+    public static fn run(_ program: String, _ arguments: String[>..], input: String) throws(ProcessError) -> Completed {
+        if let output = Runtime.run(program, arguments, input) {
+            return Completed { status: Runtime.lastExitStatus(), output: output, errors: Runtime.lastErrorOutput() }
+        }
+        throw ProcessError.NotFound(program: program)
+    }
+
+    public static fn currentDirectory() -> String {
+        return Runtime.currentDirectory()
+    }
+
+    /// Whether it changed: the directory must be there.
+    public static fn changeDirectory(_ path: String) -> Bool {
+        return Runtime.changeDirectory(path)
+    }
+
+    /// This process's identifier.
+    public static fn id() -> Int {
+        return Runtime.processId()
+    }
+}

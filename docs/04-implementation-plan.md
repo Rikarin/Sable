@@ -755,8 +755,16 @@ Written so far (`tests/Sable.CodeGen.Tests/LibraryTests.cs`):
   three more runtime calls (`time_monotonic`, `time_wall_clock`,
   `time_sleep`). Not yet: time zones, and a sleep that lets other tasks run
   (it holds the scheduler's baton).
+- `Sable.Process`: `Process.run` runs a program found on PATH to its end,
+  its input written and its output and errors read together through
+  `poll` (so neither side blocks on a full pipe), giving `Completed`
+  (status — 128 plus the signal when one ended it — output, errors);
+  `ProcessError.NotFound` when nothing by that name starts. Also the
+  current directory and the process id. Not yet: pipelines, streaming a
+  running child's output, signals, and `exit`.
 
-What it took from the compiler: `?.` on any optional rather than only a
+What it took from the compiler: `[]` as an argument typed by the parameter
+(overloaded or not), `?.` on any optional rather than only a
 local's, diagnostics placed in the file they are in rather than by offset
 (offsets overlap between the program and the library), generic initialisers
 inferring their type arguments, user operators found through a type parameter's constraints,

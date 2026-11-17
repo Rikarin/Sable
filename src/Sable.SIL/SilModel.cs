@@ -1426,6 +1426,12 @@ public static class SilBuiltins {
         Add("time_monotonic", SilType.Int);
         Add("time_wall_clock", SilType.Int);
         Add("time_sleep", SilType.Unit, SilType.Int);
+        Add("process_run", SilType.String, SilType.String, new ArrayType(SilType.String), SilType.String);
+        Add("process_status", SilType.Int);
+        Add("process_error_output", SilType.String);
+        Add("process_current_directory", SilType.String);
+        Add("process_change_directory", SilType.Bool, SilType.String);
+        Add("process_id", SilType.Int);
 
         Add("region_create", SilType.Region);
 

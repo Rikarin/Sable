@@ -5015,6 +5015,12 @@ public sealed partial class SilGen {
                 "monotonicNanoseconds" => ("time_monotonic", SilType.Int, false),
                 "wallClockNanoseconds" => ("time_wall_clock", SilType.Int, false),
                 "sleep" => ("time_sleep", SilType.Unit, false),
+                "run" => ("process_run", SilType.String, true),
+                "lastExitStatus" => ("process_status", SilType.Int, false),
+                "lastErrorOutput" => ("process_error_output", SilType.String, false),
+                "currentDirectory" => ("process_current_directory", SilType.String, false),
+                "changeDirectory" => ("process_change_directory", SilType.Bool, false),
+                "processId" => ("process_id", SilType.Int, false),
                 _ => (null!, SilType.Unit, false),
             };
 

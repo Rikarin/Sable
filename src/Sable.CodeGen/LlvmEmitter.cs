@@ -283,6 +283,12 @@ public sealed class LlvmEmitter {
                                 declare i64 @sable_time_monotonic()
                                 declare i64 @sable_time_wall_clock()
                                 declare void @sable_time_sleep(i64)
+                                declare ptr @sable_process_run(ptr, ptr, ptr)
+                                declare i64 @sable_process_status()
+                                declare ptr @sable_process_error_output()
+                                declare ptr @sable_process_current_directory()
+                                declare zeroext i1 @sable_process_change_directory(ptr)
+                                declare i64 @sable_process_id()
                                 declare ptr @sable_string_split(ptr, i32)
                                 declare ptr @sable_string_from_char(i32)
                                 declare ptr @sable_string_from_int(i64)
@@ -1925,6 +1931,22 @@ public sealed class LlvmEmitter {
 
                 case "time_monotonic" or "time_wall_clock":
                     Line($"{Result()} = call i64 @sable_{builtin.Name}()");
+                    return;
+
+                case "process_run":
+                    Line($"{Result()} = call ptr @sable_process_run(ptr {operands[0]}, ptr {operands[1]}, ptr {operands[2]})");
+                    return;
+
+                case "process_status" or "process_id":
+                    Line($"{Result()} = call i64 @sable_{builtin.Name}()");
+                    return;
+
+                case "process_error_output" or "process_current_directory":
+                    Line($"{Result()} = call ptr @sable_{builtin.Name}()");
+                    return;
+
+                case "process_change_directory":
+                    Line($"{Result()} = call zeroext i1 @sable_process_change_directory(ptr {operands[0]})");
                     return;
 
                 case "time_sleep":

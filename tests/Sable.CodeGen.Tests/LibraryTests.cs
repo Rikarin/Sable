@@ -307,6 +307,63 @@ fn main() {
         Assert.DoesNotContain(result.Errors, static e => e.Contains("lib/", StringComparison.Ordinal));
     }
 
+    /// <summary>
+    ///     Sable.Process: a program run to its end with its input given and its
+    ///     output, errors and status kept; a name that is nothing; the directory.
+    /// </summary>
+    [Fact]
+    public void ProcessIsWrittenInSable() =>
+        Assert.Equal(
+            "hello world\ntrue\n3\n3\noops\n0\nnot found: surely-not-a-program-here\ntrue\n/\nfalse\ntrue\ntrue\n",
+            AssertAgree("""
+                module P
+                import Sable.Process
+
+                @main
+                fn main() {
+                    let echoed = try! Process.run("echo", ["hello", "world"])
+                    print(echoed.output.trimmed())
+                    print(echoed.succeeded)
+                    let counted = try! Process.run("wc", ["-l"], input: "a\nb\nc\n")
+                    print(counted.output.trimmed())
+                    let failing = try! Process.run("sh", ["-c", "echo oops >&2; exit 3"])
+                    print(failing.status)
+                    print(failing.errors.trimmed())
+                    print(failing.output.count)
+                    do {
+                        let _ = try Process.run("surely-not-a-program-here", [])
+                        print("ran")
+                    } catch .NotFound(let name) {
+                        print("not found: " + name)
+                    }
+                    let start = Process.currentDirectory()
+                    print(Process.changeDirectory("/"))
+                    print(Process.currentDirectory())
+                    print(Process.changeDirectory("/surely/not/here"))
+                    print(Process.changeDirectory(start))
+                    print(Process.id() > 0)
+                }
+                """).Stdout
+        );
+
+    /// <summary>'[]' as an argument takes its type from the parameter, overloaded or not.</summary>
+    [Fact]
+    public void AnEmptyArrayArgumentTakesTheParametersType() =>
+        Assert.Equal(
+            "0\n2\n",
+            AssertAgree("""
+                module P
+                fn f(_ a: Int[>..]) -> Int { return a.count }
+                fn g(_ name: String, _ a: String[>..]) -> Int { return a.count }
+                fn g(_ name: String, _ a: String[>..], extra: Int) -> Int { return a.count + extra }
+                @main
+                fn main() {
+                    print(f([]))
+                    print(g("x", [], extra: 2))
+                }
+                """).Stdout
+        );
+
     /// <summary>Only what a program reaches is built: the library costs a program that does not use it nothing.</summary>
     [Fact]
     public void WhatAProgramDoesNotUseIsNotBuilt() {

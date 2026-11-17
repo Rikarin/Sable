@@ -223,6 +223,21 @@ public sealed class CoreTypes {
         Method(Runtime, "monotonicNanoseconds", [], Int, true);
         Method(Runtime, "wallClockNanoseconds", [], Int, true);
         Method(Runtime, "sleep", [("nanoseconds", Int)], Void, true);
+
+        // Processes: another program run to its end, its output kept; and
+        // this one's directory and identity.
+        Method(
+            Runtime,
+            "run",
+            [("program", String), ("arguments", new ArrayTypeSymbol(String, ArrayKind.Grow)), ("input", String)],
+            new OptionalTypeSymbol(String),
+            true
+        );
+        Method(Runtime, "lastExitStatus", [], Int, true);
+        Method(Runtime, "lastErrorOutput", [], String, true);
+        Method(Runtime, "currentDirectory", [], String, true);
+        Method(Runtime, "changeDirectory", [("path", String)], Bool, true);
+        Method(Runtime, "processId", [], Int, true);
     }
 
     /// <summary><c>Runtime</c>: the operating system's calls, which Sable.IO wraps.</summary>

@@ -2309,3 +2309,217 @@ void sable_time_sleep(int64_t nanoseconds) {
     while (nanosleep(&wait, &wait) != 0 && errno == EINTR) {
     }
 }
+
+// ---- Processes (Sable.Process's floor) ----------------------------------
+
+#include <poll.h>
+#include <spawn.h>
+#include <sys/wait.h>
+
+extern char **environ;
+
+static int64_t process_last_status;
+
+// Plain memory, not a Sable string: the runtime keeps it past the program's
+// own objects, and the leak check counts only those.
+static char *process_last_errors;
+static size_t process_last_errors_length;
+
+int64_t sable_process_status(void) {
+    return process_last_status;
+}
+
+SableString *sable_process_error_output(void) {
+    return make_string(process_last_errors == NULL ? "" : process_last_errors, (int64_t)process_last_errors_length);
+}
+
+typedef struct {
+    char *bytes;
+    size_t length;
+    size_t capacity;
+} Buffer;
+
+static void buffer_add(Buffer *buffer, const char *bytes, size_t length) {
+    if (buffer->length + length > buffer->capacity) {
+        size_t capacity = buffer->capacity == 0 ? 4096 : buffer->capacity;
+        while (capacity < buffer->length + length) {
+            capacity *= 2;
+        }
+
+        char *grown = realloc(buffer->bytes, capacity);
+        if (grown == NULL) {
+            sable_trap("out of memory");
+        }
+
+        buffer->bytes = grown;
+        buffer->capacity = capacity;
+    }
+
+    memcpy(buffer->bytes + buffer->length, bytes, length);
+    buffer->length += length;
+}
+
+// Runs the program, found on PATH, to its end: the input written to it and
+// its output and errors read as they come, all three at once, so that
+// neither side waits on a full pipe. Gives what it wrote to standard
+// output; how it ended and its errors are kept for the calls above.
+SableString *sable_process_run(const SableString *program, const SableArray *arguments, const SableString *input) {
+    int64_t count = arguments == NULL ? 0 : arguments->count;
+    char **argv = malloc((size_t)(count + 2) * sizeof(char *));
+    argv[0] = c_string(program);
+    for (int64_t i = 0; i < count; i++) {
+        argv[i + 1] = c_string(((SableString **)arguments->elements)[i]);
+    }
+
+    argv[count + 1] = NULL;
+
+    int in[2], out[2], err[2];
+    bool piped = pipe(in) == 0;
+    piped = piped && pipe(out) == 0;
+    piped = piped && pipe(err) == 0;
+
+    pid_t child = 0;
+    int spawned = -1;
+    if (piped) {
+        posix_spawn_file_actions_t actions;
+        posix_spawn_file_actions_init(&actions);
+        posix_spawn_file_actions_adddup2(&actions, in[0], 0);
+        posix_spawn_file_actions_adddup2(&actions, out[1], 1);
+        posix_spawn_file_actions_adddup2(&actions, err[1], 2);
+        int ends[] = { in[0], in[1], out[0], out[1], err[0], err[1] };
+        for (int i = 0; i < 6; i++) {
+            posix_spawn_file_actions_addclose(&actions, ends[i]);
+        }
+
+        fflush(stdout);
+        fflush(stderr);
+        spawned = posix_spawnp(&child, argv[0], &actions, NULL, argv, environ);
+        posix_spawn_file_actions_destroy(&actions);
+        close(in[0]);
+        close(out[1]);
+        close(err[1]);
+    }
+
+    for (int64_t i = 0; i <= count; i++) {
+        free(argv[i]);
+    }
+
+    free(argv);
+
+    if (spawned != 0) {
+        if (piped) {
+            close(in[1]);
+            close(out[0]);
+            close(err[0]);
+        }
+
+        io_last_failed = true;
+        return make_string("", 0);
+    }
+
+    Buffer output = { 0 }, errors = { 0 };
+    int64_t written = 0;
+    int writing = in[1];
+    if (input->length == 0) {
+        close(writing);
+        writing = -1;
+    }
+
+    int reading_out = out[0], reading_err = err[0];
+    char chunk[4096];
+    while (reading_out >= 0 || reading_err >= 0) {
+        struct pollfd watched[3];
+        int n = 0;
+        if (writing >= 0) {
+            watched[n++] = (struct pollfd){ writing, POLLOUT, 0 };
+        }
+
+        if (reading_out >= 0) {
+            watched[n++] = (struct pollfd){ reading_out, POLLIN, 0 };
+        }
+
+        if (reading_err >= 0) {
+            watched[n++] = (struct pollfd){ reading_err, POLLIN, 0 };
+        }
+
+        if (poll(watched, (nfds_t)n, -1) < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+
+            break;
+        }
+
+        for (int i = 0; i < n; i++) {
+            if (watched[i].revents == 0) {
+                continue;
+            }
+
+            int fd = watched[i].fd;
+            if (fd == writing) {
+                ssize_t sent = write(writing, input->bytes + written, (size_t)(input->length - written));
+                if (sent > 0) {
+                    written += sent;
+                }
+
+                // Done, or it stopped reading: either way, its input ends.
+                if (sent <= 0 || written == input->length) {
+                    close(writing);
+                    writing = -1;
+                }
+
+                continue;
+            }
+
+            ssize_t got = read(fd, chunk, sizeof chunk);
+            if (got > 0) {
+                buffer_add(fd == reading_out ? &output : &errors, chunk, (size_t)got);
+            } else if (got == 0 || errno != EINTR) {
+                close(fd);
+                if (fd == reading_out) {
+                    reading_out = -1;
+                } else {
+                    reading_err = -1;
+                }
+            }
+        }
+    }
+
+    if (writing >= 0) {
+        close(writing);
+    }
+
+    int status = 0;
+    while (waitpid(child, &status, 0) < 0 && errno == EINTR) {
+    }
+
+    // A signal's end as the shell reports it: 128 and the signal.
+    process_last_status = WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status);
+    free(process_last_errors);
+    process_last_errors = errors.bytes;
+    process_last_errors_length = errors.length;
+    SableString *result = make_string(output.bytes == NULL ? "" : output.bytes, (int64_t)output.length);
+    free(output.bytes);
+    io_last_failed = false;
+    return result;
+}
+
+SableString *sable_process_current_directory(void) {
+    char path[4096];
+    if (getcwd(path, sizeof path) == NULL) {
+        return make_string("", 0);
+    }
+
+    return make_cstring(path);
+}
+
+bool sable_process_change_directory(const SableString *path) {
+    char *name = c_string(path);
+    bool changed = chdir(name) == 0;
+    free(name);
+    return changed;
+}
+
+int64_t sable_process_id(void) {
+    return (int64_t)getpid();
+}

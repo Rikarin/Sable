@@ -938,8 +938,27 @@ public sealed class Binder
         return ErrorTypeSymbol.Instance;
     }
 
+    /// <summary>The function whose body is being bound, if any.</summary>
+    private FunctionSymbol? EnclosingFunction()
+    {
+        for (var symbol = _containingSymbol; symbol is not null; symbol = symbol.ContainingSymbol)
+            if (symbol is FunctionSymbol function) return function;
+        return null;
+    }
+
     private BoundStatement BindReturn(ReturnStatementSyntax statement)
     {
+        // An initialiser's result is the value it is building, so 'return'
+        // there means "stop", never "stop with this".
+        if (statement.Expression is { } returned
+            && EnclosingFunction() is
+                { FunctionKind: FunctionKind.Initializer or FunctionKind.Deinitializer })
+        {
+            _diagnostics.Error(ErrorCode.ERR_ReturnValueNotAllowed, returned.Span,
+                "an initialiser returns nothing, so 'return' takes no value");
+            return Record(statement, new BoundReturn(statement, BindExpression(returned)));
+        }
+
         if (statement.Expression is null)
         {
             if (!_returnType.Equals(Core.Void) && !_returnType.IsError)
@@ -2073,6 +2092,38 @@ public sealed class Binder
             indices = CheckIndices(indices, named.TypeArguments[0], syntax);
             return new BoundIndexAccess(
                 syntax, new OptionalTypeSymbol(named.TypeArguments[1]), receiver, indices);
+        }
+
+        // A type may declare its own indexing with 'subscript'.
+        if (LookupMember(receiver.Type, "subscript") is { } found)
+        {
+            var group = new BoundFunctionGroup(syntax, receiver, [.. found.Members.OfType<FunctionSymbol>()])
+            {
+                Substitution = found.Substitution,
+            };
+
+            if (!group.Candidates.IsEmpty)
+            {
+                var resolved = ResolveOverload(
+                    group.Candidates, indices, [], syntax, found.Substitution);
+
+                if (resolved is null) return new BoundError(syntax, [receiver, .. indices]);
+
+                var converted = ImmutableArray.CreateBuilder<BoundExpression>(indices.Length);
+                for (var i = 0; i < indices.Length && i < resolved.Parameters.Length; i++)
+                {
+                    converted.Add(Convert(
+                        indices[i],
+                        found.Substitution.Apply(resolved.Parameters[i].Type),
+                        indices[i].Syntax));
+                }
+
+                return new BoundIndexAccess(
+                    syntax,
+                    found.Substitution.Apply(resolved.ReturnType),
+                    receiver,
+                    converted.ToImmutable());
+            }
         }
 
         _diagnostics.Error(ErrorCode.ERR_NotIndexable, syntax.Span,

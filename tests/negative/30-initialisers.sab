@@ -1,0 +1,74 @@
+module Negative.Initialisers
+
+public struct Point {
+    public var x: Int
+    public var y: Int
+}
+
+public struct Explicit {
+    public var n: Int
+
+    public init(_ n: Int) {
+        self.n = n
+    }
+}
+
+public class Node {
+    public var value: Int
+
+    public init(value: Int) {
+        self.value = value
+    }
+}
+
+fn aMemberwiseInitialiserNeedsEveryField() -> Point {
+    return Point(x: 1)                  //! S3007
+}
+
+fn aMemberwiseInitialiserChecksTypes() -> Point {
+    return Point(x: 1, y: "two")        //! S3007
+}
+
+fn aDeclaredInitialiserReplacesTheMemberwiseOne() -> Explicit {
+    return Explicit(n: 1)               //! S3007
+}
+
+fn aDeclaredInitialiserIsUsedAsWritten() -> Explicit {
+    return Explicit(1)
+}
+
+fn aClassNeedsItsInitialiser() -> Node {
+    return Node()                       //! S3007
+}
+
+fn readingAFieldBeforeInitialising() -> Int {
+    var p: Point
+    return p.x                          //! S6008 before anything assigns
+}
+
+public struct Chained {
+    public var a: Int
+    public var b: Int
+
+    public init(_ value: Int) {
+        a = value
+        b = a + 1
+    }
+}
+
+public struct WrongSelfAssignment {
+    public var n: Int
+
+    public init(_ value: String) {
+        n = value                       //! S3004 expected 'Int'
+    }
+}
+
+public struct ReturnsSomething {
+    public var n: Int
+
+    public init() {
+        n = 0
+        return 1                        //! S3017 takes no value
+    }
+}

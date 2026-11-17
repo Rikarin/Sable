@@ -269,16 +269,24 @@ public sealed class SemanticModel
                 IsMutating = !isGetter,
             };
 
+            // A subscript's accessors see its indices.
+            var parameters = owner is FunctionSymbol { FunctionKind: FunctionKind.Subscript } sub
+                ? sub.Parameters
+                : [];
+
             if (!isGetter)
             {
                 var parameterName = accessor.ParameterName.IsNone
                     ? DefaultParameterName(accessor.Keyword.Kind)
                     : accessor.ParameterName.Text;
 
-                var parameter = new ParameterSymbol(parameterName, null, function, accessor, 0);
+                var parameter = new ParameterSymbol(
+                    parameterName, null, function, accessor, parameters.Length);
                 parameter.TypeResolver = () => valueType;
-                function.Parameters = [parameter];
+                parameters = parameters.Add(parameter);
             }
+
+            function.Parameters = parameters;
 
             var returnType = isGetter ? valueType : _compilation.Core.Void;
             function.ReturnTypeResolver = () => returnType;

@@ -274,3 +274,30 @@ public fn bagSizes(_ ints: IntBag, _ words: WordBag) -> Int {
 public fn firstWord(_ words: WordBag) -> String {
     return firstOrDefault(words, "none")
 }
+
+// ---- Subscripts ----------------------------------------------------------
+
+public struct Grid {
+    public var cells: Int[>..]
+    public var width: Int
+
+    subscript(row: Int, column: Int) -> Int {
+        get => row * width + column
+    }
+}
+
+public fn readCell(_ grid: Grid) -> Int {
+    return grid[1, 2]
+}
+
+public struct Row<Value> {
+    public var values: Value[>..]
+
+    subscript(index: Int) -> Value {
+        get => values.removeLast()
+    }
+}
+
+public fn readRow(_ row: Row<String>) -> String {
+    return row[0]
+}

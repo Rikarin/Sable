@@ -1,0 +1,61 @@
+module Negative.Operators
+
+public struct Money {
+    public var cents: I64
+
+    operator + (a: Money, b: Money) -> Money {
+        return Money { cents: a.cents + b.cents }
+    }
+
+    prefix operator - (m: Money) -> Money {
+        return Money { cents: 0 - m.cents }
+    }
+}
+
+public struct Plain {
+    public var n: Int
+}
+
+fn anOperatorNeedsItsOwnType(_ a: Plain, _ b: Plain) -> Plain {
+    return a + b                        //! S3009 is not defined for
+}
+
+fn theWrongOperator(_ a: Money, _ b: Money) -> Money {
+    return a * b                        //! S3009 is not defined for
+}
+
+fn aPrefixOperatorIsNotInfix(_ a: Money, _ b: Money) -> Money {
+    return a - b                        //! S3009 is not defined for
+}
+
+fn anOperatorResultIsChecked(_ a: Money, _ b: Money) -> Int {
+    return a + b                        //! S3004
+}
+
+fn mixedOperands(_ a: Money, _ b: Plain) -> Money {
+    return a + b                        //! S3009 is not defined for
+}
+
+fn comparingUnorderedTypes(_ a: Money, _ b: Money) -> Bool {
+    return a < b                        //! S3009 is not defined for
+}
+
+fn referenceEqualityOnValues(_ a: Money, _ b: Money) -> Bool {
+    return a === b                      //! S3009
+}
+
+public struct Subscripted {
+    public var items: Int[>..]
+
+    subscript(index: Int) -> Int {
+        get => items.count
+    }
+}
+
+fn aSubscriptIndexIsChecked(_ s: Subscripted) -> Int {
+    return s["a"]                       //! S3007 cannot be called
+}
+
+fn aSubscriptResultIsChecked(_ s: Subscripted) -> String {
+    return s[0]                         //! S3004 expected 'String'
+}

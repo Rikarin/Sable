@@ -198,6 +198,7 @@ public sealed class Binder
             new BoundDefer(defer, BindStatement(defer.Body))),
         GuardStatementSyntax guard => BindGuard(guard),
         LabeledStatementSyntax labeled => BindStatement(labeled.Statement),
+        DeclarationStatementSyntax declaration => BindDeclarationStatement(declaration),
         EmptyStatementSyntax empty => new BoundBlock(empty, [], []),
         _ => new BoundErrorStatement(statement),
     };
@@ -213,6 +214,31 @@ public sealed class Binder
         PopScope();
 
         return Record(block, new BoundBlock(block, locals, statements.ToImmutable()));
+    }
+
+    /// <summary>Binds a declaration written inside a body.</summary>
+    /// <remarks>
+    /// Only functions are handled here. A type declared inside a body is
+    /// parsed, and kept for the semantic model, but it is not yet given a
+    /// symbol: nested types need their own declaration-table pass.
+    /// </remarks>
+    private BoundStatement BindDeclarationStatement(DeclarationStatementSyntax statement)
+    {
+        if (statement.Declaration is not FunctionDeclarationSyntax declaration)
+            return Record(statement, new BoundBlock(statement, [], []));
+
+        var function = _compilation.DeclareLocalFunction(
+            declaration, _containingSymbol, _scope);
+
+        // Declared before the body is bound, so the function can call itself.
+        Declare(function.Name, function);
+
+        BoundBlock? body = null;
+        if (declaration.Body is { } block) body = BindFunctionBody(function, block);
+        else if (declaration.ExpressionBody is { } expression)
+            body = BindExpressionBody(function, expression);
+
+        return Record(statement, new BoundLocalFunction(statement, function, body));
     }
 
     private BoundStatement BindLocalDeclaration(LocalDeclarationStatementSyntax declaration)
@@ -514,6 +540,7 @@ public sealed class Binder
         ConditionalExpressionSyntax conditional => BindConditionalExpression(conditional),
         TupleExpressionSyntax tuple => BindTuple(tuple),
         ArrayExpressionSyntax array => BindArray(array, expectedType),
+        RecordExpressionSyntax record => BindRecordExpression(record),
         CastExpressionSyntax cast => BindCast(cast),
         TypeTestExpressionSyntax test => BindTypeTest(test),
         MatchExpressionSyntax match => BindMatch(match, expectedType),
@@ -597,6 +624,7 @@ public sealed class Binder
             {
                 LocalSymbol localSymbol => new BoundLocalAccess(syntax, localSymbol),
                 ParameterSymbol parameter => new BoundParameterAccess(syntax, parameter),
+                FunctionSymbol function => new BoundFunctionGroup(syntax, null, [function]),
                 _ => new BoundError(syntax),
             };
         }
@@ -705,6 +733,9 @@ public sealed class Binder
             ? optional.UnderlyingType
             : receiver.Type;
 
+        if (receiverType is TupleTypeSymbol tuple)
+            return BindTupleElementAccess(syntax, receiver, tuple, name);
+
         if (receiverType is not NamedTypeSymbol owner)
         {
             _diagnostics.Error(ErrorCode.ERR_NameNotFound, syntax.Name.Span,
@@ -722,6 +753,36 @@ public sealed class Binder
 
         return BindMemberGroup(
             syntax, receiver, members, owner, TypeSubstitution.For(owner));
+    }
+
+    private BoundExpression BindTupleElementAccess(
+        MemberAccessExpressionSyntax syntax,
+        BoundExpression receiver,
+        TupleTypeSymbol tuple,
+        string name)
+    {
+        var index = -1;
+
+        for (var i = 0; i < tuple.ElementNames.Length; i++)
+        {
+            if (string.Equals(tuple.ElementNames[i], name, StringComparison.Ordinal))
+            {
+                index = i;
+                break;
+            }
+        }
+
+        if (index < 0 && int.TryParse(name, out var position)) index = position;
+
+        if (index < 0 || index >= tuple.ElementTypes.Length)
+        {
+            _diagnostics.Error(ErrorCode.ERR_NameNotFound, syntax.Name.Span,
+                $"'{tuple.ToDisplayString()}' has no element named '{name}'");
+            return new BoundError(syntax, receiver);
+        }
+
+        return new BoundTupleElementAccess(
+            syntax, tuple.ElementTypes[index], receiver, index);
     }
 
     private BoundExpression BindImplicitMemberAccess(
@@ -1041,8 +1102,77 @@ public sealed class Binder
                 "an empty array needs a type annotation");
         }
 
-        return new BoundArray(
-            syntax, new ArrayTypeSymbol(elementType, ArrayKind.Fixed), elements);
+        // An array literal has no storage kind of its own; like a numeric
+        // literal, it takes the one the context asks for.
+        var arrayKind = expectedType is ArrayTypeSymbol expected
+            ? expected.ArrayKind
+            : ArrayKind.Fixed;
+
+        return new BoundArray(syntax, new ArrayTypeSymbol(elementType, arrayKind), elements);
+    }
+
+    private BoundExpression BindRecordExpression(RecordExpressionSyntax syntax)
+    {
+        var type = _compilation.TypeBinder.BindType(syntax.Type, _containingSymbol, _scope);
+
+        if (type is not NamedTypeSymbol named)
+        {
+            if (!type.IsError)
+            {
+                _diagnostics.Error(ErrorCode.ERR_NotAValue, syntax.Type.Span,
+                    $"'{type.ToDisplayString()}' has no fields to initialise");
+            }
+            return new BoundError(syntax);
+        }
+
+        var substitution = TypeSubstitution.For(named);
+        var fields = ImmutableArray.CreateBuilder<(FieldSymbol, BoundExpression)>();
+        var initialized = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var initializer in syntax.Fields)
+        {
+            var name = initializer.NameToken.Text;
+            var field = named.GetMembers(name).OfType<FieldSymbol>().FirstOrDefault();
+
+            if (field is null)
+            {
+                _diagnostics.Error(ErrorCode.ERR_NameNotFound, initializer.NameToken.Span,
+                    $"'{named.ToDisplayString()}' has no field named '{name}'");
+                continue;
+            }
+
+            if (!initialized.Add(name))
+            {
+                _diagnostics.Error(ErrorCode.ERR_DuplicateDeclaration,
+                    initializer.NameToken.Span,
+                    $"'{name}' is initialised more than once");
+            }
+
+            var fieldType = substitution.Apply(field.Type);
+
+            var value = initializer.Expression is { } expression
+                ? Convert(BindExpression(expression, fieldType), fieldType, expression)
+                : new BoundError(initializer);
+
+            fields.Add((field, value));
+        }
+
+        var missing = named.Members
+            .OfType<FieldSymbol>()
+            .Where(f => !f.IsStatic && !f.IsComputed && !f.HasInitializer)
+            .Where(f => !initialized.Contains(f.Name))
+            .Select(f => f.Name)
+            .ToList();
+
+        if (missing.Count > 0)
+        {
+            _diagnostics.Error(ErrorCode.ERR_MissingFieldInitializer, syntax.Span,
+                missing.Count == 1
+                    ? $"'{missing[0]}' is not initialised"
+                    : $"'{string.Join("', '", missing)}' are not initialised");
+        }
+
+        return new BoundRecordExpression(syntax, named, fields.ToImmutable());
     }
 
     private BoundExpression BindCast(CastExpressionSyntax syntax)
@@ -1172,6 +1302,13 @@ public sealed class Binder
 
         if (type is null)
         {
+            if (FindUserUnaryOperator(
+                    syntax.OperatorToken.Text, operand.Type, OperatorFixity.Prefix) is { } method)
+            {
+                return new BoundUnaryOperator(
+                    syntax, method.ReturnType, UnaryOperatorKind.UserDefined, operand, method);
+            }
+
             _diagnostics.Error(ErrorCode.ERR_OperatorNotDefined, syntax.Span,
                 $"'{syntax.OperatorToken.Text}' is not defined for "
                 + $"'{operand.Type.ToDisplayString()}'");
@@ -1189,6 +1326,13 @@ public sealed class Binder
         if (operand.Type is OptionalTypeSymbol optional)
             return new BoundConversion(
                 syntax, optional.UnderlyingType, operand, ConversionKind.Explicit);
+
+        if (FindUserUnaryOperator(
+                syntax.OperatorToken.Text, operand.Type, OperatorFixity.Postfix) is { } method)
+        {
+            return new BoundUnaryOperator(
+                syntax, method.ReturnType, UnaryOperatorKind.UserDefined, operand, method);
+        }
 
         if (!operand.HasError)
         {
@@ -1331,6 +1475,26 @@ public sealed class Binder
         _ => null,
     };
 
+    /// <summary>Looks for a one-operand <c>operator</c> member on the operand's type.</summary>
+    private FunctionSymbol? FindUserUnaryOperator(
+        string symbol, TypeSymbol operand, OperatorFixity fixity)
+    {
+        if (operand is not NamedTypeSymbol named) return null;
+
+        foreach (var member in named.Members)
+        {
+            if (member is not FunctionSymbol { FunctionKind: FunctionKind.Operator } function)
+                continue;
+            if (function.Fixity != fixity) continue;
+            if (!string.Equals(function.Name, symbol, StringComparison.Ordinal)) continue;
+            if (function.Parameters.Length != 1) continue;
+
+            if (_conversions.HasImplicitConversion(operand, function.Parameters[0].Type))
+                return function;
+        }
+        return null;
+    }
+
     /// <summary>Looks for an <c>operator</c> member on either operand's type.</summary>
     private FunctionSymbol? FindUserOperator(string symbol, TypeSymbol left, TypeSymbol right)
     {
@@ -1342,6 +1506,7 @@ public sealed class Binder
             {
                 if (member is not FunctionSymbol { FunctionKind: FunctionKind.Operator } function)
                     continue;
+                if (function.Fixity != OperatorFixity.Infix) continue;
                 if (!string.Equals(function.Name, symbol, StringComparison.Ordinal)) continue;
                 if (function.Parameters.Length != 2) continue;
 
@@ -1577,6 +1742,7 @@ public sealed class Binder
             return new BoundErrorPattern(pattern);
         }
 
+        var substitution = TypeSubstitution.For(inputType);
         var payload = ImmutableArray.CreateBuilder<BoundPattern>();
         if (pattern.ArgumentList is { } arguments)
         {
@@ -1590,7 +1756,7 @@ public sealed class Binder
             for (var i = 0; i < arguments.Arguments.Count; i++)
             {
                 var fieldType = i < unionCase.Payload.Length
-                    ? unionCase.Payload[i].Type
+                    ? substitution.Apply(unionCase.Payload[i].Type)
                     : ErrorTypeSymbol.Instance;
                 payload.Add(BindPattern(arguments.Arguments[i].Pattern, fieldType));
             }

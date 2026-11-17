@@ -1,0 +1,60 @@
+module Corpus.Generics
+
+public struct Box<T> {
+    public var item: T
+
+    public fn get() -> T {
+        return item
+    }
+
+    public fn replaced(with value: T) -> Box<T> {
+        return Box<T> { item: value }
+    }
+}
+
+public union Outcome<T, E> {
+    Ok(T)
+    Err(E)
+}
+
+public union AppError {
+    NotFound(id: U64)
+    Invalid(reason: String)
+}
+
+public fn identity<T>(_ value: T) -> T {
+    return value
+}
+
+public fn firstOr<T>(_ items: T[], _ fallback: T) -> T {
+    for item in items {
+        return item
+    }
+    return fallback
+}
+
+public fn unwrapOr<T, E>(_ outcome: Outcome<T, E>, _ fallback: T) -> T {
+    return match outcome {
+        case .Ok(let value) => value
+        case .Err(_) => fallback
+    }
+}
+
+public fn describeError(_ error: AppError) -> String {
+    return match error {
+        case .NotFound(let id) => "missing \(id)"
+        case .Invalid(let reason) => reason
+    }
+}
+
+public fn boxedInt() -> Int {
+    let b = Box<Int> { item: 7 }
+    let same = identity(b.get())
+    let swapped = b.replaced(with: same)
+    return swapped.item
+}
+
+public fn pickString() -> String {
+    let names = ["a", "b", "c"]
+    return firstOr(names, "none")
+}

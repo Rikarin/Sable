@@ -158,7 +158,10 @@ public sealed class BoundBinaryOperator(
     public override IEnumerable<BoundNode> Children => Nodes(Left, Right);
 }
 
-public enum UnaryOperatorKind { Negate, Plus, Not, Complement, AddressOf, Await, Move, Try }
+public enum UnaryOperatorKind
+{
+    Negate, Plus, Not, Complement, AddressOf, Await, Move, Try, UserDefined,
+}
 
 public sealed class BoundUnaryOperator(
     SyntaxNode syntax,
@@ -241,6 +244,17 @@ public sealed class BoundTypeTest(
     public override IEnumerable<BoundNode> Children => Nodes(Operand);
 }
 
+/// <summary>A record literal: <c>Point { x: 1, y: 2 }</c>.</summary>
+public sealed class BoundRecordExpression(
+    SyntaxNode syntax,
+    TypeSymbol type,
+    ImmutableArray<(FieldSymbol Field, BoundExpression Value)> fields)
+    : BoundExpression(syntax, type)
+{
+    public ImmutableArray<(FieldSymbol Field, BoundExpression Value)> Fields { get; } = fields;
+    public override IEnumerable<BoundNode> Children => Fields.Select(f => f.Value);
+}
+
 public sealed class BoundTuple(
     SyntaxNode syntax, TypeSymbol type, ImmutableArray<BoundExpression> elements)
     : BoundExpression(syntax, type)
@@ -255,6 +269,16 @@ public sealed class BoundArray(
 {
     public ImmutableArray<BoundExpression> Elements { get; } = elements;
     public override IEnumerable<BoundNode> Children => Elements;
+}
+
+/// <summary>One element of a tuple, named by label or by position.</summary>
+public sealed class BoundTupleElementAccess(
+    SyntaxNode syntax, TypeSymbol type, BoundExpression receiver, int index)
+    : BoundExpression(syntax, type)
+{
+    public BoundExpression Receiver { get; } = receiver;
+    public int Index { get; } = index;
+    public override IEnumerable<BoundNode> Children => Nodes(Receiver);
 }
 
 public sealed class BoundIndexAccess(
@@ -388,6 +412,15 @@ public sealed class BoundDefer(SyntaxNode syntax, BoundStatement body) : BoundSt
 {
     public BoundStatement Body { get; } = body;
     public override IEnumerable<BoundNode> Children => Nodes(Body);
+}
+
+/// <summary>A function declared inside another function's body.</summary>
+public sealed class BoundLocalFunction(
+    SyntaxNode syntax, FunctionSymbol symbol, BoundBlock? body) : BoundStatement(syntax)
+{
+    public FunctionSymbol Symbol { get; } = symbol;
+    public BoundBlock? Body { get; } = body;
+    public override IEnumerable<BoundNode> Children => Body is null ? [] : Nodes(Body);
 }
 
 /// <summary>A statement that could not be bound.</summary>

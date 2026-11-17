@@ -1,0 +1,78 @@
+module Corpus.Data
+
+public struct Entry {
+    public var key: String
+    public var count: Int
+}
+
+public struct Table {
+    public var entries: Entry[]
+    public var index: [String: Int]
+
+    public fn lookup(_ key: String) -> Int? {
+        return index[key]
+    }
+
+    public fn countOr(_ key: String, _ fallback: Int) -> Int {
+        return index[key] ?? fallback
+    }
+}
+
+public union Json {
+    Null
+    Boolean(Bool)
+    Number(F64)
+    Text(String)
+    Items(Json[])
+}
+
+public fn depth(_ value: Json) -> Int {
+    return match value {
+        case .Null => 1
+        case .Boolean(_) => 1
+        case .Number(_) => 1
+        case .Text(_) => 1
+        case .Items(let items) => deepest(items) + 1
+    }
+}
+
+public fn deepest(_ items: Json[]) -> Int {
+    var best = 0
+    for item in items {
+        let d = depth(item)
+        if d > best {
+            best = d
+        }
+    }
+    return best
+}
+
+public fn isText(_ value: Json) -> Bool {
+    if case .Text(let s) = value {
+        return sizeOf(s) > 0
+    }
+    return false
+}
+
+public fn sizeOf(_ text: String) -> Int => 0
+
+public fn summarize(_ table: Table) -> String {
+    var total = 0
+    for entry in table.entries {
+        total = total + entry.count
+    }
+    return "total \(total) over \(sizeOf("x")) keys"
+}
+
+public fn makeEntry(_ key: String) -> Entry {
+    return Entry { key: key, count: 0 }
+}
+
+public fn tupleWork() -> Int {
+    let pair = (q: 10, r: 3)
+    let sum = pair.q + pair.r
+    let nested = ((1, 2), 3)
+    let inner = nested.0
+    let first = inner.0
+    return sum + first
+}

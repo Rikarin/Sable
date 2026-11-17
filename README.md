@@ -109,7 +109,7 @@ dotnet test Sable.slnx
 | `Sable.Symbols` — definite assignment, closures, extensions | not started |
 | Everything downstream (SIL, codegen, runtime) | not started |
 
-**847 tests green**, and every file in [examples/](examples/) parses as a
+**855 tests green**, and every file in [examples/](examples/) parses as a
 complete compilation unit with no diagnostics and an exact round-trip.
 
 The lexer covers all of [spec/lexical.md](spec/lexical.md): full-fidelity

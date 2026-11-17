@@ -453,6 +453,68 @@ public sealed class Compilation
         AddTo(container, function);
     }
 
+    /// <summary>
+    /// Builds the symbol for a function declared inside a body.
+    /// </summary>
+    /// <remarks>
+    /// A local function is never a member of anything, so it is not added to a
+    /// container and its signature is bound against the scope passed in rather
+    /// than the declaration-table cursor, which has long since moved on.
+    /// </remarks>
+    internal FunctionSymbol DeclareLocalFunction(
+        FunctionDeclarationSyntax declaration, Symbol container, FileScope scope)
+    {
+        var function = new FunctionSymbol(
+            declaration.Identifier.Text, container, declaration,
+            Accessibility.Private, FunctionKind.Ordinary)
+        {
+            IsAsync = !declaration.AsyncKeyword.IsNone
+                      || declaration.Modifiers.Any(SyntaxKind.AsyncKeyword),
+        };
+
+        if (declaration.TypeParameters is { } typeParameters)
+        {
+            function.TypeParameters =
+            [
+                .. typeParameters.Parameters.Select((parameter, i) =>
+                    new TypeParameterSymbol(parameter.Identifier.Text, function, parameter, i)),
+            ];
+        }
+
+        function.Parameters =
+        [
+            .. declaration.Parameters.Parameters.Select((syntax, i) =>
+            {
+                var parameter = new ParameterSymbol(
+                    syntax.Identifier.Text,
+                    syntax.Label.IsNone ? null : syntax.Label.Text,
+                    function, syntax, i)
+                {
+                    HasDefaultValue = syntax.DefaultValue is not null,
+                    IsVariadic = !syntax.EllipsisToken.IsNone,
+                    Modifier = ModifierOf(syntax),
+                };
+                parameter.TypeResolver = () => TypeBinder.BindType(syntax.Type, function, scope);
+                return parameter;
+            }),
+        ];
+
+        function.ReturnTypeResolver = () => declaration.ReturnClause is { } clause
+            ? TypeBinder.BindType(clause.Type, function, scope)
+            : Core.Void;
+
+        function.ThrownTypeResolver = () =>
+        {
+            if (declaration.ThrowsSpec is not { } spec) return null;
+            return spec.ErrorType is { } errorType
+                ? TypeBinder.BindType(errorType, function, scope)
+                : Core.Never;
+        };
+
+        RecordDeclaration(declaration, function);
+        return function;
+    }
+
     private ParameterSymbol DeclareParameter(
         ParameterSyntax syntax, Symbol container, int ordinal)
     {
@@ -671,6 +733,12 @@ public sealed class Compilation
             AccessibilityOf(declaration.Modifiers, container), FunctionKind.Operator)
         {
             IsStatic = true,
+            Fixity = declaration.FixityToken.Kind switch
+            {
+                SyntaxKind.PrefixKeyword => OperatorFixity.Prefix,
+                SyntaxKind.PostfixKeyword => OperatorFixity.Postfix,
+                _ => OperatorFixity.Infix,
+            },
         };
 
         function.Parameters =

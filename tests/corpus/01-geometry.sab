@@ -1,0 +1,103 @@
+module Corpus.Geometry
+
+// A self-contained program that uses only the built-in types and what it
+// declares itself. It exists to be type-checked, not run.
+
+public struct Vec2 {
+    public var x: F64
+    public var y: F64
+
+    public fn lengthSquared() -> F64 => x * x + y * y
+
+    public fn scaled(by factor: F64) -> Vec2 {
+        return Vec2 { x: x * factor, y: y * factor }
+    }
+
+    operator + (a: Vec2, b: Vec2) -> Vec2 {
+        return Vec2 { x: a.x + b.x, y: a.y + b.y }
+    }
+}
+
+public union Shape {
+    Circle(radius: F64)
+    Rect(width: F64, height: F64)
+    Empty
+}
+
+public enum Quadrant: U8 {
+    First = 1
+    Second = 2
+    Third = 3
+    Fourth = 4
+}
+
+public protocol Measurable {
+    fn area() -> F64
+    var isEmpty: Bool { get }
+}
+
+public fn areaOf(_ shape: Shape) -> F64 {
+    return match shape {
+        case .Circle(let r) => 3.14159 * r * r
+        case .Rect(let w, let h) => w * h
+        case .Empty => 0.0
+    }
+}
+
+public fn describe(_ shape: Shape) -> String {
+    match shape {
+        case .Circle(let r) => {
+            return "circle of radius \(r)"
+        }
+        case .Rect(let w, let h) => {
+            return "rect \(w) by \(h)"
+        }
+        case .Empty => {
+            return "nothing"
+        }
+    }
+}
+
+public fn largest(_ shapes: Shape[]) -> Shape? {
+    var best: Shape? = none
+    var bestArea = 0.0
+
+    for shape in shapes {
+        let area = areaOf(shape)
+        if area > bestArea {
+            bestArea = area
+            best = shape
+        }
+    }
+
+    return best
+}
+
+public fn classify(_ p: Vec2) -> Quadrant {
+    if p.x >= 0.0 {
+        if p.y >= 0.0 {
+            return Quadrant.First
+        }
+        return Quadrant.Fourth
+    }
+
+    if p.y >= 0.0 {
+        return Quadrant.Second
+    }
+    return Quadrant.Third
+}
+
+public fn sumLengths(_ points: Vec2[]) -> F64 {
+    var total = 0.0
+    var index = 0
+
+    while index < 10 {
+        index = index + 1
+    }
+
+    for p in points where p.x > 0.0 {
+        total = total + p.lengthSquared()
+    }
+
+    return total
+}

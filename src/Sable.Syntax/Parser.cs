@@ -544,8 +544,13 @@ internal sealed class Parser
     /// `File.open`, `x.default`. The binder decides whether the name means
     /// anything; the parser only has to not reject it.
     /// </summary>
-    private GreenToken EatMemberName() =>
-        Current.IsKeywordToken() ? EatToken() : EatIdentifier();
+    private GreenToken EatMemberName()
+    {
+        // 'pair.0' names a tuple element by position; the token is the index.
+        if (Current.Kind == SyntaxKind.IntegerLiteralToken) return EatToken();
+
+        return Current.IsKeywordToken() ? EatToken() : EatIdentifier();
+    }
 
     private GreenToken EatIdentifier()
     {
@@ -680,6 +685,14 @@ internal sealed class Parser
             if (Peek(offset).Kind != SyntaxKind.IdentifierToken) return false;
             offset++;
 
+            // 'Box<Int> { ... }' names a constructed type.
+            if (Peek(offset).Kind == SyntaxKind.LessToken)
+            {
+                var skipped = SkipBalancedAngles(offset);
+                if (skipped < 0) return false;
+                offset = skipped;
+            }
+
             if (Peek(offset).Kind == SyntaxKind.OpenBraceToken)
             {
                 return Peek(offset + 1).Kind == SyntaxKind.CloseBraceToken
@@ -690,6 +703,31 @@ internal sealed class Parser
             if (Peek(offset).Kind != SyntaxKind.DotToken) return false;
             offset++;
         }
+    }
+
+    /// <summary>
+    /// Returns the offset just past a balanced angle-bracket group, or -1 when
+    /// it is not balanced within a reasonable distance.
+    /// </summary>
+    private int SkipBalancedAngles(int offset)
+    {
+        var depth = 0;
+        for (var i = offset; i < offset + 64; i++)
+        {
+            switch (Peek(i).Kind)
+            {
+                case SyntaxKind.LessToken: depth++; break;
+                case SyntaxKind.GreaterToken: depth--; break;
+                case SyntaxKind.GreaterGreaterToken: depth -= 2; break;
+                case SyntaxKind.EndOfFile:
+                case SyntaxKind.OpenBraceToken:
+                case SyntaxKind.SemicolonToken:
+                    return -1;
+            }
+
+            if (depth <= 0) return i + 1;
+        }
+        return -1;
     }
 
     private GreenNode ParseFieldInitializer()
@@ -897,6 +935,8 @@ internal sealed class Parser
         SyntaxKind.MinusToken or SyntaxKind.PlusToken or SyntaxKind.BangToken
             or SyntaxKind.TildeToken or SyntaxKind.AmpersandToken => true,
         SyntaxKind.AwaitKeyword or SyntaxKind.MoveKeyword or SyntaxKind.TryKeyword => true,
+        SyntaxKind.MatchKeyword or SyntaxKind.CapitalSelfKeyword => true,
+        SyntaxKind.OpenBraceToken or SyntaxKind.DollarToken => true,
         _ => false,
     };
 
@@ -1232,6 +1272,8 @@ internal sealed class Parser
         }
         return type;
     }
+
+    private bool LooksLikeRecordLiteralStart() => LooksLikeRecordLiteral();
 
     private GreenNode ParseTypeArgumentList()
     {

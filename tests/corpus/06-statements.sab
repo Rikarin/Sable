@@ -1,0 +1,104 @@
+module Corpus.Statements
+
+public struct Config {
+    public var retries: Int
+    public var verbose: Bool
+}
+
+public fn clampRetries(_ config: Config) -> Int {
+    guard config.retries > 0 else {
+        return 0
+    }
+
+    if config.retries > 10 {
+        return 10
+    }
+
+    return config.retries
+}
+
+public fn scan(_ rows: Int[], _ cols: Int[]) -> Int {
+    var found = 0
+
+    outer: for r in rows {
+        for c in cols {
+            if r == c {
+                found = found + 1
+                continue outer
+            }
+            if r < 0 {
+                break outer
+            }
+        }
+    }
+
+    return found
+}
+
+public fn countdown(_ n: Int) -> Int {
+    var remaining = n
+    repeat {
+        remaining = remaining - 1
+    } while remaining > 0
+    return remaining
+}
+
+public fn withDefer() -> Int {
+    var total = 0
+    defer {
+        total = 0
+    }
+    total = 1
+    return total
+}
+
+public fn nested(_ n: Int) -> Int {
+    fn helper(_ x: Int) -> Int {
+        return x + 1
+    }
+
+    let doubled = helper(n) + helper(n)
+    return doubled
+}
+
+public fn arrays() -> Int {
+    let fixed: Int[] = [1, 2, 3]
+    let grow: Int[>..] = []
+    let inline: Int[..8] = []
+    let slice: Int[:] = []
+
+    var total = 0
+    for value in fixed {
+        total = total + value
+    }
+    return total
+}
+
+public fn shadows(_ n: Int) -> Int {
+    let x = n
+    if x > 0 {
+        let x = 1
+        return x
+    }
+    return x
+}
+
+public fn compound(_ n: Int) -> Int {
+    var total = n
+    total += 1
+    total -= 2
+    total *= 3
+    total /= 4
+    total %= 5
+    return total
+}
+
+public fn comparisons(_ a: Int, _ b: Int) -> Bool {
+    let lt = a < b
+    let le = a <= b
+    let gt = a > b
+    let ge = a >= b
+    let eq = a == b
+    let ne = a != b
+    return lt && le && gt && ge && eq && ne || false
+}

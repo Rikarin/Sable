@@ -1,0 +1,65 @@
+module Corpus.Protocols
+
+public protocol Shape {
+    fn area() -> F64
+    fn perimeter() -> F64
+    var name: String { get }
+
+    fn describe() -> String {
+        return name
+    }
+}
+
+public protocol Scalable {
+    fn scaled(by factor: F64) -> Self
+}
+
+public struct Circle: Shape, Scalable {
+    public var radius: F64
+
+    public fn area() -> F64 => 3.14159 * radius * radius
+    public fn perimeter() -> F64 => 2.0 * 3.14159 * radius
+    public var name: String { get => "circle" }
+
+    public fn scaled(by factor: F64) -> Circle {
+        return Circle { radius: radius * factor }
+    }
+}
+
+public struct Square: Shape {
+    public var side: F64
+
+    public fn area() -> F64 => side * side
+    public fn perimeter() -> F64 => 4.0 * side
+    public var name: String { get => "square" }
+}
+
+public class Node {
+    public var value: Int
+
+    public init(value: Int) {
+        self.value = value
+    }
+
+    public open fn describe() -> String {
+        return "node"
+    }
+}
+
+public class Leaf: Node {
+    public init(value: Int) {
+        super.init(value: value)
+    }
+
+    public override fn describe() -> String {
+        return "leaf"
+    }
+}
+
+public fn totalArea(_ a: Circle, _ b: Square) -> F64 {
+    return a.area() + b.area()
+}
+
+public fn grow(_ c: Circle) -> Circle {
+    return c.scaled(by: 2.0)
+}

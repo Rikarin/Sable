@@ -91,6 +91,12 @@ public sealed class FunctionSymbol : Symbol
     public bool IsOverride { get; internal set; }
     public bool IsOpen { get; internal set; }
 
+    /// <summary>
+    /// For an <c>operator</c> member, where it sits relative to its operand.
+    /// Arity alone cannot tell a prefix operator from a postfix one.
+    /// </summary>
+    public OperatorFixity Fixity { get; internal set; } = OperatorFixity.Infix;
+
     /// <summary>True when the declaration has no body, as in a protocol.</summary>
     public bool IsAbstract { get; internal set; }
 
@@ -128,6 +134,9 @@ public sealed class FunctionSymbol : Symbol
         return $"({parameters}) -> {ReturnType.ToDisplayString()}";
     }
 }
+
+/// <summary>Where an <c>operator</c> member sits relative to its operands.</summary>
+public enum OperatorFixity { Infix, Prefix, Postfix }
 
 public enum FunctionKind
 {

@@ -1,0 +1,71 @@
+module Corpus.Members
+
+public struct Money {
+    public var cents: I64
+
+    public static fn zero() -> Money {
+        return Money { cents: 0 }
+    }
+
+    operator + (a: Money, b: Money) -> Money {
+        return Money { cents: a.cents + b.cents }
+    }
+
+    operator == (a: Money, b: Money) -> Bool {
+        return a.cents == b.cents
+    }
+
+    prefix operator - (m: Money) -> Money {
+        return Money { cents: 0 - m.cents }
+    }
+}
+
+public struct Temperature {
+    private var celsius: F64
+
+    public var fahrenheit: F64 {
+        get => celsius * 9.0 / 5.0 + 32.0
+    }
+
+    public var readonly: F64 { get => celsius }
+
+    public init(celsius: F64) {
+        self.celsius = celsius
+    }
+}
+
+@flags
+public enum Permissions: U32 {
+    None = 0
+    Read = 1
+    Write = 2
+    Execute = 4
+}
+
+public alias Cents = I64
+public alias Pair = (Int, Int)
+
+public fn addMoney(_ a: Money, _ b: Money) -> Money {
+    return a + b
+}
+
+public fn negate(_ m: Money) -> Money {
+    return -m
+}
+
+public fn sameMoney(_ a: Money, _ b: Money) -> Bool {
+    return a == b
+}
+
+public fn useAliases(_ c: Cents, _ p: Pair) -> Int {
+    let first = p.0
+    return first
+}
+
+public fn readTemperature(_ t: Temperature) -> F64 {
+    return t.fahrenheit + t.readonly
+}
+
+public fn startingMoney() -> Money {
+    return Money.zero()
+}

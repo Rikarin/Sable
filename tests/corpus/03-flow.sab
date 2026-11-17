@@ -1,0 +1,81 @@
+module Corpus.Flow
+
+public struct Counter {
+    public var value: Int
+
+    public mutating fn bump() {
+        value = value + 1
+    }
+
+    public fn doubled() -> Int => value * 2
+}
+
+public fn classify(_ n: Int) -> String {
+    match n {
+        case 0 => {
+            return "zero"
+        }
+        case 1...9 => {
+            return "small"
+        }
+        case -1 => {
+            return "negative one"
+        }
+        default => {
+            return "other"
+        }
+    }
+}
+
+public fn total(_ xs: Int[]) -> Int {
+    var sum = 0
+    for x in xs {
+        if x < 0 {
+            continue
+        }
+        if x > 1000 {
+            break
+        }
+        sum = sum + x
+    }
+    return sum
+}
+
+public fn firstPositive(_ xs: Int[]) -> Int? {
+    for x in xs {
+        if x > 0 {
+            return x
+        }
+    }
+    return none
+}
+
+public fn lengthOrZero(_ text: String?) -> Int {
+    if let value = text {
+        return sizeOf(value)
+    }
+    return 0
+}
+
+public fn sizeOf(_ text: String) -> Int {
+    return 0
+}
+
+public fn pairUp(_ a: Int, _ b: Int) -> (Int, Int) {
+    return (a, b)
+}
+
+public fn destructure(_ p: (Int, String)) -> Int {
+    match p {
+        case (0, _) => {
+            return 0
+        }
+        case (let n, _) => {
+            return n
+        }
+    }
+}
+
+public fn ternary(_ b: Bool) -> Int => b ? 1 : 2
+
+public fn coalesce(_ v: Int?) -> Int => v ?? 0

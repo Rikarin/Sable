@@ -95,6 +95,7 @@ public enum ErrorCode
     ERR_MultipleBaseClasses = 3025,
     ERR_CircularInheritance = 3026,
     ERR_RequirementSignatureMismatch = 3027,
+    ERR_MissingFieldInitializer = 3028,
     ERR_NotSupportedYet = 3099,
 
     // ---- Patterns and flow (S6000-S6999) ---------------------------------

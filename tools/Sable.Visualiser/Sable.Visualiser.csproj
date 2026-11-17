@@ -7,6 +7,7 @@
   <ItemGroup>
     <ProjectReference Include="../../src/Sable.Syntax/Sable.Syntax.csproj" />
     <ProjectReference Include="../../src/Sable.Symbols/Sable.Symbols.csproj" />
+    <ProjectReference Include="../../src/Sable.SIL/Sable.SIL.csproj" />
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="Page.html" LogicalName="Sable.Visualiser.Page.html" />

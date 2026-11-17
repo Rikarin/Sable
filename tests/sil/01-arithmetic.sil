@@ -1,0 +1,29 @@
+// Integer, floating-point and Boolean builtins, and a call between functions.
+
+sil @square : $(Int) -> Int {
+bb0(%0 : $Int):
+  %1 = builtin "mul_Int"(%0, %0) : $Int
+  return %1
+}
+
+sil @hypotenuseSquared : $(Int, Int) -> Int {
+bb0(%0 : $Int, %1 : $Int):
+  %2 = function_ref @square : $(Int) -> Int
+  %3 = apply %2(%0) : $Int
+  %4 = apply %2(%1) : $Int
+  %5 = builtin "add_Int"(%3, %4) : $Int
+  return %5
+}
+
+sil @halve : $(F64) -> F64 {
+bb0(%0 : $F64):
+  %1 = float_literal $F64, 2
+  %2 = builtin "div_F64"(%0, %1) : $F64
+  return %2
+}
+
+sil @xor : $(Bool, Bool) -> Bool {
+bb0(%0 : $Bool, %1 : $Bool):
+  %2 = builtin "cmp_ne_Bool"(%0, %1) : $Bool
+  return %2
+}

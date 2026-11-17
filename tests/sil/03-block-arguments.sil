@@ -1,0 +1,23 @@
+// Values passed along branches instead of through memory: the SSA form a
+// promotion pass produces. A loop carries its counter and sum as arguments.
+
+sil @sumTo : $(Int) -> Int {
+bb0(%0 : $Int):
+  %1 = integer_literal $Int, 0
+  br bb1(%1, %1)
+bb1(%2 : $Int, %3 : $Int):
+  %4 = builtin "cmp_lt_Int"(%2, %0) : $Bool
+  cond_br %4, bb2, bb3(%3)
+bb2:
+  %5 = integer_literal $Int, 1
+  %6 = builtin "add_Int"(%2, %5) : $Int
+  %7 = builtin "add_Int"(%3, %6) : $Int
+  br bb1(%6, %7)
+bb3(%8 : $Int):
+  return %8
+}
+
+sil @never : $() -> Int {
+bb0:
+  unreachable
+}

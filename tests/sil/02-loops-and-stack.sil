@@ -1,0 +1,29 @@
+// A loop over a stack slot: raw SIL as lowering produces it, before any
+// promotion to SSA values. Every path frees the slot before returning.
+
+sil @sumTo : $(Int) -> Int {
+bb0(%0 : $Int):
+  %1 = alloc_stack $Int
+  %2 = alloc_stack $Int
+  %3 = integer_literal $Int, 0
+  store %3 to [init] %1
+  store %3 to [init] %2
+  br bb1
+bb1:
+  %4 = load [trivial] %2
+  %5 = builtin "cmp_lt_Int"(%4, %0) : $Bool
+  cond_br %5, bb2, bb3
+bb2:
+  %6 = integer_literal $Int, 1
+  %7 = builtin "add_Int"(%4, %6) : $Int
+  store %7 to [assign] %2
+  %8 = load [trivial] %1
+  %9 = builtin "add_Int"(%8, %7) : $Int
+  store %9 to [assign] %1
+  br bb1
+bb3:
+  %10 = load [trivial] %1
+  dealloc_stack %2
+  dealloc_stack %1
+  return %10
+}

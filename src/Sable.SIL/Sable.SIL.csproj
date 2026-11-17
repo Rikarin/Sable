@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>Sable.SIL</RootNamespace>
+    <AssemblyName>Sable.SIL</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Sable.Symbols/Sable.Symbols.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Sable.SIL.Tests" />
+  </ItemGroup>
+</Project>

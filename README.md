@@ -56,6 +56,7 @@ examples/  sample programs, also used as the lexer test corpus
 src/       the compiler, written in C# (see docs/04 for why)
              Sable.Syntax   lexer, parser, trees, formatter
              Sable.Symbols  symbols, declaration table, type binding
+             Sable.SIL      the mid-level IR: model, text, verifier, lowering, interpreter
 tools/     Sable.Syntax.Generator  generates the node classes
              Sable.Visualiser        the syntax-tree visualiser
 tests/     the test suite
@@ -89,7 +90,8 @@ The first prints the tree as indented text (`--trivia` adds whitespace and
 comments). The second writes one self-contained page: the source beside a
 collapsible tree and a property pane, where selecting a node highlights its
 span and clicking the source selects the deepest node under the caret.
-`--syntax-only` skips binding.
+`--syntax-only` skips binding, and `--sil` prints what the file lowers to,
+verified, instead of the tree.
 
 ## Building
 
@@ -146,7 +148,12 @@ edit. Phase 1 is nearly done** — see
 | `Sable.Symbols` — negative-diagnostic corpus (631 cases) | done |
 | `Sable.Symbols` — throughput: 100,000 lines in under 5 s | done |
 | `tools/Sable.Visualiser` — syntax-tree visualiser | done |
-| Everything downstream (SIL, codegen, runtime) | not started |
+| `Sable.SIL` — types, values, instructions, blocks, functions | started: scalars, stack slots, calls, branches |
+| `Sable.SIL` — textual printer and parser (`tests/sil/*.sil`) | done for the subset |
+| `Sable.SIL` — verifier: structure, SSA dominance, types, stack discipline | done for the subset; ownership checks wait for owned values |
+| `Sable.SIL` — lowering from the bound tree | started: `Int`/`Bool`/`F64`, locals, calls, `if`/`guard`/`while`/`repeat`, labelled jumps, `?:`, short-circuit |
+| `Sable.SIL` — interpreter, so tests run lowered code | done for the subset |
+| Codegen (LLVM), runtime | not started |
 
 Phase 1's exit criteria, as docs/04 §1.4 states them:
 
@@ -158,7 +165,7 @@ Phase 1's exit criteria, as docs/04 §1.4 states them:
 | Type-checking 100,000 lines in under 5 s | 0.98 s |
 | Go/no-go: 10,000 lines of real Sable | ~2,900 in `tests/corpus/` |
 
-**1,599 tests green**, and every file in [examples/](examples/) parses as a
+**1,643 tests green**, and every file in [examples/](examples/) parses as a
 complete compilation unit with no diagnostics and an exact round-trip.
 [tests/corpus/](tests/corpus/) holds programs that must type-check with
 nothing to say, and [tests/negative/](tests/negative/) holds programs that

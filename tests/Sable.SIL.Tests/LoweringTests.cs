@@ -1,0 +1,355 @@
+namespace Sable.SIL.Tests;
+
+/// <summary>
+///     Real Sable programs, lowered to SIL, verified, printed and parsed back,
+///     and run — so a test checks what the lowered code computes, not only
+///     what it looks like.
+/// </summary>
+public sealed class LoweringTests {
+    /// <summary>Lowers a module, insisting on no diagnostics and verifier-clean SIL that round-trips.</summary>
+    static SilModule Lower(string source) {
+        var compilation = Compilation.Create($"module M\n{source}");
+        var errors = compilation.GetAllDiagnostics().Where(static d => d.Severity == DiagnosticSeverity.Error).ToList();
+        Assert.True(errors.Count == 0, string.Join("\n", errors.Select(static e => $"{e.Id}: {e.Message}")));
+
+        var (module, diagnostics) = SilGen.Lower(compilation);
+        Assert.True(diagnostics.Count == 0, string.Join("\n", diagnostics.Select(static d => $"{d.Id}: {d.Message}")));
+
+        var problems = SilVerifier.Verify(module);
+        Assert.True(problems.Count == 0, string.Join("\n", problems) + "\n\n" + SilPrinter.Print(module));
+
+        // Printing, parsing and printing again must give the same text, and
+        // what is parsed must verify too.
+        var text = SilPrinter.Print(module);
+        var reparsed = SilParser.Parse(text);
+        Assert.Equal(text, SilPrinter.Print(reparsed));
+        Assert.Empty(SilVerifier.Verify(reparsed));
+
+        return reparsed;
+    }
+
+    static object? Run(SilModule module, string function, params object[] arguments) =>
+        new SilInterpreter(module).Run($"M.{function}", arguments);
+
+    // ---- Arithmetic and calls ----------------------------------------------
+
+    [Fact]
+    public void AddsTwoNumbers() =>
+        Assert.Equal(5L, Run(Lower("fn add(_ a: Int, _ b: Int) -> Int { return a + b }"), "add", 2L, 3L));
+
+    [Fact]
+    public void RecursionComputesFibonacci() {
+        var module = Lower(
+            """
+            fn fib(_ n: Int) -> Int {
+                if n < 2 { return n }
+                return fib(n - 1) + fib(n - 2)
+            }
+            """
+        );
+
+        Assert.Equal(6765L, Run(module, "fib", 20L));
+    }
+
+    [Fact]
+    public void ALoopComputesTheGreatestCommonDivisor() {
+        var module = Lower(
+            """
+            fn gcd(_ a: Int, _ b: Int) -> Int {
+                var x = a
+                var y = b
+                while y != 0 {
+                    let t = x % y
+                    x = y
+                    y = t
+                }
+                return x
+            }
+            """
+        );
+
+        Assert.Equal(6L, Run(module, "gcd", 48L, 18L));
+        Assert.Equal(1L, Run(module, "gcd", 17L, 5L));
+    }
+
+    [Fact]
+    public void CompoundAssignmentAndRepeat() {
+        var module = Lower(
+            """
+            fn factorial(_ n: Int) -> Int {
+                var result = 1
+                var i = 1
+                repeat {
+                    result *= i
+                    i += 1
+                } while i <= n
+                return result
+            }
+            """
+        );
+
+        Assert.Equal(2_432_902_008_176_640_000L, Run(module, "factorial", 20L));
+    }
+
+    [Fact]
+    public void IntegerOverflowTraps() {
+        var module = Lower(
+            """
+            fn factorial(_ n: Int) -> Int {
+                if n <= 1 { return 1 }
+                return n * factorial(n - 1)
+            }
+            """
+        );
+
+        Assert.Equal("integer overflow", Assert.Throws<SilTrap>(() => Run(module, "factorial", 21L)).Message);
+    }
+
+    [Fact]
+    public void DivisionByZeroTraps() {
+        var module = Lower("fn divide(_ a: Int, _ b: Int) -> Int { return a / b }");
+        Assert.Equal("division by zero", Assert.Throws<SilTrap>(() => Run(module, "divide", 1L, 0L)).Message);
+    }
+
+    [Fact]
+    public void FloatingPointArithmetic() {
+        var module = Lower(
+            """
+            fn mean(_ a: F64, _ b: F64) -> F64 {
+                let two: F64 = 2
+                return (a + b) / two
+            }
+            """
+        );
+
+        Assert.Equal(2.5, Run(module, "mean", 2.0, 3.0));
+    }
+
+    // ---- Control flow ------------------------------------------------------
+
+    [Fact]
+    public void ShortCircuitingSkipsTheRightSide() {
+        // With n = 0 the right side would divide by zero; '&&' must not run it.
+        var module = Lower(
+            """
+            fn safe(_ n: Int) -> Bool {
+                return n != 0 && 10 / n > 1
+            }
+            """
+        );
+
+        Assert.Equal(false, Run(module, "safe", 0L));
+        Assert.Equal(true, Run(module, "safe", 2L));
+    }
+
+    [Fact]
+    public void OrAndNotAsValues() {
+        var module = Lower("fn either(_ a: Bool, _ b: Bool) -> Bool { return !(a || b) || (a && b) }");
+        Assert.Equal(true, Run(module, "either", false, false));
+        Assert.Equal(false, Run(module, "either", true, false));
+        Assert.Equal(true, Run(module, "either", true, true));
+    }
+
+    [Fact]
+    public void GuardReturnsEarly() {
+        var module = Lower(
+            """
+            fn sign(_ n: Int) -> Int {
+                guard n != 0 else { return 0 }
+                return n > 0 ? 1 : -1
+            }
+            """
+        );
+
+        Assert.Equal(0L, Run(module, "sign", 0L));
+        Assert.Equal(1L, Run(module, "sign", 7L));
+        Assert.Equal(-1L, Run(module, "sign", -7L));
+    }
+
+    [Fact]
+    public void ElseIfChains() {
+        var module = Lower(
+            """
+            fn grade(_ score: Int) -> Int {
+                if score >= 90 {
+                    return 4
+                } else if score >= 80 {
+                    return 3
+                } else if score >= 70 {
+                    return 2
+                }
+                return 0
+            }
+            """
+        );
+
+        Assert.Equal(4L, Run(module, "grade", 95L));
+        Assert.Equal(3L, Run(module, "grade", 85L));
+        Assert.Equal(0L, Run(module, "grade", 10L));
+    }
+
+    [Fact]
+    public void ALabelledBreakLeavesTheOuterLoop() {
+        // The first pair (i, j) with i * j == target, encoded as i * 100 + j.
+        var module = Lower(
+            """
+            fn find(_ target: Int) -> Int {
+                var found = 0
+                var i = 1
+                outer: while i < 10 {
+                    var j = 1
+                    while j < 10 {
+                        if i * j == target {
+                            found = i * 100 + j
+                            break outer
+                        }
+                        j += 1
+                    }
+                    i += 1
+                }
+                return found
+            }
+            """
+        );
+
+        // (3, 8) comes first. Without the labelled break the outer loop would
+        // go on and overwrite it with (4, 6), giving 406.
+        Assert.Equal(308L, Run(module, "find", 24L));
+        Assert.Equal(0L, Run(module, "find", 97L));
+    }
+
+    [Fact]
+    public void ContinueSkipsToTheNextIteration() {
+        var module = Lower(
+            """
+            fn sumOdd(_ n: Int) -> Int {
+                var sum = 0
+                var i = 0
+                while i < n {
+                    i += 1
+                    if i % 2 == 0 { continue }
+                    sum += i
+                }
+                return sum
+            }
+            """
+        );
+
+        Assert.Equal(25L, Run(module, "sumOdd", 10L));
+    }
+
+    [Fact]
+    public void CollatzStepsAcrossFunctions() {
+        var module = Lower(
+            """
+            fn next(_ n: Int) -> Int {
+                return n % 2 == 0 ? n / 2 : 3 * n + 1
+            }
+
+            fn steps(_ start: Int) -> Int {
+                var n = start
+                var count = 0
+                while n != 1 {
+                    n = next(n)
+                    count += 1
+                }
+                return count
+            }
+            """
+        );
+
+        Assert.Equal(111L, Run(module, "steps", 27L));
+    }
+
+    [Fact]
+    public void AFunctionReturningNothing() {
+        var module = Lower(
+            """
+            fn nothing(_ n: Int) {
+                var x = n
+                x += 1
+            }
+            fn caller() -> Int {
+                nothing(1)
+                return 7
+            }
+            """
+        );
+
+        Assert.Null(Run(module, "nothing", 1L));
+        Assert.Equal(7L, Run(module, "caller"));
+    }
+
+    [Fact]
+    public void OverloadsGetDistinctNames() {
+        var module = Lower(
+            """
+            fn twice(_ n: Int) -> Int { return n * 2 }
+            fn twice(_ x: F64) -> F64 { return x + x }
+            """
+        );
+
+        Assert.NotNull(module.Find("M.twice$Int"));
+        Assert.NotNull(module.Find("M.twice$F64"));
+    }
+
+    // ---- The text -------------------------------------------------------------
+
+    [Fact]
+    public void TheTextOfASmallFunction() {
+        var module = Lower("fn max(_ a: Int, _ b: Int) -> Int { return a > b ? a : b }");
+        Assert.Equal(
+            """
+            sil @M.max : $(Int, Int) -> Int {
+            bb0(%0 : $Int, %1 : $Int):
+              %2 = builtin "cmp_gt_Int"(%0, %1) : $Bool
+              cond_br %2, bb1, bb2
+            bb1:
+              br bb3(%0)
+            bb2:
+              br bb3(%1)
+            bb3(%3 : $Int):
+              return %3
+            }
+
+            """.ReplaceLineEndings("\n"),
+            SilPrinter.Print(module)
+        );
+    }
+
+    // ---- What is not lowered yet --------------------------------------------
+
+    [Fact]
+    public void AnUnsupportedConstructIsReportedByName() {
+        var compilation = Compilation.Create(
+            """
+            module M
+            struct Point { var x: Int, var y: Int }
+            fn origin(_ p: Point) -> Int { return p.x }
+            """
+        );
+
+        var (module, diagnostics) = SilGen.Lower(compilation);
+        var diagnostic = Assert.Single(diagnostics);
+        Assert.Equal(ErrorCode.ERR_NotLoweredYet, diagnostic.Code);
+        Assert.Contains("Point", diagnostic.Message, StringComparison.Ordinal);
+        Assert.Empty(SilVerifier.Verify(module));
+    }
+
+    [Fact]
+    public void AFunctionThatCannotBeLoweredStillVerifies() {
+        var compilation = Compilation.Create(
+            """
+            module M
+            fn label(_ n: Int) -> Int {
+                let s = "text"
+                return n
+            }
+            """
+        );
+
+        var (module, diagnostics) = SilGen.Lower(compilation);
+        Assert.Contains(diagnostics, static d => d.Code == ErrorCode.ERR_NotLoweredYet);
+        Assert.Empty(SilVerifier.Verify(module));
+    }
+}

@@ -46,6 +46,8 @@ public sealed class Compilation
 {
     private readonly Dictionary<string, ModuleSymbol> _modules = new(StringComparer.Ordinal);
     private readonly Dictionary<SyntaxTree, FileScope> _fileScopes = [];
+    private readonly Dictionary<SyntaxNode, Symbol> _symbolsBySyntax = [];
+    private readonly Dictionary<SyntaxTree, SemanticModel> _semanticModels = [];
     private readonly DiagnosticBag _declarationDiagnostics = new();
 
     private Compilation(ImmutableArray<SyntaxTree> syntaxTrees, ParseOptions options)
@@ -82,6 +84,37 @@ public sealed class Compilation
         _modules.TryGetValue(name, out var module) ? module : null;
 
     public FileScope GetFileScope(SyntaxTree tree) => _fileScopes[tree];
+
+    /// <summary>The symbol a declaration introduced, if it introduced one.</summary>
+    public Symbol? GetDeclaredSymbol(SyntaxNode declaration) =>
+        _symbolsBySyntax.TryGetValue(declaration, out var symbol) ? symbol : null;
+
+    /// <summary>The semantic model for a file, which binds its bodies on demand.</summary>
+    public SemanticModel GetSemanticModel(SyntaxTree tree)
+    {
+        if (_semanticModels.TryGetValue(tree, out var model)) return model;
+
+        model = new SemanticModel(this, tree);
+        _semanticModels[tree] = model;
+        return model;
+    }
+
+    /// <summary>
+    /// Every diagnostic, including those from binding function bodies.
+    /// </summary>
+    public IReadOnlyList<Diagnostic> GetAllDiagnostics()
+    {
+        var all = new List<Diagnostic>(GetDiagnostics());
+
+        foreach (var tree in SyntaxTrees)
+        {
+            if (!_fileScopes.ContainsKey(tree)) continue;
+            all.AddRange(GetSemanticModel(tree).GetDiagnostics());
+        }
+
+        all.Sort((a, b) => a.Span.Start.CompareTo(b.Span.Start));
+        return all;
+    }
 
     /// <summary>
     /// The file being declared right now. Signature binding captures it, so
@@ -306,6 +339,18 @@ public sealed class Compilation
                 DeclareInitializer(declaration, type);
                 return;
 
+            case OperatorDeclarationSyntax declaration:
+                DeclareOperator(declaration, container);
+                return;
+
+            case SubscriptDeclarationSyntax declaration:
+                DeclareSubscript(declaration, container);
+                return;
+
+            case DeinitDeclarationSyntax declaration when container is NamedTypeSymbol type:
+                DeclareDeinitializer(declaration, type);
+                return;
+
             case ExtensionDeclarationSyntax declaration:
                 // Members of an extension are declared on the extended type once
                 // type binding exists; recorded for now so they are not lost.
@@ -364,6 +409,7 @@ public sealed class Compilation
         }
 
         TypeBinder.BindTypeDeclaration(type, declaration);
+        RecordDeclaration(declaration, type);
         AddTo(container, type);
 
         foreach (var member in members) DeclareMember(member, type);
@@ -403,6 +449,7 @@ public sealed class Compilation
         ];
 
         TypeBinder.BindFunctionSignature(function, declaration);
+        RecordDeclaration(declaration, function);
         AddTo(container, function);
     }
 
@@ -469,6 +516,7 @@ public sealed class Compilation
         };
 
         TypeBinder.BindFieldType(field, declaration);
+        RecordDeclaration(declaration, field);
         AddTo(container, field);
     }
 
@@ -603,6 +651,66 @@ public sealed class Compilation
         ];
 
         function.ReturnTypeResolver = () => type;
+        RecordDeclaration(declaration, function);
+        type.AddMember(function);
+    }
+
+    private void DeclareOperator(OperatorDeclarationSyntax declaration, Symbol container)
+    {
+        // The symbol's name is the operator's spelling, so '+' is looked up
+        // by the same text the source wrote.
+        var name = declaration.SecondOperatorToken.IsNone
+            ? declaration.OperatorToken.Text
+            : declaration.OperatorToken.Text + declaration.SecondOperatorToken.Text;
+
+        var function = new FunctionSymbol(
+            name, container, declaration,
+            AccessibilityOf(declaration.Modifiers, container), FunctionKind.Operator)
+        {
+            IsStatic = true,
+        };
+
+        function.Parameters =
+        [
+            .. declaration.Parameters.Parameters.Select((parameter, i) =>
+                DeclareParameter(parameter, function, i)),
+        ];
+
+        var scope = CurrentScope;
+        function.ReturnTypeResolver = () =>
+            TypeBinder.BindType(declaration.ReturnClause.Type, function, scope);
+
+        RecordDeclaration(declaration, function);
+        AddTo(container, function);
+    }
+
+    private void DeclareSubscript(SubscriptDeclarationSyntax declaration, Symbol container)
+    {
+        var function = new FunctionSymbol(
+            "subscript", container, declaration,
+            AccessibilityOf(declaration.Modifiers, container), FunctionKind.Subscript);
+
+        function.Parameters =
+        [
+            .. declaration.Parameters.Parameters.Select((parameter, i) =>
+                DeclareParameter(parameter, function, i)),
+        ];
+
+        var scope = CurrentScope;
+        function.ReturnTypeResolver = () =>
+            TypeBinder.BindType(declaration.ReturnClause.Type, function, scope);
+
+        RecordDeclaration(declaration, function);
+        AddTo(container, function);
+    }
+
+    private void DeclareDeinitializer(DeinitDeclarationSyntax declaration, NamedTypeSymbol type)
+    {
+        var function = new FunctionSymbol(
+            "deinit", type, declaration, Accessibility.Internal, FunctionKind.Deinitializer);
+
+        function.ReturnTypeResolver = () => Core.Void;
+        RecordDeclaration(declaration, function);
         type.AddMember(function);
     }
 
@@ -617,6 +725,9 @@ public sealed class Compilation
     internal List<(ExtensionDeclarationSyntax Syntax, Symbol Container)> Extensions { get; } = [];
 
     // -----------------------------------------------------------------------
+
+    internal void RecordDeclaration(SyntaxNode declaration, Symbol symbol) =>
+        _symbolsBySyntax[declaration] = symbol;
 
     private static void AddTo(Symbol container, Symbol member)
     {

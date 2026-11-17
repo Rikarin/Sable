@@ -101,10 +101,12 @@ dotnet test Sable.slnx
 | `Sable.Syntax` — formatter | done |
 | `Sable.Symbols` — symbol model, declaration table | done |
 | `Sable.Symbols` — type binding and signatures | done |
-| `Sable.Symbols` — expression binding, inference | not started |
+| `Sable.Symbols` — bound tree, expression and statement binding | done |
+| `Sable.Symbols` — SemanticModel | done |
+| `Sable.Symbols` — generic inference, conformance, exhaustiveness | not started |
 | Everything downstream (SIL, codegen, runtime) | not started |
 
-**732 tests green**, and every file in [examples/](examples/) parses as a
+**795 tests green**, and every file in [examples/](examples/) parses as a
 complete compilation unit with no diagnostics and an exact round-trip.
 
 The lexer covers all of [spec/lexical.md](spec/lexical.md): full-fidelity

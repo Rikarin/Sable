@@ -114,10 +114,56 @@ public abstract class SyntaxNode
         new(Green.GetSlot(index) as GreenList, this, GetChildPosition(index));
 
     private protected SyntaxList<T> GetList<T>(int index) where T : SyntaxNode =>
-        new(Green.GetSlot(index) as GreenList, this, GetChildPosition(index));
+        new(Green.GetSlot(index) as GreenList, this, GetChildPosition(index), index);
 
-    private protected SeparatedSyntaxList<T> GetSeparatedList<T>(int index) where T : SyntaxNode =>
-        new(Green.GetSlot(index) as GreenList, this, GetChildPosition(index));
+    private protected SeparatedSyntaxList<T> GetSeparatedList<T>(int index)
+        where T : SyntaxNode =>
+        new(Green.GetSlot(index) as GreenList, this, GetChildPosition(index), index);
+
+    // -----------------------------------------------------------------------
+    // Red child cache
+    // -----------------------------------------------------------------------
+
+    private SyntaxNode?[]? _listChildren;
+    private int[]? _slotStarts;
+
+    /// <summary>
+    /// Returns the red node for one element of a list slot, creating it once.
+    /// </summary>
+    /// <remarks>
+    /// Identity has to be stable: a semantic model keys what it knows by node,
+    /// so handing back a fresh facade on every enumeration would lose it.
+    /// Non-list children are already cached in the generated properties.
+    /// </remarks>
+    internal SyntaxNode GetListChild(
+        int slotIndex, int elementIndex, GreenNode green, int position)
+    {
+        if (_slotStarts is null) BuildChildTable();
+
+        var index = _slotStarts![slotIndex] + elementIndex;
+        var existing = _listChildren![index];
+        if (existing is not null) return existing;
+
+        var created = green.CreateRed(this, position);
+        Interlocked.CompareExchange(ref _listChildren[index], created, null);
+        return _listChildren[index]!;
+    }
+
+    private void BuildChildTable()
+    {
+        var starts = new int[Green.SlotCount + 1];
+        var total = 0;
+
+        for (var i = 0; i < Green.SlotCount; i++)
+        {
+            starts[i] = total;
+            total += Green.GetSlot(i) is GreenList list ? list.SlotCount : 0;
+        }
+
+        starts[Green.SlotCount] = total;
+        _listChildren = new SyntaxNode?[total];
+        _slotStarts = starts;
+    }
 
     /// <summary>Returns the cached red node for a slot, or null if it is a token or empty.</summary>
     internal abstract SyntaxNode? GetNodeSlot(int index);
@@ -140,11 +186,12 @@ public abstract class SyntaxNode
             if (slot is GreenList list)
             {
                 var itemOffset = offset;
-                foreach (var child in list.Children)
+                for (var element = 0; element < list.Children.Length; element++)
                 {
+                    var child = list.Children[element];
                     yield return child is GreenToken token
                         ? new SyntaxNodeOrToken(new SyntaxToken(token, this, itemOffset))
-                        : new SyntaxNodeOrToken(child.CreateRed(this, itemOffset));
+                        : new SyntaxNodeOrToken(GetListChild(i, element, child, itemOffset));
                     itemOffset += child.FullWidth;
                 }
             }

@@ -263,6 +263,49 @@ public sealed class ParserRecoveryTests
     }
 
     [Fact]
+    public void ListElementsKeepTheirIdentity()
+    {
+        // A semantic model keys what it knows by node, so enumerating a list
+        // twice must hand back the same facades, not fresh ones.
+        var tree = SyntaxTree.Parse("""
+            module M
+            fn a() { }
+            fn b() { let x = 1
+                let y = 2
+            }
+            """);
+
+        var unit = Assert.IsType<CompilationUnitSyntax>(tree.Root);
+
+        Assert.Same(unit.Members[0], unit.Members[0]);
+        Assert.Same(unit.Members[1], unit.Members[1]);
+
+        var first = unit.ChildNodes().ToList();
+        var second = unit.ChildNodes().ToList();
+        Assert.Equal(first.Count, second.Count);
+        for (var i = 0; i < first.Count; i++) Assert.Same(first[i], second[i]);
+
+        var body = Assert.IsType<FunctionDeclarationSyntax>(unit.Members[1]).Body!;
+        Assert.Same(body.Statements[0], body.Statements[0]);
+
+        var walkedOnce = tree.Root.DescendantNodes().ToList();
+        var walkedTwice = tree.Root.DescendantNodes().ToList();
+        for (var i = 0; i < walkedOnce.Count; i++)
+            Assert.Same(walkedOnce[i], walkedTwice[i]);
+    }
+
+    [Fact]
+    public void SeparatedListElementsKeepTheirIdentity()
+    {
+        var tree = SyntaxTree.Parse("module M\nfn f(a: Int, b: Int, c: Int) { }");
+        var unit = (CompilationUnitSyntax)tree.Root;
+        var parameters = ((FunctionDeclarationSyntax)unit.Members[0]).Parameters.Parameters;
+
+        for (var i = 0; i < parameters.Count; i++) Assert.Same(parameters[i], parameters[i]);
+        Assert.Same(parameters.First(), parameters.First());
+    }
+
+    [Fact]
     public void ParentPointersAreConsistent()
     {
         var tree = SyntaxTree.ParseExpression("f(a + b, c.d)");

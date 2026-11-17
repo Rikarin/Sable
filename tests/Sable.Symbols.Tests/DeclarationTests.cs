@@ -146,7 +146,7 @@ public sealed class DeclarationTests
 
         var type = compilation.GetTypeByQualifiedName("M.S")!;
         Assert.Equal(3, type.Members.OfType<FieldSymbol>().Count());
-        Assert.Equal(2, type.Members.OfType<FunctionSymbol>().Count());
+        Assert.Equal(3, type.Members.OfType<FunctionSymbol>().Count());
 
         var a = type.GetMembers("a").OfType<FieldSymbol>().Single();
         Assert.True(a.IsMutable);

@@ -840,6 +840,18 @@ public sealed class ClassMethodInst(SilValue reference, string method, FunctionT
     public override string Opcode => "class_method";
 }
 
+/// <summary>
+///     <c>global_addr @M.total : $*Int</c>: where a global lives — a
+///     module-level variable or a type's static stored property, for the
+///     whole of the program.
+/// </summary>
+public sealed class GlobalAddrInst(string global, SilType type) : SilInstruction {
+    public string Global { get; } = global;
+    public SilType ValueType { get; } = type;
+    public override SilType Type => SilType.Address(ValueType);
+    public override string Opcode => "global_addr";
+}
+
 /// <summary><c>function_ref @f : $(Int) -&gt; Int</c>: a function as a value.</summary>
 public sealed class FunctionRefInst(string function, FunctionType type) : SilInstruction {
     public string Function { get; } = function;
@@ -1044,6 +1056,12 @@ public sealed class SilModule {
     /// <summary>The structs and enums the module declares, in declaration order.</summary>
     public List<NominalType> Types { get; } = [];
 
+    /// <summary>
+    ///     The globals, by name, with their types, in the order they are
+    ///     initialised: <c>sil_global @M.total : $Int</c>.
+    /// </summary>
+    public List<(string Name, SilType Type)> Globals { get; } = [];
+
     public NominalType? FindType(string name) => _types.GetValueOrDefault(name);
 
     public T AddType<T>(T type) where T : NominalType {
@@ -1153,6 +1171,11 @@ public static class SilBuiltins {
 
         if (name.StartsWith("inline_", StringComparison.Ordinal)) {
             return InlineSignature(name, operands, result);
+        }
+
+        // 'x is Dog': whether the object is of the class named, or a subclass of it.
+        if (name.StartsWith("class_is:", StringComparison.Ordinal)) {
+            return operands is [ClassType] ? new([operands[0]], SilType.Bool) : null;
         }
 
         // The dynamic exclusivity markers (docs/02 §2.3): an access to storage

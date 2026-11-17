@@ -239,6 +239,11 @@ public static class SilVerifier {
             case StoreInst store when store.Address.Type is not AddressType address || address.Pointee != store.Value.Type:
                 return $"store of {store.Value.Type} to {store.Address.Type}";
 
+            case GlobalAddrInst global when module is not null:
+                return module.Globals.Any(g => g.Name == global.Global && g.Type == global.ValueType)
+                    ? null
+                    : $"global_addr names @{global.Global} : ${global.ValueType}, which the module does not declare";
+
             case FunctionRefInst reference when module is not null: {
                 if (module.Find(reference.Function) is not { } callee) {
                     return $"function_ref names @{reference.Function}, which the module does not define";
@@ -343,8 +348,10 @@ public static class SilVerifier {
 
                 return owner.MethodIndex(method.Method) < 0 ? $"{owner.Name} has no method #{method.Method} in its vtable" : null;
 
-            case UncheckedRefCastInst cast when cast.Value.Type != SilType.Object:
-                return $"unchecked_ref_cast is from an Object, not {cast.Value.Type}";
+            // From an Object, or down from a class to a subclass of it (after a 'class_is' test).
+            case UncheckedRefCastInst cast when cast.Value.Type != SilType.Object
+                && !(cast.Value.Type is ClassType from && cast.Type is ClassType to && to.IsSubclassOf(from)):
+                return $"unchecked_ref_cast is from an Object, or from a class to its subclass, not {cast.Value.Type}";
 
             case TryApplyInst tryApply: {
                 if (Signature(tryApply.Callee.Type) is not { Thrown: { } calleeThrows } callee) {

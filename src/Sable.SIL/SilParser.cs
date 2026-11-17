@@ -254,6 +254,13 @@ public sealed class SilParser {
                 continue;
             }
 
+            if (Accept("sil_global")) {
+                var global = Expect(TokenKind.Global, "a global's name").Text;
+                Expect(":");
+                module.Globals.Add((global, ParseType()));
+                continue;
+            }
+
             var function = ParseFunction();
             if (module.Find(function.Name) is not null) {
                 throw Error($"@{function.Name} is defined twice");
@@ -929,6 +936,17 @@ public sealed class SilParser {
                 };
                 Expect("]");
                 instruction = new StoreInst(value, Operand(1), kind);
+                break;
+            }
+
+            case "global_addr": {
+                var global = Expect(TokenKind.Global, "a global's name").Text;
+                Expect(":");
+                if (ParseType() is not AddressType address) {
+                    throw new SilParseException("global_addr needs an address type", line);
+                }
+
+                instruction = new GlobalAddrInst(global, address.Pointee);
                 break;
             }
 

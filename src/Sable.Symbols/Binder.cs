@@ -2241,8 +2241,25 @@ public sealed class Binder {
             _ => "visible",
         };
 
-    bool IsAccessible(Symbol member) {
-        switch (member.DeclaredAccessibility) {
+    static FunctionSymbol? RequirementAndDefault(FunctionSymbol first, FunctionSymbol second) {
+        static Symbol? Owner(FunctionSymbol f) => f.ContainingSymbol is ExtensionSymbol extension ? extension.ExtendedType : f.ContainingSymbol;
+        static bool InExtension(FunctionSymbol f) => f.ContainingSymbol is ExtensionSymbol;
+
+        if (Owner(first) is not NamedTypeSymbol { TypeKind: TypeKind.Protocol } protocol
+            || !ReferenceEquals(Owner(second), protocol)
+            || first.Parameters.Length != second.Parameters.Length
+            || !first.Parameters.Zip(second.Parameters).All(static p => p.First.Type.Equals(p.Second.Type))
+            || InExtension(first) == InExtension(second)) {
+            return null;
+        }
+
+        return InExtension(first) ? second : first;
+    }
+
+    bool IsAccessible(Symbol member) => IsAccessible(member, member.DeclaredAccessibility);
+
+    bool IsAccessible(Symbol member, Accessibility accessibility) {
+        switch (accessibility) {
             case Accessibility.Public or Accessibility.Package:
                 return true;
 
@@ -3015,6 +3032,14 @@ public sealed class Binder {
             }
 
             if (candidate.TypeParameters.Length > best.TypeParameters.Length) {
+                continue;
+            }
+
+            // A protocol's requirement and the default an extension of it
+            // gives are one method: the requirement, which dispatch resolves
+            // to the conforming type's own, or to the default.
+            if (RequirementAndDefault(best, candidate) is { } requirement) {
+                best = requirement;
                 continue;
             }
 
@@ -4071,6 +4096,15 @@ public sealed class Binder {
                 ErrorCode.ERR_NotAssignable,
                 syntax.Left.Span,
                 "the left side of an assignment must be a mutable binding"
+            );
+        }
+
+        // 'private(set) var count': readable here, but not writable.
+        if (target is BoundFieldAccess { Field.SetterAccessibility: { } setter } setField && !IsAccessible(setField.Field, setter)) {
+            _diagnostics.Error(
+                ErrorCode.ERR_NotAssignable,
+                syntax.Left.Span,
+                $"'{setField.Field.Name}' can be read here but not written: its setter is {setter.ToString().ToLowerInvariant()}"
             );
         }
 

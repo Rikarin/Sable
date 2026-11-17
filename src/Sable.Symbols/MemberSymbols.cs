@@ -266,6 +266,9 @@ public sealed class FieldSymbol(
     public override ImmutableArray<SyntaxNode> DeclaringSyntax { get; } =
         declaration is null ? [] : [declaration];
 
+    /// <summary><c>private(set)</c> and the like: who may write it, when narrower than who may read it.</summary>
+    public Accessibility? SetterAccessibility { get; internal set; }
+
     public override Accessibility DeclaredAccessibility { get; } = accessibility;
 
     /// <summary>True for <c>var</c>; false for <c>let</c> and the terse form.</summary>

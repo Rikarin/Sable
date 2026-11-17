@@ -200,6 +200,20 @@ void sable_access_end(void *storage) {
     }
 }
 
+// ---- Classes ---------------------------------------------------------------
+
+// 'x is Dog': whether the metadata is the class's, or a subclass's. A class's
+// metadata keeps its superclass's where an array's keeps its element copier.
+bool sable_class_is(const SableMetadata *type, const SableMetadata *target) {
+    for (; type != NULL; type = (const SableMetadata *)(const void *)type->copy_element) {
+        if (type == target) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 // ---- Regions -------------------------------------------------------------
 
 // A region (docs/02 §2.1): chunks values are bumped into, and the destroys of

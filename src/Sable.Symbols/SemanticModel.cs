@@ -495,8 +495,20 @@ public sealed class SemanticModel {
         FileScope scope
     ) {
         var binder = new Binder(_compilation, scope, owner);
-        binder.BindInitializer(value, expected);
+        var bound = binder.BindInitializer(value, expected);
+        if (owner is FieldSymbol field) {
+            _initializers[field] = bound;
+        }
+
         Collect(binder);
+    }
+
+    readonly Dictionary<FieldSymbol, BoundExpression> _initializers = [];
+
+    /// <summary>A stored property's initial value, bound and converted to its type: what each initialiser stores first.</summary>
+    public BoundExpression? GetFieldInitializer(FieldSymbol field) {
+        EnsureBound();
+        return _initializers.GetValueOrDefault(field);
     }
 
     void Collect(Binder binder) {

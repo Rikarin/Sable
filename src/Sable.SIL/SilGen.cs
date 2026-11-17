@@ -136,6 +136,9 @@ public sealed partial class SilGen {
             _declarations[symbol] = (syntax, model);
         }
 
+        DeclareGlobals();
+        _entrySymbol = entry;
+
         // What is not generic is lowered as it is; what is, once for each set
         // of type arguments something calls it with.
         foreach (var (symbol, syntax, model) in functions) {
@@ -160,8 +163,81 @@ public sealed partial class SilGen {
             LowerBody(symbol, syntax, model, name, type, substitution);
         }
 
+        LowerGlobalLifetimes();
         BuildVTables();
         RootChecker.Check(_module, _sources, _diagnostics);
+    }
+
+    // ---- Globals --------------------------------------------------------------
+
+    /// <summary>Module-level variables and types' static stored properties: one storage each, for the whole program.</summary>
+    readonly List<(FieldSymbol Field, string Name, SemanticModel Model)> _globalFields = [];
+    readonly Dictionary<FieldSymbol, (string Name, SilType Type)> _globalsByField = [];
+    FunctionSymbol? _entrySymbol;
+
+    internal const string GlobalsInit = "$globals.init", GlobalsDeinit = "$globals.deinit";
+
+    internal static bool IsGlobal(FieldSymbol field) =>
+        !field.IsComputed && (field.IsStatic || field.ContainingSymbol is ModuleSymbol);
+
+    void DeclareGlobals() {
+        foreach (var tree in _compilation.SyntaxTrees) {
+            var model = _compilation.GetSemanticModel(tree);
+            foreach (var declaration in tree.Root.DescendantNodes().Where(static d => d is FieldDeclarationSyntax or ConstDeclarationSyntax)) {
+                if (_compilation.GetDeclaredSymbol(declaration) is not FieldSymbol field || !IsGlobal(field)
+                    || field.ContainingSymbol is NamedTypeSymbol { IsGenericDefinition: true } || Lower(field.Type) is not { } type) {
+                    continue;
+                }
+
+                var owner = field.ContainingSymbol is NamedTypeSymbol named ? $"{named.ContainingSymbol?.Name}.{named.Name}" : field.ContainingSymbol?.Name;
+                var name = $"{owner}.{field.Name}";
+                _globalFields.Add((field, name, model));
+                _globalsByField[field] = (name, type);
+                _module.Globals.Add((name, type));
+            }
+        }
+    }
+
+    internal (string Name, SilType Type)? GlobalOf(FieldSymbol field) => _globalsByField.TryGetValue(field, out var global) ? global : null;
+
+    /// <summary>
+    ///     Two functions the entry point calls: one that stores each global's
+    ///     initial value, in the order declared, before anything else runs;
+    ///     one that destroys them, last first, as the program returns.
+    /// </summary>
+    void LowerGlobalLifetimes() {
+        if (_globalFields.Count == 0 || _entrySymbol is not { } initSymbol) {
+            return;
+        }
+
+        // Lowered in the entry point's context: a function of no parameters.
+        var unit = new FunctionType([], SilType.Unit);
+        var statements = new List<BoundStatement>();
+        foreach (var (field, _, model) in _globalFields) {
+            if (model.GetFieldInitializer(field) is { } initial) {
+                var target = new BoundFieldAccess(initial.Syntax, null, field);
+                statements.Add(new BoundExpressionStatement(initial.Syntax, new BoundAssignment(initial.Syntax, target, initial)));
+            }
+        }
+
+        var source = _globalFields[0].Model.SyntaxTree.Text;
+        var syntax = _globalFields[0].Field.DeclaringSyntax[0];
+        var init = new SilFunction(GlobalsInit, unit);
+        new FunctionLowering(this, initSymbol, init, source, TypeSubstitution.Empty).Lower(new BoundBlock(syntax, [], [..statements]));
+        init.RemoveUnreachableBlocks();
+        _module.Add(init);
+
+        var deinit = new SilFunction(GlobalsDeinit, unit);
+        var entry = deinit.AddBlock();
+        for (var i = _globalFields.Count - 1; i >= 0; i--) {
+            var (name, type) = _globalsByField[_globalFields[i].Field];
+            if (!type.IsTrivial) {
+                entry.Append(new DestroyAddrInst(entry.Append(new GlobalAddrInst(name, type))));
+            }
+        }
+
+        entry.Append(new ReturnInst(null));
+        _module.Add(deinit);
     }
 
     /// <summary>Each lowered function's source, for the diagnostics of checks run on the whole module.</summary>
@@ -374,6 +450,10 @@ public sealed partial class SilGen {
             }
 
             foreach (var method in symbol.OriginalDefinition.Members.OfType<FunctionSymbol>()) {
+                if (method is { FunctionKind: FunctionKind.Ordinary, IsStatic: false, IsAbstract: true } && method.ContainingSymbol is NamedTypeSymbol) {
+                    AbstractStub(method);
+                }
+
                 if (method is not { FunctionKind: FunctionKind.Ordinary, IsStatic: false } || method.ContainingSymbol is not NamedTypeSymbol
                     || !_names.TryGetValue(method, out var name) || _module.Find(name) is null) {
                     continue;
@@ -392,6 +472,30 @@ public sealed partial class SilGen {
         foreach (var type in _classes.Keys.ToList()) {
             Build(type);
         }
+    }
+
+    /// <summary>
+    ///     An abstract method's slot: code that traps, never reached — the
+    ///     binder makes every concrete subclass override it, and an abstract
+    ///     class cannot be made.
+    /// </summary>
+    void AbstractStub(FunctionSymbol method) {
+        var name = _names.TryGetValue(method, out var known) ? known : Mangle(method, false);
+        if (_module.Find(name) is not null || method.DeclaringSyntax.FirstOrDefault() is not { } syntax
+            || SignatureOf(method, syntax, TypeSubstitution.Empty) is not { } type) {
+            return;
+        }
+
+        var stub = new SilFunction(name, type);
+        var entry = stub.AddBlock();
+        foreach (var parameter in type.Parameters) {
+            entry.AddArgument(parameter);
+        }
+
+        entry.Append(new CondFailInst(entry.Append(new IntegerLiteralInst(SilType.Bool, 1)), $"abstract method '{method.Name}' called"));
+        entry.Append(new UnreachableInst());
+        _module.Add(stub);
+        _names[method] = name;
     }
 
     /// <summary>
@@ -1141,6 +1245,15 @@ public sealed partial class SilGen {
             }
         }
 
+        // None of its own: the default an extension of the protocol gives.
+        if (Owner(requirement) is { TypeKind: TypeKind.Protocol } protocol) {
+            return protocol.OriginalDefinition.Members.OfType<FunctionSymbol>().FirstOrDefault(f =>
+                f.ContainingSymbol is ExtensionSymbol
+                && f.Name == requirement.Name
+                && f.IsStatic == requirement.IsStatic
+                && f.Parameters.Length == requirement.Parameters.Length);
+        }
+
         return null;
     }
 
@@ -1205,9 +1318,12 @@ public sealed partial class SilGen {
         if (implementation is not null && !IsGeneric(implementation) && _names.TryGetValue(implementation, out var implementationName)) {
             target = implementationName;
             targetType = _module.Find(target)?.Type ?? SignatureOf(implementation, at, TypeSubstitution.Empty);
-        } else if (implementation is null && _declarations.ContainsKey(method) && Owner(method)!.SelfTypeParameter is { } self
-                   && Instance(method, new(new() { [self] = concrete }), at) is { } instance) {
+        } else if ((implementation is { ContainingSymbol: ExtensionSymbol } ? implementation : implementation is null ? method : null) is { } fallback
+                   && _declarations.ContainsKey(fallback) && Owner(fallback)!.SelfTypeParameter is { } self
+                   && Instance(fallback, new(new() { [self] = concrete }), at) is { } instance) {
+            // The protocol's default, for this type: an instance with Self bound.
             (target, targetType) = instance;
+            implementation = null;
         } else {
             Unsupported<object>(at, $"'{method.Name}' of '{concrete.ToDisplayString()}' through an existential");
             return null;
@@ -1296,6 +1412,21 @@ public sealed partial class SilGen {
         type.Members.OfType<FieldSymbol>().Where(static f => f is { IsStatic: false, IsComputed: false });
 
     internal void Report(ErrorCode code, Sable.Syntax.TextSpan span, string message) => _diagnostics.Error(code, span, message);
+
+    /// <summary>A stored property's initial value, bound: from the model of the file that declares it.</summary>
+    internal BoundExpression? FieldInitializer(FieldSymbol field) {
+        if (field.DeclaringSyntax.FirstOrDefault() is not { } syntax) {
+            return null;
+        }
+
+        var root = syntax;
+        while (root.Parent is { } parent) {
+            root = parent;
+        }
+
+        var tree = _compilation.SyntaxTrees.FirstOrDefault(t => ReferenceEquals(t.Root, root));
+        return tree is null ? null : _compilation.GetSemanticModel(tree).GetFieldInitializer(field);
+    }
 
     T? Unsupported<T>(SyntaxNode at, string what) where T : class {
         _diagnostics.Error(ErrorCode.ERR_NotLoweredYet, at.Span, $"SIL lowering does not handle {what} yet");
@@ -1445,6 +1576,25 @@ public sealed partial class SilGen {
                 _selfAddress = NewSlot(function.Type.Result, "self");
             }
 
+            // The entry point first gives every global its initial value.
+            if (ReferenceEquals(symbol, generator._entrySymbol) && generator._globalFields.Count > 0 && function.Name != GlobalsInit) {
+                var unit = new FunctionType([], SilType.Unit);
+                Emit(new ApplyInst(Emit(new FunctionRefInst(GlobalsInit, unit)), SilType.Unit));
+            }
+
+            // 'var name = "x"': every initialiser of the type that declares it
+            // stores the initial value first, before its own body runs.
+            if (symbol.FunctionKind == FunctionKind.Initializer
+                && (symbol.ContainingSymbol is ExtensionSymbol extension ? extension.ExtendedType : symbol.ContainingSymbol) is NamedTypeSymbol owner
+                && SelfType(symbol, substitution) is { } selfType) {
+                foreach (var field in owner.OriginalDefinition.Members.OfType<FieldSymbol>()) {
+                    if (field is { IsStatic: false, IsComputed: false, HasInitializer: true } && generator.FieldInitializer(field) is { } initial) {
+                        var self = new BoundSelfAccess(initial.Syntax, selfType, true);
+                        Statement(new BoundExpressionStatement(initial.Syntax, new BoundAssignment(initial.Syntax, new BoundFieldAccess(initial.Syntax, self, field), initial)));
+                    }
+                }
+            }
+
             Statement(body);
 
             // Falling off the end: fine for a function returning nothing, and
@@ -1469,6 +1619,11 @@ public sealed partial class SilGen {
                 _location = null;
                 DestroyOwnedParameters();
                 Deallocate();
+                if (ReferenceEquals(symbol, generator._entrySymbol) && generator._globalFields.Count > 0 && function.Name != GlobalsInit) {
+                    var unit = new FunctionType([], SilType.Unit);
+                    Emit(new ApplyInst(Emit(new FunctionRefInst(GlobalsDeinit, unit)), SilType.Unit));
+                }
+
                 Jump(new ReturnInst(returnBlock.Arguments.Count == 0 ? null : returnBlock.Arguments[0]));
             }
 
@@ -2738,6 +2893,13 @@ public sealed partial class SilGen {
                 case BoundConversion { ConversionKind: ConversionKind.Explicit, Operand.Type: OptionalTypeSymbol } conversion:
                     return Unwrap(conversion);
 
+                // 'x as? Dog' and 'x as! Dog': a downcast, checked as the program runs.
+                case BoundConversion { ConversionKind: ConversionKind.Explicit } downcast when IsDowncast(downcast):
+                    return Downcast(downcast);
+
+                case BoundTypeTest test:
+                    return TypeTest(test);
+
                 case BoundConversion { ConversionKind: ConversionKind.Explicit } conversion:
                     return NumericConversion(conversion);
 
@@ -2783,6 +2945,10 @@ public sealed partial class SilGen {
 
                 case BoundAssignment assignment:
                     return Assignment(assignment);
+
+                // A global: read where it lives.
+                case BoundFieldAccess { Field: var globalField } when SilGen.IsGlobal(globalField) && generator.GlobalOf(globalField) is var (globalName, globalType):
+                    return Emit(new LoadInst(Emit(new GlobalAddrInst(globalName, globalType))));
 
                 case BoundFieldAccess { Receiver: { } receiver, Field: { IsComputed: true, Name: var member } } when IsInlineArray(receiver):
                     return InlineArrayMember(receiver, member, expression);
@@ -3101,6 +3267,10 @@ public sealed partial class SilGen {
         }
 
         SilValue? FieldAccess(BoundFieldAccess access, BoundExpression receiver, FieldSymbol field) {
+            if (SilGen.IsGlobal(field) && generator.GlobalOf(field) is var (globalName, globalType)) {
+                return Emit(new LoadInst(Emit(new GlobalAddrInst(globalName, globalType))));
+            }
+
             if (IsInlineType(receiver.Type)) {
                 return InlineRead(access);
             }
@@ -3197,6 +3367,10 @@ public sealed partial class SilGen {
         ///     on the way is borrowed until the caller ends <paramref name="borrows" />.
         /// </summary>
         SilValue? Address(BoundExpression target, List<SilValue> borrows) {
+            if (target is BoundFieldAccess { Field: { } globalField } && SilGen.IsGlobal(globalField) && generator.GlobalOf(globalField) is var (globalName, globalType)) {
+                return Emit(new GlobalAddrInst(globalName, globalType));
+            }
+
             switch (target) {
                 case BoundLocalAccess local:
                     return LocalAddress(local.Local, local.Syntax, borrows);
@@ -3407,6 +3581,65 @@ public sealed partial class SilGen {
             var result = Owned(payload);
             Destroy(value);
             return result;
+        }
+
+        bool IsDowncast(BoundConversion conversion) {
+            var target = Sub(conversion.Type) is OptionalTypeSymbol optional ? optional.UnderlyingType : Sub(conversion.Type);
+            return Sub(conversion.Operand.Type).TypeKind == TypeKind.Class && target.TypeKind == TypeKind.Class;
+        }
+
+        /// <summary>
+        ///     A downcast: the object, if it is of the class or a subclass of it —
+        ///     '.Some' of it for 'as?', a trap otherwise for 'as!'.
+        /// </summary>
+        SilValue? Downcast(BoundConversion conversion) {
+            var optional = Sub(conversion.Type) is OptionalTypeSymbol;
+            var targetSymbol = optional ? ((OptionalTypeSymbol)Sub(conversion.Type)).UnderlyingType : Sub(conversion.Type);
+            if (LowerType(targetSymbol) is not ClassType target || Expression(conversion.Operand) is not { Type: ClassType } value) {
+                return Missing(conversion, $"the cast to '{targetSymbol.ToDisplayString()}'");
+            }
+
+            var isA = Emit(new BuiltinInst($"class_is:{target.Name}", SilType.Bool, value));
+            if (!optional) {
+                Emit(new CondFailInst(Emit(new BuiltinInst("not_Bool", SilType.Bool, isA)), $"cast to '{targetSymbol.ToDisplayString()}' failed"));
+                var forced = Emit(new CopyValueInst(Emit(new UncheckedRefCastInst(value, target))));
+                Destroy(value);
+                return forced;
+            }
+
+            if (LowerType(conversion.Type) is not EnumType result) {
+                Destroy(value);
+                return Missing(conversion, $"the cast to '{conversion.Type.ToDisplayString()}'");
+            }
+
+            var yes = function.AddBlock();
+            var no = function.AddBlock();
+            var after = function.AddBlock();
+            var joined = after.AddArgument(result);
+            Jump(new CondBranchInst(isA, yes, [], no, []));
+
+            _current = yes;
+            var cast = Emit(new CopyValueInst(Emit(new UncheckedRefCastInst(value, target))));
+            Destroy(value);
+            Branch(after, Emit(new EnumInst(result, result.CaseIndex("Some"), cast)));
+
+            _current = no;
+            Destroy(value);
+            Branch(after, Emit(new EnumInst(result, result.CaseIndex("None"), null)));
+
+            _current = after;
+            return joined;
+        }
+
+        /// <summary>'x is Dog': whether the object is of the class, or a subclass of it.</summary>
+        SilValue? TypeTest(BoundTypeTest test) {
+            if (LowerType(test.TestedType) is not ClassType target || Borrow(test.Operand) is not { Type: ClassType } value) {
+                return Missing(test, $"'is {test.TestedType.ToDisplayString()}' on '{test.Operand.Type.ToDisplayString()}'");
+            }
+
+            var isA = Emit(new BuiltinInst($"class_is:{target.Name}", SilType.Bool, value));
+            End(value);
+            return isA;
         }
 
         SilValue? NumericConversion(BoundConversion conversion) {

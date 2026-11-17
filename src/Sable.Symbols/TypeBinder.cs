@@ -170,12 +170,58 @@ internal sealed class TypeBinder(Compilation compilation) {
 
         field.TypeResolver = () => declaration.Declarator.TypeAnnotation is { } annotation
             ? BindType(annotation.Type, field, scope)
-            // Without an annotation the type comes from the initialiser, which
-            // needs expression binding; until then it is unresolved.
-            : ErrorTypeSymbol.Instance;
+            // Without an annotation the type comes from the initial value, read
+            // off its form: members are declared before expressions are bound.
+            : declaration.Declarator.Initializer is { } initializer && InferFromSyntax(initializer.Value, field, scope) is { } inferred
+                ? inferred
+                : Error(
+                    ErrorCode.ERR_TypeNotFound,
+                    declaration.Declarator.Span,
+                    $"'{field.Name}' needs a type annotation: its type can be left out only when its initial value is a literal, "
+                    + "an array of literals, or a call to a type's initialiser"
+                );
 
-        if (declaration.Declarator.TypeAnnotation is not null) {
-            Defer(() => _ = field.Type);
+        Defer(() => _ = field.Type);
+    }
+
+    /// <summary>A stored property's type, from the form of its initial value: '0' is Int, 'Point(…)' a Point.</summary>
+    TypeSymbol? InferFromSyntax(ExpressionSyntax value, Symbol context, FileScope? scope) {
+        var core = compilation.Core;
+        switch (value) {
+            case ParenthesizedExpressionSyntax parenthesized:
+                return InferFromSyntax(parenthesized.Expression, context, scope);
+
+            case PrefixUnaryExpressionSyntax { OperatorToken.Kind: SyntaxKind.MinusToken } negated:
+                return InferFromSyntax(negated.Operand, context, scope) is { } number && core.IsNumeric(number) ? number : null;
+
+            case LiteralExpressionSyntax literal:
+                return literal.Token.Kind switch {
+                    SyntaxKind.IntegerLiteralToken => core.Int,
+                    SyntaxKind.FloatLiteralToken => core.F64,
+                    SyntaxKind.StringLiteralToken or SyntaxKind.MultilineStringLiteralToken or SyntaxKind.RawStringLiteralToken => core.String,
+                    SyntaxKind.CharLiteralToken => core.Char,
+                    SyntaxKind.TrueKeyword or SyntaxKind.FalseKeyword => core.Bool,
+                    _ => null,
+                };
+
+            case InterpolatedStringExpressionSyntax:
+                return core.String;
+
+            case ArrayExpressionSyntax { Elements.Count: > 0 } array
+                when InferFromSyntax(array.Elements[0], context, scope) is { } element:
+                return new ArrayTypeSymbol(element, ArrayKind.Grow);
+
+            // 'Point { x: 0, y: 0 }': a record of the type it names.
+            case RecordExpressionSyntax record:
+                return BindType(record.Type, context, scope);
+
+            // 'Counter()': a call to a type's initialiser.
+            case InvocationExpressionSyntax { Expression: IdentifierNameSyntax callee }
+                when Lookup(callee.Identifier.Text, context, scope, callee.Span) is NamedTypeSymbol { IsGenericDefinition: false } type:
+                return type;
+
+            default:
+                return null;
         }
     }
 

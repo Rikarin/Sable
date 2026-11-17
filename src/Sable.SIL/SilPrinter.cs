@@ -77,7 +77,11 @@ public static class SilPrinter {
             Declare(type);
         }
 
-        if (module.Types.Count > 0 && module.Functions.Count > 0) {
+        foreach (var (name, type) in module.Globals) {
+            builder.Append("sil_global @").Append(name).Append(" : $").Append(type).Append('\n');
+        }
+
+        if ((module.Types.Count > 0 || module.Globals.Count > 0) && module.Functions.Count > 0) {
             builder.Append('\n');
         }
 
@@ -365,6 +369,10 @@ public static class SilPrinter {
 
                     case FunctionRefInst reference:
                         builder.Append(" @").Append(reference.Function).Append(" : $").Append(reference.Type);
+                        break;
+
+                    case GlobalAddrInst global:
+                        builder.Append(" @").Append(global.Global).Append(" : $").Append(global.Type);
                         break;
 
                     case ApplyInst apply:

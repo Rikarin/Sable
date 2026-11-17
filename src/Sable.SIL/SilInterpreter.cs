@@ -35,6 +35,9 @@ public sealed partial class SilInterpreter(SilModule module, int stepLimit = 10_
     readonly HashSet<Counted> _live = [];
     readonly Dictionary<StringLiteralInst, HeapString> _literals = [];
 
+    /// <summary>The globals' storage, made as each is first reached.</summary>
+    readonly Dictionary<string, Slot> _globals = [];
+
     /// <summary>Where <c>print</c> writes: one line per call, as the native runtime does.</summary>
     public StringBuilder Output { get; } = new();
 
@@ -707,6 +710,14 @@ public sealed partial class SilInterpreter(SilModule module, int stepLimit = 10_
                         values[reference] = reference.Function;
                         break;
 
+                    case GlobalAddrInst global:
+                        if (!_globals.TryGetValue(global.Global, out var globalSlot)) {
+                            _globals[global.Global] = globalSlot = new Slot();
+                        }
+
+                        values[global] = globalSlot;
+                        break;
+
                     case PartialApplyInst partial:
                         values[partial] = new ClosureValue((string)Get(partial.Function)!, partial.Context is { } context ? Get(context) : null);
                         break;
@@ -1004,6 +1015,11 @@ public sealed partial class SilInterpreter(SilModule module, int stepLimit = 10_
 
         if (builtin.Name.StartsWith("inline_", StringComparison.Ordinal)) {
             return Inline(builtin, operands, depth);
+        }
+
+        if (builtin.Name.StartsWith("class_is:", StringComparison.Ordinal)) {
+            var target = module.FindType(builtin.Name["class_is:".Length..]) as ClassType ?? throw new SilTrap($"no class {builtin.Name}");
+            return Alive((HeapObject)operands[0]!).Type.IsSubclassOf(target);
         }
 
         if (builtin.Name.StartsWith("access_", StringComparison.Ordinal)) {

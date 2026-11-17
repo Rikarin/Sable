@@ -341,7 +341,18 @@ Order matters; each of these is a self-contained lowering:
       existentials, class inheritance, computed properties and, since Phase
       3, the sized integers and inline layout among them — the rest waiting
       on recursive generic unions, mutating requirements through
-      existentials, a few operators on enums, and async (Phase 5)
+      existentials, a few operators on enums, and async (Phase 5). Classes
+      are complete as docs/03 describes them (`tests/.../ClassTests.cs`):
+      inheritance, overrides and `super`, `abstract` methods (a trapping
+      vtable slot), protocol requirements with defaults in extensions
+      (dispatch falls back to the default), stored properties with initial
+      values (stored first by every initialiser of the declaring type; an
+      unannotated one's type read off a literal, a record or an initialiser
+      call), `private(set)`, static stored properties and module-level
+      variables (`sil_global`, initialised in order as the entry point
+      starts, destroyed last first as it returns), and `as?`, `as!` and `is`
+      (the superclass chain in the class metadata). Async and actors parse
+      and type-check but do not lower: the coroutine split is Phase 5's
 - [x] `lldb` shows correct frames, locals and types — on macOS, checked by a
       test that drives lldb: `gcd(a=1071, b=462)`, `(Int) t = 147`,
       `(Debug.Point) p = (x = 1071, y = 462)`

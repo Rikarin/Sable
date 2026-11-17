@@ -789,6 +789,7 @@ public sealed class Compilation {
             declaration.LetOrVarKeyword.Kind == SyntaxKind.VarKeyword
         ) {
             IsStatic = declaration.Modifiers.Any(SyntaxKind.StaticKeyword),
+            SetterAccessibility = SetterAccessibilityOf(declaration.Modifiers),
             IsLazy = declaration.Modifiers.Any(SyntaxKind.LazyKeyword),
             ReferenceKind = declaration.Modifiers.Any(SyntaxKind.WeakKeyword) ? ReferenceKind.Weak
                 : declaration.Modifiers.Any(SyntaxKind.UnownedKeyword) ? ReferenceKind.Unowned
@@ -1311,7 +1312,15 @@ public sealed class Compilation {
     }
 
     static Accessibility AccessibilityOf(SyntaxTokenList modifiers, Symbol container) {
-        foreach (var modifier in modifiers) {
+        for (var i = 0; i < modifiers.Count; i++) {
+            var modifier = modifiers[i];
+
+            // 'private(set)' narrows who may write, not who may read.
+            if (i + 1 < modifiers.Count && modifiers[i + 1].Kind == SyntaxKind.OpenParenToken) {
+                i += 3;
+                continue;
+            }
+
             switch (modifier.Kind) {
                 case SyntaxKind.PublicKeyword: return Accessibility.Public;
                 case SyntaxKind.PackageKeyword: return Accessibility.Package;
@@ -1324,6 +1333,22 @@ public sealed class Compilation {
         return container is NamedTypeSymbol { TypeKind: TypeKind.Protocol } protocol
             ? protocol.DeclaredAccessibility
             : Accessibility.Internal;
+    }
+
+    /// <summary>The accessibility of <c>private(set)</c> and its kin: who may write.</summary>
+    static Accessibility? SetterAccessibilityOf(SyntaxTokenList modifiers) {
+        for (var i = 0; i + 2 < modifiers.Count; i++) {
+            if (modifiers[i + 1].Kind == SyntaxKind.OpenParenToken && modifiers[i + 2].Kind == SyntaxKind.SetKeyword) {
+                return modifiers[i].Kind switch {
+                    SyntaxKind.PrivateKeyword => Accessibility.Private,
+                    SyntaxKind.InternalKeyword => Accessibility.Internal,
+                    SyntaxKind.PackageKeyword => Accessibility.Package,
+                    _ => null,
+                };
+            }
+        }
+
+        return null;
     }
 
     internal static string NameOf(TypeSyntax name) =>

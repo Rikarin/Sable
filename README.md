@@ -109,6 +109,7 @@ dotnet test Sable.slnx
 | `Sable.Symbols` — `Self` and associated types | done |
 | `Sable.Symbols` — accessibility, mutability, inheritance control | done |
 | `Sable.Symbols` — coherence and declaration-site variance | done |
+| `Sable.Symbols` — flow-sensitive narrowing | done |
 | `Sable.Symbols` — closures and function values | done |
 | `Sable.Symbols` — extensions and memberwise initialisers | done |
 | `Sable.Symbols` — effects: `throws` and `async` | done |
@@ -117,7 +118,7 @@ dotnet test Sable.slnx
 | `Sable.Symbols` — throughput: 100,000 lines in under 5 s | done |
 | Everything downstream (SIL, codegen, runtime) | not started |
 
-**1,021 tests green**, and every file in [examples/](examples/) parses as a
+**1,032 tests green**, and every file in [examples/](examples/) parses as a
 complete compilation unit with no diagnostics and an exact round-trip.
 [tests/corpus/](tests/corpus/) holds programs that must type-check with
 nothing to say, and [tests/negative/](tests/negative/) holds programs that

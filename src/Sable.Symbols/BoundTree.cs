@@ -58,18 +58,27 @@ public sealed class BoundInterpolatedString(
     public override IEnumerable<BoundNode> Children => Parts;
 }
 
-public sealed class BoundLocalAccess(SyntaxNode syntax, LocalSymbol local)
-    : BoundExpression(syntax, local.Type)
+public sealed class BoundLocalAccess(
+    SyntaxNode syntax, LocalSymbol local, TypeSymbol? narrowed = null)
+    : BoundExpression(syntax, narrowed ?? local.Type)
 {
     public LocalSymbol Local { get; } = local;
+
+    /// <summary>True where a test in scope has established a narrower type.</summary>
+    public bool IsNarrowed { get; } = narrowed is not null;
+
     public override bool IsAssignable => Local.IsMutable;
     public override IEnumerable<BoundNode> Children => [];
 }
 
-public sealed class BoundParameterAccess(SyntaxNode syntax, ParameterSymbol parameter)
-    : BoundExpression(syntax, parameter.Type)
+public sealed class BoundParameterAccess(
+    SyntaxNode syntax, ParameterSymbol parameter, TypeSymbol? narrowed = null)
+    : BoundExpression(syntax, narrowed ?? parameter.Type)
 {
     public ParameterSymbol Parameter { get; } = parameter;
+
+    /// <summary>True where a test in scope has established a narrower type.</summary>
+    public bool IsNarrowed { get; } = narrowed is not null;
 
     public override bool IsAssignable =>
         Parameter.Modifier is ParameterModifier.InOut or ParameterModifier.Out;

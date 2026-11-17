@@ -44,6 +44,18 @@ public sealed class Binder
     private ImmutableArray<TypeParameterSymbol> _openTypeParameters = [];
 
     /// <summary>
+    /// Types a test in scope has established, keyed by the binding tested.
+    /// </summary>
+    /// <remarks>
+    /// docs/03 §3.5: <c>if x is Int { }</c> gives x the type Int inside the
+    /// branch, and <c>if x != none</c> unwraps it. The map is a stack of
+    /// frames, pushed for a branch and popped when it ends, so nothing a test
+    /// established outlives the test. Assigning to a binding drops what was
+    /// known about it.
+    /// </remarks>
+    private readonly List<Dictionary<Symbol, TypeSymbol>> _narrowed = [];
+
+    /// <summary>
     /// The error type the enclosing function declared, or null when it does
     /// not throw. An error has to reach one of these, or a <c>catch</c>.
     /// </summary>
@@ -231,6 +243,24 @@ public sealed class Binder
         }
 
         scope[name] = symbol;
+    }
+
+    private void PushNarrowing(Dictionary<Symbol, TypeSymbol> frame) => _narrowed.Add(frame);
+
+    private void PopNarrowing() => _narrowed.RemoveAt(_narrowed.Count - 1);
+
+    /// <summary>The narrowed type for a binding, innermost test first.</summary>
+    private TypeSymbol? NarrowedType(Symbol symbol)
+    {
+        for (var i = _narrowed.Count - 1; i >= 0; i--)
+            if (_narrowed[i].TryGetValue(symbol, out var type)) return type;
+        return null;
+    }
+
+    /// <summary>Forgets what was known about a binding that has been written.</summary>
+    private void DropNarrowing(Symbol symbol)
+    {
+        foreach (var frame in _narrowed) frame.Remove(symbol);
     }
 
     private Symbol? LookupLocal(string name)
@@ -637,12 +667,20 @@ public sealed class Binder
     {
         PushScope();
         var condition = BindConditionList(statement.Conditions, statement);
+
+        PushNarrowing(NarrowingsWhen(condition, holds: true));
         var consequence = BindStatement(statement.Body);
+        PopNarrowing();
+
         PopScope();
 
-        var alternative = statement.ElseClause is { } elseClause
-            ? BindStatement(elseClause.Body)
-            : null;
+        BoundStatement? alternative = null;
+        if (statement.ElseClause is { } elseClause)
+        {
+            PushNarrowing(NarrowingsWhen(condition, holds: false));
+            alternative = BindStatement(elseClause.Body);
+            PopNarrowing();
+        }
 
         return Record(statement, new BoundIf(statement, condition, consequence, alternative));
     }
@@ -652,9 +690,108 @@ public sealed class Binder
         // 'guard c else { ... }' is an 'if' whose bindings outlive it; the
         // else branch must not fall through, which the flow pass will check.
         var condition = BindConditionList(statement.Conditions, statement);
+
+        PushNarrowing(NarrowingsWhen(condition, holds: false));
         var body = BindStatement(statement.Body);
+        PopNarrowing();
+
+        // What the guard established holds for the rest of the enclosing
+        // block, because the only way past it is with the condition true.
+        foreach (var (symbol, type) in NarrowingsWhen(condition, holds: true))
+        {
+            if (_narrowed.Count == 0) PushNarrowing([]);
+            _narrowed[^1][symbol] = type;
+        }
+
         return Record(statement, new BoundIf(statement, condition, body, null));
     }
+
+    /// <summary>
+    /// What a condition establishes about the bindings it mentions.
+    /// </summary>
+    /// <remarks>
+    /// Only the shapes docs/03 §3.5 names: <c>x is T</c>, <c>x != none</c> and
+    /// <c>x == none</c>, combined with <c>&amp;&amp;</c>. Anything else
+    /// establishes nothing, which is always safe.
+    /// </remarks>
+    private Dictionary<Symbol, TypeSymbol> NarrowingsWhen(BoundExpression condition, bool holds)
+    {
+        var map = new Dictionary<Symbol, TypeSymbol>();
+        Collect(condition, holds, map);
+        return map;
+
+        void Collect(BoundExpression node, bool whenTrue, Dictionary<Symbol, TypeSymbol> into)
+        {
+            switch (node)
+            {
+                // 'a && b' establishes both when it holds, and neither when
+                // it does not: either side could be the one that failed.
+                case BoundBinaryOperator
+                    { OperatorKind: BinaryOperatorKind.LogicalAnd } conjunction
+                    when whenTrue:
+                    Collect(conjunction.Left, true, into);
+                    Collect(conjunction.Right, true, into);
+                    return;
+
+                case BoundBinaryOperator
+                    { OperatorKind: BinaryOperatorKind.LogicalOr } disjunction
+                    when !whenTrue:
+                    Collect(disjunction.Left, false, into);
+                    Collect(disjunction.Right, false, into);
+                    return;
+
+                case BoundUnaryOperator { OperatorKind: UnaryOperatorKind.Not } negation:
+                    Collect(negation.Operand, !whenTrue, into);
+                    return;
+
+                case BoundTypeTest test when whenTrue:
+                    if (BindingOf(test.Operand) is { } tested) into[tested] = test.TestedType;
+                    return;
+
+                // 'x != none' unwraps when it holds; 'x == none' when it does
+                // not.
+                case BoundBinaryOperator
+                {
+                    OperatorKind: BinaryOperatorKind.NotEqual or BinaryOperatorKind.Equal,
+                } comparison:
+                {
+                    var unwrapsWhenTrue =
+                        comparison.OperatorKind == BinaryOperatorKind.NotEqual;
+                    if (whenTrue != unwrapsWhenTrue) return;
+
+                    var binding = IsNone(comparison.Right) ? comparison.Left
+                        : IsNone(comparison.Left) ? comparison.Right
+                        : null;
+
+                    if (binding is null) return;
+                    if (binding.Type is not OptionalTypeSymbol optional) return;
+                    if (BindingOf(binding) is { } symbol)
+                        into[symbol] = optional.UnderlyingType;
+                    return;
+                }
+
+                default:
+                    return;
+            }
+        }
+    }
+
+    private static Symbol? BindingOf(BoundExpression expression) => expression switch
+    {
+        BoundLocalAccess local => local.Local,
+        BoundParameterAccess parameter => parameter.Parameter,
+        BoundConversion conversion => BindingOf(conversion.Operand),
+        _ => null,
+    };
+
+    private static bool IsNone(BoundExpression expression) => expression switch
+    {
+        BoundConversion conversion => IsNone(conversion.Operand),
+        _ => expression.Syntax is LiteralExpressionSyntax
+        {
+            Token.Kind: SyntaxKind.NoneKeyword,
+        },
+    };
 
     private BoundExpression BindConditionList(
         SeparatedSyntaxList<ConditionSyntax> conditions, SyntaxNode syntax)
@@ -1017,8 +1154,10 @@ public sealed class Binder
         {
             return local switch
             {
-                LocalSymbol localSymbol => new BoundLocalAccess(syntax, localSymbol),
-                ParameterSymbol parameter => new BoundParameterAccess(syntax, parameter),
+                LocalSymbol localSymbol =>
+                    new BoundLocalAccess(syntax, localSymbol, NarrowedType(localSymbol)),
+                ParameterSymbol parameter =>
+                    new BoundParameterAccess(syntax, parameter, NarrowedType(parameter)),
                 FunctionSymbol function => new BoundFunctionGroup(syntax, null, [function]),
                 _ => new BoundError(syntax),
             };
@@ -2489,6 +2628,13 @@ public sealed class Binder
         {
             _diagnostics.Error(ErrorCode.ERR_NotAssignable, syntax.Left.Span,
                 "the left side of an assignment must be a mutable binding");
+        }
+
+        // Whatever a test established about this binding, the write ends it.
+        switch (target)
+        {
+            case BoundLocalAccess local: DropNarrowing(local.Local); break;
+            case BoundParameterAccess parameter: DropNarrowing(parameter.Parameter); break;
         }
 
         if (syntax.OperatorToken.Kind != SyntaxKind.EqualsToken)

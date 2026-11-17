@@ -233,6 +233,9 @@ public sealed class SemanticModel {
 
         // Binding those may have bound signatures of their own.
         _compilation.TypeBinder.ForceAll();
+
+        // '@test' and '@bench' functions the harness could not call.
+        _diagnostics.AddRange(_compilation.CheckTestFunctions(SyntaxTree));
     }
 
     void BindMember(SyntaxNode member, FileScope scope) {

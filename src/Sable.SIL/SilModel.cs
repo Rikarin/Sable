@@ -1440,6 +1440,7 @@ public static class SilBuiltins {
         Add("process_current_directory", SilType.String);
         Add("process_change_directory", SilType.Bool, SilType.String);
         Add("process_id", SilType.Int);
+        Add("process_executable_path", SilType.String);
 
         Add("region_create", SilType.Region);
 

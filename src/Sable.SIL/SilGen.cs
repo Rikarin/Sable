@@ -76,6 +76,19 @@ public sealed partial class SilGen {
         return (generator._module, generator.Diagnostics);
     }
 
+    /// <summary>
+    ///     Lowers every function, starting the program at the one given
+    ///     rather than at '@main': what a test or bench build does, whose
+    ///     harness is the entry point of a program that may have its own.
+    /// </summary>
+    public static (SilModule Module, IReadOnlyList<Diagnostic> Diagnostics) Lower(Compilation compilation, FunctionSymbol entryPoint) {
+        var generator = new SilGen(compilation) { _entryOverride = entryPoint };
+        generator.LowerAll();
+        return (generator._module, generator.Diagnostics);
+    }
+
+    FunctionSymbol? _entryOverride;
+
     void LowerAll() {
         var functions = new List<(FunctionSymbol Symbol, SyntaxNode Syntax, SemanticModel Model)>();
 
@@ -129,7 +142,7 @@ public sealed partial class SilGen {
 
         // '@main' marks where a program starts; failing that, a function
         // called main does.
-        var entry = functions.FirstOrDefault(static f =>
+        var entry = _entryOverride ?? functions.FirstOrDefault(static f =>
                 f.Syntax is FunctionDeclarationSyntax declaration
                 && declaration.Attributes.Any(static a => a.Name.ToString().Trim() == "main")
             ).Symbol

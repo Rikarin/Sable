@@ -147,6 +147,11 @@ public struct Runtime {
     @builtin("process_id")
     public static fn processId() -> Int
 
+    /// The path this program was started by, to start it again with; empty
+    /// where there is none, as in the interpreter.
+    @builtin("process_executable_path")
+    public static fn executablePath() -> String
+
     // ---- Strings, in one call --------------------------------------------
     // What String's conformances and Sable.Text are written over: hashing
     // and ordering by the UTF-8 bytes, and joining, in one call rather than

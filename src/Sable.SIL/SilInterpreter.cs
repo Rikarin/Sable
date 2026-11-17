@@ -1075,6 +1075,10 @@ public sealed partial class SilInterpreter(SilModule module, int stepLimit = 10_
             case "process_id":
                 return (long)Environment.ProcessId;
 
+            // No executable runs here: an interpreted program cannot start itself again.
+            case "process_executable_path":
+                return Allocate(new HeapString(""));
+
             case "time_monotonic":
                 return System.Diagnostics.Stopwatch.GetTimestamp() * (1_000_000_000L / System.Diagnostics.Stopwatch.Frequency);
 

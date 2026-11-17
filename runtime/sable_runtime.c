@@ -2956,6 +2956,27 @@ int64_t sable_process_id(void) {
     return (int64_t)getpid();
 }
 
+// The path this program was started by: argv[0], made absolute when it
+// names a file, so that the program can start itself again (the test
+// harness does, a process per test). A name without a '/' was found on
+// PATH, and is given as it is, for process_run to find the same way.
+SableString *sable_process_executable_path(void) {
+    if (saved_argc < 1 || saved_argv[0] == NULL) {
+        return make_string("", 0);
+    }
+
+    if (strchr(saved_argv[0], '/') != NULL) {
+        char *resolved = realpath(saved_argv[0], NULL);
+        if (resolved != NULL) {
+            SableString *path = make_cstring(resolved);
+            free(resolved);
+            return path;
+        }
+    }
+
+    return make_cstring(saved_argv[0]);
+}
+
 // ---- Joining (Sable.Text's floor) ------------------------------------
 
 // The parts with the separator between them, in one string made at its size:

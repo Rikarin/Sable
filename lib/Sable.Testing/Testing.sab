@@ -1,0 +1,695 @@
+module Sable.Testing
+
+// '@test' and '@bench' (docs/05 §5.1): the assertions a test is written
+// with, and the harnesses 'sable test' and 'sable bench' build around the
+// functions so marked. The compiler writes the entry point — a table of the
+// marked functions handed to 'runTests' or 'runBenchmarks' — and the rest is
+// here, in Sable.
+//
+// A failed assertion ends its test with a trap. The test harness runs each
+// test in a process of its own (the harness binary again, with
+// '--run-test <name>'), so a trap — an assertion's, or an index out of
+// range — fails that test and no other.
+
+import Sable.Text
+import Sable.Math
+import Sable.Collections
+
+// ===========================================================================
+// Assertions
+// ===========================================================================
+
+/// What a failed assertion throws, and 'try!' then traps on: no assertion
+/// can be caught by the test it is in.
+union TestFailure {
+    Failed
+}
+
+fn stopTest() throws(TestFailure) {
+    throw TestFailure.Failed
+}
+
+/// The marker a failed assertion's report starts with: the harness looks
+/// for it in a failed test's errors.
+let failureMarker = "assertion failed: "
+
+/// Ends the test, failed, saying why.
+public fn fail(_ message: String) {
+    Runtime.writeError(failureMarker + message + "\n")
+    try! stopTest()
+}
+
+/// Fails the test, saying why, unless the condition holds.
+public fn assert(_ condition: Bool, _ message: String) {
+    if !condition {
+        fail(message)
+    }
+}
+
+/// Fails the test unless the condition holds.
+public fn assert(_ condition: Bool) {
+    if !condition {
+        fail("the condition was false")
+    }
+}
+
+/// Fails the test unless the two are equal, showing both as source would
+/// write them and where they first differ.
+public fn assertEqual<T>(_ left: T, _ right: T) where T: Equatable, T: Debug {
+    if left == right {
+        return
+    }
+    fail(differenceReport(left.debugDescription(), right.debugDescription()))
+}
+
+/// Fails the test unless the two strings are equal: a line by line diff
+/// when either has more than one line, both quoted and the first
+/// difference marked otherwise.
+public fn assertEqualText(_ left: String, _ right: String) {
+    if left == right {
+        return
+    }
+    if !left.contains('\n') && !right.contains('\n') {
+        fail(differenceReport(left.debugDescription(), right.debugDescription()))
+        return
+    }
+    fail(lineDiff(lines(left), lines(right)))
+}
+
+/// Fails the test unless the two differ.
+public fn assertNotEqual<T>(_ left: T, _ right: T) where T: Equatable, T: Debug {
+    if left != right {
+        return
+    }
+    fail("both are \(left.debugDescription())")
+}
+
+/// The two descriptions, one above the other, with a caret under the first
+/// character where they differ.
+public fn differenceReport(_ left: String, _ right: String) -> String {
+    var at = 0
+    while at < left.count && at < right.count && left.at(at) == right.at(at) {
+        at = at + 1
+    }
+    return "the values differ\n   left: \(left)\n  right: \(right)\n         \(repeating(" ", at))^ first difference at character \(at)"
+}
+
+/// A diff of two lists of lines: '-' for the left's, '+' for the right's,
+/// ' ' for lines both have, by their longest common subsequence.
+public fn lineDiff(_ left: String[>..], _ right: String[>..]) -> String {
+    // lengths[i * (m + 1) + j]: the longest common subsequence of left[i...]
+    // and right[j...].
+    let n = left.count
+    let m = right.count
+    var lengths: Int[>..] = []
+    var k = 0
+    while k < (n + 1) * (m + 1) {
+        lengths.append(0)
+        k = k + 1
+    }
+    var i = n - 1
+    while i >= 0 {
+        var j = m - 1
+        while j >= 0 {
+            if left[i] == right[j] {
+                lengths[i * (m + 1) + j] = lengths[(i + 1) * (m + 1) + j + 1] + 1
+            } else {
+                lengths[i * (m + 1) + j] = max(lengths[(i + 1) * (m + 1) + j], lengths[i * (m + 1) + j + 1])
+            }
+            j = j - 1
+        }
+        i = i - 1
+    }
+
+    let report = TextBuilder()
+    report.append("the text differs (-left +right)")
+    i = 0
+    var j = 0
+    while i < n || j < m {
+        if i < n && j < m && left[i] == right[j] {
+            report.append("\n  " + left[i])
+            i = i + 1
+            j = j + 1
+        } else if i < n && (j == m || lengths[(i + 1) * (m + 1) + j] >= lengths[i * (m + 1) + j + 1]) {
+            report.append("\n- " + left[i])
+            i = i + 1
+        } else {
+            report.append("\n+ " + right[j])
+            j = j + 1
+        }
+    }
+    return report.build()
+}
+
+// ===========================================================================
+// The test harness
+// ===========================================================================
+
+/// One '@test' function, as the compiler's entry point lists it.
+public struct TestCase {
+    /// Qualified: 'Module.function'.
+    public var name: String
+    /// Where it is declared, 'file:line'.
+    public var location: String
+    /// Runs it: false when it threw an error, which fails it.
+    public var run: () -> Bool
+}
+
+/// Runs the test, failing it if it throws.
+fn runOne(_ test: TestCase) {
+    if !test.run() {
+        fail("the test threw an error")
+    }
+}
+
+/// What the harness was asked to do.
+struct TestOptions {
+    var filters: String[>..]
+    var list: Bool
+    var inProcess: Bool
+    var only: String?
+    var showOutput: Bool
+    var exact: Bool
+}
+
+fn parseTestOptions() -> TestOptions? {
+    var options = TestOptions { filters: [], list: false, inProcess: false, only: none, showOutput: false, exact: false }
+    var i = 0
+    let count = Runtime.argumentCount()
+    while i < count {
+        let argument = Runtime.argument(i)
+        if argument == "--list" {
+            options.list = true
+        } else if argument == "--in-process" {
+            options.inProcess = true
+        } else if argument == "--show-output" {
+            options.showOutput = true
+        } else if argument == "--exact" {
+            options.exact = true
+        } else if argument == "--run-test" && i + 1 < count {
+            options.only = Runtime.argument(i + 1)
+            i = i + 1
+        } else if hasPrefix(argument, "--") {
+            Runtime.writeError("unknown option '\(argument)'\nusage: <harness> [filter...] [--list] [--exact] [--show-output] [--in-process] [--run-test <name>]\n")
+            return none
+        } else {
+            options.filters.append(argument)
+        }
+        i = i + 1
+    }
+    return options
+}
+
+/// Whether the name is selected: by any of the filters, as a part of it (or
+/// all of it, with '--exact'); every name is, with none.
+fn selected(_ name: String, _ filters: String[>..], _ exact: Bool) -> Bool {
+    if filters.count == 0 {
+        return true
+    }
+    for filter in filters {
+        if exact ? name == filter : contains(name, filter) {
+            return true
+        }
+    }
+    return false
+}
+
+/// The entry point of a test build: runs the tests the arguments select,
+/// each in a process of its own, and reports on each and on them all.
+/// Gives the exit code: 0 when every test selected passed, 1 when one
+/// failed, 2 for arguments it does not understand.
+public fn runTests(_ tests: TestCase[>..]) -> Int {
+    guard let options = parseTestOptions() else {
+        return 2
+    }
+
+    // One test, in this process, for the harness that started it.
+    if let name = options.only {
+        for test in tests {
+            if test.name == name {
+                runOne(test)
+                return 0
+            }
+        }
+        Runtime.writeError("no test named '\(name)'\n")
+        return 2
+    }
+
+    var chosen: TestCase[>..] = []
+    for test in tests {
+        if selected(test.name, options.filters, options.exact) {
+            chosen.append(test)
+        }
+    }
+    let filteredOut = tests.count - chosen.count
+
+    if options.list {
+        for test in chosen {
+            print("\(test.name): test (\(test.location))")
+        }
+        print("\(chosen.count) test\(plural(chosen.count))")
+        return 0
+    }
+
+    print("running \(chosen.count) test\(plural(chosen.count))")
+
+    // Without process isolation, as asked or where there is no executable
+    // to start again (the interpreter): a failure stops the run, and no
+    // times are shown, so that two runs print the same.
+    let program = Runtime.executablePath()
+    if options.inProcess || program.count == 0 {
+        for test in chosen {
+            runOne(test)
+            print("test \(test.name) ... ok")
+        }
+        print("")
+        print("test result: ok. \(chosen.count) passed; 0 failed; \(filteredOut) filtered out")
+        return 0
+    }
+
+    let started = Runtime.monotonicNanoseconds()
+    var passed = 0
+    var failures: String[>..] = []
+    var reports: String[>..] = []
+    for test in chosen {
+        let begun = Runtime.monotonicNanoseconds()
+        let output = Runtime.run(program, ["--run-test", test.name], "")
+        let took = Runtime.monotonicNanoseconds() - begun
+        let status = output == none ? -1 : Runtime.lastExitStatus()
+        let errors = output == none ? "" : Runtime.lastErrorOutput()
+        let written = output ?? ""
+        if status == 0 {
+            passed = passed + 1
+            print("test \(test.name) ... ok (\(formatDuration(took)))")
+            if options.showOutput && written.count > 0 {
+                print(indented(written))
+            }
+        } else {
+            print("test \(test.name) ... FAILED (\(formatDuration(took)))")
+            failures.append(test.name)
+            reports.append(failureReport(test, status, written, errors))
+        }
+    }
+    let total = Runtime.monotonicNanoseconds() - started
+
+    if failures.count > 0 {
+        print("")
+        print("failures:")
+        for report in reports {
+            print("")
+            print(report)
+        }
+        print("")
+        print("failed:")
+        for name in failures {
+            print("    \(name)")
+        }
+    }
+    print("")
+    let verdict = failures.count == 0 ? "ok" : "FAILED"
+    print("test result: \(verdict). \(passed) passed; \(failures.count) failed; \(filteredOut) filtered out; finished in \(formatDuration(total))")
+    return failures.count == 0 ? 0 : 1
+}
+
+/// What a failed test's process said, and how it ended.
+fn failureReport(_ test: TestCase, _ status: Int, _ output: String, _ errors: String) -> String {
+    let report = TextBuilder()
+    report.append("---- \(test.name) (\(test.location)) ----")
+    if status < 0 {
+        report.append("\nthe test's process could not be started")
+        return report.build()
+    }
+    if output.count > 0 {
+        report.append("\nstdout:\n" + indented(output))
+    }
+    // An assertion's own trap says nothing its report has not.
+    var shown = errors
+    if contains(errors, failureMarker) {
+        shown = replacing(errors, "fatal error: 'try!' caught an error\n", with: "")
+    }
+    if shown.count > 0 {
+        report.append("\n" + indented(shown))
+    }
+    if !contains(errors, failureMarker) {
+        report.append("\n    (exit status \(status))")
+    }
+    return report.build()
+}
+
+fn indented(_ text: String) -> String {
+    let report = TextBuilder()
+    var first = true
+    for line in lines(text) {
+        if !first {
+            report.append("\n")
+        }
+        report.append("    " + line)
+        first = false
+    }
+    return report.build()
+}
+
+fn plural(_ count: Int) -> String {
+    return count == 1 ? "" : "s"
+}
+
+/// Nanoseconds, in the unit that reads best: '850 ns', '12.40 µs', '3.05 ms', '1.20 s'.
+public fn formatDuration(_ nanoseconds: Int) -> String {
+    return formatNanoseconds(F64(nanoseconds))
+}
+
+/// A time in nanoseconds, fractional, in the unit that reads best.
+public fn formatNanoseconds(_ ns: F64) -> String {
+    if ns < 1000.0 {
+        return formatted(ns, decimals: ns < 10.0 ? 2 : (ns < 100.0 ? 1 : 0)) + " ns"
+    }
+    if ns < 1000000.0 {
+        return formatted(ns / 1000.0, decimals: 2) + " µs"
+    }
+    if ns < 1000000000.0 {
+        return formatted(ns / 1000000.0, decimals: 2) + " ms"
+    }
+    return formatted(ns / 1000000000.0, decimals: 2) + " s"
+}
+
+// ===========================================================================
+// Benchmarks
+// ===========================================================================
+
+/// One '@bench' function, as the compiler's entry point lists it: run with
+/// a Bencher, whose 'iterate' does the timing.
+public struct BenchCase {
+    public var name: String
+    public var location: String
+    public var run: (Bencher) -> Void
+}
+
+/// What one benchmark measured: nanoseconds per iteration.
+public struct BenchResult {
+    public var name: String
+    public var mean: F64
+    public var median: F64
+    public var deviation: F64
+    public var iterations: Int
+}
+
+/// Times a body: a '@bench' function that takes one calls 'iterate' with
+/// what to measure, set-up kept outside it.
+public class Bencher {
+    /// How many samples to take, and how long each should last at least.
+    var samples: Int
+    var sampleNanoseconds: Int
+    var warmUpNanoseconds: Int
+
+    /// What 'iterate' measured; none until it has.
+    var measured: BenchResult? = none
+    var name: String
+
+    public init(name: String, samples: Int, sampleNanoseconds: Int, warmUpNanoseconds: Int) {
+        self.name = name
+        self.samples = samples
+        self.sampleNanoseconds = sampleNanoseconds
+        self.warmUpNanoseconds = warmUpNanoseconds
+    }
+
+    /// Runs the body over and over: first to warm up, and to learn how many
+    /// iterations make a sample last long enough to time; then for each
+    /// sample, that many times.
+    public fn iterate(_ body: () -> Void) {
+        // Warm-up, doubling the batch until it takes long enough: what it
+        // took per iteration sets the sample's size.
+        var batch = 1
+        var spent = 0
+        var perIteration = 1.0
+        while true {
+            let begun = Runtime.monotonicNanoseconds()
+            var k = 0
+            while k < batch {
+                body()
+                k = k + 1
+            }
+            let took = Runtime.monotonicNanoseconds() - begun
+            spent = spent + took
+            perIteration = F64(took) / F64(batch)
+            if spent >= warmUpNanoseconds || batch >= 1073741824 {
+                break
+            }
+            batch = batch * 2
+        }
+        var iterations = Int(F64(sampleNanoseconds) / (perIteration > 1.0 ? perIteration : 1.0))
+        if iterations < 1 {
+            iterations = 1
+        }
+
+        var times: F64[>..] = []
+        var s = 0
+        while s < samples {
+            let begun = Runtime.monotonicNanoseconds()
+            var k = 0
+            while k < iterations {
+                body()
+                k = k + 1
+            }
+            let took = Runtime.monotonicNanoseconds() - begun
+            times.append(F64(took) / F64(iterations))
+            s = s + 1
+        }
+        measured = summarise(name, times, iterations)
+    }
+}
+
+/// The mean, median and standard deviation of the samples.
+public fn summarise(_ name: String, _ times: F64[>..], _ iterations: Int) -> BenchResult {
+    var total = 0.0
+    for t in times {
+        total = total + t
+    }
+    let mean = times.count == 0 ? 0.0 : total / F64(times.count)
+    var squares = 0.0
+    for t in times {
+        squares = squares + (t - mean) * (t - mean)
+    }
+    let deviation = times.count < 2 ? 0.0 : squareRoot(squares / F64(times.count - 1))
+    let ordered = sorted(times)
+    var median = 0.0
+    if ordered.count > 0 {
+        let middle = ordered.count / 2
+        median = ordered.count % 2 == 1 ? ordered[middle] : (ordered[middle - 1] + ordered[middle]) / 2.0
+    }
+    return BenchResult { name: name, mean: mean, median: median, deviation: deviation, iterations: iterations }
+}
+
+struct BenchOptions {
+    var filters: String[>..]
+    var list: Bool
+    var saveBaseline: String?
+    var baseline: String?
+    var directory: String
+    var samples: Int
+    var sampleNanoseconds: Int
+    var warmUpNanoseconds: Int
+}
+
+fn parseBenchOptions() -> BenchOptions? {
+    var options = BenchOptions {
+        filters: [], list: false, saveBaseline: none, baseline: none, directory: "target/bench",
+        samples: 20, sampleNanoseconds: 5000000, warmUpNanoseconds: 50000000
+    }
+    var i = 0
+    let count = Runtime.argumentCount()
+    while i < count {
+        let argument = Runtime.argument(i)
+        let hasValue = i + 1 < count
+        if argument == "--list" {
+            options.list = true
+        } else if argument == "--save-baseline" && hasValue {
+            options.saveBaseline = Runtime.argument(i + 1)
+            i = i + 1
+        } else if argument == "--baseline" && hasValue {
+            options.baseline = Runtime.argument(i + 1)
+            i = i + 1
+        } else if argument == "--baseline-dir" && hasValue {
+            options.directory = Runtime.argument(i + 1)
+            i = i + 1
+        } else if argument == "--quick" {
+            // A few short samples: to see that benchmarks run, not to time them.
+            options.samples = 3
+            options.sampleNanoseconds = 100000
+            options.warmUpNanoseconds = 100000
+        } else if argument == "--samples" && hasValue && Runtime.argument(i + 1).toInt() != none {
+            options.samples = max(Runtime.argument(i + 1).toInt()!, 1)
+            i = i + 1
+        } else if hasPrefix(argument, "--") {
+            Runtime.writeError("unknown option '\(argument)'\nusage: <harness> [filter...] [--list] [--quick] [--samples <n>] [--save-baseline <name>] [--baseline <name>] [--baseline-dir <path>]\n")
+            return none
+        } else {
+            options.filters.append(argument)
+        }
+        i = i + 1
+    }
+    return options
+}
+
+/// The entry point of a bench build: runs the benchmarks the arguments
+/// select and reports each one's time per iteration; with
+/// '--save-baseline <name>', keeps the results under that name, and with
+/// '--baseline <name>' (or when one called 'default' exists), compares
+/// with what was kept. Gives the exit code: 0, or 2 for arguments it does
+/// not understand or a baseline it cannot read or write.
+public fn runBenchmarks(_ benches: BenchCase[>..]) -> Int {
+    guard let options = parseBenchOptions() else {
+        return 2
+    }
+
+    var chosen: BenchCase[>..] = []
+    for bench in benches {
+        if selected(bench.name, options.filters, false) {
+            chosen.append(bench)
+        }
+    }
+
+    if options.list {
+        for bench in chosen {
+            print("\(bench.name): bench (\(bench.location))")
+        }
+        print("\(chosen.count) benchmark\(plural(chosen.count))")
+        return 0
+    }
+
+    // What to compare with: the baseline named, else the default one if
+    // there is one.
+    var against: BenchResult[>..] = []
+    var comparing = false
+    let baselineName = options.baseline ?? "default"
+    let baselinePath = options.directory + "/" + baselineName + ".txt"
+    if let text = Runtime.readFile(baselinePath) {
+        against = parseBaseline(text)
+        comparing = true
+    } else if options.baseline != none {
+        Runtime.writeError("no baseline '\(baselineName)' at \(baselinePath)\n")
+        return 2
+    }
+
+    print("running \(chosen.count) benchmark\(plural(chosen.count))\(comparing ? " against baseline '" + baselineName + "'" : "")")
+    var results: BenchResult[>..] = []
+    var regressions = 0
+    for bench in chosen {
+        let bencher = Bencher(name: bench.name, samples: options.samples, sampleNanoseconds: options.sampleNanoseconds, warmUpNanoseconds: options.warmUpNanoseconds)
+        bench.run(bencher)
+        guard let result = bencher.measured else {
+            print("bench \(bench.name) ... did not call 'iterate'")
+            continue
+        }
+        results.append(result)
+        var line = "bench \(bench.name) ... mean \(formatNanoseconds(result.mean)) / iter, median \(formatNanoseconds(result.median)), ± \(formatNanoseconds(result.deviation)) (\(options.samples) × \(result.iterations) iterations)"
+        if comparing {
+            if let old = findResult(against, bench.name) {
+                let (text, regressed) = comparison(old, result)
+                line = line + "; " + text
+                if regressed {
+                    regressions = regressions + 1
+                }
+            } else {
+                line = line + "; new"
+            }
+        }
+        print(line)
+    }
+
+    print("")
+    var summary = "bench result: \(results.count) measured"
+    if comparing {
+        summary = summary + "; \(regressions) regressed"
+    }
+    print(summary)
+
+    if let name = options.saveBaseline {
+        let path = options.directory + "/" + name + ".txt"
+        if !makeDirectories(options.directory) || !Runtime.writeFile(path, formatBaseline(results), false) {
+            Runtime.writeError("cannot write the baseline to \(path)\n")
+            return 2
+        }
+        print("saved baseline '\(name)' to \(path)")
+    }
+    return 0
+}
+
+/// How the new result compares with the old: the change in the mean, and
+/// whether it is a regression — slower by more than the noise, which is
+/// taken as twice the two runs' deviations together, and never under 5%.
+public fn comparison(_ old: BenchResult, _ new: BenchResult) -> (String, Bool) {
+    if old.mean <= 0.0 {
+        return ("no change measurable", false)
+    }
+    let change = (new.mean - old.mean) / old.mean * 100.0
+    let noise = max(5.0, 200.0 * (old.deviation + new.deviation) / old.mean)
+    let sign = change >= 0.0 ? "+" : ""
+    let text = "\(sign)\(formatted(change, decimals: 2))% vs baseline"
+    if change > noise {
+        return (text + " (REGRESSED)", true)
+    }
+    if change < 0.0 - noise {
+        return (text + " (improved)", false)
+    }
+    return (text + " (within noise)", false)
+}
+
+fn findResult(_ results: BenchResult[>..], _ name: String) -> BenchResult? {
+    for result in results {
+        if result.name == name {
+            return result
+        }
+    }
+    return none
+}
+
+/// A baseline, one line per benchmark: its name, then mean, median and
+/// deviation in picoseconds per iteration, then the iterations per sample,
+/// tab-separated.
+public fn formatBaseline(_ results: BenchResult[>..]) -> String {
+    let report = TextBuilder()
+    report.appendLine("# sable bench baseline: name, mean ps, median ps, deviation ps, iterations")
+    for result in results {
+        report.appendLine("\(result.name)\t\(Int(result.mean * 1000.0))\t\(Int(result.median * 1000.0))\t\(Int(result.deviation * 1000.0))\t\(result.iterations)")
+    }
+    return report.build()
+}
+
+public fn parseBaseline(_ text: String) -> BenchResult[>..] {
+    var results: BenchResult[>..] = []
+    for line in lines(text) {
+        if hasPrefix(line, "#") {
+            continue
+        }
+        let fields = line.split('\t')
+        if fields.count != 5 {
+            continue
+        }
+        if let mean = fields[1].toInt(), let median = fields[2].toInt(), let deviation = fields[3].toInt(), let iterations = fields[4].toInt() {
+            results.append(BenchResult {
+                name: fields[0], mean: F64(mean) / 1000.0, median: F64(median) / 1000.0,
+                deviation: F64(deviation) / 1000.0, iterations: iterations
+            })
+        }
+    }
+    return results
+}
+
+/// Makes the directory and those above it that are missing; whether it is there now.
+fn makeDirectories(_ path: String) -> Bool {
+    if Runtime.isDirectory(path) {
+        return true
+    }
+    let parts = path.split('/')
+    var built = hasPrefix(path, "/") ? "/" : ""
+    for part in parts {
+        if part.count == 0 {
+            continue
+        }
+        built = built.count == 0 || built == "/" ? built + part : built + "/" + part
+        if !Runtime.isDirectory(built) && !Runtime.makeDirectory(built) {
+            return false
+        }
+    }
+    return Runtime.isDirectory(path)
+}

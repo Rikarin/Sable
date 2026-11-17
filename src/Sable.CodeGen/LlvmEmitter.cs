@@ -288,6 +288,7 @@ public sealed class LlvmEmitter {
                                 declare i64 @sable_process_status()
                                 declare ptr @sable_process_error_output()
                                 declare ptr @sable_process_current_directory()
+                                declare ptr @sable_process_executable_path()
                                 declare zeroext i1 @sable_process_change_directory(ptr)
                                 declare i64 @sable_process_id()
                                 declare ptr @sable_string_split(ptr, i32)
@@ -1970,7 +1971,7 @@ public sealed class LlvmEmitter {
                     Line($"{Result()} = call i64 @sable_{builtin.Name}()");
                     return;
 
-                case "process_error_output" or "process_current_directory":
+                case "process_error_output" or "process_current_directory" or "process_executable_path":
                     Line($"{Result()} = call ptr @sable_{builtin.Name}()");
                     return;
 

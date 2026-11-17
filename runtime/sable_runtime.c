@@ -154,10 +154,51 @@ static inline void small_release(void *block, unsigned class) {
     small_free[class] = block;
 }
 
+// The large buffer freed last, kept rather than given back to the system: a
+// program that builds a large array, drops it and builds another — as a
+// loop over batches does — would otherwise have the system map and zero the
+// same memory afresh each time, which costs more than filling it. A
+// collected heap keeps its memory the same way. Its size is what its last
+// owner asked for: the block may be larger, never smaller.
+enum { LARGE_BUFFER = 1 << 20 };
+static void *large_spare;
+static int64_t large_spare_size;
+
+// The spare, if it holds 'size' bytes without wasting more than as much again.
+static void *take_spare(int64_t size) {
+    if (large_spare == NULL || large_spare_size < size || large_spare_size > 2 * size) {
+        return NULL;
+    }
+
+    void *buffer = large_spare;
+    large_spare = NULL;
+    return buffer;
+}
+
+// A large buffer let go: kept as the spare if it is the larger, freed otherwise.
+static void keep_spare(void *buffer, int64_t size) {
+    if (large_spare != NULL && large_spare_size >= size) {
+        free(buffer);
+        return;
+    }
+
+    free(large_spare);
+    large_spare = buffer;
+    large_spare_size = size;
+}
+
 // An array's elements: 'size' bytes, uninitialised.
 static void *buffer_alloc(int64_t size) {
     unsigned class = small_class(size);
-    void *buffer = class != 0 ? small_alloc(class) : malloc((size_t)(size > 0 ? size : 1));
+    if (class != 0) {
+        return small_alloc(class);
+    }
+
+    void *buffer = size >= LARGE_BUFFER ? take_spare(size) : NULL;
+    if (buffer == NULL) {
+        buffer = malloc((size_t)(size > 0 ? size : 1));
+    }
+
     if (buffer == NULL) {
         sable_trap("out of memory");
     }
@@ -173,6 +214,8 @@ static void buffer_free(void *buffer, int64_t size) {
     unsigned class = small_class(size);
     if (class != 0) {
         small_release(buffer, class);
+    } else if (size >= LARGE_BUFFER) {
+        keep_spare(buffer, size);
     } else {
         free(buffer);
     }
@@ -182,6 +225,14 @@ static void buffer_free(void *buffer, int64_t size) {
 static void *buffer_resize(void *buffer, int64_t old, int64_t size) {
     unsigned from = buffer == NULL ? 0 : small_class(old), to = small_class(size);
     if (buffer != NULL && from == 0 && to == 0) {
+        // Into the spare, when it fits: its pages are already the program's.
+        void *spare = size >= LARGE_BUFFER ? take_spare(size) : NULL;
+        if (spare != NULL) {
+            memcpy(spare, buffer, (size_t)(old < size ? old : size));
+            buffer_free(buffer, old);
+            return spare;
+        }
+
         void *grown = realloc(buffer, (size_t)size);
         if (grown == NULL) {
             sable_trap("out of memory");

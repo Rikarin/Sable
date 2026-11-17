@@ -349,4 +349,62 @@ public sealed class CollectionLibraryTests {
             """);
         Assert.Equal(2, run.Stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries).Length);
     }
+
+    /// <summary>
+    ///     The runtime's string paths the benchmarks reworked: interpolations
+    ///     and chains of '+' joined at once, integers written by hand, splits
+    ///     on ASCII and non-ASCII separators, and slices of either kind of string.
+    /// </summary>
+    [Fact]
+    public void StringsAreJoinedSplitAndSlicedTheSameEverywhere() =>
+        Assert.Equal(
+            "-9223372036854775808 0 -7 42|a-b-c-é|7 3\n[] [a] [] [b] []\n[x] [y z]\n3 é|ab|éa\nhéllo, wörld 12\n",
+            AssertAgree("""
+                module P
+                fn piece(_ s: String) -> String { return "-" + s }
+                @main
+                fn main() {
+                    let low = -9223372036854775807 - 1
+                    let name = "é"
+                    let joined = "a" + piece("b") + piece("c") + "-" + name
+                    print("\(low) \(0) \(-7) \(42)|\(joined)|\(joined.count) \(name.count + 2)")
+                    var line = ""
+                    for part in ",a,,b,".split(',') { line = line + "[" + part + "] " }
+                    print(line.trimmed())
+                    line = ""
+                    for part in "xéy z".split('é') { line = line + "[" + part + "] " }
+                    print(line.trimmed())
+                    let mixed = "éab"
+                    print("\(mixed.count) \(mixed.slice(from: 0, to: 1))|\(mixed.slice(from: 1, to: 3))|\(mixed.slice(from: 0, to: 1) + "a")")
+                    let greeting = "héllo" + ", " + "wörld"
+                    print("\(greeting) \(greeting.count)")
+                }
+                """).Stdout
+        );
+
+    /// <summary>Large arrays built, dropped and built again reuse the memory the last one let go.</summary>
+    [Fact]
+    public void LargeArraysComeAndGo() =>
+        Assert.Equal(
+            "1499998500000\n",
+            AssertAgree("""
+                module P
+                @main
+                fn main() {
+                    var total = 0
+                    var round = 0
+                    while round < 3 {
+                        var values: Int[>..] = []
+                        var i = 0
+                        while i < 1000000 {
+                            values.append(i)
+                            i = i + 1
+                        }
+                        for v in values { total = total + v }
+                        round = round + 1
+                    }
+                    print(total)
+                }
+                """, stepLimit: 100_000_000).Stdout
+        );
 }

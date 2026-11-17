@@ -735,8 +735,14 @@ Written so far (`tests/Sable.CodeGen.Tests/LibraryTests.cs`):
   `find`, `contains`, `replacing`, `splitting`, padding, case mapping, and
   `TextBuilder`.
 - `Sable.Collections`: `Stack`, `Queue`, `HashMap` and `HashSet` (open
-  addressing over `Hashable`), and a merge sort for `Comparable` or by a
-  predicate.
+  addressing over `Hashable`, iterating in insertion order), `Deque` (a ring
+  buffer of optional slots, so a removed element is released at once),
+  `PriorityQueue` (a binary heap, smallest first or by a stored ordering
+  closure), `OrderedDictionary` (keys and values in arrays, positions in a
+  `HashMap`; removal closes the order up), `BitSet` (64 to a word, with
+  union, intersection, subtraction and subset), and a stable merge sort —
+  `sort(&values)` in place, `sorted(values)` a copy, either by `<` or by a
+  predicate (`tests/Sable.CodeGen.Tests/CollectionLibraryTests.cs`).
 - `Sable.IO`: `File` (read, readLines, write, append, exists, remove),
   `Directory` (exists, create, list — sorted byte by byte so every platform
   agrees — and remove), `Path` (join, fileName, directory, extension,
@@ -753,7 +759,64 @@ arguments, user operators found through a type parameter's constraints,
 operators and witnesses on primitive types lowered, and reachability-based
 emission. Next: reflection (4.2), streaming I/O (`Stream`, buffered
 readers and writers, memory-mapped files), and the names the plan lists that are not yet here
-(`Deque`, `OrderedDictionary`, `Heap`, formatting and parsing).
+(formatting and parsing).
+
+### Against .NET
+
+The exit criterion below, measured: `benchmarks/versus-dotnet/*.sab` and
+their C# ports in `benchmarks/dotnet` (Release, tiered PGO), run by
+`tools/bench/versus_dotnet.py`, which checks the two print the same line.
+`map-int` is a million pseudo-random `Int` keys in `HashMap` against
+`Dictionary<long, long>` (insert, three rounds of lookups, a million misses,
+half removed, looked up again); `map-string` 200,000 interpolated keys in
+`HashMap<String, Int>`; `list` thirty million appends, iterations by `for`
+and by index, and `removeLast`s; `sort` a million `Int`s and 200,000
+`String`s against `List.Sort`; `string` 300,000 interpolated lines split,
+compared, joined by `+` and sliced. Times are processor time, fastest of ten
+— the Sable process whole, the .NET benchmark alone after a warm-up run,
+which leans towards .NET on purpose. Apple M1 Max, macOS, 17 Nov 2026:
+
+| benchmark  | .NET ms | Sable ms | ratio |
+|------------|--------:|---------:|------:|
+| list       |   121.4 |    138.1 |  1.14 |
+| map-int    |   130.9 |    145.9 |  1.11 |
+| map-string |    48.4 |     52.7 |  1.09 |
+| sort       |   108.8 |    137.2 |  1.26 |
+| string     |    53.2 |     52.6 |  0.99 |
+
+The .NET side varies by up to 15% from run to run on `string` and
+`map-string` (46–60 ms); the Sable side by a few percent. Before this work
+`sort` was 4.6 times .NET (a merge sort that made two arrays a level),
+`string` 2.7 times, and `map-string` trapped: the Sable-written string hash
+overflowed past a dozen bytes. What closed the gap, by cause:
+
+- **Library.** `HashMap` is one array of entries (key, value, and the 31-bit
+  tag that grows the table without rehashing) under a power-of-two table of
+  index-and-tag slots, mixed with a xorshift since Sable has no wrapping
+  multiply; the sort is bottom-up over one scratch array.
+- **Runtime.** A size-class allocator for objects and element buffers up to
+  256 bytes (malloc and free were most of the string benchmark), and the
+  large buffer freed last kept for the next (the system otherwise maps and
+  zeroes it afresh); string hashing and comparison in C
+  (`Runtime.hashString`, `Runtime.compareStrings`); integers written without
+  `snprintf`; `split` on an ASCII separator by `memchr` into an array made at
+  its size; strings not zeroed before they are written, nor their scalars
+  counted when already known.
+- **Compiler.** Interpolations and chains of string `+` are one allocation
+  (`string_concat_many`); `removeLast` has an inline fast path, as `append`
+  had; an array element read for a call is borrowed even where the array's
+  own borrow ended first, which takes the retains and releases off a sort's
+  comparisons and a `HashMap` probe's; a `for` over an array lets its copy
+  go as the loop ends. String `<` and its derived operators now bind to
+  Sable.Core's operator — there was no builtin to lower them to.
+
+What is left: `sort` is a stable merge sort against .NET's unstable
+introsort, and pays a bounds check and a uniqueness check on every move;
+`list` is mostly the operating system faulting in fresh pages, which .NET's
+warmed-up heap already has; a `HashMap<String, _>` hit still copies the key
+across the call to `==`, which SIL cannot yet inline. `Sable.Text`'s
+`joined` (and so `TextBuilder.build`) is quadratic — `result = result + part`
+— and is not in the set; it wants `string_concat_many` over the parts.
 
 ### Async, as implemented
 
@@ -784,7 +847,10 @@ to the state machine where tasks are many.
 - [ ] Stdlib is self-hosted Sable, no C# in the shipping library
 - [ ] Reflection: hello-world binary grows < 50 KB with reflection off
 - [ ] Dictionary/List/String within 15% of their .NET equivalents on a
-      standard benchmark set
+      standard benchmark set — Dictionary (`map-int` 1.11, `map-string`
+      1.09), List (`list` 1.14) and String (`string` 0.99) are met, by a
+      small margin for `list`; sorting (`sort` 1.26) is not (see "Against
+      .NET" above)
 - [ ] A real program ships: a static site generator or an HTTP service, in
       Sable, used daily by the team
 

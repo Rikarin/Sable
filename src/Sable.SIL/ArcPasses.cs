@@ -485,14 +485,16 @@ public sealed class ForwardCopies : ISilPass {
             return false;
         }
 
-        // A borrow of a local slot that ends before the destroy is carried on
-        // past it — 'before(a[i], a[j])' borrows the array for each read and
-        // ends it at once — as long as nothing between writes the slot.
+        // A borrow that ends before the destroy is carried on past it —
+        // 'before(a[i], a[j])' borrows the array for each read and ends it at
+        // once — as long as nothing between could change what it borrows:
+        // for a local slot, nothing writes the slot; for anything else, the
+        // rule below, nothing calls out.
         EndBorrowInst? early = null;
         for (var k = index + 1; k < end; k++) {
             var instruction = block.Instructions[k];
             if (instruction is EndBorrowInst { Borrowed: var endedHere } endsRoot && ReferenceEquals(endedHere, root)
-                && root is LoadBorrowInst { Address: AllocStackInst } && early is null) {
+                && root is LoadBorrowInst && early is null) {
                 early = endsRoot;
                 continue;
             }

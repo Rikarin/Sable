@@ -31,9 +31,14 @@ public static partial class DocExamples {
         }
 
         var lines = tree.Text.Text.Split('\n');
-        var imports = string.Join("\n", unit.Imports.Select(static i => i.ToString().Trim()));
-        var header = $"module {module.Name.ToString().Trim()}\n{imports}\nimport Sable.Testing\n";
-        var headerLines = header.Count(static c => c == '\n');
+        // On one line — declarations need no line between them — so that
+        // the example's code can start on the line it was written on.
+        var imports = unit.Imports.Select(i => tree.Text.Text.Substring(i.Span.Start, i.Span.Length).Trim()).ToList();
+        if (!unit.Imports.Any(static i => i.Name.ToString().Trim() == "Sable.Testing")) {
+            imports.Add("import Sable.Testing");
+        }
+
+        var header = $"module {module.Name.ToString().Trim()} {string.Join(' ', imports)}";
 
         var files = new List<SyntaxTree>();
         var counts = new Dictionary<string, int>(StringComparer.Ordinal);
@@ -66,13 +71,14 @@ public static partial class DocExamples {
                 var name = $"doc_{documented}_{n}";
 
                 // The '@test fn' line just above the code, which then starts
-                // on the line it was written on, when the header leaves room.
+                // on the line it was written on (1-based; the fence is above
+                // it, so it is the second at the earliest).
                 var text = new StringBuilder(header);
-                for (var pad = headerLines; pad < line - 2; pad++) {
+                for (var at = 1; at < line - 1; at++) {
                     text.Append('\n');
                 }
 
-                text.Append("@test fn ").Append(name).Append("() {\n").Append(code).Append("}\n");
+                text.Append(line > 2 ? "" : " ").Append("@test fn ").Append(name).Append("() {\n").Append(code).Append("}\n");
                 files.Add(SyntaxTree.Parse(new SourceText(text.ToString(), tree.Text.FileName)));
             }
         }

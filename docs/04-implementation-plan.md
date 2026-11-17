@@ -1123,6 +1123,75 @@ Full design in [05-toolchain.md](05-toolchain.md).
 - Debugger: DWARF plus an lldb formatter plugin for `String`, `List`, unions,
   and existentials.
 
+### `sable test` and `sable bench`, as implemented
+
+- **The attributes.** `@test` marks a function that takes nothing and returns
+  nothing; it may `throws(E)`, and an error it throws fails it. `@bench`
+  marks one that takes nothing (its whole body is timed) or one
+  `Sable.Testing.Bencher` (it times what it hands `b.iterate { … }`, set-up
+  outside). Either is a module's function or a static method of a non-generic
+  type; neither is generic or async. The checks run in every build, so a
+  malformed test fails `sable build` too: S3100–S3110
+  (`Compilation.Testing.cs`, reported by each file's semantic model). In an
+  ordinary build the functions are dead code like any other.
+- **Assertions** live in a new library module, `lib/Sable.Testing`, with no
+  core changes beyond one builtin: `assert(cond[, message])`, `fail(message)`,
+  `assertEqual(a, b)` and `assertNotEqual` for `Equatable` + `Debug` values —
+  both shown as source would write them, with a caret under the first
+  difference — and `assertEqualText(a, b)`, a line diff (LCS, `-left
+  +right`) for multi-line text. A failed assertion writes `assertion failed:
+  …` to stderr and traps (through `try!` on an error nothing can catch).
+- **The harness is Sable source the compiler writes** (`TestHarness.cs`).
+  The program is first checked alone, so its errors are its own; then, per
+  module with tests, a file of *that* module lists a closure per test (so a
+  test need not be public), and a file of module `SableHarness` imports just
+  those lists (`import M.{ sableHarnessList0 }`, nothing else of the
+  program's, so no name of the program's can clash with Sable.Testing's),
+  builds `TestCase { name, location, run }` values and calls
+  `Sable.Testing.runTests` — or `BenchCase`s and `runBenchmarks`.
+  `SilGen.Lower(compilation, entryPoint)` starts the program there instead of
+  at the program's own `@main`.
+- **Isolation: a process per test.** The harness starts itself again
+  (`Runtime.executablePath()`, a new builtin over `argv[0]`) with
+  `--run-test <Module.name>` for each selected test, timing each, keeping
+  its output and showing it only on failure. A trap — an assertion's, an index
+  out of range, an overflow — fails that test and no other. With
+  `--in-process`, or where there is no executable to restart (the SIL
+  interpreter, whose `executablePath` is empty), the tests run in one process
+  without times, so the interpreter and a native build print the same, and
+  the first failure stops the run. Harness options: filters (substring of
+  `Module.function`, any of several), `--exact`, `--list`, `--show-output`.
+  Exit code 0 when all selected pass, 1 when one fails, 2 for bad usage.
+- **Benchmarks** warm up (doubling a batch until 50 ms have passed), size a
+  sample from that to last ≥ 5 ms, take 20 samples, and report mean, median
+  and standard deviation per iteration. `--save-baseline <name>` writes
+  `target/bench/<name>.txt` (or `--baseline-dir`): one tab-separated line per
+  benchmark in picoseconds. `--baseline <name>` (or a kept `default`)
+  compares: the change in the mean, flagged `REGRESSED` beyond the noise —
+  twice the two runs' deviations relative to the old mean, never under 5% —
+  `improved` below it, else `within noise`. `--quick` and `--samples <n>`
+  shorten a run.
+- **Commands.** `sable test <file.sab>... [filter...] [--doc]` (unoptimised
+  by default, `--release` to optimise) and `sable bench <file.sab>...`
+  (optimised) share `HarnessCommand`: build the harness, run it with the
+  rest of the arguments, exit with its code. The file list comes from one
+  overridable place, `HarnessCommand.InputFiles`, where package discovery
+  plugs in (marked TODO).
+- **`--doc`.** Each ` ```sable ` block of a `///` comment (not ` ```sable
+  ignore `) becomes `@test fn doc_<item>_<n>()` in a file of the documented
+  file's module, with that file's imports and Sable.Testing; the file has the
+  original's name and the code its original line numbers, so an error in an
+  example points into the doc comment.
+- **Proved on the library:** `tests/lib/CollectionsTests.sab` and
+  `tests/lib/TextTests.sab` test Sable.Collections and Sable.Text with
+  `@test`/`@bench`, and the test suite runs them.
+- **Deferred:** a `blackBox` to keep the optimiser from deleting a
+  benchmark's work (it needs a core builtin); async tests; a parallel test
+  runner; timeouts for a hung test; printing the error a throwing test threw;
+  `#[should_panic]`-style expected traps; snapshot and property testing
+  (docs/06 lists them under Sable.Testing); test-only files excluded from
+  ordinary package builds (with package mode).
+
 ### Exit criteria
 - [ ] Cold build of a 100-package graph < 60 s; warm incremental < 1 s
 - [ ] LSP responds to completion in < 50 ms at p95 on a 200k-line project

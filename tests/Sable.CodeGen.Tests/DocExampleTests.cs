@@ -1,0 +1,104 @@
+using Sable.Symbols;
+using static Sable.CodeGen.Tests.Harnesses;
+
+namespace Sable.CodeGen.Tests;
+
+/// <summary>
+///     <c>sable test --doc</c>: the <c>```sable</c> blocks of doc comments,
+///     compiled and run as tests of the module they document.
+/// </summary>
+public sealed class DocExampleTests {
+    const string Documented = """
+        module Maths
+
+        import Sable.Text
+        import Sable.Testing
+
+        /// Adds two numbers.
+        ///
+        /// ```sable
+        /// assertEqual(add(2, 3), 5)
+        /// assertEqual(hidden(), 1)
+        /// ```
+        ///
+        /// A wrong one:
+        ///
+        /// ```sable
+        /// assertEqual(add(2, 2), 5)
+        /// ```
+        ///
+        /// ```sable ignore
+        /// this is not even Sable
+        /// ```
+        ///
+        /// ```
+        /// not marked as Sable, so not run
+        /// ```
+        public fn add(_ a: Int, _ b: Int) -> Int { return a + b }
+
+        // Internal: an example reaches it, as a function of the module.
+        fn hidden() -> Int { return 1 }
+
+        /// Pads, with the file's imports in scope.
+        ///
+        /// ```sable
+        /// assertEqual(paddedLeft("7", to: 3, with: '0'), "007")
+        /// ```
+        @test
+        fn padding() {
+            assertEqual(paddedLeft("7", to: 2, with: '0'), "07")
+        }
+        """;
+
+    [Fact]
+    public void EachBlockIsATestOfTheModule() {
+        var examples = DocExamples.Extract(SyntaxTree.Parse(new SourceText(Documented, "maths.sab")));
+        Assert.Equal(3, examples.Count);
+
+        // The code is on the lines it was written on, in a file of that name.
+        var first = examples[0];
+        Assert.Equal("maths.sab", first.Text.FileName);
+        var lines = first.Text.Text.Split('\n');
+        Assert.Equal("module Maths import Sable.Text import Sable.Testing", lines[0]);
+        Assert.Equal("@test fn doc_add_1() {", lines[7]);
+        Assert.Equal("assertEqual(add(2, 3), 5)", lines[8]);
+        Assert.Equal("assertEqual(add(2, 3), 5)", Documented.Split('\n')[8][4..]);
+    }
+
+    [Fact]
+    public void TheyRunWithTheTests() {
+        var result = TestHarness.Compile([new SourceText(Documented, "maths.sab")], TestKind.Test, out var found, docExamples: true);
+        Assert.True(result.Succeeded, string.Join("\n", result.Errors));
+        Assert.Equal(["Maths.padding", "Maths.doc_add_1", "Maths.doc_add_2", "Maths.doc_padding_1"], found.Select(static t => t.QualifiedName));
+        Assert.Equal(["maths.sab:37", "maths.sab:8", "maths.sab:15", "maths.sab:33"], found.Select(static t => t.Location));
+
+        // Without --doc, they are only comments.
+        TestHarness.Compile([new SourceText(Documented, "maths.sab")], TestKind.Test, out var plain);
+        Assert.Equal(["Maths.padding"], plain.Select(static t => t.QualifiedName));
+
+        if (!CanBuild) {
+            return;
+        }
+
+        var run = Native([new SourceText(Documented, "maths.sab")], doc: true);
+        Assert.Equal(1, run.ExitCode);
+        Assert.Contains("test Maths.doc_add_1 ... ok", run.Stdout, StringComparison.Ordinal);
+        Assert.Contains("test Maths.doc_padding_1 ... ok", run.Stdout, StringComparison.Ordinal);
+        Assert.Contains("---- Maths.doc_add_2 (maths.sab:15) ----\n    assertion failed: the values differ\n       left: 4\n      right: 5\n", run.Stdout, StringComparison.Ordinal);
+        Assert.Contains("3 passed; 1 failed", run.Stdout, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AnExampleThatDoesNotCompileSaysWhereItIs() {
+        var result = TestHarness.Compile(
+            [new SourceText("module M\n\n/// ```sable\n/// let x: Int = \"text\"\n/// ```\nfn f() { }\n", "m.sab")],
+            TestKind.Test,
+            out _,
+            docExamples: true
+        );
+        Assert.False(result.Succeeded);
+        var error = Assert.Single(result.Errors);
+        Assert.Contains("S3004", error, StringComparison.Ordinal);
+        Assert.Contains("--> m.sab:4:", error, StringComparison.Ordinal);
+    }
+}

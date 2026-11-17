@@ -364,6 +364,36 @@ fn main() {
                 """).Stdout
         );
 
+    /// <summary>Sable.Serialize's JSON beside the other modules: no names clash, and a document round-trips.</summary>
+    [Fact]
+    public void JsonIsWrittenInSable() =>
+        Assert.Equal(
+            "{\"name\":\"Sable\",\"tags\":[\"fast\",\"safe\"],\"version\":4}\n4\nsafe\n{\n  \"name\": \"Sable\",\n  \"tags\": [\n    \"fast\",\n    \"safe\"\n  ],\n  \"version\": 4\n}\nerror\n",
+            AssertAgree("""
+                module P
+                import Sable.Serialize
+                import Sable.Text
+                import Sable.Collections
+
+                @main
+                fn main() {
+                    let document = try! parse("{\"name\": \"Sable\", \"tags\": [\"fast\", \"safe\"], \"version\": 4}")
+                    print(render(document))
+                    print(asNumber(field(document, "version") ?? null()) ?? 0.0)
+                    print(asText(try! resolve(document, "/tags/1")) ?? "-")
+                    print(renderWith(document, pretty(2)))
+                    do {
+                        let _ = try parse("{\"open\": ")
+                        print("parsed")
+                    } catch {
+                        print("error")
+                    }
+                    let words = Stack<String>()
+                    words.push(joined(["a", "b"], separator: "-"))
+                }
+                """).Stdout
+        );
+
     /// <summary>Only what a program reaches is built: the library costs a program that does not use it nothing.</summary>
     [Fact]
     public void WhatAProgramDoesNotUseIsNotBuilt() {

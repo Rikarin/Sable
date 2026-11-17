@@ -762,6 +762,16 @@ Written so far (`tests/Sable.CodeGen.Tests/LibraryTests.cs`):
   `ProcessError.NotFound` when nothing by that name starts. Also the
   current directory and the process id. Not yet: pipelines, streaming a
   running child's output, signals, and `exit`.
+- `Sable.Serialize`: JSON, which is Phase 2's 2,000-line exit program made a
+  module. It has the `JsonValue` model, a strict parser (with opt-in comments,
+  trailing commas and duplicate-key checks) that reports errors by line and
+  column, and compact, pretty and canonical printing. It also covers JSON
+  Pointer, Merge Patch, comparing, measuring and transforming documents. The
+  program's own 237-case suite runs against the module as well
+  (`JsonProgramTests`). Its text helpers are internal, so that it imports
+  cleanly beside Sable.Text and Sable.Collections. Not yet: the `Encoder` and
+  `Decoder` protocols, binary formats, and namespacing the free functions
+  (`parse`, `render`) under a type.
 
 What it took from the compiler: `[]` as an argument typed by the parameter
 (overloaded or not), `?.` on any optional rather than only a

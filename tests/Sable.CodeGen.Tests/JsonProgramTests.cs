@@ -18,6 +18,22 @@ public sealed class JsonProgramTests {
         Assert.DoesNotContain("FAIL", execution.Stdout, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    ///     The same suite against Sable.Serialize, the library the program
+    ///     became: its text helpers and its tests, with the JSON itself imported.
+    /// </summary>
+    [Fact]
+    public void TheSuitePassesAgainstSableSerialize() {
+        var lines = File.ReadAllLines(Path.Combine(Root, "tests/programs/json.sab"));
+        int Section(string title) => Array.FindIndex(lines, l => l == "// " + title) - 1;
+        var helpers = lines[Section("Text utilities")..Section("Errors")];
+        var suite = lines[Section("The test suite")..];
+        var source = string.Join("\n", ["module Json", "import Sable.Serialize", "", ..helpers, ..suite]);
+
+        var execution = AssertAgree(source, stepLimit: 50_000_000);
+        Assert.EndsWith("\n237 passed, 0 failed\n", execution.Stdout, StringComparison.Ordinal);
+    }
+
     static string Root {
         get {
             var directory = new DirectoryInfo(AppContext.BaseDirectory);

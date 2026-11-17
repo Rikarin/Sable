@@ -1,0 +1,1488 @@
+module Sable.Serialize
+
+// JSON (RFC 8259) for Sable programs (docs/04 §4.3), written in Sable: the
+// value model, a strict parser with opt-in relaxations and errors by line
+// and column, compact, pretty and canonical printing, JSON Pointer (RFC 6901),
+// Merge Patch (RFC 7386), comparing, measuring and transforming documents.
+//
+// It began as docs/04 §2.5's exit program (tests/programs/json.sab), whose
+// own suite runs against this module too. Its text helpers stay internal, so
+// that importing it alongside Sable.Text or Sable.Collections clashes with
+// neither.
+
+// ===========================================================================
+// The value model
+// ===========================================================================
+
+public union JsonValue {
+    Null
+    Bool(value: Bool)
+    Number(value: F64)
+    Text(value: String)
+    Array(items: JsonValue[>..])
+    Object(members: Member[>..])
+}
+
+// An object keeps its members in the order they were written; lookups take
+// the first with the key.
+public struct Member {
+    public var key: String
+    public var value: JsonValue
+}
+
+public fn kindOf(_ value: JsonValue) -> String {
+    return match value {
+        case .Null => "null"
+        case .Bool(_) => "boolean"
+        case .Number(_) => "number"
+        case .Text(_) => "string"
+        case .Array(_) => "array"
+        case .Object(_) => "object"
+    }
+}
+
+// ---- Building values ------------------------------------------------------
+
+public fn null() -> JsonValue {
+    return JsonValue.Null
+}
+
+public fn boolean(_ value: Bool) -> JsonValue {
+    return JsonValue.Bool(value: value)
+}
+
+public fn number(_ value: F64) -> JsonValue {
+    return JsonValue.Number(value: value)
+}
+
+public fn integer(_ value: Int) -> JsonValue {
+    return JsonValue.Number(value: value as F64)
+}
+
+public fn text(_ value: String) -> JsonValue {
+    return JsonValue.Text(value: value)
+}
+
+public fn array(_ items: JsonValue[>..]) -> JsonValue {
+    return JsonValue.Array(items: items)
+}
+
+public fn member(_ key: String, _ value: JsonValue) -> Member {
+    return Member { key: key, value: value }
+}
+
+public fn object(_ members: Member[>..]) -> JsonValue {
+    return JsonValue.Object(members: members)
+}
+
+// ---- Reading values -----------------------------------------------------
+
+public fn asBool(_ value: JsonValue) -> Bool? {
+    return match value {
+        case .Bool(let b) => b
+        default => none
+    }
+}
+
+public fn asNumber(_ value: JsonValue) -> F64? {
+    return match value {
+        case .Number(let n) => n
+        default => none
+    }
+}
+
+public fn asText(_ value: JsonValue) -> String? {
+    return match value {
+        case .Text(let t) => t
+        default => none
+    }
+}
+
+public fn isNull(_ value: JsonValue) -> Bool {
+    return match value {
+        case .Null => true
+        default => false
+    }
+}
+
+public fn itemsOf(_ value: JsonValue) -> JsonValue[>..] {
+    return match value {
+        case .Array(let items) => items
+        default => []
+    }
+}
+
+public fn membersOf(_ value: JsonValue) -> Member[>..] {
+    return match value {
+        case .Object(let members) => members
+        default => []
+    }
+}
+
+public fn field(_ value: JsonValue, _ key: String) -> JsonValue? {
+    for m in membersOf(value) {
+        if m.key == key {
+            return m.value
+        }
+    }
+    return none
+}
+
+public fn element(_ value: JsonValue, _ index: Int) -> JsonValue? {
+    let items = itemsOf(value)
+    if index < 0 || index >= items.count {
+        return none
+    }
+    return items[index]
+}
+
+public fn keysOf(_ value: JsonValue) -> String[>..] {
+    var keys: String[>..] = []
+    for m in membersOf(value) {
+        keys.append(m.key)
+    }
+    return keys
+}
+
+public fn countOf(_ value: JsonValue) -> Int {
+    return match value {
+        case .Array(let items) => items.count
+        case .Object(let members) => members.count
+        default => 0
+    }
+}
+
+// ===========================================================================
+// Text utilities
+// ===========================================================================
+
+// Strings are joined in a balanced tree, so that building a long text from
+// many small pieces costs n log n rather than n squared.
+struct TextBuilder {
+    var parts: String[>..]
+
+    public mutating fn add(_ piece: String) {
+        parts.append(piece)
+    }
+
+    public mutating fn addChar(_ c: Char) {
+        parts.append(String.fromChar(c))
+    }
+
+    public fn build() -> String {
+        return joinRange(parts, 0, parts.count)
+    }
+
+    public fn isEmpty() -> Bool {
+        return parts.count == 0
+    }
+}
+
+fn newBuilder() -> TextBuilder {
+    return TextBuilder { parts: [] }
+}
+
+fn joinRange(_ parts: String[>..], _ from: Int, _ to: Int) -> String {
+    let count = to - from
+    if count <= 0 {
+        return ""
+    }
+    if count == 1 {
+        return parts[from]
+    }
+    if count == 2 {
+        return parts[from] + parts[from + 1]
+    }
+    let middle = from + count / 2
+    return joinRange(parts, from, middle) + joinRange(parts, middle, to)
+}
+
+fn join(_ parts: String[>..], _ separator: String) -> String {
+    var builder = newBuilder()
+    var first = true
+    for part in parts {
+        if !first {
+            builder.add(separator)
+        }
+        builder.add(part)
+        first = false
+    }
+    return builder.build()
+}
+
+fn repeated(_ piece: String, _ times: Int) -> String {
+    var builder = newBuilder()
+    var i = 0
+    while i < times {
+        builder.add(piece)
+        i = i + 1
+    }
+    return builder.build()
+}
+
+fn hexDigit(_ value: Int) -> String {
+    let digits = "0123456789abcdef"
+    return String.fromChar(digits.at(value % 16))
+}
+
+fn hex4(_ value: Int) -> String {
+    return hexDigit(value / 4096) + hexDigit(value / 256 % 16) + hexDigit(value / 16 % 16) + hexDigit(value % 16)
+}
+
+fn hexValue(_ c: Char) -> Int? {
+    let code = c.codePoint
+    if code >= 48 && code <= 57 {
+        return code - 48
+    }
+    if code >= 97 && code <= 102 {
+        return code - 87
+    }
+    if code >= 65 && code <= 70 {
+        return code - 55
+    }
+    return none
+}
+
+fn charsOf(_ s: String) -> Char[>..] {
+    var result: Char[>..] = []
+    var i = 0
+    let n = s.count
+    while i < n {
+        result.append(s.at(i))
+        i = i + 1
+    }
+    return result
+}
+
+// Orders strings by Unicode scalar, as JSON's sorted-key output wants.
+fn compareText(_ a: String, _ b: String) -> Int {
+    let n = a.count.min(b.count)
+    var i = 0
+    while i < n {
+        let x = a.at(i).codePoint
+        let y = b.at(i).codePoint
+        if x != y {
+            return x < y ? -1 : 1
+        }
+        i = i + 1
+    }
+    if a.count == b.count {
+        return 0
+    }
+    return a.count < b.count ? -1 : 1
+}
+
+// A stable merge sort, for anything with an order.
+fn sorted<T>(_ items: T[>..], _ before: (T, T) -> Bool) -> T[>..] {
+    if items.count <= 1 {
+        return items
+    }
+    let middle = items.count / 2
+    var left: T[>..] = []
+    var right: T[>..] = []
+    var i = 0
+    for item in items {
+        if i < middle {
+            left.append(item)
+        } else {
+            right.append(item)
+        }
+        i = i + 1
+    }
+    return merge(sorted(left, before), sorted(right, before), before)
+}
+
+fn merge<T>(_ left: T[>..], _ right: T[>..], _ before: (T, T) -> Bool) -> T[>..] {
+    var result: T[>..] = []
+    var i = 0
+    var j = 0
+    while i < left.count && j < right.count {
+        // Taking from the left on ties keeps the sort stable.
+        if before(right[j], left[i]) {
+            result.append(right[j])
+            j = j + 1
+        } else {
+            result.append(left[i])
+            i = i + 1
+        }
+    }
+    while i < left.count {
+        result.append(left[i])
+        i = i + 1
+    }
+    while j < right.count {
+        result.append(right[j])
+        j = j + 1
+    }
+    return result
+}
+
+// ===========================================================================
+// Errors
+// ===========================================================================
+
+public struct Position {
+    public var offset: Int
+    public var line: Int
+    public var column: Int
+}
+
+public fn describePosition(_ at: Position) -> String {
+    return "line \(at.line), column \(at.column)"
+}
+
+public union ParseError {
+    UnexpectedEnd(at: Position, expected: String)
+    UnexpectedCharacter(at: Position, found: Char, expected: String)
+    InvalidNumber(at: Position, reason: String)
+    InvalidEscape(at: Position, found: Char)
+    InvalidUnicode(at: Position, reason: String)
+    ControlCharacter(at: Position, code: Int)
+    TooDeep(at: Position, limit: Int)
+    TrailingText(at: Position)
+    DuplicateKey(at: Position, key: String)
+}
+
+public fn describeChar(_ c: Char) -> String {
+    let code = c.codePoint
+    if code < 32 || code == 127 {
+        return "U+" + hex4(code)
+    }
+    return "'" + String.fromChar(c) + "'"
+}
+
+public fn describeError(_ error: ParseError) -> String {
+    return match error {
+        case .UnexpectedEnd(let at, let expected) =>
+            "\(describePosition(at)): the text ends where \(expected) was expected"
+        case .UnexpectedCharacter(let at, let found, let expected) =>
+            "\(describePosition(at)): found \(describeChar(found)) where \(expected) was expected"
+        case .InvalidNumber(let at, let reason) =>
+            "\(describePosition(at)): invalid number: \(reason)"
+        case .InvalidEscape(let at, let found) =>
+            "\(describePosition(at)): \\\(String.fromChar(found)) is not an escape"
+        case .InvalidUnicode(let at, let reason) =>
+            "\(describePosition(at)): invalid \\u escape: \(reason)"
+        case .ControlCharacter(let at, let code) =>
+            "\(describePosition(at)): control character U+\(hex4(code)) must be escaped"
+        case .TooDeep(let at, let limit) =>
+            "\(describePosition(at)): nested more than \(limit) deep"
+        case .TrailingText(let at) =>
+            "\(describePosition(at)): text after the value"
+        case .DuplicateKey(let at, let key) =>
+            "\(describePosition(at)): the key \"\(key)\" appears twice"
+    }
+}
+
+public fn errorLine(_ error: ParseError) -> Int {
+    return positionOf(error).line
+}
+
+public fn positionOf(_ error: ParseError) -> Position {
+    return match error {
+        case .UnexpectedEnd(let at, _) => at
+        case .UnexpectedCharacter(let at, _, _) => at
+        case .InvalidNumber(let at, _) => at
+        case .InvalidEscape(let at, _) => at
+        case .InvalidUnicode(let at, _) => at
+        case .ControlCharacter(let at, _) => at
+        case .TooDeep(let at, _) => at
+        case .TrailingText(let at) => at
+        case .DuplicateKey(let at, _) => at
+    }
+}
+
+// ===========================================================================
+// Parsing
+// ===========================================================================
+
+public struct ParseOptions {
+    public var maxDepth: Int
+    public var allowComments: Bool
+    public var allowTrailingCommas: Bool
+    public var rejectDuplicateKeys: Bool
+}
+
+public fn strict() -> ParseOptions {
+    return ParseOptions { maxDepth: 512, allowComments: false, allowTrailingCommas: false, rejectDuplicateKeys: false }
+}
+
+public fn relaxed() -> ParseOptions {
+    return ParseOptions { maxDepth: 512, allowComments: true, allowTrailingCommas: true, rejectDuplicateKeys: false }
+}
+
+// The parser is an object: one cursor, shared by every method it calls.
+public class Parser {
+    var chars: Char[>..]
+    var offset: Int
+    var line: Int
+    var column: Int
+    var options: ParseOptions
+
+    init(_ text: String, _ options: ParseOptions) {
+        self.chars = charsOf(text)
+        self.offset = 0
+        self.line = 1
+        self.column = 1
+        self.options = options
+    }
+
+    fn position() -> Position {
+        return Position { offset: offset, line: line, column: column }
+    }
+
+    fn atEnd() -> Bool {
+        return offset >= chars.count
+    }
+
+    fn peek() -> Char? {
+        if atEnd() {
+            return none
+        }
+        return chars[offset]
+    }
+
+    fn peekIs(_ c: Char) -> Bool {
+        return peek() == c
+    }
+
+    fn advance() -> Char {
+        let c = chars[offset]
+        offset = offset + 1
+        if c == '\n' {
+            line = line + 1
+            column = 1
+        } else {
+            column = column + 1
+        }
+        return c
+    }
+
+    fn next(_ expected: String) throws(ParseError) -> Char {
+        if atEnd() {
+            throw ParseError.UnexpectedEnd(at: position(), expected: expected)
+        }
+        return advance()
+    }
+
+    fn expect(_ wanted: Char, _ expected: String) throws(ParseError) {
+        let at = position()
+        let c = try next(expected)
+        if c != wanted {
+            throw ParseError.UnexpectedCharacter(at: at, found: c, expected: expected)
+        }
+    }
+
+    // Whitespace, and comments when they are allowed: '// ...' to the end
+    // of the line, and '/* ... */'.
+    fn skipSpace() throws(ParseError) {
+        while !atEnd() {
+            let c = chars[offset]
+            if c == ' ' || c == '\t' || c == '\n' || c == '\r' {
+                advance()
+                continue
+            }
+            if c == '/' && options.allowComments {
+                try skipComment()
+                continue
+            }
+            return
+        }
+    }
+
+    fn skipComment() throws(ParseError) {
+        let at = position()
+        advance()
+        let kind = try next("'/' or '*' after '/'")
+        if kind == '/' {
+            while !atEnd() && !peekIs('\n') {
+                advance()
+            }
+            return
+        }
+        if kind != '*' {
+            throw ParseError.UnexpectedCharacter(at: at, found: kind, expected: "a comment")
+        }
+        while true {
+            let c = try next("the end of the comment")
+            if c == '*' && peekIs('/') {
+                advance()
+                return
+            }
+        }
+    }
+
+    public fn parseDocument() throws(ParseError) -> JsonValue {
+        try skipSpace()
+        let value = try parseValue(0)
+        try skipSpace()
+        if !atEnd() {
+            throw ParseError.TrailingText(at: position())
+        }
+        return value
+    }
+
+    fn parseValue(_ depth: Int) throws(ParseError) -> JsonValue {
+        let at = position()
+        guard let c = peek() else {
+            throw ParseError.UnexpectedEnd(at: at, expected: "a value")
+        }
+
+        if c == '{' {
+            return try parseObject(depth + 1)
+        }
+        if c == '[' {
+            return try parseArray(depth + 1)
+        }
+        if c == '"' {
+            return JsonValue.Text(value: try parseString())
+        }
+        if c == 't' {
+            try parseWord("true")
+            return JsonValue.Bool(value: true)
+        }
+        if c == 'f' {
+            try parseWord("false")
+            return JsonValue.Bool(value: false)
+        }
+        if c == 'n' {
+            try parseWord("null")
+            return JsonValue.Null
+        }
+        if c == '-' || c.isDigit {
+            return JsonValue.Number(value: try parseNumber())
+        }
+        throw ParseError.UnexpectedCharacter(at: at, found: c, expected: "a value")
+    }
+
+    fn parseWord(_ word: String) throws(ParseError) {
+        var i = 0
+        while i < word.count {
+            try expect(word.at(i), "'\(word)'")
+            i = i + 1
+        }
+    }
+
+    fn checkDepth(_ depth: Int) throws(ParseError) {
+        if depth > options.maxDepth {
+            throw ParseError.TooDeep(at: position(), limit: options.maxDepth)
+        }
+    }
+
+    fn parseArray(_ depth: Int) throws(ParseError) -> JsonValue {
+        try checkDepth(depth)
+        try expect('[', "'['")
+        try skipSpace()
+
+        var items: JsonValue[>..] = []
+        if peekIs(']') {
+            advance()
+            return JsonValue.Array(items: items)
+        }
+
+        while true {
+            try skipSpace()
+            items.append(try parseValue(depth))
+            try skipSpace()
+
+            let at = position()
+            let c = try next("',' or ']'")
+            if c == ']' {
+                return JsonValue.Array(items: items)
+            }
+            if c != ',' {
+                throw ParseError.UnexpectedCharacter(at: at, found: c, expected: "',' or ']'")
+            }
+
+            try skipSpace()
+            if options.allowTrailingCommas && peekIs(']') {
+                advance()
+                return JsonValue.Array(items: items)
+            }
+        }
+    }
+
+    fn parseObject(_ depth: Int) throws(ParseError) -> JsonValue {
+        try checkDepth(depth)
+        try expect('{', "'{'")
+        try skipSpace()
+
+        var members: Member[>..] = []
+        if peekIs('}') {
+            advance()
+            return JsonValue.Object(members: members)
+        }
+
+        while true {
+            try skipSpace()
+            let keyAt = position()
+            guard let first = peek() else {
+                throw ParseError.UnexpectedEnd(at: keyAt, expected: "a key")
+            }
+            if first != '"' {
+                throw ParseError.UnexpectedCharacter(at: keyAt, found: first, expected: "a key")
+            }
+
+            let key = try parseString()
+            if options.rejectDuplicateKeys {
+                for existing in members {
+                    if existing.key == key {
+                        throw ParseError.DuplicateKey(at: keyAt, key: key)
+                    }
+                }
+            }
+
+            try skipSpace()
+            try expect(':', "':'")
+            try skipSpace()
+            let value = try parseValue(depth)
+            members.append(Member { key: key, value: value })
+            try skipSpace()
+
+            let at = position()
+            let c = try next("',' or '}'")
+            if c == '}' {
+                return JsonValue.Object(members: members)
+            }
+            if c != ',' {
+                throw ParseError.UnexpectedCharacter(at: at, found: c, expected: "',' or '}'")
+            }
+
+            try skipSpace()
+            if options.allowTrailingCommas && peekIs('}') {
+                advance()
+                return JsonValue.Object(members: members)
+            }
+        }
+    }
+
+    fn parseString() throws(ParseError) -> String {
+        try expect('"', "'\"'")
+        var builder = newBuilder()
+
+        while true {
+            let at = position()
+            let c = try next("the end of the string")
+            if c == '"' {
+                return builder.build()
+            }
+            if c == '\\' {
+                builder.addChar(try parseEscape(at))
+                continue
+            }
+            if c.codePoint < 32 {
+                throw ParseError.ControlCharacter(at: at, code: c.codePoint)
+            }
+            builder.addChar(c)
+        }
+    }
+
+    // 'at' is where the backslash is: what an error points to.
+    fn parseEscape(_ at: Position) throws(ParseError) -> Char {
+        let c = try next("an escape")
+        return match c {
+            case '"' => '"'
+            case '\\' => '\\'
+            case '/' => '/'
+            case 'b' => Char.fromCodePoint(8)!
+            case 'f' => Char.fromCodePoint(12)!
+            case 'n' => '\n'
+            case 'r' => '\r'
+            case 't' => '\t'
+            case 'u' => try parseUnicode(at)
+            default => {
+                throw ParseError.InvalidEscape(at: at, found: c)
+            }
+        }
+    }
+
+    fn parseHex4() throws(ParseError) -> Int {
+        var value = 0
+        var i = 0
+        while i < 4 {
+            let at = position()
+            let c = try next("a hex digit")
+            guard let digit = hexValue(c) else {
+                throw ParseError.UnexpectedCharacter(at: at, found: c, expected: "a hex digit")
+            }
+            value = value * 16 + digit
+            i = i + 1
+        }
+        return value
+    }
+
+    // '\uXXXX', and the pair of them a scalar above U+FFFF takes.
+    fn parseUnicode(_ at: Position) throws(ParseError) -> Char {
+        let high = try parseHex4()
+        if high >= 0xDC00 && high <= 0xDFFF {
+            throw ParseError.InvalidUnicode(at: at, reason: "a low surrogate with no high one before it")
+        }
+        if high < 0xD800 || high > 0xDBFF {
+            return Char.fromCodePoint(high)!
+        }
+
+        if !peekIs('\\') {
+            throw ParseError.InvalidUnicode(at: at, reason: "a high surrogate with no low one after it")
+        }
+        advance()
+        try expect('u', "'u' of a low surrogate")
+        let low = try parseHex4()
+        if low < 0xDC00 || low > 0xDFFF {
+            throw ParseError.InvalidUnicode(at: at, reason: "a high surrogate followed by something else")
+        }
+        return Char.fromCodePoint(0x10000 + (high - 0xD800) * 1024 + (low - 0xDC00))!
+    }
+
+    // RFC 8259's grammar, exactly: '-'? ('0' | [1-9][0-9]*) ('.' [0-9]+)?
+    // ([eE] [+-]? [0-9]+)?
+    fn parseNumber() throws(ParseError) -> F64 {
+        let at = position()
+        var builder = newBuilder()
+
+        if peekIs('-') {
+            builder.addChar(advance())
+        }
+
+        guard let first = peek() else {
+            throw ParseError.InvalidNumber(at: at, reason: "no digits")
+        }
+        if !first.isDigit {
+            throw ParseError.InvalidNumber(at: at, reason: "no digits")
+        }
+
+        if first == '0' {
+            builder.addChar(advance())
+            if let after = peek() {
+                if after.isDigit {
+                    throw ParseError.InvalidNumber(at: at, reason: "a leading zero")
+                }
+            }
+        } else {
+            while !atEnd() && chars[offset].isDigit {
+                builder.addChar(advance())
+            }
+        }
+
+        if peekIs('.') {
+            builder.addChar(advance())
+            var fraction = 0
+            while !atEnd() && chars[offset].isDigit {
+                builder.addChar(advance())
+                fraction = fraction + 1
+            }
+            if fraction == 0 {
+                throw ParseError.InvalidNumber(at: at, reason: "no digits after the point")
+            }
+        }
+
+        if peekIs('e') || peekIs('E') {
+            builder.addChar(advance())
+            if peekIs('+') || peekIs('-') {
+                builder.addChar(advance())
+            }
+            var exponent = 0
+            while !atEnd() && chars[offset].isDigit {
+                builder.addChar(advance())
+                exponent = exponent + 1
+            }
+            if exponent == 0 {
+                throw ParseError.InvalidNumber(at: at, reason: "no digits in the exponent")
+            }
+        }
+
+        guard let value = builder.build().toF64() else {
+            throw ParseError.InvalidNumber(at: at, reason: "out of range")
+        }
+        return value
+    }
+}
+
+public fn parse(_ text: String) throws(ParseError) -> JsonValue {
+    let parser = Parser(text, strict())
+    return try parser.parseDocument()
+}
+
+public fn parseWith(_ text: String, _ options: ParseOptions) throws(ParseError) -> JsonValue {
+    let parser = Parser(text, options)
+    return try parser.parseDocument()
+}
+
+// ===========================================================================
+// Printing
+// ===========================================================================
+
+public struct PrintOptions {
+    // Spaces per level; zero writes everything on one line.
+    public var indent: Int
+    public var sortKeys: Bool
+    // Escape everything outside ASCII as '\uXXXX'.
+    public var asciiOnly: Bool
+    // A space after ':' and ',' in one-line output.
+    public var spaced: Bool
+}
+
+public fn compact() -> PrintOptions {
+    return PrintOptions { indent: 0, sortKeys: false, asciiOnly: false, spaced: false }
+}
+
+public fn pretty(_ indent: Int) -> PrintOptions {
+    return PrintOptions { indent: indent, sortKeys: false, asciiOnly: false, spaced: true }
+}
+
+public fn canonical() -> PrintOptions {
+    return PrintOptions { indent: 0, sortKeys: true, asciiOnly: true, spaced: false }
+}
+
+public fn render(_ value: JsonValue) -> String {
+    return renderWith(value, compact())
+}
+
+public fn renderWith(_ value: JsonValue, _ options: PrintOptions) -> String {
+    var builder = newBuilder()
+    write(value, options, 0, builder)
+    return builder.build()
+}
+
+fn write(_ value: JsonValue, _ options: PrintOptions, _ level: Int, _ sink: inout TextBuilder) {
+    match value {
+        case .Null => sink.add("null")
+        case .Bool(let b) => sink.add(b ? "true" : "false")
+        case .Number(let n) => sink.add(formatNumber(n))
+        case .Text(let t) => sink.add(quote(t, options.asciiOnly))
+        case .Array(let items) => writeArray(items, options, level, sink)
+        case .Object(let members) => writeObject(members, options, level, sink)
+    }
+}
+
+fn newline(_ options: PrintOptions, _ level: Int, _ sink: inout TextBuilder) {
+    sink.add("\n")
+    sink.add(repeated(" ", options.indent * level))
+}
+
+fn writeArray(_ items: JsonValue[>..], _ options: PrintOptions, _ level: Int, _ sink: inout TextBuilder) {
+    if items.count == 0 {
+        sink.add("[]")
+        return
+    }
+
+    sink.add("[")
+    var first = true
+    for item in items {
+        if !first {
+            sink.add(options.spaced && options.indent == 0 ? ", " : ",")
+        }
+        if options.indent > 0 {
+            newline(options, level + 1, sink)
+        }
+        write(item, options, level + 1, sink)
+        first = false
+    }
+    if options.indent > 0 {
+        newline(options, level, sink)
+    }
+    sink.add("]")
+}
+
+fn writeObject(_ members: Member[>..], _ options: PrintOptions, _ level: Int, _ sink: inout TextBuilder) {
+    if members.count == 0 {
+        sink.add("{}")
+        return
+    }
+
+    let ordered = options.sortKeys ? sortedMembers(members) : members
+    sink.add("{")
+    var first = true
+    for m in ordered {
+        if !first {
+            sink.add(options.spaced && options.indent == 0 ? ", " : ",")
+        }
+        if options.indent > 0 {
+            newline(options, level + 1, sink)
+        }
+        sink.add(quote(m.key, options.asciiOnly))
+        sink.add(options.spaced ? ": " : ":")
+        write(m.value, options, level + 1, sink)
+        first = false
+    }
+    if options.indent > 0 {
+        newline(options, level, sink)
+    }
+    sink.add("}")
+}
+
+public fn sortedMembers(_ members: Member[>..]) -> Member[>..] {
+    return sorted(members, (a: Member, b: Member) => compareText(a.key, b.key) < 0)
+}
+
+// A string as JSON writes it: quoted, with what must be escaped escaped, and
+// with everything past ASCII escaped too when asked — as a surrogate pair
+// above U+FFFF.
+public fn quote(_ s: String, _ asciiOnly: Bool) -> String {
+    var builder = newBuilder()
+    builder.add("\"")
+    var run = 0
+    var start = 0
+    let n = s.count
+    var i = 0
+    while i < n {
+        let c = s.at(i)
+        let code = c.codePoint
+        let plain = code >= 32 && code != 34 && code != 92 && (code < 127 || !asciiOnly)
+        if plain {
+            run = run + 1
+            i = i + 1
+            continue
+        }
+
+        if run > 0 {
+            builder.add(s.slice(from: start, to: i))
+        }
+        builder.add(escape(c))
+        i = i + 1
+        start = i
+        run = 0
+    }
+    if run > 0 {
+        builder.add(s.slice(from: start, to: n))
+    }
+    builder.add("\"")
+    return builder.build()
+}
+
+public fn escape(_ c: Char) -> String {
+    let code = c.codePoint
+    if code == 34 {
+        return "\\\""
+    }
+    if code == 92 {
+        return "\\\\"
+    }
+    if code == 10 {
+        return "\\n"
+    }
+    if code == 13 {
+        return "\\r"
+    }
+    if code == 9 {
+        return "\\t"
+    }
+    if code == 8 {
+        return "\\b"
+    }
+    if code == 12 {
+        return "\\f"
+    }
+    if code < 0x10000 {
+        return "\\u" + hex4(code)
+    }
+    let shifted = code - 0x10000
+    return "\\u" + hex4(0xD800 + shifted / 1024) + "\\u" + hex4(0xDC00 + shifted % 1024)
+}
+
+// Numbers as JSON writes them: whole numbers that an F64 holds exactly
+// without a point, the rest in the shortest form that reads back the same.
+// JSON has no NaN or infinity; they are written as null.
+public fn formatNumber(_ n: F64) -> String {
+    if n != n {
+        return "null"
+    }
+    if n > 1.7976931348623157e308 || n < -1.7976931348623157e308 {
+        return "null"
+    }
+    if n == n.abs() * 0.0 + n && n.abs() < 9007199254740992.0 {
+        let whole = n as Int
+        if whole as F64 == n {
+            if whole == 0 && 1.0 / n < 0.0 {
+                return "-0"
+            }
+            return whole.toString()
+        }
+    }
+    return n.toString()
+}
+
+// ===========================================================================
+// JSON Pointer (RFC 6901)
+// ===========================================================================
+
+public union PointerError {
+    Malformed(pointer: String)
+    NotFound(pointer: String, at: String)
+}
+
+public fn describePointerError(_ error: PointerError) -> String {
+    return match error {
+        case .Malformed(let pointer) => "'\(pointer)' is not a JSON pointer"
+        case .NotFound(let pointer, let at) => "'\(pointer)' finds nothing at '\(at)'"
+    }
+}
+
+// "/a/b~1c/0" is ["a", "b/c", "0"]: '~1' stands for '/', and '~0' for '~'.
+public fn pointerTokens(_ pointer: String) throws(PointerError) -> String[>..] {
+    var tokens: String[>..] = []
+    if pointer.isEmpty {
+        return tokens
+    }
+    if pointer.at(0) != '/' {
+        throw PointerError.Malformed(pointer: pointer)
+    }
+
+    var current = newBuilder()
+    var i = 1
+    let n = pointer.count
+    while i < n {
+        let c = pointer.at(i)
+        if c == '/' {
+            tokens.append(current.build())
+            current = newBuilder()
+        } else if c == '~' {
+            if i + 1 >= n {
+                throw PointerError.Malformed(pointer: pointer)
+            }
+            let after = pointer.at(i + 1)
+            if after == '0' {
+                current.add("~")
+            } else if after == '1' {
+                current.add("/")
+            } else {
+                throw PointerError.Malformed(pointer: pointer)
+            }
+            i = i + 1
+        } else {
+            current.addChar(c)
+        }
+        i = i + 1
+    }
+    tokens.append(current.build())
+    return tokens
+}
+
+// An array index as a pointer writes it: digits, and no leading zero.
+public fn arrayIndex(_ token: String) -> Int? {
+    if token.isEmpty {
+        return none
+    }
+    if token.count > 1 && token.at(0) == '0' {
+        return none
+    }
+    var i = 0
+    while i < token.count {
+        if !token.at(i).isDigit {
+            return none
+        }
+        i = i + 1
+    }
+    return token.toInt()
+}
+
+public fn resolve(_ document: JsonValue, _ pointer: String) throws(PointerError) -> JsonValue {
+    let tokens = try pointerTokens(pointer)
+    var current = document
+    var walked = ""
+    for token in tokens {
+        walked = walked + "/" + token
+        let next = step(current, token)
+        guard let found = next else {
+            throw PointerError.NotFound(pointer: pointer, at: walked)
+        }
+        current = found
+    }
+    return current
+}
+
+fn step(_ value: JsonValue, _ token: String) -> JsonValue? {
+    return match value {
+        case .Object(_) => field(value, token)
+        case .Array(_) => stepIndex(value, token)
+        default => none
+    }
+}
+
+fn stepIndex(_ value: JsonValue, _ token: String) -> JsonValue? {
+    guard let index = arrayIndex(token) else {
+        return none
+    }
+    return element(value, index)
+}
+
+// A copy of the document with the value at the pointer replaced, or added
+// when the last step names a new key, or '-', the end of an array.
+public fn replacing(_ document: JsonValue, _ pointer: String, _ value: JsonValue) throws(PointerError) -> JsonValue {
+    let tokens = try pointerTokens(pointer)
+    return try replaceAt(document, tokens, 0, value, pointer)
+}
+
+fn replaceAt(_ current: JsonValue, _ tokens: String[>..], _ depth: Int, _ value: JsonValue, _ pointer: String) throws(PointerError) -> JsonValue {
+    if depth == tokens.count {
+        return value
+    }
+    let token = tokens[depth]
+    var walked = ""
+    var k = 0
+    while k <= depth {
+        walked = walked + "/" + escapePointerToken(tokens[k])
+        k = k + 1
+    }
+
+    match current {
+        case .Object(let members) => {
+            var result: Member[>..] = []
+            var found = false
+            for m in members {
+                if m.key == token && !found {
+                    result.append(Member { key: m.key, value: try replaceAt(m.value, tokens, depth + 1, value, pointer) })
+                    found = true
+                } else {
+                    result.append(m)
+                }
+            }
+            if !found {
+                if depth + 1 != tokens.count {
+                    throw PointerError.NotFound(pointer: pointer, at: walked)
+                }
+                result.append(Member { key: token, value: value })
+            }
+            return JsonValue.Object(members: result)
+        }
+        case .Array(let items) => {
+            if token == "-" && depth + 1 == tokens.count {
+                var appended = items
+                appended.append(value)
+                return JsonValue.Array(items: appended)
+            }
+            guard let index = arrayIndex(token) else {
+                throw PointerError.NotFound(pointer: pointer, at: walked)
+            }
+            if index >= items.count {
+                throw PointerError.NotFound(pointer: pointer, at: walked)
+            }
+            var changed = items
+            changed[index] = try replaceAt(items[index], tokens, depth + 1, value, pointer)
+            return JsonValue.Array(items: changed)
+        }
+        default => {
+            throw PointerError.NotFound(pointer: pointer, at: walked)
+        }
+    }
+}
+
+// ===========================================================================
+// JSON Merge Patch (RFC 7386)
+// ===========================================================================
+
+// A patch that is an object merges into the target, member by member: null
+// removes, an object merges, anything else replaces. Any other patch
+// replaces the target whole.
+public fn mergePatch(_ target: JsonValue, _ patch: JsonValue) -> JsonValue {
+    let patchMembers = match patch {
+        case .Object(let members) => members
+        default => {
+            return patch
+        }
+    }
+
+    var result: Member[>..] = []
+    let base = match target {
+        case .Object(let members) => members
+        default => []
+    }
+
+    for m in base {
+        let change = field(patch, m.key)
+        if let replacement = change {
+            if !isNull(replacement) {
+                result.append(Member { key: m.key, value: mergePatch(m.value, replacement) })
+            }
+        } else {
+            result.append(m)
+        }
+    }
+
+    for p in patchMembers {
+        if field(target, p.key) == none && !isNull(p.value) {
+            result.append(Member { key: p.key, value: mergePatch(JsonValue.Null, p.value) })
+        }
+    }
+
+    return JsonValue.Object(members: result)
+}
+
+// ===========================================================================
+// Comparing
+// ===========================================================================
+
+// Equal as JSON: numbers by value, strings by content, arrays in order, and
+// objects by their members whatever their order.
+public fn same(_ a: JsonValue, _ b: JsonValue) -> Bool {
+    match a {
+        case .Null => {
+            return isNull(b)
+        }
+        case .Bool(let x) => {
+            if let y = asBool(b) {
+                return x == y
+            }
+            return false
+        }
+        case .Number(let x) => {
+            if let y = asNumber(b) {
+                return x == y
+            }
+            return false
+        }
+        case .Text(let x) => {
+            if let y = asText(b) {
+                return x == y
+            }
+            return false
+        }
+        case .Array(let xs) => {
+            let ys = match b {
+                case .Array(let items) => items
+                default => {
+                    return false
+                }
+            }
+            if xs.count != ys.count {
+                return false
+            }
+            var i = 0
+            while i < xs.count {
+                if !same(xs[i], ys[i]) {
+                    return false
+                }
+                i = i + 1
+            }
+            return true
+        }
+        case .Object(let xs) => {
+            let ys = match b {
+                case .Object(let members) => members
+                default => {
+                    return false
+                }
+            }
+            if xs.count != ys.count {
+                return false
+            }
+            for m in xs {
+                guard let other = field(b, m.key) else {
+                    return false
+                }
+                if !same(m.value, other) {
+                    return false
+                }
+            }
+            return true
+        }
+    }
+}
+
+// The pointers at which two documents differ, in document order.
+public fn differences(_ a: JsonValue, _ b: JsonValue) -> String[>..] {
+    var found: String[>..] = []
+    collectDifferences(a, b, "", found)
+    return found
+}
+
+fn collectDifferences(_ a: JsonValue, _ b: JsonValue, _ at: String, _ found: inout String[>..]) {
+    if kindOf(a) != kindOf(b) {
+        found.append(at)
+        return
+    }
+
+    match a {
+        case .Array(let xs) => {
+            let ys = itemsOf(b)
+            let n = xs.count.max(ys.count)
+            var i = 0
+            while i < n {
+                let path = at + "/\(i)"
+                if i >= xs.count || i >= ys.count {
+                    found.append(path)
+                } else {
+                    collectDifferences(xs[i], ys[i], path, found)
+                }
+                i = i + 1
+            }
+        }
+        case .Object(let xs) => {
+            for m in xs {
+                let path = at + "/" + escapePointerToken(m.key)
+                if let other = field(b, m.key) {
+                    collectDifferences(m.value, other, path, found)
+                } else {
+                    found.append(path)
+                }
+            }
+            for m in membersOf(b) {
+                if field(a, m.key) == none {
+                    found.append(at + "/" + escapePointerToken(m.key))
+                }
+            }
+        }
+        default => {
+            if !same(a, b) {
+                found.append(at)
+            }
+        }
+    }
+}
+
+public fn escapePointerToken(_ token: String) -> String {
+    var builder = newBuilder()
+    var i = 0
+    while i < token.count {
+        let c = token.at(i)
+        if c == '~' {
+            builder.add("~0")
+        } else if c == '/' {
+            builder.add("~1")
+        } else {
+            builder.addChar(c)
+        }
+        i = i + 1
+    }
+    return builder.build()
+}
+
+// ===========================================================================
+// Measuring and transforming
+// ===========================================================================
+
+public struct Statistics {
+    public var values: Int
+    public var depth: Int
+    public var nulls: Int
+    public var booleans: Int
+    public var numbers: Int
+    public var strings: Int
+    public var arrays: Int
+    public var objects: Int
+    public var longestString: Int
+}
+
+public fn measure(_ value: JsonValue) -> Statistics {
+    var stats = Statistics {
+        values: 0, depth: 0, nulls: 0, booleans: 0, numbers: 0,
+        strings: 0, arrays: 0, objects: 0, longestString: 0
+    }
+    tally(value, 1, stats)
+    return stats
+}
+
+fn tally(_ value: JsonValue, _ depth: Int, _ stats: inout Statistics) {
+    stats.values = stats.values + 1
+    stats.depth = stats.depth.max(depth)
+    match value {
+        case .Null => {
+            stats.nulls = stats.nulls + 1
+        }
+        case .Bool(_) => {
+            stats.booleans = stats.booleans + 1
+        }
+        case .Number(_) => {
+            stats.numbers = stats.numbers + 1
+        }
+        case .Text(let t) => {
+            stats.strings = stats.strings + 1
+            stats.longestString = stats.longestString.max(t.count)
+        }
+        case .Array(let items) => {
+            stats.arrays = stats.arrays + 1
+            for item in items {
+                tally(item, depth + 1, stats)
+            }
+        }
+        case .Object(let members) => {
+            stats.objects = stats.objects + 1
+            for m in members {
+                tally(m.value, depth + 1, stats)
+            }
+        }
+    }
+}
+
+// The same document with every value a function of the old one, applied
+// leaves first.
+public fn transform(_ value: JsonValue, _ f: (JsonValue) -> JsonValue) -> JsonValue {
+    return match value {
+        case .Array(let items) => f(JsonValue.Array(items: mapValues(items, f)))
+        case .Object(let members) => f(JsonValue.Object(members: mapMembers(members, f)))
+        default => f(value)
+    }
+}
+
+fn mapValues(_ items: JsonValue[>..], _ f: (JsonValue) -> JsonValue) -> JsonValue[>..] {
+    var result: JsonValue[>..] = []
+    for item in items {
+        result.append(transform(item, f))
+    }
+    return result
+}
+
+fn mapMembers(_ members: Member[>..], _ f: (JsonValue) -> JsonValue) -> Member[>..] {
+    var result: Member[>..] = []
+    for m in members {
+        result.append(Member { key: m.key, value: transform(m.value, f) })
+    }
+    return result
+}
+
+// Every member whose key passes the test, at every level.
+public fn filterKeys(_ value: JsonValue, _ keep: (String) -> Bool) -> JsonValue {
+    return match value {
+        case .Array(let items) => JsonValue.Array(items: filterItems(items, keep))
+        case .Object(let members) => JsonValue.Object(members: filterMembers(members, keep))
+        default => value
+    }
+}
+
+fn filterItems(_ items: JsonValue[>..], _ keep: (String) -> Bool) -> JsonValue[>..] {
+    var result: JsonValue[>..] = []
+    for item in items {
+        result.append(filterKeys(item, keep))
+    }
+    return result
+}
+
+fn filterMembers(_ members: Member[>..], _ keep: (String) -> Bool) -> Member[>..] {
+    var result: Member[>..] = []
+    for m in members {
+        if keep(m.key) {
+            result.append(Member { key: m.key, value: filterKeys(m.value, keep) })
+        }
+    }
+    return result
+}
+
+// Every leaf with the pointer that reaches it, in document order.
+public fn flatten(_ value: JsonValue) -> String[>..] {
+    var lines: String[>..] = []
+    flattenInto(value, "", lines)
+    return lines
+}
+
+fn flattenInto(_ value: JsonValue, _ at: String, _ lines: inout String[>..]) {
+    match value {
+        case .Array(let items) => {
+            if items.count == 0 {
+                lines.append(at + " = []")
+            }
+            var i = 0
+            for item in items {
+                flattenInto(item, at + "/\(i)", lines)
+                i = i + 1
+            }
+        }
+        case .Object(let members) => {
+            if members.count == 0 {
+                lines.append(at + " = {}")
+            }
+            for m in members {
+                flattenInto(m.value, at + "/" + escapePointerToken(m.key), lines)
+            }
+        }
+        default => lines.append(at + " = " + render(value))
+    }
+}

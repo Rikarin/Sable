@@ -1,0 +1,84 @@
+module Negative.Expressions
+
+public struct Point { public var x: Int, public var y: Int }
+public enum Direction { North, South }
+public union Shape { Circle(radius: F64), Empty }
+
+fn ternaryConditionMustBeBool(_ n: Int) -> Int {
+    return n ? 1 : 2                    //! S3004 expected 'Bool'
+}
+
+fn ternaryBranchesMustAgree(_ flag: Bool) -> Int {
+    return flag ? 1 : "two"             //! S3014
+}
+
+fn castToAnUnknownType(_ n: Int) -> Int {
+    return n as Nowhere                 //! S2001 no type named 'Nowhere'
+}
+
+fn castResultIsChecked(_ n: Int) -> String {
+    return n as I64                     //! S3004 expected 'String'
+}
+
+fn optionalCastGivesAnOptional(_ s: any Describable) -> Point {
+    return s as? Point                  //! S3004 expected 'Point'
+}
+
+public protocol Describable { fn describe() -> String }
+
+fn testingAgainstAnUnknownType(_ n: Int) -> Bool {
+    return n is Nowhere                 //! S2001 no type named 'Nowhere'
+}
+
+fn aTupleLiteralIsChecked() -> (Int, String) {
+    return (1, 2)                       //! S3004
+}
+
+fn aTupleLabelIsChecked() -> (a: Int, b: Int) {
+    return (x: 1, y: 2)                 //! S3004
+}
+
+fn chainingOnANonOptional(_ p: Point) -> Int {
+    return p?.x
+}
+
+fn implicitMemberLooksInTheContextsType() -> Int {
+    return .North                       //! S2002 'Int' has no member named 'North'
+}
+
+fn implicitMemberWithNoContextAtAll() {
+    let d = .North                      //! S3021 cannot infer
+}
+
+fn implicitMemberIsChecked() -> Direction {
+    return .East                        //! S2002 has no member named 'East'
+}
+
+fn callingTheResultOfACall(_ p: Point) -> Int {
+    return p.x()                        //! S3006 is not callable
+}
+
+fn parenthesesChangeNothing(_ n: Int) -> String {
+    return (n)                          //! S3004 expected 'String'
+}
+
+fn aUnionCaseIsNotTheUnion(_ s: Shape) -> F64 {
+    return match s {
+        case .Circle(let r) => r
+        case .Empty => 0.0
+    }
+}
+
+fn anEmptyTupleIsNotVoid() -> Int {
+    return ()                           //! S3004
+}
+
+fn assignmentIsAnExpressionOfTheTargetsType(_ n: Int) -> Int {
+    var m = n
+    return m = 1
+}
+
+fn andItsTypeIsStillChecked(_ n: Int) -> String {
+    var m = n
+    return m = 1                        //! S3004 expected 'String'
+}

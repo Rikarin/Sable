@@ -1623,10 +1623,21 @@ public sealed class Binder
             _ => "",
         };
 
-        if (expectedType is NamedTypeSymbol named)
+        // The context may ask for an optional, and '.Some' is rarely what is
+        // meant; the case belongs to what it wraps.
+        var wanted = expectedType is OptionalTypeSymbol optional
+            ? optional.UnderlyingType
+            : expectedType;
+
+        if (wanted is NamedTypeSymbol named)
         {
             var members = named.GetMembers(name).ToList();
             if (members.Count > 0) return BindMemberGroup(syntax, null, members, named);
+
+            // The context does name a type; it just has no such member.
+            _diagnostics.Error(ErrorCode.ERR_NameNotFound, syntax.Name.Span,
+                $"'{named.ToDisplayString()}' has no member named '{name}'");
+            return new BoundError(syntax);
         }
 
         _diagnostics.Error(ErrorCode.ERR_NoContextualType, syntax.Span,

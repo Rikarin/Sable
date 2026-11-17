@@ -1,0 +1,54 @@
+module Negative.Conversions
+
+public protocol Named { fn name() -> String }
+public struct Person: Named { public fn name() -> String { return "p" } }
+public struct Plain { public var n: Int }
+public open class Base { public var n: Int, public init(n: Int) { self.n = n } }
+public class Derived: Base { }
+
+fn intToI64(_ n: Int) -> I64 { return n }           //! S3004 expected 'I64'
+fn i64ToInt(_ n: I64) -> Int { return n }           //! S3004 expected 'Int'
+fn intToF64(_ n: Int) -> F64 { return n }           //! S3004 expected 'F64'
+fn f64ToInt(_ n: F64) -> Int { return n }           //! S3004 expected 'Int'
+fn u8ToInt(_ n: U8) -> Int { return n }             //! S3004 expected 'Int'
+fn boolToInt(_ b: Bool) -> Int { return b }         //! S3004 expected 'Int'
+fn charToString(_ c: Char) -> String { return c }   //! S3004 expected 'String'
+fn intToString(_ n: Int) -> String { return n }     //! S3004 expected 'String'
+
+fn literalsTakeTheirContext() -> I64 { return 1 }
+fn floatLiteralsToo() -> F32 { return 1.5 }
+fn aLiteralIsStillChecked() -> Bool { return 1 }    //! S3004 expected 'Bool'
+
+fn upcastIsAllowed(_ d: Derived) -> Base { return d }
+fn downcastIsNot(_ b: Base) -> Derived { return b } //! S3004 expected 'Derived'
+
+fn toAnExistential(_ p: Person) -> any Named { return p }
+fn fromAnExistential(_ n: any Named) -> Person { return n }   //! S3004 expected 'Person'
+
+fn unrelatedToExistential(_ p: Plain) -> any Named { return p }   //! S3004
+
+fn optionalWrap(_ n: Int) -> Int? { return n }
+fn optionalUnwrapIsNot(_ n: Int?) -> Int { return n }   //! S3004 expected 'Int'
+
+fn nestedOptional(_ n: Int?) -> Int?? { return n }
+fn flatteningIsNot(_ n: Int??) -> Int? { return n }     //! S3004
+
+fn toAStructuralUnion(_ n: Int) -> Int | String { return n }
+fn fromAStructuralUnion(_ v: Int | String) -> Int { return v }   //! S3004 expected 'Int'
+
+fn unionOrderDoesNotMatter(_ v: Int | String) -> String | Int { return v }
+
+fn neverFitsAnywhere() -> Int {
+    return abort()
+}
+
+fn abort() -> Never { return abort() }
+
+fn aFunctionThatThrowsLess(_ f: () -> Int) -> () throws -> Int { return f }
+fn aFunctionThatThrowsMore(_ f: () throws -> Int) -> () -> Int { return f }   //! S3004
+
+fn anAsyncFunctionIsNotSync(_ f: async () -> Int) -> () -> Int { return f }   //! S3004
+
+fn arraysAreInvariant(_ xs: Derived[]) -> Base[] { return xs }   //! S3004
+
+fn tuplesAreElementwise(_ p: (Derived, Int)) -> (Base, Int) { return p }   //! S3004

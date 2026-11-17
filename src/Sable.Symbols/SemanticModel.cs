@@ -142,6 +142,19 @@ public sealed class SemanticModel
 
         var scope = _compilation.GetFileScope(SyntaxTree);
         foreach (var member in unit.Members) BindMember(member, scope);
+
+        // Types declared inside bodies exist once those bodies are bound, and
+        // their own members can declare more. Document order visits an outer
+        // one before anything inside it, so one pass reaches them all.
+        foreach (var statement in unit.DescendantNodes().OfType<DeclarationStatementSyntax>())
+        {
+            if (statement.Declaration is FunctionDeclarationSyntax) continue;
+            if (_compilation.GetDeclaredSymbol(statement.Declaration) is null) continue;
+            BindMember(statement.Declaration, scope);
+        }
+
+        // Binding those may have bound signatures of their own.
+        _compilation.TypeBinder.ForceAll();
     }
 
     private void BindMember(SyntaxNode member, FileScope scope)

@@ -125,6 +125,20 @@ public sealed class FunctionSymbol : Symbol
     /// </summary>
     public bool IsRethrows { get; internal set; }
 
+    private readonly List<Symbol> _localTypes = [];
+
+    /// <summary>
+    /// Types and aliases declared inside the body. They are hoisted: visible
+    /// from anywhere in the function, including before the line that declares
+    /// them, the way a local function is.
+    /// </summary>
+    public IReadOnlyList<Symbol> LocalTypes => _localTypes;
+
+    internal void AddLocalType(Symbol type) => _localTypes.Add(type);
+
+    internal IEnumerable<Symbol> GetLocalTypes(string name) =>
+        _localTypes.Where(t => string.Equals(t.Name, name, StringComparison.Ordinal));
+
     /// <summary>
     /// For an <c>operator</c> member, where it sits relative to its operand.
     /// Arity alone cannot tell a prefix operator from a postfix one.

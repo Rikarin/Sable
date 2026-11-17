@@ -549,6 +549,43 @@ public sealed class Compilation
     /// container and its signature is bound against the scope passed in rather
     /// than the declaration-table cursor, which has long since moved on.
     /// </remarks>
+    /// <summary>
+    /// Declares a type or alias written inside a function body, owned by that
+    /// function, and returns it.
+    /// </summary>
+    /// <remarks>
+    /// The declaration goes through the same path as a file-scope one, so a
+    /// local type has everything a top-level one has — members, conformances,
+    /// a memberwise initialiser. What it may not be is an extension: an
+    /// extension adds to a type everywhere, which a body has no business
+    /// doing.
+    /// </remarks>
+    internal Symbol? DeclareLocalType(
+        DeclarationSyntax declaration, FunctionSymbol container, FileScope scope)
+    {
+        if (declaration is ExtensionDeclarationSyntax extension)
+        {
+            ReportDeclaration(ErrorCode.ERR_NotAllowedInBody,
+                extension.Keyword.Span,
+                "an extension adds to a type everywhere, so it is declared at "
+                + "file scope, not inside a body");
+            return null;
+        }
+
+        var saved = CurrentScope;
+        CurrentScope = scope;
+        try
+        {
+            DeclareMember(declaration, container);
+        }
+        finally
+        {
+            CurrentScope = saved;
+        }
+
+        return GetDeclaredSymbol(declaration);
+    }
+
     internal FunctionSymbol DeclareLocalFunction(
         FunctionDeclarationSyntax declaration, Symbol container, FileScope scope)
     {
@@ -1105,6 +1142,7 @@ public sealed class Compilation
             case ModuleSymbol module: module.AddMember(member); return;
             case NamedTypeSymbol type: type.AddMember(member); return;
             case ExtensionSymbol extension: extension.ExtendedType.AddMember(member); return;
+            case FunctionSymbol function: function.AddLocalType(member); return;
             default: return;
         }
     }
@@ -1116,6 +1154,7 @@ public sealed class Compilation
             ModuleSymbol module => module.GetMembers(name),
             NamedTypeSymbol type => type.GetMembers(name),
             ExtensionSymbol extension => extension.ExtendedType.GetMembers(name),
+            FunctionSymbol function => function.GetLocalTypes(name),
             _ => [],
         };
 

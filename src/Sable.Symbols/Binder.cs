@@ -143,6 +143,7 @@ public sealed class Binder
 
         PushScope();
         foreach (var parameter in function.Parameters) Declare(parameter.Name, parameter);
+        HoistLocalTypes(body);
 
         var bound = BindBlock(body);
         CheckFlow(function, body, bound);
@@ -806,12 +807,65 @@ public sealed class Binder
 
     /// <summary>Binds a declaration written inside a body.</summary>
     /// <remarks>
-    /// Only functions are handled here. A type declared inside a body is
-    /// parsed, and kept for the semantic model, but it is not yet given a
-    /// symbol: nested types need their own declaration-table pass.
+    /// A local function is declared and bound here. A local type was already
+    /// declared when the body began (see <see cref="HoistLocalTypes"/>), and
+    /// its members are bound by the semantic model like any other type's.
     /// </remarks>
+    /// <summary>
+    /// Declares the types written in this body before any of it is bound, so
+    /// a local type can be used above the line that declares it, as a local
+    /// function can.
+    /// </summary>
+    /// <remarks>
+    /// A closure or local function hoists its own when its body is bound, so
+    /// the walk stops at both. It also stops at a local type: whatever that
+    /// declares belongs to its members, not to this body.
+    /// </remarks>
+    private void HoistLocalTypes(SyntaxNode body)
+    {
+        if (_containingSymbol is not FunctionSymbol function) return;
+
+        var declared = false;
+        foreach (var statement in LocalTypeDeclarations(body))
+        {
+            _compilation.DeclareLocalType(statement.Declaration, function, _scope);
+            declared = true;
+        }
+
+        // The body is about to use them, so their signatures and conformances
+        // are settled now rather than at the end with everything else. Every
+        // file-scope signature was forced before any body was bound, so only
+        // these are waiting.
+        if (declared) _compilation.TypeBinder.ForceAll();
+    }
+
+    private static IEnumerable<DeclarationStatementSyntax> LocalTypeDeclarations(SyntaxNode node)
+    {
+        foreach (var child in node.ChildNodes())
+        {
+            switch (child)
+            {
+                case DeclarationStatementSyntax { Declaration: FunctionDeclarationSyntax }:
+                    break;
+
+                case DeclarationStatementSyntax statement:
+                    yield return statement;
+                    break;
+
+                case ClosureExpressionSyntax or BraceClosureExpressionSyntax:
+                    break;
+
+                default:
+                    foreach (var nested in LocalTypeDeclarations(child)) yield return nested;
+                    break;
+            }
+        }
+    }
+
     private BoundStatement BindDeclarationStatement(DeclarationStatementSyntax statement)
     {
+        // A type was hoisted when the body began; its members are bound by
+        // the semantic model, like any other type's. Here it is only a mark.
         if (statement.Declaration is not FunctionDeclarationSyntax declaration)
             return Record(statement, new BoundBlock(statement, [], []));
 
@@ -1442,6 +1496,33 @@ public sealed class Binder
         return new BoundError(syntax);
     }
 
+    /// <summary>
+    /// Types named <paramref name="name"/> declared in the bodies around this
+    /// one: those inside the nearest enclosing type, or with
+    /// <paramref name="beyondType"/>, those outside it.
+    /// </summary>
+    private List<Symbol> LocalTypes(string name, bool beyondType)
+    {
+        var pastType = false;
+        for (var owner = _containingSymbol; owner is not null; owner = owner.ContainingSymbol)
+        {
+            if (owner is NamedTypeSymbol)
+            {
+                if (!beyondType) break;
+                pastType = true;
+                continue;
+            }
+
+            if (beyondType && !pastType) continue;
+            if (owner is not FunctionSymbol function || function.LocalTypes.Count == 0) continue;
+
+            var found = function.GetLocalTypes(name).ToList();
+            if (found.Count > 0) return found;
+        }
+
+        return [];
+    }
+
     private BoundExpression BindName(ExpressionSyntax syntax, string name) =>
         BindNameAsValue(name, syntax);
 
@@ -1460,6 +1541,11 @@ public sealed class Binder
             };
         }
 
+        // A type declared in this body, or in a closure's enclosing body,
+        // before the enclosing type's members: the nearer declaration wins.
+        if (LocalTypes(name, beyondType: false) is { Count: > 0 } nearer)
+            return BindMemberGroup(syntax, null, nearer, null);
+
         // Members of the enclosing type, reached implicitly through self —
         // including the ones it inherits, which is the whole point of a base
         // class.
@@ -1469,6 +1555,10 @@ public sealed class Binder
             return BindMemberGroup(
                 syntax, null, inherited.Members, inherited.Owner, inherited.Substitution);
         }
+
+        // Then the bodies the enclosing type itself was declared in.
+        if (LocalTypes(name, beyondType: true) is { Count: > 0 } farther)
+            return BindMemberGroup(syntax, null, farther, null);
 
         var moduleMembers = _scope.Module.GetMembers(name).ToList();
         if (moduleMembers.Count > 0) return BindMemberGroup(syntax, null, moduleMembers, null);
@@ -2874,6 +2964,8 @@ public sealed class Binder
         // it does not.
         foreach (var capture in captures)
             if (capture.Symbol is LocalSymbol local) Declare(local.Name, local);
+
+        HoistLocalTypes(body);
 
         BoundBlock bound;
         switch (body)

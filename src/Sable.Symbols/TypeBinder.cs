@@ -646,6 +646,8 @@ internal sealed class TypeBinder(Compilation compilation)
                 case FunctionSymbol function:
                     if (Match(function.TypeParameters, name) is { } functionParameter)
                         return functionParameter;
+                    if (FindTypeMember(function.GetLocalTypes(name)) is { } local)
+                        return local;
                     break;
 
                 case AliasSymbol alias:

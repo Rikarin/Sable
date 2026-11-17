@@ -1,0 +1,37 @@
+module Negative.LocalTypes
+
+protocol Named { fn name() -> String }
+struct Point { var x: Int }
+
+fn aLocalTypeStaysInItsFunction() {
+    struct Hidden { var v: Int }
+}
+
+fn soAnotherFunctionCannotNameIt(_ h: Hidden) { }      //! S2001 Hidden
+
+fn aLocalTypeIsCheckedLikeAnyOther() {
+    struct Bad: Named { }                               //! S3023 missing
+}
+
+fn itsMethodsAreBoundToo() {
+    struct Wrong {
+        fn f() -> Int { return "no" }                   //! S3004 expected 'Int'
+    }
+}
+
+fn twoLocalTypesMayNotShareAName() {
+    struct Twice { }
+    struct Twice { }                                    //! S2000 Twice
+}
+
+fn anExtensionBelongsAtFileScope() {
+    extension Point { }                                 //! S3050 file scope
+}
+
+fn aLocalTypesMethodCannotSeeTheFunctionsLocals() -> Int {
+    let outside = 1
+    struct Peek {
+        fn look() -> Int { return outside }             //! S2002 outside
+    }
+    return outside
+}

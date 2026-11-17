@@ -120,6 +120,7 @@ public enum ErrorCode
     ERR_VarianceViolation = 3047,
     ERR_RethrowsWithoutThrowingParameter = 3048,
     ERR_RethrowsThrowsItsOwn = 3049,
+    ERR_NotAllowedInBody = 3050,
     ERR_NotSupportedYet = 3099,
 
     // ---- Patterns and flow (S6000-S6999) ---------------------------------

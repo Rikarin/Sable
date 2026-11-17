@@ -20,6 +20,7 @@ namespace Sable.Syntax;
 public sealed class Lexer
 {
     private readonly SourceText _source;
+    private readonly ParseOptions _options;
     private readonly DiagnosticBag _diagnostics = new();
     private int _position;
 
@@ -29,13 +30,23 @@ public sealed class Lexer
     /// <summary>Start of the current token's text, for relative part spans.</summary>
     private int _tokenStart;
 
-    private Lexer(SourceText source) => _source = source;
+    private Lexer(SourceText source, ParseOptions options)
+    {
+        _source = source;
+        _options = options;
+    }
 
     public static ImmutableArray<SyntaxToken> Tokenize(
         SourceText source,
         out IReadOnlyList<Diagnostic> diagnostics)
+        => Tokenize(source, ParseOptions.Default, out diagnostics);
+
+    public static ImmutableArray<SyntaxToken> Tokenize(
+        SourceText source,
+        ParseOptions options,
+        out IReadOnlyList<Diagnostic> diagnostics)
     {
-        var lexer = new Lexer(source);
+        var lexer = new Lexer(source, options);
         var tokens = lexer.LexAll();
         diagnostics = lexer._diagnostics.ToList();
         return tokens;
@@ -86,6 +97,14 @@ public sealed class Lexer
             if (token.Kind == SyntaxKind.EndOfFile) break;
         }
 
+        if (_conditionals.Count > 0)
+        {
+            _diagnostics.Error(ErrorCode.ERR_UnterminatedConditional,
+                new TextSpan(Math.Max(0, _source.Length - 1), Math.Min(1, _source.Length)),
+                $"{_conditionals.Count} conditional-compilation directive(s) "
+                + "were never closed with '#endif'");
+        }
+
         MarkStatementTerminators(green);
 
         var tokens = ImmutableArray.CreateBuilder<SyntaxToken>(green.Count);
@@ -123,6 +142,21 @@ public sealed class Lexer
         while (!AtEnd)
         {
             var start = _position;
+
+            if (IsDirectiveAhead())
+            {
+                ScanDirective(builder);
+                continue;
+            }
+
+            // Inside an inactive region nothing is a token, so whole lines are
+            // taken as disabled text until a directive reopens it.
+            if (!IsActive)
+            {
+                ScanDisabledLine();
+                builder.Add(Trivia(SyntaxKind.DisabledTextTrivia, start));
+                continue;
+            }
 
             if (_position == 0 && Matches("#!"))
             {
@@ -1121,5 +1155,186 @@ public sealed class Lexer
         foreach (var t in trivia)
             if (t.Kind == SyntaxKind.NewLineTrivia) return true;
         return false;
+    }
+
+    // -----------------------------------------------------------------------
+    // Conditional compilation — spec/lexical.md §9
+    // -----------------------------------------------------------------------
+
+    /// <summary>The state of one open <c>#if</c>.</summary>
+    private enum BranchState
+    {
+        /// <summary>This branch's tokens are being lexed.</summary>
+        Taking,
+
+        /// <summary>This branch is inactive but a later one may still be taken.</summary>
+        Skipping,
+
+        /// <summary>A branch was already taken, so every later one is inactive.</summary>
+        Done,
+    }
+
+    private readonly List<BranchState> _conditionals = [];
+
+    /// <summary>True when no enclosing conditional is excluding this text.</summary>
+    private bool IsActive
+    {
+        get
+        {
+            foreach (var state in _conditionals)
+                if (state != BranchState.Taking) return false;
+            return true;
+        }
+    }
+
+    /// <summary>True when every conditional below the innermost one is taking.</summary>
+    private bool IsEnclosingActive
+    {
+        get
+        {
+            for (var i = 0; i < _conditionals.Count - 1; i++)
+                if (_conditionals[i] != BranchState.Taking) return false;
+            return true;
+        }
+    }
+
+    /// <summary>True when only whitespace separates the position from its line start.</summary>
+    private bool IsAtLineStart(int position)
+    {
+        var i = position - 1;
+        while (i >= 0 && _source[i] is ' ' or '\t') i--;
+        return i < 0 || _source[i] is '\n' or '\r';
+    }
+
+    private bool IsDirectiveAhead()
+    {
+        if (Current != '#' || !IsAtLineStart(_position)) return false;
+
+        var i = _position + 1;
+        var start = i;
+        while (i < _source.Length && SyntaxFacts.IsIdentifierContinue(_source[i])) i++;
+
+        return TextBetween(start, i) is
+            "if" or "elseif" or "else" or "endif" or "error" or "warning";
+    }
+
+    /// <summary>Consumes a directive line and applies it to the conditional stack.</summary>
+    private void ScanDirective(ImmutableArray<GreenTrivia>.Builder builder)
+    {
+        var start = _position;
+        _position++; // '#'
+
+        var nameStart = _position;
+        while (!AtEnd && SyntaxFacts.IsIdentifierContinue(Current)) _position++;
+        var name = TextBetween(nameStart, _position);
+
+        var argumentStart = _position;
+        while (!AtEnd && Current is not ('\n' or '\r')) _position++;
+        var argument = TextBetween(argumentStart, _position).Trim();
+
+        var span = new TextSpan(start, _position - start);
+        ApplyDirective(name, argument, span);
+
+        builder.Add(Trivia(SyntaxKind.DirectiveTrivia, start));
+    }
+
+    private void ApplyDirective(string name, string argument, TextSpan span)
+    {
+        switch (name)
+        {
+            case "if":
+                _conditionals.Add(BranchState.Skipping);   // placeholder for nesting
+                _conditionals[^1] = IsEnclosingActive
+                    ? (EvaluateCondition(argument, span) ? BranchState.Taking : BranchState.Skipping)
+                    : BranchState.Done;
+                return;
+
+            case "elseif":
+                if (!RequireOpenConditional("#elseif", span)) return;
+                _conditionals[^1] = _conditionals[^1] switch
+                {
+                    BranchState.Taking => BranchState.Done,
+                    BranchState.Done => BranchState.Done,
+                    _ => IsEnclosingActive && EvaluateCondition(argument, span)
+                        ? BranchState.Taking
+                        : BranchState.Skipping,
+                };
+                return;
+
+            case "else":
+                if (!RequireOpenConditional("#else", span)) return;
+                _conditionals[^1] = _conditionals[^1] switch
+                {
+                    BranchState.Skipping when IsEnclosingActive => BranchState.Taking,
+                    BranchState.Skipping => BranchState.Done,
+                    _ => BranchState.Done,
+                };
+                return;
+
+            case "endif":
+                if (!RequireOpenConditional("#endif", span)) return;
+                _conditionals.RemoveAt(_conditionals.Count - 1);
+                return;
+
+            case "error":
+                if (IsActive)
+                    _diagnostics.Error(ErrorCode.ERR_UserError, span, DirectiveMessage(argument));
+                return;
+
+            case "warning":
+                if (IsActive)
+                {
+                    _diagnostics.Add(Diagnostic.Warning(
+                        ErrorCode.WRN_UserWarning, span, DirectiveMessage(argument)));
+                }
+                return;
+
+            default:
+                _diagnostics.Error(ErrorCode.ERR_UnknownDirective, span,
+                    $"unknown directive '#{name}'");
+                return;
+        }
+    }
+
+    private bool RequireOpenConditional(string directive, TextSpan span)
+    {
+        if (_conditionals.Count > 0) return true;
+
+        _diagnostics.Error(ErrorCode.ERR_UnmatchedDirective, span,
+            $"'{directive}' has no matching '#if'");
+        return false;
+    }
+
+    private bool EvaluateCondition(string condition, TextSpan span)
+    {
+        if (condition.Length == 0)
+        {
+            _diagnostics.Error(ErrorCode.ERR_BadDirectiveCondition, span,
+                "expected a condition after the directive");
+            return false;
+        }
+
+        var value = DirectiveCondition.Evaluate(condition, _options, out var error);
+        if (error is not null)
+            _diagnostics.Error(ErrorCode.ERR_BadDirectiveCondition, span, error);
+
+        return value;
+    }
+
+    /// <summary>Unwraps the <c>("...")</c> of a <c>#error</c> or <c>#warning</c>.</summary>
+    private static string DirectiveMessage(string argument)
+    {
+        var text = argument.Trim();
+        if (text.StartsWith('(') && text.EndsWith(')')) text = text[1..^1].Trim();
+        if (text.Length >= 2 && text.StartsWith('"') && text.EndsWith('"')) text = text[1..^1];
+        return text.Length == 0 ? "(no message)" : text;
+    }
+
+    /// <summary>Consumes one line of an inactive region as disabled text.</summary>
+    private void ScanDisabledLine()
+    {
+        while (!AtEnd && Current is not ('\n' or '\r')) _position++;
+        if (AtEnd) return;
+        if (Current == '\r' && Next == '\n') _position += 2; else _position++;
     }
 }

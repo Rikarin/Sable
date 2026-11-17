@@ -38,6 +38,12 @@ public enum ErrorCode
     ERR_InvalidDigitForBase = 22,
     ERR_MultilineDelimiterMustBeOnOwnLine = 23,
     ERR_InsufficientIndentation = 24,
+    ERR_UnknownDirective = 25,
+    ERR_UnmatchedDirective = 26,
+    ERR_UnterminatedConditional = 27,
+    ERR_BadDirectiveCondition = 28,
+    ERR_UserError = 29,
+    WRN_UserWarning = 30,
 
     // ---- Syntactic (S1000-S1999) -----------------------------------------
     ERR_UnexpectedToken = 1000,

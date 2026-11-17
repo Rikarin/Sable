@@ -33,6 +33,7 @@ public enum SyntaxKind : ushort
     ShebangTrivia = 16,
     DisabledTextTrivia = 17,
     SkippedTokensTrivia = 18,
+    DirectiveTrivia = 19,
 
     // ---- Literals and identifiers ----------------------------------------
     IdentifierToken = 100,

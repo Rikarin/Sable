@@ -93,11 +93,12 @@ dotnet test Sable.slnx
 | `Sable.Syntax` — parser: types and expressions | done |
 | `Sable.Syntax` — parser: statements, patterns, closures | done |
 | `Sable.Syntax` — parser: declarations and compilation units | done |
-| `Sable.Syntax` — conditional compilation, structured interpolation | not started |
+| `Sable.Syntax` — conditional compilation | done |
+| `Sable.Syntax` — structured string interpolation | not started |
 | `Sable.Syntax` — incremental reparse | not started |
 | Everything downstream (symbols, binder, SIL, codegen) | not started |
 
-**557 tests green**, and every file in [examples/](examples/) parses as a
+**590 tests green**, and every file in [examples/](examples/) parses as a
 complete compilation unit with no diagnostics and an exact round-trip.
 
 The lexer covers all of [spec/lexical.md](spec/lexical.md): full-fidelity
@@ -124,7 +125,5 @@ Not implemented yet, and deliberately so:
   literal token; its holes are available through `SyntaxToken.Parts` but are
   not yet parsed into child nodes, because doing that properly means lexing
   the string into a token sequence rather than one token.
-- **Conditional compilation.** `#if` lexes as `#` plus an identifier rather
-  than turning inactive regions into `DisabledText` trivia.
 - **Compound metatype expressions.** `T.self` parses for a simple name, but a
   compound type in expression position (`Token[>..].self`) does not.

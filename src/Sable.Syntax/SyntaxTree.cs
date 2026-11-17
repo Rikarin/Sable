@@ -35,12 +35,14 @@ public sealed class SyntaxTree
         SourceText text,
         SyntaxNode root,
         SyntaxToken endOfFileToken,
-        IReadOnlyList<Diagnostic> diagnostics)
+        IReadOnlyList<Diagnostic> diagnostics,
+        ParseOptions options)
     {
         Text = text;
         Root = root;
         _trailingEndOfFile = endOfFileToken;
         Diagnostics = diagnostics;
+        Options = options;
     }
 
     public bool HasErrors
@@ -53,24 +55,31 @@ public sealed class SyntaxTree
         }
     }
 
+    /// <summary>The configuration this tree was parsed under.</summary>
+    public ParseOptions Options { get; }
+
     /// <summary>Parses a single expression.</summary>
     public static SyntaxTree ParseExpression(string text, string fileName = "<input>") =>
-        Parser.ParseExpression(new SourceText(text, fileName));
+        Parser.ParseExpression(new SourceText(text, fileName), ParseOptions.Default);
 
     /// <summary>Parses a single type reference.</summary>
     public static SyntaxTree ParseType(string text, string fileName = "<input>") =>
-        Parser.ParseType(new SourceText(text, fileName));
+        Parser.ParseType(new SourceText(text, fileName), ParseOptions.Default);
 
     /// <summary>Parses a single statement, which may be a block.</summary>
     public static SyntaxTree ParseStatement(string text, string fileName = "<input>") =>
-        Parser.ParseStatement(new SourceText(text, fileName));
+        Parser.ParseStatement(new SourceText(text, fileName), ParseOptions.Default);
 
     /// <summary>Parses a whole source file.</summary>
     public static SyntaxTree Parse(string text, string fileName = "<input>") =>
-        Parser.ParseCompilationUnit(new SourceText(text, fileName));
+        Parse(new SourceText(text, fileName), ParseOptions.Default);
 
     /// <summary>Parses a whole source file from already-loaded text.</summary>
-    public static SyntaxTree Parse(SourceText text) => Parser.ParseCompilationUnit(text);
+    public static SyntaxTree Parse(SourceText text) => Parse(text, ParseOptions.Default);
+
+    /// <summary>Parses a whole source file under the given options.</summary>
+    public static SyntaxTree Parse(SourceText text, ParseOptions options) =>
+        Parser.ParseCompilationUnit(text, options);
 
     /// <summary>The whole file, reconstructed from the tree.</summary>
     public string ToFullString()

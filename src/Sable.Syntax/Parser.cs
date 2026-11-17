@@ -24,6 +24,7 @@ internal sealed class Parser
 {
     private readonly List<GreenToken> _tokens;
     private readonly List<int> _positions;
+    private readonly ParseOptions _options;
     private readonly DiagnosticBag _diagnostics = new();
     private int _index;
 
@@ -74,9 +75,10 @@ internal sealed class Parser
         finally { _noBrace = saved; }
     }
 
-    private Parser(SourceText source)
+    private Parser(SourceText source, ParseOptions options)
     {
-        var tokens = Lexer.Tokenize(source, out var lexDiagnostics);
+        _options = options;
+        var tokens = Lexer.Tokenize(source, options, out var lexDiagnostics);
         _diagnostics.AddRange(lexDiagnostics);
 
         _tokens = new List<GreenToken>(tokens.Length);
@@ -88,30 +90,30 @@ internal sealed class Parser
         }
     }
 
-    public static SyntaxTree ParseExpression(SourceText source)
+    public static SyntaxTree ParseExpression(SourceText source, ParseOptions options)
     {
-        var parser = new Parser(source);
+        var parser = new Parser(source, options);
         return parser.Finish(source, parser.ParseExpression(), "expression");
     }
 
-    public static SyntaxTree ParseType(SourceText source)
+    public static SyntaxTree ParseType(SourceText source, ParseOptions options)
     {
-        var parser = new Parser(source);
+        var parser = new Parser(source, options);
         return parser.Finish(source, parser.ParseType(), "type");
     }
 
-    public static SyntaxTree ParseStatement(SourceText source)
+    public static SyntaxTree ParseStatement(SourceText source, ParseOptions options)
     {
-        var parser = new Parser(source);
+        var parser = new Parser(source, options);
         return parser.Finish(source, parser.ParseStatement(), "statement");
     }
 
-    public static SyntaxTree ParseCompilationUnit(SourceText source)
+    public static SyntaxTree ParseCompilationUnit(SourceText source, ParseOptions options)
     {
-        var parser = new Parser(source);
+        var parser = new Parser(source, options);
         var unit = parser.ParseCompilationUnit();
         return new SyntaxTree(source, unit.CreateRed(null, 0), default,
-            parser._diagnostics.ToList());
+            parser._diagnostics.ToList(), options);
     }
 
     /// <summary>
@@ -129,8 +131,8 @@ internal sealed class Parser
 
         var eof = EatToken();
         var node = root.CreateRed(null, 0);
-        return new SyntaxTree(source, node,
-            new SyntaxToken(eof, null, root.FullWidth), _diagnostics.ToList());
+        return new SyntaxTree(source, node, new SyntaxToken(eof, null, root.FullWidth),
+            _diagnostics.ToList(), _options);
     }
 
     // -----------------------------------------------------------------------

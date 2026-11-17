@@ -138,7 +138,7 @@ public static class SyntaxFacts
             or SyntaxKind.NoneKeyword;
 
     public static bool IsTrivia(SyntaxKind kind) =>
-        kind >= SyntaxKind.WhitespaceTrivia && kind <= SyntaxKind.DisabledTextTrivia;
+        kind >= SyntaxKind.WhitespaceTrivia && kind <= SyntaxKind.DirectiveTrivia;
 
     // -----------------------------------------------------------------------
     // Statement-terminator rule — spec/lexical.md §4

@@ -220,7 +220,18 @@ opening delimiter, not at EOF.
 
 `#if` regions that are not taken are lexed into `DisabledText` trivia — they are
 not parsed, but they are preserved in the tree so the formatter does not destroy
-them and the IDE can offer to switch configurations.
+them and the IDE can offer to switch configurations. The directive lines
+themselves are `Directive` trivia.
+
+A directive must be the first thing on its line, which is what separates it
+from the `#file`-style builtins. The condition after `#if` and `#elseif` may
+use identifiers, `true`, `false`, `os(...)`, `arch(...)`, `feature(...)`, `!`,
+`&&`, `||` and parentheses, and nothing else: it is evaluated before any
+semantic analysis exists. A malformed condition disables its region and reports
+a diagnostic rather than derailing the parse.
+
+Which symbols are defined is part of the parse configuration, so two parses of
+one file can produce different trees. Both round-trip.
 
 ## 10. Shebang
 

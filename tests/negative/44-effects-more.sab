@@ -85,3 +85,20 @@ fn tryAndAwaitTogether() -> String {
 }
 
 async fn fetch(_ url: String) throws(IoError) -> String { return url }
+
+fn anInlineCatchBindsTheError() -> String {
+    return try read("a") catch { describeIo(error) }
+}
+
+fn describeIo(_ e: IoError) -> String { return "io" }
+
+fn theErrorHasTheThrownType() -> String {
+    return try read("a") catch { describeNet(error) }   //! S3007 cannot be called
+}
+
+fn describeNet(_ e: NetError) -> String { return "net" }
+
+fn theErrorIsScopedToTheCatch() -> String {
+    let s = try read("a") catch { "" }
+    return describeIo(error)            //! S2002 no symbol named 'error'
+}

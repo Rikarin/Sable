@@ -330,6 +330,20 @@ internal sealed class DefiniteAssignment
                 Walk(binding.Source, state);
                 return;
 
+            case BoundTry tryExpression:
+            {
+                Walk(tryExpression.Expression, state);
+
+                if (tryExpression.Fallback is not { } fallback) return;
+
+                // The fallback runs from somewhere inside the expression, so
+                // it can rely on nothing the expression assigned.
+                var handler = state.Fork();
+                if (tryExpression.ErrorLocal is { } error) handler.Assign(error);
+                Walk(fallback, handler);
+                return;
+            }
+
             default:
                 foreach (var child in expression.Children)
                 {

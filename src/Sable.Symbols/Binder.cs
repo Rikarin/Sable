@@ -413,9 +413,14 @@ public sealed class Binder
 
             case TryKind.Fallback:
             {
-                var fallback = BindCatchBody(syntax.CatchBody!, value.Type);
+                var fallback = BindCatchBody(
+                    syntax.CatchBody!, value.Type, _thrownInBody ?? _declaredThrows);
+
                 return Record(syntax, new BoundTry(
-                    syntax, value.Type, value, kind, fallback));
+                    syntax, value.Type, value, kind, fallback)
+                {
+                    ErrorLocal = _catchError,
+                });
             }
 
             default:
@@ -430,7 +435,34 @@ public sealed class Binder
     }
 
     /// <summary>Binds the value an inline <c>catch</c> supplies.</summary>
-    private BoundExpression BindCatchBody(SyntaxNode body, TypeSymbol expected)
+    /// <summary>The <c>error</c> the catch being bound introduced.</summary>
+    private LocalSymbol? _catchError;
+
+    private BoundExpression BindCatchBody(
+        SyntaxNode body, TypeSymbol expected, TypeSymbol? thrown)
+    {
+        // 'error' is bound implicitly in a catch, per SYNTAX.md §18.
+        PushScope();
+
+        var errorType = thrown ?? Core.AnyError;
+        var error = new LocalSymbol("error", _containingSymbol, body, false)
+        {
+            TypeResolver = () => errorType,
+        };
+        Declare("error", error);
+        _catchError = error;
+
+        try
+        {
+            return BindCatchValue(body, expected);
+        }
+        finally
+        {
+            PopScope();
+        }
+    }
+
+    private BoundExpression BindCatchValue(SyntaxNode body, TypeSymbol expected)
     {
         switch (body)
         {
@@ -1945,10 +1977,18 @@ public sealed class Binder
             syntax, union ?? group.Type, unionCase, converted.ToImmutable());
     }
 
-    /// <summary>True for a closure argument, through any parentheses.</summary>
+    /// <summary>
+    /// True for an argument whose type the signature has to supply.
+    /// </summary>
+    /// <remarks>
+    /// A closure's parameter types and a leading dot's owner both come from
+    /// the parameter they are passed to, so neither can be bound until the
+    /// overload is chosen.
+    /// </remarks>
     private static bool IsClosure(ExpressionSyntax expression) => expression switch
     {
         ClosureExpressionSyntax or BraceClosureExpressionSyntax => true,
+        ImplicitMemberAccessExpressionSyntax => true,
         ParenthesizedExpressionSyntax parenthesized => IsClosure(parenthesized.Expression),
         _ => false,
     };

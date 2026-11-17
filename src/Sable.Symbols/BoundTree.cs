@@ -513,6 +513,9 @@ public sealed class BoundTry(
     /// <summary>The value an inline <c>catch</c> supplies instead.</summary>
     public BoundExpression? Fallback { get; } = fallback;
 
+    /// <summary>The <c>error</c> an inline <c>catch</c> binds implicitly.</summary>
+    public LocalSymbol? ErrorLocal { get; init; }
+
     public override IEnumerable<BoundNode> Children =>
         Fallback is null ? Nodes(Expression) : Nodes(Expression, Fallback);
 }

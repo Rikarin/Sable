@@ -82,3 +82,16 @@ fn andItsTypeIsStillChecked(_ n: Int) -> String {
     var m = n
     return m = 1                        //! S3004 expected 'String'
 }
+
+fn aLeadingDotTakesTheParameterType(_ r: Router) {
+    r.add(.Get)
+}
+
+fn andIsStillChecked(_ r: Router) {
+    r.add(.Patch)                       //! S2002 has no member named 'Patch'
+}
+
+public enum Method { Get, Post }
+public struct Router {
+    public fn add(_ method: Method) { }
+}

@@ -1,0 +1,218 @@
+module Corpus.Router
+
+// A request router with middleware, written against the type checker. It
+// leans on closures, protocols with associated types, generics and typed
+// errors all at once, which is where a language either holds together or
+// does not.
+
+public enum Method { Get, Post, Put, Delete }
+
+public struct Request {
+    public var method: Method
+    public var path: String
+    public var headers: [String: String]
+    public var body: String
+
+    public fn header(_ name: String) -> String? {
+        return headers[name]
+    }
+
+    public fn segments() -> String[>..] {
+        return path.split('/')
+    }
+}
+
+public struct Response {
+    public var status: Int
+    public var headers: [String: String]
+    public var body: String
+
+    public static fn ok(_ body: String) -> Response {
+        return Response { status: 200, headers: [:], body: body }
+    }
+
+    public static fn notFound() -> Response {
+        return Response { status: 404, headers: [:], body: "not found" }
+    }
+
+    public static fn error(_ status: Int, _ body: String) -> Response {
+        return Response { status: status, headers: [:], body: body }
+    }
+
+    public fn withHeader(_ name: String, _ value: String) -> Response {
+        var copy = self
+        copy.headers[name] = value
+        return copy
+    }
+}
+
+public union RouteError {
+    NotFound(path: String)
+    BadMethod(found: Method)
+    BadBody(reason: String)
+    Unauthorised
+}
+
+public alias Handler = (Request) throws(RouteError) -> Response
+
+public struct Route {
+    public var method: Method
+    public var pattern: String
+    public var run: Handler
+
+    public fn matches(_ request: Request) -> Bool {
+        if request.method != method {
+            return false
+        }
+        return matchSegments(pattern.split('/'), request.segments())
+    }
+}
+
+public fn matchSegments(_ pattern: String[>..], _ actual: String[>..]) -> Bool {
+    if pattern.count != actual.count {
+        return false
+    }
+
+    var i = 0
+    while i < pattern.count {
+        let expected = pattern.slice(from: i, to: i + 1)
+        i = i + 1
+    }
+    return true
+}
+
+// ---- Middleware ----------------------------------------------------------
+
+public protocol Middleware {
+    fn wrap(_ next: Handler) -> Handler
+}
+
+public struct Logging: Middleware {
+    public var label: String
+
+    public fn wrap(_ next: Handler) -> Handler {
+        return (request: Request) => {
+            return try next(request)
+        }
+    }
+}
+
+public struct RequireHeader: Middleware {
+    public var name: String
+
+    public fn wrap(_ next: Handler) -> Handler {
+        return (request: Request) => {
+            guard let value = request.header(name) else {
+                throw RouteError.Unauthorised
+            }
+            return try next(request)
+        }
+    }
+}
+
+public struct AddHeader: Middleware {
+    public var name: String
+    public var value: String
+
+    public fn wrap(_ next: Handler) -> Handler {
+        let headerName = name
+        let headerValue = value
+
+        return (request: Request) => {
+            let response = try next(request)
+            return response.withHeader(headerName, headerValue)
+        }
+    }
+}
+
+public fn applyAll(_ middleware: (any Middleware)[>..], _ route: Handler) -> Handler {
+    var result = route
+    for layer in middleware {
+        result = layer.wrap(result)
+    }
+    return result
+}
+
+// ---- The router ----------------------------------------------------------
+
+public struct Router {
+    public var routes: Route[>..]
+    public var middleware: (any Middleware)[>..]
+
+    public mutating fn add(_ method: Method, _ pattern: String, _ route: Handler) {
+        routes.append(Route { method: method, pattern: pattern, run: route })
+    }
+
+    public fn find(_ request: Request) -> Route? {
+        for route in routes {
+            if route.matches(request) {
+                return route
+            }
+        }
+        return none
+    }
+
+    public fn handle(_ request: Request) -> Response {
+        guard let route = find(request) else {
+            return Response.notFound()
+        }
+
+        let wrapped = applyAll(middleware, route.run)
+        return try wrapped(request) catch { describe(error) }
+    }
+}
+
+public fn describe(_ error: RouteError) -> Response {
+    return match error {
+        case .NotFound(let path) => Response.error(404, path)
+        case .BadMethod(let found) => Response.error(405, name(found))
+        case .BadBody(let reason) => Response.error(400, reason)
+        case .Unauthorised => Response.error(401, "unauthorised")
+    }
+}
+
+public fn name(_ method: Method) -> String {
+    return match method {
+        case .Get => "GET"
+        case .Post => "POST"
+        case .Put => "PUT"
+        case .Delete => "DELETE"
+    }
+}
+
+// ---- Putting one together ------------------------------------------------
+
+public fn build() -> Router {
+    var router = Router { routes: [], middleware: [] }
+
+    router.middleware.append(Logging { label: "app" })
+    router.middleware.append(AddHeader { name: "X-Served-By", value: "sable" })
+
+    router.add(.Get, "/health", (request: Request) => {
+        return Response.ok("ok")
+    })
+
+    router.add(.Get, "/users", (request: Request) => {
+        return Response.ok("[]")
+    })
+
+    router.add(.Post, "/users", (request: Request) => {
+        if request.body.isEmpty {
+            throw RouteError.BadBody(reason: "empty")
+        }
+        return Response.ok(request.body)
+    })
+
+    return router
+}
+
+public fn serve(_ router: Router, _ requests: Request[>..]) -> Int {
+    var served = 0
+    for request in requests {
+        let response = router.handle(request)
+        if response.status == 200 {
+            served = served + 1
+        }
+    }
+    return served
+}

@@ -79,9 +79,8 @@ public abstract class SyntaxNode {
                 ?? throw new InvalidOperationException(
                     $"{Kind} slot {index} is empty but was accessed as a required child"
                 );
-            result = (T)green.CreateRed(this, GetChildPosition(index));
-            Interlocked.CompareExchange(ref field, result, null);
-            result = field!;
+            var created = (T)green.CreateRed(this, GetChildPosition(index));
+            result = Interlocked.CompareExchange(ref field, created, null) ?? created;
         }
 
         return result;
@@ -96,9 +95,8 @@ public abstract class SyntaxNode {
 
         var result = field;
         if (result is null) {
-            result = (T)green.CreateRed(this, GetChildPosition(index));
-            Interlocked.CompareExchange(ref field, result, null);
-            result = field!;
+            var created = (T)green.CreateRed(this, GetChildPosition(index));
+            result = Interlocked.CompareExchange(ref field, created, null) ?? created;
         }
 
         return result;
@@ -125,8 +123,18 @@ public abstract class SyntaxNode {
     // Red child cache
     // -----------------------------------------------------------------------
 
-    SyntaxNode?[]? _listChildren;
-    int[]? _slotStarts;
+    /// <summary>
+    ///     Where each list slot's elements start, and their red nodes. Built
+    ///     whole and published once: a tree is shared between threads (the
+    ///     standard library's trees are parsed once for every compilation), and
+    ///     a table replaced under another thread would lose the nodes cached in it.
+    /// </summary>
+    sealed class ChildTable(int[] starts, int total) {
+        public readonly int[] Starts = starts;
+        public readonly SyntaxNode?[] Children = new SyntaxNode?[total];
+    }
+
+    ChildTable? _childTable;
 
     /// <summary>
     ///     Returns the red node for one element of a list slot, creating it once.
@@ -142,22 +150,19 @@ public abstract class SyntaxNode {
         GreenNode green,
         int position
     ) {
-        if (_slotStarts is null) {
-            BuildChildTable();
-        }
-
-        var index = _slotStarts![slotIndex] + elementIndex;
-        var existing = _listChildren![index];
+        var table = Volatile.Read(ref _childTable) ?? BuildChildTable();
+        var index = table.Starts[slotIndex] + elementIndex;
+        var existing = Volatile.Read(ref table.Children[index]);
         if (existing is not null) {
             return existing;
         }
 
+        // Whichever thread's node lands first is the node, for everyone.
         var created = green.CreateRed(this, position);
-        Interlocked.CompareExchange(ref _listChildren[index], created, null);
-        return _listChildren[index]!;
+        return Interlocked.CompareExchange(ref table.Children[index], created, null) ?? created;
     }
 
-    void BuildChildTable() {
+    ChildTable BuildChildTable() {
         var starts = new int[Green.SlotCount + 1];
         var total = 0;
 
@@ -167,8 +172,8 @@ public abstract class SyntaxNode {
         }
 
         starts[Green.SlotCount] = total;
-        _listChildren = new SyntaxNode?[total];
-        _slotStarts = starts;
+        var built = new ChildTable(starts, total);
+        return Interlocked.CompareExchange(ref _childTable, built, null) ?? built;
     }
 
     /// <summary>Returns the cached red node for a slot, or null if it is a token or empty.</summary>

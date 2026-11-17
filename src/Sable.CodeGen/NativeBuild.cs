@@ -84,12 +84,8 @@ public static class NativeBuild {
                 }
             }
 
-            // macOS's backtrace(), which a trap's backtrace and the system's
-            // crash reports use, walks the frame-pointer chain: keep it in
-            // every function that calls, as clang does for C there. (Without
-            // it an unoptimised build's trap showed the innermost frame only.)
-            if (OperatingSystem.IsMacOS()) {
-                attributes.Add("\"frame-pointer\"=\"non-leaf\"");
+            if (PlatformAttributes is { } platform) {
+                attributes.Add(platform);
             }
 
             if (attributes.Count > 0) {
@@ -178,6 +174,15 @@ public static class NativeBuild {
             directory.Delete(true);
         }
     });
+
+    /// <summary>
+    ///     What every function needs on this platform, whatever the build.
+    ///     macOS's backtrace(), which a trap's backtrace and the system's crash
+    ///     reports use, walks the frame-pointer chain: keep it in every
+    ///     function that calls, as clang does for C there. (Without it an
+    ///     unoptimised build's trap showed the innermost frame only.)
+    /// </summary>
+    public static string? PlatformAttributes => OperatingSystem.IsMacOS() ? "\"frame-pointer\"=\"non-leaf\"" : null;
 
     /// <summary>Every function the IR defines, given the host's attributes through one attribute group.</summary>
     public static string WithHostAttributes(string llvmIr, string attributes) {

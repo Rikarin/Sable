@@ -36,7 +36,7 @@ public static class NativeObjects {
         var temporary = objectPath + $".{Environment.ProcessId}.{Guid.NewGuid():N}.tmp";
         var irPath = temporary + ".ll";
         try {
-            File.WriteAllText(irPath, llvmIr);
+            File.WriteAllText(irPath, NativeBuild.PlatformAttributes is { } platform ? NativeBuild.WithHostAttributes(llvmIr, platform) : llvmIr);
             var (exitCode, output) = Run(NativeBuild.CompilerPath, [..Flags(optimise, debug), "-Wno-override-module", "-c", "-x", "ir", irPath, "-o", temporary]);
             if (exitCode != 0) {
                 return new(false, output);

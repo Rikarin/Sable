@@ -34,8 +34,8 @@ fn forceUnwrapNeedsAnOptional(_ p: Point) -> Point {
     return p!                           //! S3011 is not optional
 }
 
-fn comparingAnOptionalToItsValue(_ n: Int?, _ m: Int) -> Bool {
-    return n == m                       //! S3009
+fn comparingAnOptionalToAnotherType(_ n: Int?, _ s: String) -> Bool {
+    return n == s                       //! S3009
 }
 
 fn chainingGivesAnOptional(_ p: Point?) -> Int {

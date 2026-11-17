@@ -1,0 +1,297 @@
+module Corpus.Json
+
+// A JSON parser written against the type checker, per docs/04 §1.4. It is
+// not run; it exists so that real code, not test fragments, decides whether
+// the language works.
+
+public union JsonValue {
+    Null
+    Bool(value: Bool)
+    Number(value: F64)
+    Text(value: String)
+    Array(items: JsonValue[>..])
+    Object(entries: JsonEntry[>..])
+}
+
+public struct JsonEntry {
+    public var key: String
+    public var value: JsonValue
+}
+
+public union JsonError {
+    UnexpectedEnd(at: Int)
+    UnexpectedCharacter(at: Int, found: Char)
+    InvalidNumber(at: Int)
+    TrailingText(at: Int)
+}
+
+public struct Parser {
+    public var text: String
+    public var position: Int
+
+    public fn atEnd() -> Bool {
+        return position >= text.count
+    }
+
+    public fn peek() -> Char? {
+        if atEnd() {
+            return none
+        }
+        return text.at(position)
+    }
+
+    public mutating fn skipWhitespace() {
+        while !atEnd() && text.at(position).isWhitespace {
+            position = position + 1
+        }
+    }
+
+    public mutating fn take() throws(JsonError) -> Char {
+        if atEnd() {
+            throw JsonError.UnexpectedEnd(at: position)
+        }
+        let c = text.at(position)
+        position = position + 1
+        return c
+    }
+
+    public mutating fn expect(_ expected: Char) throws(JsonError) {
+        let c = try take()
+        if c != expected {
+            throw JsonError.UnexpectedCharacter(at: position - 1, found: c)
+        }
+    }
+
+    public mutating fn parseValue() throws(JsonError) -> JsonValue {
+        skipWhitespace()
+
+        guard let c = peek() else {
+            throw JsonError.UnexpectedEnd(at: position)
+        }
+
+        if c == '{' {
+            return try parseObject()
+        }
+        if c == '[' {
+            return try parseArray()
+        }
+        if c == '"' {
+            return JsonValue.Text(value: try parseString())
+        }
+        if c == 't' || c == 'f' {
+            return JsonValue.Bool(value: try parseBool())
+        }
+        if c == 'n' {
+            try expectWord("null")
+            return JsonValue.Null
+        }
+        return JsonValue.Number(value: try parseNumber())
+    }
+
+    public mutating fn expectWord(_ word: String) throws(JsonError) {
+        var i = 0
+        while i < word.count {
+            try expect(word.at(i))
+            i = i + 1
+        }
+    }
+
+    public mutating fn parseBool() throws(JsonError) -> Bool {
+        guard let c = peek() else {
+            throw JsonError.UnexpectedEnd(at: position)
+        }
+
+        if c == 't' {
+            try expectWord("true")
+            return true
+        }
+
+        try expectWord("false")
+        return false
+    }
+
+    public mutating fn parseString() throws(JsonError) -> String {
+        try expect('"')
+
+        var result = ""
+        while true {
+            let c = try take()
+            if c == '"' {
+                return result
+            }
+            if c == '\\' {
+                let escaped = try take()
+                result = result.appending(String.fromChar(unescape(escaped)))
+                continue
+            }
+            result = result.appending(String.fromChar(c))
+        }
+    }
+
+    public fn unescape(_ c: Char) -> Char {
+        return match c {
+            case 'n' => '\n'
+            case 't' => '\t'
+            case 'r' => '\r'
+            default => c
+        }
+    }
+
+    public mutating fn parseNumber() throws(JsonError) -> F64 {
+        let start = position
+
+        if peek() == '-' {
+            position = position + 1
+        }
+
+        while !atEnd() && text.at(position).isDigit {
+            position = position + 1
+        }
+
+        if !atEnd() && text.at(position) == '.' {
+            position = position + 1
+            while !atEnd() && text.at(position).isDigit {
+                position = position + 1
+            }
+        }
+
+        if position == start {
+            throw JsonError.InvalidNumber(at: start)
+        }
+
+        guard let value = text.slice(from: start, to: position).toF64() else {
+            throw JsonError.InvalidNumber(at: start)
+        }
+        return value
+    }
+
+    public mutating fn parseArray() throws(JsonError) -> JsonValue {
+        try expect('[')
+        skipWhitespace()
+
+        var items: JsonValue[>..] = []
+
+        if peek() == ']' {
+            position = position + 1
+            return JsonValue.Array(items: items)
+        }
+
+        while true {
+            let item = try parseValue()
+            items.append(item)
+            skipWhitespace()
+
+            let c = try take()
+            if c == ']' {
+                return JsonValue.Array(items: items)
+            }
+            if c != ',' {
+                throw JsonError.UnexpectedCharacter(at: position - 1, found: c)
+            }
+        }
+    }
+
+    public mutating fn parseObject() throws(JsonError) -> JsonValue {
+        try expect('{')
+        skipWhitespace()
+
+        var entries: JsonEntry[>..] = []
+
+        if peek() == '}' {
+            position = position + 1
+            return JsonValue.Object(entries: entries)
+        }
+
+        while true {
+            skipWhitespace()
+            let key = try parseString()
+            skipWhitespace()
+            try expect(':')
+
+            let value = try parseValue()
+            entries.append(JsonEntry { key: key, value: value })
+            skipWhitespace()
+
+            let c = try take()
+            if c == '}' {
+                return JsonValue.Object(entries: entries)
+            }
+            if c != ',' {
+                throw JsonError.UnexpectedCharacter(at: position - 1, found: c)
+            }
+        }
+    }
+}
+
+public fn parse(_ text: String) throws(JsonError) -> JsonValue {
+    var parser = Parser { text: text, position: 0 }
+    let value = try parser.parseValue()
+
+    parser.skipWhitespace()
+    if !parser.atEnd() {
+        throw JsonError.TrailingText(at: parser.position)
+    }
+    return value
+}
+
+// ---- Reading a parsed document ------------------------------------------
+
+public fn lookup(_ value: JsonValue, _ key: String) -> JsonValue? {
+    return match value {
+        case .Object(let entries) => findEntry(entries, key)
+        default => none
+    }
+}
+
+public fn findEntry(_ entries: JsonEntry[>..], _ key: String) -> JsonValue? {
+    for entry in entries {
+        if entry.key == key {
+            return entry.value
+        }
+    }
+    return none
+}
+
+public fn asNumber(_ value: JsonValue) -> F64? {
+    return match value {
+        case .Number(let n) => n
+        default => none
+    }
+}
+
+public fn render(_ value: JsonValue) -> String {
+    return match value {
+        case .Null => "null"
+        case .Bool(let b) => b.toString()
+        case .Number(let n) => n.toString()
+        case .Text(let t) => "\"" + t + "\""
+        case .Array(let items) => renderArray(items)
+        case .Object(let entries) => renderObject(entries)
+    }
+}
+
+public fn renderArray(_ items: JsonValue[>..]) -> String {
+    var result = "["
+    var first = true
+    for item in items {
+        if !first {
+            result = result + ","
+        }
+        result = result + render(item)
+        first = false
+    }
+    return result + "]"
+}
+
+public fn renderObject(_ entries: JsonEntry[>..]) -> String {
+    var result = "{"
+    var first = true
+    for entry in entries {
+        if !first {
+            result = result + ","
+        }
+        result = result + "\"" + entry.key + "\":" + render(entry.value)
+        first = false
+    }
+    return result + "}"
+}

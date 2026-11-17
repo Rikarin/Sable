@@ -56,6 +56,128 @@ public sealed class CoreTypes
         Integers = [I8, I16, I32, I64, I128, Int, U8, U16, U32, U64, U128, UInt];
         Floats = [F16, F32, F64];
         Numerics = [.. Integers, .. Floats];
+
+        DeclarePrimitiveMembers();
+    }
+
+    // -----------------------------------------------------------------------
+    // The members a program cannot do without
+    // -----------------------------------------------------------------------
+
+    /// <summary>
+    /// Gives the built-in types the small surface a real program needs.
+    /// </summary>
+    /// <remarks>
+    /// docs/06 §6.4 puts String, the array family and the core protocols in a
+    /// <c>Sable.Core</c> written in Sable. Until that exists the compiler
+    /// supplies the handful of members that nothing can be written without —
+    /// enough to write a parser against the type checker, which is the
+    /// go/no-go in docs/04 §1.4. Replacing this with the real module changes
+    /// nothing above it.
+    /// </remarks>
+    private void DeclarePrimitiveMembers()
+    {
+        Property(String, "count", Int);
+        Property(String, "isEmpty", Bool);
+        Method(String, "at", [("index", Int)], Char);
+        Method(String, "slice", [("from", Int), ("to", Int)], String);
+        Method(String, "appending", [("other", String)], String);
+        Method(String, "contains", [("character", Char)], Bool);
+        Method(String, "indexOf", [("character", Char)], new OptionalTypeSymbol(Int));
+        Method(String, "trimmed", [], String);
+        Method(String, "split", [("separator", Char)],
+            new ArrayTypeSymbol(String, ArrayKind.Grow));
+        Method(String, "fromChar", [("character", Char)], String, isStatic: true);
+
+        Property(Char, "isDigit", Bool);
+        Property(Char, "isLetter", Bool);
+        Property(Char, "isWhitespace", Bool);
+        Property(Char, "code", U32);
+
+        foreach (var numeric in Numerics)
+        {
+            Method(numeric, "toString", [], String);
+            Method(numeric, "abs", [], numeric);
+            Method(numeric, "min", [("other", numeric)], numeric);
+            Method(numeric, "max", [("other", numeric)], numeric);
+        }
+
+        foreach (var integer in Integers)
+            Method(String, "to" + integer.Name, [], new OptionalTypeSymbol(integer));
+
+        Method(String, "toF64", [], new OptionalTypeSymbol(F64));
+        Method(Bool, "toString", [], String);
+    }
+
+    /// <summary>The members every array has, built for one element type.</summary>
+    /// <remarks>
+    /// An array is not a named type, so its members cannot live in a member
+    /// list; they are built on demand and cached per array type.
+    /// </remarks>
+    public IReadOnlyList<Symbol> GetArrayMembers(ArrayTypeSymbol array)
+    {
+        if (_arrayMembers.TryGetValue(array, out var cached)) return cached;
+
+        var owner = new NamedTypeSymbol(
+            array.ToDisplayString(), TypeKind.Struct, Module,
+            accessibility: Accessibility.Public);
+
+        Property(owner, "count", Int);
+        Property(owner, "isEmpty", Bool);
+        Method(owner, "contains", [("element", array.ElementType)], Bool);
+        Method(owner, "slice", [("from", Int), ("to", Int)],
+            new ArrayTypeSymbol(array.ElementType, ArrayKind.Slice));
+
+        if (array.ArrayKind is ArrayKind.Grow or ArrayKind.GrowShrink)
+        {
+            Method(owner, "append", [("element", array.ElementType)], Void);
+            Method(owner, "removeLast", [], array.ElementType);
+            Method(owner, "clear", [], Void);
+        }
+
+        var members = owner.Members;
+        _arrayMembers[array] = members;
+        return members;
+    }
+
+    private readonly Dictionary<ArrayTypeSymbol, IReadOnlyList<Symbol>> _arrayMembers = [];
+
+    private static void Property(NamedTypeSymbol owner, string name, TypeSymbol type)
+    {
+        var field = new FieldSymbol(name, owner, null, Accessibility.Public, isMutable: false)
+        {
+            IsComputed = true,
+            TypeResolver = () => type,
+        };
+        owner.AddMember(field);
+    }
+
+    private static void Method(
+        NamedTypeSymbol owner,
+        string name,
+        (string Name, TypeSymbol Type)[] parameters,
+        TypeSymbol returnType,
+        bool isStatic = false)
+    {
+        var function = new FunctionSymbol(
+            name, owner, null, Accessibility.Public, FunctionKind.Ordinary)
+        {
+            IsStatic = isStatic,
+        };
+
+        function.Parameters =
+        [
+            .. parameters.Select((parameter, i) =>
+            {
+                // No declared label, so the name may be written or left out.
+                var symbol = new ParameterSymbol(parameter.Name, null, function, null, i);
+                symbol.TypeResolver = () => parameter.Type;
+                return symbol;
+            }),
+        ];
+
+        function.ReturnTypeResolver = () => returnType;
+        owner.AddMember(function);
     }
 
     public ModuleSymbol Module { get; }

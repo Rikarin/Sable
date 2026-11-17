@@ -1245,6 +1245,20 @@ public sealed class Binder
                 return null;
             }
 
+            case ArrayTypeSymbol array:
+            {
+                var members = Core.GetArrayMembers(array)
+                    .Where(m => string.Equals(m.Name, name, StringComparison.Ordinal))
+                    .ToList();
+
+                return members.Count == 0
+                    ? null
+                    : new MemberLookup(
+                        members,
+                        (NamedTypeSymbol)members[0].ContainingSymbol!,
+                        TypeSubstitution.Empty);
+            }
+
             case TypeParameterSymbol parameter:
                 foreach (var constraint in parameter.Constraints)
                 {
@@ -2453,8 +2467,16 @@ public sealed class Binder
                 ? Core.Bool
                 : null,
 
+        // 'T → T?' is implicit (docs/03 §3.7), so comparing an optional with
+        // a value of its type is comparing two optionals.
         BinaryOperatorKind.Equal or BinaryOperatorKind.NotEqual =>
-            left.Equals(right) ? Core.Bool : null,
+            left.Equals(right)
+            || (left is OptionalTypeSymbol leftOptional
+                && leftOptional.UnderlyingType.Equals(right))
+            || (right is OptionalTypeSymbol rightOptional
+                && rightOptional.UnderlyingType.Equals(left))
+                ? Core.Bool
+                : null,
 
         BinaryOperatorKind.ReferenceEqual or BinaryOperatorKind.ReferenceNotEqual =>
             left.IsReferenceType && right.IsReferenceType ? Core.Bool : null,

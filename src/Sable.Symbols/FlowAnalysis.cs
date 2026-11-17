@@ -36,6 +36,18 @@ internal static class FlowAnalysis
 
         BoundExpressionStatement expression => AlwaysExits(expression.Expression),
 
+        // 'unsafe', 'comptime' and 'region' are scopes and nothing more.
+        BoundScopedBlock scoped => AlwaysExits(scoped.Body),
+
+        // A switch exits when it has a default and every case does. A case
+        // that falls through is continued by the next one, so it does not
+        // have to exit on its own.
+        BoundSwitch switchStatement =>
+            switchStatement.Cases.Any(c => c.Values.IsEmpty)
+            && switchStatement.Cases.All(c =>
+                c.Statements.Any(AlwaysExits)
+                || c.Statements.Any(s => s is BoundFallthrough)),
+
         // A 'do' exits only if every way out of it does, the catches too.
         BoundDo doStatement =>
             AlwaysExits(doStatement.Body)

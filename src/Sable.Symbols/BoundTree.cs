@@ -533,6 +533,68 @@ public enum TryKind
     Fallback,
 }
 
+/// <summary>
+/// <c>switch</c>: C-shaped dispatch on integers and enums, with explicit
+/// fallthrough. It binds no patterns, which is what separates it from
+/// <c>match</c>.
+/// </summary>
+public sealed class BoundSwitch(
+    SyntaxNode syntax,
+    BoundExpression subject,
+    ImmutableArray<BoundSwitchCase> cases) : BoundStatement(syntax)
+{
+    public BoundExpression Subject { get; } = subject;
+    public ImmutableArray<BoundSwitchCase> Cases { get; } = cases;
+
+    public override IEnumerable<BoundNode> Children =>
+        Nodes(Subject).Concat(Cases.SelectMany(c => c.Statements.Cast<BoundNode>()));
+}
+
+/// <summary>One <c>case</c> or <c>default</c> of a <c>switch</c>.</summary>
+public sealed class BoundSwitchCase(
+    SyntaxNode syntax,
+    ImmutableArray<BoundExpression> values,
+    ImmutableArray<BoundStatement> statements)
+{
+    public SyntaxNode Syntax { get; } = syntax;
+
+    /// <summary>Empty for <c>default</c>.</summary>
+    public ImmutableArray<BoundExpression> Values { get; } = values;
+
+    public ImmutableArray<BoundStatement> Statements { get; } = statements;
+}
+
+/// <summary><c>fallthrough</c>: carry on into the next case.</summary>
+public sealed class BoundFallthrough(SyntaxNode syntax) : BoundStatement(syntax)
+{
+    public override IEnumerable<BoundNode> Children => [];
+}
+
+/// <summary>
+/// A block with something said about it: <c>unsafe</c>, <c>comptime</c>, or
+/// a <c>region</c> that names an allocator.
+/// </summary>
+public sealed class BoundScopedBlock(
+    SyntaxNode syntax,
+    ScopeKind scopeKind,
+    LocalSymbol? name,
+    BoundExpression? source,
+    BoundBlock body) : BoundStatement(syntax)
+{
+    public ScopeKind ScopeKind { get; } = scopeKind;
+
+    /// <summary>The name a <c>region</c> introduces, if any.</summary>
+    public LocalSymbol? Name { get; } = name;
+
+    public BoundExpression? Source { get; } = source;
+    public BoundBlock Body { get; } = body;
+
+    public override IEnumerable<BoundNode> Children =>
+        Source is null ? Nodes(Body) : Nodes(Source, Body);
+}
+
+public enum ScopeKind { Unsafe, Comptime, Region }
+
 /// <summary>A <c>do</c> block with its <c>catch</c> clauses.</summary>
 public sealed class BoundDo(
     SyntaxNode syntax,

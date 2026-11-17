@@ -554,6 +554,15 @@ public sealed class Binder
         LabeledStatementSyntax labeled => BindStatement(labeled.Statement),
         DeclarationStatementSyntax declaration => BindDeclarationStatement(declaration),
         DoStatementSyntax doStatement => BindDo(doStatement),
+        SwitchStatementSyntax switchStatement => BindSwitch(switchStatement),
+        FallthroughStatementSyntax fallthrough =>
+            Record(fallthrough, new BoundFallthrough(fallthrough)),
+        UnsafeStatementSyntax unsafeBlock => BindScopedBlock(
+            unsafeBlock, ScopeKind.Unsafe, default, null, unsafeBlock.Body),
+        ComptimeStatementSyntax comptime => BindScopedBlock(
+            comptime, ScopeKind.Comptime, default, null, comptime.Body),
+        RegionStatementSyntax region => BindScopedBlock(
+            region, ScopeKind.Region, region.Identifier, region.Source, region.Body),
         EmptyStatementSyntax empty => new BoundBlock(empty, [], []),
         _ => new BoundErrorStatement(statement),
     };
@@ -569,6 +578,67 @@ public sealed class Binder
         PopScope();
 
         return Record(block, new BoundBlock(block, locals, statements.ToImmutable()));
+    }
+
+    /// <summary>
+    /// Binds <c>switch</c>, which dispatches on a value and binds nothing.
+    /// </summary>
+    private BoundStatement BindSwitch(SwitchStatementSyntax statement)
+    {
+        var subject = BindExpression(statement.Expression);
+        var cases = ImmutableArray.CreateBuilder<BoundSwitchCase>(statement.Cases.Count);
+
+        foreach (var clause in statement.Cases)
+        {
+            var values = ImmutableArray.CreateBuilder<BoundExpression>();
+            foreach (var value in clause.Values)
+                values.Add(Convert(BindExpression(value, subject.Type), subject.Type, value));
+
+            PushScope();
+            var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+            foreach (var inner in clause.Statements) statements.Add(BindStatement(inner));
+            PopScope();
+
+            cases.Add(new BoundSwitchCase(clause, values.ToImmutable(), statements.ToImmutable()));
+        }
+
+        return Record(statement, new BoundSwitch(statement, subject, cases.ToImmutable()));
+    }
+
+    /// <summary>
+    /// Binds a block that says something about itself: <c>unsafe</c>,
+    /// <c>comptime</c>, or a <c>region</c> that names an allocator.
+    /// </summary>
+    /// <remarks>
+    /// What those words mean to code generation is Phase 3's business. What
+    /// they mean here is a scope, so the body is checked like any other.
+    /// </remarks>
+    private BoundStatement BindScopedBlock(
+        StatementSyntax statement,
+        ScopeKind kind,
+        SyntaxToken name,
+        ExpressionSyntax? sourceSyntax,
+        BlockSyntax bodySyntax)
+    {
+        var source = sourceSyntax is null ? null : BindExpression(sourceSyntax);
+
+        PushScope();
+
+        LocalSymbol? local = null;
+        if (!name.IsNone && name.Text.Length > 0)
+        {
+            var regionType = source?.Type ?? Core.Void;
+            local = new LocalSymbol(name.Text, _containingSymbol, statement, false)
+            {
+                TypeResolver = () => regionType,
+            };
+            Declare(local.Name, local);
+        }
+
+        var body = BindBlock(bodySyntax);
+        PopScope();
+
+        return Record(statement, new BoundScopedBlock(statement, kind, local, source, body));
     }
 
     private BoundStatement BindThrow(ThrowStatementSyntax statement)

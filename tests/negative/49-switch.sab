@@ -1,0 +1,86 @@
+module Negative.Switch
+
+public enum Code { Ok, Moved, Failed }
+public struct Point { public var x: Int }
+
+fn aCaseValueMustMatchTheSubject(_ code: Int) {
+    switch code {
+        case "ok": return               //! S3004 expected 'Int'
+        default: return
+    }
+}
+
+fn anEnumSwitch(_ code: Code) {
+    switch code {
+        case .Ok: return
+        case .Moved: fallthrough
+        case .Failed: return
+        default: return
+    }
+}
+
+fn mixingEnumAndInteger(_ code: Code) {
+    switch code {
+        case 1: return                  //! S3004 expected 'Code'
+        default: return
+    }
+}
+
+fn switchDoesNotBindPatterns(_ code: Int) -> Int {
+    switch code {
+        case 1: return value            //! S2002 no symbol named 'value'
+        default: return 0
+    }
+}
+
+fn switchOnAStruct(_ p: Point) {
+    switch p {
+        case 1: return                  //! S3004 expected 'Point'
+        default: return
+    }
+}
+
+fn unsafeIsAScope(_ n: Int) -> Int {
+    unsafe {
+        let doubled = n * 2
+        return doubled
+    }
+}
+
+fn unsafeBodyIsChecked(_ n: Int) -> Int {
+    unsafe {
+        return "text"                   //! S3004 expected 'Int'
+    }
+}
+
+fn comptimeIsAScope() -> Int {
+    comptime {
+        let limit = 10
+        return limit
+    }
+}
+
+fn comptimeBodyIsChecked() -> Int {
+    comptime {
+        return missing                  //! S2002 no symbol named 'missing'
+    }
+}
+
+fn aRegionNamesItself(_ n: Int) -> Int {
+    region arena {
+        return n
+    }
+}
+
+fn aRegionBodyIsChecked(_ n: Int) -> Int {
+    region arena {
+        return "text"                   //! S3004 expected 'Int'
+    }
+}
+
+fn aScopedBlockIsStillAScope(_ n: Int) -> Int {
+    unsafe {
+        let inner = n
+    }
+    return inner                        //! S2002 no symbol named 'inner'
+}

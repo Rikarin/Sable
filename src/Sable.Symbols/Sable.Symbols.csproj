@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>Sable.Symbols</RootNamespace>
+    <AssemblyName>Sable.Symbols</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Sable.Syntax/Sable.Syntax.csproj" />
+  </ItemGroup>
+</Project>

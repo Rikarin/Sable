@@ -54,6 +54,8 @@ docs/      design documents
 spec/      the language specification
 examples/  sample programs, also used as the lexer test corpus
 src/       the compiler, written in C# (see docs/04 for why)
+             Sable.Syntax   lexer, parser, trees, formatter
+             Sable.Symbols  symbols, declaration table, type binding
 tools/     build-time tooling (the syntax node generator)
 tests/     the test suite
 ```
@@ -97,9 +99,12 @@ dotnet test Sable.slnx
 | `Sable.Syntax` — structured string interpolation | done |
 | `Sable.Syntax` — incremental reparse | done |
 | `Sable.Syntax` — formatter | done |
-| Everything downstream (symbols, binder, SIL, codegen) | not started |
+| `Sable.Symbols` — symbol model, declaration table | done |
+| `Sable.Symbols` — type binding and signatures | done |
+| `Sable.Symbols` — expression binding, inference | not started |
+| Everything downstream (SIL, codegen, runtime) | not started |
 
-**662 tests green**, and every file in [examples/](examples/) parses as a
+**732 tests green**, and every file in [examples/](examples/) parses as a
 complete compilation unit with no diagnostics and an exact round-trip.
 
 The lexer covers all of [spec/lexical.md](spec/lexical.md): full-fidelity

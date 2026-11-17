@@ -1,0 +1,682 @@
+using System.Collections.Immutable;
+using Sable.Syntax;
+
+namespace Sable.Symbols;
+
+/// <summary>
+/// What one file can see: the module it declares, and what it imports.
+/// </summary>
+/// <remarks>
+/// Imports are per file, not per module, so a module spread over several files
+/// does not leak one file's imports into another.
+/// </remarks>
+public sealed class FileScope
+{
+    internal FileScope(SyntaxTree tree, ModuleSymbol module)
+    {
+        Tree = tree;
+        Module = module;
+    }
+
+    public SyntaxTree Tree { get; }
+    public ModuleSymbol Module { get; }
+
+    /// <summary>Modules brought into scope wholesale by <c>import</c>.</summary>
+    public List<ModuleSymbol> Imports { get; } = [];
+
+    /// <summary>Aliases introduced by <c>import A.B as C</c>.</summary>
+    public Dictionary<string, ModuleSymbol> ImportAliases { get; } =
+        new(StringComparer.Ordinal);
+
+    /// <summary>Names brought in individually by <c>import A.B.{ X, Y }</c>.</summary>
+    public Dictionary<string, Symbol> ImportedNames { get; } = new(StringComparer.Ordinal);
+}
+
+/// <summary>
+/// A set of source files analysed together, and the symbols they declare.
+/// </summary>
+/// <remarks>
+/// <para>The unit of semantic analysis, as docs/04 §1.1 describes: syntax trees
+/// plus options, immutable, with <c>With…</c> producing a new one.</para>
+/// <para>Declarations are gathered eagerly, because that pass is cheap and
+/// everything else needs the table. Signatures bind lazily, so asking about
+/// one declaration does not bind the program.</para>
+/// </remarks>
+public sealed class Compilation
+{
+    private readonly Dictionary<string, ModuleSymbol> _modules = new(StringComparer.Ordinal);
+    private readonly Dictionary<SyntaxTree, FileScope> _fileScopes = [];
+    private readonly DiagnosticBag _declarationDiagnostics = new();
+
+    private Compilation(ImmutableArray<SyntaxTree> syntaxTrees, ParseOptions options)
+    {
+        SyntaxTrees = syntaxTrees;
+        Options = options;
+
+        var coreModule = new ModuleSymbol("Sable.Core");
+        _modules[coreModule.Name] = coreModule;
+        Core = new CoreTypes(coreModule);
+
+        TypeBinder = new TypeBinder(this);
+
+        DeclareAll();
+    }
+
+    public static Compilation Create(
+        IEnumerable<SyntaxTree> syntaxTrees, ParseOptions? options = null) =>
+        new([.. syntaxTrees], options ?? ParseOptions.Default);
+
+    public static Compilation Create(params string[] sources) =>
+        Create(sources.Select((text, i) =>
+            SyntaxTree.Parse(new SourceText(text, $"file{i}.sab"))));
+
+    public ImmutableArray<SyntaxTree> SyntaxTrees { get; }
+    public ParseOptions Options { get; }
+    public CoreTypes Core { get; }
+
+    internal TypeBinder TypeBinder { get; }
+
+    public IEnumerable<ModuleSymbol> Modules => _modules.Values;
+
+    public ModuleSymbol? GetModule(string name) =>
+        _modules.TryGetValue(name, out var module) ? module : null;
+
+    public FileScope GetFileScope(SyntaxTree tree) => _fileScopes[tree];
+
+    /// <summary>
+    /// The file being declared right now. Signature binding captures it, so
+    /// that a lazily bound type resolves against the right imports.
+    /// </summary>
+    internal FileScope? CurrentScope { get; private set; }
+
+    /// <summary>Adds files, returning a new compilation.</summary>
+    public Compilation AddSyntaxTrees(params SyntaxTree[] trees) =>
+        new([.. SyntaxTrees, .. trees], Options);
+
+    /// <summary>Looks a type up by its dotted path, such as <c>App.Shapes.Circle</c>.</summary>
+    public NamedTypeSymbol? GetTypeByQualifiedName(string qualifiedName)
+    {
+        foreach (var module in _modules.Values)
+        {
+            if (qualifiedName.StartsWith(module.Name, StringComparison.Ordinal)
+                && qualifiedName.Length > module.Name.Length
+                && qualifiedName[module.Name.Length] == '.')
+            {
+                var rest = qualifiedName[(module.Name.Length + 1)..];
+                var found = LookupNested(module.Members, rest);
+                if (found is not null) return found;
+            }
+            else if (module.Name.Length == 0)
+            {
+                var found = LookupNested(module.Members, qualifiedName);
+                if (found is not null) return found;
+            }
+        }
+        return null;
+    }
+
+    private static NamedTypeSymbol? LookupNested(IReadOnlyList<Symbol> members, string path)
+    {
+        var dot = path.IndexOf('.', StringComparison.Ordinal);
+        var head = dot < 0 ? path : path[..dot];
+
+        foreach (var member in members)
+        {
+            if (member is not NamedTypeSymbol type) continue;
+            if (!string.Equals(type.Name, head, StringComparison.Ordinal)) continue;
+            return dot < 0 ? type : LookupNested([.. type.Members], path[(dot + 1)..]);
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Every diagnostic: parse errors, declaration errors, and whatever
+    /// binding the signatures turns up.
+    /// </summary>
+    public IReadOnlyList<Diagnostic> GetDiagnostics()
+    {
+        var all = new List<Diagnostic>();
+
+        foreach (var tree in SyntaxTrees) all.AddRange(tree.Diagnostics);
+        all.AddRange(_declarationDiagnostics);
+
+        // Signatures bind lazily, so force them before collecting.
+        TypeBinder.ForceAll();
+        all.AddRange(TypeBinder.Diagnostics);
+
+        all.Sort((a, b) => a.Span.Start.CompareTo(b.Span.Start));
+        return all;
+    }
+
+    internal void ReportDeclaration(ErrorCode code, TextSpan span, string message) =>
+        _declarationDiagnostics.Error(code, span, message);
+
+    // -----------------------------------------------------------------------
+    // Declaration gathering
+    // -----------------------------------------------------------------------
+
+    private void DeclareAll()
+    {
+        foreach (var tree in SyntaxTrees)
+        {
+            if (tree.Root is not CompilationUnitSyntax unit) continue;
+
+            var moduleName = unit.Module is null
+                ? string.Empty
+                : NameOf(unit.Module.Name);
+
+            if (!_modules.TryGetValue(moduleName, out var module))
+            {
+                module = new ModuleSymbol(moduleName);
+                _modules[moduleName] = module;
+            }
+
+            var scope = new FileScope(tree, module);
+            _fileScopes[tree] = scope;
+            CurrentScope = scope;
+
+            foreach (var member in unit.Members) DeclareMember(member, module);
+        }
+
+        CurrentScope = null;
+
+        // Imports resolve against the finished module set.
+        foreach (var tree in SyntaxTrees)
+        {
+            if (tree.Root is not CompilationUnitSyntax unit) continue;
+            ResolveImports(unit, _fileScopes[tree]);
+        }
+    }
+
+    private void ResolveImports(CompilationUnitSyntax unit, FileScope scope)
+    {
+        foreach (var import in unit.Imports)
+        {
+            var name = NameOf(import.Name);
+            var module = GetModule(name);
+
+            if (module is null)
+            {
+                ReportDeclaration(ErrorCode.ERR_ModuleNotFound, import.Name.Span,
+                    $"no module named '{name}' in this compilation");
+                continue;
+            }
+
+            if (import.Items is { } items)
+            {
+                foreach (var item in items.Items)
+                {
+                    if (item.NameToken.Kind == SyntaxKind.StarToken)
+                    {
+                        scope.Imports.Add(module);
+                        continue;
+                    }
+
+                    var target = module.GetMembers(item.NameToken.Text).FirstOrDefault();
+                    if (target is null)
+                    {
+                        ReportDeclaration(ErrorCode.ERR_NameNotFound, item.NameToken.Span,
+                            $"'{module.Name}' has no member named '{item.NameToken.Text}'");
+                        continue;
+                    }
+
+                    var alias = item.Alias.IsNone ? item.NameToken.Text : item.Alias.Text;
+                    scope.ImportedNames[alias] = target;
+                }
+                continue;
+            }
+
+            if (!import.Alias.IsNone) scope.ImportAliases[import.Alias.Text] = module;
+            else scope.Imports.Add(module);
+        }
+    }
+
+    private void DeclareMember(SyntaxNode member, Symbol container)
+    {
+        switch (member)
+        {
+            case StructDeclarationSyntax declaration:
+                DeclareType(declaration, declaration.Identifier, TypeKind.Struct,
+                    declaration.Attributes, declaration.Modifiers,
+                    declaration.TypeParameters, declaration.Members, container);
+                return;
+
+            case ClassDeclarationSyntax declaration:
+                DeclareType(declaration, declaration.Identifier, TypeKind.Class,
+                    declaration.Attributes, declaration.Modifiers,
+                    declaration.TypeParameters, declaration.Members, container);
+                return;
+
+            case ActorDeclarationSyntax declaration:
+                DeclareType(declaration, declaration.Identifier, TypeKind.Actor,
+                    declaration.Attributes, declaration.Modifiers,
+                    declaration.TypeParameters, declaration.Members, container);
+                return;
+
+            case ProtocolDeclarationSyntax declaration:
+                DeclareType(declaration, declaration.Identifier, TypeKind.Protocol,
+                    declaration.Attributes, declaration.Modifiers,
+                    declaration.TypeParameters, declaration.Members, container);
+                return;
+
+            case UnionDeclarationSyntax declaration:
+                DeclareType(declaration, declaration.Identifier, TypeKind.Union,
+                    declaration.Attributes, declaration.Modifiers,
+                    declaration.TypeParameters, declaration.Members, container,
+                    isVariableSize: !declaration.VariableSizeToken.IsNone);
+                return;
+
+            case EnumDeclarationSyntax declaration:
+                DeclareType(declaration, declaration.Identifier, TypeKind.Enum,
+                    declaration.Attributes, declaration.Modifiers,
+                    null, declaration.Members, container);
+                return;
+
+            case FunctionDeclarationSyntax declaration:
+                DeclareFunction(declaration, container);
+                return;
+
+            case FieldDeclarationSyntax declaration:
+                DeclareField(declaration, container);
+                return;
+
+            case ConstDeclarationSyntax declaration:
+                DeclareConstant(declaration, container);
+                return;
+
+            case AliasDeclarationSyntax declaration:
+                DeclareAlias(declaration, container);
+                return;
+
+            case TypealiasDeclarationSyntax declaration:
+                DeclareTypealias(declaration, container);
+                return;
+
+            case UnionCaseDeclarationSyntax declaration
+                when container is NamedTypeSymbol union:
+                DeclareUnionCase(declaration, union);
+                return;
+
+            case EnumCaseDeclarationSyntax declaration
+                when container is NamedTypeSymbol enumType:
+                DeclareEnumCase(declaration, enumType);
+                return;
+
+            case InitDeclarationSyntax declaration when container is NamedTypeSymbol type:
+                DeclareInitializer(declaration, type);
+                return;
+
+            case ExtensionDeclarationSyntax declaration:
+                // Members of an extension are declared on the extended type once
+                // type binding exists; recorded for now so they are not lost.
+                DeclareExtension(declaration, container);
+                return;
+
+            default:
+                return;
+        }
+    }
+
+    private void DeclareType(
+        SyntaxNode declaration,
+        SyntaxToken identifier,
+        TypeKind typeKind,
+        SyntaxList<AttributeSyntax> attributes,
+        SyntaxTokenList modifiers,
+        GenericParameterListSyntax? typeParameters,
+        SyntaxList<SyntaxNode> members,
+        Symbol container,
+        bool isVariableSize = false)
+    {
+        _ = attributes;
+
+        var name = identifier.Text;
+        if (name.Length == 0) return;
+
+        if (FindExisting(container, name) is { } existing)
+        {
+            ReportDuplicate(identifier, name, existing);
+            return;
+        }
+
+        var type = new NamedTypeSymbol(
+            name, typeKind, container, declaration,
+            AccessibilityOf(modifiers, container), isVariableSize);
+
+        if (typeParameters is not null)
+        {
+            type.TypeParameters =
+            [
+                .. typeParameters.Parameters.Select((parameter, i) =>
+                {
+                    var symbol = new TypeParameterSymbol(
+                        parameter.Identifier.Text, type, parameter, i)
+                    {
+                        Variance = parameter.VarianceToken.IsNone
+                            ? VarianceKind.None
+                            : parameter.VarianceToken.Kind == SyntaxKind.OutKeyword
+                                ? VarianceKind.Out
+                                : VarianceKind.In,
+                    };
+                    return symbol;
+                }),
+            ];
+        }
+
+        TypeBinder.BindTypeDeclaration(type, declaration);
+        AddTo(container, type);
+
+        foreach (var member in members) DeclareMember(member, type);
+    }
+
+    private void DeclareFunction(FunctionDeclarationSyntax declaration, Symbol container)
+    {
+        var name = declaration.Identifier.Text;
+        if (name.Length == 0) return;
+
+        var function = new FunctionSymbol(
+            name, container, declaration,
+            AccessibilityOf(declaration.Modifiers, container), FunctionKind.Ordinary)
+        {
+            IsStatic = declaration.Modifiers.Any(SyntaxKind.StaticKeyword),
+            IsAsync = !declaration.AsyncKeyword.IsNone
+                      || declaration.Modifiers.Any(SyntaxKind.AsyncKeyword),
+            IsMutating = declaration.Modifiers.Any(SyntaxKind.MutatingKeyword),
+            IsOverride = declaration.Modifiers.Any(SyntaxKind.OverrideKeyword),
+            IsOpen = declaration.Modifiers.Any(SyntaxKind.OpenKeyword),
+            IsAbstract = declaration.Body is null && declaration.ExpressionBody is null,
+        };
+
+        if (declaration.TypeParameters is { } typeParameters)
+        {
+            function.TypeParameters =
+            [
+                .. typeParameters.Parameters.Select((parameter, i) =>
+                    new TypeParameterSymbol(parameter.Identifier.Text, function, parameter, i)),
+            ];
+        }
+
+        function.Parameters =
+        [
+            .. declaration.Parameters.Parameters.Select((parameter, i) =>
+                DeclareParameter(parameter, function, i)),
+        ];
+
+        TypeBinder.BindFunctionSignature(function, declaration);
+        AddTo(container, function);
+    }
+
+    private ParameterSymbol DeclareParameter(
+        ParameterSyntax syntax, Symbol container, int ordinal)
+    {
+        var label = syntax.Label.IsNone ? null : syntax.Label.Text;
+
+        var parameter = new ParameterSymbol(
+            syntax.Identifier.Text, label, container, syntax, ordinal)
+        {
+            HasDefaultValue = syntax.DefaultValue is not null,
+            IsVariadic = !syntax.EllipsisToken.IsNone,
+            Modifier = ModifierOf(syntax),
+        };
+
+        TypeBinder.BindParameterType(parameter, syntax);
+        return parameter;
+    }
+
+    private static ParameterModifier ModifierOf(ParameterSyntax syntax)
+    {
+        foreach (var modifier in syntax.Modifiers)
+        {
+            var kind = Translate(modifier.Kind);
+            if (kind != ParameterModifier.None) return kind;
+        }
+        return Translate(syntax.TypeModifierToken.Kind);
+
+        static ParameterModifier Translate(SyntaxKind kind) => kind switch
+        {
+            SyntaxKind.InoutKeyword => ParameterModifier.InOut,
+            SyntaxKind.OutKeyword => ParameterModifier.Out,
+            SyntaxKind.ConsumingKeyword => ParameterModifier.Consuming,
+            SyntaxKind.BorrowingKeyword => ParameterModifier.Borrowing,
+            SyntaxKind.RefKeyword => ParameterModifier.Ref,
+            SyntaxKind.InKeyword => ParameterModifier.In,
+            _ => ParameterModifier.None,
+        };
+    }
+
+    private void DeclareField(FieldDeclarationSyntax declaration, Symbol container)
+    {
+        if (declaration.Declarator.Pattern is not BindingPatternSyntax binding) return;
+
+        var name = binding.Identifier.Text;
+        if (name.Length == 0) return;
+
+        if (FindExisting(container, name) is { } existing)
+        {
+            ReportDuplicate(binding.Identifier, name, existing);
+            return;
+        }
+
+        var field = new FieldSymbol(
+            name, container, declaration,
+            AccessibilityOf(declaration.Modifiers, container),
+            declaration.LetOrVarKeyword.Kind == SyntaxKind.VarKeyword)
+        {
+            IsStatic = declaration.Modifiers.Any(SyntaxKind.StaticKeyword),
+            IsLazy = declaration.Modifiers.Any(SyntaxKind.LazyKeyword),
+            IsComputed = declaration.Accessors is not null,
+            HasInitializer = declaration.Declarator.Initializer is not null,
+        };
+
+        TypeBinder.BindFieldType(field, declaration);
+        AddTo(container, field);
+    }
+
+    private void DeclareConstant(ConstDeclarationSyntax declaration, Symbol container)
+    {
+        var name = declaration.Identifier.Text;
+        if (name.Length == 0) return;
+
+        if (FindExisting(container, name) is { } existing)
+        {
+            ReportDuplicate(declaration.Identifier, name, existing);
+            return;
+        }
+
+        var field = new FieldSymbol(
+            name, container, declaration,
+            AccessibilityOf(declaration.Modifiers, container), isMutable: false)
+        {
+            IsStatic = true,
+            HasInitializer = true,
+        };
+
+        TypeBinder.BindConstantType(field, declaration);
+        AddTo(container, field);
+    }
+
+    private void DeclareAlias(AliasDeclarationSyntax declaration, Symbol container)
+    {
+        var name = declaration.Identifier.Text;
+        if (name.Length == 0) return;
+
+        if (FindExisting(container, name) is { } existing)
+        {
+            ReportDuplicate(declaration.Identifier, name, existing);
+            return;
+        }
+
+        var alias = new AliasSymbol(
+            name, container, declaration, AccessibilityOf(declaration.Modifiers, container));
+
+        if (declaration.TypeParameters is { } typeParameters)
+        {
+            alias.TypeParameters =
+            [
+                .. typeParameters.Parameters.Select((parameter, i) =>
+                    new TypeParameterSymbol(parameter.Identifier.Text, alias, parameter, i)),
+            ];
+        }
+
+        TypeBinder.BindAliasTarget(alias, declaration.Type);
+        AddTo(container, alias);
+    }
+
+    private void DeclareTypealias(TypealiasDeclarationSyntax declaration, Symbol container)
+    {
+        var name = declaration.Identifier.Text;
+        if (name.Length == 0) return;
+
+        if (FindExisting(container, name) is { } existing)
+        {
+            ReportDuplicate(declaration.Identifier, name, existing);
+            return;
+        }
+
+        var alias = new AliasSymbol(
+            name, container, declaration, AccessibilityOf(declaration.Modifiers, container));
+
+        TypeBinder.BindAliasTarget(alias, declaration.Type);
+        AddTo(container, alias);
+    }
+
+    private void DeclareUnionCase(UnionCaseDeclarationSyntax declaration, NamedTypeSymbol union)
+    {
+        var name = declaration.Identifier.Text;
+        if (name.Length == 0) return;
+
+        if (FindExisting(union, name) is { } existing)
+        {
+            ReportDuplicate(declaration.Identifier, name, existing);
+            return;
+        }
+
+        var unionCase = new UnionCaseSymbol(name, union, declaration);
+
+        if (declaration.Payload is { } payload)
+        {
+            unionCase.Payload =
+            [
+                .. payload.Fields.Select((field, i) =>
+                {
+                    var parameter = new ParameterSymbol(
+                        field.NameToken.IsNone ? $"_{i}" : field.NameToken.Text,
+                        field.NameToken.IsNone ? null : field.NameToken.Text,
+                        unionCase, field, i);
+
+                    TypeBinder.BindUnionCaseFieldType(parameter, field);
+                    return parameter;
+                }),
+            ];
+        }
+
+        union.AddMember(unionCase);
+    }
+
+    private void DeclareEnumCase(EnumCaseDeclarationSyntax declaration, NamedTypeSymbol enumType)
+    {
+        var name = declaration.Identifier.Text;
+        if (name.Length == 0) return;
+
+        if (FindExisting(enumType, name) is { } existing)
+        {
+            ReportDuplicate(declaration.Identifier, name, existing);
+            return;
+        }
+
+        enumType.AddMember(new EnumCaseSymbol(name, enumType, declaration)
+        {
+            HasExplicitValue = declaration.Value is not null,
+        });
+    }
+
+    private void DeclareInitializer(InitDeclarationSyntax declaration, NamedTypeSymbol type)
+    {
+        var function = new FunctionSymbol(
+            "init", type, declaration,
+            AccessibilityOf(declaration.Modifiers, type), FunctionKind.Initializer);
+
+        function.Parameters =
+        [
+            .. declaration.Parameters.Parameters.Select((parameter, i) =>
+                DeclareParameter(parameter, function, i)),
+        ];
+
+        function.ReturnTypeResolver = () => type;
+        type.AddMember(function);
+    }
+
+    private void DeclareExtension(ExtensionDeclarationSyntax declaration, Symbol container)
+    {
+        // The extended type is not known until type binding runs, so an
+        // extension's members are attached in a later pass. Recorded here so
+        // that nothing silently disappears.
+        Extensions.Add((declaration, container));
+    }
+
+    internal List<(ExtensionDeclarationSyntax Syntax, Symbol Container)> Extensions { get; } = [];
+
+    // -----------------------------------------------------------------------
+
+    private static void AddTo(Symbol container, Symbol member)
+    {
+        switch (container)
+        {
+            case ModuleSymbol module: module.AddMember(member); return;
+            case NamedTypeSymbol type: type.AddMember(member); return;
+            default: return;
+        }
+    }
+
+    private static Symbol? FindExisting(Symbol container, string name)
+    {
+        var members = container switch
+        {
+            ModuleSymbol module => module.GetMembers(name),
+            NamedTypeSymbol type => type.GetMembers(name),
+            _ => [],
+        };
+
+        // Functions may be overloaded, so only non-function clashes count.
+        foreach (var member in members)
+            if (member is not FunctionSymbol) return member;
+
+        return null;
+    }
+
+    private void ReportDuplicate(SyntaxToken identifier, string name, Symbol existing)
+    {
+        var where = existing.Location is { } location
+            ? $" (already declared at offset {location.Start})"
+            : "";
+
+        ReportDeclaration(ErrorCode.ERR_DuplicateDeclaration, identifier.Span,
+            $"'{name}' is already declared in this scope{where}");
+    }
+
+    private static Accessibility AccessibilityOf(SyntaxTokenList modifiers, Symbol container)
+    {
+        foreach (var modifier in modifiers)
+        {
+            switch (modifier.Kind)
+            {
+                case SyntaxKind.PublicKeyword: return Accessibility.Public;
+                case SyntaxKind.PackageKeyword: return Accessibility.Package;
+                case SyntaxKind.InternalKeyword: return Accessibility.Internal;
+                case SyntaxKind.PrivateKeyword: return Accessibility.Private;
+            }
+        }
+
+        // A protocol's members are as visible as the protocol itself.
+        return container is NamedTypeSymbol { TypeKind: TypeKind.Protocol } protocol
+            ? protocol.DeclaredAccessibility
+            : Accessibility.Internal;
+    }
+
+    internal static string NameOf(TypeSyntax name) => name switch
+    {
+        SimpleNameTypeSyntax simple => simple.Identifier.Text,
+        QualifiedNameSyntax qualified => $"{NameOf(qualified.Left)}.{qualified.Right.Identifier.Text}",
+        _ => "",
+    };
+}

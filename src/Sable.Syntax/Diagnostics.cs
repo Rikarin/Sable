@@ -55,6 +55,22 @@ public enum ErrorCode
     ERR_ExpectedPattern = 1006,
     ERR_ExpectedStatement = 1007,
     ERR_ExpectedDeclaration = 1008,
+
+    // ---- Name resolution (S2000-S2999) -----------------------------------
+    ERR_DuplicateDeclaration = 2000,
+    ERR_TypeNotFound = 2001,
+    ERR_NameNotFound = 2002,
+    ERR_AmbiguousName = 2003,
+    ERR_NotAType = 2004,
+    ERR_CircularAlias = 2005,
+    ERR_ModuleNotFound = 2006,
+    ERR_NoModuleDeclaration = 2007,
+
+    // ---- Types (S3000-S3999) ---------------------------------------------
+    ERR_WrongTypeArgumentCount = 3000,
+    ERR_TypeArgumentsOnNonGeneric = 3001,
+    ERR_MissingTypeArguments = 3002,
+    ERR_VariableSizeNotAllowed = 3003,
 }
 
 public enum DiagnosticSeverity { Hidden, Info, Warning, Error }

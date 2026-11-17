@@ -76,11 +76,24 @@ public static class NativeBuild {
             // Link-time optimisation lets LLVM inline the runtime's small
             // functions into the program — where the platform's linker takes
             // LLVM bitcode, as Apple's does; elsewhere it needs a plugin.
+            var attributes = new List<string>();
             if (optimise && !debug && OperatingSystem.IsMacOS()) {
                 arguments.Add("-flto");
                 if (HostAttributes.Value is { } host) {
-                    File.WriteAllText(irPath, WithHostAttributes(llvmIr, host));
+                    attributes.Add(host);
                 }
+            }
+
+            // macOS's backtrace(), which a trap's backtrace and the system's
+            // crash reports use, walks the frame-pointer chain: keep it in
+            // every function that calls, as clang does for C there. (Without
+            // it an unoptimised build's trap showed the innermost frame only.)
+            if (OperatingSystem.IsMacOS()) {
+                attributes.Add("\"frame-pointer\"=\"non-leaf\"");
+            }
+
+            if (attributes.Count > 0) {
+                File.WriteAllText(irPath, WithHostAttributes(llvmIr, string.Join(' ', attributes)));
             }
 
             // A trap's backtrace names frames through dladdr, which on Linux

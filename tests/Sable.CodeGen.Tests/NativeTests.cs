@@ -385,6 +385,32 @@ public sealed class NativeTests {
     }
 
     /// <summary>
+    ///     An unoptimised build's trap names every frame, not just the innermost:
+    ///     the functions keep the frame-pointer chain the backtrace walks.
+    /// </summary>
+    [Fact]
+    public void AnUnoptimisedTrapNamesEveryFrame() {
+        if (!CanBuild) {
+            return;
+        }
+
+        const string source = """
+                              module P
+                              fn inner(_ values: Int[>..]) -> Int { return values[5] }
+                              fn outer() -> Int { return inner([1, 2]) }
+                              @main
+                              fn main() {
+                                  print(outer())
+                              }
+                              """;
+        var traced = Programs.BuildAndRun(source, optimise: false, environment: new Dictionary<string, string> { ["SABLE_BACKTRACE"] = "1" });
+        Assert.NotEqual(0, traced.ExitCode);
+        var inner = traced.Stderr.IndexOf("P.inner", StringComparison.Ordinal);
+        var outer = traced.Stderr.IndexOf("P.outer", StringComparison.Ordinal);
+        Assert.True(inner >= 0 && outer > inner, traced.Stderr);
+    }
+
+    /// <summary>
     ///     Every function the program defines carries the host's attributes, so
     ///     that LTO may inline the runtime into it; quoted names and debug
     ///     metadata are kept as they were.

@@ -1,0 +1,420 @@
+using System.Diagnostics;
+using Sable.Driver.Commands;
+
+namespace Sable.CodeGen.Tests;
+
+/// <summary>
+///     docs/04 Phase 5: "DWARF plus an lldb formatter plugin for String, List,
+///     unions, and existentials". Each program is built with <c>-g</c> and run
+///     under the real lldb with <c>tools/lldb/sable_lldb.py</c> loaded; the
+///     tests read what <c>frame variable</c> prints, and that <c>next</c>,
+///     <c>step</c> and <c>finish</c> go where the source says.
+/// </summary>
+/// <remarks>
+///     Needs clang and an lldb that can run a program here — not, for one,
+///     an x64 container emulated on arm64, where nothing can be traced.
+///     Without them every test passes vacuously.
+/// </remarks>
+public sealed class DebuggerFormatterTests {
+    const string Values = """
+                          module Values
+                          import Sable.Collections
+
+                          struct Point {
+                              var x: Int
+                              var y: Int
+                          }
+
+                          struct Line {
+                              var from: Point
+                              var to: Point
+                              var name: String
+                          }
+
+                          union Shape {
+                              Circle(radius: F64)
+                              Rect(width: Int, height: Int)
+                              Named(label: String)
+                              Empty
+                          }
+
+                          enum Direction { North, East, South, West }
+
+                          protocol Named {
+                              fn name() -> String
+                          }
+
+                          struct Dog: Named {
+                              var breed: String
+                              fn name() -> String { return breed }
+                          }
+
+                          open class Animal: Named {
+                              var legs: Int
+                              init(_ legs: Int) {
+                                  self.legs = legs
+                              }
+                              fn name() -> String { return "animal" }
+                          }
+
+                          class Bird: Animal {
+                              init() {
+                                  super.init(2)
+                              }
+                          }
+
+                          class Node {
+                              var value: Int
+                              var label: String
+                              var next: Node?
+                              init(_ value: Int, _ label: String) {
+                                  self.value = value
+                                  self.label = label
+                                  self.next = none
+                              }
+                          }
+
+                          @main
+                          fn main() {
+                              let greeting = "hello, world"
+                              let blank = ""
+                              let numbers: Int[>..] = [10, 20, 30]
+                              let names: String[>..] = ["ann", "bob"]
+                              let nothingYet: Int[>..] = []
+                              let circle = Shape.Circle(radius: 1.5)
+                              let rect = Shape.Rect(width: 2, height: 3)
+                              let tagged = Shape.Named(label: "box")
+                              let hollow = Shape.Empty
+                              let heading = Direction.West
+                              let answer: Int? = 42
+                              let absent: Int? = none
+                              let somePoint: Point? = Point { x: 5, y: 6 }
+                              let maybeText: String? = "maybe"
+                              let pet: any Named = Dog { breed: "collie" }
+                              let bird: any Named = Bird()
+                              let node = Node(7, "seven")
+                              let noNode: Node? = none
+                              let someNode: Node? = node
+                              let line = Line { from: Point { x: 1, y: 2 }, to: Point { x: 3, y: 4 }, name: "diagonal" }
+                              let pair = (1, "one")
+                              let letter: Char = 'x'
+                              let scale = 3
+                              let times = { (a: Int) -> Int in a * scale }
+                              var ages: [String: Int] = [:]
+                              ages["ann"] = 31
+                              let map = HashMap<String, Int>()
+                              map.set("one", 1)
+                              map.set("two", 2)
+                              print(times(numbers.count)) // stop
+                          }
+                          """;
+
+    const string Steps = """
+                         module Steps
+
+                         fn triple(_ n: Int) -> Int {
+                             let doubled = n * 2
+                             let tripled = doubled + n
+                             return tripled
+                         }
+
+                         @main
+                         fn main() {
+                             var total = 0
+                             total = total + 1
+                             let t = triple(total)
+                             total = total + t
+                             print(total)
+                         }
+                         """;
+
+    const string Calls = """
+                         module Calls
+
+                         protocol Named {
+                             fn name() -> String
+                         }
+
+                         struct Dog: Named {
+                             var breed: String
+                             fn name() -> String {
+                                 return breed
+                             }
+                         }
+
+                         @main
+                         fn main() {
+                             let pet: any Named = Dog { breed: "collie" }
+                             var count = 2
+                             let label = "sum"
+                             let add = { (a: Int) -> Int in
+                                 count = count + a
+                                 return count
+                             }
+                             print(pet.name())
+                             print(label + " \(add(3))")
+                         }
+                         """;
+
+    static readonly Lazy<string?> Lldb = new(FindLldb);
+
+    /// <summary>An lldb that can launch and stop a program here; null when there is none.</summary>
+    static string? FindLldb() {
+        if (!Programs.CanBuild || OperatingSystem.IsWindows()) {
+            return null;
+        }
+
+        var lldb = Environment.GetEnvironmentVariable("LLDB") is { Length: > 0 } configured ? configured : "lldb";
+        try {
+            using var process = Process.Start(new ProcessStartInfo(lldb, "--version") { RedirectStandardOutput = true, RedirectStandardError = true })!;
+            process.WaitForExit();
+            if (process.ExitCode != 0) {
+                return null;
+            }
+        } catch (System.ComponentModel.Win32Exception) {
+            return null;
+        }
+
+        // Tracing may be impossible even so: try it on the smallest program.
+        var probe = Run(lldb, "module Probe\n@main\nfn main() {\n    print(1)\n}\n", "probe.sab", ["b probe.sab:4", "run", "kill"]).GetAwaiter().GetResult();
+        return probe.Contains("stop reason = breakpoint", StringComparison.Ordinal) ? lldb : null;
+    }
+
+    /// <summary>Builds the program with debug information and runs lldb on it, with the plugin loaded; returns what it printed.</summary>
+    static async Task<string> Run(string lldb, string source, string fileName, IReadOnlyList<string> commands) {
+        var directory = Directory.CreateTempSubdirectory("sable-formatters-");
+        try {
+            var sourcePath = Path.Combine(directory.FullName, fileName);
+            File.WriteAllText(sourcePath, source);
+
+            var result = Pipeline.Compile(new SourceText(source, fileName), directory.FullName);
+            Assert.True(result.Succeeded, string.Join("\n", result.Errors));
+
+            var executable = Path.Combine(directory.FullName, Path.GetFileNameWithoutExtension(fileName));
+            var build = NativeBuild.Build(result.LlvmIr!, executable, debug: true);
+            Assert.True(build.Succeeded, build.Output);
+
+            var plugin = Path.Combine(directory.FullName, "sable_lldb.py");
+            File.WriteAllText(plugin, NativeBuild.LldbPluginSource);
+
+            var start = new ProcessStartInfo(lldb) { RedirectStandardOutput = true, RedirectStandardError = true, WorkingDirectory = directory.FullName };
+            foreach (var argument in (string[]) [
+                         "--batch",
+                         "--one-line-before-file", "settings set target.load-script-from-symbol-file false",
+                         "--one-line-before-file", $"command script import \"{plugin}\"",
+                     ]) {
+                start.ArgumentList.Add(argument);
+            }
+
+            foreach (var command in commands) {
+                start.ArgumentList.Add("-o");
+                start.ArgumentList.Add(command);
+            }
+
+            start.ArgumentList.Add("--");
+            start.ArgumentList.Add(executable);
+
+            using var process = Process.Start(start)!;
+            var output = process.StandardOutput.ReadToEndAsync();
+            var errors = process.StandardError.ReadToEndAsync();
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(120));
+            try {
+                await process.WaitForExitAsync(timeout.Token);
+            } catch (OperationCanceledException) {
+                process.Kill(entireProcessTree: true);
+                throw;
+            }
+
+            return await output + await errors;
+        } finally {
+            directory.Delete(true);
+        }
+    }
+
+    static int LineOf(string source, string marker) =>
+        source.Split('\n').Select((text, index) => (text, index)).First(l => l.text.Contains(marker, StringComparison.Ordinal)).index + 1;
+
+    /// <summary>The program's variables where it stops, as <c>frame variable</c> shows them; null when there is no lldb.</summary>
+    static readonly Lazy<string?> ValuesOutput = new(() =>
+        Lldb.Value is not { } lldb
+            ? null
+            : Run(lldb, Values, "values.sab", [$"b values.sab:{LineOf(Values, "// stop")}", "run", "frame variable", "kill"]).GetAwaiter().GetResult());
+
+    static void Shows(params string[] expected) {
+        if (ValuesOutput.Value is not { } output) {
+            return;
+        }
+
+        foreach (var text in expected) {
+            Assert.Contains(text, output, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void StringsShowTheirText() =>
+        Shows("(String) greeting = \"hello, world\"", "(String) blank = \"\"", "(String?) maybeText = \"maybe\"");
+
+    [Fact]
+    public void ListsShowTheirCountAndElements() =>
+        Shows(
+            "([Int]) numbers = count = 3 {\n  [0] = 10\n  [1] = 20\n  [2] = 30\n}",
+            "([String]) names = count = 2 {\n  [0] = \"ann\"\n  [1] = \"bob\"\n}",
+            "([Int]) nothingYet = count = 0"
+        );
+
+    [Fact]
+    public void UnionsShowTheirCaseAndPayload() =>
+        Shows(
+            "(Values.Shape) circle = Circle(1.5)",
+            "(Values.Shape) rect = Rect(2, 3)",
+            "(Values.Shape) tagged = Named(\"box\")",
+            "(Values.Shape) hollow = Empty",
+            "(Values.Direction) heading = West"
+        );
+
+    [Fact]
+    public void OptionalsShowTheirValueOrNone() =>
+        Shows(
+            "(Int?) answer = 42",
+            "(Int?) absent = none",
+            "(Values.Point?) somePoint = (x: 5, y: 6)",
+            "(Values.Node?) noNode = none",
+            "(Values.Node?) someNode = Values.Node {"
+        );
+
+    [Fact]
+    public void ExistentialsShowTheDynamicTypeAndValue() =>
+        Shows(
+            "(any Values.Named) pet = Values.Dog {\n  [value] = (breed = \"collie\")\n}",
+            // A class held in one shows as the class it is, not the one it was boxed as.
+            "(any Values.Named) bird = Values.Bird {\n  [value] = Values.Bird {\n    legs = 2\n"
+        );
+
+    [Fact]
+    public void ClassInstancesShowTheirFieldsAndReferenceCount() =>
+        Shows("(Values.Node) node = Values.Node {\n  value = 7\n  label = \"seven\"\n  next = none\n  [strong] = 2\n}");
+
+    [Fact]
+    public void NestedStructsShowFieldByField() =>
+        Shows("(Values.Line) line = {\n  from = (x = 1, y = 2)\n  to = (x = 3, y = 4)\n  name = \"diagonal\"\n}");
+
+    [Fact]
+    public void TuplesCharactersAndClosures() =>
+        Shows("((Int, String)) pair = (1, \"one\")", "(Char) letter = 'x'", "((Int) -> Int) times = Values.main$closure0");
+
+    [Fact]
+    public void DictionariesAndHashMapsShowTheirEntries() =>
+        Shows(
+            "([(String, Int)]) ages = count = 1 {\n  [0] = (\"ann\", 31)\n}",
+            "(Sable.Collections.HashMap$of$String$Int) map = Sable.Collections.HashMap$of$String$Int count = 2 {\n  [\"one\"] = 1\n  [\"two\"] = 2\n"
+        );
+
+    [Fact]
+    public async Task NextStepsLineByLineAndFinishReturns() {
+        if (Lldb.Value is not { } lldb) {
+            return;
+        }
+
+        var output = await Run(lldb, Steps, "steps.sab", ["b steps.sab:11", "run", "next", "next", "step", "next", "frame variable", "finish", "next", "next", "frame variable total", "kill"]);
+
+        // 'next' goes one statement at a time, 'step' into the call.
+        var stops = System.Text.RegularExpressions.Regex.Matches(output, @"frame #0: .*? at steps\.sab:(\d+)").Select(static m => int.Parse(m.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture)).ToList();
+        Assert.Equal([11, 12, 13, 4, 5], stops.Take(5));
+        Assert.Contains("Steps.triple(n=1) at steps.sab:4", output, StringComparison.Ordinal);
+        Assert.Contains("(Int) doubled = 2", output, StringComparison.Ordinal);
+
+        // 'finish' comes back to the caller with the result.
+        Assert.Contains("Return value: (Int) $0 = 3", output, StringComparison.Ordinal);
+        Assert.Contains("(Int) total = 4", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task StepGoesThroughAnExistentialIntoTheMethod() {
+        if (Lldb.Value is not { } lldb) {
+            return;
+        }
+
+        var output = await Run(lldb, Calls, "calls.sab", ["b calls.sab:23", "run", "step", "bt", "finish", "kill"]);
+
+        // The compiler's thunk between them is in the backtrace, but is not stopped in.
+        Assert.Contains("Calls.Dog.name(self=(breed = \"collie\")) at calls.sab:10", output, StringComparison.Ordinal);
+        Assert.Contains("$witness$Calls.Dog$name", output, StringComparison.Ordinal);
+        Assert.Contains("Return value: (String) $0 = \"collie\"", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ClosuresShowTheirFunctionAndCaptures() {
+        if (Lldb.Value is not { } lldb) {
+            return;
+        }
+
+        var output = await Run(lldb, Calls, "calls.sab", ["b calls.sab:20", "run", "frame variable", "up", "frame variable add.count add.label", "kill"]);
+
+        // Inside, what it captured reads as locals do — by reference or by value.
+        Assert.Contains("Calls.main$closure0(a=3) at calls.sab:20", output, StringComparison.Ordinal);
+        Assert.Contains("(Int) a = 3\n(Int) count = 2", output, StringComparison.Ordinal);
+
+        // Outside, a closure is its function, and its captures are its children.
+        Assert.Contains("(Int) add.count = 2", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task FunctionsAreFoundByTheirSableNames() {
+        if (Lldb.Value is not { } lldb) {
+            return;
+        }
+
+        var output = await Run(lldb, Steps, "steps.sab", ["b Steps.triple", "run", "bt", "kill"]);
+        Assert.Contains("Steps.triple(n=1) at steps.sab:4", output, StringComparison.Ordinal);
+        Assert.Contains("Steps.main at steps.sab:13", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TheDebugCommandIsThere() {
+        var command = Command.Find("debug");
+        Assert.NotNull(command);
+        Assert.Contains("sable debug <file.sab>", command.Usage, StringComparison.Ordinal);
+    }
+
+    /// <summary>The DWARF itself is well formed, as the platform's verifier sees it.</summary>
+    [Fact]
+    public async Task DwarfVerifies() {
+        var verifier = OperatingSystem.IsMacOS() ? "dwarfdump" : "llvm-dwarfdump";
+        if (!Programs.CanBuild || !Exists(verifier)) {
+            return;
+        }
+
+        var directory = Directory.CreateTempSubdirectory("sable-dwarf-");
+        try {
+            var result = Pipeline.Compile(new SourceText(Values, "values.sab"), directory.FullName);
+            Assert.True(result.Succeeded, string.Join("\n", result.Errors));
+            var executable = Path.Combine(directory.FullName, "values");
+            var build = NativeBuild.Build(result.LlvmIr!, executable, debug: true);
+            Assert.True(build.Succeeded, build.Output);
+
+            var target = OperatingSystem.IsMacOS() ? executable + ".dSYM" : executable;
+            var start = new ProcessStartInfo(verifier) { RedirectStandardOutput = true, RedirectStandardError = true };
+            start.ArgumentList.Add("--verify");
+            start.ArgumentList.Add(target);
+            using var process = Process.Start(start)!;
+            var output = process.StandardOutput.ReadToEndAsync();
+            var errors = await process.StandardError.ReadToEndAsync();
+            await process.WaitForExitAsync();
+            var text = await output;
+            Assert.True(process.ExitCode == 0, text + errors);
+            Assert.Contains("No errors.", text, StringComparison.Ordinal);
+        } finally {
+            directory.Delete(true);
+        }
+
+        static bool Exists(string tool) {
+            try {
+                using var process = Process.Start(new ProcessStartInfo(tool, "--version") { RedirectStandardOutput = true, RedirectStandardError = true })!;
+                process.WaitForExit();
+                return process.ExitCode == 0;
+            } catch (System.ComponentModel.Win32Exception) {
+                return false;
+            }
+        }
+    }
+}

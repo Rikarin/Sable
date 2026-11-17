@@ -42,7 +42,7 @@ public sealed partial class LlvmEmitter {
         readonly Dictionary<string, string> _unique = new(StringComparer.Ordinal);
         readonly Dictionary<string, string> _files = new(StringComparer.Ordinal);
         readonly Dictionary<SilType, string?> _types = [];
-        readonly List<string> _retained = [];
+        readonly List<(string Name, string Node)> _classes = [];
         string? _unit;
         string? _firstFile;
 
@@ -72,16 +72,16 @@ public sealed partial class LlvmEmitter {
 
         /// <summary>
         ///     Starts the module: the compile unit, in the entry point's file,
-        ///     and every class's type kept in it — a formatter finds an
-        ///     object's dynamic type by the name its metadata carries, which
-        ///     need not be a type any variable has.
+        ///     and every class's type — a formatter finds an object's dynamic
+        ///     type by the name its metadata carries, which need not be a type
+        ///     any variable has.
         /// </summary>
         public void Begin(SilModule module) {
             var entry = module.EntryPoint is { } name ? module.Find(name)?.SourceFile : null;
             File(entry ?? module.Functions.Select(static f => f.SourceFile).FirstOrDefault(static f => f is not null) ?? "<unknown>");
             foreach (var type in module.Types.OfType<ClassType>()) {
                 if (Type(type) is { } node) {
-                    _retained.Add(node);
+                    _classes.Add((type.Name, node));
                 }
             }
         }
@@ -127,11 +127,10 @@ public sealed partial class LlvmEmitter {
         public string Location(int line, int column, string scope) =>
             Node($"!DILocation(line: {line}, column: {column}, scope: {scope})");
 
-        public string Variable(string name, string scope, string file, int line, SilType type, int argument = 0, bool artificial = false) {
+        public string Variable(string name, string scope, string file, int line, SilType type, int argument = 0) {
             var typePart = Type(type) is { } typeNode ? $", type: {typeNode}" : "";
             var argumentPart = argument > 0 ? $", arg: {argument}" : "";
-            var flags = artificial ? ", flags: DIFlagArtificial" : "";
-            return Node($"!DILocalVariable(name: {Quote(name)}{argumentPart}, scope: {scope}, file: {file}, line: {line}{typePart}{flags})");
+            return Node($"!DILocalVariable(name: {Quote(name)}{argumentPart}, scope: {scope}, file: {file}, line: {line}{typePart})");
         }
 
         // -------------------------------------------------------------------
@@ -236,19 +235,17 @@ public sealed partial class LlvmEmitter {
 
         string ClassObject(ClassType type) {
             var objectType = Reserve();
-            var members = new List<string> { Member("$header", ObjectHeader, 16, 0, artificial: true) };
-            var offset = 16;
-            foreach (var (fieldName, fieldType) in type.Fields) {
-                var align = Align(fieldType);
-                offset = (offset + align - 1) / align * align;
+            var members = new List<string> { Member("$header", ObjectHeader, ObjectHeaderSize, 0, artificial: true) };
+            var end = ObjectHeaderSize;
+            foreach (var (fieldName, fieldType, offset) in ObjectFields(type)) {
                 if (Type(fieldType) is { } fieldNode) {
                     members.Add(Member(fieldName, fieldNode, Size(fieldType), offset));
                 }
 
-                offset += Size(fieldType);
+                end = offset + Size(fieldType);
             }
 
-            var size = (offset + 7) / 8 * 8;
+            var size = (end + 7) / 8 * 8;
             Define(objectType, $"!DICompositeType(tag: DW_TAG_structure_type, name: {Quote(type.Name + "$object")}, size: {size * 8}, elements: !{{{string.Join(", ", members)}}})");
             return objectType;
         }
@@ -386,14 +383,32 @@ public sealed partial class LlvmEmitter {
         static string Quote(string text) =>
             "\"" + text.Replace("\\", "\\5C", StringComparison.Ordinal).Replace("\"", "\\22", StringComparison.Ordinal) + "\"";
 
+        /// <summary>
+        ///     The metadata, and the global that keeps the classes' types: one
+        ///     the program never reads, whose type has a member per class. A
+        ///     type no variable has is dropped by <c>dsymutil</c>, retained
+        ///     type or not; one a global variable has is kept.
+        /// </summary>
         public string Metadata() {
             var output = new StringBuilder();
             var dwarf = Node("!{i32 7, !\"Dwarf Version\", i32 4}");
             var version = Node("!{i32 2, !\"Debug Info Version\", i32 3}");
-            var retained = Node($"!{{{string.Join(", ", _retained)}}}");
+            var globals = "!{}";
+            if (_classes.Count > 0) {
+                var holder = Structure("$SableClasses", 8 * _classes.Count, _classes.Select((c, i) => Member(c.Name, c.Node, 8, 8 * i)));
+                var variable = Node(
+                    $"!DIGlobalVariable(name: \"sable.debug.classes\", scope: {Unit}, file: {_firstFile}, line: 0, type: {holder}, isLocal: true, isDefinition: true)",
+                    distinct: true
+                );
+                var expression = Node($"!DIGlobalVariableExpression(var: {variable}, expr: !DIExpression())");
+                globals = Node($"!{{{expression}}}");
+                output.Append($"\n@\"sable.debug.classes\" = internal constant [{_classes.Count} x i64] zeroinitializer, !dbg {expression}\n")
+                    .Append("@llvm.compiler.used = appending global [1 x ptr] [ptr @\"sable.debug.classes\"], section \"llvm.metadata\"\n");
+            }
+
             Define(Unit,
                 $"distinct !DICompileUnit(language: DW_LANG_C, file: {_firstFile}, producer: \"sable\", isOptimized: false, "
-                + $"runtimeVersion: 0, emissionKind: FullDebug, retainedTypes: {retained})");
+                + $"runtimeVersion: 0, emissionKind: FullDebug, globals: {globals})");
             output.Append($"\n!llvm.dbg.cu = !{{{Unit}}}\n!llvm.module.flags = !{{{dwarf}, {version}}}\n\n");
             foreach (var node in _nodes) {
                 output.Append(node).Append('\n');

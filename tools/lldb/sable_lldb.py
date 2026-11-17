@@ -33,6 +33,9 @@ CATEGORY = "sable"
 # How much of a string is read, at most.
 STRING_LIMIT = 1024
 
+# What a HashMap's class is called, before its type arguments.
+HASH_MAP = "Sable.Collections.HashMap$of$"
+
 
 
 # ---------------------------------------------------------------------------
@@ -80,27 +83,33 @@ def _strong_count(process, object_address):
     return "immortal" if flags & 1 else strong
 
 
-_type_cache = {}
+_class_cache = {}
+
+
+def _class_types(target):
+    """Every class's reference type, by the name its metadata carries.
+
+    The compiler keeps them as the members of one global, sable.debug.classes,
+    so that they are found without a search by name — which in some lldbs
+    asks every language's type system, Swift's included, at some cost.
+    """
+    key = (target.GetProcess().GetUniqueID(), target.GetExecutable().fullpath)
+    if key in _class_cache:
+        return _class_cache[key]
+    classes = {}
+    holder = target.FindFirstGlobalVariable("sable.debug.classes")
+    if holder.IsValid():
+        sbtype = holder.GetType()
+        for i in range(sbtype.GetNumberOfFields()):
+            field = sbtype.GetFieldAtIndex(i)
+            classes[field.GetName()] = field.GetType()
+    _class_cache[key] = classes
+    return classes
 
 
 def _find_type(target, name):
-    """A type by its DWARF name, looked for across every module of the target."""
-    key = (target.GetProcess().GetUniqueID(), name)
-    if key in _type_cache:
-        return _type_cache[key]
-    found = None
-    types = target.FindTypes(name)
-    for i in range(types.GetSize()):
-        candidate = types.GetTypeAtIndex(i)
-        if candidate.GetName() == name:
-            found = candidate
-            break
-    if found is None:
-        candidate = target.FindFirstType(name)
-        if candidate.IsValid() and candidate.GetName() == name:
-            found = candidate
-    _type_cache[key] = found
-    return found
+    """A class's reference type by its name; None when there is no such class."""
+    return _class_types(target).get(name)
 
 
 def _pointer_value(valobj, name, address, sbtype):
@@ -384,7 +393,7 @@ class ObjectProvider(object):
         if dynamic and _canonical_name(self.valobj) != dynamic + "$ref":
             reference = _reference_of_type(self.valobj, self.valobj.GetName(), address) or reference
         body = _object_body(reference)
-        if dynamic and dynamic.startswith("Sable.Collections.HashMap<"):
+        if dynamic and dynamic.startswith(HASH_MAP):
             self.children = _hash_map_entries(body)
         else:
             for i in range(body.GetNumChildren()):
@@ -434,7 +443,7 @@ def object_summary(valobj, internal_dict):
         return "none" if (raw.GetType().GetName() or "").endswith("?") else "<null>"
     process = valobj.GetProcess()
     name = _metadata_name(process, address) or raw.GetType().GetName()
-    if name.startswith("Sable.Collections.HashMap<"):
+    if name.startswith(HASH_MAP):
         body = _object_body(raw)
         used = body.GetChildMemberWithName("used").GetValueAsSigned(0)
         return "%s count = %d" % (name, used)
@@ -476,8 +485,12 @@ class ClosureProvider(object):
                 body = _object_body(reference)
                 for i in range(body.GetNumChildren()):
                     child = body.GetChildAtIndex(i)
-                    if child.GetName() != "$header":
-                        self.children.append(child)
+                    if child.GetName() == "$header":
+                        continue
+                    # One captured by reference lives in a box: shown is what it holds.
+                    if _canonical_name(child).startswith("Box$of$") and _object_address(child) != 0:
+                        child = _object_body(child).GetChildMemberWithName("value").Clone(child.GetName())
+                    self.children.append(child)
         return False
 
     def num_children(self, max_children=None):
@@ -564,6 +577,17 @@ def existential_summary(valobj, internal_dict):
 # Tuples and weak references
 # ---------------------------------------------------------------------------
 
+def char_summary(valobj, internal_dict):
+    value = _raw(valobj).GetValueAsUnsigned(0)
+    try:
+        text = chr(value)
+    except ValueError:
+        return "U+%04X" % value
+    if text == "'":
+        return "'\\''"
+    return "'\"'" if text == '"' else "'%s'" % _quote(text)[1:-1]
+
+
 def tuple_summary(valobj, internal_dict):
     raw = _raw(valobj)
     if _canonical_name(raw).endswith("$closure"):
@@ -599,6 +623,7 @@ def _register(debugger, module):
     summaries = [
         ("^String$", "string_summary", "-v"),
         ("^SableString \\*$", "string_summary", "-v"),
+        ("^Char$", "char_summary", "-v"),
         ("\\$list$", "list_summary", "-e"),
         ("\\$union$", "union_summary", ""),
         ("\\$optional$", "optional_summary", ""),

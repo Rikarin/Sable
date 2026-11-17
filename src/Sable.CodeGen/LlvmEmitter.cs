@@ -401,6 +401,24 @@ public sealed partial class LlvmEmitter {
     // Value witnesses and metadata
     // =======================================================================
 
+    /// <summary>The bytes of the header every counted object starts with (docs/06 §6.2).</summary>
+    const int ObjectHeaderSize = 16;
+
+    /// <summary>A class's fields and where each is in an object, past the header — as <see cref="ObjectType" /> lays them out.</summary>
+    static IEnumerable<(string Name, SilType Type, int Offset)> ObjectFields(ClassType type) {
+        var offset = ObjectHeaderSize;
+        foreach (var (name, fieldType) in type.Fields) {
+            var align = Align(fieldType);
+            offset = (offset + align - 1) / align * align;
+            yield return (name, fieldType, offset);
+            offset += Size(fieldType);
+        }
+    }
+
+    /// <summary>What a box holds — the class a local captured by reference lives in — or null for any other type.</summary>
+    static SilType? BoxedType(SilType type) =>
+        type is ClassType { Fields: [("value", var boxed)] } box && box.Name.StartsWith("Box$of$", StringComparison.Ordinal) ? boxed : null;
+
     /// <summary>The LLVM struct an object of a class is: the header, then the fields.</summary>
     static string ObjectType(ClassType type) =>
         $"{{ ptr, i32, i32{string.Concat(type.Fields.Select(static f => ", " + Type(f.Type)))} }}";
@@ -940,27 +958,45 @@ public sealed partial class LlvmEmitter {
             // The parameters, for the debugger: each stored in a slot of its
             // own, as clang does at -O0, so that it can be read anywhere in
             // the function and not only while its register still holds it.
-            // A closure's context is shown as what it is, its captures.
             if (_scope is not null && Debug is not null) {
                 var file = Debug.FileOf(function);
                 var line = function.SourceFile is null ? 0 : function.Line;
-                var entryLocation = EntryLocation;
                 for (var i = 0; i < function.Entry.Arguments.Count; i++) {
                     var argument = function.Entry.Arguments[i];
-                    var (name, type, artificial) = i < function.ParameterNames.Count
-                        ? (function.ParameterNames[i], argument.Type, false)
-                        : argument.Type == SilType.Object && ContextType(argument) is { } context
-                            ? ("$captures", context, true)
-                            : ((string?)null, argument.Type, false);
-                    if (name is null || argument.Type == SilType.Unit) {
+                    if (argument.Type == SilType.Unit) {
                         continue;
                     }
 
-                    var variable = Debug.Variable(name, _scope, file, line, type, i + 1, artificial);
                     var slot = $"%p{i}.debug";
+                    var declarations = new List<(string Variable, string Expression)>();
+                    if (i < function.ParameterNames.Count) {
+                        declarations.Add((Debug.Variable(function.ParameterNames[i], _scope, file, line, argument.Type, i + 1), ""));
+                    } else if (argument.Type == SilType.Object && ContextType(argument) is { } context) {
+                        if (BoxedType(context) is { } boxed) {
+                            // A protocol witness's context is the box an
+                            // existential keeps its value in: that value is its self.
+                            declarations.Add((Debug.Variable("self", _scope, file, line, boxed, i + 1), $"DW_OP_deref, DW_OP_plus_uconst, {ObjectHeaderSize}"));
+                        } else if (context.Name.EndsWith("$context", StringComparison.Ordinal)) {
+                            // A closure's: what it captured, each by its own
+                            // name, as if a local — through the box of one
+                            // captured by reference.
+                            foreach (var (fieldName, fieldType, offset) in ObjectFields(context)) {
+                                declarations.Add(BoxedType(fieldType) is { } inner
+                                    ? (Debug.Variable(fieldName, _scope, file, line, inner), $"DW_OP_deref, DW_OP_plus_uconst, {offset}, DW_OP_deref, DW_OP_plus_uconst, {ObjectHeaderSize}")
+                                    : (Debug.Variable(fieldName, _scope, file, line, fieldType), $"DW_OP_deref, DW_OP_plus_uconst, {offset}"));
+                            }
+                        }
+                    }
+
+                    if (declarations.Count == 0) {
+                        continue;
+                    }
+
                     _entryAllocas.Append($"  {slot} = alloca {Type(argument.Type)}\n")
-                        .Append($"  store {Type(argument.Type)} {_names[argument]}, ptr {slot}\n")
-                        .Append($"  call void @llvm.dbg.declare(metadata ptr {slot}, metadata {variable}, metadata !DIExpression()){entryLocation}\n");
+                        .Append($"  store {Type(argument.Type)} {_names[argument]}, ptr {slot}\n");
+                    foreach (var (variable, expression) in declarations) {
+                        _entryAllocas.Append($"  call void @llvm.dbg.declare(metadata ptr {slot}, metadata {variable}, metadata !DIExpression({expression})){EntryLocation}\n");
+                    }
                 }
             }
 
@@ -1110,9 +1146,9 @@ public sealed partial class LlvmEmitter {
                     // points to: the variable is the value inside it.
                     if (_scope is not null && alloc.VariableName is { } variable) {
                         var line = alloc.Location?.Line ?? function.Line;
-                        if (alloc.ElementType is ClassType { Fields: [("value", var boxed)] } box && box.Name.StartsWith("Box$of$", StringComparison.Ordinal)) {
+                        if (BoxedType(alloc.ElementType) is { } boxed) {
                             var node = Debug!.Variable(variable, _scope, Debug.FileOf(function), line, boxed);
-                            Line($"call void @llvm.dbg.declare(metadata ptr {name}, metadata {node}, metadata !DIExpression(DW_OP_deref, DW_OP_plus_uconst, 16))");
+                            Line($"call void @llvm.dbg.declare(metadata ptr {name}, metadata {node}, metadata !DIExpression(DW_OP_deref, DW_OP_plus_uconst, {ObjectHeaderSize}))");
                         } else {
                             var node = Debug!.Variable(variable, _scope, Debug.FileOf(function), line, alloc.ElementType);
                             Line($"call void @llvm.dbg.declare(metadata ptr {name}, metadata {node}, metadata !DIExpression())");

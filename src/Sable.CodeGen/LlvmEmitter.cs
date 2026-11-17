@@ -31,7 +31,7 @@ namespace Sable.CodeGen;
 ///         out-of-range shifts — the language's promise, kept in the code.
 ///     </para>
 /// </remarks>
-public sealed class LlvmEmitter {
+public sealed partial class LlvmEmitter {
     readonly StringBuilder _globals = new();
     readonly StringBuilder _helpers = new();
     readonly Dictionary<string, string> _strings = new(StringComparer.Ordinal);
@@ -59,6 +59,7 @@ public sealed class LlvmEmitter {
     string EmitModule(SilModule module) {
         _module = module;
         _checkExclusivity = module.CheckExclusivity;
+        _debug?.Begin(module);
 
         // Only what the program reaches is built: the library's other functions are not.
         _reachable = SilPassManager.Reachable(module);
@@ -104,138 +105,6 @@ public sealed class LlvmEmitter {
         }
 
         return output.ToString();
-    }
-
-    // =======================================================================
-    // Debug information
-    // =======================================================================
-
-    /// <summary>
-    ///     The DWARF metadata: one compile unit, a file per source, a
-    ///     subprogram per function, a location per instruction, and a variable
-    ///     per local and parameter — what lldb needs for frames, locals and
-    ///     their types.
-    /// </summary>
-    sealed class DebugInfo(string directory) {
-        readonly List<string> _nodes = [];
-        readonly Dictionary<string, string> _unique = new(StringComparer.Ordinal);
-        readonly Dictionary<string, string> _files = new(StringComparer.Ordinal);
-        string? _unit;
-
-        /// <summary>A metadata node; identical bodies share one, unless it is distinct.</summary>
-        public string Node(string body, bool distinct = false) {
-            if (!distinct && _unique.TryGetValue(body, out var existing)) {
-                return existing;
-            }
-
-            var name = $"!{_nodes.Count}";
-            _nodes.Add($"{name} = {(distinct ? "distinct " : "")}{body}");
-            if (!distinct) {
-                _unique[body] = name;
-            }
-
-            return name;
-        }
-
-        public string File(string fileName) {
-            if (_files.TryGetValue(fileName, out var file)) {
-                return file;
-            }
-
-            file = Node($"!DIFile(filename: {Quote(fileName)}, directory: {Quote(directory)})");
-            _files[fileName] = file;
-            _unit ??= Node(
-                $"!DICompileUnit(language: DW_LANG_C, file: {file}, producer: \"sable\", isOptimized: false, "
-                + "runtimeVersion: 0, emissionKind: FullDebug)",
-                distinct: true
-            );
-            return file;
-        }
-
-        public string Unit => _unit!;
-
-        public string Subprogram(SilFunction function) {
-            var file = File(function.SourceFile ?? "<unknown>");
-            var type = Node("!DISubroutineType(types: !{})");
-            var name = function.Name[(function.Name.LastIndexOf('.') + 1)..];
-            return Node(
-                $"!DISubprogram(name: {Quote(name)}, linkageName: {Quote(SymbolPrefix + function.Name)}, scope: {file}, file: {file}, "
-                + $"line: {function.Line}, type: {type}, scopeLine: {function.Line}, spFlags: DISPFlagDefinition, unit: {Unit})",
-                distinct: true
-            );
-        }
-
-        public string Location(int line, int column, string scope) =>
-            Node($"!DILocation(line: {line}, column: {column}, scope: {scope})");
-
-        public string Variable(string name, string scope, string file, int line, SilType type, int argument = 0) {
-            var typePart = Type(type) is { } typeNode ? $", type: {typeNode}" : "";
-            var argumentPart = argument > 0 ? $", arg: {argument}" : "";
-            return Node($"!DILocalVariable(name: {Quote(name)}{argumentPart}, scope: {scope}, file: {file}, line: {line}{typePart})");
-        }
-
-        /// <summary>The DWARF type for a SIL type: the scalars, and structs field by field.</summary>
-        string? Type(SilType type) {
-            switch (type) {
-                // Named as Sable names them, over the machine type a debugger
-                // knows how to print.
-                case var _ when type == SilType.Int:
-                    return Named("Int", "!DIBasicType(name: \"int64_t\", size: 64, encoding: DW_ATE_signed)");
-                case var _ when type == SilType.Bool:
-                    return Named("Bool", "!DIBasicType(name: \"bool\", size: 8, encoding: DW_ATE_boolean)");
-                case var _ when type == SilType.F64:
-                    return Named("F64", "!DIBasicType(name: \"double\", size: 64, encoding: DW_ATE_float)");
-                case var _ when type == SilType.F32:
-                    return Named("F32", "!DIBasicType(name: \"float\", size: 32, encoding: DW_ATE_float)");
-                case var _ when SilType.IntegerInfo(type) is var (bits, signed):
-                    return Named(type.ToString(), $"!DIBasicType(name: \"{(signed ? "" : "u")}int{bits}_t\", size: {bits}, encoding: {(signed ? "DW_ATE_signed" : "DW_ATE_unsigned")})");
-                // A struct with a hidden live byte is not described field by field, nor is a block of inline bytes.
-                case StructType { Deinit: not null } or StructType { IsInline: true }:
-                    return null;
-
-                case StructType structType: {
-                    var members = new List<string>();
-                    var offset = 0;
-                    foreach (var (fieldName, fieldType) in structType.Fields) {
-                        var align = Align(fieldType);
-                        offset = (offset + align - 1) / align * align;
-                        var fieldNode = Type(fieldType);
-                        members.Add(Node(
-                            $"!DIDerivedType(tag: DW_TAG_member, name: {Quote(fieldName)}, "
-                            + (fieldNode is null ? "" : $"baseType: {fieldNode}, ")
-                            + $"size: {Size(fieldType) * 8}, offset: {offset * 8})"
-                        ));
-                        offset += Size(fieldType);
-                    }
-
-                    return Node(
-                        $"!DICompositeType(tag: DW_TAG_structure_type, name: {Quote(structType.Name)}, "
-                        + $"size: {Size(structType) * 8}, elements: !{{{string.Join(", ", members)}}})"
-                    );
-                }
-
-                default:
-                    return null;
-            }
-        }
-
-        string Named(string name, string basic) =>
-            Node($"!DIDerivedType(tag: DW_TAG_typedef, name: {Quote(name)}, baseType: {Node(basic)})");
-
-        static string Quote(string text) =>
-            "\"" + text.Replace("\\", "\\5C", StringComparison.Ordinal).Replace("\"", "\\22", StringComparison.Ordinal) + "\"";
-
-        public string Metadata() {
-            var flags = new StringBuilder();
-            var dwarf = Node("!{i32 7, !\"Dwarf Version\", i32 4}");
-            var version = Node("!{i32 2, !\"Debug Info Version\", i32 3}");
-            flags.Append($"\n!llvm.dbg.cu = !{{{_unit}}}\n!llvm.module.flags = !{{{dwarf}, {version}}}\n\n");
-            foreach (var node in _nodes) {
-                flags.Append(node).Append('\n');
-            }
-
-            return flags.ToString();
-        }
     }
 
     const string Declarations = """
@@ -532,6 +401,24 @@ public sealed class LlvmEmitter {
     // =======================================================================
     // Value witnesses and metadata
     // =======================================================================
+
+    /// <summary>The bytes of the header every counted object starts with (docs/06 §6.2).</summary>
+    const int ObjectHeaderSize = 16;
+
+    /// <summary>A class's fields and where each is in an object, past the header — as <see cref="ObjectType" /> lays them out.</summary>
+    static IEnumerable<(string Name, SilType Type, int Offset)> ObjectFields(ClassType type) {
+        var offset = ObjectHeaderSize;
+        foreach (var (name, fieldType) in type.Fields) {
+            var align = Align(fieldType);
+            offset = (offset + align - 1) / align * align;
+            yield return (name, fieldType, offset);
+            offset += Size(fieldType);
+        }
+    }
+
+    /// <summary>What a box holds — the class a local captured by reference lives in — or null for any other type.</summary>
+    static SilType? BoxedType(SilType type) =>
+        type is ClassType { Fields: [("value", var boxed)] } box && box.Name.StartsWith("Box$of$", StringComparison.Ordinal) ? boxed : null;
 
     /// <summary>The LLVM struct an object of a class is: the header, then the fields.</summary>
     static string ObjectType(ClassType type) =>
@@ -1014,9 +901,11 @@ public sealed class LlvmEmitter {
         DebugInfo? Debug => module._debug;
 
         public string Emit() {
-            if (Debug is not null && function.SourceFile is not null) {
+            // Every function has a subprogram; one the compiler made, with no
+            // source of its own, is artificial, its code all at line 0.
+            if (Debug is not null) {
                 _scope = Debug.Subprogram(function);
-                _dbg = $", !dbg {Debug.Location(function.Line, 1, _scope)}";
+                _dbg = EntryLocation;
             }
 
             for (var i = 0; i < function.Blocks.Count; i++) {
@@ -1067,16 +956,48 @@ public sealed class LlvmEmitter {
 
             text.Append(" {\n");
 
-            // The parameters, for the debugger: their values, as they came in.
+            // The parameters, for the debugger: each stored in a slot of its
+            // own, as clang does at -O0, so that it can be read anywhere in
+            // the function and not only while its register still holds it.
             if (_scope is not null && Debug is not null) {
-                var file = Debug.File(function.SourceFile!);
-                var entryLocation = $", !dbg {Debug.Location(function.Line, 1, _scope)}";
-                for (var i = 0; i < function.Entry.Arguments.Count && i < function.ParameterNames.Count; i++) {
+                var file = Debug.FileOf(function);
+                var line = function.SourceFile is null ? 0 : function.Line;
+                for (var i = 0; i < function.Entry.Arguments.Count; i++) {
                     var argument = function.Entry.Arguments[i];
-                    var variable = Debug.Variable(function.ParameterNames[i], _scope, file, function.Line, argument.Type, i + 1);
-                    _entryAllocas.Append(
-                        $"  call void @llvm.dbg.value(metadata {Type(argument.Type)} {_names[argument]}, metadata {variable}, metadata !DIExpression()){entryLocation}\n"
-                    );
+                    if (argument.Type == SilType.Unit) {
+                        continue;
+                    }
+
+                    var slot = $"%p{i}.debug";
+                    var declarations = new List<(string Variable, string Expression)>();
+                    if (i < function.ParameterNames.Count) {
+                        declarations.Add((Debug.Variable(function.ParameterNames[i], _scope, file, line, argument.Type, i + 1), ""));
+                    } else if (argument.Type == SilType.Object && ContextType(argument) is { } context) {
+                        if (BoxedType(context) is { } boxed) {
+                            // A protocol witness's context is the box an
+                            // existential keeps its value in: that value is its self.
+                            declarations.Add((Debug.Variable("self", _scope, file, line, boxed, i + 1), $"DW_OP_deref, DW_OP_plus_uconst, {ObjectHeaderSize}"));
+                        } else if (context.Name.EndsWith("$context", StringComparison.Ordinal)) {
+                            // A closure's: what it captured, each by its own
+                            // name, as if a local — through the box of one
+                            // captured by reference.
+                            foreach (var (fieldName, fieldType, offset) in ObjectFields(context)) {
+                                declarations.Add(BoxedType(fieldType) is { } inner
+                                    ? (Debug.Variable(fieldName, _scope, file, line, inner), $"DW_OP_deref, DW_OP_plus_uconst, {offset}, DW_OP_deref, DW_OP_plus_uconst, {ObjectHeaderSize}")
+                                    : (Debug.Variable(fieldName, _scope, file, line, fieldType), $"DW_OP_deref, DW_OP_plus_uconst, {offset}"));
+                            }
+                        }
+                    }
+
+                    if (declarations.Count == 0) {
+                        continue;
+                    }
+
+                    _entryAllocas.Append($"  {slot} = alloca {Type(argument.Type)}\n")
+                        .Append($"  store {Type(argument.Type)} {_names[argument]}, ptr {slot}\n");
+                    foreach (var (variable, expression) in declarations) {
+                        _entryAllocas.Append($"  call void @llvm.dbg.declare(metadata ptr {slot}, metadata {variable}, metadata !DIExpression({expression})){EntryLocation}\n");
+                    }
                 }
             }
 
@@ -1105,6 +1026,15 @@ public sealed class LlvmEmitter {
         }
 
         string Fresh() => $"%t{_temporaries++}";
+
+        /// <summary>The <c>!dbg</c> attachment for the function's prologue: its own line.</summary>
+        string EntryLocation => function.SourceFile is null
+            ? $", !dbg {Debug!.Location(0, 0, _scope!)}"
+            : $", !dbg {Debug!.Location(function.Line, 1, _scope!)}";
+
+        /// <summary>The class a closure's context is, from the cast its code starts with; or null.</summary>
+        ClassType? ContextType(SilArgument context) =>
+            function.Entry.Instructions.OfType<UncheckedRefCastInst>().FirstOrDefault(c => c.Value == context)?.Type as ClassType;
 
         static List<SilBlock> ReversePostorder(SilFunction function) {
             var visited = new HashSet<SilBlock>();
@@ -1162,7 +1092,8 @@ public sealed class LlvmEmitter {
         }
 
         void Instruction(SilInstruction instruction) {
-            if (_scope is not null && instruction.Location is { } location) {
+            // A slot is made where the function starts, whatever line declared its variable.
+            if (_scope is not null && instruction.Location is { } location && instruction is not AllocStackInst) {
                 _dbg = $", !dbg {Debug!.Location(location.Line, location.Column, _scope)}";
             }
 
@@ -1191,6 +1122,19 @@ public sealed class LlvmEmitter {
                 case AllocStackInst alloc: {
                     var name = Fresh();
                     _names[alloc] = name;
+
+                    // With debug information, a slot of the entry block is
+                    // made before anything else, at the function's own line:
+                    // the code that makes it is no statement to stop at, and
+                    // a breakpoint on its variable's line must find the
+                    // statement, not this.
+                    var output = _out;
+                    var savedDbg = _dbg;
+                    if (_scope is not null && alloc.Block == function.Entry) {
+                        _out = _entryAllocas;
+                        _dbg = EntryLocation;
+                    }
+
                     Line($"{name} = alloca {Type(alloc.ElementType)}");
 
                     // Storage for something with references starts empty: all zeros.
@@ -1199,12 +1143,21 @@ public sealed class LlvmEmitter {
                     }
 
                     // A source variable lives in this slot for the whole function.
+                    // One a closure captures lives in a box, which the slot
+                    // points to: the variable is the value inside it.
                     if (_scope is not null && alloc.VariableName is { } variable) {
                         var line = alloc.Location?.Line ?? function.Line;
-                        var node = Debug!.Variable(variable, _scope, Debug.File(function.SourceFile!), line, alloc.ElementType);
-                        Line($"call void @llvm.dbg.declare(metadata ptr {name}, metadata {node}, metadata !DIExpression())");
+                        if (BoxedType(alloc.ElementType) is { } boxed) {
+                            var node = Debug!.Variable(variable, _scope, Debug.FileOf(function), line, boxed);
+                            Line($"call void @llvm.dbg.declare(metadata ptr {name}, metadata {node}, metadata !DIExpression(DW_OP_deref, DW_OP_plus_uconst, {ObjectHeaderSize}))");
+                        } else {
+                            var node = Debug!.Variable(variable, _scope, Debug.FileOf(function), line, alloc.ElementType);
+                            Line($"call void @llvm.dbg.declare(metadata ptr {name}, metadata {node}, metadata !DIExpression())");
+                        }
                     }
 
+                    _out = output;
+                    _dbg = savedDbg;
                     return;
                 }
 

@@ -4853,7 +4853,18 @@ public sealed partial class SilGen {
                         return Missing(closureExpression, $"capturing a value of type '{capture.Type.ToDisplayString()}'");
                     }
 
-                    contextType.Fields.Add(($"c{capture.Field}", capture.Boxed ? generator.BoxType(fieldType) : fieldType));
+                    // Each field is named for what it captured, so that a
+                    // debugger shows it by that name inside the closure.
+                    var fieldName = capture.Key switch {
+                        Symbol { Name: { Length: > 0 } captured } => captured,
+                        string key => key,
+                        _ => $"c{capture.Field}",
+                    };
+                    if (contextType.FieldIndex(fieldName) >= 0) {
+                        fieldName = $"{fieldName}${capture.Field}";
+                    }
+
+                    contextType.Fields.Add((fieldName, capture.Boxed ? generator.BoxType(fieldType) : fieldType));
                 }
             }
 

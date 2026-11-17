@@ -8,5 +8,6 @@
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="../../runtime/sable_runtime.c" LogicalName="Sable.CodeGen.sable_runtime.c" />
+    <EmbeddedResource Include="../../tools/lldb/sable_lldb.py" LogicalName="Sable.CodeGen.sable_lldb.py" />
   </ItemGroup>
 </Project>

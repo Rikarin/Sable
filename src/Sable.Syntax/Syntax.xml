@@ -240,10 +240,11 @@
   </Node>
 
   <Node Name="InvocationExpressionSyntax" Base="ExpressionSyntax" Kind="InvocationExpression"
-        Doc="`f(x)` or `f?(x)`.">
+        Doc="`f(x)`, `f?(x)`, or `f(x) { ... }` with a trailing closure.">
     <Field Name="Expression" Type="ExpressionSyntax" />
     <Field Name="QuestionToken" Type="Token" Optional="true" />
-    <Field Name="ArgumentList" Type="ArgumentListSyntax" />
+    <Field Name="ArgumentList" Type="ArgumentListSyntax" Optional="true" />
+    <Field Name="TrailingClosure" Type="BraceClosureExpressionSyntax" Optional="true" />
   </Node>
 
   <Node Name="ArgumentListSyntax" Base="SyntaxNode" Kind="ArgumentList"
@@ -390,6 +391,424 @@
         Doc="A compiler builtin: `#file`, `#line`, `#column`, `#function`, `#module`.">
     <Field Name="HashToken" Type="Token" />
     <Field Name="NameToken" Type="Token" />
+  </Node>
+
+  <Abstract Name="PatternSyntax" Base="SyntaxNode"
+            Doc="Any pattern. See spec/SYNTAX.md §15." />
+  <Abstract Name="StatementSyntax" Base="SyntaxNode"
+            Doc="Any statement." />
+  <Abstract Name="ConditionSyntax" Base="SyntaxNode"
+            Doc="One element of an `if`, `guard` or `while` condition list." />
+
+  <!-- ==================================================================== -->
+  <!-- Closures                                                             -->
+  <!-- ==================================================================== -->
+
+  <Node Name="ClosureExpressionSyntax" Base="ExpressionSyntax" Kind="ClosureExpression"
+        Doc="The arrow form: `(a, b) =&gt; a + b`, or `x =&gt; x * 2`.">
+    <Field Name="CaptureList" Type="CaptureListSyntax" Optional="true" />
+    <Field Name="Signature" Type="ClosureSignatureSyntax" />
+    <Field Name="ArrowToken" Type="Token" />
+    <Field Name="Body" Type="SyntaxNode" />
+  </Node>
+
+  <Node Name="ClosureSignatureSyntax" Base="SyntaxNode" Kind="ClosureSignature"
+        Doc="An arrow closure's parameters, parenthesised or a single bare name.">
+    <Field Name="OpenParenToken" Type="Token" Optional="true" />
+    <Field Name="Parameters" Type="SeparatedList:ClosureParameterSyntax" />
+    <Field Name="CloseParenToken" Type="Token" Optional="true" />
+    <Field Name="ArrowToken" Type="Token" Optional="true" />
+    <Field Name="ReturnType" Type="TypeSyntax" Optional="true" />
+  </Node>
+
+  <Node Name="ClosureParameterSyntax" Base="SyntaxNode" Kind="ClosureParameter">
+    <Field Name="Identifier" Type="Token" />
+    <Field Name="ColonToken" Type="Token" Optional="true" />
+    <Field Name="Type" Type="TypeSyntax" Optional="true" />
+  </Node>
+
+  <Node Name="BraceClosureExpressionSyntax" Base="ExpressionSyntax" Kind="BraceClosureExpression"
+        Doc="The brace form: `{ a, b in ... }`, or `{ $0.isActive }`.">
+    <Field Name="CaptureList" Type="CaptureListSyntax" Optional="true" />
+    <Field Name="OpenBraceToken" Type="Token" />
+    <Field Name="Header" Type="ClosureHeaderSyntax" Optional="true" />
+    <Field Name="Statements" Type="List:StatementSyntax" />
+    <Field Name="CloseBraceToken" Type="Token" />
+  </Node>
+
+  <Node Name="ClosureHeaderSyntax" Base="SyntaxNode" Kind="ClosureHeader"
+        Doc="`a, b -&gt; T in` at the head of a brace closure; the parentheses are optional.">
+    <Field Name="OpenParenToken" Type="Token" Optional="true" />
+    <Field Name="Parameters" Type="SeparatedList:ClosureParameterSyntax" />
+    <Field Name="CloseParenToken" Type="Token" Optional="true" />
+    <Field Name="ArrowToken" Type="Token" Optional="true" />
+    <Field Name="ReturnType" Type="TypeSyntax" Optional="true" />
+    <Field Name="InKeyword" Type="Token" />
+  </Node>
+
+  <Node Name="CaptureListSyntax" Base="SyntaxNode" Kind="CaptureList"
+        Doc="`[weak self, count = localCount]`.">
+    <Field Name="OpenBracketToken" Type="Token" />
+    <Field Name="Items" Type="SeparatedList:CaptureItemSyntax" />
+    <Field Name="CloseBracketToken" Type="Token" />
+  </Node>
+
+  <Node Name="CaptureItemSyntax" Base="SyntaxNode" Kind="CaptureItem">
+    <Field Name="SpecifierToken" Type="Token" Optional="true" />
+    <Field Name="Identifier" Type="Token" />
+    <Field Name="EqualsToken" Type="Token" Optional="true" />
+    <Field Name="Expression" Type="ExpressionSyntax" Optional="true" />
+  </Node>
+
+  <Node Name="ImplicitParameterExpressionSyntax" Base="ExpressionSyntax"
+        Kind="ImplicitParameterExpression"
+        Doc="`$0`, `$1`: a positional closure parameter.">
+    <Field Name="DollarToken" Type="Token" />
+    <Field Name="NumberToken" Type="Token" />
+  </Node>
+
+  <!-- ==================================================================== -->
+  <!-- match                                                                -->
+  <!-- ==================================================================== -->
+
+  <Node Name="MatchExpressionSyntax" Base="ExpressionSyntax" Kind="MatchExpression"
+        Doc="`match e { case p =&gt; v ... }`. In statement position it is wrapped in an expression statement.">
+    <Field Name="MatchKeyword" Type="Token" />
+    <Field Name="Expression" Type="ExpressionSyntax" />
+    <Field Name="OpenBraceToken" Type="Token" />
+    <Field Name="Arms" Type="List:SyntaxNode" />
+    <Field Name="CloseBraceToken" Type="Token" />
+  </Node>
+
+  <Node Name="MatchArmSyntax" Base="SyntaxNode" Kind="MatchArm"
+        Doc="`case p where c =&gt; body`, or `default =&gt; body`.">
+    <Field Name="CaseOrDefaultKeyword" Type="Token" />
+    <Field Name="Patterns" Type="SeparatedList:PatternSyntax" />
+    <Field Name="WhereClause" Type="PatternWhereClauseSyntax" Optional="true" />
+    <Field Name="ArrowToken" Type="Token" />
+    <Field Name="Body" Type="SyntaxNode" />
+  </Node>
+
+  <Node Name="MatchCaseBlockSyntax" Base="SyntaxNode" Kind="MatchCaseBlock"
+        Doc="`case p: statements`, the colon form of a match case.">
+    <Field Name="CaseOrDefaultKeyword" Type="Token" />
+    <Field Name="Patterns" Type="SeparatedList:PatternSyntax" />
+    <Field Name="WhereClause" Type="PatternWhereClauseSyntax" Optional="true" />
+    <Field Name="ColonToken" Type="Token" />
+    <Field Name="Statements" Type="List:StatementSyntax" />
+  </Node>
+
+  <Node Name="PatternWhereClauseSyntax" Base="SyntaxNode" Kind="PatternWhereClause">
+    <Field Name="WhereKeyword" Type="Token" />
+    <Field Name="Condition" Type="ExpressionSyntax" />
+  </Node>
+
+  <!-- ==================================================================== -->
+  <!-- Patterns                                                             -->
+  <!-- ==================================================================== -->
+
+  <Node Name="WildcardPatternSyntax" Base="PatternSyntax" Kind="WildcardPattern" Doc="`_`.">
+    <Field Name="UnderscoreToken" Type="Token" />
+  </Node>
+
+  <Node Name="BindingPatternSyntax" Base="PatternSyntax" Kind="BindingPattern"
+        Doc="`let x`, `var x`, or a bare `x`.">
+    <Field Name="LetOrVarKeyword" Type="Token" Optional="true" />
+    <Field Name="Identifier" Type="Token" />
+  </Node>
+
+  <Node Name="LiteralPatternSyntax" Base="PatternSyntax" Kind="LiteralPattern"
+        Doc="`42`, `-1`, `&quot;a&quot;`, `true`, `none`.">
+    <Field Name="MinusToken" Type="Token" Optional="true" />
+    <Field Name="Token" Type="Token" />
+  </Node>
+
+  <Node Name="RangePatternSyntax" Base="PatternSyntax" Kind="RangePattern"
+        Doc="`1...9`, `..&lt;10`, `5...`.">
+    <Field Name="Left" Type="PatternSyntax" Optional="true" />
+    <Field Name="OperatorToken" Type="Token" />
+    <Field Name="Right" Type="PatternSyntax" Optional="true" />
+  </Node>
+
+  <Node Name="TuplePatternSyntax" Base="PatternSyntax" Kind="TuplePattern" Doc="`(a, b)`.">
+    <Field Name="OpenParenToken" Type="Token" />
+    <Field Name="Elements" Type="SeparatedList:PatternSyntax" />
+    <Field Name="CloseParenToken" Type="Token" />
+  </Node>
+
+  <Node Name="ParenthesizedPatternSyntax" Base="PatternSyntax" Kind="ParenthesizedPattern">
+    <Field Name="OpenParenToken" Type="Token" />
+    <Field Name="Pattern" Type="PatternSyntax" />
+    <Field Name="CloseParenToken" Type="Token" />
+  </Node>
+
+  <Node Name="UnionCasePatternSyntax" Base="PatternSyntax" Kind="UnionCasePattern"
+        Doc="`.Circle(let r)`, `Shape.Rect(width: let w, _)`.">
+    <Field Name="Qualifier" Type="TypeSyntax" Optional="true" />
+    <Field Name="DotToken" Type="Token" />
+    <Field Name="Identifier" Type="Token" />
+    <Field Name="ArgumentList" Type="PatternArgumentListSyntax" Optional="true" />
+  </Node>
+
+  <Node Name="PatternArgumentListSyntax" Base="SyntaxNode" Kind="PatternArgumentList">
+    <Field Name="OpenParenToken" Type="Token" />
+    <Field Name="Arguments" Type="SeparatedList:SubPatternSyntax" />
+    <Field Name="CloseParenToken" Type="Token" />
+  </Node>
+
+  <Node Name="SubPatternSyntax" Base="SyntaxNode" Kind="SubPattern"
+        Doc="One payload element of a union case pattern, with an optional label.">
+    <Field Name="NameToken" Type="Token" Optional="true" />
+    <Field Name="ColonToken" Type="Token" Optional="true" />
+    <Field Name="Pattern" Type="PatternSyntax" />
+  </Node>
+
+  <Node Name="RecordPatternSyntax" Base="PatternSyntax" Kind="RecordPattern"
+        Doc="`Point { x: 0, y: let y }`, or `{ name, age }` when destructuring a known type.">
+    <Field Name="Type" Type="TypeSyntax" Optional="true" />
+    <Field Name="OpenBraceToken" Type="Token" />
+    <Field Name="Fields" Type="SeparatedList:FieldPatternSyntax" />
+    <Field Name="CloseBraceToken" Type="Token" />
+  </Node>
+
+  <Node Name="FieldPatternSyntax" Base="SyntaxNode" Kind="FieldPattern">
+    <Field Name="NameToken" Type="Token" />
+    <Field Name="ColonToken" Type="Token" Optional="true" />
+    <Field Name="Pattern" Type="PatternSyntax" Optional="true" />
+  </Node>
+
+  <Node Name="ArrayPatternSyntax" Base="PatternSyntax" Kind="ArrayPattern"
+        Doc="`[first, _, last]` or `[let head, ...let tail]`.">
+    <Field Name="OpenBracketToken" Type="Token" />
+    <Field Name="Elements" Type="SeparatedList:PatternSyntax" />
+    <Field Name="CloseBracketToken" Type="Token" />
+  </Node>
+
+  <Node Name="RestPatternSyntax" Base="PatternSyntax" Kind="RestPattern"
+        Doc="`...` or `...let tail` inside an array pattern.">
+    <Field Name="DotDotDotToken" Type="Token" />
+    <Field Name="LetKeyword" Type="Token" Optional="true" />
+    <Field Name="Identifier" Type="Token" Optional="true" />
+  </Node>
+
+  <Node Name="TypeTestPatternSyntax" Base="PatternSyntax" Kind="TypeTestPattern" Doc="`is T`.">
+    <Field Name="IsKeyword" Type="Token" />
+    <Field Name="Type" Type="TypeSyntax" />
+  </Node>
+
+  <Node Name="BindingTypeTestPatternSyntax" Base="PatternSyntax" Kind="BindingTypeTestPattern"
+        Doc="`let s as String`.">
+    <Field Name="LetOrVarKeyword" Type="Token" />
+    <Field Name="Identifier" Type="Token" />
+    <Field Name="AsKeyword" Type="Token" />
+    <Field Name="Type" Type="TypeSyntax" />
+  </Node>
+
+  <Node Name="OrPatternSyntax" Base="PatternSyntax" Kind="OrPattern" Doc="`a | b`.">
+    <Field Name="Left" Type="PatternSyntax" />
+    <Field Name="PipeToken" Type="Token" />
+    <Field Name="Right" Type="PatternSyntax" />
+  </Node>
+
+  <!-- ==================================================================== -->
+  <!-- Statements                                                           -->
+  <!-- ==================================================================== -->
+
+  <Node Name="BlockSyntax" Base="StatementSyntax" Kind="Block">
+    <Field Name="OpenBraceToken" Type="Token" />
+    <Field Name="Statements" Type="List:StatementSyntax" />
+    <Field Name="CloseBraceToken" Type="Token" />
+  </Node>
+
+  <Node Name="ExpressionStatementSyntax" Base="StatementSyntax" Kind="ExpressionStatement">
+    <Field Name="Expression" Type="ExpressionSyntax" />
+    <Field Name="SemicolonToken" Type="Token" Optional="true" />
+  </Node>
+
+  <Node Name="EmptyStatementSyntax" Base="StatementSyntax" Kind="EmptyStatement">
+    <Field Name="SemicolonToken" Type="Token" />
+  </Node>
+
+  <Node Name="LocalDeclarationStatementSyntax" Base="StatementSyntax"
+        Kind="LocalDeclarationStatement"
+        Doc="`let x: Int = 1`, `var y = 2`, `using let f = ...`.">
+    <Field Name="UsingKeyword" Type="Token" Optional="true" />
+    <Field Name="LetOrVarKeyword" Type="Token" />
+    <Field Name="Declarator" Type="VariableDeclaratorSyntax" />
+    <Field Name="SemicolonToken" Type="Token" Optional="true" />
+  </Node>
+
+  <Node Name="VariableDeclaratorSyntax" Base="SyntaxNode" Kind="VariableDeclarator"
+        Doc="The name, optional type annotation and optional initialiser of a binding.">
+    <Field Name="Pattern" Type="PatternSyntax" />
+    <Field Name="TypeAnnotation" Type="TypeAnnotationSyntax" Optional="true" />
+    <Field Name="Initializer" Type="EqualsValueClauseSyntax" Optional="true" />
+  </Node>
+
+  <Node Name="TypeAnnotationSyntax" Base="SyntaxNode" Kind="TypeAnnotation" Doc="`: T`.">
+    <Field Name="ColonToken" Type="Token" />
+    <Field Name="Type" Type="TypeSyntax" />
+  </Node>
+
+  <Node Name="EqualsValueClauseSyntax" Base="SyntaxNode" Kind="EqualsValueClause" Doc="`= e`.">
+    <Field Name="EqualsToken" Type="Token" />
+    <Field Name="Value" Type="ExpressionSyntax" />
+  </Node>
+
+  <Node Name="IfStatementSyntax" Base="StatementSyntax" Kind="IfStatement">
+    <Field Name="IfKeyword" Type="Token" />
+    <Field Name="Conditions" Type="SeparatedList:ConditionSyntax" />
+    <Field Name="Body" Type="BlockSyntax" />
+    <Field Name="ElseClause" Type="ElseClauseSyntax" Optional="true" />
+  </Node>
+
+  <Node Name="ElseClauseSyntax" Base="SyntaxNode" Kind="ElseClause"
+        Doc="`else { ... }` or `else if ...`.">
+    <Field Name="ElseKeyword" Type="Token" />
+    <Field Name="Body" Type="StatementSyntax" />
+  </Node>
+
+  <Node Name="ExpressionConditionSyntax" Base="ConditionSyntax" Kind="ExpressionCondition">
+    <Field Name="Expression" Type="ExpressionSyntax" />
+  </Node>
+
+  <Node Name="OptionalBindingConditionSyntax" Base="ConditionSyntax" Kind="OptionalBindingCondition"
+        Doc="`let user = findUser(id)`, or the shorthand `let self`.">
+    <Field Name="LetOrVarKeyword" Type="Token" />
+    <Field Name="Declarator" Type="VariableDeclaratorSyntax" />
+  </Node>
+
+  <Node Name="CasePatternConditionSyntax" Base="ConditionSyntax" Kind="CasePatternCondition"
+        Doc="`case .Circle(let r) = shape`.">
+    <Field Name="CaseKeyword" Type="Token" />
+    <Field Name="Pattern" Type="PatternSyntax" />
+    <Field Name="EqualsToken" Type="Token" />
+    <Field Name="Expression" Type="ExpressionSyntax" />
+  </Node>
+
+  <Node Name="GuardStatementSyntax" Base="StatementSyntax" Kind="GuardStatement">
+    <Field Name="GuardKeyword" Type="Token" />
+    <Field Name="Conditions" Type="SeparatedList:ConditionSyntax" />
+    <Field Name="ElseKeyword" Type="Token" />
+    <Field Name="Body" Type="BlockSyntax" />
+  </Node>
+
+  <Node Name="WhileStatementSyntax" Base="StatementSyntax" Kind="WhileStatement">
+    <Field Name="WhileKeyword" Type="Token" />
+    <Field Name="Conditions" Type="SeparatedList:ConditionSyntax" />
+    <Field Name="Body" Type="BlockSyntax" />
+  </Node>
+
+  <Node Name="RepeatStatementSyntax" Base="StatementSyntax" Kind="RepeatStatement">
+    <Field Name="RepeatKeyword" Type="Token" />
+    <Field Name="Body" Type="BlockSyntax" />
+    <Field Name="WhileKeyword" Type="Token" />
+    <Field Name="Condition" Type="ExpressionSyntax" />
+    <Field Name="SemicolonToken" Type="Token" Optional="true" />
+  </Node>
+
+  <Node Name="ForStatementSyntax" Base="StatementSyntax" Kind="ForStatement">
+    <Field Name="ForKeyword" Type="Token" />
+    <Field Name="AwaitKeyword" Type="Token" Optional="true" />
+    <Field Name="Pattern" Type="PatternSyntax" />
+    <Field Name="InKeyword" Type="Token" />
+    <Field Name="Sequence" Type="ExpressionSyntax" />
+    <Field Name="WhereClause" Type="ForWhereClauseSyntax" Optional="true" />
+    <Field Name="Body" Type="BlockSyntax" />
+  </Node>
+
+  <Node Name="ForWhereClauseSyntax" Base="SyntaxNode" Kind="ForWhereClause">
+    <Field Name="WhereKeyword" Type="Token" />
+    <Field Name="Condition" Type="ExpressionSyntax" />
+  </Node>
+
+  <Node Name="SwitchStatementSyntax" Base="StatementSyntax" Kind="SwitchStatement"
+        Doc="The C-shaped form with explicit `fallthrough`; it binds no patterns.">
+    <Field Name="SwitchKeyword" Type="Token" />
+    <Field Name="Expression" Type="ExpressionSyntax" />
+    <Field Name="OpenBraceToken" Type="Token" />
+    <Field Name="Cases" Type="List:SwitchCaseSyntax" />
+    <Field Name="CloseBraceToken" Type="Token" />
+  </Node>
+
+  <Node Name="SwitchCaseSyntax" Base="SyntaxNode" Kind="SwitchCase">
+    <Field Name="CaseOrDefaultKeyword" Type="Token" />
+    <Field Name="Values" Type="SeparatedList:ExpressionSyntax" />
+    <Field Name="ColonToken" Type="Token" />
+    <Field Name="Statements" Type="List:StatementSyntax" />
+  </Node>
+
+  <Node Name="DoStatementSyntax" Base="StatementSyntax" Kind="DoStatement">
+    <Field Name="DoKeyword" Type="Token" />
+    <Field Name="Body" Type="BlockSyntax" />
+    <Field Name="Catches" Type="List:CatchClauseSyntax" />
+  </Node>
+
+  <Node Name="CatchClauseSyntax" Base="SyntaxNode" Kind="CatchClause">
+    <Field Name="CatchKeyword" Type="Token" />
+    <Field Name="Pattern" Type="PatternSyntax" Optional="true" />
+    <Field Name="WhereClause" Type="PatternWhereClauseSyntax" Optional="true" />
+    <Field Name="Body" Type="BlockSyntax" />
+  </Node>
+
+  <Node Name="RegionStatementSyntax" Base="StatementSyntax" Kind="RegionStatement"
+        Doc="`region arena { ... }` or `region frame = pool { ... }`.">
+    <Field Name="RegionKeyword" Type="Token" />
+    <Field Name="Identifier" Type="Token" Optional="true" />
+    <Field Name="EqualsToken" Type="Token" Optional="true" />
+    <Field Name="Source" Type="ExpressionSyntax" Optional="true" />
+    <Field Name="Body" Type="BlockSyntax" />
+  </Node>
+
+  <Node Name="DeferStatementSyntax" Base="StatementSyntax" Kind="DeferStatement">
+    <Field Name="DeferKeyword" Type="Token" />
+    <Field Name="Body" Type="BlockSyntax" />
+  </Node>
+
+  <Node Name="ReturnStatementSyntax" Base="StatementSyntax" Kind="ReturnStatement">
+    <Field Name="ReturnKeyword" Type="Token" />
+    <Field Name="Expression" Type="ExpressionSyntax" Optional="true" />
+    <Field Name="SemicolonToken" Type="Token" Optional="true" />
+  </Node>
+
+  <Node Name="ThrowStatementSyntax" Base="StatementSyntax" Kind="ThrowStatement">
+    <Field Name="ThrowKeyword" Type="Token" />
+    <Field Name="Expression" Type="ExpressionSyntax" />
+    <Field Name="SemicolonToken" Type="Token" Optional="true" />
+  </Node>
+
+  <Node Name="BreakStatementSyntax" Base="StatementSyntax" Kind="BreakStatement">
+    <Field Name="BreakKeyword" Type="Token" />
+    <Field Name="Label" Type="Token" Optional="true" />
+    <Field Name="SemicolonToken" Type="Token" Optional="true" />
+  </Node>
+
+  <Node Name="ContinueStatementSyntax" Base="StatementSyntax" Kind="ContinueStatement">
+    <Field Name="ContinueKeyword" Type="Token" />
+    <Field Name="Label" Type="Token" Optional="true" />
+    <Field Name="SemicolonToken" Type="Token" Optional="true" />
+  </Node>
+
+  <Node Name="FallthroughStatementSyntax" Base="StatementSyntax" Kind="FallthroughStatement">
+    <Field Name="FallthroughKeyword" Type="Token" />
+    <Field Name="SemicolonToken" Type="Token" Optional="true" />
+  </Node>
+
+  <Node Name="UnsafeStatementSyntax" Base="StatementSyntax" Kind="UnsafeStatement">
+    <Field Name="UnsafeKeyword" Type="Token" />
+    <Field Name="Body" Type="BlockSyntax" />
+  </Node>
+
+  <Node Name="ComptimeStatementSyntax" Base="StatementSyntax" Kind="ComptimeStatement">
+    <Field Name="ComptimeKeyword" Type="Token" />
+    <Field Name="Body" Type="BlockSyntax" />
+  </Node>
+
+  <Node Name="LabeledStatementSyntax" Base="StatementSyntax" Kind="LabeledStatement"
+        Doc="`outer: for ... { ... }`.">
+    <Field Name="Label" Type="Token" />
+    <Field Name="ColonToken" Type="Token" />
+    <Field Name="Statement" Type="StatementSyntax" />
   </Node>
 
 </Syntax>

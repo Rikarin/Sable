@@ -38,7 +38,7 @@ bridge between "I want a graph of objects" and "I do not want to pay for a heap"
 ```sable
 fn parse(src: String) -> Ast.Module {
     region arena {                      // reserve, bump, release in one store
-        let tokens = arena.alloc(Token[>..])
+        let tokens: Token[>..] = arena.alloc()
         lex(src, into: tokens)
         return parseModule(tokens, in: arena).toOwned()
     }                                   // whole arena released here
@@ -378,7 +378,7 @@ class Scene {                        // Tier 2: identity, observers, reflection
     fn update(dt: F32) {
         frameArena.reset()                       // one store
         region frame = frameArena {
-            let visible = frame.alloc(Entity&[>..])   // refs rooted in 'frame'
+            let visible: Entity&[>..] = frame.alloc() // refs rooted in 'frame'
             cull(entities, into: visible)             // no allocation, no ARC
             for e in visible { e.step(dt) }           // borrowed, zero retains
         }                                             // released, one store

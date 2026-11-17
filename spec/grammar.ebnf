@@ -324,7 +324,9 @@ CatchClause       = "catch" [ Pattern [ "where" Expression ] ] Block ;
 RegionStatement   = "region" [ Identifier [ "=" Expression ] ] Block ;
 
 UsingStatement    = "using" ( "let" | "var" ) BindingPattern [ ":" Type ]
-                    "=" Expression [ Block ] NL ;
+                    "=" Expression NL ;
+                    (* no braced form: '{' after the initialiser would be a
+                       trailing closure on it *)
 
 DeferStatement    = "defer" Block ;
 
@@ -422,14 +424,17 @@ PrefixOp          = "-" | "+" | "!" | "~" | "&"
                   | "await" | "try" | "try" "?" | "try" "!" | "move" ;
 
 PostfixExpr       = PrimaryExpr { PostfixOp } ;
-PostfixOp         = "." Identifier [ GenericArgs ]
-                  | "?" "." Identifier
+PostfixOp         = "." MemberName [ GenericArgs ]
+                  | "?" "." MemberName
                   | "!"
                   | "(" [ ArgumentList ] ")" [ TrailingClosure ]
                   | "?" "(" [ ArgumentList ] ")"
                   | "[" ArgumentList "]"
                   | "?" "[" ArgumentList "]"
                   | TrailingClosure ;
+
+MemberName        = Identifier | Keyword ;
+                    (* any keyword may name a member: 'super.init', 'T.self' *)
 
 ArgumentList      = Argument { "," Argument } [ "," ] ;
 Argument          = [ Identifier ":" ] [ "&" | "out" | "move" ] Expression ;
@@ -462,7 +467,8 @@ DictLiteral       = "[" ":" "]"
 KeyValue          = Expression ":" Expression ;
 
 RecordLiteral     = QualifiedName "{" [ FieldInit { "," FieldInit } [ "," ] ] "}" ;
-FieldInit         = Identifier ":" Expression | Identifier ;
+FieldInit         = Identifier ":" Expression ;
+                    (* no shorthand: '{ x }' would be a closure returning x *)
 
 MatchExpr         = MatchStatement ;      (* usable in expression position *)
 IfExpr            = IfStatement ;         (* usable in expression position when
@@ -477,7 +483,7 @@ ClosureSignature  = "(" [ ClosureParams ] ")" [ "->" Type ]
                   | Identifier ;
 ClosureParams     = ClosureParam { "," ClosureParam } ;
 ClosureParam      = Identifier [ ":" Type ] ;
-ClosureHeader     = ClosureParams [ "->" Type ] "in" ;
+ClosureHeader     = [ "(" ] ClosureParams [ ")" ] [ "->" Type ] "in" ;
 
 CaptureList       = "[" CaptureItem { "," CaptureItem } "]" ;
 CaptureItem       = [ "weak" | "unowned" ] ( "self" | Identifier [ "=" Expression ] ) ;

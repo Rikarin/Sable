@@ -30,6 +30,50 @@ internal sealed class Parser
     /// <summary>Full text of tokens skipped by error recovery, not yet re-attached.</summary>
     private readonly List<GreenTrivia> _skipped = [];
 
+    /// <summary>
+    /// True while parsing an expression whose end is marked by '{' — an `if`
+    /// condition, a `for` sequence, a `match` subject. In that position a brace
+    /// opens the statement's body, so it may not be read as a record literal or
+    /// a trailing closure. Parentheses and brackets clear it again.
+    /// </summary>
+    private bool _noBrace;
+
+    /// <summary>
+    /// True while parsing an expression that <c>=&gt;</c> terminates — a match
+    /// arm's <c>where</c> clause. There a trailing <c>ident =&gt;</c> is the arm
+    /// separator, not a one-parameter closure.
+    /// </summary>
+    private bool _noArrow;
+
+    /// <summary>Inside brackets both suppressions lift again.</summary>
+    private T WithBracesAllowed<T>(Func<T> parse)
+    {
+        var savedBrace = _noBrace;
+        var savedArrow = _noArrow;
+        _noBrace = false;
+        _noArrow = false;
+        try { return parse(); }
+        finally { _noBrace = savedBrace; _noArrow = savedArrow; }
+    }
+
+    private T WithArrowSuppressed<T>(Func<T> parse)
+    {
+        var savedBrace = _noBrace;
+        var savedArrow = _noArrow;
+        _noBrace = true;
+        _noArrow = true;
+        try { return parse(); }
+        finally { _noBrace = savedBrace; _noArrow = savedArrow; }
+    }
+
+    private T WithBracesSuppressed<T>(Func<T> parse)
+    {
+        var saved = _noBrace;
+        _noBrace = true;
+        try { return parse(); }
+        finally { _noBrace = saved; }
+    }
+
     private Parser(SourceText source)
     {
         var tokens = Lexer.Tokenize(source, out var lexDiagnostics);
@@ -54,6 +98,12 @@ internal sealed class Parser
     {
         var parser = new Parser(source);
         return parser.Finish(source, parser.ParseType(), "type");
+    }
+
+    public static SyntaxTree ParseStatement(SourceText source)
+    {
+        var parser = new Parser(source);
+        return parser.Finish(source, parser.ParseStatement(), "statement");
     }
 
     /// <summary>
@@ -325,7 +375,18 @@ internal sealed class Parser
                 {
                     var arguments = ParseArgumentList(
                         SyntaxKind.OpenParenToken, SyntaxKind.CloseParenToken);
-                    expression = new InvocationExpressionGreen(expression, null, arguments);
+                    var trailing = TryParseTrailingClosure();
+                    expression = new InvocationExpressionGreen(
+                        expression, null, arguments, trailing);
+                    continue;
+                }
+
+                // 'items.filter { ... }' is a call whose only argument is the
+                // closure; it has no parenthesised argument list.
+                case SyntaxKind.OpenBraceToken when !_noBrace:
+                {
+                    var closure = ParseBraceClosure(null);
+                    expression = new InvocationExpressionGreen(expression, null, null, closure);
                     continue;
                 }
 
@@ -344,7 +405,8 @@ internal sealed class Parser
                     var question = EatToken();
                     var arguments = ParseArgumentList(
                         SyntaxKind.OpenParenToken, SyntaxKind.CloseParenToken);
-                    expression = new InvocationExpressionGreen(expression, question, arguments);
+                    expression = new InvocationExpressionGreen(
+                        expression, question, arguments, TryParseTrailingClosure());
                     continue;
                 }
 
@@ -408,19 +470,12 @@ internal sealed class Parser
     }
 
     /// <summary>
-    /// A member name after '.' may be a keyword: `super.init`, `Type.self`,
-    /// `x.default`. The binder decides whether the name means anything.
+    /// A member name after '.' may be any keyword: `super.init`, `Type.self`,
+    /// `File.open`, `x.default`. The binder decides whether the name means
+    /// anything; the parser only has to not reject it.
     /// </summary>
-    private GreenToken EatMemberName()
-    {
-        if (Current.Kind is SyntaxKind.InitKeyword or SyntaxKind.DeinitKeyword
-            or SyntaxKind.SelfKeyword or SyntaxKind.CapitalSelfKeyword
-            or SyntaxKind.DefaultKeyword)
-        {
-            return EatToken();
-        }
-        return EatIdentifier();
-    }
+    private GreenToken EatMemberName() =>
+        Current.IsKeywordToken() ? EatToken() : EatIdentifier();
 
     private GreenToken EatIdentifier()
     {
@@ -468,6 +523,29 @@ internal sealed class Parser
                     dot, ParseSimpleName(memberContext: true));
             }
 
+            case SyntaxKind.MatchKeyword:
+                return ParseMatchExpression();
+
+            case SyntaxKind.OpenBraceToken:
+                return ParseBraceClosure(null);
+
+            case SyntaxKind.DollarToken:
+            {
+                var dollar = EatToken();
+                return new ImplicitParameterExpressionGreen(
+                    dollar, EatToken(SyntaxKind.IntegerLiteralToken));
+            }
+
+            case SyntaxKind.OpenBracketToken when LooksLikeCaptureList():
+                return ParseCaptureListClosure();
+
+            case SyntaxKind.OpenParenToken when !_noArrow && LooksLikeArrowClosure():
+                return ParseArrowClosure(null);
+
+            case SyntaxKind.IdentifierToken
+                when !_noArrow && Peek(1).Kind == SyntaxKind.FatArrowToken:
+                return ParseArrowClosure(null);
+
             case SyntaxKind.OpenParenToken:
                 return ParseParenthesizedOrTuple();
 
@@ -504,15 +582,34 @@ internal sealed class Parser
         return new RecordExpressionGreen(type, open, fields, close);
     }
 
+    /// <summary>
+    /// True when <c>ident ('.' ident)* '{'</c> is followed by something only a
+    /// record literal can contain.
+    /// </summary>
+    /// <remarks>
+    /// <c>Point { x: 1 }</c> and <c>items.filter { $0.isActive }</c> have the
+    /// same shape up to the brace, so the contents decide: a record literal is
+    /// empty or starts <c>ident :</c>. That is why record literals have no
+    /// field shorthand — <c>Point { x }</c> would be indistinguishable from a
+    /// closure returning <c>x</c>.
+    /// </remarks>
     private bool LooksLikeRecordLiteral()
     {
+        if (_noBrace) return false;
+
         var offset = 0;
         while (true)
         {
             if (Peek(offset).Kind != SyntaxKind.IdentifierToken) return false;
             offset++;
 
-            if (Peek(offset).Kind == SyntaxKind.OpenBraceToken) return true;
+            if (Peek(offset).Kind == SyntaxKind.OpenBraceToken)
+            {
+                return Peek(offset + 1).Kind == SyntaxKind.CloseBraceToken
+                    || (Peek(offset + 1).Kind == SyntaxKind.IdentifierToken
+                        && Peek(offset + 2).Kind == SyntaxKind.ColonToken);
+            }
+
             if (Peek(offset).Kind != SyntaxKind.DotToken) return false;
             offset++;
         }
@@ -521,12 +618,14 @@ internal sealed class Parser
     private GreenNode ParseFieldInitializer()
     {
         var name = EatIdentifier();
-        var colon = TryEatToken(SyntaxKind.ColonToken);
-        var value = colon is null ? null : ParseExpression();
-        return new FieldInitializerGreen(name, colon, value);
+        var colon = EatToken(SyntaxKind.ColonToken);
+        return new FieldInitializerGreen(name, colon, ParseExpression());
     }
 
-    private GreenNode ParseParenthesizedOrTuple()
+    private GreenNode ParseParenthesizedOrTuple() =>
+        WithBracesAllowed(ParseParenthesizedOrTupleCore);
+
+    private GreenNode ParseParenthesizedOrTupleCore()
     {
         var open = EatToken();
 
@@ -579,7 +678,10 @@ internal sealed class Parser
         (Current.Kind == SyntaxKind.IdentifierToken || Current.IsContextualKeywordToken())
         && Peek(1).Kind == SyntaxKind.ColonToken;
 
-    private GreenNode ParseArrayOrDictionary()
+    private GreenNode ParseArrayOrDictionary() =>
+        WithBracesAllowed(ParseArrayOrDictionaryCore);
+
+    private GreenNode ParseArrayOrDictionaryCore()
     {
         var open = EatToken();
 
@@ -640,13 +742,14 @@ internal sealed class Parser
         return new KeyValuePairGreen(key, colon, ParseExpression());
     }
 
-    private GreenNode ParseArgumentList(SyntaxKind openKind, SyntaxKind closeKind)
-    {
-        var open = EatToken(openKind);
-        var arguments = ParseSeparatedList(closeKind, ParseArgument);
-        var close = EatToken(closeKind);
-        return new ArgumentListGreen(open, arguments, close);
-    }
+    private GreenNode ParseArgumentList(SyntaxKind openKind, SyntaxKind closeKind) =>
+        WithBracesAllowed<GreenNode>(() =>
+        {
+            var open = EatToken(openKind);
+            var arguments = ParseSeparatedList(closeKind, ParseArgument);
+            var close = EatToken(closeKind);
+            return new ArgumentListGreen(open, arguments, close);
+        });
 
     private GreenNode ParseArgument()
     {
@@ -771,7 +874,7 @@ internal sealed class Parser
         // A '&' that is followed by something which can start a type is protocol
         // composition; otherwise ParsePostfixType already took it as a reference
         // suffix, so reaching here means composition.
-        while (At(SyntaxKind.AmpersandToken) && CanStartType(Peek(1).Kind))
+        while (At(SyntaxKind.AmpersandToken) && CanFollowCompositionAmpersand(Peek(1).Kind))
         {
             var ampersand = EatToken();
             left = new CompositionTypeGreen(left, ampersand, ParsePostfixType(inExpression));
@@ -804,7 +907,7 @@ internal sealed class Parser
 
                 // '&' is a reference suffix unless a type follows, in which case
                 // it is protocol composition and belongs to the caller.
-                case SyntaxKind.AmpersandToken when !CanStartType(Peek(1).Kind):
+                case SyntaxKind.AmpersandToken when !CanFollowCompositionAmpersand(Peek(1).Kind):
                 {
                     var ampersand = EatToken();
                     var spec = At(SyntaxKind.LessToken) ? ParseRelativeReferenceSpec() : null;
@@ -1069,6 +1172,22 @@ internal sealed class Parser
             or SyntaxKind.GreaterGreaterToken
             or SyntaxKind.GreaterGreaterEqualsToken;
 
+    /// <summary>
+    /// What may follow the <c>&amp;</c> of a protocol composition.
+    /// </summary>
+    /// <remarks>
+    /// Narrower than <see cref="CanStartType"/>: only a named type can be a
+    /// protocol, so <c>Document&amp;[&gt;..]</c> is a grow-array of references
+    /// rather than a composition with a dictionary type.
+    /// </remarks>
+    private static bool CanFollowCompositionAmpersand(SyntaxKind kind) => kind switch
+    {
+        SyntaxKind.IdentifierToken or SyntaxKind.CapitalSelfKeyword => true,
+        SyntaxKind.SomeKeyword or SyntaxKind.AnyKeyword => true,
+        SyntaxKind.OpenParenToken => true,
+        _ => false,
+    };
+
     private static bool CanStartType(SyntaxKind kind) => kind switch
     {
         SyntaxKind.IdentifierToken => true,
@@ -1151,10 +1270,929 @@ internal sealed class Parser
         SyntaxKind.EndOfFile => true,
         _ => false,
     };
+    // =======================================================================
+    // Closures
+    // =======================================================================
+
+    /// <summary>A brace right after an argument list is the call's last argument.</summary>
+    private GreenNode? TryParseTrailingClosure() =>
+        !_noBrace && At(SyntaxKind.OpenBraceToken) ? ParseBraceClosure(null) : null;
+
+    private bool LooksLikeCaptureList()
+    {
+        // '[weak self] { ... }' or '[x = y] (a) => ...'
+        var offset = 0;
+        var depth = 0;
+        while (offset < 64)
+        {
+            var kind = Peek(offset).Kind;
+            if (kind == SyntaxKind.OpenBracketToken) depth++;
+            else if (kind == SyntaxKind.CloseBracketToken)
+            {
+                depth--;
+                if (depth == 0)
+                {
+                    var next = Peek(offset + 1).Kind;
+                    return next == SyntaxKind.OpenBraceToken
+                        || next == SyntaxKind.OpenParenToken
+                        || next == SyntaxKind.IdentifierToken;
+                }
+            }
+            else if (kind is SyntaxKind.EndOfFile or SyntaxKind.OpenBraceToken) return false;
+            offset++;
+        }
+        return false;
+    }
+
+    /// <summary>Scans for a balanced <c>)</c> followed by <c>=&gt;</c>.</summary>
+    private bool LooksLikeArrowClosure()
+    {
+        var offset = 0;
+        var depth = 0;
+        while (offset < 256)
+        {
+            var kind = Peek(offset).Kind;
+            if (kind is SyntaxKind.OpenParenToken) depth++;
+            else if (kind is SyntaxKind.CloseParenToken)
+            {
+                depth--;
+                if (depth == 0) return Peek(offset + 1).Kind == SyntaxKind.FatArrowToken;
+            }
+            else if (kind is SyntaxKind.EndOfFile) return false;
+            offset++;
+        }
+        return false;
+    }
+
+    private GreenNode ParseCaptureListClosure()
+    {
+        var captures = ParseCaptureList();
+        if (At(SyntaxKind.OpenBraceToken)) return ParseBraceClosure(captures);
+        return ParseArrowClosure(captures);
+    }
+
+    private GreenNode ParseCaptureList() => WithBracesAllowed<GreenNode>(() =>
+    {
+        var open = EatToken(SyntaxKind.OpenBracketToken);
+        var items = ParseSeparatedList(SyntaxKind.CloseBracketToken, ParseCaptureItem);
+        var close = EatToken(SyntaxKind.CloseBracketToken);
+        return new CaptureListGreen(open, items, close);
+    });
+
+    private GreenNode ParseCaptureItem()
+    {
+        var specifier = Current.Kind is SyntaxKind.WeakKeyword or SyntaxKind.UnownedKeyword
+            ? EatToken()
+            : null;
+
+        var identifier = At(SyntaxKind.SelfKeyword) ? EatToken() : EatIdentifier();
+        var equals = TryEatToken(SyntaxKind.EqualsToken);
+        var value = equals is null ? null : ParseExpression();
+        return new CaptureItemGreen(specifier, identifier, equals, value);
+    }
+
+    private GreenNode ParseArrowClosure(GreenNode? captures)
+    {
+        var signature = ParseClosureSignature();
+        var arrow = EatToken(SyntaxKind.FatArrowToken);
+        var body = At(SyntaxKind.OpenBraceToken)
+            ? ParseBlock()
+            : WithBracesAllowed(ParseExpression);
+        return new ClosureExpressionGreen(captures, signature, arrow, body);
+    }
+
+    private GreenNode ParseClosureSignature()
+    {
+        if (!At(SyntaxKind.OpenParenToken))
+            return new ClosureSignatureGreen(
+                null, GreenList.Create([new ClosureParameterGreen(EatIdentifier(), null, null)]),
+                null, null, null);
+
+        return WithBracesAllowed<GreenNode>(() =>
+        {
+            var open = EatToken(SyntaxKind.OpenParenToken);
+            var parameters = ParseSeparatedList(SyntaxKind.CloseParenToken, ParseClosureParameter);
+            var close = EatToken(SyntaxKind.CloseParenToken);
+
+            GreenToken? arrow = null;
+            GreenNode? returnType = null;
+            if (At(SyntaxKind.ArrowToken))
+            {
+                arrow = EatToken();
+                returnType = ParseType();
+            }
+            return new ClosureSignatureGreen(open, parameters, close, arrow, returnType);
+        });
+    }
+
+    private GreenNode ParseClosureParameter()
+    {
+        var identifier = EatIdentifier();
+        var colon = TryEatToken(SyntaxKind.ColonToken);
+        var type = colon is null ? null : ParseType();
+        return new ClosureParameterGreen(identifier, colon, type);
+    }
+
+    private GreenNode ParseBraceClosure(GreenNode? captures) => WithBracesAllowed<GreenNode>(() =>
+    {
+        var open = EatToken(SyntaxKind.OpenBraceToken);
+        var header = HasClosureHeader() ? ParseClosureHeader() : null;
+        var statements = ParseStatements(SyntaxKind.CloseBraceToken);
+        var close = EatToken(SyntaxKind.CloseBraceToken);
+        return new BraceClosureExpressionGreen(captures, open, header, statements, close);
+    });
+
+    /// <summary>
+    /// True when the tokens after <c>{</c> form a parameter list ending in
+    /// <c>in</c>.
+    /// </summary>
+    /// <remarks>
+    /// The scan stops at the first token that cannot appear in a header, so
+    /// <c>{ for x in xs { } }</c> is not mistaken for one: <c>for</c> ends the
+    /// scan before the <c>in</c> is reached.
+    /// </remarks>
+    private bool HasClosureHeader()
+    {
+        // The opening brace has already been consumed, so the scan starts at
+        // the current token.
+        for (var offset = 0; offset < 64; offset++)
+        {
+            switch (Peek(offset).Kind)
+            {
+                case SyntaxKind.InKeyword:
+                    return true;
+
+                case SyntaxKind.IdentifierToken:
+                case SyntaxKind.UnderscoreToken:
+                case SyntaxKind.CommaToken:
+                case SyntaxKind.ColonToken:
+                case SyntaxKind.ArrowToken:
+                case SyntaxKind.OpenParenToken:
+                case SyntaxKind.CloseParenToken:
+                case SyntaxKind.DotToken:
+                case SyntaxKind.LessToken:
+                case SyntaxKind.GreaterToken:
+                case SyntaxKind.GreaterGreaterToken:
+                case SyntaxKind.QuestionToken:
+                case SyntaxKind.BangToken:
+                case SyntaxKind.AmpersandToken:
+                case SyntaxKind.PipeToken:
+                case SyntaxKind.OpenBracketToken:
+                case SyntaxKind.CloseBracketToken:
+                case SyntaxKind.DotDotToken:
+                case SyntaxKind.SomeKeyword:
+                case SyntaxKind.AnyKeyword:
+                case SyntaxKind.RefKeyword:
+                case SyntaxKind.CapitalSelfKeyword:
+                    continue;
+
+                default:
+                    return false;
+            }
+        }
+        return false;
+    }
+
+    private GreenNode ParseClosureHeader()
+    {
+        var open = TryEatToken(SyntaxKind.OpenParenToken);
+
+        var items = ImmutableArray.CreateBuilder<GreenNode>();
+        while (!At(SyntaxKind.InKeyword) && !At(SyntaxKind.ArrowToken)
+               && !At(SyntaxKind.CloseParenToken) && !At(SyntaxKind.EndOfFile))
+        {
+            items.Add(ParseClosureParameter());
+            var comma = TryEatToken(SyntaxKind.CommaToken);
+            if (comma is null) break;
+            items.Add(comma);
+        }
+
+        var close = open is null ? null : TryEatToken(SyntaxKind.CloseParenToken);
+
+        GreenToken? arrow = null;
+        GreenNode? returnType = null;
+        if (At(SyntaxKind.ArrowToken))
+        {
+            arrow = EatToken();
+            returnType = ParseType();
+        }
+
+        var inKeyword = EatToken(SyntaxKind.InKeyword);
+        return new ClosureHeaderGreen(
+            open, GreenList.Create(items.ToImmutable()), close, arrow, returnType, inKeyword);
+    }
+
+    // =======================================================================
+    // match
+    // =======================================================================
+
+    private GreenNode ParseMatchExpression()
+    {
+        var matchKeyword = EatToken(SyntaxKind.MatchKeyword);
+        var subject = WithBracesSuppressed(ParseExpression);
+        var open = EatToken(SyntaxKind.OpenBraceToken);
+
+        var arms = ImmutableArray.CreateBuilder<GreenNode>();
+        while (!At(SyntaxKind.CloseBraceToken) && !At(SyntaxKind.EndOfFile))
+        {
+            var before = _index;
+            arms.Add(ParseMatchArm());
+            if (_index == before) SkipCurrentToken();
+        }
+
+        var close = EatToken(SyntaxKind.CloseBraceToken);
+        return new MatchExpressionGreen(
+            matchKeyword, subject, open, GreenList.Create(arms.ToImmutable()), close);
+    }
+
+    private GreenNode ParseMatchArm()
+    {
+        GreenToken keyword;
+        GreenList patterns = GreenList.Empty;
+
+        if (At(SyntaxKind.DefaultKeyword))
+        {
+            keyword = EatToken();
+        }
+        else
+        {
+            keyword = EatToken(SyntaxKind.CaseKeyword);
+            var items = ImmutableArray.CreateBuilder<GreenNode>();
+            while (true)
+            {
+                items.Add(WithBracesSuppressed(ParsePattern));
+                var comma = TryEatToken(SyntaxKind.CommaToken);
+                if (comma is null) break;
+                items.Add(comma);
+                if (At(SyntaxKind.EndOfFile)) break;
+            }
+            patterns = GreenList.Create(items.ToImmutable());
+        }
+
+        var whereClause = At(SyntaxKind.WhereKeyword)
+            ? new PatternWhereClauseGreen(EatToken(), WithArrowSuppressed(ParseExpression))
+            : null;
+
+        if (At(SyntaxKind.ColonToken))
+        {
+            var colon = EatToken();
+            var statements = ParseStatements(SyntaxKind.CaseKeyword, SyntaxKind.DefaultKeyword,
+                SyntaxKind.CloseBraceToken);
+            return new MatchCaseBlockGreen(keyword, patterns, whereClause, colon, statements);
+        }
+
+        var arrow = EatToken(SyntaxKind.FatArrowToken);
+        var body = At(SyntaxKind.OpenBraceToken) ? ParseBlock() : ParseExpression();
+        return new MatchArmGreen(keyword, patterns, whereClause, arrow, body);
+    }
+
+    // =======================================================================
+    // Patterns
+    // =======================================================================
+
+    /// <summary>Parses a pattern. Forms follow spec/SYNTAX.md §15.</summary>
+    public GreenNode ParsePattern()
+    {
+        var left = ParsePatternWithRange();
+        while (At(SyntaxKind.PipeToken))
+        {
+            var pipe = EatToken();
+            left = new OrPatternGreen(left, pipe, ParsePatternWithRange());
+        }
+        return left;
+    }
+
+    private GreenNode ParsePatternWithRange()
+    {
+        if (IsRangeOperator(Current.Kind))
+        {
+            var prefixOp = EatToken();
+            return new RangePatternGreen(null, prefixOp, ParsePrimaryPattern());
+        }
+
+        var pattern = ParsePrimaryPattern();
+        if (!IsRangeOperator(Current.Kind)) return pattern;
+
+        var op = EatToken();
+        var right = CanStartPattern(Current.Kind) ? ParsePrimaryPattern() : null;
+        return new RangePatternGreen(pattern, op, right);
+    }
+
+    private GreenNode ParsePrimaryPattern()
+    {
+        switch (Current.Kind)
+        {
+            case SyntaxKind.UnderscoreToken:
+                return new WildcardPatternGreen(EatToken());
+
+            case SyntaxKind.LetKeyword:
+            case SyntaxKind.VarKeyword:
+            {
+                var keyword = EatToken();
+                var identifier = At(SyntaxKind.SelfKeyword) ? EatToken() : EatIdentifier();
+                if (!At(SyntaxKind.AsKeyword)) return new BindingPatternGreen(keyword, identifier);
+
+                var asKeyword = EatToken();
+                return new BindingTypeTestPatternGreen(
+                    keyword, identifier, asKeyword, ParseType());
+            }
+
+            case SyntaxKind.IsKeyword:
+                return new TypeTestPatternGreen(EatToken(), ParseType());
+
+            case SyntaxKind.DotToken:
+            {
+                var dot = EatToken();
+                var name = EatMemberName();
+                var arguments = At(SyntaxKind.OpenParenToken) ? ParsePatternArgumentList() : null;
+                return new UnionCasePatternGreen(null, dot, name, arguments);
+            }
+
+            case SyntaxKind.OpenParenToken:
+                return ParseTupleOrParenthesizedPattern();
+
+            case SyntaxKind.OpenBracketToken:
+                return ParseArrayPattern();
+
+            case SyntaxKind.OpenBraceToken:
+                return ParseRecordPattern(null);
+
+            case SyntaxKind.MinusToken:
+            {
+                var minus = EatToken();
+                return new LiteralPatternGreen(minus, EatNumericLiteral());
+            }
+
+            case SyntaxKind.IntegerLiteralToken:
+            case SyntaxKind.FloatLiteralToken:
+            case SyntaxKind.CharLiteralToken:
+            case SyntaxKind.StringLiteralToken:
+            case SyntaxKind.MultilineStringLiteralToken:
+            case SyntaxKind.RawStringLiteralToken:
+            case SyntaxKind.TrueKeyword:
+            case SyntaxKind.FalseKeyword:
+            case SyntaxKind.NoneKeyword:
+                return new LiteralPatternGreen(null, EatToken());
+
+            case SyntaxKind.IdentifierToken:
+                return ParseNamedPattern();
+
+            default:
+                _diagnostics.Error(ErrorCode.ERR_ExpectedPattern, CurrentSpan,
+                    $"expected a pattern but found '{DescribeCurrent()}'");
+                return new BindingPatternGreen(null, CreateMissing(SyntaxKind.IdentifierToken));
+        }
+    }
+
+    private GreenToken EatNumericLiteral()
+    {
+        if (Current.Kind is SyntaxKind.IntegerLiteralToken or SyntaxKind.FloatLiteralToken)
+            return EatToken();
+
+        _diagnostics.Error(ErrorCode.ERR_ExpectedPattern, CurrentSpan,
+            "a negated pattern must be a numeric literal");
+        return CreateMissing(SyntaxKind.IntegerLiteralToken);
+    }
+
+    /// <summary>
+    /// An identifier starts a binding, a qualified union case, or a record
+    /// pattern; the dots and the brace decide which.
+    /// </summary>
+    private GreenNode ParseNamedPattern()
+    {
+        var segments = CountNameSegments();
+
+        if (Peek(segments * 2 - 1).Kind == SyntaxKind.OpenBraceToken)
+            return ParseRecordPattern(ParseTypeNameSegments(segments));
+
+        if (segments == 1)
+            return new BindingPatternGreen(null, EatToken());
+
+        // The last segment is the case name; everything before it qualifies it.
+        var qualifier = ParseTypeNameSegments(segments - 1);
+        var dot = EatToken(SyntaxKind.DotToken);
+        var name = EatMemberName();
+        var arguments = At(SyntaxKind.OpenParenToken) ? ParsePatternArgumentList() : null;
+        return new UnionCasePatternGreen(qualifier, dot, name, arguments);
+    }
+
+    /// <summary>Counts the identifiers in an <c>ident ('.' ident)*</c> run.</summary>
+    private int CountNameSegments()
+    {
+        var count = 1;
+        var offset = 1;
+        while (Peek(offset).Kind == SyntaxKind.DotToken
+               && Peek(offset + 1).Kind == SyntaxKind.IdentifierToken)
+        {
+            count++;
+            offset += 2;
+        }
+        return count;
+    }
+
+    private GreenNode ParseTypeNameSegments(int count)
+    {
+        GreenNode type = new SimpleNameTypeGreen(EatIdentifier(), null);
+        for (var i = 1; i < count; i++)
+        {
+            var dot = EatToken(SyntaxKind.DotToken);
+            type = new QualifiedNameGreen(type, dot, new SimpleNameTypeGreen(EatIdentifier(), null));
+        }
+        return type;
+    }
+
+    private GreenNode ParseRecordPattern(GreenNode? type) => WithBracesAllowed<GreenNode>(() =>
+    {
+        var open = EatToken(SyntaxKind.OpenBraceToken);
+        var fields = ParseSeparatedList(SyntaxKind.CloseBraceToken, ParseFieldPattern);
+        var close = EatToken(SyntaxKind.CloseBraceToken);
+        return new RecordPatternGreen(type, open, fields, close);
+    });
+
+    private GreenNode ParseFieldPattern()
+    {
+        var name = EatIdentifier();
+        var colon = TryEatToken(SyntaxKind.ColonToken);
+        var pattern = colon is null ? null : ParsePattern();
+        return new FieldPatternGreen(name, colon, pattern);
+    }
+
+    private GreenNode ParseTupleOrParenthesizedPattern() => WithBracesAllowed<GreenNode>(() =>
+    {
+        var open = EatToken(SyntaxKind.OpenParenToken);
+
+        var items = ImmutableArray.CreateBuilder<GreenNode>();
+        var simple = !At(SyntaxKind.CloseParenToken);
+        GreenNode? only = null;
+
+        while (!At(SyntaxKind.CloseParenToken) && !At(SyntaxKind.EndOfFile))
+        {
+            var element = ParsePattern();
+            only ??= element;
+            items.Add(element);
+
+            var comma = TryEatToken(SyntaxKind.CommaToken);
+            if (comma is null) break;
+            items.Add(comma);
+            simple = false;
+        }
+
+        var close = EatToken(SyntaxKind.CloseParenToken);
+
+        return simple && items.Count == 1 && only is not null
+            ? new ParenthesizedPatternGreen(open, only, close)
+            : new TuplePatternGreen(open, GreenList.Create(items.ToImmutable()), close);
+    });
+
+    private GreenNode ParseArrayPattern() => WithBracesAllowed<GreenNode>(() =>
+    {
+        var open = EatToken(SyntaxKind.OpenBracketToken);
+        var elements = ParseSeparatedList(SyntaxKind.CloseBracketToken, ParseArrayPatternElement);
+        var close = EatToken(SyntaxKind.CloseBracketToken);
+        return new ArrayPatternGreen(open, elements, close);
+    });
+
+    /// <summary>
+    /// Inside an array pattern <c>...</c> is the rest element, not a range.
+    /// </summary>
+    private GreenNode ParseArrayPatternElement()
+    {
+        if (!At(SyntaxKind.DotDotDotToken)) return ParsePattern();
+
+        var dots = EatToken();
+        var letKeyword = TryEatToken(SyntaxKind.LetKeyword);
+        var identifier = At(SyntaxKind.IdentifierToken) ? EatToken() : null;
+        return new RestPatternGreen(dots, letKeyword, identifier);
+    }
+
+    private GreenNode ParsePatternArgumentList() => WithBracesAllowed<GreenNode>(() =>
+    {
+        var open = EatToken(SyntaxKind.OpenParenToken);
+        var arguments = ParseSeparatedList(SyntaxKind.CloseParenToken, ParseSubPattern);
+        var close = EatToken(SyntaxKind.CloseParenToken);
+        return new PatternArgumentListGreen(open, arguments, close);
+    });
+
+    private GreenNode ParseSubPattern()
+    {
+        GreenToken? name = null;
+        GreenToken? colon = null;
+        if (IsArgumentLabel())
+        {
+            name = EatToken();
+            colon = EatToken(SyntaxKind.ColonToken);
+        }
+        return new SubPatternGreen(name, colon, ParsePattern());
+    }
+
+    private static bool CanStartPattern(SyntaxKind kind) => kind switch
+    {
+        SyntaxKind.IdentifierToken or SyntaxKind.UnderscoreToken => true,
+        SyntaxKind.LetKeyword or SyntaxKind.VarKeyword or SyntaxKind.IsKeyword => true,
+        SyntaxKind.DotToken or SyntaxKind.MinusToken => true,
+        SyntaxKind.OpenParenToken or SyntaxKind.OpenBracketToken
+            or SyntaxKind.OpenBraceToken => true,
+        SyntaxKind.IntegerLiteralToken or SyntaxKind.FloatLiteralToken
+            or SyntaxKind.CharLiteralToken or SyntaxKind.StringLiteralToken
+            or SyntaxKind.MultilineStringLiteralToken
+            or SyntaxKind.RawStringLiteralToken => true,
+        SyntaxKind.TrueKeyword or SyntaxKind.FalseKeyword or SyntaxKind.NoneKeyword => true,
+        _ => false,
+    };
+
+    // =======================================================================
+    // Statements
+    // =======================================================================
+
+    public GreenNode ParseBlock() => WithBracesAllowed<GreenNode>(() =>
+    {
+        var open = EatToken(SyntaxKind.OpenBraceToken);
+        var statements = ParseStatements(SyntaxKind.CloseBraceToken);
+        var close = EatToken(SyntaxKind.CloseBraceToken);
+        return new BlockGreen(open, statements, close);
+    });
+
+    /// <summary>
+    /// Parses statements until one of <paramref name="terminators"/>, always
+    /// making progress so that malformed input cannot spin.
+    /// </summary>
+    private GreenList ParseStatements(params SyntaxKind[] terminators)
+    {
+        var items = ImmutableArray.CreateBuilder<GreenNode>();
+        while (!At(SyntaxKind.EndOfFile) && Array.IndexOf(terminators, Current.Kind) < 0)
+        {
+            var before = _index;
+            items.Add(ParseStatement());
+            if (_index == before) SkipCurrentToken();
+        }
+        return GreenList.Create(items.ToImmutable());
+    }
+
+    public GreenNode ParseStatement()
+    {
+        switch (Current.Kind)
+        {
+            case SyntaxKind.OpenBraceToken:
+                return ParseBlock();
+
+            case SyntaxKind.SemicolonToken:
+                return new EmptyStatementGreen(EatToken());
+
+            case SyntaxKind.LetKeyword:
+            case SyntaxKind.VarKeyword:
+                return ParseLocalDeclaration(null);
+
+            case SyntaxKind.UsingKeyword:
+                return ParseLocalDeclaration(EatToken());
+
+            case SyntaxKind.IfKeyword:
+                return ParseIfStatement();
+
+            case SyntaxKind.GuardKeyword:
+            {
+                var guardKeyword = EatToken();
+                var conditions = WithBracesSuppressed(ParseConditionList);
+                var elseKeyword = EatToken(SyntaxKind.ElseKeyword);
+                return new GuardStatementGreen(guardKeyword, conditions, elseKeyword, ParseBlock());
+            }
+
+            case SyntaxKind.WhileKeyword:
+            {
+                var whileKeyword = EatToken();
+                var conditions = WithBracesSuppressed(ParseConditionList);
+                return new WhileStatementGreen(whileKeyword, conditions, ParseBlock());
+            }
+
+            case SyntaxKind.RepeatKeyword:
+            {
+                var repeatKeyword = EatToken();
+                var body = ParseBlock();
+                var whileKeyword = EatToken(SyntaxKind.WhileKeyword);
+                var condition = ParseExpression();
+                return new RepeatStatementGreen(repeatKeyword, body, whileKeyword, condition,
+                    TryEatToken(SyntaxKind.SemicolonToken));
+            }
+
+            case SyntaxKind.ForKeyword:
+                return ParseForStatement();
+
+            case SyntaxKind.SwitchKeyword:
+                return ParseSwitchStatement();
+
+            case SyntaxKind.DoKeyword:
+                return ParseDoStatement();
+
+            case SyntaxKind.RegionKeyword:
+                return ParseRegionStatement();
+
+            case SyntaxKind.DeferKeyword:
+                return new DeferStatementGreen(EatToken(), ParseBlock());
+
+            case SyntaxKind.UnsafeKeyword:
+                return new UnsafeStatementGreen(EatToken(), ParseBlock());
+
+            case SyntaxKind.ComptimeKeyword:
+                return new ComptimeStatementGreen(EatToken(), ParseBlock());
+
+            case SyntaxKind.ReturnKeyword:
+            {
+                var returnKeyword = EatToken();
+                var value = !returnKeyword.TerminatesStatement && CanStartExpression(Current.Kind)
+                    ? ParseExpression()
+                    : null;
+                return new ReturnStatementGreen(returnKeyword, value,
+                    TryEatToken(SyntaxKind.SemicolonToken));
+            }
+
+            case SyntaxKind.ThrowKeyword:
+            {
+                var throwKeyword = EatToken();
+                return new ThrowStatementGreen(throwKeyword, ParseExpression(),
+                    TryEatToken(SyntaxKind.SemicolonToken));
+            }
+
+            case SyntaxKind.BreakKeyword:
+            {
+                var breakKeyword = EatToken();
+                var label = !breakKeyword.TerminatesStatement && At(SyntaxKind.IdentifierToken)
+                    ? EatToken()
+                    : null;
+                return new BreakStatementGreen(breakKeyword, label,
+                    TryEatToken(SyntaxKind.SemicolonToken));
+            }
+
+            case SyntaxKind.ContinueKeyword:
+            {
+                var continueKeyword = EatToken();
+                var label = !continueKeyword.TerminatesStatement && At(SyntaxKind.IdentifierToken)
+                    ? EatToken()
+                    : null;
+                return new ContinueStatementGreen(continueKeyword, label,
+                    TryEatToken(SyntaxKind.SemicolonToken));
+            }
+
+            case SyntaxKind.FallthroughKeyword:
+                return new FallthroughStatementGreen(
+                    EatToken(), TryEatToken(SyntaxKind.SemicolonToken));
+
+            case SyntaxKind.IdentifierToken when Peek(1).Kind == SyntaxKind.ColonToken
+                && IsLabelTarget(Peek(2).Kind):
+            {
+                var label = EatToken();
+                var colon = EatToken(SyntaxKind.ColonToken);
+                return new LabeledStatementGreen(label, colon, ParseStatement());
+            }
+
+            default:
+            {
+                var expression = ParseExpression();
+                return new ExpressionStatementGreen(
+                    expression, TryEatToken(SyntaxKind.SemicolonToken));
+            }
+        }
+    }
+
+    private static bool IsLabelTarget(SyntaxKind kind) =>
+        kind is SyntaxKind.ForKeyword or SyntaxKind.WhileKeyword
+            or SyntaxKind.RepeatKeyword or SyntaxKind.OpenBraceToken;
+
+    private GreenNode ParseLocalDeclaration(GreenToken? usingKeyword)
+    {
+        var keyword = Current.Kind is SyntaxKind.LetKeyword or SyntaxKind.VarKeyword
+            ? EatToken()
+            : EatToken(SyntaxKind.LetKeyword);
+
+        var declarator = ParseVariableDeclarator();
+        return new LocalDeclarationStatementGreen(
+            usingKeyword, keyword, declarator, TryEatToken(SyntaxKind.SemicolonToken));
+    }
+
+    private GreenNode ParseVariableDeclarator()
+    {
+        var pattern = ParseBindingTarget();
+
+        GreenNode? annotation = null;
+        if (At(SyntaxKind.ColonToken))
+        {
+            var colon = EatToken();
+            annotation = new TypeAnnotationGreen(colon, ParseType());
+        }
+
+        GreenNode? initializer = null;
+        if (At(SyntaxKind.EqualsToken))
+        {
+            var equals = EatToken();
+            initializer = new EqualsValueClauseGreen(equals, ParseExpression());
+        }
+
+        return new VariableDeclaratorGreen(pattern, annotation, initializer);
+    }
+
+    /// <summary>
+    /// The name side of a binding: a plain identifier, or a tuple or record
+    /// pattern when destructuring.
+    /// </summary>
+    private GreenNode ParseBindingTarget() => Current.Kind switch
+    {
+        SyntaxKind.OpenParenToken => ParseTupleOrParenthesizedPattern(),
+        SyntaxKind.OpenBraceToken => ParseRecordPattern(null),
+        SyntaxKind.UnderscoreToken => new WildcardPatternGreen(EatToken()),
+        _ => new BindingPatternGreen(null, EatIdentifier()),
+    };
+
+    private GreenNode ParseIfStatement()
+    {
+        var ifKeyword = EatToken(SyntaxKind.IfKeyword);
+        var conditions = WithBracesSuppressed(ParseConditionList);
+        var body = ParseBlock();
+
+        GreenNode? elseClause = null;
+        if (At(SyntaxKind.ElseKeyword))
+        {
+            var elseKeyword = EatToken();
+            var elseBody = At(SyntaxKind.IfKeyword) ? ParseIfStatement() : ParseBlock();
+            elseClause = new ElseClauseGreen(elseKeyword, elseBody);
+        }
+
+        return new IfStatementGreen(ifKeyword, conditions, body, elseClause);
+    }
+
+    private GreenList ParseConditionList()
+    {
+        var items = ImmutableArray.CreateBuilder<GreenNode>();
+        while (true)
+        {
+            items.Add(ParseCondition());
+            var comma = TryEatToken(SyntaxKind.CommaToken);
+            if (comma is null) break;
+            items.Add(comma);
+            if (At(SyntaxKind.EndOfFile) || At(SyntaxKind.OpenBraceToken)) break;
+        }
+        return GreenList.Create(items.ToImmutable());
+    }
+
+    private GreenNode ParseCondition()
+    {
+        switch (Current.Kind)
+        {
+            case SyntaxKind.LetKeyword:
+            case SyntaxKind.VarKeyword:
+            {
+                var keyword = EatToken();
+                var pattern = At(SyntaxKind.SelfKeyword)
+                    ? new BindingPatternGreen(null, EatToken())
+                    : ParseBindingTarget();
+
+                GreenNode? annotation = null;
+                if (At(SyntaxKind.ColonToken))
+                {
+                    var colon = EatToken();
+                    annotation = new TypeAnnotationGreen(colon, ParseType());
+                }
+
+                GreenNode? initializer = null;
+                if (At(SyntaxKind.EqualsToken))
+                {
+                    var equals = EatToken();
+                    initializer = new EqualsValueClauseGreen(equals, ParseExpression());
+                }
+
+                return new OptionalBindingConditionGreen(keyword,
+                    new VariableDeclaratorGreen(pattern, annotation, initializer));
+            }
+
+            case SyntaxKind.CaseKeyword:
+            {
+                var caseKeyword = EatToken();
+                var pattern = ParsePattern();
+                var equals = EatToken(SyntaxKind.EqualsToken);
+                return new CasePatternConditionGreen(caseKeyword, pattern, equals, ParseExpression());
+            }
+
+            default:
+                return new ExpressionConditionGreen(ParseExpression());
+        }
+    }
+
+    private GreenNode ParseForStatement()
+    {
+        var forKeyword = EatToken(SyntaxKind.ForKeyword);
+        var awaitKeyword = TryEatToken(SyntaxKind.AwaitKeyword);
+        var pattern = WithBracesSuppressed(ParseBindingTarget);
+        var inKeyword = EatToken(SyntaxKind.InKeyword);
+        var sequence = WithBracesSuppressed(ParseExpression);
+
+        GreenNode? whereClause = null;
+        if (At(SyntaxKind.WhereKeyword))
+        {
+            var whereKeyword = EatToken();
+            whereClause = new ForWhereClauseGreen(
+                whereKeyword, WithBracesSuppressed(ParseExpression));
+        }
+
+        return new ForStatementGreen(
+            forKeyword, awaitKeyword, pattern, inKeyword, sequence, whereClause, ParseBlock());
+    }
+
+    private GreenNode ParseSwitchStatement()
+    {
+        var switchKeyword = EatToken(SyntaxKind.SwitchKeyword);
+        var subject = WithBracesSuppressed(ParseExpression);
+        var open = EatToken(SyntaxKind.OpenBraceToken);
+
+        var cases = ImmutableArray.CreateBuilder<GreenNode>();
+        while (!At(SyntaxKind.CloseBraceToken) && !At(SyntaxKind.EndOfFile))
+        {
+            var before = _index;
+            cases.Add(ParseSwitchCase());
+            if (_index == before) SkipCurrentToken();
+        }
+
+        var close = EatToken(SyntaxKind.CloseBraceToken);
+        return new SwitchStatementGreen(
+            switchKeyword, subject, open, GreenList.Create(cases.ToImmutable()), close);
+    }
+
+    private GreenNode ParseSwitchCase()
+    {
+        GreenToken keyword;
+        GreenList values = GreenList.Empty;
+
+        if (At(SyntaxKind.DefaultKeyword))
+        {
+            keyword = EatToken();
+        }
+        else
+        {
+            keyword = EatToken(SyntaxKind.CaseKeyword);
+            var items = ImmutableArray.CreateBuilder<GreenNode>();
+            while (true)
+            {
+                items.Add(WithBracesSuppressed(ParseExpression));
+                var comma = TryEatToken(SyntaxKind.CommaToken);
+                if (comma is null) break;
+                items.Add(comma);
+                if (At(SyntaxKind.EndOfFile)) break;
+            }
+            values = GreenList.Create(items.ToImmutable());
+        }
+
+        var colon = EatToken(SyntaxKind.ColonToken);
+        var statements = ParseStatements(
+            SyntaxKind.CaseKeyword, SyntaxKind.DefaultKeyword, SyntaxKind.CloseBraceToken);
+        return new SwitchCaseGreen(keyword, values, colon, statements);
+    }
+
+    private GreenNode ParseDoStatement()
+    {
+        var doKeyword = EatToken(SyntaxKind.DoKeyword);
+        var body = ParseBlock();
+
+        var catches = ImmutableArray.CreateBuilder<GreenNode>();
+        while (At(SyntaxKind.CatchKeyword))
+        {
+            var catchKeyword = EatToken();
+            var pattern = At(SyntaxKind.OpenBraceToken)
+                ? null
+                : WithBracesSuppressed(ParsePattern);
+
+            GreenNode? whereClause = null;
+            if (At(SyntaxKind.WhereKeyword))
+            {
+                var whereKeyword = EatToken();
+                whereClause = new PatternWhereClauseGreen(
+                    whereKeyword, WithBracesSuppressed(ParseExpression));
+            }
+
+            catches.Add(new CatchClauseGreen(catchKeyword, pattern, whereClause, ParseBlock()));
+        }
+
+        return new DoStatementGreen(doKeyword, body, GreenList.Create(catches.ToImmutable()));
+    }
+
+    private GreenNode ParseRegionStatement()
+    {
+        var regionKeyword = EatToken(SyntaxKind.RegionKeyword);
+        var identifier = At(SyntaxKind.IdentifierToken) ? EatToken() : null;
+
+        GreenToken? equals = null;
+        GreenNode? source = null;
+        if (At(SyntaxKind.EqualsToken))
+        {
+            equals = EatToken();
+            source = WithBracesSuppressed(ParseExpression);
+        }
+
+        return new RegionStatementGreen(regionKeyword, identifier, equals, source, ParseBlock());
+    }
+
 }
 
 internal static class ParserExtensions
 {
     public static bool IsContextualKeywordToken(this GreenToken token) =>
         SyntaxFacts.IsContextualKeyword(token.Kind);
+
+    public static bool IsKeywordToken(this GreenToken token) =>
+        SyntaxFacts.IsKeyword(token.Kind);
 }

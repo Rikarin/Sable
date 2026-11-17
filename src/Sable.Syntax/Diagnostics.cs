@@ -46,6 +46,8 @@ public enum ErrorCode
     ERR_ExpectedType = 1003,
     ERR_ExpectedIdentifier = 1004,
     ERR_UnexpectedTrailingTokens = 1005,
+    ERR_ExpectedPattern = 1006,
+    ERR_ExpectedStatement = 1007,
 }
 
 public enum DiagnosticSeverity { Hidden, Info, Warning, Error }

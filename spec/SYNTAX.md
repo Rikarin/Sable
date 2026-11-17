@@ -642,7 +642,7 @@ outer: for i in rows {
 
 defer { file.close() }                // runs on scope exit, LIFO
 
-using let f = File.open(path) { }     // scoped: deinit at end of block
+using let f = File.open(path)         // scoped: deinit at end of enclosing block
 
 switch value { }                      // see §15 — 'match' is preferred
 
@@ -656,11 +656,16 @@ throw AppError.notFound(id)
 ```sable
 using let conn = pool.acquire()
 using var tx = conn.begin()
-// both released in reverse order at scope exit
+// both released in reverse order at the end of the enclosing block
 ```
 
 Equivalent to `defer` for `@noncopy` resources, but the binding is consumed at
 scope exit so use-after-release is a compile error.
+
+`using` has no braced form of its own. `using let f = open(p) { ... }` would be
+read as a call to `open` with a trailing closure, so the resource is scoped to
+the enclosing block and an explicit `{ ... }` is used when a narrower scope is
+wanted.
 
 ---
 
@@ -702,6 +707,12 @@ case [first, _, last]          // array pattern, fixed length
 case [let head, ...let tail]   // array pattern with rest
 case "a" | "b" | "c"           // string alternatives
 ```
+
+### `=>` in a `where` clause
+
+Inside a match arm's `where` clause, a trailing `ident =>` is the arm's arrow,
+not a one-parameter closure: `case .Busy(let t) where t > limit => retry()`
+reads as expected. Parenthesise the closure if one is genuinely wanted there.
 
 ### `match` on multiple values
 
@@ -755,6 +766,12 @@ switch code {
 
 `&&`, `||` and `??` short-circuit. `===` is reference identity (Tier 2 only).
 
+### Member names
+
+Any keyword may be used as a member name after `.`, because the name is
+resolved against the receiver's members rather than against the grammar:
+`super.init()`, `Type.self`, `File.open(p)`, `x.default`.
+
 ### Member access and optionals
 
 ```sable
@@ -791,7 +808,7 @@ multi-line, leading indentation stripped to the closing delimiter
 ["a": 1, "b": 2]           // dictionary
 (1, "two", 3.0)            // tuple
 .Circle(radius: 1)         // inferred-context union case
-Point { x: 1, y: 2 }       // record literal
+Point { x: 1, y: 2 }       // record literal; every field carries its value
 ```
 
 ### Ranges
@@ -821,6 +838,24 @@ withLock(mutex) {
     counter += 1
 }
 ```
+
+### Braces: record literal, trailing closure, or body
+
+Three constructs open with `{`, and the rule between them is:
+
+1. Where a brace would open a statement body — an `if`, `guard` or `while`
+   condition, a `for` sequence, a `match` subject — a brace is **always** the
+   body. Parentheses and brackets lift that suppression, so
+   `if f(Point { x: 1 }) { }` reads as intended.
+2. After a name (`Point {`, `Geo.Point {`), the contents decide: `{ }` or
+   `{ ident: ...` is a **record literal**, anything else is a **trailing
+   closure**.
+3. Anywhere else a brace after an expression is a **trailing closure**:
+   `items.filter { $0.isActive }`, `withLock(m) { ... }`.
+
+Rule 2 is why a record literal has **no field shorthand**: `Point { x }` would
+be indistinguishable from a closure returning `x`, so a field always carries
+its value.
 
 ### Capture semantics
 

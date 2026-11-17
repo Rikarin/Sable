@@ -51,6 +51,10 @@ public sealed class SyntaxTree
     public static SyntaxTree ParseType(string text, string fileName = "<input>") =>
         Parser.ParseType(new SourceText(text, fileName));
 
+    /// <summary>Parses a single statement, which may be a block.</summary>
+    public static SyntaxTree ParseStatement(string text, string fileName = "<input>") =>
+        Parser.ParseStatement(new SourceText(text, fileName));
+
     /// <summary>The whole file, reconstructed from the tree.</summary>
     public string ToFullString()
     {

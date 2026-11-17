@@ -61,7 +61,7 @@ public union Ast.. {                 // variant-sized: each node is exactly its 
 
 fn parse(_ source: String) -> OwnedAst {
     region arena {
-        let tokens = arena.alloc(Token[>..])
+        let tokens: Token[>..] = arena.alloc()
         lex(source, into: tokens)
         let root = parseExpr(tokens, in: arena)   // root inferred as 'arena'
         return root.toOwned()                      // copies out before release
@@ -98,7 +98,7 @@ public class Workspace {
     public fn render(dt: F32) {
         frameArena.reset()
         region frame = frameArena {
-            let visible = frame.alloc(Document&[>..])
+            let visible: Document&[>..] = frame.alloc()
             for d in documents where d.isVisible { visible.append(&d) }
             for d in visible { d.draw(dt) }     // borrowed — zero ARC traffic
         }

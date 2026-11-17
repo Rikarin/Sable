@@ -91,11 +91,12 @@ dotnet test Sable.slnx
 | `Sable.Syntax` — green/red tree, lists, visitor | done |
 | `Sable.Syntax` — node generator | done |
 | `Sable.Syntax` — parser: types and expressions | done |
-| `Sable.Syntax` — parser: declarations, statements, patterns | not started |
+| `Sable.Syntax` — parser: statements, patterns, closures | done |
+| `Sable.Syntax` — parser: declarations and compilation units | not started |
 | `Sable.Syntax` — incremental reparse | not started |
 | Everything downstream (symbols, binder, SIL, codegen) | not started |
 
-**378 tests green.**
+**486 tests green.**
 
 The lexer covers all of [spec/lexical.md](spec/lexical.md): full-fidelity
 trivia, nested block comments, every literal form including interpolated and
@@ -112,13 +113,18 @@ reproduces the source byte for byte — is enforced over the `examples/` corpus,
 a table of hand-written cases, deliberately malformed input, and 400 rounds of
 random token soup.
 
+Entry points are `SyntaxTree.ParseExpression`, `ParseType` and `ParseStatement`.
+
 Not implemented yet, and deliberately so:
 
-- **Declarations, statements, patterns and closures.** The parser's entry
-  points are `SyntaxTree.ParseExpression` and `SyntaxTree.ParseType`.
+- **Declarations and compilation units.** `fn`, `struct`, `class`, `protocol`,
+  `union`, `enum`, `extension`, attributes, modifiers, generic parameters and
+  `where` clauses. Statement and expression parsing is complete beneath them.
 - **Structured string interpolation.** An interpolated string is a single
   literal token; its holes are available through `SyntaxToken.Parts` but are
   not yet parsed into child nodes, because doing that properly means lexing
   the string into a token sequence rather than one token.
 - **Conditional compilation.** `#if` lexes as `#` plus an identifier rather
   than turning inactive regions into `DisabledText` trivia.
+- **Compound metatype expressions.** `T.self` parses for a simple name, but a
+  compound type in expression position (`Token[>..].self`) does not.

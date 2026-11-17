@@ -197,10 +197,15 @@ public sealed class ExpressionParserTests
             Parse("Point { x: 1, y: 2 }"));
 
     [Fact]
-    public void ParsesRecordLiteralShorthandField() =>
-        Assert.Equal(
-            "(Record (SimpleNameType Point) (FieldInitializer x) (FieldInitializer y))",
-            Parse("Point { x, y }"));
+    public void RecordLiteralsHaveNoFieldShorthand()
+    {
+        // 'Point { x }' would be indistinguishable from a closure returning x,
+        // so a record field always carries its value. See the brace rule in
+        // Parser.LooksLikeRecordLiteral.
+        var tree = SyntaxTree.ParseExpression("Point { x, y }");
+        Assert.True(tree.HasErrors);
+        Assert.Equal("Point { x, y }", tree.ToFullString());
+    }
 
     [Fact]
     public void ParsesQualifiedRecordLiteral() =>

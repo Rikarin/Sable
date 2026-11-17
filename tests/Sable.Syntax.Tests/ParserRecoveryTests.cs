@@ -63,6 +63,88 @@ public sealed class ParserRecoveryTests
         AssertRoundTrips(tree, source);
     }
 
+    [Theory]
+    [InlineData("{")]
+    [InlineData("{ let")]
+    [InlineData("{ let x")]
+    [InlineData("{ let x =")]
+    [InlineData("if")]
+    [InlineData("if x")]
+    [InlineData("if x {")]
+    [InlineData("if x { } else")]
+    [InlineData("guard x")]
+    [InlineData("for")]
+    [InlineData("for x in")]
+    [InlineData("for x in xs {")]
+    [InlineData("while {")]
+    [InlineData("repeat { }")]
+    [InlineData("match")]
+    [InlineData("match x {")]
+    [InlineData("match x { case")]
+    [InlineData("match x { case .A")]
+    [InlineData("match x { case .A =>")]
+    [InlineData("switch x { case")]
+    [InlineData("do {")]
+    [InlineData("do { } catch")]
+    [InlineData("region")]
+    [InlineData("defer")]
+    [InlineData("return return return")]
+    [InlineData("{ } } } }")]
+    [InlineData("xs.map { a,")]
+    [InlineData("[weak self]")]
+    [InlineData("outer:")]
+    [InlineData("let { a,")]
+    public void MalformedStatementsStillRoundTrip(string source)
+    {
+        var tree = SyntaxTree.ParseStatement(source);
+        AssertRoundTrips(tree, source);
+    }
+
+    [Fact]
+    public void RandomStatementSoupTerminatesAndRoundTrips()
+    {
+        string[] pieces =
+        [
+            "{", "}", "(", ")", "[", "]", "let", "var", "if", "else", "guard", "while",
+            "for", "in", "match", "case", "default", "=>", "return", "break", "defer",
+            "do", "catch", "region", "a", "1", "\"s\"", "+", ".", ",", ":", ";", "_",
+            "where", "is", "as", "...", "|", "self", "try", "using", "switch",
+        ];
+
+        var random = new Random(20261118);
+        for (var iteration = 0; iteration < 500; iteration++)
+        {
+            var builder = new StringBuilder();
+            var length = random.Next(1, 16);
+            for (var i = 0; i < length; i++)
+                builder.Append(pieces[random.Next(pieces.Length)]).Append(' ');
+
+            var source = builder.ToString();
+            AssertRoundTrips(SyntaxTree.ParseStatement(source), source);
+        }
+    }
+
+    [Fact]
+    public void DeeplyNestedBlocksDoNotHang()
+    {
+        var source = new string('{', 150) + new string('}', 150);
+        var tree = SyntaxTree.ParseStatement(source);
+        Assert.False(tree.HasErrors, tree.FormatDiagnostics());
+        AssertRoundTrips(tree, source);
+    }
+
+    [Fact]
+    public void StatementNodeSpansTileTheirParent()
+    {
+        const string source = "{\n    let x = 1\n    for i in 0..<x where i > 0 {\n"
+            + "        xs.filter { $0 > i }\n    }\n"
+            + "    match x { case 1 => a() default => b() }\n}";
+
+        var tree = SyntaxTree.ParseStatement(source);
+        Assert.False(tree.HasErrors, tree.FormatDiagnostics());
+        AssertTiles(tree.Root);
+    }
+
     [Fact]
     public void AMissingTokenIsInsertedWithZeroWidth()
     {

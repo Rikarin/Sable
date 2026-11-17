@@ -501,6 +501,7 @@ public static class SilVerifier {
                 argument.Block.Function.Type.IsOwned(argument.Block.Arguments.IndexOf(argument)) ? Ownership.Owned : Ownership.Guaranteed,
             SilArgument { IsGuaranteed: true } => Ownership.Guaranteed,
             StructExtractInst or TupleExtractInst or UncheckedRefCastInst or UpcastInst or LoadBorrowInst => Ownership.Guaranteed,
+            BuiltinInst { Name: "array_get_borrowed" } => Ownership.Guaranteed,
             _ => Ownership.Owned,
         };
 
@@ -508,6 +509,10 @@ public static class SilVerifier {
     /// <remarks>A <c>cond_br</c>'s depend on the edge taken, and are worked out per edge.</remarks>
     public static IEnumerable<int> Consumed(SilInstruction instruction) {
         switch (instruction) {
+            // A slot that holds without owning takes nothing.
+            case StoreInst { Address: AllocStackInst { Unmanaged: true } }:
+                return [];
+
             case StoreInst:
                 return [0];
 
@@ -625,6 +630,7 @@ public static class SilVerifier {
                     case UncheckedRefCastInst:
                     case UpcastInst:
                     case RefElementAddrInst or StructElementAddrInst or TupleElementAddrInst when Tracked(instruction.Operands[0]):
+                    case BuiltinInst { Name: "array_get_borrowed" } when !instruction.Type.IsTrivial && Tracked(instruction.Operands[0]):
                         roots[instruction] = RootOf(instruction.Operands[0]);
                         break;
 

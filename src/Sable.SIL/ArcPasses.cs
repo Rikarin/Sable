@@ -290,6 +290,7 @@ public sealed class BorrowLoads : ISilPass {
             UncheckedRefCastInst cast => KeptBy(cast.Value),
             StructExtractInst extract => KeptBy(extract.Value),
             TupleExtractInst extract => KeptBy(extract.Value),
+            BuiltinInst { Name: "array_get_borrowed" } element => KeptBy(element.Operands[0]),
             _ => reference,
         };
 
@@ -366,6 +367,20 @@ public sealed class ForwardCopies : ISilPass {
             var uses = new Uses(function);
             foreach (var block in function.Blocks) {
                 for (var i = 0; i < block.Instructions.Count; i++) {
+                    if (block.Instructions[i] is LoadInst { Kind: LoadKind.Copy, Address: AllocStackInst } load && TryTake(function, block, i, load, uses)) {
+                        changed = true;
+                        break;
+                    }
+
+                    if (block.Instructions[i] is BuiltinInst { Name: "array_get" } read && !read.Type.IsTrivial) {
+                        if (TryBorrowedElement(block, i, read, uses)) {
+                            changed = true;
+                            break;
+                        }
+
+                        continue;
+                    }
+
                     if (block.Instructions[i] is not CopyValueInst copy) {
                         continue;
                     }
@@ -430,6 +445,100 @@ public sealed class ForwardCopies : ISilPass {
         block.Instructions.Remove(copy);
         block.Instructions.Remove(destroy);
         return true;
+    }
+
+    /// <summary>
+    ///     An element read out of an array only to be looked at, then
+    ///     destroyed in the same block, is read in place instead: no retain,
+    ///     no release. The array it is in must stay alive to the destroy, as
+    ///     a copy's source must.
+    /// </summary>
+    static bool TryBorrowedElement(SilBlock block, int index, BuiltinInst read, Uses uses) {
+        DestroyValueInst? destroy = null;
+        foreach (var user in uses.Of(read)) {
+            if (user.Block != block) {
+                return false;
+            }
+
+            if (user is DestroyValueInst found && destroy is null) {
+                destroy = found;
+                continue;
+            }
+
+            if (user.IsTerminator || Uses.Consumes(user, read)) {
+                return false;
+            }
+        }
+
+        if (destroy is null) {
+            return false;
+        }
+
+        var end = block.Instructions.IndexOf(destroy);
+        if (uses.Of(read).Any(u => block.Instructions.IndexOf(u) > end)) {
+            return false;
+        }
+
+        var source = read.Operands[0];
+        var root = Root(source);
+        if (root is null && !IsParameterBorrow(source)) {
+            return false;
+        }
+
+        for (var k = index + 1; k < end; k++) {
+            var instruction = block.Instructions[k];
+            if (root is not null && (Uses.Consumes(instruction, root) || instruction is EndBorrowInst { Borrowed: var ended } && ReferenceEquals(ended, root))) {
+                return false;
+            }
+
+            // Anything that could change the array in place. An owned array is
+            // ours alone; one borrowed from a local slot changes only through
+            // the slot's address; one borrowed from a parameter, through
+            // anything that calls out or is given an address.
+            if (root is LoadBorrowInst { Address: AllocStackInst slot }) {
+                if (instruction.Operands.Any(o => ReferenceEquals(o, slot))) {
+                    return false;
+                }
+            } else if ((root is null || root is LoadBorrowInst)
+                && (instruction is ApplyInst or TryApplyInst || instruction is BuiltinInst builtin && builtin.Operands.Any(static o => o.Type is AddressType))) {
+                return false;
+            }
+        }
+
+        read.Rename("array_get_borrowed");
+        block.Instructions.Remove(destroy);
+        return true;
+    }
+
+    /// <summary>
+    ///     A copy loaded out of a slot that is destroyed next, with only other
+    ///     slots' ends between: the value is taken out instead — 'return
+    ///     result' moves. Destruction stays where the scope puts it.
+    /// </summary>
+    static bool TryTake(SilFunction function, SilBlock block, int index, LoadInst load, Uses uses) {
+        var slot = (AllocStackInst)load.Address;
+        if (slot.Unmanaged) {
+            return false;
+        }
+
+        for (var k = index + 1; k < block.Instructions.Count; k++) {
+            var instruction = block.Instructions[k];
+            if (instruction is DestroyAddrInst destroy && ReferenceEquals(destroy.Address, slot)) {
+                var taken = new LoadInst(slot, LoadKind.Take) { Block = block, Location = load.Location };
+                block.Instructions[index] = taken;
+                Uses.Replace(function, load, taken);
+                block.Instructions.Remove(destroy);
+                return true;
+            }
+
+            // Only other slots' ends may come between: anything else would see
+            // the value destroyed sooner than its scope says.
+            if (instruction is not (DestroyAddrInst or DeallocStackInst or EndBorrowInst) || instruction.Operands.Any(o => ReferenceEquals(o, slot))) {
+                return false;
+            }
+        }
+
+        return false;
     }
 
     static bool TryOutlivingCopy(SilFunction function, SilBlock block, int index, CopyValueInst copy, Uses uses) {
@@ -525,6 +634,7 @@ public sealed class ForwardCopies : ISilPass {
         value switch {
             _ when SilVerifier.OwnershipOf(value) == Ownership.Owned => value,
             LoadBorrowInst => value,
+            BuiltinInst { Name: "array_get_borrowed" } element => Root(element.Operands[0]),
             StructExtractInst extract => Root(extract.Value),
             TupleExtractInst extract => Root(extract.Value),
             UpcastInst upcast => Root(upcast.Value),
@@ -536,6 +646,7 @@ public sealed class ForwardCopies : ISilPass {
     static bool IsParameterBorrow(SilValue value) =>
         value switch {
             SilArgument argument => argument.Block == argument.Block.Function.Entry,
+            BuiltinInst { Name: "array_get_borrowed" } element => IsParameterBorrow(element.Operands[0]),
             StructExtractInst extract => IsParameterBorrow(extract.Value),
             TupleExtractInst extract => IsParameterBorrow(extract.Value),
             UpcastInst upcast => IsParameterBorrow(upcast.Value),

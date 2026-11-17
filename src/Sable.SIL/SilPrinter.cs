@@ -212,7 +212,7 @@ public static class SilPrinter {
                         break;
 
                     case AllocStackInst alloc:
-                        builder.Append(" $").Append(alloc.ElementType);
+                        builder.Append(alloc.Unmanaged ? " [unmanaged]" : "").Append(" $").Append(alloc.ElementType);
                         if (alloc.VariableName is { } variable) {
                             builder.Append(", var ").Append(Quote(variable));
                         }

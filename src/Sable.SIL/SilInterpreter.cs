@@ -508,7 +508,8 @@ public sealed partial class SilInterpreter(SilModule module, int stepLimit = 10_
                         break;
 
                     case DeallocStackInst dealloc:
-                        if (!((AllocStackInst)dealloc.Address).ElementType.IsTrivial && ((IReference)Get(dealloc.Address)!).Peek() is not null) {
+                        if (dealloc.Address is AllocStackInst { Unmanaged: false } deallocated && !deallocated.ElementType.IsTrivial
+                            && ((IReference)Get(dealloc.Address)!).Peek() is not null) {
                             throw new SilTrap("dealloc_stack of storage still holding a value");
                         }
 
@@ -540,7 +541,7 @@ public sealed partial class SilInterpreter(SilModule module, int stepLimit = 10_
                         }
 
                         address.Set(Get(store.Value));
-                        if (store.Kind == StoreKind.Assign) {
+                        if (store.Kind == StoreKind.Assign && store.Address is not AllocStackInst { Unmanaged: true }) {
                             Release(store.Value.Type, old, depth);
                         }
 
@@ -610,6 +611,10 @@ public sealed partial class SilInterpreter(SilModule module, int stepLimit = 10_
                         var address = (IReference)Get(destroy.Address)!;
                         var old = address.Peek();
                         address.Set(null);
+                        if (destroy.Address is AllocStackInst { Unmanaged: true }) {
+                            break;
+                        }
+
                         Release(((AddressType)destroy.Address.Type).Pointee, old, depth);
                         break;
                     }
@@ -910,7 +915,7 @@ public sealed partial class SilInterpreter(SilModule module, int stepLimit = 10_
             case "array_count":
                 return operands[0] is HeapArray counted ? (long)Alive(counted).Elements.Count : 0L;
 
-            case "array_get": {
+            case "array_get" or "array_get_borrowed": {
                 var array = operands[0] is HeapArray held ? Alive(held) : null;
                 var index = (long)operands[1]!;
                 if (array is null || index < 0 || index >= array.Elements.Count) {
@@ -918,7 +923,10 @@ public sealed partial class SilInterpreter(SilModule module, int stepLimit = 10_
                 }
 
                 var element = array.Elements[(int)index];
-                Retain(builtin.Type, element);
+                if (builtin.Name == "array_get") {
+                    Retain(builtin.Type, element);
+                }
+
                 return element;
             }
 

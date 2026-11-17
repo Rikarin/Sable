@@ -970,30 +970,25 @@ public sealed partial class SilGen {
             var end = function.AddBlock();
             entry.Append(new BranchInst(header, entry.Append(new IntegerLiteralInst(SilType.Int, 0))));
 
-            var counted = byAddress ? header.Append(new LoadInst(searched)) : searched;
+            // The entries are borrowed, never copied: a load_borrow of the
+            // address for each look, an element read in place.
+            var counted = byAddress ? header.Append(new LoadBorrowInst(searched)) : searched;
             var count = Count(header, counted);
             if (byAddress) {
-                Destroy(header, counted);
+                header.Append(new EndBorrowInst(counted));
             }
 
             header.Append(new CondBranchInst(header.Append(new BuiltinInst("cmp_lt_Int", SilType.Bool, index, count)), test, [], end, []));
 
-            var array = byAddress ? test.Append(new LoadInst(searched)) : searched;
-            var element = test.Append(new BuiltinInst("array_get", tuple, array, index));
-            if (byAddress) {
-                Destroy(test, array);
-            }
-
+            var array = byAddress ? test.Append(new LoadBorrowInst(searched)) : searched;
+            var element = test.Append(new BuiltinInst("array_get_borrowed", tuple, array, index));
             var same = test.Append(new BuiltinInst(equal, SilType.Bool, test.Append(new TupleExtractInst(element, 0)), function.Entry.Arguments[1]));
             if (byAddress) {
-                Destroy(test, element);
+                test.Append(new EndBorrowInst(array));
             }
 
             test.Append(new CondBranchInst(same, hit, [], next, []));
             found(hit, index, byAddress ? null : element);
-            if (!byAddress) {
-                Destroy(next, element);
-            }
 
             next.Append(new BranchInst(header, next.Append(new BuiltinInst("add_Int", SilType.Int, index, One(next)))));
             missing(end);
@@ -1007,7 +1002,6 @@ public sealed partial class SilGen {
         Search(get, getEntry, getEntries, false,
             (hit, _, element) => {
                 var found = Copy(hit, hit.Append(new TupleExtractInst(element!, 1)));
-                Destroy(hit, element!);
                 hit.Append(new ReturnInst(hit.Append(new EnumInst(optional, optional.CaseIndex("Some"), found))));
             },
             end => end.Append(new ReturnInst(end.Append(new EnumInst(optional, optional.CaseIndex("None"), null)))));
@@ -2331,10 +2325,23 @@ public sealed partial class SilGen {
             Jump(new CondBranchInst(Emit(new BuiltinInst("cmp_lt_Int", SilType.Bool, current, count)), body, [], after, []));
 
             _current = body;
-            var again = Emit(new LoadInst(array));
-            var value = Emit(new BuiltinInst("array_get", arrayType.Element, again, Emit(new LoadInst(counter))));
-            Destroy(again);
-            BindLocal(loop.Element, value, loop.Syntax);
+
+            // The loop walks a copy of the array that nothing else can change,
+            // so each element stays alive and as it is while it is the loop's:
+            // the variable holds it unretained, read in place.
+            if (!arrayType.Element.IsTrivial && !_boxed.Contains(loop.Element) && closure is null && !Moves(loop.Body, loop.Element)
+                && arrayType.Element is not NominalType { IsNoncopyable: true } && SlotFor(loop.Element, loop.Syntax) is { } elementSlot) {
+                elementSlot.Unmanaged = true;
+                var lent = Emit(new LoadBorrowInst(array));
+                var borrowed = Emit(new BuiltinInst("array_get_borrowed", arrayType.Element, lent, Emit(new LoadInst(counter))));
+                Emit(new StoreInst(borrowed, elementSlot, StoreKind.Assign));
+                Emit(new EndBorrowInst(lent));
+            } else {
+                var again = Emit(new LoadInst(array));
+                var value = Emit(new BuiltinInst("array_get", arrayType.Element, again, Emit(new LoadInst(counter))));
+                Destroy(again);
+                BindLocal(loop.Element, value, loop.Syntax);
+            }
             if (loop.Filter is { } filter) {
                 var filtered = function.AddBlock();
                 Condition(filter, filtered, step);
@@ -2353,6 +2360,11 @@ public sealed partial class SilGen {
 
             _current = after;
         }
+
+        /// <summary>True when the code moves the local's value out: 'move x'.</summary>
+        static bool Moves(BoundNode node, LocalSymbol local) =>
+            node is BoundUnaryOperator { OperatorKind: UnaryOperatorKind.Move, Operand: BoundLocalAccess moved } && moved.Local == local
+            || node.Children.Any(child => Moves(child, local));
 
         void InLoop(BoundStatement loop, SilBlock breakTarget, SilBlock continueTarget, Action body) {
             var label = loop.Syntax.Parent is LabeledStatementSyntax { Label.Text: { Length: > 0 } text } ? text : null;

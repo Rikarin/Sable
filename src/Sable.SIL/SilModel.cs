@@ -627,6 +627,14 @@ public sealed class AllocStackInst(SilType elementType) : SilInstruction {
 
     /// <summary>The source variable the slot holds, for a debugger; null for a temporary.</summary>
     public string? VariableName { get; init; }
+
+    /// <summary>
+    ///     <c>alloc_stack [unmanaged]</c>: holds a reference without owning it —
+    ///     stored without a copy, never destroyed — where something else
+    ///     provably keeps it alive (<see cref="BorrowFields" />).
+    /// </summary>
+    public bool Unmanaged { get; set; }
+
     public override SilType Type => SilType.Address(ElementType);
     public override string Opcode => "alloc_stack";
 }
@@ -1104,7 +1112,7 @@ public static class SilBuiltins {
 
     /// <summary>The names whose signature depends on the element type of the array they work on.</summary>
     public static readonly ImmutableArray<string> ArrayOperations =
-        ["array_empty", "array_count", "array_get", "array_append", "array_set", "array_remove_last", "array_clear", "array_slice", "region_alloc"];
+        ["array_empty", "array_count", "array_get", "array_get_borrowed", "array_append", "array_set", "array_remove_last", "array_clear", "array_slice", "region_alloc"];
 
     /// <summary>A builtin with fixed operand types, by name.</summary>
     public static Signature? Find(string name) => Table.GetValueOrDefault(name);
@@ -1151,7 +1159,9 @@ public static class SilBuiltins {
             case "array_count" when Element(0, false) is not null:
                 return new([operands[0]], SilType.Int);
 
-            case "array_get" when Element(0, false) is { } element:
+            // A borrowed read leaves the element where it is: no copy, for as
+            // long as the array it is in is alive and unchanged.
+            case "array_get" or "array_get_borrowed" when Element(0, false) is { } element:
                 return new([operands[0], SilType.Int], element);
 
             case "array_append" when Element(0, true) is { } element:

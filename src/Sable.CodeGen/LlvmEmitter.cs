@@ -291,6 +291,7 @@ public sealed class LlvmEmitter {
                                 declare { i64, i1 } @llvm.usub.with.overflow.i64(i64, i64)
                                 declare { i64, i1 } @llvm.umul.with.overflow.i64(i64, i64)
                                 declare ptr @sable_inline_new(ptr)
+                                @sable_empty_array_count = internal constant [3 x i64] zeroinitializer
                                 declare void @sable_access_begin(ptr, i32)
                                 declare void @sable_access_end(ptr)
                                 declare ptr @sable_inline_new_stack(ptr, ptr, i64)
@@ -358,6 +359,7 @@ public sealed class LlvmEmitter {
             WeakStorageType or UnownedStorageType => "ptr",
             StructType structType => $"{{ {string.Join(", ", StructParts(structType).Select(Type))} }}",
             TupleType tuple => $"{{ {string.Join(", ", tuple.Elements.Select(Type))} }}",
+            EnumType enumType when IsNullable(enumType) => "ptr",
             EnumType enumType => PayloadWords(enumType) == 0 ? "{ i64 }" : $"{{ i64, [{PayloadWords(enumType)} x i64] }}",
             _ => throw new NotSupportedException($"no LLVM type for {type}"),
         };
@@ -386,6 +388,16 @@ public sealed class LlvmEmitter {
                 : $"{{ i1, {Type(type.Result)}, {Type(thrown)} }}";
 
     /// <summary>The 8-byte words an enum's payload area needs: room for its largest case.</summary>
+    /// <summary>
+    ///     An optional class reference — one case holding the reference, one
+    ///     holding nothing — is the reference itself, null for none: one word,
+    ///     not a tag and a payload, as C's nullable pointer is.
+    /// </summary>
+    static bool IsNullable(EnumType type) =>
+        type.Cases is [(_, ClassType), (_, null)] or [(_, null), (_, ClassType)];
+
+    static int SomeCase(EnumType type) => type.Cases[0].Payload is null ? 1 : 0;
+
     static int PayloadWords(EnumType type) =>
         (type.Cases.Where(static c => c.Payload is not null).Select(c => Size(c.Payload!)).DefaultIfEmpty(0).Max() + 7) / 8;
 
@@ -403,6 +415,7 @@ public sealed class LlvmEmitter {
             _ when type == SilType.Object || type == SilType.Region => 8,
             ThickFunctionType => 16,
             WeakStorageType or UnownedStorageType => 8,
+            EnumType enumType when IsNullable(enumType) => 8,
             EnumType enumType => 8 + PayloadWords(enumType) * 8,
             StructType structType => Aggregate(StructParts(structType)),
             TupleType tuple => Aggregate(tuple.Elements),
@@ -475,7 +488,7 @@ public sealed class LlvmEmitter {
             return;
         }
 
-        if (type is ScalarType or ClassType or ArrayType or StructType { IsInline: true }) {
+        if (type is ScalarType or ClassType or ArrayType or StructType { IsInline: true } || type is EnumType nullable && IsNullable(nullable)) {
             output.Append(indent).Append($"call void @{(copy ? "sable_retain" : "sable_release")}(ptr {value}){dbg}\n");
             return;
         }
@@ -976,7 +989,7 @@ public sealed class LlvmEmitter {
                 case StoreInst store: {
                     // Assigning destroys what was there, after the new value is in.
                     string? old = null;
-                    if (store.Kind == StoreKind.Assign && !store.Value.Type.IsTrivial) {
+                    if (store.Kind == StoreKind.Assign && !store.Value.Type.IsTrivial && store.Address is not AllocStackInst { Unmanaged: true }) {
                         old = Fresh();
                         Line($"{old} = load {Type(store.Value.Type)}, ptr {Name(store.Address)}");
                     }
@@ -990,6 +1003,15 @@ public sealed class LlvmEmitter {
                 }
 
                 // A weak reference read: the object, retained, or null — as an optional.
+                case LoadWeakInst nullableWeak when IsNullable((EnumType)nullableWeak.Type): {
+                    var entry = Fresh();
+                    var name = Fresh();
+                    _names[nullableWeak] = name;
+                    Line($"{entry} = load ptr, ptr {Name(nullableWeak.Address)}");
+                    Line($"{name} = call ptr @sable_weak_load(ptr {entry})");
+                    return;
+                }
+
                 case LoadWeakInst weak: {
                     var optional = (EnumType)weak.Type;
                     var type = Type(optional);
@@ -1008,6 +1030,16 @@ public sealed class LlvmEmitter {
                     Line($"{word} = ptrtoint ptr {target} to i64");
                     Line($"{tagged} = insertvalue {type} zeroinitializer, i64 {tag}, 0");
                     Line($"{name} = insertvalue {type} {tagged}, i64 {word}, 1, 0");
+                    return;
+                }
+
+                case StoreWeakInst nullableStore when IsNullable((EnumType)nullableStore.Value.Type): {
+                    var entry = Fresh();
+                    var old = Fresh();
+                    Line($"{entry} = call ptr @sable_weak_entry(ptr {Name(nullableStore.Value)})");
+                    Line($"{old} = load ptr, ptr {Name(nullableStore.Address)}");
+                    Line($"store ptr {entry}, ptr {Name(nullableStore.Address)}");
+                    Line($"call void @sable_weak_release(ptr {old})");
                     return;
                 }
 
@@ -1067,6 +1099,10 @@ public sealed class LlvmEmitter {
 
                 case DestroyValueInst destroy:
                     Own(false, destroy.Value.Type, Name(destroy.Value));
+                    return;
+
+                // A slot that holds without owning gives nothing back.
+                case DestroyAddrInst { Address: AllocStackInst { Unmanaged: true } }:
                     return;
 
                 case DestroyAddrInst destroy: {
@@ -1225,6 +1261,10 @@ public sealed class LlvmEmitter {
                     return;
                 }
 
+                case EnumInst nullableInst when IsNullable(nullableInst.EnumType):
+                    _names[nullableInst] = nullableInst.Payload is { } held ? Name(held) : "null";
+                    return;
+
                 case EnumInst enumInst: {
                     var type = Type(enumInst.Type);
                     var slot = Scratch(type);
@@ -1322,6 +1362,40 @@ public sealed class LlvmEmitter {
             var enumType = (EnumType)switchEnum.Value.Type;
             var type = Type(enumType);
             var value = Name(switchEnum.Value);
+
+            // A nullable reference: null or not, the reference its own payload.
+            if (IsNullable(enumType)) {
+                var some = SomeCase(enumType);
+                string Target(int caseIndex, bool payload) {
+                    foreach (var (listed, block) in switchEnum.Cases) {
+                        if (listed != caseIndex) {
+                            continue;
+                        }
+
+                        if (!payload) {
+                            return _labels[block];
+                        }
+
+                        var edge = NewLabel("case");
+                        _extra.Append(edge).Append(":\n").Append($"  br label %{_labels[block]}\n");
+                        _incoming[block.Arguments[0]].Add((value, edge));
+                        return edge;
+                    }
+
+                    if (switchEnum.Default is { } otherwise) {
+                        return _labels[otherwise];
+                    }
+
+                    var unreachable = NewLabel("nocase");
+                    _extra.Append(unreachable).Append(":\n  unreachable\n");
+                    return unreachable;
+                }
+
+                var isNull = Fresh();
+                Line($"{isNull} = icmp eq ptr {value}, null");
+                Line($"br i1 {isNull}, label %{Target(1 - some, false)}, label %{Target(some, true)}");
+                return;
+            }
 
             var tag = Fresh();
             Line($"{tag} = extractvalue {type} {value}, 0");
@@ -1628,16 +1702,20 @@ public sealed class LlvmEmitter {
                     _names[builtin] = "null";
                     return;
 
+                // The array header is { object header (16), count, capacity, elements }:
+                // the count and the elements are read in place, not through a call.
                 case "array_count":
-                    Line($"{Result()} = call i64 @sable_array_count(ptr {operands[0]})");
+                    _names[builtin] = Count(operands[0]);
                     return;
 
-                case "array_get": {
-                    var element = Fresh();
-                    Line($"{element} = call ptr @sable_array_element(ptr {operands[0]}, i64 {operands[1]})");
+                case "array_get" or "array_get_borrowed": {
+                    var element = InlineElement(operands[0], operands[1], ((ArrayType)builtin.Operands[0].Type).Element);
                     var value = Result();
                     Line($"{value} = load {Type(builtin.Type)}, ptr {element}");
-                    Own(true, builtin.Type, value);
+                    if (builtin.Name == "array_get") {
+                        Own(true, builtin.Type, value);
+                    }
+
                     return;
                 }
 
@@ -1652,9 +1730,8 @@ public sealed class LlvmEmitter {
                 case "array_set": {
                     var arrayType = (ArrayType)((AddressType)builtin.Operands[0].Type).Pointee;
                     var elementType = Type(arrayType.Element);
-                    var element = Fresh();
+                    var element = MutableElement(operands[0], operands[1], arrayType);
                     var old = Fresh();
-                    Line($"{element} = call ptr @sable_array_mutable_element(ptr {operands[0]}, ptr {module.ArrayMetadata(arrayType)}, i64 {operands[1]})");
                     Line($"{old} = load {elementType}, ptr {element}");
                     Line($"store {elementType} {operands[2]}, ptr {element}");
                     Own(false, arrayType.Element, old);
@@ -2157,6 +2234,89 @@ public sealed class LlvmEmitter {
                 : (BigInteger.Zero, (BigInteger.One << bits) - 1);
 
         static string Hex(double value) => $"0x{BitConverter.DoubleToInt64Bits(value):X16}";
+
+        /// <summary>An array's count: none for the empty array, which is null; else read from its header.</summary>
+        string Count(string array) {
+            var isNull = Fresh();
+            var safe = Fresh();
+            var field = Fresh();
+            var stored = Fresh();
+            var count = Fresh();
+            Line($"{isNull} = icmp eq ptr {array}, null");
+            Line($"{safe} = select i1 {isNull}, ptr @sable_empty_array_count, ptr {array}");
+            Line($"{field} = getelementptr inbounds i8, ptr {safe}, i64 16");
+            Line($"{stored} = load i64, ptr {field}");
+            Line($"{count} = select i1 {isNull}, i64 0, i64 {stored}");
+            return count;
+        }
+
+        /// <summary>An element's address, its index checked against the count — inline, with no call.</summary>
+        string InlineElement(string array, string index, SilType elementType) {
+            var count = Count(array);
+            var outside = Fresh();
+            Line($"{outside} = icmp uge i64 {index}, {count}");
+            TrapIf(outside, "array index out of range");
+            var elementsField = Fresh();
+            var elements = Fresh();
+            var element = Fresh();
+            Line($"{elementsField} = getelementptr inbounds i8, ptr {array}, i64 32");
+            Line($"{elements} = load ptr, ptr {elementsField}");
+            Line($"{element} = getelementptr inbounds {Type(elementType)}, ptr {elements}, i64 {index}");
+            return element;
+        }
+
+        /// <summary>
+        ///     An element's address to write: in place when the array is the
+        ///     only reference to its buffer and the index is in range, the
+        ///     runtime's copy-on-write otherwise.
+        /// </summary>
+        string MutableElement(string slot, string index, ArrayType arrayType) {
+            var array = Fresh();
+            var isNull = Fresh();
+            Line($"{array} = load ptr, ptr {slot}");
+            Line($"{isNull} = icmp eq ptr {array}, null");
+            var check = NewLabel("unique");
+            var fast = NewLabel("inplace");
+            var slow = NewLabel("cow");
+            var done = NewLabel("element");
+            Line($"br i1 {isNull}, label %{slow}, label %{check}");
+
+            Continue(check);
+            var countField = Fresh();
+            var count = Fresh();
+            var strongField = Fresh();
+            var strong = Fresh();
+            var inRange = Fresh();
+            var unique = Fresh();
+            var both = Fresh();
+            Line($"{countField} = getelementptr inbounds i8, ptr {array}, i64 16");
+            Line($"{count} = load i64, ptr {countField}");
+            Line($"{inRange} = icmp ult i64 {index}, {count}");
+            Line($"{strongField} = getelementptr inbounds i8, ptr {array}, i64 8");
+            Line($"{strong} = load i32, ptr {strongField}");
+            Line($"{unique} = icmp eq i32 {strong}, 1");
+            Line($"{both} = and i1 {inRange}, {unique}");
+            Line($"br i1 {both}, label %{fast}, label %{slow}");
+
+            Continue(fast);
+            var elementsField = Fresh();
+            var elements = Fresh();
+            var direct = Fresh();
+            Line($"{elementsField} = getelementptr inbounds i8, ptr {array}, i64 32");
+            Line($"{elements} = load ptr, ptr {elementsField}");
+            Line($"{direct} = getelementptr inbounds {Type(arrayType.Element)}, ptr {elements}, i64 {index}");
+            Line($"br label %{done}");
+
+            Continue(slow);
+            var copied = Fresh();
+            Line($"{copied} = call ptr @sable_array_mutable_element(ptr {slot}, ptr {module.ArrayMetadata(arrayType)}, i64 {index})");
+            Line($"br label %{done}");
+
+            Continue(done);
+            var element = Fresh();
+            Line($"{element} = phi ptr [ {direct}, %{fast} ], [ {copied}, %{slow} ]");
+            return element;
+        }
 
         /// <summary>Checked arithmetic: the intrinsic, then a trap on its overflow flag.</summary>
         void Overflowing(string intrinsic, string left, string right, string result) {

@@ -395,9 +395,9 @@ Status:
 
 Measured by `tools/bench/run.py` (`benchmarks/history.tsv`): against naive
 insertion, retains fall by 75% (binary trees), 92% (sort), 77% (shapes),
-71% (JSON), 49% (words) and 100% (n-body), and time by 7–44%. Against a
-hand-written C port of each benchmark that frees by hand (`benchmarks/c`),
-see §3.8.
+71% (JSON), 49% (words) and 100% (n-body), and time by 7–44%; since then,
+by 100% (binary trees), 99.7% (shapes), 90% (words), 29% (sort) and 40%
+(JSON) more — see §3.8 for how, and for the overhead that is left.
 
 ### 3.2 Move checking (~3 weeks)
 
@@ -599,22 +599,29 @@ provably never read, and promotion inside loops.
       program), run by `tools/bench/run.py --record`, which appends time,
       allocations, retains and releases per commit to
       `benchmarks/history.tsv`
-- [ ] ARC overhead on the suite < 5% vs a manually-managed equivalent —
-      not met. `benchmarks/c` holds a C port of each benchmark that frees by
-      hand, with the same allocations, overflow checks and bounds checks and
-      byte-identical output; Sable is 1.45× (binary trees) to 1.9× (words)
-      its time, but n-body, which does no reference counting at all, is
-      1.65×, so most of that gap is code generation (array elements reached
-      through out-of-line runtime calls, `calloc`, the object header), not
-      ARC. Isolating ARC instead — the same Sable build against one whose
-      retain and release do nothing (and so free nothing: an upper bound) —
-      puts it at 1% (n-body), 9% (orders), 15% (sort), 27% (shapes), 37%
-      (words) and 42% (binary trees). Closing it needs what the measurement
-      points at: inlining the count operations and the array accessors,
-      dropping retain/release pairs across calls whose summaries say the
-      argument does not escape (§3.7's summaries; docs/01's "every reference
-      the checker proves non-escaping is a pair deleted"), and promotion
-      inside loops
+- [x] ARC overhead on the suite < 5% vs a manually-managed equivalent —
+      2.3% across the suite (`tools/bench/arc_overhead.py`; 1–3% per
+      benchmark run to run, n-body none, shapes noisy at 5 ms). A program
+      that manages memory by hand still frees what it allocates and destroys
+      its contents, as ARC's last release does; what it does not do is
+      count. So the overhead is the count traffic — every retain, and every
+      release that leaves its object alive — measured by doing it twice: each
+      benchmark against the runtime as it is and against one where each such
+      operation first does an equal one, out of line, on the same header.
+      Getting there took the count traffic from tens of millions of
+      operations to hundreds of thousands: a borrowed field kept unretained
+      in its `if let` slot when nothing can write the heap meanwhile
+      (`BorrowFields`, binary trees: 14.6M retains to 0); array elements read
+      in place where they are only looked at, the dictionary's key search
+      among them (words: 7.9M to 0.8M); a `for` loop's element held
+      unretained, since the loop walks a copy nothing else can change
+      (shapes: 903K to 2.6K); `return result` a move; and an optional class
+      reference one nullable word rather than a tag and a payload. The C
+      ports in `benchmarks/c` — same allocations, checks and output — are
+      timed beside it: Sable is 1.06× (shapes) to 1.6× (n-body) their time,
+      and 4.7× on orders, whose inline-layout runtime is generic where the
+      port is written for two record types. n-body does no reference
+      counting at all, so that gap is code generation, not memory management
 - [x] Root inference rejects no program in the corpus that should compile —
       `CorpusLoweringTests` holds every corpus file, example and the JSON
       program to producing no diagnostic but "not lowered yet": root

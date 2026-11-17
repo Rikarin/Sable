@@ -670,6 +670,12 @@ public sealed class SilParser {
             }
 
             case "alloc_stack": {
+                var unmanaged = Accept("[");
+                if (unmanaged) {
+                    Expect("unmanaged");
+                    Expect("]");
+                }
+
                 var type = ParseType();
                 string? variable = null;
                 if (Accept(",")) {
@@ -677,7 +683,7 @@ public sealed class SilParser {
                     variable = Expect(TokenKind.String, "a variable name").Text;
                 }
 
-                instruction = new AllocStackInst(type) { VariableName = variable };
+                instruction = new AllocStackInst(type) { VariableName = variable, Unmanaged = unmanaged };
                 break;
             }
 

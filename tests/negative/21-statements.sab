@@ -1,0 +1,90 @@
+module Negative.Statements
+
+struct Point { var x: Int, var y: Int }
+union Shape { Circle(radius: F64), Empty }
+
+fn conditionMustBeBool(_ n: Int) {
+    if n {                              //! S3004 expected 'Bool'
+    }
+}
+
+fn whileConditionMustBeBool(_ n: Int) {
+    while n {                           //! S3004 expected 'Bool'
+    }
+}
+
+fn repeatConditionMustBeBool(_ n: Int) {
+    repeat {
+    } while n                           //! S3004 expected 'Bool'
+}
+
+fn guardConditionMustBeBool(_ n: Int) -> Int {
+    guard n else {                      //! S3004 expected 'Bool'
+        return 0
+    }
+    return 1
+}
+
+fn forFilterMustBeBool(_ xs: Int[], _ n: Int) {
+    for x in xs where n {               //! S3004 expected 'Bool'
+    }
+}
+
+fn andNeedsBools(_ a: Int, _ b: Bool) -> Bool {
+    return a && b                       //! S3009
+}
+
+fn orNeedsBools(_ a: Bool, _ b: Int) -> Bool {
+    return a || b                       //! S3009
+}
+
+fn notNeedsABool(_ a: Int) -> Bool {
+    return !a                           //! S3009
+}
+
+fn negateNeedsANumber(_ a: Bool) -> Bool {
+    return -a                           //! S3009
+}
+
+fn complementNeedsAnInteger(_ a: F64) -> F64 {
+    return ~a                           //! S3009
+}
+
+fn shiftNeedsIntegers(_ a: F64, _ b: Int) -> F64 {
+    return a << b                       //! S3009
+}
+
+fn remainderOnStrings(_ a: String, _ b: String) -> String {
+    return a % b                        //! S3009
+}
+
+fn compoundAssignIsChecked(_ n: Int, _ s: String) {
+    var total = n
+    total += s                          //! S3009
+}
+
+fn deferTakesABlock(_ n: Int) -> Int {
+    defer {
+        let unused = n
+    }
+    return n
+}
+
+fn labelledBreakOutsideALoop() {
+    break outer                         //! S3018
+}
+
+fn throwNeedsAnErrorValue() {
+    throw 1                             //! S3033
+}
+
+fn matchSubjectIsBound(_ s: Shape) -> Int {
+    return match s {
+        case .Circle(let r) => r        //! S6007 earlier arms gave
+        case .Empty => 0
+    }
+}
+
+fn aLetNeedsSomething() {
+    let x                               //! S3005 needs either a type annotation
+}

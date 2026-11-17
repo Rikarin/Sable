@@ -2085,6 +2085,32 @@ public sealed class Binder
 
             case BraceClosureExpressionSyntax brace:
             {
+                // '{ $0 * 2 }' is a value, not a statement that throws one
+                // away: a brace closure whose body is one expression returns
+                // it, which is what makes the shorthand mean anything.
+                if (brace.Statements.Count == 1
+                    && brace.Statements[0] is ExpressionStatementSyntax only
+                    && only.Expression is not (MatchExpressionSyntax or AssignmentExpressionSyntax))
+                {
+                    var value = BindExpression(only.Expression, inferring ? null : _returnType);
+
+                    if (inferring)
+                    {
+                        _returnType = value.Type.Equals(Core.Never) ? Core.Void : value.Type;
+                        _inferringReturn = false;
+                    }
+                    else if (!_returnType.Equals(Core.Void))
+                    {
+                        value = Convert(value, _returnType, only.Expression);
+                    }
+
+                    bound = new BoundBlock(brace, [],
+                        [_returnType.Equals(Core.Void)
+                            ? new BoundExpressionStatement(only, value)
+                            : new BoundReturn(only, value)]);
+                    break;
+                }
+
                 var statements = ImmutableArray.CreateBuilder<BoundStatement>();
                 foreach (var statement in brace.Statements) statements.Add(BindStatement(statement));
                 var locals = _locals[^1].Values.OfType<LocalSymbol>().ToImmutableArray();
@@ -2100,6 +2126,8 @@ public sealed class Binder
         // Nothing returned a value, so the closure returns nothing.
         if (_inferringReturn) _returnType = Core.Void;
 
+        CheckClosureFlow(body, bound);
+
         var resolved = _returnType;
         symbol.ReturnTypeResolver = () => resolved;
 
@@ -2111,6 +2139,24 @@ public sealed class Binder
         _returnType = savedReturn;
         _containingSymbol = savedSymbol;
         return bound;
+    }
+
+    /// <summary>A closure with a result returns on every path, like anything else.</summary>
+    private void CheckClosureFlow(SyntaxNode body, BoundBlock bound)
+    {
+        if (_returnType.Equals(Core.Void) || _returnType.IsError) return;
+        if (FlowAnalysis.AlwaysExits(bound)) return;
+
+        var span = body switch
+        {
+            BraceClosureExpressionSyntax brace => brace.CloseBraceToken.Span,
+            BlockSyntax block => block.CloseBraceToken.Span,
+            _ => body.Span,
+        };
+
+        _diagnostics.Error(ErrorCode.ERR_NotAllPathsReturn, span,
+            $"this closure returns '{_returnType.ToDisplayString()}', "
+            + "so every path through it needs a value");
     }
 
     private ImmutableArray<BoundCapture> BindCaptures(CaptureListSyntax? captureList)

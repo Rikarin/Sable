@@ -166,4 +166,26 @@ public sealed class ClosureTests
         var errors = ErrorsIn("let r = apply(1, x => x && true)");
         Assert.NotEmpty(errors);
     }
+
+    [Fact]
+    public void AOneExpressionBraceClosureReturnsIt() =>
+        Assert.Equal("(Int) -> Int", TypeOfLast("let f: (Int) -> Int = { $0 * 2 }"));
+
+    [Fact]
+    public void AOneExpressionBraceClosureIsCheckedAgainstTheResult()
+    {
+        var errors = ErrorsIn("let r = apply(1) { $0 > 0 }");
+        Assert.Contains(errors, e => e.Code == ErrorCode.ERR_TypeMismatch);
+    }
+
+    [Fact]
+    public void ABraceClosureOfSeveralStatementsStillNeedsAReturn()
+    {
+        var errors = ErrorsIn("""
+            let r = apply(1) {
+                let doubled = $0 * 2
+            }
+            """);
+        Assert.Contains(errors, e => e.Code == ErrorCode.ERR_NotAllPathsReturn);
+    }
 }

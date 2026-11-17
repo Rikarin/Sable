@@ -1,0 +1,63 @@
+module Negative.Closures
+
+struct Point { var x: Int }
+
+fn apply(_ value: Int, _ transform: (Int) -> Int) -> Int { return transform(value) }
+fn project<T, U>(_ value: T, _ f: (T) -> U) -> U { return f(value) }
+fn run(_ body: () -> Void) { body() }
+
+fn aClosureBodyIsChecked() -> Int {
+    return apply(1) { $0 + "x" }        //! S3009
+}
+
+fn aClosureResultIsChecked() -> Int {
+    return apply(1) { $0 > 0 }          //! S3004
+}
+
+fn aClosureArityIsChecked() -> Int {
+    return apply(1, (a: Int, b: Int) => a + b)   //! S3004 expected
+}
+
+fn anUnannotatedParameterNeedsContext() -> Int {
+    let f = x => x + 1                  //! S3005 cannot be inferred
+    return 0
+}
+
+fn shorthandNeedsASignature() -> Int {
+    let f = { $0 + 1 }                  //! S2002 only available inside a closure
+    return 0
+}
+
+fn callingANonFunction(_ p: Point) -> Int {
+    let f = p
+    return f(1)                         //! S3006 is not callable
+}
+
+fn tooManyArguments() -> Int {
+    let f = (x: Int) => x
+    return f(1, 2)                      //! S3007 takes 1 argument
+}
+
+fn aClosureCannotSeeLater() -> Int {
+    let f = () => { return later }      //! S2002 no symbol named 'later'
+    let later = 1
+    return f()
+}
+
+fn aCaptureMustExist() -> Int {
+    let f = [missing] (x: Int) => x     //! S2002 no symbol named 'missing'
+    return f(1)
+}
+
+fn aClosureReturnTypeIsChecked() -> Int {
+    let f = (x: Int) -> String => x     //! S3004 expected 'String'
+    return 0
+}
+
+fn aVoidClosureTakesNoValue() {
+    run(() => { })
+}
+
+fn assigningAClosureOfTheWrongShape() {
+    var f: (Int) -> Int = (s: String) => 1   //! S3004
+}

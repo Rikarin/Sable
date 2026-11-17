@@ -232,7 +232,9 @@ with no code generation.**
 - [x] The full type system of `03-type-system.md` is checked
 - [x] Negative-test corpus: ≥ 600 programs that must fail, each asserting an
       exact error code, span, and message
-- [ ] `AnalyzeDataFlow` is correct on a 300-case corpus
+- [x] `AnalyzeDataFlow` is correct on a 300-case corpus — 105 hand-written
+      cases plus 195 straight-line programs checked against an independent
+      oracle, over a control-flow graph (`ControlFlowGraph.cs`)
 - [x] Type-checking 100,000 lines completes in < 5 s single-threaded
 - [ ] **Go/no-go: is the language actually pleasant?** Write 10,000 lines of
       real Sable (a JSON parser, an HTTP client, a small game) against the type

@@ -228,8 +228,8 @@ public sealed class DefiniteAssignmentTests {
             """
             var x: Int
             do {
-                x = 1
                 let t = try read("a")
+                x = 1
             } catch {
                 let y = x
             }
@@ -286,6 +286,79 @@ public sealed class DefiniteAssignmentTests {
             """
             let outer = 1
             let f = [copied = outer] () => { return copied }
+            """
+        );
+
+    // ---- What the control-flow graph sees that a tree walk could not -------
+
+    [Fact]
+    public void ALoopLeftOnlyByABreakAfterTheAssignmentAssigns() =>
+        AssertClean(
+            """
+            var x: Int
+            while true {
+                x = 1
+                break
+            }
+            let y = x
+            """
+        );
+
+    [Fact]
+    public void ALoopThatMayNotRunDoesNotAssign() =>
+        AssertReported(
+            """
+            let n: Int
+            var x: Int
+            while n > 0 {
+                x = 1
+            }
+            let y = x
+            """
+        );
+
+    [Fact]
+    public void AVariableDeclaredInALoopStartsUnassignedEachTime() =>
+        AssertReported(
+            """
+            let xs: Int[]
+            for i in xs {
+                var x: Int
+                if i > 0 {
+                    x = i
+                }
+                let y = x
+            }
+            """
+        );
+
+    [Fact]
+    public void ALabelledBreakSkipsTheAssignment() =>
+        AssertReported(
+            """
+            let xs: Int[]
+            var x: Int
+            outer: while true {
+                for i in xs {
+                    break outer
+                }
+                x = 1
+                break
+            }
+            let y = x
+            """
+        );
+
+    [Fact]
+    public void BothSidesOfAnOrMustBind() =>
+        AssertReported(
+            """
+            let n: Int
+            var x: Int
+            if n > 0 || n < -5 {
+                x = 1
+            }
+            let y = x
             """
         );
 }

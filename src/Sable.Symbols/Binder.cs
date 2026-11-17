@@ -162,8 +162,11 @@ public sealed class Binder {
         HoistLocalTypes(body);
 
         var bound = BindBlock(body);
-        CheckFlow(function, body, bound);
-        DefiniteAssignment.Analyze(bound, function.Parameters, _diagnostics);
+
+        // One graph serves all three flow checks.
+        var graph = ControlFlowGraph.Build(bound, function.Parameters);
+        CheckFlow(function, body, graph);
+        DefiniteAssignment.Analyze(graph, _diagnostics);
 
         PopScope();
         RestoreEffects(savedEffects);
@@ -173,8 +176,8 @@ public sealed class Binder {
     }
 
     /// <summary>Checks that a function returns on every path, and warns on dead code.</summary>
-    void CheckFlow(FunctionSymbol function, BlockSyntax body, BoundBlock bound) {
-        if (FlowAnalysis.FirstUnreachable(bound) is { } unreachable) {
+    void CheckFlow(FunctionSymbol function, BlockSyntax body, ControlFlowGraph graph) {
+        if (FlowAnalysis.FirstUnreachable(graph) is { } unreachable) {
             _diagnostics.Add(
                 Diagnostic.Warning(
                     ErrorCode.WRN_UnreachableCode,
@@ -195,7 +198,7 @@ public sealed class Binder {
             return;
         }
 
-        if (FlowAnalysis.AlwaysExits(bound)) {
+        if (!graph.EndIsReachable) {
             return;
         }
 

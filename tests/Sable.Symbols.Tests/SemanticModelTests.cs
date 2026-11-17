@@ -237,7 +237,9 @@ public sealed class SemanticModelTests {
     }
 
     [Fact]
-    public void ABreakIsAnExitPoint() {
+    public void ABreakInsideTheRegionDoesNotLeaveIt() {
+        // The break ends the loop, and the loop is the region: control goes
+        // on past it normally, so nothing leaves early.
         var (model, tree) = Compile(
             """
             fn probe(_ items: Int[]) -> Int {
@@ -250,8 +252,32 @@ public sealed class SemanticModelTests {
         );
 
         var flow = model.AnalyzeControlFlow(NthStatement(tree, 0));
-        Assert.Single(flow.ExitPoints);
+        Assert.Empty(flow.ExitPoints);
         Assert.Empty(flow.ReturnStatements);
+        Assert.True(flow.EndPointIsReachable);
+    }
+
+    [Fact]
+    public void ABreakToALoopOutsideTheRegionIsAnExitPoint() {
+        var (model, tree) = Compile(
+            """
+            fn probe(_ items: Int[]) -> Int {
+                outer: for i in items {
+                    for j in items {
+                        break outer
+                    }
+                }
+                return 0
+            }
+            """
+        );
+
+        var inner = tree.Root.DescendantNodes().OfType<ForStatementSyntax>().Last();
+        var flow = model.AnalyzeControlFlow(inner);
+        Assert.IsType<BoundBreak>(Assert.Single(flow.ExitPoints));
+
+        // 'items' may be empty, so the inner loop can also just finish.
+        Assert.True(flow.EndPointIsReachable);
     }
 
     // ---- The step budget ---------------------------------------------------

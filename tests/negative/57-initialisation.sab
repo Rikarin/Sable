@@ -104,8 +104,8 @@ fn anIfLetAssigns(_ n: Int?) -> Int {
 fn aCatchCannotRelyOnTheBody() -> Int {
     var n: Int
     do {
-        n = 1
         let t = try read()
+        n = 1
     } catch {
         return n                        //! S6008 before anything assigns
     }

@@ -90,14 +90,17 @@ public sealed class SemanticModel {
     ///     reads, writes and captures, and what would have to cross the boundary
     ///     if it were pulled out into a function of its own.
     /// </summary>
-    public DataFlowAnalysis AnalyzeDataFlow(StatementSyntax statement) {
+    public DataFlowAnalysis AnalyzeDataFlow(StatementSyntax statement) => AnalyzeDataFlow(statement, statement);
+
+    /// <summary>
+    ///     The same for a run of statements in one block, from
+    ///     <paramref name="first" /> to <paramref name="last" /> inclusive —
+    ///     the selection an "extract method" refactoring works on.
+    /// </summary>
+    public DataFlowAnalysis AnalyzeDataFlow(StatementSyntax first, StatementSyntax last) {
         EnsureBound();
 
-        if (GetBoundNode(statement) is not { } region) {
-            return DataFlowAnalysis.Failed;
-        }
-
-        if (EnclosingBody(statement) is not { } body) {
+        if (Region(first, last) is not { } region || FunctionBody(first) is not { } body) {
             return DataFlowAnalysis.Failed;
         }
 
@@ -105,23 +108,74 @@ public sealed class SemanticModel {
     }
 
     /// <summary>How control enters and leaves a statement.</summary>
-    public ControlFlowAnalysis AnalyzeControlFlow(StatementSyntax statement) {
+    public ControlFlowAnalysis AnalyzeControlFlow(StatementSyntax statement) => AnalyzeControlFlow(statement, statement);
+
+    /// <summary>How control enters and leaves a run of statements in one block.</summary>
+    public ControlFlowAnalysis AnalyzeControlFlow(StatementSyntax first, StatementSyntax last) {
         EnsureBound();
 
-        return GetBoundNode(statement) is { } region
+        return Region(first, last) is { } region
             ? RegionFlow.Control(region)
             : ControlFlowAnalysis.Failed;
     }
 
-    /// <summary>The bound body of the declaration a statement sits in.</summary>
-    BoundBlock? EnclosingBody(SyntaxNode statement) {
-        for (var node = statement.Parent; node is not null; node = node.Parent) {
-            if (_bound.TryGetValue(node, out var bound) && bound is BoundBlock body) {
-                return body;
+    /// <summary>
+    ///     The bound statements from <paramref name="first" /> to
+    ///     <paramref name="last" />, or null unless both sit in the same block
+    ///     in that order.
+    /// </summary>
+    List<BoundStatement>? Region(StatementSyntax first, StatementSyntax last) {
+        if (ReferenceEquals(first, last)) {
+            return _bound.TryGetValue(first, out var single) && single is BoundStatement statement
+                ? [statement]
+                : null;
+        }
+
+        if (first.Parent is not BlockSyntax block || !ReferenceEquals(first.Parent, last.Parent)) {
+            return null;
+        }
+
+        var region = new List<BoundStatement>();
+        var inside = false;
+        foreach (var statement in block.Statements) {
+            inside |= ReferenceEquals(statement, first);
+            if (inside) {
+                if (!_bound.TryGetValue(statement, out var bound) || bound is not BoundStatement boundStatement) {
+                    return null;
+                }
+
+                region.Add(boundStatement);
+            }
+
+            if (ReferenceEquals(statement, last)) {
+                return inside ? region : null;
             }
         }
 
         return null;
+    }
+
+    /// <summary>
+    ///     The bound body of the function a statement sits in: the outermost
+    ///     bound block above it, so that a closure's statements are analysed
+    ///     against the whole function around them.
+    /// </summary>
+    BoundBlock? FunctionBody(SyntaxNode statement) {
+        BoundBlock? outermost = null;
+        for (var node = statement.Parent; node is not null; node = node.Parent) {
+            if (_bound.TryGetValue(node, out var bound) && bound is BoundBlock body) {
+                outermost = body;
+            }
+
+            // A local function's statements belong to the function around it;
+            // any other declaration — a type member, a method of a local type —
+            // is a body of its own.
+            if (node is DeclarationSyntax && node.Parent is not DeclarationStatementSyntax) {
+                break;
+            }
+        }
+
+        return outermost;
     }
 
     /// <summary>The bound body of a function declaration, binding it if needed.</summary>

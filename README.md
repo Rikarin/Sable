@@ -141,7 +141,8 @@ edit. Phase 1 is nearly done** — see
 | `Sable.Symbols` — extensions and memberwise initialisers | done |
 | `Sable.Symbols` — local types, destructuring, generic aliases | done |
 | `Sable.Symbols` — effects: `throws`, `rethrows` and `async` | done |
-| `Sable.Symbols` — definite assignment and the flow-analysis API | done |
+| `Sable.Symbols` — control-flow graph; reachability, definite return and definite assignment over it | done |
+| `Sable.Symbols` — `AnalyzeDataFlow` / `AnalyzeControlFlow` by reaching definitions, over statement ranges | done |
 | `Sable.Symbols` — negative-diagnostic corpus (631 cases) | done |
 | `Sable.Symbols` — throughput: 100,000 lines in under 5 s | done |
 | `tools/Sable.Visualiser` — syntax-tree visualiser | done |
@@ -153,11 +154,11 @@ Phase 1's exit criteria, as docs/04 §1.4 states them:
 |---|---|
 | The full type system of `docs/03` is checked | done |
 | ≥ 600 negative programs, each asserting code, span and message | 631, over 99 diagnostics |
-| `AnalyzeDataFlow` correct on a 300-case corpus | 59 cases so far |
+| `AnalyzeDataFlow` correct on a 300-case corpus | 300: 105 written by hand, 195 generated against an independent oracle |
 | Type-checking 100,000 lines in under 5 s | 0.98 s |
 | Go/no-go: 10,000 lines of real Sable | ~2,900 in `tests/corpus/` |
 
-**1,352 tests green**, and every file in [examples/](examples/) parses as a
+**1,599 tests green**, and every file in [examples/](examples/) parses as a
 complete compilation unit with no diagnostics and an exact round-trip.
 [tests/corpus/](tests/corpus/) holds programs that must type-check with
 nothing to say, and [tests/negative/](tests/negative/) holds programs that

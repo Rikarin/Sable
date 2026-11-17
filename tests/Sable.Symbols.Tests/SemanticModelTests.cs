@@ -1,68 +1,67 @@
-using Sable.Symbols;
-
 namespace Sable.Symbols.Tests;
 
 /// <summary>
-/// The semantic model as a product: what it answers for the tools that read
-/// it, rather than what the binder happens to compute.
+///     The semantic model as a product: what it answers for the tools that read
+///     it, rather than what the binder happens to compute.
 /// </summary>
-public sealed class SemanticModelTests
-{
-    private static (SemanticModel Model, SyntaxTree Tree) Compile(string source)
-    {
+public sealed class SemanticModelTests {
+    static (SemanticModel Model, SyntaxTree Tree) Compile(string source) {
         var compilation = Compilation.Create("module M\n" + source);
         var tree = compilation.SyntaxTrees[0];
         return (compilation.GetSemanticModel(tree), tree);
     }
 
-    private static StatementSyntax NthStatement(SyntaxTree tree, int index) =>
+    static StatementSyntax NthStatement(SyntaxTree tree, int index) =>
         tree.Root.DescendantNodes().OfType<BlockSyntax>().First().Statements[index];
 
-    private static IReadOnlyList<string> Names(IEnumerable<Symbol> symbols) =>
-        [.. symbols.Select(s => s.Name).Order(StringComparer.Ordinal)];
+    static IReadOnlyList<string> Names(IEnumerable<Symbol> symbols) =>
+        [..symbols.Select(static s => s.Name).Order(StringComparer.Ordinal)];
 
     // ---- Every body is bound, not just 'fn' --------------------------------
 
     [Fact]
-    public void AnInitializerBodyIsChecked()
-    {
-        var (model, _) = Compile("""
+    public void AnInitializerBodyIsChecked() {
+        var (model, _) = Compile(
+            """
             struct Point {
                 var x: Int
                 init(_ n: Int) { self.x = "no" }
             }
-            """);
-        Assert.Contains(model.GetDiagnostics(), d => d.Code == ErrorCode.ERR_TypeMismatch);
+            """
+        );
+        Assert.Contains(model.GetDiagnostics(), static d => d.Code == ErrorCode.ERR_TypeMismatch);
     }
 
     [Fact]
-    public void AnOperatorBodyIsChecked()
-    {
-        var (model, _) = Compile("""
+    public void AnOperatorBodyIsChecked() {
+        var (model, _) = Compile(
+            """
             struct Money {
                 var cents: I64
                 operator + (a: Money, b: Money) -> Money { return 1 }
             }
-            """);
-        Assert.Contains(model.GetDiagnostics(), d => d.Code == ErrorCode.ERR_TypeMismatch);
+            """
+        );
+        Assert.Contains(model.GetDiagnostics(), static d => d.Code == ErrorCode.ERR_TypeMismatch);
     }
 
     [Fact]
-    public void AnAccessorBodyIsChecked()
-    {
-        var (model, _) = Compile("""
+    public void AnAccessorBodyIsChecked() {
+        var (model, _) = Compile(
+            """
             struct Temperature {
                 var celsius: F64
                 var label: String { get => celsius }
             }
-            """);
-        Assert.Contains(model.GetDiagnostics(), d => d.Code == ErrorCode.ERR_TypeMismatch);
+            """
+        );
+        Assert.Contains(model.GetDiagnostics(), static d => d.Code == ErrorCode.ERR_TypeMismatch);
     }
 
     [Fact]
-    public void ASetterSeesNewValue()
-    {
-        var (model, _) = Compile("""
+    public void ASetterSeesNewValue() {
+        var (model, _) = Compile(
+            """
             struct Box {
                 var stored: Int
                 var value: Int {
@@ -70,24 +69,25 @@ public sealed class SemanticModelTests
                     set { stored = newValue }
                 }
             }
-            """);
-        Assert.DoesNotContain(
-            model.GetDiagnostics(), d => d.Severity == DiagnosticSeverity.Error);
+            """
+        );
+        Assert.DoesNotContain(model.GetDiagnostics(), static d => d.Severity == DiagnosticSeverity.Error);
     }
 
     [Fact]
-    public void AFieldInitializerIsChecked()
-    {
-        var (model, _) = Compile("""
+    public void AFieldInitializerIsChecked() {
+        var (model, _) = Compile(
+            """
             struct Point { var x: Int = "no" }
-            """);
-        Assert.Contains(model.GetDiagnostics(), d => d.Code == ErrorCode.ERR_TypeMismatch);
+            """
+        );
+        Assert.Contains(model.GetDiagnostics(), static d => d.Code == ErrorCode.ERR_TypeMismatch);
     }
 
     [Fact]
-    public void SuperReachesTheBaseClass()
-    {
-        var (model, _) = Compile("""
+    public void SuperReachesTheBaseClass() {
+        var (model, _) = Compile(
+            """
             open class Node {
                 var value: Int
                 init(value: Int) { self.value = value }
@@ -97,25 +97,30 @@ public sealed class SemanticModelTests
                 init(value: Int) { super.init(value: value) }
                 override fn describe() -> String { return super.describe() }
             }
-            """);
+            """
+        );
         var errors = model.GetDiagnostics()
-            .Where(d => d.Severity == DiagnosticSeverity.Error).ToList();
-        Assert.True(errors.Count == 0,
-            string.Join("\n", errors.Select(e => $"{e.Id}: {e.Message}")));
+            .Where(static d => d.Severity == DiagnosticSeverity.Error)
+            .ToList();
+        Assert.True(
+            errors.Count == 0,
+            string.Join("\n", errors.Select(static e => $"{e.Id}: {e.Message}"))
+        );
     }
 
     // ---- Data flow ---------------------------------------------------------
 
     [Fact]
-    public void DataFlowReportsWhatAStatementReadsAndWrites()
-    {
-        var (model, tree) = Compile("""
+    public void DataFlowReportsWhatAStatementReadsAndWrites() {
+        var (model, tree) = Compile(
+            """
             fn probe(_ a: Int, _ b: Int) -> Int {
                 var total = 0
                 total = a + b
                 return total
             }
-            """);
+            """
+        );
 
         var flow = model.AnalyzeDataFlow(NthStatement(tree, 1));
 
@@ -126,15 +131,16 @@ public sealed class SemanticModelTests
     }
 
     [Fact]
-    public void DataFlowReportsWhatCrossesTheBoundary()
-    {
-        var (model, tree) = Compile("""
+    public void DataFlowReportsWhatCrossesTheBoundary() {
+        var (model, tree) = Compile(
+            """
             fn probe(_ a: Int) -> Int {
                 var total = 0
                 total = a + 1
                 return total
             }
-            """);
+            """
+        );
 
         var flow = model.AnalyzeDataFlow(NthStatement(tree, 1));
 
@@ -143,29 +149,31 @@ public sealed class SemanticModelTests
     }
 
     [Fact]
-    public void AValueWrittenAndNeverReadDoesNotFlowOut()
-    {
-        var (model, tree) = Compile("""
+    public void AValueWrittenAndNeverReadDoesNotFlowOut() {
+        var (model, tree) = Compile(
+            """
             fn probe(_ a: Int) -> Int {
                 var unused = 0
                 unused = a
                 return a
             }
-            """);
+            """
+        );
 
         var flow = model.AnalyzeDataFlow(NthStatement(tree, 1));
         Assert.Empty(flow.DataFlowsOut);
     }
 
     [Fact]
-    public void ADeclarationIsReportedAsDeclared()
-    {
-        var (model, tree) = Compile("""
+    public void ADeclarationIsReportedAsDeclared() {
+        var (model, tree) = Compile(
+            """
             fn probe(_ a: Int) -> Int {
                 let doubled = a * 2
                 return doubled
             }
-            """);
+            """
+        );
 
         var flow = model.AnalyzeDataFlow(NthStatement(tree, 0));
         Assert.Equal(["doubled"], Names(flow.VariablesDeclared));
@@ -173,14 +181,15 @@ public sealed class SemanticModelTests
     }
 
     [Fact]
-    public void AClosureReportsWhatItCaptures()
-    {
-        var (model, tree) = Compile("""
+    public void AClosureReportsWhatItCaptures() {
+        var (model, tree) = Compile(
+            """
             fn probe(_ a: Int) -> Int {
                 let f = () => { return a }
                 return f()
             }
-            """);
+            """
+        );
 
         var flow = model.AnalyzeDataFlow(NthStatement(tree, 0));
         Assert.Equal(["a"], Names(flow.Captured));
@@ -189,9 +198,9 @@ public sealed class SemanticModelTests
     // ---- Control flow ------------------------------------------------------
 
     [Fact]
-    public void ControlFlowFindsTheReturns()
-    {
-        var (model, tree) = Compile("""
+    public void ControlFlowFindsTheReturns() {
+        var (model, tree) = Compile(
+            """
             fn probe(_ a: Int) -> Int {
                 if a > 0 {
                     return 1
@@ -199,7 +208,8 @@ public sealed class SemanticModelTests
                     return 2
                 }
             }
-            """);
+            """
+        );
 
         var flow = model.AnalyzeControlFlow(NthStatement(tree, 0));
 
@@ -209,16 +219,17 @@ public sealed class SemanticModelTests
     }
 
     [Fact]
-    public void AStatementThatFallsThroughHasAReachableEnd()
-    {
-        var (model, tree) = Compile("""
+    public void AStatementThatFallsThroughHasAReachableEnd() {
+        var (model, tree) = Compile(
+            """
             fn probe(_ a: Int) -> Int {
                 if a > 0 {
                     return 1
                 }
                 return 2
             }
-            """);
+            """
+        );
 
         var flow = model.AnalyzeControlFlow(NthStatement(tree, 0));
         Assert.True(flow.EndPointIsReachable);
@@ -226,16 +237,17 @@ public sealed class SemanticModelTests
     }
 
     [Fact]
-    public void ABreakIsAnExitPoint()
-    {
-        var (model, tree) = Compile("""
+    public void ABreakIsAnExitPoint() {
+        var (model, tree) = Compile(
+            """
             fn probe(_ items: Int[]) -> Int {
                 for i in items {
                     break
                 }
                 return 0
             }
-            """);
+            """
+        );
 
         var flow = model.AnalyzeControlFlow(NthStatement(tree, 0));
         Assert.Single(flow.ExitPoints);
@@ -245,42 +257,44 @@ public sealed class SemanticModelTests
     // ---- The step budget ---------------------------------------------------
 
     [Fact]
-    public void AnExpressionOverTheBudgetIsReportedRatherThanBound()
-    {
+    public void AnExpressionOverTheBudgetIsReportedRatherThanBound() {
         var source = "module M\nfn probe() -> Int { return "
             + string.Join(" + ", Enumerable.Repeat("1", 50))
             + " }";
 
         var compilation = Compilation.Create(source)
-            .WithBindOptions(new BindOptions { StepBudget = 10 });
+            .WithBindOptions(new() { StepBudget = 10 });
 
-        Assert.Contains(compilation.GetAllDiagnostics(),
-            d => d.Code == ErrorCode.ERR_ExpressionTooComplex);
+        Assert.Contains(
+            compilation.GetAllDiagnostics(),
+            static d => d.Code == ErrorCode.ERR_ExpressionTooComplex
+        );
     }
 
     [Fact]
-    public void TheBudgetIsReportedOncePerStatement()
-    {
+    public void TheBudgetIsReportedOncePerStatement() {
         var source = "module M\nfn probe() -> Int { return "
             + string.Join(" + ", Enumerable.Repeat("1", 50))
             + " }";
 
         var compilation = Compilation.Create(source)
-            .WithBindOptions(new BindOptions { StepBudget = 10 });
+            .WithBindOptions(new() { StepBudget = 10 });
 
         Assert.Single(
             compilation.GetAllDiagnostics(),
-            d => d.Code == ErrorCode.ERR_ExpressionTooComplex);
+            static d => d.Code == ErrorCode.ERR_ExpressionTooComplex
+        );
     }
 
     [Fact]
-    public void TheDefaultBudgetIsGenerous()
-    {
+    public void TheDefaultBudgetIsGenerous() {
         var source = "module M\nfn probe() -> Int { return "
             + string.Join(" + ", Enumerable.Repeat("1", 500))
             + " }";
 
-        Assert.DoesNotContain(Compilation.Create(source).GetAllDiagnostics(),
-            d => d.Code == ErrorCode.ERR_ExpressionTooComplex);
+        Assert.DoesNotContain(
+            Compilation.Create(source).GetAllDiagnostics(),
+            static d => d.Code == ErrorCode.ERR_ExpressionTooComplex
+        );
     }
 }

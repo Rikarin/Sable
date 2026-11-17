@@ -1,40 +1,40 @@
 namespace Sable.Syntax;
 
 /// <summary>
-/// Evaluates the restricted expression after <c>#if</c> and <c>#elseif</c>.
+///     Evaluates the restricted expression after <c>#if</c> and <c>#elseif</c>.
 /// </summary>
 /// <remarks>
-/// <para>The grammar, per spec/grammar.ebnf: identifiers, <c>true</c>,
-/// <c>false</c>, the predicates <c>os(...)</c>, <c>arch(...)</c> and
-/// <c>feature(...)</c>, the operators <c>!</c>, <c>&amp;&amp;</c> and
-/// <c>||</c>, and parentheses. Nothing else, because a directive condition is
-/// evaluated before any semantic analysis exists.</para>
-/// <para>A malformed condition evaluates to <see langword="false"/> and
-/// reports a diagnostic, so the region is simply disabled rather than
-/// derailing the parse.</para>
+///     <para>
+///         The grammar, per spec/grammar.ebnf: identifiers, <c>true</c>,
+///         <c>false</c>, the predicates <c>os(...)</c>, <c>arch(...)</c> and
+///         <c>feature(...)</c>, the operators <c>!</c>, <c>&amp;&amp;</c> and
+///         <c>||</c>, and parentheses. Nothing else, because a directive condition is
+///         evaluated before any semantic analysis exists.
+///     </para>
+///     <para>
+///         A malformed condition evaluates to <see langword="false" /> and
+///         reports a diagnostic, so the region is simply disabled rather than
+///         derailing the parse.
+///     </para>
 /// </remarks>
-internal sealed class DirectiveCondition
-{
-    private readonly string _text;
-    private readonly ParseOptions _options;
-    private int _position;
-    private bool _failed;
+internal sealed class DirectiveCondition {
+    readonly string _text;
+    readonly ParseOptions _options;
+    int _position;
+    bool _failed;
 
-    private DirectiveCondition(string text, ParseOptions options)
-    {
+    DirectiveCondition(string text, ParseOptions options) {
         _text = text;
         _options = options;
     }
 
     /// <summary>Evaluates a condition, reporting whether it was well formed.</summary>
-    public static bool Evaluate(string text, ParseOptions options, out string? error)
-    {
+    public static bool Evaluate(string text, ParseOptions options, out string? error) {
         var evaluator = new DirectiveCondition(text, options);
         var value = evaluator.ParseOr();
         evaluator.SkipWhitespace();
 
-        if (!evaluator._failed && evaluator._position < evaluator._text.Length)
-        {
+        if (!evaluator._failed && evaluator._position < evaluator._text.Length) {
             error = $"unexpected '{evaluator._text[evaluator._position..].Trim()}' "
                 + "in a conditional-compilation condition";
             return false;
@@ -42,67 +42,81 @@ internal sealed class DirectiveCondition
 
         error = evaluator._failed
             ? "a conditional-compilation condition may only use identifiers, "
-              + "os(), arch(), feature(), '!', '&&', '||' and parentheses"
+            + "os(), arch(), feature(), '!', '&&', '||' and parentheses"
             : null;
 
         return error is null && value;
     }
 
-    private void SkipWhitespace()
-    {
-        while (_position < _text.Length && char.IsWhiteSpace(_text[_position])) _position++;
+    void SkipWhitespace() {
+        while (_position < _text.Length && char.IsWhiteSpace(_text[_position])) {
+            _position++;
+        }
     }
 
-    private bool AtEnd
-    {
-        get
-        {
+    bool AtEnd {
+        get {
             SkipWhitespace();
             return _position >= _text.Length;
         }
     }
 
-    private bool Matches(string token)
-    {
+    bool Matches(string token) {
         SkipWhitespace();
-        if (_position + token.Length > _text.Length) return false;
-        if (string.CompareOrdinal(_text, _position, token, 0, token.Length) != 0) return false;
+        if (_position + token.Length > _text.Length) {
+            return false;
+        }
+
+        if (string.CompareOrdinal(_text, _position, token, 0, token.Length) != 0) {
+            return false;
+        }
+
         _position += token.Length;
         return true;
     }
 
-    private bool ParseOr()
-    {
+    bool ParseOr() {
         var value = ParseAnd();
-        while (Matches("||")) value = ParseAnd() || value;
+        while (Matches("||")) {
+            value = ParseAnd() || value;
+        }
+
         return value;
     }
 
-    private bool ParseAnd()
-    {
+    bool ParseAnd() {
         var value = ParseUnary();
-        while (Matches("&&")) value = ParseUnary() && value;
+        while (Matches("&&")) {
+            value = ParseUnary() && value;
+        }
+
         return value;
     }
 
-    private bool ParseUnary() => Matches("!") ? !ParseUnary() : ParsePrimary();
+    bool ParseUnary() => Matches("!") ? !ParseUnary() : ParsePrimary();
 
-    private bool ParsePrimary()
-    {
-        if (AtEnd) { _failed = true; return false; }
+    bool ParsePrimary() {
+        if (AtEnd) {
+            _failed = true;
+            return false;
+        }
 
-        if (Matches("("))
-        {
+        if (Matches("(")) {
             var value = ParseOr();
-            if (!Matches(")")) _failed = true;
+            if (!Matches(")")) {
+                _failed = true;
+            }
+
             return value;
         }
 
         var name = ReadIdentifier();
-        if (name.Length == 0) { _failed = true; return false; }
+        if (name.Length == 0) {
+            _failed = true;
+            return false;
+        }
 
-        switch (name)
-        {
+        switch (name) {
             case "true": return true;
             case "false": return false;
 
@@ -123,22 +137,28 @@ internal sealed class DirectiveCondition
         }
     }
 
-    private string ReadIdentifier()
-    {
+    string ReadIdentifier() {
         SkipWhitespace();
         var start = _position;
-        while (_position < _text.Length && SyntaxFacts.IsIdentifierContinue(_text[_position]))
+        while (_position < _text.Length && SyntaxFacts.IsIdentifierContinue(_text[_position])) {
             _position++;
+        }
+
         return _text[start.._position];
     }
 
     /// <summary>Reads <c>(name)</c> after a predicate, or fails.</summary>
-    private string? ReadPredicateArgument()
-    {
-        if (!Matches("(")) { _failed = true; return null; }
+    string? ReadPredicateArgument() {
+        if (!Matches("(")) {
+            _failed = true;
+            return null;
+        }
 
         var argument = ReadIdentifier();
-        if (argument.Length == 0 || !Matches(")")) { _failed = true; return null; }
+        if (argument.Length == 0 || !Matches(")")) {
+            _failed = true;
+            return null;
+        }
 
         return argument;
     }

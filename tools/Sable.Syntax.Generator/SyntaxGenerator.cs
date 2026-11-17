@@ -6,21 +6,19 @@ using System.Xml.Linq;
 namespace Sable.Syntax.Generator;
 
 /// <summary>
-/// Turns <c>Syntax.xml</c> into the green and red node classes.
+///     Turns <c>Syntax.xml</c> into the green and red node classes.
 /// </summary>
 /// <remarks>
-/// Node classes are generated rather than hand-written for the reason given in
-/// docs/04-implementation-plan.md §0.3: there will eventually be around 180 of
-/// them, and hand-writing them guarantees drift between the green tree, the red
-/// tree and the visitor.
+///     Node classes are generated rather than hand-written for the reason given in
+///     docs/04-implementation-plan.md §0.3: there will eventually be around 180 of
+///     them, and hand-writing them guarantees drift between the green tree, the red
+///     tree and the visitor.
 /// </remarks>
-public static partial class SyntaxGenerator
-{
+public static partial class SyntaxGenerator {
     public const string GreenFileName = "Syntax.Green.g.cs";
     public const string RedFileName = "Syntax.g.cs";
 
-    private sealed record Field(string Name, string Type, bool Optional)
-    {
+    private sealed record Field(string Name, string Type, bool Optional) {
         public bool IsToken => Type == "Token";
         public bool IsTokenList => Type == "TokenList";
         public bool IsList => Type.StartsWith("List:", StringComparison.Ordinal);
@@ -32,86 +30,96 @@ public static partial class SyntaxGenerator
     }
 
     private sealed record Node(string Name, string Base, string Kind, string? Doc, List<Field> Fields);
+
     private sealed record Abstract(string Name, string Base, string? Doc);
 
     /// <summary>Generates both output files, keyed by file name.</summary>
     /// <param name="schemaXml">The contents of Syntax.xml.</param>
     /// <param name="syntaxKindSource">
-    /// The contents of SyntaxKind.cs, used to verify that every Kind named in
-    /// the schema actually exists.
+    ///     The contents of SyntaxKind.cs, used to verify that every Kind named in
+    ///     the schema actually exists.
     /// </param>
     public static IReadOnlyDictionary<string, string> Generate(
-        string schemaXml, string? syntaxKindSource = null)
-    {
+        string schemaXml,
+        string? syntaxKindSource = null
+    ) {
         var document = XDocument.Parse(schemaXml);
         var root = document.Root
             ?? throw new InvalidOperationException("Syntax.xml has no root element");
 
         var abstracts = root.Elements("Abstract")
-            .Select(e => new Abstract(Attr(e, "Name"), Attr(e, "Base"), e.Attribute("Doc")?.Value))
+            .Select(static e => new Abstract(Attr(e, "Name"), Attr(e, "Base"), e.Attribute("Doc")?.Value))
             .ToList();
 
         var nodes = root.Elements("Node").Select(ParseNode).ToList();
 
-        if (syntaxKindSource is not null) VerifyKinds(nodes, syntaxKindSource);
+        if (syntaxKindSource is not null) {
+            VerifyKinds(nodes, syntaxKindSource);
+        }
+
         VerifyBases(nodes, abstracts);
 
-        return new Dictionary<string, string>(StringComparer.Ordinal)
-        {
-            [GreenFileName] = GenerateGreen(nodes),
-            [RedFileName] = GenerateRed(nodes, abstracts),
+        return new Dictionary<string, string>(StringComparer.Ordinal) {
+            [GreenFileName] = GenerateGreen(nodes), [RedFileName] = GenerateRed(nodes, abstracts)
         };
     }
 
-    private static Node ParseNode(XElement element) => new(
-        Attr(element, "Name"),
-        Attr(element, "Base"),
-        Attr(element, "Kind"),
-        element.Attribute("Doc")?.Value,
-        [.. element.Elements("Field").Select(f => new Field(
-            Attr(f, "Name"),
-            Attr(f, "Type"),
-            string.Equals(f.Attribute("Optional")?.Value, "true", StringComparison.OrdinalIgnoreCase)))]);
+    static Node ParseNode(XElement element) =>
+        new(
+            Attr(element, "Name"),
+            Attr(element, "Base"),
+            Attr(element, "Kind"),
+            element.Attribute("Doc")?.Value,
+            [
+                ..element.Elements("Field")
+                    .Select(static f => new Field(
+                            Attr(f, "Name"),
+                            Attr(f, "Type"),
+                            string.Equals(f.Attribute("Optional")?.Value, "true", StringComparison.OrdinalIgnoreCase)
+                        )
+                    )
+            ]
+        );
 
-    private static string Attr(XElement element, string name) =>
+    static string Attr(XElement element, string name) =>
         element.Attribute(name)?.Value
-        ?? throw new InvalidOperationException(
-            $"<{element.Name}> is missing the required '{name}' attribute");
+        ?? throw new InvalidOperationException($"<{element.Name}> is missing the required '{name}' attribute");
 
-    private static void VerifyKinds(List<Node> nodes, string syntaxKindSource)
-    {
-        var declared = KindMemberRegex().Matches(syntaxKindSource)
-            .Select(m => m.Groups[1].Value)
+    static void VerifyKinds(List<Node> nodes, string syntaxKindSource) {
+        var declared = KindMemberRegex()
+            .Matches(syntaxKindSource)
+            .Select(static m => m.Groups[1].Value)
             .ToHashSet(StringComparer.Ordinal);
 
-        var missing = nodes.Where(n => !declared.Contains(n.Kind)).Select(n => n.Kind).ToList();
-        if (missing.Count > 0)
-        {
+        var missing = nodes.Where(n => !declared.Contains(n.Kind)).Select(static n => n.Kind).ToList();
+        if (missing.Count > 0) {
             throw new InvalidOperationException(
                 "Syntax.xml names kinds that do not exist in SyntaxKind.cs: "
-                + string.Join(", ", missing));
+                + string.Join(", ", missing)
+            );
         }
     }
 
-    private static void VerifyBases(List<Node> nodes, List<Abstract> abstracts)
-    {
-        var known = abstracts.Select(a => a.Name)
-            .Concat(nodes.Select(n => n.Name))
+    static void VerifyBases(List<Node> nodes, List<Abstract> abstracts) {
+        var known = abstracts.Select(static a => a.Name)
+            .Concat(nodes.Select(static n => n.Name))
             .Append("SyntaxNode")
             .ToHashSet(StringComparer.Ordinal);
 
-        foreach (var node in nodes)
-        {
-            if (!known.Contains(node.Base))
+        foreach (var node in nodes) {
+            if (!known.Contains(node.Base)) {
                 throw new InvalidOperationException($"{node.Name} has unknown base '{node.Base}'");
+            }
 
-            foreach (var field in node.Fields)
-            {
-                if (field.IsToken || field.IsTokenList) continue;
+            foreach (var field in node.Fields) {
+                if (field.IsToken || field.IsTokenList) {
+                    continue;
+                }
+
                 var type = field.IsList || field.IsSeparatedList ? field.ItemType : field.Type;
-                if (!known.Contains(type))
-                    throw new InvalidOperationException(
-                        $"{node.Name}.{field.Name} has unknown type '{type}'");
+                if (!known.Contains(type)) {
+                    throw new InvalidOperationException($"{node.Name}.{field.Name} has unknown type '{type}'");
+                }
             }
         }
     }
@@ -123,39 +131,51 @@ public static partial class SyntaxGenerator
     // Green nodes
     // -----------------------------------------------------------------------
 
-    private static string GenerateGreen(List<Node> nodes)
-    {
+    static string GenerateGreen(List<Node> nodes) {
         var sb = new StringBuilder();
         WriteHeader(sb);
         sb.AppendLine("namespace Sable.Syntax.Green;");
         sb.AppendLine();
 
-        foreach (var node in nodes)
-        {
+        foreach (var node in nodes) {
             var green = GreenName(node.Name);
-            sb.AppendLine(CultureInfo.InvariantCulture, $"/// <summary>Green node for <see cref=\"{node.Name}\"/>.</summary>");
+            sb.AppendLine(
+                CultureInfo.InvariantCulture,
+                $"/// <summary>Green node for <see cref=\"{node.Name}\"/>.</summary>"
+            );
             sb.AppendLine(CultureInfo.InvariantCulture, $"internal sealed class {green} : GreenNode");
             sb.AppendLine("{");
 
-            foreach (var field in node.Fields)
-                sb.AppendLine(CultureInfo.InvariantCulture, $"    private readonly {GreenFieldType(field)} {field.FieldName};");
+            foreach (var field in node.Fields) {
+                sb.AppendLine(
+                    CultureInfo.InvariantCulture,
+                    $"    private readonly {GreenFieldType(field)} {field.FieldName};"
+                );
+            }
 
-            if (node.Fields.Count > 0) sb.AppendLine();
+            if (node.Fields.Count > 0) {
+                sb.AppendLine();
+            }
 
-            var parameters = string.Join(", ",
-                node.Fields.Select(f => $"{GreenFieldType(f)} {f.ParameterName}"));
+            var parameters = string.Join(
+                ", ",
+                node.Fields.Select(static f => $"{GreenFieldType(f)} {f.ParameterName}")
+            );
             sb.AppendLine(CultureInfo.InvariantCulture, $"    public {green}({parameters})");
             sb.AppendLine(CultureInfo.InvariantCulture, $"        : base(SyntaxKind.{node.Kind}, 0)");
             sb.AppendLine("    {");
-            foreach (var field in node.Fields)
+            foreach (var field in node.Fields) {
                 sb.AppendLine(CultureInfo.InvariantCulture, $"        {field.FieldName} = {field.ParameterName};");
+            }
 
-            if (node.Fields.Count > 0)
-            {
-                var width = string.Join("\n                    + ",
-                    node.Fields.Select(f => $"({f.ParameterName}?.FullWidth ?? 0)"));
+            if (node.Fields.Count > 0) {
+                var width = string.Join(
+                    "\n                    + ",
+                    node.Fields.Select(static f => $"({f.ParameterName}?.FullWidth ?? 0)")
+                );
                 sb.AppendLine(CultureInfo.InvariantCulture, $"        FullWidth = {width};");
             }
+
             sb.AppendLine("    }");
             sb.AppendLine();
 
@@ -163,8 +183,10 @@ public static partial class SyntaxGenerator
             sb.AppendLine();
             sb.AppendLine("    public override GreenNode? GetSlot(int index) => index switch");
             sb.AppendLine("    {");
-            for (var i = 0; i < node.Fields.Count; i++)
+            for (var i = 0; i < node.Fields.Count; i++) {
                 sb.AppendLine(CultureInfo.InvariantCulture, $"        {i} => {node.Fields[i].FieldName},");
+            }
+
             sb.AppendLine("        _ => null,");
             sb.AppendLine("    };");
             sb.AppendLine();
@@ -177,12 +199,12 @@ public static partial class SyntaxGenerator
         return sb.ToString();
     }
 
-    private static string GreenFieldType(Field field) =>
+    static string GreenFieldType(Field field) =>
         field.IsToken ? "GreenToken?"
         : field.IsTokenList || field.IsList || field.IsSeparatedList ? "GreenList?"
         : "GreenNode?";
 
-    private static string GreenName(string nodeName) =>
+    static string GreenName(string nodeName) =>
         nodeName.EndsWith("Syntax", StringComparison.Ordinal)
             ? nodeName[..^"Syntax".Length] + "Green"
             : nodeName + "Green";
@@ -191,8 +213,7 @@ public static partial class SyntaxGenerator
     // Red nodes
     // -----------------------------------------------------------------------
 
-    private static string GenerateRed(List<Node> nodes, List<Abstract> abstracts)
-    {
+    static string GenerateRed(List<Node> nodes, List<Abstract> abstracts) {
         var sb = new StringBuilder();
         WriteHeader(sb);
         sb.AppendLine("using Sable.Syntax.Green;");
@@ -200,85 +221,100 @@ public static partial class SyntaxGenerator
         sb.AppendLine("namespace Sable.Syntax;");
         sb.AppendLine();
 
-        foreach (var node in abstracts)
-        {
-            if (node.Doc is not null)
+        foreach (var node in abstracts) {
+            if (node.Doc is not null) {
                 sb.AppendLine(CultureInfo.InvariantCulture, $"/// <summary>{Escape(node.Doc)}</summary>");
+            }
+
             sb.AppendLine(CultureInfo.InvariantCulture, $"public abstract class {node.Name} : {node.Base}");
             sb.AppendLine("{");
-            sb.AppendLine(CultureInfo.InvariantCulture,
-                $"    private protected {node.Name}(GreenNode green, SyntaxNode? parent, int position)");
+            sb.AppendLine(
+                CultureInfo.InvariantCulture,
+                $"    private protected {node.Name}(GreenNode green, SyntaxNode? parent, int position)"
+            );
             sb.AppendLine("        : base(green, parent, position) { }");
             sb.AppendLine("}");
             sb.AppendLine();
         }
 
-        foreach (var node in nodes)
-        {
-            if (node.Doc is not null)
+        foreach (var node in nodes) {
+            if (node.Doc is not null) {
                 sb.AppendLine(CultureInfo.InvariantCulture, $"/// <summary>{Escape(node.Doc)}</summary>");
+            }
+
             sb.AppendLine(CultureInfo.InvariantCulture, $"public sealed class {node.Name} : {node.Base}");
             sb.AppendLine("{");
 
             var cached = node.Fields
-                .Select((f, i) => (Field: f, Index: i))
-                .Where(x => x.Field.IsNode)
+                .Select(static (f, i) => (Field: f, Index: i))
+                .Where(static x => x.Field.IsNode)
                 .ToList();
 
-            foreach (var (field, _) in cached)
+            foreach (var (field, _) in cached) {
                 sb.AppendLine(CultureInfo.InvariantCulture, $"    private {field.Type}? {field.FieldName};");
-            if (cached.Count > 0) sb.AppendLine();
+            }
 
-            sb.AppendLine(CultureInfo.InvariantCulture,
-                $"    internal {node.Name}(GreenNode green, SyntaxNode? parent, int position)");
+            if (cached.Count > 0) {
+                sb.AppendLine();
+            }
+
+            sb.AppendLine(
+                CultureInfo.InvariantCulture,
+                $"    internal {node.Name}(GreenNode green, SyntaxNode? parent, int position)"
+            );
             sb.AppendLine("        : base(green, parent, position) { }");
             sb.AppendLine();
 
-            for (var i = 0; i < node.Fields.Count; i++)
-            {
+            for (var i = 0; i < node.Fields.Count; i++) {
                 var field = node.Fields[i];
-                if (field.IsToken)
-                {
-                    sb.AppendLine(CultureInfo.InvariantCulture,
-                        $"    public SyntaxToken {field.Name} => GetToken({i});");
-                }
-                else if (field.IsTokenList)
-                {
-                    sb.AppendLine(CultureInfo.InvariantCulture,
-                        $"    public SyntaxTokenList {field.Name} => GetTokenList({i});");
-                }
-                else if (field.IsSeparatedList)
-                {
-                    sb.AppendLine(CultureInfo.InvariantCulture,
-                        $"    public SeparatedSyntaxList<{field.ItemType}> {field.Name} => GetSeparatedList<{field.ItemType}>({i});");
-                }
-                else if (field.IsList)
-                {
-                    sb.AppendLine(CultureInfo.InvariantCulture,
-                        $"    public SyntaxList<{field.ItemType}> {field.Name} => GetList<{field.ItemType}>({i});");
-                }
-                else if (field.Optional)
-                {
-                    sb.AppendLine(CultureInfo.InvariantCulture,
-                        $"    public {field.Type}? {field.Name} => GetRedOptional(ref {field.FieldName}, {i});");
-                }
-                else
-                {
-                    sb.AppendLine(CultureInfo.InvariantCulture,
-                        $"    public {field.Type} {field.Name} => GetRed(ref {field.FieldName}, {i});");
+                if (field.IsToken) {
+                    sb.AppendLine(
+                        CultureInfo.InvariantCulture,
+                        $"    public SyntaxToken {field.Name} => GetToken({i});"
+                    );
+                } else if (field.IsTokenList) {
+                    sb.AppendLine(
+                        CultureInfo.InvariantCulture,
+                        $"    public SyntaxTokenList {field.Name} => GetTokenList({i});"
+                    );
+                } else if (field.IsSeparatedList) {
+                    sb.AppendLine(
+                        CultureInfo.InvariantCulture,
+                        $"    public SeparatedSyntaxList<{field.ItemType}> {field.Name} => GetSeparatedList<{field.ItemType}>({i});"
+                    );
+                } else if (field.IsList) {
+                    sb.AppendLine(
+                        CultureInfo.InvariantCulture,
+                        $"    public SyntaxList<{field.ItemType}> {field.Name} => GetList<{field.ItemType}>({i});"
+                    );
+                } else if (field.Optional) {
+                    sb.AppendLine(
+                        CultureInfo.InvariantCulture,
+                        $"    public {field.Type}? {field.Name} => GetRedOptional(ref {field.FieldName}, {i});"
+                    );
+                } else {
+                    sb.AppendLine(
+                        CultureInfo.InvariantCulture,
+                        $"    public {field.Type} {field.Name} => GetRed(ref {field.FieldName}, {i});"
+                    );
                 }
             }
+
             sb.AppendLine();
 
             sb.AppendLine("    internal override SyntaxNode? GetNodeSlot(int index) => index switch");
             sb.AppendLine("    {");
-            foreach (var (field, index) in cached)
+            foreach (var (field, index) in cached) {
                 sb.AppendLine(CultureInfo.InvariantCulture, $"        {index} => {field.Name},");
+            }
+
             sb.AppendLine("        _ => null,");
             sb.AppendLine("    };");
             sb.AppendLine();
-            sb.AppendLine(CultureInfo.InvariantCulture,
-                $"    public override void Accept(SyntaxVisitor visitor) => visitor.Visit{VisitName(node.Name)}(this);");
+            sb.AppendLine(
+                CultureInfo.InvariantCulture,
+                $"    public override void Accept(SyntaxVisitor visitor) => visitor.Visit{VisitName(node.Name)}(this);"
+            );
             sb.AppendLine("}");
             sb.AppendLine();
         }
@@ -295,30 +331,31 @@ public static partial class SyntaxGenerator
         sb.AppendLine("        foreach (var child in node.ChildNodes()) Visit(child);");
         sb.AppendLine("    }");
         sb.AppendLine();
-        foreach (var node in nodes)
-        {
-            sb.AppendLine(CultureInfo.InvariantCulture,
-                $"    public virtual void Visit{VisitName(node.Name)}({node.Name} node) => DefaultVisit(node);");
+        foreach (var node in nodes) {
+            sb.AppendLine(
+                CultureInfo.InvariantCulture,
+                $"    public virtual void Visit{VisitName(node.Name)}({node.Name} node) => DefaultVisit(node);"
+            );
         }
+
         sb.AppendLine("}");
         sb.AppendLine();
 
         return sb.ToString();
     }
 
-    private static string VisitName(string nodeName) =>
+    static string VisitName(string nodeName) =>
         nodeName.EndsWith("Syntax", StringComparison.Ordinal)
             ? nodeName[..^"Syntax".Length]
             : nodeName;
 
     /// <summary>Re-escapes decoded attribute text for an XML doc comment.</summary>
-    private static string Escape(string text) =>
+    static string Escape(string text) =>
         text.Replace("&", "&amp;", StringComparison.Ordinal)
             .Replace("<", "&lt;", StringComparison.Ordinal)
             .Replace(">", "&gt;", StringComparison.Ordinal);
 
-    private static void WriteHeader(StringBuilder sb)
-    {
+    static void WriteHeader(StringBuilder sb) {
         sb.AppendLine("// <auto-generated/>");
         sb.AppendLine("//");
         sb.AppendLine("// Generated from src/Sable.Syntax/Syntax.xml by tools/Sable.Syntax.Generator.");

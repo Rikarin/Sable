@@ -1,31 +1,32 @@
-using Sable.Symbols;
-
 namespace Sable.Symbols.Tests;
 
-public sealed class BindingTests
-{
+public sealed class BindingTests {
     /// <summary>Binds a function body and reports the type of its last expression.</summary>
-    private static string TypeOfLast(string body, string extra = "")
-    {
+    static string TypeOfLast(string body, string extra = "") {
         var source = TestSource.Probe(body, extra);
         var compilation = Compilation.Create(source);
         var tree = compilation.SyntaxTrees[0];
         var model = compilation.GetSemanticModel(tree);
 
         var errors = compilation.GetAllDiagnostics()
-            .Where(d => d.Severity == DiagnosticSeverity.Error).ToList();
-        Assert.True(errors.Count == 0,
-            string.Join("\n", errors.Select(e => $"{e.Id}: {e.Message}")));
+            .Where(static d => d.Severity == DiagnosticSeverity.Error)
+            .ToList();
+        Assert.True(
+            errors.Count == 0,
+            string.Join("\n", errors.Select(static e => $"{e.Id}: {e.Message}"))
+        );
 
         // The type of the last binding's initialiser, or of the last
         // expression statement.
         ExpressionSyntax? last = tree.Root.DescendantNodes()
             .OfType<LocalDeclarationStatementSyntax>()
-            .LastOrDefault()?.Declarator.Initializer?.Value;
+            .LastOrDefault()
+            ?.Declarator.Initializer?.Value;
 
         last ??= tree.Root.DescendantNodes()
             .OfType<ExpressionStatementSyntax>()
-            .LastOrDefault()?.Expression;
+            .LastOrDefault()
+            ?.Expression;
 
         Assert.NotNull(last);
 
@@ -34,19 +35,21 @@ public sealed class BindingTests
         return type!.ToDisplayString();
     }
 
-    private static IReadOnlyList<Diagnostic> ErrorsIn(string body, string extra = "")
-    {
+    static IReadOnlyList<Diagnostic> ErrorsIn(string body, string extra = "") {
         var source = TestSource.Probe(body, extra);
         var compilation = Compilation.Create(source);
-        return [.. compilation.GetAllDiagnostics()
-            .Where(d => d.Severity == DiagnosticSeverity.Error)];
+        return [
+            ..compilation.GetAllDiagnostics()
+                .Where(static d => d.Severity == DiagnosticSeverity.Error)
+        ];
     }
 
-    private static void AssertClean(string body, string extra = "")
-    {
+    static void AssertClean(string body, string extra = "") {
         var errors = ErrorsIn(body, extra);
-        Assert.True(errors.Count == 0,
-            string.Join("\n", errors.Select(e => $"{e.Id}: {e.Message} {e.Span}")));
+        Assert.True(
+            errors.Count == 0,
+            string.Join("\n", errors.Select(static e => $"{e.Id}: {e.Message} {e.Span}"))
+        );
     }
 
     // ---- Literals and locals ----------------------------------------------
@@ -59,32 +62,31 @@ public sealed class BindingTests
     [InlineData("let x = 'c'", "Char")]
     [InlineData("let x: U8 = 1", "U8")]
     [InlineData("let x: F32 = 2", "F32")]
-    public void BindsLiterals(string body, string expected) =>
-        Assert.Equal(expected, TypeOfLast(body));
+    public void BindsLiterals(string body, string expected) => Assert.Equal(expected, TypeOfLast(body));
 
     [Fact]
-    public void ALocalKeepsItsType()
-    {
+    public void ALocalKeepsItsType() {
         Assert.Equal("Int", TypeOfLast("let x = 1\nlet y = x"));
         Assert.Equal("Int", TypeOfLast("var x: Int = 1\nx"));
     }
 
     [Fact]
     public void AnUnknownNameIsReported() =>
-        Assert.Contains(ErrorsIn("let x = nope"), e => e.Code == ErrorCode.ERR_NameNotFound);
+        Assert.Contains(ErrorsIn("let x = nope"), static e => e.Code == ErrorCode.ERR_NameNotFound);
 
     [Fact]
     public void ALocalWithoutTypeOrValueIsReported() =>
-        Assert.Contains(ErrorsIn("var x"), e => e.Code == ErrorCode.ERR_CannotInferType);
+        Assert.Contains(ErrorsIn("var x"), static e => e.Code == ErrorCode.ERR_CannotInferType);
 
     [Fact]
     public void ShadowingInTheSameScopeIsReported() =>
-        Assert.Contains(ErrorsIn("let x = 1\nlet x = 2"),
-            e => e.Code == ErrorCode.ERR_DuplicateDeclaration);
+        Assert.Contains(
+            ErrorsIn("let x = 1\nlet x = 2"),
+            static e => e.Code == ErrorCode.ERR_DuplicateDeclaration
+        );
 
     [Fact]
-    public void ShadowingInANestedScopeIsAllowed() =>
-        AssertClean("let x = 1\nif true {\n    let x = 2\n}");
+    public void ShadowingInANestedScopeIsAllowed() => AssertClean("let x = 1\nif true {\n    let x = 2\n}");
 
     // ---- Operators ---------------------------------------------------------
 
@@ -99,34 +101,35 @@ public sealed class BindingTests
     [InlineData("let v = -1", "Int")]
     [InlineData("let v = !true", "Bool")]
     [InlineData("let v = ~1", "Int")]
-    public void BindsOperators(string body, string expected) =>
-        Assert.Equal(expected, TypeOfLast(body));
+    public void BindsOperators(string body, string expected) => Assert.Equal(expected, TypeOfLast(body));
 
     [Fact]
-    public void ALiteralTakesTheOtherOperandsType() =>
-        Assert.Equal("U8", TypeOfLast("let a: U8 = 1\nlet v = a + 2"));
+    public void ALiteralTakesTheOtherOperandsType() => Assert.Equal("U8", TypeOfLast("let a: U8 = 1\nlet v = a + 2"));
 
     [Fact]
     public void MixingNumericTypesIsReported() =>
-        Assert.Contains(ErrorsIn("let a: U8 = 1\nlet b: I32 = 2\nlet v = a + b"),
-            e => e.Code == ErrorCode.ERR_OperatorNotDefined);
+        Assert.Contains(
+            ErrorsIn("let a: U8 = 1\nlet b: I32 = 2\nlet v = a + b"),
+            static e => e.Code == ErrorCode.ERR_OperatorNotDefined
+        );
 
     [Fact]
     public void AnOperatorOnTheWrongTypeIsReported() =>
-        Assert.Contains(ErrorsIn("let v = true + true"),
-            e => e.Code == ErrorCode.ERR_OperatorNotDefined);
+        Assert.Contains(
+            ErrorsIn("let v = true + true"),
+            static e => e.Code == ErrorCode.ERR_OperatorNotDefined
+        );
 
     [Fact]
-    public void BindsAUserDefinedOperator()
-    {
+    public void BindsAUserDefinedOperator() {
         const string extra = """
-            struct Money {
-                var cents: I64
-                operator + (a: Money, b: Money) -> Money {
-                    return Money { cents: a.cents + b.cents }
-                }
-            }
-            """;
+                             struct Money {
+                                 var cents: I64
+                                 operator + (a: Money, b: Money) -> Money {
+                                     return Money { cents: a.cents + b.cents }
+                                 }
+                             }
+                             """;
 
         Assert.Equal("Money", TypeOfLast("let a: Money\nlet b: Money\nlet v = a + b", extra));
     }
@@ -134,134 +137,131 @@ public sealed class BindingTests
     // ---- Optionals ---------------------------------------------------------
 
     [Fact]
-    public void WrapsIntoAnOptional() =>
-        Assert.Equal("Int?", TypeOfLast("let x: Int? = 1"));
+    public void WrapsIntoAnOptional() => Assert.Equal("Int?", TypeOfLast("let x: Int? = 1"));
 
     [Fact]
-    public void CoalesceUnwraps() =>
-        Assert.Equal("Int", TypeOfLast("let a: Int? = 1\nlet v = a ?? 0"));
+    public void CoalesceUnwraps() => Assert.Equal("Int", TypeOfLast("let a: Int? = 1\nlet v = a ?? 0"));
 
     [Fact]
     public void CoalesceOnANonOptionalIsReported() =>
-        Assert.Contains(ErrorsIn("let a = 1\nlet v = a ?? 0"),
-            e => e.Code == ErrorCode.ERR_NotOptional);
+        Assert.Contains(
+            ErrorsIn("let a = 1\nlet v = a ?? 0"),
+            static e => e.Code == ErrorCode.ERR_NotOptional
+        );
 
     [Fact]
-    public void ForceUnwrapRemovesTheOptional() =>
-        Assert.Equal("Int", TypeOfLast("let a: Int? = 1\nlet v = a!"));
+    public void ForceUnwrapRemovesTheOptional() => Assert.Equal("Int", TypeOfLast("let a: Int? = 1\nlet v = a!"));
 
     [Fact]
-    public void OptionalBindingUnwraps() =>
-        AssertClean("let a: Int? = 1\nif let b = a {\n    let c: Int = b\n}");
+    public void OptionalBindingUnwraps() => AssertClean("let a: Int? = 1\nif let b = a {\n    let c: Int = b\n}");
 
     // ---- Members and calls -------------------------------------------------
 
     [Fact]
-    public void BindsFieldAccess()
-    {
+    public void BindsFieldAccess() {
         const string extra = "struct Point { var x: Int\n var y: Int }";
         Assert.Equal("Int", TypeOfLast("let p: Point\nlet v = p.x", extra));
     }
 
     [Fact]
-    public void AnUnknownMemberIsReported()
-    {
+    public void AnUnknownMemberIsReported() {
         const string extra = "struct Point { var x: Int }";
-        Assert.Contains(ErrorsIn("let p: Point\nlet v = p.nope", extra),
-            e => e.Code == ErrorCode.ERR_NameNotFound);
+        Assert.Contains(
+            ErrorsIn("let p: Point\nlet v = p.nope", extra),
+            static e => e.Code == ErrorCode.ERR_NameNotFound
+        );
     }
 
     [Fact]
-    public void BindsACall()
-    {
+    public void BindsACall() {
         const string extra = "fn twice(_ n: Int) -> Int { return n }";
         Assert.Equal("Int", TypeOfLast("let v = twice(21)", extra));
     }
 
     [Fact]
-    public void BindsAMethodCall()
-    {
+    public void BindsAMethodCall() {
         const string extra = """
-            struct Counter {
-                var n: Int
-                fn next() -> Int { return n }
-            }
-            """;
+                             struct Counter {
+                                 var n: Int
+                                 fn next() -> Int { return n }
+                             }
+                             """;
         Assert.Equal("Int", TypeOfLast("let c: Counter\nlet v = c.next()", extra));
     }
 
     [Fact]
-    public void ChoosesTheRightOverload()
-    {
+    public void ChoosesTheRightOverload() {
         const string extra = """
-            fn f(_ a: Int) -> Int { return a }
-            fn f(_ a: String) -> Bool { return true }
-            """;
+                             fn f(_ a: Int) -> Int { return a }
+                             fn f(_ a: String) -> Bool { return true }
+                             """;
 
         Assert.Equal("Int", TypeOfLast("let v = f(1)", extra));
-        Assert.Equal("Bool", TypeOfLast("let v = f(\"s\")", extra));
+        Assert.Equal("Bool", TypeOfLast("""let v = f("s")""", extra));
     }
 
     [Fact]
-    public void NoMatchingOverloadIsReported()
-    {
+    public void NoMatchingOverloadIsReported() {
         const string extra = "fn f(_ a: Int) -> Int { return a }";
-        Assert.Contains(ErrorsIn("let v = f(true)", extra),
-            e => e.Code == ErrorCode.ERR_NoMatchingOverload);
+        Assert.Contains(
+            ErrorsIn("let v = f(true)", extra),
+            static e => e.Code == ErrorCode.ERR_NoMatchingOverload
+        );
     }
 
     [Fact]
-    public void WrongArgumentCountIsReported()
-    {
+    public void WrongArgumentCountIsReported() {
         const string extra = "fn f(_ a: Int) -> Int { return a }";
-        Assert.Contains(ErrorsIn("let v = f(1, 2)", extra),
-            e => e.Code == ErrorCode.ERR_NoMatchingOverload);
+        Assert.Contains(
+            ErrorsIn("let v = f(1, 2)", extra),
+            static e => e.Code == ErrorCode.ERR_NoMatchingOverload
+        );
     }
 
     [Fact]
-    public void ArgumentLabelsAreChecked()
-    {
+    public void ArgumentLabelsAreChecked() {
         const string extra = "fn relocate(from source: Int, to dest: Int) { }";
         AssertClean("relocate(from: 1, to: 2)", extra);
 
-        Assert.Contains(ErrorsIn("relocate(wrong: 1, to: 2)", extra),
-            e => e.Code == ErrorCode.ERR_NoMatchingOverload);
+        Assert.Contains(
+            ErrorsIn("relocate(wrong: 1, to: 2)", extra),
+            static e => e.Code == ErrorCode.ERR_NoMatchingOverload
+        );
     }
 
     [Fact]
-    public void DefaultedParametersMayBeOmitted()
-    {
+    public void DefaultedParametersMayBeOmitted() {
         const string extra = "fn connect(host: String, port: Int = 443) { }";
-        AssertClean("connect(host: \"a\")", extra);
+        AssertClean("""connect(host: "a")""", extra);
     }
 
     [Fact]
     public void CallingSomethingUncallableIsReported() =>
-        Assert.Contains(ErrorsIn("let a = 1\nlet v = a()"),
-            e => e.Code == ErrorCode.ERR_NotCallable);
+        Assert.Contains(
+            ErrorsIn("let a = 1\nlet v = a()"),
+            static e => e.Code == ErrorCode.ERR_NotCallable
+        );
 
     // ---- Aggregates --------------------------------------------------------
 
     [Fact]
-    public void BindsTuples() =>
-        Assert.Equal("(Int, String)", TypeOfLast("let v = (1, \"s\")"));
+    public void BindsTuples() => Assert.Equal("(Int, String)", TypeOfLast("""let v = (1, "s")"""));
 
     [Fact]
-    public void BindsNamedTuples() =>
-        Assert.Equal("(q: Int, r: Int)", TypeOfLast("let v = (q: 1, r: 2)"));
+    public void BindsNamedTuples() => Assert.Equal("(q: Int, r: Int)", TypeOfLast("let v = (q: 1, r: 2)"));
 
     [Fact]
-    public void BindsArrays() =>
-        Assert.Equal("Int[]", TypeOfLast("let v = [1, 2, 3]"));
+    public void BindsArrays() => Assert.Equal("Int[]", TypeOfLast("let v = [1, 2, 3]"));
 
     [Fact]
     public void InconsistentArrayElementsAreReported() =>
-        Assert.Contains(ErrorsIn("let v = [1, \"s\"]"),
-            e => e.Code == ErrorCode.ERR_InconsistentArrayElements);
+        Assert.Contains(
+            ErrorsIn("""let v = [1, "s"]"""),
+            static e => e.Code == ErrorCode.ERR_InconsistentArrayElements
+        );
 
     [Fact]
-    public void IndexingAnArrayYieldsItsElement() =>
-        Assert.Equal("Int", TypeOfLast("let xs = [1, 2]\nlet v = xs[0]"));
+    public void IndexingAnArrayYieldsItsElement() => Assert.Equal("Int", TypeOfLast("let xs = [1, 2]\nlet v = xs[0]"));
 
     [Fact]
     public void IndexingADictionaryYieldsAnOptional() =>
@@ -269,18 +269,19 @@ public sealed class BindingTests
 
     [Fact]
     public void IndexingSomethingElseIsReported() =>
-        Assert.Contains(ErrorsIn("let a = 1\nlet v = a[0]"),
-            e => e.Code == ErrorCode.ERR_NotIndexable);
+        Assert.Contains(
+            ErrorsIn("let a = 1\nlet v = a[0]"),
+            static e => e.Code == ErrorCode.ERR_NotIndexable
+        );
 
     // ---- Statements --------------------------------------------------------
 
     [Fact]
     public void AConditionMustBeBoolean() =>
-        Assert.Contains(ErrorsIn("if 1 { }"), e => e.Code == ErrorCode.ERR_TypeMismatch);
+        Assert.Contains(ErrorsIn("if 1 { }"), static e => e.Code == ErrorCode.ERR_TypeMismatch);
 
     [Fact]
-    public void BindsLoops()
-    {
+    public void BindsLoops() {
         AssertClean("while true { }");
         AssertClean("repeat { } while true");
         AssertClean("let xs = [1, 2]\nfor x in xs {\n    let y: Int = x\n}");
@@ -288,65 +289,72 @@ public sealed class BindingTests
 
     [Fact]
     public void BreakOutsideALoopIsReported() =>
-        Assert.Contains(ErrorsIn("break"), e => e.Code == ErrorCode.ERR_NoEnclosingLoop);
+        Assert.Contains(ErrorsIn("break"), static e => e.Code == ErrorCode.ERR_NoEnclosingLoop);
 
     [Fact]
     public void IteratingSomethingUniterableIsReported() =>
-        Assert.Contains(ErrorsIn("for x in true { }"), e => e.Code == ErrorCode.ERR_NotIterable);
+        Assert.Contains(ErrorsIn("for x in true { }"), static e => e.Code == ErrorCode.ERR_NotIterable);
 
     [Fact]
-    public void AssignmentRequiresAMutableTarget()
-    {
+    public void AssignmentRequiresAMutableTarget() {
         AssertClean("var x = 1\nx = 2");
-        Assert.Contains(ErrorsIn("let x = 1\nx = 2"),
-            e => e.Code == ErrorCode.ERR_NotAssignable);
+        Assert.Contains(
+            ErrorsIn("let x = 1\nx = 2"),
+            static e => e.Code == ErrorCode.ERR_NotAssignable
+        );
     }
 
     [Fact]
     public void AssignmentChecksTheType() =>
-        Assert.Contains(ErrorsIn("var x = 1\nx = \"s\""),
-            e => e.Code == ErrorCode.ERR_TypeMismatch);
+        Assert.Contains(
+            ErrorsIn("var x = 1\nx = \"s\""),
+            static e => e.Code == ErrorCode.ERR_TypeMismatch
+        );
 
     [Fact]
-    public void ReturnIsCheckedAgainstTheSignature()
-    {
-        var compilation = Compilation.Create("""
+    public void ReturnIsCheckedAgainstTheSignature() {
+        var compilation = Compilation.Create(
+            """
             module M
             fn a() -> Int { return "s" }
             fn b() -> Int { return }
             fn c() { return 1 }
             fn d() -> Int { return 1 }
-            """);
+            """
+        );
 
         var errors = compilation.GetAllDiagnostics()
-            .Where(d => d.Severity == DiagnosticSeverity.Error).ToList();
+            .Where(static d => d.Severity == DiagnosticSeverity.Error)
+            .ToList();
 
-        Assert.Contains(errors, e => e.Code == ErrorCode.ERR_TypeMismatch);
-        Assert.Contains(errors, e => e.Code == ErrorCode.ERR_ReturnValueRequired);
-        Assert.Contains(errors, e => e.Code == ErrorCode.ERR_ReturnValueNotAllowed);
+        Assert.Contains(errors, static e => e.Code == ErrorCode.ERR_TypeMismatch);
+        Assert.Contains(errors, static e => e.Code == ErrorCode.ERR_ReturnValueRequired);
+        Assert.Contains(errors, static e => e.Code == ErrorCode.ERR_ReturnValueNotAllowed);
         Assert.Equal(3, errors.Count);
     }
 
     [Fact]
-    public void BindsAnExpressionBody()
-    {
+    public void BindsAnExpressionBody() {
         var compilation = Compilation.Create("module M\nfn double(_ n: Int) -> Int => n * 2");
-        Assert.DoesNotContain(compilation.GetAllDiagnostics(),
-            d => d.Severity == DiagnosticSeverity.Error);
+        Assert.DoesNotContain(
+            compilation.GetAllDiagnostics(),
+            static d => d.Severity == DiagnosticSeverity.Error
+        );
     }
 
     [Fact]
     public void AnExpressionBodyIsCheckedAgainstTheReturnType() =>
         Assert.Contains(
             Compilation.Create("module M\nfn f() -> Int => \"s\"").GetAllDiagnostics(),
-            e => e.Code == ErrorCode.ERR_TypeMismatch);
+            static e => e.Code == ErrorCode.ERR_TypeMismatch
+        );
 
     // ---- self and members --------------------------------------------------
 
     [Fact]
-    public void BindsSelfAndImplicitMembers()
-    {
-        var compilation = Compilation.Create("""
+    public void BindsSelfAndImplicitMembers() {
+        var compilation = Compilation.Create(
+            """
             module M
             struct Counter {
                 var n: Int
@@ -355,36 +363,40 @@ public sealed class BindingTests
                     return self.n
                 }
             }
-            """);
+            """
+        );
 
         var errors = compilation.GetAllDiagnostics()
-            .Where(d => d.Severity == DiagnosticSeverity.Error).ToList();
-        Assert.True(errors.Count == 0, string.Join("\n", errors.Select(e => e.Message)));
+            .Where(static d => d.Severity == DiagnosticSeverity.Error)
+            .ToList();
+        Assert.True(errors.Count == 0, string.Join("\n", errors.Select(static e => e.Message)));
     }
 
     [Fact]
     public void SelfOutsideATypeIsReported() =>
-        Assert.Contains(ErrorsIn("let v = self"), e => e.Code == ErrorCode.ERR_SelfOutsideType);
+        Assert.Contains(ErrorsIn("let v = self"), static e => e.Code == ErrorCode.ERR_SelfOutsideType);
 
     // ---- The semantic model ------------------------------------------------
 
     [Fact]
-    public void ResolvesSymbolsForNames()
-    {
-        var compilation = Compilation.Create("""
+    public void ResolvesSymbolsForNames() {
+        var compilation = Compilation.Create(
+            """
             module M
             fn twice(_ n: Int) -> Int { return n }
             fn probe() {
                 let a = 1
                 let b = twice(a)
             }
-            """);
+            """
+        );
 
         var tree = compilation.SyntaxTrees[0];
         var model = compilation.GetSemanticModel(tree);
 
         var call = tree.Root.DescendantNodes()
-            .OfType<InvocationExpressionSyntax>().Single();
+            .OfType<InvocationExpressionSyntax>()
+            .Single();
 
         var function = Assert.IsType<FunctionSymbol>(model.GetSymbolOf(call));
         Assert.Equal("twice", function.Name);
@@ -395,25 +407,28 @@ public sealed class BindingTests
     }
 
     [Fact]
-    public void InterpolationHolesAreBound()
-    {
-        var compilation = Compilation.Create("""
+    public void InterpolationHolesAreBound() {
+        var compilation = Compilation.Create(
+            """
             module M
             fn probe() {
                 let n = 1
                 let s = "value \(n + 1)"
             }
-            """);
+            """
+        );
 
         var errors = compilation.GetAllDiagnostics()
-            .Where(d => d.Severity == DiagnosticSeverity.Error).ToList();
-        Assert.True(errors.Count == 0, string.Join("\n", errors.Select(e => e.Message)));
+            .Where(static d => d.Severity == DiagnosticSeverity.Error)
+            .ToList();
+        Assert.True(errors.Count == 0, string.Join("\n", errors.Select(static e => e.Message)));
 
         var tree = compilation.SyntaxTrees[0];
         var model = compilation.GetSemanticModel(tree);
 
         var hole = tree.Root.DescendantNodes()
-            .OfType<InterpolationSyntax>().Single();
+            .OfType<InterpolationSyntax>()
+            .Single();
 
         Assert.Equal("Int", model.GetTypeOf(hole.Expression)!.ToDisplayString());
     }

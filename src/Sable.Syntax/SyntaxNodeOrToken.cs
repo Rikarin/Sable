@@ -1,19 +1,16 @@
 namespace Sable.Syntax;
 
 /// <summary>A tree child, which is either a node or a token.</summary>
-public readonly struct SyntaxNodeOrToken : IEquatable<SyntaxNodeOrToken>
-{
-    private readonly SyntaxNode? _node;
-    private readonly SyntaxToken _token;
+public readonly struct SyntaxNodeOrToken : IEquatable<SyntaxNodeOrToken> {
+    readonly SyntaxNode? _node;
+    readonly SyntaxToken _token;
 
-    internal SyntaxNodeOrToken(SyntaxNode node)
-    {
+    internal SyntaxNodeOrToken(SyntaxNode node) {
         _node = node;
         _token = default;
     }
 
-    internal SyntaxNodeOrToken(SyntaxToken token)
-    {
+    internal SyntaxNodeOrToken(SyntaxToken token) {
         _node = null;
         _token = token;
     }
@@ -35,8 +32,7 @@ public readonly struct SyntaxNodeOrToken : IEquatable<SyntaxNodeOrToken>
     public static implicit operator SyntaxNodeOrToken(SyntaxNode node) => new(node);
     public static implicit operator SyntaxNodeOrToken(SyntaxToken token) => new(token);
 
-    public bool Equals(SyntaxNodeOrToken other) =>
-        ReferenceEquals(_node, other._node) && _token == other._token;
+    public bool Equals(SyntaxNodeOrToken other) => ReferenceEquals(_node, other._node) && _token == other._token;
 
     public override bool Equals(object? obj) => obj is SyntaxNodeOrToken other && Equals(other);
     public override int GetHashCode() => HashCode.Combine(_node, _token);

@@ -5,35 +5,32 @@ namespace Sable.Symbols;
 
 /// <summary>A symbol whose type is resolved the first time it is asked for.</summary>
 /// <remarks>
-/// Signatures are bound lazily so that a compilation can answer questions
-/// about one declaration without binding the whole program, which is what the
-/// language server needs.
+///     Signatures are bound lazily so that a compilation can answer questions
+///     about one declaration without binding the whole program, which is what the
+///     language server needs.
 /// </remarks>
-public abstract class TypedSymbol : Symbol
-{
-    private TypeSymbol? _type;
+public abstract class TypedSymbol : Symbol {
+    TypeSymbol? _type;
 
     internal Func<TypeSymbol>? TypeResolver { get; set; }
 
-    public TypeSymbol Type =>
-        _type ??= TypeResolver?.Invoke() ?? ErrorTypeSymbol.Instance;
+    public TypeSymbol Type => _type ??= TypeResolver?.Invoke() ?? ErrorTypeSymbol.Instance;
 }
 
 /// <summary>A module: the unit of declaration scope, spanning its files.</summary>
-public sealed class ModuleSymbol(string name) : Symbol
-{
-    private readonly List<Symbol> _members = [];
+public sealed class ModuleSymbol(string name) : Symbol {
+    readonly List<Symbol> _members = [];
 
     /// <summary>
-    /// Members by name, built on demand and dropped when one is added.
+    ///     Members by name, built on demand and dropped when one is added.
     /// </summary>
     /// <remarks>
-    /// A module may hold thousands of declarations and every name lookup asks
-    /// it. Scanning the list made declaring a module quadratic in the number
-    /// of things it declares, which is the shape that only shows up on a real
-    /// program.
+    ///     A module may hold thousands of declarations and every name lookup asks
+    ///     it. Scanning the list made declaring a module quadratic in the number
+    ///     of things it declares, which is the shape that only shows up on a real
+    ///     program.
     /// </remarks>
-    private Dictionary<string, List<Symbol>>? _byName;
+    Dictionary<string, List<Symbol>>? _byName;
 
     public override SymbolKind Kind => SymbolKind.Module;
     public override string Name { get; } = name;
@@ -44,40 +41,47 @@ public sealed class ModuleSymbol(string name) : Symbol
     /// <summary>Modules this one imports, in declaration order.</summary>
     public List<ModuleSymbol> Imports { get; } = [];
 
-    internal void AddMember(Symbol member)
-    {
+    internal void AddMember(Symbol member) {
         _members.Add(member);
 
-        if (_byName is null) return;
-        if (!_byName.TryGetValue(member.Name, out var bucket))
+        if (_byName is null) {
+            return;
+        }
+
+        if (!_byName.TryGetValue(member.Name, out var bucket)) {
             _byName[member.Name] = bucket = [];
+        }
+
         bucket.Add(member);
     }
 
-    public IEnumerable<Symbol> GetMembers(string name)
-    {
+    public IEnumerable<Symbol> GetMembers(string name) {
         _byName ??= BuildIndex(_members);
         return _byName.TryGetValue(name, out var bucket)
             ? bucket
             : [];
     }
 
-    internal static Dictionary<string, List<Symbol>> BuildIndex(List<Symbol> members)
-    {
+    internal static Dictionary<string, List<Symbol>> BuildIndex(List<Symbol> members) {
         var index = new Dictionary<string, List<Symbol>>(StringComparer.Ordinal);
-        foreach (var member in members)
-        {
-            if (!index.TryGetValue(member.Name, out var bucket))
+        foreach (var member in members) {
+            if (!index.TryGetValue(member.Name, out var bucket)) {
                 index[member.Name] = bucket = [];
+            }
+
             bucket.Add(member);
         }
+
         return index;
     }
 
-    public NamedTypeSymbol? GetType(string name)
-    {
-        foreach (var member in GetMembers(name))
-            if (member is NamedTypeSymbol type) return type;
+    public NamedTypeSymbol? GetType(string name) {
+        foreach (var member in GetMembers(name)) {
+            if (member is NamedTypeSymbol type) {
+                return type;
+            }
+        }
+
         return null;
     }
 
@@ -85,15 +89,14 @@ public sealed class ModuleSymbol(string name) : Symbol
 }
 
 /// <summary>A function, method, initialiser, accessor or operator.</summary>
-public sealed class FunctionSymbol : Symbol
-{
+public sealed class FunctionSymbol : Symbol {
     internal FunctionSymbol(
         string name,
         Symbol container,
         SyntaxNode? declaration,
         Accessibility accessibility,
-        FunctionKind functionKind)
-    {
+        FunctionKind functionKind
+    ) {
         Name = name;
         ContainingSymbol = container;
         DeclaringSyntax = declaration is null ? [] : [declaration];
@@ -119,18 +122,18 @@ public sealed class FunctionSymbol : Symbol
     public bool IsOpen { get; internal set; }
 
     /// <summary>
-    /// Declared <c>rethrows</c>: it throws exactly when one of the closures
-    /// handed to it does, so <see cref="ThrownType"/> is what those closures
-    /// throw rather than anything written at the declaration.
+    ///     Declared <c>rethrows</c>: it throws exactly when one of the closures
+    ///     handed to it does, so <see cref="ThrownType" /> is what those closures
+    ///     throw rather than anything written at the declaration.
     /// </summary>
     public bool IsRethrows { get; internal set; }
 
-    private readonly List<Symbol> _localTypes = [];
+    readonly List<Symbol> _localTypes = [];
 
     /// <summary>
-    /// Types and aliases declared inside the body. They are hoisted: visible
-    /// from anywhere in the function, including before the line that declares
-    /// them, the way a local function is.
+    ///     Types and aliases declared inside the body. They are hoisted: visible
+    ///     from anywhere in the function, including before the line that declares
+    ///     them, the way a local function is.
     /// </summary>
     public IReadOnlyList<Symbol> LocalTypes => _localTypes;
 
@@ -140,30 +143,30 @@ public sealed class FunctionSymbol : Symbol
         _localTypes.Where(t => string.Equals(t.Name, name, StringComparison.Ordinal));
 
     /// <summary>
-    /// For an <c>operator</c> member, where it sits relative to its operand.
-    /// Arity alone cannot tell a prefix operator from a postfix one.
+    ///     For an <c>operator</c> member, where it sits relative to its operand.
+    ///     Arity alone cannot tell a prefix operator from a postfix one.
     /// </summary>
     public OperatorFixity Fixity { get; internal set; } = OperatorFixity.Infix;
 
     /// <summary>True when the declaration has no body, as in a protocol.</summary>
     public bool IsAbstract { get; internal set; }
 
-    private TypeSymbol? _returnType;
+    TypeSymbol? _returnType;
     internal Func<TypeSymbol>? ReturnTypeResolver { get; set; }
 
-    public TypeSymbol ReturnType =>
-        _returnType ??= ReturnTypeResolver?.Invoke() ?? ErrorTypeSymbol.Instance;
+    public TypeSymbol ReturnType => _returnType ??= ReturnTypeResolver?.Invoke() ?? ErrorTypeSymbol.Instance;
 
-    private TypeSymbol? _thrownType;
+    TypeSymbol? _thrownType;
     internal Func<TypeSymbol?>? ThrownTypeResolver { get; set; }
-    private bool _thrownResolved;
+    bool _thrownResolved;
 
     /// <summary>The declared error type, or null when the function cannot throw.</summary>
-    public TypeSymbol? ThrownType
-    {
-        get
-        {
-            if (_thrownResolved) return _thrownType;
+    public TypeSymbol? ThrownType {
+        get {
+            if (_thrownResolved) {
+                return _thrownType;
+            }
+
             _thrownType = ThrownTypeResolver?.Invoke();
             _thrownResolved = true;
             return _thrownType;
@@ -171,29 +174,31 @@ public sealed class FunctionSymbol : Symbol
     }
 
     /// <summary>The function's type, as it would appear in a signature.</summary>
-    public FunctionTypeSymbol FunctionType => new(
-        [.. Parameters.Select(p => p.Type)], ReturnType, IsAsync, ThrownType);
+    public FunctionTypeSymbol FunctionType =>
+        new([..Parameters.Select(static p => p.Type)], ReturnType, IsAsync, ThrownType);
 
     public override string ToString() => $"{QualifiedName}{SignatureString()}";
 
-    private string SignatureString()
-    {
-        var parameters = string.Join(", ", Parameters.Select(p => p.Type.ToDisplayString()));
+    string SignatureString() {
+        var parameters = string.Join(", ", Parameters.Select(static p => p.Type.ToDisplayString()));
         return $"({parameters}) -> {ReturnType.ToDisplayString()}";
     }
 }
 
 /// <summary>Where an <c>operator</c> member sits relative to its operands.</summary>
-public enum OperatorFixity { Infix, Prefix, Postfix }
+public enum OperatorFixity {
+    Infix,
+    Prefix,
+    Postfix
+}
 
-public enum FunctionKind
-{
+public enum FunctionKind {
     Ordinary,
     Initializer,
     Deinitializer,
     Operator,
     Subscript,
-    Accessor,
+    Accessor
 }
 
 public sealed class ParameterSymbol(
@@ -201,11 +206,11 @@ public sealed class ParameterSymbol(
     string? label,
     Symbol container,
     SyntaxNode? declaration,
-    int ordinal) : TypedSymbol
-{
+    int ordinal) : TypedSymbol {
     public override SymbolKind Kind => SymbolKind.Parameter;
     public override string Name { get; } = name;
     public override Symbol? ContainingSymbol { get; } = container;
+
     public override ImmutableArray<SyntaxNode> DeclaringSyntax { get; } =
         declaration is null ? [] : [declaration];
 
@@ -219,7 +224,15 @@ public sealed class ParameterSymbol(
     public ParameterModifier Modifier { get; internal set; } = ParameterModifier.None;
 }
 
-public enum ParameterModifier { None, InOut, Out, Consuming, Borrowing, Ref, In }
+public enum ParameterModifier {
+    None,
+    InOut,
+    Out,
+    Consuming,
+    Borrowing,
+    Ref,
+    In
+}
 
 /// <summary>A stored or computed member, or a module-level binding.</summary>
 public sealed class FieldSymbol(
@@ -227,13 +240,14 @@ public sealed class FieldSymbol(
     Symbol container,
     SyntaxNode? declaration,
     Accessibility accessibility,
-    bool isMutable) : TypedSymbol
-{
+    bool isMutable) : TypedSymbol {
     public override SymbolKind Kind => SymbolKind.Field;
     public override string Name { get; } = name;
     public override Symbol? ContainingSymbol { get; } = container;
+
     public override ImmutableArray<SyntaxNode> DeclaringSyntax { get; } =
         declaration is null ? [] : [declaration];
+
     public override Accessibility DeclaredAccessibility { get; } = accessibility;
 
     /// <summary>True for <c>var</c>; false for <c>let</c> and the terse form.</summary>
@@ -249,8 +263,8 @@ public sealed class FieldSymbol(
     public bool HasSetter { get; internal set; }
 
     /// <summary>
-    /// True for a protocol requirement: accessors are declared but none has a
-    /// body, so a conforming type has to supply one.
+    ///     True for a protocol requirement: accessors are declared but none has a
+    ///     body, so a conforming type has to supply one.
     /// </summary>
     public bool IsAbstract { get; internal set; }
 
@@ -262,13 +276,14 @@ public sealed class AliasSymbol(
     string name,
     Symbol container,
     SyntaxNode? declaration,
-    Accessibility accessibility) : TypedSymbol
-{
+    Accessibility accessibility) : TypedSymbol {
     public override SymbolKind Kind => SymbolKind.Alias;
     public override string Name { get; } = name;
     public override Symbol? ContainingSymbol { get; } = container;
+
     public override ImmutableArray<SyntaxNode> DeclaringSyntax { get; } =
         declaration is null ? [] : [declaration];
+
     public override Accessibility DeclaredAccessibility { get; } = accessibility;
 
     public ImmutableArray<TypeParameterSymbol> TypeParameters { get; internal set; } = [];
@@ -281,13 +296,14 @@ public sealed class AliasSymbol(
 public sealed class UnionCaseSymbol(
     string name,
     NamedTypeSymbol container,
-    SyntaxNode? declaration) : Symbol
-{
+    SyntaxNode? declaration) : Symbol {
     public override SymbolKind Kind => SymbolKind.UnionCase;
     public override string Name { get; } = name;
     public override Symbol? ContainingSymbol { get; } = container;
+
     public override ImmutableArray<SyntaxNode> DeclaringSyntax { get; } =
         declaration is null ? [] : [declaration];
+
     public override Accessibility DeclaredAccessibility => container.DeclaredAccessibility;
 
     public ImmutableArray<ParameterSymbol> Payload { get; internal set; } = [];
@@ -299,13 +315,14 @@ public sealed class UnionCaseSymbol(
 public sealed class EnumCaseSymbol(
     string name,
     NamedTypeSymbol container,
-    SyntaxNode? declaration) : Symbol
-{
+    SyntaxNode? declaration) : Symbol {
     public override SymbolKind Kind => SymbolKind.EnumCase;
     public override string Name { get; } = name;
     public override Symbol? ContainingSymbol { get; } = container;
+
     public override ImmutableArray<SyntaxNode> DeclaringSyntax { get; } =
         declaration is null ? [] : [declaration];
+
     public override Accessibility DeclaredAccessibility => container.DeclaredAccessibility;
 
     /// <summary>True when the case declared an explicit value.</summary>
@@ -317,11 +334,11 @@ public sealed class LocalSymbol(
     string name,
     Symbol container,
     SyntaxNode? declaration,
-    bool isMutable) : TypedSymbol
-{
+    bool isMutable) : TypedSymbol {
     public override SymbolKind Kind => SymbolKind.Local;
     public override string Name { get; } = name;
     public override Symbol? ContainingSymbol { get; } = container;
+
     public override ImmutableArray<SyntaxNode> DeclaringSyntax { get; } =
         declaration is null ? [] : [declaration];
 

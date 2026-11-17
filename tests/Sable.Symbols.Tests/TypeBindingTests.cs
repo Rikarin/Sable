@@ -1,12 +1,8 @@
-using Sable.Symbols;
-
 namespace Sable.Symbols.Tests;
 
-public sealed class TypeBindingTests
-{
+public sealed class TypeBindingTests {
     /// <summary>Declares a field of the given type and reports how it bound.</summary>
-    private static string Bind(string typeSyntax, string extraDeclarations = "")
-    {
+    static string Bind(string typeSyntax, string extraDeclarations = "") {
         var source = $"module M\n{extraDeclarations}\nstruct Holder {{ var value: {typeSyntax} }}";
         var compilation = Compilation.Create(source);
 
@@ -17,11 +13,10 @@ public sealed class TypeBindingTests
         return field.Type.ToDisplayString();
     }
 
-    private static IReadOnlyList<Diagnostic> ErrorsFor(string typeSyntax, string extra = "")
-    {
+    static IReadOnlyList<Diagnostic> ErrorsFor(string typeSyntax, string extra = "") {
         var source = $"module M\n{extra}\nstruct Holder {{ var value: {typeSyntax} }}";
         var compilation = Compilation.Create(source);
-        return [.. compilation.GetDiagnostics().Where(d => d.Severity == DiagnosticSeverity.Error)];
+        return [..compilation.GetDiagnostics().Where(static d => d.Severity == DiagnosticSeverity.Error)];
     }
 
     // ---- Built-ins ---------------------------------------------------------
@@ -34,8 +29,7 @@ public sealed class TypeBindingTests
     [InlineData("U8", "U8")]
     [InlineData("Void", "Void")]
     [InlineData("Never", "Never")]
-    public void BindsBuiltinTypes(string syntax, string expected) =>
-        Assert.Equal(expected, Bind(syntax));
+    public void BindsBuiltinTypes(string syntax, string expected) => Assert.Equal(expected, Bind(syntax));
 
     // ---- Structural forms --------------------------------------------------
 
@@ -61,12 +55,10 @@ public sealed class TypeBindingTests
     [InlineData("async (Int) -> Bool", "async (Int) -> Bool")]
     [InlineData("Int | String", "Int | String")]
     [InlineData("Int[>..]?", "Int[>..]?")]
-    public void BindsStructuralTypes(string syntax, string expected) =>
-        Assert.Equal(expected, Bind(syntax));
+    public void BindsStructuralTypes(string syntax, string expected) => Assert.Equal(expected, Bind(syntax));
 
     [Fact]
-    public void StructuralUnionsNormalise()
-    {
+    public void StructuralUnionsNormalise() {
         // Flattened, de-duplicated and sorted, so the same set is the same type.
         Assert.Equal(Bind("Int | String"), Bind("String | Int"));
         Assert.Equal(Bind("Int | String"), Bind("Int | String | Int"));
@@ -74,8 +66,7 @@ public sealed class TypeBindingTests
     }
 
     [Fact]
-    public void BindsProtocolForms()
-    {
+    public void BindsProtocolForms() {
         Assert.Equal("some P", Bind("some P", "protocol P { }"));
         Assert.Equal("any P", Bind("any P", "protocol P { }"));
         Assert.Equal("P & Q", Bind("P & Q", "protocol P { }\nprotocol Q { }"));
@@ -85,25 +76,22 @@ public sealed class TypeBindingTests
     // ---- Declared types ----------------------------------------------------
 
     [Fact]
-    public void BindsADeclaredType() =>
-        Assert.Equal("Point", Bind("Point", "struct Point { }"));
+    public void BindsADeclaredType() => Assert.Equal("Point", Bind("Point", "struct Point { }"));
 
     [Fact]
-    public void BindsANestedType() =>
-        Assert.Equal("Inner", Bind("Outer.Inner", "struct Outer { struct Inner { } }"));
+    public void BindsANestedType() => Assert.Equal("Inner", Bind("Outer.Inner", "struct Outer { struct Inner { } }"));
 
     [Fact]
-    public void BindsGenericInstantiation() =>
-        Assert.Equal("Box<Int>", Bind("Box<Int>", "struct Box<T> { }"));
+    public void BindsGenericInstantiation() => Assert.Equal("Box<Int>", Bind("Box<Int>", "struct Box<T> { }"));
 
     [Fact]
     public void BindsNestedGenericInstantiation() =>
         Assert.Equal("Box<Box<Int>>", Bind("Box<Box<Int>>", "struct Box<T> { }"));
 
     [Fact]
-    public void ConstructedTypesCompareByArguments()
-    {
-        var compilation = Compilation.Create("""
+    public void ConstructedTypesCompareByArguments() {
+        var compilation = Compilation.Create(
+            """
             module M
             struct Box<T> { }
             struct Holder {
@@ -111,23 +99,24 @@ public sealed class TypeBindingTests
                 var b: Box<Int>
                 var c: Box<String>
             }
-            """);
+            """
+        );
 
         var holder = compilation.GetTypeByQualifiedName("M.Holder")!;
-        TypeSymbol TypeOf(string name) =>
-            holder.GetMembers(name).OfType<FieldSymbol>().Single().Type;
+        TypeSymbol TypeOf(string name) => holder.GetMembers(name).OfType<FieldSymbol>().Single().Type;
 
         Assert.Equal(TypeOf("a"), TypeOf("b"));
         Assert.NotEqual(TypeOf("a"), TypeOf("c"));
     }
 
     [Fact]
-    public void BindsATypeParameterInScope()
-    {
-        var compilation = Compilation.Create("""
+    public void BindsATypeParameterInScope() {
+        var compilation = Compilation.Create(
+            """
             module M
             struct Box<T> { var item: T }
-            """);
+            """
+        );
 
         var box = compilation.GetTypeByQualifiedName("M.Box")!;
         var item = box.GetMembers("item").OfType<FieldSymbol>().Single();
@@ -137,43 +126,44 @@ public sealed class TypeBindingTests
     }
 
     [Fact]
-    public void BindsSelf()
-    {
+    public void BindsSelf() {
         var compilation = Compilation.Create("module M\nstruct S { var me: Self }");
         var s = compilation.GetTypeByQualifiedName("M.S")!;
         Assert.Equal("S", s.GetMembers("me").OfType<FieldSymbol>().Single().Type.ToDisplayString());
     }
 
     [Fact]
-    public void BindsAliases()
-    {
+    public void BindsAliases() {
         Assert.Equal("Int", Bind("Id", "alias Id = Int"));
         Assert.Equal("Int[>..]", Bind("Buffer", "alias Buffer = Int[>..]"));
         Assert.Equal("(Int) -> Bool", Bind("Pred", "alias Pred = (Int) -> Bool"));
     }
 
     [Fact]
-    public void BindsQualifiedModuleNames()
-    {
+    public void BindsQualifiedModuleNames() {
         var compilation = Compilation.Create(
             "module Lib.Collections\npublic struct List<T> { }",
-            "module App\nstruct S { var xs: Lib.Collections.List<Int> }");
+            "module App\nstruct S { var xs: Lib.Collections.List<Int> }"
+        );
 
         var errors = compilation.GetDiagnostics()
-            .Where(d => d.Severity == DiagnosticSeverity.Error).ToList();
-        Assert.True(errors.Count == 0, string.Join("\n", errors.Select(e => e.Message)));
+            .Where(static d => d.Severity == DiagnosticSeverity.Error)
+            .ToList();
+        Assert.True(errors.Count == 0, string.Join("\n", errors.Select(static e => e.Message)));
 
         var s = compilation.GetTypeByQualifiedName("App.S")!;
-        Assert.Equal("List<Int>",
-            s.GetMembers("xs").OfType<FieldSymbol>().Single().Type.ToDisplayString());
+        Assert.Equal(
+            "List<Int>",
+            s.GetMembers("xs").OfType<FieldSymbol>().Single().Type.ToDisplayString()
+        );
     }
 
     // ---- Signatures --------------------------------------------------------
 
     [Fact]
-    public void BindsFunctionSignatures()
-    {
-        var compilation = Compilation.Create("""
+    public void BindsFunctionSignatures() {
+        var compilation = Compilation.Create(
+            """
             module M
             struct S {
                 fn add(_ a: Int, b: Int) -> Int { }
@@ -181,13 +171,14 @@ public sealed class TypeBindingTests
                 fn nothing() { }
             }
             union IoError { NotFound }
-            """);
+            """
+        );
 
         var s = compilation.GetTypeByQualifiedName("M.S")!;
 
         var add = s.GetMembers("add").OfType<FunctionSymbol>().Single();
         Assert.Equal("Int", add.ReturnType.ToDisplayString());
-        Assert.Equal(["Int", "Int"], add.Parameters.Select(p => p.Type.ToDisplayString()));
+        Assert.Equal(["Int", "Int"], add.Parameters.Select(static p => p.Type.ToDisplayString()));
         Assert.Equal("b", add.Parameters[1].Name);
 
         var fetch = s.GetMembers("fetch").OfType<FunctionSymbol>().Single();
@@ -199,17 +190,20 @@ public sealed class TypeBindingTests
     }
 
     [Fact]
-    public void RecordsParameterModifiersAndLabels()
-    {
-        var compilation = Compilation.Create("""
+    public void RecordsParameterModifiersAndLabels() {
+        var compilation = Compilation.Create(
+            """
             module M
             struct S {
                 fn f(from source: Int, to dest: inout Int, _ hidden: Int, rest: Int...) { }
             }
-            """);
+            """
+        );
 
         var f = compilation.GetTypeByQualifiedName("M.S")!
-            .GetMembers("f").OfType<FunctionSymbol>().Single();
+            .GetMembers("f")
+            .OfType<FunctionSymbol>()
+            .Single();
 
         Assert.Equal("from", f.Parameters[0].Label);
         Assert.Equal("source", f.Parameters[0].Name);
@@ -219,106 +213,117 @@ public sealed class TypeBindingTests
     }
 
     [Fact]
-    public void BindsBaseTypes()
-    {
-        var compilation = Compilation.Create("""
+    public void BindsBaseTypes() {
+        var compilation = Compilation.Create(
+            """
             module M
             protocol Drawable { }
             protocol Serializable { }
             class Base { }
             class Shape: Base, Drawable, Serializable { }
-            """);
+            """
+        );
 
         compilation.GetDiagnostics();
 
         var shape = compilation.GetTypeByQualifiedName("M.Shape")!;
-        Assert.Equal(["Base", "Drawable", "Serializable"],
-            shape.BaseTypes.Select(b => b.ToDisplayString()));
+        Assert.Equal(
+            ["Base", "Drawable", "Serializable"],
+            shape.BaseTypes.Select(static b => b.ToDisplayString())
+        );
     }
 
     [Fact]
-    public void BindsTypeParameterConstraints()
-    {
-        var compilation = Compilation.Create("""
+    public void BindsTypeParameterConstraints() {
+        var compilation = Compilation.Create(
+            """
             module M
             protocol Comparable { }
             struct Sorted<T: Comparable> { }
-            """);
+            """
+        );
 
         compilation.GetDiagnostics();
 
         var sorted = compilation.GetTypeByQualifiedName("M.Sorted")!;
-        Assert.Equal("Comparable",
-            Assert.Single(sorted.TypeParameters[0].Constraints).ToDisplayString());
+        Assert.Equal(
+            "Comparable",
+            Assert.Single(sorted.TypeParameters[0].Constraints).ToDisplayString()
+        );
     }
 
     // ---- Errors ------------------------------------------------------------
 
     [Fact]
-    public void AnUnknownTypeIsReported()
-    {
+    public void AnUnknownTypeIsReported() {
         var error = Assert.Single(ErrorsFor("Nope"));
         Assert.Equal(ErrorCode.ERR_TypeNotFound, error.Code);
     }
 
     [Fact]
-    public void WrongTypeArgumentCountIsReported()
-    {
-        Assert.Contains(ErrorsFor("Box<Int, Int>", "struct Box<T> { }"),
-            e => e.Code == ErrorCode.ERR_WrongTypeArgumentCount);
+    public void WrongTypeArgumentCountIsReported() {
+        Assert.Contains(
+            ErrorsFor("Box<Int, Int>", "struct Box<T> { }"),
+            static e => e.Code == ErrorCode.ERR_WrongTypeArgumentCount
+        );
 
-        Assert.Contains(ErrorsFor("Box", "struct Box<T> { }"),
-            e => e.Code == ErrorCode.ERR_MissingTypeArguments);
+        Assert.Contains(
+            ErrorsFor("Box", "struct Box<T> { }"),
+            static e => e.Code == ErrorCode.ERR_MissingTypeArguments
+        );
 
-        Assert.Contains(ErrorsFor("Int<Bool>"),
-            e => e.Code == ErrorCode.ERR_TypeArgumentsOnNonGeneric
-                 || e.Code == ErrorCode.ERR_WrongTypeArgumentCount);
+        Assert.Contains(
+            ErrorsFor("Int<Bool>"),
+            static e => e.Code == ErrorCode.ERR_TypeArgumentsOnNonGeneric
+                || e.Code == ErrorCode.ERR_WrongTypeArgumentCount
+        );
     }
 
     [Fact]
-    public void AnErrorTypeDoesNotCascade()
-    {
+    public void AnErrorTypeDoesNotCascade() {
         // One unknown name, one diagnostic -- not one per use.
-        var compilation = Compilation.Create("""
+        var compilation = Compilation.Create(
+            """
             module M
             struct S {
                 var a: Missing
                 var b: Missing
             }
-            """);
+            """
+        );
 
         var errors = compilation.GetDiagnostics()
-            .Where(d => d.Code == ErrorCode.ERR_TypeNotFound).ToList();
+            .Where(static d => d.Code == ErrorCode.ERR_TypeNotFound)
+            .ToList();
 
-        Assert.Equal(2, errors.Count);   // one per occurrence, none derived
-        Assert.All(errors, e => Assert.Equal(ErrorCode.ERR_TypeNotFound, e.Code));
+        Assert.Equal(2, errors.Count); // one per occurrence, none derived
+        Assert.All(errors, static e => Assert.Equal(ErrorCode.ERR_TypeNotFound, e.Code));
     }
 
     [Fact]
-    public void SelfOutsideATypeIsReported()
-    {
+    public void SelfOutsideATypeIsReported() {
         var compilation = Compilation.Create("module M\nfn f(x: Self) { }");
-        Assert.Contains(compilation.GetDiagnostics(), e => e.Code == ErrorCode.ERR_NotAType);
+        Assert.Contains(compilation.GetDiagnostics(), static e => e.Code == ErrorCode.ERR_NotAType);
     }
 
     [Fact]
-    public void AmbiguousImportsAreReported()
-    {
+    public void AmbiguousImportsAreReported() {
         var compilation = Compilation.Create(
             "module A\npublic struct Widget { }",
             "module B\npublic struct Widget { }",
-            "module App\nimport A\nimport B\nstruct S { w: Widget }");
+            "module App\nimport A\nimport B\nstruct S { w: Widget }"
+        );
 
-        Assert.Contains(compilation.GetDiagnostics(), e => e.Code == ErrorCode.ERR_AmbiguousName);
+        Assert.Contains(compilation.GetDiagnostics(), static e => e.Code == ErrorCode.ERR_AmbiguousName);
     }
 
     [Fact]
-    public void AnInternalTypeIsNotVisibleThroughAnImport()
-    {
+    public void AnInternalTypeIsNotVisibleThroughAnImport() {
         var compilation = Compilation.Create(
             "module Lib\nstruct Hidden { }",
-            "module App\nimport Lib\nstruct S { h: Hidden }");
+            "module App\nimport Lib\nstruct S { h: Hidden }"
+        );
 
-        Assert.Contains(compilation.GetDiagnostics(), e => e.Code == ErrorCode.ERR_TypeNotFound);
+        Assert.Contains(compilation.GetDiagnostics(), static e => e.Code == ErrorCode.ERR_TypeNotFound);
     }
 }

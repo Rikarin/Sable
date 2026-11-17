@@ -10,30 +10,32 @@ internal readonly record struct IncrementalLexResult(
     int ReusedPrefixCount,
     int ReusedSuffixCount,
     int OldSuffixStartIndex,
-    int[] OldPositions)
-{
+    int[] OldPositions) {
     /// <summary>The new index at which the reused suffix begins.</summary>
     public int NewSuffixStartIndex => Tokens.Length - ReusedSuffixCount;
 }
 
 /// <summary>
-/// Re-lexes only the damaged part of a file, splicing the old token stream
-/// back in on both sides.
+///     Re-lexes only the damaged part of a file, splicing the old token stream
+///     back in on both sides.
 /// </summary>
 /// <remarks>
-/// <para>Green tokens carry no position, so a token after the edit is reused
-/// as-is: nothing in it has to change. That is the whole reason the tree is
-/// split into green and red halves.</para>
-/// <para>Two conservative rules keep this sound. The prefix stops two tokens
-/// short of the edit, because an edit can merge with its neighbours (typing a
-/// second <c>/</c> turns two tokens into a comment). And the suffix is only
-/// reused once the new lexer lands exactly on an old token boundary past the
-/// edit, which means the two streams have resynchronised.</para>
+///     <para>
+///         Green tokens carry no position, so a token after the edit is reused
+///         as-is: nothing in it has to change. That is the whole reason the tree is
+///         split into green and red halves.
+///     </para>
+///     <para>
+///         Two conservative rules keep this sound. The prefix stops two tokens
+///         short of the edit, because an edit can merge with its neighbours (typing a
+///         second <c>/</c> turns two tokens into a comment). And the suffix is only
+///         reused once the new lexer lands exactly on an old token boundary past the
+///         edit, which means the two streams have resynchronised.
+///     </para>
 /// </remarks>
-internal static class IncrementalLexer
-{
+internal static class IncrementalLexer {
     /// <summary>Tokens kept before the edit must end this many tokens early.</summary>
-    private const int PrefixSafetyMargin = 2;
+    const int PrefixSafetyMargin = 2;
 
     public static IncrementalLexResult Lex(
         SourceText newText,
@@ -41,8 +43,8 @@ internal static class IncrementalLexer
         ImmutableArray<GreenToken> oldTokens,
         IReadOnlyList<Diagnostic> oldDiagnostics,
         bool oldHadDirectives,
-        TextChange change)
-    {
+        TextChange change
+    ) {
         // Directives make the lexer stateful across tokens, so resynchronising
         // is not simply a matter of matching positions. Those files re-lex.
         var canReuseSuffix = !oldHadDirectives;
@@ -60,17 +62,13 @@ internal static class IncrementalLexer
         var reusedSuffix = 0;
         var oldSuffixStart = oldTokens.Length;
 
-        while (true)
-        {
+        while (true) {
             var positionBefore = lexer.Position;
 
-            if (canReuseSuffix && positionBefore > changeEndNew)
-            {
-                var oldIndex = FindTokenStartingAt(
-                    oldPositions, positionBefore - change.Delta, prefixCount);
+            if (canReuseSuffix && positionBefore > changeEndNew) {
+                var oldIndex = FindTokenStartingAt(oldPositions, positionBefore - change.Delta, prefixCount);
 
-                if (oldIndex >= 0 && lexer.IsResyncSafe)
-                {
+                if (oldIndex >= 0 && lexer.IsResyncSafe) {
                     reusedSuffix = oldTokens.Length - oldIndex;
                     oldSuffixStart = oldIndex;
                     break;
@@ -80,8 +78,7 @@ internal static class IncrementalLexer
             var token = lexer.LexNextToken();
             middle.Add(token);
 
-            if (token.Kind == SyntaxKind.EndOfFile)
-            {
+            if (token.Kind == SyntaxKind.EndOfFile) {
                 lexer.ReportUnterminatedConditionals();
                 break;
             }
@@ -90,94 +87,104 @@ internal static class IncrementalLexer
         var array = new GreenToken[prefixCount + middle.Count + reusedSuffix];
         oldTokens.CopyTo(0, array, 0, prefixCount);
         middle.CopyTo(array, prefixCount);
-        if (reusedSuffix > 0)
+        if (reusedSuffix > 0) {
             oldTokens.CopyTo(oldSuffixStart, array, prefixCount + middle.Count, reusedSuffix);
+        }
 
         Lexer.MarkTerminators(array);
         var tokens = System.Runtime.InteropServices.ImmutableCollectionsMarshal
             .AsImmutableArray(array);
 
         var diagnostics = MergeDiagnostics(
-            oldDiagnostics, lexer.Diagnostics, prefixEnd,
+            oldDiagnostics,
+            lexer.Diagnostics,
+            prefixEnd,
             oldSuffixStart < oldTokens.Length ? oldPositions[oldSuffixStart] : int.MaxValue,
-            change.Delta);
+            change.Delta
+        );
 
-        return new IncrementalLexResult(
-            tokens, diagnostics, prefixCount, reusedSuffix, oldSuffixStart, oldPositions);
+        return new(tokens, diagnostics, prefixCount, reusedSuffix, oldSuffixStart, oldPositions);
     }
 
     /// <summary>Prefix sums of token widths; entry i is where token i starts.</summary>
-    private static int[] ComputePositions(ImmutableArray<GreenToken> tokens)
-    {
+    static int[] ComputePositions(ImmutableArray<GreenToken> tokens) {
         var positions = new int[tokens.Length + 1];
         var offset = 0;
-        for (var i = 0; i < tokens.Length; i++)
-        {
+        for (var i = 0; i < tokens.Length; i++) {
             positions[i] = offset;
             offset += tokens[i].FullWidth;
         }
+
         positions[tokens.Length] = offset;
         return positions;
     }
 
-    private static int FindReusablePrefix(
-        ImmutableArray<GreenToken> tokens, int[] positions, int changeStart)
-    {
+    static int FindReusablePrefix(
+        ImmutableArray<GreenToken> tokens,
+        int[] positions,
+        int changeStart
+    ) {
         var count = 0;
-        while (count < tokens.Length && positions[count + 1] < changeStart) count++;
+        while (count < tokens.Length && positions[count + 1] < changeStart) {
+            count++;
+        }
+
         return Math.Max(0, count - PrefixSafetyMargin);
     }
 
     /// <summary>Index of the old token starting exactly at a position, or -1.</summary>
-    private static int FindTokenStartingAt(int[] positions, int position, int lowerBound)
-    {
-        if (position < 0) return -1;
+    static int FindTokenStartingAt(int[] positions, int position, int lowerBound) {
+        if (position < 0) {
+            return -1;
+        }
 
         var low = lowerBound;
         var high = positions.Length - 2;
-        while (low <= high)
-        {
+        while (low <= high) {
             var middle = (low + high) / 2;
             var value = positions[middle];
-            if (value == position) return middle;
-            if (value < position) low = middle + 1; else high = middle - 1;
+            if (value == position) {
+                return middle;
+            }
+
+            if (value < position) {
+                low = middle + 1;
+            } else {
+                high = middle - 1;
+            }
         }
+
         return -1;
     }
 
     /// <summary>
-    /// Keeps the lexical diagnostics of the regions that were not re-lexed,
-    /// shifting the ones after the edit.
+    ///     Keeps the lexical diagnostics of the regions that were not re-lexed,
+    ///     shifting the ones after the edit.
     /// </summary>
     /// <remarks>
-    /// Only lexical ones. The parser runs over the whole spliced stream, so it
-    /// re-reports its own diagnostics for everything it did not reuse — and a
-    /// member it did reuse is never one that had a parser diagnostic, which is
-    /// what <see cref="IncrementalReuse"/> guarantees.
+    ///     Only lexical ones. The parser runs over the whole spliced stream, so it
+    ///     re-reports its own diagnostics for everything it did not reuse — and a
+    ///     member it did reuse is never one that had a parser diagnostic, which is
+    ///     what <see cref="IncrementalReuse" /> guarantees.
     /// </remarks>
-    private static IReadOnlyList<Diagnostic> MergeDiagnostics(
+    static IReadOnlyList<Diagnostic> MergeDiagnostics(
         IReadOnlyList<Diagnostic> old,
         IReadOnlyList<Diagnostic> fresh,
         int prefixEnd,
         int oldSuffixStart,
-        int delta)
-    {
+        int delta
+    ) {
         var merged = new List<Diagnostic>(fresh);
 
-        foreach (var diagnostic in old)
-        {
-            if (!IsLexical(diagnostic)) continue;
-
-            if (diagnostic.Span.End <= prefixEnd)
-            {
-                merged.Add(diagnostic);
+        foreach (var diagnostic in old) {
+            if (!IsLexical(diagnostic)) {
+                continue;
             }
-            else if (diagnostic.Span.Start >= oldSuffixStart)
-            {
-                merged.Add(diagnostic with
-                {
-                    Span = new TextSpan(diagnostic.Span.Start + delta, diagnostic.Span.Length),
-                });
+
+            if (diagnostic.Span.End <= prefixEnd) {
+                merged.Add(diagnostic);
+            } else if (diagnostic.Span.Start >= oldSuffixStart) {
+                merged.Add(diagnostic with { Span = new(diagnostic.Span.Start + delta, diagnostic.Span.Length) });
             }
         }
 
@@ -185,5 +192,5 @@ internal static class IncrementalLexer
     }
 
     /// <summary>Lexical diagnostics occupy S0001-S0999; see ErrorCode.</summary>
-    private static bool IsLexical(Diagnostic diagnostic) => (int)diagnostic.Code < 1000;
+    static bool IsLexical(Diagnostic diagnostic) => (int)diagnostic.Code < 1000;
 }

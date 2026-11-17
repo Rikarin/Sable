@@ -4,13 +4,12 @@ using System.Globalization;
 namespace Sable.Syntax;
 
 /// <summary>
-/// Diagnostic identifiers. Ranges are allocated per docs/04-implementation-plan.md §0.1:
-/// S0001-0999 lexical, S1000-1999 syntactic, S2000-2999 name resolution,
-/// S3000-3999 types, S4000-4999 ownership, S5000-5999 concurrency,
-/// S6000-6999 patterns, S7000-7999 codegen, S8000-8999 linking, S9000+ internal.
+///     Diagnostic identifiers. Ranges are allocated per docs/04-implementation-plan.md §0.1:
+///     S0001-0999 lexical, S1000-1999 syntactic, S2000-2999 name resolution,
+///     S3000-3999 types, S4000-4999 ownership, S5000-5999 concurrency,
+///     S6000-6999 patterns, S7000-7999 codegen, S8000-8999 linking, S9000+ internal.
 /// </summary>
-public enum ErrorCode
-{
+public enum ErrorCode {
     None = 0,
 
     // ---- Lexical (S0001-S0999) -------------------------------------------
@@ -30,6 +29,7 @@ public enum ErrorCode
     ERR_IntegerLiteralOverflow = 14,
     ERR_InvalidFloatLiteral = 15,
     ERR_HexFloatNeedsExponent = 16,
+
     // 17 was "a float needs digits on both sides". It cannot happen: by
     // spec/lexical.md, '1.' is the integer 1 followed by '.', which is what
     // makes 'x.0' and '1..<5' lex unambiguously.
@@ -56,6 +56,7 @@ public enum ErrorCode
     ERR_ExpectedIdentifier = 1004,
     ERR_UnexpectedTrailingTokens = 1005,
     ERR_ExpectedPattern = 1006,
+
     // 1007 was "expected a statement". Anything may start one, so the
     // parser never has to say this.
     ERR_ExpectedDeclaration = 1008,
@@ -133,21 +134,25 @@ public enum ErrorCode
     WRN_PatternAlreadyCovered = 6006,
     ERR_MatchArmTypesDiffer = 6007,
     ERR_UseBeforeAssignment = 6008,
-    ERR_RefutablePatternInDeclaration = 6009,
+    ERR_RefutablePatternInDeclaration = 6009
 }
 
-public enum DiagnosticSeverity { Hidden, Info, Warning, Error }
+public enum DiagnosticSeverity {
+    Hidden,
+    Info,
+    Warning,
+    Error
+}
 
 /// <summary>
-/// A structured diagnostic. Carries data, not a pre-formatted string, so the CLI
-/// and the language server can render the same object differently.
+///     A structured diagnostic. Carries data, not a pre-formatted string, so the CLI
+///     and the language server can render the same object differently.
 /// </summary>
 public sealed record Diagnostic(
     ErrorCode Code,
     DiagnosticSeverity Severity,
     TextSpan Span,
-    string Message)
-{
+    string Message) {
     public string Id => "S" + ((int)Code).ToString("D4", CultureInfo.InvariantCulture);
 
     public static Diagnostic Error(ErrorCode code, TextSpan span, string message) =>
@@ -159,8 +164,7 @@ public sealed record Diagnostic(
     public override string ToString() => $"{Id}: {Message} {Span}";
 
     /// <summary>Renders a rustc/Roslyn-style caret diagnostic against its source.</summary>
-    public string Format(SourceText source)
-    {
+    public string Format(SourceText source) {
         var pos = source.GetLinePosition(Span.Start);
         var lineText = source.GetLineText(pos.Line);
         var gutter = pos.Line.ToString(CultureInfo.InvariantCulture);
@@ -170,41 +174,38 @@ public sealed record Diagnostic(
         var level = Severity == DiagnosticSeverity.Error ? "error" : Severity.ToString().ToLowerInvariant();
 
         return $"""
-               {level}[{Id}]: {Message}
-               {pad}--> {source.FileName}:{pos.Line}:{pos.Column}
-               {pad} |
-               {gutter} | {lineText}
-               {pad} | {caretPad}{caret}
-               """;
+                {level}[{Id}]: {Message}
+                {pad}--> {source.FileName}:{pos.Line}:{pos.Column}
+                {pad} |
+                {gutter} | {lineText}
+                {pad} | {caretPad}{caret}
+                """;
     }
 }
 
 /// <summary>A mutable, ordered collection of diagnostics produced during a compilation step.</summary>
-public sealed class DiagnosticBag : IReadOnlyCollection<Diagnostic>
-{
-    private readonly List<Diagnostic> _items = [];
-    private int _suppressed;
+public sealed class DiagnosticBag : IReadOnlyCollection<Diagnostic> {
+    readonly List<Diagnostic> _items = [];
+    int _suppressed;
 
     public int Count => _items.Count;
-    public bool HasErrors => _items.Exists(d => d.Severity == DiagnosticSeverity.Error);
+    public bool HasErrors => _items.Exists(static d => d.Severity == DiagnosticSeverity.Error);
 
     /// <summary>
-    /// Stops recording until the returned handle is disposed.
+    ///     Stops recording until the returned handle is disposed.
     /// </summary>
     /// <remarks>
-    /// Bidirectional inference sometimes binds an expression to find out what
-    /// it is, then binds it again in the position it turned out to have. The
-    /// first pass is a question, not a claim, so its complaints are not the
-    /// user's problem.
+    ///     Bidirectional inference sometimes binds an expression to find out what
+    ///     it is, then binds it again in the position it turned out to have. The
+    ///     first pass is a question, not a claim, so its complaints are not the
+    ///     user's problem.
     /// </remarks>
     public Suppression Suppress() => new(this);
 
-    public readonly struct Suppression : IDisposable
-    {
-        private readonly DiagnosticBag _bag;
+    public readonly struct Suppression : IDisposable {
+        readonly DiagnosticBag _bag;
 
-        internal Suppression(DiagnosticBag bag)
-        {
+        internal Suppression(DiagnosticBag bag) {
             _bag = bag;
             bag._suppressed++;
         }
@@ -212,16 +213,16 @@ public sealed class DiagnosticBag : IReadOnlyCollection<Diagnostic>
         public void Dispose() => _bag._suppressed--;
     }
 
-    public void Add(Diagnostic diagnostic)
-    {
-        if (_suppressed == 0) _items.Add(diagnostic);
+    public void Add(Diagnostic diagnostic) {
+        if (_suppressed == 0) {
+            _items.Add(diagnostic);
+        }
     }
 
-    public void Error(ErrorCode code, TextSpan span, string message) =>
-        Add(Diagnostic.Error(code, span, message));
+    public void Error(ErrorCode code, TextSpan span, string message) => Add(Diagnostic.Error(code, span, message));
 
     public void Error(ErrorCode code, int start, int length, string message) =>
-        Add(Diagnostic.Error(code, new TextSpan(start, length), message));
+        Add(Diagnostic.Error(code, new(start, length), message));
 
     public void AddRange(IEnumerable<Diagnostic> diagnostics) => _items.AddRange(diagnostics);
 

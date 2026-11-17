@@ -4,30 +4,30 @@ using Sable.Syntax;
 namespace Sable.Symbols;
 
 /// <summary>
-/// A node of the bound tree: syntax that has been resolved to symbols and
-/// types.
+///     A node of the bound tree: syntax that has been resolved to symbols and
+///     types.
 /// </summary>
 /// <remarks>
-/// The bound tree is what lowering reads, and it is where every question of
-/// meaning has already been answered — which overload, which conversion, which
-/// local. It keeps a pointer back to its syntax so diagnostics and the
-/// language server can find their way to the source.
+///     The bound tree is what lowering reads, and it is where every question of
+///     meaning has already been answered — which overload, which conversion, which
+///     local. It keeps a pointer back to its syntax so diagnostics and the
+///     language server can find their way to the source.
 /// </remarks>
-public abstract class BoundNode(SyntaxNode syntax)
-{
+public abstract class BoundNode(SyntaxNode syntax) {
     public SyntaxNode Syntax { get; } = syntax;
 
     public abstract IEnumerable<BoundNode> Children { get; }
 
-    protected static IEnumerable<BoundNode> Nodes(params BoundNode?[] nodes)
-    {
-        foreach (var node in nodes)
-            if (node is not null) yield return node;
+    protected static IEnumerable<BoundNode> Nodes(params BoundNode?[] nodes) {
+        foreach (var node in nodes) {
+            if (node is not null) {
+                yield return node;
+            }
+        }
     }
 }
 
-public abstract class BoundExpression(SyntaxNode syntax, TypeSymbol type) : BoundNode(syntax)
-{
+public abstract class BoundExpression(SyntaxNode syntax, TypeSymbol type) : BoundNode(syntax) {
     public TypeSymbol Type { get; } = type;
 
     public bool HasError => Type.IsError;
@@ -43,25 +43,26 @@ public abstract class BoundStatement(SyntaxNode syntax) : BoundNode(syntax);
 // ---------------------------------------------------------------------------
 
 public sealed class BoundLiteral(SyntaxNode syntax, TypeSymbol type, object? value)
-    : BoundExpression(syntax, type)
-{
+    : BoundExpression(syntax, type) {
     public object? Value { get; } = value;
     public override IEnumerable<BoundNode> Children => [];
 }
 
 /// <summary>A string with holes; the pieces are bound expressions.</summary>
 public sealed class BoundInterpolatedString(
-    SyntaxNode syntax, TypeSymbol type, ImmutableArray<BoundExpression> parts)
-    : BoundExpression(syntax, type)
-{
+    SyntaxNode syntax,
+    TypeSymbol type,
+    ImmutableArray<BoundExpression> parts)
+    : BoundExpression(syntax, type) {
     public ImmutableArray<BoundExpression> Parts { get; } = parts;
     public override IEnumerable<BoundNode> Children => Parts;
 }
 
 public sealed class BoundLocalAccess(
-    SyntaxNode syntax, LocalSymbol local, TypeSymbol? narrowed = null)
-    : BoundExpression(syntax, narrowed ?? local.Type)
-{
+    SyntaxNode syntax,
+    LocalSymbol local,
+    TypeSymbol? narrowed = null)
+    : BoundExpression(syntax, narrowed ?? local.Type) {
     public LocalSymbol Local { get; } = local;
 
     /// <summary>True where a test in scope has established a narrower type.</summary>
@@ -72,35 +73,37 @@ public sealed class BoundLocalAccess(
 }
 
 public sealed class BoundParameterAccess(
-    SyntaxNode syntax, ParameterSymbol parameter, TypeSymbol? narrowed = null)
-    : BoundExpression(syntax, narrowed ?? parameter.Type)
-{
+    SyntaxNode syntax,
+    ParameterSymbol parameter,
+    TypeSymbol? narrowed = null)
+    : BoundExpression(syntax, narrowed ?? parameter.Type) {
     public ParameterSymbol Parameter { get; } = parameter;
 
     /// <summary>True where a test in scope has established a narrower type.</summary>
     public bool IsNarrowed { get; } = narrowed is not null;
 
-    public override bool IsAssignable =>
-        Parameter.Modifier is ParameterModifier.InOut or ParameterModifier.Out;
+    public override bool IsAssignable => Parameter.Modifier is ParameterModifier.InOut or ParameterModifier.Out;
 
     public override IEnumerable<BoundNode> Children => [];
 }
 
 public sealed class BoundFieldAccess(
-    SyntaxNode syntax, BoundExpression? receiver, FieldSymbol field, TypeSymbol? type = null)
-    : BoundExpression(syntax, type ?? field.Type)
-{
+    SyntaxNode syntax,
+    BoundExpression? receiver,
+    FieldSymbol field,
+    TypeSymbol? type = null)
+    : BoundExpression(syntax, type ?? field.Type) {
     public BoundExpression? Receiver { get; } = receiver;
     public FieldSymbol Field { get; } = field;
 
     /// <summary>
-    /// Assignable when the field is mutable, the member has a setter if it is
-    /// computed, and the value it belongs to can be written through.
+    ///     Assignable when the field is mutable, the member has a setter if it is
+    ///     computed, and the value it belongs to can be written through.
     /// </summary>
     /// <remarks>
-    /// A struct in a <c>let</c> is immutable all the way down, so
-    /// <c>p.x = 1</c> is refused for <c>let p: Point</c>. A class is a
-    /// reference, so the binding's mutability says nothing about the object's.
+    ///     A struct in a <c>let</c> is immutable all the way down, so
+    ///     <c>p.x = 1</c> is refused for <c>let p: Point</c>. A class is a
+    ///     reference, so the binding's mutability says nothing about the object's.
     /// </remarks>
     public override bool IsAssignable =>
         Field.IsMutable
@@ -109,15 +112,17 @@ public sealed class BoundFieldAccess(
             || Receiver is null
             || Receiver.Type.IsReferenceType
             || Receiver.IsAssignable);
+
     public override IEnumerable<BoundNode> Children => Nodes(Receiver);
 }
 
 public sealed class BoundSelfAccess(
-    SyntaxNode syntax, TypeSymbol type, bool isMutable = false)
-    : BoundExpression(syntax, type)
-{
+    SyntaxNode syntax,
+    TypeSymbol type,
+    bool isMutable = false)
+    : BoundExpression(syntax, type) {
     /// <summary>
-    /// True inside a <c>mutating</c> member, or wherever self is a reference.
+    ///     True inside a <c>mutating</c> member, or wherever self is a reference.
     /// </summary>
     public bool IsMutable { get; } = isMutable;
 
@@ -126,20 +131,18 @@ public sealed class BoundSelfAccess(
 }
 
 /// <summary>
-/// <c>super</c>: self, seen as the base class, so a member reached through it
-/// is the base's rather than the override.
+///     <c>super</c>: self, seen as the base class, so a member reached through it
+///     is the base's rather than the override.
 /// </summary>
 public sealed class BoundSuperAccess(SyntaxNode syntax, NamedTypeSymbol baseType)
-    : BoundExpression(syntax, baseType)
-{
+    : BoundExpression(syntax, baseType) {
     public NamedTypeSymbol BaseType { get; } = baseType;
     public override IEnumerable<BoundNode> Children => [];
 }
 
 /// <summary>A reference to a type used as a value, as in <c>Int.self</c>.</summary>
 public sealed class BoundTypeExpression(SyntaxNode syntax, TypeSymbol referencedType)
-    : BoundExpression(syntax, referencedType)
-{
+    : BoundExpression(syntax, referencedType) {
     public TypeSymbol ReferencedType { get; } = referencedType;
     public override IEnumerable<BoundNode> Children => [];
 }
@@ -150,13 +153,12 @@ public sealed class BoundCall(
     FunctionSymbol function,
     ImmutableArray<BoundExpression> arguments,
     TypeSymbol? type = null)
-    : BoundExpression(syntax, type ?? function.ReturnType)
-{
+    : BoundExpression(syntax, type ?? function.ReturnType) {
     public BoundExpression? Receiver { get; } = receiver;
     public FunctionSymbol Function { get; } = function;
     public ImmutableArray<BoundExpression> Arguments { get; } = arguments;
 
-    public override IEnumerable<BoundNode> Children => Nodes([Receiver, .. Arguments]);
+    public override IEnumerable<BoundNode> Children => Nodes([Receiver, ..Arguments]);
 }
 
 /// <summary>A union case used as a value, with its payload.</summary>
@@ -165,21 +167,35 @@ public sealed class BoundUnionCaseConstruction(
     TypeSymbol type,
     UnionCaseSymbol unionCase,
     ImmutableArray<BoundExpression> arguments)
-    : BoundExpression(syntax, type)
-{
+    : BoundExpression(syntax, type) {
     public UnionCaseSymbol UnionCase { get; } = unionCase;
     public ImmutableArray<BoundExpression> Arguments { get; } = arguments;
     public override IEnumerable<BoundNode> Children => Arguments;
 }
 
-public enum BinaryOperatorKind
-{
-    Add, Subtract, Multiply, Divide, Remainder,
-    And, Or, ExclusiveOr, LeftShift, RightShift,
-    Equal, NotEqual, ReferenceEqual, ReferenceNotEqual,
-    LessThan, LessThanOrEqual, GreaterThan, GreaterThanOrEqual,
-    LogicalAnd, LogicalOr, Coalesce,
-    UserDefined,
+public enum BinaryOperatorKind {
+    Add,
+    Subtract,
+    Multiply,
+    Divide,
+    Remainder,
+    And,
+    Or,
+    ExclusiveOr,
+    LeftShift,
+    RightShift,
+    Equal,
+    NotEqual,
+    ReferenceEqual,
+    ReferenceNotEqual,
+    LessThan,
+    LessThanOrEqual,
+    GreaterThan,
+    GreaterThanOrEqual,
+    LogicalAnd,
+    LogicalOr,
+    Coalesce,
+    UserDefined
 }
 
 public sealed class BoundBinaryOperator(
@@ -189,8 +205,7 @@ public sealed class BoundBinaryOperator(
     BoundExpression left,
     BoundExpression right,
     FunctionSymbol? method = null)
-    : BoundExpression(syntax, type)
-{
+    : BoundExpression(syntax, type) {
     public BinaryOperatorKind OperatorKind { get; } = operatorKind;
     public BoundExpression Left { get; } = left;
     public BoundExpression Right { get; } = right;
@@ -201,9 +216,16 @@ public sealed class BoundBinaryOperator(
     public override IEnumerable<BoundNode> Children => Nodes(Left, Right);
 }
 
-public enum UnaryOperatorKind
-{
-    Negate, Plus, Not, Complement, AddressOf, Await, Move, Try, UserDefined,
+public enum UnaryOperatorKind {
+    Negate,
+    Plus,
+    Not,
+    Complement,
+    AddressOf,
+    Await,
+    Move,
+    Try,
+    UserDefined
 }
 
 public sealed class BoundUnaryOperator(
@@ -212,8 +234,7 @@ public sealed class BoundUnaryOperator(
     UnaryOperatorKind operatorKind,
     BoundExpression operand,
     FunctionSymbol? method = null)
-    : BoundExpression(syntax, type)
-{
+    : BoundExpression(syntax, type) {
     public UnaryOperatorKind OperatorKind { get; } = operatorKind;
     public BoundExpression Operand { get; } = operand;
     public FunctionSymbol? Method { get; } = method;
@@ -226,8 +247,7 @@ public sealed class BoundConditional(
     BoundExpression condition,
     BoundExpression whenTrue,
     BoundExpression whenFalse)
-    : BoundExpression(syntax, type)
-{
+    : BoundExpression(syntax, type) {
     public BoundExpression Condition { get; } = condition;
     public BoundExpression WhenTrue { get; } = whenTrue;
     public BoundExpression WhenFalse { get; } = whenFalse;
@@ -235,16 +255,16 @@ public sealed class BoundConditional(
 }
 
 public sealed class BoundAssignment(
-    SyntaxNode syntax, BoundExpression target, BoundExpression value)
-    : BoundExpression(syntax, target.Type)
-{
+    SyntaxNode syntax,
+    BoundExpression target,
+    BoundExpression value)
+    : BoundExpression(syntax, target.Type) {
     public BoundExpression Target { get; } = target;
     public BoundExpression Value { get; } = value;
     public override IEnumerable<BoundNode> Children => Nodes(Target, Value);
 }
 
-public enum ConversionKind
-{
+public enum ConversionKind {
     Identity,
 
     /// <summary>A literal taking the type the context asked for.</summary>
@@ -266,22 +286,26 @@ public enum ConversionKind
     UnionInjection,
 
     /// <summary>Written with <c>as</c>; checked at runtime where needed.</summary>
-    Explicit,
+    Explicit
 }
 
 public sealed class BoundConversion(
-    SyntaxNode syntax, TypeSymbol type, BoundExpression operand, ConversionKind conversionKind)
-    : BoundExpression(syntax, type)
-{
+    SyntaxNode syntax,
+    TypeSymbol type,
+    BoundExpression operand,
+    ConversionKind conversionKind)
+    : BoundExpression(syntax, type) {
     public BoundExpression Operand { get; } = operand;
     public ConversionKind ConversionKind { get; } = conversionKind;
     public override IEnumerable<BoundNode> Children => Nodes(Operand);
 }
 
 public sealed class BoundTypeTest(
-    SyntaxNode syntax, TypeSymbol type, BoundExpression operand, TypeSymbol testedType)
-    : BoundExpression(syntax, type)
-{
+    SyntaxNode syntax,
+    TypeSymbol type,
+    BoundExpression operand,
+    TypeSymbol testedType)
+    : BoundExpression(syntax, type) {
     public BoundExpression Operand { get; } = operand;
     public TypeSymbol TestedType { get; } = testedType;
     public override IEnumerable<BoundNode> Children => Nodes(Operand);
@@ -293,8 +317,7 @@ public sealed class BoundRange(
     TypeSymbol type,
     BoundExpression? lower,
     BoundExpression? upper,
-    bool isInclusive) : BoundExpression(syntax, type)
-{
+    bool isInclusive) : BoundExpression(syntax, type) {
     public BoundExpression? Lower { get; } = lower;
     public BoundExpression? Upper { get; } = upper;
 
@@ -309,20 +332,18 @@ public sealed class BoundDictionary(
     SyntaxNode syntax,
     TypeSymbol type,
     ImmutableArray<(BoundExpression Key, BoundExpression Value)> entries)
-    : BoundExpression(syntax, type)
-{
+    : BoundExpression(syntax, type) {
     public ImmutableArray<(BoundExpression Key, BoundExpression Value)> Entries { get; } = entries;
 
     public override IEnumerable<BoundNode> Children =>
-        Entries.SelectMany(e => new BoundNode[] { e.Key, e.Value });
+        Entries.SelectMany(static e => new BoundNode[] { e.Key, e.Value });
 }
 
 /// <summary>
-/// <c>#file</c>, <c>#line</c> and the rest: a value the compiler supplies.
+///     <c>#file</c>, <c>#line</c> and the rest: a value the compiler supplies.
 /// </summary>
 public sealed class BoundBuiltin(SyntaxNode syntax, TypeSymbol type, string name)
-    : BoundExpression(syntax, type)
-{
+    : BoundExpression(syntax, type) {
     public string Name { get; } = name;
     public override IEnumerable<BoundNode> Children => [];
 }
@@ -332,33 +353,36 @@ public sealed class BoundRecordExpression(
     SyntaxNode syntax,
     TypeSymbol type,
     ImmutableArray<(FieldSymbol Field, BoundExpression Value)> fields)
-    : BoundExpression(syntax, type)
-{
+    : BoundExpression(syntax, type) {
     public ImmutableArray<(FieldSymbol Field, BoundExpression Value)> Fields { get; } = fields;
-    public override IEnumerable<BoundNode> Children => Fields.Select(f => f.Value);
+    public override IEnumerable<BoundNode> Children => Fields.Select(static f => f.Value);
 }
 
 public sealed class BoundTuple(
-    SyntaxNode syntax, TypeSymbol type, ImmutableArray<BoundExpression> elements)
-    : BoundExpression(syntax, type)
-{
+    SyntaxNode syntax,
+    TypeSymbol type,
+    ImmutableArray<BoundExpression> elements)
+    : BoundExpression(syntax, type) {
     public ImmutableArray<BoundExpression> Elements { get; } = elements;
     public override IEnumerable<BoundNode> Children => Elements;
 }
 
 public sealed class BoundArray(
-    SyntaxNode syntax, TypeSymbol type, ImmutableArray<BoundExpression> elements)
-    : BoundExpression(syntax, type)
-{
+    SyntaxNode syntax,
+    TypeSymbol type,
+    ImmutableArray<BoundExpression> elements)
+    : BoundExpression(syntax, type) {
     public ImmutableArray<BoundExpression> Elements { get; } = elements;
     public override IEnumerable<BoundNode> Children => Elements;
 }
 
 /// <summary>One element of a tuple, named by label or by position.</summary>
 public sealed class BoundTupleElementAccess(
-    SyntaxNode syntax, TypeSymbol type, BoundExpression receiver, int index)
-    : BoundExpression(syntax, type)
-{
+    SyntaxNode syntax,
+    TypeSymbol type,
+    BoundExpression receiver,
+    int index)
+    : BoundExpression(syntax, type) {
     public BoundExpression Receiver { get; } = receiver;
     public int Index { get; } = index;
     public override IEnumerable<BoundNode> Children => Nodes(Receiver);
@@ -369,22 +393,20 @@ public sealed class BoundIndexAccess(
     TypeSymbol type,
     BoundExpression receiver,
     ImmutableArray<BoundExpression> indices)
-    : BoundExpression(syntax, type)
-{
+    : BoundExpression(syntax, type) {
     public BoundExpression Receiver { get; } = receiver;
     public ImmutableArray<BoundExpression> Indices { get; } = indices;
     public override bool IsAssignable => true;
-    public override IEnumerable<BoundNode> Children => Nodes([Receiver, .. Indices]);
+    public override IEnumerable<BoundNode> Children => Nodes([Receiver, ..Indices]);
 }
 
 /// <summary>
-/// Stands in for an expression that could not be bound, carrying whatever was
-/// bound successfully so that analysis downstream still sees the shape.
+///     Stands in for an expression that could not be bound, carrying whatever was
+///     bound successfully so that analysis downstream still sees the shape.
 /// </summary>
 public sealed class BoundError(SyntaxNode syntax, params BoundExpression[] children)
-    : BoundExpression(syntax, ErrorTypeSymbol.Instance)
-{
-    private readonly BoundExpression[] _children = children;
+    : BoundExpression(syntax, ErrorTypeSymbol.Instance) {
+    readonly BoundExpression[] _children = children;
     public override IEnumerable<BoundNode> Children => _children;
 }
 
@@ -396,38 +418,38 @@ public sealed class BoundBlock(
     SyntaxNode syntax,
     ImmutableArray<LocalSymbol> locals,
     ImmutableArray<BoundStatement> statements)
-    : BoundStatement(syntax)
-{
+    : BoundStatement(syntax) {
     public ImmutableArray<LocalSymbol> Locals { get; } = locals;
     public ImmutableArray<BoundStatement> Statements { get; } = statements;
     public override IEnumerable<BoundNode> Children => Statements;
 }
 
 /// <summary>
-/// <c>let (a, b) = pair</c> or <c>let { name, age } = person</c>: a
-/// declaration whose left side is a pattern, which must always match.
+///     <c>let (a, b) = pair</c> or <c>let { name, age } = person</c>: a
+///     declaration whose left side is a pattern, which must always match.
 /// </summary>
 public sealed class BoundPatternDeclaration(
-    SyntaxNode syntax, BoundPattern pattern, BoundExpression initializer)
-    : BoundStatement(syntax)
-{
+    SyntaxNode syntax,
+    BoundPattern pattern,
+    BoundExpression initializer)
+    : BoundStatement(syntax) {
     public BoundPattern Pattern { get; } = pattern;
     public BoundExpression Initializer { get; } = initializer;
     public override IEnumerable<BoundNode> Children => [Initializer, Pattern];
 }
 
 public sealed class BoundLocalDeclaration(
-    SyntaxNode syntax, LocalSymbol local, BoundExpression? initializer)
-    : BoundStatement(syntax)
-{
+    SyntaxNode syntax,
+    LocalSymbol local,
+    BoundExpression? initializer)
+    : BoundStatement(syntax) {
     public LocalSymbol Local { get; } = local;
     public BoundExpression? Initializer { get; } = initializer;
     public override IEnumerable<BoundNode> Children => Nodes(Initializer);
 }
 
 public sealed class BoundExpressionStatement(SyntaxNode syntax, BoundExpression expression)
-    : BoundStatement(syntax)
-{
+    : BoundStatement(syntax) {
     public BoundExpression Expression { get; } = expression;
     public override IEnumerable<BoundNode> Children => Nodes(Expression);
 }
@@ -437,8 +459,7 @@ public sealed class BoundIf(
     BoundExpression condition,
     BoundStatement consequence,
     BoundStatement? alternative)
-    : BoundStatement(syntax)
-{
+    : BoundStatement(syntax) {
     public BoundExpression Condition { get; } = condition;
     public BoundStatement Consequence { get; } = consequence;
     public BoundStatement? Alternative { get; } = alternative;
@@ -446,18 +467,20 @@ public sealed class BoundIf(
 }
 
 public sealed class BoundWhile(
-    SyntaxNode syntax, BoundExpression condition, BoundStatement body)
-    : BoundStatement(syntax)
-{
+    SyntaxNode syntax,
+    BoundExpression condition,
+    BoundStatement body)
+    : BoundStatement(syntax) {
     public BoundExpression Condition { get; } = condition;
     public BoundStatement Body { get; } = body;
     public override IEnumerable<BoundNode> Children => Nodes(Condition, Body);
 }
 
 public sealed class BoundRepeat(
-    SyntaxNode syntax, BoundStatement body, BoundExpression condition)
-    : BoundStatement(syntax)
-{
+    SyntaxNode syntax,
+    BoundStatement body,
+    BoundExpression condition)
+    : BoundStatement(syntax) {
     public BoundStatement Body { get; } = body;
     public BoundExpression Condition { get; } = condition;
     public override IEnumerable<BoundNode> Children => Nodes(Body, Condition);
@@ -469,8 +492,7 @@ public sealed class BoundForEach(
     BoundExpression sequence,
     BoundExpression? filter,
     BoundStatement body)
-    : BoundStatement(syntax)
-{
+    : BoundStatement(syntax) {
     public LocalSymbol? Element { get; } = element;
     public BoundExpression Sequence { get; } = sequence;
     public BoundExpression? Filter { get; } = filter;
@@ -479,47 +501,41 @@ public sealed class BoundForEach(
 }
 
 public sealed class BoundReturn(SyntaxNode syntax, BoundExpression? value)
-    : BoundStatement(syntax)
-{
+    : BoundStatement(syntax) {
     public BoundExpression? Value { get; } = value;
     public override IEnumerable<BoundNode> Children => Nodes(Value);
 }
 
 public sealed class BoundThrow(SyntaxNode syntax, BoundExpression value)
-    : BoundStatement(syntax)
-{
+    : BoundStatement(syntax) {
     public BoundExpression Value { get; } = value;
     public override IEnumerable<BoundNode> Children => Nodes(Value);
 }
 
-public sealed class BoundBreak(SyntaxNode syntax, string? label) : BoundStatement(syntax)
-{
+public sealed class BoundBreak(SyntaxNode syntax, string? label) : BoundStatement(syntax) {
     public string? Label { get; } = label;
     public override IEnumerable<BoundNode> Children => [];
 }
 
-public sealed class BoundContinue(SyntaxNode syntax, string? label) : BoundStatement(syntax)
-{
+public sealed class BoundContinue(SyntaxNode syntax, string? label) : BoundStatement(syntax) {
     public string? Label { get; } = label;
     public override IEnumerable<BoundNode> Children => [];
 }
 
-public sealed class BoundDefer(SyntaxNode syntax, BoundStatement body) : BoundStatement(syntax)
-{
+public sealed class BoundDefer(SyntaxNode syntax, BoundStatement body) : BoundStatement(syntax) {
     public BoundStatement Body { get; } = body;
     public override IEnumerable<BoundNode> Children => Nodes(Body);
 }
 
 /// <summary>
-/// <c>try e</c>, <c>try? e</c>, <c>try! e</c>, or <c>try e catch { ... }</c>.
+///     <c>try e</c>, <c>try? e</c>, <c>try! e</c>, or <c>try e catch { ... }</c>.
 /// </summary>
 public sealed class BoundTry(
     SyntaxNode syntax,
     TypeSymbol type,
     BoundExpression expression,
     TryKind tryKind,
-    BoundExpression? fallback) : BoundExpression(syntax, type)
-{
+    BoundExpression? fallback) : BoundExpression(syntax, type) {
     public BoundExpression Expression { get; } = expression;
     public TryKind TryKind { get; } = tryKind;
 
@@ -534,8 +550,7 @@ public sealed class BoundTry(
 }
 
 /// <summary>What a <c>try</c> does with the error, per SYNTAX.md §18.</summary>
-public enum TryKind
-{
+public enum TryKind {
     /// <summary>Propagates to the caller.</summary>
     Propagate,
 
@@ -546,32 +561,30 @@ public enum TryKind
     Force,
 
     /// <summary>Replaced by an inline fallback value.</summary>
-    Fallback,
+    Fallback
 }
 
 /// <summary>
-/// <c>switch</c>: C-shaped dispatch on integers and enums, with explicit
-/// fallthrough. It binds no patterns, which is what separates it from
-/// <c>match</c>.
+///     <c>switch</c>: C-shaped dispatch on integers and enums, with explicit
+///     fallthrough. It binds no patterns, which is what separates it from
+///     <c>match</c>.
 /// </summary>
 public sealed class BoundSwitch(
     SyntaxNode syntax,
     BoundExpression subject,
-    ImmutableArray<BoundSwitchCase> cases) : BoundStatement(syntax)
-{
+    ImmutableArray<BoundSwitchCase> cases) : BoundStatement(syntax) {
     public BoundExpression Subject { get; } = subject;
     public ImmutableArray<BoundSwitchCase> Cases { get; } = cases;
 
     public override IEnumerable<BoundNode> Children =>
-        Nodes(Subject).Concat(Cases.SelectMany(c => c.Statements.Cast<BoundNode>()));
+        Nodes(Subject).Concat(Cases.SelectMany(static c => c.Statements.Cast<BoundNode>()));
 }
 
 /// <summary>One <c>case</c> or <c>default</c> of a <c>switch</c>.</summary>
 public sealed class BoundSwitchCase(
     SyntaxNode syntax,
     ImmutableArray<BoundExpression> values,
-    ImmutableArray<BoundStatement> statements)
-{
+    ImmutableArray<BoundStatement> statements) {
     public SyntaxNode Syntax { get; } = syntax;
 
     /// <summary>Empty for <c>default</c>.</summary>
@@ -581,22 +594,20 @@ public sealed class BoundSwitchCase(
 }
 
 /// <summary><c>fallthrough</c>: carry on into the next case.</summary>
-public sealed class BoundFallthrough(SyntaxNode syntax) : BoundStatement(syntax)
-{
+public sealed class BoundFallthrough(SyntaxNode syntax) : BoundStatement(syntax) {
     public override IEnumerable<BoundNode> Children => [];
 }
 
 /// <summary>
-/// A block with something said about it: <c>unsafe</c>, <c>comptime</c>, or
-/// a <c>region</c> that names an allocator.
+///     A block with something said about it: <c>unsafe</c>, <c>comptime</c>, or
+///     a <c>region</c> that names an allocator.
 /// </summary>
 public sealed class BoundScopedBlock(
     SyntaxNode syntax,
     ScopeKind scopeKind,
     LocalSymbol? name,
     BoundExpression? source,
-    BoundBlock body) : BoundStatement(syntax)
-{
+    BoundBlock body) : BoundStatement(syntax) {
     public ScopeKind ScopeKind { get; } = scopeKind;
 
     /// <summary>The name a <c>region</c> introduces, if any.</summary>
@@ -605,23 +616,25 @@ public sealed class BoundScopedBlock(
     public BoundExpression? Source { get; } = source;
     public BoundBlock Body { get; } = body;
 
-    public override IEnumerable<BoundNode> Children =>
-        Source is null ? Nodes(Body) : Nodes(Source, Body);
+    public override IEnumerable<BoundNode> Children => Source is null ? Nodes(Body) : Nodes(Source, Body);
 }
 
-public enum ScopeKind { Unsafe, Comptime, Region }
+public enum ScopeKind {
+    Unsafe,
+    Comptime,
+    Region
+}
 
 /// <summary>A <c>do</c> block with its <c>catch</c> clauses.</summary>
 public sealed class BoundDo(
     SyntaxNode syntax,
     BoundBlock body,
-    ImmutableArray<BoundCatch> catches) : BoundStatement(syntax)
-{
+    ImmutableArray<BoundCatch> catches) : BoundStatement(syntax) {
     public BoundBlock Body { get; } = body;
     public ImmutableArray<BoundCatch> Catches { get; } = catches;
 
     public override IEnumerable<BoundNode> Children =>
-        Nodes(Body).Concat(Catches.Select(c => (BoundNode)c.Body));
+        Nodes(Body).Concat(Catches.Select(static c => (BoundNode)c.Body));
 }
 
 /// <summary>One <c>catch</c> clause of a <c>do</c>.</summary>
@@ -630,8 +643,7 @@ public sealed class BoundCatch(
     BoundPattern? pattern,
     BoundExpression? guard,
     BoundBlock body,
-    LocalSymbol? errorLocal)
-{
+    LocalSymbol? errorLocal) {
     public SyntaxNode Syntax { get; } = syntax;
 
     /// <summary>Null for a bare <c>catch</c>, which takes everything.</summary>
@@ -645,28 +657,26 @@ public sealed class BoundCatch(
 }
 
 /// <summary>
-/// A condition that binds a name: <c>if let x = e</c> or <c>if case p = e</c>.
+///     A condition that binds a name: <c>if let x = e</c> or <c>if case p = e</c>.
 /// </summary>
 /// <remarks>
-/// It is an expression of type Bool, so a condition list can combine several
-/// with <c>&amp;&amp;</c>, but it carries what it binds — which is what lets
-/// definite assignment see that the name is set when the branch is taken.
+///     It is an expression of type Bool, so a condition list can combine several
+///     with <c>&amp;&amp;</c>, but it carries what it binds — which is what lets
+///     definite assignment see that the name is set when the branch is taken.
 /// </remarks>
 public sealed class BoundConditionBinding(
     SyntaxNode syntax,
     TypeSymbol type,
     BoundExpression source,
     BoundPattern? pattern,
-    LocalSymbol? local) : BoundExpression(syntax, type)
-{
+    LocalSymbol? local) : BoundExpression(syntax, type) {
     public BoundExpression Source { get; } = source;
     public BoundPattern? Pattern { get; } = pattern;
 
     /// <summary>The local an optional binding introduces.</summary>
     public LocalSymbol? Local { get; } = local;
 
-    public override IEnumerable<BoundNode> Children =>
-        Pattern is null ? Nodes(Source) : Nodes(Source, Pattern);
+    public override IEnumerable<BoundNode> Children => Pattern is null ? Nodes(Source) : Nodes(Source, Pattern);
 }
 
 /// <summary>A function named but not called: the value is the function itself.</summary>
@@ -674,8 +684,7 @@ public sealed class BoundFunctionReference(
     SyntaxNode syntax,
     FunctionTypeSymbol type,
     BoundExpression? receiver,
-    FunctionSymbol function) : BoundExpression(syntax, type)
-{
+    FunctionSymbol function) : BoundExpression(syntax, type) {
     public BoundExpression? Receiver { get; } = receiver;
     public FunctionSymbol Function { get; } = function;
     public override IEnumerable<BoundNode> Children => Nodes(Receiver);
@@ -686,8 +695,7 @@ public sealed class BoundIndirectCall(
     SyntaxNode syntax,
     TypeSymbol type,
     BoundExpression callee,
-    ImmutableArray<BoundExpression> arguments) : BoundExpression(syntax, type)
-{
+    ImmutableArray<BoundExpression> arguments) : BoundExpression(syntax, type) {
     public BoundExpression Callee { get; } = callee;
     public ImmutableArray<BoundExpression> Arguments { get; } = arguments;
 
@@ -696,8 +704,10 @@ public sealed class BoundIndirectCall(
 
 /// <summary>One name a closure captures from the scope around it.</summary>
 public sealed class BoundCapture(
-    SyntaxNode syntax, Symbol symbol, CaptureKind captureKind, BoundExpression? initializer)
-{
+    SyntaxNode syntax,
+    Symbol symbol,
+    CaptureKind captureKind,
+    BoundExpression? initializer) {
     public SyntaxNode Syntax { get; } = syntax;
     public Symbol Symbol { get; } = symbol;
     public CaptureKind CaptureKind { get; } = captureKind;
@@ -707,7 +717,12 @@ public sealed class BoundCapture(
 }
 
 /// <summary>How a closure holds onto what it captured, per SYNTAX.md §17.</summary>
-public enum CaptureKind { Default, Weak, Unowned, ByValue }
+public enum CaptureKind {
+    Default,
+    Weak,
+    Unowned,
+    ByValue
+}
 
 /// <summary>A closure: an anonymous function, with what it captured.</summary>
 public sealed class BoundClosure(
@@ -715,55 +730,52 @@ public sealed class BoundClosure(
     FunctionTypeSymbol type,
     FunctionSymbol symbol,
     ImmutableArray<BoundCapture> captures,
-    BoundBlock body) : BoundExpression(syntax, type)
-{
+    BoundBlock body) : BoundExpression(syntax, type) {
     public FunctionSymbol Symbol { get; } = symbol;
     public ImmutableArray<BoundCapture> Captures { get; } = captures;
     public BoundBlock Body { get; } = body;
 
     public override IEnumerable<BoundNode> Children =>
-        Captures.Select(c => c.Initializer).OfType<BoundNode>().Append(Body);
+        Captures.Select(static c => c.Initializer).OfType<BoundNode>().Append(Body);
 }
 
 /// <summary>
-/// A closure argument whose parameter types are not known yet.
+///     A closure argument whose parameter types are not known yet.
 /// </summary>
 /// <remarks>
-/// It stands in during overload resolution and is replaced by a
-/// <see cref="BoundClosure"/> once the chosen signature says what the
-/// parameters are. One should never survive into a finished bound tree.
+///     It stands in during overload resolution and is replaced by a
+///     <see cref="BoundClosure" /> once the chosen signature says what the
+///     parameters are. One should never survive into a finished bound tree.
 /// </remarks>
 public sealed class BoundUnboundClosure(SyntaxNode syntax)
-    : BoundExpression(syntax, ErrorTypeSymbol.Instance)
-{
+    : BoundExpression(syntax, ErrorTypeSymbol.Instance) {
     public override IEnumerable<BoundNode> Children => [];
 }
 
 /// <summary>A function declared inside another function's body.</summary>
 public sealed class BoundLocalFunction(
-    SyntaxNode syntax, FunctionSymbol symbol, BoundBlock? body) : BoundStatement(syntax)
-{
+    SyntaxNode syntax,
+    FunctionSymbol symbol,
+    BoundBlock? body) : BoundStatement(syntax) {
     public FunctionSymbol Symbol { get; } = symbol;
     public BoundBlock? Body { get; } = body;
     public override IEnumerable<BoundNode> Children => Body is null ? [] : Nodes(Body);
 }
 
 /// <summary>A statement that could not be bound.</summary>
-public sealed class BoundErrorStatement(SyntaxNode syntax) : BoundStatement(syntax)
-{
+public sealed class BoundErrorStatement(SyntaxNode syntax) : BoundStatement(syntax) {
     public override IEnumerable<BoundNode> Children => [];
 }
 
 /// <summary>
-/// A name that resolved to one or more functions. Only ever the callee of a
-/// call; overload resolution replaces it with a <see cref="BoundCall"/>.
+///     A name that resolved to one or more functions. Only ever the callee of a
+///     call; overload resolution replaces it with a <see cref="BoundCall" />.
 /// </summary>
 public sealed class BoundFunctionGroup(
     SyntaxNode syntax,
     BoundExpression? receiver,
     ImmutableArray<FunctionSymbol> candidates)
-    : BoundExpression(syntax, ErrorTypeSymbol.Instance)
-{
+    : BoundExpression(syntax, ErrorTypeSymbol.Instance) {
     public BoundExpression? Receiver { get; } = receiver;
     public ImmutableArray<FunctionSymbol> Candidates { get; } = candidates;
 
@@ -771,8 +783,8 @@ public sealed class BoundFunctionGroup(
     internal TypeSubstitution? Substitution { get; init; }
 
     /// <summary>
-    /// True when the receiver was reached through <c>?.</c>, so a call
-    /// through this group gives an optional.
+    ///     True when the receiver was reached through <c>?.</c>, so a call
+    ///     through this group gives an optional.
     /// </summary>
     internal bool IsOptionalChain { get; init; }
 
@@ -781,9 +793,10 @@ public sealed class BoundFunctionGroup(
 
 /// <summary>A union case named but not yet applied to a payload.</summary>
 public sealed class BoundUnionCaseGroup(
-    SyntaxNode syntax, TypeSymbol unionType, UnionCaseSymbol unionCase)
-    : BoundExpression(syntax, unionType)
-{
+    SyntaxNode syntax,
+    TypeSymbol unionType,
+    UnionCaseSymbol unionCase)
+    : BoundExpression(syntax, unionType) {
     public UnionCaseSymbol UnionCase { get; } = unionCase;
     public override IEnumerable<BoundNode> Children => [];
 }
@@ -793,8 +806,7 @@ public sealed class BoundUnionCaseGroup(
 // ---------------------------------------------------------------------------
 
 /// <summary>A pattern, bound against the type of the value it matches.</summary>
-public abstract class BoundPattern(SyntaxNode syntax, TypeSymbol inputType) : BoundNode(syntax)
-{
+public abstract class BoundPattern(SyntaxNode syntax, TypeSymbol inputType) : BoundNode(syntax) {
     /// <summary>The type of the value this pattern is matched against.</summary>
     public TypeSymbol InputType { get; } = inputType;
 
@@ -803,45 +815,50 @@ public abstract class BoundPattern(SyntaxNode syntax, TypeSymbol inputType) : Bo
 }
 
 public sealed class BoundWildcardPattern(SyntaxNode syntax, TypeSymbol inputType)
-    : BoundPattern(syntax, inputType)
-{
+    : BoundPattern(syntax, inputType) {
     public override bool IsIrrefutable => true;
     public override IEnumerable<BoundNode> Children => [];
 }
 
 public sealed class BoundBindingPattern(
-    SyntaxNode syntax, TypeSymbol inputType, LocalSymbol local)
-    : BoundPattern(syntax, inputType)
-{
+    SyntaxNode syntax,
+    TypeSymbol inputType,
+    LocalSymbol local)
+    : BoundPattern(syntax, inputType) {
     public LocalSymbol Local { get; } = local;
     public override bool IsIrrefutable => true;
     public override IEnumerable<BoundNode> Children => [];
 }
 
 public sealed class BoundLiteralPattern(
-    SyntaxNode syntax, TypeSymbol inputType, object? value, bool isNegative)
-    : BoundPattern(syntax, inputType)
-{
+    SyntaxNode syntax,
+    TypeSymbol inputType,
+    object? value,
+    bool isNegative)
+    : BoundPattern(syntax, inputType) {
     public object? Value { get; } = value;
     public bool IsNegative { get; } = isNegative;
     public override IEnumerable<BoundNode> Children => [];
 }
 
 public sealed class BoundRangePattern(
-    SyntaxNode syntax, TypeSymbol inputType, BoundPattern? lower, BoundPattern? upper)
-    : BoundPattern(syntax, inputType)
-{
+    SyntaxNode syntax,
+    TypeSymbol inputType,
+    BoundPattern? lower,
+    BoundPattern? upper)
+    : BoundPattern(syntax, inputType) {
     public BoundPattern? Lower { get; } = lower;
     public BoundPattern? Upper { get; } = upper;
     public override IEnumerable<BoundNode> Children => Nodes(Lower, Upper);
 }
 
 public sealed class BoundTuplePattern(
-    SyntaxNode syntax, TypeSymbol inputType, ImmutableArray<BoundPattern> elements)
-    : BoundPattern(syntax, inputType)
-{
+    SyntaxNode syntax,
+    TypeSymbol inputType,
+    ImmutableArray<BoundPattern> elements)
+    : BoundPattern(syntax, inputType) {
     public ImmutableArray<BoundPattern> Elements { get; } = elements;
-    public override bool IsIrrefutable => Elements.All(e => e.IsIrrefutable);
+    public override bool IsIrrefutable => Elements.All(static e => e.IsIrrefutable);
     public override IEnumerable<BoundNode> Children => Elements;
 }
 
@@ -850,17 +867,17 @@ public sealed class BoundUnionCasePattern(
     TypeSymbol inputType,
     UnionCaseSymbol unionCase,
     ImmutableArray<BoundPattern> payload)
-    : BoundPattern(syntax, inputType)
-{
+    : BoundPattern(syntax, inputType) {
     public UnionCaseSymbol UnionCase { get; } = unionCase;
     public ImmutableArray<BoundPattern> Payload { get; } = payload;
     public override IEnumerable<BoundNode> Children => Payload;
 }
 
 public sealed class BoundEnumCasePattern(
-    SyntaxNode syntax, TypeSymbol inputType, EnumCaseSymbol enumCase)
-    : BoundPattern(syntax, inputType)
-{
+    SyntaxNode syntax,
+    TypeSymbol inputType,
+    EnumCaseSymbol enumCase)
+    : BoundPattern(syntax, inputType) {
     public EnumCaseSymbol EnumCase { get; } = enumCase;
     public override IEnumerable<BoundNode> Children => [];
 }
@@ -869,8 +886,7 @@ public sealed class BoundRecordPattern(
     SyntaxNode syntax,
     TypeSymbol inputType,
     ImmutableArray<(FieldSymbol Field, BoundPattern Pattern)> fields)
-    : BoundPattern(syntax, inputType)
-{
+    : BoundPattern(syntax, inputType) {
     public ImmutableArray<(FieldSymbol Field, BoundPattern Pattern)> Fields { get; } = fields;
 
     /// <summary>True when the pattern names a narrower type than its input.</summary>
@@ -880,8 +896,9 @@ public sealed class BoundRecordPattern(
     public bool IsIncomplete { get; init; }
 
     public override bool IsIrrefutable =>
-        !TestsType && !IsIncomplete && Fields.All(f => f.Pattern.IsIrrefutable);
-    public override IEnumerable<BoundNode> Children => Fields.Select(f => f.Pattern);
+        !TestsType && !IsIncomplete && Fields.All(static f => f.Pattern.IsIrrefutable);
+
+    public override IEnumerable<BoundNode> Children => Fields.Select(static f => f.Pattern);
 }
 
 public sealed class BoundArrayPattern(
@@ -889,8 +906,7 @@ public sealed class BoundArrayPattern(
     TypeSymbol inputType,
     ImmutableArray<BoundPattern> elements,
     int restIndex)
-    : BoundPattern(syntax, inputType)
-{
+    : BoundPattern(syntax, inputType) {
     public ImmutableArray<BoundPattern> Elements { get; } = elements;
 
     /// <summary>Index of the <c>...</c> element, or -1 when there is none.</summary>
@@ -900,18 +916,22 @@ public sealed class BoundArrayPattern(
 }
 
 public sealed class BoundTypeTestPattern(
-    SyntaxNode syntax, TypeSymbol inputType, TypeSymbol testedType, LocalSymbol? local)
-    : BoundPattern(syntax, inputType)
-{
+    SyntaxNode syntax,
+    TypeSymbol inputType,
+    TypeSymbol testedType,
+    LocalSymbol? local)
+    : BoundPattern(syntax, inputType) {
     public TypeSymbol TestedType { get; } = testedType;
     public LocalSymbol? Local { get; } = local;
     public override IEnumerable<BoundNode> Children => [];
 }
 
 public sealed class BoundOrPattern(
-    SyntaxNode syntax, TypeSymbol inputType, BoundPattern left, BoundPattern right)
-    : BoundPattern(syntax, inputType)
-{
+    SyntaxNode syntax,
+    TypeSymbol inputType,
+    BoundPattern left,
+    BoundPattern right)
+    : BoundPattern(syntax, inputType) {
     public BoundPattern Left { get; } = left;
     public BoundPattern Right { get; } = right;
     public override bool IsIrrefutable => Left.IsIrrefutable || Right.IsIrrefutable;
@@ -919,8 +939,7 @@ public sealed class BoundOrPattern(
 }
 
 public sealed class BoundErrorPattern(SyntaxNode syntax)
-    : BoundPattern(syntax, ErrorTypeSymbol.Instance)
-{
+    : BoundPattern(syntax, ErrorTypeSymbol.Instance) {
     public override IEnumerable<BoundNode> Children => [];
 }
 
@@ -933,8 +952,7 @@ public sealed class BoundMatchArm(
     ImmutableArray<BoundPattern> patterns,
     BoundExpression? guard,
     BoundNode body)
-    : BoundNode(syntax)
-{
+    : BoundNode(syntax) {
     public ImmutableArray<BoundPattern> Patterns { get; } = patterns;
     public BoundExpression? Guard { get; } = guard;
 
@@ -944,7 +962,7 @@ public sealed class BoundMatchArm(
     /// <summary>True for <c>default</c>, which has no patterns.</summary>
     public bool IsDefault => Patterns.IsEmpty;
 
-    public override IEnumerable<BoundNode> Children => Nodes([.. Patterns, Guard, Body]);
+    public override IEnumerable<BoundNode> Children => Nodes([..Patterns, Guard, Body]);
 }
 
 public sealed class BoundMatch(
@@ -952,9 +970,8 @@ public sealed class BoundMatch(
     TypeSymbol type,
     BoundExpression subject,
     ImmutableArray<BoundMatchArm> arms)
-    : BoundExpression(syntax, type)
-{
+    : BoundExpression(syntax, type) {
     public BoundExpression Subject { get; } = subject;
     public ImmutableArray<BoundMatchArm> Arms { get; } = arms;
-    public override IEnumerable<BoundNode> Children => Nodes([Subject, .. Arms]);
+    public override IEnumerable<BoundNode> Children => Nodes([Subject, ..Arms]);
 }

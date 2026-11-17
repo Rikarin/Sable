@@ -5,28 +5,31 @@ using Sable.Syntax.Green;
 namespace Sable.Syntax;
 
 /// <summary>
-/// A parsed source file: its text, its root node, and the diagnostics produced
-/// while lexing and parsing it.
+///     A parsed source file: its text, its root node, and the diagnostics produced
+///     while lexing and parsing it.
 /// </summary>
 /// <remarks>
-/// <para>The root plus <see cref="EndOfFileToken"/> account for every character
-/// of <see cref="Text"/>, so <see cref="ToFullString"/> reproduces the source
-/// byte for byte. Trivia after the root — trailing whitespace, a final comment,
-/// anything error recovery skipped — is attached to the end-of-file token.</para>
-/// <para>Once declarations exist, the root will be a compilation unit that owns
-/// the end-of-file token itself, as it does in Roslyn.</para>
+///     <para>
+///         The root plus <see cref="EndOfFileToken" /> account for every character
+///         of <see cref="Text" />, so <see cref="ToFullString" /> reproduces the source
+///         byte for byte. Trivia after the root — trailing whitespace, a final comment,
+///         anything error recovery skipped — is attached to the end-of-file token.
+///     </para>
+///     <para>
+///         Once declarations exist, the root will be a compilation unit that owns
+///         the end-of-file token itself, as it does in Roslyn.
+///     </para>
 /// </remarks>
-public sealed class SyntaxTree
-{
-    private readonly SyntaxToken _trailingEndOfFile;
+public sealed class SyntaxTree {
+    readonly SyntaxToken _trailingEndOfFile;
 
     public SourceText Text { get; }
     public SyntaxNode Root { get; }
     public IReadOnlyList<Diagnostic> Diagnostics { get; }
 
     /// <summary>
-    /// The end-of-file token. A compilation unit owns it as a child; the
-    /// single-construct entry points carry it beside the root instead.
+    ///     The end-of-file token. A compilation unit owns it as a child; the
+    ///     single-construct entry points carry it beside the root instead.
     /// </summary>
     public SyntaxToken EndOfFileToken =>
         _trailingEndOfFile.IsNone && Root is CompilationUnitSyntax unit
@@ -34,14 +37,14 @@ public sealed class SyntaxTree
             : _trailingEndOfFile;
 
     /// <summary>
-    /// The token stream this tree was built from, kept so that an edit can
-    /// splice rather than re-lex.
+    ///     The token stream this tree was built from, kept so that an edit can
+    ///     splice rather than re-lex.
     /// </summary>
     internal ImmutableArray<GreenToken> Tokens { get; }
 
     /// <summary>
-    /// True when the file uses conditional compilation, which makes the lexer
-    /// stateful across tokens and so rules out splicing.
+    ///     True when the file uses conditional compilation, which makes the lexer
+    ///     stateful across tokens and so rules out splicing.
     /// </summary>
     internal bool HasDirectives { get; }
 
@@ -52,8 +55,8 @@ public sealed class SyntaxTree
         IReadOnlyList<Diagnostic> diagnostics,
         ParseOptions options,
         ImmutableArray<GreenToken> tokens = default,
-        bool hasDirectives = false)
-    {
+        bool hasDirectives = false
+    ) {
         Text = text;
         Root = root;
         _trailingEndOfFile = endOfFileToken;
@@ -61,33 +64,34 @@ public sealed class SyntaxTree
 
         // Sorted so that a full parse and an incremental one, which collect
         // diagnostics in different orders, report the same sequence.
-        Diagnostics = [.. diagnostics
-            .OrderBy(d => d.Span.Start)
-            .ThenBy(d => d.Span.Length)
-            .ThenBy(d => (int)d.Code)];
+        Diagnostics = [
+            ..diagnostics
+                .OrderBy(static d => d.Span.Start)
+                .ThenBy(static d => d.Span.Length)
+                .ThenBy(static d => (int)d.Code)
+        ];
         Tokens = tokens.IsDefault ? [] : tokens;
         HasDirectives = hasDirectives;
     }
 
     /// <summary>
-    /// Applies an edit, reusing everything the edit did not touch.
+    ///     Applies an edit, reusing everything the edit did not touch.
     /// </summary>
     /// <remarks>
-    /// Tokens on both sides of the edit are spliced from the old stream, and
-    /// whole members that survive are dropped in as the very same green nodes.
-    /// The result is the tree a full parse would have produced; only the work
-    /// differs.
+    ///     Tokens on both sides of the edit are spliced from the old stream, and
+    ///     whole members that survive are dropped in as the very same green nodes.
+    ///     The result is the tree a full parse would have produced; only the work
+    ///     differs.
     /// </remarks>
-    public SyntaxTree WithChange(TextChange change)
-    {
+    public SyntaxTree WithChange(TextChange change) {
         var newText = Text.WithChange(change);
 
         // Only a compilation unit keeps the bookkeeping an edit needs.
-        if (Tokens.IsEmpty || Root is not CompilationUnitSyntax)
+        if (Tokens.IsEmpty || Root is not CompilationUnitSyntax) {
             return Parse(newText, Options);
+        }
 
-        var lexResult = IncrementalLexer.Lex(
-            newText, Options, Tokens, Diagnostics, HasDirectives, change);
+        var lexResult = IncrementalLexer.Lex(newText, Options, Tokens, Diagnostics, HasDirectives, change);
 
         var reuse = IncrementalReuse.Build(Root.Green, Tokens, Diagnostics, lexResult);
 
@@ -95,23 +99,33 @@ public sealed class SyntaxTree
         var hasDirectives = HasDirectives || change.NewText.Contains('#');
 
         return Parser.ParseCompilationUnitFrom(
-            newText, Options, lexResult.Tokens, lexResult.Diagnostics, hasDirectives, reuse);
+            newText,
+            Options,
+            lexResult.Tokens,
+            lexResult.Diagnostics,
+            hasDirectives,
+            reuse
+        );
     }
 
     /// <summary>Applies several edits in order.</summary>
-    public SyntaxTree WithChanges(IEnumerable<TextChange> changes)
-    {
+    public SyntaxTree WithChanges(IEnumerable<TextChange> changes) {
         var tree = this;
-        foreach (var change in changes) tree = tree.WithChange(change);
+        foreach (var change in changes) {
+            tree = tree.WithChange(change);
+        }
+
         return tree;
     }
 
-    public bool HasErrors
-    {
-        get
-        {
-            foreach (var diagnostic in Diagnostics)
-                if (diagnostic.Severity == DiagnosticSeverity.Error) return true;
+    public bool HasErrors {
+        get {
+            foreach (var diagnostic in Diagnostics) {
+                if (diagnostic.Severity == DiagnosticSeverity.Error) {
+                    return true;
+                }
+            }
+
             return false;
         }
     }
@@ -121,30 +135,28 @@ public sealed class SyntaxTree
 
     /// <summary>Parses a single expression.</summary>
     public static SyntaxTree ParseExpression(string text, string fileName = "<input>") =>
-        Parser.ParseExpression(new SourceText(text, fileName), ParseOptions.Default);
+        Parser.ParseExpression(new(text, fileName), ParseOptions.Default);
 
     /// <summary>Parses a single type reference.</summary>
     public static SyntaxTree ParseType(string text, string fileName = "<input>") =>
-        Parser.ParseType(new SourceText(text, fileName), ParseOptions.Default);
+        Parser.ParseType(new(text, fileName), ParseOptions.Default);
 
     /// <summary>Parses a single statement, which may be a block.</summary>
     public static SyntaxTree ParseStatement(string text, string fileName = "<input>") =>
-        Parser.ParseStatement(new SourceText(text, fileName), ParseOptions.Default);
+        Parser.ParseStatement(new(text, fileName), ParseOptions.Default);
 
     /// <summary>Parses a whole source file.</summary>
     public static SyntaxTree Parse(string text, string fileName = "<input>") =>
-        Parse(new SourceText(text, fileName), ParseOptions.Default);
+        Parse(new(text, fileName), ParseOptions.Default);
 
     /// <summary>Parses a whole source file from already-loaded text.</summary>
     public static SyntaxTree Parse(SourceText text) => Parse(text, ParseOptions.Default);
 
     /// <summary>Parses a whole source file under the given options.</summary>
-    public static SyntaxTree Parse(SourceText text, ParseOptions options) =>
-        Parser.ParseCompilationUnit(text, options);
+    public static SyntaxTree Parse(SourceText text, ParseOptions options) => Parser.ParseCompilationUnit(text, options);
 
     /// <summary>The whole file, reconstructed from the tree.</summary>
-    public string ToFullString()
-    {
+    public string ToFullString() {
         var builder = new StringBuilder(Text.Length);
         builder.Append(Root.ToFullString());
         builder.Append(_trailingEndOfFile.ToFullString());
@@ -152,6 +164,5 @@ public sealed class SyntaxTree
     }
 
     /// <summary>Renders every diagnostic with its source line and caret.</summary>
-    public string FormatDiagnostics() =>
-        string.Join("\n\n", Diagnostics.Select(d => d.Format(Text)));
+    public string FormatDiagnostics() => string.Join("\n\n", Diagnostics.Select(d => d.Format(Text)));
 }

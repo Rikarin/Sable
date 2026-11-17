@@ -1,2 +1,2 @@
-global using Xunit;
 global using Sable.Syntax;
+global using Xunit;

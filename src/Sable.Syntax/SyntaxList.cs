@@ -4,15 +4,13 @@ using Sable.Syntax.Green;
 namespace Sable.Syntax;
 
 /// <summary>A list of sibling nodes of the same kind.</summary>
-public readonly struct SyntaxList<T> : IReadOnlyList<T> where T : SyntaxNode
-{
-    private readonly GreenList? _green;
-    private readonly SyntaxNode? _parent;
-    private readonly int _position;
-    private readonly int _slotIndex;
+public readonly struct SyntaxList<T> : IReadOnlyList<T> where T : SyntaxNode {
+    readonly GreenList? _green;
+    readonly SyntaxNode? _parent;
+    readonly int _position;
+    readonly int _slotIndex;
 
-    internal SyntaxList(GreenList? green, SyntaxNode? parent, int position, int slotIndex)
-    {
+    internal SyntaxList(GreenList? green, SyntaxNode? parent, int position, int slotIndex) {
         _green = green;
         _parent = parent;
         _position = position;
@@ -21,28 +19,33 @@ public readonly struct SyntaxList<T> : IReadOnlyList<T> where T : SyntaxNode
 
     public int Count => _green?.SlotCount ?? 0;
 
-    public T this[int index]
-    {
-        get
-        {
-            if (_green is null) throw new ArgumentOutOfRangeException(nameof(index));
+    public T this[int index] {
+        get {
+            if (_green is null) {
+                throw new ArgumentOutOfRangeException(nameof(index));
+            }
+
             var offset = _position;
-            for (var i = 0; i < index; i++) offset += _green.Children[i].FullWidth;
+            for (var i = 0; i < index; i++) {
+                offset += _green.Children[i].FullWidth;
+            }
+
             return (T)Materialize(index, offset);
         }
     }
 
-    private SyntaxNode Materialize(int index, int offset) =>
+    SyntaxNode Materialize(int index, int offset) =>
         _parent is null
             ? _green!.Children[index].CreateRed(null, offset)
             : _parent.GetListChild(_slotIndex, index, _green!.Children[index], offset);
 
-    public IEnumerator<T> GetEnumerator()
-    {
-        if (_green is null) yield break;
+    public IEnumerator<T> GetEnumerator() {
+        if (_green is null) {
+            yield break;
+        }
+
         var offset = _position;
-        for (var i = 0; i < _green.Children.Length; i++)
-        {
+        for (var i = 0; i < _green.Children.Length; i++) {
             yield return (T)Materialize(i, offset);
             offset += _green.Children[i].FullWidth;
         }
@@ -52,77 +55,89 @@ public readonly struct SyntaxList<T> : IReadOnlyList<T> where T : SyntaxNode
 }
 
 /// <summary>
-/// A list of nodes interleaved with separator tokens. Items occupy the even
-/// green slots and separators the odd ones, so a list of <c>n</c> items with a
-/// trailing separator has <c>2n</c> slots and one without has <c>2n - 1</c>.
+///     A list of nodes interleaved with separator tokens. Items occupy the even
+///     green slots and separators the odd ones, so a list of <c>n</c> items with a
+///     trailing separator has <c>2n</c> slots and one without has <c>2n - 1</c>.
 /// </summary>
-public readonly struct SeparatedSyntaxList<T> : IReadOnlyList<T> where T : SyntaxNode
-{
-    private readonly GreenList? _green;
-    private readonly SyntaxNode? _parent;
-    private readonly int _position;
-    private readonly int _slotIndex;
+public readonly struct SeparatedSyntaxList<T> : IReadOnlyList<T> where T : SyntaxNode {
+    readonly GreenList? _green;
+    readonly SyntaxNode? _parent;
+    readonly int _position;
+    readonly int _slotIndex;
 
     internal SeparatedSyntaxList(
-        GreenList? green, SyntaxNode? parent, int position, int slotIndex)
-    {
+        GreenList? green,
+        SyntaxNode? parent,
+        int position,
+        int slotIndex
+    ) {
         _green = green;
         _parent = parent;
         _position = position;
         _slotIndex = slotIndex;
     }
 
-    private int SlotCount => _green?.SlotCount ?? 0;
+    int SlotCount => _green?.SlotCount ?? 0;
 
     public int Count => (SlotCount + 1) / 2;
     public int SeparatorCount => SlotCount / 2;
 
-    public T this[int index]
-    {
-        get
-        {
-            if (_green is null) throw new ArgumentOutOfRangeException(nameof(index));
+    public T this[int index] {
+        get {
+            if (_green is null) {
+                throw new ArgumentOutOfRangeException(nameof(index));
+            }
+
             return (T)Materialize(index * 2, OffsetOfSlot(index * 2));
         }
     }
 
-    public SyntaxToken GetSeparator(int index)
-    {
-        if (_green is null) return default;
+    public SyntaxToken GetSeparator(int index) {
+        if (_green is null) {
+            return default;
+        }
+
         var slot = index * 2 + 1;
-        if (slot >= SlotCount) return default;
-        return new SyntaxToken((GreenToken)_green.Children[slot], _parent, OffsetOfSlot(slot));
+        if (slot >= SlotCount) {
+            return default;
+        }
+
+        return new((GreenToken)_green.Children[slot], _parent, OffsetOfSlot(slot));
     }
 
     /// <summary>True when a separator follows the final item.</summary>
     public bool HasTrailingSeparator => SlotCount > 0 && SlotCount % 2 == 0;
 
-    private SyntaxNode Materialize(int index, int offset) =>
+    SyntaxNode Materialize(int index, int offset) =>
         _parent is null
             ? _green!.Children[index].CreateRed(null, offset)
             : _parent.GetListChild(_slotIndex, index, _green!.Children[index], offset);
 
-    private int OffsetOfSlot(int slot)
-    {
+    int OffsetOfSlot(int slot) {
         var offset = _position;
-        for (var i = 0; i < slot; i++) offset += _green!.Children[i].FullWidth;
+        for (var i = 0; i < slot; i++) {
+            offset += _green!.Children[i].FullWidth;
+        }
+
         return offset;
     }
 
-    public IEnumerator<T> GetEnumerator()
-    {
-        for (var i = 0; i < Count; i++) yield return this[i];
+    public IEnumerator<T> GetEnumerator() {
+        for (var i = 0; i < Count; i++) {
+            yield return this[i];
+        }
     }
 
     IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
 
     /// <summary>Items and separators together, in source order.</summary>
-    public IEnumerable<SyntaxNodeOrToken> GetWithSeparators()
-    {
-        if (_green is null) yield break;
+    public IEnumerable<SyntaxNodeOrToken> GetWithSeparators() {
+        if (_green is null) {
+            yield break;
+        }
+
         var offset = _position;
-        for (var i = 0; i < SlotCount; i++)
-        {
+        for (var i = 0; i < SlotCount; i++) {
             var child = _green.Children[i];
             yield return child is GreenToken token
                 ? new SyntaxNodeOrToken(new SyntaxToken(token, _parent, offset))
@@ -133,14 +148,12 @@ public readonly struct SeparatedSyntaxList<T> : IReadOnlyList<T> where T : Synta
 }
 
 /// <summary>A list of tokens, such as a declaration's modifiers.</summary>
-public readonly struct SyntaxTokenList : IReadOnlyList<SyntaxToken>
-{
-    private readonly GreenList? _green;
-    private readonly SyntaxNode? _parent;
-    private readonly int _position;
+public readonly struct SyntaxTokenList : IReadOnlyList<SyntaxToken> {
+    readonly GreenList? _green;
+    readonly SyntaxNode? _parent;
+    readonly int _position;
 
-    internal SyntaxTokenList(GreenList? green, SyntaxNode? parent, int position)
-    {
+    internal SyntaxTokenList(GreenList? green, SyntaxNode? parent, int position) {
         _green = green;
         _parent = parent;
         _position = position;
@@ -148,31 +161,42 @@ public readonly struct SyntaxTokenList : IReadOnlyList<SyntaxToken>
 
     public int Count => _green?.SlotCount ?? 0;
 
-    public SyntaxToken this[int index]
-    {
-        get
-        {
-            if (_green is null) throw new ArgumentOutOfRangeException(nameof(index));
+    public SyntaxToken this[int index] {
+        get {
+            if (_green is null) {
+                throw new ArgumentOutOfRangeException(nameof(index));
+            }
+
             var offset = _position;
-            for (var i = 0; i < index; i++) offset += _green.Children[i].FullWidth;
+            for (var i = 0; i < index; i++) {
+                offset += _green.Children[i].FullWidth;
+            }
+
             return new SyntaxToken((GreenToken)_green.Children[index], _parent, offset);
         }
     }
 
-    public bool Any(SyntaxKind kind)
-    {
-        if (_green is null) return false;
-        foreach (var child in _green.Children)
-            if (child.Kind == kind) return true;
+    public bool Any(SyntaxKind kind) {
+        if (_green is null) {
+            return false;
+        }
+
+        foreach (var child in _green.Children) {
+            if (child.Kind == kind) {
+                return true;
+            }
+        }
+
         return false;
     }
 
-    public IEnumerator<SyntaxToken> GetEnumerator()
-    {
-        if (_green is null) yield break;
+    public IEnumerator<SyntaxToken> GetEnumerator() {
+        if (_green is null) {
+            yield break;
+        }
+
         var offset = _position;
-        foreach (var child in _green.Children)
-        {
+        foreach (var child in _green.Children) {
             yield return new SyntaxToken((GreenToken)child, _parent, offset);
             offset += child.FullWidth;
         }

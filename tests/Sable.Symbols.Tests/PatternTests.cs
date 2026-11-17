@@ -1,41 +1,40 @@
-using Sable.Symbols;
-
 namespace Sable.Symbols.Tests;
 
-public sealed class PatternTests
-{
-    private const string Shapes = """
-        union Shape {
-            Circle(radius: F64)
-            Rect(width: F64, height: F64)
-            Empty
-        }
-        enum Direction { North, South, East, West }
-        """;
+public sealed class PatternTests {
+    const string Shapes = """
+                          union Shape {
+                              Circle(radius: F64)
+                              Rect(width: F64, height: F64)
+                              Empty
+                          }
+                          enum Direction { North, South, East, West }
+                          """;
 
-    private static IReadOnlyList<Diagnostic> ErrorsIn(string body, string extra = Shapes)
-    {
+    static IReadOnlyList<Diagnostic> ErrorsIn(string body, string extra = Shapes) {
         var source = TestSource.Probe(body, extra);
         var compilation = Compilation.Create(source);
-        return [.. compilation.GetAllDiagnostics()
-            .Where(d => d.Severity == DiagnosticSeverity.Error)];
+        return [
+            ..compilation.GetAllDiagnostics()
+                .Where(static d => d.Severity == DiagnosticSeverity.Error)
+        ];
     }
 
-    private static void AssertClean(string body, string extra = Shapes)
-    {
+    static void AssertClean(string body, string extra = Shapes) {
         var errors = ErrorsIn(body, extra);
-        Assert.True(errors.Count == 0,
-            string.Join("\n", errors.Select(e => $"{e.Id}: {e.Message} {e.Span}")));
+        Assert.True(
+            errors.Count == 0,
+            string.Join("\n", errors.Select(static e => $"{e.Id}: {e.Message} {e.Span}"))
+        );
     }
 
-    private static string TypeOfMatch(string body, string extra = Shapes)
-    {
+    static string TypeOfMatch(string body, string extra = Shapes) {
         var source = TestSource.Probe(body, extra);
         var compilation = Compilation.Create(source);
 
         var errors = compilation.GetAllDiagnostics()
-            .Where(d => d.Severity == DiagnosticSeverity.Error).ToList();
-        Assert.True(errors.Count == 0, string.Join("\n", errors.Select(e => e.Message)));
+            .Where(static d => d.Severity == DiagnosticSeverity.Error)
+            .ToList();
+        Assert.True(errors.Count == 0, string.Join("\n", errors.Select(static e => e.Message)));
 
         var tree = compilation.SyntaxTrees[0];
         var model = compilation.GetSemanticModel(tree);
@@ -47,28 +46,33 @@ public sealed class PatternTests
 
     [Fact]
     public void BindsUnionCasePatternsAndTheirPayloads() =>
-        AssertClean("""
+        AssertClean(
+            """
             let s: Shape
             match s {
                 case .Circle(let r) => { let x: F64 = r }
                 case .Rect(let w, let h) => { let y: F64 = w + h }
                 case .Empty => { }
             }
-            """);
+            """
+        );
 
     [Fact]
     public void BindsWildcardAndBindingPatterns() =>
-        AssertClean("""
+        AssertClean(
+            """
             let s: Shape
             match s {
                 case .Circle(_) => { }
                 default => { }
             }
-            """);
+            """
+        );
 
     [Fact]
     public void BindsLiteralAndRangePatterns() =>
-        AssertClean("""
+        AssertClean(
+            """
             let n = 5
             match n {
                 case 0 => { }
@@ -76,63 +80,75 @@ public sealed class PatternTests
                 case -1 => { }
                 default => { }
             }
-            """);
+            """
+        );
 
     [Fact]
     public void BindsTuplePatterns() =>
-        AssertClean("""
+        AssertClean(
+            """
             let p = (1, "s")
             match p {
                 case (0, _) => { }
                 case (let a, let b) => { let x: Int = a
                     let y: String = b }
             }
-            """);
+            """
+        );
 
     [Fact]
     public void BindsOrPatterns() =>
-        AssertClean("""
+        AssertClean(
+            """
             let s: Shape
             match s {
                 case .Circle(_) | .Empty => { }
                 case .Rect(_, _) => { }
             }
-            """);
+            """
+        );
 
     [Fact]
     public void BindsTypeTestPatterns() =>
-        AssertClean("""
+        AssertClean(
+            """
             let s: Shape
             match s {
                 case is Shape => { }
                 default => { }
             }
-            """);
+            """
+        );
 
     [Fact]
     public void BindsRecordPatterns() =>
-        AssertClean("""
+        AssertClean(
+            """
             let p: Point
             match p {
                 case Point { x: 0, y: let y } => { let a: Int = y }
                 default => { }
             }
             """,
-            "struct Point { var x: Int\n var y: Int }");
+            "struct Point { var x: Int\n var y: Int }"
+        );
 
     [Fact]
     public void BindsArrayPatterns() =>
-        AssertClean("""
+        AssertClean(
+            """
             let xs = [1, 2, 3]
             match xs {
                 case [let first, ...let rest] => { let a: Int = first }
                 default => { }
             }
-            """);
+            """
+        );
 
     [Fact]
     public void BindsEnumCasePatterns() =>
-        AssertClean("""
+        AssertClean(
+            """
             let d: Direction
             match d {
                 case .North => { }
@@ -140,186 +156,245 @@ public sealed class PatternTests
                 case .East => { }
                 case .West => { }
             }
-            """);
+            """
+        );
 
     // ---- Errors in patterns -------------------------------------------------
 
     [Fact]
     public void AnUnknownCaseIsReported() =>
-        Assert.Contains(ErrorsIn("""
-            let s: Shape
-            match s {
-                case .Triangle => { }
-                default => { }
-            }
-            """), e => e.Code == ErrorCode.ERR_UnknownUnionCase);
+        Assert.Contains(
+            ErrorsIn(
+                """
+                let s: Shape
+                match s {
+                    case .Triangle => { }
+                    default => { }
+                }
+                """
+            ),
+            static e => e.Code == ErrorCode.ERR_UnknownUnionCase
+        );
 
     [Fact]
     public void TheWrongPayloadCountIsReported() =>
-        Assert.Contains(ErrorsIn("""
-            let s: Shape
-            match s {
-                case .Rect(let w) => { }
-                default => { }
-            }
-            """), e => e.Code == ErrorCode.ERR_WrongPayloadCount);
+        Assert.Contains(
+            ErrorsIn(
+                """
+                let s: Shape
+                match s {
+                    case .Rect(let w) => { }
+                    default => { }
+                }
+                """
+            ),
+            static e => e.Code == ErrorCode.ERR_WrongPayloadCount
+        );
 
     [Fact]
     public void AMistypedLiteralPatternIsReported() =>
-        Assert.Contains(ErrorsIn("""
-            let s: Shape
-            match s {
-                case 1 => { }
-                default => { }
-            }
-            """), e => e.Code == ErrorCode.ERR_PatternTypeMismatch);
+        Assert.Contains(
+            ErrorsIn(
+                """
+                let s: Shape
+                match s {
+                    case 1 => { }
+                    default => { }
+                }
+                """
+            ),
+            static e => e.Code == ErrorCode.ERR_PatternTypeMismatch
+        );
 
     // ---- Exhaustiveness -----------------------------------------------------
 
     [Fact]
-    public void AMissingUnionCaseIsReported()
-    {
-        var error = Assert.Single(ErrorsIn("""
-            let s: Shape
-            match s {
-                case .Circle(_) => { }
-                case .Rect(_, _) => { }
-            }
-            """), e => e.Code == ErrorCode.ERR_MatchNotExhaustive);
+    public void AMissingUnionCaseIsReported() {
+        var error = Assert.Single(
+            ErrorsIn(
+                """
+                let s: Shape
+                match s {
+                    case .Circle(_) => { }
+                    case .Rect(_, _) => { }
+                }
+                """
+            ),
+            static e => e.Code == ErrorCode.ERR_MatchNotExhaustive
+        );
 
         Assert.Contains("Empty", error.Message, StringComparison.Ordinal);
     }
 
     [Fact]
     public void CoveringEveryCaseIsExhaustive() =>
-        AssertClean("""
+        AssertClean(
+            """
             let s: Shape
             match s {
                 case .Circle(_) => { }
                 case .Rect(_, _) => { }
                 case .Empty => { }
             }
-            """);
+            """
+        );
 
     [Fact]
     public void ADefaultMakesAMatchExhaustive() =>
-        AssertClean("""
+        AssertClean(
+            """
             let s: Shape
             match s {
                 case .Circle(_) => { }
                 default => { }
             }
-            """);
+            """
+        );
 
     [Fact]
     public void AGuardedArmDoesNotCount() =>
-        Assert.Contains(ErrorsIn("""
-            let s: Shape
-            match s {
-                case .Circle(_) => { }
-                case .Rect(_, _) => { }
-                case .Empty where true => { }
-            }
-            """), e => e.Code == ErrorCode.ERR_MatchNotExhaustive);
+        Assert.Contains(
+            ErrorsIn(
+                """
+                let s: Shape
+                match s {
+                    case .Circle(_) => { }
+                    case .Rect(_, _) => { }
+                    case .Empty where true => { }
+                }
+                """
+            ),
+            static e => e.Code == ErrorCode.ERR_MatchNotExhaustive
+        );
 
     [Fact]
-    public void AMissingEnumCaseIsReported()
-    {
-        var error = Assert.Single(ErrorsIn("""
-            let d: Direction
-            match d {
-                case .North => { }
-                case .South => { }
-            }
-            """), e => e.Code == ErrorCode.ERR_MatchNotExhaustive);
+    public void AMissingEnumCaseIsReported() {
+        var error = Assert.Single(
+            ErrorsIn(
+                """
+                let d: Direction
+                match d {
+                    case .North => { }
+                    case .South => { }
+                }
+                """
+            ),
+            static e => e.Code == ErrorCode.ERR_MatchNotExhaustive
+        );
 
         Assert.Contains("East", error.Message, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void BooleansAreExhaustedByBothValues()
-    {
-        AssertClean("""
+    public void BooleansAreExhaustedByBothValues() {
+        AssertClean(
+            """
             let b = true
             match b {
                 case true => { }
                 case false => { }
             }
-            """);
+            """
+        );
 
-        Assert.Contains(ErrorsIn("""
-            let b = true
-            match b {
-                case true => { }
-            }
-            """), e => e.Code == ErrorCode.ERR_MatchNotExhaustive);
+        Assert.Contains(
+            ErrorsIn(
+                """
+                let b = true
+                match b {
+                    case true => { }
+                }
+                """
+            ),
+            static e => e.Code == ErrorCode.ERR_MatchNotExhaustive
+        );
     }
 
     [Fact]
     public void MatchingAnOpenTypeNeedsADefault() =>
-        Assert.Contains(ErrorsIn("""
-            let n = 1
-            match n {
-                case 0 => { }
-                case 1 => { }
-            }
-            """), e => e.Code == ErrorCode.ERR_MatchNotExhaustive);
+        Assert.Contains(
+            ErrorsIn(
+                """
+                let n = 1
+                match n {
+                    case 0 => { }
+                    case 1 => { }
+                }
+                """
+            ),
+            static e => e.Code == ErrorCode.ERR_MatchNotExhaustive
+        );
 
     // ---- match as an expression ---------------------------------------------
 
     [Fact]
     public void MatchHasTheTypeOfItsArms() =>
-        Assert.Equal("F64", TypeOfMatch("""
-            let s: Shape
-            let area = match s {
-                case .Circle(let r) => r
-                case .Rect(let w, let h) => w * h
-                case .Empty => 0.0
-            }
-            """));
+        Assert.Equal(
+            "F64",
+            TypeOfMatch(
+                """
+                let s: Shape
+                let area = match s {
+                    case .Circle(let r) => r
+                    case .Rect(let w, let h) => w * h
+                    case .Empty => 0.0
+                }
+                """
+            )
+        );
 
     [Fact]
     public void ArmsWithDifferentTypesAreReported() =>
-        Assert.Contains(ErrorsIn("""
-            let s: Shape
-            let v = match s {
-                case .Circle(_) => 1
-                case .Rect(_, _) => "s"
-                case .Empty => 0
-            }
-            """), e => e.Code == ErrorCode.ERR_MatchArmTypesDiffer);
+        Assert.Contains(
+            ErrorsIn(
+                """
+                let s: Shape
+                let v = match s {
+                    case .Circle(_) => 1
+                    case .Rect(_, _) => "s"
+                    case .Empty => 0
+                }
+                """
+            ),
+            static e => e.Code == ErrorCode.ERR_MatchArmTypesDiffer
+        );
 
     [Fact]
     public void BindsIfCasePatterns() =>
-        AssertClean("""
+        AssertClean(
+            """
             let s: Shape
             if case .Circle(let r) = s {
                 let x: F64 = r
             }
-            """);
+            """
+        );
 
     // ---- Flow ----------------------------------------------------------------
 
     [Fact]
-    public void NotAllPathsReturningIsReported()
-    {
-        var compilation = Compilation.Create("""
+    public void NotAllPathsReturningIsReported() {
+        var compilation = Compilation.Create(
+            """
             module M
             fn f(_ b: Bool) -> Int {
                 if b {
                     return 1
                 }
             }
-            """);
+            """
+        );
 
-        Assert.Contains(compilation.GetAllDiagnostics(),
-            e => e.Code == ErrorCode.ERR_NotAllPathsReturn);
+        Assert.Contains(
+            compilation.GetAllDiagnostics(),
+            static e => e.Code == ErrorCode.ERR_NotAllPathsReturn
+        );
     }
 
     [Fact]
-    public void BothBranchesReturningIsEnough()
-    {
-        var compilation = Compilation.Create("""
+    public void BothBranchesReturningIsEnough() {
+        var compilation = Compilation.Create(
+            """
             module M
             fn f(_ b: Bool) -> Int {
                 if b {
@@ -328,16 +403,19 @@ public sealed class PatternTests
                     return 2
                 }
             }
-            """);
+            """
+        );
 
-        Assert.DoesNotContain(compilation.GetAllDiagnostics(),
-            e => e.Code == ErrorCode.ERR_NotAllPathsReturn);
+        Assert.DoesNotContain(
+            compilation.GetAllDiagnostics(),
+            static e => e.Code == ErrorCode.ERR_NotAllPathsReturn
+        );
     }
 
     [Fact]
-    public void AThrowCountsAsAnExit()
-    {
-        var compilation = Compilation.Create("""
+    public void AThrowCountsAsAnExit() {
+        var compilation = Compilation.Create(
+            """
             module M
             union E { Bad }
             fn f(_ b: Bool) -> Int {
@@ -347,75 +425,90 @@ public sealed class PatternTests
                     throw E.Bad
                 }
             }
-            """);
+            """
+        );
 
-        Assert.DoesNotContain(compilation.GetAllDiagnostics(),
-            e => e.Code == ErrorCode.ERR_NotAllPathsReturn);
+        Assert.DoesNotContain(
+            compilation.GetAllDiagnostics(),
+            static e => e.Code == ErrorCode.ERR_NotAllPathsReturn
+        );
     }
 
     [Fact]
-    public void AnExhaustiveMatchCountsAsAnExit()
-    {
-        var compilation = Compilation.Create($$"""
-            module M
-            {{Shapes}}
-            fn f(_ s: Shape) -> Int {
-                match s {
-                    case .Circle(_) => { return 1 }
-                    case .Rect(_, _) => { return 2 }
-                    case .Empty => { return 3 }
-                }
-            }
-            """);
+    public void AnExhaustiveMatchCountsAsAnExit() {
+        var compilation = Compilation.Create(
+            $$"""
+              module M
+              {{Shapes}}
+              fn f(_ s: Shape) -> Int {
+                  match s {
+                      case .Circle(_) => { return 1 }
+                      case .Rect(_, _) => { return 2 }
+                      case .Empty => { return 3 }
+                  }
+              }
+              """
+        );
 
-        Assert.DoesNotContain(compilation.GetAllDiagnostics(),
-            e => e.Code == ErrorCode.ERR_NotAllPathsReturn);
+        Assert.DoesNotContain(
+            compilation.GetAllDiagnostics(),
+            static e => e.Code == ErrorCode.ERR_NotAllPathsReturn
+        );
     }
 
     [Fact]
-    public void WhileTrueCountsAsAnExit()
-    {
-        var compilation = Compilation.Create("""
+    public void WhileTrueCountsAsAnExit() {
+        var compilation = Compilation.Create(
+            """
             module M
             fn f() -> Int {
                 while true {
                     let x = 1
                 }
             }
-            """);
+            """
+        );
 
-        Assert.DoesNotContain(compilation.GetAllDiagnostics(),
-            e => e.Code == ErrorCode.ERR_NotAllPathsReturn);
+        Assert.DoesNotContain(
+            compilation.GetAllDiagnostics(),
+            static e => e.Code == ErrorCode.ERR_NotAllPathsReturn
+        );
     }
 
     [Fact]
-    public void WhileTrueWithABreakDoesNotCount()
-    {
-        var compilation = Compilation.Create("""
+    public void WhileTrueWithABreakDoesNotCount() {
+        var compilation = Compilation.Create(
+            """
             module M
             fn f() -> Int {
                 while true {
                     break
                 }
             }
-            """);
+            """
+        );
 
-        Assert.Contains(compilation.GetAllDiagnostics(),
-            e => e.Code == ErrorCode.ERR_NotAllPathsReturn);
+        Assert.Contains(
+            compilation.GetAllDiagnostics(),
+            static e => e.Code == ErrorCode.ERR_NotAllPathsReturn
+        );
     }
 
     [Fact]
-    public void UnreachableCodeIsWarned()
-    {
-        var compilation = Compilation.Create("""
+    public void UnreachableCodeIsWarned() {
+        var compilation = Compilation.Create(
+            """
             module M
             fn f() -> Int {
                 return 1
                 let x = 2
             }
-            """);
+            """
+        );
 
-        Assert.Contains(compilation.GetAllDiagnostics(),
-            e => e.Code == ErrorCode.WRN_UnreachableCode);
+        Assert.Contains(
+            compilation.GetAllDiagnostics(),
+            static e => e.Code == ErrorCode.WRN_UnreachableCode
+        );
     }
 }

@@ -3,18 +3,16 @@ using System.Collections.Immutable;
 namespace Sable.Symbols;
 
 /// <summary>
-/// The built-in types, synthesised into a <c>Sable.Core</c> module that every
-/// file sees without importing it.
+///     The built-in types, synthesised into a <c>Sable.Core</c> module that every
+///     file sees without importing it.
 /// </summary>
 /// <remarks>
-/// docs/06 has these written in Sable once the standard library exists. Until
-/// then the compiler supplies them, so that type binding has something to bind
-/// to; replacing this with a real <c>Sable.Core</c> changes nothing above it.
+///     docs/06 has these written in Sable once the standard library exists. Until
+///     then the compiler supplies them, so that type binding has something to bind
+///     to; replacing this with a real <c>Sable.Core</c> changes nothing above it.
 /// </remarks>
-public sealed class CoreTypes
-{
-    internal CoreTypes(ModuleSymbol module)
-    {
+public sealed class CoreTypes {
+    internal CoreTypes(ModuleSymbol module) {
         Module = module;
 
         Bool = Primitive("Bool");
@@ -44,8 +42,7 @@ public sealed class CoreTypes
 
         // Every thrown value conforms to Error; bare 'throws' means
         // 'throws(any Error)', per SYNTAX.md §18.
-        Error = new NamedTypeSymbol(
-            "Error", TypeKind.Protocol, Module, accessibility: Accessibility.Public);
+        Error = new("Error", TypeKind.Protocol, Module, accessibility: Accessibility.Public);
         Module.AddMember(Error);
         AnyError = new ExistentialTypeSymbol(Error);
 
@@ -59,7 +56,7 @@ public sealed class CoreTypes
 
         Integers = [I8, I16, I32, I64, I128, Int, U8, U16, U32, U64, U128, UInt];
         Floats = [F16, F32, F64];
-        Numerics = [.. Integers, .. Floats];
+        Numerics = [..Integers, ..Floats];
 
         DeclarePrimitiveMembers();
     }
@@ -69,18 +66,17 @@ public sealed class CoreTypes
     // -----------------------------------------------------------------------
 
     /// <summary>
-    /// Gives the built-in types the small surface a real program needs.
+    ///     Gives the built-in types the small surface a real program needs.
     /// </summary>
     /// <remarks>
-    /// docs/06 §6.4 puts String, the array family and the core protocols in a
-    /// <c>Sable.Core</c> written in Sable. Until that exists the compiler
-    /// supplies the handful of members that nothing can be written without —
-    /// enough to write a parser against the type checker, which is the
-    /// go/no-go in docs/04 §1.4. Replacing this with the real module changes
-    /// nothing above it.
+    ///     docs/06 §6.4 puts String, the array family and the core protocols in a
+    ///     <c>Sable.Core</c> written in Sable. Until that exists the compiler
+    ///     supplies the handful of members that nothing can be written without —
+    ///     enough to write a parser against the type checker, which is the
+    ///     go/no-go in docs/04 §1.4. Replacing this with the real module changes
+    ///     nothing above it.
     /// </remarks>
-    private void DeclarePrimitiveMembers()
-    {
+    void DeclarePrimitiveMembers() {
         Property(String, "count", Int);
         Property(String, "isEmpty", Bool);
         Method(String, "at", [("index", Int)], Char);
@@ -89,9 +85,13 @@ public sealed class CoreTypes
         Method(String, "contains", [("character", Char)], Bool);
         Method(String, "indexOf", [("character", Char)], new OptionalTypeSymbol(Int));
         Method(String, "trimmed", [], String);
-        Method(String, "split", [("separator", Char)],
-            new ArrayTypeSymbol(String, ArrayKind.Grow));
-        Method(String, "fromChar", [("character", Char)], String, isStatic: true);
+        Method(
+            String,
+            "split",
+            [("separator", Char)],
+            new ArrayTypeSymbol(String, ArrayKind.Grow)
+        );
+        Method(String, "fromChar", [("character", Char)], String, true);
 
         Property(Range, "lowerBound", Range.TypeParameters[0]);
         Property(Range, "upperBound", Range.TypeParameters[0]);
@@ -102,16 +102,16 @@ public sealed class CoreTypes
         Property(Char, "isWhitespace", Bool);
         Property(Char, "code", U32);
 
-        foreach (var numeric in Numerics)
-        {
+        foreach (var numeric in Numerics) {
             Method(numeric, "toString", [], String);
             Method(numeric, "abs", [], numeric);
             Method(numeric, "min", [("other", numeric)], numeric);
             Method(numeric, "max", [("other", numeric)], numeric);
         }
 
-        foreach (var integer in Integers)
+        foreach (var integer in Integers) {
             Method(String, "to" + integer.Name, [], new OptionalTypeSymbol(integer));
+        }
 
         Method(String, "toF64", [], new OptionalTypeSymbol(F64));
         Method(Bool, "toString", [], String);
@@ -119,25 +119,32 @@ public sealed class CoreTypes
 
     /// <summary>The members every array has, built for one element type.</summary>
     /// <remarks>
-    /// An array is not a named type, so its members cannot live in a member
-    /// list; they are built on demand and cached per array type.
+    ///     An array is not a named type, so its members cannot live in a member
+    ///     list; they are built on demand and cached per array type.
     /// </remarks>
-    public IReadOnlyList<Symbol> GetArrayMembers(ArrayTypeSymbol array)
-    {
-        if (_arrayMembers.TryGetValue(array, out var cached)) return cached;
+    public IReadOnlyList<Symbol> GetArrayMembers(ArrayTypeSymbol array) {
+        if (_arrayMembers.TryGetValue(array, out var cached)) {
+            return cached;
+        }
 
         var owner = new NamedTypeSymbol(
-            array.ToDisplayString(), TypeKind.Struct, Module,
-            accessibility: Accessibility.Public);
+            array.ToDisplayString(),
+            TypeKind.Struct,
+            Module,
+            accessibility: Accessibility.Public
+        );
 
         Property(owner, "count", Int);
         Property(owner, "isEmpty", Bool);
         Method(owner, "contains", [("element", array.ElementType)], Bool);
-        Method(owner, "slice", [("from", Int), ("to", Int)],
-            new ArrayTypeSymbol(array.ElementType, ArrayKind.Slice));
+        Method(
+            owner,
+            "slice",
+            [("from", Int), ("to", Int)],
+            new ArrayTypeSymbol(array.ElementType, ArrayKind.Slice)
+        );
 
-        if (array.ArrayKind is ArrayKind.Grow or ArrayKind.GrowShrink)
-        {
+        if (array.ArrayKind is ArrayKind.Grow or ArrayKind.GrowShrink) {
             Method(owner, "append", [("element", array.ElementType)], Void);
             Method(owner, "removeLast", [], array.ElementType);
             Method(owner, "clear", [], Void);
@@ -148,40 +155,34 @@ public sealed class CoreTypes
         return members;
     }
 
-    private readonly Dictionary<ArrayTypeSymbol, IReadOnlyList<Symbol>> _arrayMembers = [];
+    readonly Dictionary<ArrayTypeSymbol, IReadOnlyList<Symbol>> _arrayMembers = [];
 
-    private static void Property(NamedTypeSymbol owner, string name, TypeSymbol type)
-    {
-        var field = new FieldSymbol(name, owner, null, Accessibility.Public, isMutable: false)
-        {
-            IsComputed = true,
-            TypeResolver = () => type,
+    static void Property(NamedTypeSymbol owner, string name, TypeSymbol type) {
+        var field = new FieldSymbol(name, owner, null, Accessibility.Public, false) {
+            IsComputed = true, TypeResolver = () => type
         };
         owner.AddMember(field);
     }
 
-    private static void Method(
+    static void Method(
         NamedTypeSymbol owner,
         string name,
         (string Name, TypeSymbol Type)[] parameters,
         TypeSymbol returnType,
-        bool isStatic = false)
-    {
-        var function = new FunctionSymbol(
-            name, owner, null, Accessibility.Public, FunctionKind.Ordinary)
-        {
-            IsStatic = isStatic,
+        bool isStatic = false
+    ) {
+        var function = new FunctionSymbol(name, owner, null, Accessibility.Public, FunctionKind.Ordinary) {
+            IsStatic = isStatic
         };
 
-        function.Parameters =
-        [
-            .. parameters.Select((parameter, i) =>
-            {
-                // No declared label, so the name may be written or left out.
-                var symbol = new ParameterSymbol(parameter.Name, null, function, null, i);
-                symbol.TypeResolver = () => parameter.Type;
-                return symbol;
-            }),
+        function.Parameters = [
+            ..parameters.Select((parameter, i) => {
+                    // No declared label, so the name may be written or left out.
+                    var symbol = new ParameterSymbol(parameter.Name, null, function, null, i);
+                    symbol.TypeResolver = () => parameter.Type;
+                    return symbol;
+                }
+            )
         ];
 
         function.ReturnTypeResolver = () => returnType;
@@ -227,24 +228,21 @@ public sealed class CoreTypes
     public bool IsNumeric(TypeSymbol type) => Numerics.Any(n => n.Equals(type));
     public bool IsInteger(TypeSymbol type) => Integers.Any(n => n.Equals(type));
 
-    private NamedTypeSymbol Primitive(string name)
-    {
-        var type = new NamedTypeSymbol(
-            name, TypeKind.Builtin, Module, accessibility: Accessibility.Public);
+    NamedTypeSymbol Primitive(string name) {
+        var type = new NamedTypeSymbol(name, TypeKind.Builtin, Module, accessibility: Accessibility.Public);
         Module.AddMember(type);
         return type;
     }
 
-    private NamedTypeSymbol DeclareGeneric(
-        string name, TypeKind typeKind, params string[] typeParameterNames)
-    {
-        var type = new NamedTypeSymbol(
-            name, typeKind, Module, accessibility: Accessibility.Public);
+    NamedTypeSymbol DeclareGeneric(
+        string name,
+        TypeKind typeKind,
+        params string[] typeParameterNames
+    ) {
+        var type = new NamedTypeSymbol(name, typeKind, Module, accessibility: Accessibility.Public);
 
-        type.TypeParameters =
-        [
-            .. typeParameterNames.Select(
-                (parameterName, i) => new TypeParameterSymbol(parameterName, type, null, i)),
+        type.TypeParameters = [
+            ..typeParameterNames.Select((parameterName, i) => new TypeParameterSymbol(parameterName, type, null, i))
         ];
 
         Module.AddMember(type);

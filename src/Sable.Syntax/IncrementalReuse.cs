@@ -4,8 +4,7 @@ using Sable.Syntax.Green;
 namespace Sable.Syntax;
 
 /// <summary>Which member list a node came out of.</summary>
-internal enum MemberContext
-{
+internal enum MemberContext {
     /// <summary>A compilation unit or an ordinary type body.</summary>
     Declaration,
 
@@ -13,34 +12,35 @@ internal enum MemberContext
     Union,
 
     /// <summary>An enum body, where a bare identifier is a case.</summary>
-    Enum,
+    Enum
 }
 
 /// <summary>
-/// The green nodes an incremental parse may reuse, keyed by the token index
-/// they start at in the new stream.
+///     The green nodes an incremental parse may reuse, keyed by the token index
+///     they start at in the new stream.
 /// </summary>
 /// <remarks>
-/// <para>Reuse is only offered for whole members. A member is a self-contained
-/// parse — its result does not depend on anything around it — so dropping its
-/// old green node straight into the new tree gives exactly what reparsing it
-/// would have given, for free.</para>
-/// <para>The context is recorded because a union body and a type body read a
-/// bare identifier differently; a node is only offered back to the same kind
-/// of member list it came from.</para>
+///     <para>
+///         Reuse is only offered for whole members. A member is a self-contained
+///         parse — its result does not depend on anything around it — so dropping its
+///         old green node straight into the new tree gives exactly what reparsing it
+///         would have given, for free.
+///     </para>
+///     <para>
+///         The context is recorded because a union body and a type body read a
+///         bare identifier differently; a node is only offered back to the same kind
+///         of member list it came from.
+///     </para>
 /// </remarks>
-internal sealed class IncrementalReuse
-{
-    private readonly Dictionary<int, Entry> _entries = [];
+internal sealed class IncrementalReuse {
+    readonly Dictionary<int, Entry> _entries = [];
 
     private readonly record struct Entry(GreenNode Node, int TokenCount, MemberContext Context);
 
     public int Count => _entries.Count;
 
-    public bool TryGet(int tokenIndex, MemberContext context, out GreenNode node, out int tokenCount)
-    {
-        if (_entries.TryGetValue(tokenIndex, out var entry) && entry.Context == context)
-        {
+    public bool TryGet(int tokenIndex, MemberContext context, out GreenNode node, out int tokenCount) {
+        if (_entries.TryGetValue(tokenIndex, out var entry) && entry.Context == context) {
             node = entry.Node;
             tokenCount = entry.TokenCount;
             return true;
@@ -52,106 +52,137 @@ internal sealed class IncrementalReuse
     }
 
     /// <summary>
-    /// Collects the members of an old tree that survive an edit, translating
-    /// their old token indices into new ones.
+    ///     Collects the members of an old tree that survive an edit, translating
+    ///     their old token indices into new ones.
     /// </summary>
-    private int _cursor;
+    int _cursor;
 
-    private int[] _diagnosticPositions = [];
+    int[] _diagnosticPositions = [];
 
     public static IncrementalReuse Build(
         GreenNode oldRoot,
         ImmutableArray<GreenToken> oldTokens,
         IReadOnlyList<Diagnostic> oldDiagnostics,
-        in IncrementalLexResult lexResult)
-    {
-        var reuse = new IncrementalReuse
-        {
+        in IncrementalLexResult lexResult
+    ) {
+        var reuse = new IncrementalReuse {
             // Members that produced a diagnostic are never reused, so that the
             // parser's diagnostics can simply be regenerated.
-            _diagnosticPositions = [.. oldDiagnostics
-                .Where(d => (int)d.Code >= 1000)
-                .Select(d => d.Span.Start)
-                .Order()],
+            _diagnosticPositions = [
+                ..oldDiagnostics
+                    .Where(static d => (int)d.Code >= 1000)
+                    .Select(static d => d.Span.Start)
+                    .Order()
+            ]
         };
 
-        reuse.Collect(oldRoot, 0, MemberContext.Declaration, lexResult.OldPositions,
+        reuse.Collect(
+            oldRoot,
+            0,
+            MemberContext.Declaration,
+            lexResult.OldPositions,
             lexResult.ReusedPrefixCount,
             lexResult.OldSuffixStartIndex,
-            lexResult.NewSuffixStartIndex);
+            lexResult.NewSuffixStartIndex
+        );
 
         return reuse;
     }
 
     /// <summary>
-    /// Moves the cursor to a position and returns its token index, or -1 when
-    /// no token starts exactly there. The traversal is in source order, so the
-    /// cursor only ever moves forward.
+    ///     Moves the cursor to a position and returns its token index, or -1 when
+    ///     no token starts exactly there. The traversal is in source order, so the
+    ///     cursor only ever moves forward.
     /// </summary>
-    private int Advance(int[] positions, int position)
-    {
-        while (_cursor < positions.Length && positions[_cursor] < position) _cursor++;
+    int Advance(int[] positions, int position) {
+        while (_cursor < positions.Length && positions[_cursor] < position) {
+            _cursor++;
+        }
+
         return _cursor < positions.Length && positions[_cursor] == position ? _cursor : -1;
     }
 
-    private void Collect(
+    void Collect(
         GreenNode node,
         int position,
         MemberContext context,
         int[] positions,
         int prefixCount,
         int oldSuffixStart,
-        int newSuffixStart)
-    {
+        int newSuffixStart
+    ) {
         var offset = position;
 
-        for (var i = 0; i < node.SlotCount; i++)
-        {
+        for (var i = 0; i < node.SlotCount; i++) {
             var slot = node.GetSlot(i);
-            if (slot is null) continue;
+            if (slot is null) {
+                continue;
+            }
 
-            if (slot is GreenList list && IsMemberList(list))
-            {
+            if (slot is GreenList list && IsMemberList(list)) {
                 var childOffset = offset;
                 var childContext = ContextOf(node.Kind);
 
-                foreach (var child in list.Children)
-                {
+                foreach (var child in list.Children) {
                     var startIndex = Advance(positions, childOffset);
 
                     // Nested members are recorded while the cursor is inside
                     // this child, before it moves on to the child's end.
-                    Collect(child, childOffset, childContext, positions,
-                        prefixCount, oldSuffixStart, newSuffixStart);
+                    Collect(
+                        child,
+                        childOffset,
+                        childContext,
+                        positions,
+                        prefixCount,
+                        oldSuffixStart,
+                        newSuffixStart
+                    );
 
                     var endIndex = Advance(positions, childOffset + child.FullWidth);
 
-                    Record(child, childOffset, startIndex, endIndex, childContext,
-                        prefixCount, oldSuffixStart, newSuffixStart);
+                    Record(
+                        child,
+                        childOffset,
+                        startIndex,
+                        endIndex,
+                        childContext,
+                        prefixCount,
+                        oldSuffixStart,
+                        newSuffixStart
+                    );
 
                     childOffset += child.FullWidth;
                 }
-            }
-            else if (IsDeclarationLike(slot.Kind))
-            {
-                Collect(slot, offset, context, positions,
-                    prefixCount, oldSuffixStart, newSuffixStart);
+            } else if (IsDeclarationLike(slot.Kind)) {
+                Collect(
+                    slot,
+                    offset,
+                    context,
+                    positions,
+                    prefixCount,
+                    oldSuffixStart,
+                    newSuffixStart
+                );
             }
 
             offset += slot.FullWidth;
         }
     }
 
-    private bool HasDiagnosticIn(int start, int end)
-    {
-        if (_diagnosticPositions.Length == 0) return false;
+    bool HasDiagnosticIn(int start, int end) {
+        if (_diagnosticPositions.Length == 0) {
+            return false;
+        }
 
         var index = Array.BinarySearch(_diagnosticPositions, start);
-        if (index < 0) index = ~index;
+        if (index < 0) {
+            index = ~index;
+        }
+
         return index < _diagnosticPositions.Length && _diagnosticPositions[index] < end;
     }
 
-    private void Record(
+    void Record(
         GreenNode child,
         int childPosition,
         int startIndex,
@@ -159,67 +190,81 @@ internal sealed class IncrementalReuse
         MemberContext context,
         int prefixCount,
         int oldSuffixStart,
-        int newSuffixStart)
-    {
-        if (child.FullWidth == 0) return;
-        if (startIndex < 0 || endIndex < 0 || endIndex <= startIndex) return;
-        if (HasDiagnosticIn(childPosition, childPosition + child.FullWidth)) return;
+        int newSuffixStart
+    ) {
+        if (child.FullWidth == 0) {
+            return;
+        }
+
+        if (startIndex < 0 || endIndex < 0 || endIndex <= startIndex) {
+            return;
+        }
+
+        if (HasDiagnosticIn(childPosition, childPosition + child.FullWidth)) {
+            return;
+        }
 
         var tokenCount = endIndex - startIndex;
 
         // Entirely inside the untouched prefix: indices are unchanged.
-        if (endIndex <= prefixCount)
-        {
-            _entries[startIndex] = new Entry(child, tokenCount, context);
+        if (endIndex <= prefixCount) {
+            _entries[startIndex] = new(child, tokenCount, context);
             return;
         }
 
         // Entirely inside the reused suffix: shift into new-stream indices.
-        if (startIndex >= oldSuffixStart)
-        {
+        if (startIndex >= oldSuffixStart) {
             var newStart = startIndex - oldSuffixStart + newSuffixStart;
-            _entries[newStart] = new Entry(child, tokenCount, context);
+            _entries[newStart] = new(child, tokenCount, context);
         }
     }
 
-    private static bool IsMemberList(GreenList list)
-    {
-        if (list.SlotCount == 0) return false;
+    static bool IsMemberList(GreenList list) {
+        if (list.SlotCount == 0) {
+            return false;
+        }
+
         var first = list.Children[0];
         return IsMemberKind(first.Kind);
     }
 
     /// <summary>
-    /// The kinds that actually appear in a member list. Listed explicitly
-    /// rather than by range, because the declaration range also holds helper
-    /// nodes — attributes, parameter lists, where clauses — and an attribute
-    /// list must never look like a member list.
+    ///     The kinds that actually appear in a member list. Listed explicitly
+    ///     rather than by range, because the declaration range also holds helper
+    ///     nodes — attributes, parameter lists, where clauses — and an attribute
+    ///     list must never look like a member list.
     /// </summary>
-    private static bool IsMemberKind(SyntaxKind kind) => kind switch
-    {
-        SyntaxKind.FunctionDeclaration or SyntaxKind.FieldDeclaration
-            or SyntaxKind.ConstDeclaration or SyntaxKind.InitDeclaration
-            or SyntaxKind.DeinitDeclaration or SyntaxKind.SubscriptDeclaration
-            or SyntaxKind.OperatorDeclaration => true,
-        SyntaxKind.StructDeclaration or SyntaxKind.ClassDeclaration
-            or SyntaxKind.ActorDeclaration or SyntaxKind.ProtocolDeclaration
-            or SyntaxKind.UnionDeclaration or SyntaxKind.EnumDeclaration
-            or SyntaxKind.ExtensionDeclaration => true,
-        SyntaxKind.AliasDeclaration or SyntaxKind.TypealiasDeclaration
-            or SyntaxKind.AssociatedTypeDeclaration => true,
-        SyntaxKind.UnionCaseDeclaration or SyntaxKind.EnumCaseDeclaration => true,
-        SyntaxKind.IncompleteDeclaration => true,
-        _ => false,
-    };
+    static bool IsMemberKind(SyntaxKind kind) =>
+        kind switch {
+            SyntaxKind.FunctionDeclaration
+                or SyntaxKind.FieldDeclaration
+                or SyntaxKind.ConstDeclaration
+                or SyntaxKind.InitDeclaration
+                or SyntaxKind.DeinitDeclaration
+                or SyntaxKind.SubscriptDeclaration
+                or SyntaxKind.OperatorDeclaration => true,
+            SyntaxKind.StructDeclaration
+                or SyntaxKind.ClassDeclaration
+                or SyntaxKind.ActorDeclaration
+                or SyntaxKind.ProtocolDeclaration
+                or SyntaxKind.UnionDeclaration
+                or SyntaxKind.EnumDeclaration
+                or SyntaxKind.ExtensionDeclaration => true,
+            SyntaxKind.AliasDeclaration
+                or SyntaxKind.TypealiasDeclaration
+                or SyntaxKind.AssociatedTypeDeclaration => true,
+            SyntaxKind.UnionCaseDeclaration or SyntaxKind.EnumCaseDeclaration => true,
+            SyntaxKind.IncompleteDeclaration => true,
+            _ => false,
+        };
 
     /// <summary>Declaration nodes are the only ones worth descending into.</summary>
-    private static bool IsDeclarationLike(SyntaxKind kind) =>
-        kind is SyntaxKind.CompilationUnit || IsMemberKind(kind);
+    static bool IsDeclarationLike(SyntaxKind kind) => kind is SyntaxKind.CompilationUnit || IsMemberKind(kind);
 
-    private static MemberContext ContextOf(SyntaxKind parentKind) => parentKind switch
-    {
-        SyntaxKind.UnionDeclaration => MemberContext.Union,
-        SyntaxKind.EnumDeclaration => MemberContext.Enum,
-        _ => MemberContext.Declaration,
-    };
+    static MemberContext ContextOf(SyntaxKind parentKind) =>
+        parentKind switch {
+            SyntaxKind.UnionDeclaration => MemberContext.Union,
+            SyntaxKind.EnumDeclaration => MemberContext.Enum,
+            _ => MemberContext.Declaration,
+        };
 }

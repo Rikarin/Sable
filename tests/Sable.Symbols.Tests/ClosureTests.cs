@@ -1,54 +1,55 @@
-using Sable.Symbols;
-
 namespace Sable.Symbols.Tests;
 
 /// <summary>
-/// Closures: what their parameters and result are, where those come from, and
-/// what they can see of the scope around them.
+///     Closures: what their parameters and result are, where those come from, and
+///     what they can see of the scope around them.
 /// </summary>
-public sealed class ClosureTests
-{
-    private const string Helpers = """
-        fn apply(_ v: Int, _ f: (Int) -> Int) -> Int { return f(v) }
-        fn project<T, U>(_ v: T, _ f: (T) -> U) -> U { return f(v) }
-        fn run(_ f: () -> Void) { f() }
-        """;
+public sealed class ClosureTests {
+    const string Helpers = """
+                           fn apply(_ v: Int, _ f: (Int) -> Int) -> Int { return f(v) }
+                           fn project<T, U>(_ v: T, _ f: (T) -> U) -> U { return f(v) }
+                           fn run(_ f: () -> Void) { f() }
+                           """;
 
-    private static (Compilation, SyntaxTree) Compile(string body, string extra = "")
-    {
+    static (Compilation, SyntaxTree) Compile(string body, string extra = "") {
         var source = $"module M\n{Helpers}\n{extra}\nfn probe() {{\n{body}\n}}";
         var compilation = Compilation.Create(source);
         return (compilation, compilation.SyntaxTrees[0]);
     }
 
-    private static IReadOnlyList<Diagnostic> ErrorsIn(string body, string extra = "")
-    {
+    static IReadOnlyList<Diagnostic> ErrorsIn(string body, string extra = "") {
         var (compilation, _) = Compile(body, extra);
-        return [.. compilation.GetAllDiagnostics()
-            .Where(d => d.Severity == DiagnosticSeverity.Error)];
+        return [
+            ..compilation.GetAllDiagnostics()
+                .Where(static d => d.Severity == DiagnosticSeverity.Error)
+        ];
     }
 
-    private static void AssertClean(string body, string extra = "")
-    {
+    static void AssertClean(string body, string extra = "") {
         var errors = ErrorsIn(body, extra);
-        Assert.True(errors.Count == 0,
-            string.Join("\n", errors.Select(e => $"{e.Id}: {e.Message}")));
+        Assert.True(
+            errors.Count == 0,
+            string.Join("\n", errors.Select(static e => $"{e.Id}: {e.Message}"))
+        );
     }
 
     /// <summary>The type of the last local binding's initialiser.</summary>
-    private static string TypeOfLast(string body, string extra = "")
-    {
+    static string TypeOfLast(string body, string extra = "") {
         var (compilation, tree) = Compile(body, extra);
         var model = compilation.GetSemanticModel(tree);
 
         var errors = compilation.GetAllDiagnostics()
-            .Where(d => d.Severity == DiagnosticSeverity.Error).ToList();
-        Assert.True(errors.Count == 0,
-            string.Join("\n", errors.Select(e => $"{e.Id}: {e.Message}")));
+            .Where(static d => d.Severity == DiagnosticSeverity.Error)
+            .ToList();
+        Assert.True(
+            errors.Count == 0,
+            string.Join("\n", errors.Select(static e => $"{e.Id}: {e.Message}"))
+        );
 
         var last = tree.Root.DescendantNodes()
             .OfType<LocalDeclarationStatementSyntax>()
-            .LastOrDefault()?.Declarator.Initializer?.Value;
+            .LastOrDefault()
+            ?.Declarator.Initializer?.Value;
 
         Assert.NotNull(last);
         var type = model.GetTypeOf(last!);
@@ -69,18 +70,28 @@ public sealed class ClosureTests
 
     [Fact]
     public void AnOmittedReturnTypeComesFromTheBody() =>
-        Assert.Equal("(Int) -> String", TypeOfLast("""
-            let f = (x: Int) => {
-                return "n"
-            }
-            """));
+        Assert.Equal(
+            "(Int) -> String",
+            TypeOfLast(
+                """
+                let f = (x: Int) => {
+                    return "n"
+                }
+                """
+            )
+        );
 
     [Fact]
     public void AClosureThatReturnsNothingReturnsVoid() =>
-        Assert.Equal("(Int) -> Void", TypeOfLast("""
-            var total = 0
-            let f = (x: Int) => { total = x }
-            """));
+        Assert.Equal(
+            "(Int) -> Void",
+            TypeOfLast(
+                """
+                var total = 0
+                let f = (x: Int) => { total = x }
+                """
+            )
+        );
 
     // ---- Inference from the context ---------------------------------------
 
@@ -95,74 +106,87 @@ public sealed class ClosureTests
         Assert.Equal("(Int) -> Int", TypeOfLast("let f: (Int) -> Int = x => x"));
 
     [Fact]
-    public void AClosureResultSettlesATypeParameter() => AssertClean("""
-        let r: Bool = project(1, x => x > 0)
-        """);
+    public void AClosureResultSettlesATypeParameter() =>
+        AssertClean(
+            """
+            let r: Bool = project(1, x => x > 0)
+            """
+        );
 
     [Fact]
     public void ATrailingClosureIsAnArgument() => AssertClean("let r = apply(1) { $0 * 2 }");
 
     [Fact]
-    public void AClosureParameterWithNothingToInferFromIsAnError()
-    {
+    public void AClosureParameterWithNothingToInferFromIsAnError() {
         var errors = ErrorsIn("let f = x => x");
-        Assert.Contains(errors, e => e.Code == ErrorCode.ERR_CannotInferType);
+        Assert.Contains(errors, static e => e.Code == ErrorCode.ERR_CannotInferType);
     }
 
     [Fact]
-    public void ShorthandOutsideAKnownSignatureIsAnError()
-    {
+    public void ShorthandOutsideAKnownSignatureIsAnError() {
         var errors = ErrorsIn("let f = { $0 + 1 }");
-        Assert.Contains(errors, e => e.Code == ErrorCode.ERR_NameNotFound);
+        Assert.Contains(errors, static e => e.Code == ErrorCode.ERR_NameNotFound);
     }
 
     // ---- Captures ----------------------------------------------------------
 
     [Fact]
-    public void AClosureSeesTheScopeAroundIt() => AssertClean("""
-        let offset = 10
-        let f = (x: Int) => x + offset
-        """);
+    public void AClosureSeesTheScopeAroundIt() =>
+        AssertClean(
+            """
+            let offset = 10
+            let f = (x: Int) => x + offset
+            """
+        );
 
     [Fact]
-    public void ACaptureListIntroducesItsOwnName() => AssertClean("""
-        let outer = 1
-        let f = [copied = outer] (x: Int) => x + copied
-        """);
+    public void ACaptureListIntroducesItsOwnName() =>
+        AssertClean(
+            """
+            let outer = 1
+            let f = [copied = outer] (x: Int) => x + copied
+            """
+        );
 
     [Fact]
-    public void ACaptureListNameIsNotVisibleOutside()
-    {
-        var errors = ErrorsIn("""
+    public void ACaptureListNameIsNotVisibleOutside() {
+        var errors = ErrorsIn(
+            """
             let outer = 1
             let f = [copied = outer] (x: Int) => x + copied
             let bad = copied
-            """);
-        Assert.Contains(errors, e => e.Code == ErrorCode.ERR_NameNotFound);
+            """
+        );
+        Assert.Contains(errors, static e => e.Code == ErrorCode.ERR_NameNotFound);
     }
 
     // ---- Calling a value ---------------------------------------------------
 
     [Fact]
     public void AValueOfFunctionTypeIsCallable() =>
-        Assert.Equal("Int", TypeOfLast("""
-            let f = (x: Int) => x
-            let r = f(1)
-            """));
+        Assert.Equal(
+            "Int",
+            TypeOfLast(
+                """
+                let f = (x: Int) => x
+                let r = f(1)
+                """
+            )
+        );
 
     [Fact]
-    public void CallingWithTheWrongCountIsAnError()
-    {
-        var errors = ErrorsIn("""
+    public void CallingWithTheWrongCountIsAnError() {
+        var errors = ErrorsIn(
+            """
             let f = (x: Int) => x
             let r = f(1, 2)
-            """);
-        Assert.Contains(errors, e => e.Code == ErrorCode.ERR_NoMatchingOverload);
+            """
+        );
+        Assert.Contains(errors, static e => e.Code == ErrorCode.ERR_NoMatchingOverload);
     }
 
     [Fact]
-    public void AClosureBodyIsCheckedAgainstItsParameterTypes()
-    {
+    public void AClosureBodyIsCheckedAgainstItsParameterTypes() {
         var errors = ErrorsIn("let r = apply(1, x => x && true)");
         Assert.NotEmpty(errors);
     }
@@ -172,20 +196,20 @@ public sealed class ClosureTests
         Assert.Equal("(Int) -> Int", TypeOfLast("let f: (Int) -> Int = { $0 * 2 }"));
 
     [Fact]
-    public void AOneExpressionBraceClosureIsCheckedAgainstTheResult()
-    {
+    public void AOneExpressionBraceClosureIsCheckedAgainstTheResult() {
         var errors = ErrorsIn("let r = apply(1) { $0 > 0 }");
-        Assert.Contains(errors, e => e.Code == ErrorCode.ERR_TypeMismatch);
+        Assert.Contains(errors, static e => e.Code == ErrorCode.ERR_TypeMismatch);
     }
 
     [Fact]
-    public void ABraceClosureOfSeveralStatementsStillNeedsAReturn()
-    {
-        var errors = ErrorsIn("""
+    public void ABraceClosureOfSeveralStatementsStillNeedsAReturn() {
+        var errors = ErrorsIn(
+            """
             let r = apply(1) {
                 let doubled = $0 * 2
             }
-            """);
-        Assert.Contains(errors, e => e.Code == ErrorCode.ERR_NotAllPathsReturn);
+            """
+        );
+        Assert.Contains(errors, static e => e.Code == ErrorCode.ERR_NotAllPathsReturn);
     }
 }

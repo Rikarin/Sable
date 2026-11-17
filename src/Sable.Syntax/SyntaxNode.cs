@@ -3,22 +3,21 @@ using Sable.Syntax.Green;
 namespace Sable.Syntax;
 
 /// <summary>
-/// A node in the public syntax tree: a thin, lazily created facade over an
-/// immutable <see cref="GreenNode"/>, adding a parent pointer and an absolute
-/// position.
+///     A node in the public syntax tree: a thin, lazily created facade over an
+///     immutable <see cref="GreenNode" />, adding a parent pointer and an absolute
+///     position.
 /// </summary>
 /// <remarks>
-/// Red nodes are created on demand as the tree is walked and cached in the
-/// parent, so an unvisited subtree costs nothing beyond its green nodes.
+///     Red nodes are created on demand as the tree is walked and cached in the
+///     parent, so an unvisited subtree costs nothing beyond its green nodes.
 /// </remarks>
-public abstract class SyntaxNode
-{
+public abstract class SyntaxNode {
     internal GreenNode Green { get; }
 
     /// <summary>
-    /// The underlying green node, exposed for identity checks: two red nodes
-    /// over the same green node are the same syntax, which is how incremental
-    /// reuse is observed.
+    ///     The underlying green node, exposed for identity checks: two red nodes
+    ///     over the same green node are the same syntax, which is how incremental
+    ///     reuse is observed.
     /// </summary>
     public object GreenIdentity => Green;
 
@@ -28,8 +27,7 @@ public abstract class SyntaxNode
     /// <summary>Absolute start of this node including its leading trivia.</summary>
     public int Position { get; }
 
-    private protected SyntaxNode(GreenNode green, SyntaxNode? parent, int position)
-    {
+    private protected SyntaxNode(GreenNode green, SyntaxNode? parent, int position) {
         Green = green ?? throw new ArgumentNullException(nameof(green));
         Parent = parent;
         Position = position;
@@ -47,12 +45,14 @@ public abstract class SyntaxNode
     public int Width => Green.Width;
 
     /// <summary>True when every token beneath this node was synthesised.</summary>
-    public bool IsMissing
-    {
-        get
-        {
-            foreach (var token in DescendantTokens())
-                if (!token.IsMissing) return false;
+    public bool IsMissing {
+        get {
+            foreach (var token in DescendantTokens()) {
+                if (!token.IsMissing) {
+                    return false;
+                }
+            }
+
             return true;
         }
     }
@@ -61,49 +61,50 @@ public abstract class SyntaxNode
     // Slot access, used by generated node classes
     // -----------------------------------------------------------------------
 
-    /// <summary>Absolute position of the green slot at <paramref name="index"/>.</summary>
-    private protected int GetChildPosition(int index)
-    {
+    /// <summary>Absolute position of the green slot at <paramref name="index" />.</summary>
+    private protected int GetChildPosition(int index) {
         var offset = Position;
-        for (var i = 0; i < index; i++)
+        for (var i = 0; i < index; i++) {
             offset += Green.GetSlot(i)?.FullWidth ?? 0;
+        }
+
         return offset;
     }
 
     /// <summary>Materialises and caches the red node for a child slot.</summary>
-    private protected T GetRed<T>(ref T? field, int index) where T : SyntaxNode
-    {
+    private protected T GetRed<T>(ref T? field, int index) where T : SyntaxNode {
         var result = field;
-        if (result is null)
-        {
+        if (result is null) {
             var green = Green.GetSlot(index)
                 ?? throw new InvalidOperationException(
-                    $"{Kind} slot {index} is empty but was accessed as a required child");
+                    $"{Kind} slot {index} is empty but was accessed as a required child"
+                );
             result = (T)green.CreateRed(this, GetChildPosition(index));
             Interlocked.CompareExchange(ref field, result, null);
             result = field!;
         }
+
         return result;
     }
 
     /// <summary>Materialises and caches an optional child slot.</summary>
-    private protected T? GetRedOptional<T>(ref T? field, int index) where T : SyntaxNode
-    {
+    private protected T? GetRedOptional<T>(ref T? field, int index) where T : SyntaxNode {
         var green = Green.GetSlot(index);
-        if (green is null) return null;
+        if (green is null) {
+            return null;
+        }
 
         var result = field;
-        if (result is null)
-        {
+        if (result is null) {
             result = (T)green.CreateRed(this, GetChildPosition(index));
             Interlocked.CompareExchange(ref field, result, null);
             result = field!;
         }
+
         return result;
     }
 
-    private protected SyntaxToken GetToken(int index)
-    {
+    private protected SyntaxToken GetToken(int index) {
         var green = Green.GetSlot(index);
         return green is GreenToken token
             ? new SyntaxToken(token, this, GetChildPosition(index))
@@ -124,38 +125,43 @@ public abstract class SyntaxNode
     // Red child cache
     // -----------------------------------------------------------------------
 
-    private SyntaxNode?[]? _listChildren;
-    private int[]? _slotStarts;
+    SyntaxNode?[]? _listChildren;
+    int[]? _slotStarts;
 
     /// <summary>
-    /// Returns the red node for one element of a list slot, creating it once.
+    ///     Returns the red node for one element of a list slot, creating it once.
     /// </summary>
     /// <remarks>
-    /// Identity has to be stable: a semantic model keys what it knows by node,
-    /// so handing back a fresh facade on every enumeration would lose it.
-    /// Non-list children are already cached in the generated properties.
+    ///     Identity has to be stable: a semantic model keys what it knows by node,
+    ///     so handing back a fresh facade on every enumeration would lose it.
+    ///     Non-list children are already cached in the generated properties.
     /// </remarks>
     internal SyntaxNode GetListChild(
-        int slotIndex, int elementIndex, GreenNode green, int position)
-    {
-        if (_slotStarts is null) BuildChildTable();
+        int slotIndex,
+        int elementIndex,
+        GreenNode green,
+        int position
+    ) {
+        if (_slotStarts is null) {
+            BuildChildTable();
+        }
 
         var index = _slotStarts![slotIndex] + elementIndex;
         var existing = _listChildren![index];
-        if (existing is not null) return existing;
+        if (existing is not null) {
+            return existing;
+        }
 
         var created = green.CreateRed(this, position);
         Interlocked.CompareExchange(ref _listChildren[index], created, null);
         return _listChildren[index]!;
     }
 
-    private void BuildChildTable()
-    {
+    void BuildChildTable() {
         var starts = new int[Green.SlotCount + 1];
         var total = 0;
 
-        for (var i = 0; i < Green.SlotCount; i++)
-        {
+        for (var i = 0; i < Green.SlotCount; i++) {
             starts[i] = total;
             total += Green.GetSlot(i) is GreenList list ? list.SlotCount : 0;
         }
@@ -175,32 +181,26 @@ public abstract class SyntaxNode
     // Traversal
     // -----------------------------------------------------------------------
 
-    public IEnumerable<SyntaxNodeOrToken> ChildNodesAndTokens()
-    {
+    public IEnumerable<SyntaxNodeOrToken> ChildNodesAndTokens() {
         var offset = Position;
-        for (var i = 0; i < Green.SlotCount; i++)
-        {
+        for (var i = 0; i < Green.SlotCount; i++) {
             var slot = Green.GetSlot(i);
-            if (slot is null) continue;
+            if (slot is null) {
+                continue;
+            }
 
-            if (slot is GreenList list)
-            {
+            if (slot is GreenList list) {
                 var itemOffset = offset;
-                for (var element = 0; element < list.Children.Length; element++)
-                {
+                for (var element = 0; element < list.Children.Length; element++) {
                     var child = list.Children[element];
                     yield return child is GreenToken token
                         ? new SyntaxNodeOrToken(new SyntaxToken(token, this, itemOffset))
                         : new SyntaxNodeOrToken(GetListChild(i, element, child, itemOffset));
                     itemOffset += child.FullWidth;
                 }
-            }
-            else if (slot is GreenToken token)
-            {
+            } else if (slot is GreenToken token) {
                 yield return new SyntaxNodeOrToken(new SyntaxToken(token, this, offset));
-            }
-            else
-            {
+            } else {
                 var node = GetNodeSlot(i) ?? slot.CreateRed(this, offset);
                 yield return new SyntaxNodeOrToken(node);
             }
@@ -209,61 +209,75 @@ public abstract class SyntaxNode
         }
     }
 
-    public IEnumerable<SyntaxNode> ChildNodes()
-    {
-        foreach (var child in ChildNodesAndTokens())
-            if (child.AsNode() is { } node) yield return node;
+    public IEnumerable<SyntaxNode> ChildNodes() {
+        foreach (var child in ChildNodesAndTokens()) {
+            if (child.AsNode() is { } node) {
+                yield return node;
+            }
+        }
     }
 
     /// <summary>Every node beneath this one, in source order, excluding itself.</summary>
-    public IEnumerable<SyntaxNode> DescendantNodes()
-    {
-        foreach (var child in ChildNodes())
-        {
+    public IEnumerable<SyntaxNode> DescendantNodes() {
+        foreach (var child in ChildNodes()) {
             yield return child;
-            foreach (var descendant in child.DescendantNodes()) yield return descendant;
+            foreach (var descendant in child.DescendantNodes()) {
+                yield return descendant;
+            }
         }
     }
 
     /// <summary>This node and every node beneath it, in source order.</summary>
-    public IEnumerable<SyntaxNode> DescendantNodesAndSelf()
-    {
+    public IEnumerable<SyntaxNode> DescendantNodesAndSelf() {
         yield return this;
-        foreach (var descendant in DescendantNodes()) yield return descendant;
+        foreach (var descendant in DescendantNodes()) {
+            yield return descendant;
+        }
     }
 
     /// <summary>Every token beneath this node, in source order.</summary>
-    public IEnumerable<SyntaxToken> DescendantTokens()
-    {
-        foreach (var child in ChildNodesAndTokens())
-        {
-            if (child.IsToken) yield return child.AsToken();
-            else foreach (var token in child.AsNode()!.DescendantTokens()) yield return token;
+    public IEnumerable<SyntaxToken> DescendantTokens() {
+        foreach (var child in ChildNodesAndTokens()) {
+            if (child.IsToken) {
+                yield return child.AsToken();
+            } else {
+                foreach (var token in child.AsNode()!.DescendantTokens()) {
+                    yield return token;
+                }
+            }
         }
     }
 
-    public SyntaxToken GetFirstToken()
-    {
-        foreach (var token in DescendantTokens()) return token;
+    public SyntaxToken GetFirstToken() {
+        foreach (var token in DescendantTokens()) {
+            return token;
+        }
+
         return default;
     }
 
-    public SyntaxToken GetLastToken()
-    {
+    public SyntaxToken GetLastToken() {
         var last = default(SyntaxToken);
-        foreach (var token in DescendantTokens()) last = token;
+        foreach (var token in DescendantTokens()) {
+            last = token;
+        }
+
         return last;
     }
 
-    /// <summary>The innermost node whose span contains <paramref name="position"/>.</summary>
-    public SyntaxNode? FindNode(int position)
-    {
-        if (!FullSpan.Contains(position)) return null;
-        foreach (var child in ChildNodes())
-        {
-            var found = child.FindNode(position);
-            if (found is not null) return found;
+    /// <summary>The innermost node whose span contains <paramref name="position" />.</summary>
+    public SyntaxNode? FindNode(int position) {
+        if (!FullSpan.Contains(position)) {
+            return null;
         }
+
+        foreach (var child in ChildNodes()) {
+            var found = child.FindNode(position);
+            if (found is not null) {
+                return found;
+            }
+        }
+
         return this;
     }
 

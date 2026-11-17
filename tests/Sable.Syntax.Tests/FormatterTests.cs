@@ -1,46 +1,46 @@
 namespace Sable.Syntax.Tests;
 
 /// <summary>
-/// The formatter has two obligations, and both are checked here rather than
-/// asserted on a sample of output: formatting is idempotent, and formatting
-/// never changes the tree.
+///     The formatter has two obligations, and both are checked here rather than
+///     asserted on a sample of output: formatting is idempotent, and formatting
+///     never changes the tree.
 /// </summary>
-public sealed class FormatterTests
-{
-    private static string Format(string source) => SyntaxFormatter.Format(source);
+public sealed class FormatterTests {
+    static string Format(string source) => SyntaxFormatter.Format(source);
 
-    private static void AssertStable(string source)
-    {
+    static void AssertStable(string source) {
         var once = Format(source);
         var twice = Format(once);
 
-        Assert.True(once == twice,
-            $"formatting is not idempotent\n---- once ----\n{once}\n---- twice ----\n{twice}");
+        Assert.True(
+            once == twice,
+            $"formatting is not idempotent\n---- once ----\n{once}\n---- twice ----\n{twice}"
+        );
     }
 
-    private static void AssertPreservesTree(string source)
-    {
+    static void AssertPreservesTree(string source) {
         var formatted = Format(source);
 
-        var before = SyntaxTree.Parse(new SourceText(source, "before"));
-        var after = SyntaxTree.Parse(new SourceText(formatted, "after"));
+        var before = SyntaxTree.Parse(new(source, "before"));
+        var after = SyntaxTree.Parse(new(formatted, "after"));
 
-        Assert.True(TreeDump.Dump(before.Root) == TreeDump.Dump(after.Root),
+        Assert.True(
+            TreeDump.Dump(before.Root) == TreeDump.Dump(after.Root),
             $"""
              formatting changed the tree
              ---- source ----
              {source}
              ---- formatted ----
              {formatted}
-             """);
+             """
+        );
     }
 
-    private static void AssertKeepsComments(string source)
-    {
+    static void AssertKeepsComments(string source) {
         var formatted = Format(source);
 
-        var before = SyntaxTree.Parse(new SourceText(source, "before"));
-        var after = SyntaxTree.Parse(new SourceText(formatted, "after"));
+        var before = SyntaxTree.Parse(new(source, "before"));
+        var after = SyntaxTree.Parse(new(formatted, "after"));
 
         var commentsBefore = Comments(before);
         var commentsAfter = Comments(after);
@@ -48,16 +48,22 @@ public sealed class FormatterTests
         Assert.Equal(commentsBefore, commentsAfter);
     }
 
-    private static List<string> Comments(SyntaxTree tree)
-    {
+    static List<string> Comments(SyntaxTree tree) {
         var comments = new List<string>();
-        foreach (var token in tree.Root.DescendantTokens().Append(tree.EndOfFileToken))
-        {
-            foreach (var trivia in token.LeadingTrivia)
-                if (trivia.IsComment) comments.Add(trivia.Text.TrimEnd());
-            foreach (var trivia in token.TrailingTrivia)
-                if (trivia.IsComment) comments.Add(trivia.Text.TrimEnd());
+        foreach (var token in tree.Root.DescendantTokens().Append(tree.EndOfFileToken)) {
+            foreach (var trivia in token.LeadingTrivia) {
+                if (trivia.IsComment) {
+                    comments.Add(trivia.Text.TrimEnd());
+                }
+            }
+
+            foreach (var trivia in token.TrailingTrivia) {
+                if (trivia.IsComment) {
+                    comments.Add(trivia.Text.TrimEnd());
+                }
+            }
         }
+
         return comments;
     }
 
@@ -67,24 +73,21 @@ public sealed class FormatterTests
 
     [Theory]
     [MemberData(nameof(ExampleFiles))]
-    public void FormattingTheCorpusIsIdempotent(string fileName)
-    {
+    public void FormattingTheCorpusIsIdempotent(string fileName) {
         var path = Path.Combine(TestHelpers.RepositoryRoot, "examples", fileName);
         AssertStable(File.ReadAllText(path));
     }
 
     [Theory]
     [MemberData(nameof(ExampleFiles))]
-    public void FormattingTheCorpusPreservesTheTree(string fileName)
-    {
+    public void FormattingTheCorpusPreservesTheTree(string fileName) {
         var path = Path.Combine(TestHelpers.RepositoryRoot, "examples", fileName);
         AssertPreservesTree(File.ReadAllText(path));
     }
 
     [Theory]
     [MemberData(nameof(ExampleFiles))]
-    public void FormattingTheCorpusKeepsEveryComment(string fileName)
-    {
+    public void FormattingTheCorpusKeepsEveryComment(string fileName) {
         var path = Path.Combine(TestHelpers.RepositoryRoot, "examples", fileName);
         AssertKeepsComments(File.ReadAllText(path));
     }
@@ -104,42 +107,37 @@ public sealed class FormatterTests
     [InlineData("let o:Int?=none", "let o: Int? = none\n")]
     [InlineData("let c=a ? b : d", "let c = a ? b : d\n")]
     [InlineData("let p=Point{x:1,y:2}", "let p = Point { x: 1, y: 2 }\n")]
-    public void NormalisesSpacing(string source, string expected) =>
-        Assert.Equal(expected, Format(source));
+    public void NormalisesSpacing(string source, string expected) => Assert.Equal(expected, Format(source));
 
     [Fact]
-    public void IndentsBodies()
-    {
+    public void IndentsBodies() {
         const string source = "fn f() { let x = 1\nlet y = 2 }";
         Assert.Equal("fn f() {\n    let x = 1\n    let y = 2\n}\n", Format(source));
     }
 
     [Fact]
-    public void IndentsNestedBodies()
-    {
+    public void IndentsNestedBodies() {
         const string source = "struct S { fn f() { if x { g() } } }";
         Assert.Equal(
             "struct S {\n    fn f() {\n        if x {\n            g()\n        }\n    }\n}\n",
-            Format(source));
+            Format(source)
+        );
     }
 
     [Fact]
-    public void CollapsesRunsOfBlankLinesToOne()
-    {
+    public void CollapsesRunsOfBlankLinesToOne() {
         const string source = "fn a() { }\n\n\n\n\nfn b() { }";
         Assert.Equal("fn a() { }\n\nfn b() { }\n", Format(source));
     }
 
     [Fact]
-    public void KeepsAuthorParagraphing()
-    {
+    public void KeepsAuthorParagraphing() {
         const string source = "fn a() { }\n\nfn b() { }\nfn c() { }";
         Assert.Equal("fn a() { }\n\nfn b() { }\nfn c() { }\n", Format(source));
     }
 
     [Fact]
-    public void EndsWithExactlyOneNewline()
-    {
+    public void EndsWithExactlyOneNewline() {
         Assert.Equal("fn f() { }\n", Format("fn f() { }"));
         Assert.Equal("fn f() { }\n", Format("fn f() { }\n\n\n"));
     }
@@ -150,22 +148,19 @@ public sealed class FormatterTests
     // ---- Comments ----------------------------------------------------------
 
     [Fact]
-    public void KeepsDocCommentsOnTheirOwnLine()
-    {
+    public void KeepsDocCommentsOnTheirOwnLine() {
         const string source = "/// doc\nfn f() { }";
         Assert.Equal("/// doc\nfn f() { }\n", Format(source));
     }
 
     [Fact]
-    public void KeepsTrailingComments()
-    {
+    public void KeepsTrailingComments() {
         const string source = "fn f() { let x = 1 // note\n}";
         Assert.Contains("// note", Format(source), StringComparison.Ordinal);
     }
 
     [Fact]
-    public void KeepsDisabledRegionsVerbatim()
-    {
+    public void KeepsDisabledRegionsVerbatim() {
         const string source = "#if NOPE\nthis is ( nonsense\n#endif\nfn f() { }";
         var formatted = Format(source);
         Assert.Contains("this is ( nonsense", formatted, StringComparison.Ordinal);
@@ -175,33 +170,32 @@ public sealed class FormatterTests
     // ---- Stability over generated input ------------------------------------
 
     [Fact]
-    public void RandomWhitespaceDoesNotChangeTheFormattedResult()
-    {
+    public void RandomWhitespaceDoesNotChangeTheFormattedResult() {
         const string source = """
-            module A
-            public struct P { x: F64, y: F64 }
-            public fn f(_ a: Int, b: Int = 0) throws(E) -> Int {
-                let xs = [1, 2, 3]
-                for i in 0..<10 where i > 2 {
-                    xs.filter { $0 > i }
-                }
-                return match a {
-                    case 1 => 2
-                    default => 3
-                }
-            }
-            """;
+                              module A
+                              public struct P { x: F64, y: F64 }
+                              public fn f(_ a: Int, b: Int = 0) throws(E) -> Int {
+                                  let xs = [1, 2, 3]
+                                  for i in 0..<10 where i > 2 {
+                                      xs.filter { $0 > i }
+                                  }
+                                  return match a {
+                                      case 1 => 2
+                                      default => 3
+                                  }
+                              }
+                              """;
 
         var canonical = Format(source);
 
         var random = new Random(20261122);
-        for (var i = 0; i < 50; i++)
-        {
+        for (var i = 0; i < 50; i++) {
             var builder = new System.Text.StringBuilder();
-            foreach (var c in source)
-            {
+            foreach (var c in source) {
                 builder.Append(c);
-                if (char.IsWhiteSpace(c) && random.Next(4) == 0) builder.Append(' ');
+                if (char.IsWhiteSpace(c) && random.Next(4) == 0) {
+                    builder.Append(' ');
+                }
             }
 
             Assert.Equal(canonical, Format(builder.ToString()));
@@ -209,14 +203,14 @@ public sealed class FormatterTests
     }
 
     [Fact]
-    public void MalformedInputStillFormatsAndStaysStable()
-    {
-        string[] sources =
-        [
+    public void MalformedInputStillFormatsAndStaysStable() {
+        string[] sources = [
             "fn", "fn f(", "struct S {", "}}}", "let x =", "@", "match x {",
-            "fn f() { let y = ", "#if A", "\"unterminated",
+            "fn f() { let y = ", "#if A", "\"unterminated"
         ];
 
-        foreach (var source in sources) AssertStable(source);
+        foreach (var source in sources) {
+            AssertStable(source);
+        }
     }
 }

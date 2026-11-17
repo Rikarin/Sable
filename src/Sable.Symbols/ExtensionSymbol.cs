@@ -19,8 +19,8 @@ namespace Sable.Symbols;
 /// extensions of the same type cannot see each other's parameter names.</para>
 /// </remarks>
 public sealed class ExtensionSymbol(
-    NamedTypeSymbol extendedType, SyntaxNode declaration) : Symbol
-{
+    NamedTypeSymbol extendedType,
+    SyntaxNode declaration) : Symbol {
     public override SymbolKind Kind => SymbolKind.Extension;
     public override string Name => ExtendedType.Name;
     public override Symbol? ContainingSymbol => ExtendedType;
@@ -30,8 +30,8 @@ public sealed class ExtensionSymbol(
     public NamedTypeSymbol ExtendedType { get; } = extendedType;
 
     /// <summary>
-    /// The extended type's parameters under the names this extension wrote,
-    /// which may differ from the ones the declaration used.
+    ///     The extended type's parameters under the names this extension wrote,
+    ///     which may differ from the ones the declaration used.
     /// </summary>
     public ImmutableArray<AliasSymbol> TypeParameterAliases { get; internal set; } = [];
 

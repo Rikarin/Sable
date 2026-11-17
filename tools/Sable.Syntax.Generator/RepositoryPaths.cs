@@ -1,20 +1,17 @@
 namespace Sable.Syntax.Generator;
 
 /// <summary>Locates the schema and its generated output from anywhere in the tree.</summary>
-public static class RepositoryPaths
-{
+public static class RepositoryPaths {
     /// <summary>The directory containing Sable.slnx.</summary>
-    public static string Root
-    {
-        get
-        {
+    public static string Root {
+        get {
             var dir = new DirectoryInfo(AppContext.BaseDirectory);
-            while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "Sable.slnx")))
+            while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "Sable.slnx"))) {
                 dir = dir.Parent;
+            }
 
             return dir?.FullName
-                ?? throw new InvalidOperationException(
-                    $"could not find Sable.slnx above {AppContext.BaseDirectory}");
+                ?? throw new InvalidOperationException($"could not find Sable.slnx above {AppContext.BaseDirectory}");
         }
     }
 

@@ -3,17 +3,16 @@ using System.Collections.Immutable;
 namespace Sable.Syntax;
 
 /// <summary>
-/// The configuration a source file is lexed and parsed under: which
-/// conditional-compilation symbols are defined, and what the target is.
+///     The configuration a source file is lexed and parsed under: which
+///     conditional-compilation symbols are defined, and what the target is.
 /// </summary>
 /// <remarks>
-/// Two parses of the same file under different options produce different
-/// trees, because inactive <c>#if</c> regions become
-/// <see cref="SyntaxKind.DisabledTextTrivia"/> rather than tokens. The text
-/// still round-trips either way.
+///     Two parses of the same file under different options produce different
+///     trees, because inactive <c>#if</c> regions become
+///     <see cref="SyntaxKind.DisabledTextTrivia" /> rather than tokens. The text
+///     still round-trips either way.
 /// </remarks>
-public sealed record ParseOptions
-{
+public sealed record ParseOptions {
     public static readonly ParseOptions Default = new();
 
     /// <summary>Symbols defined for <c>#if</c>, e.g. DEBUG or RELEASE.</summary>
@@ -30,11 +29,9 @@ public sealed record ParseOptions
     public ImmutableHashSet<string> Features { get; init; } =
         ImmutableHashSet<string>.Empty.WithComparer(StringComparer.Ordinal);
 
-    public ParseOptions WithSymbols(params string[] symbols) =>
-        this with { Symbols = [.. symbols] };
+    public ParseOptions WithSymbols(params string[] symbols) => this with { Symbols = [..symbols] };
 
-    public ParseOptions WithFeatures(params string[] features) =>
-        this with { Features = [.. features] };
+    public ParseOptions WithFeatures(params string[] features) => this with { Features = [..features] };
 
     public bool IsDefined(string symbol) => Symbols.Contains(symbol);
 }

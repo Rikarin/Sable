@@ -2,8 +2,7 @@ using System.Text;
 
 namespace Sable.Syntax.Tests;
 
-public sealed class LexerTests
-{
+public sealed class LexerTests {
     // ---- Identifiers and keywords -----------------------------------------
 
     [Theory]
@@ -12,8 +11,7 @@ public sealed class LexerTests
     [InlineData("camelCase42")]
     [InlineData("ünïcödé")]
     [InlineData("日本語")]
-    public void LexesIdentifiers(string text)
-    {
+    public void LexesIdentifiers(string text) {
         var token = TestHelpers.LexSingle(text);
         Assert.Equal(SyntaxKind.IdentifierToken, token.Kind);
         Assert.Equal(text, token.Text);
@@ -39,30 +37,26 @@ public sealed class LexerTests
     [InlineData("get", SyntaxKind.GetKeyword)]
     [InlineData("willSet", SyntaxKind.WillSetKeyword)]
     [InlineData("associatedtype", SyntaxKind.AssociatedtypeKeyword)]
-    public void LexesKeywords(string text, SyntaxKind expected)
-    {
+    public void LexesKeywords(string text, SyntaxKind expected) {
         var token = TestHelpers.LexSingle(text);
         Assert.Equal(expected, token.Kind);
     }
 
     [Fact]
-    public void BareUnderscoreIsTheWildcardTokenNotAnIdentifier()
-    {
+    public void BareUnderscoreIsTheWildcardTokenNotAnIdentifier() {
         Assert.Equal(SyntaxKind.UnderscoreToken, TestHelpers.LexSingle("_").Kind);
         Assert.Equal(SyntaxKind.IdentifierToken, TestHelpers.LexSingle("_x").Kind);
         Assert.Equal(SyntaxKind.IdentifierToken, TestHelpers.LexSingle("__").Kind);
     }
 
     [Fact]
-    public void SelfAndCapitalSelfAreDistinct()
-    {
+    public void SelfAndCapitalSelfAreDistinct() {
         var kinds = TestHelpers.Kinds("self Self");
         Assert.Equal([SyntaxKind.SelfKeyword, SyntaxKind.CapitalSelfKeyword], kinds);
     }
 
     [Fact]
-    public void ContextualKeywordsAreClassifiedSeparately()
-    {
+    public void ContextualKeywordsAreClassifiedSeparately() {
         Assert.True(SyntaxFacts.IsReservedKeyword(SyntaxKind.FnKeyword));
         Assert.False(SyntaxFacts.IsContextualKeyword(SyntaxKind.FnKeyword));
         Assert.True(SyntaxFacts.IsContextualKeyword(SyntaxKind.GetKeyword));
@@ -70,15 +64,13 @@ public sealed class LexerTests
     }
 
     [Fact]
-    public void BooleanKeywordsCarryTheirValue()
-    {
+    public void BooleanKeywordsCarryTheirValue() {
         Assert.Equal(true, TestHelpers.LexSingle("true").Value);
         Assert.Equal(false, TestHelpers.LexSingle("false").Value);
     }
 
     [Fact]
-    public void EscapedIdentifierIsAnIdentifier()
-    {
+    public void EscapedIdentifierIsAnIdentifier() {
         var token = TestHelpers.LexSingle("`class`");
         Assert.Equal(SyntaxKind.IdentifierToken, token.Kind);
         Assert.Equal("`class`", token.Text);
@@ -86,10 +78,9 @@ public sealed class LexerTests
     }
 
     [Fact]
-    public void FutureReservedWordWarns()
-    {
+    public void FutureReservedWordWarns() {
         var (_, diagnostics) = TestHelpers.LexWithDiagnostics("let macro = 1");
-        Assert.Contains(diagnostics, d => d.Severity == DiagnosticSeverity.Warning);
+        Assert.Contains(diagnostics, static d => d.Severity == DiagnosticSeverity.Warning);
     }
 
     // ---- Punctuation and operators ----------------------------------------
@@ -125,52 +116,54 @@ public sealed class LexerTests
     [InlineData("#", SyntaxKind.HashToken)]
     [InlineData("~", SyntaxKind.TildeToken)]
     [InlineData("$", SyntaxKind.DollarToken)]
-    public void LexesOperatorsWithLongestMatch(string text, SyntaxKind expected)
-    {
+    public void LexesOperatorsWithLongestMatch(string text, SyntaxKind expected) {
         var token = TestHelpers.LexSingle(text);
         Assert.Equal(expected, token.Kind);
         Assert.Equal(text, token.Text);
     }
 
     [Fact]
-    public void RangeOperatorsDoNotStealDigits()
-    {
+    public void RangeOperatorsDoNotStealDigits() {
         // '1..<5' must not lex '1.' as a float.
         Assert.Equal(
             [SyntaxKind.IntegerLiteralToken, SyntaxKind.DotDotLessToken, SyntaxKind.IntegerLiteralToken],
-            TestHelpers.Kinds("1..<5"));
+            TestHelpers.Kinds("1..<5")
+        );
 
         Assert.Equal(
             [SyntaxKind.IntegerLiteralToken, SyntaxKind.DotDotDotToken, SyntaxKind.IntegerLiteralToken],
-            TestHelpers.Kinds("1...5"));
+            TestHelpers.Kinds("1...5")
+        );
     }
 
     [Fact]
-    public void TupleMemberAccessLexesAsDotThenInteger()
-    {
+    public void TupleMemberAccessLexesAsDotThenInteger() {
         Assert.Equal(
             [SyntaxKind.IdentifierToken, SyntaxKind.DotToken, SyntaxKind.IntegerLiteralToken],
-            TestHelpers.Kinds("pair.0"));
+            TestHelpers.Kinds("pair.0")
+        );
     }
 
     [Fact]
-    public void EveryFixedTextTokenRoundTripsThroughSyntaxFacts()
-    {
-        foreach (SyntaxKind kind in Enum.GetValues<SyntaxKind>())
-        {
+    public void EveryFixedTextTokenRoundTripsThroughSyntaxFacts() {
+        foreach (SyntaxKind kind in Enum.GetValues<SyntaxKind>()) {
             var text = SyntaxFacts.GetText(kind);
-            if (text is null) continue;
+            if (text is null) {
+                continue;
+            }
+
             var token = TestHelpers.LexSingle(text);
-            Assert.True(token.Kind == kind,
-                $"'{text}' lexed as {token.Kind} but SyntaxFacts.GetText says {kind}");
+            Assert.True(
+                token.Kind == kind,
+                $"'{text}' lexed as {token.Kind} but SyntaxFacts.GetText says {kind}"
+            );
         }
     }
 
     // ---- Trivia -----------------------------------------------------------
 
     [Fact]
-    public void LeadingAndTrailingTriviaAttachAsRoslynDoes()
-    {
+    public void LeadingAndTrailingTriviaAttachAsRoslynDoes() {
         var tokens = TestHelpers.Lex("  let  \n  x");
 
         var let = tokens[0];
@@ -180,7 +173,8 @@ public sealed class LexerTests
         // Trailing trivia ends at (and includes) the first line break.
         Assert.Equal(
             [SyntaxKind.WhitespaceTrivia, SyntaxKind.NewLineTrivia],
-            let.TrailingTrivia.Select(t => t.Kind));
+            let.TrailingTrivia.Select(static t => t.Kind)
+        );
 
         var x = tokens[1];
         Assert.Equal(SyntaxKind.WhitespaceTrivia, Assert.Single(x.LeadingTrivia).Kind);
@@ -194,58 +188,52 @@ public sealed class LexerTests
     [InlineData("/* block */", SyntaxKind.BlockCommentTrivia)]
     [InlineData("/** block doc */", SyntaxKind.DocCommentTrivia)]
     [InlineData("/**/", SyntaxKind.BlockCommentTrivia)]
-    public void ClassifiesComments(string comment, SyntaxKind expected)
-    {
+    public void ClassifiesComments(string comment, SyntaxKind expected) {
         var tokens = TestHelpers.LexAll(comment + "\nx");
         var trivia = tokens[0].LeadingTrivia;
         Assert.Equal(expected, trivia[0].Kind);
     }
 
     [Fact]
-    public void BlockCommentsNest()
-    {
+    public void BlockCommentsNest() {
         var tokens = TestHelpers.LexAll("/* a /* b */ c */ x");
-        var trivia = Assert.Single(tokens[0].LeadingTrivia, t => t.IsComment);
+        var trivia = Assert.Single(tokens[0].LeadingTrivia, static t => t.IsComment);
         Assert.Equal("/* a /* b */ c */", trivia.Text);
         Assert.Equal(SyntaxKind.IdentifierToken, tokens[0].Kind);
     }
 
     [Fact]
-    public void ShebangIsTriviaOnlyOnTheFirstLine()
-    {
+    public void ShebangIsTriviaOnlyOnTheFirstLine() {
         var first = TestHelpers.LexAll("#!/usr/bin/env sable\nfn main() { }");
         Assert.Equal(SyntaxKind.ShebangTrivia, first[0].LeadingTrivia[0].Kind);
 
         // Not on line 1: '#' is an ordinary token.
         var later = TestHelpers.Lex("x\n#!foo");
-        Assert.Contains(later, t => t.Kind == SyntaxKind.HashToken);
+        Assert.Contains(later, static t => t.Kind == SyntaxKind.HashToken);
     }
 
     [Theory]
     [InlineData("a\nb")]
     [InlineData("a\r\nb")]
     [InlineData("a\rb")]
-    public void RecognisesAllLineTerminators(string source)
-    {
+    public void RecognisesAllLineTerminators(string source) {
         var tokens = TestHelpers.Lex(source);
         Assert.Equal(2, tokens.Length);
-        Assert.Contains(tokens[0].TrailingTrivia, t => t.Kind == SyntaxKind.NewLineTrivia);
+        Assert.Contains(tokens[0].TrailingTrivia, static t => t.Kind == SyntaxKind.NewLineTrivia);
     }
 
     // ---- Spans ------------------------------------------------------------
 
     [Fact]
-    public void SpanCoversTokenTextAndFullSpanCoversTrivia()
-    {
+    public void SpanCoversTokenTextAndFullSpanCoversTrivia() {
         var tokens = TestHelpers.Lex("  abc  ");
         var token = tokens[0];
-        Assert.Equal(new TextSpan(2, 3), token.Span);
-        Assert.Equal(new TextSpan(0, 7), token.FullSpan);
+        Assert.Equal(new(2, 3), token.Span);
+        Assert.Equal(new(0, 7), token.FullSpan);
     }
 
     [Fact]
-    public void EndOfFileTokenIsAlwaysLastAndEmpty()
-    {
+    public void EndOfFileTokenIsAlwaysLastAndEmpty() {
         var tokens = TestHelpers.LexAll("let x = 1\n");
         var eof = tokens[^1];
         Assert.Equal(SyntaxKind.EndOfFile, eof.Kind);
@@ -254,23 +242,20 @@ public sealed class LexerTests
     }
 
     [Fact]
-    public void ByteOrderMarkIsRejected()
-    {
-        var (_, diagnostics) = TestHelpers.LexWithDiagnostics("﻿let x = 1");
-        Assert.Contains(diagnostics, d => d.Code == ErrorCode.ERR_ByteOrderMarkNotAllowed);
+    public void ByteOrderMarkIsRejected() {
+        var (_, diagnostics) = TestHelpers.LexWithDiagnostics("\uFEFFlet x = 1");
+        Assert.Contains(diagnostics, static d => d.Code == ErrorCode.ERR_ByteOrderMarkNotAllowed);
     }
 
     [Fact]
-    public void UnexpectedCharacterProducesBadTokenAndDiagnostic()
-    {
+    public void UnexpectedCharacterProducesBadTokenAndDiagnostic() {
         var (tokens, diagnostics) = TestHelpers.LexWithDiagnostics("let x = §");
-        Assert.Contains(tokens, t => t.Kind == SyntaxKind.BadToken);
-        Assert.Contains(diagnostics, d => d.Code == ErrorCode.ERR_UnexpectedCharacter);
+        Assert.Contains(tokens, static t => t.Kind == SyntaxKind.BadToken);
+        Assert.Contains(diagnostics, static d => d.Code == ErrorCode.ERR_UnexpectedCharacter);
     }
 
     [Fact]
-    public void DiagnosticFormatsWithCaret()
-    {
+    public void DiagnosticFormatsWithCaret() {
         var source = new SourceText("let x = §\n", "test.sab");
         Lexer.Tokenize(source, out var diagnostics);
         var formatted = diagnostics[0].Format(source);
@@ -282,65 +267,69 @@ public sealed class LexerTests
     // ---- A realistic declaration ------------------------------------------
 
     [Fact]
-    public void LexesARepresentativeDeclaration()
-    {
+    public void LexesARepresentativeDeclaration() {
         const string source = "public fn add(_ a: Int, b: Int = 0) throws(MathError) -> Int => a + b";
         var kinds = TestHelpers.Kinds(source);
 
         Assert.Equal(
-        [
-            SyntaxKind.PublicKeyword, SyntaxKind.FnKeyword, SyntaxKind.IdentifierToken,
-            SyntaxKind.OpenParenToken,
-            SyntaxKind.UnderscoreToken, SyntaxKind.IdentifierToken, SyntaxKind.ColonToken,
-            SyntaxKind.IdentifierToken, SyntaxKind.CommaToken,
-            SyntaxKind.IdentifierToken, SyntaxKind.ColonToken, SyntaxKind.IdentifierToken,
-            SyntaxKind.EqualsToken, SyntaxKind.IntegerLiteralToken,
-            SyntaxKind.CloseParenToken,
-            SyntaxKind.ThrowsKeyword, SyntaxKind.OpenParenToken, SyntaxKind.IdentifierToken,
-            SyntaxKind.CloseParenToken,
-            SyntaxKind.ArrowToken, SyntaxKind.IdentifierToken,
-            SyntaxKind.FatArrowToken,
-            SyntaxKind.IdentifierToken, SyntaxKind.PlusToken, SyntaxKind.IdentifierToken,
-        ], kinds);
+            [
+                SyntaxKind.PublicKeyword, SyntaxKind.FnKeyword, SyntaxKind.IdentifierToken,
+                SyntaxKind.OpenParenToken,
+                SyntaxKind.UnderscoreToken, SyntaxKind.IdentifierToken, SyntaxKind.ColonToken,
+                SyntaxKind.IdentifierToken, SyntaxKind.CommaToken,
+                SyntaxKind.IdentifierToken, SyntaxKind.ColonToken, SyntaxKind.IdentifierToken,
+                SyntaxKind.EqualsToken, SyntaxKind.IntegerLiteralToken,
+                SyntaxKind.CloseParenToken,
+                SyntaxKind.ThrowsKeyword, SyntaxKind.OpenParenToken, SyntaxKind.IdentifierToken,
+                SyntaxKind.CloseParenToken,
+                SyntaxKind.ArrowToken, SyntaxKind.IdentifierToken,
+                SyntaxKind.FatArrowToken,
+                SyntaxKind.IdentifierToken, SyntaxKind.PlusToken, SyntaxKind.IdentifierToken
+            ],
+            kinds
+        );
     }
 
     [Fact]
-    public void LexesRelativeReferenceType()
-    {
+    public void LexesRelativeReferenceType() {
         Assert.Equal(
-        [
-            SyntaxKind.IdentifierToken, SyntaxKind.AmpersandToken, SyntaxKind.LessToken,
-            SyntaxKind.IdentifierToken, SyntaxKind.InKeyword, SyntaxKind.IdentifierToken,
-            SyntaxKind.GreaterToken, SyntaxKind.QuestionToken,
-        ], TestHelpers.Kinds("Order&<u32 in pool>?"));
+            [
+                SyntaxKind.IdentifierToken, SyntaxKind.AmpersandToken, SyntaxKind.LessToken,
+                SyntaxKind.IdentifierToken, SyntaxKind.InKeyword, SyntaxKind.IdentifierToken,
+                SyntaxKind.GreaterToken, SyntaxKind.QuestionToken
+            ],
+            TestHelpers.Kinds("Order&<u32 in pool>?")
+        );
     }
 
     [Fact]
-    public void LexesGrowOnlyArraySuffix()
-    {
+    public void LexesGrowOnlyArraySuffix() {
         Assert.Equal(
-        [
-            SyntaxKind.IdentifierToken, SyntaxKind.OpenBracketToken, SyntaxKind.GreaterToken,
-            SyntaxKind.DotDotToken, SyntaxKind.CloseBracketToken,
-        ], TestHelpers.Kinds("Line[>..]"));
+            [
+                SyntaxKind.IdentifierToken, SyntaxKind.OpenBracketToken, SyntaxKind.GreaterToken,
+                SyntaxKind.DotDotToken, SyntaxKind.CloseBracketToken
+            ],
+            TestHelpers.Kinds("Line[>..]")
+        );
     }
 
     [Fact]
-    public void LexesVariantSizedUnionHeader()
-    {
+    public void LexesVariantSizedUnionHeader() {
         Assert.Equal(
-        [
-            SyntaxKind.UnionKeyword, SyntaxKind.IdentifierToken, SyntaxKind.DotDotToken,
-            SyntaxKind.OpenBraceToken, SyntaxKind.CloseBraceToken,
-        ], TestHelpers.Kinds("union Node.. { }"));
+            [
+                SyntaxKind.UnionKeyword, SyntaxKind.IdentifierToken, SyntaxKind.DotDotToken,
+                SyntaxKind.OpenBraceToken, SyntaxKind.CloseBraceToken
+            ],
+            TestHelpers.Kinds("union Node.. { }")
+        );
     }
 
     [Fact]
-    public void LexesLargeInputWithoutQuadraticBlowup()
-    {
+    public void LexesLargeInputWithoutQuadraticBlowup() {
         var builder = new StringBuilder();
-        for (var i = 0; i < 20_000; i++)
+        for (var i = 0; i < 20_000; i++) {
             builder.Append("let x").Append(i).Append(" = ").Append(i).Append(" + 1\n");
+        }
 
         var source = new SourceText(builder.ToString());
         var watch = System.Diagnostics.Stopwatch.StartNew();
@@ -349,7 +338,9 @@ public sealed class LexerTests
 
         Assert.Empty(diagnostics);
         Assert.True(tokens.Length > 100_000);
-        Assert.True(watch.ElapsedMilliseconds < 3000,
-            $"lexing 20k lines took {watch.ElapsedMilliseconds} ms");
+        Assert.True(
+            watch.ElapsedMilliseconds < 3000,
+            $"lexing 20k lines took {watch.ElapsedMilliseconds} ms"
+        );
     }
 }

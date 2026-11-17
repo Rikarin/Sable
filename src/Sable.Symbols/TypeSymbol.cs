@@ -5,12 +5,11 @@ namespace Sable.Symbols;
 
 /// <summary>Any type.</summary>
 /// <remarks>
-/// Types compare by structure, so two independently constructed
-/// <c>List&lt;Int&gt;</c> symbols are equal. Named types compare by definition
-/// and type arguments; the structural forms compare by their parts.
+///     Types compare by structure, so two independently constructed
+///     <c>List&lt;Int&gt;</c> symbols are equal. Named types compare by definition
+///     and type arguments; the structural forms compare by their parts.
 /// </remarks>
-public abstract class TypeSymbol : Symbol, IEquatable<TypeSymbol>
-{
+public abstract class TypeSymbol : Symbol, IEquatable<TypeSymbol> {
     public abstract TypeKind TypeKind { get; }
 
     /// <summary>True for types with identity and a reference count.</summary>
@@ -28,17 +27,15 @@ public abstract class TypeSymbol : Symbol, IEquatable<TypeSymbol>
     public override bool Equals(object? obj) => Equals(obj as TypeSymbol);
     public override int GetHashCode() => ToDisplayString().GetHashCode(StringComparison.Ordinal);
 
-    public static bool operator ==(TypeSymbol? left, TypeSymbol? right) =>
-        left?.Equals(right) ?? right is null;
+    public static bool operator ==(TypeSymbol? left, TypeSymbol? right) => left?.Equals(right) ?? right is null;
 
     public static bool operator !=(TypeSymbol? left, TypeSymbol? right) => !(left == right);
 }
 
 /// <summary>A type the source declared, or a built-in primitive.</summary>
-public sealed class NamedTypeSymbol : TypeSymbol
-{
-    private readonly List<Symbol> _members = [];
-    private ImmutableArray<TypeSymbol> _baseTypes = [];
+public sealed class NamedTypeSymbol : TypeSymbol {
+    readonly List<Symbol> _members = [];
+    ImmutableArray<TypeSymbol> _baseTypes = [];
 
     internal NamedTypeSymbol(
         string name,
@@ -46,8 +43,8 @@ public sealed class NamedTypeSymbol : TypeSymbol
         Symbol? container,
         SyntaxNode? declaration = null,
         Accessibility accessibility = Accessibility.Internal,
-        bool isVariableSize = false)
-    {
+        bool isVariableSize = false
+    ) {
         Name = name;
         TypeKind = typeKind;
         ContainingSymbol = container;
@@ -57,8 +54,7 @@ public sealed class NamedTypeSymbol : TypeSymbol
         OriginalDefinition = this;
     }
 
-    private NamedTypeSymbol(NamedTypeSymbol definition, ImmutableArray<TypeSymbol> typeArguments)
-    {
+    NamedTypeSymbol(NamedTypeSymbol definition, ImmutableArray<TypeSymbol> typeArguments) {
         Name = definition.Name;
         TypeKind = definition.TypeKind;
         ContainingSymbol = definition.ContainingSymbol;
@@ -94,24 +90,24 @@ public sealed class NamedTypeSymbol : TypeSymbol
     public IReadOnlyList<Symbol> Members => _members;
 
     /// <summary>
-    /// A protocol's implicit <c>Self</c>: the conforming type, as a parameter
-    /// so that every substitution mechanism already handles it.
+    ///     A protocol's implicit <c>Self</c>: the conforming type, as a parameter
+    ///     so that every substitution mechanism already handles it.
     /// </summary>
     /// <remarks>
-    /// It is deliberately not in <see cref="TypeParameters"/>, because a
-    /// protocol with one associated type is written <c>P</c> and not
-    /// <c>P&lt;Self&gt;</c> — its arity is what the source says.
+    ///     It is deliberately not in <see cref="TypeParameters" />, because a
+    ///     protocol with one associated type is written <c>P</c> and not
+    ///     <c>P&lt;Self&gt;</c> — its arity is what the source says.
     /// </remarks>
     public TypeParameterSymbol? SelfTypeParameter { get; internal set; }
 
     /// <summary>
-    /// A protocol's <c>associatedtype</c> declarations.
+    ///     A protocol's <c>associatedtype</c> declarations.
     /// </summary>
     /// <remarks>
-    /// Like <c>Self</c> these are type parameters, and like <c>Self</c> they
-    /// stay out of <see cref="TypeParameters"/>: a conformer supplies them by
-    /// name rather than positionally, so they are not part of the protocol's
-    /// arity.
+    ///     Like <c>Self</c> these are type parameters, and like <c>Self</c> they
+    ///     stay out of <see cref="TypeParameters" />: a conformer supplies them by
+    ///     name rather than positionally, so they are not part of the protocol's
+    ///     arity.
     /// </remarks>
     public ImmutableArray<TypeParameterSymbol> AssociatedTypes { get; internal set; } = [];
 
@@ -124,28 +120,30 @@ public sealed class NamedTypeSymbol : TypeSymbol
     /// <summary>True for <c>abstract class</c>: it cannot be instantiated.</summary>
     public bool IsAbstract { get; internal set; }
 
-    public ImmutableArray<TypeSymbol> BaseTypes
-    {
+    public ImmutableArray<TypeSymbol> BaseTypes {
         get => _baseTypes;
         internal set => _baseTypes = value;
     }
 
-    /// <summary>Members by name, built on demand; see <see cref="ModuleSymbol"/>.</summary>
-    private Dictionary<string, List<Symbol>>? _byName;
+    /// <summary>Members by name, built on demand; see <see cref="ModuleSymbol" />.</summary>
+    Dictionary<string, List<Symbol>>? _byName;
 
-    internal void AddMember(Symbol member)
-    {
+    internal void AddMember(Symbol member) {
         _members.Add(member);
 
-        if (_byName is null) return;
-        if (!_byName.TryGetValue(member.Name, out var bucket))
+        if (_byName is null) {
+            return;
+        }
+
+        if (!_byName.TryGetValue(member.Name, out var bucket)) {
             _byName[member.Name] = bucket = [];
+        }
+
         bucket.Add(member);
     }
 
     /// <summary>Members declared with a given name, in declaration order.</summary>
-    public IEnumerable<Symbol> GetMembers(string name)
-    {
+    public IEnumerable<Symbol> GetMembers(string name) {
         _byName ??= ModuleSymbol.BuildIndex(_members);
         return _byName.TryGetValue(name, out var bucket) ? bucket : [];
     }
@@ -156,24 +154,36 @@ public sealed class NamedTypeSymbol : TypeSymbol
     public override string ToDisplayString() =>
         TypeArguments.IsEmpty
             ? Name
-            : $"{Name}<{string.Join(", ", TypeArguments.Select(t => t.ToDisplayString()))}>";
+            : $"{Name}<{string.Join(", ", TypeArguments.Select(static t => t.ToDisplayString()))}>";
 
-    public override bool Equals(TypeSymbol? other)
-    {
-        if (other is not NamedTypeSymbol named) return false;
-        if (!ReferenceEquals(OriginalDefinition, named.OriginalDefinition)) return false;
-        if (TypeArguments.Length != named.TypeArguments.Length) return false;
+    public override bool Equals(TypeSymbol? other) {
+        if (other is not NamedTypeSymbol named) {
+            return false;
+        }
 
-        for (var i = 0; i < TypeArguments.Length; i++)
-            if (!TypeArguments[i].Equals(named.TypeArguments[i])) return false;
+        if (!ReferenceEquals(OriginalDefinition, named.OriginalDefinition)) {
+            return false;
+        }
+
+        if (TypeArguments.Length != named.TypeArguments.Length) {
+            return false;
+        }
+
+        for (var i = 0; i < TypeArguments.Length; i++) {
+            if (!TypeArguments[i].Equals(named.TypeArguments[i])) {
+                return false;
+            }
+        }
 
         return true;
     }
 
-    public override int GetHashCode()
-    {
+    public override int GetHashCode() {
         var hash = OriginalDefinition.Name.GetHashCode(StringComparison.Ordinal);
-        foreach (var argument in TypeArguments) hash = (hash * 31) ^ argument.GetHashCode();
+        foreach (var argument in TypeArguments) {
+            hash = (hash * 31) ^ argument.GetHashCode();
+        }
+
         return hash;
     }
 }
@@ -183,12 +193,12 @@ public sealed class TypeParameterSymbol(
     string name,
     Symbol container,
     SyntaxNode? declaration,
-    int ordinal) : TypeSymbol
-{
+    int ordinal) : TypeSymbol {
     public override SymbolKind Kind => SymbolKind.TypeParameter;
     public override string Name { get; } = name;
     public override TypeKind TypeKind => TypeKind.Struct;
     public override Symbol? ContainingSymbol { get; } = container;
+
     public override ImmutableArray<SyntaxNode> DeclaringSyntax { get; } =
         declaration is null ? [] : [declaration];
 
@@ -201,23 +211,28 @@ public sealed class TypeParameterSymbol(
     public VarianceKind Variance { get; internal set; } = VarianceKind.None;
 
     /// <summary>
-    /// What an <c>associatedtype</c> falls back to when a conformer does not
-    /// name it, as in <c>associatedtype Index: Comparable = Int</c>.
+    ///     What an <c>associatedtype</c> falls back to when a conformer does not
+    ///     name it, as in <c>associatedtype Index: Comparable = Int</c>.
     /// </summary>
     public TypeSymbol? DefaultType { get; internal set; }
 
     public override string ToDisplayString() => Name;
 
     public override bool Equals(TypeSymbol? other) => ReferenceEquals(this, other);
-    public override int GetHashCode() => System.Runtime.CompilerServices
-        .RuntimeHelpers.GetHashCode(this);
+
+    public override int GetHashCode() =>
+        System.Runtime.CompilerServices
+            .RuntimeHelpers.GetHashCode(this);
 }
 
-public enum VarianceKind { None, Out, In }
+public enum VarianceKind {
+    None,
+    Out,
+    In
+}
 
 /// <summary>The kinds in the array family, per docs/02-memory-model.md §2.5.</summary>
-public enum ArrayKind
-{
+public enum ArrayKind {
     /// <summary><c>T[]</c> or <c>T[k]</c>: size fixed at construction.</summary>
     Fixed,
 
@@ -231,26 +246,25 @@ public enum ArrayKind
     GrowShrink,
 
     /// <summary><c>T[:]</c>: a non-copying slice view.</summary>
-    Slice,
+    Slice
 }
 
-public sealed class ArrayTypeSymbol(TypeSymbol elementType, ArrayKind arrayKind) : TypeSymbol
-{
+public sealed class ArrayTypeSymbol(TypeSymbol elementType, ArrayKind arrayKind) : TypeSymbol {
     public override SymbolKind Kind => SymbolKind.ArrayType;
-    public override string Name => "";
+    public override string Name => string.Empty;
     public override TypeKind TypeKind => TypeKind.Struct;
 
     public TypeSymbol ElementType { get; } = elementType;
     public ArrayKind ArrayKind { get; } = arrayKind;
 
-    public override string ToDisplayString() => ArrayKind switch
-    {
-        ArrayKind.Fixed => $"{ElementType.ToDisplayString()}[]",
-        ArrayKind.Inline => $"{ElementType.ToDisplayString()}[..]",
-        ArrayKind.Grow => $"{ElementType.ToDisplayString()}[>..]",
-        ArrayKind.GrowShrink => $"{ElementType.ToDisplayString()}[>..<]",
-        _ => $"{ElementType.ToDisplayString()}[:]",
-    };
+    public override string ToDisplayString() =>
+        ArrayKind switch {
+            ArrayKind.Fixed => $"{ElementType.ToDisplayString()}[]",
+            ArrayKind.Inline => $"{ElementType.ToDisplayString()}[..]",
+            ArrayKind.Grow => $"{ElementType.ToDisplayString()}[>..]",
+            ArrayKind.GrowShrink => $"{ElementType.ToDisplayString()}[>..<]",
+            _ => $"{ElementType.ToDisplayString()}[:]",
+        };
 
     public override bool Equals(TypeSymbol? other) =>
         other is ArrayTypeSymbol array
@@ -260,10 +274,9 @@ public sealed class ArrayTypeSymbol(TypeSymbol elementType, ArrayKind arrayKind)
     public override int GetHashCode() => HashCode.Combine(ElementType, ArrayKind);
 }
 
-public sealed class OptionalTypeSymbol(TypeSymbol underlyingType) : TypeSymbol
-{
+public sealed class OptionalTypeSymbol(TypeSymbol underlyingType) : TypeSymbol {
     public override SymbolKind Kind => SymbolKind.OptionalType;
-    public override string Name => "";
+    public override string Name => string.Empty;
     public override TypeKind TypeKind => TypeKind.Union;
 
     public TypeSymbol UnderlyingType { get; } = underlyingType;
@@ -279,10 +292,9 @@ public sealed class OptionalTypeSymbol(TypeSymbol underlyingType) : TypeSymbol
 public sealed class ReferenceTypeSymbol(
     TypeSymbol referencedType,
     string? relativeWidth = null,
-    string? pool = null) : TypeSymbol
-{
+    string? pool = null) : TypeSymbol {
     public override SymbolKind Kind => SymbolKind.ReferenceType;
-    public override string Name => "";
+    public override string Name => string.Empty;
     public override TypeKind TypeKind => TypeKind.Struct;
 
     public TypeSymbol ReferencedType { get; } = referencedType;
@@ -293,11 +305,12 @@ public sealed class ReferenceTypeSymbol(
     /// <summary>The pool a relative reference is measured from, or null.</summary>
     public string? Pool { get; } = pool;
 
-    public override string ToDisplayString()
-    {
+    public override string ToDisplayString() {
         var suffix = RelativeWidth is null
-            ? ""
-            : Pool is null ? $"<{RelativeWidth}>" : $"<{RelativeWidth} in {Pool}>";
+            ? string.Empty
+            : Pool is null
+                ? $"<{RelativeWidth}>"
+                : $"<{RelativeWidth} in {Pool}>";
         return $"{ReferencedType.ToDisplayString()}&{suffix}";
     }
 
@@ -307,49 +320,58 @@ public sealed class ReferenceTypeSymbol(
         && reference.RelativeWidth == RelativeWidth
         && reference.Pool == Pool;
 
-    public override int GetHashCode() =>
-        HashCode.Combine(ReferencedType, RelativeWidth, Pool);
+    public override int GetHashCode() => HashCode.Combine(ReferencedType, RelativeWidth, Pool);
 }
 
 public sealed class TupleTypeSymbol(
     ImmutableArray<TypeSymbol> elementTypes,
-    ImmutableArray<string?> elementNames) : TypeSymbol
-{
+    ImmutableArray<string?> elementNames) : TypeSymbol {
     public override SymbolKind Kind => SymbolKind.TupleType;
-    public override string Name => "";
+    public override string Name => string.Empty;
     public override TypeKind TypeKind => TypeKind.Struct;
 
     public ImmutableArray<TypeSymbol> ElementTypes { get; } = elementTypes;
     public ImmutableArray<string?> ElementNames { get; } = elementNames;
 
-    public override string ToDisplayString()
-    {
+    public override string ToDisplayString() {
         var parts = ElementTypes.Select((type, i) =>
             ElementNames.Length > i && ElementNames[i] is { } name
                 ? $"{name}: {type.ToDisplayString()}"
-                : type.ToDisplayString());
+                : type.ToDisplayString()
+        );
         return $"({string.Join(", ", parts)})";
     }
 
-    public override bool Equals(TypeSymbol? other)
-    {
-        if (other is not TupleTypeSymbol tuple) return false;
-        if (tuple.ElementTypes.Length != ElementTypes.Length) return false;
+    public override bool Equals(TypeSymbol? other) {
+        if (other is not TupleTypeSymbol tuple) {
+            return false;
+        }
 
-        for (var i = 0; i < ElementTypes.Length; i++)
-        {
-            if (!ElementTypes[i].Equals(tuple.ElementTypes[i])) return false;
+        if (tuple.ElementTypes.Length != ElementTypes.Length) {
+            return false;
+        }
+
+        for (var i = 0; i < ElementTypes.Length; i++) {
+            if (!ElementTypes[i].Equals(tuple.ElementTypes[i])) {
+                return false;
+            }
+
             var left = i < ElementNames.Length ? ElementNames[i] : null;
             var right = i < tuple.ElementNames.Length ? tuple.ElementNames[i] : null;
-            if (left != right) return false;
+            if (left != right) {
+                return false;
+            }
         }
+
         return true;
     }
 
-    public override int GetHashCode()
-    {
+    public override int GetHashCode() {
         var hash = ElementTypes.Length;
-        foreach (var type in ElementTypes) hash = (hash * 31) ^ type.GetHashCode();
+        foreach (var type in ElementTypes) {
+            hash = (hash * 31) ^ type.GetHashCode();
+        }
+
         return hash;
     }
 }
@@ -358,10 +380,9 @@ public sealed class FunctionTypeSymbol(
     ImmutableArray<TypeSymbol> parameterTypes,
     TypeSymbol returnType,
     bool isAsync = false,
-    TypeSymbol? thrownType = null) : TypeSymbol
-{
+    TypeSymbol? thrownType = null) : TypeSymbol {
     public override SymbolKind Kind => SymbolKind.FunctionType;
-    public override string Name => "";
+    public override string Name => string.Empty;
     public override TypeKind TypeKind => TypeKind.Struct;
 
     public ImmutableArray<TypeSymbol> ParameterTypes { get; } = parameterTypes;
@@ -372,121 +393,155 @@ public sealed class FunctionTypeSymbol(
     public TypeSymbol? ThrownType { get; } = thrownType;
 
     /// <summary>
-    /// Written <c>rethrows</c>: <see cref="ThrownType"/> is then what the
-    /// throwing function parameters throw, and a call only throws when the
-    /// arguments it is given actually do.
+    ///     Written <c>rethrows</c>: <see cref="ThrownType" /> is then what the
+    ///     throwing function parameters throw, and a call only throws when the
+    ///     arguments it is given actually do.
     /// </summary>
     public bool IsRethrows { get; init; }
 
-    public override string ToDisplayString()
-    {
-        var prefix = IsAsync ? "async " : "";
-        var parameters = string.Join(", ", ParameterTypes.Select(t => t.ToDisplayString()));
+    public override string ToDisplayString() {
+        var prefix = IsAsync ? "async " : string.Empty;
+        var parameters = string.Join(", ", ParameterTypes.Select(static t => t.ToDisplayString()));
         var throws = IsRethrows
             ? " rethrows"
-            : ThrownType is null ? "" : $" throws({ThrownType.ToDisplayString()})";
+            : ThrownType is null
+                ? string.Empty
+                : $" throws({ThrownType.ToDisplayString()})";
         return $"{prefix}({parameters}){throws} -> {ReturnType.ToDisplayString()}";
     }
 
-    public override bool Equals(TypeSymbol? other)
-    {
-        if (other is not FunctionTypeSymbol function) return false;
-        if (function.IsAsync != IsAsync) return false;
-        if (function.IsRethrows != IsRethrows) return false;
-        if (!function.ReturnType.Equals(ReturnType)) return false;
-        if (function.ParameterTypes.Length != ParameterTypes.Length) return false;
-        if ((function.ThrownType is null) != (ThrownType is null)) return false;
-        if (ThrownType is not null && !ThrownType.Equals(function.ThrownType)) return false;
+    public override bool Equals(TypeSymbol? other) {
+        if (other is not FunctionTypeSymbol function) {
+            return false;
+        }
 
-        for (var i = 0; i < ParameterTypes.Length; i++)
-            if (!ParameterTypes[i].Equals(function.ParameterTypes[i])) return false;
+        if (function.IsAsync != IsAsync) {
+            return false;
+        }
+
+        if (function.IsRethrows != IsRethrows) {
+            return false;
+        }
+
+        if (!function.ReturnType.Equals(ReturnType)) {
+            return false;
+        }
+
+        if (function.ParameterTypes.Length != ParameterTypes.Length) {
+            return false;
+        }
+
+        if (function.ThrownType is null != ThrownType is null) {
+            return false;
+        }
+
+        if (ThrownType is not null && !ThrownType.Equals(function.ThrownType)) {
+            return false;
+        }
+
+        for (var i = 0; i < ParameterTypes.Length; i++) {
+            if (!ParameterTypes[i].Equals(function.ParameterTypes[i])) {
+                return false;
+            }
+        }
 
         return true;
     }
 
-    public override int GetHashCode()
-    {
+    public override int GetHashCode() {
         var hash = ReturnType.GetHashCode();
-        foreach (var type in ParameterTypes) hash = (hash * 31) ^ type.GetHashCode();
+        foreach (var type in ParameterTypes) {
+            hash = (hash * 31) ^ type.GetHashCode();
+        }
+
         return hash;
     }
 }
 
 /// <summary>An anonymous sum type, such as <c>Int | String</c>.</summary>
 /// <remarks>
-/// Cases are normalised on construction, per docs/03-type-system.md §3.1:
-/// nested unions are flattened, duplicates removed, and the result sorted, so
-/// that two unions with the same case set are the same type.
+///     Cases are normalised on construction, per docs/03-type-system.md §3.1:
+///     nested unions are flattened, duplicates removed, and the result sorted, so
+///     that two unions with the same case set are the same type.
 /// </remarks>
-public sealed class StructuralUnionTypeSymbol : TypeSymbol
-{
+public sealed class StructuralUnionTypeSymbol : TypeSymbol {
     /// <summary>
-    /// Builds the union of these cases, which is one of them when, after
-    /// flattening and removing duplicates, only one is left.
+    ///     Builds the union of these cases, which is one of them when, after
+    ///     flattening and removing duplicates, only one is left.
     /// </summary>
-    public static TypeSymbol Create(IEnumerable<TypeSymbol> cases)
-    {
+    public static TypeSymbol Create(IEnumerable<TypeSymbol> cases) {
         var union = new StructuralUnionTypeSymbol(cases);
         return union.Cases.Length == 1 ? union.Cases[0] : union;
     }
 
-    public StructuralUnionTypeSymbol(IEnumerable<TypeSymbol> cases)
-    {
+    public StructuralUnionTypeSymbol(IEnumerable<TypeSymbol> cases) {
         var flattened = new List<TypeSymbol>();
         Flatten(cases, flattened);
 
         var distinct = new List<TypeSymbol>();
-        foreach (var type in flattened)
-            if (!distinct.Exists(existing => existing.Equals(type))) distinct.Add(type);
+        foreach (var type in flattened) {
+            if (!distinct.Exists(existing => existing.Equals(type))) {
+                distinct.Add(type);
+            }
+        }
 
         distinct.Sort(static (a, b) =>
-            string.CompareOrdinal(a.ToDisplayString(), b.ToDisplayString()));
+            string.CompareOrdinal(a.ToDisplayString(), b.ToDisplayString())
+        );
 
-        Cases = [.. distinct];
+        Cases = [..distinct];
     }
 
-    private static void Flatten(IEnumerable<TypeSymbol> types, List<TypeSymbol> into)
-    {
-        foreach (var type in types)
-        {
-            if (type is StructuralUnionTypeSymbol nested) Flatten(nested.Cases, into);
-            else into.Add(type);
+    static void Flatten(IEnumerable<TypeSymbol> types, List<TypeSymbol> into) {
+        foreach (var type in types) {
+            if (type is StructuralUnionTypeSymbol nested) {
+                Flatten(nested.Cases, into);
+            } else {
+                into.Add(type);
+            }
         }
     }
 
     public override SymbolKind Kind => SymbolKind.StructuralUnionType;
-    public override string Name => "";
+    public override string Name => string.Empty;
     public override TypeKind TypeKind => TypeKind.Union;
 
     public ImmutableArray<TypeSymbol> Cases { get; }
 
-    public override string ToDisplayString() =>
-        string.Join(" | ", Cases.Select(c => c.ToDisplayString()));
+    public override string ToDisplayString() => string.Join(" | ", Cases.Select(static c => c.ToDisplayString()));
 
-    public override bool Equals(TypeSymbol? other)
-    {
-        if (other is not StructuralUnionTypeSymbol union) return false;
-        if (union.Cases.Length != Cases.Length) return false;
+    public override bool Equals(TypeSymbol? other) {
+        if (other is not StructuralUnionTypeSymbol union) {
+            return false;
+        }
 
-        for (var i = 0; i < Cases.Length; i++)
-            if (!Cases[i].Equals(union.Cases[i])) return false;
+        if (union.Cases.Length != Cases.Length) {
+            return false;
+        }
+
+        for (var i = 0; i < Cases.Length; i++) {
+            if (!Cases[i].Equals(union.Cases[i])) {
+                return false;
+            }
+        }
 
         return true;
     }
 
-    public override int GetHashCode()
-    {
+    public override int GetHashCode() {
         var hash = Cases.Length;
-        foreach (var type in Cases) hash = (hash * 31) ^ type.GetHashCode();
+        foreach (var type in Cases) {
+            hash = (hash * 31) ^ type.GetHashCode();
+        }
+
         return hash;
     }
 }
 
 /// <summary><c>any P</c>: a boxed value dispatched through a witness table.</summary>
-public sealed class ExistentialTypeSymbol(TypeSymbol constraint) : TypeSymbol
-{
+public sealed class ExistentialTypeSymbol(TypeSymbol constraint) : TypeSymbol {
     public override SymbolKind Kind => SymbolKind.ExistentialType;
-    public override string Name => "";
+    public override string Name => string.Empty;
     public override TypeKind TypeKind => TypeKind.Struct;
     public override bool IsReferenceType => true;
 
@@ -501,10 +556,9 @@ public sealed class ExistentialTypeSymbol(TypeSymbol constraint) : TypeSymbol
 }
 
 /// <summary><c>some P</c>: one concrete type, hidden from the caller.</summary>
-public sealed class OpaqueTypeSymbol(TypeSymbol constraint) : TypeSymbol
-{
+public sealed class OpaqueTypeSymbol(TypeSymbol constraint) : TypeSymbol {
     public override SymbolKind Kind => SymbolKind.OpaqueType;
-    public override string Name => "";
+    public override string Name => string.Empty;
     public override TypeKind TypeKind => TypeKind.Struct;
 
     public TypeSymbol Constraint { get; } = constraint;
@@ -518,11 +572,10 @@ public sealed class OpaqueTypeSymbol(TypeSymbol constraint) : TypeSymbol
 }
 
 /// <summary>
-/// Stands in for a type that could not be resolved, so that binding continues
-/// and one mistake does not cascade into a page of diagnostics.
+///     Stands in for a type that could not be resolved, so that binding continues
+///     and one mistake does not cascade into a page of diagnostics.
 /// </summary>
-public sealed class ErrorTypeSymbol(string name = "?") : TypeSymbol
-{
+public sealed class ErrorTypeSymbol(string name = "?") : TypeSymbol {
     public static readonly ErrorTypeSymbol Instance = new();
 
     public override SymbolKind Kind => SymbolKind.ErrorType;
@@ -534,57 +587,68 @@ public sealed class ErrorTypeSymbol(string name = "?") : TypeSymbol
 
     /// <summary>Every error type is equal, so errors do not cascade.</summary>
     public override bool Equals(TypeSymbol? other) => other is ErrorTypeSymbol;
+
     public override int GetHashCode() => 0x0E22;
 }
 
 /// <summary><c>P &amp; Q</c>: a value conforming to every part.</summary>
-public sealed class CompositionTypeSymbol : TypeSymbol
-{
-    public CompositionTypeSymbol(IEnumerable<TypeSymbol> parts)
-    {
+public sealed class CompositionTypeSymbol : TypeSymbol {
+    public CompositionTypeSymbol(IEnumerable<TypeSymbol> parts) {
         var flattened = new List<TypeSymbol>();
         Flatten(parts, flattened);
 
         var distinct = new List<TypeSymbol>();
-        foreach (var type in flattened)
-            if (!distinct.Exists(existing => existing.Equals(type))) distinct.Add(type);
+        foreach (var type in flattened) {
+            if (!distinct.Exists(existing => existing.Equals(type))) {
+                distinct.Add(type);
+            }
+        }
 
-        Parts = [.. distinct];
+        Parts = [..distinct];
     }
 
-    private static void Flatten(IEnumerable<TypeSymbol> types, List<TypeSymbol> into)
-    {
-        foreach (var type in types)
-        {
-            if (type is CompositionTypeSymbol nested) Flatten(nested.Parts, into);
-            else into.Add(type);
+    static void Flatten(IEnumerable<TypeSymbol> types, List<TypeSymbol> into) {
+        foreach (var type in types) {
+            if (type is CompositionTypeSymbol nested) {
+                Flatten(nested.Parts, into);
+            } else {
+                into.Add(type);
+            }
         }
     }
 
     public override SymbolKind Kind => SymbolKind.NamedType;
-    public override string Name => "";
+    public override string Name => string.Empty;
     public override TypeKind TypeKind => TypeKind.Protocol;
 
     public ImmutableArray<TypeSymbol> Parts { get; }
 
-    public override string ToDisplayString() =>
-        string.Join(" & ", Parts.Select(p => p.ToDisplayString()));
+    public override string ToDisplayString() => string.Join(" & ", Parts.Select(static p => p.ToDisplayString()));
 
-    public override bool Equals(TypeSymbol? other)
-    {
-        if (other is not CompositionTypeSymbol composition) return false;
-        if (composition.Parts.Length != Parts.Length) return false;
+    public override bool Equals(TypeSymbol? other) {
+        if (other is not CompositionTypeSymbol composition) {
+            return false;
+        }
 
-        for (var i = 0; i < Parts.Length; i++)
-            if (!Parts[i].Equals(composition.Parts[i])) return false;
+        if (composition.Parts.Length != Parts.Length) {
+            return false;
+        }
+
+        for (var i = 0; i < Parts.Length; i++) {
+            if (!Parts[i].Equals(composition.Parts[i])) {
+                return false;
+            }
+        }
 
         return true;
     }
 
-    public override int GetHashCode()
-    {
+    public override int GetHashCode() {
         var hash = Parts.Length;
-        foreach (var type in Parts) hash = (hash * 31) ^ type.GetHashCode();
+        foreach (var type in Parts) {
+            hash = (hash * 31) ^ type.GetHashCode();
+        }
+
         return hash;
     }
 }

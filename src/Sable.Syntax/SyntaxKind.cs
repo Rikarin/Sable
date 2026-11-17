@@ -1,24 +1,23 @@
 namespace Sable.Syntax;
 
 /// <summary>
-/// Every lexical and syntactic element kind. Values are grouped into stable
-/// ranges so that <see cref="SyntaxFacts"/> can answer category questions with
-/// a range check rather than a switch.
+///     Every lexical and syntactic element kind. Values are grouped into stable
+///     ranges so that <see cref="SyntaxFacts" /> can answer category questions with
+///     a range check rather than a switch.
 /// </summary>
 /// <remarks>
-/// Ranges:
-/// <list type="bullet">
-///   <item>0000-0099  control and trivia</item>
-///   <item>0100-0199  literals and identifiers</item>
-///   <item>0200-0399  punctuation and operators</item>
-///   <item>0400-0599  reserved keywords</item>
-///   <item>0600-0699  contextual keywords</item>
-///   <item>0700-0799  directives</item>
-///   <item>1000+      syntax nodes (added in the parser milestone)</item>
-/// </list>
+///     Ranges:
+///     <list type="bullet">
+///         <item>0000-0099  control and trivia</item>
+///         <item>0100-0199  literals and identifiers</item>
+///         <item>0200-0399  punctuation and operators</item>
+///         <item>0400-0599  reserved keywords</item>
+///         <item>0600-0699  contextual keywords</item>
+///         <item>0700-0799  directives</item>
+///         <item>1000+      syntax nodes (added in the parser milestone)</item>
+///     </list>
 /// </remarks>
-public enum SyntaxKind : ushort
-{
+public enum SyntaxKind : ushort {
     None = 0,
     EndOfFile = 1,
     BadToken = 2,
@@ -28,8 +27,8 @@ public enum SyntaxKind : ushort
     NewLineTrivia = 11,
     LineCommentTrivia = 12,
     BlockCommentTrivia = 13,
-    DocCommentTrivia = 14,          // /// and /** */
-    ModuleDocCommentTrivia = 15,    // //!
+    DocCommentTrivia = 14, // /// and /** */
+    ModuleDocCommentTrivia = 15, // //!
     ShebangTrivia = 16,
     DisabledTextTrivia = 17,
     SkippedTokensTrivia = 18,
@@ -52,66 +51,66 @@ public enum SyntaxKind : ushort
     InterpolatedStringEndToken = 111,
 
     // ---- Punctuation ------------------------------------------------------
-    OpenParenToken = 200,           // (
-    CloseParenToken = 201,          // )
-    OpenBracketToken = 202,         // [
-    CloseBracketToken = 203,        // ]
-    OpenBraceToken = 204,           // {
-    CloseBraceToken = 205,          // }
-    CommaToken = 206,               // ,
-    SemicolonToken = 207,           // ;
-    ColonToken = 208,               // :
-    DotToken = 209,                 // .
-    QuestionToken = 210,            // ?
-    QuestionDotToken = 211,         // ?.
-    DotDotToken = 212,              // ..
-    DotDotLessToken = 213,          // ..<
-    DotDotDotToken = 214,           // ...
-    ArrowToken = 215,               // ->
-    FatArrowToken = 216,            // =>
-    AtToken = 217,                  // @
-    HashToken = 218,                // #
-    UnderscoreToken = 219,          // _
-    BackslashToken = 220,           // \
-    DollarToken = 221,              // $  (closure shorthand $0, $1)
+    OpenParenToken = 200, // (
+    CloseParenToken = 201, // )
+    OpenBracketToken = 202, // [
+    CloseBracketToken = 203, // ]
+    OpenBraceToken = 204, // {
+    CloseBraceToken = 205, // }
+    CommaToken = 206, // ,
+    SemicolonToken = 207, // ;
+    ColonToken = 208, // :
+    DotToken = 209, // .
+    QuestionToken = 210, // ?
+    QuestionDotToken = 211, // ?.
+    DotDotToken = 212, // ..
+    DotDotLessToken = 213, // ..<
+    DotDotDotToken = 214, // ...
+    ArrowToken = 215, // ->
+    FatArrowToken = 216, // =>
+    AtToken = 217, // @
+    HashToken = 218, // #
+    UnderscoreToken = 219, // _
+    BackslashToken = 220, // \
+    DollarToken = 221, // $  (closure shorthand $0, $1)
 
     // ---- Operators --------------------------------------------------------
-    PlusToken = 240,                // +
-    MinusToken = 241,               // -
-    StarToken = 242,                // *
-    SlashToken = 243,               // /
-    PercentToken = 244,             // %
-    AmpersandToken = 245,           // &
-    PipeToken = 246,                // |
-    CaretToken = 247,               // ^
-    TildeToken = 248,               // ~
-    BangToken = 249,                // !
-    LessLessToken = 250,            // <<
-    GreaterGreaterToken = 251,      // >>
-    AmpersandAmpersandToken = 252,  // &&
-    PipePipeToken = 253,            // ||
-    QuestionQuestionToken = 254,    // ??
+    PlusToken = 240, // +
+    MinusToken = 241, // -
+    StarToken = 242, // *
+    SlashToken = 243, // /
+    PercentToken = 244, // %
+    AmpersandToken = 245, // &
+    PipeToken = 246, // |
+    CaretToken = 247, // ^
+    TildeToken = 248, // ~
+    BangToken = 249, // !
+    LessLessToken = 250, // <<
+    GreaterGreaterToken = 251, // >>
+    AmpersandAmpersandToken = 252, // &&
+    PipePipeToken = 253, // ||
+    QuestionQuestionToken = 254, // ??
 
-    EqualsToken = 260,              // =
-    EqualsEqualsToken = 261,        // ==
-    BangEqualsToken = 262,          // !=
-    EqualsEqualsEqualsToken = 263,  // ===
-    BangEqualsEqualsToken = 264,    // !==
-    LessToken = 265,                // <
-    LessEqualsToken = 266,          // <=
-    GreaterToken = 267,             // >
-    GreaterEqualsToken = 268,       // >=
+    EqualsToken = 260, // =
+    EqualsEqualsToken = 261, // ==
+    BangEqualsToken = 262, // !=
+    EqualsEqualsEqualsToken = 263, // ===
+    BangEqualsEqualsToken = 264, // !==
+    LessToken = 265, // <
+    LessEqualsToken = 266, // <=
+    GreaterToken = 267, // >
+    GreaterEqualsToken = 268, // >=
 
-    PlusEqualsToken = 280,          // +=
-    MinusEqualsToken = 281,         // -=
-    StarEqualsToken = 282,          // *=
-    SlashEqualsToken = 283,         // /=
-    PercentEqualsToken = 284,       // %=
-    AmpersandEqualsToken = 285,     // &=
-    PipeEqualsToken = 286,          // |=
-    CaretEqualsToken = 287,         // ^=
-    LessLessEqualsToken = 288,      // <<=
-    GreaterGreaterEqualsToken = 289,// >>=
+    PlusEqualsToken = 280, // +=
+    MinusEqualsToken = 281, // -=
+    StarEqualsToken = 282, // *=
+    SlashEqualsToken = 283, // /=
+    PercentEqualsToken = 284, // %=
+    AmpersandEqualsToken = 285, // &=
+    PipeEqualsToken = 286, // |=
+    CaretEqualsToken = 287, // ^=
+    LessLessEqualsToken = 288, // <<=
+    GreaterGreaterEqualsToken = 289, // >>=
     QuestionQuestionEqualsToken = 290, // ??=
 
     // ---- Reserved keywords (spec/lexical.md §5) ---------------------------
@@ -175,8 +174,8 @@ public enum SyntaxKind : ushort
     RethrowsKeyword = 459,
     ReturnKeyword = 460,
     SealedKeyword = 461,
-    SelfKeyword = 462,          // self
-    CapitalSelfKeyword = 463,   // Self
+    SelfKeyword = 462, // self
+    CapitalSelfKeyword = 463, // Self
     SomeKeyword = 464,
     StaticKeyword = 465,
     StructKeyword = 466,
@@ -196,7 +195,7 @@ public enum SyntaxKind : ushort
     WeakKeyword = 480,
     WhereKeyword = 481,
     WhileKeyword = 482,
-    RefKeyword = 483,          // out of alphabetical order; the range check is numeric
+    RefKeyword = 483, // out of alphabetical order; the range check is numeric
 
     // ---- Contextual keywords ---------------------------------------------
     AssociatedtypeKeyword = 600,
@@ -379,5 +378,5 @@ public enum SyntaxKind : ushort
     UnionCasePayloadList = 1434,
     UnionCaseField = 1435,
     EnumCaseDeclaration = 1436,
-    IncompleteDeclaration = 1437,
+    IncompleteDeclaration = 1437
 }

@@ -1,26 +1,23 @@
-using Sable.Symbols;
-
 namespace Sable.Symbols.Tests;
 
-public sealed class DeclarationTests
-{
-    private static Compilation Compile(params string[] sources) => Compilation.Create(sources);
+public sealed class DeclarationTests {
+    static Compilation Compile(params string[] sources) => Compilation.Create(sources);
 
-    private static IReadOnlyList<Diagnostic> Errors(Compilation compilation) =>
-        [.. compilation.GetDiagnostics().Where(d => d.Severity == DiagnosticSeverity.Error)];
+    static IReadOnlyList<Diagnostic> Errors(Compilation compilation) =>
+        [..compilation.GetDiagnostics().Where(static d => d.Severity == DiagnosticSeverity.Error)];
 
-    private static void AssertNoErrors(Compilation compilation)
-    {
+    static void AssertNoErrors(Compilation compilation) {
         var errors = Errors(compilation);
-        Assert.True(errors.Count == 0,
-            string.Join("\n", errors.Select(e => $"{e.Id}: {e.Message} {e.Span}")));
+        Assert.True(
+            errors.Count == 0,
+            string.Join("\n", errors.Select(static e => $"{e.Id}: {e.Message} {e.Span}"))
+        );
     }
 
     // ---- Modules -----------------------------------------------------------
 
     [Fact]
-    public void DeclaresAModule()
-    {
+    public void DeclaresAModule() {
         var compilation = Compile("module App.Core\nstruct Point { x: Int, y: Int }");
         AssertNoErrors(compilation);
 
@@ -30,11 +27,11 @@ public sealed class DeclarationTests
     }
 
     [Fact]
-    public void TwoFilesShareOneModule()
-    {
+    public void TwoFilesShareOneModule() {
         var compilation = Compile(
             "module App\nstruct A { }",
-            "module App\nstruct B { }");
+            "module App\nstruct B { }"
+        );
 
         AssertNoErrors(compilation);
         var module = compilation.GetModule("App");
@@ -42,24 +39,25 @@ public sealed class DeclarationTests
     }
 
     [Fact]
-    public void AFileWithoutAModuleStillDeclaresItsTypes()
-    {
+    public void AFileWithoutAModuleStillDeclaresItsTypes() {
         // spec/SYNTAX.md §1 wants a module declaration, and says so, but the
         // file is still bound: a missing one must not take the rest with it.
         var compilation = Compile("struct A { }");
 
-        Assert.Contains(compilation.GetDiagnostics(),
-            d => d.Code == ErrorCode.ERR_NoModuleDeclaration);
-        Assert.NotNull(compilation.GetModule(""));
+        Assert.Contains(
+            compilation.GetDiagnostics(),
+            static d => d.Code == ErrorCode.ERR_NoModuleDeclaration
+        );
+        Assert.NotNull(compilation.GetModule(string.Empty));
         Assert.NotNull(compilation.GetTypeByQualifiedName("A"));
     }
 
     // ---- Types -------------------------------------------------------------
 
     [Fact]
-    public void DeclaresEveryTypeKind()
-    {
-        var compilation = Compile("""
+    public void DeclaresEveryTypeKind() {
+        var compilation = Compile(
+            """
             module M
             struct S { }
             class C { }
@@ -67,7 +65,8 @@ public sealed class DeclarationTests
             protocol P { }
             union U { Case }
             enum E { One }
-            """);
+            """
+        );
 
         AssertNoErrors(compilation);
 
@@ -80,8 +79,7 @@ public sealed class DeclarationTests
     }
 
     [Fact]
-    public void DeclaresNestedTypes()
-    {
+    public void DeclaresNestedTypes() {
         var compilation = Compile("module M\nstruct Outer { struct Inner { } }");
         AssertNoErrors(compilation);
 
@@ -91,8 +89,7 @@ public sealed class DeclarationTests
     }
 
     [Fact]
-    public void RecordsTypeParametersAndVariance()
-    {
+    public void RecordsTypeParametersAndVariance() {
         var compilation = Compile("module M\nprotocol Producer<out T> { }\nstruct Pair<A, B> { }");
         AssertNoErrors(compilation);
 
@@ -103,38 +100,44 @@ public sealed class DeclarationTests
     }
 
     [Fact]
-    public void RecordsVariableSizedUnions()
-    {
+    public void RecordsVariableSizedUnions() {
         var compilation = Compile("module M\nunion Node.. { Leaf }");
         AssertNoErrors(compilation);
         Assert.True(compilation.GetTypeByQualifiedName("M.Node")!.IsVariableSize);
     }
 
     [Fact]
-    public void RecordsAccessibility()
-    {
-        var compilation = Compile("""
+    public void RecordsAccessibility() {
+        var compilation = Compile(
+            """
             module M
             public struct Open { }
             private struct Hidden { }
             struct Default { }
-            """);
+            """
+        );
 
         AssertNoErrors(compilation);
-        Assert.Equal(Accessibility.Public,
-            compilation.GetTypeByQualifiedName("M.Open")!.DeclaredAccessibility);
-        Assert.Equal(Accessibility.Private,
-            compilation.GetTypeByQualifiedName("M.Hidden")!.DeclaredAccessibility);
-        Assert.Equal(Accessibility.Internal,
-            compilation.GetTypeByQualifiedName("M.Default")!.DeclaredAccessibility);
+        Assert.Equal(
+            Accessibility.Public,
+            compilation.GetTypeByQualifiedName("M.Open")!.DeclaredAccessibility
+        );
+        Assert.Equal(
+            Accessibility.Private,
+            compilation.GetTypeByQualifiedName("M.Hidden")!.DeclaredAccessibility
+        );
+        Assert.Equal(
+            Accessibility.Internal,
+            compilation.GetTypeByQualifiedName("M.Default")!.DeclaredAccessibility
+        );
     }
 
     // ---- Members -----------------------------------------------------------
 
     [Fact]
-    public void DeclaresMembers()
-    {
-        var compilation = Compile("""
+    public void DeclaresMembers() {
+        var compilation = Compile(
+            """
             module M
             struct S {
                 public var a: Int
@@ -144,7 +147,8 @@ public sealed class DeclarationTests
                 init(a: Int) { }
                 deinit { }
             }
-            """);
+            """
+        );
 
         AssertNoErrors(compilation);
 
@@ -161,16 +165,17 @@ public sealed class DeclarationTests
     }
 
     [Fact]
-    public void DeclaresUnionCasesWithPayloads()
-    {
-        var compilation = Compile("""
+    public void DeclaresUnionCasesWithPayloads() {
+        var compilation = Compile(
+            """
             module M
             union Shape {
                 Circle(radius: F64)
                 Rect(width: F64, height: F64)
                 Empty
             }
-            """);
+            """
+        );
 
         AssertNoErrors(compilation);
 
@@ -184,13 +189,13 @@ public sealed class DeclarationTests
     }
 
     [Fact]
-    public void DeclaresEnumCases()
-    {
+    public void DeclaresEnumCases() {
         var compilation = Compile("module M\nenum E : U8 { A = 1, B, C }");
         AssertNoErrors(compilation);
 
         var cases = compilation.GetTypeByQualifiedName("M.E")!
-            .Members.OfType<EnumCaseSymbol>().ToList();
+            .Members.OfType<EnumCaseSymbol>()
+            .ToList();
 
         Assert.Equal(3, cases.Count);
         Assert.True(cases[0].HasExplicitValue);
@@ -198,31 +203,33 @@ public sealed class DeclarationTests
     }
 
     [Fact]
-    public void FunctionsMayBeOverloaded()
-    {
-        var compilation = Compile("""
+    public void FunctionsMayBeOverloaded() {
+        var compilation = Compile(
+            """
             module M
             struct S {
                 fn f(_ a: Int) { }
                 fn f(_ a: String) { }
             }
-            """);
+            """
+        );
 
         AssertNoErrors(compilation);
         Assert.Equal(2, compilation.GetTypeByQualifiedName("M.S")!.GetMembers("f").Count());
     }
 
     [Fact]
-    public void RecordsFunctionModifiers()
-    {
-        var compilation = Compile("""
+    public void RecordsFunctionModifiers() {
+        var compilation = Compile(
+            """
             module M
             struct S {
                 public static fn a() { }
                 mutating fn b() { }
                 async fn c() { }
             }
-            """);
+            """
+        );
 
         AssertNoErrors(compilation);
         var type = compilation.GetTypeByQualifiedName("M.S")!;
@@ -235,75 +242,71 @@ public sealed class DeclarationTests
     // ---- Duplicates --------------------------------------------------------
 
     [Fact]
-    public void DuplicateTypeIsReported()
-    {
+    public void DuplicateTypeIsReported() {
         var compilation = Compile("module M\nstruct A { }\nstruct A { }");
         var error = Assert.Single(Errors(compilation));
         Assert.Equal(ErrorCode.ERR_DuplicateDeclaration, error.Code);
     }
 
     [Fact]
-    public void DuplicateMemberIsReported()
-    {
+    public void DuplicateMemberIsReported() {
         var compilation = Compile("module M\nstruct S { var a: Int\n var a: Int }");
-        Assert.Contains(Errors(compilation), e => e.Code == ErrorCode.ERR_DuplicateDeclaration);
+        Assert.Contains(Errors(compilation), static e => e.Code == ErrorCode.ERR_DuplicateDeclaration);
     }
 
     [Fact]
-    public void DuplicateAcrossFilesInOneModuleIsReported()
-    {
+    public void DuplicateAcrossFilesInOneModuleIsReported() {
         var compilation = Compile("module M\nstruct A { }", "module M\nstruct A { }");
-        Assert.Contains(Errors(compilation), e => e.Code == ErrorCode.ERR_DuplicateDeclaration);
+        Assert.Contains(Errors(compilation), static e => e.Code == ErrorCode.ERR_DuplicateDeclaration);
     }
 
     [Fact]
-    public void TheSameNameInTwoModulesIsFine()
-    {
+    public void TheSameNameInTwoModulesIsFine() {
         AssertNoErrors(Compile("module A\nstruct S { }", "module B\nstruct S { }"));
     }
 
     // ---- Imports -----------------------------------------------------------
 
     [Fact]
-    public void ResolvesImports()
-    {
+    public void ResolvesImports() {
         var compilation = Compile(
             "module Lib\npublic struct Widget { }",
-            "module App\nimport Lib\nstruct Screen { w: Widget }");
+            "module App\nimport Lib\nstruct Screen { w: Widget }"
+        );
 
         AssertNoErrors(compilation);
     }
 
     [Fact]
-    public void AnUnknownImportIsReported()
-    {
+    public void AnUnknownImportIsReported() {
         var compilation = Compile("module App\nimport Missing\nstruct S { }");
-        Assert.Contains(Errors(compilation), e => e.Code == ErrorCode.ERR_ModuleNotFound);
+        Assert.Contains(Errors(compilation), static e => e.Code == ErrorCode.ERR_ModuleNotFound);
     }
 
     [Fact]
-    public void SelectiveImportBringsInOnlyWhatIsNamed()
-    {
+    public void SelectiveImportBringsInOnlyWhatIsNamed() {
         var compilation = Compile(
             "module Lib\npublic struct A { }\npublic struct B { }",
-            "module App\nimport Lib.{ A }\nstruct S { a: A }");
+            "module App\nimport Lib.{ A }\nstruct S { a: A }"
+        );
 
         AssertNoErrors(compilation);
 
         var hidden = Compile(
             "module Lib\npublic struct A { }\npublic struct B { }",
-            "module App\nimport Lib.{ A }\nstruct S { b: B }");
+            "module App\nimport Lib.{ A }\nstruct S { b: B }"
+        );
 
-        Assert.Contains(Errors(hidden), e => e.Code == ErrorCode.ERR_TypeNotFound);
+        Assert.Contains(Errors(hidden), static e => e.Code == ErrorCode.ERR_TypeNotFound);
     }
 
     [Fact]
-    public void ImportingAnUnknownMemberIsReported()
-    {
+    public void ImportingAnUnknownMemberIsReported() {
         var compilation = Compile(
             "module Lib\npublic struct A { }",
-            "module App\nimport Lib.{ Nope }");
+            "module App\nimport Lib.{ Nope }"
+        );
 
-        Assert.Contains(Errors(compilation), e => e.Code == ErrorCode.ERR_NameNotFound);
+        Assert.Contains(Errors(compilation), static e => e.Code == ErrorCode.ERR_NameNotFound);
     }
 }

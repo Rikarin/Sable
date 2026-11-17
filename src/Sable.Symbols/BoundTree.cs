@@ -754,6 +754,12 @@ public sealed class BoundFunctionGroup(
     /// <summary>What the receiver's type arguments bind, if it was constructed.</summary>
     internal TypeSubstitution? Substitution { get; init; }
 
+    /// <summary>
+    /// True when the receiver was reached through <c>?.</c>, so a call
+    /// through this group gives an optional.
+    /// </summary>
+    internal bool IsOptionalChain { get; init; }
+
     public override IEnumerable<BoundNode> Children => Nodes(Receiver);
 }
 

@@ -45,3 +45,15 @@ fn parsingReturnsAnOptional(_ s: String) -> Int {
 fn parsingUnwrapped(_ s: String) -> Int {
     return s.toInt() ?? 0
 }
+
+fn splitGivesAnArray(_ s: String) -> String {
+    return s.split('-')                 //! S3004 expected 'String'
+}
+
+fn sliceTakesTwoIndices(_ s: String) -> String {
+    return s.slice(from: 0)             //! S3007 cannot be called
+}
+
+fn fromCharIsStatic(_ c: Char) -> String {
+    return String.fromChar(c)
+}

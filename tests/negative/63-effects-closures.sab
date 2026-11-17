@@ -1,0 +1,67 @@
+module Negative.EffectsAndClosures
+
+public union IoError { Denied }
+
+fn read(_ p: String) throws(IoError) -> String { return p }
+async fn fetch(_ p: String) -> String { return p }
+
+fn withRetry<T>(_ body: () throws(IoError) -> T) throws(IoError) -> T {
+    return try body()
+}
+
+fn mapThrowing<T, U>(_ xs: T[>..], _ f: (T) throws(IoError) -> U) throws(IoError) -> U[>..] {
+    var result: U[>..] = []
+    for x in xs {
+        result.append(try f(x))
+    }
+    return result
+}
+
+fn aThrowingClosureFitsAThrowingParameter() throws(IoError) -> String {
+    return try withRetry(() => { return try read("a") })
+}
+
+fn aNonThrowingClosureFitsToo() throws(IoError) -> String {
+    return try withRetry(() => { return "a" })
+}
+
+fn aThrowingClosureDoesNotFitAPlainParameter() -> Int {
+    return apply(1) { try read("a").count }   //! S3033 nowhere to go
+}
+
+fn apply(_ n: Int, _ f: (Int) -> Int) -> Int { return f(n) }
+
+fn mappingWithAThrowingClosure(_ xs: String[>..]) throws(IoError) -> String[>..] {
+    return try mapThrowing(xs) { try read($0) }
+}
+
+fn theClosureResultStillDecides(_ xs: String[>..]) throws(IoError) -> Int[>..] {
+    return try mapThrowing(xs) { try read($0) }   //! S3004
+}
+
+fn anAsyncClosureNeedsAnAsyncParameter() -> Int {
+    return apply(1) { await fetch("a").count }   //! S3035 'await' is only available //! S3035 is async
+}
+
+fn awaitingInAnAsyncClosure() -> Int {
+    return applyAsync(1) { await fetch("a").count }
+}
+
+fn applyAsync(_ n: Int, _ f: async (Int) -> Int) -> Int {
+    return n
+}
+
+fn aTryCoversTheWholeClosureBody() throws(IoError) -> String {
+    return try withRetry(() => {
+        let a = try read("a")
+        let b = try read(a)
+        return b
+    })
+}
+
+fn eachCallInsideStillNeedsOne() throws(IoError) -> String {
+    return try withRetry(() => {
+        let a = read("a")               //! S3032 needs 'try'
+        return a
+    })
+}

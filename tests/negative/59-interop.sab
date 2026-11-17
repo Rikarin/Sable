@@ -72,3 +72,31 @@ fn callingAMutatingRequirementOnALet(_ c: Circle) {
     let copy = c
     copy.scale(by: 2.0)                 //! S3041 is mutating
 }
+
+fn protocolMembersThroughAnOptional(_ s: (any Shape)?) -> F64 {
+    return s?.area() ?? 0.0
+}
+
+fn withoutTheChain(_ s: (any Shape)?) -> F64 {
+    return s.area()                     //! S3011 may hold nothing
+}
+
+fn anOptionalExistentialIsStillOptional(_ s: (any Shape)?) -> F64 {
+    return s?.area()                    //! S3004 expected 'F64'
+}
+
+fn chainingTwoLevels(_ shapes: ((any Shape)?)[>..]) -> F64 {
+    var total = 0.0
+    for shape in shapes {
+        total = total + (shape?.area() ?? 0.0)
+    }
+    return total
+}
+
+fn aNonOptionalDoesNotNeedIt(_ s: any Shape) -> F64 {
+    return s.area()
+}
+
+fn aForcedUnwrap(_ s: (any Shape)?) -> F64 {
+    return s!.area()
+}

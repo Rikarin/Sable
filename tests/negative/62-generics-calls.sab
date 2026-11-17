@@ -1,0 +1,98 @@
+module Negative.GenericsCalls
+
+public protocol Named { fn name() -> String }
+public struct Person: Named { public fn name() -> String { return "p" } }
+public struct Plain { public var n: Int }
+public struct Pair<A, B> { public var first: A, public var second: B }
+
+fn identity<T>(_ value: T) -> T { return value }
+fn firstOf<A, B>(_ p: Pair<A, B>) -> A { return p.first }
+fn swap<A, B>(_ p: Pair<A, B>) -> Pair<B, A> {
+    return Pair { first: p.second, second: p.first }
+}
+fn named<T: Named>(_ value: T) -> String { return value.name() }
+fn two<T>(_ a: T, _ b: T) -> T { return a }
+
+fn identityKeepsTheType(_ n: Int) -> String {
+    return identity(n)                  //! S3004 expected 'String'
+}
+
+fn aPairProjects(_ p: Pair<Int, String>) -> Int {
+    return firstOf(p)
+}
+
+fn andItsTypeIsChecked(_ p: Pair<Int, String>) -> String {
+    return firstOf(p)                   //! S3004 expected 'String'
+}
+
+fn swappingSwapsTheArguments(_ p: Pair<Int, String>) -> Pair<String, Int> {
+    return swap(p)
+}
+
+fn swappingTheWrongWay(_ p: Pair<Int, String>) -> Pair<Int, String> {
+    return swap(p)                      //! S3004
+}
+
+fn oneTypeParameterTwoArguments(_ a: Int, _ b: String) -> Int {
+    return two(a, b)                    //! S3007 cannot be called
+}
+
+fn theSameTypeTwice(_ a: Int, _ b: Int) -> Int {
+    return two(a, b)
+}
+
+fn aConstraintIsChecked(_ p: Plain) -> String {
+    return named(p)                     //! S3007 cannot be called
+}
+
+fn aConstraintIsSatisfied(_ p: Person) -> String {
+    return named(p)
+}
+
+fn inferringThroughAnArray(_ xs: Int[>..]) -> Int {
+    return firstElement(xs)
+}
+
+fn firstElement<T>(_ xs: T[>..]) -> T {
+    for x in xs {
+        return x
+    }
+    return firstElement(xs)
+}
+
+fn inferringThroughAnArrayChecks(_ xs: Int[>..]) -> String {
+    return firstElement(xs)             //! S3004 expected 'String'
+}
+
+fn inferringThroughAnOptional(_ n: Int?) -> Int {
+    return unwrapOr(n, 0)
+}
+
+fn unwrapOr<T>(_ value: T?, _ fallback: T) -> T {
+    guard let found = value else {
+        return fallback
+    }
+    return found
+}
+
+fn theFallbackMustAgree(_ n: Int?) -> Int {
+    return unwrapOr(n, "zero")          //! S3007 cannot be called
+}
+
+fn inferringThroughAClosure(_ n: Int) -> String {
+    return transform(n) { $0.toString() }
+}
+
+fn transform<T, U>(_ value: T, _ f: (T) -> U) -> U { return f(value) }
+
+fn theClosureResultDecides(_ n: Int) -> Int {
+    return transform(n) { $0.toString() }   //! S3004 expected 'Int'
+}
+
+fn aNestedGenericCall(_ p: Pair<Int, String>) -> Pair<String, Int> {
+    return swap(identity(p))
+}
+
+fn aNestedGenericCallChecks(_ p: Pair<Int, String>) -> Pair<Int, String> {
+    return swap(identity(p))            //! S3004
+}

@@ -1501,15 +1501,26 @@ public sealed class Binder
         var member = BindMemberGroup(
             syntax, receiver, instanceMembers, found.Owner, found.Substitution);
 
+        if (!optionalChain) return member;
+
         // Reaching through an optional gives an optional: '?.' can produce
         // nothing, and the type says so.
-        if (optionalChain && member is BoundFieldAccess field)
+        return member switch
         {
-            return new BoundFieldAccess(
-                syntax, field.Receiver, field.Field, new OptionalTypeSymbol(field.Type));
-        }
+            BoundFieldAccess field => new BoundFieldAccess(
+                syntax, field.Receiver, field.Field, new OptionalTypeSymbol(field.Type)),
 
-        return member;
+            // A call through the chain is optional too, which the group
+            // carries until the call is bound.
+            BoundFunctionGroup group => new BoundFunctionGroup(
+                syntax, group.Receiver, group.Candidates)
+            {
+                Substitution = group.Substitution,
+                IsOptionalChain = true,
+            },
+
+            _ => member,
+        };
     }
 
     /// <summary>
@@ -1640,12 +1651,16 @@ public sealed class Binder
                     // The conformer also says what the associated types are.
                     if (Unwrap(selfType) is NamedTypeSymbol conformer)
                     {
+                        // 'alias Item = T' names the conformer's own
+                        // parameter, so Tagged<String> binds Item to String.
+                        var own = TypeSubstitution.For(conformer);
+
                         foreach (var associated in named.AssociatedTypes)
                         {
                             if (ConformanceChecker.ResolveAssociated(conformer, associated)
                                 is { } bound)
                             {
-                                map[associated] = bound;
+                                map[associated] = own.Apply(bound);
                             }
                         }
                     }
@@ -2073,8 +2088,14 @@ public sealed class Binder
             MarkThrows(syntax.Span, $"'{resolved.Name}'", substitution.Apply(thrown));
         if (resolved.IsAsync) MarkAsync(syntax.Span, $"'{resolved.Name}'");
 
-        return new BoundCall(syntax, group.Receiver, resolved, converted.ToImmutable(),
-            substitution.Apply(resolved.ReturnType));
+        var result = substitution.Apply(resolved.ReturnType);
+        var call = new BoundCall(
+            syntax, group.Receiver, resolved, converted.ToImmutable(), result);
+
+        return group.IsOptionalChain
+            ? new BoundConversion(
+                syntax, new OptionalTypeSymbol(result), call, ConversionKind.OptionalWrap)
+            : call;
     }
 
     /// <summary>Works out a generic function's type arguments from the call.</summary>
@@ -2120,11 +2141,13 @@ public sealed class Binder
             {
                 if (constraint is not NamedTypeSymbol protocol) continue;
 
+                var own = TypeSubstitution.For(conformer);
+
                 foreach (var associated in protocol.AssociatedTypes)
                 {
                     if (map.ContainsKey(associated)) continue;
                     if (ConformanceChecker.ResolveAssociated(conformer, associated) is { } bound)
-                        map[associated] = bound;
+                        map[associated] = own.Apply(bound);
                 }
             }
         }
@@ -2286,6 +2309,37 @@ public sealed class Binder
 
         if (receiver.HasError) return new BoundError(syntax, [receiver, .. indices]);
 
+        // 'd?[k]' indexes through an optional and gives an optional back.
+        if (receiver.Type is OptionalTypeSymbol optional)
+        {
+            if (syntax.QuestionToken.IsNone)
+            {
+                _diagnostics.Error(ErrorCode.ERR_NotOptional, syntax.Span,
+                    $"'{receiver.Type.ToDisplayString()}' may hold nothing, so index it "
+                    + "with '?[...]' or unwrap it first");
+                return new BoundError(syntax, [receiver, .. indices]);
+            }
+
+            var unwrapped = new BoundConversion(
+                syntax.Expression, optional.UnderlyingType, receiver, ConversionKind.Explicit);
+
+            var inner = BindElementAccessCore(syntax, unwrapped, indices);
+
+            return inner.HasError || inner.Type is OptionalTypeSymbol
+                ? inner
+                : new BoundConversion(
+                    syntax, new OptionalTypeSymbol(inner.Type), inner,
+                    ConversionKind.OptionalWrap);
+        }
+
+        return BindElementAccessCore(syntax, receiver, indices);
+    }
+
+    private BoundExpression BindElementAccessCore(
+        ElementAccessExpressionSyntax syntax,
+        BoundExpression receiver,
+        ImmutableArray<BoundExpression> indices)
+    {
         if (receiver.Type is ArrayTypeSymbol array)
         {
             indices = CheckIndices(indices, Core.Int, syntax);

@@ -1,0 +1,113 @@
+module Negative.Final
+
+public struct Vec { public var x: F64, public var y: F64 }
+public protocol Summable { fn total() -> F64 }
+
+fn vectorArithmetic(_ a: Vec, _ b: Vec) -> Vec {
+    return Vec { x: a.x + b.x, y: a.y + b.y }
+}
+
+fn addingVectorsDirectly(_ a: Vec, _ b: Vec) -> Vec {
+    return a + b                        //! S3009 is not defined for
+}
+
+fn scalingByAnInt(_ a: Vec, _ k: Int) -> Vec {
+    return Vec { x: a.x * k, y: a.y * k }   //! S3009 //! S3009
+}
+
+fn scalingByAFloat(_ a: Vec, _ k: F64) -> Vec {
+    return Vec { x: a.x * k, y: a.y * k }
+}
+
+// The extension below adds the conformance; declaration order does not
+// matter, so this is fine.
+fn conformanceFromAnExtension(_ v: Vec) -> F64 {
+    return sum(v)
+}
+
+fn sum(_ value: some Summable) -> F64 { return value.total() }
+
+public extension Vec: Summable {
+    public fn total() -> F64 {
+        return x + y
+    }
+}
+
+fn nowItConforms(_ v: Vec) -> F64 {
+    return sum(v)
+}
+
+fn theExtensionMemberIsReachable(_ v: Vec) -> F64 {
+    return v.total()
+}
+
+fn butNotUnderAnotherName(_ v: Vec) -> F64 {
+    return v.sum()                      //! S2002 has no member named 'sum'
+}
+
+fn chainedOptionals(_ v: Vec?) -> F64 {
+    return v?.x ?? 0.0
+}
+
+fn chainedWithoutTheFallback(_ v: Vec?) -> F64 {
+    return v?.x                         //! S3004 expected 'F64'
+}
+
+fn arrayOfVectors(_ vs: Vec[>..]) -> F64 {
+    var total = 0.0
+    for v in vs {
+        total = total + v.total()
+    }
+    return total
+}
+
+fn theLoopVariableIsAVec(_ vs: Vec[>..]) -> Int {
+    for v in vs {
+        return v                        //! S3004 expected 'Int'
+    }
+    return 0
+}
+
+fn aDictionaryOfVectors(_ d: [String: Vec]) -> F64 {
+    return d["a"]?.total() ?? 0.0
+}
+
+fn withoutTheChain(_ d: [String: Vec]) -> F64 {
+    return d["a"].total()               //! S3011 may hold nothing
+}
+
+fn chainingThroughACall(_ v: Vec?) -> F64 {
+    return v?.total() ?? 0.0
+}
+
+fn chainingThroughACallGivesAnOptional(_ v: Vec?) -> F64 {
+    return v?.total()                   //! S3004 expected 'F64'
+}
+
+fn chainingTwice(_ d: [String: Vec]) -> F64 {
+    return d["a"]?.total() ?? 0.0
+}
+
+fn aChainWithoutTheQuestion(_ v: Vec?) -> F64 {
+    return v.total()                    //! S3011 may hold nothing
+}
+
+fn aPlainCallIsNotOptional(_ v: Vec) -> F64? {
+    return v.total()
+}
+
+fn indexingAnOptionalDictionary(_ d: [String: Vec]?) -> F64 {
+    return d?["a"]?.total() ?? 0.0
+}
+
+fn indexingAnOptionalWithoutTheQuestion(_ d: [String: Vec]?) -> Vec? {
+    return d["a"]                       //! S3011 may hold nothing
+}
+
+fn indexingAnOptionalArray(_ xs: Int[]?) -> Int {
+    return xs?[0] ?? 0
+}
+
+fn andItGivesAnOptional(_ xs: Int[]?) -> Int {
+    return xs?[0]                       //! S3004 expected 'Int'
+}

@@ -138,8 +138,10 @@ public sealed class NegativeCorpusTests
             }
         }
 
-        Assert.True(cases >= 100, $"the negative corpus has only {cases} cases");
-        Assert.True(claimed.Count >= 40,
+        // docs/04 §1.4 asks for at least 600 programs that must fail, each
+        // asserting an exact error code, span and message.
+        Assert.True(cases >= 600, $"the negative corpus has only {cases} cases");
+        Assert.True(claimed.Count >= 90,
             $"the negative corpus covers only {claimed.Count} distinct diagnostics");
     }
 }

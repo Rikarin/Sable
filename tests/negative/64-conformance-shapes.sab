@@ -1,0 +1,76 @@
+module Negative.ConformanceShapes
+
+public protocol Container {
+    associatedtype Item
+    fn count() -> Int
+    fn at(_ index: Int) -> Item
+}
+
+public protocol Sorted: Container {
+    fn isSorted() -> Bool
+}
+
+public struct Numbers: Sorted {
+    public alias Item = Int
+    public var values: Int[>..]
+
+    public fn count() -> Int { return values.count }
+    public fn at(_ index: Int) -> Int { return values.removeLast() }
+    public fn isSorted() -> Bool { return true }
+}
+
+public struct HalfDone: Sorted {        //! S3023 //! S3023
+    public alias Item = Int
+    public fn isSorted() -> Bool { return true }
+}
+
+public struct WrongItem: Container {    //! S3027 at
+    public alias Item = Int
+    public fn count() -> Int { return 0 }
+    public fn at(_ index: Int) -> String { return "" }
+}
+
+public struct NoItem: Container {       //! S3023 Item //! S3027 at
+    public fn count() -> Int { return 0 }
+    public fn at(_ index: Int) -> Int { return 0 }
+}
+
+fn countingThroughTheProtocol<C: Container>(_ c: C) -> Int {
+    return c.count()
+}
+
+fn gettingAnItem<C: Container>(_ c: C, _ i: Int) -> C.Item {
+    return c.at(i)
+}
+
+fn theItemTypeFollows(_ n: Numbers) -> Int {
+    return gettingAnItem(n, 0)
+}
+
+fn andIsStillChecked(_ n: Numbers) -> String {
+    return gettingAnItem(n, 0)          //! S3004 expected 'String'
+}
+
+fn requiringTheRefinement<C: Sorted>(_ c: C) -> Bool {
+    return c.isSorted() && c.count() > 0
+}
+
+fn aPlainContainerDoesNotRefine<C: Container>(_ c: C) -> Bool {
+    return c.isSorted()                 //! S2002 has no member named 'isSorted'
+}
+
+public struct Tagged<T>: Container {
+    public alias Item = T
+    public var values: T[>..]
+
+    public fn count() -> Int { return values.count }
+    public fn at(_ index: Int) -> T { return values.removeLast() }
+}
+
+fn aGenericConformerBindsTheAssociatedType(_ t: Tagged<String>) -> String {
+    return gettingAnItem(t, 0)
+}
+
+fn andThatIsCheckedToo(_ t: Tagged<String>) -> Int {
+    return gettingAnItem(t, 0)          //! S3004 expected 'Int'
+}

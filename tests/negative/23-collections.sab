@@ -65,3 +65,21 @@ fn iteratingAPoint(_ p: Point) {
 fn arrayCountIsNotAMethod(_ xs: Int[]) -> Int {
     return xs.count()                   //! S3006 is not callable
 }
+
+fn aSliceIsReadOnly(_ xs: Int[>..]) -> Int {
+    let slice = xs.slice(from: 0, to: 1)
+    slice.append(1)                     //! S2002 has no member named 'append'
+    return 0
+}
+
+fn countIsAProperty(_ xs: Int[>..]) -> Int {
+    return xs.count
+}
+
+fn containsChecksTheElement(_ xs: Int[>..]) -> Bool {
+    return xs.contains("one")           //! S3007 cannot be called
+}
+
+fn removeLastGivesAnElement(_ xs: Int[>..]) -> String {
+    return xs.removeLast()              //! S3004 expected 'String'
+}

@@ -1657,6 +1657,30 @@ internal sealed class FieldInitializerGreen : GreenNode
         new FieldInitializerSyntax(this, parent, position);
 }
 
+/// <summary>Green node for <see cref="TypeExpressionSyntax"/>.</summary>
+internal sealed class TypeExpressionGreen : GreenNode
+{
+    private readonly GreenNode? _type;
+
+    public TypeExpressionGreen(GreenNode? type)
+        : base(SyntaxKind.TypeExpression, 0)
+    {
+        _type = type;
+        FullWidth = (type?.FullWidth ?? 0);
+    }
+
+    public override int SlotCount => 1;
+
+    public override GreenNode? GetSlot(int index) => index switch
+    {
+        0 => _type,
+        _ => null,
+    };
+
+    public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
+        new TypeExpressionSyntax(this, parent, position);
+}
+
 /// <summary>Green node for <see cref="BuiltinExpressionSyntax"/>.</summary>
 internal sealed class BuiltinExpressionGreen : GreenNode
 {

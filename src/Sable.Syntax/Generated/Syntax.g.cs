@@ -1136,6 +1136,25 @@ public sealed class FieldInitializerSyntax : SyntaxNode
     public override void Accept(SyntaxVisitor visitor) => visitor.VisitFieldInitializer(this);
 }
 
+/// <summary>A type written where an expression goes, which only `.self` may follow: `Token[&gt;..].self`, `Int?.self`, `(Int) -&gt; Bool.self`.</summary>
+public sealed class TypeExpressionSyntax : ExpressionSyntax
+{
+    private TypeSyntax? _type;
+
+    internal TypeExpressionSyntax(GreenNode green, SyntaxNode? parent, int position)
+        : base(green, parent, position) { }
+
+    public TypeSyntax Type => GetRed(ref _type, 0);
+
+    internal override SyntaxNode? GetNodeSlot(int index) => index switch
+    {
+        0 => Type,
+        _ => null,
+    };
+
+    public override void Accept(SyntaxVisitor visitor) => visitor.VisitTypeExpression(this);
+}
+
 /// <summary>A compiler builtin: `#file`, `#line`, `#column`, `#function`, `#module`.</summary>
 public sealed class BuiltinExpressionSyntax : ExpressionSyntax
 {
@@ -3454,6 +3473,7 @@ public abstract class SyntaxVisitor
     public virtual void VisitKeyValuePair(KeyValuePairSyntax node) => DefaultVisit(node);
     public virtual void VisitRecordExpression(RecordExpressionSyntax node) => DefaultVisit(node);
     public virtual void VisitFieldInitializer(FieldInitializerSyntax node) => DefaultVisit(node);
+    public virtual void VisitTypeExpression(TypeExpressionSyntax node) => DefaultVisit(node);
     public virtual void VisitBuiltinExpression(BuiltinExpressionSyntax node) => DefaultVisit(node);
     public virtual void VisitClosureExpression(ClosureExpressionSyntax node) => DefaultVisit(node);
     public virtual void VisitClosureSignature(ClosureSignatureSyntax node) => DefaultVisit(node);

@@ -627,8 +627,106 @@ internal sealed class Parser
         return CreateMissing(SyntaxKind.IdentifierToken);
     }
 
+    /// <summary>
+    /// Tokens that can appear inside a type, used to decide cheaply whether a
+    /// speculative type parse is worth attempting at all.
+    /// </summary>
+    private static bool CanAppearInType(SyntaxKind kind) => kind switch
+    {
+        SyntaxKind.IdentifierToken or SyntaxKind.CapitalSelfKeyword => true,
+        SyntaxKind.DotToken or SyntaxKind.CommaToken or SyntaxKind.ColonToken => true,
+        SyntaxKind.OpenParenToken or SyntaxKind.CloseParenToken => true,
+        SyntaxKind.OpenBracketToken or SyntaxKind.CloseBracketToken => true,
+        SyntaxKind.LessToken or SyntaxKind.GreaterToken => true,
+        SyntaxKind.QuestionToken or SyntaxKind.QuestionQuestionToken => true,
+        SyntaxKind.QuestionDotToken => true,   // 'Int?.self' lexes the '?.' whole
+        SyntaxKind.PipeToken or SyntaxKind.AmpersandToken or SyntaxKind.BangToken => true,
+        SyntaxKind.ArrowToken or SyntaxKind.DotDotToken or SyntaxKind.DotDotLessToken => true,
+        SyntaxKind.GreaterGreaterToken or SyntaxKind.DotDotDotToken => true,
+        SyntaxKind.UnderscoreToken or SyntaxKind.StarToken => true,
+        SyntaxKind.SomeKeyword or SyntaxKind.AnyKeyword or SyntaxKind.RefKeyword => true,
+        SyntaxKind.AsyncKeyword or SyntaxKind.ThrowsKeyword
+            or SyntaxKind.RethrowsKeyword => true,
+        SyntaxKind.SelfKeyword => true,
+        _ => false,
+    };
+
+    /// <summary>
+    /// True when a type followed by <c>.self</c> starts here, which is the one
+    /// place a compound type is written where an expression goes.
+    /// </summary>
+    /// <remarks>
+    /// A simple name is left alone: <c>T.self</c> already works as a member
+    /// access on a name that happens to be a type, and routing it through here
+    /// would change which diagnostic a non-type name produces. What this is
+    /// for is <c>Token[&gt;..].self</c>, <c>Int?.self</c> and
+    /// <c>(Int) -&gt; Bool.self</c>, none of which parse as expressions.
+    /// </remarks>
+    private bool AtCompoundMetatype()
+    {
+        if (!CanAppearInType(Current.Kind)) return false;
+
+        // 'T.self' and 'self.self': the member-access path has those.
+        if (Peek(1).Kind == SyntaxKind.DotToken
+            && Peek(2).Kind == SyntaxKind.SelfKeyword)
+        {
+            return false;
+        }
+
+        // A bounded scan for '.self' over tokens a type could contain, so the
+        // speculative parse below is only ever reached for something shaped
+        // like one.
+        var found = false;
+        for (var offset = 0; offset < MetatypeScanLimit; offset++)
+        {
+            var kind = Peek(offset).Kind;
+
+            // '?.' counts: 'Int?.self' lexes the two characters as one token,
+            // and the type parser splits it again.
+            if (kind is SyntaxKind.DotToken or SyntaxKind.QuestionDotToken
+                && Peek(offset + 1).Kind == SyntaxKind.SelfKeyword)
+            {
+                found = true;
+                break;
+            }
+
+            if (!CanAppearInType(kind)) return false;
+        }
+
+        if (!found) return false;
+
+        // Now parse it for real, and put the stream back.
+        var index = _index;
+        var tokenPosition = _tokenPosition;
+        var split = _split is null ? null : new Dictionary<int, GreenToken>(_split);
+        var skipped = _skipped.Count;
+
+        using (_diagnostics.Suppress())
+        {
+            try
+            {
+                ParseType();
+                return At(SyntaxKind.DotToken)
+                    && Peek(1).Kind == SyntaxKind.SelfKeyword;
+            }
+            finally
+            {
+                _index = index;
+                _tokenPosition = tokenPosition;
+                _split = split;
+                if (_skipped.Count > skipped)
+                    _skipped.RemoveRange(skipped, _skipped.Count - skipped);
+            }
+        }
+    }
+
+    /// <summary>How far ahead to look for the <c>.self</c> of a metatype.</summary>
+    private const int MetatypeScanLimit = 64;
+
     private GreenNode ParsePrimary()
     {
+        if (AtCompoundMetatype()) return new TypeExpressionGreen(ParseType());
+
         switch (Current.Kind)
         {
             case SyntaxKind.StringLiteralToken when HasInterpolation(Current):
@@ -1092,6 +1190,14 @@ internal sealed class Parser
                         SyntaxKind.QuestionToken, SyntaxKind.QuestionToken));
                     continue;
 
+                // 'Int?.self' lexes '?.' whole, and here the '?' belongs to
+                // the type while the '.' introduces the metatype.
+                case SyntaxKind.QuestionDotToken
+                    when Peek(1).Kind == SyntaxKind.SelfKeyword:
+                    type = new OptionalTypeGreen(type, SplitLeadingCharacter(
+                        SyntaxKind.QuestionToken, SyntaxKind.DotToken));
+                    continue;
+
                 case SyntaxKind.BangToken:
                     type = new ImplicitlyUnwrappedTypeGreen(type, EatToken());
                     continue;
@@ -1111,7 +1217,9 @@ internal sealed class Parser
                     type = ParseArraySuffix(type);
                     continue;
 
-                case SyntaxKind.DotToken:
+                // '.self' is the metatype of the type so far, not a member
+                // of it: no type has a member called 'self'.
+                case SyntaxKind.DotToken when Peek(1).Kind != SyntaxKind.SelfKeyword:
                 {
                     var dot = EatToken();
                     type = new QualifiedNameGreen(type, dot, ParseSimpleNameType());

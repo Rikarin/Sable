@@ -1338,6 +1338,13 @@ public sealed class Binder
         RangeExpressionSyntax range => BindRange(range, expectedType),
         DictionaryExpressionSyntax dictionary => BindDictionary(dictionary, expectedType),
         BuiltinExpressionSyntax builtin => BindBuiltin(builtin),
+
+        // A compound type written where an expression goes, which only
+        // '.self' follows: the member access turns it into the metatype.
+        TypeExpressionSyntax written => Record(written, new BoundTypeExpression(
+            written,
+            _compilation.TypeBinder.BindType(written.Type, _containingSymbol, _scope))),
+
         ClosureExpressionSyntax closure => BindClosure(
             closure, closure.CaptureList, closure.Signature.Parameters,
             closure.Signature.ReturnType, closure.Body, expectedType,

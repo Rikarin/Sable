@@ -312,4 +312,42 @@ public sealed class ExpressionParserTests
         Assert.Equal(source, tree.ToFullString());
         Assert.Equal(SyntaxKind.BinaryExpression, tree.Root.Kind);
     }
+
+    // ---- Metatypes, per spec/SYNTAX.md §4 ---------------------------------
+
+    /// <remarks>
+    /// A compound type in expression position is only ever followed by
+    /// <c>.self</c>, which is what tells the parser to read a type there at
+    /// all. Everything else with the same shape stays what it was.
+    /// </remarks>
+    [Theory]
+    [InlineData("Point.self",
+        "(MemberAccess (IdentifierName Point) . (IdentifierName self))")]
+    [InlineData("Point?.self",
+        "(MemberAccess (Type (OptionalType (SimpleNameType Point) ?)) . (IdentifierName self))")]
+    [InlineData("Point[].self",
+        "(MemberAccess (Type (FixedSizeArrayType (SimpleNameType Point))) . (IdentifierName self))")]
+    [InlineData("Token[>..].self",
+        "(MemberAccess (Type (GrowArrayType (SimpleNameType Token) > ..)) "
+        + ". (IdentifierName self))")]
+    [InlineData("(Int, String).self",
+        "(MemberAccess (Type (TupleType (TupleTypeElement (SimpleNameType Int)) "
+        + "(TupleTypeElement (SimpleNameType String)))) . (IdentifierName self))")]
+    public void ParsesMetatypes(string source, string expected) =>
+        Assert.Equal(expected, Parse(source));
+
+    [Theory]
+    [InlineData("xs[0]")]
+    [InlineData("p?.x")]
+    [InlineData("n > 0 ? n : 0")]
+    [InlineData("a.b.c")]
+    [InlineData("f(x).y")]
+    [InlineData("xs[0] ?? 1")]
+    public void TheMetatypeLookaheadLeavesEverythingElseAlone(string source)
+    {
+        var tree = SyntaxTree.ParseExpression(source);
+        Assert.False(tree.HasErrors, tree.FormatDiagnostics());
+        Assert.Equal(source, tree.ToFullString());
+        Assert.DoesNotContain("(Type ", TreeDump.Dump(tree), StringComparison.Ordinal);
+    }
 }

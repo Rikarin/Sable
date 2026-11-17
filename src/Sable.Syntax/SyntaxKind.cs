@@ -286,6 +286,7 @@ public enum SyntaxKind : ushort
     InterpolatedStringExpression = 1141,
     InterpolatedText = 1142,
     Interpolation = 1143,
+    TypeExpression = 1144,
 
     // ---- Pattern nodes (1200-1299) ----------------------------------------
     WildcardPattern = 1200,

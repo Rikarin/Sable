@@ -160,8 +160,3 @@ tree a full parse would have produced, and every incremental test asserts it.
 `SyntaxFormatter.Format` renders a tree as canonical source. It has no options,
 by design. Two properties are tested over the corpus rather than asserted on
 sample output: formatting is idempotent, and formatting never changes the tree.
-
-Not implemented yet, and deliberately so:
-
-- **Compound metatype expressions.** `T.self` parses for a simple name, but a
-  compound type in expression position (`Token[>..].self`) does not.

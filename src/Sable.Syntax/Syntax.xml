@@ -389,6 +389,11 @@
     <Field Name="Expression" Type="ExpressionSyntax" Optional="true" />
   </Node>
 
+  <Node Name="TypeExpressionSyntax" Base="ExpressionSyntax" Kind="TypeExpression"
+        Doc="A type written where an expression goes, which only `.self` may follow: `Token[&gt;..].self`, `Int?.self`, `(Int) -&gt; Bool.self`.">
+    <Field Name="Type" Type="TypeSyntax" />
+  </Node>
+
   <Node Name="BuiltinExpressionSyntax" Base="ExpressionSyntax" Kind="BuiltinExpression"
         Doc="A compiler builtin: `#file`, `#line`, `#column`, `#function`, `#module`.">
     <Field Name="HashToken" Type="Token" />

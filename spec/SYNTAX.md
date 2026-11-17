@@ -801,6 +801,14 @@ Any keyword may be used as a member name after `.`, because the name is
 resolved against the receiver's members rather than against the grammar:
 `super.init()`, `Type.self`, `File.open(p)`, `x.default`.
 
+### Metatypes
+
+`T.self` is the type `T` as a value. Any type may be written this way, not
+only a name: `Int?.self`, `Point[].self`, `Token[>..].self`,
+`(Int, String).self`, `(Int) -> Bool.self`. A compound type is only read in
+expression position when `.self` follows it, so `xs[0]` stays an index and
+`p?.x` stays an optional chain.
+
 ### Member access and optionals
 
 ```sable

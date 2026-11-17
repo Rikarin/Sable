@@ -3,12 +3,12 @@ module Negative.TypeForms
 public struct Point { public var x: Int }
 public protocol Named { fn name() -> String }
 
-fn aReferenceIsNotItsTarget(_ r: Point&) -> Point {
-    return r                            //! S3004 expected 'Point'
+fn aReferenceIsNotAnotherType(_ r: Point&) -> Int {
+    return r                            //! S3004 expected 'Int'
 }
 
-fn aTargetIsNotAReference(_ p: Point) -> Point& {
-    return p                            //! S3004
+fn aTemporaryHasNoAddress() -> Point& {
+    return Point { x: 1 }               //! S3060
 }
 
 fn anInlineArrayIsNotFixed(_ xs: Int[..8]) -> Int[] {

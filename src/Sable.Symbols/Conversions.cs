@@ -116,6 +116,16 @@ internal sealed class Conversions(CoreTypes core) {
             return ConversionKind.Upcast;
         }
 
+        // A reference reads as what it refers to; a place, where a reference
+        // is wanted, is referred to — the binder checks it is a place.
+        if (source is ReferenceTypeSymbol { RelativeWidth: null } reference && reference.ReferencedType.Equals(target)) {
+            return ConversionKind.Dereference;
+        }
+
+        if (target is ReferenceTypeSymbol { RelativeWidth: null } wanted && source.Equals(wanted.ReferencedType)) {
+            return ConversionKind.Reference;
+        }
+
         return null;
     }
 

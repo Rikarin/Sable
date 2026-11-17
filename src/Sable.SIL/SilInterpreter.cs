@@ -87,6 +87,30 @@ public sealed class SilInterpreter(SilModule module, int stepLimit = 10_000_000,
         public int Count;
     }
 
+    /// <summary>A region: the cells allocated in it, released in reverse when it goes.</summary>
+    sealed class RegionObject : Counted {
+        public List<RegionCell> Cells { get; } = [];
+    }
+
+    /// <summary>A value in a region: storage that is gone once the region is.</summary>
+    sealed class RegionCell(RegionObject region, SilType type) : IReference {
+        object? _value;
+        public SilType Type { get; } = type;
+        public object? Get() => Peek() ?? throw new SilTrap("load from uninitialised storage");
+
+        public object? Peek() =>
+            region.Freed ? throw new SilTrap("use of a region's memory after the region ended") : _value;
+
+        public void Set(object? value) => _value = region.Freed ? throw new SilTrap("use of a region's memory after the region ended") : value;
+
+        /// <summary>What the cell holds, for the region to destroy as it goes.</summary>
+        public object? Take() {
+            var value = _value;
+            _value = null;
+            return value;
+        }
+    }
+
     sealed class HeapArray(ArrayType type, List<object?> elements) : Counted {
         public ArrayType Type { get; } = type;
         public List<object?> Elements { get; } = elements;
@@ -193,6 +217,12 @@ public sealed class SilInterpreter(SilModule module, int stepLimit = 10_000_000,
                 return;
 
             case (StructType structType, object?[] fields):
+                // A move-only struct's deinit sees it whole, before its fields go.
+                if (structType.Deinit is { } deinit) {
+                    var function = module.Find(deinit) ?? throw new SilTrap($"call to undefined @{deinit}");
+                    Call(function, [fields], depth + 1);
+                }
+
                 for (var i = 0; i < fields.Length; i++) {
                     Release(structType.Fields[i].Type, fields[i], depth);
                 }
@@ -254,6 +284,14 @@ public sealed class SilInterpreter(SilModule module, int stepLimit = 10_000_000,
             case HeapArray array:
                 foreach (var element in array.Elements) {
                     Release(array.Type.Element, element, depth);
+                }
+
+                break;
+
+            // A region destroys what was allocated in it, last first.
+            case RegionObject region:
+                for (var i = region.Cells.Count - 1; i >= 0; i--) {
+                    Release(region.Cells[i].Type, region.Cells[i].Take(), depth);
                 }
 
                 break;
@@ -700,6 +738,16 @@ public sealed class SilInterpreter(SilModule module, int stepLimit = 10_000_000,
         switch (builtin.Name) {
             case "array_empty":
                 return null;
+
+            case "region_create":
+                return Allocate(new RegionObject());
+
+            case "region_alloc": {
+                var region = Alive((RegionObject)operands[0]!);
+                var cell = new RegionCell(region, ((AddressType)builtin.Type).Pointee);
+                region.Cells.Add(cell);
+                return cell;
+            }
 
             case "string_concat":
                 return Allocate(new HeapString(Text(operands[0]).Value + Text(operands[1]).Value));

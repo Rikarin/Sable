@@ -37,6 +37,10 @@ public sealed class CoreTypes {
 
         Char = Primitive("Char");
         String = Primitive("String");
+
+        // A bump-allocated arena (docs/02 §2.1, Tier 1): what 'region arena { }'
+        // makes and an 'in r: region' parameter borrows.
+        Region = Primitive("Region");
         Void = Primitive("Void");
         Never = Primitive("Never");
 
@@ -96,6 +100,16 @@ public sealed class CoreTypes {
             new ArrayTypeSymbol(String, ArrayKind.Grow)
         );
         Method(String, "fromChar", [("character", Char)], String, true);
+
+        // 'arena.alloc(value)': the value, moved into the region; a reference
+        // to it, rooted in the region, back.
+        var alloc = new FunctionSymbol("alloc", Region, null, Accessibility.Public, FunctionKind.Ordinary);
+        var element = new TypeParameterSymbol("T", alloc, null, 0);
+        alloc.TypeParameters = [element];
+        var allocated = new ParameterSymbol("value", "_", alloc, null, 0) { TypeResolver = () => element };
+        alloc.Parameters = [allocated];
+        alloc.ReturnTypeResolver = () => new ReferenceTypeSymbol(element);
+        Region.AddMember(alloc);
 
         Property(Range, "lowerBound", Range.TypeParameters[0]);
         Property(Range, "upperBound", Range.TypeParameters[0]);
@@ -246,6 +260,7 @@ public sealed class CoreTypes {
     public NamedTypeSymbol F64 { get; }
     public NamedTypeSymbol Char { get; }
     public NamedTypeSymbol String { get; }
+    public NamedTypeSymbol Region { get; }
     public NamedTypeSymbol Void { get; }
     public NamedTypeSymbol Never { get; }
     public NamedTypeSymbol Error { get; }

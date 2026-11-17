@@ -30,13 +30,18 @@ public static class SilPrinter {
 
             switch (type) {
                 case StructType structType:
-                    builder.Append("sil_struct ").Append(structType.Name).Append(" { ")
+                    builder.Append("sil_struct ").Append(structType.Name).Append(structType.IsNoncopyable ? " @noncopy" : "").Append(" { ")
                         .Append(string.Join(", ", structType.Fields.Select(static f => $"{f.Name}: ${f.Type}")))
-                        .Append(" }\n");
+                        .Append(" }");
+                    if (structType.Deinit is { } structDeinit) {
+                        builder.Append(" deinit @").Append(structDeinit);
+                    }
+
+                    builder.Append('\n');
                     break;
 
                 case EnumType enumType:
-                    builder.Append("sil_enum ").Append(enumType.Name).Append(" { ")
+                    builder.Append("sil_enum ").Append(enumType.Name).Append(enumType.IsNoncopyable ? " @noncopy" : "").Append(" { ")
                         .Append(string.Join(", ", enumType.Cases.Select(static c => c.Payload is null ? c.Name : $"{c.Name}(${c.Payload})")))
                         .Append(" }\n");
                     break;
@@ -153,6 +158,9 @@ public static class SilPrinter {
         }
 
         builder.Append("sil @").Append(function.Name).Append(" : $").Append(function.Type);
+        if (function.ResultRoots is { } roots) {
+            builder.Append(" roots(").Append(string.Join(", ", roots)).Append(')');
+        }
         if (function.SourceFile is { } file) {
             builder.Append(" loc ").Append(Quote(file)).Append(':').Append(function.Line);
         }

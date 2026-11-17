@@ -131,6 +131,11 @@ public enum ErrorCode {
     ERR_ErrorTypeDoesNotFit = 3054,
     ERR_WeakNeedsOptionalClass = 3055,
     ERR_UnownedNeedsClass = 3056,
+    ERR_UsedAfterMove = 3057,
+    ERR_CopyOfNoncopyable = 3058,
+    ERR_PartialMove = 3059,
+    ERR_ReferenceNeedsPlace = 3060,
+    ERR_ReferenceOutlivesRoot = 3061,
     ERR_NotSupportedYet = 3099,
 
     // ---- Patterns and flow (S6000-S6999) ---------------------------------

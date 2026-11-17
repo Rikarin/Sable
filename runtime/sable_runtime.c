@@ -137,6 +137,85 @@ void sable_release(void *pointer) {
     free(object);
 }
 
+// ---- Regions -------------------------------------------------------------
+
+// A region (docs/02 §2.1): chunks values are bumped into, and the destroys of
+// those that hold references, run last first when the region goes.
+typedef struct SableChunk {
+    struct SableChunk *next;
+    size_t used, size;
+    _Alignas(16) char bytes[];
+} SableChunk;
+
+typedef struct SableCleanup {
+    void *value;
+    void (*destroy)(void *value);
+} SableCleanup;
+
+typedef struct SableRegion {
+    SableObject header;
+    SableChunk *chunk;
+    SableCleanup *cleanups;
+    int64_t cleanup_count, cleanup_capacity;
+} SableRegion;
+
+static void sable_region_destroy(void *pointer) {
+    SableRegion *region = pointer;
+    for (int64_t i = region->cleanup_count - 1; i >= 0; i--) {
+        region->cleanups[i].destroy(region->cleanups[i].value);
+    }
+
+    free(region->cleanups);
+    for (SableChunk *chunk = region->chunk; chunk != NULL;) {
+        SableChunk *next = chunk->next;
+        free(chunk);
+        chunk = next;
+    }
+}
+
+static const SableMetadata region_metadata = { sable_region_destroy, "Region", 0, NULL, NULL };
+
+void *sable_region_create(void) {
+    return sable_alloc(&region_metadata, (int64_t)sizeof(SableRegion));
+}
+
+// Room for a value of 'size' bytes, aligned to 16; with a destroy, it is
+// destroyed when the region goes. The memory is zero: empty, until stored.
+void *sable_region_alloc(void *pointer, int64_t size, void (*destroy)(void *value)) {
+    SableRegion *region = pointer;
+    size_t rounded = ((size_t)size + 15) & ~(size_t)15;
+    SableChunk *chunk = region->chunk;
+    if (chunk == NULL || chunk->used + rounded > chunk->size) {
+        size_t capacity = chunk == NULL ? 4096 : chunk->size * 2;
+        if (capacity < rounded) {
+            capacity = rounded;
+        }
+
+        SableChunk *fresh = calloc(1, sizeof(SableChunk) + capacity);
+        if (fresh == NULL) {
+            sable_trap("out of memory");
+        }
+
+        fresh->size = capacity;
+        fresh->next = chunk;
+        region->chunk = chunk = fresh;
+    }
+
+    void *value = chunk->bytes + chunk->used;
+    chunk->used += rounded;
+
+    if (destroy != NULL) {
+        if (region->cleanup_count == region->cleanup_capacity) {
+            region->cleanup_capacity = region->cleanup_capacity == 0 ? 16 : region->cleanup_capacity * 2;
+            region->cleanups = realloc(region->cleanups, (size_t)region->cleanup_capacity * sizeof(SableCleanup));
+        }
+
+        region->cleanups[region->cleanup_count++] = (SableCleanup){ value, destroy };
+    }
+
+    return value;
+}
+
 // ---- Unowned references --------------------------------------------------
 
 void sable_unowned_retain(void *pointer) {

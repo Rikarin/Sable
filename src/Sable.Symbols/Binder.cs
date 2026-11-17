@@ -989,7 +989,7 @@ public sealed class Binder {
 
         LocalSymbol? local = null;
         if (!name.IsNone && name.Text.Length > 0) {
-            var regionType = source?.Type ?? Core.Void;
+            var regionType = source?.Type ?? (kind == ScopeKind.Region ? Core.Region : Core.Void);
             local = new(name.Text, _containingSymbol, statement, false) { TypeResolver = () => regionType };
             Declare(local.Name, local);
         }
@@ -2035,8 +2035,25 @@ public sealed class Binder {
         }
     }
 
+    /// <summary>True for an expression that names storage: something a reference can refer to.</summary>
+    static bool IsPlace(BoundExpression expression) =>
+        expression switch {
+            BoundLocalAccess or BoundParameterAccess or BoundSelfAccess => true,
+            BoundFieldAccess { Field.IsComputed: false, Field.IsStatic: false, Receiver: { } receiver } =>
+                receiver.Type.TypeKind == TypeKind.Struct && IsPlace(receiver),
+            BoundTupleElementAccess element => IsPlace(element.Receiver),
+            BoundConversion { ConversionKind: ConversionKind.Dereference } => true,
+            BoundConversion { ConversionKind: ConversionKind.Identity } conversion => IsPlace(conversion.Operand),
+            _ => false,
+        };
+
     BoundExpression BindMemberAccess(MemberAccessExpressionSyntax syntax) {
         var receiver = BindExpression(syntax.Expression);
+
+        // A member of a reference is the member of what it refers to.
+        if (receiver.Type is ReferenceTypeSymbol { RelativeWidth: null } reference) {
+            receiver = new BoundConversion(syntax.Expression, reference.ReferencedType, receiver, ConversionKind.Dereference);
+        }
         var name = syntax.Name switch {
             IdentifierNameSyntax identifier => identifier.Identifier.Text,
             GenericNameSyntax generic => generic.Identifier.Text,
@@ -4513,6 +4530,25 @@ public sealed class Binder {
 
         if (conversion == ConversionKind.Identity) {
             return expression;
+        }
+
+        // 'c ? a : b' refers to whichever place it picks: each arm becomes a reference.
+        if (conversion == ConversionKind.Reference && expression is BoundConditional choice) {
+            var whenTrue = Convert(choice.WhenTrue, target, choice.WhenTrue.Syntax);
+            var whenFalse = Convert(choice.WhenFalse, target, choice.WhenFalse.Syntax);
+            return new BoundConditional(choice.Syntax, target, choice.Condition, whenTrue, whenFalse);
+        }
+
+        // A reference refers to somewhere: a variable, a parameter, a field
+        // of one — not a value that exists only for the moment.
+        if (conversion == ConversionKind.Reference && !IsPlace(expression)) {
+            _diagnostics.Error(
+                ErrorCode.ERR_ReferenceNeedsPlace,
+                syntax.Span,
+                $"a reference needs something with an address — a variable, a parameter, or a field of one — "
+                + $"and this '{expression.Type.ToDisplayString()}' is a value that exists only here"
+            );
+            return new BoundError(syntax, expression);
         }
 
         var converted = new BoundConversion(syntax, target, expression, conversion.Value);

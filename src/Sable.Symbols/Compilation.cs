@@ -469,8 +469,6 @@ public sealed class Compilation {
         Symbol container,
         bool isVariableSize = false
     ) {
-        _ = attributes;
-
         var name = identifier.Text;
         if (name.Length == 0) {
             return;
@@ -491,7 +489,9 @@ public sealed class Compilation {
         ) {
             IsOpen = modifiers.Any(SyntaxKind.OpenKeyword),
             IsSealed = modifiers.Any(SyntaxKind.SealedKeyword),
-            IsAbstract = modifiers.Any(SyntaxKind.AbstractKeyword)
+            IsAbstract = modifiers.Any(SyntaxKind.AbstractKeyword),
+            IsNoncopyable = typeKind is TypeKind.Struct or TypeKind.Union
+                && attributes.Any(static a => a.Name.ToString().Trim() == "noncopy")
         };
 
         if (typeParameters is not null) {

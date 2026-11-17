@@ -155,6 +155,10 @@ public sealed class LlvmEmitter {
                     return Named("Bool", "!DIBasicType(name: \"bool\", size: 8, encoding: DW_ATE_boolean)");
                 case var _ when type == SilType.F64:
                     return Named("F64", "!DIBasicType(name: \"double\", size: 64, encoding: DW_ATE_float)");
+                // A struct with a hidden live byte is not described field by field.
+                case StructType { Deinit: not null }:
+                    return null;
+
                 case StructType structType: {
                     var members = new List<string>();
                     var offset = 0;
@@ -244,6 +248,8 @@ public sealed class LlvmEmitter {
                                 declare ptr @sable_array_mutable_element(ptr, ptr, i64)
                                 declare ptr @sable_array_remove_last(ptr, ptr)
                                 declare ptr @sable_array_slice(ptr, i64, i64, ptr)
+                                declare ptr @sable_region_create()
+                                declare ptr @sable_region_alloc(ptr, i64, ptr)
                                 declare double @llvm.fabs.f64(double)
                                 declare double @llvm.minnum.f64(double, double)
                                 declare double @llvm.maxnum.f64(double, double)
@@ -283,14 +289,25 @@ public sealed class LlvmEmitter {
             _ when type == SilType.String => "ptr",
             _ when type == SilType.Unit => "void",
             AddressType or FunctionType or ClassType or ArrayType => "ptr",
-            _ when type == SilType.Object => "ptr",
+            _ when type == SilType.Object || type == SilType.Region => "ptr",
             ThickFunctionType => "{ ptr, ptr }",
             WeakStorageType or UnownedStorageType => "ptr",
-            StructType structType => $"{{ {string.Join(", ", structType.Fields.Select(static f => Type(f.Type)))} }}",
+            StructType structType => $"{{ {string.Join(", ", StructParts(structType).Select(Type))} }}",
             TupleType tuple => $"{{ {string.Join(", ", tuple.Elements.Select(Type))} }}",
             EnumType enumType => PayloadWords(enumType) == 0 ? "{ i64 }" : $"{{ i64, [{PayloadWords(enumType)} x i64] }}",
             _ => throw new NotSupportedException($"no LLVM type for {type}"),
         };
+
+    /// <summary>
+    ///     What a struct is laid out as: its fields, after a hidden byte for one
+    ///     with a deinit — set when a value is made, so that storage left empty
+    ///     by a move, all zeros, is not mistaken for a value to deinit.
+    /// </summary>
+    static IEnumerable<SilType> StructParts(StructType type) =>
+        type.Deinit is null ? type.Fields.Select(static f => f.Type) : [SilType.Bool, ..type.Fields.Select(static f => f.Type)];
+
+    /// <summary>Where a struct's field is in its LLVM type: one further along when there is a live byte.</summary>
+    static int FieldSlot(StructType type, int field) => type.Deinit is null ? field : field + 1;
 
     /// <summary>
     ///     What a function returns at the LLVM level. A throwing one returns
@@ -316,11 +333,11 @@ public sealed class LlvmEmitter {
             _ when type == SilType.Char => 4,
             _ when type == SilType.String => 8,
             AddressType or FunctionType or ClassType or ArrayType => 8,
-            _ when type == SilType.Object => 8,
+            _ when type == SilType.Object || type == SilType.Region => 8,
             ThickFunctionType => 16,
             WeakStorageType or UnownedStorageType => 8,
             EnumType enumType => 8 + PayloadWords(enumType) * 8,
-            StructType structType => Aggregate(structType.Fields.Select(static f => f.Type)),
+            StructType structType => Aggregate(StructParts(structType)),
             TupleType tuple => Aggregate(tuple.Elements),
             _ => 0,
         };
@@ -342,7 +359,7 @@ public sealed class LlvmEmitter {
         type switch {
             _ when type == SilType.Bool => 1,
             _ when type == SilType.Char => 4,
-            StructType structType => structType.Fields.Select(static f => Align(f.Type)).DefaultIfEmpty(1).Max(),
+            StructType structType => StructParts(structType).Select(Align).DefaultIfEmpty(1).Max(),
             TupleType tuple => tuple.Elements.Select(Align).DefaultIfEmpty(1).Max(),
             _ => 8,
         };
@@ -417,7 +434,17 @@ public sealed class LlvmEmitter {
 
         switch (type) {
             case StructType structType:
-                Parts(structType.Fields.Select(static f => f.Type).ToList());
+                // A move-only struct's deinit runs first, seeing it whole —
+                // if it is a value at all, and not storage a move emptied.
+                if (!copy && structType.Deinit is { } deinit) {
+                    body.Append("  %live = extractvalue ").Append(llvmType).Append(" %v, 0\n")
+                        .Append("  br i1 %live, label %value, label %empty\n")
+                        .Append("empty:\n  ret void\n")
+                        .Append("value:\n")
+                        .Append($"  call void @{Global(deinit)}({llvmType} %v)\n");
+                }
+
+                Parts([..StructParts(structType)]);
                 body.Append("  ret void\n");
                 break;
 
@@ -522,6 +549,20 @@ public sealed class LlvmEmitter {
 
     /// <summary>A class's metadata: the runtime's record, then its vtable.</summary>
     static string MetadataType(ClassType type) => $"{{ ptr, ptr, i64, ptr, ptr, [{type.VTable.Count} x ptr] }}";
+
+    /// <summary>The function that destroys a value of the type in memory, given its address; or null for a trivial one.</summary>
+    string ElementDestroyer(SilType type) {
+        if (type.IsTrivial) {
+            return "null";
+        }
+
+        var name = $"@\"sable.elementdestroy.{Mangled(type)}\"";
+        if (_emitted.Add(name + "#region")) {
+            ArrayMetadata(new ArrayType(type));
+        }
+
+        return name;
+    }
 
     /// <summary>An array's metadata, per element type: the element's size, and how one is copied and destroyed.</summary>
     string ArrayMetadata(ArrayType type) {
@@ -1021,6 +1062,21 @@ public sealed class LlvmEmitter {
                     Line("ret void");
                     return;
 
+                case StructInst { StructType.Deinit: not null } made: {
+                    // The live byte, then the fields.
+                    var type = Type(made.Type);
+                    var current = Fresh();
+                    Line($"{current} = insertvalue {type} poison, i1 true, 0");
+                    for (var i = 0; i < made.Operands.Count; i++) {
+                        var next = Fresh();
+                        Line($"{next} = insertvalue {type} {current}, {Type(made.Operands[i].Type)} {Name(made.Operands[i])}, {i + 1}");
+                        current = next;
+                    }
+
+                    _names[made] = current;
+                    return;
+                }
+
                 case StructInst or TupleInst:
                     _names[instruction] = Aggregate(Type(instruction.Type), instruction.Operands);
                     return;
@@ -1028,7 +1084,7 @@ public sealed class LlvmEmitter {
                 case StructExtractInst extract: {
                     var name = Fresh();
                     _names[extract] = name;
-                    Line($"{name} = extractvalue {Type(extract.Value.Type)} {Name(extract.Value)}, {extract.Field}");
+                    Line($"{name} = extractvalue {Type(extract.Value.Type)} {Name(extract.Value)}, {FieldSlot((StructType)extract.Value.Type, extract.Field)}");
                     return;
                 }
 
@@ -1042,8 +1098,8 @@ public sealed class LlvmEmitter {
                 case StructElementAddrInst element: {
                     var name = Fresh();
                     _names[element] = name;
-                    var aggregate = Type(((AddressType)element.Address.Type).Pointee);
-                    Line($"{name} = getelementptr inbounds {aggregate}, ptr {Name(element.Address)}, i32 0, i32 {element.Field}");
+                    var structType = (StructType)((AddressType)element.Address.Type).Pointee;
+                    Line($"{name} = getelementptr inbounds {Type(structType)}, ptr {Name(element.Address)}, i32 0, i32 {FieldSlot(structType, element.Field)}");
                     return;
                 }
 
@@ -1476,6 +1532,18 @@ public sealed class LlvmEmitter {
                     var element = Fresh();
                     Line($"{element} = call ptr @sable_array_remove_last(ptr {operands[0]}, ptr {module.ArrayMetadata(arrayType)})");
                     Line($"{Result()} = load {Type(arrayType.Element)}, ptr {element}");
+                    return;
+                }
+
+                case "region_create":
+                    Line($"{Result()} = call ptr @sable_region_create()");
+                    return;
+
+                // Room in the region for the value, and how to destroy it when the region goes.
+                case "region_alloc": {
+                    var type = ((AddressType)builtin.Type).Pointee;
+                    var size = $"ptrtoint (ptr getelementptr ({Type(type)}, ptr null, i32 1) to i64)";
+                    Line($"{Result()} = call ptr @sable_region_alloc(ptr {operands[0]}, i64 {size}, ptr {module.ElementDestroyer(type)})");
                     return;
                 }
 

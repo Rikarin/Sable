@@ -398,6 +398,21 @@ Dataflow over SIL for `@noncopy` types: every value consumed exactly once on
 every path, with the consuming site reported in the use-after-move diagnostic.
 This is a straightforward dataflow problem and it is a good warm-up for 3.3.
 
+Status: done for variables and parameters (`src/Sable.SIL/MoveChecker.cs`).
+`@noncopy` structs and unions, with `deinit` for structs; `consuming`
+parameters (owned, and kept in a slot when move-only); `move x` for any
+type. The lowering borrows a move-only variable with `load_borrow`, so a
+borrow never copies — a copy destroyed would run the deinit — and consumes it
+with a load the checker turns into `load [take]`; a forward dataflow then
+reports a read or a move where the variable may already have been moved,
+naming the move (`'a' is used after its value was moved out of it, at line
+16`), and any copy left — a borrowed parameter consumed, a part moved out —
+is an error. Natively a struct with a deinit carries a hidden live byte, so
+the storage a move empties is not deinited. Locals now die at the end of the
+block that declared them, on every way out, which a move-only value needs and
+deterministic destruction (docs/02 §2.2) asked for. Not yet: partial moves out
+of fields, `using`, and move-only values in arrays or generic parameters.
+
 ### 3.3 Root inference / borrow checking (~10 weeks) ★
 
 The novel pass. Algorithm sketch:
@@ -420,6 +435,24 @@ The novel pass. Algorithm sketch:
 Diagnostics must name the root, the escape site, and at least two concrete
 fixes. A borrow checker with bad errors is a borrow checker nobody uses.
 
+Status: a first, working slice (`src/Sable.SIL/RootChecker.cs`). References
+are coherent in the front end — `T&` reads as its target, a place becomes a
+reference where one is wanted (`return a` from `-> ref T`, a `ref` argument,
+each arm of `c ? a : b`), and a value with no place cannot (S3060) — and
+lower to addresses. Anchors (1) are a local's slot, a parameter, or `heap`;
+propagation (2) goes through field projections, ref variables, joins and
+calls; summaries (4) are the parameters a result may refer into, inferred to
+a fixed point across the module so recursion converges, and recorded on the
+function (`roots(0, 1)` in SIL — `longest`'s `{a, b}`, with nothing written).
+Checking (3) rejects a returned reference rooted in a local, a temporary or a
+by-value parameter, with the fixes named, and — flow-sensitively — a
+reference used after its local's scope ended or its value was moved out.
+Not yet: references in fields or arrays (and so rule 4's stores into
+regions), regions themselves (§3.5) and the specialisation by root shape
+that needs them (5), summaries serialised into a `.sabi`, a fuller
+diagnostic with secondary labels, and using non-escape to delete ARC
+traffic.
+
 **Risk note:** budget 10 weeks, expect 16. This pass is where an ambitious
 schedule goes to die, and it is also the only part of the design that has not
 been validated at scale by someone else. Prototype it standalone, against a
@@ -437,6 +470,21 @@ Static checking where accesses are to provably distinct storage; dynamic
   this is the payoff for doing root inference properly.
 - `reset()`, nested regions, region-to-owned copy-out (`toOwned()`).
 - Thread affinity by construction (a region anchor is not `Sendable`).
+
+Status: the core is in. `region arena { … }` makes a `Region` — a counted
+runtime arena of chunks — that ends with its block on every way out;
+`arena.alloc(value)` moves a value into it and gives back a `T&`; an
+`in r: Region` parameter borrows a caller's. Ending a region runs the
+destroys of what it holds, last first, then frees its chunks at once. And,
+as promised, it fell out of 3.3: what a region allocates is anchored where
+the region is — a local region's slot, or the parameter it came in as — so
+returning a reference into a local region is rejected with its fixes, a
+reference used after its region ended is rejected, and `build(in r) -> ref
+Node` has `roots(0)`: "root inferred as 'r'". Not yet: references in fields
+(so no linked structures in a region yet), `reset()`, nested regions as
+values, `toOwned()` beyond a dereference's copy, region sources
+(`region frame = pool`), and the lowercase `region` spelling in type
+position.
 
 ### 3.6 Inline layout (~6 weeks)
 

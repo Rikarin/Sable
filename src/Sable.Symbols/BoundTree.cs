@@ -293,7 +293,16 @@ public enum ConversionKind {
     UnionInjection,
 
     /// <summary>Written with <c>as</c>; checked at runtime where needed.</summary>
-    Explicit
+    Explicit,
+
+    /// <summary><c>T&amp;</c> to <c>T</c>: the value a reference refers to, copied out.</summary>
+    Dereference,
+
+    /// <summary>
+    ///     A place of type <c>T</c> to <c>T&amp;</c>: a reference to it, where one
+    ///     is wanted — a <c>ref</c> result, a reference parameter.
+    /// </summary>
+    Reference,
 }
 
 public sealed class BoundConversion(

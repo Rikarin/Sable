@@ -37,6 +37,13 @@ public abstract class SilType : IEquatable<SilType> {
     /// </summary>
     public static readonly SilType Object = new ScalarType("Object", trivial: false);
 
+    /// <summary>
+    ///     A region (docs/02 §2.1): a counted arena that values are
+    ///     bump-allocated into and released with all at once, when its last
+    ///     reference goes — at the end of its <c>region</c> block.
+    /// </summary>
+    public static readonly SilType Region = new ScalarType("Region", trivial: false);
+
     /// <summary><c>()</c>: no value. What a function that returns nothing returns.</summary>
     public static readonly SilType Unit = new ScalarType("()");
 
@@ -158,6 +165,10 @@ public sealed class TupleType(ImmutableArray<SilType> elements) : SilType {
 /// <summary>A named type a module declares: a struct, an enum or a class.</summary>
 public abstract class NominalType(string name) : SilType {
     public string Name { get; } = name;
+
+    /// <summary>A move-only struct or enum: a value of it is never copied, so it has ownership even when its parts are trivial.</summary>
+    public bool IsNoncopyable { get; set; }
+
     public override string ToString() => Name;
 }
 
@@ -170,7 +181,10 @@ public sealed class StructType(string name) : NominalType(name) {
 
     public int FieldIndex(string field) => Fields.FindIndex(f => f.Name == field);
 
-    public override bool IsTrivial => Fields.All(static f => f.Type.IsTrivial);
+    /// <summary>A move-only struct's deinit, run as a value of it is destroyed, before its fields; or null.</summary>
+    public string? Deinit { get; set; }
+
+    public override bool IsTrivial => !IsNoncopyable && Fields.All(static f => f.Type.IsTrivial);
 }
 
 /// <summary>
@@ -183,7 +197,7 @@ public sealed class EnumType(string name) : NominalType(name) {
 
     public int CaseIndex(string @case) => Cases.FindIndex(c => c.Name == @case);
 
-    public override bool IsTrivial => Cases.All(static c => c.Payload?.IsTrivial ?? true);
+    public override bool IsTrivial => !IsNoncopyable && Cases.All(static c => c.Payload?.IsTrivial ?? true);
 }
 
 /// <summary>
@@ -734,6 +748,13 @@ public sealed class SilFunction(string name, FunctionType type) {
 
     /// <summary>The module the function belongs to, once it is added to one.</summary>
     public SilModule? Module { get; internal set; }
+
+    /// <summary>
+    ///     For a function that returns a reference, the parameters the result
+    ///     may refer into — its summary, inferred by root inference and part
+    ///     of its interface (docs/02 §2.4). Printed as <c>roots(0, 1)</c>.
+    /// </summary>
+    public IReadOnlyList<int>? ResultRoots { get; set; }
     public FunctionType Type { get; } = type;
     public List<SilBlock> Blocks { get; } = [];
 
@@ -832,7 +853,7 @@ public sealed class SilModule {
             ThickFunctionType => true,
             ClassType classType => Types.OfType<ClassType>().Where(c => c.IsSubclassOf(classType))
                 .Any(c => c.Deinit is not null || c.Fields.Any(f => MayRunDeinit(f.Type))),
-            StructType structType => structType.Fields.Any(f => MayRunDeinit(f.Type)),
+            StructType structType => structType.Deinit is not null || structType.Fields.Any(f => MayRunDeinit(f.Type)),
             TupleType tuple => tuple.Elements.Any(MayRunDeinit),
             EnumType enumType => enumType.Cases.Any(c => c.Payload is { } payload && MayRunDeinit(payload)),
             ArrayType array => MayRunDeinit(array.Element),
@@ -875,7 +896,7 @@ public static class SilBuiltins {
 
     /// <summary>The names whose signature depends on the element type of the array they work on.</summary>
     public static readonly ImmutableArray<string> ArrayOperations =
-        ["array_empty", "array_count", "array_get", "array_append", "array_set", "array_remove_last", "array_clear", "array_slice"];
+        ["array_empty", "array_count", "array_get", "array_append", "array_set", "array_remove_last", "array_clear", "array_slice", "region_alloc"];
 
     /// <summary>A builtin with fixed operand types, by name.</summary>
     public static Signature? Find(string name) => Table.GetValueOrDefault(name);
@@ -892,6 +913,11 @@ public static class SilBuiltins {
 
         if (name == "array_empty") {
             return operands.Count == 0 && result is ArrayType ? new([], result) : null;
+        }
+
+        // Room for a value in a region: its address, which the caller initialises.
+        if (name == "region_alloc") {
+            return operands is [var region] && region == SilType.Region && result is AddressType ? new([SilType.Region], result) : null;
         }
 
         SilType? Element(int index, bool address) {
@@ -999,6 +1025,7 @@ public static class SilBuiltins {
         Add("string_to_Int", SilType.Tuple([SilType.Bool, SilType.Int]), SilType.String);
         Add("string_to_F64", SilType.Tuple([SilType.Bool, SilType.F64]), SilType.String);
 
+        Add("region_create", SilType.Region);
         Add("char_to_Int", SilType.Int, SilType.Char);
         Add("char_from_Int", SilType.Tuple([SilType.Bool, SilType.Char]), SilType.Int);
         Add("char_is_digit", SilType.Bool, SilType.Char);

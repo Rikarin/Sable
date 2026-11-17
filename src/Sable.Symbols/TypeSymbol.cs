@@ -120,6 +120,12 @@ public sealed class NamedTypeSymbol : TypeSymbol {
     /// <summary>Inheritance control, per spec/SYNTAX.md §2.</summary>
     public bool IsOpen { get; internal set; }
 
+    /// <summary>
+    ///     <c>@noncopy</c>: a move-only struct or union (docs/02 §2.3). A
+    ///     value of it is moved, never copied; a use after the move is an error.
+    /// </summary>
+    public bool IsNoncopyable { get; internal set; }
+
     /// <summary>True for <c>sealed class</c>: it may not be subclassed.</summary>
     public bool IsSealed { get; internal set; }
 

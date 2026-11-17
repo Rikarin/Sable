@@ -83,6 +83,13 @@ public sealed class SourceText {
     }
 
     /// <summary>Maps an absolute character offset to a one-based line/column.</summary>
+    /// <summary>The position of a one-based line and column: the inverse of <see cref="GetLinePosition" />.</summary>
+    public int GetPosition(LinePosition position) {
+        var lineStarts = LineStarts;
+        var line = Math.Clamp(position.Line - 1, 0, lineStarts.Length - 1);
+        return Math.Min(lineStarts[line] + Math.Max(position.Column - 1, 0), Text.Length);
+    }
+
     public LinePosition GetLinePosition(int position) {
         ArgumentOutOfRangeException.ThrowIfNegative(position);
         var lineStarts = LineStarts;

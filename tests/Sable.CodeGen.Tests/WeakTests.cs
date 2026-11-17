@@ -145,3 +145,52 @@ public sealed class WeakTests {
         Assert.Contains(result.Errors, e => e.Contains(message, StringComparison.Ordinal));
     }
 }
+
+/// <summary>A local dies at the end of the block that declared it, not when its function returns.</summary>
+public sealed class LifetimeTests {
+    [Fact]
+    public void LocalsDieWithTheirScope() =>
+        Assert.Equal(
+            "a made\na gone\nafter the block\nl0 made\nloop 0\nl0 gone\nl1 made\nloop 1\nl1 gone\nouter made\nearly made\nearly gone\nouter gone\nreturned 7\nlast made\nend of main\nlast gone\n",
+            AssertAgree(
+                Program(
+                    """
+                    class Noisy {
+                        var name: String
+                        init(_ name: String) {
+                            self.name = name
+                            print(name + " made")
+                        }
+                        deinit {
+                            print(name + " gone")
+                        }
+                    }
+
+                    fn early() -> Int {
+                        let outer = Noisy("outer")
+                        do {
+                            let inner = Noisy("early")
+                            if inner.name.count > 0 {
+                                return 7
+                            }
+                        }
+                        return 0
+                    }
+                    """,
+                    """
+                        do {
+                            let a = Noisy("a")
+                        }
+                        print("after the block")
+                        for i in 0..<2 {
+                            let l = Noisy("l\(i)")
+                            print("loop \(i)")
+                        }
+                        print("returned \(early())")
+                        let last = Noisy("last")
+                        print("end of main")
+                    """
+                )
+            ).Stdout
+        );
+}

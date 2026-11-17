@@ -161,7 +161,11 @@ public sealed class SilGen {
         }
 
         BuildVTables();
+        RootChecker.Check(_module, _sources, _diagnostics);
     }
+
+    /// <summary>Each lowered function's source, for the diagnostics of checks run on the whole module.</summary>
+    readonly Dictionary<SilFunction, SourceText> _sources = [];
 
     readonly Dictionary<FunctionSymbol, (SyntaxNode Syntax, SemanticModel Model)> _declarations = [];
     readonly Dictionary<string, FunctionType> _instances = new(StringComparer.Ordinal);
@@ -205,9 +209,19 @@ public sealed class SilGen {
         function.RemoveUnreachableBlocks();
         _module.Add(function);
 
-        if (symbol.FunctionKind == FunctionKind.Deinitializer && Lower(SelfType(symbol, substitution)) is ClassType owner) {
-            owner.Deinit = function.Name;
+        if (symbol.FunctionKind == FunctionKind.Deinitializer) {
+            switch (Lower(SelfType(symbol, substitution))) {
+                case ClassType owner:
+                    owner.Deinit = function.Name;
+                    break;
+                case StructType owner:
+                    owner.Deinit = function.Name;
+                    break;
+            }
         }
+
+        MoveChecker.Check(function, source, _diagnostics);
+        _sources[function] = source;
     }
 
     internal static string InitializerName(string allocator) => allocator + "$initialize";
@@ -426,7 +440,9 @@ public sealed class SilGen {
         }
 
         foreach (var parameter in symbol.Parameters) {
-            if (parameter.Modifier is not (ParameterModifier.None or ParameterModifier.InOut)) {
+            // 'in r: region' borrows the region, as any parameter is borrowed.
+            if (parameter.Modifier is not (ParameterModifier.None or ParameterModifier.InOut or ParameterModifier.Consuming
+                or ParameterModifier.Ref or ParameterModifier.In)) {
                 return Unsupported<FunctionType>(at, $"the '{parameter.Modifier}' parameter '{parameter.Name}'");
             }
 
@@ -434,8 +450,8 @@ public sealed class SilGen {
                 return Unsupported<FunctionType>(at, $"a parameter of type '{parameter.Type.ToDisplayString()}'");
             }
 
-            // An inout parameter is the address of the caller's storage.
-            parameters.Add(parameter.Modifier == ParameterModifier.InOut ? SilType.Address(type) : type);
+            // An inout or ref parameter is the address of the caller's storage.
+            parameters.Add(parameter.Modifier is ParameterModifier.InOut or ParameterModifier.Ref ? SilType.Address(type) : type);
         }
 
         var resultSymbol = symbol.FunctionKind == FunctionKind.Initializer ? SelfType(symbol, substitution) : symbol.ReturnType;
@@ -454,9 +470,11 @@ public sealed class SilGen {
 
         // An initialiser owns its parameters: it usually stores them, and a
         // caller's temporary then passes straight in rather than being copied.
-        var owned = symbol.FunctionKind == FunctionKind.Initializer
-            ? parameters.Select(static p => p is not AddressType && !p.IsTrivial).ToImmutableArray()
-            : default;
+        // A 'consuming' parameter is owned whatever the function.
+        var selfCount = HasSelf(symbol) ? 1 : 0;
+        var owned = parameters.Select((p, i) => p is not AddressType && !p.IsTrivial
+            && (symbol.FunctionKind == FunctionKind.Initializer
+                || i >= selfCount && symbol.Parameters[i - selfCount].Modifier == ParameterModifier.Consuming)).ToImmutableArray();
 
         return new FunctionType(parameters.ToImmutable(), result, thrown, owned);
     }
@@ -547,6 +565,10 @@ public sealed class SilGen {
             return SilType.String;
         }
 
+        if (type.Equals(Core.Region)) {
+            return SilType.Region;
+        }
+
         switch (type) {
             case TupleTypeSymbol tuple: {
                 var elements = ImmutableArray.CreateBuilder<SilType>();
@@ -563,8 +585,11 @@ public sealed class SilGen {
 
             // The growable kinds, the fixed one and slices share a counted
             // buffer; a slice is a copy, for now, rather than a view.
+            // An array copies its elements on write, so a move-only element has no array yet.
             case ArrayTypeSymbol { ArrayKind: ArrayKind.Grow or ArrayKind.GrowShrink or ArrayKind.Fixed or ArrayKind.Slice } array:
-                return Lower(array.ElementType) is { } elementType ? new ArrayType(elementType) : null;
+                return Lower(array.ElementType) is { } elementType && elementType is not NominalType { IsNoncopyable: true }
+                    ? new ArrayType(elementType)
+                    : null;
 
             // A dictionary, until Sable.Core writes one: its entries, in an
             // array, with key equality from the builtins.
@@ -581,6 +606,11 @@ public sealed class SilGen {
             // 'any P': a closure per requirement, sharing one box with the value.
             case ExistentialTypeSymbol { Constraint: NamedTypeSymbol { TypeKind: TypeKind.Protocol } protocol }:
                 return ExistentialLayout(protocol);
+
+            // A reference: the address of what it refers to. Root inference
+            // checks it does not outlive that.
+            case ReferenceTypeSymbol { RelativeWidth: null } reference:
+                return Lower(reference.ReferencedType) is { } referenced ? SilType.Address(referenced) : null;
 
             // A function as a value: code and a context, called with both.
             case FunctionTypeSymbol { IsAsync: false, IsRethrows: false } functionType: {
@@ -622,7 +652,7 @@ public sealed class SilGen {
             }
 
             case NamedTypeSymbol { IsGenericDefinition: false, TypeKind: TypeKind.Struct } named: {
-                var structType = Begin(named, new StructType(TypeName(named)));
+                var structType = Begin(named, new StructType(TypeName(named)) { IsNoncopyable = named.OriginalDefinition.IsNoncopyable });
                 var members = TypeSubstitution.For(named);
                 if (StoredFields(named.OriginalDefinition).Any(static f => f.ReferenceKind != ReferenceKind.Strong)) {
                     return null; // weak and unowned fields of structs wait for value witnesses of their own
@@ -673,7 +703,7 @@ public sealed class SilGen {
             }
 
             case NamedTypeSymbol { IsGenericDefinition: false, TypeKind: TypeKind.Union } named: {
-                var enumType = Begin(named, new EnumType(TypeName(named)));
+                var enumType = Begin(named, new EnumType(TypeName(named)) { IsNoncopyable = named.OriginalDefinition.IsNoncopyable });
                 var members = TypeSubstitution.For(named);
                 foreach (var unionCase in named.OriginalDefinition.Members.OfType<UnionCaseSymbol>()) {
                     SilType? payload = null;
@@ -1266,7 +1296,13 @@ public sealed class SilGen {
         readonly List<Handler> _handlers = [];
 
         /// <summary>The deferred bodies of each open scope, innermost last.</summary>
-        readonly List<List<BoundStatement>> _scopes = [];
+        /// <remarks>
+        ///     A scope's cleanups are its deferred bodies and its locals'
+        ///     slots, in the order they appeared; leaving the scope runs them
+        ///     last first — so a local dies at the end of the block that
+        ///     declared it, after any <c>defer</c> written below it.
+        /// </remarks>
+        readonly List<List<object>> _scopes = [];
 
         /// <summary>
         ///     Owned values an expression holds while it evaluates the rest of
@@ -1316,6 +1352,21 @@ public sealed class SilGen {
 
             foreach (var parameter in symbol.Parameters) {
                 _parameters[parameter] = _entry.AddArgument(parameterTypes[next++]);
+            }
+
+            _current = _entry;
+
+            // A move-only parameter the function owns lives in a slot, like a
+            // local, so that moving it out is checked as a local's move is.
+            for (var i = 0; i < symbol.Parameters.Length; i++) {
+                var argument = (SilArgument)_parameters[symbol.Parameters[i]];
+                if (function.Type.IsOwned(_entry.Arguments.IndexOf(argument)) && argument.Type is NominalType { IsNoncopyable: true }) {
+                    var slot = NewSlot(argument.Type, symbol.Parameters[i].Name);
+                    Emit(new StoreInst(argument, slot, StoreKind.Assign));
+                    _spilled[symbol.Parameters[i]] = slot;
+                    _spilledArguments.Add(argument);
+                    _parameters.Remove(symbol.Parameters[i]);
+                }
             }
 
             _current = _entry;
@@ -1448,6 +1499,8 @@ public sealed class SilGen {
                 return;
             }
 
+            EndsWithScope(slot);
+
             if (_boxed.Contains(local)) {
                 var box = Emit(new AllocRefInst((ClassType)slot.ElementType));
                 if (value is not null) {
@@ -1506,9 +1559,15 @@ public sealed class SilGen {
         }
 
         /// <summary>The parameters the function owns, destroyed wherever it leaves.</summary>
+        /// <summary>Move-only parameters the function owns, kept in slots.</summary>
+        readonly Dictionary<ParameterSymbol, AllocStackInst> _spilled = [];
+
+        /// <summary>The arguments that went into those slots: consumed there, not destroyed on the way out.</summary>
+        readonly HashSet<SilArgument> _spilledArguments = [];
+
         void DestroyOwnedParameters() {
             for (var i = 0; i < _entry.Arguments.Count; i++) {
-                if (function.Type.IsOwned(i)) {
+                if (function.Type.IsOwned(i) && !_spilledArguments.Contains(_entry.Arguments[i])) {
                     Emit(new DestroyValueInst(_entry.Arguments[i]));
                 }
             }
@@ -1517,7 +1576,7 @@ public sealed class SilGen {
         /// <summary>Destroys what every non-trivial slot holds, then frees the slots, in reverse.</summary>
         void Deallocate() {
             for (var i = _allocations.Count - 1; i >= 0; i--) {
-                if (!_allocations[i].ElementType.IsTrivial) {
+                if (!_allocations[i].ElementType.IsTrivial && !_scoped.Contains(_allocations[i])) {
                     Emit(new DestroyAddrInst(_allocations[i]));
                 }
             }
@@ -1556,7 +1615,7 @@ public sealed class SilGen {
 
         /// <summary>Keeps an owned value on the temporaries while more of the expression is evaluated.</summary>
         SilValue Hold(SilValue value) {
-            if (IsOwned(value)) {
+            if (IsOwned(value) || value is LoadBorrowInst) {
                 _temporaries.Add(value);
             }
 
@@ -1565,20 +1624,28 @@ public sealed class SilGen {
 
         /// <summary>Takes a held value back off the temporaries, for whatever consumes it next.</summary>
         SilValue Unhold(SilValue value) {
-            if (IsOwned(value)) {
+            if (IsOwned(value) || value is LoadBorrowInst) {
                 _temporaries.RemoveAt(_temporaries.LastIndexOf(value));
             }
 
             return value;
         }
 
-        /// <summary>The end of a borrow: a temporary is taken off the temporaries and destroyed.</summary>
-        void End(SilValue value) => Destroy(Unhold(value));
+        /// <summary>The end of a borrow: a temporary is taken off the temporaries and destroyed, a load_borrow ended.</summary>
+        void End(SilValue value) {
+            if (value is LoadBorrowInst borrowed) {
+                Unhold(borrowed);
+                Emit(new EndBorrowInst(borrowed));
+                return;
+            }
+
+            Destroy(Unhold(value));
+        }
 
         /// <summary>Destroys, on the path being emitted, the temporaries above a depth, without forgetting them.</summary>
         void DestroyTemporaries(int depth) {
             for (var i = _temporaries.Count - 1; i >= depth; i--) {
-                Emit(new DestroyValueInst(_temporaries[i]));
+                Emit<SilInstruction>(_temporaries[i] is LoadBorrowInst borrowed ? new EndBorrowInst(borrowed) : new DestroyValueInst(_temporaries[i]));
             }
         }
 
@@ -1588,6 +1655,12 @@ public sealed class SilGen {
         ///     and held as a temporary, to be <see cref="End" />ed after the use.
         /// </summary>
         SilValue? Borrow(BoundExpression expression) {
+            // A move-only variable is borrowed where it is: a copy, destroyed
+            // after, would run its deinit.
+            if (MoveOnlyPlace(expression) is { } place) {
+                return Hold(Emit(new LoadBorrowInst(place)));
+            }
+
             switch (expression) {
                 case BoundParameterAccess access when _parameters.TryGetValue(access.Parameter, out var parameter) && parameter.Type is not AddressType:
                     return parameter;
@@ -1617,6 +1690,23 @@ public sealed class SilGen {
                     return Expression(expression) is { } owned ? Hold(owned) : null;
             }
         }
+
+        /// <summary>
+        ///     True for a parameter passed by address — inout or ref — whose
+        ///     address stands for its value; a parameter of reference type is
+        ///     an address that is the value.
+        /// </summary>
+        static bool IsByAddress(ParameterSymbol parameter) => parameter.Modifier is ParameterModifier.InOut or ParameterModifier.Ref;
+
+        /// <summary>The slot of a move-only local or parameter, or null.</summary>
+        AllocStackInst? MoveOnlyPlace(BoundExpression expression) =>
+            expression switch {
+                BoundLocalAccess local when _slots.TryGetValue(local.Local, out var slot) && !_boxed.Contains(local.Local)
+                    && slot.ElementType is NominalType { IsNoncopyable: true } => slot,
+                BoundParameterAccess parameter when _spilled.TryGetValue(parameter.Parameter, out var spilled) => spilled,
+                BoundConversion { ConversionKind: ConversionKind.Identity } conversion => MoveOnlyPlace(conversion.Operand),
+                _ => null,
+            };
 
         /// <summary>True for an expression <see cref="Borrow" /> reaches without evaluating anything owned.</summary>
         bool IsBorrowable(BoundExpression expression) =>
@@ -1667,20 +1757,50 @@ public sealed class SilGen {
             return block;
         }
 
-        /// <summary>Runs the deferred bodies of every scope deeper than <paramref name="depth" />, innermost first.</summary>
+        /// <summary>
+        ///     Runs the cleanups of every scope deeper than <paramref name="depth" />,
+        ///     innermost first: deferred bodies, and the destruction of the
+        ///     locals each declared. A local never bound on this path is
+        ///     empty, and destroying it does nothing.
+        /// </summary>
         void RunDefers(int depth) {
-            var saved = _scopes.ToList();
+            var saved = _scopes.Select(static s => s.ToList()).ToList();
             for (var i = saved.Count - 1; i >= depth; i--) {
                 // While a scope's defers run, it and those inside it are closed.
                 _scopes.RemoveRange(i, _scopes.Count - i);
-                foreach (var deferred in Enumerable.Reverse(saved[i])) {
-                    Statement(deferred);
+                foreach (var cleanup in Enumerable.Reverse(saved[i])) {
+                    switch (cleanup) {
+                        case BoundStatement deferred:
+                            Statement(deferred);
+                            break;
+
+                        case AllocStackInst slot:
+                            Emit(new DestroyAddrInst(slot));
+                            break;
+                    }
                 }
             }
 
             _scopes.Clear();
             _scopes.AddRange(saved);
         }
+
+        /// <summary>Gives a local's slot to the innermost scope, to be destroyed as it closes.</summary>
+        void EndsWithScope(AllocStackInst slot) {
+            if (slot.ElementType.IsTrivial || _scopes.Count == 0 || _scopes.Any(s => s.Contains(slot))) {
+                return;
+            }
+
+            _scopes[^1].Add(slot);
+            _scoped.Add(slot);
+        }
+
+        /// <summary>
+        ///     Slots a scope destroys: on every way out of it they are destroyed
+        ///     or, on a way out lowered before they were bound, still empty — so
+        ///     the function's exits need not destroy them again.
+        /// </summary>
+        readonly HashSet<AllocStackInst> _scoped = [];
 
         /// <summary>
         ///     The one block every return goes through. Its deallocations are
@@ -1779,6 +1899,8 @@ public sealed class SilGen {
                         }
                     } else if (_boxed.Contains(declaration.Local)) {
                         BindLocal(declaration.Local, null, declaration.Syntax);
+                    } else if (SlotFor(declaration.Local, declaration.Syntax) is { } declared) {
+                        EndsWithScope(declared);
                     }
 
                     return;
@@ -1893,6 +2015,24 @@ public sealed class SilGen {
 
                 case BoundDo doStatement:
                     Do(doStatement);
+                    return;
+
+                // 'region arena { … }': a region for the block, ended with it.
+                case BoundScopedBlock { ScopeKind: ScopeKind.Region, Source: null, Name: { } arena } region: {
+                    _scopes.Add([]);
+                    BindLocal(arena, Emit(new BuiltinInst("region_create", SilType.Region)), region.Syntax);
+                    Statement(region.Body);
+                    if (_current is not null) {
+                        RunDefers(_scopes.Count - 1);
+                    }
+
+                    _scopes.RemoveAt(_scopes.Count - 1);
+                    return;
+                }
+
+                // 'unsafe { … }' and the like: a block, as far as lowering goes.
+                case BoundScopedBlock { ScopeKind: not ScopeKind.Region } scoped:
+                    Statement(scoped.Body);
                     return;
 
                 default:
@@ -2408,6 +2548,17 @@ public sealed class SilGen {
                 case BoundConversion { ConversionKind: ConversionKind.Existential } conversion:
                     return MakeExistential(conversion);
 
+                // A reference read: what it refers to, copied.
+                case BoundConversion { ConversionKind: ConversionKind.Dereference } dereference:
+                    return Expression(dereference.Operand) is { Type: AddressType } address ? Emit(new LoadInst(address)) : null;
+
+                // A place where a reference is wanted, or '&x': its address.
+                case BoundConversion { ConversionKind: ConversionKind.Reference } reference:
+                    return ReferenceTo(reference.Operand);
+
+                case BoundUnaryOperator { OperatorKind: UnaryOperatorKind.AddressOf, Operand: var target }:
+                    return ReferenceTo(target);
+
                 // An object as one of its superclasses: the same object, owned as that.
                 case BoundConversion { ConversionKind: ConversionKind.Upcast } conversion: {
                     if (LowerType(conversion.Type) is not ClassType target || Expression(conversion.Operand) is not { Type: ClassType } value) {
@@ -2426,8 +2577,15 @@ public sealed class SilGen {
                 case BoundConversion { ConversionKind: ConversionKind.Explicit } conversion:
                     return NumericConversion(conversion);
 
+                case BoundParameterAccess access when _spilled.TryGetValue(access.Parameter, out var spilledSlot):
+                    return Emit(new LoadInst(spilledSlot));
+
+                // 'move x': the variable's value, taken; the variable is then empty.
+                case BoundUnaryOperator { OperatorKind: UnaryOperatorKind.Move, Operand: var moved }:
+                    return Move(moved);
+
                 case BoundParameterAccess access when _parameters.TryGetValue(access.Parameter, out var parameter):
-                    return parameter.Type is AddressType ? Emit(new LoadInst(parameter)) : Owned(parameter);
+                    return IsByAddress(access.Parameter) ? Emit(new LoadInst(parameter)) : Owned(parameter);
 
                 case BoundLocalAccess access:
                     return LoadLocal(access);
@@ -2693,6 +2851,50 @@ public sealed class SilGen {
             return Emit(new LoadInst(slot, LoadKind.Take));
         }
 
+        /// <summary>
+        ///     The address a reference to an expression holds: a place's own; a
+        ///     parameter passed by value, or a value with no place, in a slot of
+        ///     its own — which root inference then knows dies with the function.
+        /// </summary>
+        SilValue? ReferenceTo(BoundExpression expression) {
+            if (LowerType(expression.Type) is AddressType) {
+                return Expression(expression); // already a reference
+            }
+
+            if (Place(expression) is { } place) {
+                return place;
+            }
+
+            if (Expression(expression) is not { } value) {
+                return null;
+            }
+
+            var name = expression switch {
+                BoundParameterAccess parameter => parameter.Parameter.Name,
+                BoundSelfAccess => "self",
+                _ => null,
+            };
+            var slot = NewSlot(value.Type, name);
+            Store(value, slot);
+            return slot;
+        }
+
+        /// <summary>'move x': a local's value taken out of its slot; anything else is already a value of its own.</summary>
+        SilValue? Move(BoundExpression operand) {
+            var slot = operand switch {
+                BoundLocalAccess local when _slots.TryGetValue(local.Local, out var found) && !_boxed.Contains(local.Local)
+                    && closure?.Captures.ContainsKey(local.Local) != true => found,
+                BoundParameterAccess parameter when _spilled.TryGetValue(parameter.Parameter, out var spilled) => spilled,
+                _ => null,
+            };
+
+            if (slot is null || slot.ElementType.IsTrivial) {
+                return Expression(operand);
+            }
+
+            return Emit(new LoadInst(slot, LoadKind.Take));
+        }
+
         /// <summary>A field's value, read as its storage says: a copy, or the object a weak or unowned reference holds.</summary>
         SilValue ReadField(SilValue address) =>
             ((AddressType)address.Type).Pointee switch {
@@ -2763,8 +2965,11 @@ public sealed class SilGen {
                 case BoundLocalAccess local when _slots.TryGetValue(local.Local, out var slot) && !_boxed.Contains(local.Local):
                     return slot;
 
-                case BoundParameterAccess access when _parameters.TryGetValue(access.Parameter, out var inout) && inout.Type is AddressType:
+                case BoundParameterAccess access when _parameters.TryGetValue(access.Parameter, out var inout) && IsByAddress(access.Parameter):
                     return inout;
+
+                case BoundParameterAccess access when _spilled.TryGetValue(access.Parameter, out var spilled):
+                    return spilled;
 
                 case BoundSelfAccess when _selfAddress is { } self:
                     return self;
@@ -2782,6 +2987,10 @@ public sealed class SilGen {
                 case BoundTupleElementAccess element when Place(element.Receiver) is { Type: AddressType { Pointee: TupleType } } tuple:
                     return Emit(new TupleElementAddrInst(tuple, element.Index));
 
+                // What a reference refers to is where it points.
+                case BoundConversion { ConversionKind: ConversionKind.Dereference } dereference:
+                    return Expression(dereference.Operand) is { Type: AddressType } referred ? referred : null;
+
                 default:
                     return null;
             }
@@ -2797,8 +3006,11 @@ public sealed class SilGen {
                 case BoundLocalAccess local:
                     return LocalAddress(local.Local, local.Syntax, borrows);
 
-                case BoundParameterAccess access when _parameters.TryGetValue(access.Parameter, out var inout) && inout.Type is AddressType:
+                case BoundParameterAccess access when _parameters.TryGetValue(access.Parameter, out var inout) && IsByAddress(access.Parameter):
                     return inout;
+
+                case BoundParameterAccess access when _spilled.TryGetValue(access.Parameter, out var spilled):
+                    return spilled;
 
                 case BoundSelfAccess when _selfAddress is { } self:
                     return self;
@@ -3637,6 +3849,16 @@ public sealed class SilGen {
             }
 
             for (var i = 0; i < passed; i++) {
+                // A ref argument passes where it is, or a temporary when it is nowhere.
+                if (i < callee.Parameters.Length && callee.Parameters[i].Modifier == ParameterModifier.Ref) {
+                    if (ReferenceTo(call.Arguments[i]) is not { } referred) {
+                        return null;
+                    }
+
+                    arguments.Add(referred);
+                    continue;
+                }
+
                 // An inout argument passes where it is; the rest are borrowed.
                 if (i < callee.Parameters.Length && callee.Parameters[i].Modifier == ParameterModifier.InOut) {
                     if (Address(call.Arguments[i], borrows) is not { } address) {
@@ -4019,6 +4241,24 @@ public sealed class SilGen {
 
                 EndAll(borrows);
                 return new(result);
+            }
+
+            // 'arena.alloc(value)': room in the region, the value moved there, its address back.
+            if (Sub(receiver.Type).Equals(Core.Region) && callee.Name == "alloc") {
+                if (Expression(call.Arguments[0]) is not { } allocated) {
+                    return new((SilValue?)null);
+                }
+
+                Hold(allocated);
+                if (Borrow(receiver) is not { } region) {
+                    return new((SilValue?)null);
+                }
+
+                var room = Emit(new BuiltinInst("region_alloc", SilType.Address(allocated.Type), region));
+                Unhold(allocated);
+                Emit(new StoreInst(Owned(allocated), room, StoreKind.Init));
+                End(region);
+                return new(room);
             }
 
             var isCore = Sub(receiver.Type) is ArrayTypeSymbol

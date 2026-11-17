@@ -226,7 +226,7 @@ public sealed class SilParser {
                 && (i == 0 || _tokens[i - 1].Text != "$")
                 && _tokens[i + 1].Kind == TokenKind.Word) {
                 var name = _tokens[i + 1].Text;
-                if (module.FindType(name) is not null || name is "Int" or "Bool" or "F64" or "String" or "Char" or "Object") {
+                if (module.FindType(name) is not null || name is "Int" or "Bool" or "F64" or "String" or "Char" or "Object" or "Region") {
                     throw new SilParseException($"the type {name} is declared twice", _tokens[i + 1].Line);
                 }
 
@@ -272,8 +272,18 @@ public sealed class SilParser {
     List<(SilInstruction User, int Operand, string Name, int Line)> _pending = [];
     SilFunction _function = null!;
 
+    bool AcceptNoncopy() {
+        if (Current is not { Kind: TokenKind.Global, Text: "noncopy" }) {
+            return false;
+        }
+
+        Next();
+        return true;
+    }
+
     void ParseStruct() {
         var type = (StructType)_module.FindType(Expect(TokenKind.Word, "a struct name").Text)!;
+        type.IsNoncopyable = AcceptNoncopy();
         Expect("{");
         if (!At("}")) {
             do {
@@ -284,6 +294,9 @@ public sealed class SilParser {
         }
 
         Expect("}");
+        if (Accept("deinit")) {
+            type.Deinit = Expect(TokenKind.Global, "the deinit function").Text;
+        }
     }
 
     void ParseClass() {
@@ -323,6 +336,7 @@ public sealed class SilParser {
 
     void ParseEnum() {
         var type = (EnumType)_module.FindType(Expect(TokenKind.Word, "an enum name").Text)!;
+        type.IsNoncopyable = AcceptNoncopy();
         Expect("{");
         if (!At("}")) {
             do {
@@ -349,6 +363,19 @@ public sealed class SilParser {
         }
 
         _function = new SilFunction(name, type);
+        if (Accept("roots")) {
+            Expect("(");
+            var roots = new List<int>();
+            if (!At(")")) {
+                do {
+                    roots.Add(int.Parse(Expect(TokenKind.Number, "a parameter index").Text, CultureInfo.InvariantCulture));
+                } while (Accept(","));
+            }
+
+            Expect(")");
+            _function.ResultRoots = roots;
+        }
+
         if (Accept("loc")) {
             _function.SourceFile = Expect(TokenKind.String, "a file name").Text;
             Expect(":");
@@ -528,6 +555,7 @@ public sealed class SilParser {
             "String" => SilType.String,
             "Char" => SilType.Char,
             "Object" => SilType.Object,
+            "Region" => SilType.Region,
             _ => _module.FindType(name) ?? throw Error($"unknown type '{name}'"),
         };
     }

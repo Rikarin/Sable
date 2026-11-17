@@ -10,4 +10,8 @@
   <ItemGroup>
     <InternalsVisibleTo Include="Sable.CodeGen.Tests" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- The standard library: Sable source, compiled with every program that imports it. -->
+    <EmbeddedResource Include="../../lib/**/*.sab" LogicalName="lib/%(RecursiveDir)%(Filename)%(Extension)" />
+  </ItemGroup>
 </Project>

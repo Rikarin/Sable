@@ -82,7 +82,7 @@ public sealed partial class SilGen {
         foreach (var tree in _compilation.SyntaxTrees) {
             var model = _compilation.GetSemanticModel(tree);
             foreach (var declaration in tree.Root.DescendantNodes()) {
-                if (declaration is not (FunctionDeclarationSyntax or InitDeclarationSyntax or DeinitDeclarationSyntax)) {
+                if (declaration is not (FunctionDeclarationSyntax or InitDeclarationSyntax or DeinitDeclarationSyntax or OperatorDeclarationSyntax)) {
                     continue;
                 }
 
@@ -401,6 +401,9 @@ public sealed partial class SilGen {
         symbol.ContainingSymbol is ModuleSymbol
         || Owner(symbol) switch {
             { TypeKind: TypeKind.Struct or TypeKind.Union or TypeKind.Enum } => true,
+
+            // An extension of a primitive: 'extension Int: Comparable { … }'.
+            { TypeKind: TypeKind.Builtin } => true,
             { TypeKind: TypeKind.Class or TypeKind.Actor } => true,
 
             // A protocol's default implementations: generic over Self, so
@@ -522,8 +525,9 @@ public sealed partial class SilGen {
         new([..text.Select(static c => char.IsLetterOrDigit(c) || c is '_' or '.' ? c : '$')]);
 
     /// <summary>True for a method that takes <c>self</c>, as opposed to a static one or an initialiser.</summary>
+    // An operator is a static function of its type: both operands are arguments.
     static bool HasSelf(FunctionSymbol symbol) =>
-        Owner(symbol) is not null && !symbol.IsStatic && symbol.FunctionKind != FunctionKind.Initializer;
+        Owner(symbol) is not null && !symbol.IsStatic && symbol.FunctionKind is not (FunctionKind.Initializer or FunctionKind.Operator);
 
     FunctionType? SignatureOf(FunctionSymbol symbol, SyntaxNode at, TypeSubstitution substitution) {
         SilType? Lower(TypeSymbol type) => this.Lower(substitution.Apply(type));
@@ -1242,9 +1246,10 @@ public sealed partial class SilGen {
     /// <summary>The member of a concrete type that implements a protocol's method: its own, or a superclass's.</summary>
     internal static FunctionSymbol? Implementation(NamedTypeSymbol concrete, FunctionSymbol requirement) {
         for (var type = (NamedTypeSymbol?)concrete.OriginalDefinition; type is not null; type = SuperclassOf(type)?.OriginalDefinition) {
+            // An operator is static wherever it is written; a requirement's says nothing.
             var found = type.Members.OfType<FunctionSymbol>().FirstOrDefault(f =>
                 f.Name == requirement.Name
-                && f.IsStatic == requirement.IsStatic
+                && (f.IsStatic == requirement.IsStatic || requirement.FunctionKind == FunctionKind.Operator)
                 && f.Parameters.Length == requirement.Parameters.Length
                 && Owner(f) is { TypeKind: not TypeKind.Protocol });
             if (found is not null) {
@@ -3031,6 +3036,13 @@ public sealed partial class SilGen {
                 case BoundUnaryOperator { OperatorKind: UnaryOperatorKind.Await, Operand: var awaited }:
                     return Expression(awaited);
 
+                // An operator of the program's own: a call to it.
+                case BoundBinaryOperator { Method: { } binaryMethod } userBinary:
+                    return UserBinary(userBinary, binaryMethod);
+
+                case BoundUnaryOperator { Method: { } unaryMethod } userUnary:
+                    return Expression(new BoundCall(userUnary.Syntax, null, OperatorWitness(unaryMethod, userUnary.Operand.Type) ?? unaryMethod, [userUnary.Operand], userUnary.Type));
+
                 case BoundUnaryOperator unary:
                     return Unary(unary);
 
@@ -3600,6 +3612,41 @@ public sealed partial class SilGen {
             var result = Owned(payload);
             Destroy(value);
             return result;
+        }
+
+        /// <summary>
+        ///     The operator that meets a protocol's requirement for the type
+        ///     the operand turned out to be; the operator itself otherwise.
+        /// </summary>
+        FunctionSymbol? OperatorWitness(FunctionSymbol method, TypeSymbol operand) =>
+            OwnerOf(method) is { TypeKind: TypeKind.Protocol } && Sub(operand) is NamedTypeSymbol concrete
+                ? Implementation(concrete, method)
+                : method;
+
+        /// <summary>
+        ///     'a == b' through an operator the program declares: a call to it.
+        ///     '!=' is the negation of '=='; '>' is '<' with the operands
+        ///     swapped, '<=' its negation, '>=' the negation of '<'.
+        /// </summary>
+        SilValue? UserBinary(BoundBinaryOperator binary, FunctionSymbol method) {
+            if (OperatorWitness(method, binary.Left.Type) is not { } callee) {
+                return Missing(binary, $"'{method.Name}' for '{Sub(binary.Left.Type).ToDisplayString()}'");
+            }
+
+            var (first, second, negate) = binary.OperatorKind switch {
+                BinaryOperatorKind.NotEqual => (binary.Left, binary.Right, true),
+                BinaryOperatorKind.GreaterThan => (binary.Right, binary.Left, false),
+                BinaryOperatorKind.LessThanOrEqual => (binary.Right, binary.Left, true),
+                BinaryOperatorKind.GreaterThanOrEqual => (binary.Left, binary.Right, true),
+                _ => (binary.Left, binary.Right, false),
+            };
+
+            var resultType = binary.OperatorKind == BinaryOperatorKind.UserDefined ? binary.Type : Core.Bool;
+            if (Expression(new BoundCall(binary.Syntax, null, callee, [first, second], resultType)) is not { } result) {
+                return null;
+            }
+
+            return negate ? Emit(new BuiltinInst("not_Bool", SilType.Bool, result)) : result;
         }
 
         bool IsDowncast(BoundConversion conversion) {
@@ -4708,6 +4755,12 @@ public sealed partial class SilGen {
         Handled? CoreMember(BoundCall call) {
             var callee = call.Function;
             var owner = callee.ContainingSymbol;
+
+            // Written in Sable — a protocol's requirement, or an extension's
+            // member — rather than built in: called as any function is.
+            if (!callee.DeclaringSyntax.IsEmpty || OwnerOf(callee) is { TypeKind: TypeKind.Protocol }) {
+                return null;
+            }
 
             // String.fromChar(c): a static member, with no receiver.
             if (callee is { Name: "fromChar", IsStatic: true } && ReferenceEquals(owner, Core.String)) {

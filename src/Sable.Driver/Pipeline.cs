@@ -29,11 +29,13 @@ public static class Pipeline {
     /// </param>
     public static CompileResult Compile(SourceText source, string? debugDirectory = null, bool checkExclusivity = true) {
         var tree = SyntaxTree.Parse(source);
-        var compilation = Compilation.Create([tree]);
+
+        // The standard library the program uses comes with it (docs/04 §4.3).
+        var compilation = Compilation.Create([tree, ..Library.For(tree)]);
 
         var errors = compilation.GetAllDiagnostics()
             .Where(static d => d.Severity == DiagnosticSeverity.Error)
-            .Select(d => d.Format(source))
+            .Select(d => Format(d, source))
             .ToList();
         if (errors.Count > 0) {
             return new(null, null, errors);
@@ -41,7 +43,7 @@ public static class Pipeline {
 
         var (module, lowering) = SilGen.Lower(compilation);
         module.CheckExclusivity = checkExclusivity;
-        errors.AddRange(lowering.Select(d => d.Format(source)));
+        errors.AddRange(lowering.Select(d => Format(d, source)));
         if (errors.Count > 0) {
             return new(module, null, errors);
         }
@@ -70,4 +72,10 @@ public static class Pipeline {
         var ir = debugDirectory is null ? LlvmEmitter.Emit(module) : LlvmEmitter.EmitWithDebugInfo(module, debugDirectory);
         return new(module, ir, []);
     }
+
+    /// <summary>A diagnostic, against the program's text — or the library's, when it falls outside the program.</summary>
+    static string Format(Diagnostic diagnostic, SourceText source) =>
+        diagnostic.Span.End <= source.Length
+            ? diagnostic.Format(source)
+            : $"error[{diagnostic.Id}] in the standard library: {diagnostic.Message}";
 }

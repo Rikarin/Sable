@@ -1,0 +1,175 @@
+module Sable.Text
+
+// Working with text (docs/06): searching, slicing, building, padding —
+// written in Sable over the core String. Positions count Unicode scalars,
+// as String does.
+
+/// The string, n times over.
+public fn repeating(_ text: String, _ times: Int) -> String {
+    var result = ""
+    var i = 0
+    while i < times {
+        result = result + text
+        i = i + 1
+    }
+    return result
+}
+
+/// The parts, with the separator between each two.
+public fn joined(_ parts: String[>..], separator: String) -> String {
+    var result = ""
+    var first = true
+    for part in parts {
+        if !first {
+            result = result + separator
+        }
+        result = result + part
+        first = false
+    }
+    return result
+}
+
+/// The text, its scalars in reverse order.
+public fn reversed(_ text: String) -> String {
+    var result = ""
+    var i = text.count - 1
+    while i >= 0 {
+        result = result + String.fromChar(text.at(i))
+        i = i - 1
+    }
+    return result
+}
+
+/// Whether the text begins with the prefix.
+public fn hasPrefix(_ text: String, _ start: String) -> Bool {
+    return start.count <= text.count && text.slice(from: 0, to: start.count) == start
+}
+
+/// Whether the text ends with the suffix.
+public fn hasSuffix(_ text: String, _ end: String) -> Bool {
+    return end.count <= text.count && text.slice(from: text.count - end.count, to: text.count) == end
+}
+
+/// Where the first occurrence of the part starts, or none.
+public fn find(_ text: String, _ part: String) -> Int? {
+    if part.count == 0 {
+        return 0
+    }
+    var i = 0
+    while i + part.count <= text.count {
+        if text.slice(from: i, to: i + part.count) == part {
+            return i
+        }
+        i = i + 1
+    }
+    return none
+}
+
+/// Whether the part occurs in the text.
+public fn contains(_ text: String, _ part: String) -> Bool {
+    return find(text, part) != none
+}
+
+/// The text with every occurrence of the part replaced, left to right.
+public fn replacing(_ text: String, _ part: String, with replacement: String) -> String {
+    if part.count == 0 {
+        return text
+    }
+    var result = ""
+    var i = 0
+    while i < text.count {
+        if i + part.count <= text.count && text.slice(from: i, to: i + part.count) == part {
+            result = result + replacement
+            i = i + part.count
+        } else {
+            result = result + String.fromChar(text.at(i))
+            i = i + 1
+        }
+    }
+    return result
+}
+
+/// The text split at every occurrence of the separator; empty parts kept.
+public fn splitting(_ text: String, by separator: String) -> String[>..] {
+    var parts: String[>..] = []
+    if separator.count == 0 {
+        parts.append(text)
+        return parts
+    }
+    var start = 0
+    var i = 0
+    while i + separator.count <= text.count {
+        if text.slice(from: i, to: i + separator.count) == separator {
+            parts.append(text.slice(from: start, to: i))
+            i = i + separator.count
+            start = i
+        } else {
+            i = i + 1
+        }
+    }
+    parts.append(text.slice(from: start, to: text.count))
+    return parts
+}
+
+/// The text padded on the left with the fill to the width; longer text as it is.
+public fn paddedLeft(_ text: String, to width: Int, with fill: Char) -> String {
+    return text.count >= width ? text : repeating(String.fromChar(fill), width - text.count) + text
+}
+
+/// The text padded on the right with the fill to the width; longer text as it is.
+public fn paddedRight(_ text: String, to width: Int, with fill: Char) -> String {
+    return text.count >= width ? text : text + repeating(String.fromChar(fill), width - text.count)
+}
+
+/// ASCII letters in upper case; everything else as it is.
+public fn uppercased(_ text: String) -> String {
+    var result = ""
+    var i = 0
+    while i < text.count {
+        let code = text.at(i).codePoint
+        if code >= 97 && code <= 122 {
+            result = result + String.fromChar(Char.fromCodePoint(code - 32)!)
+        } else {
+            result = result + String.fromChar(text.at(i))
+        }
+        i = i + 1
+    }
+    return result
+}
+
+/// ASCII letters in lower case; everything else as it is.
+public fn lowercased(_ text: String) -> String {
+    var result = ""
+    var i = 0
+    while i < text.count {
+        let code = text.at(i).codePoint
+        if code >= 65 && code <= 90 {
+            result = result + String.fromChar(Char.fromCodePoint(code + 32)!)
+        } else {
+            result = result + String.fromChar(text.at(i))
+        }
+        i = i + 1
+    }
+    return result
+}
+
+/// Collects text piece by piece without rebuilding it each time a piece is
+/// added: the pieces are kept, and joined once.
+public class TextBuilder {
+    var pieces: String[>..] = []
+
+    public init() { }
+
+    public fn append(_ piece: String) {
+        pieces.append(piece)
+    }
+
+    public fn appendLine(_ line: String) {
+        pieces.append(line)
+        pieces.append("\n")
+    }
+
+    public fn build() -> String {
+        return joined(pieces, separator: "")
+    }
+}

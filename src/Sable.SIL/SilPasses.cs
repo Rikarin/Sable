@@ -22,6 +22,80 @@ public static class SilPassManager {
     /// </remarks>
     public static IReadOnlyList<ISilPass> Default { get; } = [new PromoteSlots(), new ForwardCopies(), new BorrowLoads(), new ForwardCopies(), new BorrowFields(), new PromoteToStack(), new HoistUniqueness()];
 
+    /// <summary>
+    ///     Drops every function the entry point cannot reach: through calls
+    ///     and function values, the globals' initialiser, the deinits and
+    ///     vtables of the classes it makes, and every type's deinit.
+    /// </summary>
+    public static void RemoveUnreachable(SilModule module) {
+        if (Reachable(module) is { } reached) {
+            module.Functions.RemoveAll(f => !reached.Contains(f.Name));
+        }
+    }
+
+    /// <summary>The functions the entry point can reach, by name; null for a module with no entry point.</summary>
+    public static HashSet<string>? Reachable(SilModule module) {
+        if (module.EntryPoint is not { } entry) {
+            return null;
+        }
+
+        var reached = new HashSet<string>(StringComparer.Ordinal);
+        var pending = new Stack<string>([entry, "$globals.init", "$globals.deinit"]);
+        foreach (var type in module.Types) {
+            switch (type) {
+                case StructType { Deinit: { } deinit }:
+                    pending.Push(deinit);
+                    break;
+                case ClassType { Deinit: { } deinit }:
+                    pending.Push(deinit);
+                    break;
+            }
+        }
+
+        var made = new HashSet<ClassType>();
+        while (pending.Count > 0) {
+            var name = pending.Pop();
+            if (!reached.Add(name) || module.Find(name) is not { } function) {
+                continue;
+            }
+
+            foreach (var instruction in function.Blocks.SelectMany(static b => b.Instructions)) {
+                switch (instruction) {
+                    case FunctionRefInst reference:
+                        pending.Push(reference.Function);
+                        break;
+
+                    // A class made, or called through: every method its vtable, or a subclass's, may dispatch to.
+                    case AllocRefInst alloc:
+                        for (var type = alloc.ClassType; type is not null; type = type.Superclass) {
+                            if (made.Add(type)) {
+                                foreach (var (_, method) in type.VTable) {
+                                    pending.Push(method);
+                                }
+                            }
+                        }
+
+                        foreach (var (_, method) in alloc.ClassType.VTable) {
+                            pending.Push(method);
+                        }
+
+                        break;
+
+                    case ClassMethodInst dispatch:
+                        foreach (var type in module.Types.OfType<ClassType>()) {
+                            if (type.VTable.FirstOrDefault(m => m.Method == dispatch.Method) is { Function: { } target }) {
+                                pending.Push(target);
+                            }
+                        }
+
+                        break;
+                }
+            }
+        }
+
+        return reached;
+    }
+
     public static void Run(SilModule module, IEnumerable<ISilPass> passes) {
         foreach (var pass in passes) {
             foreach (var function in module.Functions) {

@@ -2652,7 +2652,35 @@ public sealed class Binder {
                     return new BoundError(syntax, arguments.ToArray());
                 }
 
-                var group = new BoundFunctionGroup(syntax, null, initializers);
+                // A generic type's initialiser sees the type's parameters as the
+                // type was written — 'Box<String>(…)' — or as its arguments say
+                // they must be — 'Box("z")'.
+                var constructed = namedType;
+                if (namedType is { TypeArguments.IsEmpty: true, TypeParameters.IsEmpty: false }) {
+                    var map = new Dictionary<TypeParameterSymbol, TypeSymbol>();
+                    if (Expand(expectedType) is NamedTypeSymbol { IsConstructed: true } wanted
+                        && ReferenceEquals(wanted.OriginalDefinition, namedType.OriginalDefinition)) {
+                        for (var i = 0; i < namedType.TypeParameters.Length; i++) {
+                            map[namedType.TypeParameters[i]] = wanted.TypeArguments[i];
+                        }
+                    }
+
+                    foreach (var initializer in initializers.Where(i => i.Parameters.Length == arguments.Length)) {
+                        for (var i = 0; i < arguments.Length; i++) {
+                            if (arguments[i] is not BoundUnboundClosure) {
+                                TypeSubstitution.Unify(initializer.Parameters[i].Type, arguments[i].Type, namedType.TypeParameters, map);
+                            }
+                        }
+                    }
+
+                    if (map.Count == namedType.TypeParameters.Length) {
+                        constructed = namedType.Construct([..namedType.TypeParameters.Select(p => map[p])]);
+                    }
+                }
+
+                var group = new BoundFunctionGroup(syntax, null, initializers) {
+                    Substitution = constructed.TypeArguments.IsEmpty ? null : TypeSubstitution.For(constructed),
+                };
                 return BindCallToGroup(syntax, group, arguments, labels, syntaxes, expectedType);
             }
 
@@ -2971,6 +2999,15 @@ public sealed class Binder {
         }
 
         var result = substitution.Apply(resolved.ReturnType);
+
+        // An initialiser of a generic type gives the type its arguments made:
+        // 'Box<String>(…)' is a Box<String>, not the definition.
+        if (resolved.FunctionKind == FunctionKind.Initializer
+            && result is NamedTypeSymbol { TypeArguments.IsEmpty: true, TypeParameters.IsEmpty: false } definition
+            && definition.TypeParameters.All(p => substitution.Lookup(p) is not null)) {
+            result = definition.Construct([..definition.TypeParameters.Select(p => substitution.Lookup(p)!)]);
+        }
+
         var call = new BoundCall(syntax, group.Receiver, resolved, converted.ToImmutable(), result) {
             Substitution = substitution,
         };
@@ -4425,6 +4462,25 @@ public sealed class Binder {
             right = Convert(right, left.Type, right.Syntax);
         }
 
+        // A type of the program's own, or a type parameter, uses the operators
+        // it declares, or its constraints require: 'a == b' on two Moneys is
+        // Money's '=='. '!=', '>', '<=' and '>=' follow from '==' and '<'.
+        if (!IsBuiltinOperand(left.Type) || !IsBuiltinOperand(right.Type)) {
+            if (FindUserOperator(operatorToken.Text, left.Type, right.Type) is { } own) {
+                return new BoundBinaryOperator(syntax, UserResultType(own, left.Type), BinaryOperatorKind.UserDefined, left, right, own);
+            }
+
+            var derivedFrom = kind switch {
+                BinaryOperatorKind.NotEqual => "==",
+                BinaryOperatorKind.GreaterThan or BinaryOperatorKind.LessThanOrEqual or BinaryOperatorKind.GreaterThanOrEqual => "<",
+                _ => null,
+            };
+
+            if (derivedFrom is not null && FindUserOperator(derivedFrom, left.Type, right.Type) is { } basis) {
+                return new BoundBinaryOperator(syntax, Core.Bool, kind, left, right, basis);
+            }
+        }
+
         var type = ResultTypeOf(kind, left.Type, right.Type);
         if (type is not null) {
             return new BoundBinaryOperator(syntax, type, kind, left, right);
@@ -4538,13 +4594,53 @@ public sealed class Binder {
     }
 
     /// <summary>Looks for an <c>operator</c> member on either operand's type.</summary>
+    /// <summary>A type the built-in operators are defined on: what never looks for one of its own.</summary>
+    bool IsBuiltinOperand(TypeSymbol type) =>
+        Core.IsNumeric(type) || type.Equals(Core.String) || type.Equals(Core.Bool) || type.Equals(Core.Char)
+        || type is OptionalTypeSymbol || type.IsError;
+
+    /// <summary>What a user operator gives: 'Self' in a protocol's requirement is the operand's type.</summary>
+    static TypeSymbol UserResultType(FunctionSymbol method, TypeSymbol operand) =>
+        method.ReturnType is TypeParameterSymbol { ContainingSymbol: NamedTypeSymbol { TypeKind: TypeKind.Protocol } } ? operand : method.ReturnType;
+
+    /// <summary>The protocols a type parameter is constrained to, and those they refine.</summary>
+    static IEnumerable<NamedTypeSymbol> ConstraintProtocols(TypeParameterSymbol parameter) {
+        var seen = new HashSet<NamedTypeSymbol>();
+        var pending = new Stack<NamedTypeSymbol>(parameter.Constraints.OfType<NamedTypeSymbol>().Where(static c => c.TypeKind == TypeKind.Protocol));
+        while (pending.Count > 0) {
+            var protocol = pending.Pop();
+            if (!seen.Add(protocol)) {
+                continue;
+            }
+
+            yield return protocol;
+            foreach (var refined in protocol.BaseTypes.OfType<NamedTypeSymbol>().Where(static b => b.TypeKind == TypeKind.Protocol)) {
+                pending.Push(refined);
+            }
+        }
+    }
+
     FunctionSymbol? FindUserOperator(string symbol, TypeSymbol left, TypeSymbol right) {
+        // 'a < b' on two T: Comparable — the protocol's requirement, met by
+        // whatever T turns out to be.
+        if (left is TypeParameterSymbol parameter && left.Equals(right)) {
+            foreach (var protocol in ConstraintProtocols(parameter)) {
+                if (protocol.Members.OfType<FunctionSymbol>().FirstOrDefault(f =>
+                        f is { FunctionKind: FunctionKind.Operator, Fixity: OperatorFixity.Infix, Parameters.Length: 2 }
+                        && string.Equals(f.Name, symbol, StringComparison.Ordinal)) is { } requirement) {
+                    return requirement;
+                }
+            }
+
+            return null;
+        }
+
         foreach (var owner in new[] { left, right }) {
             if (owner is not NamedTypeSymbol named) {
                 continue;
             }
 
-            foreach (var member in named.Members) {
+            foreach (var member in named.OriginalDefinition.Members) {
                 if (member is not FunctionSymbol { FunctionKind: FunctionKind.Operator } function) {
                     continue;
                 }

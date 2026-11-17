@@ -713,6 +713,38 @@ Sable.Testing      the test harness `sable test` drives
 **Write the standard library in Sable from day one of this phase.** It is the
 first large program and the best source of language bugs.
 
+### The library, as begun
+
+The library is Sable source in `lib/<Module>/*.sab`, embedded in the driver
+and compiled with every program (`src/Sable.Driver/Library.cs`):
+`Sable.Core` always, every other module when a program imports it, and what
+those import in turn. Only what the entry point, the globals and the deinits
+reach is emitted, so hello world stays at 51 KB unstripped with the prelude.
+An error inside the library is reported as such, not against the program.
+
+Written so far (`tests/Sable.CodeGen.Tests/LibraryTests.cs`):
+
+- `Sable.Core`: `Equatable`, `Comparable` (refining it) and `Hashable` as
+  Sable protocols with operator requirements; the integer types, floats,
+  `String`, `Char` and `Bool` conform in extensions. `!=`, `>`, `<=` and `>=`
+  are derived from `==` and `<`, so generic code compares through
+  `T: Comparable` and user types conform with one operator.
+- `Sable.Math`: generic `max`/`min`/`clamp`, `gcd`, `lcm`, `power`,
+  `isPrime`, `squareRoot`, `floor`/`ceiling`/`round`, and `Random`.
+- `Sable.Text`: `repeating`, `joined`, `reversed`, `hasPrefix`/`hasSuffix`,
+  `find`, `contains`, `replacing`, `splitting`, padding, case mapping, and
+  `TextBuilder`.
+- `Sable.Collections`: `Stack`, `Queue`, `HashMap` and `HashSet` (open
+  addressing over `Hashable`), and a merge sort for `Comparable` or by a
+  predicate.
+
+What it took from the compiler: generic initialisers inferring their type
+arguments, user operators found through a type parameter's constraints,
+operators and witnesses on primitive types lowered, and reachability-based
+emission. Next: `Sable.IO` (needs runtime calls for files and stdin),
+reflection (4.2), and the names the plan lists that are not yet here
+(`Deque`, `OrderedDictionary`, `Heap`, formatting and parsing).
+
 ### Async, as implemented
 
 Done ahead of `Sable.Concurrency`, with the core of it in `Sable.Core`

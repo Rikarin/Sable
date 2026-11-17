@@ -1,0 +1,252 @@
+module Sable.Collections
+
+// Collections beyond the array family (docs/04 §4.3), written in Sable.
+
+/// Last in, first out.
+public class Stack<Element> {
+    var items: Element[>..] = []
+
+    public init() { }
+
+    public var count: Int { get { return items.count } }
+    public var isEmpty: Bool { get { return items.count == 0 } }
+
+    public fn push(_ item: Element) {
+        items.append(item)
+    }
+
+    public fn pop() -> Element? {
+        if items.count == 0 {
+            return none
+        }
+        return items.removeLast()
+    }
+
+    public fn peek() -> Element? {
+        if items.count == 0 {
+            return none
+        }
+        return items[items.count - 1]
+    }
+}
+
+/// First in, first out: two stacks, the second refilled from the first
+/// when it runs dry, so each element moves once.
+public class Queue<Element> {
+    var incoming: Element[>..] = []
+    var outgoing: Element[>..] = []
+
+    public init() { }
+
+    public var count: Int { get { return incoming.count + outgoing.count } }
+    public var isEmpty: Bool { get { return incoming.count + outgoing.count == 0 } }
+
+    public fn enqueue(_ item: Element) {
+        incoming.append(item)
+    }
+
+    public fn dequeue() -> Element? {
+        if outgoing.count == 0 {
+            while incoming.count > 0 {
+                outgoing.append(incoming.removeLast())
+            }
+        }
+        if outgoing.count == 0 {
+            return none
+        }
+        return outgoing.removeLast()
+    }
+}
+
+/// Keys to values, by hash: open addressing over a table of indices into
+/// the entries, kept at most half full. Iteration is in insertion order.
+public class HashMap<Key: Hashable, Value> {
+    var keys: Key[>..] = []
+    var values: Value[>..] = []
+    var live: Bool[>..] = []
+    var table: Int[>..] = []
+    var used: Int = 0
+
+    public init() { }
+
+    /// How many keys it holds.
+    public var count: Int { get { return used } }
+
+    fn slot(_ key: Key) -> Int {
+        let h = key.hash() % table.count
+        return h < 0 ? h + table.count : h
+    }
+
+    /// Where the key's index is in the table, or where it would go.
+    fn probe(_ key: Key) -> Int {
+        var at = slot(key)
+        while table[at] != -1 {
+            let index = table[at]
+            if index >= 0 && live[index] && keys[index] == key {
+                return at
+            }
+            at = (at + 1) % table.count
+        }
+        return at
+    }
+
+    fn grow() {
+        var size = table.count == 0 ? 8 : table.count * 2
+        table = []
+        var i = 0
+        while i < size {
+            table.append(-1)
+            i = i + 1
+        }
+        var index = 0
+        while index < keys.count {
+            if live[index] {
+                var at = slot(keys[index])
+                while table[at] != -1 {
+                    at = (at + 1) % table.count
+                }
+                table[at] = index
+            }
+            index = index + 1
+        }
+    }
+
+    /// The value for the key, or none.
+    public fn get(_ key: Key) -> Value? {
+        if table.count == 0 {
+            return none
+        }
+        let at = probe(key)
+        if table[at] < 0 {
+            return none
+        }
+        return values[table[at]]
+    }
+
+    /// Whether the map holds the key.
+    public fn contains(_ key: Key) -> Bool {
+        return table.count > 0 && table[probe(key)] >= 0
+    }
+
+    /// Sets the key's value, adding the key if it is new.
+    public fn set(_ key: Key, _ value: Value) {
+        if (keys.count + 1) * 2 > table.count {
+            grow()
+        }
+        let at = probe(key)
+        if table[at] >= 0 {
+            values[table[at]] = value
+            return
+        }
+        table[at] = keys.count
+        keys.append(key)
+        values.append(value)
+        live.append(true)
+        used = used + 1
+    }
+
+    /// Removes the key; true if it was there.
+    public fn remove(_ key: Key) -> Bool {
+        if table.count == 0 {
+            return false
+        }
+        let at = probe(key)
+        if table[at] < 0 {
+            return false
+        }
+        live[table[at]] = false
+        table[at] = -2
+        used = used - 1
+        return true
+    }
+
+    /// The keys, in the order they were first set.
+    public fn allKeys() -> Key[>..] {
+        var result: Key[>..] = []
+        var index = 0
+        while index < keys.count {
+            if live[index] {
+                result.append(keys[index])
+            }
+            index = index + 1
+        }
+        return result
+    }
+}
+
+/// Distinct values, by hash; iteration is in insertion order.
+public class HashSet<Element: Hashable> {
+    var map: HashMap<Element, Bool> = HashMap<Element, Bool>()
+
+    public init() { }
+
+    public var count: Int { get { return map.count } }
+
+    /// Adds the value; true if it was not there before.
+    public fn insert(_ value: Element) -> Bool {
+        if map.contains(value) {
+            return false
+        }
+        map.set(value, true)
+        return true
+    }
+
+    public fn contains(_ value: Element) -> Bool {
+        return map.contains(value)
+    }
+
+    public fn remove(_ value: Element) -> Bool {
+        return map.remove(value)
+    }
+
+    public fn elements() -> Element[>..] {
+        return map.allKeys()
+    }
+}
+
+/// The values in ascending order: a stable merge sort.
+public fn sorted<T: Comparable>(_ values: T[>..]) -> T[>..] {
+    return sorted(values, by: (a: T, b: T) => a < b)
+}
+
+/// The values ordered by 'before': a stable merge sort.
+public fn sorted<T>(_ values: T[>..], by before: (T, T) -> Bool) -> T[>..] {
+    if values.count <= 1 {
+        return values
+    }
+    let middle = values.count / 2
+    var left: T[>..] = []
+    var right: T[>..] = []
+    var i = 0
+    while i < values.count {
+        if i < middle {
+            left.append(values[i])
+        } else {
+            right.append(values[i])
+        }
+        i = i + 1
+    }
+    let a = sorted(left, by: before)
+    let b = sorted(right, by: before)
+    var result: T[>..] = []
+    var x = 0
+    var y = 0
+    while x < a.count && y < b.count {
+        if before(b[y], a[x]) {
+            result.append(b[y])
+            y = y + 1
+        } else {
+            result.append(a[x])
+            x = x + 1
+        }
+    }
+    while x < a.count {
+        result.append(a[x])
+        x = x + 1
+    }
+    while y < b.count {
+        result.append(b[y])
+        y = y + 1
+    }
+    return result
+}

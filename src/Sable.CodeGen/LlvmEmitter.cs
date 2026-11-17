@@ -53,10 +53,17 @@ public sealed class LlvmEmitter {
     const string TbaaRoot = "!9000000", TbaaHeaderType = "!9000001", TbaaElementType = "!9000002";
     const string TbaaHeader = "!9000003", TbaaElement = "!9000004";
 
+    SilModule? _module;
+    HashSet<string>? _reachable;
+
     string EmitModule(SilModule module) {
+        _module = module;
         _checkExclusivity = module.CheckExclusivity;
+
+        // Only what the program reaches is built: the library's other functions are not.
+        _reachable = SilPassManager.Reachable(module);
         var functions = new StringBuilder();
-        foreach (var function in module.Functions) {
+        foreach (var function in module.Functions.Where(f => _reachable?.Contains(f.Name) ?? true)) {
             functions.Append(new FunctionEmitter(this, function).Emit()).Append('\n');
         }
 
@@ -655,7 +662,8 @@ public sealed class LlvmEmitter {
         // metadata, which 'is' and 'as?' walk.
         var typeName = TrapMessage(type.Name);
         var superclass = type.Superclass is { } parent ? ClassMetadata(parent) : "null";
-        var vtable = string.Join(", ", type.VTable.Select(static m => $"ptr @{Global(m.Function)}"));
+        // A method no reachable code can call was not built: its slot is empty.
+        var vtable = string.Join(", ", type.VTable.Select(m => _reachable?.Contains(m.Function) == false ? "ptr null" : $"ptr @{Global(m.Function)}"));
         _globals.Append($"{name} = internal constant {MetadataType(type)} {{ ptr {destroy}, ptr {typeName}, i64 0, ptr {superclass}, ptr null, [{type.VTable.Count} x ptr] [{vtable}] }}\n");
         return name;
     }

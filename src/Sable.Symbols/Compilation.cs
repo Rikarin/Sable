@@ -591,9 +591,15 @@ public sealed class Compilation
             ? TypeBinder.BindType(clause.Type, function, scope)
             : Core.Void;
 
+        function.IsRethrows =
+            declaration.ThrowsSpec?.ThrowsKeyword.Kind == SyntaxKind.RethrowsKeyword;
+
         function.ThrownTypeResolver = () =>
         {
             if (declaration.ThrowsSpec is not { } spec) return null;
+            if (function.IsRethrows)
+                return TypeBinder.RethrownType(function.Parameters.Select(p => p.Type));
+
             return spec.ErrorType is { } errorType
                 ? TypeBinder.BindType(errorType, function, scope)
                 : Core.AnyError;

@@ -371,11 +371,20 @@ public sealed class FunctionTypeSymbol(
     /// <summary>The declared error type, or null when the function cannot throw.</summary>
     public TypeSymbol? ThrownType { get; } = thrownType;
 
+    /// <summary>
+    /// Written <c>rethrows</c>: <see cref="ThrownType"/> is then what the
+    /// throwing function parameters throw, and a call only throws when the
+    /// arguments it is given actually do.
+    /// </summary>
+    public bool IsRethrows { get; init; }
+
     public override string ToDisplayString()
     {
         var prefix = IsAsync ? "async " : "";
         var parameters = string.Join(", ", ParameterTypes.Select(t => t.ToDisplayString()));
-        var throws = ThrownType is null ? "" : $" throws({ThrownType.ToDisplayString()})";
+        var throws = IsRethrows
+            ? " rethrows"
+            : ThrownType is null ? "" : $" throws({ThrownType.ToDisplayString()})";
         return $"{prefix}({parameters}){throws} -> {ReturnType.ToDisplayString()}";
     }
 
@@ -383,6 +392,7 @@ public sealed class FunctionTypeSymbol(
     {
         if (other is not FunctionTypeSymbol function) return false;
         if (function.IsAsync != IsAsync) return false;
+        if (function.IsRethrows != IsRethrows) return false;
         if (!function.ReturnType.Equals(ReturnType)) return false;
         if (function.ParameterTypes.Length != ParameterTypes.Length) return false;
         if ((function.ThrownType is null) != (ThrownType is null)) return false;

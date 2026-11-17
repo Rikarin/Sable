@@ -61,6 +61,12 @@ public sealed class Binder
     /// </summary>
     private TypeSymbol? _declaredThrows;
 
+    /// <summary>
+    /// True inside a <c>rethrows</c> body, where the only errors allowed out
+    /// are the ones the function's own closure parameters raise.
+    /// </summary>
+    private bool _rethrows;
+
     private bool _inAsyncContext;
 
     /// <summary>Depth of <c>try</c> and <c>await</c> operands being bound.</summary>
@@ -82,6 +88,13 @@ public sealed class Binder
     /// <c>catch</c> clauses match against.
     /// </summary>
     private TypeSymbol? _thrownInBody;
+
+    /// <summary>
+    /// What the closure body just bound can let out, which is what its
+    /// function type claims. Written by <c>BindClosureBody</c>, read by the
+    /// caller that builds the type.
+    /// </summary>
+    private TypeSymbol? _closureThrows;
 
     internal Binder(Compilation compilation, FileScope scope, Symbol containingSymbol)
     {
@@ -124,7 +137,9 @@ public sealed class Binder
         _containingSymbol = function;
         _returnType = function.ReturnType;
         _declaredThrows = function.ThrownType;
+        _rethrows = function.IsRethrows;
         _inAsyncContext = function.IsAsync;
+        SeedRethrowSources(function);
 
         PushScope();
         foreach (var parameter in function.Parameters) Declare(parameter.Name, parameter);
@@ -178,7 +193,9 @@ public sealed class Binder
         _containingSymbol = function;
         _returnType = function.ReturnType;
         _declaredThrows = function.ThrownType;
+        _rethrows = function.IsRethrows;
         _inAsyncContext = function.IsAsync;
+        SeedRethrowSources(function);
 
         PushScope();
         foreach (var parameter in function.Parameters) Declare(parameter.Name, parameter);
@@ -305,7 +322,8 @@ public sealed class Binder
     // -----------------------------------------------------------------------
 
     private readonly record struct Effects(
-        TypeSymbol? Throws, bool Async, int Try, int Await, int Catch, bool Threw);
+        TypeSymbol? Throws, bool Rethrows, bool Async,
+        int Try, int Await, int Catch, bool Threw);
 
     /// <summary>
     /// The thrown types seen so far, reset around anything that has its own
@@ -313,11 +331,13 @@ public sealed class Binder
     /// </summary>
 
     private Effects SaveEffects() => new(
-        _declaredThrows, _inAsyncContext, _tryDepth, _awaitDepth, _catchDepth, _threwInTry);
+        _declaredThrows, _rethrows, _inAsyncContext,
+        _tryDepth, _awaitDepth, _catchDepth, _threwInTry);
 
     private void RestoreEffects(Effects saved)
     {
         _declaredThrows = saved.Throws;
+        _rethrows = saved.Rethrows;
         _inAsyncContext = saved.Async;
         _tryDepth = saved.Try;
         _awaitDepth = saved.Await;
@@ -335,13 +355,32 @@ public sealed class Binder
     /// calls. What it does not do is let the error leave silently — that is
     /// checked where the <c>try</c> itself is bound.
     /// </remarks>
-    private void MarkThrows(TextSpan span, string what, TypeSymbol thrown)
+    /// <summary>The union of two error types, either of which may be absent.</summary>
+    private static TypeSymbol? Union(TypeSymbol? left, TypeSymbol? right) =>
+        left is null ? right
+        : right is null ? left
+        : StructuralUnionTypeSymbol.Create([left, right]);
+
+    private void MarkThrows(
+        TextSpan span, string what, TypeSymbol thrown, bool viaParameter = false)
     {
+        // In a 'rethrows' function the error has to come from one of the
+        // closures the caller handed over. Anything else would let an error
+        // out of a signature the caller reads as non-throwing.
+        if (_rethrows && !viaParameter && _catchDepth == 0)
+        {
+            _diagnostics.Error(ErrorCode.ERR_RethrowsThrowsItsOwn, span,
+                $"{what} throws on its own, and a 'rethrows' function may only "
+                + "throw what one of its own closure parameters throws");
+
+            // The 'try' around it was not pointless, whatever else is wrong.
+            if (_tryDepth > 0) _threwInTry = true;
+            return;
+        }
+
         // One 'do' body may call several throwing functions. When they do not
         // agree, what reaches the catches is the union of them.
-        _thrownInBody = _thrownInBody is null || _thrownInBody.Equals(thrown)
-            ? thrown
-            : new StructuralUnionTypeSymbol([_thrownInBody, thrown]);
+        _thrownInBody = Union(_thrownInBody, thrown);
 
         if (_tryDepth > 0)
         {
@@ -351,6 +390,67 @@ public sealed class Binder
 
         _diagnostics.Error(ErrorCode.ERR_MustUseTry, span,
             $"{what} can throw, so the expression needs 'try'");
+    }
+
+    /// <summary>
+    /// What a call to a <c>rethrows</c> function actually throws: whatever the
+    /// throwing closures among its arguments throw, and nothing when none of
+    /// them do — which is the whole point of the annotation.
+    /// </summary>
+    private static TypeSymbol? RethrownBy(ImmutableArray<BoundExpression> arguments) =>
+        TypeBinder.RethrownType(arguments.Select(a => a.Type));
+
+    /// <summary>
+    /// True when one of the throwing arguments is a parameter of the function
+    /// being bound, which is what lets one <c>rethrows</c> function pass its
+    /// closure on to another.
+    /// </summary>
+    private bool PassesOwnParameter(ImmutableArray<BoundExpression> arguments) =>
+        arguments.Any(a =>
+            a.Type is FunctionTypeSymbol { ThrownType: not null } && IsRethrowSource(a));
+
+    /// <summary>
+    /// The throwing closures a <c>rethrows</c> body is allowed to throw
+    /// through: its own parameters, and the locals that hold one — which is
+    /// how <c>guard let body</c> on an optional parameter stays legal.
+    /// </summary>
+    private readonly HashSet<Symbol> _rethrowSources = [];
+
+    private bool IsRethrowSource(BoundExpression expression) => expression switch
+    {
+        BoundConversion conversion => IsRethrowSource(conversion.Operand),
+        BoundParameterAccess access => _rethrowSources.Contains(access.Parameter),
+        BoundLocalAccess access => _rethrowSources.Contains(access.Local),
+        _ => false,
+    };
+
+    /// <summary>
+    /// Notes that a name now holds a closure the body may rethrow from, when
+    /// the value it was given was one.
+    /// </summary>
+    private void TrackRethrowSource(Symbol name, BoundExpression? value)
+    {
+        if (!_rethrows || value is null) return;
+        if (IsRethrowSource(value)) _rethrowSources.Add(name);
+    }
+
+    /// <summary>
+    /// Seeds the sources with the parameters of a <c>rethrows</c> function:
+    /// every one whose type is a throwing function, behind an optional or not.
+    /// </summary>
+    private void SeedRethrowSources(FunctionSymbol function)
+    {
+        if (!function.IsRethrows) return;
+
+        foreach (var parameter in function.Parameters)
+        {
+            var type = parameter.Type is OptionalTypeSymbol optional
+                ? optional.UnderlyingType
+                : parameter.Type;
+
+            if (type is FunctionTypeSymbol { ThrownType: not null })
+                _rethrowSources.Add(parameter);
+        }
     }
 
     /// <summary>Records that the expression being bound suspends.</summary>
@@ -386,14 +486,24 @@ public sealed class Binder
         var inner = kind == TryKind.Optional ? null : expectedType;
 
         var outerThrew = _threwInTry;
+        var outerThrown = _thrownInBody;
         _threwInTry = false;
+        _thrownInBody = null;
         _tryDepth++;
 
         var value = BindExpression(syntax.Expression, inner);
 
         _tryDepth--;
         var threw = _threwInTry;
+        var operandThrown = _thrownInBody;
         _threwInTry = outerThrew || (threw && _tryDepth > 0);
+
+        // What this body can throw is what can actually leave it. 'try?',
+        // 'try!' and 'try e catch { }' all settle the error here, so only a
+        // plain 'try' adds to it.
+        _thrownInBody = kind == TryKind.Propagate
+            ? Union(outerThrown, operandThrown)
+            : outerThrown;
 
         if (!threw && !value.HasError)
         {
@@ -414,7 +524,7 @@ public sealed class Binder
             case TryKind.Fallback:
             {
                 var fallback = BindCatchBody(
-                    syntax.CatchBody!, value.Type, _thrownInBody ?? _declaredThrows);
+                    syntax.CatchBody!, value.Type, operandThrown ?? _declaredThrows);
 
                 return Record(syntax, new BoundTry(
                     syntax, value.Type, value, kind, fallback)
@@ -676,8 +786,16 @@ public sealed class Binder
     private BoundStatement BindThrow(ThrowStatementSyntax statement)
     {
         var value = BindExpression(statement.Expression, _declaredThrows);
+        _thrownInBody = Union(_thrownInBody, value.Type);
 
-        if (!CanThrowHere())
+        if (_rethrows && _catchDepth == 0)
+        {
+            _diagnostics.Error(
+                ErrorCode.ERR_RethrowsThrowsItsOwn, statement.ThrowKeyword.Span,
+                "a 'rethrows' function may only throw what one of its own "
+                + "closure parameters throws");
+        }
+        else if (!CanThrowHere())
         {
             _diagnostics.Error(ErrorCode.ERR_ThrowsNotDeclared, statement.ThrowKeyword.Span,
                 "this function does not declare 'throws', so it cannot throw");
@@ -762,6 +880,7 @@ public sealed class Binder
         };
 
         Declare(local.Name, local);
+        TrackRethrowSource(local, initializer);
         return Record(declaration, new BoundLocalDeclaration(declaration, local, initializer));
     }
 
@@ -962,6 +1081,7 @@ public sealed class Binder
                 };
 
                 Declare(name, local);
+                TrackRethrowSource(local, source);
                 return new BoundConditionBinding(
                     binding, Core.Bool, source, null, local);
             }
@@ -2018,16 +2138,34 @@ public sealed class Binder
             return new BoundError(syntax, [callee, .. arguments]);
         }
 
+        var bound = arguments.ToBuilder();
         var converted = ImmutableArray.CreateBuilder<BoundExpression>(arguments.Length);
         for (var i = 0; i < arguments.Length; i++)
         {
-            var argument = arguments[i] is BoundUnboundClosure
-                ? BindExpression(syntaxes[i], type.ParameterTypes[i])
-                : arguments[i];
-            converted.Add(Convert(argument, type.ParameterTypes[i], argument.Syntax));
+            if (bound[i] is BoundUnboundClosure)
+                bound[i] = BindExpression(syntaxes[i], type.ParameterTypes[i]);
+
+            converted.Add(Convert(bound[i], type.ParameterTypes[i], bound[i].Syntax));
         }
 
-        if (type.ThrownType is { } thrown) MarkThrows(syntax.Span, "this call", thrown);
+        // Before conversion, so that a closure that cannot throw is still
+        // seen as one that cannot: converting it to the parameter's throwing
+        // type would hide exactly the thing 'rethrows' is asking about.
+        arguments = bound.ToImmutable();
+
+        if (type.IsRethrows)
+        {
+            if (RethrownBy(arguments) is { } rethrown)
+            {
+                MarkThrows(syntax.Span, "this call", rethrown,
+                    IsRethrowSource(callee) || PassesOwnParameter(arguments));
+            }
+        }
+        else if (type.ThrownType is { } thrown)
+        {
+            MarkThrows(syntax.Span, "this call", thrown, IsRethrowSource(callee));
+        }
+
         if (type.IsAsync) MarkAsync(syntax.Span, "this call");
 
         return new BoundIndirectCall(
@@ -2150,8 +2288,20 @@ public sealed class Binder
                 $"'{resolved.Name}' is mutating, so it needs a value it can change");
         }
 
-        if (resolved.ThrownType is { } thrown)
+        if (resolved.IsRethrows)
+        {
+            // Not what the signature says it may throw, but what these
+            // arguments actually can: 'withLock(m) { 1 }' does not throw.
+            if (RethrownBy(arguments) is { } rethrown)
+            {
+                MarkThrows(syntax.Span, $"'{resolved.Name}'",
+                    substitution.Apply(rethrown), PassesOwnParameter(arguments));
+            }
+        }
+        else if (resolved.ThrownType is { } thrown)
+        {
             MarkThrows(syntax.Span, $"'{resolved.Name}'", substitution.Apply(thrown));
+        }
         if (resolved.IsAsync) MarkAsync(syntax.Span, $"'{resolved.Name}'");
 
         var result = substitution.Apply(resolved.ReturnType);
@@ -2675,7 +2825,7 @@ public sealed class Binder
             [.. symbol.Parameters.Select(p => p.Type)],
             symbol.ReturnType,
             symbol.IsAsync,
-            symbol.ThrownType);
+            _closureThrows);
 
         return Record(syntax, new BoundClosure(syntax, type, symbol, captures, bound));
     }
@@ -2701,7 +2851,9 @@ public sealed class Binder
         _loopDepth = 0;
         _openTypeParameters = [];
         _declaredThrows = symbol.ThrownType;
+        _rethrows = symbol.IsRethrows;
         _inAsyncContext = symbol.IsAsync;
+        SeedRethrowSources(symbol);
         _tryDepth = 0;
         _awaitDepth = 0;
         _catchDepth = 0;
@@ -2790,6 +2942,11 @@ public sealed class Binder
 
         var resolved = _returnType;
         symbol.ReturnTypeResolver = () => resolved;
+
+        // What the closure's type claims is what its body can actually let
+        // out, not what the context would have allowed: a closure that does
+        // not throw is not a throwing closure, which is what 'rethrows' reads.
+        _closureThrows = _thrownInBody;
 
         PopScope();
         RestoreEffects(savedEffects);

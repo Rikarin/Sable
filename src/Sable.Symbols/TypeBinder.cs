@@ -53,6 +53,38 @@ internal sealed class TypeBinder(Compilation compilation)
     // Signature binding
     // -----------------------------------------------------------------------
 
+    /// <summary>
+    /// What a <c>rethrows</c> signature can let out: the union of what its
+    /// throwing function parameters throw, or null when it has none — which
+    /// is a signature that can never throw, and is reported as such.
+    /// </summary>
+    /// <remarks>
+    /// spec/SYNTAX.md §18: "<c>rethrows</c> means throws iff a closure
+    /// parameter throws". The error type is therefore not written anywhere;
+    /// it is read off the parameters, so that
+    /// <c>(_ body: () throws(IoError) -> T) rethrows</c> throws
+    /// <c>IoError</c> and nothing wider.
+    /// </remarks>
+    internal static TypeSymbol? RethrownType(IEnumerable<TypeSymbol> parameterTypes)
+    {
+        TypeSymbol? thrown = null;
+
+        foreach (var parameterType in parameterTypes)
+        {
+            var type = parameterType is OptionalTypeSymbol optional
+                ? optional.UnderlyingType
+                : parameterType;
+
+            if (type is not FunctionTypeSymbol { ThrownType: { } one }) continue;
+
+            thrown = thrown is null
+                ? one
+                : StructuralUnionTypeSymbol.Create([thrown, one]);
+        }
+
+        return thrown;
+    }
+
     public void BindFunctionSignature(
         FunctionSymbol function, FunctionDeclarationSyntax declaration)
     {
@@ -62,9 +94,15 @@ internal sealed class TypeBinder(Compilation compilation)
             ? BindType(clause.Type, function, scope)
             : compilation.Core.Void;
 
+        function.IsRethrows =
+            declaration.ThrowsSpec?.ThrowsKeyword.Kind == SyntaxKind.RethrowsKeyword;
+
         function.ThrownTypeResolver = () =>
         {
             if (declaration.ThrowsSpec is not { } spec) return null;
+            if (function.IsRethrows)
+                return RethrownType(function.Parameters.Select(p => p.Type));
+
             return spec.ErrorType is { } errorType
                 ? BindType(errorType, function, scope)
                 : compilation.Core.AnyError;   // bare 'throws' is 'throws(any Error)' 
@@ -78,8 +116,18 @@ internal sealed class TypeBinder(Compilation compilation)
             BindWhereClause(declaration.WhereClause, function, scope);
 
             _ = function.ReturnType;
-            _ = function.ThrownType;
             foreach (var parameter in function.Parameters) _ = parameter.Type;
+
+            if (function.IsRethrows && function.ThrownType is null)
+            {
+                _diagnostics.Error(
+                    ErrorCode.ERR_RethrowsWithoutThrowingParameter,
+                    declaration.ThrowsSpec!.Span,
+                    $"'{function.Name}' is 'rethrows', so it needs a parameter "
+                    + "of throwing function type to rethrow from");
+            }
+
+            _ = function.ThrownType;
         });
     }
 
@@ -343,8 +391,24 @@ internal sealed class TypeBinder(Compilation compilation)
                 var parameters = function.Parameters.Elements
                     .Select(e => BindType(e.Type, context, scope));
 
+                var parameterTypes = parameters.ToImmutableArray();
+                var rethrows =
+                    function.ThrowsSpec?.ThrowsKeyword.Kind == SyntaxKind.RethrowsKeyword;
+
                 TypeSymbol? thrown = null;
-                if (function.ThrowsSpec is { } spec)
+                if (rethrows)
+                {
+                    thrown = RethrownType(parameterTypes);
+                    if (thrown is null)
+                    {
+                        _diagnostics.Error(
+                            ErrorCode.ERR_RethrowsWithoutThrowingParameter,
+                            function.ThrowsSpec!.Span,
+                            "'rethrows' needs a parameter of throwing function "
+                            + "type to rethrow from");
+                    }
+                }
+                else if (function.ThrowsSpec is { } spec)
                 {
                     thrown = spec.ErrorType is { } errorType
                         ? BindType(errorType, context, scope)
@@ -352,10 +416,13 @@ internal sealed class TypeBinder(Compilation compilation)
                 }
 
                 return new FunctionTypeSymbol(
-                    [.. parameters],
+                    parameterTypes,
                     BindType(function.ReturnType, context, scope),
                     !function.AsyncKeyword.IsNone,
-                    thrown);
+                    thrown)
+                {
+                    IsRethrows = rethrows,
+                };
             }
 
             case OpaqueTypeSyntax opaque:

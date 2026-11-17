@@ -118,6 +118,8 @@ public enum ErrorCode
     ERR_CannotInstantiate = 3045,
     ERR_IncoherentConformance = 3046,
     ERR_VarianceViolation = 3047,
+    ERR_RethrowsWithoutThrowingParameter = 3048,
+    ERR_RethrowsThrowsItsOwn = 3049,
     ERR_NotSupportedYet = 3099,
 
     // ---- Patterns and flow (S6000-S6999) ---------------------------------

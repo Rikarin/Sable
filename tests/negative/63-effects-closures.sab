@@ -26,7 +26,7 @@ fn aNonThrowingClosureFitsToo() throws(IoError) -> String {
 }
 
 fn aThrowingClosureDoesNotFitAPlainParameter() -> Int {
-    return apply(1) { try read("a").count }   //! S3033 nowhere to go
+    return apply(1) { try read("a").count }   //! S3033 nowhere to go //! S3004 throws(IoError)
 }
 
 fn apply(_ n: Int, _ f: (Int) -> Int) -> Int { return f(n) }

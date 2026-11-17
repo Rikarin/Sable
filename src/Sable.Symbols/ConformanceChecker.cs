@@ -342,16 +342,38 @@ internal static class ConformanceChecker
         NamedTypeSymbol conformer)
     {
         if (candidate.IsStatic != requirement.IsStatic) return false;
+        if (candidate.IsAsync != requirement.IsAsync) return false;
         if (candidate.Parameters.Length != requirement.Parameters.Length) return false;
+        if (candidate.TypeParameters.Length != requirement.TypeParameters.Length) return false;
+
+        // A generic requirement is written with its own type parameters, and
+        // the witness with its own. They stand for the same things, so the
+        // requirement is read with the witness's names before comparing.
+        var renamed = new Dictionary<TypeParameterSymbol, TypeSymbol>();
+        for (var i = 0; i < requirement.TypeParameters.Length; i++)
+            renamed[requirement.TypeParameters[i]] = candidate.TypeParameters[i];
+
+        var rename = new TypeSubstitution(renamed);
+
+        TypeSymbol Expected(TypeSymbol type) =>
+            rename.Apply(SubstituteSelf(type, protocol, conformer));
 
         for (var i = 0; i < requirement.Parameters.Length; i++)
         {
-            var expected = SubstituteSelf(requirement.Parameters[i].Type, protocol, conformer);
+            var expected = Expected(requirement.Parameters[i].Type);
             var actual = candidate.Parameters[i].Type;
             if (!expected.Equals(actual) && !expected.IsError && !actual.IsError) return false;
         }
 
-        var expectedReturn = SubstituteSelf(requirement.ReturnType, protocol, conformer);
+        // The witness may promise less than the requirement allows, never
+        // more: a requirement that cannot throw is not met by one that can.
+        if (candidate.ThrownType is { } thrown)
+        {
+            if (requirement.ThrownType is not { } allowed) return false;
+            if (!Expected(allowed).Equals(thrown) && !thrown.IsError) return false;
+        }
+
+        var expectedReturn = Expected(requirement.ReturnType);
         return expectedReturn.Equals(candidate.ReturnType)
                || expectedReturn.IsError
                || candidate.ReturnType.IsError;

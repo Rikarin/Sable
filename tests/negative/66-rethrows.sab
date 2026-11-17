@@ -1,0 +1,44 @@
+module Negative.Rethrows
+
+union IoError { NotFound, Denied }
+struct Lock { }
+
+fn risky() throws(IoError) -> Int { return 1 }
+
+fn rethrowsNeedsAThrowingParameter(
+    _ body: () -> Int
+) rethrows -> Int {                                     //! S3048 rethrow from
+    return body()
+}
+
+fn aRethrowsBodyMayNotThrowItsOwn(_ body: () throws(IoError) -> Int) rethrows -> Int {
+    throw IoError.Denied                                //! S3049
+}
+
+fn aRethrowsBodyMayNotCallAnotherThrowingFunction(
+    _ body: () throws(IoError) -> Int
+) rethrows -> Int {
+    return try risky()                                  //! S3049
+}
+
+fn withLock<T>(_ l: Lock, _ body: () throws(IoError) -> T) rethrows -> T {
+    return try body()
+}
+
+fn aNonThrowingArgumentMakesTheCallNonThrowing(_ l: Lock) -> Int {
+    return try withLock(l) { 1 }                        //! S3036
+}
+
+fn aThrowingArgumentMakesTheCallThrowing(_ l: Lock) throws(IoError) -> Int {
+    return withLock(l) { try risky() }                  //! S3032
+}
+
+fn andThenTheErrorNeedsSomewhereToGo(_ l: Lock) -> Int {
+    return try withLock(l) { try risky() }              //! S3033
+}
+
+fn aRethrowingTypeNeedsAThrowingParameterToo(
+    _ f: (() -> Int) rethrows -> Int                    //! S3048 rethrow from
+) -> Int {
+    return f({ 1 })
+}

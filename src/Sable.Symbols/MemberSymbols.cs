@@ -119,6 +119,13 @@ public sealed class FunctionSymbol : Symbol
     public bool IsOpen { get; internal set; }
 
     /// <summary>
+    /// Declared <c>rethrows</c>: it throws exactly when one of the closures
+    /// handed to it does, so <see cref="ThrownType"/> is what those closures
+    /// throw rather than anything written at the declaration.
+    /// </summary>
+    public bool IsRethrows { get; internal set; }
+
+    /// <summary>
     /// For an <c>operator</c> member, where it sits relative to its operand.
     /// Arity alone cannot tell a prefix operator from a postfix one.
     /// </summary>

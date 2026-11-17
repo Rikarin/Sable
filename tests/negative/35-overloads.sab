@@ -1,0 +1,62 @@
+module Negative.Overloads
+
+public struct Point { public var x: Int }
+public struct Label { public var text: String }
+
+fn show(_ n: Int) -> String { return "int" }
+fn show(_ s: String) -> String { return "string" }
+fn show(_ p: Point) -> String { return "point" }
+
+fn labelled(first n: Int) -> String { return "first" }
+fn labelled(second n: Int) -> String { return "second" }
+
+fn withDefault(_ n: Int, _ step: Int = 1) -> Int { return n + step }
+
+fn variadic(_ values: Int...) -> Int { return 0 }
+
+fn noOverloadTakesThat(_ l: Label) -> String {
+    return show(l)                      //! S3007 no overload
+}
+
+fn tooManyArguments() -> String {
+    return show(1, 2)                   //! S3007 no overload
+}
+
+fn tooFewArguments() -> String {
+    return show()                       //! S3007 no overload
+}
+
+fn aLabelMustMatch() -> String {
+    return labelled(third: 1)           //! S3007 no overload
+}
+
+fn aLabelIsRequired() -> String {
+    return labelled(1)                  //! S3007 no overload
+}
+
+fn aDefaultMayBeOmitted() -> Int {
+    return withDefault(1)
+}
+
+fn aDefaultIsStillTyped() -> Int {
+    return withDefault(1, "two")        //! S3007 cannot be called
+}
+
+fn aVariadicTakesAny() -> Int {
+    return variadic(1, 2, 3)
+}
+
+fn aVariadicStillChecks() -> Int {
+    return variadic(1, "two")           //! S3007 cannot be called
+}
+
+fn resultTypeIsNotAnOverloadKey(_ n: Int) -> Int {
+    return show(n)                      //! S3004 expected 'Int'
+}
+
+fn aGenericAndAConcreteOverload(_ p: Point) -> String {
+    return both(p)
+}
+
+fn both<T>(_ value: T) -> String { return "generic" }
+fn both(_ p: Point) -> String { return "concrete" }

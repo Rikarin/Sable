@@ -86,8 +86,17 @@ internal sealed class TypeBinder(Compilation compilation)
     public void BindParameterType(ParameterSymbol parameter, ParameterSyntax syntax)
     {
         var scope = compilation.CurrentScope;
+
         parameter.TypeResolver = () =>
-            BindType(syntax.Type, parameter.ContainingSymbol ?? parameter, scope);
+        {
+            var written = BindType(syntax.Type, parameter.ContainingSymbol ?? parameter, scope);
+
+            // 'values: Int...' is written as the element type and is a
+            // sequence of them inside the body.
+            return parameter.IsVariadic
+                ? new ArrayTypeSymbol(written, ArrayKind.Slice)
+                : written;
+        };
     }
 
     public void BindUnionCaseFieldType(ParameterSymbol parameter, UnionCaseFieldSyntax syntax)

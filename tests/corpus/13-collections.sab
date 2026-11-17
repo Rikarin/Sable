@@ -301,3 +301,38 @@ public struct Row<Value> {
 public fn readRow(_ row: Row<String>) -> String {
     return row[0]
 }
+
+// ---- Variadics -----------------------------------------------------------
+
+public fn total(_ values: Int...) -> Int {
+    var sum = 0
+    for value in values {
+        sum = sum + value
+    }
+    return sum
+}
+
+public fn sumOfThree() -> Int {
+    return total(1, 2, 3)
+}
+
+public fn sumOfNone() -> Int {
+    return total()
+}
+
+public fn joined(_ separator: String, _ parts: String...) -> String {
+    var result = ""
+    var first = true
+    for part in parts {
+        if !first {
+            result = result + separator
+        }
+        result = result + part
+        first = false
+    }
+    return result
+}
+
+public fn joinedExample() -> String {
+    return joined(", ", "a", "b", "c")
+}

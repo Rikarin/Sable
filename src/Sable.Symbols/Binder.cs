@@ -1867,11 +1867,23 @@ public sealed class Binder
         var converted = ImmutableArray.CreateBuilder<BoundExpression>(arguments.Length);
         for (var i = 0; i < arguments.Length; i++)
         {
-            var parameter = i < resolved.Parameters.Length ? resolved.Parameters[i] : null;
-            converted.Add(parameter is null
-                ? arguments[i]
-                : Convert(arguments[i], substitution.Apply(parameter.Type),
-                    arguments[i].Syntax));
+            var parameter = i < resolved.Parameters.Length
+                ? resolved.Parameters[i]
+                : resolved.Parameters.Length > 0 && resolved.Parameters[^1].IsVariadic
+                    ? resolved.Parameters[^1]
+                    : null;
+
+            if (parameter is null)
+            {
+                converted.Add(arguments[i]);
+                continue;
+            }
+
+            var wanted = substitution.Apply(parameter.Type);
+            if (parameter.IsVariadic && wanted is ArrayTypeSymbol variadic)
+                wanted = variadic.ElementType;
+
+            converted.Add(Convert(arguments[i], wanted, arguments[i].Syntax));
         }
 
         if (!resolved.TypeParameters.IsEmpty)
@@ -1984,8 +1996,28 @@ public sealed class Binder
             var cost = Score(candidate, arguments, labels, outer);
             if (cost is null) continue;
 
-            if (cost < bestCost) { best = candidate; bestCost = cost.Value; ambiguous = false; }
-            else if (cost == bestCost && best is not null) ambiguous = true;
+            if (cost < bestCost)
+            {
+                best = candidate;
+                bestCost = cost.Value;
+                ambiguous = false;
+                continue;
+            }
+
+            if (cost != bestCost || best is null) continue;
+
+            // A concrete overload beats one that had to infer a parameter:
+            // 'both(aPoint)' means the one written for Point.
+            if (candidate.TypeParameters.Length < best.TypeParameters.Length)
+            {
+                best = candidate;
+                ambiguous = false;
+                continue;
+            }
+
+            if (candidate.TypeParameters.Length > best.TypeParameters.Length) continue;
+
+            ambiguous = true;
         }
 
         if (best is null)
@@ -2025,8 +2057,14 @@ public sealed class Binder
         var cost = 0;
         for (var i = 0; i < arguments.Length; i++)
         {
-            if (i >= parameters.Length) break;
-            var parameter = parameters[i];
+            // Everything from a variadic parameter on is one of its elements.
+            var parameter = i < parameters.Length
+                ? parameters[i]
+                : parameters.Length > 0 && parameters[^1].IsVariadic
+                    ? parameters[^1]
+                    : null;
+
+            if (parameter is null) break;
 
             // A written label must match the parameter's.
             if (i < labels.Length && labels[i] is { } label)
@@ -2044,8 +2082,12 @@ public sealed class Binder
                 return null;
             }
 
+            var wanted = substitution.Apply(parameter.Type);
+            if (parameter.IsVariadic && wanted is ArrayTypeSymbol elements)
+                wanted = elements.ElementType;
+
             var conversion = _conversions.Classify(
-                arguments[i].Type, substitution.Apply(parameter.Type), IsLiteral(arguments[i]));
+                arguments[i].Type, wanted, IsLiteral(arguments[i]));
 
             if (conversion is null) return null;
             cost += Conversions.Cost(conversion.Value);

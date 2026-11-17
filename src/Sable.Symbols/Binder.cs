@@ -1092,6 +1092,8 @@ public sealed class Binder
         TypeTestExpressionSyntax test => BindTypeTest(test),
         MatchExpressionSyntax match => BindMatch(match, expectedType),
         RangeExpressionSyntax range => BindRange(range, expectedType),
+        DictionaryExpressionSyntax dictionary => BindDictionary(dictionary, expectedType),
+        BuiltinExpressionSyntax builtin => BindBuiltin(builtin),
         ClosureExpressionSyntax closure => BindClosure(
             closure, closure.CaptureList, closure.Signature.Parameters,
             closure.Signature.ReturnType, closure.Body, expectedType),
@@ -2646,6 +2648,73 @@ public sealed class Binder
         OptionalTypeSymbol optional => optional.UnderlyingType,
         _ => type,
     };
+
+    /// <summary>Binds <c>["a": 1]</c> and the empty <c>[:]</c>.</summary>
+    private BoundExpression BindDictionary(
+        DictionaryExpressionSyntax syntax, TypeSymbol? expectedType)
+    {
+        TypeSymbol? expectedKey = null;
+        TypeSymbol? expectedValue = null;
+
+        if (expectedType is NamedTypeSymbol wanted
+            && wanted.OriginalDefinition.Equals(Core.Dictionary)
+            && wanted.TypeArguments.Length == 2)
+        {
+            expectedKey = wanted.TypeArguments[0];
+            expectedValue = wanted.TypeArguments[1];
+        }
+
+        var entries =
+            ImmutableArray.CreateBuilder<(BoundExpression, BoundExpression)>(syntax.Entries.Count);
+
+        TypeSymbol? keyType = expectedKey;
+        TypeSymbol? valueType = expectedValue;
+
+        foreach (var entry in syntax.Entries)
+        {
+            var key = BindExpression(entry.Key, keyType);
+            var value = BindExpression(entry.Value, valueType);
+
+            keyType ??= key.Type;
+            valueType ??= value.Type;
+
+            entries.Add((
+                Convert(key, keyType, entry.Key),
+                Convert(value, valueType, entry.Value)));
+        }
+
+        if (keyType is null || valueType is null)
+        {
+            _diagnostics.Error(ErrorCode.ERR_CannotInferType, syntax.Span,
+                "an empty dictionary needs a type annotation");
+            return new BoundError(syntax);
+        }
+
+        return Record(syntax, new BoundDictionary(
+            syntax, Core.Dictionary.Construct([keyType, valueType]), entries.ToImmutable()));
+    }
+
+    /// <summary>Binds <c>#file</c> and the rest, per spec/lexical.md §9.</summary>
+    private BoundExpression BindBuiltin(BuiltinExpressionSyntax syntax)
+    {
+        var name = syntax.NameToken.Text;
+
+        TypeSymbol type = name switch
+        {
+            "file" or "function" or "module" => Core.String,
+            "line" or "column" => Core.Int,
+            _ => ErrorTypeSymbol.Instance,
+        };
+
+        if (type.IsError)
+        {
+            _diagnostics.Error(ErrorCode.ERR_NameNotFound, syntax.Span,
+                $"there is no compiler builtin called '#{name}'");
+            return new BoundError(syntax);
+        }
+
+        return Record(syntax, new BoundBuiltin(syntax, type, name));
+    }
 
     private BoundExpression BindRecordExpression(RecordExpressionSyntax syntax)
     {

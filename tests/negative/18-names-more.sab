@@ -21,6 +21,6 @@ fn aVariableSizeValueCannotBeBoxed(_ v: Variable) -> any Named {
     return v                            //! S3003 variable-size
 }
 
-fn notSupportedYet() -> Int {
-    return #file                        //! S3099 is not bound yet
+fn aBuiltinHasItsOwnType() -> Int {
+    return #file                        //! S3004 expected 'Int'
 }

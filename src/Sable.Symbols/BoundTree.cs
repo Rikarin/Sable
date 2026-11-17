@@ -304,6 +304,29 @@ public sealed class BoundRange(
     public override IEnumerable<BoundNode> Children => Nodes(Lower, Upper);
 }
 
+/// <summary>A dictionary literal: <c>[:]</c>, <c>["a": 1]</c>.</summary>
+public sealed class BoundDictionary(
+    SyntaxNode syntax,
+    TypeSymbol type,
+    ImmutableArray<(BoundExpression Key, BoundExpression Value)> entries)
+    : BoundExpression(syntax, type)
+{
+    public ImmutableArray<(BoundExpression Key, BoundExpression Value)> Entries { get; } = entries;
+
+    public override IEnumerable<BoundNode> Children =>
+        Entries.SelectMany(e => new BoundNode[] { e.Key, e.Value });
+}
+
+/// <summary>
+/// <c>#file</c>, <c>#line</c> and the rest: a value the compiler supplies.
+/// </summary>
+public sealed class BoundBuiltin(SyntaxNode syntax, TypeSymbol type, string name)
+    : BoundExpression(syntax, type)
+{
+    public string Name { get; } = name;
+    public override IEnumerable<BoundNode> Children => [];
+}
+
 /// <summary>A record literal: <c>Point { x: 1, y: 2 }</c>.</summary>
 public sealed class BoundRecordExpression(
     SyntaxNode syntax,

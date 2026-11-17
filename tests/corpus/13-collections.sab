@@ -362,3 +362,25 @@ public fn aRangeIsAValue(_ n: Int) -> Range<Int> {
 public fn rangeBounds(_ r: Range<Int>) -> Int {
     return r.lowerBound + r.upperBound
 }
+
+// ---- Dictionaries --------------------------------------------------------
+
+public fn counts(_ words: String[>..]) -> [String: Int] {
+    var result: [String: Int] = [:]
+    for word in words {
+        result[word] = (result[word] ?? 0) + 1
+    }
+    return result
+}
+
+public fn lookupOrDefault(_ d: [String: Int], _ key: String) -> Int {
+    return d[key] ?? 0
+}
+
+public fn literalDictionary() -> [String: Int] {
+    return ["one": 1, "two": 2, "three": 3]
+}
+
+public fn describeBuiltins() -> String {
+    return #file + ":" + #line.toString() + " in " + #function
+}

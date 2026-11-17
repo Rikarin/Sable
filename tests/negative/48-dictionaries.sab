@@ -1,0 +1,49 @@
+module Negative.Dictionaries
+
+fn anEmptyDictionaryNeedsAType() {
+    let d = [:]                         //! S3005 needs a type annotation
+}
+
+fn anAnnotatedEmptyDictionary() -> [String: Int] {
+    return [:]
+}
+
+fn keysMustAgree() -> [String: Int] {
+    return ["a": 1, 2: 2]               //! S3004 expected 'String'
+}
+
+fn valuesMustAgree() -> [String: Int] {
+    return ["a": 1, "b": "two"]         //! S3004 expected 'Int'
+}
+
+fn aDictionaryTakesItsTypeFromTheContext() -> [String: I64] {
+    return ["a": 1]
+}
+
+fn andItIsStillChecked() -> [String: Bool] {
+    return ["a": 1]                     //! S3004 expected 'Bool'
+}
+
+fn lookupGivesAnOptional(_ d: [String: Int]) -> Int {
+    return d["a"]                       //! S3004 expected 'Int'
+}
+
+fn lookupUnwrapped(_ d: [String: Int]) -> Int {
+    return d["a"] ?? 0
+}
+
+fn theKeyTypeIsChecked(_ d: [String: Int]) -> Int? {
+    return d[1]                         //! S3004 expected 'String'
+}
+
+fn builtinsHaveTypes() -> String {
+    return #file
+}
+
+fn aLineIsAnInt() -> String {
+    return #line                        //! S3004 expected 'String'
+}
+
+fn anUnknownBuiltin() -> String {
+    return #nothing                     //! S2002 no compiler builtin
+}

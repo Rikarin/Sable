@@ -21,9 +21,50 @@ public sealed class SilInterpreter(SilModule module, int stepLimit = 10_000_000,
     /// <summary>Where <c>print</c> writes: one line per call, as the native runtime does.</summary>
     public System.Text.StringBuilder Output { get; } = new();
 
-    sealed class Slot {
-        public object? Value;
+    /// <summary>An address: something that can be read and written.</summary>
+    interface IReference {
+        object? Get();
+        void Set(object? value);
+
+        /// <summary>The value, or null when nothing has been stored yet.</summary>
+        object? Peek();
     }
+
+    /// <summary>An <c>alloc_stack</c>.</summary>
+    sealed class Slot : IReference {
+        object? _value;
+        public object? Get() => _value ?? throw new SilTrap("load from uninitialised storage");
+        public void Set(object? value) => _value = value;
+        public object? Peek() => _value;
+    }
+
+    /// <summary>
+    ///     A field or element inside an aggregate at another address. Writing
+    ///     replaces the whole aggregate with a changed copy, so that a struct
+    ///     value someone else holds never changes under them.
+    /// </summary>
+    /// <remarks>
+    ///     An initialiser fills an empty aggregate one field at a time, so
+    ///     writing into one that holds nothing yet makes it; reading a part
+    ///     that was never written traps.
+    /// </remarks>
+    sealed class Element(IReference parent, int index, int count) : IReference {
+        public object? Get() => Peek() ?? throw new SilTrap("load from uninitialised storage");
+
+        public object? Peek() => parent.Peek() is object?[] whole ? whole[index] : null;
+
+        public void Set(object? value) {
+            var copy = parent.Peek() is object?[] whole ? (object?[])whole.Clone() : new object?[count];
+            copy[index] = value;
+            parent.Set(copy);
+        }
+    }
+
+    /// <summary>An enum value: which case, and its payload.</summary>
+    public sealed record EnumValue(int Case, object? Payload);
+
+    /// <summary>What a throwing call gives back instead of a result.</summary>
+    sealed record Thrown(object? Error);
 
     public object? Run(string function, params object[] arguments) {
         if (module.Find(function) is not { } target) {
@@ -31,7 +72,8 @@ public sealed class SilInterpreter(SilModule module, int stepLimit = 10_000_000,
         }
 
         _steps = 0;
-        return Call(target, arguments, 0);
+        var result = Call(target, arguments, 0);
+        return result is Thrown thrown ? throw new SilTrap($"uncaught error: {Format(thrown.Error)}") : result;
     }
 
     object? Call(SilFunction function, IReadOnlyList<object> arguments, int depth) {
@@ -84,15 +126,80 @@ public sealed class SilInterpreter(SilModule module, int stepLimit = 10_000_000,
                     case DeallocStackInst:
                         break;
 
-                    case LoadInst load: {
-                        var slot = (Slot)Get(load.Address)!;
-                        values[load] = slot.Value ?? throw new SilTrap("load from uninitialised storage");
+                    case LoadInst load:
+                        values[load] = ((IReference)Get(load.Address)!).Get();
+                        break;
+
+                    case StoreInst store:
+                        ((IReference)Get(store.Address)!).Set(Get(store.Value));
+                        break;
+
+                    case StructInst or TupleInst:
+                        values[instruction] = instruction.Operands.Select(Get).ToArray();
+                        break;
+
+                    case StructExtractInst extract:
+                        values[extract] = ((object?[])Get(extract.Value)!)[extract.Field];
+                        break;
+
+                    case TupleExtractInst extract:
+                        values[extract] = ((object?[])Get(extract.Value)!)[extract.Element];
+                        break;
+
+                    case StructElementAddrInst element: {
+                        var structType = (StructType)((AddressType)element.Address.Type).Pointee;
+                        values[element] = new Element((IReference)Get(element.Address)!, element.Field, structType.Fields.Count);
                         break;
                     }
 
-                    case StoreInst store:
-                        ((Slot)Get(store.Address)!).Value = Get(store.Value);
+                    case TupleElementAddrInst element: {
+                        var tupleType = (TupleType)((AddressType)element.Address.Type).Pointee;
+                        values[element] = new Element((IReference)Get(element.Address)!, element.Element, tupleType.Elements.Length);
                         break;
+                    }
+
+                    case EnumInst enumInst:
+                        values[enumInst] = new EnumValue(enumInst.Case, enumInst.Payload is { } payload ? Get(payload) : null);
+                        break;
+
+                    case SwitchEnumInst switchEnum: {
+                        var scrutinee = (EnumValue)Get(switchEnum.Value)!;
+                        var match = switchEnum.Cases.FirstOrDefault(c => c.Case == scrutinee.Case);
+                        if (match.Target is { } target) {
+                            next = target;
+                            incoming = target.Arguments.Count == 0 ? [] : [scrutinee.Payload];
+                        } else {
+                            next = switchEnum.Default ?? throw new SilTrap("switch_enum matched no case");
+                            incoming = [];
+                        }
+
+                        break;
+                    }
+
+                    case CondFailInst condFail:
+                        if ((bool)Get(condFail.Condition)!) {
+                            throw new SilTrap(condFail.Message);
+                        }
+
+                        break;
+
+                    case ThrowInst throwInst:
+                        return new Thrown(Get(throwInst.Error));
+
+                    case TryApplyInst tryApply: {
+                        var name = (string)Get(tryApply.Callee)!;
+                        var callee = module.Find(name) ?? throw new SilTrap($"call to undefined @{name}");
+                        var result = Call(callee, [..tryApply.Arguments.Select(a => Get(a)!)], depth + 1);
+                        if (result is Thrown error) {
+                            next = tryApply.Error;
+                            incoming = [error.Error];
+                        } else {
+                            next = tryApply.Normal;
+                            incoming = tryApply.Normal.Arguments.Count == 0 ? [] : [result];
+                        }
+
+                        break;
+                    }
 
                     case FunctionRefInst reference:
                         values[reference] = reference.Function;
@@ -176,6 +283,14 @@ public sealed class SilInterpreter(SilModule module, int stepLimit = 10_000_000,
 
                 ("cmp_eq_Bool", [bool a, bool b]) => a == b,
                 ("cmp_ne_Bool", [bool a, bool b]) => a != b,
+
+                ("cmp_eq_String", [string a, string b]) => string.Equals(a, b, StringComparison.Ordinal),
+                ("cmp_ne_String", [string a, string b]) => !string.Equals(a, b, StringComparison.Ordinal),
+
+                ("convert_Int_F64", [long a]) => (double)a,
+                ("convert_F64_Int", [double a]) => a is >= -9.2233720368547758e18 and < 9.2233720368547758e18
+                    ? (long)a
+                    : throw new SilTrap("F64 does not fit in Int"),
 
                 _ => throw new SilTrap($"builtin \"{name}\" cannot take these operands"),
             };

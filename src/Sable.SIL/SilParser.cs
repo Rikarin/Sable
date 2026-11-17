@@ -31,8 +31,9 @@ public sealed class SilParser {
     // ---- Tokens -------------------------------------------------------------
 
     enum TokenKind {
-        Word, // sil, integer_literal, bb0, init, Int
+        Word, // sil, integer_literal, bb0, init, Int, M.Point
         Global, // @name
+        Member, // #x, #Circle
         Local, // %0
         Number,
         String,
@@ -73,13 +74,14 @@ public sealed class SilParser {
 
             var start = i;
 
-            if (c is '@' or '%') {
+            if (c is '@' or '%' or '#') {
                 i++;
                 while (i < text.Length && IsNameChar(text[i])) {
                     i++;
                 }
 
-                tokens.Add(new(c == '@' ? TokenKind.Global : TokenKind.Local, text[(start + 1)..i], line));
+                var kind = c switch { '@' => TokenKind.Global, '%' => TokenKind.Local, _ => TokenKind.Member };
+                tokens.Add(new(kind, text[(start + 1)..i], line));
                 continue;
             }
 
@@ -142,7 +144,8 @@ public sealed class SilParser {
             }
 
             if (char.IsLetter(c) || c == '_') {
-                while (i < text.Length && (char.IsLetterOrDigit(text[i]) || text[i] == '_')) {
+                // A type's name may be qualified and mangled: M.Point, Optional$Int.
+                while (i < text.Length && IsNameChar(text[i])) {
                     i++;
                 }
 
@@ -210,9 +213,22 @@ public sealed class SilParser {
 
     // ---- Module and function ------------------------------------------------
 
+    SilModule _module = null!;
+
     SilModule ParseModule() {
         var module = new SilModule();
+        _module = module;
         while (Current.Kind != TokenKind.End) {
+            if (Accept("sil_struct")) {
+                ParseStruct();
+                continue;
+            }
+
+            if (Accept("sil_enum")) {
+                ParseEnum();
+                continue;
+            }
+
             var function = ParseFunction();
             if (module.Find(function.Name) is not null) {
                 throw Error($"@{function.Name} is defined twice");
@@ -231,6 +247,49 @@ public sealed class SilParser {
     List<(SilInstruction User, int Operand, string Name, int Line)> _pending = [];
     SilFunction _function = null!;
 
+    void ParseStruct() {
+        var name = Expect(TokenKind.Word, "a struct name").Text;
+        DeclareType(name);
+        var type = _module.AddType(new StructType(name));
+        Expect("{");
+        if (!At("}")) {
+            do {
+                var field = Expect(TokenKind.Word, "a field name").Text;
+                Expect(":");
+                type.Fields.Add((field, ParseType()));
+            } while (Accept(","));
+        }
+
+        Expect("}");
+    }
+
+    void ParseEnum() {
+        var name = Expect(TokenKind.Word, "an enum name").Text;
+        DeclareType(name);
+        var type = _module.AddType(new EnumType(name));
+        Expect("{");
+        if (!At("}")) {
+            do {
+                var @case = Expect(TokenKind.Word, "a case name").Text;
+                SilType? payload = null;
+                if (Accept("(")) {
+                    payload = ParseType();
+                    Expect(")");
+                }
+
+                type.Cases.Add((@case, payload));
+            } while (Accept(","));
+        }
+
+        Expect("}");
+    }
+
+    void DeclareType(string name) {
+        if (_module.FindType(name) is not null || name is "Int" or "Bool" or "F64" or "String") {
+            throw Error($"the type {name} is declared twice");
+        }
+    }
+
     SilFunction ParseFunction() {
         Expect("sil");
         var name = Expect(TokenKind.Global, "a function name").Text;
@@ -240,6 +299,12 @@ public sealed class SilParser {
         }
 
         _function = new SilFunction(name, type);
+        if (Accept("loc")) {
+            _function.SourceFile = Expect(TokenKind.String, "a file name").Text;
+            Expect(":");
+            _function.Line = int.Parse(Expect(TokenKind.Number, "a line").Text, CultureInfo.InvariantCulture);
+        }
+
         _values = new(StringComparer.Ordinal);
         _blocks = new(StringComparer.Ordinal);
         _definedBlocks = [];
@@ -299,6 +364,9 @@ public sealed class SilParser {
                 var name = Expect(TokenKind.Local, "an argument name").Text;
                 Expect(":");
                 Define(name, block.AddArgument(ParseType()));
+                if (Accept("var")) {
+                    _function.ParameterNames.Add(Expect(TokenKind.String, "a parameter name").Text);
+                }
             } while (Accept(","));
 
             Expect(")");
@@ -344,15 +412,23 @@ public sealed class SilParser {
 
             Expect(")");
 
+            SilType? thrown = null;
+            if (Accept("throws")) {
+                Expect("(");
+                thrown = ParseTypeBody();
+                Expect(")");
+            }
+
             if (Accept("->")) {
-                return SilType.Function(parts.ToImmutable(), ParseTypeBody());
+                return new FunctionType(parts.ToImmutable(), ParseTypeBody(), thrown);
             }
 
-            if (parts.Count == 0) {
-                return SilType.Unit;
+            if (thrown is not null) {
+                throw Error("'throws' belongs to a function type");
             }
 
-            throw Error("a parenthesised type list must be a function's parameters, or '()'");
+            // A parenthesised list is a tuple; the empty one is ().
+            return SilType.Tuple(parts.ToImmutable());
         }
 
         var name = Expect(TokenKind.Word, "a type").Text;
@@ -361,7 +437,7 @@ public sealed class SilParser {
             "Bool" => SilType.Bool,
             "F64" => SilType.F64,
             "String" => SilType.String,
-            _ => throw Error($"unknown type '{name}'"),
+            _ => _module.FindType(name) ?? throw Error($"unknown type '{name}'"),
         };
     }
 
@@ -445,9 +521,131 @@ public sealed class SilParser {
                 break;
             }
 
-            case "alloc_stack":
-                instruction = new AllocStackInst(ParseType());
+            case "alloc_stack": {
+                var type = ParseType();
+                string? variable = null;
+                if (Accept(",")) {
+                    Expect("var");
+                    variable = Expect(TokenKind.String, "a variable name").Text;
+                }
+
+                instruction = new AllocStackInst(type) { VariableName = variable };
                 break;
+            }
+
+            case "struct": {
+                if (ParseType() is not StructType structType) {
+                    throw new SilParseException("struct needs a struct type", line);
+                }
+
+                instruction = new StructInst(structType, [..OperandList(0)]);
+                break;
+            }
+
+            case "struct_extract" or "struct_element_addr": {
+                var value = Defined(Operand(0), opcode, line);
+                Expect(",");
+                var field = Expect(TokenKind.Member, "a field").Text;
+                var structType = (opcode == "struct_extract" ? value.Type : (value.Type as AddressType)?.Pointee) as StructType
+                    ?? throw new SilParseException($"{opcode} needs a struct {(opcode == "struct_extract" ? "value" : "address")}", line);
+                var index = structType.FieldIndex(field);
+                if (index < 0) {
+                    throw new SilParseException($"{structType.Name} has no field #{field}", line);
+                }
+
+                instruction = opcode == "struct_extract"
+                    ? new StructExtractInst(value, index)
+                    : new StructElementAddrInst(value, index);
+                break;
+            }
+
+            case "tuple": {
+                if (ParseType() is not TupleType tupleType) {
+                    throw new SilParseException("tuple needs a tuple type", line);
+                }
+
+                instruction = new TupleInst(tupleType, [..OperandList(0)]);
+                break;
+            }
+
+            case "tuple_extract" or "tuple_element_addr": {
+                var value = Defined(Operand(0), opcode, line);
+                Expect(",");
+                var index = int.Parse(Expect(TokenKind.Number, "an element index").Text, CultureInfo.InvariantCulture);
+                instruction = opcode == "tuple_extract"
+                    ? new TupleExtractInst(value, index)
+                    : new TupleElementAddrInst(value, index);
+                break;
+            }
+
+            case "enum": {
+                if (ParseType() is not EnumType enumType) {
+                    throw new SilParseException("enum needs an enum type", line);
+                }
+
+                Expect(",");
+                var caseName = Expect(TokenKind.Member, "a case").Text;
+                var index = enumType.CaseIndex(caseName);
+                if (index < 0) {
+                    throw new SilParseException($"{enumType.Name} has no case #{caseName}", line);
+                }
+
+                instruction = new EnumInst(enumType, index, Accept(",") ? Operand(0) : null);
+                break;
+            }
+
+            case "switch_enum": {
+                var value = Defined(Operand(0), opcode, line);
+                var enumType = value.Type as EnumType
+                    ?? throw new SilParseException("switch_enum needs an enum value", line);
+                var cases = new List<(int, SilBlock)>();
+                SilBlock? fallback = null;
+                while (Accept(",")) {
+                    if (Accept("default")) {
+                        fallback = BlockNamed(Expect(TokenKind.Word, "a block label").Text);
+                        continue;
+                    }
+
+                    Expect("case");
+                    var caseName = Expect(TokenKind.Member, "a case").Text;
+                    var index = enumType.CaseIndex(caseName);
+                    if (index < 0) {
+                        throw new SilParseException($"{enumType.Name} has no case #{caseName}", line);
+                    }
+
+                    Expect(":");
+                    cases.Add((index, BlockNamed(Expect(TokenKind.Word, "a block label").Text)));
+                }
+
+                instruction = new SwitchEnumInst(value, cases, fallback);
+                break;
+            }
+
+            case "throw":
+                instruction = new ThrowInst(Operand(0));
+                break;
+
+            case "cond_fail": {
+                var condition = Operand(0);
+                Expect(",");
+                instruction = new CondFailInst(condition, Expect(TokenKind.String, "a message").Text);
+                break;
+            }
+
+            case "try_apply": {
+                var callee = Operand(0);
+                var arguments = OperandList(1);
+                Expect(":");
+                var resultType = ParseType();
+                Expect(",");
+                Expect("normal");
+                var normal = BlockNamed(Expect(TokenKind.Word, "a block label").Text);
+                Expect(",");
+                Expect("error");
+                var error = BlockNamed(Expect(TokenKind.Word, "a block label").Text);
+                instruction = new TryApplyInst(callee, resultType, [..arguments], normal, error);
+                break;
+            }
 
             case "dealloc_stack":
                 instruction = new DeallocStackInst(Operand(0));
@@ -525,6 +723,13 @@ public sealed class SilParser {
             _pending.Add((instruction, index, name, useLine));
         }
 
+        if (Accept("loc")) {
+            var sourceLine = int.Parse(Expect(TokenKind.Number, "a line").Text, CultureInfo.InvariantCulture);
+            Expect(":");
+            var column = int.Parse(Expect(TokenKind.Number, "a column").Text, CultureInfo.InvariantCulture);
+            instruction.Location = new SilLocation(sourceLine, column);
+        }
+
         if (result is not null) {
             if (!instruction.HasResult) {
                 throw new SilParseException($"'{opcode}' produces no value to name %{result}", line);
@@ -537,6 +742,12 @@ public sealed class SilParser {
 
         return instruction;
     }
+
+    /// <summary>A value whose type an instruction needs while it is parsed, so it must already be defined.</summary>
+    static SilValue Defined(SilValue value, string opcode, int line) =>
+        value is Placeholder
+            ? throw new SilParseException($"{opcode} needs its operand defined before it in the text", line)
+            : value;
 
     /// <summary>Stands in for a value used before it is defined, until the end of the function.</summary>
     sealed class Placeholder : SilValue {

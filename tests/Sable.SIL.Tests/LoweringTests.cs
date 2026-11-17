@@ -25,6 +25,12 @@ public sealed class LoweringTests {
         Assert.Equal(text, SilPrinter.Print(reparsed));
         Assert.Empty(SilVerifier.Verify(reparsed));
 
+        // The tests run the promoted form: if promotion changed what a
+        // program computes, they say so. It must verify and round-trip too.
+        SilPassManager.Run(reparsed, SilPassManager.Default);
+        var promoted = SilPrinter.Print(reparsed);
+        Assert.Equal(promoted, SilPrinter.Print(SilParser.Parse(promoted)));
+
         return reparsed;
     }
 
@@ -300,16 +306,18 @@ public sealed class LoweringTests {
         var module = Lower("fn max(_ a: Int, _ b: Int) -> Int { return a > b ? a : b }");
         Assert.Equal(
             """
-            sil @M.max : $(Int, Int) -> Int {
-            bb0(%0 : $Int, %1 : $Int):
-              %2 = builtin "cmp_gt_Int"(%0, %1) : $Bool
-              cond_br %2, bb1, bb2
+            sil @M.max : $(Int, Int) -> Int loc "file0.sab":2 {
+            bb0(%0 : $Int var "a", %1 : $Int var "b"):
+              %2 = builtin "cmp_gt_Int"(%0, %1) : $Bool loc 2:37
+              cond_br %2, bb1, bb2 loc 2:37
             bb1:
-              br bb3(%0)
+              br bb3(%0) loc 2:37
             bb2:
-              br bb3(%1)
+              br bb3(%1) loc 2:37
             bb3(%3 : $Int):
-              return %3
+              br bb4(%3) loc 2:37
+            bb4(%4 : $Int):
+              return %4
             }
 
             """.ReplaceLineEndings("\n"),
@@ -324,7 +332,7 @@ public sealed class LoweringTests {
         var compilation = Compilation.Create(
             """
             module M
-            struct Point { var x: Int, var y: Int }
+            class Point { var x: Int = 0 }
             fn origin(_ p: Point) -> Int { return p.x }
             """
         );

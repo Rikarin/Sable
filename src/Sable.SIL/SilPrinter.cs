@@ -15,6 +15,42 @@ namespace Sable.SIL;
 public static class SilPrinter {
     public static string Print(SilModule module) {
         var builder = new StringBuilder();
+
+        // Types first, each after the types it holds, so that the parser
+        // never meets a name it has not seen.
+        var printed = new HashSet<NominalType>();
+        void Declare(NominalType type) {
+            if (!printed.Add(type)) {
+                return;
+            }
+
+            foreach (var nested in Contained(type)) {
+                Declare(nested);
+            }
+
+            switch (type) {
+                case StructType structType:
+                    builder.Append("sil_struct ").Append(structType.Name).Append(" { ")
+                        .Append(string.Join(", ", structType.Fields.Select(static f => $"{f.Name}: ${f.Type}")))
+                        .Append(" }\n");
+                    break;
+
+                case EnumType enumType:
+                    builder.Append("sil_enum ").Append(enumType.Name).Append(" { ")
+                        .Append(string.Join(", ", enumType.Cases.Select(static c => c.Payload is null ? c.Name : $"{c.Name}(${c.Payload})")))
+                        .Append(" }\n");
+                    break;
+            }
+        }
+
+        foreach (var type in module.Types) {
+            Declare(type);
+        }
+
+        if (module.Types.Count > 0 && module.Functions.Count > 0) {
+            builder.Append('\n');
+        }
+
         for (var i = 0; i < module.Functions.Count; i++) {
             if (i > 0) {
                 builder.Append('\n');
@@ -24,6 +60,26 @@ public static class SilPrinter {
         }
 
         return builder.ToString();
+    }
+
+    /// <summary>The named types a type holds by value, directly or inside tuples.</summary>
+    static IEnumerable<NominalType> Contained(SilType type) {
+        IEnumerable<SilType> parts = type switch {
+            StructType structType => structType.Fields.Select(static f => f.Type),
+            EnumType enumType => enumType.Cases.Where(static c => c.Payload is not null).Select(static c => c.Payload!),
+            TupleType tuple => tuple.Elements,
+            _ => [],
+        };
+
+        foreach (var part in parts) {
+            if (part is NominalType nominal) {
+                yield return nominal;
+            } else {
+                foreach (var inner in Contained(part)) {
+                    yield return inner;
+                }
+            }
+        }
     }
 
     public static string Print(SilFunction function) {
@@ -54,19 +110,30 @@ public static class SilPrinter {
 
         string Name(SilValue value) => names.TryGetValue(value, out var name) ? name : "%<undefined>";
 
+        string Label(SilBlock block) => blocks.TryGetValue(block, out var name) ? name : "bb<undefined>";
+
         string Target(SilBlock block, IEnumerable<SilValue> arguments) {
             var list = arguments.Select(Name).ToList();
             var label = blocks.TryGetValue(block, out var name) ? name : "bb<undefined>";
             return list.Count == 0 ? label : $"{label}({string.Join(", ", list)})";
         }
 
-        builder.Append("sil @").Append(function.Name).Append(" : $").Append(function.Type).Append(" {\n");
+        builder.Append("sil @").Append(function.Name).Append(" : $").Append(function.Type);
+        if (function.SourceFile is { } file) {
+            builder.Append(" loc ").Append(Quote(file)).Append(':').Append(function.Line);
+        }
+
+        builder.Append(" {\n");
 
         foreach (var block in function.Blocks) {
             builder.Append(blocks[block]);
             if (block.Arguments.Count > 0) {
+                var isEntry = block == function.Blocks[0];
                 builder.Append('(')
-                    .Append(string.Join(", ", block.Arguments.Select(a => $"{Name(a)} : ${a.Type}")))
+                    .Append(string.Join(", ", block.Arguments.Select((a, i) =>
+                        isEntry && i < function.ParameterNames.Count
+                            ? $"{Name(a)} : ${a.Type} var {Quote(function.ParameterNames[i])}"
+                            : $"{Name(a)} : ${a.Type}")))
                     .Append(')');
             }
 
@@ -102,6 +169,76 @@ public static class SilPrinter {
 
                     case AllocStackInst alloc:
                         builder.Append(" $").Append(alloc.ElementType);
+                        if (alloc.VariableName is { } variable) {
+                            builder.Append(", var ").Append(Quote(variable));
+                        }
+
+                        break;
+
+                    case StructInst structInst:
+                        builder.Append(" $").Append(structInst.Type).Append(" (")
+                            .Append(string.Join(", ", structInst.Operands.Select(Name))).Append(')');
+                        break;
+
+                    case StructExtractInst extract:
+                        builder.Append(' ').Append(Name(extract.Value)).Append(", #")
+                            .Append(((StructType)extract.Value.Type).Fields[extract.Field].Name);
+                        break;
+
+                    case StructElementAddrInst element:
+                        builder.Append(' ').Append(Name(element.Address)).Append(", #")
+                            .Append(((StructType)((AddressType)element.Address.Type).Pointee).Fields[element.Field].Name);
+                        break;
+
+                    case TupleInst tuple:
+                        builder.Append(" $").Append(tuple.Type).Append(" (")
+                            .Append(string.Join(", ", tuple.Operands.Select(Name))).Append(')');
+                        break;
+
+                    case TupleExtractInst extract:
+                        builder.Append(' ').Append(Name(extract.Value)).Append(", ").Append(extract.Element);
+                        break;
+
+                    case TupleElementAddrInst element:
+                        builder.Append(' ').Append(Name(element.Address)).Append(", ").Append(element.Element);
+                        break;
+
+                    case EnumInst enumInst:
+                        builder.Append(" $").Append(enumInst.Type).Append(", #").Append(enumInst.EnumType.Cases[enumInst.Case].Name);
+                        if (enumInst.Payload is { } payload) {
+                            builder.Append(", ").Append(Name(payload));
+                        }
+
+                        break;
+
+                    case SwitchEnumInst switchEnum: {
+                        var enumType = (EnumType)switchEnum.Value.Type;
+                        builder.Append(' ').Append(Name(switchEnum.Value));
+                        foreach (var (caseIndex, target) in switchEnum.Cases) {
+                            builder.Append(", case #").Append(enumType.Cases[caseIndex].Name).Append(": ").Append(Label(target));
+                        }
+
+                        if (switchEnum.Default is { } fallback) {
+                            builder.Append(", default ").Append(Label(fallback));
+                        }
+
+                        break;
+                    }
+
+                    case CondFailInst condFail:
+                        builder.Append(' ').Append(Name(condFail.Condition)).Append(", ").Append(Quote(condFail.Message));
+                        break;
+
+                    case ThrowInst throwInst:
+                        builder.Append(' ').Append(Name(throwInst.Error));
+                        break;
+
+                    case TryApplyInst tryApply:
+                        builder.Append(' ').Append(Name(tryApply.Callee)).Append('(')
+                            .Append(string.Join(", ", tryApply.Arguments.Select(Name)))
+                            .Append(") : $").Append(tryApply.ResultType)
+                            .Append(", normal ").Append(Label(tryApply.Normal))
+                            .Append(", error ").Append(Label(tryApply.Error));
                         break;
 
                     case DeallocStackInst dealloc:
@@ -141,6 +278,10 @@ public static class SilPrinter {
                     case ReturnInst { Value: { } value }:
                         builder.Append(' ').Append(Name(value));
                         break;
+                }
+
+                if (instruction.Location is { } location) {
+                    builder.Append(" loc ").Append(location);
                 }
 
                 builder.Append('\n');

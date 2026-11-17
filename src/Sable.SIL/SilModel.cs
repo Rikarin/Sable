@@ -36,6 +36,9 @@ public abstract class SilType : IEquatable<SilType> {
     public static SilType Function(ImmutableArray<SilType> parameters, SilType result) =>
         new FunctionType(parameters, result);
 
+    public static SilType Tuple(ImmutableArray<SilType> elements) =>
+        elements.IsEmpty ? Unit : new TupleType(elements);
+
     /// <summary>True for a value with no ownership to track: copied by copying its bits.</summary>
     public virtual bool IsTrivial => true;
 
@@ -60,10 +63,55 @@ public sealed class AddressType(SilType pointee) : SilType {
     public override string ToString() => $"*{Pointee}";
 }
 
-public sealed class FunctionType(ImmutableArray<SilType> parameters, SilType result) : SilType {
+public sealed class FunctionType(ImmutableArray<SilType> parameters, SilType result, SilType? thrown = null) : SilType {
     public ImmutableArray<SilType> Parameters { get; } = parameters;
     public SilType Result { get; } = result;
-    public override string ToString() => $"({string.Join(", ", Parameters)}) -> {Result}";
+
+    /// <summary>The error a <c>throws(E)</c> function may throw, or null when it cannot.</summary>
+    public SilType? Thrown { get; } = thrown;
+
+    public override string ToString() =>
+        Thrown is null
+            ? $"({string.Join(", ", Parameters)}) -> {Result}"
+            : $"({string.Join(", ", Parameters)}) throws({Thrown}) -> {Result}";
+}
+
+/// <summary><c>(Int, Bool)</c>: a tuple, laid out inline. The empty tuple is <see cref="SilType.Unit" />.</summary>
+public sealed class TupleType(ImmutableArray<SilType> elements) : SilType {
+    public ImmutableArray<SilType> Elements { get; } = elements;
+    public override bool IsTrivial => Elements.All(static e => e.IsTrivial);
+    public override string ToString() => $"({string.Join(", ", Elements)})";
+}
+
+/// <summary>A named type a module declares: a struct or an enum.</summary>
+public abstract class NominalType(string name) : SilType {
+    public string Name { get; } = name;
+    public override string ToString() => Name;
+}
+
+/// <summary>
+///     A struct: named fields laid out inline, in order. Declared in SIL text
+///     as <c>sil_struct Point { x: $Int, y: $Int }</c>.
+/// </summary>
+public sealed class StructType(string name) : NominalType(name) {
+    public List<(string Name, SilType Type)> Fields { get; } = [];
+
+    public int FieldIndex(string field) => Fields.FindIndex(f => f.Name == field);
+
+    public override bool IsTrivial => Fields.All(static f => f.Type.IsTrivial);
+}
+
+/// <summary>
+///     A tagged union: cases, each with at most one payload — several values
+///     are one tuple. Unions, enums and optionals all lower to it. Declared as
+///     <c>sil_enum Shape { Circle($F64), Empty }</c>.
+/// </summary>
+public sealed class EnumType(string name) : NominalType(name) {
+    public List<(string Name, SilType? Payload)> Cases { get; } = [];
+
+    public int CaseIndex(string @case) => Cases.FindIndex(c => c.Name == @case);
+
+    public override bool IsTrivial => Cases.All(static c => c.Payload?.IsTrivial ?? true);
 }
 
 // ===========================================================================
@@ -85,6 +133,11 @@ public sealed class SilArgument(SilBlock block, SilType type) : SilValue {
 // Instructions
 // ===========================================================================
 
+/// <summary>Where in the source an instruction came from: one-based line and column.</summary>
+public readonly record struct SilLocation(int Line, int Column) {
+    public override string ToString() => $"{Line}:{Column}";
+}
+
 /// <summary>
 ///     One SIL instruction. An instruction that produces a value is itself the
 ///     value, as in Swift's SIL, so a use names the instruction.
@@ -97,6 +150,9 @@ public abstract class SilInstruction : SilValue {
     }
 
     public SilBlock Block { get; internal set; } = null!;
+
+    /// <summary>The source position it was lowered from, for debug information.</summary>
+    public SilLocation? Location { get; set; }
 
     public IReadOnlyList<SilValue> Operands => _operands;
 
@@ -147,9 +203,75 @@ public sealed class BuiltinInst(string name, SilType type, params SilValue[] ope
     public override string Opcode => "builtin";
 }
 
+/// <summary><c>struct $Point (%0, %1)</c>: a struct from its fields, in order.</summary>
+public sealed class StructInst(StructType type, params SilValue[] fields) : SilInstruction(fields) {
+    public StructType StructType { get; } = type;
+    public override SilType Type => StructType;
+    public override string Opcode => "struct";
+}
+
+/// <summary><c>struct_extract %0, #x</c>: one field of a struct value.</summary>
+public sealed class StructExtractInst(SilValue value, int field) : SilInstruction(value) {
+    public SilValue Value => Operands[0];
+    public int Field { get; } = field;
+    public override SilType Type => ((StructType)Value.Type).Fields[Field].Type;
+    public override string Opcode => "struct_extract";
+}
+
+/// <summary><c>struct_element_addr %0, #x</c>: the address of one field of a struct in memory.</summary>
+public sealed class StructElementAddrInst(SilValue address, int field) : SilInstruction(address) {
+    public SilValue Address => Operands[0];
+    public int Field { get; } = field;
+    public override SilType Type => SilType.Address(((StructType)((AddressType)Address.Type).Pointee).Fields[Field].Type);
+    public override string Opcode => "struct_element_addr";
+}
+
+/// <summary><c>tuple $(Int, Bool) (%0, %1)</c>.</summary>
+public sealed class TupleInst(TupleType type, params SilValue[] elements) : SilInstruction(elements) {
+    public TupleType TupleType { get; } = type;
+    public override SilType Type => TupleType;
+    public override string Opcode => "tuple";
+}
+
+/// <summary><c>tuple_extract %0, 1</c>.</summary>
+public sealed class TupleExtractInst(SilValue value, int element) : SilInstruction(value) {
+    public SilValue Value => Operands[0];
+    public int Element { get; } = element;
+    public override SilType Type => ((TupleType)Value.Type).Elements[Element];
+    public override string Opcode => "tuple_extract";
+}
+
+/// <summary><c>tuple_element_addr %0, 1</c>.</summary>
+public sealed class TupleElementAddrInst(SilValue address, int element) : SilInstruction(address) {
+    public SilValue Address => Operands[0];
+    public int Element { get; } = element;
+    public override SilType Type => SilType.Address(((TupleType)((AddressType)Address.Type).Pointee).Elements[Element]);
+    public override string Opcode => "tuple_element_addr";
+}
+
+/// <summary><c>enum $Shape, #Circle, %0</c>, or without a payload for a case that has none.</summary>
+public sealed class EnumInst(EnumType type, int @case, SilValue? payload) : SilInstruction(payload is null ? [] : [payload]) {
+    public EnumType EnumType { get; } = type;
+    public int Case { get; } = @case;
+    public SilValue? Payload => Operands.Count == 0 ? null : Operands[0];
+    public override SilType Type => EnumType;
+    public override string Opcode => "enum";
+}
+
+/// <summary><c>cond_fail %0, "message"</c>: stops the program with the message when the condition is true.</summary>
+public sealed class CondFailInst(SilValue condition, string message) : SilInstruction(condition) {
+    public SilValue Condition => Operands[0];
+    public string Message { get; } = message;
+    public override bool HasResult => false;
+    public override string Opcode => "cond_fail";
+}
+
 /// <summary><c>alloc_stack $T</c>: storage in the current frame, popped by <c>dealloc_stack</c>.</summary>
 public sealed class AllocStackInst(SilType elementType) : SilInstruction {
     public SilType ElementType { get; } = elementType;
+
+    /// <summary>The source variable the slot holds, for a debugger; null for a temporary.</summary>
+    public string? VariableName { get; init; }
     public override SilType Type => SilType.Address(ElementType);
     public override string Opcode => "alloc_stack";
 }
@@ -236,6 +358,46 @@ public sealed class ReturnInst(SilValue? value) : SilInstruction(value is null ?
     public override string Opcode => "return";
 }
 
+/// <summary>
+///     <c>switch_enum %0, case #A: bb1, case #B: bb2, default bb3</c>: branches
+///     on an enum's case. A case block takes the payload as its one argument
+///     when the case has one; the default block takes nothing.
+/// </summary>
+public sealed class SwitchEnumInst(SilValue value, List<(int Case, SilBlock Target)> cases, SilBlock? defaultTarget)
+    : SilInstruction(value) {
+    public SilValue Value => Operands[0];
+    public List<(int Case, SilBlock Target)> Cases { get; } = cases;
+    public SilBlock? Default { get; internal set; } = defaultTarget;
+    public override bool HasResult => false;
+    public override bool IsTerminator => true;
+    public override string Opcode => "switch_enum";
+}
+
+/// <summary><c>throw %0</c>: leaves a <c>throws</c> function with an error.</summary>
+public sealed class ThrowInst(SilValue error) : SilInstruction(error) {
+    public SilValue Error => Operands[0];
+    public override bool HasResult => false;
+    public override bool IsTerminator => true;
+    public override string Opcode => "throw";
+}
+
+/// <summary>
+///     <c>try_apply %f(%0) : $Int, normal bb1, error bb2</c>: calls a throwing
+///     function. The normal block takes the result (nothing for <c>()</c>);
+///     the error block takes the error.
+/// </summary>
+public sealed class TryApplyInst(SilValue callee, SilType resultType, SilValue[] arguments, SilBlock normal, SilBlock error)
+    : SilInstruction([callee, ..arguments]) {
+    public SilValue Callee => Operands[0];
+    public IEnumerable<SilValue> Arguments => Operands.Skip(1);
+    public SilType ResultType { get; } = resultType;
+    public SilBlock Normal { get; internal set; } = normal;
+    public SilBlock Error { get; internal set; } = error;
+    public override bool HasResult => false;
+    public override bool IsTerminator => true;
+    public override string Opcode => "try_apply";
+}
+
 /// <summary><c>unreachable</c>: control cannot get here.</summary>
 public sealed class UnreachableInst() : SilInstruction {
     public override bool HasResult => false;
@@ -259,6 +421,8 @@ public sealed class SilBlock(SilFunction function) {
         Terminator switch {
             BranchInst branch => [branch.Target],
             CondBranchInst conditional => [conditional.WhenTrue, conditional.WhenFalse],
+            SwitchEnumInst switchEnum => [..switchEnum.Cases.Select(static c => c.Target), ..(switchEnum.Default is { } d ? [d] : Array.Empty<SilBlock>())],
+            TryApplyInst tryApply => [tryApply.Normal, tryApply.Error],
             _ => [],
         };
 
@@ -280,6 +444,14 @@ public sealed class SilFunction(string name, FunctionType type) {
     public string Name { get; } = name;
     public FunctionType Type { get; } = type;
     public List<SilBlock> Blocks { get; } = [];
+
+    /// <summary>The source file and line it was declared at, for debug information.</summary>
+    public string? SourceFile { get; set; }
+
+    public int Line { get; set; }
+
+    /// <summary>The name of each parameter, <c>self</c> included, for a debugger.</summary>
+    public List<string> ParameterNames { get; } = [];
 
     public SilBlock Entry => Blocks[0];
 
@@ -317,6 +489,19 @@ public sealed class SilModule {
 
     /// <summary>The function a program starts in: the one marked <c>@main</c>, or else <c>main</c>.</summary>
     public string? EntryPoint { get; set; }
+
+    readonly Dictionary<string, NominalType> _types = new(StringComparer.Ordinal);
+
+    /// <summary>The structs and enums the module declares, in declaration order.</summary>
+    public List<NominalType> Types { get; } = [];
+
+    public NominalType? FindType(string name) => _types.GetValueOrDefault(name);
+
+    public T AddType<T>(T type) where T : NominalType {
+        Types.Add(type);
+        _types[type.Name] = type;
+        return type;
+    }
 
     public SilFunction? Find(string name) => _byName.GetValueOrDefault(name);
 
@@ -381,6 +566,11 @@ public static class SilBuiltins {
         foreach (var printable in new[] { SilType.String, SilType.Int, SilType.F64, SilType.Bool }) {
             table[$"print_{printable}"] = new([printable], SilType.Unit);
         }
+
+        Binary("cmp_eq", SilType.String, SilType.Bool);
+        Binary("cmp_ne", SilType.String, SilType.Bool);
+        table["convert_Int_F64"] = new([SilType.Int], SilType.F64);
+        table["convert_F64_Int"] = new([SilType.F64], SilType.Int);
 
         Unary("neg", SilType.Int);
         Unary("neg", SilType.F64);

@@ -19,7 +19,11 @@ public sealed record CompileResult(
 ///     say, so a later stage never runs on a broken earlier one.
 /// </summary>
 public static class Pipeline {
-    public static CompileResult Compile(SourceText source) {
+    /// <param name="debugDirectory">
+    ///     When set, emit DWARF debug information, with source file names
+    ///     relative to this directory.
+    /// </param>
+    public static CompileResult Compile(SourceText source, string? debugDirectory = null) {
         var tree = SyntaxTree.Parse(source);
         var compilation = Compilation.Create([tree]);
 
@@ -48,6 +52,17 @@ public static class Pipeline {
             return new(module, null, ["error: no entry point: mark a function '@main' or name one 'main'"]);
         }
 
-        return new(module, LlvmEmitter.Emit(module), []);
+        // The SIL passes, each followed by the verifier. A debug build keeps
+        // every local in its slot, where the debug information says it is.
+        if (debugDirectory is null) {
+            try {
+                SilPassManager.Run(module, SilPassManager.Default);
+            } catch (SilPassException failure) {
+                return new(module, null, [$"internal error: {failure.Message}"]);
+            }
+        }
+
+        var ir = debugDirectory is null ? LlvmEmitter.Emit(module) : LlvmEmitter.EmitWithDebugInfo(module, debugDirectory);
+        return new(module, ir, []);
     }
 }

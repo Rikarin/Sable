@@ -158,4 +158,21 @@ public sealed class TypeRuleTests {
         var diagnostics = Compilation.Create($"module M\nfn f() -> Int {{ return {nested} }}").GetAllDiagnostics();
         Assert.Contains(diagnostics, static d => d.Code == ErrorCode.ERR_NestedTooDeeply);
     }
+
+    // ---- 'none' as an argument ----------------------------------------------
+
+    [Fact]
+    public void NoneTakesItsTypeFromTheParameter() =>
+        AssertClean(
+            """
+            fn tripled(_ n: Int?) -> Int { return 0 }
+            fn print(_ s: String) { }
+            fn print(_ n: Int) { }
+            fn probe() { print(tripled(none)) }
+            """
+        );
+
+    [Fact]
+    public void NoneForAParameterThatIsNotOptionalIsStillAnError() =>
+        Assert.NotEmpty(ErrorsIn("fn take(_ n: Int) { }\nfn probe() { take(none) }"));
 }

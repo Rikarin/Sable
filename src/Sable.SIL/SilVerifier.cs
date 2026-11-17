@@ -194,9 +194,107 @@ public static class SilVerifier {
                     : $"function_ref @{reference.Function} is {callee.Type}, not {reference.Type}";
             }
 
+            case StructInst structInst:
+                return structInst.Operands.Select(static o => o.Type).SequenceEqual(structInst.StructType.Fields.Select(static f => f.Type))
+                    ? null
+                    : $"struct {structInst.StructType.Name} takes ({string.Join(", ", structInst.StructType.Fields.Select(static f => f.Type))}), "
+                    + $"not ({Types(structInst.Operands)})";
+
+            case StructExtractInst extract when extract.Value.Type is not StructType:
+                return $"struct_extract needs a struct, not {extract.Value.Type}";
+
+            case StructElementAddrInst element when element.Address.Type is not AddressType { Pointee: StructType }:
+                return $"struct_element_addr needs a struct's address, not {element.Address.Type}";
+
+            case TupleInst tuple:
+                return tuple.Operands.Select(static o => o.Type).SequenceEqual(tuple.TupleType.Elements)
+                    ? null
+                    : $"tuple {tuple.TupleType} is given ({Types(tuple.Operands)})";
+
+            case TupleExtractInst extract when extract.Value.Type is not TupleType { } tupleType
+                                               || extract.Element >= tupleType.Elements.Length:
+                return $"tuple_extract {extract.Element} of {extract.Value.Type}";
+
+            case TupleElementAddrInst element when element.Address.Type is not AddressType { Pointee: TupleType { } tupleType }
+                                                   || element.Element >= tupleType.Elements.Length:
+                return $"tuple_element_addr {element.Element} of {element.Address.Type}";
+
+            case EnumInst enumInst: {
+                var (name, payload) = enumInst.EnumType.Cases[enumInst.Case];
+                if (payload is null) {
+                    return enumInst.Payload is null ? null : $"enum case #{name} carries nothing";
+                }
+
+                return enumInst.Payload?.Type == payload ? null : $"enum case #{name} carries {payload}";
+            }
+
+            case SwitchEnumInst switchEnum: {
+                if (switchEnum.Value.Type is not EnumType enumType) {
+                    return $"switch_enum needs an enum, not {switchEnum.Value.Type}";
+                }
+
+                var seen = new HashSet<int>();
+                foreach (var (caseIndex, target) in switchEnum.Cases) {
+                    if (!seen.Add(caseIndex)) {
+                        return $"switch_enum names #{enumType.Cases[caseIndex].Name} twice";
+                    }
+
+                    var payload = enumType.Cases[caseIndex].Payload;
+                    var expected = payload is null ? Array.Empty<SilType>() : [payload];
+                    if (!target.Arguments.Select(static a => a.Type).SequenceEqual(expected)) {
+                        return $"switch_enum's block for #{enumType.Cases[caseIndex].Name} must take ({string.Join(", ", expected.Select(static t => t.ToString()))})";
+                    }
+                }
+
+                if (switchEnum.Default is { } fallback && fallback.Arguments.Count > 0) {
+                    return "switch_enum's default block takes nothing";
+                }
+
+                return switchEnum.Default is null && seen.Count < enumType.Cases.Count
+                    ? $"switch_enum on {enumType.Name} covers {seen.Count} of {enumType.Cases.Count} cases and has no default"
+                    : null;
+            }
+
+            case CondFailInst condFail when condFail.Condition.Type != SilType.Bool:
+                return $"cond_fail needs a Bool, not {condFail.Condition.Type}";
+
+            case ThrowInst throwInst:
+                if (function.Type.Thrown is not { } thrown) {
+                    return "throw in a function that does not throw";
+                }
+
+                return throwInst.Error.Type == thrown ? null : $"throws {throwInst.Error.Type} from a function throwing {thrown}";
+
+            case TryApplyInst tryApply: {
+                if (tryApply.Callee.Type is not FunctionType { Thrown: { } calleeThrows } callee) {
+                    return "try_apply needs a throwing function; call others with apply";
+                }
+
+                if (!tryApply.Arguments.Select(static a => a.Type).SequenceEqual(callee.Parameters)) {
+                    return $"try_apply passes ({Types(tryApply.Arguments)}) to {callee}";
+                }
+
+                if (tryApply.ResultType != callee.Result) {
+                    return $"try_apply of {callee} gives {callee.Result}, not {tryApply.ResultType}";
+                }
+
+                var normal = callee.Result == SilType.Unit ? Array.Empty<SilType>() : [callee.Result];
+                if (!tryApply.Normal.Arguments.Select(static a => a.Type).SequenceEqual(normal)) {
+                    return "try_apply's normal block must take the result";
+                }
+
+                return tryApply.Error.Arguments.Select(static a => a.Type).SequenceEqual([calleeThrows])
+                    ? null
+                    : $"try_apply's error block must take the {calleeThrows}";
+            }
+
             case ApplyInst apply: {
                 if (apply.Callee.Type is not FunctionType callee) {
                     return $"apply needs a function, not {apply.Callee.Type}";
+                }
+
+                if (callee.Thrown is not null) {
+                    return "apply of a throwing function; it needs try_apply";
                 }
 
                 if (!apply.Arguments.Select(static a => a.Type).SequenceEqual(callee.Parameters)) {
@@ -274,8 +372,8 @@ public static class SilVerifier {
                         error(block, $"'{instruction.Opcode}' uses stack storage that is not live");
                         return;
 
-                    case ReturnInst when stack.Count > 0:
-                        error(block, $"returns with {stack.Count} stack allocation(s) still live");
+                    case ReturnInst or ThrowInst when stack.Count > 0:
+                        error(block, $"leaves the function with {stack.Count} stack allocation(s) still live");
                         return;
                 }
             }

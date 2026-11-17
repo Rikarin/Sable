@@ -119,10 +119,12 @@ dotnet run --project src/Sable.Driver -- build hello.sab -o hello
 dotnet run --project src/Sable.Driver -- run hello.sab
 ```
 
-`--emit sil` and `--emit llvm-ir` print a stage's output instead. Only the
-first subset of the language lowers so far — `Int`, `Bool`, `F64`, string
-literals, `print`, functions and control flow; anything else is reported as
-`S7000` by construct.
+`--emit sil` and `--emit llvm-ir` print a stage's output instead, and `-g`
+builds with DWARF debug information for lldb. What lowers so far: `Int`,
+`Bool`, `F64`, string literals, structs with methods and initialisers, tuples,
+unions, enums and optionals with `match`, `throws`/`try`/`do`/`catch`,
+`defer`, and the control flow around them. Anything else — arrays, built
+strings, classes, closures, generics — is reported as `S7000` by construct.
 
 ## Status
 
@@ -167,12 +169,14 @@ edit. Phase 1 is nearly done** — see
 | `Sable.Symbols` — negative-diagnostic corpus (631 cases) | done |
 | `Sable.Symbols` — throughput: 100,000 lines in under 5 s | done |
 | `tools/Sable.Visualiser` — syntax-tree visualiser | done |
-| `Sable.SIL` — types, values, instructions, blocks, functions | started: scalars, stack slots, calls, branches |
+| `Sable.SIL` — types, values, instructions, blocks, functions | scalars, structs, tuples, enums, addresses; `switch_enum`, `try_apply`, `throw`, `cond_fail` |
 | `Sable.SIL` — textual printer and parser (`tests/sil/*.sil`) | done for the subset |
-| `Sable.SIL` — verifier: structure, SSA dominance, types, stack discipline | done for the subset; ownership checks wait for owned values |
-| `Sable.SIL` — lowering from the bound tree | started: `Int`/`Bool`/`F64`, locals, calls, `if`/`guard`/`while`/`repeat`, labelled jumps, `?:`, short-circuit |
+| `Sable.SIL` — verifier: structure, SSA dominance, types, stack discipline, enum coverage, throws | done for the subset; ownership checks wait for owned values |
+| `Sable.SIL` — pass manager, verifying after every pass; slot promotion (mem2reg) | done |
+| `Sable.SIL` — lowering from the bound tree | value types, `match`, optionals, errors, `defer`; 59 of the corpus's 343 functions lower — the rest need the heap (arrays, strings, classes) or generics |
 | `Sable.SIL` — interpreter, so tests run lowered code | done for the subset |
-| `Sable.CodeGen` — LLVM IR text: phis for block arguments, overflow / division / shift traps | done for the subset |
+| `Sable.CodeGen` — LLVM IR text: phis, aggregates, tagged enums, discriminated returns for `throws`, traps | done for the subset |
+| `Sable.CodeGen` — DWARF debug information (`sable build -g`) | done: frames, locals and types in lldb |
 | `runtime/` — C runtime: print, trap | started |
 | `sable build` / `sable run` — native executables via clang | done for the subset; hello world is 34 KB |
 
@@ -186,7 +190,7 @@ Phase 1's exit criteria, as docs/04 §1.4 states them:
 | Type-checking 100,000 lines in under 5 s | 0.98 s |
 | Go/no-go: 10,000 lines of real Sable | ~2,900 in `tests/corpus/` |
 
-**1,664 tests green**, and every file in [examples/](examples/) parses as a
+**1,713 tests green**, and every file in [examples/](examples/) parses as a
 complete compilation unit with no diagnostics and an exact round-trip.
 [tests/corpus/](tests/corpus/) holds programs that must type-check with
 nothing to say, and [tests/negative/](tests/negative/) holds programs that

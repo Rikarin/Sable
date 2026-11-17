@@ -38,7 +38,12 @@ public static class NativeBuild {
         }
     }
 
-    public static NativeBuildResult Build(string llvmIr, string outputPath, bool optimise = true) {
+    /// <param name="debug">
+    ///     Build for a debugger: <c>-g</c> at <c>-O0</c>, so that every variable
+    ///     stays where the debug information says it is. On macOS clang then
+    ///     writes a <c>.dSYM</c> beside the executable.
+    /// </param>
+    public static NativeBuildResult Build(string llvmIr, string outputPath, bool optimise = true, bool debug = false) {
         var directory = Directory.CreateTempSubdirectory("sable-build-");
         try {
             var irPath = Path.Combine(directory.FullName, "program.ll");
@@ -46,10 +51,12 @@ public static class NativeBuild {
             File.WriteAllText(irPath, llvmIr);
             File.WriteAllText(runtimePath, RuntimeSource);
 
-            var (exitCode, output) = Run(
-                CompilerPath,
-                [optimise ? "-O2" : "-O0", "-Wno-override-module", irPath, runtimePath, "-o", outputPath]
-            );
+            List<string> arguments = debug
+                ? ["-g", "-O0"]
+                : [optimise ? "-O2" : "-O0"];
+            arguments.AddRange(["-Wno-override-module", irPath, runtimePath, "-o", outputPath]);
+
+            var (exitCode, output) = Run(CompilerPath, arguments);
 
             return new(exitCode == 0, output);
         } finally {

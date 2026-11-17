@@ -327,8 +327,11 @@ Order matters; each of these is a self-contained lowering:
       done (`sable build hello.sab && ./hello`); Linux x64 not yet tried
 - [ ] A 2,000-line program (JSON parser + pretty printer) compiles and passes
       its tests
-- [ ] SIL verifier is clean on the corpus
-- [ ] `lldb` shows correct frames, locals and types
+- [ ] SIL verifier is clean on the corpus — clean on everything that lowers,
+      before and after the passes; 59 of the corpus's 343 functions lower so far
+- [x] `lldb` shows correct frames, locals and types — on macOS, checked by a
+      test that drives lldb: `gcd(a=1071, b=462)`, `(Int) t = 147`,
+      `(Debug.Point) p = (x = 1071, y = 462)`
 - [ ] Startup time < 2 ms, hello-world binary < 400 KB stripped — 34 KB
       stripped; start to exit is ~3.2 ms against ~2.1 ms for `/usr/bin/true`
       measured the same way, so ~1 ms over the process-launch floor

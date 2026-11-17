@@ -2671,6 +2671,10 @@ public sealed class Binder {
             // '.Full(value: 1)' as an argument: the dot still needs the parameter.
             InvocationExpressionSyntax { Expression: ImplicitMemberAccessExpressionSyntax } => true,
 
+            // 'none' is no particular optional until the parameter says which:
+            // 'tripled(none)' with tripled taking Int?.
+            LiteralExpressionSyntax { Token.Kind: SyntaxKind.NoneKeyword } => true,
+
             ParenthesizedExpressionSyntax parenthesized => IsClosure(parenthesized.Expression),
             _ => false,
         };

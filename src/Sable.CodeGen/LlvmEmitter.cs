@@ -33,6 +33,13 @@ public sealed class LlvmEmitter {
 
     public static string Emit(SilModule module) => new LlvmEmitter().EmitModule(module);
 
+    /// <summary>The same, with DWARF debug information, so that lldb can show frames, locals and types.</summary>
+    /// <param name="directory">The directory the source file names are relative to.</param>
+    public static string EmitWithDebugInfo(SilModule module, string directory) =>
+        new LlvmEmitter { _debug = new DebugInfo(directory) }.EmitModule(module);
+
+    DebugInfo? _debug;
+
     string EmitModule(SilModule module) {
         var functions = new StringBuilder();
         foreach (var function in module.Functions) {
@@ -53,7 +60,136 @@ public sealed class LlvmEmitter {
         output.Append(Declarations);
         output.Append('\n');
         output.Append(functions);
+
+        if (_debug is not null) {
+            output.Append(_debug.Metadata());
+        }
+
         return output.ToString();
+    }
+
+    // =======================================================================
+    // Debug information
+    // =======================================================================
+
+    /// <summary>
+    ///     The DWARF metadata: one compile unit, a file per source, a
+    ///     subprogram per function, a location per instruction, and a variable
+    ///     per local and parameter — what lldb needs for frames, locals and
+    ///     their types.
+    /// </summary>
+    sealed class DebugInfo(string directory) {
+        readonly List<string> _nodes = [];
+        readonly Dictionary<string, string> _unique = new(StringComparer.Ordinal);
+        readonly Dictionary<string, string> _files = new(StringComparer.Ordinal);
+        string? _unit;
+
+        /// <summary>A metadata node; identical bodies share one, unless it is distinct.</summary>
+        public string Node(string body, bool distinct = false) {
+            if (!distinct && _unique.TryGetValue(body, out var existing)) {
+                return existing;
+            }
+
+            var name = $"!{_nodes.Count}";
+            _nodes.Add($"{name} = {(distinct ? "distinct " : "")}{body}");
+            if (!distinct) {
+                _unique[body] = name;
+            }
+
+            return name;
+        }
+
+        public string File(string fileName) {
+            if (_files.TryGetValue(fileName, out var file)) {
+                return file;
+            }
+
+            file = Node($"!DIFile(filename: {Quote(fileName)}, directory: {Quote(directory)})");
+            _files[fileName] = file;
+            _unit ??= Node(
+                $"!DICompileUnit(language: DW_LANG_C, file: {file}, producer: \"sable\", isOptimized: false, "
+                + "runtimeVersion: 0, emissionKind: FullDebug)",
+                distinct: true
+            );
+            return file;
+        }
+
+        public string Unit => _unit!;
+
+        public string Subprogram(SilFunction function) {
+            var file = File(function.SourceFile ?? "<unknown>");
+            var type = Node("!DISubroutineType(types: !{})");
+            var name = function.Name[(function.Name.LastIndexOf('.') + 1)..];
+            return Node(
+                $"!DISubprogram(name: {Quote(name)}, linkageName: {Quote(SymbolPrefix + function.Name)}, scope: {file}, file: {file}, "
+                + $"line: {function.Line}, type: {type}, scopeLine: {function.Line}, spFlags: DISPFlagDefinition, unit: {Unit})",
+                distinct: true
+            );
+        }
+
+        public string Location(int line, int column, string scope) =>
+            Node($"!DILocation(line: {line}, column: {column}, scope: {scope})");
+
+        public string Variable(string name, string scope, string file, int line, SilType type, int argument = 0) {
+            var typePart = Type(type) is { } typeNode ? $", type: {typeNode}" : "";
+            var argumentPart = argument > 0 ? $", arg: {argument}" : "";
+            return Node($"!DILocalVariable(name: {Quote(name)}{argumentPart}, scope: {scope}, file: {file}, line: {line}{typePart})");
+        }
+
+        /// <summary>The DWARF type for a SIL type: the scalars, and structs field by field.</summary>
+        string? Type(SilType type) {
+            switch (type) {
+                // Named as Sable names them, over the machine type a debugger
+                // knows how to print.
+                case var _ when type == SilType.Int:
+                    return Named("Int", "!DIBasicType(name: \"int64_t\", size: 64, encoding: DW_ATE_signed)");
+                case var _ when type == SilType.Bool:
+                    return Named("Bool", "!DIBasicType(name: \"bool\", size: 8, encoding: DW_ATE_boolean)");
+                case var _ when type == SilType.F64:
+                    return Named("F64", "!DIBasicType(name: \"double\", size: 64, encoding: DW_ATE_float)");
+                case StructType structType: {
+                    var members = new List<string>();
+                    var offset = 0;
+                    foreach (var (fieldName, fieldType) in structType.Fields) {
+                        var align = Align(fieldType);
+                        offset = (offset + align - 1) / align * align;
+                        var fieldNode = Type(fieldType);
+                        members.Add(Node(
+                            $"!DIDerivedType(tag: DW_TAG_member, name: {Quote(fieldName)}, "
+                            + (fieldNode is null ? "" : $"baseType: {fieldNode}, ")
+                            + $"size: {Size(fieldType) * 8}, offset: {offset * 8})"
+                        ));
+                        offset += Size(fieldType);
+                    }
+
+                    return Node(
+                        $"!DICompositeType(tag: DW_TAG_structure_type, name: {Quote(structType.Name)}, "
+                        + $"size: {Size(structType) * 8}, elements: !{{{string.Join(", ", members)}}})"
+                    );
+                }
+
+                default:
+                    return null;
+            }
+        }
+
+        string Named(string name, string basic) =>
+            Node($"!DIDerivedType(tag: DW_TAG_typedef, name: {Quote(name)}, baseType: {Node(basic)})");
+
+        static string Quote(string text) =>
+            "\"" + text.Replace("\\", "\\5C", StringComparison.Ordinal).Replace("\"", "\\22", StringComparison.Ordinal) + "\"";
+
+        public string Metadata() {
+            var flags = new StringBuilder();
+            var dwarf = Node("!{i32 7, !\"Dwarf Version\", i32 4}");
+            var version = Node("!{i32 2, !\"Debug Info Version\", i32 3}");
+            flags.Append($"\n!llvm.dbg.cu = !{{{_unit}}}\n!llvm.module.flags = !{{{dwarf}, {version}}}\n\n");
+            foreach (var node in _nodes) {
+                flags.Append(node).Append('\n');
+            }
+
+            return flags.ToString();
+        }
     }
 
     const string Declarations = """
@@ -62,10 +198,13 @@ public sealed class LlvmEmitter {
                                 declare void @sable_print_f64(double)
                                 declare void @sable_print_bool(i1 zeroext)
                                 declare void @sable_trap(ptr) noreturn cold
+                                declare zeroext i1 @sable_string_equal(ptr, i64, ptr, i64)
 
                                 declare { i64, i1 } @llvm.sadd.with.overflow.i64(i64, i64)
                                 declare { i64, i1 } @llvm.ssub.with.overflow.i64(i64, i64)
                                 declare { i64, i1 } @llvm.smul.with.overflow.i64(i64, i64)
+                                declare void @llvm.dbg.declare(metadata, metadata, metadata)
+                                declare void @llvm.dbg.value(metadata, metadata, metadata)
 
                                 """;
 
@@ -78,11 +217,14 @@ public sealed class LlvmEmitter {
     }
 
     /// <summary>
-    ///     The LLVM symbol for a SIL function: its name behind a <c>$s</c>
-    ///     prefix, as Swift does, so that no Sable name can collide with a C
-    ///     one — <c>main</c> above all, or the runtime's own.
+    ///     The LLVM symbol for a SIL function: its name behind a <c>sable.</c>
+    ///     prefix, so that no Sable name can collide with a C one — <c>main</c>
+    ///     above all, or the runtime's own. Not Swift's <c>$s</c>: debuggers
+    ///     read that as a Swift symbol and try to demangle it.
     /// </summary>
-    static string Global(string name) => $"\"$s{name}\"";
+    static string Global(string name) => $"\"{SymbolPrefix}{name}\"";
+
+    public const string SymbolPrefix = "sable.";
 
     static string Type(SilType type) =>
         type switch {
@@ -92,7 +234,60 @@ public sealed class LlvmEmitter {
             _ when type == SilType.String => "{ ptr, i64 }",
             _ when type == SilType.Unit => "void",
             AddressType or FunctionType => "ptr",
+            StructType structType => $"{{ {string.Join(", ", structType.Fields.Select(static f => Type(f.Type)))} }}",
+            TupleType tuple => $"{{ {string.Join(", ", tuple.Elements.Select(Type))} }}",
+            EnumType enumType => PayloadWords(enumType) == 0 ? "{ i64 }" : $"{{ i64, [{PayloadWords(enumType)} x i64] }}",
             _ => throw new NotSupportedException($"no LLVM type for {type}"),
+        };
+
+    /// <summary>
+    ///     What a function returns at the LLVM level. A throwing one returns
+    ///     <c>{ i1 thrown, result, error }</c> — the discriminated return of
+    ///     docs/04 §2.2 — and the caller branches on the flag.
+    /// </summary>
+    static string ReturnType(FunctionType type) =>
+        type.Thrown is not { } thrown
+            ? Type(type.Result)
+            : type.Result == SilType.Unit
+                ? $"{{ i1, {Type(thrown)} }}"
+                : $"{{ i1, {Type(type.Result)}, {Type(thrown)} }}";
+
+    /// <summary>The 8-byte words an enum's payload area needs: room for its largest case.</summary>
+    static int PayloadWords(EnumType type) =>
+        (type.Cases.Where(static c => c.Payload is not null).Select(c => Size(c.Payload!)).DefaultIfEmpty(0).Max() + 7) / 8;
+
+    /// <summary>Bytes a value of the type occupies in memory, as LLVM lays it out.</summary>
+    static int Size(SilType type) {
+        return type switch {
+            _ when type == SilType.Bool => 1,
+            _ when type == SilType.Int || type == SilType.F64 => 8,
+            _ when type == SilType.String => 16,
+            AddressType or FunctionType => 8,
+            EnumType enumType => 8 + PayloadWords(enumType) * 8,
+            StructType structType => Aggregate(structType.Fields.Select(static f => f.Type)),
+            TupleType tuple => Aggregate(tuple.Elements),
+            _ => 0,
+        };
+
+        static int Aggregate(IEnumerable<SilType> parts) {
+            var offset = 0;
+            var largest = 1;
+            foreach (var part in parts) {
+                var align = Align(part);
+                largest = Math.Max(largest, align);
+                offset = (offset + align - 1) / align * align + Size(part);
+            }
+
+            return (offset + largest - 1) / largest * largest;
+        }
+    }
+
+    static int Align(SilType type) =>
+        type switch {
+            _ when type == SilType.Bool => 1,
+            StructType structType => structType.Fields.Select(static f => Align(f.Type)).DefaultIfEmpty(1).Max(),
+            TupleType tuple => tuple.Elements.Select(Align).DefaultIfEmpty(1).Max(),
+            _ => 8,
         };
 
     /// <summary>A private constant holding a string's UTF-8 bytes; the same text shares one.</summary>
@@ -153,12 +348,34 @@ public sealed class LlvmEmitter {
         /// <summary>Blocks created while writing: edge blocks and trap blocks.</summary>
         readonly StringBuilder _extra = new();
 
+        /// <summary>Scratch slots, allocated once in the entry block so that a loop does not grow the stack.</summary>
+        readonly StringBuilder _entryAllocas = new();
+
+        string Scratch(string type) {
+            var name = Fresh();
+            _entryAllocas.Append("  ").Append(name).Append(" = alloca ").Append(type).Append('\n');
+            return name;
+        }
+
         StringBuilder _out = null!;
         string _currentLabel = "";
         int _temporaries;
         int _extraBlocks;
 
+        /// <summary>The function's subprogram, when there is debug information.</summary>
+        string? _scope;
+
+        /// <summary>The <c>!dbg</c> attachment for what is being written now.</summary>
+        string _dbg = "";
+
+        DebugInfo? Debug => module._debug;
+
         public string Emit() {
+            if (Debug is not null && function.SourceFile is not null) {
+                _scope = Debug.Subprogram(function);
+                _dbg = $", !dbg {Debug.Location(function.Line, 1, _scope)}";
+            }
+
             for (var i = 0; i < function.Blocks.Count; i++) {
                 _labels[function.Blocks[i]] = $"bb{i}";
             }
@@ -178,7 +395,9 @@ public sealed class LlvmEmitter {
                 }
             }
 
-            foreach (var block in function.Blocks) {
+            // Written in reverse postorder, where every definition comes before
+            // its uses; printed in the function's own order.
+            foreach (var block in ReversePostorder(function)) {
                 _out = new StringBuilder();
                 _bodies[block] = _out;
                 _currentLabel = _labels[block];
@@ -187,12 +406,38 @@ public sealed class LlvmEmitter {
                 }
             }
 
+            foreach (var block in function.Blocks) {
+                _bodies.TryAdd(block, new StringBuilder("  unreachable\n"));
+            }
+
             var text = new StringBuilder();
-            text.Append("define ").Append(Type(function.Type.Result)).Append(" @").Append(Global(function.Name))
-                .Append('(').Append(string.Join(", ", parameters)).Append(") {\n");
+            text.Append("define ").Append(ReturnType(function.Type)).Append(" @").Append(Global(function.Name))
+                .Append('(').Append(string.Join(", ", parameters)).Append(')');
+            if (_scope is not null) {
+                text.Append(" !dbg ").Append(_scope);
+            }
+
+            text.Append(" {\n");
+
+            // The parameters, for the debugger: their values, as they came in.
+            if (_scope is not null && Debug is not null) {
+                var file = Debug.File(function.SourceFile!);
+                var entryLocation = $", !dbg {Debug.Location(function.Line, 1, _scope)}";
+                for (var i = 0; i < function.Entry.Arguments.Count && i < function.ParameterNames.Count; i++) {
+                    var argument = function.Entry.Arguments[i];
+                    var variable = Debug.Variable(function.ParameterNames[i], _scope, file, function.Line, argument.Type, i + 1);
+                    _entryAllocas.Append(
+                        $"  call void @llvm.dbg.value(metadata {Type(argument.Type)} {_names[argument]}, metadata {variable}, metadata !DIExpression()){entryLocation}\n"
+                    );
+                }
+            }
 
             foreach (var block in function.Blocks) {
                 text.Append(_labels[block]).Append(":\n");
+                if (block == function.Entry) {
+                    text.Append(_entryAllocas);
+                }
+
                 foreach (var argument in block.Arguments) {
                     if (!_incoming.TryGetValue(argument, out var incoming)) {
                         continue;
@@ -213,12 +458,38 @@ public sealed class LlvmEmitter {
 
         string Fresh() => $"%t{_temporaries++}";
 
+        static List<SilBlock> ReversePostorder(SilFunction function) {
+            var visited = new HashSet<SilBlock>();
+            var postorder = new List<SilBlock>();
+
+            // Iterative, so that a long chain of blocks cannot overflow the stack.
+            var stack = new Stack<(SilBlock Block, IEnumerator<SilBlock> Successors)>();
+            visited.Add(function.Entry);
+            stack.Push((function.Entry, function.Entry.Successors.GetEnumerator()));
+            while (stack.Count > 0) {
+                var (block, successors) = stack.Peek();
+                if (successors.MoveNext()) {
+                    if (visited.Add(successors.Current)) {
+                        stack.Push((successors.Current, successors.Current.Successors.GetEnumerator()));
+                    }
+
+                    continue;
+                }
+
+                stack.Pop();
+                postorder.Add(block);
+            }
+
+            postorder.Reverse();
+            return postorder;
+        }
+
         string Name(SilValue value) =>
             _names.TryGetValue(value, out var name)
                 ? name
                 : throw new InvalidOperationException("a value used before it was written");
 
-        void Line(string text) => _out.Append("  ").Append(text).Append('\n');
+        void Line(string text) => _out.Append("  ").Append(text).Append(_dbg).Append('\n');
 
         /// <summary>Starts a new LLVM block inside the current SIL block: after a check, the code that runs when it passes.</summary>
         void Continue(string label) {
@@ -234,12 +505,16 @@ public sealed class LlvmEmitter {
             var ok = NewLabel("ok");
             Line($"br i1 {condition}, label %{trap}, label %{ok}");
             _extra.Append(trap).Append(":\n")
-                .Append("  call void @sable_trap(ptr ").Append(module.TrapMessage(message)).Append(")\n")
+                .Append("  call void @sable_trap(ptr ").Append(module.TrapMessage(message)).Append(')').Append(_dbg).Append('\n')
                 .Append("  unreachable\n");
             Continue(ok);
         }
 
         void Instruction(SilInstruction instruction) {
+            if (_scope is not null && instruction.Location is { } location) {
+                _dbg = $", !dbg {Debug!.Location(location.Line, location.Column, _scope)}";
+            }
+
             switch (instruction) {
                 case IntegerLiteralInst literal:
                     _names[literal] = literal.Type == SilType.Bool
@@ -266,6 +541,14 @@ public sealed class LlvmEmitter {
                     var name = Fresh();
                     _names[alloc] = name;
                     Line($"{name} = alloca {Type(alloc.ElementType)}");
+
+                    // A source variable lives in this slot for the whole function.
+                    if (_scope is not null && alloc.VariableName is { } variable) {
+                        var line = alloc.Location?.Line ?? function.Line;
+                        var node = Debug!.Variable(variable, _scope, Debug.File(function.SourceFile!), line, alloc.ElementType);
+                        Line($"call void @llvm.dbg.declare(metadata ptr {name}, metadata {node}, metadata !DIExpression())");
+                    }
+
                     return;
                 }
 
@@ -312,6 +595,14 @@ public sealed class LlvmEmitter {
                     return;
                 }
 
+                case ReturnInst returnInst when function.Type.Thrown is not null:
+                    Line($"ret {ReturnType(function.Type)} {Discriminated(false, returnInst.Value)}");
+                    return;
+
+                case ThrowInst throwInst:
+                    Line($"ret {ReturnType(function.Type)} {Discriminated(true, throwInst.Error)}");
+                    return;
+
                 case ReturnInst { Value: { } value }:
                     Line($"ret {Type(value.Type)} {Name(value)}");
                     return;
@@ -320,8 +611,71 @@ public sealed class LlvmEmitter {
                     Line("ret void");
                     return;
 
+                case StructInst or TupleInst:
+                    _names[instruction] = Aggregate(Type(instruction.Type), instruction.Operands);
+                    return;
+
+                case StructExtractInst extract: {
+                    var name = Fresh();
+                    _names[extract] = name;
+                    Line($"{name} = extractvalue {Type(extract.Value.Type)} {Name(extract.Value)}, {extract.Field}");
+                    return;
+                }
+
+                case TupleExtractInst extract: {
+                    var name = Fresh();
+                    _names[extract] = name;
+                    Line($"{name} = extractvalue {Type(extract.Value.Type)} {Name(extract.Value)}, {extract.Element}");
+                    return;
+                }
+
+                case StructElementAddrInst element: {
+                    var name = Fresh();
+                    _names[element] = name;
+                    var aggregate = Type(((AddressType)element.Address.Type).Pointee);
+                    Line($"{name} = getelementptr inbounds {aggregate}, ptr {Name(element.Address)}, i32 0, i32 {element.Field}");
+                    return;
+                }
+
+                case TupleElementAddrInst element: {
+                    var name = Fresh();
+                    _names[element] = name;
+                    var aggregate = Type(((AddressType)element.Address.Type).Pointee);
+                    Line($"{name} = getelementptr inbounds {aggregate}, ptr {Name(element.Address)}, i32 0, i32 {element.Element}");
+                    return;
+                }
+
+                case EnumInst enumInst: {
+                    var type = Type(enumInst.Type);
+                    var slot = Scratch(type);
+                    Line($"store {type} zeroinitializer, ptr {slot}");
+                    Line($"store i64 {enumInst.Case}, ptr {slot}");
+                    if (enumInst.Payload is { } payload) {
+                        var area = Fresh();
+                        Line($"{area} = getelementptr inbounds {type}, ptr {slot}, i32 0, i32 1");
+                        Line($"store {Type(payload.Type)} {Name(payload)}, ptr {area}");
+                    }
+
+                    var name = Fresh();
+                    _names[enumInst] = name;
+                    Line($"{name} = load {type}, ptr {slot}");
+                    return;
+                }
+
+                case SwitchEnumInst switchEnum:
+                    SwitchEnum(switchEnum);
+                    return;
+
+                case TryApplyInst tryApply:
+                    TryApply(tryApply);
+                    return;
+
                 case UnreachableInst:
                     Line("unreachable");
+                    return;
+
+                case CondFailInst condFail:
+                    TrapIf(Name(condFail.Condition), condFail.Message);
                     return;
 
                 default:
@@ -350,6 +704,111 @@ public sealed class LlvmEmitter {
             }
 
             return split ? from : label;
+        }
+
+        /// <summary>An aggregate built by inserting each part into the previous, from poison.</summary>
+        string Aggregate(string type, IReadOnlyList<SilValue> parts) {
+            if (parts.Count == 0) {
+                return "zeroinitializer";
+            }
+
+            var current = "poison";
+            for (var i = 0; i < parts.Count; i++) {
+                var next = Fresh();
+                Line($"{next} = insertvalue {type} {current}, {Type(parts[i].Type)} {Name(parts[i])}, {i}");
+                current = next;
+            }
+
+            return current;
+        }
+
+        /// <summary>A throwing function's return value: the flag, and the result or the error.</summary>
+        string Discriminated(bool thrown, SilValue? value) {
+            var type = ReturnType(function.Type);
+            var withResult = function.Type.Result != SilType.Unit;
+            var flag = Fresh();
+            Line($"{flag} = insertvalue {type} poison, i1 {(thrown ? "true" : "false")}, 0");
+            if (value is null) {
+                return flag;
+            }
+
+            var index = thrown ? (withResult ? 2 : 1) : 1;
+            var filled = Fresh();
+            Line($"{filled} = insertvalue {type} {flag}, {Type(value.Type)} {Name(value)}, {index}");
+            return filled;
+        }
+
+        void SwitchEnum(SwitchEnumInst switchEnum) {
+            var enumType = (EnumType)switchEnum.Value.Type;
+            var type = Type(enumType);
+            var value = Name(switchEnum.Value);
+
+            var tag = Fresh();
+            Line($"{tag} = extractvalue {type} {value}, 0");
+
+            string fallback;
+            if (switchEnum.Default is { } defaultBlock) {
+                fallback = _labels[defaultBlock];
+            } else {
+                // Every case is listed, so this cannot be taken.
+                fallback = NewLabel("nocase");
+                _extra.Append(fallback).Append(":\n  unreachable\n");
+            }
+
+            var arms = new List<string>();
+            foreach (var (caseIndex, target) in switchEnum.Cases) {
+                if (enumType.Cases[caseIndex].Payload is not { } payload) {
+                    arms.Add($"i64 {caseIndex}, label %{_labels[target]}");
+                    continue;
+                }
+
+                // An edge of its own, which unpacks the payload for the target.
+                var edge = NewLabel("case");
+                var slot = Scratch(type);
+                var area = Fresh();
+                var unpacked = Fresh();
+                _extra.Append(edge).Append(":\n")
+                    .Append($"  store {type} {value}, ptr {slot}\n")
+                    .Append($"  {area} = getelementptr inbounds {type}, ptr {slot}, i32 0, i32 1\n")
+                    .Append($"  {unpacked} = load {Type(payload)}, ptr {area}\n")
+                    .Append($"  br label %{_labels[target]}\n");
+                _incoming[target.Arguments[0]].Add((unpacked, edge));
+                arms.Add($"i64 {caseIndex}, label %{edge}");
+            }
+
+            Line($"switch i64 {tag}, label %{fallback} [ {string.Join(" ", arms)} ]");
+        }
+
+        void TryApply(TryApplyInst tryApply) {
+            var callee = (FunctionType)tryApply.Callee.Type;
+            var type = ReturnType(callee);
+            var arguments = string.Join(", ", tryApply.Arguments.Select(a => $"{Type(a.Type)} {Name(a)}"));
+
+            var result = Fresh();
+            var flag = Fresh();
+            Line($"{result} = call {type} {Name(tryApply.Callee)}({arguments})");
+            Line($"{flag} = extractvalue {type} {result}, 0");
+
+            var withResult = callee.Result != SilType.Unit;
+
+            var normal = NewLabel("normal");
+            _extra.Append(normal).Append(":\n");
+            if (withResult) {
+                var value = Fresh();
+                _extra.Append($"  {value} = extractvalue {type} {result}, 1\n");
+                _incoming[tryApply.Normal.Arguments[0]].Add((value, normal));
+            }
+
+            _extra.Append($"  br label %{_labels[tryApply.Normal]}\n");
+
+            var failed = NewLabel("error");
+            var error = Fresh();
+            _extra.Append(failed).Append(":\n")
+                .Append($"  {error} = extractvalue {type} {result}, {(withResult ? 2 : 1)}\n")
+                .Append($"  br label %{_labels[tryApply.Error]}\n");
+            _incoming[tryApply.Error.Arguments[0]].Add((error, failed));
+
+            Line($"br i1 {flag}, label %{failed}, label %{normal}");
         }
 
         void Builtin(BuiltinInst builtin) {
@@ -429,6 +888,44 @@ public sealed class LlvmEmitter {
                     Line($"{pointer} = extractvalue {{ ptr, i64 }} {operands[0]}, 0");
                     Line($"{length} = extractvalue {{ ptr, i64 }} {operands[0]}, 1");
                     Line($"call void @sable_print_string(ptr {pointer}, i64 {length})");
+                    return;
+                }
+
+                case "cmp_eq_String" or "cmp_ne_String": {
+                    var parts = new List<string>();
+                    foreach (var operand in operands) {
+                        var pointer = Fresh();
+                        var length = Fresh();
+                        Line($"{pointer} = extractvalue {{ ptr, i64 }} {operand}, 0");
+                        Line($"{length} = extractvalue {{ ptr, i64 }} {operand}, 1");
+                        parts.Add($"ptr {pointer}, i64 {length}");
+                    }
+
+                    var equal = builtin.Name.StartsWith("cmp_eq", StringComparison.Ordinal) ? Result() : Fresh();
+                    Line($"{equal} = call zeroext i1 @sable_string_equal({string.Join(", ", parts)})");
+                    if (builtin.Name.StartsWith("cmp_ne", StringComparison.Ordinal)) {
+                        Line($"{Result()} = xor i1 {equal}, true");
+                    }
+
+                    return;
+                }
+
+                case "convert_Int_F64":
+                    Line($"{Result()} = sitofp i64 {operands[0]} to double");
+                    return;
+
+                case "convert_F64_Int": {
+                    // Out of range (or NaN) has no Int; fptosi would give poison.
+                    var low = Fresh();
+                    var high = Fresh();
+                    var inside = Fresh();
+                    var outside = Fresh();
+                    Line($"{low} = fcmp oge double {operands[0]}, -9.2233720368547758e18");
+                    Line($"{high} = fcmp olt double {operands[0]}, 9.2233720368547758e18");
+                    Line($"{inside} = and i1 {low}, {high}");
+                    Line($"{outside} = xor i1 {inside}, true");
+                    TrapIf(outside, "F64 does not fit in Int");
+                    Line($"{Result()} = fptosi double {operands[0]} to i64");
                     return;
                 }
 

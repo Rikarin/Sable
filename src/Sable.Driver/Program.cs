@@ -4,8 +4,8 @@ using Sable.Driver;
 using Sable.SIL;
 using Sable.Syntax;
 
-// sable build <file.sab> [-o <output>] [--emit sil|llvm-ir] [-O0]
-// sable run   <file.sab> [-O0]
+// sable build <file.sab> [-o <output>] [--emit sil|llvm-ir] [-O0] [-g]
+// sable run   <file.sab> [-O0] [-g]
 //
 // The single toolchain binary of docs/05, as far as Phase 2 takes it:
 // compile one file to a native executable, or compile and run it.
@@ -19,12 +19,14 @@ string? input = null;
 string? output = null;
 string? emit = null;
 var optimise = true;
+var debug = false;
 
 for (var i = 1; i < args.Length; i++) {
     switch (args[i]) {
         case "-o" when i + 1 < args.Length: output = args[++i]; break;
         case "--emit" when i + 1 < args.Length: emit = args[++i]; break;
         case "-O0": optimise = false; break;
+        case "-g": debug = true; break;
         default:
             if (input is not null || args[i].StartsWith('-')) {
                 return Usage(2);
@@ -45,7 +47,7 @@ if (!File.Exists(input)) {
 }
 
 var source = new SourceText(File.ReadAllText(input), Path.GetFileName(input));
-var result = Pipeline.Compile(source);
+var result = Pipeline.Compile(source, debug ? Path.GetDirectoryName(Path.GetFullPath(input)) : null);
 
 // --emit shows a stage's output, even when a later stage could not run.
 if (emit == "sil" && result.Sil is { } sil) {
@@ -73,7 +75,7 @@ var executable = command == "run"
     ? Path.Combine(Path.GetTempPath(), $"sable-run-{Guid.NewGuid():N}")
     : output ?? Path.GetFileNameWithoutExtension(input);
 
-var build = NativeBuild.Build(result.LlvmIr!, executable, optimise);
+var build = NativeBuild.Build(result.LlvmIr!, executable, optimise, debug);
 if (!build.Succeeded) {
     Console.Error.WriteLine("internal error: the native build failed:");
     Console.Error.Write(build.Output);
@@ -101,13 +103,14 @@ static void Report(IReadOnlyList<string> errors) {
 
 static int Usage(int code) {
     var writer = code == 0 ? Console.Out : Console.Error;
-    writer.WriteLine("usage: sable build <file.sab> [-o <output>] [--emit sil|llvm-ir] [-O0]");
-    writer.WriteLine("       sable run   <file.sab> [-O0]");
+    writer.WriteLine("usage: sable build <file.sab> [-o <output>] [--emit sil|llvm-ir] [-O0] [-g]");
+    writer.WriteLine("       sable run   <file.sab> [-O0] [-g]");
     writer.WriteLine();
     writer.WriteLine("  build              compile to a native executable (default name: the file's)");
     writer.WriteLine("  run                compile, run, and exit with the program's exit code");
     writer.WriteLine("  --emit sil         print the verified SIL instead of building");
     writer.WriteLine("  --emit llvm-ir     print the LLVM IR instead of building");
     writer.WriteLine("  -O0                build without LLVM's optimiser");
+    writer.WriteLine("  -g                 build with debug information, for lldb");
     return code;
 }

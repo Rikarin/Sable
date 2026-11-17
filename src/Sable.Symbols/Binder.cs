@@ -1449,7 +1449,22 @@ public sealed class Binder
             return new BoundError(syntax, receiver);
         }
 
-        var instanceMembers = found.Members.Where(m => !IsStaticMember(m)).ToList();
+        // A subscript is reached by indexing, never by its name, which is a
+        // keyword anyway.
+        var instanceMembers = found.Members
+            .Where(m => m is not FunctionSymbol { FunctionKind: FunctionKind.Subscript })
+            .Where(m => !IsStaticMember(m))
+            .ToList();
+
+        if (instanceMembers.Count == 0
+            && found.Members.All(m => m is FunctionSymbol { FunctionKind: FunctionKind.Subscript }))
+        {
+            _diagnostics.Error(ErrorCode.ERR_NameNotFound, syntax.Name.Span,
+                $"'{found.Owner.ToDisplayString()}' has no member named '{name}'; "
+                + "a subscript is reached by indexing");
+            return new BoundError(syntax, receiver);
+        }
+
         if (instanceMembers.Count == 0)
         {
             _diagnostics.Error(ErrorCode.ERR_MemberAccessMismatch, syntax.Name.Span,

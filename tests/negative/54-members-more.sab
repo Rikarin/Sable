@@ -1,0 +1,93 @@
+module Negative.MembersMore
+
+public protocol Named { fn name() -> String }
+
+public struct Counter {
+    public var n: Int
+
+    public var doubled: Int {
+        get => n * 2
+    }
+
+    public var tracked: Int {
+        get => n
+        set { n = newValue }
+    }
+
+    public static var shared: Counter {
+        get => Counter { n: 0 }
+    }
+
+    public static fn zero() -> Counter {
+        return Counter { n: 0 }
+    }
+
+    public mutating fn bump() {
+        n = n + 1
+    }
+
+    public fn peek() -> Int {
+        return n
+    }
+
+    subscript(offset: Int) -> Int {
+        get => n + offset
+    }
+}
+
+fn aGetterHasNoSetter(_ c: Counter) {
+    var copy = c
+    copy.doubled = 1                    //! S3010
+}
+
+fn aTrackedPropertyHasOne(_ c: Counter) {
+    var copy = c
+    copy.tracked = 1
+}
+
+fn aStaticPropertyIsOnTheType() -> Counter {
+    return Counter.shared
+}
+
+fn aStaticPropertyIsNotOnTheValue(_ c: Counter) -> Counter {
+    return c.shared                     //! S3039 is a static member
+}
+
+fn aComputedPropertyIsNotAMethod(_ c: Counter) -> Int {
+    return c.doubled()                  //! S3006 is not callable
+}
+
+fn aMethodIsNotAProperty(_ c: Counter) -> Int {
+    return c.peek                       //! S3004
+}
+
+fn aSubscriptIsNotAMethod(_ c: Counter) -> Int {
+    return c.subscript(1)               //! S2002 reached by indexing
+}
+
+fn aSubscriptIsIndexing(_ c: Counter) -> Int {
+    return c[1]
+}
+
+fn aMutatingMethodThroughAGetter(_ c: Counter) {
+    var copy = c
+    copy.bump()
+}
+
+fn selfInAStaticMember() -> Int {
+    return Counter.staticSelf()
+}
+
+public extension Counter {
+    public static fn staticSelf() -> Int {
+        return 0
+    }
+}
+
+fn anExtensionStaticIsOnTheType() -> Int {
+    return Counter.staticSelf()
+}
+
+fn anExtensionStaticIsNotOnTheValue(_ c: Counter) -> Int {
+    return c.staticSelf()               //! S3039 is a static member
+}

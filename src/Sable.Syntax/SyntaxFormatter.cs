@@ -75,8 +75,16 @@ public static class SyntaxFormatter {
         public void WriteNode(SyntaxNode node, SyntaxKind parentKind) {
             var kind = node.Kind;
 
-            if (StartsOnItsOwnLine(node, parentKind) && !InsideInlineBrace) {
+            var startsLine = StartsOnItsOwnLine(node, parentKind);
+            if (startsLine && !InsideInlineBrace) {
                 BreakLine(BlankLinesBefore(node));
+            }
+
+            // A line the formatter starts is a unit for kept breaks: a
+            // continuation inside it is indented until it ends.
+            var line = startsLine ? new Group(SyntaxKind.None, _tokens) : null;
+            if (line is not null) {
+                _groups.Push(line);
             }
 
             foreach (var child in node.ChildNodesAndTokens()) {
@@ -84,6 +92,17 @@ public static class SyntaxFormatter {
                     WriteToken(child.AsToken(), node);
                 } else {
                     WriteNode(child.AsNode()!, kind);
+                }
+            }
+
+            if (line is not null) {
+                // Whatever a malformed tree left open closes with its line.
+                while (_groups.Count > 0) {
+                    var open = _groups.Pop();
+                    Release(open);
+                    if (ReferenceEquals(open, line)) {
+                        break;
+                    }
                 }
             }
 
@@ -100,7 +119,25 @@ public static class SyntaxFormatter {
                 return;
             }
 
+            // A line break the author made inside an expression, where the
+            // formatter would not make one, is kept: gofmt's rule, since
+            // there is no line width here to decide it instead.
+            var brokenBefore = _started && (_previousEndedLine || token.LeadingTrivia.Any(SyntaxKind.NewLineTrivia));
+            var closesGroup = Closer(token.Kind) && _groups.Count > 0 && _groups.Peek().Closer == token.Kind
+                && (token.Kind != SyntaxKind.CloseBraceToken || (_braces.Count > 0 && !_braces.Peek().OpensBody));
+            var closesBody = token.Kind == SyntaxKind.CloseBraceToken && _braces.Count > 0 && _braces.Peek().OpensBody;
+            if (brokenBefore && !_structuralBreak && !closesGroup && !closesBody && !ContinuesTheLineBefore(token.Kind, parentKind)) {
+                KeepBreak(token.Kind);
+            }
+
             WriteTrivia(token.LeadingTrivia, true);
+
+            if (closesGroup) {
+                Release(_groups.Pop());
+                if (brokenBefore && !_structuralBreak) {
+                    BreakLine(0, structural: false);
+                }
+            }
 
             if (token.Kind == SyntaxKind.CloseBraceToken && _braces.Count > 0) {
                 var brace = _braces.Pop();
@@ -128,20 +165,43 @@ public static class SyntaxFormatter {
             }
 
             Write(token.Text);
+            _tokens++;
 
             _previousKind = token.Kind;
             _previousParent = parentKind;
 
             // Trailing trivia first, so a comment after '{' stays on its line.
+            // The mark is taken before it: a body holding only a comment is
+            // not empty, and its '}' must not land after a line comment.
+            var mark = _builder.Length;
             WriteTrivia(token.TrailingTrivia, false);
 
             if (token.Kind == SyntaxKind.OpenBraceToken) {
                 var opensBody = OpensABody(parent);
-                _braces.Push(new(opensBody, _builder.Length));
+                _braces.Push(new(opensBody, mark));
                 if (opensBody) {
+                    // A body is indented from its line, not from a
+                    // continuation of it: 'if a &&\n    b {' closes at 'if'.
+                    if (_groups.Count > 0 && _groups.Peek() is { Continued: true, ContinuedAt: not SyntaxKind.CatchKeyword } continued) {
+                        continued.Continued = false;
+                        continued.Indents--;
+                        Outdent();
+                    }
+
                     Indent();
-                    BreakLine(0);
+
+                    // '{ a, b in' keeps its header on the brace's line; the
+                    // body starts after 'in'.
+                    if (parent is not BraceClosureExpressionSyntax { Header: not null }) {
+                        BreakLine(0);
+                    }
+                } else {
+                    _groups.Push(new(SyntaxKind.CloseBraceToken, _tokens));
                 }
+            } else if (token.Kind == SyntaxKind.InKeyword && parent is ClosureHeaderSyntax { Parent: BraceClosureExpressionSyntax closure } && OpensABody(closure)) {
+                BreakLine(0);
+            } else if (token.Kind is SyntaxKind.OpenParenToken or SyntaxKind.OpenBracketToken) {
+                _groups.Push(new(token.Kind == SyntaxKind.OpenParenToken ? SyntaxKind.CloseParenToken : SyntaxKind.CloseBracketToken, _tokens));
             }
 
             _previousEndedLine = token.TrailingTrivia.Any(SyntaxKind.NewLineTrivia);
@@ -162,10 +222,15 @@ public static class SyntaxFormatter {
                 return;
             }
 
-            var sawNewLine = false;
+            // When the token before ended its line, the first newline here
+            // already makes a blank one.
+            var sawNewLine = leading && _previousEndedLine;
             var blankLines = 0;
+            var wroteLine = false;
 
-            foreach (var item in trivia) {
+            for (var index = 0; index < trivia.Count; index++) {
+                var item = trivia[index];
+                var previous = index > 0 ? trivia[index - 1].Kind : SyntaxKind.None;
                 switch (item.Kind) {
                     case SyntaxKind.NewLineTrivia:
                         if (sawNewLine) {
@@ -184,13 +249,14 @@ public static class SyntaxFormatter {
                     case SyntaxKind.ShebangTrivia:
                     case SyntaxKind.DirectiveTrivia:
                         if (leading && (sawNewLine || !_started)) {
-                            BreakLine(Math.Min(blankLines, 1));
+                            BreakLine(Math.Min(blankLines, 1), structural: false);
                         } else {
                             _pendingSpace = true;
                         }
 
                         Write(item.Text.TrimEnd());
-                        BreakLine(0);
+                        BreakLine(0, structural: false);
+                        wroteLine = true;
 
                         // The newline that ends this comment is its own, not a
                         // blank line before whatever follows.
@@ -200,30 +266,55 @@ public static class SyntaxFormatter {
 
                     case SyntaxKind.BlockCommentTrivia:
                         if (leading && sawNewLine) {
-                            BreakLine(Math.Min(blankLines, 1));
+                            BreakLine(Math.Min(blankLines, 1), structural: false);
                         } else {
                             _pendingSpace = true;
                         }
 
                         Write(item.Text);
                         if (leading && sawNewLine) {
-                            BreakLine(0);
+                            BreakLine(0, structural: false);
+                            wroteLine = true;
                         }
 
                         blankLines = 0;
                         continue;
 
-                    case SyntaxKind.SkippedTokensTrivia:
                     case SyntaxKind.DisabledTextTrivia:
-                        // Text the parser could not use, and inactive regions:
-                        // emitted verbatim so nothing is ever lost.
+                        // An inactive region, a line at a time, verbatim and
+                        // with its own indentation. A line with nothing on it
+                        // either ends the directive before it or is a blank
+                        // line the author left.
+                        if (item.Text.AsSpan().Trim().IsEmpty) {
+                            if (previous != SyntaxKind.DirectiveTrivia && _started) {
+                                _pendingLines++;
+                            }
+                        } else {
+                            BreakLine(0, structural: false);
+                            WriteVerbatim(item.Text, indent: false);
+                        }
+
+                        wroteLine = true;
+
+                        sawNewLine = false;
+                        blankLines = 0;
+                        continue;
+
+                    case SyntaxKind.SkippedTokensTrivia:
+                        // Text the parser could not use: emitted verbatim so
+                        // nothing is ever lost.
                         if (leading) {
-                            BreakLine(0);
+                            BreakLine(0, structural: false);
                         }
 
                         WriteVerbatim(item.Text);
                         continue;
                 }
+            }
+
+            // A blank line between a comment and what it precedes stays.
+            if (leading && wroteLine && blankLines > 0) {
+                BreakLine(1, structural: false);
             }
         }
 
@@ -239,21 +330,23 @@ public static class SyntaxFormatter {
             Flush();
             _builder.Append(text);
             _started = true;
+            _structuralBreak = false;
         }
 
-        void WriteVerbatim(string text) {
+        void WriteVerbatim(string text, bool indent = true) {
             if (text.Length == 0) {
                 return;
             }
 
             _pendingSpace = false;
-            Flush();
+            Flush(indent);
             _builder.Append(text.TrimEnd('\n', '\r'));
             _started = true;
-            BreakLine(0);
+            _structuralBreak = false;
+            BreakLine(0, structural: false);
         }
 
-        void Flush() {
+        void Flush(bool indent = true) {
             if (_pendingLines > 0) {
                 for (var i = 0; i < _pendingLines; i++) {
                     _builder.Append('\n');
@@ -262,7 +355,7 @@ public static class SyntaxFormatter {
                 _pendingLines = 0;
                 _pendingSpace = false;
 
-                for (var i = 0; i < _indent; i++) {
+                for (var i = 0; indent && i < _indent; i++) {
                     _builder.Append(IndentUnit);
                 }
             } else if (_pendingSpace) {
@@ -274,13 +367,81 @@ public static class SyntaxFormatter {
             }
         }
 
-        void BreakLine(int blankLines) {
+        /// <param name="structural">
+        ///     False for a break only trivia or the author asked for; a
+        ///     structural one — a statement's, a member's, a body's — is the
+        ///     formatter's own, and a kept break never adds to it.
+        /// </param>
+        void BreakLine(int blankLines, bool structural = true) {
             if (!_started) {
                 return;
             }
 
             _pendingSpace = false;
             _pendingLines = Math.Max(_pendingLines, 1 + blankLines);
+            _structuralBreak |= structural;
+        }
+
+        /// <summary>True when the break about to be written is the formatter's own.</summary>
+        bool _structuralBreak;
+
+        /// <summary>Tokens written so far: a group knows whether anything follows its opener.</summary>
+        int _tokens;
+
+        /// <summary>
+        ///     An open bracket, or a line the formatter started, and the
+        ///     indentation the author's breaks inside it have added.
+        /// </summary>
+        private sealed class Group(SyntaxKind closer, int openedAt) {
+            /// <summary>The token that closes it; none for a line.</summary>
+            public SyntaxKind Closer { get; } = closer;
+
+            /// <summary>The token count when it opened: a break right after the opener breaks the group.</summary>
+            public int OpenedAt { get; } = openedAt;
+
+            /// <summary>Broken right after its opener: one item per line, indented.</summary>
+            public bool Broken { get; set; }
+
+            /// <summary>Broken somewhere in the middle: the rest of it indented once.</summary>
+            public bool Continued { get; set; }
+
+            /// <summary>The token the continuation began at.</summary>
+            public SyntaxKind ContinuedAt { get; set; }
+
+            public int Indents { get; set; }
+        }
+
+        readonly Stack<Group> _groups = new();
+
+        static bool Closer(SyntaxKind kind) =>
+            kind is SyntaxKind.CloseParenToken or SyntaxKind.CloseBracketToken or SyntaxKind.CloseBraceToken;
+
+        /// <summary>Keeps a break the author made, indenting what follows it.</summary>
+        void KeepBreak(SyntaxKind at) {
+            if (_groups.Count > 0) {
+                var group = _groups.Peek();
+                if (group.Closer != SyntaxKind.None && !group.Broken && _tokens == group.OpenedAt) {
+                    group.Broken = true;
+                    group.Indents++;
+                    Indent();
+                } else if (!group.Broken && !group.Continued) {
+                    group.Continued = true;
+                    group.ContinuedAt = at;
+                    group.Indents++;
+                    Indent();
+                }
+            }
+
+            BreakLine(0, structural: false);
+        }
+
+        /// <summary>Takes back the indentation a group added, as it closes.</summary>
+        void Release(Group group) {
+            for (var i = 0; i < group.Indents; i++) {
+                Outdent();
+            }
+
+            group.Indents = 0;
         }
 
         void Indent() => _indent++;
@@ -332,7 +493,8 @@ public static class SyntaxFormatter {
             foreach (var trivia in first.LeadingTrivia) {
                 if (trivia.Kind == SyntaxKind.NewLineTrivia) {
                     newLines++;
-                } else if (trivia.IsComment) {
+                } else if (trivia.IsComment || trivia.Kind is SyntaxKind.DirectiveTrivia or SyntaxKind.DisabledTextTrivia) {
+                    // Whatever comes after that is the trivia's to place.
                     break;
                 }
             }
@@ -341,7 +503,8 @@ public static class SyntaxFormatter {
         }
 
         static bool StartsOnItsOwnLine(SyntaxNode node, SyntaxKind parentKind) =>
-            (node is StatementSyntax && node.Kind != SyntaxKind.Block)
+            // 'else if' is one line: the 'if' continues the 'else'.
+            (node is StatementSyntax && node.Kind != SyntaxKind.Block && parentKind is not (SyntaxKind.ElseClause or SyntaxKind.LabeledStatement))
             || IsMember(node)
             || node.Kind is SyntaxKind.ImportDeclaration
                 or SyntaxKind.ModuleDeclaration
@@ -370,11 +533,13 @@ public static class SyntaxFormatter {
         /// <remarks>
         ///     A short accessor list or a one-expression closure reads better on
         ///     one line: <c>var x: Int { get }</c> and <c>xs.filter { $0 &gt; 1 }</c>.
-        ///     Anything holding statements gets the indented form.
+        ///     Anything holding statements gets the indented form — except a
+        ///     declaration's body of one simple statement that its author wrote
+        ///     on one line, as gofmt keeps it: <c>fn hash() -&gt; Int { return self }</c>.
         /// </remarks>
         static bool OpensABody(SyntaxNode? parent) =>
             parent switch {
-                BlockSyntax => true,
+                BlockSyntax block => !IsOneLineBody(block),
                 StructDeclarationSyntax
                     or ClassDeclarationSyntax
                     or ActorDeclarationSyntax
@@ -384,7 +549,8 @@ public static class SyntaxFormatter {
                     or ExtensionDeclarationSyntax => true,
                 MatchExpressionSyntax or SwitchStatementSyntax => true,
 
-                AccessorListSyntax accessors => accessors.Accessors.Any(static a => a.Body is not null),
+                AccessorListSyntax accessors => accessors.Accessors.Any(static a => a.Body is not null || a.ExpressionBody is not null)
+                    && !(WrittenOnOneLine(accessors) && accessors.Accessors.All(static a => a.Body is null || IsOneLineBody(a.Body))),
 
                 BraceClosureExpressionSyntax closure =>
                     closure.Header is not null
@@ -394,6 +560,47 @@ public static class SyntaxFormatter {
                 _ => false,
             };
 
+        /// <summary>
+        ///     A function's, initialiser's, operator's or accessor's body, or a
+        ///     block inside an expression or a match arm, or a guard's exit, of
+        ///     one statement with no block of its own, written on one line:
+        ///     <c>guard let x = y else { return none }</c>. Other statements'
+        ///     blocks — 'if', 'for', 'while' — always take their own lines.
+        /// </summary>
+        static bool IsOneLineBody(BlockSyntax block) =>
+            block.Parent is FunctionDeclarationSyntax
+                or InitDeclarationSyntax
+                or DeinitDeclarationSyntax
+                or OperatorDeclarationSyntax
+                or AccessorSyntax
+                or ExpressionSyntax
+                or MatchArmSyntax
+                or GuardStatementSyntax
+            && block.Statements.Count == 1
+            && block.Statements[0] is not DeclarationStatementSyntax
+            && !block.Statements[0].DescendantNodes().Any(static n => n is BlockSyntax or BraceClosureExpressionSyntax or MatchExpressionSyntax)
+            && WrittenOnOneLine(block);
+
+        /// <summary>No line break or comment anywhere inside the node, up to its last token.</summary>
+        static bool WrittenOnOneLine(SyntaxNode node) {
+            var last = node.GetLastToken();
+            foreach (var token in node.DescendantTokens()) {
+                if (token.IsMissing) {
+                    return false;
+                }
+
+                if (token.LeadingTrivia.Any(static t => t.Kind == SyntaxKind.NewLineTrivia || t.IsComment || t.Kind is SyntaxKind.DirectiveTrivia or SyntaxKind.DisabledTextTrivia)) {
+                    return false;
+                }
+
+                if (token != last && token.TrailingTrivia.Any(static t => t.Kind == SyntaxKind.NewLineTrivia || t.IsComment)) {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
         bool NeedsSpace(SyntaxKind kind, SyntaxKind parentKind) {
             if (_previousKind == SyntaxKind.None) {
                 return false;
@@ -402,6 +609,11 @@ public static class SyntaxFormatter {
             // A modifier's parenthesised argument: 'private(set)'.
             if (kind == SyntaxKind.OpenParenToken && IsModifierKeyword(_previousKind)) {
                 return false;
+            }
+
+            // An operator's name stands apart from its parameters: 'operator == (lhs: T, rhs: T)'.
+            if (kind == SyntaxKind.OpenParenToken && _previousParent == SyntaxKind.OperatorDeclaration) {
+                return true;
             }
 
             if (NoSpaceBefore(kind, parentKind)) {
@@ -513,12 +725,11 @@ public static class SyntaxFormatter {
                     or SyntaxKind.PlusToken
                     or SyntaxKind.BangToken
                     or SyntaxKind.TildeToken =>
-                    parentKind is SyntaxKind.PrefixUnaryExpression or SyntaxKind.Argument,
+                    parentKind is SyntaxKind.PrefixUnaryExpression or SyntaxKind.Argument or SyntaxKind.LiteralPattern,
 
+                // 'f()?.x' and 'xs[0]?.y'; but 'try? f()' and 'x as? T' take a space.
                 SyntaxKind.QuestionToken => parentKind is SyntaxKind.InvocationExpression
-                    or SyntaxKind.ElementAccessExpression
-                    or SyntaxKind.TryExpression
-                    or SyntaxKind.CastExpression,
+                    or SyntaxKind.ElementAccessExpression,
 
                 SyntaxKind.GreaterToken => parentKind is SyntaxKind.GrowArrayType,
 

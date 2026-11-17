@@ -262,6 +262,25 @@ public sealed class Lexer {
             // Inside an inactive region nothing is a token, so whole lines are
             // taken as disabled text until a directive reopens it.
             if (!IsActive) {
+                // A directive may be indented, here as in active code: the
+                // indentation is whitespace, and the directive comes next.
+                var indented = _position;
+                while (indented < _source.Length && _source[indented] is ' ' or '\t') {
+                    indented++;
+                }
+
+                if (indented > _position && indented < _source.Length && _source[indented] == '#' && IsAtLineStart(_position)) {
+                    var save = _position;
+                    _position = indented;
+                    var directive = IsDirectiveAhead();
+                    _position = save;
+                    if (directive) {
+                        _position = indented;
+                        builder.Add(Trivia(SyntaxKind.WhitespaceTrivia, start));
+                        continue;
+                    }
+                }
+
                 ScanDisabledLine();
                 builder.Add(Trivia(SyntaxKind.DisabledTextTrivia, start));
                 continue;

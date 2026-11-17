@@ -16,4 +16,8 @@
          Sable.Core is not here: every compilation has it, so Sable.Symbols carries it. -->
     <EmbeddedResource Include="../../lib/**/*.sab" Exclude="../../lib/Sable.Core/*.sab" LogicalName="lib/%(RecursiveDir)%(Filename)%(Extension)" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- 'sable explain': the diagnostics' long-form documentation. -->
+    <EmbeddedResource Include="../../docs/diagnostics/*.md" LogicalName="diagnostics/%(Filename)%(Extension)" />
+  </ItemGroup>
 </Project>

@@ -1,0 +1,87 @@
+module Negative.EffectsMore
+
+public union IoError { Denied }
+public union NetError { Timeout }
+
+fn read(_ p: String) throws(IoError) -> String { return p }
+fn send(_ p: String) throws(NetError) -> String { return p }
+fn plain(_ p: String) -> String { return p }
+
+fn oneTryTwoErrorTypes() throws(IoError) -> String {
+    return try read("a") + send("b")
+}
+
+fn aCatchSeesTheUnion() -> Int {
+    var n = 0
+    do {
+        let a = try read("a")
+        let b = try send("b")
+    } catch {
+        n = 1
+    }
+    return n
+}
+
+fn aNestedDoHandlesItsOwn() throws(IoError) -> Int {
+    var n = 0
+    do {
+        let a = try send("b")
+    } catch {
+        n = 1
+    }
+    let b = try read("a")
+    return n
+}
+
+fn aNestedTryStillNeedsAnOuterOne() -> String {
+    return try read("a")                //! S3033 nowhere to go
+}
+
+fn tryInsideACatch() -> String {
+    do {
+        return try read("a")
+    } catch {
+        return try read("b")            //! S3033 nowhere to go
+    }
+}
+
+fn throwingFromACatchNeedsADeclaration() -> Int {
+    do {
+        let a = try read("a")
+    } catch {
+        throw IoError.Denied            //! S3033 cannot throw
+    }
+    return 0
+}
+
+// Both 'try's cover a throwing call, so neither is redundant.
+fn tryOverATry() throws(IoError) -> String {
+    return try read(try read("a"))
+}
+
+fn aRedundantTryIsStillReported() throws(IoError) -> String {
+    return try plain(try read("a"))
+}
+
+fn deferCannotThrow() -> Int {
+    defer {
+        let a = try read("a")           //! S3033 nowhere to go
+    }
+    return 0
+}
+
+fn awaitInsideAClosure() -> Int {
+    let f = () => { return 1 }
+    return f()
+}
+
+async fn asyncClosureInsideAsync() -> Int {
+    let f = () => { return 1 }
+    return f()
+}
+
+fn tryAndAwaitTogether() -> String {
+    return try await fetch("a")   //! S3035 'await' is only available //! S3035 is async //! S3033 nowhere to go
+}
+
+async fn fetch(_ url: String) throws(IoError) -> String { return url }

@@ -1,0 +1,85 @@
+module Negative.Scoping
+
+public struct Point { public var x: Int }
+
+fn redeclaringALocal() {
+    let a = 1
+    let a = 2                           //! S2000 already declared
+}
+
+fn redeclaringAcrossKinds() {
+    let a = 1
+    var a = 2                           //! S2000 already declared
+}
+
+fn shadowingInANestedBlockIsFine() -> Int {
+    let a = 1
+    if true {
+        let a = 2
+        return a
+    }
+    return a
+}
+
+fn aLocalIsNotVisibleBefore() -> Int {
+    let b = a                           //! S2002 no symbol named 'a'
+    let a = 1
+    return b
+}
+
+fn aLocalIsNotVisibleAfterItsBlock() -> Int {
+    if true {
+        let a = 1
+    }
+    return a                            //! S2002 no symbol named 'a'
+}
+
+fn aLoopVariableIsScopedToTheLoop(_ xs: Int[]) -> Int {
+    for x in xs {
+    }
+    return x                            //! S2002 no symbol named 'x'
+}
+
+fn aPatternBindingIsScopedToItsArm(_ n: Int) -> Int {
+    match n {
+        case let m => { }
+        default => { }                  //! S6006 earlier arms
+    }
+    return m                            //! S2002 no symbol named 'm'
+}
+
+fn anIfLetBindingIsScopedToItsBranch(_ n: Int?) -> Int {
+    if let value = n {
+    }
+    return value                        //! S2002 no symbol named 'value'
+}
+
+// A local may shadow a parameter: the body is a scope inside the signature's.
+fn aLocalMayShadowAParameter(_ n: Int) -> Int {
+    let n = 1
+    return n
+}
+
+fn aNestedFunctionSeesTheOuterScope(_ n: Int) -> Int {
+    fn inner() -> Int {
+        return n
+    }
+    return inner()
+}
+
+fn aNestedFunctionIsScoped() -> Int {
+    fn inner() -> Int { return 1 }
+    return inner()
+}
+
+fn theNestedFunctionIsNotVisibleOutside() -> Int {
+    return inner()                      //! S2002 no symbol named 'inner'
+}
+
+// A local may shadow a module-level name too, for the same reason.
+fn aLocalMayShadowAType() -> Int {
+    let Point = 1
+    return Point
+}
+
+struct Duplicate { var a: Int, var a: Int }   //! S2000 already declared

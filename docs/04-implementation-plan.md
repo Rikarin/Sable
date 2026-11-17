@@ -1093,10 +1093,10 @@ to the state machine where tasks are many.
       it grows not at all (51,736 bytes either way): reflection is code
       synthesised per type a program reflects on, and nothing else
 - [x] Dictionary/List/String within 15% of their .NET equivalents on a
-      standard benchmark set — Dictionary (`map-int` 1.11, `map-string`
-      1.02), List (`list` 1.15) and String (`string` 0.94) are met, on
-      the line for `list`; so is sorting (`sort` 1.03, a stable merge sort
-      against `List.Sort`'s introsort) — see "Against .NET" above
+      standard benchmark set — Dictionary (`map-int` 1.10, `map-string`
+      0.90), List (`list` 1.14) and String (`string` 0.72) are met, close
+      to the line for `list`; so is sorting (`sort` 1.00, a stable merge
+      sort against `List.Sort`'s introsort) — see "Against .NET" above
 - [ ] A real program ships: a static site generator or an HTTP service, in
       Sable, used daily by the team — written (`examples/ssg`, see "The
       first real program"); daily use is still to come

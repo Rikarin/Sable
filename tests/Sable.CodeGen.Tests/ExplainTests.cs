@@ -14,6 +14,17 @@ public sealed class ExplainTests {
     /// </summary>
     static readonly HashSet<ErrorCode> Undocumented = [
         ErrorCode.None,
+
+        // Only SyntaxTree.ParseExpression/ParseType/ParseStatement report it; compiling a file never does.
+        ErrorCode.ERR_UnexpectedTrailingTokens,
+
+        // Builtins are Sable.Core's alone: elsewhere S3081 comes first and stops the compile.
+        ErrorCode.ERR_MalformedBuiltin,
+        ErrorCode.ERR_UnknownBuiltin,
+        ErrorCode.ERR_BuiltinSignatureMismatch,
+
+        // The binder's fallback for a syntax kind it has no case for; every kind has one.
+        ErrorCode.ERR_NotSupportedYet,
     ];
 
     static string RepositoryRoot {

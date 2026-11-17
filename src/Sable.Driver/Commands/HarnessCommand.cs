@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Sable.CodeGen;
+using Sable.Driver.Packages;
 using Sable.Symbols;
 using Sable.Syntax;
 
@@ -74,57 +75,66 @@ public abstract class HarnessCommand : Command {
         return new(files, harness, doc, optimise, debug, exclusivity);
     }
 
-    /// <summary>
-    ///     The source files to build: those named on the command line.
-    ///     Null, having said why, when there are none to build.
-    /// </summary>
-    /// <remarks>
-    ///     TODO(packages): with no file named, this is where a package's
-    ///     sources plug in — find <c>sable.toml</c> from the current directory
-    ///     up, and give every <c>.sab</c> file of the package (with its test
-    ///     files, which an ordinary build leaves out). Everything after this
-    ///     takes a list of files already.
-    /// </remarks>
-    protected virtual IReadOnlyList<string>? InputFiles(IReadOnlyList<string> named) {
-        if (named.Count == 0) {
-            Console.Error.WriteLine($"sable: '{Name}' needs a file to build until packages are supported: 'sable {Name} <file.sab>'");
-            return null;
-        }
-
-        foreach (var file in named.Where(static f => !File.Exists(f))) {
-            Console.Error.WriteLine($"sable: no such file '{file}'");
-            return null;
-        }
-
-        return named;
-    }
-
     public override int Run(IReadOnlyList<string> arguments) {
         if (Parse(arguments) is not { } options) {
             return BadUsage();
         }
 
-        if (InputFiles(options.Files) is not { } files) {
+        if (Program(options) is not { } program) {
             return 1;
         }
 
         var executable = Path.Combine(Path.GetTempPath(), $"sable-{Name}-{Guid.NewGuid():N}");
         try {
-            return Build(files, options, executable) ?? Execute(executable, options.HarnessArguments);
+            return Build(program.Trees, program.Directory, options, executable) ?? Execute(executable, options.HarnessArguments);
         } finally {
             File.Delete(executable);
         }
     }
 
+    /// <summary>
+    ///     What to build: the files named on the command line or, with none,
+    ///     the package in this directory or the nearest one above it — its
+    ///     library with its <c>tests/</c> and <c>benches/</c> files, and its
+    ///     dependencies'. Null, having said why, when there is nothing to build.
+    /// </summary>
+    static (IReadOnlyList<SyntaxTree> Trees, string Directory)? Program(Options options) {
+        if (options.Files.Count > 0) {
+            foreach (var file in options.Files.Where(static f => !File.Exists(f))) {
+                Console.Error.WriteLine($"sable: no such file '{file}'");
+                return null;
+            }
+
+            return ([..options.Files.Select(static f => SyntaxTree.Parse(new SourceText(File.ReadAllText(f), Path.GetFileName(f))))],
+                Path.GetDirectoryName(Path.GetFullPath(options.Files[0]))!);
+        }
+
+        try {
+            var workspace = Workspace.Load(Directory.GetCurrentDirectory());
+            var environment = PackageEnvironment.FromProcess();
+            var member = workspace.Current ?? workspace.Members[0];
+            var graph = PackageBuilder.Resolve(workspace, environment, new BuildRequest(Package: member.Name));
+            var trees = PackageBuilder.TestProgram(graph, member.Name);
+            if (trees.Count == 0) {
+                Console.Error.WriteLine($"sable: package '{member.Name}' has no source files");
+                return null;
+            }
+
+            return (trees, workspace.Root);
+        } catch (PackageException failure) {
+            Console.Error.WriteLine($"error: {failure.Message}");
+            return null;
+        }
+    }
+
     /// <summary>Builds the harness; null when built, else the exit code to fail with.</summary>
-    protected int? Build(IReadOnlyList<string> files, Options options, string executable) {
-        var sources = files.Select(static f => new SourceText(File.ReadAllText(f), Path.GetFileName(f))).ToList();
+    protected int? Build(IReadOnlyList<SyntaxTree> trees, string directory, Options options, string executable) {
         var result = TestHarness.Compile(
-            sources,
+            trees,
             Kind,
             out _,
             options.DocExamples,
-            options.Debug ? Path.GetDirectoryName(Path.GetFullPath(files[0])) : null,
+            options.Debug ? directory : null,
             options.Exclusivity ?? (options.Debug || !options.Optimise)
         );
         if (!result.Succeeded) {

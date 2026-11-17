@@ -28,7 +28,7 @@ public static class PackageBuilder {
         : workspace.Current is { } current ? [current]
         : workspace.Members;
 
-    static PackageGraph Resolve(Workspace workspace, PackageEnvironment environment, BuildRequest request) =>
+    internal static PackageGraph Resolve(Workspace workspace, PackageEnvironment environment, BuildRequest request) =>
         PackageGraph.Resolve(workspace, environment, new(request.Features, null, request.Locked, [..Selected(workspace, request.Package).Select(static m => m.Name)]));
 
     /// <summary>
@@ -48,6 +48,29 @@ public static class PackageBuilder {
         }
 
         return trees;
+    }
+
+    /// <summary>
+    ///     What <c>sable test</c> and <c>sable bench</c> build for a member:
+    ///     its library, the files under its <c>tests/</c> and <c>benches/</c>
+    ///     (which an ordinary build leaves out), then its dependencies' libraries.
+    ///     The harness supplies the entry point, so no binary's entry file is in it.
+    /// </summary>
+    public static IReadOnlyList<SyntaxTree> TestProgram(PackageGraph graph, string member) {
+        var own = graph.Packages[member];
+        var extra = new[] { "tests", "benches" }
+            .Select(d => Path.Combine(own.Package.Directory, d))
+            .Where(Directory.Exists)
+            .SelectMany(static d => Directory.GetFiles(d, "*.sab", SearchOption.AllDirectories))
+            .Select(Path.GetFullPath)
+            .Order(StringComparer.Ordinal)
+            .Select(file => Parse(graph, own, file))
+            .ToList();
+        return [
+            ..own.Package.LibrarySources().Select(file => Parse(graph, own, file)),
+            ..extra,
+            ..graph.Closure(member).Where(p => p.Name != member).SelectMany(p => p.Package.LibrarySources().Select(file => Parse(graph, p, file))),
+        ];
     }
 
     static SyntaxTree Parse(PackageGraph graph, ResolvedPackage package, string file) {

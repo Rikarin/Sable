@@ -46,9 +46,19 @@ public static class TestHarness {
         bool docExamples = false,
         string? debugDirectory = null,
         bool checkExclusivity = true
+    ) => Compile([..sources.Select(SyntaxTree.Parse)], kind, out tests, docExamples, debugDirectory, checkExclusivity);
+
+    /// <summary>The same, for files already parsed: a package's, each with its own package's features.</summary>
+    public static CompileResult Compile(
+        IReadOnlyList<SyntaxTree> trees,
+        TestKind kind,
+        out IReadOnlyList<TestFunction> tests,
+        bool docExamples = false,
+        string? debugDirectory = null,
+        bool checkExclusivity = true
     ) {
         tests = [];
-        var program = sources.Select(SyntaxTree.Parse).ToList();
+        var program = trees.ToList();
         if (docExamples) {
             program.AddRange(program.ToList().SelectMany(DocExamples.Extract));
         }

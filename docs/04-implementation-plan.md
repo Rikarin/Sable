@@ -1174,9 +1174,11 @@ Full design in [05-toolchain.md](05-toolchain.md).
 - **Commands.** `sable test <file.sab>... [filter...] [--doc]` (unoptimised
   by default, `--release` to optimise) and `sable bench <file.sab>...`
   (optimised) share `HarnessCommand`: build the harness, run it with the
-  rest of the arguments, exit with its code. The file list comes from one
-  overridable place, `HarnessCommand.InputFiles`, where package discovery
-  plugs in (marked TODO).
+  rest of the arguments, exit with its code. With no file named they test
+  the package in the current directory (or the nearest above): its library,
+  the files under its `tests/` and `benches/` — which an ordinary build
+  leaves out — and its dependencies' libraries
+  (`PackageBuilder.TestProgram`).
 - **`--doc`.** Each ` ```sable ` block of a `///` comment (not ` ```sable
   ignore `) becomes `@test fn doc_<item>_<n>()` in a file of the documented
   file's module, with that file's imports and Sable.Testing; the file has the
@@ -1189,8 +1191,8 @@ Full design in [05-toolchain.md](05-toolchain.md).
   benchmark's work (it needs a core builtin); async tests; a parallel test
   runner; timeouts for a hung test; printing the error a throwing test threw;
   `#[should_panic]`-style expected traps; snapshot and property testing
-  (docs/06 lists them under Sable.Testing); test-only files excluded from
-  ordinary package builds (with package mode).
+  (docs/06 lists them under Sable.Testing); `[dev-dependencies]` in a test
+  build (they are resolved, not yet compiled in).
 
 ### Packages, as implemented
 

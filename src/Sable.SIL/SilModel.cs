@@ -1173,6 +1173,16 @@ public static class SilBuiltins {
             return InlineSignature(name, operands, result);
         }
 
+        // Tasks: spawned, given a body and the task object (which the runtime then holds), waited for, yielded to.
+        switch (name) {
+            case "task_spawn" when operands is [FunctionType, ClassType]:
+                return new([operands[0], operands[1]], SilType.Int) { Consumed = [1] };
+            case "task_wait" or "task_release" when operands is [var handle] && handle == SilType.Int:
+                return new([SilType.Int], SilType.Unit);
+            case "task_yield" or "task_drain" when operands.Count == 0:
+                return new([], SilType.Unit);
+        }
+
         // 'x is Dog': whether the object is of the class named, or a subclass of it.
         if (name.StartsWith("class_is:", StringComparison.Ordinal)) {
             return operands is [ClassType] ? new([operands[0]], SilType.Bool) : null;
@@ -1232,7 +1242,8 @@ public static class SilBuiltins {
         }
     }
 
-    public static IEnumerable<string> Names => Table.Keys.Concat(ArrayOperations).Concat(["access_begin_read", "access_begin_modify", "access_end"]);
+    public static IEnumerable<string> Names =>
+        Table.Keys.Concat(ArrayOperations).Concat(["access_begin_read", "access_begin_modify", "access_end", "task_spawn", "task_wait", "task_release", "task_yield", "task_drain"]);
 
     static SilType? Pointee(SilType? type) => (type as InlinePointerType)?.Pointee;
 

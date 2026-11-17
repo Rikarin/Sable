@@ -533,6 +533,17 @@ public sealed class Compilation {
         if (typeKind == TypeKind.Struct) {
             SynthesizeMemberwiseInitializer(type);
         }
+
+        // A class or actor with no initialiser of its own, whose fields all
+        // start with a value, is made with 'init()'.
+        if (typeKind is TypeKind.Class or TypeKind.Actor && !type.GetMembers("init").Any()
+            && type.Members.OfType<FieldSymbol>().Where(static f => f is { IsStatic: false, IsComputed: false }).All(static f => f.HasInitializer)) {
+            var implicitInit = new FunctionSymbol("init", type, null, type.DeclaredAccessibility, FunctionKind.Initializer) {
+                ReturnTypeResolver = () => type,
+            };
+            implicitInit.Parameters = [];
+            type.AddMember(implicitInit);
+        }
     }
 
     /// <summary>

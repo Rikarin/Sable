@@ -295,7 +295,9 @@ Order matters; each of these is a self-contained lowering:
 1. `defer` / `using` → explicit cleanup on every exit path
 2. `match` → decision tree (Maranget's compilation, not a linear chain)
 3. Closures → boxes + `partial_apply`; non-escaping closures stay on the stack
-4. `async` → a state machine (coroutine split, see Phase 5)
+4. `async` → a state machine (coroutine split, see Phase 5). Interim, done:
+   an async function lowers as an ordinary one, and each task runs on a
+   stack of its own — see "Async, as implemented" under Phase 4
 5. `throws` → a discriminated return with an error register, plus the error
    edges in the CFG
 6. Generic instantiation → monomorphised SIL functions
@@ -351,8 +353,8 @@ Order matters; each of these is a self-contained lowering:
       call), `private(set)`, static stored properties and module-level
       variables (`sil_global`, initialised in order as the entry point
       starts, destroyed last first as it returns), and `as?`, `as!` and `is`
-      (the superclass chain in the class metadata). Async and actors parse
-      and type-check but do not lower: the coroutine split is Phase 5's
+      (the superclass chain in the class metadata). Async and actors lower
+      too — see "Async, as implemented" under Phase 4
 - [x] `lldb` shows correct frames, locals and types — on macOS, checked by a
       test that drives lldb: `gcd(a=1071, b=462)`, `(Int) t = 147`,
       `(Debug.Point) p = (x = 1071, y = 462)`
@@ -710,6 +712,30 @@ Sable.Testing      the test harness `sable test` drives
 
 **Write the standard library in Sable from day one of this phase.** It is the
 first large program and the best source of language bugs.
+
+### Async, as implemented
+
+Done ahead of `Sable.Concurrency`, with the core of it in `Sable.Core`
+(`tests/Sable.CodeGen.Tests/AsyncTests.cs`). Tasks are scheduled
+cooperatively: each runs on a thread of its own, but one lock is held by
+whichever task is running, so exactly one runs at a time and switches only
+where a task waits — awaiting a task not yet finished, or `Task.yield()`. The
+interleaving is therefore deterministic, the interpreter reproduces it, and
+reference counts stay non-atomic. An async function is an ordinary function,
+and `await` is its operand; `Task.spawn { … }` queues a task (a class holding
+the runtime's handle, the body and the result), `await task.value` waits for
+it, and the program ends once every task has. Actors lower as classes: with
+one task running at a time a call into one runs alone, and the binder makes
+a call from outside it `await`. `async let` binds; reading it needs `await`.
+A class or actor whose fields all have initial values is made with `init()`.
+
+This trades the planned stackless state machine (§2.2, item 4) for a stack
+per task — far less compiler for the same semantics, at the cost of memory
+per task and of thread creation. Not yet: `async let` runs its child to
+completion at the declaration rather than alongside; no task groups,
+cancellation, `for await` or async sequences, no sleeping or I/O to wait
+on, and no parallelism — all `Sable.Concurrency`'s, along with the switch
+to the state machine where tasks are many.
 
 ### 4.4 Exit criteria
 

@@ -8,6 +8,7 @@
 
 #include <errno.h>
 #include <math.h>
+#include <pthread.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -1873,4 +1874,178 @@ SableString *sable_inline_invalid(const SableInlineLayout *layout, const SableBl
     free(check.links);
     free(check.targets);
     return check.why == NULL ? (SableString *)&empty_string_object : make_cstring(check.why);
+}
+
+// ---- Tasks -----------------------------------------------------------------
+
+// Concurrency (docs/02 §2.7): tasks scheduled cooperatively. Each runs on a
+// thread of its own, but one lock is held by whichever task is running, so
+// exactly one runs at a time — the order is the scheduler's, and the counts
+// need no atomics. A task gives the lock up only where it waits: on a task
+// not yet finished, or at Task.yield(). Spawning queues a task; it runs when
+// the running one next waits. The program's entry is a task too, and the
+// program ends once every task has.
+
+typedef struct SableTask {
+    void (*body)(void *context);
+    void *context;
+    pthread_cond_t wake;
+    bool done;
+    bool released; // the program no longer holds it
+    struct SableTask *next;     // in the run queue
+    struct SableTask *waiters;  // tasks waiting for this one, through 'next_waiter'
+    struct SableTask *next_waiter;
+} SableTask;
+
+static pthread_mutex_t task_lock = PTHREAD_MUTEX_INITIALIZER;
+static SableTask main_task;
+static SableTask *current_task;
+static SableTask *queue_head, *queue_tail;
+
+__attribute__((constructor)) static void sable_tasks_start(void) {
+    pthread_mutex_lock(&task_lock);
+    pthread_cond_init(&main_task.wake, NULL);
+    current_task = &main_task;
+}
+
+static void enqueue(SableTask *task) {
+    task->next = NULL;
+    if (queue_tail != NULL) {
+        queue_tail->next = task;
+    } else {
+        queue_head = task;
+    }
+
+    queue_tail = task;
+}
+
+static SableTask *dequeue(void) {
+    SableTask *task = queue_head;
+    if (task != NULL) {
+        queue_head = task->next;
+        if (queue_head == NULL) {
+            queue_tail = NULL;
+        }
+    }
+
+    return task;
+}
+
+// Hands the lock to the next task in the queue, and waits until a task hands it back.
+static void switch_away(void) {
+    SableTask *self = current_task;
+    SableTask *next = dequeue();
+    if (next == NULL) {
+        sable_trap("every task is waiting: the program cannot go on");
+    }
+
+    current_task = next;
+    pthread_cond_signal(&next->wake);
+    while (current_task != self) {
+        pthread_cond_wait(&self->wake, &task_lock);
+    }
+}
+
+static void free_task(SableTask *task) {
+    pthread_cond_destroy(&task->wake);
+    free(task);
+}
+
+static void *task_thread(void *argument) {
+    SableTask *self = argument;
+    pthread_mutex_lock(&task_lock);
+    while (current_task != self) {
+        pthread_cond_wait(&self->wake, &task_lock);
+    }
+
+    self->body(self->context);
+
+    // Done: whoever waits for it may go on.
+    self->done = true;
+    for (SableTask *waiter = self->waiters; waiter != NULL;) {
+        SableTask *after = waiter->next_waiter;
+        enqueue(waiter);
+        waiter = after;
+    }
+
+    self->waiters = NULL;
+    SableTask *next = dequeue();
+    if (next == NULL) {
+        sable_trap("every task is waiting: the program cannot go on");
+    }
+
+    current_task = next;
+    pthread_cond_signal(&next->wake);
+    if (self->released) {
+        free_task(self);
+    }
+
+    pthread_mutex_unlock(&task_lock);
+    return NULL;
+}
+
+// A new task, queued to run 'body(context)'; the program holds the handle until it releases it.
+void *sable_task_spawn(void (*body)(void *), void *context) {
+    SableTask *task = calloc(1, sizeof(SableTask));
+    if (task == NULL) {
+        sable_trap("out of memory");
+    }
+
+    task->body = body;
+    task->context = context;
+    pthread_cond_init(&task->wake, NULL);
+
+    pthread_attr_t attributes;
+    pthread_attr_init(&attributes);
+    pthread_attr_setstacksize(&attributes, 8u << 20);
+    pthread_attr_setdetachstate(&attributes, PTHREAD_CREATE_DETACHED);
+    pthread_t thread;
+    if (pthread_create(&thread, &attributes, task_thread, task) != 0) {
+        sable_trap("cannot start a task");
+    }
+
+    pthread_attr_destroy(&attributes);
+    enqueue(task);
+    return task;
+}
+
+// 'await task.value': waits until it has finished.
+void sable_task_wait(void *handle) {
+    SableTask *task = handle;
+    while (!task->done) {
+        SableTask *self = current_task;
+        self->next_waiter = task->waiters;
+        task->waiters = self;
+        switch_away();
+    }
+}
+
+// 'await Task.yield()': lets every task queued run before this one goes on.
+void sable_task_yield(void) {
+    if (queue_head == NULL) {
+        return;
+    }
+
+    enqueue(current_task);
+    switch_away();
+}
+
+void sable_task_release(void *handle) {
+    SableTask *task = handle;
+    if (task == NULL) {
+        return;
+    }
+
+    if (task->done) {
+        free_task(task);
+    } else {
+        task->released = true;
+    }
+}
+
+// As the entry point returns: every task still to run, run.
+void sable_tasks_drain(void) {
+    while (queue_head != NULL) {
+        sable_task_yield();
+    }
 }

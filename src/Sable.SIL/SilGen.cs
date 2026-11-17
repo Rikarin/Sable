@@ -401,7 +401,7 @@ public sealed partial class SilGen {
         symbol.ContainingSymbol is ModuleSymbol
         || Owner(symbol) switch {
             { TypeKind: TypeKind.Struct or TypeKind.Union or TypeKind.Enum } => true,
-            { TypeKind: TypeKind.Class } => true,
+            { TypeKind: TypeKind.Class or TypeKind.Actor } => true,
 
             // A protocol's default implementations: generic over Self, so
             // lowered only for the types that use them.
@@ -426,7 +426,7 @@ public sealed partial class SilGen {
     /// <summary>True for a method a call must find through the vtable: one a subclass may override.</summary>
     internal bool IsDynamic(FunctionSymbol method) =>
         method.FunctionKind == FunctionKind.Ordinary && !method.IsStatic
-        && method.ContainingSymbol is NamedTypeSymbol { TypeKind: TypeKind.Class } owner
+        && method.ContainingSymbol is NamedTypeSymbol { TypeKind: TypeKind.Class or TypeKind.Actor } owner
         && _inherited.Contains(owner.OriginalDefinition);
 
     /// <summary>
@@ -528,7 +528,9 @@ public sealed partial class SilGen {
     FunctionType? SignatureOf(FunctionSymbol symbol, SyntaxNode at, TypeSubstitution substitution) {
         SilType? Lower(TypeSymbol type) => this.Lower(substitution.Apply(type));
 
-        if (symbol.IsAsync || symbol.IsRethrows) {
+        // An async function is an ordinary one: a task suspends only where
+        // it waits, in the runtime, with its whole stack (docs/04 §5).
+        if (symbol.IsRethrows) {
             return Unsupported<FunctionType>(at, $"'{symbol.Name}', which is async or rethrows");
         }
 
@@ -727,7 +729,7 @@ public sealed partial class SilGen {
                 return Lower(reference.ReferencedType) is { } referenced ? SilType.Address(referenced) : null;
 
             // A function as a value: code and a context, called with both.
-            case FunctionTypeSymbol { IsAsync: false, IsRethrows: false } functionType: {
+            case FunctionTypeSymbol { IsRethrows: false } functionType: {
                 var parameters = ImmutableArray.CreateBuilder<SilType>();
                 foreach (var parameter in functionType.ParameterTypes) {
                     if (Lower(parameter) is not { } lowered) {
@@ -786,7 +788,12 @@ public sealed partial class SilGen {
                 return HoldsItself(structType) ? null : structType;
             }
 
-            case NamedTypeSymbol { IsGenericDefinition: false, TypeKind: TypeKind.Class } named: {
+            case NamedTypeSymbol { TypeArguments: [var success] } task when task.OriginalDefinition.Equals(Core.Task):
+                return TaskClass(success);
+
+            // An actor is a class whose calls are serialised: the cooperative
+            // scheduler runs one task at a time, so its state needs no more.
+            case NamedTypeSymbol { IsGenericDefinition: false, TypeKind: TypeKind.Class or TypeKind.Actor } named when !named.OriginalDefinition.Equals(Core.Task): {
                 var classType = Begin(named, new ClassType(TypeName(named)));
                 _classes[classType] = named;
 
@@ -1619,6 +1626,11 @@ public sealed partial class SilGen {
                 _location = null;
                 DestroyOwnedParameters();
                 Deallocate();
+                // The program ends once every task has, and then its globals go.
+                if (ReferenceEquals(symbol, generator._entrySymbol) && function.Name != GlobalsInit) {
+                    Emit(new BuiltinInst("task_drain", SilType.Unit));
+                }
+
                 if (ReferenceEquals(symbol, generator._entrySymbol) && generator._globalFields.Count > 0 && function.Name != GlobalsInit) {
                     var unit = new FunctionType([], SilType.Unit);
                     Emit(new ApplyInst(Emit(new FunctionRefInst(GlobalsDeinit, unit)), SilType.Unit));
@@ -2946,6 +2958,9 @@ public sealed partial class SilGen {
                 case BoundAssignment assignment:
                     return Assignment(assignment);
 
+                case BoundFieldAccess { Field: { Name: "value", IsAsyncGetter: true } } taskValue:
+                    return TaskValue(taskValue);
+
                 // A global: read where it lives.
                 case BoundFieldAccess { Field: var globalField } when SilGen.IsGlobal(globalField) && generator.GlobalOf(globalField) is var (globalName, globalType):
                     return Emit(new LoadInst(Emit(new GlobalAddrInst(globalName, globalType))));
@@ -3011,6 +3026,10 @@ public sealed partial class SilGen {
 
                 case BoundBinaryOperator binary when binary.Method is null:
                     return Binary(binary);
+
+                // 'await x': x. Where it waits, the runtime suspends the task.
+                case BoundUnaryOperator { OperatorKind: UnaryOperatorKind.Await, Operand: var awaited }:
+                    return Expression(awaited);
 
                 case BoundUnaryOperator unary:
                     return Unary(unary);
@@ -3276,7 +3295,7 @@ public sealed partial class SilGen {
             }
 
             // A field of an object: through its address, while the object is borrowed.
-            if (Sub(receiver.Type).TypeKind == TypeKind.Class) {
+            if (Sub(receiver.Type).TypeKind is TypeKind.Class or TypeKind.Actor) {
                 if (Borrow(receiver) is not { Type: ClassType classType } reference) {
                     return null;
                 }
@@ -3385,7 +3404,7 @@ public sealed partial class SilGen {
                     return self;
 
                 case BoundFieldAccess { Receiver: { } receiver, Field: { IsComputed: false, IsStatic: false } field }
-                    when Sub(receiver.Type).TypeKind == TypeKind.Class: {
+                    when Sub(receiver.Type).TypeKind is TypeKind.Class or TypeKind.Actor: {
                     if (Borrow(receiver) is not { Type: ClassType classType } reference) {
                         return null;
                     }
@@ -4193,6 +4212,22 @@ public sealed partial class SilGen {
             }
 
             var callee = call.Function;
+
+            // Tasks: made, and yielded to.
+            if (ReferenceEquals(Owner(callee)?.OriginalDefinition, Core.Task) && callee.IsStatic) {
+                if (callee.Name == "spawn") {
+                    return Spawn(call);
+                }
+
+                Emit(new BuiltinInst("task_yield", SilType.Unit));
+                return UnitValue.Instance;
+            }
+
+            // A class or actor's implicit 'init()'.
+            if (callee is { FunctionKind: FunctionKind.Initializer, DeclaringSyntax.IsEmpty: true, Parameters.IsEmpty: true }
+                && LowerType(call.Type) is ClassType implicitClass) {
+                return ImplicitInit(call, implicitClass);
+            }
 
             // Inline layout: the bytes of a value, a value from bytes, an inline array's members.
             if (callee is { Name: "of", IsStatic: true } && ReferenceEquals(callee.ContainingSymbol, Core.Bytes)) {

@@ -1017,6 +1017,10 @@ public sealed partial class SilInterpreter(SilModule module, int stepLimit = 10_
             return Inline(builtin, operands, depth);
         }
 
+        if (builtin.Name.StartsWith("task_", StringComparison.Ordinal)) {
+            return Task(builtin.Name, operands);
+        }
+
         if (builtin.Name.StartsWith("class_is:", StringComparison.Ordinal)) {
             var target = module.FindType(builtin.Name["class_is:".Length..]) as ClassType ?? throw new SilTrap($"no class {builtin.Name}");
             return Alive((HeapObject)operands[0]!).Type.IsSubclassOf(target);

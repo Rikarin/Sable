@@ -64,6 +64,10 @@ public sealed class CoreTypes {
 
         // What 'fromBytes' gives (docs/02 §2.5): the value, or why the bytes were refused.
         Decoded = DeclareGeneric("Decoded", TypeKind.Union, "Value");
+
+        // Concurrency's one core type, until Sable.Concurrency (docs/06): a task
+        // running concurrently, whose result is awaited.
+        Task = DeclareGeneric("Task", TypeKind.Class, "Success");
         Bytes = new NamedTypeSymbol("Bytes", TypeKind.Struct, Module, accessibility: Accessibility.Public);
         Module.AddMember(Bytes);
 
@@ -126,6 +130,27 @@ public sealed class CoreTypes {
         var invalid = new UnionCaseSymbol("Invalid", Decoded, null);
         invalid.Payload = [new ParameterSymbol("why", null, invalid, null, 0) { TypeResolver = () => String }];
         Decoded.AddMember(invalid);
+
+        // 'Task.spawn { … }': a task, queued; 'await task.value': its result;
+        // 'await Task.yield()': every task queued runs first.
+        var spawn = new FunctionSymbol("spawn", Task, null, Accessibility.Public, FunctionKind.Ordinary) { IsStatic = true };
+        var success = new TypeParameterSymbol("T", spawn, null, 0);
+        spawn.TypeParameters = [success];
+        spawn.Parameters = [
+            new ParameterSymbol("body", "_", spawn, null, 0) { TypeResolver = () => new FunctionTypeSymbol([], success, isAsync: true) },
+        ];
+        spawn.ReturnTypeResolver = () => Task.Construct([success]);
+        Task.AddMember(spawn);
+
+        var value = new FieldSymbol("value", Task, null, Accessibility.Public, false) {
+            IsComputed = true, IsAsyncGetter = true, TypeResolver = () => Task.TypeParameters[0],
+        };
+        Task.AddMember(value);
+
+        var yielding = new FunctionSymbol("yield", Task, null, Accessibility.Public, FunctionKind.Ordinary) { IsStatic = true, IsAsync = true };
+        yielding.Parameters = [];
+        yielding.ReturnTypeResolver = () => Void;
+        Task.AddMember(yielding);
 
         // 'Bytes.of(value)': an @inline_layout value's bytes, as they are — no serialising pass.
         var of = new FunctionSymbol("of", Bytes, null, Accessibility.Public, FunctionKind.Ordinary) { IsStatic = true };
@@ -271,6 +296,9 @@ public sealed class CoreTypes {
     }
 
     public ModuleSymbol Module { get; }
+
+    /// <summary><c>Task&lt;Success&gt;</c>: a task and, once it finishes, its result.</summary>
+    public NamedTypeSymbol Task { get; }
 
     /// <summary><c>Decoded&lt;T&gt;</c>: what <c>fromBytes</c> gives.</summary>
     public NamedTypeSymbol Decoded { get; }

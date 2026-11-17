@@ -310,6 +310,11 @@ public sealed class LlvmEmitter {
                                 declare { i64, i1 } @llvm.umul.with.overflow.i64(i64, i64)
                                 declare ptr @sable_inline_new(ptr)
                                 declare zeroext i1 @sable_class_is(ptr, ptr)
+                                declare ptr @sable_task_spawn(ptr, ptr)
+                                declare void @sable_task_wait(ptr)
+                                declare void @sable_task_release(ptr)
+                                declare void @sable_task_yield()
+                                declare void @sable_tasks_drain()
                                 declare void @sable_array_make_unique(ptr captures(none), ptr)
                                 @sable_empty_array_count = internal constant [3 x i64] zeroinitializer
                                 declare void @sable_access_begin(ptr, i32)
@@ -1701,6 +1706,30 @@ public sealed class LlvmEmitter {
             if (builtin.Name.StartsWith("inline_", StringComparison.Ordinal)) {
                 Inline(builtin, operands, Result);
                 return;
+            }
+
+            switch (builtin.Name) {
+                case "task_spawn": {
+                    var handle = Fresh();
+                    Line($"{handle} = call ptr @sable_task_spawn(ptr {operands[0]}, ptr {operands[1]})");
+                    Line($"{Result()} = ptrtoint ptr {handle} to i64");
+                    return;
+                }
+
+                case "task_wait" or "task_release": {
+                    var handle = Fresh();
+                    Line($"{handle} = inttoptr i64 {operands[0]} to ptr");
+                    Line($"call void @sable_{builtin.Name}(ptr {handle})");
+                    return;
+                }
+
+                case "task_yield":
+                    Line("call void @sable_task_yield()");
+                    return;
+
+                case "task_drain":
+                    Line("call void @sable_tasks_drain()");
+                    return;
             }
 
             if (builtin.Name.StartsWith("class_is:", StringComparison.Ordinal)) {

@@ -1123,11 +1123,26 @@ public sealed class Binder {
             ? _compilation.TypeBinder.BindType(annotation.Type, _containingSymbol, _scope)
             : null;
 
+        // 'async let x = f()': the initial value is a child task's work, which
+        // may await on its own; it is the reads of 'x' that await.
+        var isAsyncLet = !declaration.AsyncKeyword.IsNone;
+        if (isAsyncLet && !_inAsyncContext) {
+            _diagnostics.Error(ErrorCode.ERR_AwaitOutsideAsync, declaration.AsyncKeyword.Span, "'async let' starts a child task, and this is not an async context");
+        }
+
         BoundExpression? initializer = null;
         if (declarator.Initializer is { } initSyntax) {
+            if (isAsyncLet) {
+                _awaitDepth++;
+            }
+
             initializer = BindExpression(initSyntax.Value, declaredType);
             if (declaredType is not null) {
                 initializer = Convert(initializer, declaredType, initSyntax.Value);
+            }
+
+            if (isAsyncLet) {
+                _awaitDepth--;
             }
         }
 
@@ -1150,7 +1165,8 @@ public sealed class Binder {
         }
 
         var local = new LocalSymbol(binding.Identifier.Text, _containingSymbol, declaration, isMutable) {
-            TypeResolver = () => type
+            TypeResolver = () => type,
+            IsAsyncLet = isAsyncLet,
         };
 
         Declare(local.Name, local);
@@ -1912,9 +1928,35 @@ public sealed class Binder {
 
     BoundExpression BindName(ExpressionSyntax syntax, string name) => BindNameAsValue(name, syntax);
 
+    /// <summary>An 'async let': its child task's result, so reading it awaits.</summary>
+    BoundExpression AwaitedLocal(SyntaxNode syntax, LocalSymbol local) {
+        MarkAsync(syntax.Span, $"'{local.Name}', an 'async let',");
+        return new BoundLocalAccess(syntax, local, NarrowedType(local));
+    }
+
+    /// <summary>
+    ///     A call into an actor from outside it: the actor runs one call at a
+    ///     time, so its caller may have to wait its turn (docs/02 §2.7).
+    /// </summary>
+    bool CrossesIntoActor(FunctionSymbol callee) {
+        if (callee is not { IsStatic: false, FunctionKind: FunctionKind.Ordinary }
+            || (callee.ContainingSymbol is ExtensionSymbol extension ? extension.ExtendedType : callee.ContainingSymbol) is not NamedTypeSymbol { TypeKind: TypeKind.Actor } actor) {
+            return false;
+        }
+
+        for (var here = _containingSymbol; here is not null; here = here.ContainingSymbol) {
+            if (ReferenceEquals(here, actor.OriginalDefinition) || here is ExtensionSymbol { ExtendedType: var extended } && ReferenceEquals(extended, actor.OriginalDefinition)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     BoundExpression BindNameAsValue(string name, SyntaxNode syntax) {
         if (LookupLocal(name) is { } local) {
             return local switch {
+                LocalSymbol { IsAsyncLet: true } asyncLet => AwaitedLocal(syntax, asyncLet),
                 LocalSymbol localSymbol =>
                     new BoundLocalAccess(syntax, localSymbol, NarrowedType(localSymbol)),
                 ParameterSymbol parameter =>
@@ -2000,6 +2042,11 @@ public sealed class Binder {
             case FieldSymbol field:
                 if (receiver is null && !field.IsStatic && containingType is not null) {
                     receiver = new BoundSelfAccess(syntax, containingType, SelfIsMutable(containingType));
+                }
+
+                // 'task.value' waits for the task.
+                if (field.IsAsyncGetter) {
+                    MarkAsync(syntax.Span, $"reading '{field.Name}'");
                 }
 
                 return new BoundFieldAccess(syntax, receiver, field, substitution.Apply(field.Type));
@@ -2919,6 +2966,8 @@ public sealed class Binder {
 
         if (resolved.IsAsync) {
             MarkAsync(syntax.Span, $"'{resolved.Name}'");
+        } else if (CrossesIntoActor(resolved)) {
+            MarkAsync(syntax.Span, $"'{resolved.Name}', isolated to its actor,");
         }
 
         var result = substitution.Apply(resolved.ReturnType);

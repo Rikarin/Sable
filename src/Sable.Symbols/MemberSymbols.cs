@@ -267,6 +267,9 @@ public sealed class FieldSymbol(
         declaration is null ? [] : [declaration];
 
     /// <summary><c>private(set)</c> and the like: who may write it, when narrower than who may read it.</summary>
+    /// <summary>A property whose read may suspend: <c>task.value</c>.</summary>
+    public bool IsAsyncGetter { get; internal set; }
+
     public Accessibility? SetterAccessibility { get; internal set; }
 
     public override Accessibility DeclaredAccessibility { get; } = accessibility;
@@ -365,6 +368,9 @@ public sealed class LocalSymbol(
 
     public override ImmutableArray<SyntaxNode> DeclaringSyntax { get; } =
         declaration is null ? [] : [declaration];
+
+    /// <summary><c>async let</c>: its value comes from a child task, so reading it awaits.</summary>
+    public bool IsAsyncLet { get; internal set; }
 
     public bool IsMutable { get; } = isMutable;
 }

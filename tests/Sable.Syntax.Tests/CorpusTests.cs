@@ -12,7 +12,9 @@ public sealed class CorpusTests {
             var data = new TheoryData<string>();
             var directory = Path.Combine(TestHelpers.RepositoryRoot, "examples");
             foreach (var file in Directory.GetFiles(directory, "*.sab", SearchOption.AllDirectories)) {
-                data.Add(Path.GetFileName(file));
+                // Relative to examples/, so that a program of its own
+                // directory — examples/ssg/ssg.sab — is found again.
+                data.Add(Path.GetRelativePath(directory, file));
             }
 
             return data;

@@ -733,7 +733,16 @@ Written so far (`tests/Sable.CodeGen.Tests/LibraryTests.cs`):
   `isPrime`, `squareRoot`, `floor`/`ceiling`/`round`, and `Random`.
 - `Sable.Text`: `repeating`, `joined`, `reversed`, `hasPrefix`/`hasSuffix`,
   `find`, `contains`, `replacing`, `splitting`, padding, case mapping, and
-  `TextBuilder`.
+  `TextBuilder`. Formatting and parsing (`TextLibraryTests.cs`): integers
+  in any radix from 2 to 36 with a width, a fill (a '0' goes after the
+  sign) and a letter case, `parseInt` in a radix (none on overflow), and
+  `formatted(x, decimals: n)` for F64 — the digits of `%.*f`, rounded half
+  to even on the value's exact binary expansion, worked out in Sable with
+  base-10^9 limbs rather than asked of printf or .NET, so native and
+  interpreted agree to the last digit. Also `format("{} is {1}", args)`
+  templates, `lines`, `trimmedStart`/`trimmedEnd`, `isBlank`,
+  `removingPrefix`/`removingSuffix`, `findLast`, `occurrences` and
+  `escapedHtml`.
 - `Sable.Collections`: `Stack`, `Queue`, `HashMap` and `HashSet` (open
   addressing over `Hashable`), and a merge sort for `Comparable` or by a
   predicate.
@@ -753,7 +762,25 @@ arguments, user operators found through a type parameter's constraints,
 operators and witnesses on primitive types lowered, and reachability-based
 emission. Next: reflection (4.2), streaming I/O (`Stream`, buffered
 readers and writers, memory-mapped files), and the names the plan lists that are not yet here
-(`Deque`, `OrderedDictionary`, `Heap`, formatting and parsing).
+(`Deque`, `OrderedDictionary`, `Heap`, Unicode tables, regex).
+
+### The first real program
+
+`examples/ssg/ssg.sab` is a static site generator, some 640 lines of Sable: it
+reads a directory of Markdown pages with front matter and a template,
+renders a pragmatic Markdown subset (headings with unique ids, paragraphs,
+emphasis, code, links and images, nested lists, quotes, rules, fenced code)
+and writes a page each, an index newest first, a page of tags, and the
+static files; `sable run examples/ssg/ssg.sab -- <site> <out>` (`run` now
+passes what follows `--` to the program). `StaticSiteTests.cs` builds the
+sample site in `examples/ssg/site` both ways and requires the same output
+and the same files, byte for byte, with nothing leaked. Writing it found:
+default arguments were checked but never passed (now filled in by the
+binder, bound where the callee is declared, and a label may skip
+defaulted parameters); string ordering (`a < b`) did not lower; `[]` as
+an argument had no type; `HashMap<String, String[>..]>()` parsed as
+comparisons; a conditional could not be broken before its `?`; and
+String's hash overflowed past a dozen characters.
 
 ### Async, as implemented
 
@@ -786,7 +813,8 @@ to the state machine where tasks are many.
 - [ ] Dictionary/List/String within 15% of their .NET equivalents on a
       standard benchmark set
 - [ ] A real program ships: a static site generator or an HTTP service, in
-      Sable, used daily by the team
+      Sable, used daily by the team — written (`examples/ssg`, see "The
+      first real program"); daily use is still to come
 
 ---
 

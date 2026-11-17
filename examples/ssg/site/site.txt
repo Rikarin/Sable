@@ -1,0 +1,2 @@
+name: Sable Notes
+tagline: A language, a compiler, and the things learned building them.

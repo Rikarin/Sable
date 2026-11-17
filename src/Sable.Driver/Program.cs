@@ -5,7 +5,7 @@ using Sable.SIL;
 using Sable.Syntax;
 
 // sable build <file.sab> [-o <output>] [--emit sil|llvm-ir] [-O0] [-g] [--exclusivity=checked|unchecked]
-// sable run   <file.sab> [-O0] [-g] [--exclusivity=checked|unchecked]
+// sable run   <file.sab> [-O0] [-g] [--exclusivity=checked|unchecked] [-- <arguments>]
 //
 // The single toolchain binary of docs/05, as far as Phase 2 takes it:
 // compile one file to a native executable, or compile and run it.
@@ -21,9 +21,15 @@ string? emit = null;
 var optimise = true;
 var debug = false;
 bool? exclusivity = null;
+var arguments = new List<string>();
 
 for (var i = 1; i < args.Length; i++) {
     switch (args[i]) {
+        case "--" when command == "run":
+            // Everything after '--' is the program's.
+            arguments.AddRange(args[(i + 1)..]);
+            i = args.Length;
+            break;
         case "-o" when i + 1 < args.Length: output = args[++i]; break;
         case "--emit" when i + 1 < args.Length: emit = args[++i]; break;
         case "-O0": optimise = false; break;
@@ -96,7 +102,12 @@ if (command == "build") {
 }
 
 try {
-    using var process = Process.Start(new ProcessStartInfo(executable)) ?? throw new InvalidOperationException();
+    var start = new ProcessStartInfo(executable);
+    foreach (var argument in arguments) {
+        start.ArgumentList.Add(argument);
+    }
+
+    using var process = Process.Start(start) ?? throw new InvalidOperationException();
     process.WaitForExit();
     return process.ExitCode;
 } finally {
@@ -113,10 +124,11 @@ static void Report(IReadOnlyList<string> errors) {
 static int Usage(int code) {
     var writer = code == 0 ? Console.Out : Console.Error;
     writer.WriteLine("usage: sable build <file.sab> [-o <output>] [--emit sil|llvm-ir] [-O0] [-g] [--exclusivity=checked|unchecked]");
-    writer.WriteLine("       sable run   <file.sab> [-O0] [-g] [--exclusivity=checked|unchecked]");
+    writer.WriteLine("       sable run   <file.sab> [-O0] [-g] [--exclusivity=checked|unchecked] [-- <arguments>]");
     writer.WriteLine();
     writer.WriteLine("  build              compile to a native executable (default name: the file's)");
-    writer.WriteLine("  run                compile, run, and exit with the program's exit code");
+    writer.WriteLine("  run                compile, run, and exit with the program's exit code;");
+    writer.WriteLine("                     what follows '--' is passed to the program");
     writer.WriteLine("  --emit sil         print the verified SIL instead of building");
     writer.WriteLine("  --emit llvm-ir     print the LLVM IR instead of building");
     writer.WriteLine("  -O0                build without LLVM's optimiser");

@@ -19,8 +19,9 @@ public sealed record BuiltBinary(string Package, string Name, string Path, Profi
 
 /// <summary>
 ///     Builds packages: each binary is its entry file, the package's library
-///     files, and every dependency's library files, compiled as one program
-///     (docs/05 §5.4 will make that incremental; today it is whole-program).
+///     files, and every dependency's library files, compiled as one program —
+///     incrementally (<see cref="IncrementalBuild" />, docs/05 §5.4): in a
+///     debug build each package separately, and only what changed.
 ///     Executables go to <c>target/&lt;profile&gt;/</c>.
 /// </summary>
 public static class PackageBuilder {

@@ -41,8 +41,9 @@ public sealed class SilUnitInfo {
 
     /// <summary>
     ///     What this unit assumed about the program's types — each class's
-    ///     vtable, each struct's deinit and fields — one line per type. Every
-    ///     unit of a program must agree, or the units cannot be linked.
+    ///     superclass, deinit, fields and vtable, each struct's deinit — one
+    ///     line per type. Every unit of a program must agree, or the units
+    ///     cannot be linked.
     /// </summary>
     public SortedDictionary<string, string> Abi { get; } = new(StringComparer.Ordinal);
 }

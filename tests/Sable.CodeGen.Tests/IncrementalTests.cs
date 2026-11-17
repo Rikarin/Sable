@@ -461,6 +461,56 @@ public sealed class IncrementalTests {
         Assert.Equal(("kept\n", 0), PackageFixture.Execute(built[0].Path));
     }
 
+    [Fact]
+    public void UnitsThatDisagreeAboutAClassAreNotLinked() {
+        if (!CanBuild) {
+            return;
+        }
+
+        // A class declared in a body, subclassing another unit's class: the
+        // other unit cannot see it, and takes the superclass to have no
+        // subclasses. Their records of it disagree, and the program is built whole.
+        var directory = Directory.CreateTempSubdirectory("sable-disagree-").FullName;
+        try {
+            File.WriteAllText(Path.Combine(directory, "base.sab"), """
+                module T
+
+                import Sable.IO
+
+                open class Base {
+                    init() { }
+                    open fn name() -> String { return "base" }
+                }
+
+                fn show(_ b: Base) {
+                    print(b.name())
+                }
+                """);
+            File.WriteAllText(Path.Combine(directory, "main.sab"), """
+                module T
+
+                fn main() {
+                    class Local: Base {
+                        init() { super.init() }
+                        override fn name() -> String { return "local" }
+                    }
+                    show(Local())
+                    show(Base())
+                }
+                """);
+            UnitPlan Unit(string name) => new(name, [new SourceFile(Path.Combine(directory, name + ".sab"), name + ".sab", [])]);
+            var log = new StringWriter();
+            var executable = Path.Combine(directory, "program");
+            var outcome = IncrementalBuild.Build([Unit("main"), Unit("base")], new BuildSettings("dev", false, directory, true), executable, Path.Combine(directory, "cache"), null, log);
+            Assert.True(outcome.Succeeded, string.Join("\n", outcome.Errors));
+            Assert.Equal("whole", outcome.Kind);
+            Assert.Contains("disagree about class T.Base", log.ToString());
+            Assert.Equal(("local\nbase\n", 0), PackageFixture.Execute(executable));
+        } finally {
+            Directory.Delete(directory, true);
+        }
+    }
+
     // ---- Interface fingerprints ---------------------------------------------
 
     static string Fingerprint(string source) {

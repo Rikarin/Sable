@@ -1450,12 +1450,6 @@ pointer to their bytes; the standard library's own source lines (its
 functions name a file the debugger cannot find); expression evaluation in
 Sable syntax (`expression` is lldb's C); and gdb.
 
-### Exit criteria
-- [ ] Cold build of a 100-package graph < 60 s; warm incremental < 1 s
-- [x] LSP responds to completion in < 50 ms at p95 on a 200k-line project —
-      p95 5.2–9.4 ms on 205k lines, typing into function bodies while the
-      server rebuilds in the background (`tools/Sable.LspBench`)
-
 ### Incremental builds, as implemented
 
 In `src/Sable.Driver/Build/` (`IncrementalBuild`, `InterfaceFingerprint`),
@@ -1602,12 +1596,24 @@ separately compiled builds (lldb reads DWARF from the cached objects
 through the debug map; `sable clean` removes them); `sable test` and
 `sable bench` still compile whole.
 
+### Not built in Phase 5
+
+Of docs/05 §5.1's commands, all but two exist (with `debug`, `lint` and
+`yank` beside them). `sable bindgen` waits for a foreign-function interface,
+which the language does not have yet; `sable toolchain` waits for released
+toolchains to manage. Build scripts (§5.6) are read but not run, and the
+registry is a directory, not a network service.
+
 ### Exit criteria
 - [x] Cold build of a 100-package graph < 60 s; warm incremental < 1 s
   (5.7 s cold and 0.88 s after a function body edit, on the 110k-line
   graph above; an edit to an interface still rebuilds every unit, 5.8 s)
-- [ ] LSP responds to completion in < 50 ms at p95 on a 200k-line project
-- [ ] A third party publishes a package without talking to the team
+- [x] LSP responds to completion in < 50 ms at p95 on a 200k-line project —
+      p95 5.2–9.4 ms on 205k lines, typing into function bodies while the
+      server rebuilds in the background (`tools/Sable.LspBench`)
+- [ ] A third party publishes a package without talking to the team — the
+      tooling is there (`sable new`, `publish`, a signed registry, `explain`,
+      `doc`); what is missing is a network registry and a third party
 
 ---
 

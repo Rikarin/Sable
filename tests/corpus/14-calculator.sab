@@ -1,0 +1,314 @@
+module Corpus.Calculator
+
+// A tokenizer and a precedence-climbing evaluator. Written against the type
+// checker, like the other corpus programs, and for the same reason: real
+// code decides whether the language works.
+
+public enum TokenKind {
+    Number
+    Plus
+    Minus
+    Star
+    Slash
+    Percent
+    Caret
+    OpenParen
+    CloseParen
+    Name
+    End
+}
+
+public struct Token {
+    public var kind: TokenKind
+    public var text: String
+    public var value: F64
+    public var position: Int
+}
+
+public union LexError {
+    BadCharacter(at: Int, found: Char)
+    BadNumber(at: Int)
+}
+
+public struct Lexer {
+    public var text: String
+    public var position: Int
+
+    public fn atEnd() -> Bool {
+        return position >= text.count
+    }
+
+    public fn current() -> Char? {
+        if atEnd() {
+            return none
+        }
+        return text.at(position)
+    }
+
+    public mutating fn skipSpaces() {
+        while !atEnd() && text.at(position).isWhitespace {
+            position = position + 1
+        }
+    }
+
+    public mutating fn next() throws(LexError) -> Token {
+        skipSpaces()
+
+        if atEnd() {
+            return Token { kind: .End, text: "", value: 0.0, position: position }
+        }
+
+        let start = position
+        let c = text.at(position)
+
+        if c.isDigit {
+            return try number(start)
+        }
+
+        if c.isLetter {
+            return name(start)
+        }
+
+        position = position + 1
+
+        guard let kind = punctuation(c) else {
+            throw LexError.BadCharacter(at: start, found: c)
+        }
+
+        return Token {
+            kind: kind,
+            text: String.fromChar(c),
+            value: 0.0,
+            position: start,
+        }
+    }
+
+    public fn punctuation(_ c: Char) -> TokenKind? {
+        return match c {
+            case '+' => TokenKind.Plus
+            case '-' => TokenKind.Minus
+            case '*' => TokenKind.Star
+            case '/' => TokenKind.Slash
+            case '%' => TokenKind.Percent
+            case '^' => TokenKind.Caret
+            case '(' => TokenKind.OpenParen
+            case ')' => TokenKind.CloseParen
+            default => none
+        }
+    }
+
+    public mutating fn number(_ start: Int) throws(LexError) -> Token {
+        while !atEnd() && text.at(position).isDigit {
+            position = position + 1
+        }
+
+        if !atEnd() && text.at(position) == '.' {
+            position = position + 1
+            while !atEnd() && text.at(position).isDigit {
+                position = position + 1
+            }
+        }
+
+        let slice = text.slice(from: start, to: position)
+        guard let value = slice.toF64() else {
+            throw LexError.BadNumber(at: start)
+        }
+
+        return Token { kind: .Number, text: slice, value: value, position: start }
+    }
+
+    public mutating fn name(_ start: Int) -> Token {
+        while !atEnd() && (text.at(position).isLetter || text.at(position).isDigit) {
+            position = position + 1
+        }
+
+        let slice = text.slice(from: start, to: position)
+        return Token { kind: .Name, text: slice, value: 0.0, position: start }
+    }
+}
+
+public fn tokenize(_ text: String) throws(LexError) -> Token[>..] {
+    var lexer = Lexer { text: text, position: 0 }
+    var tokens: Token[>..] = []
+
+    while true {
+        let token = try lexer.next()
+        tokens.append(token)
+        if token.kind == TokenKind.End {
+            return tokens
+        }
+    }
+}
+
+// ---- Evaluation ----------------------------------------------------------
+
+public union EvalError {
+    Lexing(cause: LexError)
+    UnexpectedToken(at: Int)
+    UnknownName(name: String)
+    DivisionByZero(at: Int)
+}
+
+public struct Binding {
+    public var name: String
+    public var value: F64
+}
+
+public struct Evaluator {
+    public var tokens: Token[>..]
+    public var index: Int
+    public var bindings: Binding[>..]
+
+    public fn peek() -> Token {
+        return tokens.removeLast()
+    }
+
+    public mutating fn take() -> Token {
+        let token = peek()
+        index = index + 1
+        return token
+    }
+
+    public fn lookup(_ name: String) -> F64? {
+        for binding in bindings {
+            if binding.name == name {
+                return binding.value
+            }
+        }
+        return none
+    }
+
+    public mutating fn expression(_ minimum: Int) throws(EvalError) -> F64 {
+        var left = try unary()
+
+        while true {
+            let token = peek()
+            guard let power = precedence(token.kind) else {
+                return left
+            }
+
+            if power < minimum {
+                return left
+            }
+
+            let operation = take()
+            let rightAssociative = operation.kind == TokenKind.Caret
+            let next = rightAssociative ? power : power + 1
+            let right = try expression(next)
+
+            left = try apply(operation, left, right)
+        }
+    }
+
+    public mutating fn unary() throws(EvalError) -> F64 {
+        let token = peek()
+
+        if token.kind == TokenKind.Minus {
+            let ignored = take()
+            let value = try unary()
+            return 0.0 - value
+        }
+
+        return try primary()
+    }
+
+    public mutating fn primary() throws(EvalError) -> F64 {
+        let token = take()
+
+        if token.kind == TokenKind.Number {
+            return token.value
+        }
+
+        if token.kind == TokenKind.Name {
+            guard let value = lookup(token.text) else {
+                throw EvalError.UnknownName(name: token.text)
+            }
+            return value
+        }
+
+        if token.kind == TokenKind.OpenParen {
+            let value = try expression(0)
+            let close = take()
+            if close.kind != TokenKind.CloseParen {
+                throw EvalError.UnexpectedToken(at: close.position)
+            }
+            return value
+        }
+
+        throw EvalError.UnexpectedToken(at: token.position)
+    }
+
+    public fn apply(_ operation: Token, _ left: F64, _ right: F64) throws(EvalError) -> F64 {
+        return match operation.kind {
+            case .Plus => left + right
+            case .Minus => left - right
+            case .Star => left * right
+            case .Slash => try divide(operation, left, right)
+            case .Percent => try modulo(operation, left, right)
+            case .Caret => power(left, right)
+            default => { throw EvalError.UnexpectedToken(at: operation.position) }
+        }
+    }
+
+    public fn divide(_ operation: Token, _ left: F64, _ right: F64) throws(EvalError) -> F64 {
+        if right == 0.0 {
+            throw EvalError.DivisionByZero(at: operation.position)
+        }
+        return left / right
+    }
+
+    public fn modulo(_ operation: Token, _ left: F64, _ right: F64) throws(EvalError) -> F64 {
+        if right == 0.0 {
+            throw EvalError.DivisionByZero(at: operation.position)
+        }
+        return left % right
+    }
+
+    public fn power(_ base: F64, _ exponent: F64) -> F64 {
+        var result = 1.0
+        var remaining = 0
+        while remaining < 8 {
+            result = result * base
+            remaining = remaining + 1
+        }
+        return result
+    }
+}
+
+public fn precedence(_ kind: TokenKind) -> Int? {
+    return match kind {
+        case .Plus => 1
+        case .Minus => 1
+        case .Star => 2
+        case .Slash => 2
+        case .Percent => 2
+        case .Caret => 3
+        default => none
+    }
+}
+
+public fn evaluate(_ text: String, _ bindings: Binding[>..]) -> F64? {
+    let tokens = try? tokenize(text)
+    guard let ready = tokens else {
+        return none
+    }
+
+    var evaluator = Evaluator { tokens: ready, index: 0, bindings: bindings }
+    return try? evaluator.expression(0)
+}
+
+public fn describeError(_ error: EvalError) -> String {
+    return match error {
+        case .Lexing(let cause) => describeLexError(cause)
+        case .UnexpectedToken(let at) => "unexpected token at " + at.toString()
+        case .UnknownName(let name) => "unknown name " + name
+        case .DivisionByZero(let at) => "division by zero at " + at.toString()
+    }
+}
+
+public fn describeLexError(_ error: LexError) -> String {
+    return match error {
+        case .BadCharacter(let at, let found) => "bad character at " + at.toString()
+        case .BadNumber(let at) => "bad number at " + at.toString()
+    }
+}

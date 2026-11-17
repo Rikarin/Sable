@@ -1178,7 +1178,9 @@ imported by hand there. `sable debug <file.sab> [--batch] [-o <command>]… [--
 (`$LLDB`, else `lldb`) with the plugin loaded.
 `tests/Sable.CodeGen.Tests/DebuggerFormatterTests.cs` drives the real lldb;
 it passes vacuously where lldb cannot trace a process — as in the emulated
-x64 container on an arm64 Mac.
+x64 container on an arm64 Mac, where lldb 21 launches the program but it
+stops at once with SIGILL. There only the DWARF check runs, with
+`llvm-dwarfdump-21 --verify`; the formatters are verified on macOS.
 
 Not yet: lexical scopes (every local is in its function's scope, so a
 shadowed name shows twice); union payload field names (SIL keeps a tuple, so

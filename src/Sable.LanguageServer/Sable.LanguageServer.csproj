@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>Sable.LanguageServer</RootNamespace>
+    <AssemblyName>Sable.LanguageServer</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Sable.SIL for root inference: the inferred-roots inlay hint reads its summaries. -->
+    <ProjectReference Include="../Sable.SIL/Sable.SIL.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Sable.LanguageServer.Tests" />
+  </ItemGroup>
+</Project>

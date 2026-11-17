@@ -109,12 +109,12 @@ public sealed partial class SemanticModel {
     ///     ending there — the caret just after a name finds the name.
     /// </summary>
     public static SyntaxToken FindToken(SyntaxNode root, int position) {
-        var at = TokenAt(root, position);
+        var at = FindTokenAt(root, position);
         if (!at.IsNone && at.Span.Start <= position && position < at.Span.End && IsWord(at)) {
             return at;
         }
 
-        if (position > 0 && TokenAt(root, position - 1) is { IsNone: false } before && before.Span.End == position && IsWord(before)) {
+        if (position > 0 && FindTokenAt(root, position - 1) is { IsNone: false } before && before.Span.End == position && IsWord(before)) {
             return before;
         }
 
@@ -125,7 +125,7 @@ public sealed partial class SemanticModel {
         token.Kind == SyntaxKind.IdentifierToken || token.IsKeyword || token.IsLiteral;
 
     /// <summary>The token whose full span, trivia included, holds a position; the last one for the end of the text.</summary>
-    static SyntaxToken TokenAt(SyntaxNode root, int position) {
+    public static SyntaxToken FindTokenAt(SyntaxNode root, int position) {
         var node = root;
         while (true) {
             SyntaxNodeOrToken? last = null;

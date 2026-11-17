@@ -1,0 +1,335 @@
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using Sable.Symbols;
+using Sable.Syntax;
+
+namespace Sable.LanguageServer;
+
+public sealed partial class LanguageServer {
+    /// <summary>The analysis of exactly a snapshot: what a request about declarations and references needs.</summary>
+    async Task<Analysis> AnalysisOfAsync(WorkspaceSnapshot snapshot) =>
+        await _analyses.GetAsync(await LoadedAsync(snapshot));
+
+    /// <summary>
+    ///     The snapshot once the workspace's files are loaded: a request that
+    ///     arrived while they were being read is about the documents it saw,
+    ///     which the newer snapshot has unchanged, along with the rest.
+    /// </summary>
+    async Task<WorkspaceSnapshot> LoadedAsync(WorkspaceSnapshot snapshot) {
+        await _loading;
+        var current = _workspace.Current;
+        return current.Generation > snapshot.Generation && snapshot.Documents.Values.All(d => ReferenceEquals(current.Find(d.Uri)?.Tree, d.Tree))
+            ? current
+            : snapshot;
+    }
+
+    // -----------------------------------------------------------------------
+    // Hover
+    // -----------------------------------------------------------------------
+
+    async Task<JsonNode?> HoverAsync(WorkspaceSnapshot snapshot, JsonElement parameters, CancellationToken cancellation) {
+        var (document, offset) = Locate(snapshot, parameters);
+        var analysis = await AnalysisOfAsync(snapshot);
+        cancellation.ThrowIfCancellationRequested();
+
+        lock (analysis.Gate) {
+            var model = analysis.Model(document.Tree);
+            var token = SemanticModel.FindToken(document.Tree.Root, offset);
+            if (token.IsNone) {
+                return null;
+            }
+
+            var markdown = new StringBuilder();
+            if (model.GetSymbolOfToken(token) is { } symbol) {
+                markdown.Append("```sable\n").Append(SymbolDisplay.Signature(symbol)).Append("\n```");
+                if (Container(symbol) is { } container) {
+                    markdown.Append("\n\nin `").Append(container).Append('`');
+                }
+
+                if (SymbolDisplay.Documentation(symbol) is { } documentation) {
+                    markdown.Append("\n\n---\n\n").Append(documentation);
+                }
+            } else if (ExpressionAt(token) is { } expression
+                       && SemanticModel.FindMember(document.Tree.Root, offset) is { } member
+                       && model.GetMemberModel(member).GetTypeOf(expression) is { IsError: false } type) {
+                markdown.Append("```sable\n").Append(SymbolDisplay.Type(type)).Append("\n```");
+            } else {
+                return null;
+            }
+
+            return new JsonObject {
+                ["contents"] = new JsonObject { ["kind"] = "markdown", ["value"] = markdown.ToString() },
+                ["range"] = RangeNode(document.Lines.RangeOf(token.Span))
+            };
+        }
+    }
+
+    static string? Container(Symbol symbol) =>
+        symbol switch {
+            LocalSymbol or ParameterSymbol or ModuleSymbol => null,
+            _ => symbol.ContainingSymbol switch {
+                ModuleSymbol { Name.Length: > 0 } module => module.Name,
+                NamedTypeSymbol type => type.QualifiedName,
+                ExtensionSymbol extension => extension.ExtendedType.QualifiedName,
+                _ => null,
+            },
+        };
+
+    static ExpressionSyntax? ExpressionAt(SyntaxToken token) {
+        for (var node = token.Parent; node is not null; node = node.Parent) {
+            if (node is ExpressionSyntax expression) {
+                return expression;
+            }
+
+            if (node is StatementSyntax) {
+                return null;
+            }
+        }
+
+        return null;
+    }
+
+    // -----------------------------------------------------------------------
+    // Definition
+    // -----------------------------------------------------------------------
+
+    async Task<JsonNode?> DefinitionAsync(WorkspaceSnapshot snapshot, JsonElement parameters, CancellationToken cancellation) {
+        var (document, offset) = Locate(snapshot, parameters);
+        var analysis = await AnalysisOfAsync(snapshot);
+        cancellation.ThrowIfCancellationRequested();
+
+        lock (analysis.Gate) {
+            var symbol = analysis.Model(document.Tree).GetSymbolAt(offset);
+            if (symbol is null || symbol.DeclaringSyntax.IsEmpty) {
+                return null;
+            }
+
+            return LocationOf(analysis, symbol);
+        }
+    }
+
+    /// <summary>Where a symbol is declared: its name in its declaration, in a workspace file or a library one.</summary>
+    JsonNode? LocationOf(Analysis analysis, Symbol symbol) {
+        var declaration = symbol.DeclaringSyntax[0];
+        var name = SemanticModel.NameTokenOf(symbol, declaration);
+        var span = name.IsNone ? declaration.Span : name.Span;
+
+        if (analysis.DocumentOf(declaration) is { } owner) {
+            return new JsonObject { ["uri"] = owner.Uri, ["range"] = RangeNode(owner.Lines.RangeOf(span)) };
+        }
+
+        if (analysis.TreeOf(declaration) is not { } tree) {
+            return null;
+        }
+
+        // A library file lives in the compiler; the editor is shown a copy.
+        var path = Path.Combine(_options.LibraryCacheDirectory, tree.Text.FileName);
+        try {
+            if (!File.Exists(path) || File.ReadAllText(path) != tree.Text.Text) {
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                File.WriteAllText(path, tree.Text.Text);
+            }
+        } catch (IOException e) {
+            Log($"cannot write {path}: {e.Message}");
+            return null;
+        }
+
+        return new JsonObject { ["uri"] = Workspace.UriOf(path), ["range"] = RangeNode(LineIndex.Of(tree.Text).RangeOf(span)) };
+    }
+
+    // -----------------------------------------------------------------------
+    // References and rename
+    // -----------------------------------------------------------------------
+
+    async Task<JsonNode?> ReferencesAsync(WorkspaceSnapshot snapshot, JsonElement parameters, CancellationToken cancellation) {
+        var (document, offset) = Locate(snapshot, parameters);
+        var analysis = await AnalysisOfAsync(snapshot);
+        var includeDeclaration = parameters.Get("context")?.GetBool("includeDeclaration") ?? true;
+
+        Symbol? symbol;
+        lock (analysis.Gate) {
+            symbol = analysis.Model(document.Tree).GetSymbolAt(offset);
+        }
+
+        if (symbol is null) {
+            return null;
+        }
+
+        var locations = new JsonArray();
+        foreach (var (owner, span, isDeclaration) in References(analysis, symbol, document, cancellation)) {
+            if (includeDeclaration || !isDeclaration) {
+                locations.Add(new JsonObject { ["uri"] = owner.Uri, ["range"] = RangeNode(owner.Lines.RangeOf(span)) });
+            }
+        }
+
+        return locations;
+    }
+
+    /// <summary>
+    ///     Every reference to a symbol in the workspace's documents, its
+    ///     declaration included. A local or a parameter can only be named in
+    ///     its own file; anything else is looked for in each file whose text
+    ///     mentions it, binding only the members that do.
+    /// </summary>
+    static List<(Document Document, TextSpan Span, bool IsDeclaration)> References(Analysis analysis, Symbol symbol, Document origin, CancellationToken cancellation) {
+        var documents = symbol is LocalSymbol or ParameterSymbol
+            ? [origin]
+            : analysis.Snapshot.Documents.Values.OrderBy(static d => d.Uri, StringComparer.Ordinal).ToList();
+
+        var declaration = !symbol.DeclaringSyntax.IsEmpty ? SemanticModel.NameTokenOf(symbol, symbol.DeclaringSyntax[0]) : default;
+        var declaredIn = !symbol.DeclaringSyntax.IsEmpty ? analysis.DocumentOf(symbol.DeclaringSyntax[0]) : null;
+
+        var found = new List<(Document, TextSpan, bool)>();
+        foreach (var document in documents) {
+            cancellation.ThrowIfCancellationRequested();
+            if (!document.Tree.Text.Text.Contains(symbol.Name, StringComparison.Ordinal)) {
+                continue;
+            }
+
+            IReadOnlyList<TextSpan> spans;
+            lock (analysis.Gate) {
+                spans = analysis.Model(document.Tree).FindReferences(symbol);
+            }
+
+            foreach (var span in spans) {
+                var isDeclaration = ReferenceEquals(declaredIn, document) && !declaration.IsNone && declaration.Span == span;
+                found.Add((document, span, isDeclaration));
+            }
+        }
+
+        return found;
+    }
+
+    async Task<JsonNode?> PrepareRenameAsync(WorkspaceSnapshot snapshot, JsonElement parameters, CancellationToken cancellation) {
+        var (document, offset) = Locate(snapshot, parameters);
+        var analysis = await AnalysisOfAsync(snapshot);
+        lock (analysis.Gate) {
+            var token = SemanticModel.FindToken(document.Tree.Root, offset);
+            var symbol = token.IsNone ? null : analysis.Model(document.Tree).GetSymbolOfToken(token);
+            CheckRenamable(analysis, symbol);
+            return new JsonObject {
+                ["range"] = RangeNode(document.Lines.RangeOf(token.Span)),
+                ["placeholder"] = token.Text
+            };
+        }
+    }
+
+    /// <summary>
+    ///     Refuses what cannot be renamed: nothing, what the compiler made up,
+    ///     and anything the library declares — renaming <c>print</c> would
+    ///     rename it for every program.
+    /// </summary>
+    static void CheckRenamable(Analysis analysis, Symbol? symbol) {
+        if (symbol is null) {
+            throw new LspException(LspException.RequestFailed, "there is nothing here to rename");
+        }
+
+        if (symbol.DeclaringSyntax.IsEmpty || analysis.TreeOf(symbol.DeclaringSyntax[0]) is not { } tree) {
+            throw new LspException(LspException.RequestFailed, $"'{symbol.Name}' is built into the compiler and cannot be renamed");
+        }
+
+        if (analysis.IsLibrary(tree) || analysis.DocumentOf(symbol.DeclaringSyntax[0]) is null) {
+            throw new LspException(LspException.RequestFailed, $"'{symbol.Name}' is declared in the standard library and cannot be renamed");
+        }
+
+        if (SemanticModel.NameTokenOf(symbol, symbol.DeclaringSyntax[0]).IsNone) {
+            throw new LspException(LspException.RequestFailed, $"'{symbol.Name}' cannot be renamed");
+        }
+    }
+
+    async Task<JsonNode?> RenameAsync(WorkspaceSnapshot snapshot, JsonElement parameters, CancellationToken cancellation) {
+        var (document, offset) = Locate(snapshot, parameters);
+        var newName = parameters.GetString("newName") ?? "";
+        if (!IsIdentifier(newName) || SyntaxFacts.KeywordKind(newName) != SyntaxKind.IdentifierToken) {
+            throw new LspException(LspException.InvalidParams, $"'{newName}' is not a name");
+        }
+
+        var analysis = await AnalysisOfAsync(snapshot);
+        Symbol? symbol;
+        lock (analysis.Gate) {
+            symbol = analysis.Model(document.Tree).GetSymbolAt(offset);
+            CheckRenamable(analysis, symbol);
+        }
+
+        var changes = new JsonObject();
+        foreach (var group in References(analysis, symbol!, document, cancellation).GroupBy(static r => r.Document.Uri)) {
+            var edits = new JsonArray();
+            foreach (var (owner, span, _) in group) {
+                edits.Add(new JsonObject { ["range"] = RangeNode(owner.Lines.RangeOf(span)), ["newText"] = newName });
+            }
+
+            changes[group.Key] = edits;
+        }
+
+        return new JsonObject { ["changes"] = changes };
+    }
+
+    // -----------------------------------------------------------------------
+    // Document symbols
+    // -----------------------------------------------------------------------
+
+    /// <summary>The file's declarations as an outline: syntax alone, so it needs no compilation.</summary>
+    Task<JsonNode?> DocumentSymbolsAsync(WorkspaceSnapshot snapshot, JsonElement parameters, CancellationToken cancellation) {
+        var uri = parameters.Get("textDocument")?.GetString("uri") ?? "";
+        var document = snapshot.Find(uri) ?? throw new LspException(LspException.InvalidParams, $"'{uri}' is not open");
+        var root = document.Tree.Root is CompilationUnitSyntax unit ? unit.Members : default;
+        return Task.FromResult<JsonNode?>(Outline(document, root));
+    }
+
+    static JsonArray Outline(Document document, IEnumerable<SyntaxNode> members) {
+        var symbols = new JsonArray();
+        foreach (var member in members) {
+            var (name, children) = member switch {
+                StructDeclarationSyntax type => (type.Identifier.Text, (IEnumerable<SyntaxNode>)type.Members),
+                ClassDeclarationSyntax type => (type.Identifier.Text, type.Members),
+                ActorDeclarationSyntax type => (type.Identifier.Text, type.Members),
+                ProtocolDeclarationSyntax type => (type.Identifier.Text, type.Members),
+                UnionDeclarationSyntax type => (type.Identifier.Text, type.Members),
+                EnumDeclarationSyntax type => (type.Identifier.Text, type.Members),
+                ExtensionDeclarationSyntax extension => ("extension " + extension.Type.ToString().Trim(), extension.Members),
+                FunctionDeclarationSyntax function => (function.Identifier.Text, []),
+                InitDeclarationSyntax => ("init", []),
+                DeinitDeclarationSyntax => ("deinit", []),
+                SubscriptDeclarationSyntax => ("subscript", []),
+                OperatorDeclarationSyntax op => ("operator " + op.OperatorToken.Text, []),
+                FieldDeclarationSyntax field => (NameOf(field.Declarator), []),
+                ConstDeclarationSyntax constant => (constant.Identifier.Text, []),
+                AliasDeclarationSyntax alias => (alias.Identifier.Text, []),
+                UnionCaseDeclarationSyntax unionCase => (unionCase.Identifier.Text, []),
+                EnumCaseDeclarationSyntax enumCase => (enumCase.Identifier.Text, []),
+                _ => ("", Array.Empty<SyntaxNode>()),
+            };
+
+            if (name.Length == 0) {
+                continue;
+            }
+
+            var selection = member.DescendantTokens().FirstOrDefault(t => t.Text == name || name.EndsWith(t.Text, StringComparison.Ordinal) && t.Text.Length > 0);
+            var node = new JsonObject {
+                ["name"] = name,
+                ["detail"] = Detail(member),
+                ["kind"] = SymbolDisplay.SymbolKindOf(member),
+                ["range"] = RangeNode(document.Lines.RangeOf(member.Span)),
+                ["selectionRange"] = RangeNode(document.Lines.RangeOf(selection.IsNone ? member.Span : selection.Span))
+            };
+
+            var nested = Outline(document, children);
+            if (nested.Count > 0) {
+                node["children"] = nested;
+            }
+
+            symbols.Add(node);
+        }
+
+        return symbols;
+    }
+
+    static string Detail(SyntaxNode member) =>
+        member switch {
+            FunctionDeclarationSyntax function => function.Parameters.ToString().Trim() + (function.ReturnClause is { } result ? " " + result.ToString().Trim() : ""),
+            InitDeclarationSyntax init => init.Parameters.ToString().Trim(),
+            FieldDeclarationSyntax field => field.Declarator.TypeAnnotation?.Type.ToString().Trim() ?? "",
+            _ => "",
+        };
+}

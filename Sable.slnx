@@ -4,6 +4,7 @@
     <Project Path="src/Sable.Symbols/Sable.Symbols.csproj" />
     <Project Path="src/Sable.SIL/Sable.SIL.csproj" />
     <Project Path="src/Sable.CodeGen/Sable.CodeGen.csproj" />
+    <Project Path="src/Sable.LanguageServer/Sable.LanguageServer.csproj" />
     <Project Path="src/Sable.Driver/Sable.Driver.csproj" />
   </Folder>
   <Folder Name="/tools/">
@@ -15,5 +16,6 @@
     <Project Path="tests/Sable.Symbols.Tests/Sable.Symbols.Tests.csproj" />
     <Project Path="tests/Sable.SIL.Tests/Sable.SIL.Tests.csproj" />
     <Project Path="tests/Sable.CodeGen.Tests/Sable.CodeGen.Tests.csproj" />
+    <Project Path="tests/Sable.LanguageServer.Tests/Sable.LanguageServer.Tests.csproj" />
   </Folder>
 </Solution>

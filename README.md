@@ -118,7 +118,7 @@ dotnet test Sable.slnx
 | `Sable.Symbols` — throughput: 100,000 lines in under 5 s | done |
 | Everything downstream (SIL, codegen, runtime) | not started |
 
-**1,087 tests green**, and every file in [examples/](examples/) parses as a
+**1,088 tests green**, and every file in [examples/](examples/) parses as a
 complete compilation unit with no diagnostics and an exact round-trip.
 [tests/corpus/](tests/corpus/) holds programs that must type-check with
 nothing to say, and [tests/negative/](tests/negative/) holds programs that

@@ -1023,9 +1023,7 @@ public sealed class Binder
         }
 
         // User sequences need the Iterable protocol, which arrives with the
-        // standard library.
-        if (Core.IsInteger(sequence)) return sequence;
-
+        // standard library. A bare integer is not one: 'for i in 0..<n'.
         _diagnostics.Error(ErrorCode.ERR_NotIterable, syntax.Span,
             $"'{sequence.ToDisplayString()}' cannot be iterated");
         return ErrorTypeSymbol.Instance;

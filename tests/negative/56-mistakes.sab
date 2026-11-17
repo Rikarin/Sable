@@ -1,0 +1,87 @@
+module Negative.Mistakes
+
+// The mistakes somebody actually makes, rather than the ones a grammar
+// suggests.
+
+public struct User {
+    public var name: String
+    public var age: Int
+    public var email: String?
+}
+
+public union Result { Ok(value: Int), Failed(reason: String) }
+
+fn forgettingTheOptional(_ u: User) -> String {
+    return u.email                      //! S3004 expected 'String'
+}
+
+fn forgettingToUnwrap(_ u: User) -> Int {
+    return u.email.count                //! S3011 may hold nothing
+}
+
+fn comparingAgainstTheWrongField(_ u: User) -> Bool {
+    return u.name == u.age              //! S3009
+}
+
+fn swappingArguments() -> User {
+    return User(name: 30, age: "Ada", email: none)   //! S3007
+}
+
+fn forgettingAField() -> User {
+    return User { name: "Ada", age: 30 }   //! S3028 'email' is not initialised
+}
+
+fn misspellingAField() -> User {
+    return User { name: "Ada", age: 30, mail: none }   //! S2002 has no field named 'mail' //! S3028 'email' is not initialised
+}
+
+fn returningTheUnionNotTheCase(_ r: Result) -> Int {
+    return r                            //! S3004 expected 'Int'
+}
+
+fn forgettingToMatch(_ r: Result) -> Int {
+    return r.value                      //! S2002 has no member named 'value'
+}
+
+fn usingAnIndexAsAName(_ users: User[]) -> String {
+    return users.name                   //! S2002 has no member named 'name'
+}
+
+fn iteratingACount(_ users: User[]) -> Int {
+    var total = 0
+    for u in users.count {               //! S3013 cannot be iterated
+        total = total + 1
+    }
+    return total
+}
+
+fn assigningInACondition(_ n: Int) -> Int {
+    var m = 0
+    if m = n {                          //! S3004 expected 'Bool'
+        return 1
+    }
+    return 0
+}
+
+fn usingTheResultOfAVoidFunction(_ u: User) -> Int {
+    return log(u)                       //! S3004 expected 'Int'
+}
+
+fn log(_ u: User) { }
+
+fn callingAMutatingMethodOnALiteral() -> Int {
+    return 1.bump()                     //! S2002 has no member named 'bump'
+}
+
+fn shadowingAndThenUsingTheOuter(_ n: Int) -> Int {
+    if true {
+        let n = "text"
+        return n                        //! S3004 expected 'Int'
+    }
+    return n
+}
+
+fn returningFromInsideAClosure(_ n: Int) -> Int {
+    let f = () => { return n }
+    f()
+}                                       //! S6004 not all paths return

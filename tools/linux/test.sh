@@ -20,8 +20,10 @@ docker run --rm --platform linux/amd64 \
         export DEBIAN_FRONTEND=noninteractive
         apt-get update -qq >/dev/null
         apt-get install -y -qq clang lldb >/dev/null 2>&1
-        cp -r /source /work
-        rm -rf /work/.git
+        # The repository without its history or local tool state (worktrees
+        # under .claude can be many times the size of the tree itself).
+        mkdir /work
+        tar -C /source --exclude=./.git --exclude=./.claude -cf - . | tar -C /work -xf -
         find /work -type d \( -name bin -o -name obj \) -prune -exec rm -rf {} +
         cd /work
         uname -m

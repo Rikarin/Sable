@@ -1,0 +1,54 @@
+module Negative.Attributes
+
+@frozen
+public struct Frozen { public var n: Int }
+
+@noncopy
+public struct Lock { private let handle: Int }
+
+@flags
+public enum Permissions: U32 { None = 0, Read = 1 }
+
+public struct Escaping {
+    public fn hold(@escaping _ callback: () -> Int) -> Int {
+        return callback()
+    }
+}
+
+@inline_layout
+public struct Packed { public var a: U8, public var b: U8 }
+
+@MainActor
+public class Window { public var title: String = "" }
+
+fn attributesDoNotChangeTheType(_ f: Frozen) -> Int {
+    return f                            //! S3004 expected 'Int'
+}
+
+fn anAttributedStructIsStillAStruct(_ p: Packed) -> U8 {
+    return p.a
+}
+
+fn anAttributedFieldIsStillChecked(_ p: Packed) -> Int {
+    return p.a                          //! S3004 expected 'Int'
+}
+
+fn aFlagsEnumIsStillAnEnum(_ p: Permissions) -> U32 {
+    return p                            //! S3004 expected 'U32'
+}
+
+fn anEscapingParameterIsStillAFunction(_ e: Escaping) -> Int {
+    return e.hold(() => { return 1 })
+}
+
+fn anEscapingParameterIsStillChecked(_ e: Escaping) -> Int {
+    return e.hold(() => { return "x" }) //! S3004 expected 'Int'
+}
+
+fn aNoncopyStructIsStillAStruct(_ l: Lock) -> Int {
+    return l                            //! S3004 expected 'Int'
+}
+
+fn anActorClassIsStillAClass(_ w: Window) -> String {
+    return w.title
+}

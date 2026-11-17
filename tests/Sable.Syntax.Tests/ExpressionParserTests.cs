@@ -245,6 +245,29 @@ public sealed class ExpressionParserTests
         Assert.Equal("(Builtin # file)", Parse("#file"));
 
     [Fact]
+    public void ANestedTupleIndexIsTakenApart()
+    {
+        // '0.1' lexes as a float literal, because by spec/lexical.md §6 that
+        // is what it is; after a '.' it is two indices.
+        Assert.Equal(
+            "(MemberAccess (MemberAccess (IdentifierName p) . (IdentifierName 0)) "
+            + ". (IdentifierName 1))",
+            Parse("p.0.1"));
+    }
+
+    [Fact]
+    public void ANestedTupleIndexRoundTrips()
+    {
+        var tree = SyntaxTree.ParseExpression("p . 0.1 ");
+        Assert.Equal("p . 0.1 ", tree.Root.ToFullString());
+        Assert.False(tree.HasErrors, tree.FormatDiagnostics());
+    }
+
+    [Fact]
+    public void AFloatLiteralIsStillAFloatLiteral() =>
+        Assert.Equal("(Literal 0.1)", Parse("0.1"));
+
+    [Fact]
     public void ParsesSelfAndSuper()
     {
         Assert.Equal("(MemberAccess (Self self) . (IdentifierName x))", Parse("self.x"));

@@ -1,0 +1,75 @@
+module Negative.Tuples
+
+public struct Point { public var x: Int, public var y: Int }
+
+fn aTupleElementByName(_ p: (first: Int, second: String)) -> Int {
+    return p.first
+}
+
+fn theWrongElementType(_ p: (first: Int, second: String)) -> String {
+    return p.first                      //! S3004 expected 'String'
+}
+
+fn byPosition(_ p: (Int, String)) -> String {
+    return p.1
+}
+
+fn pastTheEnd(_ p: (Int, String)) -> Int {
+    return p.2                          //! S2002 has no element named '2'
+}
+
+fn aNameThatIsNotThere(_ p: (Int, String)) -> Int {
+    return p.first                      //! S2002 has no element named 'first'
+}
+
+fn nestedTuples(_ p: ((Int, Int), String)) -> Int {
+    return p.0.1
+}
+
+fn aNestedElementIsChecked(_ p: ((Int, Int), String)) -> String {
+    return p.0.1                        //! S3004 expected 'String'
+}
+
+fn aTupleOfOneIsItsElement(_ n: Int) -> Int {
+    return (n)
+}
+
+fn tupleArity(_ p: (Int, Int)) -> (Int, Int, Int) {
+    return p                            //! S3004
+}
+
+fn tupleEquality(_ a: (Int, Int), _ b: (Int, Int)) -> Bool {
+    return a == b
+}
+
+fn tupleInequalityAcrossShapes(_ a: (Int, Int), _ b: (Int, String)) -> Bool {
+    return a == b                       //! S3009
+}
+
+fn aTupleIsNotAStruct(_ p: (x: Int, y: Int)) -> Point {
+    return p                            //! S3004
+}
+
+fn aStructIsNotATuple(_ p: Point) -> (x: Int, y: Int) {
+    return p                            //! S3004
+}
+
+fn aTupleInAnArray(_ xs: (Int, String)[]) -> String {
+    for pair in xs {
+        return pair.1
+    }
+    return ""
+}
+
+fn matchingATuple(_ p: (Int, String)) -> Int {
+    return match p {
+        case (let n, let s) => n
+    }
+}
+
+fn matchingATupleWithTheWrongArity(_ p: (Int, String)) -> Int {
+    return match p {
+        case (let n, let s, let t) => n   //! S6000
+        default => 0                      //! S6006 earlier arms
+    }
+}

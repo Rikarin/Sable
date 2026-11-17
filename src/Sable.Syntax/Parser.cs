@@ -439,6 +439,16 @@ internal sealed class Parser
                 case SyntaxKind.QuestionDotToken:
                 {
                     var op = EatToken();
+
+                    // 'pair.0.1' lexes '0.1' as a float literal, because by
+                    // spec/lexical.md §6 that is what it is. Here it is two
+                    // indices, so the token is taken apart.
+                    if (IsTupleIndexPath(Current)) 
+                    {
+                        expression = ParseTupleIndexPath(expression, op);
+                        continue;
+                    }
+
                     var name = ParseSimpleName(memberContext: true);
                     expression = new MemberAccessExpressionGreen(expression, op, name);
                     continue;
@@ -553,6 +563,56 @@ internal sealed class Parser
         if (Current.Kind == SyntaxKind.IntegerLiteralToken) return EatToken();
 
         return Current.IsKeywordToken() ? EatToken() : EatIdentifier();
+    }
+
+    /// <summary>True for a float literal that is really a path of indices.</summary>
+    private static bool IsTupleIndexPath(GreenToken token)
+    {
+        if (token.Kind != SyntaxKind.FloatLiteralToken) return false;
+
+        var text = token.Text;
+        var sawDigit = false;
+
+        foreach (var c in text)
+        {
+            if (char.IsAsciiDigit(c)) { sawDigit = true; continue; }
+            if (c == '.' && sawDigit) continue;
+            return false;
+        }
+
+        return text.Contains('.', StringComparison.Ordinal) && !text.EndsWith('.');
+    }
+
+    /// <summary>
+    /// Turns <c>.0.1</c> into two member accesses, keeping the text exactly.
+    /// </summary>
+    /// <remarks>
+    /// The float token's leading trivia goes on the first index and its
+    /// trailing trivia on the last, with zero-width dots between, so
+    /// concatenating the tree still reproduces the source.
+    /// </remarks>
+    private GreenNode ParseTupleIndexPath(GreenNode expression, GreenToken firstDot)
+    {
+        var token = EatToken();
+        var parts = token.Text.Split('.');
+
+        var dot = firstDot;
+        for (var i = 0; i < parts.Length; i++)
+        {
+            var leading = i == 0 ? token.Leading : [];
+            var trailing = i == parts.Length - 1 ? token.Trailing : [];
+
+            var index = new GreenToken(
+                SyntaxKind.IntegerLiteralToken, parts[i], leading, trailing);
+
+            expression = new MemberAccessExpressionGreen(
+                expression, dot, new IdentifierNameGreen(index));
+
+            if (i + 1 < parts.Length)
+                dot = new GreenToken(SyntaxKind.DotToken, ".", [], []);
+        }
+
+        return expression;
     }
 
     private GreenToken EatIdentifier()

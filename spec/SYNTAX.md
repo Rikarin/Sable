@@ -158,7 +158,7 @@ Foo<T, U>           // generic instantiation
 ### Type aliases
 
 ```sable
-alias Handler = (Request) async throws(HttpError) -> Response
+alias Handler = async (Request) throws(HttpError) -> Response
 alias Matrix  = F64[4][4]
 alias Id<T>   = U64                            // generic alias (phantom)
 public alias Result<T> = Outcome<T, AppError>  // partial application
@@ -201,12 +201,15 @@ fn divmod(a: Int, b: Int) -> (q: Int, r: Int) {        // labelled tuple return
 A parameter may declare an **external label** before its internal name:
 
 ```sable
-fn move(from source: Point, to dest: Point) { }
-move(from: a, to: b)
+fn relocate(from source: Point, to dest: Point) { }
+relocate(from: a, to: b)
 
 fn insert(_ item: T, at index: Int) { }    // '_' suppresses the label
 insert(x, at: 3)
 ```
+
+An external label may be a keyword, so `fn first(where p: ...)` and
+`parseExpr(tokens, in: arena)` both read naturally.
 
 With a single name, the label is the parameter name and is **optional** at the
 call site (the C# rule):
@@ -223,15 +226,20 @@ resize(width: 800, height: 600)    // both legal
 fn connect(host: String, port: Int = 443, timeout: Duration = .seconds(30)) { }
 fn sum(of values: Int...) -> Int { }
 fn tryParse(_ s: String, out value: Int) -> Bool { }   // 'out' = must assign
-fn scale(inout v: Vec3, by f: F32) { v.x *= f; v.y *= f; v.z *= f }
+fn scale(v: inout Vec3, by f: F32) { v.x *= f; v.y *= f; v.z *= f }
 ```
 
 ### Ownership modifiers
 
+An ownership modifier may be written before the parameter name or after the
+colon. The second form is preferred once a parameter has an external label,
+because `fn read(into buf: inout U8[])` reads better than
+`fn read(inout into buf: U8[])`.
+
 ```sable
 fn store(consuming h: FileHandle)   // takes ownership
 fn peek(borrowing h: FileHandle)    // may not escape it
-fn edit(inout v: Vec3)              // exclusive mutable access
+fn edit(v: inout Vec3)              // exclusive mutable access
 fn pick(ref a: Node, ref b: Node) -> ref Node    // root inferred as {a, b}
 ```
 
@@ -281,6 +289,17 @@ struct Vec3 {
     operator + (a: Vec3, b: Vec3) -> Vec3 => Vec3(a.x+b.x, a.y+b.y, a.z+b.z)
 }
 ```
+
+Inside a type body a field may be written without `let` or `var`:
+
+```sable
+struct Vec3 { x: F32, y: F32, z: F32 }      // three immutable stored fields
+```
+
+A bare `name: Type` declares an immutable stored field; `var` is written when
+the field is mutable. Members of a one-line body are separated by `,` or `;`;
+members on their own lines need no separator. The same holds for union and
+enum cases.
 
 - `mutating` is required on methods that modify `self`.
 - Structs get a memberwise initialiser unless they declare their own `init`.
@@ -577,6 +596,14 @@ class Temperature {
 
     lazy var expensive: Report = computeReport()    // computed once, on first read
 }
+```
+
+A brace directly after a field's initialiser opens an accessor block, not a
+trailing closure, when its first token is `get`, `set`, `willSet` or `didSet`:
+
+```sable
+var tracked: Int = 0 { willSet { } }    // accessors
+let handler = makeHandler { }           // trailing closure
 ```
 
 ### Subscripts
@@ -898,6 +925,9 @@ fn caller() throws(AppError) {
 }
 ```
 
+`try e catch { ... }` supplies an inline fallback: the braces hold a block
+whose value replaces the failed expression, or an expression after `catch`.
+
 - `throws` with no type means `throws(any Error)`.
 - `rethrows` means "throws iff a closure parameter throws".
 - Error conversion between types requires a `From` conformance, applied
@@ -945,6 +975,9 @@ actor Counter {
 let c = Counter()
 await c.increment()
 ```
+
+`async let` is a statement, not an expression: it starts a child task bound to
+the enclosing scope.
 
 - Structured concurrency: child tasks cannot outlive their parent scope.
 - `Sendable` is a protocol; crossing an isolation boundary requires it, checked
@@ -1001,6 +1034,10 @@ fn sizeTable<T>() -> Int => MemoryLayout<T>.size
 #endif
 ```
 
+`const` declares a compile-time constant on its own (`const Pi = 3.14`) and
+modifies a function in `const fn`. Functions and types may also be declared
+inside a function body, where they are ordinary statements.
+
 `const fn` bodies run in the compiler's interpreter. They may allocate, loop,
 and call other `const fn`s; they may not do I/O or touch `unsafe`.
 
@@ -1020,7 +1057,7 @@ and call other `const fn`s; they may not do I/O or touch `unsafe`.
 | `@escaping` | closure param | Closure may outlive the call |
 | `@polymorphic` | generic fn | Single boxed instantiation |
 | `@deprecated("use X")` | any | Warning at use site |
-| `@available(macos 14, *)` | any | Platform gate |
+| `@available(macos: "14.0")` | any | Platform gate |
 | `@extern("c", "name")` | fn | Foreign import |
 | `@export("name")` | fn, var | Foreign export |
 | `@packed` / `@align(16)` | struct | Layout control |

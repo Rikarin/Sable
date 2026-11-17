@@ -72,14 +72,14 @@ formatter removes redundant ones.
 ### Reserved
 
 ```
-abstract   actor      alias      any        as         assert     async
-await      borrowing  break      case       catch      class      const
+abstract   actor      alias      any        as         async      await
+borrowing  break      case       catch      class      const
 consuming  continue   default    defer      deinit     do         else
 enum       extension  fallthrough false     final      fn         for
 guard      if         import     in         init       inout      internal
 is         lazy       let        match      module     move       mutating
 none       nonisolated nonmutating open     operator   out        override
-package    postfix    precondition prefix   private    protocol   public
+package    postfix    prefix     private    protocol   public
 ref        region     repeat     required   rethrows   return     sealed
 self
 Self       some       static     struct     subscript  super      switch
@@ -92,9 +92,12 @@ unsafe     using      var        weak       where      while
 Usable as identifiers except in their syntactic position:
 
 ```
-associatedtype  convenience  didSet  get  in (capture lists)  newValue
-oldValue  set  willSet  comptime  unchecked
+associatedtype  convenience  didSet  get  in (capture lists)
+set  willSet  comptime  unchecked
 ```
+
+`newValue` and `oldValue` are ordinary identifiers that a property's `set`,
+`willSet` and `didSet` bodies have implicitly bound; they are not keywords.
 
 ### Reserved for future use
 

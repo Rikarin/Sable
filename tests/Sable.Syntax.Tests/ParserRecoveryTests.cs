@@ -125,6 +125,44 @@ public sealed class ParserRecoveryTests
     }
 
     [Fact]
+    public void RandomFileSoupTerminatesAndRoundTrips()
+    {
+        string[] pieces =
+        [
+            "module", "import", "fn", "struct", "class", "protocol", "union", "enum",
+            "extension", "alias", "const", "public", "private", "static", "open", "@",
+            "attr", "{", "}", "(", ")", "<", ">", "[", "]", ":", ",", ".", "=", "=>",
+            "->", "where", "let", "var", "get", "set", "init", "deinit", "subscript",
+            "operator", "+", "A", "B", "1", "\"s\"", "inout", "throws", "async", "...",
+        ];
+
+        var random = new Random(20261119);
+        for (var iteration = 0; iteration < 500; iteration++)
+        {
+            var builder = new StringBuilder();
+            var length = random.Next(1, 20);
+            for (var i = 0; i < length; i++)
+                builder.Append(pieces[random.Next(pieces.Length)]).Append(' ');
+
+            var source = builder.ToString();
+            AssertRoundTrips(SyntaxTree.Parse(source), source);
+        }
+    }
+
+    [Fact]
+    public void DeeplyNestedTypesDoNotHang()
+    {
+        var builder = new StringBuilder();
+        for (var i = 0; i < 60; i++) builder.Append("struct S").Append(i).Append(" { ");
+        for (var i = 0; i < 60; i++) builder.Append("} ");
+
+        var source = builder.ToString();
+        var tree = SyntaxTree.Parse(source);
+        Assert.False(tree.HasErrors, tree.FormatDiagnostics());
+        AssertRoundTrips(tree, source);
+    }
+
+    [Fact]
     public void DeeplyNestedBlocksDoNotHang()
     {
         var source = new string('{', 150) + new string('}', 150);

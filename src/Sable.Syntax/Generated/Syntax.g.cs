@@ -53,6 +53,13 @@ public abstract class ConditionSyntax : SyntaxNode
         : base(green, parent, position) { }
 }
 
+/// <summary>Any declaration: a type, a member, or a top-level item.</summary>
+public abstract class DeclarationSyntax : SyntaxNode
+{
+    private protected DeclarationSyntax(GreenNode green, SyntaxNode? parent, int position)
+        : base(green, parent, position) { }
+}
+
 /// <summary>A type name, optionally with type arguments: `Int`, `List&lt;T&gt;`.</summary>
 public sealed class SimpleNameTypeSyntax : TypeSyntax
 {
@@ -802,10 +809,11 @@ public sealed class PostfixUnaryExpressionSyntax : ExpressionSyntax
     public override void Accept(SyntaxVisitor visitor) => visitor.VisitPostfixUnaryExpression(this);
 }
 
-/// <summary>`try e`, `try? e` or `try! e`.</summary>
+/// <summary>`try e`, `try? e`, `try! e`, and the inline-recovery form `try e catch { ... }`.</summary>
 public sealed class TryExpressionSyntax : ExpressionSyntax
 {
     private ExpressionSyntax? _expression;
+    private SyntaxNode? _catchBody;
 
     internal TryExpressionSyntax(GreenNode green, SyntaxNode? parent, int position)
         : base(green, parent, position) { }
@@ -813,10 +821,13 @@ public sealed class TryExpressionSyntax : ExpressionSyntax
     public SyntaxToken TryKeyword => GetToken(0);
     public SyntaxToken QuestionOrBangToken => GetToken(1);
     public ExpressionSyntax Expression => GetRed(ref _expression, 2);
+    public SyntaxToken CatchKeyword => GetToken(3);
+    public SyntaxNode? CatchBody => GetRedOptional(ref _catchBody, 4);
 
     internal override SyntaxNode? GetNodeSlot(int index) => index switch
     {
         2 => Expression,
+        4 => CatchBody,
         _ => null,
     };
 
@@ -1781,14 +1792,15 @@ public sealed class LocalDeclarationStatementSyntax : StatementSyntax
     internal LocalDeclarationStatementSyntax(GreenNode green, SyntaxNode? parent, int position)
         : base(green, parent, position) { }
 
-    public SyntaxToken UsingKeyword => GetToken(0);
-    public SyntaxToken LetOrVarKeyword => GetToken(1);
-    public VariableDeclaratorSyntax Declarator => GetRed(ref _declarator, 2);
-    public SyntaxToken SemicolonToken => GetToken(3);
+    public SyntaxToken AsyncKeyword => GetToken(0);
+    public SyntaxToken UsingKeyword => GetToken(1);
+    public SyntaxToken LetOrVarKeyword => GetToken(2);
+    public VariableDeclaratorSyntax Declarator => GetRed(ref _declarator, 3);
+    public SyntaxToken SemicolonToken => GetToken(4);
 
     internal override SyntaxNode? GetNodeSlot(int index) => index switch
     {
-        2 => Declarator,
+        3 => Declarator,
         _ => null,
     };
 
@@ -2337,6 +2349,25 @@ public sealed class ComptimeStatementSyntax : StatementSyntax
     public override void Accept(SyntaxVisitor visitor) => visitor.VisitComptimeStatement(this);
 }
 
+/// <summary>A declaration used as a statement: a nested function or a local type.</summary>
+public sealed class DeclarationStatementSyntax : StatementSyntax
+{
+    private DeclarationSyntax? _declaration;
+
+    internal DeclarationStatementSyntax(GreenNode green, SyntaxNode? parent, int position)
+        : base(green, parent, position) { }
+
+    public DeclarationSyntax Declaration => GetRed(ref _declaration, 0);
+
+    internal override SyntaxNode? GetNodeSlot(int index) => index switch
+    {
+        0 => Declaration,
+        _ => null,
+    };
+
+    public override void Accept(SyntaxVisitor visitor) => visitor.VisitDeclarationStatement(this);
+}
+
 /// <summary>`outer: for ... { ... }`.</summary>
 public sealed class LabeledStatementSyntax : StatementSyntax
 {
@@ -2356,6 +2387,954 @@ public sealed class LabeledStatementSyntax : StatementSyntax
     };
 
     public override void Accept(SyntaxVisitor visitor) => visitor.VisitLabeledStatement(this);
+}
+
+/// <summary>One source file: a module declaration, imports, and declarations.</summary>
+public sealed class CompilationUnitSyntax : SyntaxNode
+{
+    private ModuleDeclarationSyntax? _module;
+
+    internal CompilationUnitSyntax(GreenNode green, SyntaxNode? parent, int position)
+        : base(green, parent, position) { }
+
+    public ModuleDeclarationSyntax? Module => GetRedOptional(ref _module, 0);
+    public SyntaxList<ImportDeclarationSyntax> Imports => GetList<ImportDeclarationSyntax>(1);
+    public SyntaxList<SyntaxNode> Members => GetList<SyntaxNode>(2);
+    public SyntaxToken EndOfFileToken => GetToken(3);
+
+    internal override SyntaxNode? GetNodeSlot(int index) => index switch
+    {
+        0 => Module,
+        _ => null,
+    };
+
+    public override void Accept(SyntaxVisitor visitor) => visitor.VisitCompilationUnit(this);
+}
+
+public sealed class ModuleDeclarationSyntax : DeclarationSyntax
+{
+    private TypeSyntax? _name;
+
+    internal ModuleDeclarationSyntax(GreenNode green, SyntaxNode? parent, int position)
+        : base(green, parent, position) { }
+
+    public SyntaxList<AttributeSyntax> Attributes => GetList<AttributeSyntax>(0);
+    public SyntaxToken ModuleKeyword => GetToken(1);
+    public TypeSyntax Name => GetRed(ref _name, 2);
+
+    internal override SyntaxNode? GetNodeSlot(int index) => index switch
+    {
+        2 => Name,
+        _ => null,
+    };
+
+    public override void Accept(SyntaxVisitor visitor) => visitor.VisitModuleDeclaration(this);
+}
+
+/// <summary>`import A.B`, `import A.B as C`, `import A.B.{ X, Y }`, `import A.B.{ * }`.</summary>
+public sealed class ImportDeclarationSyntax : DeclarationSyntax
+{
+    private TypeSyntax? _name;
+    private ImportItemListSyntax? _items;
+
+    internal ImportDeclarationSyntax(GreenNode green, SyntaxNode? parent, int position)
+        : base(green, parent, position) { }
+
+    public SyntaxToken PublicKeyword => GetToken(0);
+    public SyntaxToken ImportKeyword => GetToken(1);
+    public TypeSyntax Name => GetRed(ref _name, 2);
+    public SyntaxToken AsKeyword => GetToken(3);
+    public SyntaxToken Alias => GetToken(4);
+    public ImportItemListSyntax? Items => GetRedOptional(ref _items, 5);
+
+    internal override SyntaxNode? GetNodeSlot(int index) => index switch
+    {
+        2 => Name,
+        5 => Items,
+        _ => null,
+    };
+
+    public override void Accept(SyntaxVisitor visitor) => visitor.VisitImportDeclaration(this);
+}
+
+public sealed class ImportItemListSyntax : SyntaxNode
+{
+    internal ImportItemListSyntax(GreenNode green, SyntaxNode? parent, int position)
+        : base(green, parent, position) { }
+
+    public SyntaxToken DotToken => GetToken(0);
+    public SyntaxToken OpenBraceToken => GetToken(1);
+    public SeparatedSyntaxList<ImportItemSyntax> Items => GetSeparatedList<ImportItemSyntax>(2);
+    public SyntaxToken CloseBraceToken => GetToken(3);
+
+    internal override SyntaxNode? GetNodeSlot(int index) => index switch
+    {
+        _ => null,
+    };
+
+    public override void Accept(SyntaxVisitor visitor) => visitor.VisitImportItemList(this);
+}
+
+public sealed class ImportItemSyntax : SyntaxNode
+{
+    internal ImportItemSyntax(GreenNode green, SyntaxNode? parent, int position)
+        : base(green, parent, position) { }
+
+    public SyntaxToken NameToken => GetToken(0);
+    public SyntaxToken AsKeyword => GetToken(1);
+    public SyntaxToken Alias => GetToken(2);
+
+    internal override SyntaxNode? GetNodeSlot(int index) => index switch
+    {
+        _ => null,
+    };
+
+    public override void Accept(SyntaxVisitor visitor) => visitor.VisitImportItem(this);
+}
+
+/// <summary>`@inline(always)`, `@reflectable`.</summary>
+public sealed class AttributeSyntax : SyntaxNode
+{
+    private TypeSyntax? _name;
+    private ArgumentListSyntax? _argumentList;
+
+    internal AttributeSyntax(GreenNode green, SyntaxNode? parent, int position)
+        : base(green, parent, position) { }
+
+    public SyntaxToken AtToken => GetToken(0);
+    public TypeSyntax Name => GetRed(ref _name, 1);
+    public ArgumentListSyntax? ArgumentList => GetRedOptional(ref _argumentList, 2);
+
+    internal override SyntaxNode? GetNodeSlot(int index) => index switch
+    {
+        1 => Name,
+        2 => ArgumentList,
+        _ => null,
+    };
+
+    public override void Accept(SyntaxVisitor visitor) => visitor.VisitAttribute(this);
+}
+
+public sealed class ParameterListSyntax : SyntaxNode
+{
+    internal ParameterListSyntax(GreenNode green, SyntaxNode? parent, int position)
+        : base(green, parent, position) { }
+
+    public SyntaxToken OpenToken => GetToken(0);
+    public SeparatedSyntaxList<ParameterSyntax> Parameters => GetSeparatedList<ParameterSyntax>(1);
+    public SyntaxToken CloseToken => GetToken(2);
+
+    internal override SyntaxNode? GetNodeSlot(int index) => index switch
+    {
+        _ => null,
+    };
+
+    public override void Accept(SyntaxVisitor visitor) => visitor.VisitParameterList(this);
+}
+
+/// <summary>`from source: Point`, `_ item: T`, `inout v: Vec3`, `values: Int...`.</summary>
+public sealed class ParameterSyntax : SyntaxNode
+{
+    private TypeSyntax? _type;
+    private EqualsValueClauseSyntax? _defaultValue;
+
+    internal ParameterSyntax(GreenNode green, SyntaxNode? parent, int position)
+        : base(green, parent, position) { }
+
+    public SyntaxList<AttributeSyntax> Attributes => GetList<AttributeSyntax>(0);
+    public SyntaxTokenList Modifiers => GetTokenList(1);
+    public SyntaxToken Label => GetToken(2);
+    public SyntaxToken Identifier => GetToken(3);
+    public SyntaxToken ColonToken => GetToken(4);
+    public SyntaxToken TypeModifierToken => GetToken(5);
+    public TypeSyntax Type => GetRed(ref _type, 6);
+    public SyntaxToken EllipsisToken => GetToken(7);
+    public EqualsValueClauseSyntax? DefaultValue => GetRedOptional(ref _defaultValue, 8);
+
+    internal override SyntaxNode? GetNodeSlot(int index) => index switch
+    {
+        6 => Type,
+        8 => DefaultValue,
+        _ => null,
+    };
+
+    public override void Accept(SyntaxVisitor visitor) => visitor.VisitParameter(this);
+}
+
+/// <summary>`-&gt; T` or `-&gt; ref T`.</summary>
+public sealed class ReturnClauseSyntax : SyntaxNode
+{
+    private TypeSyntax? _type;
+
+    internal ReturnClauseSyntax(GreenNode green, SyntaxNode? parent, int position)
+        : base(green, parent, position) { }
+
+    public SyntaxToken ArrowToken => GetToken(0);
+    public TypeSyntax Type => GetRed(ref _type, 1);
+
+    internal override SyntaxNode? GetNodeSlot(int index) => index switch
+    {
+        1 => Type,
+        _ => null,
+    };
+
+    public override void Accept(SyntaxVisitor visitor) => visitor.VisitReturnClause(this);
+}
+
+public sealed class GenericParameterListSyntax : SyntaxNode
+{
+    internal GenericParameterListSyntax(GreenNode green, SyntaxNode? parent, int position)
+        : base(green, parent, position) { }
+
+    public SyntaxToken LessThanToken => GetToken(0);
+    public SeparatedSyntaxList<GenericParameterSyntax> Parameters => GetSeparatedList<GenericParameterSyntax>(1);
+    public SyntaxToken GreaterThanToken => GetToken(2);
+
+    internal override SyntaxNode? GetNodeSlot(int index) => index switch
+    {
+        _ => null,
+    };
+
+    public override void Accept(SyntaxVisitor visitor) => visitor.VisitGenericParameterList(this);
+}
+
+/// <summary>`T`, `out T`, `T: Comparable`, `T: P = Int`.</summary>
+public sealed class GenericParameterSyntax : SyntaxNode
+{
+    private TypeSyntax? _constraint;
+    private TypeSyntax? _defaultType;
+
+    internal GenericParameterSyntax(GreenNode green, SyntaxNode? parent, int position)
+        : base(green, parent, position) { }
+
+    public SyntaxList<AttributeSyntax> Attributes => GetList<AttributeSyntax>(0);
+    public SyntaxToken VarianceToken => GetToken(1);
+    public SyntaxToken Identifier => GetToken(2);
+    public SyntaxToken ColonToken => GetToken(3);
+    public TypeSyntax? Constraint => GetRedOptional(ref _constraint, 4);
+    public SyntaxToken EqualsToken => GetToken(5);
+    public TypeSyntax? DefaultType => GetRedOptional(ref _defaultType, 6);
+
+    internal override SyntaxNode? GetNodeSlot(int index) => index switch
+    {
+        4 => Constraint,
+        6 => DefaultType,
+        _ => null,
+    };
+
+    public override void Accept(SyntaxVisitor visitor) => visitor.VisitGenericParameter(this);
+}
+
+public sealed class WhereClauseSyntax : SyntaxNode
+{
+    internal WhereClauseSyntax(GreenNode green, SyntaxNode? parent, int position)
+        : base(green, parent, position) { }
+
+    public SyntaxToken WhereKeyword => GetToken(0);
+    public SeparatedSyntaxList<WhereConstraintSyntax> Constraints => GetSeparatedList<WhereConstraintSyntax>(1);
+
+    internal override SyntaxNode? GetNodeSlot(int index) => index switch
+    {
+        _ => null,
+    };
+
+    public override void Accept(SyntaxVisitor visitor) => visitor.VisitWhereClause(this);
+}
+
+/// <summary>`T: P` or `S.Element == T`.</summary>
+public sealed class WhereConstraintSyntax : SyntaxNode
+{
+    private TypeSyntax? _left;
+    private TypeSyntax? _right;
+
+    internal WhereConstraintSyntax(GreenNode green, SyntaxNode? parent, int position)
+        : base(green, parent, position) { }
+
+    public TypeSyntax Left => GetRed(ref _left, 0);
+    public SyntaxToken OperatorToken => GetToken(1);
+    public TypeSyntax Right => GetRed(ref _right, 2);
+
+    internal override SyntaxNode? GetNodeSlot(int index) => index switch
+    {
+        0 => Left,
+        2 => Right,
+        _ => null,
+    };
+
+    public override void Accept(SyntaxVisitor visitor) => visitor.VisitWhereConstraint(this);
+}
+
+/// <summary>`: Base, Protocol1, Protocol2`.</summary>
+public sealed class BaseTypeListSyntax : SyntaxNode
+{
+    internal BaseTypeListSyntax(GreenNode green, SyntaxNode? parent, int position)
+        : base(green, parent, position) { }
+
+    public SyntaxToken ColonToken => GetToken(0);
+    public SeparatedSyntaxList<TypeSyntax> Types => GetSeparatedList<TypeSyntax>(1);
+
+    internal override SyntaxNode? GetNodeSlot(int index) => index switch
+    {
+        _ => null,
+    };
+
+    public override void Accept(SyntaxVisitor visitor) => visitor.VisitBaseTypeList(this);
+}
+
+public sealed class StructDeclarationSyntax : DeclarationSyntax
+{
+    private GenericParameterListSyntax? _typeParameters;
+    private BaseTypeListSyntax? _baseTypes;
+    private WhereClauseSyntax? _whereClause;
+
+    internal StructDeclarationSyntax(GreenNode green, SyntaxNode? parent, int position)
+        : base(green, parent, position) { }
+
+    public SyntaxList<AttributeSyntax> Attributes => GetList<AttributeSyntax>(0);
+    public SyntaxTokenList Modifiers => GetTokenList(1);
+    public SyntaxToken Keyword => GetToken(2);
+    public SyntaxToken Identifier => GetToken(3);
+    public GenericParameterListSyntax? TypeParameters => GetRedOptional(ref _typeParameters, 4);
+    public BaseTypeListSyntax? BaseTypes => GetRedOptional(ref _baseTypes, 5);
+    public WhereClauseSyntax? WhereClause => GetRedOptional(ref _whereClause, 6);
+    public SyntaxToken OpenBraceToken => GetToken(7);
+    public SyntaxList<SyntaxNode> Members => GetList<SyntaxNode>(8);
+    public SyntaxToken CloseBraceToken => GetToken(9);
+
+    internal override SyntaxNode? GetNodeSlot(int index) => index switch
+    {
+        4 => TypeParameters,
+        5 => BaseTypes,
+        6 => WhereClause,
+        _ => null,
+    };
+
+    public override void Accept(SyntaxVisitor visitor) => visitor.VisitStructDeclaration(this);
+}
+
+public sealed class ClassDeclarationSyntax : DeclarationSyntax
+{
+    private GenericParameterListSyntax? _typeParameters;
+    private BaseTypeListSyntax? _baseTypes;
+    private WhereClauseSyntax? _whereClause;
+
+    internal ClassDeclarationSyntax(GreenNode green, SyntaxNode? parent, int position)
+        : base(green, parent, position) { }
+
+    public SyntaxList<AttributeSyntax> Attributes => GetList<AttributeSyntax>(0);
+    public SyntaxTokenList Modifiers => GetTokenList(1);
+    public SyntaxToken Keyword => GetToken(2);
+    public SyntaxToken Identifier => GetToken(3);
+    public GenericParameterListSyntax? TypeParameters => GetRedOptional(ref _typeParameters, 4);
+    public BaseTypeListSyntax? BaseTypes => GetRedOptional(ref _baseTypes, 5);
+    public WhereClauseSyntax? WhereClause => GetRedOptional(ref _whereClause, 6);
+    public SyntaxToken OpenBraceToken => GetToken(7);
+    public SyntaxList<SyntaxNode> Members => GetList<SyntaxNode>(8);
+    public SyntaxToken CloseBraceToken => GetToken(9);
+
+    internal override SyntaxNode? GetNodeSlot(int index) => index switch
+    {
+        4 => TypeParameters,
+        5 => BaseTypes,
+        6 => WhereClause,
+        _ => null,
+    };
+
+    public override void Accept(SyntaxVisitor visitor) => visitor.VisitClassDeclaration(this);
+}
+
+public sealed class ActorDeclarationSyntax : DeclarationSyntax
+{
+    private GenericParameterListSyntax? _typeParameters;
+    private BaseTypeListSyntax? _baseTypes;
+    private WhereClauseSyntax? _whereClause;
+
+    internal ActorDeclarationSyntax(GreenNode green, SyntaxNode? parent, int position)
+        : base(green, parent, position) { }
+
+    public SyntaxList<AttributeSyntax> Attributes => GetList<AttributeSyntax>(0);
+    public SyntaxTokenList Modifiers => GetTokenList(1);
+    public SyntaxToken Keyword => GetToken(2);
+    public SyntaxToken Identifier => GetToken(3);
+    public GenericParameterListSyntax? TypeParameters => GetRedOptional(ref _typeParameters, 4);
+    public BaseTypeListSyntax? BaseTypes => GetRedOptional(ref _baseTypes, 5);
+    public WhereClauseSyntax? WhereClause => GetRedOptional(ref _whereClause, 6);
+    public SyntaxToken OpenBraceToken => GetToken(7);
+    public SyntaxList<SyntaxNode> Members => GetList<SyntaxNode>(8);
+    public SyntaxToken CloseBraceToken => GetToken(9);
+
+    internal override SyntaxNode? GetNodeSlot(int index) => index switch
+    {
+        4 => TypeParameters,
+        5 => BaseTypes,
+        6 => WhereClause,
+        _ => null,
+    };
+
+    public override void Accept(SyntaxVisitor visitor) => visitor.VisitActorDeclaration(this);
+}
+
+public sealed class ProtocolDeclarationSyntax : DeclarationSyntax
+{
+    private GenericParameterListSyntax? _typeParameters;
+    private BaseTypeListSyntax? _baseTypes;
+    private WhereClauseSyntax? _whereClause;
+
+    internal ProtocolDeclarationSyntax(GreenNode green, SyntaxNode? parent, int position)
+        : base(green, parent, position) { }
+
+    public SyntaxList<AttributeSyntax> Attributes => GetList<AttributeSyntax>(0);
+    public SyntaxTokenList Modifiers => GetTokenList(1);
+    public SyntaxToken Keyword => GetToken(2);
+    public SyntaxToken Identifier => GetToken(3);
+    public GenericParameterListSyntax? TypeParameters => GetRedOptional(ref _typeParameters, 4);
+    public BaseTypeListSyntax? BaseTypes => GetRedOptional(ref _baseTypes, 5);
+    public WhereClauseSyntax? WhereClause => GetRedOptional(ref _whereClause, 6);
+    public SyntaxToken OpenBraceToken => GetToken(7);
+    public SyntaxList<SyntaxNode> Members => GetList<SyntaxNode>(8);
+    public SyntaxToken CloseBraceToken => GetToken(9);
+
+    internal override SyntaxNode? GetNodeSlot(int index) => index switch
+    {
+        4 => TypeParameters,
+        5 => BaseTypes,
+        6 => WhereClause,
+        _ => null,
+    };
+
+    public override void Accept(SyntaxVisitor visitor) => visitor.VisitProtocolDeclaration(this);
+}
+
+/// <summary>`union Shape { ... }`, or `union Node.. { ... }` for a variant-sized union.</summary>
+public sealed class UnionDeclarationSyntax : DeclarationSyntax
+{
+    private GenericParameterListSyntax? _typeParameters;
+    private BaseTypeListSyntax? _baseTypes;
+    private WhereClauseSyntax? _whereClause;
+
+    internal UnionDeclarationSyntax(GreenNode green, SyntaxNode? parent, int position)
+        : base(green, parent, position) { }
+
+    public SyntaxList<AttributeSyntax> Attributes => GetList<AttributeSyntax>(0);
+    public SyntaxTokenList Modifiers => GetTokenList(1);
+    public SyntaxToken Keyword => GetToken(2);
+    public SyntaxToken Identifier => GetToken(3);
+    public SyntaxToken VariableSizeToken => GetToken(4);
+    public GenericParameterListSyntax? TypeParameters => GetRedOptional(ref _typeParameters, 5);
+    public BaseTypeListSyntax? BaseTypes => GetRedOptional(ref _baseTypes, 6);
+    public WhereClauseSyntax? WhereClause => GetRedOptional(ref _whereClause, 7);
+    public SyntaxToken OpenBraceToken => GetToken(8);
+    public SyntaxList<SyntaxNode> Members => GetList<SyntaxNode>(9);
+    public SyntaxToken CloseBraceToken => GetToken(10);
+
+    internal override SyntaxNode? GetNodeSlot(int index) => index switch
+    {
+        5 => TypeParameters,
+        6 => BaseTypes,
+        7 => WhereClause,
+        _ => null,
+    };
+
+    public override void Accept(SyntaxVisitor visitor) => visitor.VisitUnionDeclaration(this);
+}
+
+public sealed class EnumDeclarationSyntax : DeclarationSyntax
+{
+    private BaseTypeListSyntax? _baseTypes;
+
+    internal EnumDeclarationSyntax(GreenNode green, SyntaxNode? parent, int position)
+        : base(green, parent, position) { }
+
+    public SyntaxList<AttributeSyntax> Attributes => GetList<AttributeSyntax>(0);
+    public SyntaxTokenList Modifiers => GetTokenList(1);
+    public SyntaxToken Keyword => GetToken(2);
+    public SyntaxToken Identifier => GetToken(3);
+    public BaseTypeListSyntax? BaseTypes => GetRedOptional(ref _baseTypes, 4);
+    public SyntaxToken OpenBraceToken => GetToken(5);
+    public SyntaxList<SyntaxNode> Members => GetList<SyntaxNode>(6);
+    public SyntaxToken CloseBraceToken => GetToken(7);
+
+    internal override SyntaxNode? GetNodeSlot(int index) => index switch
+    {
+        4 => BaseTypes,
+        _ => null,
+    };
+
+    public override void Accept(SyntaxVisitor visitor) => visitor.VisitEnumDeclaration(this);
+}
+
+public sealed class ExtensionDeclarationSyntax : DeclarationSyntax
+{
+    private TypeSyntax? _type;
+    private BaseTypeListSyntax? _baseTypes;
+    private WhereClauseSyntax? _whereClause;
+
+    internal ExtensionDeclarationSyntax(GreenNode green, SyntaxNode? parent, int position)
+        : base(green, parent, position) { }
+
+    public SyntaxList<AttributeSyntax> Attributes => GetList<AttributeSyntax>(0);
+    public SyntaxTokenList Modifiers => GetTokenList(1);
+    public SyntaxToken Keyword => GetToken(2);
+    public TypeSyntax Type => GetRed(ref _type, 3);
+    public BaseTypeListSyntax? BaseTypes => GetRedOptional(ref _baseTypes, 4);
+    public WhereClauseSyntax? WhereClause => GetRedOptional(ref _whereClause, 5);
+    public SyntaxToken OpenBraceToken => GetToken(6);
+    public SyntaxList<SyntaxNode> Members => GetList<SyntaxNode>(7);
+    public SyntaxToken CloseBraceToken => GetToken(8);
+
+    internal override SyntaxNode? GetNodeSlot(int index) => index switch
+    {
+        3 => Type,
+        4 => BaseTypes,
+        5 => WhereClause,
+        _ => null,
+    };
+
+    public override void Accept(SyntaxVisitor visitor) => visitor.VisitExtensionDeclaration(this);
+}
+
+public sealed class FunctionDeclarationSyntax : DeclarationSyntax
+{
+    private TypeSyntax? _explicitProtocol;
+    private GenericParameterListSyntax? _typeParameters;
+    private ParameterListSyntax? _parameters;
+    private ThrowsSpecSyntax? _throwsSpec;
+    private ReturnClauseSyntax? _returnClause;
+    private WhereClauseSyntax? _whereClause;
+    private BlockSyntax? _body;
+    private ExpressionSyntax? _expressionBody;
+
+    internal FunctionDeclarationSyntax(GreenNode green, SyntaxNode? parent, int position)
+        : base(green, parent, position) { }
+
+    public SyntaxList<AttributeSyntax> Attributes => GetList<AttributeSyntax>(0);
+    public SyntaxTokenList Modifiers => GetTokenList(1);
+    public SyntaxToken FnKeyword => GetToken(2);
+    public TypeSyntax? ExplicitProtocol => GetRedOptional(ref _explicitProtocol, 3);
+    public SyntaxToken DotToken => GetToken(4);
+    public SyntaxToken Identifier => GetToken(5);
+    public GenericParameterListSyntax? TypeParameters => GetRedOptional(ref _typeParameters, 6);
+    public ParameterListSyntax Parameters => GetRed(ref _parameters, 7);
+    public SyntaxToken AsyncKeyword => GetToken(8);
+    public ThrowsSpecSyntax? ThrowsSpec => GetRedOptional(ref _throwsSpec, 9);
+    public ReturnClauseSyntax? ReturnClause => GetRedOptional(ref _returnClause, 10);
+    public WhereClauseSyntax? WhereClause => GetRedOptional(ref _whereClause, 11);
+    public BlockSyntax? Body => GetRedOptional(ref _body, 12);
+    public SyntaxToken ArrowToken => GetToken(13);
+    public ExpressionSyntax? ExpressionBody => GetRedOptional(ref _expressionBody, 14);
+
+    internal override SyntaxNode? GetNodeSlot(int index) => index switch
+    {
+        3 => ExplicitProtocol,
+        6 => TypeParameters,
+        7 => Parameters,
+        9 => ThrowsSpec,
+        10 => ReturnClause,
+        11 => WhereClause,
+        12 => Body,
+        14 => ExpressionBody,
+        _ => null,
+    };
+
+    public override void Accept(SyntaxVisitor visitor) => visitor.VisitFunctionDeclaration(this);
+}
+
+public sealed class InitDeclarationSyntax : DeclarationSyntax
+{
+    private GenericParameterListSyntax? _typeParameters;
+    private ParameterListSyntax? _parameters;
+    private ThrowsSpecSyntax? _throwsSpec;
+    private WhereClauseSyntax? _whereClause;
+    private BlockSyntax? _body;
+
+    internal InitDeclarationSyntax(GreenNode green, SyntaxNode? parent, int position)
+        : base(green, parent, position) { }
+
+    public SyntaxList<AttributeSyntax> Attributes => GetList<AttributeSyntax>(0);
+    public SyntaxTokenList Modifiers => GetTokenList(1);
+    public SyntaxToken InitKeyword => GetToken(2);
+    public SyntaxToken QuestionToken => GetToken(3);
+    public GenericParameterListSyntax? TypeParameters => GetRedOptional(ref _typeParameters, 4);
+    public ParameterListSyntax Parameters => GetRed(ref _parameters, 5);
+    public ThrowsSpecSyntax? ThrowsSpec => GetRedOptional(ref _throwsSpec, 6);
+    public WhereClauseSyntax? WhereClause => GetRedOptional(ref _whereClause, 7);
+    public BlockSyntax? Body => GetRedOptional(ref _body, 8);
+
+    internal override SyntaxNode? GetNodeSlot(int index) => index switch
+    {
+        4 => TypeParameters,
+        5 => Parameters,
+        6 => ThrowsSpec,
+        7 => WhereClause,
+        8 => Body,
+        _ => null,
+    };
+
+    public override void Accept(SyntaxVisitor visitor) => visitor.VisitInitDeclaration(this);
+}
+
+public sealed class DeinitDeclarationSyntax : DeclarationSyntax
+{
+    private BlockSyntax? _body;
+
+    internal DeinitDeclarationSyntax(GreenNode green, SyntaxNode? parent, int position)
+        : base(green, parent, position) { }
+
+    public SyntaxList<AttributeSyntax> Attributes => GetList<AttributeSyntax>(0);
+    public SyntaxTokenList Modifiers => GetTokenList(1);
+    public SyntaxToken DeinitKeyword => GetToken(2);
+    public BlockSyntax Body => GetRed(ref _body, 3);
+
+    internal override SyntaxNode? GetNodeSlot(int index) => index switch
+    {
+        3 => Body,
+        _ => null,
+    };
+
+    public override void Accept(SyntaxVisitor visitor) => visitor.VisitDeinitDeclaration(this);
+}
+
+public sealed class SubscriptDeclarationSyntax : DeclarationSyntax
+{
+    private GenericParameterListSyntax? _typeParameters;
+    private ParameterListSyntax? _parameters;
+    private ReturnClauseSyntax? _returnClause;
+    private WhereClauseSyntax? _whereClause;
+    private AccessorListSyntax? _accessors;
+    private ExpressionSyntax? _expressionBody;
+
+    internal SubscriptDeclarationSyntax(GreenNode green, SyntaxNode? parent, int position)
+        : base(green, parent, position) { }
+
+    public SyntaxList<AttributeSyntax> Attributes => GetList<AttributeSyntax>(0);
+    public SyntaxTokenList Modifiers => GetTokenList(1);
+    public SyntaxToken SubscriptKeyword => GetToken(2);
+    public GenericParameterListSyntax? TypeParameters => GetRedOptional(ref _typeParameters, 3);
+    public ParameterListSyntax Parameters => GetRed(ref _parameters, 4);
+    public ReturnClauseSyntax ReturnClause => GetRed(ref _returnClause, 5);
+    public WhereClauseSyntax? WhereClause => GetRedOptional(ref _whereClause, 6);
+    public AccessorListSyntax? Accessors => GetRedOptional(ref _accessors, 7);
+    public SyntaxToken ArrowToken => GetToken(8);
+    public ExpressionSyntax? ExpressionBody => GetRedOptional(ref _expressionBody, 9);
+
+    internal override SyntaxNode? GetNodeSlot(int index) => index switch
+    {
+        3 => TypeParameters,
+        4 => Parameters,
+        5 => ReturnClause,
+        6 => WhereClause,
+        7 => Accessors,
+        9 => ExpressionBody,
+        _ => null,
+    };
+
+    public override void Accept(SyntaxVisitor visitor) => visitor.VisitSubscriptDeclaration(this);
+}
+
+public sealed class OperatorDeclarationSyntax : DeclarationSyntax
+{
+    private ParameterListSyntax? _parameters;
+    private ReturnClauseSyntax? _returnClause;
+    private BlockSyntax? _body;
+    private ExpressionSyntax? _expressionBody;
+
+    internal OperatorDeclarationSyntax(GreenNode green, SyntaxNode? parent, int position)
+        : base(green, parent, position) { }
+
+    public SyntaxList<AttributeSyntax> Attributes => GetList<AttributeSyntax>(0);
+    public SyntaxTokenList Modifiers => GetTokenList(1);
+    public SyntaxToken FixityToken => GetToken(2);
+    public SyntaxToken OperatorKeyword => GetToken(3);
+    public SyntaxToken OperatorToken => GetToken(4);
+    public SyntaxToken SecondOperatorToken => GetToken(5);
+    public ParameterListSyntax Parameters => GetRed(ref _parameters, 6);
+    public ReturnClauseSyntax ReturnClause => GetRed(ref _returnClause, 7);
+    public BlockSyntax? Body => GetRedOptional(ref _body, 8);
+    public SyntaxToken ArrowToken => GetToken(9);
+    public ExpressionSyntax? ExpressionBody => GetRedOptional(ref _expressionBody, 10);
+
+    internal override SyntaxNode? GetNodeSlot(int index) => index switch
+    {
+        6 => Parameters,
+        7 => ReturnClause,
+        8 => Body,
+        10 => ExpressionBody,
+        _ => null,
+    };
+
+    public override void Accept(SyntaxVisitor visitor) => visitor.VisitOperatorDeclaration(this);
+}
+
+/// <summary>A stored or computed member: `var x: Int`, `let y = 1`, `var z: Int { get }`, or the terse immutable form `x: F32` inside a type body.</summary>
+public sealed class FieldDeclarationSyntax : DeclarationSyntax
+{
+    private VariableDeclaratorSyntax? _declarator;
+    private AccessorListSyntax? _accessors;
+
+    internal FieldDeclarationSyntax(GreenNode green, SyntaxNode? parent, int position)
+        : base(green, parent, position) { }
+
+    public SyntaxList<AttributeSyntax> Attributes => GetList<AttributeSyntax>(0);
+    public SyntaxTokenList Modifiers => GetTokenList(1);
+    public SyntaxToken LetOrVarKeyword => GetToken(2);
+    public VariableDeclaratorSyntax Declarator => GetRed(ref _declarator, 3);
+    public AccessorListSyntax? Accessors => GetRedOptional(ref _accessors, 4);
+    public SyntaxToken SeparatorToken => GetToken(5);
+
+    internal override SyntaxNode? GetNodeSlot(int index) => index switch
+    {
+        3 => Declarator,
+        4 => Accessors,
+        _ => null,
+    };
+
+    public override void Accept(SyntaxVisitor visitor) => visitor.VisitFieldDeclaration(this);
+}
+
+public sealed class AccessorListSyntax : SyntaxNode
+{
+    internal AccessorListSyntax(GreenNode green, SyntaxNode? parent, int position)
+        : base(green, parent, position) { }
+
+    public SyntaxToken OpenBraceToken => GetToken(0);
+    public SyntaxList<AccessorSyntax> Accessors => GetList<AccessorSyntax>(1);
+    public SyntaxToken CloseBraceToken => GetToken(2);
+
+    internal override SyntaxNode? GetNodeSlot(int index) => index switch
+    {
+        _ => null,
+    };
+
+    public override void Accept(SyntaxVisitor visitor) => visitor.VisitAccessorList(this);
+}
+
+/// <summary>`get`, `get =&gt; e`, `set { ... }`, `set(v) { ... }`, `willSet`, `didSet`.</summary>
+public sealed class AccessorSyntax : SyntaxNode
+{
+    private BlockSyntax? _body;
+    private ExpressionSyntax? _expressionBody;
+
+    internal AccessorSyntax(GreenNode green, SyntaxNode? parent, int position)
+        : base(green, parent, position) { }
+
+    public SyntaxList<AttributeSyntax> Attributes => GetList<AttributeSyntax>(0);
+    public SyntaxTokenList Modifiers => GetTokenList(1);
+    public SyntaxToken Keyword => GetToken(2);
+    public SyntaxToken OpenParenToken => GetToken(3);
+    public SyntaxToken ParameterName => GetToken(4);
+    public SyntaxToken CloseParenToken => GetToken(5);
+    public BlockSyntax? Body => GetRedOptional(ref _body, 6);
+    public SyntaxToken ArrowToken => GetToken(7);
+    public ExpressionSyntax? ExpressionBody => GetRedOptional(ref _expressionBody, 8);
+
+    internal override SyntaxNode? GetNodeSlot(int index) => index switch
+    {
+        6 => Body,
+        8 => ExpressionBody,
+        _ => null,
+    };
+
+    public override void Accept(SyntaxVisitor visitor) => visitor.VisitAccessor(this);
+}
+
+public sealed class ConstDeclarationSyntax : DeclarationSyntax
+{
+    private TypeAnnotationSyntax? _typeAnnotation;
+    private EqualsValueClauseSyntax? _initializer;
+
+    internal ConstDeclarationSyntax(GreenNode green, SyntaxNode? parent, int position)
+        : base(green, parent, position) { }
+
+    public SyntaxList<AttributeSyntax> Attributes => GetList<AttributeSyntax>(0);
+    public SyntaxTokenList Modifiers => GetTokenList(1);
+    public SyntaxToken ConstKeyword => GetToken(2);
+    public SyntaxToken Identifier => GetToken(3);
+    public TypeAnnotationSyntax? TypeAnnotation => GetRedOptional(ref _typeAnnotation, 4);
+    public EqualsValueClauseSyntax Initializer => GetRed(ref _initializer, 5);
+
+    internal override SyntaxNode? GetNodeSlot(int index) => index switch
+    {
+        4 => TypeAnnotation,
+        5 => Initializer,
+        _ => null,
+    };
+
+    public override void Accept(SyntaxVisitor visitor) => visitor.VisitConstDeclaration(this);
+}
+
+public sealed class AliasDeclarationSyntax : DeclarationSyntax
+{
+    private GenericParameterListSyntax? _typeParameters;
+    private TypeSyntax? _type;
+
+    internal AliasDeclarationSyntax(GreenNode green, SyntaxNode? parent, int position)
+        : base(green, parent, position) { }
+
+    public SyntaxList<AttributeSyntax> Attributes => GetList<AttributeSyntax>(0);
+    public SyntaxTokenList Modifiers => GetTokenList(1);
+    public SyntaxToken AliasKeyword => GetToken(2);
+    public SyntaxToken Identifier => GetToken(3);
+    public GenericParameterListSyntax? TypeParameters => GetRedOptional(ref _typeParameters, 4);
+    public SyntaxToken EqualsToken => GetToken(5);
+    public TypeSyntax Type => GetRed(ref _type, 6);
+
+    internal override SyntaxNode? GetNodeSlot(int index) => index switch
+    {
+        4 => TypeParameters,
+        6 => Type,
+        _ => null,
+    };
+
+    public override void Accept(SyntaxVisitor visitor) => visitor.VisitAliasDeclaration(this);
+}
+
+/// <summary>`typealias Element = Int` inside a conforming type.</summary>
+public sealed class TypealiasDeclarationSyntax : DeclarationSyntax
+{
+    private TypeSyntax? _type;
+
+    internal TypealiasDeclarationSyntax(GreenNode green, SyntaxNode? parent, int position)
+        : base(green, parent, position) { }
+
+    public SyntaxList<AttributeSyntax> Attributes => GetList<AttributeSyntax>(0);
+    public SyntaxTokenList Modifiers => GetTokenList(1);
+    public SyntaxToken TypealiasKeyword => GetToken(2);
+    public SyntaxToken Identifier => GetToken(3);
+    public SyntaxToken EqualsToken => GetToken(4);
+    public TypeSyntax Type => GetRed(ref _type, 5);
+
+    internal override SyntaxNode? GetNodeSlot(int index) => index switch
+    {
+        5 => Type,
+        _ => null,
+    };
+
+    public override void Accept(SyntaxVisitor visitor) => visitor.VisitTypealiasDeclaration(this);
+}
+
+public sealed class AssociatedTypeDeclarationSyntax : DeclarationSyntax
+{
+    private BaseTypeListSyntax? _baseTypes;
+    private TypeSyntax? _defaultType;
+
+    internal AssociatedTypeDeclarationSyntax(GreenNode green, SyntaxNode? parent, int position)
+        : base(green, parent, position) { }
+
+    public SyntaxList<AttributeSyntax> Attributes => GetList<AttributeSyntax>(0);
+    public SyntaxTokenList Modifiers => GetTokenList(1);
+    public SyntaxToken AssociatedTypeKeyword => GetToken(2);
+    public SyntaxToken Identifier => GetToken(3);
+    public BaseTypeListSyntax? BaseTypes => GetRedOptional(ref _baseTypes, 4);
+    public SyntaxToken EqualsToken => GetToken(5);
+    public TypeSyntax? DefaultType => GetRedOptional(ref _defaultType, 6);
+
+    internal override SyntaxNode? GetNodeSlot(int index) => index switch
+    {
+        4 => BaseTypes,
+        6 => DefaultType,
+        _ => null,
+    };
+
+    public override void Accept(SyntaxVisitor visitor) => visitor.VisitAssociatedTypeDeclaration(this);
+}
+
+/// <summary>Union cases may be separated by commas or by line breaks.</summary>
+public sealed class UnionCaseDeclarationSyntax : DeclarationSyntax
+{
+    private UnionCasePayloadListSyntax? _payload;
+
+    internal UnionCaseDeclarationSyntax(GreenNode green, SyntaxNode? parent, int position)
+        : base(green, parent, position) { }
+
+    public SyntaxList<AttributeSyntax> Attributes => GetList<AttributeSyntax>(0);
+    public SyntaxToken Identifier => GetToken(1);
+    public UnionCasePayloadListSyntax? Payload => GetRedOptional(ref _payload, 2);
+    public SyntaxToken CommaToken => GetToken(3);
+
+    internal override SyntaxNode? GetNodeSlot(int index) => index switch
+    {
+        2 => Payload,
+        _ => null,
+    };
+
+    public override void Accept(SyntaxVisitor visitor) => visitor.VisitUnionCaseDeclaration(this);
+}
+
+public sealed class UnionCasePayloadListSyntax : SyntaxNode
+{
+    internal UnionCasePayloadListSyntax(GreenNode green, SyntaxNode? parent, int position)
+        : base(green, parent, position) { }
+
+    public SyntaxToken OpenParenToken => GetToken(0);
+    public SeparatedSyntaxList<UnionCaseFieldSyntax> Fields => GetSeparatedList<UnionCaseFieldSyntax>(1);
+    public SyntaxToken CloseParenToken => GetToken(2);
+
+    internal override SyntaxNode? GetNodeSlot(int index) => index switch
+    {
+        _ => null,
+    };
+
+    public override void Accept(SyntaxVisitor visitor) => visitor.VisitUnionCasePayloadList(this);
+}
+
+public sealed class UnionCaseFieldSyntax : SyntaxNode
+{
+    private TypeSyntax? _type;
+
+    internal UnionCaseFieldSyntax(GreenNode green, SyntaxNode? parent, int position)
+        : base(green, parent, position) { }
+
+    public SyntaxToken NameToken => GetToken(0);
+    public SyntaxToken ColonToken => GetToken(1);
+    public TypeSyntax Type => GetRed(ref _type, 2);
+
+    internal override SyntaxNode? GetNodeSlot(int index) => index switch
+    {
+        2 => Type,
+        _ => null,
+    };
+
+    public override void Accept(SyntaxVisitor visitor) => visitor.VisitUnionCaseField(this);
+}
+
+/// <summary>Enum cases may be separated by commas or by line breaks.</summary>
+public sealed class EnumCaseDeclarationSyntax : DeclarationSyntax
+{
+    private ExpressionSyntax? _value;
+
+    internal EnumCaseDeclarationSyntax(GreenNode green, SyntaxNode? parent, int position)
+        : base(green, parent, position) { }
+
+    public SyntaxList<AttributeSyntax> Attributes => GetList<AttributeSyntax>(0);
+    public SyntaxToken Identifier => GetToken(1);
+    public SyntaxToken EqualsToken => GetToken(2);
+    public ExpressionSyntax? Value => GetRedOptional(ref _value, 3);
+    public SyntaxToken CommaToken => GetToken(4);
+
+    internal override SyntaxNode? GetNodeSlot(int index) => index switch
+    {
+        3 => Value,
+        _ => null,
+    };
+
+    public override void Accept(SyntaxVisitor visitor) => visitor.VisitEnumCaseDeclaration(this);
+}
+
+/// <summary>Attributes and modifiers with no declaration after them; error recovery only.</summary>
+public sealed class IncompleteDeclarationSyntax : DeclarationSyntax
+{
+    internal IncompleteDeclarationSyntax(GreenNode green, SyntaxNode? parent, int position)
+        : base(green, parent, position) { }
+
+    public SyntaxList<AttributeSyntax> Attributes => GetList<AttributeSyntax>(0);
+    public SyntaxTokenList Modifiers => GetTokenList(1);
+
+    internal override SyntaxNode? GetNodeSlot(int index) => index switch
+    {
+        _ => null,
+    };
+
+    public override void Accept(SyntaxVisitor visitor) => visitor.VisitIncompleteDeclaration(this);
 }
 
 /// <summary>A depth-first visitor over the syntax tree.</summary>
@@ -2479,6 +3458,45 @@ public abstract class SyntaxVisitor
     public virtual void VisitFallthroughStatement(FallthroughStatementSyntax node) => DefaultVisit(node);
     public virtual void VisitUnsafeStatement(UnsafeStatementSyntax node) => DefaultVisit(node);
     public virtual void VisitComptimeStatement(ComptimeStatementSyntax node) => DefaultVisit(node);
+    public virtual void VisitDeclarationStatement(DeclarationStatementSyntax node) => DefaultVisit(node);
     public virtual void VisitLabeledStatement(LabeledStatementSyntax node) => DefaultVisit(node);
+    public virtual void VisitCompilationUnit(CompilationUnitSyntax node) => DefaultVisit(node);
+    public virtual void VisitModuleDeclaration(ModuleDeclarationSyntax node) => DefaultVisit(node);
+    public virtual void VisitImportDeclaration(ImportDeclarationSyntax node) => DefaultVisit(node);
+    public virtual void VisitImportItemList(ImportItemListSyntax node) => DefaultVisit(node);
+    public virtual void VisitImportItem(ImportItemSyntax node) => DefaultVisit(node);
+    public virtual void VisitAttribute(AttributeSyntax node) => DefaultVisit(node);
+    public virtual void VisitParameterList(ParameterListSyntax node) => DefaultVisit(node);
+    public virtual void VisitParameter(ParameterSyntax node) => DefaultVisit(node);
+    public virtual void VisitReturnClause(ReturnClauseSyntax node) => DefaultVisit(node);
+    public virtual void VisitGenericParameterList(GenericParameterListSyntax node) => DefaultVisit(node);
+    public virtual void VisitGenericParameter(GenericParameterSyntax node) => DefaultVisit(node);
+    public virtual void VisitWhereClause(WhereClauseSyntax node) => DefaultVisit(node);
+    public virtual void VisitWhereConstraint(WhereConstraintSyntax node) => DefaultVisit(node);
+    public virtual void VisitBaseTypeList(BaseTypeListSyntax node) => DefaultVisit(node);
+    public virtual void VisitStructDeclaration(StructDeclarationSyntax node) => DefaultVisit(node);
+    public virtual void VisitClassDeclaration(ClassDeclarationSyntax node) => DefaultVisit(node);
+    public virtual void VisitActorDeclaration(ActorDeclarationSyntax node) => DefaultVisit(node);
+    public virtual void VisitProtocolDeclaration(ProtocolDeclarationSyntax node) => DefaultVisit(node);
+    public virtual void VisitUnionDeclaration(UnionDeclarationSyntax node) => DefaultVisit(node);
+    public virtual void VisitEnumDeclaration(EnumDeclarationSyntax node) => DefaultVisit(node);
+    public virtual void VisitExtensionDeclaration(ExtensionDeclarationSyntax node) => DefaultVisit(node);
+    public virtual void VisitFunctionDeclaration(FunctionDeclarationSyntax node) => DefaultVisit(node);
+    public virtual void VisitInitDeclaration(InitDeclarationSyntax node) => DefaultVisit(node);
+    public virtual void VisitDeinitDeclaration(DeinitDeclarationSyntax node) => DefaultVisit(node);
+    public virtual void VisitSubscriptDeclaration(SubscriptDeclarationSyntax node) => DefaultVisit(node);
+    public virtual void VisitOperatorDeclaration(OperatorDeclarationSyntax node) => DefaultVisit(node);
+    public virtual void VisitFieldDeclaration(FieldDeclarationSyntax node) => DefaultVisit(node);
+    public virtual void VisitAccessorList(AccessorListSyntax node) => DefaultVisit(node);
+    public virtual void VisitAccessor(AccessorSyntax node) => DefaultVisit(node);
+    public virtual void VisitConstDeclaration(ConstDeclarationSyntax node) => DefaultVisit(node);
+    public virtual void VisitAliasDeclaration(AliasDeclarationSyntax node) => DefaultVisit(node);
+    public virtual void VisitTypealiasDeclaration(TypealiasDeclarationSyntax node) => DefaultVisit(node);
+    public virtual void VisitAssociatedTypeDeclaration(AssociatedTypeDeclarationSyntax node) => DefaultVisit(node);
+    public virtual void VisitUnionCaseDeclaration(UnionCaseDeclarationSyntax node) => DefaultVisit(node);
+    public virtual void VisitUnionCasePayloadList(UnionCasePayloadListSyntax node) => DefaultVisit(node);
+    public virtual void VisitUnionCaseField(UnionCaseFieldSyntax node) => DefaultVisit(node);
+    public virtual void VisitEnumCaseDeclaration(EnumCaseDeclarationSyntax node) => DefaultVisit(node);
+    public virtual void VisitIncompleteDeclaration(IncompleteDeclarationSyntax node) => DefaultVisit(node);
 }
 

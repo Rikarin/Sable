@@ -282,10 +282,12 @@
   </Node>
 
   <Node Name="TryExpressionSyntax" Base="ExpressionSyntax" Kind="TryExpression"
-        Doc="`try e`, `try? e` or `try! e`.">
+        Doc="`try e`, `try? e`, `try! e`, and the inline-recovery form `try e catch { ... }`.">
     <Field Name="TryKeyword" Type="Token" />
     <Field Name="QuestionOrBangToken" Type="Token" Optional="true" />
     <Field Name="Expression" Type="ExpressionSyntax" />
+    <Field Name="CatchKeyword" Type="Token" Optional="true" />
+    <Field Name="CatchBody" Type="SyntaxNode" Optional="true" />
   </Node>
 
   <Node Name="BinaryExpressionSyntax" Base="ExpressionSyntax" Kind="BinaryExpression">
@@ -632,6 +634,7 @@
   <Node Name="LocalDeclarationStatementSyntax" Base="StatementSyntax"
         Kind="LocalDeclarationStatement"
         Doc="`let x: Int = 1`, `var y = 2`, `using let f = ...`.">
+    <Field Name="AsyncKeyword" Type="Token" Optional="true" />
     <Field Name="UsingKeyword" Type="Token" Optional="true" />
     <Field Name="LetOrVarKeyword" Type="Token" />
     <Field Name="Declarator" Type="VariableDeclaratorSyntax" />
@@ -804,11 +807,396 @@
     <Field Name="Body" Type="BlockSyntax" />
   </Node>
 
+  <Node Name="DeclarationStatementSyntax" Base="StatementSyntax" Kind="DeclarationStatement"
+        Doc="A declaration used as a statement: a nested function or a local type.">
+    <Field Name="Declaration" Type="DeclarationSyntax" />
+  </Node>
+
   <Node Name="LabeledStatementSyntax" Base="StatementSyntax" Kind="LabeledStatement"
         Doc="`outer: for ... { ... }`.">
     <Field Name="Label" Type="Token" />
     <Field Name="ColonToken" Type="Token" />
     <Field Name="Statement" Type="StatementSyntax" />
+  </Node>
+
+  <Abstract Name="DeclarationSyntax" Base="SyntaxNode"
+            Doc="Any declaration: a type, a member, or a top-level item." />
+
+  <!-- ==================================================================== -->
+  <!-- Compilation unit                                                     -->
+  <!-- ==================================================================== -->
+
+  <Node Name="CompilationUnitSyntax" Base="SyntaxNode" Kind="CompilationUnit"
+        Doc="One source file: a module declaration, imports, and declarations.">
+    <Field Name="Module" Type="ModuleDeclarationSyntax" Optional="true" />
+    <Field Name="Imports" Type="List:ImportDeclarationSyntax" />
+    <Field Name="Members" Type="List:SyntaxNode" />
+    <Field Name="EndOfFileToken" Type="Token" />
+  </Node>
+
+  <Node Name="ModuleDeclarationSyntax" Base="DeclarationSyntax" Kind="ModuleDeclaration">
+    <Field Name="Attributes" Type="List:AttributeSyntax" />
+    <Field Name="ModuleKeyword" Type="Token" />
+    <Field Name="Name" Type="TypeSyntax" />
+  </Node>
+
+  <Node Name="ImportDeclarationSyntax" Base="DeclarationSyntax" Kind="ImportDeclaration"
+        Doc="`import A.B`, `import A.B as C`, `import A.B.{ X, Y }`, `import A.B.{ * }`.">
+    <Field Name="PublicKeyword" Type="Token" Optional="true" />
+    <Field Name="ImportKeyword" Type="Token" />
+    <Field Name="Name" Type="TypeSyntax" />
+    <Field Name="AsKeyword" Type="Token" Optional="true" />
+    <Field Name="Alias" Type="Token" Optional="true" />
+    <Field Name="Items" Type="ImportItemListSyntax" Optional="true" />
+  </Node>
+
+  <Node Name="ImportItemListSyntax" Base="SyntaxNode" Kind="ImportItemList">
+    <Field Name="DotToken" Type="Token" />
+    <Field Name="OpenBraceToken" Type="Token" />
+    <Field Name="Items" Type="SeparatedList:ImportItemSyntax" />
+    <Field Name="CloseBraceToken" Type="Token" />
+  </Node>
+
+  <Node Name="ImportItemSyntax" Base="SyntaxNode" Kind="ImportItem">
+    <Field Name="NameToken" Type="Token" />
+    <Field Name="AsKeyword" Type="Token" Optional="true" />
+    <Field Name="Alias" Type="Token" Optional="true" />
+  </Node>
+
+  <Node Name="AttributeSyntax" Base="SyntaxNode" Kind="Attribute"
+        Doc="`@inline(always)`, `@reflectable`.">
+    <Field Name="AtToken" Type="Token" />
+    <Field Name="Name" Type="TypeSyntax" />
+    <Field Name="ArgumentList" Type="ArgumentListSyntax" Optional="true" />
+  </Node>
+
+  <!-- ==================================================================== -->
+  <!-- Shared clauses                                                       -->
+  <!-- ==================================================================== -->
+
+  <Node Name="ParameterListSyntax" Base="SyntaxNode" Kind="ParameterList">
+    <Field Name="OpenToken" Type="Token" />
+    <Field Name="Parameters" Type="SeparatedList:ParameterSyntax" />
+    <Field Name="CloseToken" Type="Token" />
+  </Node>
+
+  <Node Name="ParameterSyntax" Base="SyntaxNode" Kind="Parameter"
+        Doc="`from source: Point`, `_ item: T`, `inout v: Vec3`, `values: Int...`.">
+    <Field Name="Attributes" Type="List:AttributeSyntax" />
+    <Field Name="Modifiers" Type="TokenList" />
+    <Field Name="Label" Type="Token" Optional="true" />
+    <Field Name="Identifier" Type="Token" />
+    <Field Name="ColonToken" Type="Token" />
+    <Field Name="TypeModifierToken" Type="Token" Optional="true" />
+    <Field Name="Type" Type="TypeSyntax" />
+    <Field Name="EllipsisToken" Type="Token" Optional="true" />
+    <Field Name="DefaultValue" Type="EqualsValueClauseSyntax" Optional="true" />
+  </Node>
+
+  <Node Name="ReturnClauseSyntax" Base="SyntaxNode" Kind="ReturnClause" Doc="`-> T` or `-> ref T`.">
+    <Field Name="ArrowToken" Type="Token" />
+    <Field Name="Type" Type="TypeSyntax" />
+  </Node>
+
+  <Node Name="GenericParameterListSyntax" Base="SyntaxNode" Kind="GenericParameterList">
+    <Field Name="LessThanToken" Type="Token" />
+    <Field Name="Parameters" Type="SeparatedList:GenericParameterSyntax" />
+    <Field Name="GreaterThanToken" Type="Token" />
+  </Node>
+
+  <Node Name="GenericParameterSyntax" Base="SyntaxNode" Kind="GenericParameter"
+        Doc="`T`, `out T`, `T: Comparable`, `T: P = Int`.">
+    <Field Name="Attributes" Type="List:AttributeSyntax" />
+    <Field Name="VarianceToken" Type="Token" Optional="true" />
+    <Field Name="Identifier" Type="Token" />
+    <Field Name="ColonToken" Type="Token" Optional="true" />
+    <Field Name="Constraint" Type="TypeSyntax" Optional="true" />
+    <Field Name="EqualsToken" Type="Token" Optional="true" />
+    <Field Name="DefaultType" Type="TypeSyntax" Optional="true" />
+  </Node>
+
+  <Node Name="WhereClauseSyntax" Base="SyntaxNode" Kind="WhereClause">
+    <Field Name="WhereKeyword" Type="Token" />
+    <Field Name="Constraints" Type="SeparatedList:WhereConstraintSyntax" />
+  </Node>
+
+  <Node Name="WhereConstraintSyntax" Base="SyntaxNode" Kind="WhereConstraint"
+        Doc="`T: P` or `S.Element == T`.">
+    <Field Name="Left" Type="TypeSyntax" />
+    <Field Name="OperatorToken" Type="Token" />
+    <Field Name="Right" Type="TypeSyntax" />
+  </Node>
+
+  <Node Name="BaseTypeListSyntax" Base="SyntaxNode" Kind="BaseTypeList"
+        Doc="`: Base, Protocol1, Protocol2`.">
+    <Field Name="ColonToken" Type="Token" />
+    <Field Name="Types" Type="SeparatedList:TypeSyntax" />
+  </Node>
+
+  <!-- ==================================================================== -->
+  <!-- Type declarations                                                    -->
+  <!-- ==================================================================== -->
+
+  <Node Name="StructDeclarationSyntax" Base="DeclarationSyntax" Kind="StructDeclaration">
+    <Field Name="Attributes" Type="List:AttributeSyntax" />
+    <Field Name="Modifiers" Type="TokenList" />
+    <Field Name="Keyword" Type="Token" />
+    <Field Name="Identifier" Type="Token" />
+    <Field Name="TypeParameters" Type="GenericParameterListSyntax" Optional="true" />
+    <Field Name="BaseTypes" Type="BaseTypeListSyntax" Optional="true" />
+    <Field Name="WhereClause" Type="WhereClauseSyntax" Optional="true" />
+    <Field Name="OpenBraceToken" Type="Token" />
+    <Field Name="Members" Type="List:SyntaxNode" />
+    <Field Name="CloseBraceToken" Type="Token" />
+  </Node>
+
+  <Node Name="ClassDeclarationSyntax" Base="DeclarationSyntax" Kind="ClassDeclaration">
+    <Field Name="Attributes" Type="List:AttributeSyntax" />
+    <Field Name="Modifiers" Type="TokenList" />
+    <Field Name="Keyword" Type="Token" />
+    <Field Name="Identifier" Type="Token" />
+    <Field Name="TypeParameters" Type="GenericParameterListSyntax" Optional="true" />
+    <Field Name="BaseTypes" Type="BaseTypeListSyntax" Optional="true" />
+    <Field Name="WhereClause" Type="WhereClauseSyntax" Optional="true" />
+    <Field Name="OpenBraceToken" Type="Token" />
+    <Field Name="Members" Type="List:SyntaxNode" />
+    <Field Name="CloseBraceToken" Type="Token" />
+  </Node>
+
+  <Node Name="ActorDeclarationSyntax" Base="DeclarationSyntax" Kind="ActorDeclaration">
+    <Field Name="Attributes" Type="List:AttributeSyntax" />
+    <Field Name="Modifiers" Type="TokenList" />
+    <Field Name="Keyword" Type="Token" />
+    <Field Name="Identifier" Type="Token" />
+    <Field Name="TypeParameters" Type="GenericParameterListSyntax" Optional="true" />
+    <Field Name="BaseTypes" Type="BaseTypeListSyntax" Optional="true" />
+    <Field Name="WhereClause" Type="WhereClauseSyntax" Optional="true" />
+    <Field Name="OpenBraceToken" Type="Token" />
+    <Field Name="Members" Type="List:SyntaxNode" />
+    <Field Name="CloseBraceToken" Type="Token" />
+  </Node>
+
+  <Node Name="ProtocolDeclarationSyntax" Base="DeclarationSyntax" Kind="ProtocolDeclaration">
+    <Field Name="Attributes" Type="List:AttributeSyntax" />
+    <Field Name="Modifiers" Type="TokenList" />
+    <Field Name="Keyword" Type="Token" />
+    <Field Name="Identifier" Type="Token" />
+    <Field Name="TypeParameters" Type="GenericParameterListSyntax" Optional="true" />
+    <Field Name="BaseTypes" Type="BaseTypeListSyntax" Optional="true" />
+    <Field Name="WhereClause" Type="WhereClauseSyntax" Optional="true" />
+    <Field Name="OpenBraceToken" Type="Token" />
+    <Field Name="Members" Type="List:SyntaxNode" />
+    <Field Name="CloseBraceToken" Type="Token" />
+  </Node>
+
+  <Node Name="UnionDeclarationSyntax" Base="DeclarationSyntax" Kind="UnionDeclaration"
+        Doc="`union Shape { ... }`, or `union Node.. { ... }` for a variant-sized union.">
+    <Field Name="Attributes" Type="List:AttributeSyntax" />
+    <Field Name="Modifiers" Type="TokenList" />
+    <Field Name="Keyword" Type="Token" />
+    <Field Name="Identifier" Type="Token" />
+    <Field Name="VariableSizeToken" Type="Token" Optional="true" />
+    <Field Name="TypeParameters" Type="GenericParameterListSyntax" Optional="true" />
+    <Field Name="BaseTypes" Type="BaseTypeListSyntax" Optional="true" />
+    <Field Name="WhereClause" Type="WhereClauseSyntax" Optional="true" />
+    <Field Name="OpenBraceToken" Type="Token" />
+    <Field Name="Members" Type="List:SyntaxNode" />
+    <Field Name="CloseBraceToken" Type="Token" />
+  </Node>
+
+  <Node Name="EnumDeclarationSyntax" Base="DeclarationSyntax" Kind="EnumDeclaration">
+    <Field Name="Attributes" Type="List:AttributeSyntax" />
+    <Field Name="Modifiers" Type="TokenList" />
+    <Field Name="Keyword" Type="Token" />
+    <Field Name="Identifier" Type="Token" />
+    <Field Name="BaseTypes" Type="BaseTypeListSyntax" Optional="true" />
+    <Field Name="OpenBraceToken" Type="Token" />
+    <Field Name="Members" Type="List:SyntaxNode" />
+    <Field Name="CloseBraceToken" Type="Token" />
+  </Node>
+
+  <Node Name="ExtensionDeclarationSyntax" Base="DeclarationSyntax" Kind="ExtensionDeclaration">
+    <Field Name="Attributes" Type="List:AttributeSyntax" />
+    <Field Name="Modifiers" Type="TokenList" />
+    <Field Name="Keyword" Type="Token" />
+    <Field Name="Type" Type="TypeSyntax" />
+    <Field Name="BaseTypes" Type="BaseTypeListSyntax" Optional="true" />
+    <Field Name="WhereClause" Type="WhereClauseSyntax" Optional="true" />
+    <Field Name="OpenBraceToken" Type="Token" />
+    <Field Name="Members" Type="List:SyntaxNode" />
+    <Field Name="CloseBraceToken" Type="Token" />
+  </Node>
+
+  <!-- ==================================================================== -->
+  <!-- Members                                                              -->
+  <!-- ==================================================================== -->
+
+  <Node Name="FunctionDeclarationSyntax" Base="DeclarationSyntax" Kind="FunctionDeclaration">
+    <Field Name="Attributes" Type="List:AttributeSyntax" />
+    <Field Name="Modifiers" Type="TokenList" />
+    <Field Name="FnKeyword" Type="Token" />
+    <Field Name="ExplicitProtocol" Type="TypeSyntax" Optional="true" />
+    <Field Name="DotToken" Type="Token" Optional="true" />
+    <Field Name="Identifier" Type="Token" />
+    <Field Name="TypeParameters" Type="GenericParameterListSyntax" Optional="true" />
+    <Field Name="Parameters" Type="ParameterListSyntax" />
+    <Field Name="AsyncKeyword" Type="Token" Optional="true" />
+    <Field Name="ThrowsSpec" Type="ThrowsSpecSyntax" Optional="true" />
+    <Field Name="ReturnClause" Type="ReturnClauseSyntax" Optional="true" />
+    <Field Name="WhereClause" Type="WhereClauseSyntax" Optional="true" />
+    <Field Name="Body" Type="BlockSyntax" Optional="true" />
+    <Field Name="ArrowToken" Type="Token" Optional="true" />
+    <Field Name="ExpressionBody" Type="ExpressionSyntax" Optional="true" />
+  </Node>
+
+  <Node Name="InitDeclarationSyntax" Base="DeclarationSyntax" Kind="InitDeclaration">
+    <Field Name="Attributes" Type="List:AttributeSyntax" />
+    <Field Name="Modifiers" Type="TokenList" />
+    <Field Name="InitKeyword" Type="Token" />
+    <Field Name="QuestionToken" Type="Token" Optional="true" />
+    <Field Name="TypeParameters" Type="GenericParameterListSyntax" Optional="true" />
+    <Field Name="Parameters" Type="ParameterListSyntax" />
+    <Field Name="ThrowsSpec" Type="ThrowsSpecSyntax" Optional="true" />
+    <Field Name="WhereClause" Type="WhereClauseSyntax" Optional="true" />
+    <Field Name="Body" Type="BlockSyntax" Optional="true" />
+  </Node>
+
+  <Node Name="DeinitDeclarationSyntax" Base="DeclarationSyntax" Kind="DeinitDeclaration">
+    <Field Name="Attributes" Type="List:AttributeSyntax" />
+    <Field Name="Modifiers" Type="TokenList" />
+    <Field Name="DeinitKeyword" Type="Token" />
+    <Field Name="Body" Type="BlockSyntax" />
+  </Node>
+
+  <Node Name="SubscriptDeclarationSyntax" Base="DeclarationSyntax" Kind="SubscriptDeclaration">
+    <Field Name="Attributes" Type="List:AttributeSyntax" />
+    <Field Name="Modifiers" Type="TokenList" />
+    <Field Name="SubscriptKeyword" Type="Token" />
+    <Field Name="TypeParameters" Type="GenericParameterListSyntax" Optional="true" />
+    <Field Name="Parameters" Type="ParameterListSyntax" />
+    <Field Name="ReturnClause" Type="ReturnClauseSyntax" />
+    <Field Name="WhereClause" Type="WhereClauseSyntax" Optional="true" />
+    <Field Name="Accessors" Type="AccessorListSyntax" Optional="true" />
+    <Field Name="ArrowToken" Type="Token" Optional="true" />
+    <Field Name="ExpressionBody" Type="ExpressionSyntax" Optional="true" />
+  </Node>
+
+  <Node Name="OperatorDeclarationSyntax" Base="DeclarationSyntax" Kind="OperatorDeclaration">
+    <Field Name="Attributes" Type="List:AttributeSyntax" />
+    <Field Name="Modifiers" Type="TokenList" />
+    <Field Name="FixityToken" Type="Token" Optional="true" />
+    <Field Name="OperatorKeyword" Type="Token" />
+    <Field Name="OperatorToken" Type="Token" />
+    <Field Name="SecondOperatorToken" Type="Token" Optional="true" />
+    <Field Name="Parameters" Type="ParameterListSyntax" />
+    <Field Name="ReturnClause" Type="ReturnClauseSyntax" />
+    <Field Name="Body" Type="BlockSyntax" Optional="true" />
+    <Field Name="ArrowToken" Type="Token" Optional="true" />
+    <Field Name="ExpressionBody" Type="ExpressionSyntax" Optional="true" />
+  </Node>
+
+  <Node Name="FieldDeclarationSyntax" Base="DeclarationSyntax" Kind="FieldDeclaration"
+        Doc="A stored or computed member: `var x: Int`, `let y = 1`, `var z: Int { get }`, or the terse immutable form `x: F32` inside a type body.">
+    <Field Name="Attributes" Type="List:AttributeSyntax" />
+    <Field Name="Modifiers" Type="TokenList" />
+    <Field Name="LetOrVarKeyword" Type="Token" Optional="true" />
+    <Field Name="Declarator" Type="VariableDeclaratorSyntax" />
+    <Field Name="Accessors" Type="AccessorListSyntax" Optional="true" />
+    <Field Name="SeparatorToken" Type="Token" Optional="true" />
+  </Node>
+
+  <Node Name="AccessorListSyntax" Base="SyntaxNode" Kind="AccessorList">
+    <Field Name="OpenBraceToken" Type="Token" />
+    <Field Name="Accessors" Type="List:AccessorSyntax" />
+    <Field Name="CloseBraceToken" Type="Token" />
+  </Node>
+
+  <Node Name="AccessorSyntax" Base="SyntaxNode" Kind="Accessor"
+        Doc="`get`, `get => e`, `set { ... }`, `set(v) { ... }`, `willSet`, `didSet`.">
+    <Field Name="Attributes" Type="List:AttributeSyntax" />
+    <Field Name="Modifiers" Type="TokenList" />
+    <Field Name="Keyword" Type="Token" />
+    <Field Name="OpenParenToken" Type="Token" Optional="true" />
+    <Field Name="ParameterName" Type="Token" Optional="true" />
+    <Field Name="CloseParenToken" Type="Token" Optional="true" />
+    <Field Name="Body" Type="BlockSyntax" Optional="true" />
+    <Field Name="ArrowToken" Type="Token" Optional="true" />
+    <Field Name="ExpressionBody" Type="ExpressionSyntax" Optional="true" />
+  </Node>
+
+  <Node Name="ConstDeclarationSyntax" Base="DeclarationSyntax" Kind="ConstDeclaration">
+    <Field Name="Attributes" Type="List:AttributeSyntax" />
+    <Field Name="Modifiers" Type="TokenList" />
+    <Field Name="ConstKeyword" Type="Token" />
+    <Field Name="Identifier" Type="Token" />
+    <Field Name="TypeAnnotation" Type="TypeAnnotationSyntax" Optional="true" />
+    <Field Name="Initializer" Type="EqualsValueClauseSyntax" />
+  </Node>
+
+  <Node Name="AliasDeclarationSyntax" Base="DeclarationSyntax" Kind="AliasDeclaration">
+    <Field Name="Attributes" Type="List:AttributeSyntax" />
+    <Field Name="Modifiers" Type="TokenList" />
+    <Field Name="AliasKeyword" Type="Token" />
+    <Field Name="Identifier" Type="Token" />
+    <Field Name="TypeParameters" Type="GenericParameterListSyntax" Optional="true" />
+    <Field Name="EqualsToken" Type="Token" />
+    <Field Name="Type" Type="TypeSyntax" />
+  </Node>
+
+  <Node Name="TypealiasDeclarationSyntax" Base="DeclarationSyntax" Kind="TypealiasDeclaration"
+        Doc="`typealias Element = Int` inside a conforming type.">
+    <Field Name="Attributes" Type="List:AttributeSyntax" />
+    <Field Name="Modifiers" Type="TokenList" />
+    <Field Name="TypealiasKeyword" Type="Token" />
+    <Field Name="Identifier" Type="Token" />
+    <Field Name="EqualsToken" Type="Token" />
+    <Field Name="Type" Type="TypeSyntax" />
+  </Node>
+
+  <Node Name="AssociatedTypeDeclarationSyntax" Base="DeclarationSyntax"
+        Kind="AssociatedTypeDeclaration">
+    <Field Name="Attributes" Type="List:AttributeSyntax" />
+    <Field Name="Modifiers" Type="TokenList" />
+    <Field Name="AssociatedTypeKeyword" Type="Token" />
+    <Field Name="Identifier" Type="Token" />
+    <Field Name="BaseTypes" Type="BaseTypeListSyntax" Optional="true" />
+    <Field Name="EqualsToken" Type="Token" Optional="true" />
+    <Field Name="DefaultType" Type="TypeSyntax" Optional="true" />
+  </Node>
+
+  <Node Name="UnionCaseDeclarationSyntax" Base="DeclarationSyntax" Kind="UnionCaseDeclaration"
+        Doc="Union cases may be separated by commas or by line breaks.">
+    <Field Name="Attributes" Type="List:AttributeSyntax" />
+    <Field Name="Identifier" Type="Token" />
+    <Field Name="Payload" Type="UnionCasePayloadListSyntax" Optional="true" />
+    <Field Name="CommaToken" Type="Token" Optional="true" />
+  </Node>
+
+  <Node Name="UnionCasePayloadListSyntax" Base="SyntaxNode" Kind="UnionCasePayloadList">
+    <Field Name="OpenParenToken" Type="Token" />
+    <Field Name="Fields" Type="SeparatedList:UnionCaseFieldSyntax" />
+    <Field Name="CloseParenToken" Type="Token" />
+  </Node>
+
+  <Node Name="UnionCaseFieldSyntax" Base="SyntaxNode" Kind="UnionCaseField">
+    <Field Name="NameToken" Type="Token" Optional="true" />
+    <Field Name="ColonToken" Type="Token" Optional="true" />
+    <Field Name="Type" Type="TypeSyntax" />
+  </Node>
+
+  <Node Name="EnumCaseDeclarationSyntax" Base="DeclarationSyntax" Kind="EnumCaseDeclaration"
+        Doc="Enum cases may be separated by commas or by line breaks.">
+    <Field Name="Attributes" Type="List:AttributeSyntax" />
+    <Field Name="Identifier" Type="Token" />
+    <Field Name="EqualsToken" Type="Token" Optional="true" />
+    <Field Name="Value" Type="ExpressionSyntax" Optional="true" />
+    <Field Name="CommaToken" Type="Token" Optional="true" />
+  </Node>
+
+  <Node Name="IncompleteDeclarationSyntax" Base="DeclarationSyntax" Kind="IncompleteDeclaration"
+        Doc="Attributes and modifiers with no declaration after them; error recovery only.">
+    <Field Name="Attributes" Type="List:AttributeSyntax" />
+    <Field Name="Modifiers" Type="TokenList" />
   </Node>
 
 </Syntax>

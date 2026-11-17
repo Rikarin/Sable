@@ -22,9 +22,10 @@ public static partial class SyntaxGenerator
     private sealed record Field(string Name, string Type, bool Optional)
     {
         public bool IsToken => Type == "Token";
+        public bool IsTokenList => Type == "TokenList";
         public bool IsList => Type.StartsWith("List:", StringComparison.Ordinal);
         public bool IsSeparatedList => Type.StartsWith("SeparatedList:", StringComparison.Ordinal);
-        public bool IsNode => !IsToken && !IsList && !IsSeparatedList;
+        public bool IsNode => !IsToken && !IsTokenList && !IsList && !IsSeparatedList;
         public string ItemType => Type[(Type.IndexOf(':', StringComparison.Ordinal) + 1)..];
         public string ParameterName => char.ToLowerInvariant(Name[0]) + Name[1..];
         public string FieldName => "_" + ParameterName;
@@ -106,8 +107,9 @@ public static partial class SyntaxGenerator
 
             foreach (var field in node.Fields)
             {
+                if (field.IsToken || field.IsTokenList) continue;
                 var type = field.IsList || field.IsSeparatedList ? field.ItemType : field.Type;
-                if (type != "Token" && !known.Contains(type))
+                if (!known.Contains(type))
                     throw new InvalidOperationException(
                         $"{node.Name}.{field.Name} has unknown type '{type}'");
             }
@@ -177,7 +179,7 @@ public static partial class SyntaxGenerator
 
     private static string GreenFieldType(Field field) =>
         field.IsToken ? "GreenToken?"
-        : field.IsList || field.IsSeparatedList ? "GreenList?"
+        : field.IsTokenList || field.IsList || field.IsSeparatedList ? "GreenList?"
         : "GreenNode?";
 
     private static string GreenName(string nodeName) =>
@@ -239,6 +241,11 @@ public static partial class SyntaxGenerator
                 {
                     sb.AppendLine(CultureInfo.InvariantCulture,
                         $"    public SyntaxToken {field.Name} => GetToken({i});");
+                }
+                else if (field.IsTokenList)
+                {
+                    sb.AppendLine(CultureInfo.InvariantCulture,
+                        $"    public SyntaxTokenList {field.Name} => GetTokenList({i});");
                 }
                 else if (field.IsSeparatedList)
                 {

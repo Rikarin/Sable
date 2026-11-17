@@ -48,6 +48,7 @@ public enum ErrorCode
     ERR_UnexpectedTrailingTokens = 1005,
     ERR_ExpectedPattern = 1006,
     ERR_ExpectedStatement = 1007,
+    ERR_ExpectedDeclaration = 1008,
 }
 
 public enum DiagnosticSeverity { Hidden, Info, Warning, Error }

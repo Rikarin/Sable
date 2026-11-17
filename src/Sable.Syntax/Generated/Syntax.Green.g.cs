@@ -1151,25 +1151,33 @@ internal sealed class TryExpressionGreen : GreenNode
     private readonly GreenToken? _tryKeyword;
     private readonly GreenToken? _questionOrBangToken;
     private readonly GreenNode? _expression;
+    private readonly GreenToken? _catchKeyword;
+    private readonly GreenNode? _catchBody;
 
-    public TryExpressionGreen(GreenToken? tryKeyword, GreenToken? questionOrBangToken, GreenNode? expression)
+    public TryExpressionGreen(GreenToken? tryKeyword, GreenToken? questionOrBangToken, GreenNode? expression, GreenToken? catchKeyword, GreenNode? catchBody)
         : base(SyntaxKind.TryExpression, 0)
     {
         _tryKeyword = tryKeyword;
         _questionOrBangToken = questionOrBangToken;
         _expression = expression;
+        _catchKeyword = catchKeyword;
+        _catchBody = catchBody;
         FullWidth = (tryKeyword?.FullWidth ?? 0)
                     + (questionOrBangToken?.FullWidth ?? 0)
-                    + (expression?.FullWidth ?? 0);
+                    + (expression?.FullWidth ?? 0)
+                    + (catchKeyword?.FullWidth ?? 0)
+                    + (catchBody?.FullWidth ?? 0);
     }
 
-    public override int SlotCount => 3;
+    public override int SlotCount => 5;
 
     public override GreenNode? GetSlot(int index) => index switch
     {
         0 => _tryKeyword,
         1 => _questionOrBangToken,
         2 => _expression,
+        3 => _catchKeyword,
+        4 => _catchBody,
         _ => null,
     };
 
@@ -2704,32 +2712,36 @@ internal sealed class EmptyStatementGreen : GreenNode
 /// <summary>Green node for <see cref="LocalDeclarationStatementSyntax"/>.</summary>
 internal sealed class LocalDeclarationStatementGreen : GreenNode
 {
+    private readonly GreenToken? _asyncKeyword;
     private readonly GreenToken? _usingKeyword;
     private readonly GreenToken? _letOrVarKeyword;
     private readonly GreenNode? _declarator;
     private readonly GreenToken? _semicolonToken;
 
-    public LocalDeclarationStatementGreen(GreenToken? usingKeyword, GreenToken? letOrVarKeyword, GreenNode? declarator, GreenToken? semicolonToken)
+    public LocalDeclarationStatementGreen(GreenToken? asyncKeyword, GreenToken? usingKeyword, GreenToken? letOrVarKeyword, GreenNode? declarator, GreenToken? semicolonToken)
         : base(SyntaxKind.LocalDeclarationStatement, 0)
     {
+        _asyncKeyword = asyncKeyword;
         _usingKeyword = usingKeyword;
         _letOrVarKeyword = letOrVarKeyword;
         _declarator = declarator;
         _semicolonToken = semicolonToken;
-        FullWidth = (usingKeyword?.FullWidth ?? 0)
+        FullWidth = (asyncKeyword?.FullWidth ?? 0)
+                    + (usingKeyword?.FullWidth ?? 0)
                     + (letOrVarKeyword?.FullWidth ?? 0)
                     + (declarator?.FullWidth ?? 0)
                     + (semicolonToken?.FullWidth ?? 0);
     }
 
-    public override int SlotCount => 4;
+    public override int SlotCount => 5;
 
     public override GreenNode? GetSlot(int index) => index switch
     {
-        0 => _usingKeyword,
-        1 => _letOrVarKeyword,
-        2 => _declarator,
-        3 => _semicolonToken,
+        0 => _asyncKeyword,
+        1 => _usingKeyword,
+        2 => _letOrVarKeyword,
+        3 => _declarator,
+        4 => _semicolonToken,
         _ => null,
     };
 
@@ -3585,6 +3597,30 @@ internal sealed class ComptimeStatementGreen : GreenNode
         new ComptimeStatementSyntax(this, parent, position);
 }
 
+/// <summary>Green node for <see cref="DeclarationStatementSyntax"/>.</summary>
+internal sealed class DeclarationStatementGreen : GreenNode
+{
+    private readonly GreenNode? _declaration;
+
+    public DeclarationStatementGreen(GreenNode? declaration)
+        : base(SyntaxKind.DeclarationStatement, 0)
+    {
+        _declaration = declaration;
+        FullWidth = (declaration?.FullWidth ?? 0);
+    }
+
+    public override int SlotCount => 1;
+
+    public override GreenNode? GetSlot(int index) => index switch
+    {
+        0 => _declaration,
+        _ => null,
+    };
+
+    public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
+        new DeclarationStatementSyntax(this, parent, position);
+}
+
 /// <summary>Green node for <see cref="LabeledStatementSyntax"/>.</summary>
 internal sealed class LabeledStatementGreen : GreenNode
 {
@@ -3615,5 +3651,1693 @@ internal sealed class LabeledStatementGreen : GreenNode
 
     public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
         new LabeledStatementSyntax(this, parent, position);
+}
+
+/// <summary>Green node for <see cref="CompilationUnitSyntax"/>.</summary>
+internal sealed class CompilationUnitGreen : GreenNode
+{
+    private readonly GreenNode? _module;
+    private readonly GreenList? _imports;
+    private readonly GreenList? _members;
+    private readonly GreenToken? _endOfFileToken;
+
+    public CompilationUnitGreen(GreenNode? module, GreenList? imports, GreenList? members, GreenToken? endOfFileToken)
+        : base(SyntaxKind.CompilationUnit, 0)
+    {
+        _module = module;
+        _imports = imports;
+        _members = members;
+        _endOfFileToken = endOfFileToken;
+        FullWidth = (module?.FullWidth ?? 0)
+                    + (imports?.FullWidth ?? 0)
+                    + (members?.FullWidth ?? 0)
+                    + (endOfFileToken?.FullWidth ?? 0);
+    }
+
+    public override int SlotCount => 4;
+
+    public override GreenNode? GetSlot(int index) => index switch
+    {
+        0 => _module,
+        1 => _imports,
+        2 => _members,
+        3 => _endOfFileToken,
+        _ => null,
+    };
+
+    public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
+        new CompilationUnitSyntax(this, parent, position);
+}
+
+/// <summary>Green node for <see cref="ModuleDeclarationSyntax"/>.</summary>
+internal sealed class ModuleDeclarationGreen : GreenNode
+{
+    private readonly GreenList? _attributes;
+    private readonly GreenToken? _moduleKeyword;
+    private readonly GreenNode? _name;
+
+    public ModuleDeclarationGreen(GreenList? attributes, GreenToken? moduleKeyword, GreenNode? name)
+        : base(SyntaxKind.ModuleDeclaration, 0)
+    {
+        _attributes = attributes;
+        _moduleKeyword = moduleKeyword;
+        _name = name;
+        FullWidth = (attributes?.FullWidth ?? 0)
+                    + (moduleKeyword?.FullWidth ?? 0)
+                    + (name?.FullWidth ?? 0);
+    }
+
+    public override int SlotCount => 3;
+
+    public override GreenNode? GetSlot(int index) => index switch
+    {
+        0 => _attributes,
+        1 => _moduleKeyword,
+        2 => _name,
+        _ => null,
+    };
+
+    public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
+        new ModuleDeclarationSyntax(this, parent, position);
+}
+
+/// <summary>Green node for <see cref="ImportDeclarationSyntax"/>.</summary>
+internal sealed class ImportDeclarationGreen : GreenNode
+{
+    private readonly GreenToken? _publicKeyword;
+    private readonly GreenToken? _importKeyword;
+    private readonly GreenNode? _name;
+    private readonly GreenToken? _asKeyword;
+    private readonly GreenToken? _alias;
+    private readonly GreenNode? _items;
+
+    public ImportDeclarationGreen(GreenToken? publicKeyword, GreenToken? importKeyword, GreenNode? name, GreenToken? asKeyword, GreenToken? alias, GreenNode? items)
+        : base(SyntaxKind.ImportDeclaration, 0)
+    {
+        _publicKeyword = publicKeyword;
+        _importKeyword = importKeyword;
+        _name = name;
+        _asKeyword = asKeyword;
+        _alias = alias;
+        _items = items;
+        FullWidth = (publicKeyword?.FullWidth ?? 0)
+                    + (importKeyword?.FullWidth ?? 0)
+                    + (name?.FullWidth ?? 0)
+                    + (asKeyword?.FullWidth ?? 0)
+                    + (alias?.FullWidth ?? 0)
+                    + (items?.FullWidth ?? 0);
+    }
+
+    public override int SlotCount => 6;
+
+    public override GreenNode? GetSlot(int index) => index switch
+    {
+        0 => _publicKeyword,
+        1 => _importKeyword,
+        2 => _name,
+        3 => _asKeyword,
+        4 => _alias,
+        5 => _items,
+        _ => null,
+    };
+
+    public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
+        new ImportDeclarationSyntax(this, parent, position);
+}
+
+/// <summary>Green node for <see cref="ImportItemListSyntax"/>.</summary>
+internal sealed class ImportItemListGreen : GreenNode
+{
+    private readonly GreenToken? _dotToken;
+    private readonly GreenToken? _openBraceToken;
+    private readonly GreenList? _items;
+    private readonly GreenToken? _closeBraceToken;
+
+    public ImportItemListGreen(GreenToken? dotToken, GreenToken? openBraceToken, GreenList? items, GreenToken? closeBraceToken)
+        : base(SyntaxKind.ImportItemList, 0)
+    {
+        _dotToken = dotToken;
+        _openBraceToken = openBraceToken;
+        _items = items;
+        _closeBraceToken = closeBraceToken;
+        FullWidth = (dotToken?.FullWidth ?? 0)
+                    + (openBraceToken?.FullWidth ?? 0)
+                    + (items?.FullWidth ?? 0)
+                    + (closeBraceToken?.FullWidth ?? 0);
+    }
+
+    public override int SlotCount => 4;
+
+    public override GreenNode? GetSlot(int index) => index switch
+    {
+        0 => _dotToken,
+        1 => _openBraceToken,
+        2 => _items,
+        3 => _closeBraceToken,
+        _ => null,
+    };
+
+    public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
+        new ImportItemListSyntax(this, parent, position);
+}
+
+/// <summary>Green node for <see cref="ImportItemSyntax"/>.</summary>
+internal sealed class ImportItemGreen : GreenNode
+{
+    private readonly GreenToken? _nameToken;
+    private readonly GreenToken? _asKeyword;
+    private readonly GreenToken? _alias;
+
+    public ImportItemGreen(GreenToken? nameToken, GreenToken? asKeyword, GreenToken? alias)
+        : base(SyntaxKind.ImportItem, 0)
+    {
+        _nameToken = nameToken;
+        _asKeyword = asKeyword;
+        _alias = alias;
+        FullWidth = (nameToken?.FullWidth ?? 0)
+                    + (asKeyword?.FullWidth ?? 0)
+                    + (alias?.FullWidth ?? 0);
+    }
+
+    public override int SlotCount => 3;
+
+    public override GreenNode? GetSlot(int index) => index switch
+    {
+        0 => _nameToken,
+        1 => _asKeyword,
+        2 => _alias,
+        _ => null,
+    };
+
+    public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
+        new ImportItemSyntax(this, parent, position);
+}
+
+/// <summary>Green node for <see cref="AttributeSyntax"/>.</summary>
+internal sealed class AttributeGreen : GreenNode
+{
+    private readonly GreenToken? _atToken;
+    private readonly GreenNode? _name;
+    private readonly GreenNode? _argumentList;
+
+    public AttributeGreen(GreenToken? atToken, GreenNode? name, GreenNode? argumentList)
+        : base(SyntaxKind.Attribute, 0)
+    {
+        _atToken = atToken;
+        _name = name;
+        _argumentList = argumentList;
+        FullWidth = (atToken?.FullWidth ?? 0)
+                    + (name?.FullWidth ?? 0)
+                    + (argumentList?.FullWidth ?? 0);
+    }
+
+    public override int SlotCount => 3;
+
+    public override GreenNode? GetSlot(int index) => index switch
+    {
+        0 => _atToken,
+        1 => _name,
+        2 => _argumentList,
+        _ => null,
+    };
+
+    public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
+        new AttributeSyntax(this, parent, position);
+}
+
+/// <summary>Green node for <see cref="ParameterListSyntax"/>.</summary>
+internal sealed class ParameterListGreen : GreenNode
+{
+    private readonly GreenToken? _openToken;
+    private readonly GreenList? _parameters;
+    private readonly GreenToken? _closeToken;
+
+    public ParameterListGreen(GreenToken? openToken, GreenList? parameters, GreenToken? closeToken)
+        : base(SyntaxKind.ParameterList, 0)
+    {
+        _openToken = openToken;
+        _parameters = parameters;
+        _closeToken = closeToken;
+        FullWidth = (openToken?.FullWidth ?? 0)
+                    + (parameters?.FullWidth ?? 0)
+                    + (closeToken?.FullWidth ?? 0);
+    }
+
+    public override int SlotCount => 3;
+
+    public override GreenNode? GetSlot(int index) => index switch
+    {
+        0 => _openToken,
+        1 => _parameters,
+        2 => _closeToken,
+        _ => null,
+    };
+
+    public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
+        new ParameterListSyntax(this, parent, position);
+}
+
+/// <summary>Green node for <see cref="ParameterSyntax"/>.</summary>
+internal sealed class ParameterGreen : GreenNode
+{
+    private readonly GreenList? _attributes;
+    private readonly GreenList? _modifiers;
+    private readonly GreenToken? _label;
+    private readonly GreenToken? _identifier;
+    private readonly GreenToken? _colonToken;
+    private readonly GreenToken? _typeModifierToken;
+    private readonly GreenNode? _type;
+    private readonly GreenToken? _ellipsisToken;
+    private readonly GreenNode? _defaultValue;
+
+    public ParameterGreen(GreenList? attributes, GreenList? modifiers, GreenToken? label, GreenToken? identifier, GreenToken? colonToken, GreenToken? typeModifierToken, GreenNode? type, GreenToken? ellipsisToken, GreenNode? defaultValue)
+        : base(SyntaxKind.Parameter, 0)
+    {
+        _attributes = attributes;
+        _modifiers = modifiers;
+        _label = label;
+        _identifier = identifier;
+        _colonToken = colonToken;
+        _typeModifierToken = typeModifierToken;
+        _type = type;
+        _ellipsisToken = ellipsisToken;
+        _defaultValue = defaultValue;
+        FullWidth = (attributes?.FullWidth ?? 0)
+                    + (modifiers?.FullWidth ?? 0)
+                    + (label?.FullWidth ?? 0)
+                    + (identifier?.FullWidth ?? 0)
+                    + (colonToken?.FullWidth ?? 0)
+                    + (typeModifierToken?.FullWidth ?? 0)
+                    + (type?.FullWidth ?? 0)
+                    + (ellipsisToken?.FullWidth ?? 0)
+                    + (defaultValue?.FullWidth ?? 0);
+    }
+
+    public override int SlotCount => 9;
+
+    public override GreenNode? GetSlot(int index) => index switch
+    {
+        0 => _attributes,
+        1 => _modifiers,
+        2 => _label,
+        3 => _identifier,
+        4 => _colonToken,
+        5 => _typeModifierToken,
+        6 => _type,
+        7 => _ellipsisToken,
+        8 => _defaultValue,
+        _ => null,
+    };
+
+    public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
+        new ParameterSyntax(this, parent, position);
+}
+
+/// <summary>Green node for <see cref="ReturnClauseSyntax"/>.</summary>
+internal sealed class ReturnClauseGreen : GreenNode
+{
+    private readonly GreenToken? _arrowToken;
+    private readonly GreenNode? _type;
+
+    public ReturnClauseGreen(GreenToken? arrowToken, GreenNode? type)
+        : base(SyntaxKind.ReturnClause, 0)
+    {
+        _arrowToken = arrowToken;
+        _type = type;
+        FullWidth = (arrowToken?.FullWidth ?? 0)
+                    + (type?.FullWidth ?? 0);
+    }
+
+    public override int SlotCount => 2;
+
+    public override GreenNode? GetSlot(int index) => index switch
+    {
+        0 => _arrowToken,
+        1 => _type,
+        _ => null,
+    };
+
+    public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
+        new ReturnClauseSyntax(this, parent, position);
+}
+
+/// <summary>Green node for <see cref="GenericParameterListSyntax"/>.</summary>
+internal sealed class GenericParameterListGreen : GreenNode
+{
+    private readonly GreenToken? _lessThanToken;
+    private readonly GreenList? _parameters;
+    private readonly GreenToken? _greaterThanToken;
+
+    public GenericParameterListGreen(GreenToken? lessThanToken, GreenList? parameters, GreenToken? greaterThanToken)
+        : base(SyntaxKind.GenericParameterList, 0)
+    {
+        _lessThanToken = lessThanToken;
+        _parameters = parameters;
+        _greaterThanToken = greaterThanToken;
+        FullWidth = (lessThanToken?.FullWidth ?? 0)
+                    + (parameters?.FullWidth ?? 0)
+                    + (greaterThanToken?.FullWidth ?? 0);
+    }
+
+    public override int SlotCount => 3;
+
+    public override GreenNode? GetSlot(int index) => index switch
+    {
+        0 => _lessThanToken,
+        1 => _parameters,
+        2 => _greaterThanToken,
+        _ => null,
+    };
+
+    public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
+        new GenericParameterListSyntax(this, parent, position);
+}
+
+/// <summary>Green node for <see cref="GenericParameterSyntax"/>.</summary>
+internal sealed class GenericParameterGreen : GreenNode
+{
+    private readonly GreenList? _attributes;
+    private readonly GreenToken? _varianceToken;
+    private readonly GreenToken? _identifier;
+    private readonly GreenToken? _colonToken;
+    private readonly GreenNode? _constraint;
+    private readonly GreenToken? _equalsToken;
+    private readonly GreenNode? _defaultType;
+
+    public GenericParameterGreen(GreenList? attributes, GreenToken? varianceToken, GreenToken? identifier, GreenToken? colonToken, GreenNode? constraint, GreenToken? equalsToken, GreenNode? defaultType)
+        : base(SyntaxKind.GenericParameter, 0)
+    {
+        _attributes = attributes;
+        _varianceToken = varianceToken;
+        _identifier = identifier;
+        _colonToken = colonToken;
+        _constraint = constraint;
+        _equalsToken = equalsToken;
+        _defaultType = defaultType;
+        FullWidth = (attributes?.FullWidth ?? 0)
+                    + (varianceToken?.FullWidth ?? 0)
+                    + (identifier?.FullWidth ?? 0)
+                    + (colonToken?.FullWidth ?? 0)
+                    + (constraint?.FullWidth ?? 0)
+                    + (equalsToken?.FullWidth ?? 0)
+                    + (defaultType?.FullWidth ?? 0);
+    }
+
+    public override int SlotCount => 7;
+
+    public override GreenNode? GetSlot(int index) => index switch
+    {
+        0 => _attributes,
+        1 => _varianceToken,
+        2 => _identifier,
+        3 => _colonToken,
+        4 => _constraint,
+        5 => _equalsToken,
+        6 => _defaultType,
+        _ => null,
+    };
+
+    public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
+        new GenericParameterSyntax(this, parent, position);
+}
+
+/// <summary>Green node for <see cref="WhereClauseSyntax"/>.</summary>
+internal sealed class WhereClauseGreen : GreenNode
+{
+    private readonly GreenToken? _whereKeyword;
+    private readonly GreenList? _constraints;
+
+    public WhereClauseGreen(GreenToken? whereKeyword, GreenList? constraints)
+        : base(SyntaxKind.WhereClause, 0)
+    {
+        _whereKeyword = whereKeyword;
+        _constraints = constraints;
+        FullWidth = (whereKeyword?.FullWidth ?? 0)
+                    + (constraints?.FullWidth ?? 0);
+    }
+
+    public override int SlotCount => 2;
+
+    public override GreenNode? GetSlot(int index) => index switch
+    {
+        0 => _whereKeyword,
+        1 => _constraints,
+        _ => null,
+    };
+
+    public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
+        new WhereClauseSyntax(this, parent, position);
+}
+
+/// <summary>Green node for <see cref="WhereConstraintSyntax"/>.</summary>
+internal sealed class WhereConstraintGreen : GreenNode
+{
+    private readonly GreenNode? _left;
+    private readonly GreenToken? _operatorToken;
+    private readonly GreenNode? _right;
+
+    public WhereConstraintGreen(GreenNode? left, GreenToken? operatorToken, GreenNode? right)
+        : base(SyntaxKind.WhereConstraint, 0)
+    {
+        _left = left;
+        _operatorToken = operatorToken;
+        _right = right;
+        FullWidth = (left?.FullWidth ?? 0)
+                    + (operatorToken?.FullWidth ?? 0)
+                    + (right?.FullWidth ?? 0);
+    }
+
+    public override int SlotCount => 3;
+
+    public override GreenNode? GetSlot(int index) => index switch
+    {
+        0 => _left,
+        1 => _operatorToken,
+        2 => _right,
+        _ => null,
+    };
+
+    public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
+        new WhereConstraintSyntax(this, parent, position);
+}
+
+/// <summary>Green node for <see cref="BaseTypeListSyntax"/>.</summary>
+internal sealed class BaseTypeListGreen : GreenNode
+{
+    private readonly GreenToken? _colonToken;
+    private readonly GreenList? _types;
+
+    public BaseTypeListGreen(GreenToken? colonToken, GreenList? types)
+        : base(SyntaxKind.BaseTypeList, 0)
+    {
+        _colonToken = colonToken;
+        _types = types;
+        FullWidth = (colonToken?.FullWidth ?? 0)
+                    + (types?.FullWidth ?? 0);
+    }
+
+    public override int SlotCount => 2;
+
+    public override GreenNode? GetSlot(int index) => index switch
+    {
+        0 => _colonToken,
+        1 => _types,
+        _ => null,
+    };
+
+    public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
+        new BaseTypeListSyntax(this, parent, position);
+}
+
+/// <summary>Green node for <see cref="StructDeclarationSyntax"/>.</summary>
+internal sealed class StructDeclarationGreen : GreenNode
+{
+    private readonly GreenList? _attributes;
+    private readonly GreenList? _modifiers;
+    private readonly GreenToken? _keyword;
+    private readonly GreenToken? _identifier;
+    private readonly GreenNode? _typeParameters;
+    private readonly GreenNode? _baseTypes;
+    private readonly GreenNode? _whereClause;
+    private readonly GreenToken? _openBraceToken;
+    private readonly GreenList? _members;
+    private readonly GreenToken? _closeBraceToken;
+
+    public StructDeclarationGreen(GreenList? attributes, GreenList? modifiers, GreenToken? keyword, GreenToken? identifier, GreenNode? typeParameters, GreenNode? baseTypes, GreenNode? whereClause, GreenToken? openBraceToken, GreenList? members, GreenToken? closeBraceToken)
+        : base(SyntaxKind.StructDeclaration, 0)
+    {
+        _attributes = attributes;
+        _modifiers = modifiers;
+        _keyword = keyword;
+        _identifier = identifier;
+        _typeParameters = typeParameters;
+        _baseTypes = baseTypes;
+        _whereClause = whereClause;
+        _openBraceToken = openBraceToken;
+        _members = members;
+        _closeBraceToken = closeBraceToken;
+        FullWidth = (attributes?.FullWidth ?? 0)
+                    + (modifiers?.FullWidth ?? 0)
+                    + (keyword?.FullWidth ?? 0)
+                    + (identifier?.FullWidth ?? 0)
+                    + (typeParameters?.FullWidth ?? 0)
+                    + (baseTypes?.FullWidth ?? 0)
+                    + (whereClause?.FullWidth ?? 0)
+                    + (openBraceToken?.FullWidth ?? 0)
+                    + (members?.FullWidth ?? 0)
+                    + (closeBraceToken?.FullWidth ?? 0);
+    }
+
+    public override int SlotCount => 10;
+
+    public override GreenNode? GetSlot(int index) => index switch
+    {
+        0 => _attributes,
+        1 => _modifiers,
+        2 => _keyword,
+        3 => _identifier,
+        4 => _typeParameters,
+        5 => _baseTypes,
+        6 => _whereClause,
+        7 => _openBraceToken,
+        8 => _members,
+        9 => _closeBraceToken,
+        _ => null,
+    };
+
+    public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
+        new StructDeclarationSyntax(this, parent, position);
+}
+
+/// <summary>Green node for <see cref="ClassDeclarationSyntax"/>.</summary>
+internal sealed class ClassDeclarationGreen : GreenNode
+{
+    private readonly GreenList? _attributes;
+    private readonly GreenList? _modifiers;
+    private readonly GreenToken? _keyword;
+    private readonly GreenToken? _identifier;
+    private readonly GreenNode? _typeParameters;
+    private readonly GreenNode? _baseTypes;
+    private readonly GreenNode? _whereClause;
+    private readonly GreenToken? _openBraceToken;
+    private readonly GreenList? _members;
+    private readonly GreenToken? _closeBraceToken;
+
+    public ClassDeclarationGreen(GreenList? attributes, GreenList? modifiers, GreenToken? keyword, GreenToken? identifier, GreenNode? typeParameters, GreenNode? baseTypes, GreenNode? whereClause, GreenToken? openBraceToken, GreenList? members, GreenToken? closeBraceToken)
+        : base(SyntaxKind.ClassDeclaration, 0)
+    {
+        _attributes = attributes;
+        _modifiers = modifiers;
+        _keyword = keyword;
+        _identifier = identifier;
+        _typeParameters = typeParameters;
+        _baseTypes = baseTypes;
+        _whereClause = whereClause;
+        _openBraceToken = openBraceToken;
+        _members = members;
+        _closeBraceToken = closeBraceToken;
+        FullWidth = (attributes?.FullWidth ?? 0)
+                    + (modifiers?.FullWidth ?? 0)
+                    + (keyword?.FullWidth ?? 0)
+                    + (identifier?.FullWidth ?? 0)
+                    + (typeParameters?.FullWidth ?? 0)
+                    + (baseTypes?.FullWidth ?? 0)
+                    + (whereClause?.FullWidth ?? 0)
+                    + (openBraceToken?.FullWidth ?? 0)
+                    + (members?.FullWidth ?? 0)
+                    + (closeBraceToken?.FullWidth ?? 0);
+    }
+
+    public override int SlotCount => 10;
+
+    public override GreenNode? GetSlot(int index) => index switch
+    {
+        0 => _attributes,
+        1 => _modifiers,
+        2 => _keyword,
+        3 => _identifier,
+        4 => _typeParameters,
+        5 => _baseTypes,
+        6 => _whereClause,
+        7 => _openBraceToken,
+        8 => _members,
+        9 => _closeBraceToken,
+        _ => null,
+    };
+
+    public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
+        new ClassDeclarationSyntax(this, parent, position);
+}
+
+/// <summary>Green node for <see cref="ActorDeclarationSyntax"/>.</summary>
+internal sealed class ActorDeclarationGreen : GreenNode
+{
+    private readonly GreenList? _attributes;
+    private readonly GreenList? _modifiers;
+    private readonly GreenToken? _keyword;
+    private readonly GreenToken? _identifier;
+    private readonly GreenNode? _typeParameters;
+    private readonly GreenNode? _baseTypes;
+    private readonly GreenNode? _whereClause;
+    private readonly GreenToken? _openBraceToken;
+    private readonly GreenList? _members;
+    private readonly GreenToken? _closeBraceToken;
+
+    public ActorDeclarationGreen(GreenList? attributes, GreenList? modifiers, GreenToken? keyword, GreenToken? identifier, GreenNode? typeParameters, GreenNode? baseTypes, GreenNode? whereClause, GreenToken? openBraceToken, GreenList? members, GreenToken? closeBraceToken)
+        : base(SyntaxKind.ActorDeclaration, 0)
+    {
+        _attributes = attributes;
+        _modifiers = modifiers;
+        _keyword = keyword;
+        _identifier = identifier;
+        _typeParameters = typeParameters;
+        _baseTypes = baseTypes;
+        _whereClause = whereClause;
+        _openBraceToken = openBraceToken;
+        _members = members;
+        _closeBraceToken = closeBraceToken;
+        FullWidth = (attributes?.FullWidth ?? 0)
+                    + (modifiers?.FullWidth ?? 0)
+                    + (keyword?.FullWidth ?? 0)
+                    + (identifier?.FullWidth ?? 0)
+                    + (typeParameters?.FullWidth ?? 0)
+                    + (baseTypes?.FullWidth ?? 0)
+                    + (whereClause?.FullWidth ?? 0)
+                    + (openBraceToken?.FullWidth ?? 0)
+                    + (members?.FullWidth ?? 0)
+                    + (closeBraceToken?.FullWidth ?? 0);
+    }
+
+    public override int SlotCount => 10;
+
+    public override GreenNode? GetSlot(int index) => index switch
+    {
+        0 => _attributes,
+        1 => _modifiers,
+        2 => _keyword,
+        3 => _identifier,
+        4 => _typeParameters,
+        5 => _baseTypes,
+        6 => _whereClause,
+        7 => _openBraceToken,
+        8 => _members,
+        9 => _closeBraceToken,
+        _ => null,
+    };
+
+    public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
+        new ActorDeclarationSyntax(this, parent, position);
+}
+
+/// <summary>Green node for <see cref="ProtocolDeclarationSyntax"/>.</summary>
+internal sealed class ProtocolDeclarationGreen : GreenNode
+{
+    private readonly GreenList? _attributes;
+    private readonly GreenList? _modifiers;
+    private readonly GreenToken? _keyword;
+    private readonly GreenToken? _identifier;
+    private readonly GreenNode? _typeParameters;
+    private readonly GreenNode? _baseTypes;
+    private readonly GreenNode? _whereClause;
+    private readonly GreenToken? _openBraceToken;
+    private readonly GreenList? _members;
+    private readonly GreenToken? _closeBraceToken;
+
+    public ProtocolDeclarationGreen(GreenList? attributes, GreenList? modifiers, GreenToken? keyword, GreenToken? identifier, GreenNode? typeParameters, GreenNode? baseTypes, GreenNode? whereClause, GreenToken? openBraceToken, GreenList? members, GreenToken? closeBraceToken)
+        : base(SyntaxKind.ProtocolDeclaration, 0)
+    {
+        _attributes = attributes;
+        _modifiers = modifiers;
+        _keyword = keyword;
+        _identifier = identifier;
+        _typeParameters = typeParameters;
+        _baseTypes = baseTypes;
+        _whereClause = whereClause;
+        _openBraceToken = openBraceToken;
+        _members = members;
+        _closeBraceToken = closeBraceToken;
+        FullWidth = (attributes?.FullWidth ?? 0)
+                    + (modifiers?.FullWidth ?? 0)
+                    + (keyword?.FullWidth ?? 0)
+                    + (identifier?.FullWidth ?? 0)
+                    + (typeParameters?.FullWidth ?? 0)
+                    + (baseTypes?.FullWidth ?? 0)
+                    + (whereClause?.FullWidth ?? 0)
+                    + (openBraceToken?.FullWidth ?? 0)
+                    + (members?.FullWidth ?? 0)
+                    + (closeBraceToken?.FullWidth ?? 0);
+    }
+
+    public override int SlotCount => 10;
+
+    public override GreenNode? GetSlot(int index) => index switch
+    {
+        0 => _attributes,
+        1 => _modifiers,
+        2 => _keyword,
+        3 => _identifier,
+        4 => _typeParameters,
+        5 => _baseTypes,
+        6 => _whereClause,
+        7 => _openBraceToken,
+        8 => _members,
+        9 => _closeBraceToken,
+        _ => null,
+    };
+
+    public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
+        new ProtocolDeclarationSyntax(this, parent, position);
+}
+
+/// <summary>Green node for <see cref="UnionDeclarationSyntax"/>.</summary>
+internal sealed class UnionDeclarationGreen : GreenNode
+{
+    private readonly GreenList? _attributes;
+    private readonly GreenList? _modifiers;
+    private readonly GreenToken? _keyword;
+    private readonly GreenToken? _identifier;
+    private readonly GreenToken? _variableSizeToken;
+    private readonly GreenNode? _typeParameters;
+    private readonly GreenNode? _baseTypes;
+    private readonly GreenNode? _whereClause;
+    private readonly GreenToken? _openBraceToken;
+    private readonly GreenList? _members;
+    private readonly GreenToken? _closeBraceToken;
+
+    public UnionDeclarationGreen(GreenList? attributes, GreenList? modifiers, GreenToken? keyword, GreenToken? identifier, GreenToken? variableSizeToken, GreenNode? typeParameters, GreenNode? baseTypes, GreenNode? whereClause, GreenToken? openBraceToken, GreenList? members, GreenToken? closeBraceToken)
+        : base(SyntaxKind.UnionDeclaration, 0)
+    {
+        _attributes = attributes;
+        _modifiers = modifiers;
+        _keyword = keyword;
+        _identifier = identifier;
+        _variableSizeToken = variableSizeToken;
+        _typeParameters = typeParameters;
+        _baseTypes = baseTypes;
+        _whereClause = whereClause;
+        _openBraceToken = openBraceToken;
+        _members = members;
+        _closeBraceToken = closeBraceToken;
+        FullWidth = (attributes?.FullWidth ?? 0)
+                    + (modifiers?.FullWidth ?? 0)
+                    + (keyword?.FullWidth ?? 0)
+                    + (identifier?.FullWidth ?? 0)
+                    + (variableSizeToken?.FullWidth ?? 0)
+                    + (typeParameters?.FullWidth ?? 0)
+                    + (baseTypes?.FullWidth ?? 0)
+                    + (whereClause?.FullWidth ?? 0)
+                    + (openBraceToken?.FullWidth ?? 0)
+                    + (members?.FullWidth ?? 0)
+                    + (closeBraceToken?.FullWidth ?? 0);
+    }
+
+    public override int SlotCount => 11;
+
+    public override GreenNode? GetSlot(int index) => index switch
+    {
+        0 => _attributes,
+        1 => _modifiers,
+        2 => _keyword,
+        3 => _identifier,
+        4 => _variableSizeToken,
+        5 => _typeParameters,
+        6 => _baseTypes,
+        7 => _whereClause,
+        8 => _openBraceToken,
+        9 => _members,
+        10 => _closeBraceToken,
+        _ => null,
+    };
+
+    public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
+        new UnionDeclarationSyntax(this, parent, position);
+}
+
+/// <summary>Green node for <see cref="EnumDeclarationSyntax"/>.</summary>
+internal sealed class EnumDeclarationGreen : GreenNode
+{
+    private readonly GreenList? _attributes;
+    private readonly GreenList? _modifiers;
+    private readonly GreenToken? _keyword;
+    private readonly GreenToken? _identifier;
+    private readonly GreenNode? _baseTypes;
+    private readonly GreenToken? _openBraceToken;
+    private readonly GreenList? _members;
+    private readonly GreenToken? _closeBraceToken;
+
+    public EnumDeclarationGreen(GreenList? attributes, GreenList? modifiers, GreenToken? keyword, GreenToken? identifier, GreenNode? baseTypes, GreenToken? openBraceToken, GreenList? members, GreenToken? closeBraceToken)
+        : base(SyntaxKind.EnumDeclaration, 0)
+    {
+        _attributes = attributes;
+        _modifiers = modifiers;
+        _keyword = keyword;
+        _identifier = identifier;
+        _baseTypes = baseTypes;
+        _openBraceToken = openBraceToken;
+        _members = members;
+        _closeBraceToken = closeBraceToken;
+        FullWidth = (attributes?.FullWidth ?? 0)
+                    + (modifiers?.FullWidth ?? 0)
+                    + (keyword?.FullWidth ?? 0)
+                    + (identifier?.FullWidth ?? 0)
+                    + (baseTypes?.FullWidth ?? 0)
+                    + (openBraceToken?.FullWidth ?? 0)
+                    + (members?.FullWidth ?? 0)
+                    + (closeBraceToken?.FullWidth ?? 0);
+    }
+
+    public override int SlotCount => 8;
+
+    public override GreenNode? GetSlot(int index) => index switch
+    {
+        0 => _attributes,
+        1 => _modifiers,
+        2 => _keyword,
+        3 => _identifier,
+        4 => _baseTypes,
+        5 => _openBraceToken,
+        6 => _members,
+        7 => _closeBraceToken,
+        _ => null,
+    };
+
+    public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
+        new EnumDeclarationSyntax(this, parent, position);
+}
+
+/// <summary>Green node for <see cref="ExtensionDeclarationSyntax"/>.</summary>
+internal sealed class ExtensionDeclarationGreen : GreenNode
+{
+    private readonly GreenList? _attributes;
+    private readonly GreenList? _modifiers;
+    private readonly GreenToken? _keyword;
+    private readonly GreenNode? _type;
+    private readonly GreenNode? _baseTypes;
+    private readonly GreenNode? _whereClause;
+    private readonly GreenToken? _openBraceToken;
+    private readonly GreenList? _members;
+    private readonly GreenToken? _closeBraceToken;
+
+    public ExtensionDeclarationGreen(GreenList? attributes, GreenList? modifiers, GreenToken? keyword, GreenNode? type, GreenNode? baseTypes, GreenNode? whereClause, GreenToken? openBraceToken, GreenList? members, GreenToken? closeBraceToken)
+        : base(SyntaxKind.ExtensionDeclaration, 0)
+    {
+        _attributes = attributes;
+        _modifiers = modifiers;
+        _keyword = keyword;
+        _type = type;
+        _baseTypes = baseTypes;
+        _whereClause = whereClause;
+        _openBraceToken = openBraceToken;
+        _members = members;
+        _closeBraceToken = closeBraceToken;
+        FullWidth = (attributes?.FullWidth ?? 0)
+                    + (modifiers?.FullWidth ?? 0)
+                    + (keyword?.FullWidth ?? 0)
+                    + (type?.FullWidth ?? 0)
+                    + (baseTypes?.FullWidth ?? 0)
+                    + (whereClause?.FullWidth ?? 0)
+                    + (openBraceToken?.FullWidth ?? 0)
+                    + (members?.FullWidth ?? 0)
+                    + (closeBraceToken?.FullWidth ?? 0);
+    }
+
+    public override int SlotCount => 9;
+
+    public override GreenNode? GetSlot(int index) => index switch
+    {
+        0 => _attributes,
+        1 => _modifiers,
+        2 => _keyword,
+        3 => _type,
+        4 => _baseTypes,
+        5 => _whereClause,
+        6 => _openBraceToken,
+        7 => _members,
+        8 => _closeBraceToken,
+        _ => null,
+    };
+
+    public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
+        new ExtensionDeclarationSyntax(this, parent, position);
+}
+
+/// <summary>Green node for <see cref="FunctionDeclarationSyntax"/>.</summary>
+internal sealed class FunctionDeclarationGreen : GreenNode
+{
+    private readonly GreenList? _attributes;
+    private readonly GreenList? _modifiers;
+    private readonly GreenToken? _fnKeyword;
+    private readonly GreenNode? _explicitProtocol;
+    private readonly GreenToken? _dotToken;
+    private readonly GreenToken? _identifier;
+    private readonly GreenNode? _typeParameters;
+    private readonly GreenNode? _parameters;
+    private readonly GreenToken? _asyncKeyword;
+    private readonly GreenNode? _throwsSpec;
+    private readonly GreenNode? _returnClause;
+    private readonly GreenNode? _whereClause;
+    private readonly GreenNode? _body;
+    private readonly GreenToken? _arrowToken;
+    private readonly GreenNode? _expressionBody;
+
+    public FunctionDeclarationGreen(GreenList? attributes, GreenList? modifiers, GreenToken? fnKeyword, GreenNode? explicitProtocol, GreenToken? dotToken, GreenToken? identifier, GreenNode? typeParameters, GreenNode? parameters, GreenToken? asyncKeyword, GreenNode? throwsSpec, GreenNode? returnClause, GreenNode? whereClause, GreenNode? body, GreenToken? arrowToken, GreenNode? expressionBody)
+        : base(SyntaxKind.FunctionDeclaration, 0)
+    {
+        _attributes = attributes;
+        _modifiers = modifiers;
+        _fnKeyword = fnKeyword;
+        _explicitProtocol = explicitProtocol;
+        _dotToken = dotToken;
+        _identifier = identifier;
+        _typeParameters = typeParameters;
+        _parameters = parameters;
+        _asyncKeyword = asyncKeyword;
+        _throwsSpec = throwsSpec;
+        _returnClause = returnClause;
+        _whereClause = whereClause;
+        _body = body;
+        _arrowToken = arrowToken;
+        _expressionBody = expressionBody;
+        FullWidth = (attributes?.FullWidth ?? 0)
+                    + (modifiers?.FullWidth ?? 0)
+                    + (fnKeyword?.FullWidth ?? 0)
+                    + (explicitProtocol?.FullWidth ?? 0)
+                    + (dotToken?.FullWidth ?? 0)
+                    + (identifier?.FullWidth ?? 0)
+                    + (typeParameters?.FullWidth ?? 0)
+                    + (parameters?.FullWidth ?? 0)
+                    + (asyncKeyword?.FullWidth ?? 0)
+                    + (throwsSpec?.FullWidth ?? 0)
+                    + (returnClause?.FullWidth ?? 0)
+                    + (whereClause?.FullWidth ?? 0)
+                    + (body?.FullWidth ?? 0)
+                    + (arrowToken?.FullWidth ?? 0)
+                    + (expressionBody?.FullWidth ?? 0);
+    }
+
+    public override int SlotCount => 15;
+
+    public override GreenNode? GetSlot(int index) => index switch
+    {
+        0 => _attributes,
+        1 => _modifiers,
+        2 => _fnKeyword,
+        3 => _explicitProtocol,
+        4 => _dotToken,
+        5 => _identifier,
+        6 => _typeParameters,
+        7 => _parameters,
+        8 => _asyncKeyword,
+        9 => _throwsSpec,
+        10 => _returnClause,
+        11 => _whereClause,
+        12 => _body,
+        13 => _arrowToken,
+        14 => _expressionBody,
+        _ => null,
+    };
+
+    public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
+        new FunctionDeclarationSyntax(this, parent, position);
+}
+
+/// <summary>Green node for <see cref="InitDeclarationSyntax"/>.</summary>
+internal sealed class InitDeclarationGreen : GreenNode
+{
+    private readonly GreenList? _attributes;
+    private readonly GreenList? _modifiers;
+    private readonly GreenToken? _initKeyword;
+    private readonly GreenToken? _questionToken;
+    private readonly GreenNode? _typeParameters;
+    private readonly GreenNode? _parameters;
+    private readonly GreenNode? _throwsSpec;
+    private readonly GreenNode? _whereClause;
+    private readonly GreenNode? _body;
+
+    public InitDeclarationGreen(GreenList? attributes, GreenList? modifiers, GreenToken? initKeyword, GreenToken? questionToken, GreenNode? typeParameters, GreenNode? parameters, GreenNode? throwsSpec, GreenNode? whereClause, GreenNode? body)
+        : base(SyntaxKind.InitDeclaration, 0)
+    {
+        _attributes = attributes;
+        _modifiers = modifiers;
+        _initKeyword = initKeyword;
+        _questionToken = questionToken;
+        _typeParameters = typeParameters;
+        _parameters = parameters;
+        _throwsSpec = throwsSpec;
+        _whereClause = whereClause;
+        _body = body;
+        FullWidth = (attributes?.FullWidth ?? 0)
+                    + (modifiers?.FullWidth ?? 0)
+                    + (initKeyword?.FullWidth ?? 0)
+                    + (questionToken?.FullWidth ?? 0)
+                    + (typeParameters?.FullWidth ?? 0)
+                    + (parameters?.FullWidth ?? 0)
+                    + (throwsSpec?.FullWidth ?? 0)
+                    + (whereClause?.FullWidth ?? 0)
+                    + (body?.FullWidth ?? 0);
+    }
+
+    public override int SlotCount => 9;
+
+    public override GreenNode? GetSlot(int index) => index switch
+    {
+        0 => _attributes,
+        1 => _modifiers,
+        2 => _initKeyword,
+        3 => _questionToken,
+        4 => _typeParameters,
+        5 => _parameters,
+        6 => _throwsSpec,
+        7 => _whereClause,
+        8 => _body,
+        _ => null,
+    };
+
+    public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
+        new InitDeclarationSyntax(this, parent, position);
+}
+
+/// <summary>Green node for <see cref="DeinitDeclarationSyntax"/>.</summary>
+internal sealed class DeinitDeclarationGreen : GreenNode
+{
+    private readonly GreenList? _attributes;
+    private readonly GreenList? _modifiers;
+    private readonly GreenToken? _deinitKeyword;
+    private readonly GreenNode? _body;
+
+    public DeinitDeclarationGreen(GreenList? attributes, GreenList? modifiers, GreenToken? deinitKeyword, GreenNode? body)
+        : base(SyntaxKind.DeinitDeclaration, 0)
+    {
+        _attributes = attributes;
+        _modifiers = modifiers;
+        _deinitKeyword = deinitKeyword;
+        _body = body;
+        FullWidth = (attributes?.FullWidth ?? 0)
+                    + (modifiers?.FullWidth ?? 0)
+                    + (deinitKeyword?.FullWidth ?? 0)
+                    + (body?.FullWidth ?? 0);
+    }
+
+    public override int SlotCount => 4;
+
+    public override GreenNode? GetSlot(int index) => index switch
+    {
+        0 => _attributes,
+        1 => _modifiers,
+        2 => _deinitKeyword,
+        3 => _body,
+        _ => null,
+    };
+
+    public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
+        new DeinitDeclarationSyntax(this, parent, position);
+}
+
+/// <summary>Green node for <see cref="SubscriptDeclarationSyntax"/>.</summary>
+internal sealed class SubscriptDeclarationGreen : GreenNode
+{
+    private readonly GreenList? _attributes;
+    private readonly GreenList? _modifiers;
+    private readonly GreenToken? _subscriptKeyword;
+    private readonly GreenNode? _typeParameters;
+    private readonly GreenNode? _parameters;
+    private readonly GreenNode? _returnClause;
+    private readonly GreenNode? _whereClause;
+    private readonly GreenNode? _accessors;
+    private readonly GreenToken? _arrowToken;
+    private readonly GreenNode? _expressionBody;
+
+    public SubscriptDeclarationGreen(GreenList? attributes, GreenList? modifiers, GreenToken? subscriptKeyword, GreenNode? typeParameters, GreenNode? parameters, GreenNode? returnClause, GreenNode? whereClause, GreenNode? accessors, GreenToken? arrowToken, GreenNode? expressionBody)
+        : base(SyntaxKind.SubscriptDeclaration, 0)
+    {
+        _attributes = attributes;
+        _modifiers = modifiers;
+        _subscriptKeyword = subscriptKeyword;
+        _typeParameters = typeParameters;
+        _parameters = parameters;
+        _returnClause = returnClause;
+        _whereClause = whereClause;
+        _accessors = accessors;
+        _arrowToken = arrowToken;
+        _expressionBody = expressionBody;
+        FullWidth = (attributes?.FullWidth ?? 0)
+                    + (modifiers?.FullWidth ?? 0)
+                    + (subscriptKeyword?.FullWidth ?? 0)
+                    + (typeParameters?.FullWidth ?? 0)
+                    + (parameters?.FullWidth ?? 0)
+                    + (returnClause?.FullWidth ?? 0)
+                    + (whereClause?.FullWidth ?? 0)
+                    + (accessors?.FullWidth ?? 0)
+                    + (arrowToken?.FullWidth ?? 0)
+                    + (expressionBody?.FullWidth ?? 0);
+    }
+
+    public override int SlotCount => 10;
+
+    public override GreenNode? GetSlot(int index) => index switch
+    {
+        0 => _attributes,
+        1 => _modifiers,
+        2 => _subscriptKeyword,
+        3 => _typeParameters,
+        4 => _parameters,
+        5 => _returnClause,
+        6 => _whereClause,
+        7 => _accessors,
+        8 => _arrowToken,
+        9 => _expressionBody,
+        _ => null,
+    };
+
+    public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
+        new SubscriptDeclarationSyntax(this, parent, position);
+}
+
+/// <summary>Green node for <see cref="OperatorDeclarationSyntax"/>.</summary>
+internal sealed class OperatorDeclarationGreen : GreenNode
+{
+    private readonly GreenList? _attributes;
+    private readonly GreenList? _modifiers;
+    private readonly GreenToken? _fixityToken;
+    private readonly GreenToken? _operatorKeyword;
+    private readonly GreenToken? _operatorToken;
+    private readonly GreenToken? _secondOperatorToken;
+    private readonly GreenNode? _parameters;
+    private readonly GreenNode? _returnClause;
+    private readonly GreenNode? _body;
+    private readonly GreenToken? _arrowToken;
+    private readonly GreenNode? _expressionBody;
+
+    public OperatorDeclarationGreen(GreenList? attributes, GreenList? modifiers, GreenToken? fixityToken, GreenToken? operatorKeyword, GreenToken? operatorToken, GreenToken? secondOperatorToken, GreenNode? parameters, GreenNode? returnClause, GreenNode? body, GreenToken? arrowToken, GreenNode? expressionBody)
+        : base(SyntaxKind.OperatorDeclaration, 0)
+    {
+        _attributes = attributes;
+        _modifiers = modifiers;
+        _fixityToken = fixityToken;
+        _operatorKeyword = operatorKeyword;
+        _operatorToken = operatorToken;
+        _secondOperatorToken = secondOperatorToken;
+        _parameters = parameters;
+        _returnClause = returnClause;
+        _body = body;
+        _arrowToken = arrowToken;
+        _expressionBody = expressionBody;
+        FullWidth = (attributes?.FullWidth ?? 0)
+                    + (modifiers?.FullWidth ?? 0)
+                    + (fixityToken?.FullWidth ?? 0)
+                    + (operatorKeyword?.FullWidth ?? 0)
+                    + (operatorToken?.FullWidth ?? 0)
+                    + (secondOperatorToken?.FullWidth ?? 0)
+                    + (parameters?.FullWidth ?? 0)
+                    + (returnClause?.FullWidth ?? 0)
+                    + (body?.FullWidth ?? 0)
+                    + (arrowToken?.FullWidth ?? 0)
+                    + (expressionBody?.FullWidth ?? 0);
+    }
+
+    public override int SlotCount => 11;
+
+    public override GreenNode? GetSlot(int index) => index switch
+    {
+        0 => _attributes,
+        1 => _modifiers,
+        2 => _fixityToken,
+        3 => _operatorKeyword,
+        4 => _operatorToken,
+        5 => _secondOperatorToken,
+        6 => _parameters,
+        7 => _returnClause,
+        8 => _body,
+        9 => _arrowToken,
+        10 => _expressionBody,
+        _ => null,
+    };
+
+    public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
+        new OperatorDeclarationSyntax(this, parent, position);
+}
+
+/// <summary>Green node for <see cref="FieldDeclarationSyntax"/>.</summary>
+internal sealed class FieldDeclarationGreen : GreenNode
+{
+    private readonly GreenList? _attributes;
+    private readonly GreenList? _modifiers;
+    private readonly GreenToken? _letOrVarKeyword;
+    private readonly GreenNode? _declarator;
+    private readonly GreenNode? _accessors;
+    private readonly GreenToken? _separatorToken;
+
+    public FieldDeclarationGreen(GreenList? attributes, GreenList? modifiers, GreenToken? letOrVarKeyword, GreenNode? declarator, GreenNode? accessors, GreenToken? separatorToken)
+        : base(SyntaxKind.FieldDeclaration, 0)
+    {
+        _attributes = attributes;
+        _modifiers = modifiers;
+        _letOrVarKeyword = letOrVarKeyword;
+        _declarator = declarator;
+        _accessors = accessors;
+        _separatorToken = separatorToken;
+        FullWidth = (attributes?.FullWidth ?? 0)
+                    + (modifiers?.FullWidth ?? 0)
+                    + (letOrVarKeyword?.FullWidth ?? 0)
+                    + (declarator?.FullWidth ?? 0)
+                    + (accessors?.FullWidth ?? 0)
+                    + (separatorToken?.FullWidth ?? 0);
+    }
+
+    public override int SlotCount => 6;
+
+    public override GreenNode? GetSlot(int index) => index switch
+    {
+        0 => _attributes,
+        1 => _modifiers,
+        2 => _letOrVarKeyword,
+        3 => _declarator,
+        4 => _accessors,
+        5 => _separatorToken,
+        _ => null,
+    };
+
+    public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
+        new FieldDeclarationSyntax(this, parent, position);
+}
+
+/// <summary>Green node for <see cref="AccessorListSyntax"/>.</summary>
+internal sealed class AccessorListGreen : GreenNode
+{
+    private readonly GreenToken? _openBraceToken;
+    private readonly GreenList? _accessors;
+    private readonly GreenToken? _closeBraceToken;
+
+    public AccessorListGreen(GreenToken? openBraceToken, GreenList? accessors, GreenToken? closeBraceToken)
+        : base(SyntaxKind.AccessorList, 0)
+    {
+        _openBraceToken = openBraceToken;
+        _accessors = accessors;
+        _closeBraceToken = closeBraceToken;
+        FullWidth = (openBraceToken?.FullWidth ?? 0)
+                    + (accessors?.FullWidth ?? 0)
+                    + (closeBraceToken?.FullWidth ?? 0);
+    }
+
+    public override int SlotCount => 3;
+
+    public override GreenNode? GetSlot(int index) => index switch
+    {
+        0 => _openBraceToken,
+        1 => _accessors,
+        2 => _closeBraceToken,
+        _ => null,
+    };
+
+    public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
+        new AccessorListSyntax(this, parent, position);
+}
+
+/// <summary>Green node for <see cref="AccessorSyntax"/>.</summary>
+internal sealed class AccessorGreen : GreenNode
+{
+    private readonly GreenList? _attributes;
+    private readonly GreenList? _modifiers;
+    private readonly GreenToken? _keyword;
+    private readonly GreenToken? _openParenToken;
+    private readonly GreenToken? _parameterName;
+    private readonly GreenToken? _closeParenToken;
+    private readonly GreenNode? _body;
+    private readonly GreenToken? _arrowToken;
+    private readonly GreenNode? _expressionBody;
+
+    public AccessorGreen(GreenList? attributes, GreenList? modifiers, GreenToken? keyword, GreenToken? openParenToken, GreenToken? parameterName, GreenToken? closeParenToken, GreenNode? body, GreenToken? arrowToken, GreenNode? expressionBody)
+        : base(SyntaxKind.Accessor, 0)
+    {
+        _attributes = attributes;
+        _modifiers = modifiers;
+        _keyword = keyword;
+        _openParenToken = openParenToken;
+        _parameterName = parameterName;
+        _closeParenToken = closeParenToken;
+        _body = body;
+        _arrowToken = arrowToken;
+        _expressionBody = expressionBody;
+        FullWidth = (attributes?.FullWidth ?? 0)
+                    + (modifiers?.FullWidth ?? 0)
+                    + (keyword?.FullWidth ?? 0)
+                    + (openParenToken?.FullWidth ?? 0)
+                    + (parameterName?.FullWidth ?? 0)
+                    + (closeParenToken?.FullWidth ?? 0)
+                    + (body?.FullWidth ?? 0)
+                    + (arrowToken?.FullWidth ?? 0)
+                    + (expressionBody?.FullWidth ?? 0);
+    }
+
+    public override int SlotCount => 9;
+
+    public override GreenNode? GetSlot(int index) => index switch
+    {
+        0 => _attributes,
+        1 => _modifiers,
+        2 => _keyword,
+        3 => _openParenToken,
+        4 => _parameterName,
+        5 => _closeParenToken,
+        6 => _body,
+        7 => _arrowToken,
+        8 => _expressionBody,
+        _ => null,
+    };
+
+    public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
+        new AccessorSyntax(this, parent, position);
+}
+
+/// <summary>Green node for <see cref="ConstDeclarationSyntax"/>.</summary>
+internal sealed class ConstDeclarationGreen : GreenNode
+{
+    private readonly GreenList? _attributes;
+    private readonly GreenList? _modifiers;
+    private readonly GreenToken? _constKeyword;
+    private readonly GreenToken? _identifier;
+    private readonly GreenNode? _typeAnnotation;
+    private readonly GreenNode? _initializer;
+
+    public ConstDeclarationGreen(GreenList? attributes, GreenList? modifiers, GreenToken? constKeyword, GreenToken? identifier, GreenNode? typeAnnotation, GreenNode? initializer)
+        : base(SyntaxKind.ConstDeclaration, 0)
+    {
+        _attributes = attributes;
+        _modifiers = modifiers;
+        _constKeyword = constKeyword;
+        _identifier = identifier;
+        _typeAnnotation = typeAnnotation;
+        _initializer = initializer;
+        FullWidth = (attributes?.FullWidth ?? 0)
+                    + (modifiers?.FullWidth ?? 0)
+                    + (constKeyword?.FullWidth ?? 0)
+                    + (identifier?.FullWidth ?? 0)
+                    + (typeAnnotation?.FullWidth ?? 0)
+                    + (initializer?.FullWidth ?? 0);
+    }
+
+    public override int SlotCount => 6;
+
+    public override GreenNode? GetSlot(int index) => index switch
+    {
+        0 => _attributes,
+        1 => _modifiers,
+        2 => _constKeyword,
+        3 => _identifier,
+        4 => _typeAnnotation,
+        5 => _initializer,
+        _ => null,
+    };
+
+    public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
+        new ConstDeclarationSyntax(this, parent, position);
+}
+
+/// <summary>Green node for <see cref="AliasDeclarationSyntax"/>.</summary>
+internal sealed class AliasDeclarationGreen : GreenNode
+{
+    private readonly GreenList? _attributes;
+    private readonly GreenList? _modifiers;
+    private readonly GreenToken? _aliasKeyword;
+    private readonly GreenToken? _identifier;
+    private readonly GreenNode? _typeParameters;
+    private readonly GreenToken? _equalsToken;
+    private readonly GreenNode? _type;
+
+    public AliasDeclarationGreen(GreenList? attributes, GreenList? modifiers, GreenToken? aliasKeyword, GreenToken? identifier, GreenNode? typeParameters, GreenToken? equalsToken, GreenNode? type)
+        : base(SyntaxKind.AliasDeclaration, 0)
+    {
+        _attributes = attributes;
+        _modifiers = modifiers;
+        _aliasKeyword = aliasKeyword;
+        _identifier = identifier;
+        _typeParameters = typeParameters;
+        _equalsToken = equalsToken;
+        _type = type;
+        FullWidth = (attributes?.FullWidth ?? 0)
+                    + (modifiers?.FullWidth ?? 0)
+                    + (aliasKeyword?.FullWidth ?? 0)
+                    + (identifier?.FullWidth ?? 0)
+                    + (typeParameters?.FullWidth ?? 0)
+                    + (equalsToken?.FullWidth ?? 0)
+                    + (type?.FullWidth ?? 0);
+    }
+
+    public override int SlotCount => 7;
+
+    public override GreenNode? GetSlot(int index) => index switch
+    {
+        0 => _attributes,
+        1 => _modifiers,
+        2 => _aliasKeyword,
+        3 => _identifier,
+        4 => _typeParameters,
+        5 => _equalsToken,
+        6 => _type,
+        _ => null,
+    };
+
+    public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
+        new AliasDeclarationSyntax(this, parent, position);
+}
+
+/// <summary>Green node for <see cref="TypealiasDeclarationSyntax"/>.</summary>
+internal sealed class TypealiasDeclarationGreen : GreenNode
+{
+    private readonly GreenList? _attributes;
+    private readonly GreenList? _modifiers;
+    private readonly GreenToken? _typealiasKeyword;
+    private readonly GreenToken? _identifier;
+    private readonly GreenToken? _equalsToken;
+    private readonly GreenNode? _type;
+
+    public TypealiasDeclarationGreen(GreenList? attributes, GreenList? modifiers, GreenToken? typealiasKeyword, GreenToken? identifier, GreenToken? equalsToken, GreenNode? type)
+        : base(SyntaxKind.TypealiasDeclaration, 0)
+    {
+        _attributes = attributes;
+        _modifiers = modifiers;
+        _typealiasKeyword = typealiasKeyword;
+        _identifier = identifier;
+        _equalsToken = equalsToken;
+        _type = type;
+        FullWidth = (attributes?.FullWidth ?? 0)
+                    + (modifiers?.FullWidth ?? 0)
+                    + (typealiasKeyword?.FullWidth ?? 0)
+                    + (identifier?.FullWidth ?? 0)
+                    + (equalsToken?.FullWidth ?? 0)
+                    + (type?.FullWidth ?? 0);
+    }
+
+    public override int SlotCount => 6;
+
+    public override GreenNode? GetSlot(int index) => index switch
+    {
+        0 => _attributes,
+        1 => _modifiers,
+        2 => _typealiasKeyword,
+        3 => _identifier,
+        4 => _equalsToken,
+        5 => _type,
+        _ => null,
+    };
+
+    public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
+        new TypealiasDeclarationSyntax(this, parent, position);
+}
+
+/// <summary>Green node for <see cref="AssociatedTypeDeclarationSyntax"/>.</summary>
+internal sealed class AssociatedTypeDeclarationGreen : GreenNode
+{
+    private readonly GreenList? _attributes;
+    private readonly GreenList? _modifiers;
+    private readonly GreenToken? _associatedTypeKeyword;
+    private readonly GreenToken? _identifier;
+    private readonly GreenNode? _baseTypes;
+    private readonly GreenToken? _equalsToken;
+    private readonly GreenNode? _defaultType;
+
+    public AssociatedTypeDeclarationGreen(GreenList? attributes, GreenList? modifiers, GreenToken? associatedTypeKeyword, GreenToken? identifier, GreenNode? baseTypes, GreenToken? equalsToken, GreenNode? defaultType)
+        : base(SyntaxKind.AssociatedTypeDeclaration, 0)
+    {
+        _attributes = attributes;
+        _modifiers = modifiers;
+        _associatedTypeKeyword = associatedTypeKeyword;
+        _identifier = identifier;
+        _baseTypes = baseTypes;
+        _equalsToken = equalsToken;
+        _defaultType = defaultType;
+        FullWidth = (attributes?.FullWidth ?? 0)
+                    + (modifiers?.FullWidth ?? 0)
+                    + (associatedTypeKeyword?.FullWidth ?? 0)
+                    + (identifier?.FullWidth ?? 0)
+                    + (baseTypes?.FullWidth ?? 0)
+                    + (equalsToken?.FullWidth ?? 0)
+                    + (defaultType?.FullWidth ?? 0);
+    }
+
+    public override int SlotCount => 7;
+
+    public override GreenNode? GetSlot(int index) => index switch
+    {
+        0 => _attributes,
+        1 => _modifiers,
+        2 => _associatedTypeKeyword,
+        3 => _identifier,
+        4 => _baseTypes,
+        5 => _equalsToken,
+        6 => _defaultType,
+        _ => null,
+    };
+
+    public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
+        new AssociatedTypeDeclarationSyntax(this, parent, position);
+}
+
+/// <summary>Green node for <see cref="UnionCaseDeclarationSyntax"/>.</summary>
+internal sealed class UnionCaseDeclarationGreen : GreenNode
+{
+    private readonly GreenList? _attributes;
+    private readonly GreenToken? _identifier;
+    private readonly GreenNode? _payload;
+    private readonly GreenToken? _commaToken;
+
+    public UnionCaseDeclarationGreen(GreenList? attributes, GreenToken? identifier, GreenNode? payload, GreenToken? commaToken)
+        : base(SyntaxKind.UnionCaseDeclaration, 0)
+    {
+        _attributes = attributes;
+        _identifier = identifier;
+        _payload = payload;
+        _commaToken = commaToken;
+        FullWidth = (attributes?.FullWidth ?? 0)
+                    + (identifier?.FullWidth ?? 0)
+                    + (payload?.FullWidth ?? 0)
+                    + (commaToken?.FullWidth ?? 0);
+    }
+
+    public override int SlotCount => 4;
+
+    public override GreenNode? GetSlot(int index) => index switch
+    {
+        0 => _attributes,
+        1 => _identifier,
+        2 => _payload,
+        3 => _commaToken,
+        _ => null,
+    };
+
+    public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
+        new UnionCaseDeclarationSyntax(this, parent, position);
+}
+
+/// <summary>Green node for <see cref="UnionCasePayloadListSyntax"/>.</summary>
+internal sealed class UnionCasePayloadListGreen : GreenNode
+{
+    private readonly GreenToken? _openParenToken;
+    private readonly GreenList? _fields;
+    private readonly GreenToken? _closeParenToken;
+
+    public UnionCasePayloadListGreen(GreenToken? openParenToken, GreenList? fields, GreenToken? closeParenToken)
+        : base(SyntaxKind.UnionCasePayloadList, 0)
+    {
+        _openParenToken = openParenToken;
+        _fields = fields;
+        _closeParenToken = closeParenToken;
+        FullWidth = (openParenToken?.FullWidth ?? 0)
+                    + (fields?.FullWidth ?? 0)
+                    + (closeParenToken?.FullWidth ?? 0);
+    }
+
+    public override int SlotCount => 3;
+
+    public override GreenNode? GetSlot(int index) => index switch
+    {
+        0 => _openParenToken,
+        1 => _fields,
+        2 => _closeParenToken,
+        _ => null,
+    };
+
+    public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
+        new UnionCasePayloadListSyntax(this, parent, position);
+}
+
+/// <summary>Green node for <see cref="UnionCaseFieldSyntax"/>.</summary>
+internal sealed class UnionCaseFieldGreen : GreenNode
+{
+    private readonly GreenToken? _nameToken;
+    private readonly GreenToken? _colonToken;
+    private readonly GreenNode? _type;
+
+    public UnionCaseFieldGreen(GreenToken? nameToken, GreenToken? colonToken, GreenNode? type)
+        : base(SyntaxKind.UnionCaseField, 0)
+    {
+        _nameToken = nameToken;
+        _colonToken = colonToken;
+        _type = type;
+        FullWidth = (nameToken?.FullWidth ?? 0)
+                    + (colonToken?.FullWidth ?? 0)
+                    + (type?.FullWidth ?? 0);
+    }
+
+    public override int SlotCount => 3;
+
+    public override GreenNode? GetSlot(int index) => index switch
+    {
+        0 => _nameToken,
+        1 => _colonToken,
+        2 => _type,
+        _ => null,
+    };
+
+    public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
+        new UnionCaseFieldSyntax(this, parent, position);
+}
+
+/// <summary>Green node for <see cref="EnumCaseDeclarationSyntax"/>.</summary>
+internal sealed class EnumCaseDeclarationGreen : GreenNode
+{
+    private readonly GreenList? _attributes;
+    private readonly GreenToken? _identifier;
+    private readonly GreenToken? _equalsToken;
+    private readonly GreenNode? _value;
+    private readonly GreenToken? _commaToken;
+
+    public EnumCaseDeclarationGreen(GreenList? attributes, GreenToken? identifier, GreenToken? equalsToken, GreenNode? value, GreenToken? commaToken)
+        : base(SyntaxKind.EnumCaseDeclaration, 0)
+    {
+        _attributes = attributes;
+        _identifier = identifier;
+        _equalsToken = equalsToken;
+        _value = value;
+        _commaToken = commaToken;
+        FullWidth = (attributes?.FullWidth ?? 0)
+                    + (identifier?.FullWidth ?? 0)
+                    + (equalsToken?.FullWidth ?? 0)
+                    + (value?.FullWidth ?? 0)
+                    + (commaToken?.FullWidth ?? 0);
+    }
+
+    public override int SlotCount => 5;
+
+    public override GreenNode? GetSlot(int index) => index switch
+    {
+        0 => _attributes,
+        1 => _identifier,
+        2 => _equalsToken,
+        3 => _value,
+        4 => _commaToken,
+        _ => null,
+    };
+
+    public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
+        new EnumCaseDeclarationSyntax(this, parent, position);
+}
+
+/// <summary>Green node for <see cref="IncompleteDeclarationSyntax"/>.</summary>
+internal sealed class IncompleteDeclarationGreen : GreenNode
+{
+    private readonly GreenList? _attributes;
+    private readonly GreenList? _modifiers;
+
+    public IncompleteDeclarationGreen(GreenList? attributes, GreenList? modifiers)
+        : base(SyntaxKind.IncompleteDeclaration, 0)
+    {
+        _attributes = attributes;
+        _modifiers = modifiers;
+        FullWidth = (attributes?.FullWidth ?? 0)
+                    + (modifiers?.FullWidth ?? 0);
+    }
+
+    public override int SlotCount => 2;
+
+    public override GreenNode? GetSlot(int index) => index switch
+    {
+        0 => _attributes,
+        1 => _modifiers,
+        _ => null,
+    };
+
+    public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
+        new IncompleteDeclarationSyntax(this, parent, position);
 }
 

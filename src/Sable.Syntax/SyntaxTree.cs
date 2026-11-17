@@ -16,10 +16,20 @@ namespace Sable.Syntax;
 /// </remarks>
 public sealed class SyntaxTree
 {
+    private readonly SyntaxToken _trailingEndOfFile;
+
     public SourceText Text { get; }
     public SyntaxNode Root { get; }
-    public SyntaxToken EndOfFileToken { get; }
     public IReadOnlyList<Diagnostic> Diagnostics { get; }
+
+    /// <summary>
+    /// The end-of-file token. A compilation unit owns it as a child; the
+    /// single-construct entry points carry it beside the root instead.
+    /// </summary>
+    public SyntaxToken EndOfFileToken =>
+        _trailingEndOfFile.IsNone && Root is CompilationUnitSyntax unit
+            ? unit.EndOfFileToken
+            : _trailingEndOfFile;
 
     internal SyntaxTree(
         SourceText text,
@@ -29,7 +39,7 @@ public sealed class SyntaxTree
     {
         Text = text;
         Root = root;
-        EndOfFileToken = endOfFileToken;
+        _trailingEndOfFile = endOfFileToken;
         Diagnostics = diagnostics;
     }
 
@@ -55,12 +65,19 @@ public sealed class SyntaxTree
     public static SyntaxTree ParseStatement(string text, string fileName = "<input>") =>
         Parser.ParseStatement(new SourceText(text, fileName));
 
+    /// <summary>Parses a whole source file.</summary>
+    public static SyntaxTree Parse(string text, string fileName = "<input>") =>
+        Parser.ParseCompilationUnit(new SourceText(text, fileName));
+
+    /// <summary>Parses a whole source file from already-loaded text.</summary>
+    public static SyntaxTree Parse(SourceText text) => Parser.ParseCompilationUnit(text);
+
     /// <summary>The whole file, reconstructed from the tree.</summary>
     public string ToFullString()
     {
         var builder = new StringBuilder(Text.Length);
         builder.Append(Root.ToFullString());
-        builder.Append(EndOfFileToken.ToFullString());
+        builder.Append(_trailingEndOfFile.ToFullString());
         return builder.ToString();
     }
 

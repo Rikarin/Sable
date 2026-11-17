@@ -106,6 +106,14 @@ internal sealed class Parser
         return parser.Finish(source, parser.ParseStatement(), "statement");
     }
 
+    public static SyntaxTree ParseCompilationUnit(SourceText source)
+    {
+        var parser = new Parser(source);
+        var unit = parser.ParseCompilationUnit();
+        return new SyntaxTree(source, unit.CreateRed(null, 0), default,
+            parser._diagnostics.ToList());
+    }
+
     /// <summary>
     /// Consumes anything left over, so that the root plus the end-of-file token
     /// still account for every character in the file.
@@ -336,7 +344,18 @@ internal sealed class Parser
             var marker = Current.Kind is SyntaxKind.QuestionToken or SyntaxKind.BangToken
                 ? EatToken()
                 : null;
-            return new TryExpressionGreen(tryKeyword, marker, ParseUnary());
+            var operand = ParseUnary();
+
+            GreenToken? catchKeyword = null;
+            GreenNode? catchBody = null;
+            if (At(SyntaxKind.CatchKeyword))
+            {
+                catchKeyword = EatToken();
+                catchBody = At(SyntaxKind.OpenBraceToken) ? ParseBlock() : ParseExpression();
+            }
+
+            return new TryExpressionGreen(
+                tryKeyword, marker, operand, catchKeyword, catchBody);
         }
 
         if (IsPrefixOperator(Current.Kind))
@@ -383,7 +402,7 @@ internal sealed class Parser
 
                 // 'items.filter { ... }' is a call whose only argument is the
                 // closure; it has no parenthesised argument list.
-                case SyntaxKind.OpenBraceToken when !_noBrace:
+                case SyntaxKind.OpenBraceToken when CanTakeTrailingClosure():
                 {
                     var closure = ParseBraceClosure(null);
                     expression = new InvocationExpressionGreen(expression, null, null, closure);
@@ -673,9 +692,12 @@ internal sealed class Parser
         return (new TupleElementGreen(name, colon, expression), name is not null, expression);
     }
 
-    /// <summary>True when the current token starts a <c>label:</c> prefix.</summary>
+    /// <summary>
+    /// True when the current token starts a <c>label:</c> prefix. Keywords are
+    /// allowed, so <c>parseExpr(tokens, in: arena)</c> reads as intended.
+    /// </summary>
     private bool IsArgumentLabel() =>
-        (Current.Kind == SyntaxKind.IdentifierToken || Current.IsContextualKeywordToken())
+        (Current.Kind == SyntaxKind.IdentifierToken || Current.IsKeywordToken())
         && Peek(1).Kind == SyntaxKind.ColonToken;
 
     private GreenNode ParseArrayOrDictionary() =>
@@ -1276,30 +1298,61 @@ internal sealed class Parser
 
     /// <summary>A brace right after an argument list is the call's last argument.</summary>
     private GreenNode? TryParseTrailingClosure() =>
-        !_noBrace && At(SyntaxKind.OpenBraceToken) ? ParseBraceClosure(null) : null;
+        CanTakeTrailingClosure() ? ParseBraceClosure(null) : null;
 
+    private bool CanTakeTrailingClosure() =>
+        !_noBrace && At(SyntaxKind.OpenBraceToken) && !IsAccessorBlockAhead();
+
+    /// <summary>
+    /// True when the brace at the current token opens a property's accessors.
+    /// </summary>
+    /// <remarks>
+    /// `var tracked: Int = 0 { willSet { ... } }` has an initialiser and then
+    /// an accessor block, so the brace must not be read as a trailing closure
+    /// on the initialiser. Swift decides the same way: by the first token
+    /// inside the brace. None of these keywords is a valid expression, so the
+    /// test is safe to apply everywhere.
+    /// </remarks>
+    private bool IsAccessorBlockAhead() =>
+        Peek(1).Kind is SyntaxKind.GetKeyword or SyntaxKind.SetKeyword
+            or SyntaxKind.WillSetKeyword or SyntaxKind.DidSetKeyword;
+
+    /// <summary>
+    /// True for a closure capture list: <c>[weak self] { ... }</c>.
+    /// </summary>
+    /// <remarks>
+    /// Both ends have to be checked. An array literal can also be followed by
+    /// an identifier on the next line, so the token after the closing bracket
+    /// must be something only a closure can start.
+    /// </remarks>
     private bool LooksLikeCaptureList()
     {
-        // '[weak self] { ... }' or '[x = y] (a) => ...'
-        var offset = 0;
+        if (Peek(1).Kind is not (SyntaxKind.WeakKeyword or SyntaxKind.UnownedKeyword
+            or SyntaxKind.SelfKeyword or SyntaxKind.IdentifierToken))
+        {
+            return false;
+        }
+
         var depth = 0;
-        while (offset < 64)
+        for (var offset = 0; offset < 64; offset++)
         {
             var kind = Peek(offset).Kind;
             if (kind == SyntaxKind.OpenBracketToken) depth++;
             else if (kind == SyntaxKind.CloseBracketToken)
             {
                 depth--;
-                if (depth == 0)
+                if (depth != 0) continue;
+
+                return Peek(offset + 1).Kind switch
                 {
-                    var next = Peek(offset + 1).Kind;
-                    return next == SyntaxKind.OpenBraceToken
-                        || next == SyntaxKind.OpenParenToken
-                        || next == SyntaxKind.IdentifierToken;
-                }
+                    SyntaxKind.OpenBraceToken => true,
+                    SyntaxKind.OpenParenToken => true,
+                    SyntaxKind.IdentifierToken =>
+                        Peek(offset + 2).Kind == SyntaxKind.FatArrowToken,
+                    _ => false,
+                };
             }
             else if (kind is SyntaxKind.EndOfFile or SyntaxKind.OpenBraceToken) return false;
-            offset++;
         }
         return false;
     }
@@ -1840,10 +1893,15 @@ internal sealed class Parser
 
             case SyntaxKind.LetKeyword:
             case SyntaxKind.VarKeyword:
-                return ParseLocalDeclaration(null);
+                return ParseLocalDeclaration(null, null);
 
             case SyntaxKind.UsingKeyword:
-                return ParseLocalDeclaration(EatToken());
+                return ParseLocalDeclaration(null, EatToken());
+
+            // 'async let x = f()' starts a child task; see SYNTAX.md §19.
+            case SyntaxKind.AsyncKeyword when Peek(1).Kind is SyntaxKind.LetKeyword
+                or SyntaxKind.VarKeyword:
+                return ParseLocalDeclaration(EatToken(), null);
 
             case SyntaxKind.IfKeyword:
                 return ParseIfStatement();
@@ -1935,6 +1993,21 @@ internal sealed class Parser
                 return new FallthroughStatementGreen(
                     EatToken(), TryEatToken(SyntaxKind.SemicolonToken));
 
+            // A declaration used as a statement: a nested function or type.
+            case SyntaxKind.FnKeyword:
+            case SyntaxKind.StructKeyword:
+            case SyntaxKind.ClassKeyword:
+            case SyntaxKind.ActorKeyword:
+            case SyntaxKind.ProtocolKeyword:
+            case SyntaxKind.UnionKeyword:
+            case SyntaxKind.EnumKeyword:
+            case SyntaxKind.ExtensionKeyword:
+            case SyntaxKind.AliasKeyword:
+            case SyntaxKind.TypealiasKeyword:
+            case SyntaxKind.ConstKeyword:
+            case SyntaxKind.AtToken:
+                return new DeclarationStatementGreen(ParseMemberDeclaration(GreenList.Empty));
+
             case SyntaxKind.IdentifierToken when Peek(1).Kind == SyntaxKind.ColonToken
                 && IsLabelTarget(Peek(2).Kind):
             {
@@ -1956,15 +2029,15 @@ internal sealed class Parser
         kind is SyntaxKind.ForKeyword or SyntaxKind.WhileKeyword
             or SyntaxKind.RepeatKeyword or SyntaxKind.OpenBraceToken;
 
-    private GreenNode ParseLocalDeclaration(GreenToken? usingKeyword)
+    private GreenNode ParseLocalDeclaration(GreenToken? asyncKeyword, GreenToken? usingKeyword)
     {
         var keyword = Current.Kind is SyntaxKind.LetKeyword or SyntaxKind.VarKeyword
             ? EatToken()
             : EatToken(SyntaxKind.LetKeyword);
 
         var declarator = ParseVariableDeclarator();
-        return new LocalDeclarationStatementGreen(
-            usingKeyword, keyword, declarator, TryEatToken(SyntaxKind.SemicolonToken));
+        return new LocalDeclarationStatementGreen(asyncKeyword, usingKeyword, keyword,
+            declarator, TryEatToken(SyntaxKind.SemicolonToken));
     }
 
     private GreenNode ParseVariableDeclarator()
@@ -2184,6 +2257,715 @@ internal sealed class Parser
         }
 
         return new RegionStatementGreen(regionKeyword, identifier, equals, source, ParseBlock());
+    }
+
+    // =======================================================================
+    // Declarations
+    // =======================================================================
+
+    /// <summary>Parses a whole source file.</summary>
+    public GreenNode ParseCompilationUnit()
+    {
+        var attributes = ParseAttributes();
+
+        GreenNode? module = null;
+        if (At(SyntaxKind.ModuleKeyword))
+        {
+            var moduleKeyword = EatToken();
+            module = new ModuleDeclarationGreen(attributes, moduleKeyword, ParseTypeName());
+            attributes = GreenList.Empty;
+        }
+
+        var imports = ImmutableArray.CreateBuilder<GreenNode>();
+        while (attributes.SlotCount == 0 && AtImportDeclaration())
+            imports.Add(ParseImportDeclaration());
+
+        var members = ParseMembers(attributes, ParseMemberDeclaration, SyntaxKind.EndOfFile);
+        var eof = EatToken();
+
+        return new CompilationUnitGreen(
+            module, GreenList.Create(imports.ToImmutable()), members, eof);
+    }
+
+    private bool AtImportDeclaration() =>
+        At(SyntaxKind.ImportKeyword)
+        || (At(SyntaxKind.PublicKeyword) && Peek(1).Kind == SyntaxKind.ImportKeyword);
+
+    private GreenNode ParseImportDeclaration()
+    {
+        var publicKeyword = TryEatToken(SyntaxKind.PublicKeyword);
+        var importKeyword = EatToken(SyntaxKind.ImportKeyword);
+        var name = ParseTypeName();
+
+        GreenNode? items = null;
+        if (At(SyntaxKind.DotToken) && Peek(1).Kind == SyntaxKind.OpenBraceToken)
+        {
+            var dot = EatToken();
+            var open = EatToken(SyntaxKind.OpenBraceToken);
+            var list = ParseSeparatedList(SyntaxKind.CloseBraceToken, ParseImportItem);
+            var close = EatToken(SyntaxKind.CloseBraceToken);
+            items = new ImportItemListGreen(dot, open, list, close);
+        }
+
+        GreenToken? asKeyword = null;
+        GreenToken? alias = null;
+        if (items is null && At(SyntaxKind.AsKeyword))
+        {
+            asKeyword = EatToken();
+            alias = EatIdentifier();
+        }
+
+        return new ImportDeclarationGreen(
+            publicKeyword, importKeyword, name, asKeyword, alias, items);
+    }
+
+    private GreenNode ParseImportItem()
+    {
+        var name = At(SyntaxKind.StarToken) ? EatToken() : EatIdentifier();
+        var asKeyword = TryEatToken(SyntaxKind.AsKeyword);
+        var alias = asKeyword is null ? null : EatIdentifier();
+        return new ImportItemGreen(name, asKeyword, alias);
+    }
+
+    private GreenList ParseAttributes()
+    {
+        if (!At(SyntaxKind.AtToken)) return GreenList.Empty;
+
+        var items = ImmutableArray.CreateBuilder<GreenNode>();
+        while (At(SyntaxKind.AtToken))
+        {
+            var at = EatToken();
+            var name = ParseTypeName();
+            var arguments = At(SyntaxKind.OpenParenToken)
+                ? ParseArgumentList(SyntaxKind.OpenParenToken, SyntaxKind.CloseParenToken)
+                : null;
+            items.Add(new AttributeGreen(at, name, arguments));
+        }
+        return GreenList.Create(items.ToImmutable());
+    }
+
+    private GreenList ParseModifiers()
+    {
+        if (!IsModifier(Current.Kind) && !IsConstFunctionModifier()) return GreenList.Empty;
+
+        var items = ImmutableArray.CreateBuilder<GreenNode>();
+        while (IsModifier(Current.Kind) || IsConstFunctionModifier())
+        {
+            items.Add(EatToken());
+
+            // 'private(set)' and 'unowned(safe)' carry a parenthesised argument.
+            if (At(SyntaxKind.OpenParenToken) && Peek(2).Kind == SyntaxKind.CloseParenToken)
+            {
+                items.Add(EatToken());
+                items.Add(EatToken());
+                items.Add(EatToken());
+            }
+        }
+        return GreenList.Create(items.ToImmutable());
+    }
+
+    /// <summary>
+    /// <c>const</c> declares a compile-time constant on its own, but modifies
+    /// a function in <c>const fn</c>.
+    /// </summary>
+    private bool IsConstFunctionModifier() =>
+        At(SyntaxKind.ConstKeyword) && Peek(1).Kind == SyntaxKind.FnKeyword;
+
+    private static bool IsModifier(SyntaxKind kind) => kind switch
+    {
+        SyntaxKind.PublicKeyword or SyntaxKind.PackageKeyword
+            or SyntaxKind.InternalKeyword or SyntaxKind.PrivateKeyword => true,
+        SyntaxKind.StaticKeyword or SyntaxKind.OpenKeyword or SyntaxKind.SealedKeyword
+            or SyntaxKind.AbstractKeyword or SyntaxKind.FinalKeyword
+            or SyntaxKind.OverrideKeyword or SyntaxKind.RequiredKeyword
+            or SyntaxKind.ConvenienceKeyword => true,
+        SyntaxKind.MutatingKeyword or SyntaxKind.NonmutatingKeyword
+            or SyntaxKind.LazyKeyword or SyntaxKind.NonisolatedKeyword => true,
+        SyntaxKind.WeakKeyword or SyntaxKind.UnownedKeyword => true,
+        SyntaxKind.AsyncKeyword => true,
+        _ => false,
+    };
+
+    /// <summary>
+    /// Parses members until <paramref name="terminator"/>, always making
+    /// progress. <paramref name="leading"/> carries attributes already read.
+    /// </summary>
+    private GreenList ParseMembers(
+        GreenList leading, Func<GreenList, GreenNode> parseMember, SyntaxKind terminator)
+    {
+        var items = ImmutableArray.CreateBuilder<GreenNode>();
+        var pending = leading;
+
+        while (!At(terminator) && !At(SyntaxKind.EndOfFile))
+        {
+            var before = _index;
+            items.Add(parseMember(pending));
+            pending = GreenList.Empty;
+            if (_index == before) SkipCurrentToken();
+        }
+
+        if (pending.SlotCount > 0)
+            items.Add(new IncompleteDeclarationGreen(pending, GreenList.Empty));
+
+        return GreenList.Create(items.ToImmutable());
+    }
+
+    private GreenNode ParseMemberDeclaration(GreenList leadingAttributes)
+    {
+        var attributes = leadingAttributes.SlotCount > 0 ? leadingAttributes : ParseAttributes();
+        var modifiers = ParseModifiers();
+
+        switch (Current.Kind)
+        {
+            case SyntaxKind.FnKeyword:
+                return ParseFunctionDeclaration(attributes, modifiers);
+
+            case SyntaxKind.StructKeyword:
+            case SyntaxKind.ClassKeyword:
+            case SyntaxKind.ActorKeyword:
+            case SyntaxKind.ProtocolKeyword:
+                return ParseTypeDeclaration(attributes, modifiers);
+
+            case SyntaxKind.UnionKeyword:
+                return ParseUnionDeclaration(attributes, modifiers);
+
+            case SyntaxKind.EnumKeyword:
+                return ParseEnumDeclaration(attributes, modifiers);
+
+            case SyntaxKind.ExtensionKeyword:
+                return ParseExtensionDeclaration(attributes, modifiers);
+
+            case SyntaxKind.AliasKeyword:
+            {
+                var aliasKeyword = EatToken();
+                var identifier = EatIdentifier();
+                var typeParameters = At(SyntaxKind.LessToken) ? ParseGenericParameterList() : null;
+                var equals = EatToken(SyntaxKind.EqualsToken);
+                return new AliasDeclarationGreen(attributes, modifiers, aliasKeyword,
+                    identifier, typeParameters, equals, ParseType());
+            }
+
+            case SyntaxKind.TypealiasKeyword:
+            {
+                var keyword = EatToken();
+                var identifier = EatIdentifier();
+                var equals = EatToken(SyntaxKind.EqualsToken);
+                return new TypealiasDeclarationGreen(
+                    attributes, modifiers, keyword, identifier, equals, ParseType());
+            }
+
+            case SyntaxKind.AssociatedtypeKeyword:
+            {
+                var keyword = EatToken();
+                var identifier = EatIdentifier();
+                var baseTypes = At(SyntaxKind.ColonToken) ? ParseBaseTypeList() : null;
+                var equals = TryEatToken(SyntaxKind.EqualsToken);
+                var defaultType = equals is null ? null : ParseType();
+                return new AssociatedTypeDeclarationGreen(attributes, modifiers, keyword,
+                    identifier, baseTypes, equals, defaultType);
+            }
+
+            case SyntaxKind.ConstKeyword:
+            {
+                var keyword = EatToken();
+                var identifier = EatIdentifier();
+                GreenNode? annotation = null;
+                if (At(SyntaxKind.ColonToken))
+                {
+                    var colon = EatToken();
+                    annotation = new TypeAnnotationGreen(colon, ParseType());
+                }
+                var equals = EatToken(SyntaxKind.EqualsToken);
+                return new ConstDeclarationGreen(attributes, modifiers, keyword, identifier,
+                    annotation, new EqualsValueClauseGreen(equals, ParseExpression()));
+            }
+
+            case SyntaxKind.LetKeyword:
+            case SyntaxKind.VarKeyword:
+                return ParseFieldDeclaration(attributes, modifiers, EatToken());
+
+            // The terse field form inside a type body: 'x: F32' declares an
+            // immutable stored field; 'var' is written when it is mutable.
+            case SyntaxKind.IdentifierToken when Peek(1).Kind == SyntaxKind.ColonToken:
+                return ParseFieldDeclaration(attributes, modifiers, null);
+
+            case SyntaxKind.InitKeyword:
+            {
+                var keyword = EatToken();
+                var question = TryEatToken(SyntaxKind.QuestionToken);
+                var typeParameters = At(SyntaxKind.LessToken) ? ParseGenericParameterList() : null;
+                var parameters = ParseParameterList();
+                var throwsSpec = ParseThrowsSpecOrNull();
+                var whereClause = At(SyntaxKind.WhereKeyword) ? ParseWhereClause() : null;
+                var body = At(SyntaxKind.OpenBraceToken) ? ParseBlock() : null;
+                return new InitDeclarationGreen(attributes, modifiers, keyword, question,
+                    typeParameters, parameters, throwsSpec, whereClause, body);
+            }
+
+            case SyntaxKind.DeinitKeyword:
+                return new DeinitDeclarationGreen(
+                    attributes, modifiers, EatToken(), ParseBlock());
+
+            case SyntaxKind.SubscriptKeyword:
+                return ParseSubscriptDeclaration(attributes, modifiers);
+
+            case SyntaxKind.OperatorKeyword:
+            case SyntaxKind.PrefixKeyword:
+            case SyntaxKind.PostfixKeyword:
+                return ParseOperatorDeclaration(attributes, modifiers);
+
+            default:
+                if (attributes.SlotCount > 0 || modifiers.SlotCount > 0)
+                    return new IncompleteDeclarationGreen(attributes, modifiers);
+
+                _diagnostics.Error(ErrorCode.ERR_ExpectedDeclaration, CurrentSpan,
+                    $"expected a declaration but found '{DescribeCurrent()}'");
+                return new IncompleteDeclarationGreen(GreenList.Empty, GreenList.Empty);
+        }
+    }
+
+    private GreenNode ParseFieldDeclaration(
+        GreenList attributes, GreenList modifiers, GreenToken? keyword)
+    {
+        var declarator = ParseVariableDeclarator();
+        var accessors = At(SyntaxKind.OpenBraceToken) ? ParseAccessorList() : null;
+
+        // One-line type bodies separate their fields with commas.
+        var separator = Current.Kind is SyntaxKind.CommaToken or SyntaxKind.SemicolonToken
+            ? EatToken()
+            : null;
+
+        return new FieldDeclarationGreen(
+            attributes, modifiers, keyword, declarator, accessors, separator);
+    }
+
+    private GreenNode ParseFunctionDeclaration(GreenList attributes, GreenList modifiers)
+    {
+        var fnKeyword = EatToken(SyntaxKind.FnKeyword);
+
+        GreenNode? explicitProtocol = null;
+        GreenToken? dot = null;
+        if (At(SyntaxKind.IdentifierToken) && Peek(1).Kind == SyntaxKind.DotToken)
+        {
+            explicitProtocol = ParseTypeNameSegments(CountNameSegments() - 1);
+            dot = EatToken(SyntaxKind.DotToken);
+        }
+
+        var identifier = EatMemberName();
+        var typeParameters = At(SyntaxKind.LessToken) ? ParseGenericParameterList() : null;
+        var parameters = ParseParameterList();
+
+        var asyncKeyword = TryEatToken(SyntaxKind.AsyncKeyword);
+        var throwsSpec = ParseThrowsSpecOrNull();
+        asyncKeyword ??= TryEatToken(SyntaxKind.AsyncKeyword);
+
+        var returnClause = At(SyntaxKind.ArrowToken) ? ParseReturnClause() : null;
+        var whereClause = At(SyntaxKind.WhereKeyword) ? ParseWhereClause() : null;
+
+        GreenNode? body = null;
+        GreenToken? arrow = null;
+        GreenNode? expressionBody = null;
+
+        if (At(SyntaxKind.OpenBraceToken)) body = ParseBlock();
+        else if (At(SyntaxKind.FatArrowToken))
+        {
+            arrow = EatToken();
+            expressionBody = ParseExpression();
+        }
+
+        return new FunctionDeclarationGreen(attributes, modifiers, fnKeyword, explicitProtocol,
+            dot, identifier, typeParameters, parameters, asyncKeyword, throwsSpec, returnClause,
+            whereClause, body, arrow, expressionBody);
+    }
+
+    private GreenNode ParseReturnClause()
+    {
+        var arrow = EatToken(SyntaxKind.ArrowToken);
+        return new ReturnClauseGreen(arrow, ParseType());
+    }
+
+    private GreenNode ParseParameterList(
+        SyntaxKind openKind = SyntaxKind.OpenParenToken,
+        SyntaxKind closeKind = SyntaxKind.CloseParenToken) =>
+        WithBracesAllowed<GreenNode>(() =>
+        {
+            var open = EatToken(openKind);
+            var parameters = ParseSeparatedList(closeKind, ParseParameter);
+            var close = EatToken(closeKind);
+            return new ParameterListGreen(open, parameters, close);
+        });
+
+    private GreenNode ParseParameter()
+    {
+        var attributes = ParseAttributes();
+
+        var modifierItems = ImmutableArray.CreateBuilder<GreenNode>();
+        while (IsParameterModifier(Current.Kind)) modifierItems.Add(EatToken());
+        var modifiers = GreenList.Create(modifierItems.ToImmutable());
+
+        // 'from source: T' has an external label; 'source: T' does not. The
+        // label may be a keyword — 'fn first(where p: ...)' reads naturally.
+        GreenToken? label = null;
+        if ((Current.Kind is SyntaxKind.IdentifierToken or SyntaxKind.UnderscoreToken
+             || Current.IsKeywordToken())
+            && Peek(1).Kind == SyntaxKind.IdentifierToken)
+        {
+            label = EatToken();
+        }
+
+        var identifier = At(SyntaxKind.UnderscoreToken) ? EatToken() : EatIdentifier();
+        var colon = EatToken(SyntaxKind.ColonToken);
+
+        // 'into buf: inout U8[]' puts the modifier after the colon, which is
+        // the form that reads well once a parameter has an external label.
+        var typeModifier = IsParameterModifier(Current.Kind) ? EatToken() : null;
+
+        var type = ParseType();
+        var ellipsis = TryEatToken(SyntaxKind.DotDotDotToken);
+
+        GreenNode? defaultValue = null;
+        if (At(SyntaxKind.EqualsToken))
+        {
+            var equals = EatToken();
+            defaultValue = new EqualsValueClauseGreen(equals, ParseExpression());
+        }
+
+        return new ParameterGreen(attributes, modifiers, label, identifier, colon,
+            typeModifier, type, ellipsis, defaultValue);
+    }
+
+    private static bool IsParameterModifier(SyntaxKind kind) => kind switch
+    {
+        SyntaxKind.InoutKeyword or SyntaxKind.OutKeyword or SyntaxKind.ConsumingKeyword
+            or SyntaxKind.BorrowingKeyword or SyntaxKind.RefKeyword
+            or SyntaxKind.InKeyword => true,
+        _ => false,
+    };
+
+    private GreenNode ParseGenericParameterList() => WithBracesAllowed<GreenNode>(() =>
+    {
+        var less = EatToken(SyntaxKind.LessToken);
+
+        var items = ImmutableArray.CreateBuilder<GreenNode>();
+        while (!IsTypeArgumentListEnd() && !At(SyntaxKind.EndOfFile))
+        {
+            items.Add(ParseGenericParameter());
+            var comma = TryEatToken(SyntaxKind.CommaToken);
+            if (comma is null) break;
+            items.Add(comma);
+        }
+
+        var greater = EatGreaterThan();
+        return new GenericParameterListGreen(
+            less, GreenList.Create(items.ToImmutable()), greater);
+    });
+
+    private GreenNode ParseGenericParameter()
+    {
+        var attributes = ParseAttributes();
+        var variance = Current.Kind is SyntaxKind.OutKeyword or SyntaxKind.InKeyword
+            ? EatToken()
+            : null;
+
+        var identifier = EatIdentifier();
+        var colon = TryEatToken(SyntaxKind.ColonToken);
+        var constraint = colon is null ? null : ParseIntersectionType();
+        var equals = TryEatToken(SyntaxKind.EqualsToken);
+        var defaultType = equals is null ? null : ParseType();
+
+        return new GenericParameterGreen(
+            attributes, variance, identifier, colon, constraint, equals, defaultType);
+    }
+
+    private GreenNode ParseWhereClause()
+    {
+        var whereKeyword = EatToken(SyntaxKind.WhereKeyword);
+
+        var items = ImmutableArray.CreateBuilder<GreenNode>();
+        while (true)
+        {
+            items.Add(ParseWhereConstraint());
+            var comma = TryEatToken(SyntaxKind.CommaToken);
+            if (comma is null) break;
+            items.Add(comma);
+            if (At(SyntaxKind.EndOfFile) || At(SyntaxKind.OpenBraceToken)) break;
+        }
+
+        return new WhereClauseGreen(whereKeyword, GreenList.Create(items.ToImmutable()));
+    }
+
+    private GreenNode ParseWhereConstraint()
+    {
+        var left = WithBracesSuppressed(() => ParsePostfixType());
+        var op = Current.Kind switch
+        {
+            SyntaxKind.ColonToken => EatToken(),
+            SyntaxKind.EqualsEqualsToken => EatToken(),
+            _ => EatToken(SyntaxKind.ColonToken),
+        };
+        var right = WithBracesSuppressed(() => ParseIntersectionType());
+        return new WhereConstraintGreen(left, op, right);
+    }
+
+    private GreenNode ParseBaseTypeList()
+    {
+        var colon = EatToken(SyntaxKind.ColonToken);
+
+        var items = ImmutableArray.CreateBuilder<GreenNode>();
+        while (true)
+        {
+            items.Add(WithBracesSuppressed(() => ParseIntersectionType()));
+            var comma = TryEatToken(SyntaxKind.CommaToken);
+            if (comma is null) break;
+            items.Add(comma);
+            if (At(SyntaxKind.EndOfFile) || At(SyntaxKind.OpenBraceToken)) break;
+        }
+
+        return new BaseTypeListGreen(colon, GreenList.Create(items.ToImmutable()));
+    }
+
+    private (GreenToken Keyword, GreenToken Identifier, GreenNode? TypeParameters,
+        GreenNode? BaseTypes, GreenNode? WhereClause, GreenToken Open) ParseTypeHeader()
+    {
+        var keyword = EatToken();
+        var identifier = EatIdentifier();
+        var typeParameters = At(SyntaxKind.LessToken) ? ParseGenericParameterList() : null;
+        var baseTypes = At(SyntaxKind.ColonToken) ? ParseBaseTypeList() : null;
+        var whereClause = At(SyntaxKind.WhereKeyword) ? ParseWhereClause() : null;
+        var open = EatToken(SyntaxKind.OpenBraceToken);
+        return (keyword, identifier, typeParameters, baseTypes, whereClause, open);
+    }
+
+    private GreenNode ParseTypeDeclaration(GreenList attributes, GreenList modifiers)
+    {
+        var kind = Current.Kind;
+        var header = ParseTypeHeader();
+        var members = ParseMembers(
+            GreenList.Empty, ParseMemberDeclaration, SyntaxKind.CloseBraceToken);
+        var close = EatToken(SyntaxKind.CloseBraceToken);
+
+        return kind switch
+        {
+            SyntaxKind.StructKeyword => new StructDeclarationGreen(attributes, modifiers,
+                header.Keyword, header.Identifier, header.TypeParameters, header.BaseTypes,
+                header.WhereClause, header.Open, members, close),
+            SyntaxKind.ClassKeyword => new ClassDeclarationGreen(attributes, modifiers,
+                header.Keyword, header.Identifier, header.TypeParameters, header.BaseTypes,
+                header.WhereClause, header.Open, members, close),
+            SyntaxKind.ActorKeyword => new ActorDeclarationGreen(attributes, modifiers,
+                header.Keyword, header.Identifier, header.TypeParameters, header.BaseTypes,
+                header.WhereClause, header.Open, members, close),
+            _ => new ProtocolDeclarationGreen(attributes, modifiers,
+                header.Keyword, header.Identifier, header.TypeParameters, header.BaseTypes,
+                header.WhereClause, header.Open, members, close),
+        };
+    }
+
+    private GreenNode ParseUnionDeclaration(GreenList attributes, GreenList modifiers)
+    {
+        var keyword = EatToken(SyntaxKind.UnionKeyword);
+        var identifier = EatIdentifier();
+        // 'union Node..' marks a variant-sized union.
+        var variableSize = TryEatToken(SyntaxKind.DotDotToken);
+        var typeParameters = At(SyntaxKind.LessToken) ? ParseGenericParameterList() : null;
+        var baseTypes = At(SyntaxKind.ColonToken) ? ParseBaseTypeList() : null;
+        var whereClause = At(SyntaxKind.WhereKeyword) ? ParseWhereClause() : null;
+        var open = EatToken(SyntaxKind.OpenBraceToken);
+
+        var members = ParseMembers(
+            GreenList.Empty, ParseUnionMember, SyntaxKind.CloseBraceToken);
+        var close = EatToken(SyntaxKind.CloseBraceToken);
+
+        return new UnionDeclarationGreen(attributes, modifiers, keyword, identifier,
+            variableSize, typeParameters, baseTypes, whereClause, open, members, close);
+    }
+
+    /// <summary>A union body holds cases first, then ordinary members.</summary>
+    private GreenNode ParseUnionMember(GreenList leadingAttributes)
+    {
+        var attributes = leadingAttributes.SlotCount > 0 ? leadingAttributes : ParseAttributes();
+
+        if (At(SyntaxKind.IdentifierToken))
+        {
+            var identifier = EatToken();
+            GreenNode? payload = null;
+            if (At(SyntaxKind.OpenParenToken))
+            {
+                var open = EatToken();
+                var fields = ParseSeparatedList(SyntaxKind.CloseParenToken, ParseUnionCaseField);
+                var close = EatToken(SyntaxKind.CloseParenToken);
+                payload = new UnionCasePayloadListGreen(open, fields, close);
+            }
+            var comma = TryEatToken(SyntaxKind.CommaToken);
+            return new UnionCaseDeclarationGreen(attributes, identifier, payload, comma);
+        }
+
+        return ParseMemberDeclaration(attributes);
+    }
+
+    private GreenNode ParseUnionCaseField()
+    {
+        GreenToken? name = null;
+        GreenToken? colon = null;
+        if (IsArgumentLabel())
+        {
+            name = EatToken();
+            colon = EatToken(SyntaxKind.ColonToken);
+        }
+        return new UnionCaseFieldGreen(name, colon, ParseType());
+    }
+
+    private GreenNode ParseEnumDeclaration(GreenList attributes, GreenList modifiers)
+    {
+        var keyword = EatToken(SyntaxKind.EnumKeyword);
+        var identifier = EatIdentifier();
+        var baseTypes = At(SyntaxKind.ColonToken) ? ParseBaseTypeList() : null;
+        var open = EatToken(SyntaxKind.OpenBraceToken);
+
+        var members = ParseMembers(
+            GreenList.Empty, ParseEnumMember, SyntaxKind.CloseBraceToken);
+        var close = EatToken(SyntaxKind.CloseBraceToken);
+
+        return new EnumDeclarationGreen(attributes, modifiers, keyword, identifier,
+            baseTypes, open, members, close);
+    }
+
+    private GreenNode ParseEnumMember(GreenList leadingAttributes)
+    {
+        var attributes = leadingAttributes.SlotCount > 0 ? leadingAttributes : ParseAttributes();
+
+        if (!At(SyntaxKind.IdentifierToken)) return ParseMemberDeclaration(attributes);
+
+        var identifier = EatToken();
+        var equals = TryEatToken(SyntaxKind.EqualsToken);
+        var value = equals is null ? null : ParseExpression();
+        var comma = TryEatToken(SyntaxKind.CommaToken);
+        return new EnumCaseDeclarationGreen(attributes, identifier, equals, value, comma);
+    }
+
+    private GreenNode ParseExtensionDeclaration(GreenList attributes, GreenList modifiers)
+    {
+        var keyword = EatToken(SyntaxKind.ExtensionKeyword);
+        var type = WithBracesSuppressed(() => ParsePostfixType());
+        var baseTypes = At(SyntaxKind.ColonToken) ? ParseBaseTypeList() : null;
+        var whereClause = At(SyntaxKind.WhereKeyword) ? ParseWhereClause() : null;
+        var open = EatToken(SyntaxKind.OpenBraceToken);
+
+        var members = ParseMembers(
+            GreenList.Empty, ParseMemberDeclaration, SyntaxKind.CloseBraceToken);
+        var close = EatToken(SyntaxKind.CloseBraceToken);
+
+        return new ExtensionDeclarationGreen(attributes, modifiers, keyword, type,
+            baseTypes, whereClause, open, members, close);
+    }
+
+    private GreenNode ParseSubscriptDeclaration(GreenList attributes, GreenList modifiers)
+    {
+        var keyword = EatToken(SyntaxKind.SubscriptKeyword);
+        var typeParameters = At(SyntaxKind.LessToken) ? ParseGenericParameterList() : null;
+        var parameters = ParseParameterList();
+        var returnClause = ParseReturnClause();
+        var whereClause = At(SyntaxKind.WhereKeyword) ? ParseWhereClause() : null;
+
+        GreenNode? accessors = null;
+        GreenToken? arrow = null;
+        GreenNode? expressionBody = null;
+
+        if (At(SyntaxKind.OpenBraceToken)) accessors = ParseAccessorList();
+        else if (At(SyntaxKind.FatArrowToken))
+        {
+            arrow = EatToken();
+            expressionBody = ParseExpression();
+        }
+
+        return new SubscriptDeclarationGreen(attributes, modifiers, keyword, typeParameters,
+            parameters, returnClause, whereClause, accessors, arrow, expressionBody);
+    }
+
+    private GreenNode ParseOperatorDeclaration(GreenList attributes, GreenList modifiers)
+    {
+        var fixity = Current.Kind is SyntaxKind.PrefixKeyword or SyntaxKind.PostfixKeyword
+            ? EatToken()
+            : null;
+
+        var operatorKeyword = EatToken(SyntaxKind.OperatorKeyword);
+        var operatorToken = EatToken();
+
+        // '[]' and '()' are written as two tokens.
+        var second = operatorToken.Kind switch
+        {
+            SyntaxKind.OpenBracketToken => EatToken(SyntaxKind.CloseBracketToken),
+            SyntaxKind.OpenParenToken => EatToken(SyntaxKind.CloseParenToken),
+            _ => null,
+        };
+
+        var parameters = ParseParameterList();
+        var returnClause = ParseReturnClause();
+
+        GreenNode? body = null;
+        GreenToken? arrow = null;
+        GreenNode? expressionBody = null;
+
+        if (At(SyntaxKind.OpenBraceToken)) body = ParseBlock();
+        else if (At(SyntaxKind.FatArrowToken))
+        {
+            arrow = EatToken();
+            expressionBody = ParseExpression();
+        }
+
+        return new OperatorDeclarationGreen(attributes, modifiers, fixity, operatorKeyword,
+            operatorToken, second, parameters, returnClause, body, arrow, expressionBody);
+    }
+
+    private GreenNode ParseAccessorList() => WithBracesAllowed<GreenNode>(() =>
+    {
+        var open = EatToken(SyntaxKind.OpenBraceToken);
+
+        var items = ImmutableArray.CreateBuilder<GreenNode>();
+        while (!At(SyntaxKind.CloseBraceToken) && !At(SyntaxKind.EndOfFile))
+        {
+            var before = _index;
+            items.Add(ParseAccessor());
+            if (_index == before) SkipCurrentToken();
+        }
+
+        var close = EatToken(SyntaxKind.CloseBraceToken);
+        return new AccessorListGreen(open, GreenList.Create(items.ToImmutable()), close);
+    });
+
+    private GreenNode ParseAccessor()
+    {
+        var attributes = ParseAttributes();
+        var modifiers = ParseModifiers();
+
+        var keyword = Current.Kind is SyntaxKind.GetKeyword or SyntaxKind.SetKeyword
+            or SyntaxKind.WillSetKeyword or SyntaxKind.DidSetKeyword
+            ? EatToken()
+            : EatToken(SyntaxKind.GetKeyword);
+
+        GreenToken? open = null;
+        GreenToken? parameterName = null;
+        GreenToken? close = null;
+        if (At(SyntaxKind.OpenParenToken))
+        {
+            open = EatToken();
+            parameterName = EatIdentifier();
+            close = EatToken(SyntaxKind.CloseParenToken);
+        }
+
+        GreenNode? body = null;
+        GreenToken? arrow = null;
+        GreenNode? expressionBody = null;
+
+        if (At(SyntaxKind.OpenBraceToken)) body = ParseBlock();
+        else if (At(SyntaxKind.FatArrowToken))
+        {
+            arrow = EatToken();
+            expressionBody = ParseExpression();
+        }
+
+        return new AccessorGreen(attributes, modifiers, keyword, open, parameterName, close,
+            body, arrow, expressionBody);
     }
 
 }

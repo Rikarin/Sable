@@ -116,3 +116,52 @@ public readonly struct SeparatedSyntaxList<T> : IReadOnlyList<T> where T : Synta
         }
     }
 }
+
+/// <summary>A list of tokens, such as a declaration's modifiers.</summary>
+public readonly struct SyntaxTokenList : IReadOnlyList<SyntaxToken>
+{
+    private readonly GreenList? _green;
+    private readonly SyntaxNode? _parent;
+    private readonly int _position;
+
+    internal SyntaxTokenList(GreenList? green, SyntaxNode? parent, int position)
+    {
+        _green = green;
+        _parent = parent;
+        _position = position;
+    }
+
+    public int Count => _green?.SlotCount ?? 0;
+
+    public SyntaxToken this[int index]
+    {
+        get
+        {
+            if (_green is null) throw new ArgumentOutOfRangeException(nameof(index));
+            var offset = _position;
+            for (var i = 0; i < index; i++) offset += _green.Children[i].FullWidth;
+            return new SyntaxToken((GreenToken)_green.Children[index], _parent, offset);
+        }
+    }
+
+    public bool Any(SyntaxKind kind)
+    {
+        if (_green is null) return false;
+        foreach (var child in _green.Children)
+            if (child.Kind == kind) return true;
+        return false;
+    }
+
+    public IEnumerator<SyntaxToken> GetEnumerator()
+    {
+        if (_green is null) yield break;
+        var offset = _position;
+        foreach (var child in _green.Children)
+        {
+            yield return new SyntaxToken((GreenToken)child, _parent, offset);
+            offset += child.FullWidth;
+        }
+    }
+
+    IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+}

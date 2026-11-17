@@ -103,6 +103,9 @@ public abstract class SyntaxNode
             : default;
     }
 
+    private protected SyntaxTokenList GetTokenList(int index) =>
+        new(Green.GetSlot(index) as GreenList, this, GetChildPosition(index));
+
     private protected SyntaxList<T> GetList<T>(int index) where T : SyntaxNode =>
         new(Green.GetSlot(index) as GreenList, this, GetChildPosition(index));
 

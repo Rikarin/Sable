@@ -92,11 +92,13 @@ dotnet test Sable.slnx
 | `Sable.Syntax` — node generator | done |
 | `Sable.Syntax` — parser: types and expressions | done |
 | `Sable.Syntax` — parser: statements, patterns, closures | done |
-| `Sable.Syntax` — parser: declarations and compilation units | not started |
+| `Sable.Syntax` — parser: declarations and compilation units | done |
+| `Sable.Syntax` — conditional compilation, structured interpolation | not started |
 | `Sable.Syntax` — incremental reparse | not started |
 | Everything downstream (symbols, binder, SIL, codegen) | not started |
 
-**486 tests green.**
+**557 tests green**, and every file in [examples/](examples/) parses as a
+complete compilation unit with no diagnostics and an exact round-trip.
 
 The lexer covers all of [spec/lexical.md](spec/lexical.md): full-fidelity
 trivia, nested block comments, every literal form including interpolated and
@@ -113,13 +115,11 @@ reproduces the source byte for byte — is enforced over the `examples/` corpus,
 a table of hand-written cases, deliberately malformed input, and 400 rounds of
 random token soup.
 
-Entry points are `SyntaxTree.ParseExpression`, `ParseType` and `ParseStatement`.
+`SyntaxTree.Parse` reads a whole file; `ParseExpression`, `ParseType` and
+`ParseStatement` read a single construct, which is what most of the tests use.
 
 Not implemented yet, and deliberately so:
 
-- **Declarations and compilation units.** `fn`, `struct`, `class`, `protocol`,
-  `union`, `enum`, `extension`, attributes, modifiers, generic parameters and
-  `where` clauses. Statement and expression parsing is complete beneath them.
 - **Structured string interpolation.** An interpolated string is a single
   literal token; its holes are available through `SyntaxToken.Parts` but are
   not yet parsed into child nodes, because doing that properly means lexing

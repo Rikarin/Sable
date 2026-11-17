@@ -99,10 +99,12 @@ ReturnType        = [ "ref" ] Type ;
 
 ParamList         = Param { "," Param } [ "," ] ;
 Param             = { Attribute } [ ParamModifier ] [ ParamLabel ] Identifier
-                    ":" Type [ "..." ] [ "=" Expression ] ;
+                    ":" [ ParamModifier ] Type [ "..." ] [ "=" Expression ] ;
+                    (* the modifier may precede the name or follow the colon;
+                       the second form composes with an external label *)
 ParamModifier     = "inout" | "out" | "consuming" | "borrowing" | "ref"
                   | "ref" "mut" | "in" ;
-ParamLabel        = Identifier | "_" ;              (* external label *)
+ParamLabel        = Identifier | Keyword | "_" ;    (* external label *)
 
 
 (* -- 2.2 Types ------------------------------------------------------------- *)
@@ -133,6 +135,7 @@ TypeBody          = "{" { MemberDecl } "}" ;
 ProtocolBody      = "{" { ProtocolMember } "}" ;
 
 MemberDecl        = Declaration
+                  | TerseFieldDecl
                   | AssociatedTypeDecl
                   | TypeAliasDecl
                   | ConditionalCompilation ;
@@ -150,7 +153,8 @@ AssociatedTypeDecl = "associatedtype" Identifier [ ":" TypeList ]
 TypeAliasDecl      = "typealias" Identifier "=" Type NL ;
 
 UnionBody         = "{" { UnionCase } { MemberDecl } "}" ;
-UnionCase         = { Attribute } Identifier [ "(" [ CasePayload ] ")" ] NL ;
+UnionCase         = { Attribute } Identifier [ "(" [ CasePayload ] ")" ]
+                    [ "," ] NL ;
 CasePayload       = CaseField { "," CaseField } ;
 CaseField         = [ Identifier ":" ] Type ;
 
@@ -160,8 +164,12 @@ EnumCase          = { Attribute } Identifier [ "=" Expression ] ;
 
 (* -- 2.3 Members ----------------------------------------------------------- *)
 
-VariableDecl      = ( "let" | "var" ) BindingPattern [ ":" Type ]
-                    [ "=" Expression ] [ Accessors ] NL ;
+VariableDecl      = [ "async" ] [ "using" ] ( "let" | "var" ) BindingPattern
+                    [ ":" Type ] [ "=" Expression ] [ Accessors ] [ "," | ";" ] NL ;
+
+TerseFieldDecl    = Identifier ":" Type [ "=" Expression ] [ Accessors ]
+                    [ "," | ";" ] NL ;
+                    (* inside a type body only; declares an immutable field *)
 
 ConstDecl         = "const" Identifier [ ":" Type ] "=" Expression NL ;
 
@@ -421,7 +429,11 @@ CastOp            = "as" | "as" "?" | "as" "!" | "unchecked" "as" | "is" ;
 
 UnaryExpr         = PrefixOp UnaryExpr | PostfixExpr ;
 PrefixOp          = "-" | "+" | "!" | "~" | "&"
-                  | "await" | "try" | "try" "?" | "try" "!" | "move" ;
+                  | "await" | "move" ;
+
+TryExpr           = ( "try" | "try" "?" | "try" "!" ) UnaryExpr
+                    [ "catch" ( Block | Expression ) ] ;
+                    (* the catch supplies an inline fallback value *)
 
 PostfixExpr       = PrimaryExpr { PostfixOp } ;
 PostfixOp         = "." MemberName [ GenericArgs ]
@@ -453,7 +465,7 @@ PrimaryExpr       = Literal
                   | ClosureExpr
                   | MatchExpr
                   | IfExpr
-                  | AsyncLetExpr
+                  | TryExpr
                   | "unsafe" Block
                   | Type "." "self"
                   | "#" Identifier ;                (* compiler builtins: #file, #line *)
@@ -474,7 +486,7 @@ MatchExpr         = MatchStatement ;      (* usable in expression position *)
 IfExpr            = IfStatement ;         (* usable in expression position when
                                              every branch yields a value *)
 
-AsyncLetExpr      = "async" "let" Identifier "=" Expression ;
+(* 'async let' is a VariableDecl, not an expression *)
 
 ClosureExpr       = [ CaptureList ] ClosureSignature "=>" ( Expression | Block )
                   | [ CaptureList ] "{" [ ClosureHeader ] { Statement } "}" ;

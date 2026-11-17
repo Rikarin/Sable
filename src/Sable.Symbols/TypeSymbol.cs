@@ -410,6 +410,16 @@ public sealed class FunctionTypeSymbol(
 /// </remarks>
 public sealed class StructuralUnionTypeSymbol : TypeSymbol
 {
+    /// <summary>
+    /// Builds the union of these cases, which is one of them when, after
+    /// flattening and removing duplicates, only one is left.
+    /// </summary>
+    public static TypeSymbol Create(IEnumerable<TypeSymbol> cases)
+    {
+        var union = new StructuralUnionTypeSymbol(cases);
+        return union.Cases.Length == 1 ? union.Cases[0] : union;
+    }
+
     public StructuralUnionTypeSymbol(IEnumerable<TypeSymbol> cases)
     {
         var flattened = new List<TypeSymbol>();

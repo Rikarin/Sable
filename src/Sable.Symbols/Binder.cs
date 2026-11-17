@@ -3983,6 +3983,12 @@ public sealed class Binder
                 covered.Add(value ? "true" : "false");
                 return;
 
+            // A structural union is covered case by case, and a case is a
+            // type, so a type test is what covers one.
+            case BoundTypeTestPattern test:
+                covered.Add(test.TestedType.ToDisplayString());
+                return;
+
             case BoundOrPattern or:
                 CollectCovered(or.Left, covered);
                 CollectCovered(or.Right, covered);
@@ -3998,6 +4004,13 @@ public sealed class Binder
             if (!covered.Contains("true")) missing.Add("true");
             if (!covered.Contains("false")) missing.Add("false");
             return missing;
+        }
+
+        if (subject is StructuralUnionTypeSymbol union)
+        {
+            return [.. union.Cases
+                .Select(c => c.ToDisplayString())
+                .Where(name => !covered.Contains(name))];
         }
 
         if (subject is not NamedTypeSymbol named) return null;

@@ -382,7 +382,7 @@ internal sealed class TypeBinder(Compilation compilation)
                 ]);
 
             case UnionTypeSyntax union:
-                return new StructuralUnionTypeSymbol(
+                return StructuralUnionTypeSymbol.Create(
                 [
                     BindType(union.Left, context, scope),
                     BindType(union.Right, context, scope),

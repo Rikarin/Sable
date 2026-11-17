@@ -372,6 +372,7 @@ internal sealed class DefiniteAssignment
     private static IEnumerable<LocalSymbol> LocalsIn(BoundPattern pattern)
     {
         if (pattern is BoundBindingPattern binding) yield return binding.Local;
+        if (pattern is BoundTypeTestPattern { Local: { } tested }) yield return tested;
 
         foreach (var child in pattern.Children)
         {

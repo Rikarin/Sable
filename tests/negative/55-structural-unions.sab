@@ -1,0 +1,77 @@
+module Negative.StructuralUnions
+
+public struct Point { public var x: Int }
+public protocol Named { fn name() -> String }
+
+fn injectingIntoAUnion(_ n: Int) -> Int | String {
+    return n
+}
+
+fn aThirdTypeDoesNotInject(_ p: Point) -> Int | String {
+    return p                            //! S3004
+}
+
+fn aUnionDoesNotProject(_ v: Int | String) -> Int {
+    return v                            //! S3004 expected 'Int'
+}
+
+fn unionsAreUnordered(_ v: Int | String) -> String | Int {
+    return v
+}
+
+fn aWiderUnionDoesNotFit(_ v: Int | String | Bool) -> Int | String {
+    return v                            //! S3004
+}
+
+fn aNarrowerUnionDoesNotEither(_ v: Int | String) -> Int | String | Bool {
+    return v                            //! S3004
+}
+
+fn duplicatesCollapse(_ v: Int | Int) -> Int {
+    return v
+}
+
+fn matchingAUnionByType(_ v: Int | String) -> Int {
+    return match v {
+        case let n as Int => n
+        case let s as String => 0
+    }
+}
+
+fn matchingWithAMissingCase(_ v: Int | String) -> Int {
+    return match v {                    //! S6003
+        case let n as Int => n
+    }
+}
+
+fn aMemberOfNeitherSide(_ v: Int | String) -> Int {
+    return v.count                      //! S2002 has no member named 'count'
+}
+
+fn comparingAUnionToOneSide(_ v: Int | String) -> Bool {
+    return v == 1                       //! S3009
+}
+
+fn thereIsNoNoneType(_ n: Int?) -> Int | None {   //! S2001 no type named 'None'
+    return n                            //! S3004
+}
+
+fn aUnionOfProtocols(_ v: any Named | Point) -> Int {
+    return 0
+}
+
+fn aUnionInAnArray(_ xs: (Int | String)[]) -> Int {
+    for value in xs {
+        return match value {
+            case let n as Int => n
+            default => 0
+        }
+    }
+    return 0
+}
+
+fn aUnionAsATypeArgument(_ b: Box<Int | String>) -> Int | String {
+    return b.item
+}
+
+public struct Box<Item> { public var item: Item }

@@ -69,6 +69,11 @@ internal static class AssociatedTypes {
     ///     What a generic type is known to conform to: a parameter's declared
     ///     constraints, or an associated type's, read through its base.
     /// </summary>
+    public static ImmutableArray<TypeSymbol> ConstraintsOf(TypeSymbol type, TypeEquivalence? context) {
+        var own = ConstraintsOf(type);
+        return context is null ? own : [..own, ..context.ExtraConstraints(type)];
+    }
+
     public static ImmutableArray<TypeSymbol> ConstraintsOf(TypeSymbol type) {
         switch (type) {
             case TypeParameterSymbol parameter:

@@ -238,6 +238,7 @@ internal sealed class TypeBinder(Compilation compilation) {
         // a conformance an extension added is checked along with the rest.
         DeferLate(() => ConformanceChecker.Check(type, _diagnostics, compilation.Core));
         DeferLate(() => VarianceChecker.Check(type, _diagnostics));
+        DeferLate(() => LayoutChecker.Check(type, _diagnostics));
     }
 
     static BaseTypeListSyntax? BaseTypeListOf(SyntaxNode declaration) =>
@@ -324,6 +325,21 @@ internal sealed class TypeBinder(Compilation compilation) {
 
             if (left is TypeParameterSymbol parameter) {
                 parameter.Constraints = parameter.Constraints.Add(right);
+                continue;
+            }
+
+            // 'C.Item: Comparable' constrains a type no single parameter owns.
+            if (left is DependentMemberTypeSymbol) {
+                var requirement = new ConformanceRequirement(left, right);
+                switch (context) {
+                    case FunctionSymbol function:
+                        function.ConformanceRequirements = function.ConformanceRequirements.Add(requirement);
+                        break;
+
+                    case NamedTypeSymbol type:
+                        type.ConformanceRequirements = type.ConformanceRequirements.Add(requirement);
+                        break;
+                }
             }
         }
     }

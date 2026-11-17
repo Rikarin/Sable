@@ -122,6 +122,10 @@ public enum ErrorCode {
     ERR_RethrowsWithoutThrowingParameter = 3048,
     ERR_RethrowsThrowsItsOwn = 3049,
     ERR_NotAllowedInBody = 3050,
+    ERR_OpaqueReturnTypesDiffer = 3051,
+    ERR_InfiniteSize = 3052,
+    ERR_DuplicateConformance = 3053,
+    ERR_ErrorTypeDoesNotFit = 3054,
     ERR_NotSupportedYet = 3099,
 
     // ---- Patterns and flow (S6000-S6999) ---------------------------------

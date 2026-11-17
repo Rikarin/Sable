@@ -131,6 +131,9 @@ public sealed class FunctionSymbol : Symbol {
     /// <summary>The <c>where A == B</c> requirements on this function's parameters.</summary>
     public ImmutableArray<SameTypeRequirement> SameTypeRequirements { get; internal set; } = [];
 
+    /// <summary>The <c>where C.Item: P</c> requirements on associated types.</summary>
+    public ImmutableArray<ConformanceRequirement> ConformanceRequirements { get; internal set; } = [];
+
     readonly List<Symbol> _localTypes = [];
 
     /// <summary>

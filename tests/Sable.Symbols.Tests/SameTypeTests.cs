@@ -112,4 +112,41 @@ public sealed class SameTypeTests {
         Assert.Empty(f.TypeParameters[0].Constraints);
         Assert.Single(f.SameTypeRequirements);
     }
+
+    // ---- Conformance requirements on associated types ----------------------
+
+    const string Ranked = """
+                          protocol Ranked { fn rank() -> Int }
+                          struct Card: Ranked { fn rank() -> Int { return 1 } }
+                          struct Hand: Container {
+                              alias Item = Card
+                              fn first() -> Card? { return none }
+                              fn holds(_ item: Card) -> Bool { return true }
+                          }
+                          fn best<C: Container>(_ c: C) -> Int where C.Item: Ranked {
+                              guard let top = c.first() else { return 0 }
+                              return top.rank()
+                          }
+                          """;
+
+    [Fact]
+    public void ARequirementOnAnAssociatedTypeGivesItsMembers() => AssertClean(Ranked);
+
+    [Fact]
+    public void WithoutItTheMemberIsNotThere() =>
+        Assert.NotEmpty(ErrorsIn(Ranked.Replace(" where C.Item: Ranked", "", StringComparison.Ordinal)));
+
+    [Fact]
+    public void ACallMeetsItThroughTheConformer() =>
+        AssertClean($"{Ranked}\nfn probe(_ h: Hand) -> Int {{ return best(h) }}");
+
+    [Fact]
+    public void ACallThatDoesNotMeetItIsRejected() =>
+        AssertRejected($"{Ranked}\nfn probe(_ w: WordBag) -> Int {{ return best(w) }}");
+
+    [Fact]
+    public void AGenericCallerMustRequireItToo() {
+        AssertRejected($"{Ranked}\nfn relay<D: Container>(_ d: D) -> Int {{ return best(d) }}");
+        AssertClean($"{Ranked}\nfn relay<D: Container>(_ d: D) -> Int where D.Item: Ranked {{ return best(d) }}");
+    }
 }

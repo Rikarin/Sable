@@ -114,6 +114,9 @@ public sealed class NamedTypeSymbol : TypeSymbol {
     /// <summary>The <c>where A == B</c> requirements on this type's parameters.</summary>
     public ImmutableArray<SameTypeRequirement> SameTypeRequirements { get; internal set; } = [];
 
+    /// <summary>The <c>where C.Item: P</c> requirements on associated types.</summary>
+    public ImmutableArray<ConformanceRequirement> ConformanceRequirements { get; internal set; } = [];
+
     /// <summary>Inheritance control, per spec/SYNTAX.md §2.</summary>
     public bool IsOpen { get; internal set; }
 

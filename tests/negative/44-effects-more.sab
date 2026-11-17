@@ -7,8 +7,12 @@ fn read(_ p: String) throws(IoError) -> String { return p }
 fn send(_ p: String) throws(NetError) -> String { return p }
 fn plain(_ p: String) -> String { return p }
 
-fn oneTryTwoErrorTypes() throws(IoError) -> String {
+fn oneTryTwoErrorTypes() throws(IoError | NetError) -> String {
     return try read("a") + send("b")
+}
+
+fn anErrorThatDoesNotFitTheDeclaredType() throws(IoError) -> String {
+    return try send("b")                //! S3054 'NetError'
 }
 
 fn aCatchSeesTheUnion() -> Int {

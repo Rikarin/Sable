@@ -99,16 +99,16 @@ internal sealed class Conversions(CoreTypes core) {
 
         // 'any P' and 'some P' accept whatever conforms to P.
         if (target is ExistentialTypeSymbol existential) {
-            return Satisfies(source, existential.Constraint)
+            return Satisfies(source, existential.Constraint, Equivalence)
                 ? ConversionKind.Existential
                 : null;
         }
 
         if (target is OpaqueTypeSymbol opaque) {
-            return Satisfies(source, opaque.Constraint) ? ConversionKind.Existential : null;
+            return Satisfies(source, opaque.Constraint, Equivalence) ? ConversionKind.Existential : null;
         }
 
-        if (target is CompositionTypeSymbol && Satisfies(source, target)) {
+        if (target is CompositionTypeSymbol && Satisfies(source, target, Equivalence)) {
             return ConversionKind.Existential;
         }
 
@@ -120,13 +120,13 @@ internal sealed class Conversions(CoreTypes core) {
     }
 
     /// <summary>True when a type meets a constraint: a protocol, a class, or several.</summary>
-    public static bool Satisfies(TypeSymbol source, TypeSymbol constraint) {
+    public static bool Satisfies(TypeSymbol source, TypeSymbol constraint, TypeEquivalence? context = null) {
         if (constraint.IsError || source.IsError) {
             return true;
         }
 
         if (constraint is CompositionTypeSymbol composition) {
-            return composition.Parts.All(part => Satisfies(source, part));
+            return composition.Parts.All(part => Satisfies(source, part, context));
         }
 
         // A constraint that is itself a parameter stands for a type nothing
@@ -142,15 +142,15 @@ internal sealed class Conversions(CoreTypes core) {
         // A type parameter satisfies only what it was constrained to: an
         // unconstrained one conforms to nothing.
         if (source is TypeParameterSymbol or DependentMemberTypeSymbol) {
-            return AssociatedTypes.ConstraintsOf(source).Any(c => Satisfies(c, constraint));
+            return AssociatedTypes.ConstraintsOf(source, context).Any(c => Satisfies(c, constraint, context));
         }
 
         if (source is OpaqueTypeSymbol sourceOpaque) {
-            return Satisfies(sourceOpaque.Constraint, constraint);
+            return Satisfies(sourceOpaque.Constraint, constraint, context);
         }
 
         if (source is ExistentialTypeSymbol sourceExistential) {
-            return Satisfies(sourceExistential.Constraint, constraint);
+            return Satisfies(sourceExistential.Constraint, constraint, context);
         }
 
         return IsDerivedFrom(source, constraint);

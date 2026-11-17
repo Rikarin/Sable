@@ -35,7 +35,7 @@ public sealed class Binder {
         get => _containingSymbolField;
         set {
             _containingSymbolField = value;
-            _conversions.Equivalence = TypeEquivalence.For(TypeEquivalence.RequirementsOf(value));
+            _conversions.Equivalence = TypeEquivalence.ForSymbol(value);
         }
     }
 
@@ -623,6 +623,55 @@ public sealed class Binder {
     /// <summary>True when an error thrown here has somewhere to go.</summary>
     bool CanThrowHere() => _catchDepth > 0 || _declaredThrows is not null;
 
+    /// <summary>
+    ///     Checks that an error leaving the function fits what it declares to
+    ///     throw: as it is, or through a <c>From</c> conformance, which is the
+    ///     one conversion applied implicitly between error types (docs/03 §3.6).
+    /// </summary>
+    /// <remarks>
+    ///     Inside a <c>do</c> the error goes to the catches instead, and bare
+    ///     <c>throws</c> erases every error to <c>any Error</c>, so neither is
+    ///     checked here.
+    /// </remarks>
+    void CheckErrorFits(TypeSymbol thrown, TextSpan span, string what) {
+        if (_catchDepth > 0
+            || _declaredThrows is not { } declared
+            || declared.IsError
+            || declared.Equals(Core.AnyError)) {
+            return;
+        }
+
+        var cases = thrown is StructuralUnionTypeSymbol union ? union.Cases : [thrown];
+
+        foreach (var error in cases) {
+            if (error.IsError
+                || error.Equals(Core.Never)
+                || _conversions.Classify(error, declared, false) is not null
+                || ConvertsFrom(declared, error)) {
+                continue;
+            }
+
+            _diagnostics.Error(
+                ErrorCode.ERR_ErrorTypeDoesNotFit,
+                span,
+                $"{what} throws '{error.ToDisplayString()}', and this function throws "
+                + $"'{declared.ToDisplayString()}'; add "
+                + $"'extension {declared.ToDisplayString()}: From<{error.ToDisplayString()}>', "
+                + "or catch it"
+            );
+            return;
+        }
+    }
+
+    /// <summary>True when <paramref name="target" /> declares <c>From&lt;source&gt;</c>.</summary>
+    bool ConvertsFrom(TypeSymbol target, TypeSymbol source) =>
+        target is NamedTypeSymbol named
+        && named.OriginalDefinition.BaseTypes.Any(b =>
+            b is NamedTypeSymbol { IsConstructed: true } conformance
+            && ReferenceEquals(conformance.OriginalDefinition, Core.From)
+            && conformance.TypeArguments[0].Equals(source)
+        );
+
     BoundExpression BindTry(TryExpressionSyntax syntax, TypeSymbol? expectedType) {
         var kind = syntax.QuestionOrBangToken.Kind switch {
             SyntaxKind.QuestionToken => TryKind.Optional,
@@ -687,6 +736,8 @@ public sealed class Binder {
                         "this error has nowhere to go: declare 'throws', "
                         + "catch it, or use 'try?'"
                     );
+                } else if (operandThrown is not null) {
+                    CheckErrorFits(operandThrown, syntax.Span, "this expression");
                 }
 
                 return Record(syntax, new BoundTry(syntax, value.Type, value, kind, null));
@@ -949,6 +1000,10 @@ public sealed class Binder {
     BoundStatement BindThrow(ThrowStatementSyntax statement) {
         var value = BindExpression(statement.Expression, _declaredThrows);
         _thrownInBody = Union(_thrownInBody, value.Type);
+
+        if (!value.HasError && CanThrowHere() && !(_rethrows && _catchDepth == 0)) {
+            CheckErrorFits(value.Type, statement.Expression.Span, "this");
+        }
 
         if (_rethrows && _catchDepth == 0) {
             _diagnostics.Error(
@@ -1517,10 +1572,49 @@ public sealed class Binder {
                 "this function returns nothing, so 'return' takes no value"
             );
         } else {
+            CheckOpaqueReturn(value, statement.Expression);
             value = Convert(value, _returnType, statement.Expression);
         }
 
         return Record(statement, new BoundReturn(statement, value));
+    }
+
+    /// <summary>
+    ///     The concrete type each function returning <c>some P</c> has returned
+    ///     so far.
+    /// </summary>
+    readonly Dictionary<Symbol, (TypeSymbol Type, SyntaxNode Where)> _opaqueReturns = [];
+
+    /// <summary>
+    ///     A <c>some P</c> result is one concrete type, fixed by the definition
+    ///     and hidden from the caller (docs/03 §3.2), so every return must give
+    ///     the same one.
+    /// </summary>
+    void CheckOpaqueReturn(BoundExpression value, SyntaxNode syntax) {
+        if (_returnType is not OpaqueTypeSymbol opaque
+            || value.HasError
+            || value.Type.IsError
+            || value.Type.Equals(Core.Never)) {
+            return;
+        }
+
+        if (!_opaqueReturns.TryGetValue(_containingSymbol, out var first)) {
+            _opaqueReturns[_containingSymbol] = (value.Type, syntax);
+            return;
+        }
+
+        if (first.Type.Equals(value.Type)) {
+            return;
+        }
+
+        _diagnostics.Error(
+            ErrorCode.ERR_OpaqueReturnTypesDiffer,
+            syntax.Span,
+            $"'{opaque.ToDisplayString()}' stands for one concrete type, but this returns "
+            + $"'{value.Type.ToDisplayString()}' and an earlier return gave "
+            + $"'{first.Type.ToDisplayString()}'; return 'any {opaque.Constraint.ToDisplayString()}' "
+            + "to allow both"
+        );
     }
 
     /// <summary>Labels of the loops this statement sits inside, innermost last.</summary>
@@ -2277,7 +2371,7 @@ public sealed class Binder {
             }
 
             case TypeParameterSymbol or DependentMemberTypeSymbol:
-                foreach (var constraint in AssociatedTypes.ConstraintsOf(type)) {
+                foreach (var constraint in AssociatedTypes.ConstraintsOf(type, _conversions.Equivalence)) {
                     if (LookupMemberCore(constraint, name, outer, visited, selfType) is { } found) {
                         return found;
                     }
@@ -2853,10 +2947,13 @@ public sealed class Binder {
         FunctionSymbol? best = null;
         var bestCost = int.MaxValue;
         var ambiguous = false;
+        var rejected = new List<(FunctionSymbol Candidate, string Reason)>();
+        var tied = new List<FunctionSymbol>();
 
         foreach (var candidate in candidates) {
             var cost = Score(candidate, arguments, labels, outer);
             if (cost is null) {
+                rejected.Add((candidate, _rejection ?? "it does not fit"));
                 continue;
             }
 
@@ -2864,6 +2961,7 @@ public sealed class Binder {
                 best = candidate;
                 bestCost = cost.Value;
                 ambiguous = false;
+                tied.Clear();
                 continue;
             }
 
@@ -2876,6 +2974,7 @@ public sealed class Binder {
             if (candidate.TypeParameters.Length < best.TypeParameters.Length) {
                 best = candidate;
                 ambiguous = false;
+                tied.Clear();
                 continue;
             }
 
@@ -2884,29 +2983,51 @@ public sealed class Binder {
             }
 
             ambiguous = true;
+            tied.Add(candidate);
         }
 
+        // Each rejected candidate keeps its reason, so the error can say what
+        // was wrong rather than only that something was (docs/04 §1.2).
         if (best is null) {
             var name = candidates.IsEmpty ? "?" : candidates[0].Name;
-            _diagnostics.Error(
-                ErrorCode.ERR_NoMatchingOverload,
-                syntax.Span,
-                candidates.Length == 1
-                    ? $"'{name}' cannot be called with these arguments"
-                    : $"no overload of '{name}' takes these arguments"
-            );
+            var message = candidates.Length == 1 && rejected.Count == 1
+                ? $"'{name}' cannot be called with these arguments: {rejected[0].Reason}"
+                : $"no overload of '{name}' takes these arguments"
+                + string.Concat(rejected.Take(3).Select(static r => $"; '{Signature(r.Candidate)}': {r.Reason}"))
+                + (rejected.Count > 3 ? $"; and {rejected.Count - 3} more" : string.Empty);
+
+            _diagnostics.Error(ErrorCode.ERR_NoMatchingOverload, syntax.Span, message);
             return null;
         }
 
         if (ambiguous) {
+            var contenders = new[] { best }.Concat(tied).Distinct().Take(3).Select(static c => $"'{Signature(c)}'");
             _diagnostics.Error(
                 ErrorCode.ERR_AmbiguousOverload,
                 syntax.Span,
-                $"the call to '{best.Name}' is ambiguous between several overloads"
+                $"the call to '{best.Name}' is ambiguous between {string.Join(" and ", contenders)}"
             );
         }
 
         return best;
+    }
+
+    /// <summary>Why the last candidate <see cref="Score" /> looked at was rejected.</summary>
+    string? _rejection;
+
+    int? Reject(string reason) {
+        _rejection = reason;
+        return null;
+    }
+
+    static string Plural(int count, string noun) => count == 1 ? $"1 {noun}" : $"{count} {noun}s";
+
+    /// <summary>A candidate as the source would declare it: <c>insert(_: T, at: Int)</c>.</summary>
+    static string Signature(FunctionSymbol function) {
+        var parameters = function.Parameters.Select(static p =>
+            $"{p.Label ?? p.Name}: {p.Type.ToDisplayString()}"
+        );
+        return $"{function.Name}({string.Join(", ", parameters)})";
     }
 
     int? Score(
@@ -2915,6 +3036,7 @@ public sealed class Binder {
         ImmutableArray<string?> labels,
         TypeSubstitution outer
     ) {
+        _rejection = null;
         var substitution = Combine(outer, Infer(candidate, arguments, outer));
         var parameters = candidate.Parameters;
 
@@ -2922,11 +3044,11 @@ public sealed class Binder {
         var variadic = parameters.Any(static p => p.IsVariadic);
 
         if (arguments.Length < required) {
-            return null;
+            return Reject($"it needs {Plural(required, "argument")}, and this passes {arguments.Length}");
         }
 
         if (!variadic && arguments.Length > parameters.Length) {
-            return null;
+            return Reject($"it takes {Plural(parameters.Length, "argument")}, and this passes {arguments.Length}");
         }
 
         var cost = 0;
@@ -2946,7 +3068,7 @@ public sealed class Binder {
             if (i < labels.Length && labels[i] is { } label) {
                 var expected = parameter.Label ?? parameter.Name;
                 if (!string.Equals(expected, label, StringComparison.Ordinal)) {
-                    return null;
+                    return Reject($"argument {i + 1} is labelled '{label}', and the parameter is '{expected}'");
                 }
             } else if (i < labels.Length
                        && parameter.Label is { } requiredLabel
@@ -2954,7 +3076,7 @@ public sealed class Binder {
                        && !string.Equals(requiredLabel, parameter.Name, StringComparison.Ordinal)) {
                 // The parameter declares a distinct external label, so one is
                 // required at the call site.
-                return null;
+                return Reject($"argument {i + 1} needs the label '{requiredLabel}:'");
             }
 
             var wanted = substitution.Apply(parameter.Type);
@@ -2965,7 +3087,10 @@ public sealed class Binder {
             var conversion = _conversions.Classify(arguments[i].Type, wanted, IsLiteral(arguments[i]));
 
             if (conversion is null) {
-                return null;
+                return Reject(
+                    $"argument {i + 1} is '{arguments[i].Type.ToDisplayString()}', "
+                    + $"and '{parameter.Name}' takes '{wanted.ToDisplayString()}'"
+                );
             }
 
             cost += Conversions.Cost(conversion.Value);
@@ -2980,8 +3105,11 @@ public sealed class Binder {
             }
 
             foreach (var constraint in typeParameter.Constraints) {
-                if (!Conversions.Satisfies(argument, substitution.Apply(constraint))) {
-                    return null;
+                if (!Conversions.Satisfies(argument, substitution.Apply(constraint), _conversions.Equivalence)) {
+                    return Reject(
+                        $"'{typeParameter.Name}' would be '{argument.ToDisplayString()}', "
+                        + $"which is not '{substitution.Apply(constraint).ToDisplayString()}'"
+                    );
                 }
             }
         }
@@ -2997,7 +3125,25 @@ public sealed class Binder {
             }
 
             if (!_conversions.Equivalence.AreSame(leftType, rightType)) {
-                return null;
+                return Reject(
+                    $"it requires '{left.ToDisplayString()} == {right.ToDisplayString()}', "
+                    + $"and here they are '{leftType.ToDisplayString()}' and '{rightType.ToDisplayString()}'"
+                );
+            }
+        }
+
+        // 'where C.Item: Comparable' holds only when what C became says so.
+        foreach (var (subject, constraint) in candidate.ConformanceRequirements) {
+            var subjectType = substitution.Apply(subject);
+            if (ContainsUninferred(subjectType, candidate)) {
+                continue;
+            }
+
+            if (!Conversions.Satisfies(subjectType, substitution.Apply(constraint), _conversions.Equivalence)) {
+                return Reject(
+                    $"it requires '{subject.ToDisplayString()}: {constraint.ToDisplayString()}', "
+                    + $"and '{subjectType.ToDisplayString()}' is not"
+                );
             }
         }
 

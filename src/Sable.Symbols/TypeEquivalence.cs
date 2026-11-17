@@ -6,6 +6,12 @@ namespace Sable.Symbols;
 public readonly record struct SameTypeRequirement(TypeSymbol Left, TypeSymbol Right);
 
 /// <summary>
+///     A <c>where C.Item: P</c> requirement on something that is not a plain
+///     type parameter, so cannot live in that parameter's constraint list.
+/// </summary>
+public readonly record struct ConformanceRequirement(TypeSymbol Subject, TypeSymbol Constraint);
+
+/// <summary>
 ///     Which generic types a declaration's same-type requirements make one and
 ///     the same, per docs/03 §3.4: a union-find over type parameters and the
 ///     associated types read through them.
@@ -20,22 +26,66 @@ public readonly record struct SameTypeRequirement(TypeSymbol Left, TypeSymbol Ri
 ///     when their canonical forms are equal.
 /// </remarks>
 internal sealed class TypeEquivalence {
-    public static readonly TypeEquivalence Empty = new([]);
+    public static readonly TypeEquivalence Empty = new([], []);
 
     readonly Dictionary<TypeSymbol, TypeSymbol> _parent = [];
+    readonly List<ConformanceRequirement> _conformances;
 
-    TypeEquivalence(IEnumerable<SameTypeRequirement> requirements) {
+    TypeEquivalence(IEnumerable<SameTypeRequirement> requirements, List<ConformanceRequirement> conformances) {
         foreach (var (left, right) in requirements) {
             Union(left, right);
         }
+
+        _conformances = conformances;
     }
 
-    public static TypeEquivalence For(IEnumerable<SameTypeRequirement> requirements) {
-        var list = requirements.ToList();
-        return list.Count == 0 ? Empty : new TypeEquivalence(list);
+    public static TypeEquivalence For(IEnumerable<SameTypeRequirement> requirements) =>
+        For(requirements, []);
+
+    public static TypeEquivalence For(
+        IEnumerable<SameTypeRequirement> requirements,
+        IEnumerable<ConformanceRequirement> conformances
+    ) {
+        var sameTypes = requirements.ToList();
+        var extra = conformances.ToList();
+        return sameTypes.Count == 0 && extra.Count == 0 ? Empty : new TypeEquivalence(sameTypes, extra);
     }
 
+    /// <summary>The requirements in force inside a symbol, of both kinds.</summary>
+    public static TypeEquivalence ForSymbol(Symbol? symbol) =>
+        For(RequirementsOf(symbol), ConformanceRequirementsOf(symbol));
+
+    /// <summary>True when the same-type requirements say nothing.</summary>
     public bool IsEmpty => _parent.Count == 0;
+
+    /// <summary>
+    ///     What a <c>where</c> clause adds to a type's constraints:
+    ///     <c>where C.Item: Comparable</c> makes a <c>C.Item</c> comparable.
+    /// </summary>
+    public IEnumerable<TypeSymbol> ExtraConstraints(TypeSymbol type) {
+        if (_conformances.Count == 0) {
+            return [];
+        }
+
+        var canonical = Canonical(type);
+        return _conformances
+            .Where(r => Canonical(r.Subject).Equals(canonical))
+            .Select(static r => r.Constraint);
+    }
+
+    public static IEnumerable<ConformanceRequirement> ConformanceRequirementsOf(Symbol? symbol) {
+        for (; symbol is not null; symbol = symbol.ContainingSymbol) {
+            var own = symbol switch {
+                FunctionSymbol function => function.ConformanceRequirements,
+                NamedTypeSymbol type => type.ConformanceRequirements,
+                _ => [],
+            };
+
+            foreach (var requirement in own) {
+                yield return requirement;
+            }
+        }
+    }
 
     /// <summary>The requirements in force inside a symbol: its own and every enclosing declaration's.</summary>
     public static IEnumerable<SameTypeRequirement> RequirementsOf(Symbol? symbol) {

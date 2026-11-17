@@ -246,4 +246,55 @@ public sealed class EffectTests {
             }
             """
         );
+
+    // ---- Error types and From ----------------------------------------------
+
+    [Fact]
+    public void AnErrorThatDoesNotFitIsReported() =>
+        AssertReports(
+            ErrorCode.ERR_ErrorTypeDoesNotFit,
+            """
+            union AppError { Io, Other }
+            fn probe() throws(AppError) -> String { return try read("a") }
+            """
+        );
+
+    [Fact]
+    public void AFromConformanceConvertsIt() =>
+        AssertClean(
+            """
+            union AppError { Io, Other }
+            extension AppError: From<IoError> { }
+            fn probe() throws(AppError) -> String { return try read("a") }
+            """
+        );
+
+    [Fact]
+    public void BareThrowsTakesAnyError() =>
+        AssertClean("fn probe() throws -> String { return try read(\"a\") }");
+
+    [Fact]
+    public void InsideADoTheCatchesDecide() =>
+        AssertClean(
+            """
+            union AppError { Io, Other }
+            fn probe() throws(AppError) -> String {
+                do {
+                    return try read("a")
+                } catch {
+                    throw AppError.Io
+                }
+            }
+            """
+        );
+
+    [Fact]
+    public void AThrowStatementIsCheckedToo() =>
+        AssertReports(
+            ErrorCode.ERR_ErrorTypeDoesNotFit,
+            """
+            union AppError { Io, Other }
+            fn probe() throws(AppError) { throw IoError.Denied }
+            """
+        );
 }

@@ -25,9 +25,22 @@ internal static class ConformanceChecker {
         }
 
         var classBases = 0;
+        var conformances = new HashSet<TypeSymbol>();
 
         foreach (var baseType in type.BaseTypes) {
             if (baseType.IsError) {
+                continue;
+            }
+
+            // At most one conformance per (type, protocol) pair, globally
+            // (docs/03 §3.2) — and so certainly not two in one place.
+            if (baseType is NamedTypeSymbol { TypeKind: TypeKind.Protocol } && !conformances.Add(baseType)) {
+                Report(
+                    diagnostics,
+                    ErrorCode.ERR_DuplicateConformance,
+                    type,
+                    $"'{type.Name}' already conforms to '{baseType.ToDisplayString()}'"
+                );
                 continue;
             }
 

@@ -46,6 +46,10 @@ public sealed class CoreTypes {
         Module.AddMember(Error);
         AnyError = new ExistentialTypeSymbol(Error);
 
+        // 'extension AppError: From<IoError>' lets a 'try' in a function that
+        // throws AppError propagate an IoError, converted (docs/03 §3.6).
+        From = DeclareGeneric("From", TypeKind.Protocol, "Source");
+
         // A range has a nominal form too, so that 'for i in 0..<n' iterates
         // something rather than a shape the binder knows by sight.
         Range = DeclareGeneric("Range", TypeKind.Struct, "Bound");
@@ -215,6 +219,9 @@ public sealed class CoreTypes {
 
     /// <summary>What a bare <c>throws</c> means.</summary>
     public TypeSymbol AnyError { get; }
+
+    /// <summary><c>From&lt;Source&gt;</c>: the conversion a <c>try</c> applies between error types.</summary>
+    public NamedTypeSymbol From { get; }
 
     public NamedTypeSymbol Range { get; }
 

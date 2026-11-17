@@ -1407,6 +1407,23 @@ public static class SilBuiltins {
         Add("string_to_Int", SilType.Tuple([SilType.Bool, SilType.Int]), SilType.String);
         Add("string_to_F64", SilType.Tuple([SilType.Bool, SilType.F64]), SilType.String);
 
+        // The runtime's calls (Sable.IO's floor). Those that can fail give a
+        // value either way; 'io_succeeded' then says whether the last one did.
+        Add("io_write", SilType.Unit, SilType.String);
+        Add("io_write_error", SilType.Unit, SilType.String);
+        Add("io_read_line", SilType.String);
+        Add("io_read_file", SilType.String, SilType.String);
+        Add("io_write_file", SilType.Bool, SilType.String, SilType.String, SilType.Bool);
+        Add("io_file_exists", SilType.Bool, SilType.String);
+        Add("io_is_directory", SilType.Bool, SilType.String);
+        Add("io_remove_file", SilType.Bool, SilType.String);
+        Add("io_make_directory", SilType.Bool, SilType.String);
+        Add("io_list_directory", new ArrayType(SilType.String), SilType.String);
+        Add("io_environment", SilType.String, SilType.String);
+        Add("io_argument_count", SilType.Int);
+        Add("io_argument", SilType.String, SilType.Int);
+        Add("io_succeeded", SilType.Bool);
+
         Add("region_create", SilType.Region);
 
         // Emptying a region, all of it or back to a mark: what a 'region frame = pool' block took.

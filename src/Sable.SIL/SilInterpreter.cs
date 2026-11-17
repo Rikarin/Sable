@@ -41,6 +41,18 @@ public sealed partial class SilInterpreter(SilModule module, int stepLimit = 10_
     /// <summary>Where <c>print</c> writes: one line per call, as the native runtime does.</summary>
     public StringBuilder Output { get; } = new();
 
+    /// <summary>What <c>Runtime.writeError</c> writes, as the native runtime writes to standard error.</summary>
+    public StringBuilder ErrorOutput { get; } = new();
+
+    /// <summary>Standard input, for <c>Runtime.readLine</c>.</summary>
+    public TextReader Input { get; init; } = TextReader.Null;
+
+    /// <summary>The program's arguments, after its own name.</summary>
+    public IReadOnlyList<string> Arguments { get; init; } = [];
+
+    /// <summary>Whether the last runtime call that can fail did.</summary>
+    bool _ioFailed;
+
     /// <summary>Heap objects allocated and not yet freed: after a whole program, a leak.</summary>
     public int LiveObjects => _live.Count;
 
@@ -874,6 +886,124 @@ public sealed partial class SilInterpreter(SilModule module, int stepLimit = 10_
                 var separator = ((Rune)operands[1]!).ToString();
                 var parts = Text(operands[0]).Value.Split(separator);
                 return Allocate(new HeapArray(new ArrayType(SilType.String), [..parts.Select(p => (object?)Allocate(new HeapString(p)))]));
+            }
+
+            case "io_write":
+                Output.Append(Text(operands[0]).Value);
+                return null;
+
+            case "io_write_error":
+                ErrorOutput.Append(Text(operands[0]).Value);
+                return null;
+
+            case "io_succeeded":
+                return !_ioFailed;
+
+            case "io_read_line": {
+                var line = Input.ReadLine();
+                _ioFailed = line is null;
+                return Allocate(new HeapString(line ?? ""));
+            }
+
+            case "io_read_file": {
+                string? contents = null;
+                try {
+                    contents = File.ReadAllText(Text(operands[0]).Value);
+                } catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException) {
+                }
+
+                _ioFailed = contents is null;
+                return Allocate(new HeapString(contents ?? ""));
+            }
+
+            case "io_write_file": {
+                try {
+                    var (path, text) = (Text(operands[0]).Value, Text(operands[1]).Value);
+                    if ((bool)operands[2]!) {
+                        File.AppendAllText(path, text);
+                    } else {
+                        File.WriteAllText(path, text);
+                    }
+
+                    return true;
+                } catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException) {
+                    return false;
+                }
+            }
+
+            case "io_file_exists": {
+                var path = Text(operands[0]).Value;
+                return File.Exists(path) || Directory.Exists(path);
+            }
+
+            case "io_is_directory":
+                return Directory.Exists(Text(operands[0]).Value);
+
+            case "io_remove_file": {
+                var path = Text(operands[0]).Value;
+                try {
+                    if (File.Exists(path)) {
+                        File.Delete(path);
+                        return true;
+                    }
+
+                    if (Directory.Exists(path)) {
+                        Directory.Delete(path, recursive: false);
+                        return true;
+                    }
+                } catch (Exception e) when (e is IOException or UnauthorizedAccessException) {
+                }
+
+                return false;
+            }
+
+            case "io_make_directory": {
+                var path = Text(operands[0]).Value;
+                if (Directory.Exists(path) || File.Exists(path) || Path.GetDirectoryName(Path.GetFullPath(path)) is { } parent && !Directory.Exists(parent)) {
+                    return false;
+                }
+
+                try {
+                    Directory.CreateDirectory(path);
+                    return true;
+                } catch (Exception e) when (e is IOException or UnauthorizedAccessException) {
+                    return false;
+                }
+            }
+
+            case "io_list_directory": {
+                var path = Text(operands[0]).Value;
+                string[] names;
+                try {
+                    names = [..Directory.EnumerateFileSystemEntries(path).Select(Path.GetFileName).Select(static n => n!)];
+                } catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException) {
+                    names = [];
+                    _ioFailed = true;
+                    return Allocate(new HeapArray(new ArrayType(SilType.String), []));
+                }
+
+                // Byte by byte, as the native runtime sorts them.
+                Array.Sort(names, static (a, b) => Encoding.UTF8.GetBytes(a).AsSpan().SequenceCompareTo(Encoding.UTF8.GetBytes(b)));
+                _ioFailed = false;
+                return Allocate(new HeapArray(new ArrayType(SilType.String), [..names.Select(n => (object?)Allocate(new HeapString(n)))]));
+            }
+
+            case "io_environment": {
+                var value = Environment.GetEnvironmentVariable(Text(operands[0]).Value);
+                _ioFailed = value is null;
+                return Allocate(new HeapString(value ?? ""));
+            }
+
+            case "io_argument_count":
+                return (long)Arguments.Count;
+
+            case "io_argument": {
+                var index = (long)operands[0]!;
+                if (index < 0 || index >= Arguments.Count) {
+                    throw new SilTrap("argument index out of range");
+                }
+
+                return Allocate(new HeapString(Arguments[(int)index]));
             }
 
             case "string_from_Char":

@@ -4777,6 +4777,10 @@ public sealed partial class SilGen {
                 return new(MakeOptional(call.Type, Emit(new TupleExtractInst(made, 0)), Emit(new TupleExtractInst(made, 1)), call));
             }
 
+            if (callee.IsStatic && ReferenceEquals(owner, Core.Runtime)) {
+                return new(RuntimeCall(call));
+            }
+
             if (call.Receiver is not { } receiver) {
                 return null;
             }
@@ -4923,8 +4927,62 @@ public sealed partial class SilGen {
             }
         }
 
+        /// <summary>
+        ///     A call into the runtime: a builtin per call, its arguments
+        ///     borrowed. Those that may fail give their value regardless, and
+        ///     <c>io_succeeded</c> says whether they did; the value is then dropped.
+        /// </summary>
+        SilValue? RuntimeCall(BoundCall call) {
+            var arguments = new List<SilValue>();
+            foreach (var argument in call.Arguments) {
+                if (Borrow(argument) is not { } value) {
+                    return null;
+                }
+
+                arguments.Add(value);
+            }
+
+            var strings = new ArrayType(SilType.String);
+            var (builtin, result, fallible) = call.Function.Name switch {
+                "write" => ("io_write", SilType.Unit, false),
+                "writeError" => ("io_write_error", SilType.Unit, false),
+                "readLine" => ("io_read_line", SilType.String, true),
+                "readFile" => ("io_read_file", SilType.String, true),
+                "writeFile" => ("io_write_file", SilType.Bool, false),
+                "fileExists" => ("io_file_exists", SilType.Bool, false),
+                "isDirectory" => ("io_is_directory", SilType.Bool, false),
+                "removeFile" => ("io_remove_file", SilType.Bool, false),
+                "makeDirectory" => ("io_make_directory", SilType.Bool, false),
+                "listDirectory" => ("io_list_directory", (SilType)strings, true),
+                "environment" => ("io_environment", SilType.String, true),
+                "argumentCount" => ("io_argument_count", SilType.Int, false),
+                "argument" => ("io_argument", SilType.String, false),
+                _ => (null!, SilType.Unit, false),
+            };
+
+            if (builtin is null) {
+                return Missing(call, $"the runtime call '{call.Function.Name}'");
+            }
+
+            var made = Emit(new BuiltinInst(builtin, result, [..arguments]));
+            for (var i = arguments.Count - 1; i >= 0; i--) {
+                End(arguments[i]);
+            }
+
+            if (result == SilType.Unit) {
+                return UnitValue.Instance;
+            }
+
+            if (!fallible) {
+                return made;
+            }
+
+            var present = Emit(new BuiltinInst("io_succeeded", SilType.Bool));
+            return MakeOptional(call.Type, present, made, call, owned: true);
+        }
+
         /// <summary>An optional holding the value when the flag is set, and none otherwise.</summary>
-        SilValue? MakeOptional(TypeSymbol type, SilValue present, SilValue value, BoundNode at) {
+        SilValue? MakeOptional(TypeSymbol type, SilValue present, SilValue value, BoundNode at, bool owned = false) {
             if (LowerType(type) is not EnumType optional) {
                 return Missing(at, $"an optional of type '{type.ToDisplayString()}'");
             }
@@ -4937,6 +4995,11 @@ public sealed partial class SilGen {
             _current = some;
             Branch(after, Emit(new EnumInst(optional, optional.CaseIndex("Some"), value)));
             _current = none;
+            if (owned) {
+                // Made either way; without the flag, nobody wants it.
+                Emit(new DestroyValueInst(value));
+            }
+
             Branch(after, Emit(new EnumInst(optional, optional.CaseIndex("None"), null)));
             _current = after;
             return result;

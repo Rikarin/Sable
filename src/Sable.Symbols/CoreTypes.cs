@@ -71,11 +71,17 @@ public sealed class CoreTypes {
         Bytes = new NamedTypeSymbol("Bytes", TypeKind.Struct, Module, accessibility: Accessibility.Public);
         Module.AddMember(Bytes);
 
+        // What the operating system gives a program, through the runtime:
+        // the calls Sable.IO is written over (docs/06 §6.4).
+        Runtime = new NamedTypeSymbol("Runtime", TypeKind.Struct, Module, accessibility: Accessibility.Public);
+        Module.AddMember(Runtime);
+
         Integers = [I8, I16, I32, I64, I128, Int, U8, U16, U32, U64, U128, UInt];
         Floats = [F16, F32, F64];
         Numerics = [..Integers, ..Floats];
 
         DeclarePrimitiveMembers();
+        DeclareRuntimeMembers();
     }
 
     // -----------------------------------------------------------------------
@@ -194,6 +200,27 @@ public sealed class CoreTypes {
             Print = Print.Add(Function("print", [("value", printable)], Void));
         }
     }
+
+    /// <summary>The runtime's own calls, all static: standard streams, files, directories, the environment.</summary>
+    void DeclareRuntimeMembers() {
+        var text = new OptionalTypeSymbol(String);
+        Method(Runtime, "write", [("text", String)], Void, true);
+        Method(Runtime, "writeError", [("text", String)], Void, true);
+        Method(Runtime, "readLine", [], text, true);
+        Method(Runtime, "readFile", [("path", String)], text, true);
+        Method(Runtime, "writeFile", [("path", String), ("text", String), ("append", Bool)], Bool, true);
+        Method(Runtime, "fileExists", [("path", String)], Bool, true);
+        Method(Runtime, "isDirectory", [("path", String)], Bool, true);
+        Method(Runtime, "removeFile", [("path", String)], Bool, true);
+        Method(Runtime, "makeDirectory", [("path", String)], Bool, true);
+        Method(Runtime, "listDirectory", [("path", String)], new OptionalTypeSymbol(new ArrayTypeSymbol(String, ArrayKind.Grow)), true);
+        Method(Runtime, "environment", [("name", String)], text, true);
+        Method(Runtime, "argumentCount", [], Int, true);
+        Method(Runtime, "argument", [("index", Int)], String, true);
+    }
+
+    /// <summary><c>Runtime</c>: the operating system's calls, which Sable.IO wraps.</summary>
+    public NamedTypeSymbol Runtime { get; }
 
     /// <summary>The <c>print</c> overloads, which code generation recognises.</summary>
     public ImmutableArray<FunctionSymbol> Print { get; private set; } = [];

@@ -38,7 +38,7 @@ public sealed class PipelineTests {
         var result = Compile("module M\n@main\nfn start() { print(\"x\") }\n");
         Assert.True(result.Succeeded, string.Join("\n", result.Errors));
         Assert.Contains("declare void @sable_print_string(ptr)", result.LlvmIr, StringComparison.Ordinal);
-        Assert.Contains("define i32 @main()", result.LlvmIr, StringComparison.Ordinal);
+        Assert.Contains("define i32 @main(i32 %argc, ptr %argv)", result.LlvmIr, StringComparison.Ordinal);
         Assert.Contains("call void @\"sable.M.start\"()", result.LlvmIr, StringComparison.Ordinal);
     }
 

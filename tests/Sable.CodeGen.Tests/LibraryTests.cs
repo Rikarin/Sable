@@ -135,6 +135,93 @@ fn main() {
                 """).Stdout
         );
 
+    /// <summary>
+    ///     Sable.IO over the runtime's calls: files, directories, paths, the
+    ///     standard streams and the environment — the same answers natively
+    ///     and interpreted, from the same directory and the same input.
+    /// </summary>
+    [Fact]
+    public void IoIsWrittenInSable() {
+        var root = Path.Combine(Path.GetTempPath(), $"sable-io-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try {
+            var run = AssertAgree(
+                $$"""
+                module P
+                import Sable.IO
+
+                @main
+                fn main() {
+                    let dir = Path.join("{{root}}", "work")
+                    if Directory.exists(dir) {
+                        for name in try! Directory.list(dir) {
+                            try! File.remove(Path.join(dir, name))
+                        }
+                        try! Directory.remove(dir)
+                    }
+                    try! Directory.create(dir)
+                    let notes = Path.join(dir, "notes.txt")
+                    try! File.write(notes, "one\ntwo\r\n")
+                    try! File.append(notes, "three\n")
+                    print(try! File.read(notes).count)
+                    for line in try! File.readLines(notes) {
+                        Console.writeLine("[" + line + "]")
+                    }
+                    try! File.write(Path.join(dir, "b.md"), "")
+                    for name in try! Directory.list(dir) {
+                        Console.write(name + " ")
+                    }
+                    Console.writeLine("")
+                    print(File.exists(notes))
+                    print(Directory.exists(notes))
+                    do {
+                        print(try File.read(Path.join(dir, "missing")))
+                    } catch .NotFound(let path) {
+                        print("not found: " + Path.fileName(path))
+                    } catch {
+                        print("other")
+                    }
+                    print(Path.extension("a/b.tar.gz") ?? "-")
+                    print(Path.extension(".hidden") ?? "-")
+                    print(Path.withoutExtension("x/y/report.md"))
+                    print(Path.directory("x/y/report.md"))
+                    print(Path.directory("report.md"))
+                    print(Environment.variable("SABLE_SURELY_UNSET") ?? "unset")
+                    print(Environment.arguments().count)
+                    var total = 0
+                    while let line = Console.readLine() {
+                        total += line.toInt() ?? 0
+                    }
+                    print(total)
+                    Console.writeErrorLine("done")
+                }
+                """,
+                input: "1\n2\n39"
+            );
+            Assert.Equal(
+                "15\n[one]\n[two]\n[three]\nb.md notes.txt \ntrue\nfalse\nnot found: missing\ngz\n-\nx/y/report\nx/y\n.\nunset\n0\n42\n",
+                run.Stdout
+            );
+            Assert.Equal("done\n", run.Stderr);
+        } finally {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ReadingAnArgumentThatIsNotThereTraps() {
+        var run = AssertAgree("""
+            module P
+            @main
+            fn main() {
+                print(Runtime.argumentCount())
+                print(Runtime.argument(0))
+            }
+            """);
+        Assert.Equal("0\n", run.Stdout);
+        Assert.Contains("argument index out of range", run.Stderr, StringComparison.Ordinal);
+    }
+
     /// <summary>Only what a program reaches is built: the library costs a program that does not use it nothing.</summary>
     [Fact]
     public void WhatAProgramDoesNotUseIsNotBuilt() {

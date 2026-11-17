@@ -737,12 +737,22 @@ Written so far (`tests/Sable.CodeGen.Tests/LibraryTests.cs`):
 - `Sable.Collections`: `Stack`, `Queue`, `HashMap` and `HashSet` (open
   addressing over `Hashable`), and a merge sort for `Comparable` or by a
   predicate.
+- `Sable.IO`: `File` (read, readLines, write, append, exists, remove),
+  `Directory` (exists, create, list — sorted byte by byte so every platform
+  agrees — and remove), `Path` (join, fileName, directory, extension,
+  withoutExtension), `Console` (the standard streams, `readLine`,
+  `readLines`) and `Environment` (variables, arguments), failing with
+  `IoError`. It is written over `Runtime`, a core type of static calls the
+  runtime implements in C (`sable_io_*`) and the interpreter in .NET; a call
+  that may fail gives a value either way and `io_succeeded` says whether to
+  keep it. `main` now takes `argc`/`argv`. The test harness gives programs
+  standard input and compares standard error between the two.
 
 What it took from the compiler: generic initialisers inferring their type
 arguments, user operators found through a type parameter's constraints,
 operators and witnesses on primitive types lowered, and reachability-based
-emission. Next: `Sable.IO` (needs runtime calls for files and stdin),
-reflection (4.2), and the names the plan lists that are not yet here
+emission. Next: reflection (4.2), streaming I/O (`Stream`, buffered
+readers and writers, memory-mapped files), and the names the plan lists that are not yet here
 (`Deque`, `OrderedDictionary`, `Heap`, formatting and parsing).
 
 ### Async, as implemented

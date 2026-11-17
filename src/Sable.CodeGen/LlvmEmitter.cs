@@ -265,6 +265,21 @@ public sealed class LlvmEmitter {
                                 declare zeroext i1 @sable_string_contains(ptr, i32)
                                 declare i64 @sable_string_index_of(ptr, i32)
                                 declare ptr @sable_string_trimmed(ptr)
+                                declare void @sable_io_write(ptr)
+                                declare void @sable_io_write_error(ptr)
+                                declare ptr @sable_io_read_line()
+                                declare ptr @sable_io_read_file(ptr)
+                                declare zeroext i1 @sable_io_write_file(ptr, ptr, i1 zeroext)
+                                declare zeroext i1 @sable_io_file_exists(ptr)
+                                declare zeroext i1 @sable_io_is_directory(ptr)
+                                declare zeroext i1 @sable_io_remove_file(ptr)
+                                declare zeroext i1 @sable_io_make_directory(ptr)
+                                declare ptr @sable_io_list_directory(ptr)
+                                declare ptr @sable_io_environment(ptr)
+                                declare i64 @sable_io_argument_count()
+                                declare ptr @sable_io_argument(i64)
+                                declare zeroext i1 @sable_io_succeeded()
+                                declare void @sable_set_arguments(i32, ptr)
                                 declare ptr @sable_string_split(ptr, i32)
                                 declare ptr @sable_string_from_char(i32)
                                 declare ptr @sable_string_from_int(i64)
@@ -361,8 +376,8 @@ public sealed class LlvmEmitter {
     static string MainShim(SilFunction entry) {
         var call = $"@{Global(entry.Name)}()";
         return entry.Type.Result == SilType.Int
-            ? $"define i32 @main() {{\n  %r = call i64 {call}\n  %c = trunc i64 %r to i32\n  ret i32 %c\n}}\n"
-            : $"define i32 @main() {{\n  call void {call}\n  ret i32 0\n}}\n";
+            ? $"define i32 @main(i32 %argc, ptr %argv) {{\n  call void @sable_set_arguments(i32 %argc, ptr %argv)\n  %r = call i64 {call}\n  %c = trunc i64 %r to i32\n  ret i32 %c\n}}\n"
+            : $"define i32 @main(i32 %argc, ptr %argv) {{\n  call void @sable_set_arguments(i32 %argc, ptr %argv)\n  call void {call}\n  ret i32 0\n}}\n";
     }
 
     /// <summary>
@@ -1883,6 +1898,30 @@ public sealed class LlvmEmitter {
 
                 case "string_index_of":
                     Line($"{Result()} = call i64 @sable_string_index_of(ptr {operands[0]}, i32 {operands[1]})");
+                    return;
+
+                case "io_write" or "io_write_error":
+                    Line($"call void @sable_{builtin.Name}(ptr {operands[0]})");
+                    return;
+
+                case "io_read_line" or "io_succeeded" or "io_argument_count":
+                    Line($"{Result()} = call {(builtin.Name == "io_read_line" ? "ptr" : builtin.Name == "io_succeeded" ? "zeroext i1" : "i64")} @sable_{builtin.Name}()");
+                    return;
+
+                case "io_read_file" or "io_list_directory" or "io_environment":
+                    Line($"{Result()} = call ptr @sable_{builtin.Name}(ptr {operands[0]})");
+                    return;
+
+                case "io_file_exists" or "io_is_directory" or "io_remove_file" or "io_make_directory":
+                    Line($"{Result()} = call zeroext i1 @sable_{builtin.Name}(ptr {operands[0]})");
+                    return;
+
+                case "io_write_file":
+                    Line($"{Result()} = call zeroext i1 @sable_io_write_file(ptr {operands[0]}, ptr {operands[1]}, i1 zeroext {operands[2]})");
+                    return;
+
+                case "io_argument":
+                    Line($"{Result()} = call ptr @sable_io_argument(i64 {operands[0]})");
                     return;
 
                 case "string_trimmed":

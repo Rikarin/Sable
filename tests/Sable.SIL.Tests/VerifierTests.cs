@@ -318,4 +318,79 @@ public sealed class VerifierTests {
             return directory?.FullName ?? throw new InvalidOperationException("cannot find the repository root");
         }
     }
+
+    // ---- Borrows and the new reference kinds --------------------------------
+
+    [Fact]
+    public void StorageCannotBeWrittenWhileItIsBorrowed() =>
+        AssertRejected(
+            """
+            sil @f : $(String) -> () {
+            bb0(%0 : $String):
+              %1 = alloc_stack $String
+              %2 = copy_value %0
+              store %2 to [assign] %1
+              %3 = load_borrow %1
+              %4 = copy_value %0
+              store %4 to [assign] %1
+              end_borrow %3
+              destroy_addr %1
+              dealloc_stack %1
+              return
+            }
+            """,
+            "'store' writes storage that %3 (load_borrow) borrows"
+        );
+
+    [Fact]
+    public void ABorrowMustEndOnEveryPath() =>
+        AssertRejected(
+            """
+            sil @f : $(*String) -> () {
+            bb0(%0 : $*String):
+              %1 = load_borrow %0
+              return
+            }
+            """,
+            "never consumed: %1 (load_borrow)"
+        );
+
+    [Fact]
+    public void OwnedParametersWeakAndUnownedStorageRoundTrip() {
+        const string text = """
+                            sil_class M.Node { next: $@sil_weak Optional$M.Node, parent: $@sil_unowned M.Node }
+                            sil_enum Optional$M.Node { Some($M.Node), None }
+
+                            sil @M.Node.link : $(@owned M.Node, M.Node) -> () {
+                            bb0(%0 : $M.Node, %1 : $M.Node):
+                              %2 = ref_element_addr %0, #next
+                              %3 = load_weak %2
+                              store_weak %3 to %2
+                              destroy_value %3
+                              %4 = ref_element_addr %0, #parent
+                              store_unowned %1 to %4
+                              %5 = load_unowned %4
+                              destroy_value %5
+                              destroy_value %0
+                              return
+                            }
+
+                            """;
+        var module = SilParser.Parse(text);
+        Assert.Empty(SilVerifier.Verify(module));
+        Assert.Equal(SilPrinter.Print(module), SilPrinter.Print(SilParser.Parse(SilPrinter.Print(module))));
+        Assert.Contains("(@owned M.Node, M.Node) -> ()", SilPrinter.Print(module), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AnOwnedParameterMustBeConsumed() =>
+        AssertRejected(
+            """
+            sil @f : $(@owned String) -> () {
+            bb0(%0 : $String):
+              return
+            }
+            """,
+            "never consumed: %0 (argument)"
+        );
 }

@@ -784,6 +784,9 @@ public sealed class Compilation {
         ) {
             IsStatic = declaration.Modifiers.Any(SyntaxKind.StaticKeyword),
             IsLazy = declaration.Modifiers.Any(SyntaxKind.LazyKeyword),
+            ReferenceKind = declaration.Modifiers.Any(SyntaxKind.WeakKeyword) ? ReferenceKind.Weak
+                : declaration.Modifiers.Any(SyntaxKind.UnownedKeyword) ? ReferenceKind.Unowned
+                : ReferenceKind.Strong,
             IsComputed = declaration.Accessors is not null,
             HasSetter = declaration.Accessors is not { } list
                 || list.Accessors.Any(static a => a.Keyword.Kind == SyntaxKind.SetKeyword),

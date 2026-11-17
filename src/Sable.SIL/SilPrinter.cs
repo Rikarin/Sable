@@ -42,9 +42,20 @@ public static class SilPrinter {
                     break;
 
                 case ClassType classType:
-                    builder.Append("sil_class ").Append(classType.Name).Append(" { ")
+                    builder.Append("sil_class ").Append(classType.Name);
+                    if (classType.Superclass is { } superclass) {
+                        builder.Append(" : ").Append(superclass.Name);
+                    }
+
+                    builder.Append(" { ")
                         .Append(string.Join(", ", classType.Fields.Select(static f => $"{f.Name}: ${f.Type}")))
                         .Append(" }");
+                    if (classType.VTable.Count > 0) {
+                        builder.Append(" vtable { ")
+                            .Append(string.Join(", ", classType.VTable.Select(static m => $"{m.Method}: @{m.Function}")))
+                            .Append(" }");
+                    }
+
                     if (classType.Deinit is { } deinit) {
                         builder.Append(" deinit @").Append(deinit);
                     }
@@ -85,10 +96,12 @@ public static class SilPrinter {
     static IEnumerable<NominalType> Contained(SilType type) {
         IEnumerable<SilType> parts = type switch {
             StructType structType => structType.Fields.Select(static f => f.Type),
-            ClassType classType => classType.Fields.Select(static f => f.Type),
+            ClassType classType => classType.Fields.Select(static f => f.Type).Concat(classType.Superclass is { } s ? [s] : []),
             EnumType enumType => enumType.Cases.Where(static c => c.Payload is not null).Select(static c => c.Payload!),
             TupleType tuple => tuple.Elements,
             ArrayType array => [array.Element],
+            WeakStorageType weak => [weak.Optional],
+            UnownedStorageType unowned => [unowned.Referent],
             _ => [],
         };
 
@@ -272,6 +285,30 @@ public static class SilPrinter {
                         builder.Append(" [").Append(load.Kind.ToString().ToLowerInvariant()).Append("] ").Append(Name(load.Address));
                         break;
 
+                    case LoadWeakInst weak:
+                        builder.Append(' ').Append(Name(weak.Address));
+                        break;
+
+                    case LoadUnownedInst unowned:
+                        builder.Append(' ').Append(Name(unowned.Address));
+                        break;
+
+                    case StoreWeakInst weak:
+                        builder.Append(' ').Append(Name(weak.Value)).Append(" to ").Append(Name(weak.Address));
+                        break;
+
+                    case StoreUnownedInst unowned:
+                        builder.Append(' ').Append(Name(unowned.Value)).Append(" to ").Append(Name(unowned.Address));
+                        break;
+
+                    case LoadBorrowInst borrow:
+                        builder.Append(' ').Append(Name(borrow.Address));
+                        break;
+
+                    case EndBorrowInst end:
+                        builder.Append(' ').Append(Name(end.Borrowed));
+                        break;
+
                     case CopyValueInst copy:
                         builder.Append(' ').Append(Name(copy.Value));
                         break;
@@ -303,6 +340,15 @@ public static class SilPrinter {
                         builder.Append(' ').Append(Name(partial.Function)).Append('(')
                             .Append(partial.Context is { } context ? Name(context) : "")
                             .Append(") : $").Append(partial.Type);
+                        break;
+
+                    case UpcastInst upcast:
+                        builder.Append(' ').Append(Name(upcast.Value)).Append(" : $").Append(upcast.Type);
+                        break;
+
+                    case ClassMethodInst method:
+                        builder.Append(' ').Append(Name(method.Reference)).Append(", #").Append(method.Method)
+                            .Append(" : $").Append(method.Type);
                         break;
 
                     case UncheckedRefCastInst cast:

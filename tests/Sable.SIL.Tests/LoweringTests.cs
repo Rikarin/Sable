@@ -332,8 +332,8 @@ public sealed class LoweringTests {
         var compilation = Compilation.Create(
             """
             module M
-            open class Point { var x: Int = 0 }
-            fn origin(_ p: Point) -> Int { return p.x }
+            struct Point { var x: U8 }
+            fn origin(_ p: Point) -> Int { return 0 }
             """
         );
 
@@ -350,7 +350,7 @@ public sealed class LoweringTests {
             """
             module M
             fn label(_ n: Int) -> Int {
-                let counts = ["n": n]
+                let table = [(n, n): n]
                 return n
             }
             """

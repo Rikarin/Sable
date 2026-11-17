@@ -212,6 +212,13 @@ public sealed class LlvmEmitter {
                                 declare void @sable_retain(ptr)
                                 declare void @sable_release(ptr)
                                 declare void @sable_array_destroy(ptr)
+                                declare void @sable_unowned_retain(ptr)
+                                declare void @sable_unowned_release(ptr)
+                                declare void @sable_unowned_load(ptr)
+                                declare ptr @sable_weak_entry(ptr)
+                                declare void @sable_weak_retain(ptr)
+                                declare void @sable_weak_release(ptr)
+                                declare ptr @sable_weak_load(ptr)
                                 declare zeroext i1 @sable_string_equal(ptr, ptr)
                                 declare ptr @sable_string_concat(ptr, ptr)
                                 declare i64 @sable_string_count(ptr)
@@ -236,6 +243,7 @@ public sealed class LlvmEmitter {
                                 declare ptr @sable_array_append_slot(ptr, ptr)
                                 declare ptr @sable_array_mutable_element(ptr, ptr, i64)
                                 declare ptr @sable_array_remove_last(ptr, ptr)
+                                declare ptr @sable_array_slice(ptr, i64, i64, ptr)
                                 declare double @llvm.fabs.f64(double)
                                 declare double @llvm.minnum.f64(double, double)
                                 declare double @llvm.maxnum.f64(double, double)
@@ -277,6 +285,7 @@ public sealed class LlvmEmitter {
             AddressType or FunctionType or ClassType or ArrayType => "ptr",
             _ when type == SilType.Object => "ptr",
             ThickFunctionType => "{ ptr, ptr }",
+            WeakStorageType or UnownedStorageType => "ptr",
             StructType structType => $"{{ {string.Join(", ", structType.Fields.Select(static f => Type(f.Type)))} }}",
             TupleType tuple => $"{{ {string.Join(", ", tuple.Elements.Select(Type))} }}",
             EnumType enumType => PayloadWords(enumType) == 0 ? "{ i64 }" : $"{{ i64, [{PayloadWords(enumType)} x i64] }}",
@@ -309,6 +318,7 @@ public sealed class LlvmEmitter {
             AddressType or FunctionType or ClassType or ArrayType => 8,
             _ when type == SilType.Object => 8,
             ThickFunctionType => 16,
+            WeakStorageType or UnownedStorageType => 8,
             EnumType enumType => 8 + PayloadWords(enumType) * 8,
             StructType structType => Aggregate(structType.Fields.Select(static f => f.Type)),
             TupleType tuple => Aggregate(tuple.Elements),
@@ -380,6 +390,12 @@ public sealed class LlvmEmitter {
 
         if (type is ScalarType or ClassType or ArrayType) {
             output.Append(indent).Append($"call void @{(copy ? "sable_retain" : "sable_release")}(ptr {value}){dbg}\n");
+            return;
+        }
+
+        if (type is WeakStorageType or UnownedStorageType) {
+            var kind = type is WeakStorageType ? "weak" : "unowned";
+            output.Append(indent).Append($"call void @sable_{kind}_{(copy ? "retain" : "release")}(ptr {value}){dbg}\n");
             return;
         }
 
@@ -478,8 +494,10 @@ public sealed class LlvmEmitter {
         var destroy = $"@\"sable.deinit.{type.Name}\"";
         var objectType = ObjectType(type);
         var body = new StringBuilder($"define internal void {destroy}(ptr %o) {{\nentry:\n");
-        if (type.Deinit is { } deinit) {
-            body.Append($"  call void @{Global(deinit)}(ptr %o)\n");
+        for (var level = type; level is not null; level = level.Superclass) {
+            if (level.Deinit is { } deinit) {
+                body.Append($"  call void @{Global(deinit)}(ptr %o)\n");
+            }
         }
 
         for (var i = type.Fields.Count - 1; i >= 0; i--) {
@@ -495,10 +513,15 @@ public sealed class LlvmEmitter {
         body.Append("  ret void\n}\n\n");
         _helpers.Append(body);
 
+        // The runtime reads the first five fields; the vtable follows them.
         var typeName = TrapMessage(type.Name);
-        _globals.Append($"{name} = internal constant %SableMetadata {{ ptr {destroy}, ptr {typeName}, i64 0, ptr null, ptr null }}\n");
+        var vtable = string.Join(", ", type.VTable.Select(static m => $"ptr @{Global(m.Function)}"));
+        _globals.Append($"{name} = internal constant {MetadataType(type)} {{ ptr {destroy}, ptr {typeName}, i64 0, ptr null, ptr null, [{type.VTable.Count} x ptr] [{vtable}] }}\n");
         return name;
     }
+
+    /// <summary>A class's metadata: the runtime's record, then its vtable.</summary>
+    static string MetadataType(ClassType type) => $"{{ ptr, ptr, i64, ptr, ptr, [{type.VTable.Count} x ptr] }}";
 
     /// <summary>An array's metadata, per element type: the element's size, and how one is copied and destroyed.</summary>
     string ArrayMetadata(ArrayType type) {
@@ -818,6 +841,77 @@ public sealed class LlvmEmitter {
                     return;
                 }
 
+                // A weak reference read: the object, retained, or null — as an optional.
+                case LoadWeakInst weak: {
+                    var optional = (EnumType)weak.Type;
+                    var type = Type(optional);
+                    var entry = Fresh();
+                    var target = Fresh();
+                    var absent = Fresh();
+                    var tag = Fresh();
+                    var word = Fresh();
+                    var tagged = Fresh();
+                    var name = Fresh();
+                    _names[weak] = name;
+                    Line($"{entry} = load ptr, ptr {Name(weak.Address)}");
+                    Line($"{target} = call ptr @sable_weak_load(ptr {entry})");
+                    Line($"{absent} = icmp eq ptr {target}, null");
+                    Line($"{tag} = select i1 {absent}, i64 {optional.CaseIndex("None")}, i64 {optional.CaseIndex("Some")}");
+                    Line($"{word} = ptrtoint ptr {target} to i64");
+                    Line($"{tagged} = insertvalue {type} zeroinitializer, i64 {tag}, 0");
+                    Line($"{name} = insertvalue {type} {tagged}, i64 {word}, 1, 0");
+                    return;
+                }
+
+                case StoreWeakInst weak: {
+                    var optional = (EnumType)weak.Value.Type;
+                    var type = Type(optional);
+                    var tag = Fresh();
+                    var word = Fresh();
+                    var pointer = Fresh();
+                    var present = Fresh();
+                    var target = Fresh();
+                    var entry = Fresh();
+                    var old = Fresh();
+                    Line($"{tag} = extractvalue {type} {Name(weak.Value)}, 0");
+                    Line($"{word} = extractvalue {type} {Name(weak.Value)}, 1, 0");
+                    Line($"{pointer} = inttoptr i64 {word} to ptr");
+                    Line($"{present} = icmp eq i64 {tag}, {optional.CaseIndex("Some")}");
+                    Line($"{target} = select i1 {present}, ptr {pointer}, ptr null");
+                    Line($"{entry} = call ptr @sable_weak_entry(ptr {target})");
+                    Line($"{old} = load ptr, ptr {Name(weak.Address)}");
+                    Line($"store ptr {entry}, ptr {Name(weak.Address)}");
+                    Line($"call void @sable_weak_release(ptr {old})");
+                    return;
+                }
+
+                case LoadUnownedInst unowned: {
+                    var name = Fresh();
+                    _names[unowned] = name;
+                    Line($"{name} = load ptr, ptr {Name(unowned.Address)}");
+                    Line($"call void @sable_unowned_load(ptr {name})");
+                    return;
+                }
+
+                case StoreUnownedInst unowned: {
+                    var old = Fresh();
+                    Line($"call void @sable_unowned_retain(ptr {Name(unowned.Value)})");
+                    Line($"{old} = load ptr, ptr {Name(unowned.Address)}");
+                    Line($"store ptr {Name(unowned.Value)}, ptr {Name(unowned.Address)}");
+                    Line($"call void @sable_unowned_release(ptr {old})");
+                    return;
+                }
+
+                case LoadBorrowInst borrow: {
+                    var name = Fresh();
+                    _names[borrow] = name;
+                    Line($"{name} = load {Type(borrow.Type)}, ptr {Name(borrow.Address)}");
+                    return;
+                }
+
+                case EndBorrowInst:
+                    return;
+
                 case CopyValueInst copy:
                     _names[copy] = Name(copy.Value);
                     Own(true, copy.Type, _names[copy]);
@@ -868,6 +962,23 @@ public sealed class LlvmEmitter {
                 case UncheckedRefCastInst cast:
                     _names[cast] = Name(cast.Value);
                     return;
+
+                case UpcastInst upcast:
+                    _names[upcast] = Name(upcast.Value);
+                    return;
+
+                // The object's metadata is its first word; the method is in its slot there.
+                case ClassMethodInst method: {
+                    var owner = (ClassType)method.Reference.Type;
+                    var metadata = Fresh();
+                    var slot = Fresh();
+                    var name = Fresh();
+                    _names[method] = name;
+                    Line($"{metadata} = load ptr, ptr {Name(method.Reference)}");
+                    Line($"{slot} = getelementptr inbounds {MetadataType(owner)}, ptr {metadata}, i32 0, i32 5, i64 {owner.MethodIndex(method.Method)}");
+                    Line($"{name} = load ptr, ptr {slot}");
+                    return;
+                }
 
                 case ApplyInst apply: {
                     var (target, arguments) = Callee(apply.Callee, apply.Arguments);
@@ -1367,6 +1478,10 @@ public sealed class LlvmEmitter {
                     Line($"{Result()} = load {Type(arrayType.Element)}, ptr {element}");
                     return;
                 }
+
+                case "array_slice":
+                    Line($"{Result()} = call ptr @sable_array_slice(ptr {operands[0]}, i64 {operands[1]}, i64 {operands[2]}, ptr {module.ArrayMetadata((ArrayType)builtin.Type)})");
+                    return;
 
                 case "array_clear": {
                     var old = Fresh();

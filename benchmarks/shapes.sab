@@ -1,0 +1,80 @@
+module Shapes
+
+// Dynamic dispatch both ways: existentials of structs, and a class hierarchy
+// whose overrides are reached through the base class.
+
+protocol Shape {
+    fn area() -> F64
+    fn name() -> String
+}
+
+struct Circle: Shape {
+    var r: F64
+    fn area() -> F64 { return 3.14159 * r * r }
+    fn name() -> String { return "circle" }
+}
+
+struct Rect: Shape {
+    var w: F64
+    var h: F64
+    fn area() -> F64 { return w * h }
+    fn name() -> String { return "rect" }
+}
+
+open class Animal {
+    var legs: Int
+    init(_ legs: Int) {
+        self.legs = legs
+    }
+    open fn weight() -> Int { return legs }
+}
+
+class Bird: Animal {
+    init() {
+        super.init(2)
+    }
+    override fn weight() -> Int { return 1 }
+}
+
+class Dog: Animal {
+    init() {
+        super.init(4)
+    }
+    override fn weight() -> Int { return 20 }
+}
+
+@main
+fn main() {
+    var shapes: (any Shape)[>..] = []
+    var animals: Animal[>..] = []
+    var i = 0
+    while i < 1000 {
+        if i % 2 == 0 {
+            shapes.append(Circle { r: (i % 10) as F64 })
+            animals.append(Bird())
+        } else {
+            shapes.append(Rect { w: (i % 7) as F64, h: 2.0 })
+            animals.append(Dog())
+        }
+        i = i + 1
+    }
+
+    var area = 0.0
+    var letters = 0
+    var weight = 0
+    var round = 0
+    while round < 300 {
+        for shape in shapes {
+            area = area + shape.area()
+            letters = letters + shape.name().count
+        }
+        for animal in animals {
+            weight = weight + animal.weight() + animal.legs
+        }
+        round = round + 1
+    }
+
+    print(area)
+    print(letters)
+    print(weight)
+}

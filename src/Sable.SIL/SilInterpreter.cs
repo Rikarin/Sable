@@ -41,6 +41,13 @@ public sealed class SilInterpreter(SilModule module, int stepLimit = 10_000_000,
     /// <summary>Heap objects allocated and not yet freed: after a whole program, a leak.</summary>
     public int LiveObjects => _live.Count;
 
+    /// <summary>What ARC did, counted as the runtime counts it: only what touches a count.</summary>
+    public int Allocations { get; private set; }
+
+    public int Retains { get; private set; }
+
+    public int Releases { get; private set; }
+
     // =======================================================================
     // The heap
     // =======================================================================
@@ -63,6 +70,21 @@ public sealed class SilInterpreter(SilModule module, int stepLimit = 10_000_000,
     sealed class HeapObject(ClassType type) : Counted {
         public ClassType Type { get; } = type;
         public object?[] Fields { get; } = new object?[type.Fields.Count];
+
+        /// <summary>Unowned references to it: its memory stays until they go, though it may be deinited.</summary>
+        public int Unowned;
+
+        /// <summary>True once its last strong reference has gone and its deinit has run.</summary>
+        public bool Deinited;
+
+        /// <summary>The entry its weak references share, made when the first is.</summary>
+        public WeakEntry? Side;
+    }
+
+    /// <summary>What weak references to one object point to: the object, until it goes.</summary>
+    sealed class WeakEntry(HeapObject target) {
+        public HeapObject? Target = target;
+        public int Count;
     }
 
     sealed class HeapArray(ArrayType type, List<object?> elements) : Counted {
@@ -72,6 +94,7 @@ public sealed class SilInterpreter(SilModule module, int stepLimit = 10_000_000,
 
     T Allocate<T>(T value) where T : Counted {
         _live.Add(value);
+        Allocations++;
         return value;
     }
 
@@ -87,9 +110,18 @@ public sealed class SilInterpreter(SilModule module, int stepLimit = 10_000_000,
         }
 
         switch (type, value) {
+            case (WeakStorageType, WeakEntry entry):
+                entry.Count++;
+                return;
+
+            case (UnownedStorageType, HeapObject held):
+                held.Unowned++;
+                return;
+
             case (_, Counted counted):
                 if (!Alive(counted).Immortal) {
                     counted.Strong++;
+                    Retains++;
                 }
 
                 return;
@@ -132,11 +164,27 @@ public sealed class SilInterpreter(SilModule module, int stepLimit = 10_000_000,
                 Release(SilType.Object, closure.Context, depth);
                 return;
 
+            case (WeakStorageType, WeakEntry entry):
+                if (--entry.Count == 0 && entry.Target is { } target) {
+                    target.Side = null;
+                }
+
+                return;
+
+            case (UnownedStorageType, HeapObject held):
+                if (--held.Unowned == 0 && held.Deinited) {
+                    held.Freed = true;
+                    _live.Remove(held);
+                }
+
+                return;
+
             case (_, Counted counted):
                 if (Alive(counted).Immortal) {
                     return;
                 }
 
+                Releases++;
                 if (--counted.Strong > 0) {
                     return;
                 }
@@ -170,8 +218,13 @@ public sealed class SilInterpreter(SilModule module, int stepLimit = 10_000_000,
     void Free(Counted counted, int depth) {
         switch (counted) {
             case HeapObject instance:
-                // The deinit sees the object alive; it may not keep it.
-                if (instance.Type.Deinit is { } deinit) {
+                // The deinits, the class's own and then its superclasses',
+                // see the object alive; they may not keep it.
+                for (var type = instance.Type; type is not null; type = type.Superclass) {
+                    if (type.Deinit is not { } deinit) {
+                        continue;
+                    }
+
                     counted.Strong = 1;
                     var function = module.Find(deinit) ?? throw new SilTrap($"call to undefined @{deinit}");
                     Call(function, [instance], depth + 1);
@@ -182,6 +235,18 @@ public sealed class SilInterpreter(SilModule module, int stepLimit = 10_000_000,
 
                 for (var i = instance.Fields.Length - 1; i >= 0; i--) {
                     Release(instance.Type.Fields[i].Type, instance.Fields[i], depth);
+                }
+
+                // Weak references now read as none; unowned ones hold the
+                // memory, but not the object, until they go.
+                instance.Deinited = true;
+                if (instance.Side is { } side) {
+                    side.Target = null;
+                    instance.Side = null;
+                }
+
+                if (instance.Unowned > 0) {
+                    return;
                 }
 
                 break;
@@ -402,6 +467,65 @@ public sealed class SilInterpreter(SilModule module, int stepLimit = 10_000_000,
                         break;
                     }
 
+                    case LoadWeakInst weak: {
+                        var optional = (EnumType)weak.Type;
+                        if (((IReference)Get(weak.Address)!).Peek() is WeakEntry { Target: { } target }) {
+                            Retain(SilType.Object, target);
+                            values[weak] = new EnumValue(optional.CaseIndex("Some"), target);
+                        } else {
+                            values[weak] = new EnumValue(optional.CaseIndex("None"), null);
+                        }
+
+                        break;
+                    }
+
+                    case StoreWeakInst weak: {
+                        var address = (IReference)Get(weak.Address)!;
+                        var storage = (WeakStorageType)((AddressType)weak.Address.Type).Pointee;
+                        WeakEntry? entry = null;
+                        if (Get(weak.Value) is EnumValue { Payload: HeapObject target }) {
+                            entry = target.Side ??= new WeakEntry(target);
+                            entry.Count++;
+                        }
+
+                        var old = address.Peek();
+                        address.Set(entry);
+                        Release(storage, old, depth);
+                        break;
+                    }
+
+                    case LoadUnownedInst unowned: {
+                        var held = (HeapObject)((IReference)Get(unowned.Address)!).Get()!;
+                        if (held.Deinited) {
+                            throw new SilTrap("read an unowned reference to an object that is gone");
+                        }
+
+                        Retain(SilType.Object, held);
+                        values[unowned] = held;
+                        break;
+                    }
+
+                    case StoreUnownedInst unowned: {
+                        var address = (IReference)Get(unowned.Address)!;
+                        var storage = (UnownedStorageType)((AddressType)unowned.Address.Type).Pointee;
+                        var held = (HeapObject)Get(unowned.Value)!;
+                        held.Unowned++;
+                        var old = address.Peek();
+                        address.Set(held);
+                        Release(storage, old, depth);
+                        break;
+                    }
+
+                    // Borrowed: no count changes; the storage keeps it alive.
+                    case LoadBorrowInst borrow: {
+                        var address = (IReference)Get(borrow.Address)!;
+                        values[borrow] = borrow.Type is ArrayType ? address.Peek() : address.Get();
+                        break;
+                    }
+
+                    case EndBorrowInst:
+                        break;
+
                     case DestroyAddrInst destroy: {
                         var address = (IReference)Get(destroy.Address)!;
                         var old = address.Peek();
@@ -505,6 +629,18 @@ public sealed class SilInterpreter(SilModule module, int stepLimit = 10_000_000,
                     case UncheckedRefCastInst cast:
                         values[cast] = Get(cast.Value);
                         break;
+
+                    case UpcastInst upcast:
+                        values[upcast] = Get(upcast.Value);
+                        break;
+
+                    // The method for the class the object is, not the one it is seen as.
+                    case ClassMethodInst method: {
+                        var instance = Alive((HeapObject)Get(method.Reference)!);
+                        var slot = instance.Type.MethodIndex(method.Method);
+                        values[method] = slot >= 0 ? instance.Type.VTable[slot].Function : throw new SilTrap($"no method #{method.Method}");
+                        break;
+                    }
 
                     case ApplyInst apply: {
                         var (callee, passed) = Callee(Get(apply.Callee)!, apply.Arguments.Select(Get));
@@ -704,6 +840,26 @@ public sealed class SilInterpreter(SilModule module, int stepLimit = 10_000_000,
                 return last;
             }
 
+            case "array_slice": {
+                var source = operands[0] is HeapArray held ? Alive(held).Elements : [];
+                var (from, to) = ((long)operands[1]!, (long)operands[2]!);
+                if (from < 0 || to > source.Count || from > to) {
+                    throw new SilTrap("array slice out of range");
+                }
+
+                if (from == to) {
+                    return null;
+                }
+
+                var type = (ArrayType)builtin.Type;
+                var copy = Allocate(new HeapArray(type, [..source.Skip((int)from).Take((int)(to - from))]));
+                foreach (var element in copy.Elements) {
+                    Retain(type.Element, element);
+                }
+
+                return copy;
+            }
+
             case "array_clear": {
                 var address = (IReference)operands[0]!;
                 var old = address.Peek();
@@ -739,6 +895,7 @@ public sealed class SilInterpreter(SilModule module, int stepLimit = 10_000_000,
         }
 
         array.Strong--;
+        Releases++;
         address.Set(copy);
         return copy;
     }

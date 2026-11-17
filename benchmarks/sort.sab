@@ -1,0 +1,65 @@
+module Sort
+
+// A generic merge sort over arrays, ordered by a closure: what arrays copy,
+// slice and append, and what calling a closure in an inner loop costs.
+
+fn sorted<T>(_ items: T[:], _ before: (T, T) -> Bool) -> T[>..] {
+    if items.count <= 1 {
+        var copy: T[>..] = []
+        for item in items {
+            copy.append(item)
+        }
+        return copy
+    }
+    let middle = items.count / 2
+    let left = sorted(items.slice(from: 0, to: middle), before)
+    let right = sorted(items.slice(from: middle, to: items.count), before)
+
+    var result: T[>..] = []
+    var i = 0
+    var j = 0
+    while i < left.count && j < right.count {
+        if before(right[j], left[i]) {
+            result.append(right[j])
+            j = j + 1
+        } else {
+            result.append(left[i])
+            i = i + 1
+        }
+    }
+    while i < left.count {
+        result.append(left[i])
+        i = i + 1
+    }
+    while j < right.count {
+        result.append(right[j])
+        j = j + 1
+    }
+    return result
+}
+
+@main
+fn main() {
+    var numbers: Int[>..] = []
+    var seed = 42
+    var i = 0
+    while i < 200000 {
+        seed = (seed * 1103515245 + 12345) % 2147483648
+        numbers.append(seed % 1000000)
+        i = i + 1
+    }
+
+    let ascending = sorted(numbers.slice(from: 0, to: numbers.count), (a: Int, b: Int) => a < b)
+    var labels: String[>..] = []
+    i = 0
+    while i < 20000 {
+        labels.append("item-\(ascending[i * 10] % 997)")
+        i = i + 1
+    }
+    let byLabel = sorted(labels.slice(from: 0, to: labels.count), (a: String, b: String) => a.count < b.count)
+
+    print(ascending[0])
+    print(ascending[199999])
+    print(byLabel[0])
+    print(byLabel[19999])
+}

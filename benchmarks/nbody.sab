@@ -1,0 +1,92 @@
+module NBody
+
+// The control: floating-point arithmetic on structs and an array of them,
+// with no references at all in the inner loop. ARC should cost nothing here.
+
+struct Body {
+    var x: F64
+    var y: F64
+    var z: F64
+    var vx: F64
+    var vy: F64
+    var vz: F64
+    var mass: F64
+}
+
+fn energy(_ bodies: Body[>..]) -> F64 {
+    var e = 0.0
+    var i = 0
+    while i < bodies.count {
+        let b = bodies[i]
+        e = e + 0.5 * b.mass * (b.vx * b.vx + b.vy * b.vy + b.vz * b.vz)
+        var j = i + 1
+        while j < bodies.count {
+            let c = bodies[j]
+            let dx = b.x - c.x
+            let dy = b.y - c.y
+            let dz = b.z - c.z
+            e = e - b.mass * c.mass / sqrtApprox(dx * dx + dy * dy + dz * dz)
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return e
+}
+
+fn sqrtApprox(_ v: F64) -> F64 {
+    var guess = v / 2.0 + 0.5
+    var k = 0
+    while k < 12 {
+        guess = 0.5 * (guess + v / guess)
+        k = k + 1
+    }
+    return guess
+}
+
+fn advance(_ bodies: inout Body[>..], _ dt: F64) {
+    let n = bodies.count
+    var i = 0
+    while i < n {
+        var b = bodies[i]
+        var j = i + 1
+        while j < n {
+            var c = bodies[j]
+            let dx = b.x - c.x
+            let dy = b.y - c.y
+            let dz = b.z - c.z
+            let d2 = dx * dx + dy * dy + dz * dz
+            let mag = dt / (d2 * sqrtApprox(d2))
+            b.vx = b.vx - dx * c.mass * mag
+            b.vy = b.vy - dy * c.mass * mag
+            b.vz = b.vz - dz * c.mass * mag
+            c.vx = c.vx + dx * b.mass * mag
+            c.vy = c.vy + dy * b.mass * mag
+            c.vz = c.vz + dz * b.mass * mag
+            bodies[j] = c
+            j = j + 1
+        }
+        b.x = b.x + dt * b.vx
+        b.y = b.y + dt * b.vy
+        b.z = b.z + dt * b.vz
+        bodies[i] = b
+        i = i + 1
+    }
+}
+
+@main
+fn main() {
+    var bodies: Body[>..] = [
+        Body { x: 0.0, y: 0.0, z: 0.0, vx: 0.0, vy: 0.0, vz: 0.0, mass: 39.47 },
+        Body { x: 4.84, y: -1.16, z: -0.10, vx: 0.60, vy: 2.81, vz: -0.02, mass: 0.037 },
+        Body { x: 8.34, y: 4.12, z: -0.40, vx: -1.01, vy: 1.82, vz: 0.008, mass: 0.011 },
+        Body { x: 12.89, y: -15.11, z: -0.22, vx: 1.08, vy: 0.86, vz: -0.01, mass: 0.0017 },
+        Body { x: 15.37, y: -25.91, z: 0.17, vx: 0.97, vy: 0.59, vz: -0.03, mass: 0.002 }
+    ]
+    print(energy(bodies))
+    var step = 0
+    while step < 200000 {
+        advance(bodies, 0.01)
+        step = step + 1
+    }
+    print(energy(bodies))
+}

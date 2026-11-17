@@ -62,6 +62,18 @@ public sealed class SemanticModel {
         return _bound.TryGetValue(syntax, out var node) ? node : null;
     }
 
+    readonly Dictionary<AccessorSyntax, FunctionSymbol> _accessors = [];
+
+    /// <summary>
+    ///     The function an accessor's body was bound as: its parameters, and
+    ///     the member it belongs to as its container. Code generation lowers
+    ///     a getter as a method, with this as its symbol.
+    /// </summary>
+    public FunctionSymbol? GetAccessorSymbol(AccessorSyntax accessor) {
+        EnsureBound();
+        return _accessors.GetValueOrDefault(accessor);
+    }
+
     /// <summary>The symbol an expression refers to, if it refers to one.</summary>
     public Symbol? GetSymbolOf(SyntaxNode syntax) {
         if (_compilation.GetDeclaredSymbol(syntax) is { } declared) {
@@ -362,6 +374,34 @@ public sealed class SemanticModel {
         }
 
         BindAccessors(declaration.Accessors, field, field.Type, scope);
+        CheckReferenceKind(declaration, field);
+    }
+
+    /// <summary>
+    ///     <c>weak</c> holds an object that may go, so it is a <c>var</c> of an
+    ///     optional class type, which becomes none when it does; <c>unowned</c>
+    ///     holds an object it assumes outlives it, of a class type.
+    /// </summary>
+    void CheckReferenceKind(FieldDeclarationSyntax declaration, FieldSymbol field) {
+        var span = declaration.Declarator.Span;
+        switch (field.ReferenceKind) {
+            case ReferenceKind.Weak when !field.IsMutable || field.Type is not OptionalTypeSymbol { UnderlyingType.TypeKind: TypeKind.Class }:
+                _diagnostics.Add(Diagnostic.Error(
+                    ErrorCode.ERR_WeakNeedsOptionalClass,
+                    span,
+                    $"'weak' needs a 'var' of an optional class type, since it becomes none when its object goes; '{field.Name}' is "
+                    + (field.IsMutable ? $"'{field.Type.ToDisplayString()}'" : "a 'let'")
+                ));
+                break;
+
+            case ReferenceKind.Unowned when field.Type.TypeKind != TypeKind.Class:
+                _diagnostics.Add(Diagnostic.Error(
+                    ErrorCode.ERR_UnownedNeedsClass,
+                    span,
+                    $"'unowned' needs a class type; '{field.Name}' is '{field.Type.ToDisplayString()}'"
+                ));
+                break;
+        }
     }
 
     void BindConstant(ConstDeclarationSyntax declaration, FileScope scope) {
@@ -431,6 +471,7 @@ public sealed class SemanticModel {
             function.ReturnTypeResolver = () => returnType;
 
             var binder = new Binder(_compilation, scope, function);
+            _accessors[accessor] = function;
 
             _bound[accessor] = accessor.Body is { } body
                 ? binder.BindFunctionBody(function, body)

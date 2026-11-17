@@ -1,0 +1,54 @@
+module BinaryTrees
+
+// The classic allocation benchmark: build complete binary trees of objects,
+// walk them, let them go. What it measures is allocation, reference counting
+// and teardown — the cost of a class.
+
+class Node {
+    var left: Node?
+    var right: Node?
+
+    init(_ left: Node?, _ right: Node?) {
+        self.left = left
+        self.right = right
+    }
+}
+
+fn build(_ depth: Int) -> Node {
+    if depth == 0 {
+        return Node(none, none)
+    }
+    return Node(build(depth - 1), build(depth - 1))
+}
+
+fn check(_ node: Node) -> Int {
+    var total = 1
+    if let left = node.left {
+        total = total + check(left)
+    }
+    if let right = node.right {
+        total = total + check(right)
+    }
+    return total
+}
+
+@main
+fn main() {
+    let maxDepth = 16
+    let longLived = build(maxDepth)
+
+    var depth = 4
+    while depth <= maxDepth {
+        let iterations = 1 << (maxDepth - depth + 4)
+        var sum = 0
+        var i = 0
+        while i < iterations {
+            sum = sum + check(build(depth))
+            i = i + 1
+        }
+        print("\(iterations) trees of depth \(depth): \(sum)")
+        depth = depth + 2
+    }
+
+    print("long lived tree of depth \(maxDepth): \(check(longLived))")
+}

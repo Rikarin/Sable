@@ -84,17 +84,28 @@ public sealed class AddressType(SilType pointee) : SilType {
     public override string ToString() => $"*{Pointee}";
 }
 
-public sealed class FunctionType(ImmutableArray<SilType> parameters, SilType result, SilType? thrown = null) : SilType {
+/// <remarks>
+///     A parameter is guaranteed — borrowed for the call — unless marked
+///     <c>@owned</c>: then the caller hands it over, and the callee must
+///     consume it. An initialiser's are owned, since it usually stores them.
+/// </remarks>
+public sealed class FunctionType(ImmutableArray<SilType> parameters, SilType result, SilType? thrown = null, ImmutableArray<bool> owned = default)
+    : SilType {
     public ImmutableArray<SilType> Parameters { get; } = parameters;
     public SilType Result { get; } = result;
 
     /// <summary>The error a <c>throws(E)</c> function may throw, or null when it cannot.</summary>
     public SilType? Thrown { get; } = thrown;
 
-    public override string ToString() =>
-        Thrown is null
-            ? $"({string.Join(", ", Parameters)}) -> {Result}"
-            : $"({string.Join(", ", Parameters)}) throws({Thrown}) -> {Result}";
+    /// <summary>For each parameter, whether it is owned; empty when none is.</summary>
+    public ImmutableArray<bool> Owned { get; } = owned.IsDefault || !owned.Contains(true) ? [] : owned;
+
+    public bool IsOwned(int parameter) => !Owned.IsEmpty && Owned[parameter];
+
+    public override string ToString() {
+        var parameters = string.Join(", ", Parameters.Select((p, i) => IsOwned(i) ? $"@owned {p}" : p.ToString()));
+        return Thrown is null ? $"({parameters}) -> {Result}" : $"({parameters}) throws({Thrown}) -> {Result}";
+    }
 }
 
 /// <summary>
@@ -107,10 +118,34 @@ public sealed class ThickFunctionType(FunctionType signature) : SilType {
     public FunctionType Signature { get; } = signature;
 
     public FunctionType Implementation =>
-        new([..Signature.Parameters, Object], Signature.Result, Signature.Thrown);
+        new([..Signature.Parameters, Object], Signature.Result, Signature.Thrown, Signature.Owned.IsEmpty ? default : [..Signature.Owned, false]);
 
     public override bool IsTrivial => false;
     public override string ToString() => $"@thick {Signature}";
+}
+
+/// <summary>
+///     <c>@sil_weak Optional$Node</c>: what a <c>weak</c> field holds — a
+///     reference that does not keep its object alive and reads as none once
+///     the object is gone. Only storage has this type; reading it with
+///     <c>load_weak</c> gives the optional.
+/// </summary>
+public sealed class WeakStorageType(EnumType optional) : SilType {
+    public EnumType Optional { get; } = optional;
+    public ClassType Referent => (ClassType)Optional.Cases[Optional.CaseIndex("Some")].Payload!;
+    public override bool IsTrivial => false;
+    public override string ToString() => $"@sil_weak {Optional}";
+}
+
+/// <summary>
+///     <c>@sil_unowned Node</c>: what an <c>unowned</c> field holds — a
+///     reference that does not keep its object alive; reading it with
+///     <c>load_unowned</c> once the object is gone traps.
+/// </summary>
+public sealed class UnownedStorageType(ClassType referent) : SilType {
+    public ClassType Referent { get; } = referent;
+    public override bool IsTrivial => false;
+    public override string ToString() => $"@sil_unowned {Referent}";
 }
 
 /// <summary><c>(Int, Bool)</c>: a tuple, laid out inline. The empty tuple is <see cref="SilType.Unit" />.</summary>
@@ -157,13 +192,37 @@ public sealed class EnumType(string name) : NominalType(name) {
 ///     <c>sil_class Node { value: $Int, next: $Optional$Node }</c>; a field
 ///     may name the class itself, since it is reached through a reference.
 /// </summary>
+/// <remarks>
+///     A subclass's fields start with its superclass's, in the same places,
+///     so a field's index is the same in every class that has it. Its vtable
+///     likewise starts with its superclass's methods, an override in its
+///     base method's slot.
+/// </remarks>
 public sealed class ClassType(string name) : NominalType(name) {
     public List<(string Name, SilType Type)> Fields { get; } = [];
 
     public int FieldIndex(string field) => Fields.FindIndex(f => f.Name == field);
 
+    public ClassType? Superclass { get; set; }
+
+    /// <summary>The methods called through the vtable: each slot's name, and the function in it for this class.</summary>
+    public List<(string Method, string Function)> VTable { get; } = [];
+
+    public int MethodIndex(string method) => VTable.FindIndex(m => m.Method == method);
+
     /// <summary>The function that runs as an object dies, before its fields are destroyed, or null.</summary>
     public string? Deinit { get; set; }
+
+    /// <summary>True when this class is the given one or inherits from it.</summary>
+    public bool IsSubclassOf(ClassType other) {
+        for (var type = this; type is not null; type = type.Superclass) {
+            if (ReferenceEquals(type, other)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     public override bool IsTrivial => false;
 }
@@ -405,6 +464,54 @@ public sealed class StoreInst(SilValue value, SilValue address, StoreKind kind) 
     public override string Opcode => "store";
 }
 
+/// <summary>
+///     <c>load_borrow %0</c>: the value in storage, borrowed rather than
+///     copied — no retain — until <c>end_borrow</c>. Nothing may write the
+///     storage in between, which the verifier checks for a stack slot.
+/// </summary>
+public sealed class LoadBorrowInst(SilValue address) : SilInstruction(address) {
+    public SilValue Address => Operands[0];
+    public override SilType Type => (Address.Type as AddressType)?.Pointee ?? SilType.Unit;
+    public override string Opcode => "load_borrow";
+}
+
+/// <summary><c>end_borrow %1</c>: the end of a <c>load_borrow</c>.</summary>
+public sealed class EndBorrowInst(SilValue borrowed) : SilInstruction(borrowed) {
+    public SilValue Borrowed => Operands[0];
+    public override bool HasResult => false;
+    public override string Opcode => "end_borrow";
+}
+
+/// <summary><c>load_weak %0</c>: the object a weak reference holds, retained, or none if it is gone.</summary>
+public sealed class LoadWeakInst(SilValue address) : SilInstruction(address) {
+    public SilValue Address => Operands[0];
+    public override SilType Type => ((WeakStorageType)((AddressType)Address.Type).Pointee).Optional;
+    public override string Opcode => "load_weak";
+}
+
+/// <summary><c>store_weak %1 to %0</c>: holds an optional's object weakly, borrowing the optional.</summary>
+public sealed class StoreWeakInst(SilValue value, SilValue address) : SilInstruction(value, address) {
+    public SilValue Value => Operands[0];
+    public SilValue Address => Operands[1];
+    public override bool HasResult => false;
+    public override string Opcode => "store_weak";
+}
+
+/// <summary><c>load_unowned %0</c>: the object an unowned reference holds, retained; a trap if it is gone.</summary>
+public sealed class LoadUnownedInst(SilValue address) : SilInstruction(address) {
+    public SilValue Address => Operands[0];
+    public override SilType Type => ((UnownedStorageType)((AddressType)Address.Type).Pointee).Referent;
+    public override string Opcode => "load_unowned";
+}
+
+/// <summary><c>store_unowned %1 to %0</c>: holds an object without keeping it alive, borrowing it.</summary>
+public sealed class StoreUnownedInst(SilValue value, SilValue address) : SilInstruction(value, address) {
+    public SilValue Value => Operands[0];
+    public SilValue Address => Operands[1];
+    public override bool HasResult => false;
+    public override string Opcode => "store_unowned";
+}
+
 /// <summary><c>copy_value %0</c>: a new owned copy of a value — a retain, for a reference.</summary>
 public sealed class CopyValueInst(SilValue value) : SilInstruction(value) {
     public SilValue Value => Operands[0];
@@ -465,6 +572,28 @@ public sealed class UncheckedRefCastInst(SilValue value, ClassType type) : SilIn
     public SilValue Value => Operands[0];
     public override SilType Type { get; } = type;
     public override string Opcode => "unchecked_ref_cast";
+}
+
+/// <summary>
+///     <c>upcast %0 : $Base</c>: an object seen as one of its superclasses.
+///     The result is borrowed from the operand; something that must own it
+///     copies it.
+/// </summary>
+public sealed class UpcastInst(SilValue value, ClassType type) : SilInstruction(value) {
+    public SilValue Value => Operands[0];
+    public override SilType Type { get; } = type;
+    public override string Opcode => "upcast";
+}
+
+/// <summary>
+///     <c>class_method %0, #describe : $(Node) -&gt; String</c>: the code of a
+///     method for the class the object actually is, from its vtable.
+/// </summary>
+public sealed class ClassMethodInst(SilValue reference, string method, FunctionType type) : SilInstruction(reference) {
+    public SilValue Reference => Operands[0];
+    public string Method { get; } = method;
+    public override SilType Type { get; } = type;
+    public override string Opcode => "class_method";
 }
 
 /// <summary><c>function_ref @f : $(Int) -&gt; Int</c>: a function as a value.</summary>
@@ -602,6 +731,9 @@ public sealed class SilBlock(SilFunction function) {
 /// <summary>A SIL function: a signature and blocks, the first of which is the entry.</summary>
 public sealed class SilFunction(string name, FunctionType type) {
     public string Name { get; } = name;
+
+    /// <summary>The module the function belongs to, once it is added to one.</summary>
+    public SilModule? Module { get; internal set; }
     public FunctionType Type { get; } = type;
     public List<SilBlock> Blocks { get; } = [];
 
@@ -673,7 +805,45 @@ public sealed class SilModule {
     public SilFunction Add(SilFunction function) {
         Functions.Add(function);
         _byName[function.Name] = function;
+        function.Module = this;
         return function;
+    }
+
+    Dictionary<SilType, bool>? _deinits;
+
+    /// <summary>
+    ///     True when destroying a value of the type may run a <c>deinit</c> —
+    ///     code of the program's own, which could write any storage. A class
+    ///     may if it, a subclass, or anything its fields hold has one; a
+    ///     closure, an existential or an <c>Object</c> may hold anything.
+    /// </summary>
+    public bool MayRunDeinit(SilType type) {
+        _deinits ??= [];
+        if (_deinits.TryGetValue(type, out var known)) {
+            return known;
+        }
+
+        // Assumed false while it is worked out, so that a type holding itself ends.
+        _deinits[type] = false;
+        var result = type switch {
+            _ when type.IsTrivial => false,
+            _ when type == SilType.String => false,
+            _ when type == SilType.Object => true,
+            ThickFunctionType => true,
+            ClassType classType => Types.OfType<ClassType>().Where(c => c.IsSubclassOf(classType))
+                .Any(c => c.Deinit is not null || c.Fields.Any(f => MayRunDeinit(f.Type))),
+            StructType structType => structType.Fields.Any(f => MayRunDeinit(f.Type)),
+            TupleType tuple => tuple.Elements.Any(MayRunDeinit),
+            EnumType enumType => enumType.Cases.Any(c => c.Payload is { } payload && MayRunDeinit(payload)),
+            ArrayType array => MayRunDeinit(array.Element),
+
+            // Releasing a weak or unowned reference may free memory, but runs no deinit.
+            WeakStorageType or UnownedStorageType => false,
+            _ => true,
+        };
+
+        _deinits[type] = result;
+        return result;
     }
 
     public override string ToString() => SilPrinter.Print(this);
@@ -705,7 +875,7 @@ public static class SilBuiltins {
 
     /// <summary>The names whose signature depends on the element type of the array they work on.</summary>
     public static readonly ImmutableArray<string> ArrayOperations =
-        ["array_empty", "array_count", "array_get", "array_append", "array_set", "array_remove_last", "array_clear"];
+        ["array_empty", "array_count", "array_get", "array_append", "array_set", "array_remove_last", "array_clear", "array_slice"];
 
     /// <summary>A builtin with fixed operand types, by name.</summary>
     public static Signature? Find(string name) => Table.GetValueOrDefault(name);
@@ -751,6 +921,10 @@ public static class SilBuiltins {
 
             case "array_clear" when Element(0, true) is not null:
                 return new([operands[0]], SilType.Unit);
+
+            // A copy of elements [from, to): an array of its own.
+            case "array_slice" when Element(0, false) is not null:
+                return new([operands[0], SilType.Int, SilType.Int], operands[0]);
 
             default:
                 return null;

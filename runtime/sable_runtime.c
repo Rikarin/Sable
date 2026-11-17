@@ -27,6 +27,8 @@ typedef struct SableMetadata {
     void (*destroy_element)(void *element);                       // null: nothing to do
 } SableMetadata;
 
+// The header of docs/06 §6.2: metadata, the strong count, and a word of
+// flags in its low byte with the unowned count above them.
 typedef struct SableObject {
     const SableMetadata *type;
     uint32_t strong;
@@ -36,18 +38,44 @@ typedef struct SableObject {
 enum {
     // Never counted, never freed: string literals live in read-only memory.
     SABLE_IMMORTAL = 1u,
+
+    // The last strong reference has gone and the deinit has run; unowned
+    // references still hold the memory.
+    SABLE_DEINITED = 2u,
+
+    // Weak references to it share an entry in the side table.
+    SABLE_HAS_SIDE = 4u,
+
+    SABLE_UNOWNED_ONE = 1u << 8,
 };
 
+static uint32_t unowned_count(const SableObject *object) {
+    return object->flags >> 8;
+}
+
 _Noreturn void sable_trap(const char *message);
+static void sable_weak_object_died(SableObject *object);
 
 static int64_t live_objects;
 
+// What ARC did: the counts the benchmarks track, and what the ARC passes are
+// measured by. Retains and releases count only those that touch a count —
+// not null, not immortal.
+static int64_t allocations, retains, releases;
+
 // With SABLE_CHECK_LEAKS set, a program that ends with objects still alive
-// says how many: tests run every program this way.
-__attribute__((destructor)) static void sable_report_leaks(void) {
+// says how many: tests run every program this way. With SABLE_STATS set, it
+// says what ARC did.
+__attribute__((destructor)) static void sable_report(void) {
     if (live_objects != 0 && getenv("SABLE_CHECK_LEAKS") != NULL) {
         fflush(stdout);
         fprintf(stderr, "sable: %lld object(s) leaked\n", (long long)live_objects);
+    }
+
+    if (getenv("SABLE_STATS") != NULL) {
+        fflush(stdout);
+        fprintf(stderr, "sable: allocations %lld, retains %lld, releases %lld\n",
+            (long long)allocations, (long long)retains, (long long)releases);
     }
 }
 
@@ -61,6 +89,7 @@ void *sable_alloc(const SableMetadata *type, int64_t size) {
     object->type = type;
     object->strong = 1;
     live_objects++;
+    allocations++;
     return object;
 }
 
@@ -68,6 +97,7 @@ void sable_retain(void *pointer) {
     SableObject *object = pointer;
     if (object != NULL && !(object->flags & SABLE_IMMORTAL)) {
         object->strong++;
+        retains++;
     }
 }
 
@@ -77,6 +107,7 @@ void sable_release(void *pointer) {
         return;
     }
 
+    releases++;
     if (--object->strong > 0) {
         return;
     }
@@ -91,8 +122,190 @@ void sable_release(void *pointer) {
         sable_trap("an object outlived its deinit");
     }
 
+    object->strong = 0;
+    object->flags |= SABLE_DEINITED;
+    if (object->flags & SABLE_HAS_SIDE) {
+        sable_weak_object_died(object);
+    }
+
+    // Unowned references hold the memory, not the object, until they go.
+    if (unowned_count(object) > 0) {
+        return;
+    }
+
     live_objects--;
     free(object);
+}
+
+// ---- Unowned references --------------------------------------------------
+
+void sable_unowned_retain(void *pointer) {
+    SableObject *object = pointer;
+    if (object != NULL && !(object->flags & SABLE_IMMORTAL)) {
+        object->flags += SABLE_UNOWNED_ONE;
+    }
+}
+
+void sable_unowned_release(void *pointer) {
+    SableObject *object = pointer;
+    if (object == NULL || (object->flags & SABLE_IMMORTAL)) {
+        return;
+    }
+
+    object->flags -= SABLE_UNOWNED_ONE;
+    if (unowned_count(object) == 0 && (object->flags & SABLE_DEINITED)) {
+        live_objects--;
+        free(object);
+    }
+}
+
+// Reading an unowned reference: the object, retained — or a trap, if it is gone.
+void sable_unowned_load(void *pointer) {
+    SableObject *object = pointer;
+    if (object->flags & SABLE_DEINITED) {
+        sable_trap("read an unowned reference to an object that is gone");
+    }
+
+    sable_retain(object);
+}
+
+// ---- Weak references -------------------------------------------------------
+
+// A weak reference points to its object's entry, not the object: the entry
+// outlives the object, and says it is gone. Entries are found by object in an
+// open-addressed table, which only objects with weak references are in.
+typedef struct SableWeakEntry {
+    SableObject *object;
+    int64_t count;
+} SableWeakEntry;
+
+static SableWeakEntry **side_table;
+static int64_t side_capacity, side_count;
+
+#define SIDE_TOMBSTONE ((SableWeakEntry *)1)
+
+static size_t side_slot(const SableObject *object) {
+    uintptr_t key = (uintptr_t)object;
+    key ^= key >> 33;
+    key *= 0xff51afd7ed558ccdULL;
+    key ^= key >> 33;
+    return (size_t)(key & (uintptr_t)(side_capacity - 1));
+}
+
+static SableWeakEntry **side_find(const SableObject *object) {
+    for (size_t i = side_slot(object);; i = (i + 1) & (size_t)(side_capacity - 1)) {
+        SableWeakEntry *entry = side_table[i];
+        if (entry == NULL) {
+            return NULL;
+        }
+
+        if (entry != SIDE_TOMBSTONE && entry->object == object) {
+            return &side_table[i];
+        }
+    }
+}
+
+static void side_insert(SableWeakEntry *entry);
+
+static void side_grow(void) {
+    SableWeakEntry **old = side_table;
+    int64_t old_capacity = side_capacity;
+    side_capacity = side_capacity == 0 ? 64 : side_capacity * 2;
+    side_table = calloc((size_t)side_capacity, sizeof *side_table);
+    side_count = 0;
+    for (int64_t i = 0; i < old_capacity; i++) {
+        if (old[i] != NULL && old[i] != SIDE_TOMBSTONE) {
+            side_insert(old[i]);
+        }
+    }
+
+    free(old);
+}
+
+static void side_insert(SableWeakEntry *entry) {
+    if ((side_count + 1) * 2 > side_capacity) {
+        side_grow();
+    }
+
+    size_t i = side_slot(entry->object);
+    while (side_table[i] != NULL && side_table[i] != SIDE_TOMBSTONE) {
+        i = (i + 1) & (size_t)(side_capacity - 1);
+    }
+
+    side_table[i] = entry;
+    side_count++;
+}
+
+static void side_remove(const SableObject *object) {
+    SableWeakEntry **slot = side_find(object);
+    if (slot != NULL) {
+        *slot = SIDE_TOMBSTONE;
+    }
+}
+
+// The entry for an object, retained: made, and the object marked, the first time.
+void *sable_weak_entry(void *pointer) {
+    SableObject *object = pointer;
+    if (object == NULL) {
+        return NULL;
+    }
+
+    SableWeakEntry *entry;
+    if (object->flags & SABLE_HAS_SIDE) {
+        entry = *side_find(object);
+    } else {
+        entry = malloc(sizeof *entry);
+        entry->object = object;
+        entry->count = 0;
+        side_insert(entry);
+        object->flags |= SABLE_HAS_SIDE;
+    }
+
+    entry->count++;
+    return entry;
+}
+
+void sable_weak_retain(void *pointer) {
+    SableWeakEntry *entry = pointer;
+    if (entry != NULL) {
+        entry->count++;
+    }
+}
+
+void sable_weak_release(void *pointer) {
+    SableWeakEntry *entry = pointer;
+    if (entry == NULL || --entry->count > 0) {
+        return;
+    }
+
+    if (entry->object != NULL) {
+        side_remove(entry->object);
+        entry->object->flags &= ~(uint32_t)SABLE_HAS_SIDE;
+    }
+
+    free(entry);
+}
+
+// Reading a weak reference: its object, retained, or null once it is gone.
+void *sable_weak_load(void *pointer) {
+    SableWeakEntry *entry = pointer;
+    if (entry == NULL || entry->object == NULL) {
+        return NULL;
+    }
+
+    sable_retain(entry->object);
+    return entry->object;
+}
+
+// The object has died: its weak references now read as none.
+static void sable_weak_object_died(SableObject *object) {
+    SableWeakEntry **slot = side_find(object);
+    if (slot != NULL) {
+        (*slot)->object = NULL;
+        *slot = SIDE_TOMBSTONE;
+    }
+
+    object->flags &= ~(uint32_t)SABLE_HAS_SIDE;
 }
 
 // ---- Stopping and writing -------------------------------------------
@@ -547,6 +760,34 @@ void *sable_array_remove_last(SableArray **slot, const SableMetadata *type) {
 
     SableArray *array = unique(slot, type, 0);
     return array->elements + --array->count * type->element_size;
+}
+
+// A copy of elements [from, to): a buffer of its own, each element copied.
+SableArray *sable_array_slice(const SableArray *array, int64_t from, int64_t to, const SableMetadata *type) {
+    int64_t count = sable_array_count(array);
+    if (from < 0 || to > count || from > to) {
+        sable_trap("array slice out of range");
+    }
+
+    if (from == to) {
+        return NULL;
+    }
+
+    int64_t size = type->element_size;
+    SableArray *copy = sable_alloc(type, (int64_t)sizeof(SableArray));
+    copy->capacity = to - from;
+    copy->count = to - from;
+    copy->elements = malloc((size_t)(copy->capacity * size));
+    for (int64_t i = 0; i < copy->count; i++) {
+        const char *source = array->elements + (from + i) * size;
+        if (type->copy_element != NULL) {
+            type->copy_element(copy->elements + i * size, source);
+        } else {
+            memcpy(copy->elements + i * size, source, (size_t)size);
+        }
+    }
+
+    return copy;
 }
 
 static void copy_string_element(void *destination, const void *source) {

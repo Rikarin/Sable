@@ -323,8 +323,10 @@ Order matters; each of these is a self-contained lowering:
 
 ### 2.5 Exit criteria
 
-- [ ] Hello world links and runs on macOS arm64 and Linux x64 — macOS arm64
-      done (`sable build hello.sab && ./hello`); Linux x64 not yet tried
+- [x] Hello world links and runs on macOS arm64 and Linux x64 — and so does
+      every native test, the JSON exit program included: on Linux x64 in a
+      container (`tools/linux/test.sh`, Ubuntu clang 21), each builds, runs
+      and agrees with the interpreter
 - [x] A 2,000-line program (JSON parser + pretty printer) compiles and passes
       its tests — `tests/programs/json.sab`, 2,100 lines: strict RFC 8259
       parsing with line/column errors and opt-in comments, trailing commas,
@@ -334,9 +336,11 @@ Order matters; each of these is a self-contained lowering:
       and in the interpreter, which agree, with nothing leaked
 - [ ] SIL verifier is clean on the corpus — clean on everything that lowers,
       before and after the passes, ownership included (every owned value
-      consumed exactly once on every path); 196 of the corpus's 345 function
-      declarations lower so far, the rest waiting on dictionaries, slices,
-      existentials, class inheritance and async
+      consumed exactly once on every path); 240 of the corpus's 345 function
+      declarations lower so far — dictionaries, slices, existentials, class
+      inheritance and computed properties now among them — the rest waiting
+      on the integer types other than Int, recursive generic unions, mutating
+      requirements through existentials, and async (Phase 5)
 - [x] `lldb` shows correct frames, locals and types — on macOS, checked by a
       test that drives lldb: `gcd(a=1071, b=462)`, `(Int) t = 147`,
       `(Debug.Point) p = (x = 1071, y = 462)`
@@ -361,6 +365,32 @@ This is the highest-risk phase. Everything before it is well-trodden.
 4. `@guaranteed` calling convention for `self` and borrowed parameters.
 5. `weak` via a side table; `unowned` via a second count in the header.
 6. `deinit` ordering, `@immortal` fast path, atomic/non-atomic selection.
+
+Status:
+- [x] 1, 2 — from Phase 2: the lowering's explicit ownership and the
+      verifier's consumed-once rule, which every pass is held to.
+- [x] 3 — `ForwardCopies` and `BorrowLoads` (`src/Sable.SIL/ArcPasses.cs`):
+      copies only ever borrowed, or outliving their source, are removed; a
+      `load [copy]` only ever borrowed becomes `load_borrow`/`end_borrow`,
+      across a branch on it too, where nothing on the way may write the
+      storage — a slot by anything given its address, other storage by a
+      call or a release that could run a deinit (`SilModule.MayRunDeinit`).
+      The verifier checks a slot is not written while it is borrowed.
+- [x] 4 — parameters are guaranteed; an initialiser's are `@owned`, so a
+      caller's temporary is handed over rather than copied in, and the one
+      copy an initialiser stores is forwarded into the parameter.
+- [x] 5 — `weak var x: C?` and `unowned var x: C` on class fields:
+      `@sil_weak`/`@sil_unowned` storage, `load_weak`/`store_weak`,
+      `load_unowned`/`store_unowned`; weak references share a side-table
+      entry per object, cleared when it dies; unowned ones count in the
+      header's flags word, holding the memory, not the object, and trap on
+      a read once it is gone. Not yet: in structs, or in capture lists.
+- [ ] 6 — deinit ordering (subclass first, fields last to first) and the
+      immortal fast path are done; atomic counts wait for threads.
+
+Measured by `tools/bench/run.py` (`benchmarks/history.tsv`): against naive
+insertion, retains fall by 75% (binary trees), 92% (sort), 77% (shapes),
+71% (JSON), 49% (words) and 100% (n-body), and time by 7–44%.
 
 ### 3.2 Move checking (~3 weeks)
 
@@ -429,7 +459,11 @@ summaries as 3.3.
 
 ### 3.8 Exit criteria
 
-- [ ] A benchmark suite exists and is tracked per-commit
+- [x] A benchmark suite exists and is tracked per-commit — `benchmarks/`
+      (binary trees, n-body, shapes, sort, words, and the JSON exit
+      program), run by `tools/bench/run.py --record`, which appends time,
+      allocations, retains and releases per commit to
+      `benchmarks/history.tsv`
 - [ ] ARC overhead on the suite < 5% vs a manually-managed equivalent
 - [ ] Root inference rejects no program in the corpus that should compile
 - [ ] `@inline_layout` reproduces the Goose order-record result: a nested

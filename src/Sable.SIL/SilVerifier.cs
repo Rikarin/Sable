@@ -197,6 +197,27 @@ public static class SilVerifier {
             case LoadInst load when load.Address.Type is not AddressType:
                 return $"load needs an address, not {load.Address.Type}";
 
+            case LoadWeakInst weak when weak.Address.Type is not AddressType { Pointee: WeakStorageType }:
+                return "load_weak needs the address of weak storage";
+
+            case LoadUnownedInst unowned when unowned.Address.Type is not AddressType { Pointee: UnownedStorageType }:
+                return "load_unowned needs the address of unowned storage";
+
+            case StoreWeakInst weak when weak.Address.Type is not AddressType { Pointee: WeakStorageType storage } || storage.Optional != weak.Value.Type:
+                return $"store_weak of {weak.Value.Type} to {weak.Address.Type}";
+
+            case StoreUnownedInst unowned when unowned.Address.Type is not AddressType { Pointee: UnownedStorageType storage } || storage.Referent != unowned.Value.Type:
+                return $"store_unowned of {unowned.Value.Type} to {unowned.Address.Type}";
+
+            case LoadInst { Type: WeakStorageType or UnownedStorageType }:
+                return "weak and unowned storage is read with load_weak and load_unowned";
+
+            case LoadBorrowInst borrow when borrow.Address.Type is not AddressType || borrow.Type.IsTrivial:
+                return "load_borrow needs the address of a non-trivial value; a trivial one is loaded [trivial]";
+
+            case EndBorrowInst end when end.Borrowed is not LoadBorrowInst:
+                return "end_borrow ends a load_borrow";
+
             case LoadInst load when (load.Kind == LoadKind.Trivial) != load.Type.IsTrivial:
                 return load.Kind == LoadKind.Trivial
                     ? $"load [trivial] of {load.Type}, which is not trivial; it needs [copy] or [take]"
@@ -308,6 +329,16 @@ public static class SilVerifier {
 
                 return partial.Context is null or { Type: ClassType } ? null : $"a closure's context is an object, not {partial.Context.Type}";
             }
+
+            case UpcastInst upcast when upcast.Value.Type is not ClassType from || !from.IsSubclassOf((ClassType)upcast.Type):
+                return $"upcast of {upcast.Value.Type} to {upcast.Type}, which it does not inherit from";
+
+            case ClassMethodInst method:
+                if (method.Reference.Type is not ClassType owner) {
+                    return $"class_method needs an object, not {method.Reference.Type}";
+                }
+
+                return owner.MethodIndex(method.Method) < 0 ? $"{owner.Name} has no method #{method.Method} in its vtable" : null;
 
             case UncheckedRefCastInst cast when cast.Value.Type != SilType.Object:
                 return $"unchecked_ref_cast is from an Object, not {cast.Value.Type}";
@@ -462,8 +493,11 @@ public static class SilVerifier {
     public static Ownership OwnershipOf(SilValue value) =>
         value switch {
             _ when value.Type.IsTrivial => Ownership.Trivial,
-            SilArgument argument when argument.Block == argument.Block.Function.Entry || argument.IsGuaranteed => Ownership.Guaranteed,
-            StructExtractInst or TupleExtractInst or UncheckedRefCastInst => Ownership.Guaranteed,
+            // A parameter is borrowed for the call, unless the function owns it.
+            SilArgument argument when argument.Block == argument.Block.Function.Entry =>
+                argument.Block.Function.Type.IsOwned(argument.Block.Arguments.IndexOf(argument)) ? Ownership.Owned : Ownership.Guaranteed,
+            SilArgument { IsGuaranteed: true } => Ownership.Guaranteed,
+            StructExtractInst or TupleExtractInst or UncheckedRefCastInst or UpcastInst or LoadBorrowInst => Ownership.Guaranteed,
             _ => Ownership.Owned,
         };
 
@@ -486,6 +520,10 @@ public static class SilVerifier {
             case BuiltinInst builtin:
                 return SilBuiltins.Resolve(builtin.Name, [..builtin.Operands.Select(static o => o.Type)], builtin.Type)?.Consumed ?? [];
 
+            // An argument for an owned parameter is handed over.
+            case ApplyInst or TryApplyInst when Signature(instruction.Operands[0].Type) is { Owned.IsEmpty: false } callee:
+                return Enumerable.Range(0, callee.Parameters.Length).Where(callee.IsOwned).Select(static i => i + 1);
+
             default:
                 return [];
         }
@@ -505,9 +543,12 @@ public static class SilVerifier {
         // What each borrowed value, and each address into an object, borrows
         // from: an owned value, or null for a parameter, which outlives the call.
         var roots = new Dictionary<SilValue, SilValue?>();
+        // A load_borrow is its own root, and is tracked like an owned value:
+        // live until its end_borrow, which every path must reach.
         SilValue? RootOf(SilValue value) =>
             OwnershipOf(value) switch {
                 Ownership.Owned => value,
+                _ when value is LoadBorrowInst => value,
                 _ => roots.GetValueOrDefault(value),
             };
 
@@ -579,6 +620,7 @@ public static class SilVerifier {
                 switch (instruction) {
                     case StructExtractInst or TupleExtractInst when !instruction.Type.IsTrivial:
                     case UncheckedRefCastInst:
+                    case UpcastInst:
                     case RefElementAddrInst or StructElementAddrInst or TupleElementAddrInst when Tracked(instruction.Operands[0]):
                         roots[instruction] = RootOf(instruction.Operands[0]);
                         break;
@@ -605,6 +647,18 @@ public static class SilVerifier {
                     continue;
                 }
 
+                // Nothing writes storage while a borrow of it is live.
+                if (WrittenSlot(instruction) is { } written
+                    && live.OfType<LoadBorrowInst>().FirstOrDefault(b => ReferenceEquals(SlotOf(b.Address), written)) is { } borrowed) {
+                    error(block, $"'{instruction.Opcode}' writes storage that {Describe(borrowed)} borrows");
+                    return;
+                }
+
+                if (instruction is EndBorrowInst { Borrowed: var ended }) {
+                    live.Remove(ended);
+                    continue;
+                }
+
                 foreach (var index in Consumed(instruction).Distinct()) {
                     var operand = instruction.Operands[index];
                     if (operand.Type.IsTrivial) {
@@ -625,7 +679,7 @@ public static class SilVerifier {
                     return;
                 }
 
-                if (instruction.HasResult && OwnershipOf(instruction) == Ownership.Owned) {
+                if (instruction.HasResult && (OwnershipOf(instruction) == Ownership.Owned || instruction is LoadBorrowInst)) {
                     live.Add(instruction);
                 }
 
@@ -658,6 +712,30 @@ public static class SilVerifier {
             }
         }
     }
+
+    /// <summary>The stack slot an address is in, through the fields and elements it reaches; null for any other storage.</summary>
+    static AllocStackInst? SlotOf(SilValue address) =>
+        address switch {
+            AllocStackInst slot => slot,
+            StructElementAddrInst element => SlotOf(element.Address),
+            TupleElementAddrInst element => SlotOf(element.Address),
+            _ => null,
+        };
+
+    /// <summary>The stack slot an instruction may write, if it writes one.</summary>
+    static AllocStackInst? WrittenSlot(SilInstruction instruction) =>
+        instruction switch {
+            StoreInst store => SlotOf(store.Address),
+            StoreWeakInst weak => SlotOf(weak.Address),
+            StoreUnownedInst unowned => SlotOf(unowned.Address),
+            DestroyAddrInst destroy => SlotOf(destroy.Address),
+            LoadInst { Kind: LoadKind.Take } take => SlotOf(take.Address),
+            BuiltinInst or ApplyInst or TryApplyInst => instruction.Operands
+                .Where(static o => o.Type is AddressType)
+                .Select(SlotOf)
+                .FirstOrDefault(static s => s is not null),
+            _ => null,
+        };
 
     static HashSet<SilValue>? Consume(
         HashSet<SilValue> live,

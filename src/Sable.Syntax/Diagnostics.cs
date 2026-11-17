@@ -129,6 +129,8 @@ public enum ErrorCode {
     ERR_InfiniteSize = 3052,
     ERR_DuplicateConformance = 3053,
     ERR_ErrorTypeDoesNotFit = 3054,
+    ERR_WeakNeedsOptionalClass = 3055,
+    ERR_UnownedNeedsClass = 3056,
     ERR_NotSupportedYet = 3099,
 
     // ---- Patterns and flow (S6000-S6999) ---------------------------------

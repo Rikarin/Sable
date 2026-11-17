@@ -337,13 +337,23 @@ public sealed class IncrementalTests {
 
         var perEdit = watch.Elapsed.TotalMilliseconds / iterations;
 
+        // A full reparse of the same file, on the same machine under the same
+        // load, is what an incremental edit is measured against.
+        var full = Stopwatch.StartNew();
+        for (var i = 0; i < 3; i++) {
+            SyntaxTree.Parse(source);
+        }
+
+        var perParse = full.Elapsed.TotalMilliseconds / 3;
+
         // The plan's exit criterion is 2 ms, and this measures 0.9-1.8 ms on a
-        // development machine. The bound is loose enough to survive a loaded
-        // CI machine but tight enough to catch a regression back to full
-        // reparsing, which takes about 30 ms.
+        // development machine, against about 30 ms to reparse. Either bound
+        // catches a regression back to full reparsing: the absolute one on an
+        // ordinary machine, the relative one on a loaded or emulated one,
+        // where every number is slower alike.
         Assert.True(
-            perEdit < 6.0,
-            $"incremental reparse took {perEdit:F2} ms per edit for {source.LineCount:N0} lines"
+            perEdit < 6.0 || perEdit * 5 < perParse,
+            $"incremental reparse took {perEdit:F2} ms per edit, a full parse {perParse:F2} ms, for {source.LineCount:N0} lines"
         );
     }
 

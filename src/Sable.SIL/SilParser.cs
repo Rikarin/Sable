@@ -288,6 +288,11 @@ public sealed class SilParser {
 
     void ParseClass() {
         var type = (ClassType)_module.FindType(Expect(TokenKind.Word, "a class name").Text)!;
+        if (Accept(":")) {
+            type.Superclass = _module.FindType(Expect(TokenKind.Word, "a superclass").Text) as ClassType
+                ?? throw Error("a class's superclass must be a class");
+        }
+
         Expect("{");
         if (!At("}")) {
             do {
@@ -298,6 +303,19 @@ public sealed class SilParser {
         }
 
         Expect("}");
+        if (Accept("vtable")) {
+            Expect("{");
+            if (!At("}")) {
+                do {
+                    var method = Expect(TokenKind.Word, "a method name").Text;
+                    Expect(":");
+                    type.VTable.Add((method, Expect(TokenKind.Global, "a function").Text));
+                } while (Accept(","));
+            }
+
+            Expect("}");
+        }
+
         if (Accept("deinit")) {
             type.Deinit = Expect(TokenKind.Global, "the deinit function").Text;
         }
@@ -435,6 +453,20 @@ public sealed class SilParser {
     }
 
     SilType ParseTypeBody() {
+        if (Current is { Kind: TokenKind.Global, Text: "sil_weak" }) {
+            Next();
+            return ParseTypeBody() is EnumType optional
+                ? new WeakStorageType(optional)
+                : throw Error("@sil_weak needs an optional of a class");
+        }
+
+        if (Current is { Kind: TokenKind.Global, Text: "sil_unowned" }) {
+            Next();
+            return ParseTypeBody() is ClassType referent
+                ? new UnownedStorageType(referent)
+                : throw Error("@sil_unowned needs a class");
+        }
+
         if (Current is { Kind: TokenKind.Global, Text: "thick" }) {
             Next();
             return ParseTypeBody() is FunctionType signature
@@ -454,8 +486,15 @@ public sealed class SilParser {
 
         if (Accept("(")) {
             var parts = ImmutableArray.CreateBuilder<SilType>();
+            var owned = ImmutableArray.CreateBuilder<bool>();
             if (!At(")")) {
                 do {
+                    var isOwned = Current is { Kind: TokenKind.Global, Text: "owned" };
+                    if (isOwned) {
+                        Next();
+                    }
+
+                    owned.Add(isOwned);
                     parts.Add(ParseTypeBody());
                 } while (Accept(","));
             }
@@ -470,11 +509,11 @@ public sealed class SilParser {
             }
 
             if (Accept("->")) {
-                return new FunctionType(parts.ToImmutable(), ParseTypeBody(), thrown);
+                return new FunctionType(parts.ToImmutable(), ParseTypeBody(), thrown, owned.ToImmutable());
             }
 
-            if (thrown is not null) {
-                throw Error("'throws' belongs to a function type");
+            if (thrown is not null || owned.Contains(true)) {
+                throw Error("'throws' and '@owned' belong to a function type");
             }
 
             // A parenthesised list is a tuple; the empty one is ().
@@ -728,6 +767,24 @@ public sealed class SilParser {
                 break;
             }
 
+            case "upcast": {
+                var value = Operand(0);
+                Expect(":");
+                instruction = new UpcastInst(value, ParseType() as ClassType
+                    ?? throw new SilParseException("upcast gives a class reference", line));
+                break;
+            }
+
+            case "class_method": {
+                var reference = Operand(0);
+                Expect(",");
+                var method = Expect(TokenKind.Member, "a method").Text;
+                Expect(":");
+                instruction = new ClassMethodInst(reference, method, ParseType() as FunctionType
+                    ?? throw new SilParseException("class_method gives a function", line));
+                break;
+            }
+
             case "unchecked_ref_cast": {
                 var value = Operand(0);
                 Expect(":");
@@ -735,6 +792,29 @@ public sealed class SilParser {
                     ?? throw new SilParseException("unchecked_ref_cast gives a class reference", line));
                 break;
             }
+
+            case "load_weak":
+                instruction = new LoadWeakInst(Defined(Operand(0), opcode, line));
+                break;
+
+            case "load_unowned":
+                instruction = new LoadUnownedInst(Defined(Operand(0), opcode, line));
+                break;
+
+            case "store_weak" or "store_unowned": {
+                var value = Operand(0);
+                Expect("to");
+                instruction = opcode == "store_weak" ? new StoreWeakInst(value, Operand(1)) : new StoreUnownedInst(value, Operand(1));
+                break;
+            }
+
+            case "load_borrow":
+                instruction = new LoadBorrowInst(Defined(Operand(0), opcode, line));
+                break;
+
+            case "end_borrow":
+                instruction = new EndBorrowInst(Operand(0));
+                break;
 
             case "copy_value":
                 instruction = new CopyValueInst(Defined(Operand(0), opcode, line));

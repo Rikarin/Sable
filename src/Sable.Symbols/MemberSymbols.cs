@@ -241,6 +241,18 @@ public enum ParameterModifier {
 }
 
 /// <summary>A stored or computed member, or a module-level binding.</summary>
+/// <summary>How a stored reference holds its object.</summary>
+public enum ReferenceKind {
+    /// <summary>It keeps the object alive.</summary>
+    Strong,
+
+    /// <summary><c>weak</c>: it does not, and reads as none once the object is gone.</summary>
+    Weak,
+
+    /// <summary><c>unowned</c>: it does not, and reading it once the object is gone traps.</summary>
+    Unowned,
+}
+
 public sealed class FieldSymbol(
     string name,
     Symbol container,
@@ -261,6 +273,9 @@ public sealed class FieldSymbol(
 
     public bool IsStatic { get; internal set; }
     public bool IsLazy { get; internal set; }
+
+    /// <summary>How a field of a class type holds its object (docs/02 §2.2): strongly, unless declared otherwise.</summary>
+    public ReferenceKind ReferenceKind { get; internal set; }
 
     /// <summary>True when the member has accessors rather than storage.</summary>
     public bool IsComputed { get; internal set; }

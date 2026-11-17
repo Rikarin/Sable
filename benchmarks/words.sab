@@ -1,0 +1,68 @@
+module Words
+
+// Text work: building a corpus with interpolation, splitting it into words,
+// counting them in a dictionary, and ranking them with a sort that takes a
+// closure. Strings, dictionaries, arrays and closures, each copied and
+// released many times.
+
+fn corpus(_ lines: Int) -> String[>..] {
+    let words: String[>..] = ["alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta", "iota", "kappa"]
+    var result: String[>..] = []
+    var i = 0
+    while i < lines {
+        let a = words[i % 10]
+        let b = words[(i * 7 + 3) % 10]
+        let c = words[(i * 13 + 5) % 10]
+        result.append("\(a) \(b) \(c) \(a)")
+        i = i + 1
+    }
+    return result
+}
+
+struct Count {
+    var word: String
+    var count: Int
+}
+
+fn ranked(_ items: Count[>..], _ before: (Count, Count) -> Bool) -> Count[>..] {
+    var sorted = items
+    var i = 1
+    while i < sorted.count {
+        var j = i
+        while j > 0 && before(sorted[j], sorted[j - 1]) {
+            let held = sorted[j]
+            sorted[j] = sorted[j - 1]
+            sorted[j - 1] = held
+            j = j - 1
+        }
+        i = i + 1
+    }
+    return sorted
+}
+
+@main
+fn main() {
+    var counts: [String: Int] = [:]
+    var seen: String[>..] = []
+    var round = 0
+    while round < 20 {
+        for line in corpus(5000) {
+            for word in line.split(' ') {
+                if counts[word] == none {
+                    seen.append(word)
+                }
+                counts[word] = (counts[word] ?? 0) + 1
+            }
+        }
+        round = round + 1
+    }
+
+    var items: Count[>..] = []
+    for word in seen {
+        items.append(Count { word: word, count: counts[word] ?? 0 })
+    }
+
+    for item in ranked(items, (a: Count, b: Count) => a.count > b.count) {
+        print("\(item.word) \(item.count)")
+    }
+}

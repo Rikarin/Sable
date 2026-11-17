@@ -16,7 +16,11 @@ public sealed class SilPassException(string message) : Exception(message);
 /// </summary>
 public static class SilPassManager {
     /// <summary>The passes a build runs, in order.</summary>
-    public static IReadOnlyList<ISilPass> Default { get; } = [new PromoteSlots()];
+    /// <remarks>
+    ///     Copies are forwarded before loads are borrowed and after: each
+    ///     uncovers more of the other.
+    /// </remarks>
+    public static IReadOnlyList<ISilPass> Default { get; } = [new PromoteSlots(), new ForwardCopies(), new BorrowLoads(), new ForwardCopies()];
 
     public static void Run(SilModule module, IEnumerable<ISilPass> passes) {
         foreach (var pass in passes) {

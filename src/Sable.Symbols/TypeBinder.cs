@@ -27,6 +27,20 @@ internal sealed class TypeBinder(Compilation compilation) {
 
     public IReadOnlyList<Diagnostic> Diagnostics => _diagnostics.ToList();
 
+    /// <summary>
+    ///     What each type name written in the source resolved to, by syntax:
+    ///     the semantic model's answer for a name in a type's place.
+    /// </summary>
+    readonly Dictionary<SyntaxNode, Symbol> _names = [];
+
+    /// <summary>The symbol a written type name resolved to, if it has been bound.</summary>
+    internal Symbol? ResolvedName(SyntaxNode name) => _names.GetValueOrDefault(name);
+
+    T Resolved<T>(SyntaxNode name, Symbol symbol, T type) where T : TypeSymbol {
+        _names[name] = symbol;
+        return type;
+    }
+
     int _forced;
     int _forcedLate;
 
@@ -613,7 +627,7 @@ internal sealed class TypeBinder(Compilation compilation) {
             );
         }
 
-        return ApplyTypeArguments(found, syntax.TypeArgumentList, context, scope, syntax.Span);
+        return Resolved(syntax, found, ApplyTypeArguments(found, syntax.TypeArgumentList, context, scope, syntax.Span));
     }
 
     TypeSymbol BindQualifiedName(
@@ -633,7 +647,7 @@ internal sealed class TypeBinder(Compilation compilation) {
                 );
             }
 
-            return ApplyTypeArguments(member, syntax.Right.TypeArgumentList, context, scope, syntax.Span);
+            return Resolved(syntax.Right, member, ApplyTypeArguments(member, syntax.Right.TypeArgumentList, context, scope, syntax.Span));
         }
 
         // Otherwise the left side names a type, and the right a nested one.
@@ -681,7 +695,7 @@ internal sealed class TypeBinder(Compilation compilation) {
             );
         }
 
-        return ApplyTypeArguments(nested, syntax.Right.TypeArgumentList, context, scope, syntax.Span);
+        return Resolved(syntax.Right, nested, ApplyTypeArguments(nested, syntax.Right.TypeArgumentList, context, scope, syntax.Span));
     }
 
     /// <summary>
@@ -692,7 +706,7 @@ internal sealed class TypeBinder(Compilation compilation) {
         var symbol = Lookup(syntax.Identifier.Text, context, scope, syntax.Identifier.Span);
         return symbol is null
             ? ErrorTypeSymbol.Instance
-            : ApplyTypeArguments(symbol, syntax.TypeArgumentList, context, scope, syntax.Span);
+            : Resolved(syntax, symbol, ApplyTypeArguments(symbol, syntax.TypeArgumentList, context, scope, syntax.Span));
     }
 
     TypeSymbol ApplyTypeArguments(

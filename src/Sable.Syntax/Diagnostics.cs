@@ -96,6 +96,9 @@ public enum ErrorCode
     ERR_CircularInheritance = 3026,
     ERR_RequirementSignatureMismatch = 3027,
     ERR_MissingFieldInitializer = 3028,
+    ERR_ExtensionStoredProperty = 3029,
+    ERR_ExtensionInitializer = 3030,
+    ERR_CannotExtend = 3031,
     ERR_NotSupportedYet = 3099,
 
     // ---- Patterns and flow (S6000-S6999) ---------------------------------

@@ -101,3 +101,7 @@ public fn sumLengths(_ points: Vec2[]) -> F64 {
 
     return total
 }
+
+public fn memberwise() -> Vec2 {
+    return Vec2(x: 1.0, y: 2.0)
+}

@@ -43,11 +43,45 @@ internal sealed class Conversions(CoreTypes core)
             }
         }
 
-        if (target is ExistentialTypeSymbol) return ConversionKind.Existential;
+        // 'any P' and 'some P' accept whatever conforms to P.
+        if (target is ExistentialTypeSymbol existential)
+        {
+            return Satisfies(source, existential.Constraint)
+                ? ConversionKind.Existential
+                : null;
+        }
+
+        if (target is OpaqueTypeSymbol opaque)
+            return Satisfies(source, opaque.Constraint) ? ConversionKind.Existential : null;
+
+        if (target is CompositionTypeSymbol && Satisfies(source, target))
+            return ConversionKind.Existential;
 
         if (IsDerivedFrom(source, target)) return ConversionKind.Upcast;
 
         return null;
+    }
+
+    /// <summary>True when a type meets a constraint: a protocol, a class, or several.</summary>
+    public static bool Satisfies(TypeSymbol source, TypeSymbol constraint)
+    {
+        if (constraint.IsError || source.IsError) return true;
+
+        if (constraint is CompositionTypeSymbol composition)
+            return composition.Parts.All(part => Satisfies(source, part));
+
+        // A type parameter stands for a type nothing is known about yet.
+        if (constraint is TypeParameterSymbol || source is TypeParameterSymbol) return true;
+
+        if (source.Equals(constraint)) return true;
+
+        if (source is OpaqueTypeSymbol sourceOpaque)
+            return Satisfies(sourceOpaque.Constraint, constraint);
+
+        if (source is ExistentialTypeSymbol sourceExistential)
+            return Satisfies(sourceExistential.Constraint, constraint);
+
+        return IsDerivedFrom(source, constraint);
     }
 
     public bool HasImplicitConversion(

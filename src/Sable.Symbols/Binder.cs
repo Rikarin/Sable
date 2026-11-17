@@ -765,23 +765,84 @@ public sealed class Binder
         if (receiverType is TupleTypeSymbol tuple)
             return BindTupleElementAccess(syntax, receiver, tuple, name);
 
-        if (receiverType is not NamedTypeSymbol owner)
+        if (LookupMember(receiverType, name) is not { } found)
         {
             _diagnostics.Error(ErrorCode.ERR_NameNotFound, syntax.Name.Span,
                 $"'{receiverType.ToDisplayString()}' has no member named '{name}'");
             return new BoundError(syntax, receiver);
         }
 
-        var members = owner.GetMembers(name).ToList();
-        if (members.Count == 0)
-        {
-            _diagnostics.Error(ErrorCode.ERR_NameNotFound, syntax.Name.Span,
-                $"'{owner.ToDisplayString()}' has no member named '{name}'");
-            return new BoundError(syntax, receiver);
-        }
-
         return BindMemberGroup(
-            syntax, receiver, members, owner, TypeSubstitution.For(owner));
+            syntax, receiver, found.Members, found.Owner, found.Substitution);
+    }
+
+    /// <summary>What a member lookup found, and what it has to be read through.</summary>
+    private readonly record struct MemberLookup(
+        IReadOnlyList<Symbol> Members, NamedTypeSymbol Owner, TypeSubstitution Substitution);
+
+    /// <summary>
+    /// Finds a named member on a type, reaching through everything that can
+    /// stand in for one.
+    /// </summary>
+    /// <remarks>
+    /// A class inherits its base's members; a type parameter has the members
+    /// of everything it is constrained to; <c>some P</c> and <c>any P</c> have
+    /// P's; and a composition has all of its parts'. Each step composes its
+    /// substitution, so a member of <c>Base&lt;Int&gt;</c> reached through
+    /// <c>Derived : Base&lt;Int&gt;</c> still reports Int.
+    /// </remarks>
+    private MemberLookup? LookupMember(TypeSymbol type, string name)
+    {
+        var visited = new HashSet<TypeSymbol>();
+        return LookupMemberCore(type, name, TypeSubstitution.Empty, visited);
+    }
+
+    private MemberLookup? LookupMemberCore(
+        TypeSymbol type, string name, TypeSubstitution outer, HashSet<TypeSymbol> visited)
+    {
+        if (!visited.Add(type)) return null;
+
+        switch (type)
+        {
+            case NamedTypeSymbol named:
+            {
+                var substitution = Combine(outer, TypeSubstitution.For(named));
+
+                var members = named.GetMembers(name).ToList();
+                if (members.Count > 0) return new MemberLookup(members, named, substitution);
+
+                foreach (var baseType in named.BaseTypes)
+                {
+                    if (LookupMemberCore(baseType, name, substitution, visited) is { } inherited)
+                        return inherited;
+                }
+                return null;
+            }
+
+            case TypeParameterSymbol parameter:
+                foreach (var constraint in parameter.Constraints)
+                {
+                    if (LookupMemberCore(constraint, name, outer, visited) is { } found)
+                        return found;
+                }
+                return null;
+
+            case OpaqueTypeSymbol opaque:
+                return LookupMemberCore(opaque.Constraint, name, outer, visited);
+
+            case ExistentialTypeSymbol existential:
+                return LookupMemberCore(existential.Constraint, name, outer, visited);
+
+            case CompositionTypeSymbol composition:
+                foreach (var part in composition.Parts)
+                {
+                    if (LookupMemberCore(part, name, outer, visited) is { } found) return found;
+                }
+                return null;
+
+            default:
+                return null;
+        }
     }
 
     private BoundExpression BindTupleElementAccess(

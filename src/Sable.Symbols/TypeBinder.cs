@@ -20,20 +20,34 @@ internal sealed class TypeBinder(Compilation compilation)
 {
     private readonly DiagnosticBag _diagnostics = new();
     private readonly List<Action> _forcers = [];
+    private readonly List<Action> _late = [];
 
     public IReadOnlyList<Diagnostic> Diagnostics => _diagnostics.ToList();
 
     private int _forced;
+    private int _forcedLate;
 
     /// <summary>Binds every deferred signature, so diagnostics are complete.</summary>
+    /// <remarks>
+    /// Two queues, not one. Signatures come first, and the checks that compare
+    /// whole types — conformance above all — come after every signature is
+    /// bound, including the ones an extension declared somewhere else. Binding
+    /// one signature can add more work, so both are drained by index, and the
+    /// cursors persist so a second call does not repeat the diagnostics.
+    /// </remarks>
     public void ForceAll()
     {
-        // Binding one signature can add more work, so drain by index; and the
-        // cursor persists, so a second call does not repeat the diagnostics.
-        while (_forced < _forcers.Count) _forcers[_forced++]();
+        while (_forced < _forcers.Count || _forcedLate < _late.Count)
+        {
+            while (_forced < _forcers.Count) _forcers[_forced++]();
+            if (_forcedLate < _late.Count) _late[_forcedLate++]();
+        }
     }
 
-    private void Defer(Action force) => _forcers.Add(force);
+    internal void Defer(Action force) => _forcers.Add(force);
+
+    /// <summary>Defers work that must see every signature, not just this one's.</summary>
+    internal void DeferLate(Action force) => _late.Add(force);
 
     // -----------------------------------------------------------------------
     // Signature binding
@@ -132,8 +146,9 @@ internal sealed class TypeBinder(Compilation compilation)
         });
 
         // Conformance is checked after every signature is bound, so that the
-        // comparison sees real types rather than unresolved ones.
-        Defer(() => ConformanceChecker.Check(type, _diagnostics, compilation.Core));
+        // comparison sees real types rather than unresolved ones — and so that
+        // a conformance an extension added is checked along with the rest.
+        DeferLate(() => ConformanceChecker.Check(type, _diagnostics, compilation.Core));
     }
 
     private static BaseTypeListSyntax? BaseTypeListOf(SyntaxNode declaration) => declaration switch
@@ -455,6 +470,14 @@ internal sealed class TypeBinder(Compilation compilation)
                 case AliasSymbol alias:
                     if (Match(alias.TypeParameters, name) is { } aliasParameter)
                         return aliasParameter;
+                    break;
+
+                case ExtensionSymbol extension:
+                    foreach (var written in extension.TypeParameterAliases)
+                    {
+                        if (string.Equals(written.Name, name, StringComparison.Ordinal))
+                            return written;
+                    }
                     break;
             }
         }

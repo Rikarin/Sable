@@ -25,6 +25,7 @@ public enum SymbolKind
     ExistentialType,
     OpaqueType,
     ErrorType,
+    Extension,
 }
 
 /// <summary>Visibility, per spec/SYNTAX.md §2.</summary>

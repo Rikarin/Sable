@@ -1,0 +1,64 @@
+module Corpus.Extensions
+
+public protocol Describable {
+    fn describe() -> String
+}
+
+public struct Point {
+    public var x: Int
+    public var y: Int
+}
+
+public struct Box<Item> {
+    public var item: Item
+}
+
+public extension Point {
+    public fn magnitudeSquared() -> Int {
+        return x * x + y * y
+    }
+
+    public var isOrigin: Bool {
+        get => x == 0 && y == 0
+    }
+
+    public static fn origin() -> Point {
+        return Point { x: 0, y: 0 }
+    }
+}
+
+public extension Point: Describable {
+    public fn describe() -> String {
+        return "point"
+    }
+}
+
+public extension Box<T> {
+    public fn held() -> T {
+        return item
+    }
+}
+
+public fn useExtension(_ p: Point) -> Int {
+    return p.magnitudeSquared()
+}
+
+public fn useComputed(_ p: Point) -> Bool {
+    return p.isOrigin
+}
+
+public fn useStatic() -> Point {
+    return Point.origin()
+}
+
+public fn useConformance(_ p: Point) -> String {
+    return p.describe()
+}
+
+public fn describeAny(_ value: some Describable) -> String {
+    return value.describe()
+}
+
+public fn useGenericExtension(_ b: Box<Int>) -> Int {
+    return b.held()
+}

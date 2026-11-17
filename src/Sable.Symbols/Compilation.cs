@@ -219,6 +219,8 @@ public sealed class Compilation
             if (tree.Root is not CompilationUnitSyntax unit) continue;
             ResolveImports(unit, _fileScopes[tree]);
         }
+
+        AttachExtensions();
     }
 
     private void ResolveImports(CompilationUnitSyntax unit, FileScope scope)
@@ -413,6 +415,48 @@ public sealed class Compilation
         AddTo(container, type);
 
         foreach (var member in members) DeclareMember(member, type);
+
+        if (typeKind == TypeKind.Struct) SynthesizeMemberwiseInitializer(type);
+    }
+
+    /// <summary>
+    /// Gives a struct the initialiser its fields imply, per SYNTAX.md §6.
+    /// </summary>
+    /// <remarks>
+    /// Only when the struct declares none of its own: writing an <c>init</c>
+    /// is how a type says its fields are not the interface. Parameters take
+    /// the fields' names as labels, in declaration order, and a field with an
+    /// initialiser makes its parameter optional.
+    /// </remarks>
+    private void SynthesizeMemberwiseInitializer(NamedTypeSymbol type)
+    {
+        if (type.GetMembers("init").Any()) return;
+
+        var fields = type.Members
+            .OfType<FieldSymbol>()
+            .Where(field => !field.IsStatic && !field.IsComputed)
+            .ToList();
+
+        if (fields.Count == 0) return;
+
+        var function = new FunctionSymbol(
+            "init", type, null, type.DeclaredAccessibility, FunctionKind.Initializer);
+
+        function.Parameters =
+        [
+            .. fields.Select((field, i) =>
+            {
+                var parameter = new ParameterSymbol(field.Name, field.Name, function, null, i)
+                {
+                    HasDefaultValue = field.HasInitializer,
+                };
+                parameter.TypeResolver = () => field.Type;
+                return parameter;
+            }),
+        ];
+
+        function.ReturnTypeResolver = () => type;
+        type.AddMember(function);
     }
 
     private void DeclareFunction(FunctionDeclarationSyntax declaration, Symbol container)
@@ -787,13 +831,154 @@ public sealed class Compilation
 
     private void DeclareExtension(ExtensionDeclarationSyntax declaration, Symbol container)
     {
-        // The extended type is not known until type binding runs, so an
-        // extension's members are attached in a later pass. Recorded here so
-        // that nothing silently disappears.
-        Extensions.Add((declaration, container));
+        // The extended type may be declared in a file this one has not reached
+        // yet, so extensions are attached once every file has been read.
+        Extensions.Add((declaration, container, CurrentScope));
     }
 
-    internal List<(ExtensionDeclarationSyntax Syntax, Symbol Container)> Extensions { get; } = [];
+    internal List<(
+        ExtensionDeclarationSyntax Syntax,
+        Symbol Container,
+        FileScope? Scope)> Extensions { get; } = [];
+
+    /// <summary>
+    /// Attaches every extension's members to the type it extends.
+    /// </summary>
+    /// <remarks>
+    /// This runs after all files are declared, because an extension may
+    /// precede the declaration it extends, in this file or another.
+    /// </remarks>
+    private void AttachExtensions()
+    {
+        foreach (var (declaration, container, scope) in Extensions)
+        {
+            CurrentScope = scope;
+
+            var extended = ResolveExtendedType(declaration, container, scope);
+            if (extended is null) continue;
+
+            var extension = new ExtensionSymbol(extended, declaration);
+            extension.TypeParameterAliases = AliasTypeParameters(declaration, extension, extended);
+            RecordDeclaration(declaration, extension);
+
+            // ': P' on an extension is retroactive conformance.
+            if (declaration.BaseTypes is { } baseTypes)
+            {
+                var written = scope;
+                TypeBinder.Defer(() =>
+                {
+                    foreach (var baseType in baseTypes.Types)
+                    {
+                        extended.BaseTypes = extended.BaseTypes.Add(
+                            TypeBinder.BindType(baseType, extension, written));
+                    }
+                });
+            }
+
+            foreach (var member in declaration.Members)
+            {
+                if (RejectInExtension(member)) continue;
+                DeclareMember(member, extension);
+            }
+        }
+
+        CurrentScope = null;
+    }
+
+    /// <summary>Resolves the name an extension extends, without its arguments.</summary>
+    private NamedTypeSymbol? ResolveExtendedType(
+        ExtensionDeclarationSyntax declaration, Symbol container, FileScope? scope)
+    {
+        var syntax = declaration.Type;
+        while (syntax is ParenthesizedTypeSyntax parenthesized) syntax = parenthesized.Type;
+
+        var found = syntax switch
+        {
+            SimpleNameTypeSyntax simple =>
+                TypeBinder.Lookup(simple.Identifier.Text, container, scope, simple.Span),
+            QualifiedNameSyntax qualified =>
+                TypeBinder.BindType(qualified, container, scope) as Symbol,
+            _ => null,
+        };
+
+        if (found is AliasSymbol alias) found = alias.AliasedType as Symbol;
+
+        if (found is NamedTypeSymbol named) return named.OriginalDefinition;
+
+        ReportDeclaration(ErrorCode.ERR_CannotExtend, declaration.Type.Span,
+            "only a named type can be extended");
+        return null;
+    }
+
+    /// <summary>
+    /// Binds the names an extension writes for the type's parameters.
+    /// </summary>
+    /// <remarks>
+    /// <c>extension Array&lt;T&gt;</c> on <c>struct Array&lt;Element&gt;</c>
+    /// means T is Element under another name, for the length of the extension.
+    /// </remarks>
+    private static ImmutableArray<AliasSymbol> AliasTypeParameters(
+        ExtensionDeclarationSyntax declaration,
+        ExtensionSymbol extension,
+        NamedTypeSymbol extended)
+    {
+        var syntax = declaration.Type;
+        while (syntax is ParenthesizedTypeSyntax parenthesized) syntax = parenthesized.Type;
+
+        var arguments = syntax switch
+        {
+            SimpleNameTypeSyntax simple => simple.TypeArgumentList,
+            QualifiedNameSyntax qualified => qualified.Right.TypeArgumentList,
+            _ => null,
+        };
+
+        if (arguments is null) return [];
+
+        var aliases = ImmutableArray.CreateBuilder<AliasSymbol>();
+        var i = 0;
+        foreach (var argument in arguments.Arguments)
+        {
+            if (i >= extended.TypeParameters.Length) break;
+
+            // Only a bare name introduces one; 'Array<Int>' extends nothing new.
+            if (argument is SimpleNameTypeSyntax { TypeArgumentList: null } name)
+            {
+                var target = extended.TypeParameters[i];
+                var alias = new AliasSymbol(
+                    name.Identifier.Text, extension, name, Accessibility.Private);
+                alias.TypeResolver = () => target;
+                aliases.Add(alias);
+            }
+            i++;
+        }
+
+        return aliases.ToImmutable();
+    }
+
+    /// <summary>
+    /// Reports the members an extension may not add, per SYNTAX.md §11.
+    /// </summary>
+    private bool RejectInExtension(SyntaxNode member)
+    {
+        switch (member)
+        {
+            case FieldDeclarationSyntax field when !IsComputed(field):
+                ReportDeclaration(ErrorCode.ERR_ExtensionStoredProperty, field.Span,
+                    "an extension cannot add stored properties, only computed ones");
+                return true;
+
+            case InitDeclarationSyntax init:
+                ReportDeclaration(ErrorCode.ERR_ExtensionInitializer, init.Span,
+                    "an extension cannot add a designated initialiser");
+                return true;
+
+            default:
+                return false;
+        }
+    }
+
+    private static bool IsComputed(FieldDeclarationSyntax field) =>
+        field.Accessors is not null;
 
     // -----------------------------------------------------------------------
 
@@ -806,6 +991,7 @@ public sealed class Compilation
         {
             case ModuleSymbol module: module.AddMember(member); return;
             case NamedTypeSymbol type: type.AddMember(member); return;
+            case ExtensionSymbol extension: extension.ExtendedType.AddMember(member); return;
             default: return;
         }
     }
@@ -816,6 +1002,7 @@ public sealed class Compilation
         {
             ModuleSymbol module => module.GetMembers(name),
             NamedTypeSymbol type => type.GetMembers(name),
+            ExtensionSymbol extension => extension.ExtendedType.GetMembers(name),
             _ => [],
         };
 

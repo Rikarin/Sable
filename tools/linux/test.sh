@@ -22,8 +22,14 @@ docker run --rm --platform linux/amd64 \
         apt-get install -y -qq clang lldb >/dev/null 2>&1
         # The repository without its history or local tool state (worktrees
         # under .claude can be many times the size of the tree itself).
+        # (tar cannot extract under emulation, so each entry is copied.)
         mkdir /work
-        tar -C /source --exclude=./.git --exclude=./.claude -cf - . | tar -C /work -xf -
+        for entry in /source/* /source/.[!.]*; do
+            case "${entry##*/}" in
+                .git | .claude | ".[!.]*") ;;
+                *) cp -r "$entry" /work/ ;;
+            esac
+        done
         find /work -type d \( -name bin -o -name obj \) -prune -exec rm -rf {} +
         cd /work
         uname -m

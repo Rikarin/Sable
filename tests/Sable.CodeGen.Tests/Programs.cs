@@ -11,7 +11,13 @@ internal static class Programs {
 
     public sealed record Execution(string Stdout, string Stderr, int ExitCode);
 
-    public static Execution BuildAndRun(string source, bool optimise = true, string input = "", IReadOnlyDictionary<string, string>? environment = null) {
+    public static Execution BuildAndRun(
+        string source,
+        bool optimise = true,
+        string input = "",
+        IReadOnlyList<string>? arguments = null,
+        IReadOnlyDictionary<string, string>? environment = null
+    ) {
         var result = Pipeline.Compile(new SourceText(source, "test.sab"));
         Assert.True(result.Succeeded, string.Join("\n", result.Errors));
 
@@ -27,6 +33,10 @@ internal static class Programs {
                 start.Environment[name] = value;
             }
 
+            foreach (var argument in arguments ?? []) {
+                start.ArgumentList.Add(argument);
+            }
+
             using var process = Process.Start(start)!;
             process.StandardInput.Write(input);
             process.StandardInput.Close();
@@ -40,15 +50,19 @@ internal static class Programs {
     }
 
     public static (string Output, string? Trap) Interpret(string source, int stepLimit = 10_000_000) {
-        var (output, _, trap) = Interpret(source, stepLimit, "");
+        var (output, _, trap) = Interpret(source, stepLimit, "", []);
         return (output, trap);
     }
 
-    /// <summary>Interpreted, with standard input given and standard error kept.</summary>
-    static (string Output, string Errors, string? Trap) Interpret(string source, int stepLimit, string input) {
+    /// <summary>Interpreted only, with arguments, for a program that exits with a failure on purpose.</summary>
+    public static (string Output, string Errors, string? Trap) InterpretWithArguments(string source, IReadOnlyList<string> arguments) =>
+        Interpret(source, 10_000_000, "", arguments);
+
+    /// <summary>Interpreted, with standard input and arguments given and standard error kept.</summary>
+    static (string Output, string Errors, string? Trap) Interpret(string source, int stepLimit, string input, IReadOnlyList<string> arguments) {
         var result = Pipeline.Compile(new SourceText(source, "test.sab"));
         Assert.True(result.Succeeded, string.Join("\n", result.Errors));
-        var interpreter = new SilInterpreter(result.Sil!, stepLimit) { Input = new StringReader(input) };
+        var interpreter = new SilInterpreter(result.Sil!, stepLimit) { Input = new StringReader(input), Arguments = arguments };
         try {
             interpreter.Run(result.Sil!.EntryPoint!);
             Assert.True(interpreter.LiveObjects == 0, $"the interpreter found {interpreter.LiveObjects} object(s) leaked");
@@ -61,14 +75,25 @@ internal static class Programs {
     /// <summary>
     ///     Runs the program both ways and requires the same output and the same
     ///     trap. Without a C compiler, the interpreter's answer is all there is.
+    ///     A program that writes files is checked by <paramref name="afterEach" />,
+    ///     called with "interpreter" and then "native" after each run, so it can
+    ///     keep what the first wrote to compare with what the second does.
     /// </summary>
-    public static Execution AssertAgree(string source, int stepLimit = 10_000_000, string input = "") {
-        var (output, errors, trap) = Interpret(source, stepLimit, input);
+    public static Execution AssertAgree(
+        string source,
+        int stepLimit = 10_000_000,
+        string input = "",
+        IReadOnlyList<string>? arguments = null,
+        Action<string>? afterEach = null
+    ) {
+        var (output, errors, trap) = Interpret(source, stepLimit, input, arguments ?? []);
+        afterEach?.Invoke("interpreter");
         if (!CanBuild) {
             return new(output, errors + (trap is null ? "" : $"fatal error: {trap}\n"), trap is null ? 0 : 134);
         }
 
-        var native = BuildAndRun(source, input: input);
+        var native = BuildAndRun(source, input: input, arguments: arguments);
+        afterEach?.Invoke("native");
         Assert.True(
             (trap is null) == (native.ExitCode == 0),
             $"the interpreter {(trap is null ? "ran to the end" : $"trapped: {trap}")}, "

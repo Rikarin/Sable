@@ -1734,13 +1734,34 @@ internal sealed class Parser {
         var start = _index;
         var depth = 0;
 
+        // Inside an array type's brackets, '>' and '..' spell its kind —
+        // 'String[>..]' — and close nothing.
+        var brackets = 0;
+
         try {
             while (true) {
                 var kind = _tokens[_index].Kind;
 
+                if (brackets > 0
+                    && kind is SyntaxKind.GreaterToken
+                        or SyntaxKind.DotDotToken
+                        or SyntaxKind.DotDotLessToken
+                        or SyntaxKind.IntegerLiteralToken) {
+                    _index++;
+                    continue;
+                }
+
                 switch (kind) {
                     case SyntaxKind.LessToken:
                         depth++;
+                        break;
+
+                    case SyntaxKind.OpenBracketToken:
+                        brackets++;
+                        break;
+
+                    case SyntaxKind.CloseBracketToken:
+                        brackets--;
                         break;
 
                     case SyntaxKind.GreaterToken:
@@ -1765,8 +1786,6 @@ internal sealed class Parser {
                     case SyntaxKind.QuestionToken:
                     case SyntaxKind.AmpersandToken:
                     case SyntaxKind.PipeToken:
-                    case SyntaxKind.OpenBracketToken:
-                    case SyntaxKind.CloseBracketToken:
                     case SyntaxKind.ColonToken:
                     case SyntaxKind.SomeKeyword:
                     case SyntaxKind.AnyKeyword:

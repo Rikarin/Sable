@@ -429,4 +429,46 @@ public sealed class LanguageTests {
                 print(name("b"))
             """
         );
+
+    /// <summary>Strings order through Sable.Core's '<', which has no instruction of its own.</summary>
+    [Fact]
+    public void StringsOrder() =>
+        Prints(
+            "true false true true false true\n",
+            "",
+            """
+                let a = "2026-03-02"
+                let b = "2026-11-17"
+                print("\(a < b) \(a > b) \(a <= a) \(b >= a) \("ab" < "a") \("a" < "ab")")
+            """
+        );
+
+    /// <summary>
+    ///     A default is filled in where the call leaves it off, bound where it
+    ///     was declared; a label may pass over defaults to the parameter it names.
+    /// </summary>
+    [Fact]
+    public void DefaultArgumentsAreFilledIn() =>
+        Prints(
+            "h:443:false:30\nh:80:false:30\nh:443:true:30\nh:443:false:5\nh:8443:true:30\n",
+            """
+            let standardPort = 443
+            fn connect(_ host: String, port: Int = standardPort, secure: Bool = false, timeout: Int = 6 * 5) -> String {
+                return "\(host):\(port):\(secure):\(timeout)"
+            }
+            struct Client {
+                var base: Int
+                fn connect(_ host: String, port: Int = 8443, secure: Bool = true) -> String {
+                    return "\(host):\(port):\(secure):\(base)"
+                }
+            }
+            """,
+            """
+                print(connect("h"))
+                print(connect("h", port: 80))
+                print(connect("h", secure: true))
+                print(connect("h", timeout: 5))
+                print(Client(base: 30).connect("h"))
+            """
+        );
 }

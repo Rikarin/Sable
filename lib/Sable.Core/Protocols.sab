@@ -119,11 +119,13 @@ extension String: Comparable, Hashable {
         return lhs.count < rhs.count
     }
 
+    /// djb2, kept below 2^55 (by a prime just under it) so that h * 33 plus
+    /// a scalar never overflows, however long the string.
     public fn hash() -> Int {
         var h = 5381
         var i = 0
         while i < self.count {
-            h = (h * 33 + self.at(i).codePoint) % 2305843009213693951
+            h = (h * 33 + self.at(i).codePoint) % 36028797018963913
             i = i + 1
         }
         return h

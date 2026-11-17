@@ -235,6 +235,24 @@ public sealed class BindingTests {
         AssertClean("""connect(host: "a")""", extra);
     }
 
+    /// <summary>An empty array argument takes its type from the parameter.</summary>
+    [Fact]
+    public void AnEmptyArrayArgumentTakesTheParametersType() =>
+        AssertClean("let n = count([])", "fn count(_ items: String[>..]) -> Int { return items.count }");
+
+    /// <summary>A label may pass over parameters with defaults, never over one without.</summary>
+    [Fact]
+    public void ALabelMayPassOverDefaultedParametersOnly() {
+        const string extra = "fn connect(host: String, port: Int = 443, secure: Bool, timeout: Int = 30) { }";
+        AssertClean("""connect(host: "a", secure: true)""", extra);
+        AssertClean("""connect(host: "a", secure: true, timeout: 5)""", extra);
+        AssertClean("""connect(host: "a", port: 80, secure: true, timeout: 5)""", extra);
+        Assert.Contains(
+            ErrorsIn("""connect(host: "a", timeout: 5)""", extra),
+            static e => e.Code == ErrorCode.ERR_NoMatchingOverload
+        );
+    }
+
     [Fact]
     public void CallingSomethingUncallableIsReported() =>
         Assert.Contains(

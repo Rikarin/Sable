@@ -1,0 +1,642 @@
+module Ssg
+
+// A static site generator: the "real program" of docs/04 §4.4, and the
+// first one written in Sable rather than about it.
+//
+//     ssg <site> <output>
+//
+// The site directory holds:
+//
+//     site.txt         'key: value' lines: name, tagline
+//     template.html    the page every page is poured into; {{site}},
+//                      {{title}}, {{date}}, {{tags}}, {{content}} and
+//                      {{nav}} are filled in
+//     pages/*.md       the pages, in the Markdown subset below, each with
+//                      optional front matter between '---' lines (title,
+//                      date, summary, tags)
+//     static/*         copied as they are (text files only)
+//
+// It writes one .html file per page, an index of them newest first, and a
+// page of tags, and says what it wrote.
+//
+// The Markdown is a pragmatic subset: ATX headings ('#' to '######'),
+// paragraphs, '**strong**', '*emphasis*' and '_emphasis_', '`code`',
+// '[links](url)' and '![images](src)', '-', '*' and '+' lists and '1.'
+// lists (nested by indenting), '>' quotes, '---' rules, fenced code blocks
+// with an optional language, and backslash escapes. Everything else is
+// text, escaped.
+
+import Sable.IO
+import Sable.Text
+import Sable.Collections
+
+// ===========================================================================
+// The model
+// ===========================================================================
+
+/// A page of the site, its front matter read and its body still Markdown.
+struct Page {
+    /// The file name without its extension, which is also the output's.
+    var slug: String
+    var title: String
+    /// As written, conventionally YYYY-MM-DD, which sorts as text; may be empty.
+    var date: String
+    var summary: String
+    var tags: String[>..]
+    var body: String
+}
+
+/// What the site as a whole is called, from site.txt.
+struct Site {
+    var name: String
+    var tagline: String
+}
+
+// ===========================================================================
+// Front matter and settings
+// ===========================================================================
+
+/// The value of 'key: value' among the lines, or none.
+fn setting(_ lines: String[>..], _ key: String) -> String? {
+    for line in lines {
+        if let colon = line.indexOf(':') {
+            if trimmedEnd(line.slice(from: 0, to: colon)) == key {
+                return line.slice(from: colon + 1, to: line.count).trimmed()
+            }
+        }
+    }
+    return none
+}
+
+/// A page from its file name and text: front matter first, when the text
+/// starts with a '---' line, then the body.
+fn readPage(_ fileName: String, _ text: String) -> Page {
+    let all = lines(text)
+    var front: String[>..] = []
+    var start = 0
+    if all.count > 0 && all[0].trimmed() == "---" {
+        var i = 1
+        while i < all.count && all[i].trimmed() != "---" {
+            front.append(all[i])
+            i += 1
+        }
+        start = i + 1
+    }
+    var body: String[>..] = []
+    var i = start
+    while i < all.count {
+        body.append(all[i])
+        i += 1
+    }
+    // A first heading that repeats the title would say it twice, since the
+    // template shows the title already.
+    let title = setting(front, "title") ?? firstHeading(body) ?? Path.withoutExtension(fileName)
+    var first = 0
+    while first < body.count && isBlank(body[first]) {
+        first += 1
+    }
+    if first < body.count && hasPrefix(body[first], "# ") && body[first].slice(from: 2, to: body[first].count).trimmed() == title {
+        body[first] = ""
+    }
+    let slug = Path.withoutExtension(fileName)
+    var tags: String[>..] = []
+    if let written = setting(front, "tags") {
+        for tag in splitting(written, by: ",") {
+            let trimmed = tag.trimmed()
+            if trimmed.count > 0 {
+                tags.append(lowercased(trimmed))
+            }
+        }
+    }
+    return Page {
+        slug: slug,
+        title: title,
+        date: setting(front, "date") ?? "",
+        summary: setting(front, "summary") ?? "",
+        tags: tags,
+        body: joined(body, separator: "\n")
+    }
+}
+
+/// The text of the first '# ' heading, for a page that names no title.
+fn firstHeading(_ body: String[>..]) -> String? {
+    for line in body {
+        if hasPrefix(line, "# ") {
+            return line.slice(from: 2, to: line.count).trimmed()
+        }
+    }
+    return none
+}
+
+// ===========================================================================
+// Markdown: inline
+// ===========================================================================
+
+/// Whether the character may be escaped with a backslash.
+fn isPunctuation(_ c: Char) -> Bool {
+    return "\\`*_{}[]()#+-.!<>&\"'".contains(c)
+}
+
+/// Where the closing delimiter next occurs after the opening one at 'from',
+/// with something between them; -1 when there is none.
+fn closing(_ text: String, _ delimiter: String, from start: Int) -> Int {
+    if let found = find(text, delimiter, from: start + delimiter.count + 1) {
+        return found
+    }
+    return -1
+}
+
+/// One line's (or one paragraph's) spans as HTML: emphasis, code, links and
+/// images, with everything else escaped.
+fn renderInline(_ text: String) -> String {
+    let html = TextBuilder()
+    // Plain text is gathered from 'plain' up to 'i' and escaped in one go.
+    var plain = 0
+    var i = 0
+    while i < text.count {
+        let c = text.at(i)
+        var span = ""
+        var next = i
+        if c == '\\' && i + 1 < text.count && isPunctuation(text.at(i + 1)) {
+            span = escapedHtml(String.fromChar(text.at(i + 1)))
+            next = i + 2
+        } else if c == '`' {
+            if let end = text.slice(from: i + 1, to: text.count).indexOf('`') {
+                span = "<code>" + escapedHtml(text.slice(from: i + 1, to: i + 1 + end)) + "</code>"
+                next = i + end + 2
+            }
+        } else if c == '*' && i + 1 < text.count && text.at(i + 1) == '*' {
+            let end = closing(text, "**", from: i)
+            if end > 0 {
+                span = "<strong>" + renderInline(text.slice(from: i + 2, to: end)) + "</strong>"
+                next = end + 2
+            }
+        } else if c == '*' || c == '_' && (i == 0 || !isWordCharacter(text.at(i - 1))) {
+            let end = closing(text, String.fromChar(c), from: i)
+            if end > 0 && (c == '*' || end + 1 == text.count || !isWordCharacter(text.at(end + 1))) {
+                span = "<em>" + renderInline(text.slice(from: i + 1, to: end)) + "</em>"
+                next = end + 1
+            }
+        } else if c == '[' || c == '!' && i + 1 < text.count && text.at(i + 1) == '[' {
+            let image = c == '!'
+            let opening = image ? i + 1 : i
+            if let middle = find(text, "](", from: opening) {
+                if let end = find(text, ")", from: middle + 2) {
+                    let label = text.slice(from: opening + 1, to: middle)
+                    let target = escapedHtml(text.slice(from: middle + 2, to: end).trimmed())
+                    span = image
+                        ? "<img src=\"" + target + "\" alt=\"" + escapedHtml(label) + "\">"
+                        : "<a href=\"" + target + "\">" + renderInline(label) + "</a>"
+                    next = end + 1
+                }
+            }
+        }
+        if next > i {
+            html.append(escapedHtml(text.slice(from: plain, to: i)))
+            html.append(span)
+            i = next
+            plain = i
+        } else {
+            i += 1
+        }
+    }
+    html.append(escapedHtml(text.slice(from: plain, to: text.count)))
+    return html.build()
+}
+
+fn isWordCharacter(_ c: Char) -> Bool {
+    return c.isLetter || c.isDigit
+}
+
+// ===========================================================================
+// Markdown: blocks
+// ===========================================================================
+
+/// A list item's marker, when the line starts one: "-", "*", "+" for an
+/// unordered list, "1." for an ordered one — returned as "ul" or "ol" —
+/// and how many characters the marker and its space take.
+struct Marker {
+    var kind: String
+    var width: Int
+}
+
+fn listMarker(_ line: String) -> Marker? {
+    if line.count >= 2 && (line.at(0) == '-' || line.at(0) == '*' || line.at(0) == '+') && line.at(1) == ' ' {
+        return Marker { kind: "ul", width: 2 }
+    }
+    var i = 0
+    while i < line.count && line.at(i).isDigit {
+        i += 1
+    }
+    if i > 0 && i + 1 < line.count && line.at(i) == '.' && line.at(i + 1) == ' ' {
+        return Marker { kind: "ol", width: i + 2 }
+    }
+    return none
+}
+
+/// The heading level of a line, 1 to 6, or 0 when it is not one.
+fn headingLevel(_ line: String) -> Int {
+    var level = 0
+    while level < line.count && line.at(level) == '#' {
+        level += 1
+    }
+    if level == 0 || level > 6 || level < line.count && line.at(level) != ' ' {
+        return 0
+    }
+    return level
+}
+
+/// Whether the line is a thematic break: three or more '-' or '*', alone.
+fn isRule(_ line: String) -> Bool {
+    let trimmed = line.trimmed()
+    if trimmed.count < 3 || trimmed.at(0) != '-' && trimmed.at(0) != '*' {
+        return false
+    }
+    var i = 0
+    while i < trimmed.count {
+        if trimmed.at(i) != trimmed.at(0) {
+            return false
+        }
+        i += 1
+    }
+    return true
+}
+
+/// Whether the line begins a block other than a paragraph, and so ends one.
+fn startsBlock(_ line: String) -> Bool {
+    return headingLevel(line) > 0 || hasPrefix(line, "```") || hasPrefix(line, ">")
+        || isRule(line) || listMarker(line) != none
+}
+
+/// The line without up to 'width' leading spaces.
+fn dedented(_ line: String, _ width: Int) -> String {
+    var i = 0
+    while i < width && i < line.count && line.at(i) == ' ' {
+        i += 1
+    }
+    return line.slice(from: i, to: line.count)
+}
+
+/// An id for a heading: its letters and digits in lower case, words joined
+/// by '-'.
+fn slugged(_ text: String) -> String {
+    let lower = lowercased(text)
+    let slug = TextBuilder()
+    var pendingDash = false
+    var written = 0
+    var i = 0
+    while i < lower.count {
+        let c = lower.at(i)
+        if isWordCharacter(c) {
+            if pendingDash && written > 0 {
+                slug.append("-")
+            }
+            slug.append(String.fromChar(c))
+            written += 1
+            pendingDash = false
+        } else if c == ' ' || c == '-' {
+            pendingDash = true
+        }
+        i += 1
+    }
+    return written == 0 ? "section" : slug.build()
+}
+
+/// Turns a page's Markdown into HTML, keeping count of what it made.
+class Renderer {
+    var html: TextBuilder = TextBuilder()
+    /// Heading ids given out so far, so that each is unique on the page.
+    var ids: HashSet<String> = HashSet<String>()
+    var headings = 0
+    var codeBlocks = 0
+
+    init() { }
+
+    fn render(_ markdown: String) -> String {
+        renderBlocks(lines(markdown))
+        return html.build()
+    }
+
+    fn renderBlocks(_ lines: String[>..]) {
+        var i = 0
+        while i < lines.count {
+            let line = lines[i]
+            if isBlank(line) {
+                i += 1
+            } else if hasPrefix(line, "```") {
+                i = renderFence(lines, i)
+            } else if headingLevel(line) > 0 {
+                renderHeading(line)
+                i += 1
+            } else if isRule(line) {
+                html.appendLine("<hr>")
+                i += 1
+            } else if hasPrefix(line, ">") {
+                i = renderQuote(lines, i)
+            } else if let marker = listMarker(line) {
+                i = renderList(lines, i, marker.kind)
+            } else {
+                i = renderParagraph(lines, i)
+            }
+        }
+    }
+
+    fn renderHeading(_ line: String) {
+        let level = headingLevel(line)
+        let text = line.slice(from: level, to: line.count).trimmed()
+        var id = slugged(text)
+        var n = 2
+        while ids.contains(id) {
+            id = slugged(text) + "-" + n.toString()
+            n += 1
+        }
+        let _ = ids.insert(id)
+        headings += 1
+        html.appendLine(format("<h{0} id=\"{1}\">{2}</h{0}>", [level.toString(), id, renderInline(text)]))
+    }
+
+    /// A fenced code block, from its opening fence to its closing one (or the
+    /// end); the index of the line after it.
+    fn renderFence(_ lines: String[>..], _ start: Int) -> Int {
+        let language = lines[start].slice(from: 3, to: lines[start].count).trimmed()
+        codeBlocks += 1
+        html.append(language.count > 0 ? "<pre><code class=\"language-" + escapedHtml(language) + "\">" : "<pre><code>")
+        var i = start + 1
+        while i < lines.count && !hasPrefix(lines[i], "```") {
+            html.append(escapedHtml(lines[i]))
+            html.append("\n")
+            i += 1
+        }
+        html.appendLine("</code></pre>")
+        return i + 1
+    }
+
+    /// A block quote: its '>' lines, unquoted and rendered as blocks.
+    fn renderQuote(_ lines: String[>..], _ start: Int) -> Int {
+        var inner: String[>..] = []
+        var i = start
+        while i < lines.count && hasPrefix(lines[i], ">") {
+            inner.append(dedented(lines[i].slice(from: 1, to: lines[i].count), 1))
+            i += 1
+        }
+        html.appendLine("<blockquote>")
+        renderBlocks(inner)
+        html.appendLine("</blockquote>")
+        return i
+    }
+
+    /// A list of one kind: each item its marker's line and the indented lines
+    /// after it. An item of one line is rendered inline; a longer one — with
+    /// a nested list, say — as blocks of its own.
+    fn renderList(_ lines: String[>..], _ start: Int, _ kind: String) -> Int {
+        html.appendLine("<" + kind + ">")
+        var i = start
+        while i < lines.count {
+            guard let marker = listMarker(lines[i]) else { break }
+            if marker.kind != kind {
+                break
+            }
+            var item: String[>..] = [lines[i].slice(from: marker.width, to: lines[i].count)]
+            i += 1
+            while i < lines.count && (hasPrefix(lines[i], "  ") || isBlank(lines[i]) && i + 1 < lines.count && hasPrefix(lines[i + 1], "  ")) {
+                item.append(dedented(lines[i], marker.width))
+                i += 1
+            }
+            if item.count == 1 {
+                html.appendLine("<li>" + renderInline(item[0]) + "</li>")
+            } else {
+                html.append("<li>")
+                renderItem(item)
+                html.appendLine("</li>")
+            }
+        }
+        html.appendLine("</" + kind + ">")
+        return i
+    }
+
+    /// A list item of several lines: its first paragraph inline, so a tight
+    /// item does not gain a <p>, and what follows as blocks.
+    fn renderItem(_ item: String[>..]) {
+        var first: String[>..] = []
+        var i = 0
+        while i < item.count && !isBlank(item[i]) && (i == 0 || !startsBlock(item[i])) {
+            first.append(item[i].trimmed())
+            i += 1
+        }
+        html.appendLine(renderInline(joined(first, separator: "\n")))
+        var rest: String[>..] = []
+        while i < item.count {
+            rest.append(item[i])
+            i += 1
+        }
+        renderBlocks(rest)
+    }
+
+    fn renderParagraph(_ lines: String[>..], _ start: Int) -> Int {
+        var text: String[>..] = []
+        var i = start
+        while i < lines.count && !isBlank(lines[i]) && (i == start || !startsBlock(lines[i])) {
+            text.append(lines[i].trimmed())
+            i += 1
+        }
+        html.appendLine("<p>" + renderInline(joined(text, separator: "\n")) + "</p>")
+        return i
+    }
+}
+
+// ===========================================================================
+// The site
+// ===========================================================================
+
+/// The template with its placeholders filled in.
+fn fill(_ template: String, _ site: Site, _ title: String, _ date: String, _ tags: String, _ content: String, _ nav: String) -> String {
+    var page = template
+    page = replacing(page, "{{site}}", with: escapedHtml(site.name))
+    page = replacing(page, "{{title}}", with: escapedHtml(title))
+    page = replacing(page, "{{date}}", with: escapedHtml(date))
+    page = replacing(page, "{{tags}}", with: tags)
+    page = replacing(page, "{{nav}}", with: nav)
+    // Content last, so that a page that happens to mention a placeholder
+    // keeps it as written.
+    return replacing(page, "{{content}}", with: content)
+}
+
+fn tagLinks(_ tags: String[>..]) -> String {
+    var links: String[>..] = []
+    for tag in tags {
+        links.append(format("<a href=\"tags.html#{0}\">{0}</a>", [escapedHtml(tag)]))
+    }
+    return joined(links, separator: ", ")
+}
+
+/// Newest first; undated pages after dated ones, by title.
+fn before(_ a: Page, _ b: Page) -> Bool {
+    if a.date != b.date {
+        return b.date < a.date
+    }
+    return a.title < b.title
+}
+
+/// How many words the Markdown holds, near enough: runs of non-space.
+fn wordCount(_ text: String) -> Int {
+    var words = 0
+    var inWord = false
+    var i = 0
+    while i < text.count {
+        let space = text.at(i).isWhitespace
+        if !space && !inWord {
+            words += 1
+        }
+        inWord = !space
+        i += 1
+    }
+    return words
+}
+
+/// "812 B" or "2.4 KB": sizes as people read them.
+fn size(_ characters: Int) -> String {
+    if characters < 1024 {
+        return characters.toString() + " B"
+    }
+    return formatted(F64(characters) / 1024.0, decimals: 1) + " KB"
+}
+
+/// Makes the directory if it is not there, and empties it of .html files if
+/// it is, so pages removed from the site do not linger in its output.
+fn prepare(_ directory: String) throws(IoError) {
+    if !Directory.exists(directory) {
+        try Directory.create(directory)
+        return
+    }
+    for name in try Directory.list(directory) {
+        if Path.extension(name) == "html" {
+            try File.remove(Path.join(directory, name))
+        }
+    }
+}
+
+fn build(_ root: String, _ output: String) throws(IoError) -> Int {
+    let settings = try File.readLines(Path.join(root, "site.txt"))
+    let site = Site {
+        name: setting(settings, "name") ?? "Untitled",
+        tagline: setting(settings, "tagline") ?? ""
+    }
+    let template = try File.read(Path.join(root, "template.html"))
+    try prepare(output)
+
+    var pages: String[>..] = []
+    var all: Page[>..] = []
+    let source = Path.join(root, "pages")
+    for name in try Directory.list(source) {
+        if Path.extension(name) == "md" {
+            all.append(readPage(name, try File.read(Path.join(source, name))))
+        }
+    }
+    let ordered = sorted(all, by: (a: Page, b: Page) => before(a, b))
+
+    // Each page, with links to its neighbours in the index's order.
+    var totalWords = 0
+    var i = 0
+    while i < ordered.count {
+        let page = ordered[i]
+        let renderer = Renderer()
+        let content = renderer.render(page.body)
+        var nav: String[>..] = []
+        if i > 0 {
+            nav.append(format("<a rel=\"prev\" href=\"{}.html\">&larr; {}</a>", [ordered[i - 1].slug, escapedHtml(ordered[i - 1].title)]))
+        }
+        nav.append("<a href=\"index.html\">Index</a>")
+        if i + 1 < ordered.count {
+            nav.append(format("<a rel=\"next\" href=\"{}.html\">{} &rarr;</a>", [ordered[i + 1].slug, escapedHtml(ordered[i + 1].title)]))
+        }
+        let html = fill(template, site, page.title, page.date, tagLinks(page.tags), content, joined(nav, separator: " | "))
+        try File.write(Path.join(output, page.slug + ".html"), html)
+        let words = wordCount(page.body)
+        totalWords += words
+        print(format("  {} {} {} words, {} heading(s), {} code block(s)", [
+            paddedRight(page.slug + ".html", to: 24, with: ' '),
+            paddedLeft(size(html.count), to: 8, with: ' '),
+            formatted(words, width: 5),
+            renderer.headings.toString(),
+            renderer.codeBlocks.toString()
+        ]))
+        i += 1
+    }
+
+    // The index: every page, newest first, with its summary.
+    let index = TextBuilder()
+    if site.tagline.count > 0 {
+        index.appendLine("<p class=\"tagline\">" + escapedHtml(site.tagline) + "</p>")
+    }
+    index.appendLine("<ul class=\"pages\">")
+    for page in ordered {
+        index.append(format("<li><a href=\"{}.html\">{}</a>", [page.slug, escapedHtml(page.title)]))
+        if page.date.count > 0 {
+            index.append(" <time>" + escapedHtml(page.date) + "</time>")
+        }
+        if page.summary.count > 0 {
+            index.append("<br>" + renderInline(page.summary))
+        }
+        index.appendLine("</li>")
+    }
+    index.appendLine("</ul>")
+    let indexHtml = fill(template, site, site.name, "", "", index.build(), "<a href=\"tags.html\">Tags</a>")
+    try File.write(Path.join(output, "index.html"), indexHtml)
+    print(format("  {} {}", [paddedRight("index.html", to: 24, with: ' '), paddedLeft(size(indexHtml.count), to: 8, with: ' ')]))
+
+    // Tags: each, alphabetically, with its pages in the index's order.
+    let byTag = HashMap<String, String[>..]>()
+    for page in ordered {
+        for tag in page.tags {
+            var titles = byTag.get(tag) ?? []
+            titles.append(format("<a href=\"{}.html\">{}</a>", [page.slug, escapedHtml(page.title)]))
+            byTag.set(tag, titles)
+        }
+    }
+    let tagsHtml = TextBuilder()
+    for tag in sorted(byTag.allKeys()) {
+        let links = byTag.get(tag) ?? []
+        tagsHtml.appendLine(format("<h2 id=\"{0}\">{0} ({1})</h2>", [escapedHtml(tag), links.count.toString()]))
+        tagsHtml.appendLine("<ul><li>" + joined(links, separator: "</li><li>") + "</li></ul>")
+    }
+    let tagsPage = fill(template, site, "Tags", "", "", tagsHtml.build(), "<a href=\"index.html\">Index</a>")
+    try File.write(Path.join(output, "tags.html"), tagsPage)
+    print(format("  {} {}", [paddedRight("tags.html", to: 24, with: ' '), paddedLeft(size(tagsPage.count), to: 8, with: ' ')]))
+
+    // Static files, as they are.
+    let assets = Path.join(root, "static")
+    if Directory.exists(assets) {
+        for name in try Directory.list(assets) {
+            try File.write(Path.join(output, name), try File.read(Path.join(assets, name)))
+            print("  " + name + " (copied)")
+        }
+    }
+
+    print(format("{} pages, {} words, {} tags, written to {}", [
+        ordered.count.toString(),
+        totalWords.toString(),
+        byTag.count.toString(),
+        Path.fileName(output)
+    ]))
+    return ordered.count
+}
+
+/// Exits with 0 when the site is built, 1 when it could not be, 2 when
+/// the arguments are wrong.
+@main
+fn main() -> Int {
+    let arguments = Environment.arguments()
+    if arguments.count != 2 {
+        Console.writeErrorLine("usage: ssg <site> <output>")
+        return 2
+    }
+    do {
+        let _ = try build(arguments[0], arguments[1])
+        return 0
+    } catch .NotFound(let path) {
+        Console.writeErrorLine("ssg: no such file or directory: " + path)
+    } catch .Failed(let path) {
+        Console.writeErrorLine("ssg: could not read or write " + path)
+    }
+    return 1
+}

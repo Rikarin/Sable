@@ -226,7 +226,7 @@ public sealed class SilParser {
                 && (i == 0 || _tokens[i - 1].Text != "$")
                 && _tokens[i + 1].Kind == TokenKind.Word) {
                 var name = _tokens[i + 1].Text;
-                if (module.FindType(name) is not null || name is "Int" or "Bool" or "F64" or "String" or "Char") {
+                if (module.FindType(name) is not null || name is "Int" or "Bool" or "F64" or "String" or "Char" or "Object") {
                     throw new SilParseException($"the type {name} is declared twice", _tokens[i + 1].Line);
                 }
 
@@ -435,6 +435,13 @@ public sealed class SilParser {
     }
 
     SilType ParseTypeBody() {
+        if (Current is { Kind: TokenKind.Global, Text: "thick" }) {
+            Next();
+            return ParseTypeBody() is FunctionType signature
+                ? new ThickFunctionType(signature)
+                : throw Error("@thick needs a function type");
+        }
+
         if (Accept("*")) {
             return SilType.Address(ParseTypeBody());
         }
@@ -481,6 +488,7 @@ public sealed class SilParser {
             "F64" => SilType.F64,
             "String" => SilType.String,
             "Char" => SilType.Char,
+            "Object" => SilType.Object,
             _ => _module.FindType(name) ?? throw Error($"unknown type '{name}'"),
         };
     }
@@ -705,6 +713,26 @@ public sealed class SilParser {
                 };
                 Expect("]");
                 instruction = new LoadInst(Operand(0), kind);
+                break;
+            }
+
+            case "partial_apply": {
+                var function = Operand(0);
+                var context = OperandList(1);
+                Expect(":");
+                if (ParseType() is not ThickFunctionType thick || context.Count > 1) {
+                    throw new SilParseException("partial_apply takes at most a context, and gives a @thick function", line);
+                }
+
+                instruction = new PartialApplyInst(function, context.Count == 0 ? null : context[0], thick);
+                break;
+            }
+
+            case "unchecked_ref_cast": {
+                var value = Operand(0);
+                Expect(":");
+                instruction = new UncheckedRefCastInst(value, ParseType() as ClassType
+                    ?? throw new SilParseException("unchecked_ref_cast gives a class reference", line));
                 break;
             }
 

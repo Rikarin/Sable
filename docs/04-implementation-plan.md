@@ -328,13 +328,14 @@ Order matters; each of these is a self-contained lowering:
 - [ ] A 2,000-line program (JSON parser + pretty printer) compiles and passes
       its tests — the corpus's 300-line JSON parser and renderer
       (`tests/corpus/11-json.sab`) compiles and runs natively, agreeing with
-      the interpreter and freeing everything it allocates; the full-size
-      program waits for generics and closures
+      the interpreter and freeing everything it allocates; generics
+      (monomorphised) and closures (boxed captures, counted contexts) now
+      lower too, so the full-size program is what remains
 - [ ] SIL verifier is clean on the corpus — clean on everything that lowers,
       before and after the passes, ownership included (every owned value
-      consumed exactly once on every path); 141 of the corpus's 343 functions
-      lower so far, the rest waiting on closures, generics, protocols and
-      class inheritance
+      consumed exactly once on every path); 196 of the corpus's 345 function
+      declarations lower so far, the rest waiting on dictionaries, slices,
+      existentials, class inheritance and async
 - [x] `lldb` shows correct frames, locals and types — on macOS, checked by a
       test that drives lldb: `gcd(a=1071, b=462)`, `(Int) t = 147`,
       `(Debug.Point) p = (x = 1071, y = 462)`

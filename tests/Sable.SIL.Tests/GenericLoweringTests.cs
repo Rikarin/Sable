@@ -1,0 +1,220 @@
+namespace Sable.SIL.Tests;
+
+/// <summary>
+///     Generics by monomorphisation (docs/04 §2.2, item 6): each generic
+///     function and type is lowered once per set of type arguments it is used
+///     with, and every instance is ordinary SIL.
+/// </summary>
+public sealed class GenericLoweringTests {
+    static SilModule Lower(string source) {
+        var compilation = Compilation.Create($"module M\n{source}");
+        var errors = compilation.GetAllDiagnostics().Where(static d => d.Severity == DiagnosticSeverity.Error).ToList();
+        Assert.True(errors.Count == 0, string.Join("\n", errors.Select(static e => $"{e.Id}: {e.Message}")));
+
+        var (module, diagnostics) = SilGen.Lower(compilation);
+        Assert.True(diagnostics.Count == 0, string.Join("\n", diagnostics.Select(static d => $"{d.Id}: {d.Message}")));
+
+        var problems = SilVerifier.Verify(module);
+        Assert.True(problems.Count == 0, string.Join("\n", problems) + "\n\n" + SilPrinter.Print(module));
+
+        var text = SilPrinter.Print(module);
+        var reparsed = SilParser.Parse(text);
+        Assert.Equal(text, SilPrinter.Print(reparsed));
+
+        SilPassManager.Run(reparsed, SilPassManager.Default);
+        return reparsed;
+    }
+
+    static object? Run(SilModule module, string function, params object[] arguments) {
+        var interpreter = new SilInterpreter(module);
+        var result = interpreter.Run($"M.{function}", arguments);
+        Assert.True(interpreter.LiveObjects == 0, $"{interpreter.LiveObjects} object(s) leaked");
+        return result;
+    }
+
+    [Fact]
+    public void AGenericFunctionIsLoweredOncePerTypeArgument() {
+        var module = Lower(
+            """
+            fn identity<T>(_ value: T) -> T {
+                return value
+            }
+
+            fn test() -> String {
+                let n = identity(41) + identity(1)
+                return identity("n=") + "\(n)"
+            }
+            """
+        );
+
+        Assert.Equal("n=42", Run(module, "test"));
+        Assert.NotNull(module.Find("M.identity$of$Int"));
+        Assert.NotNull(module.Find("M.identity$of$String"));
+        Assert.Null(module.Find("M.identity"));
+    }
+
+    [Fact]
+    public void GenericStructsUnionsAndTheirMethods() {
+        var module = Lower(
+            """
+            struct Box<T> {
+                var item: T
+
+                fn get() -> T {
+                    return item
+                }
+
+                fn replaced(with value: T) -> Box<T> {
+                    return Box<T> { item: value }
+                }
+            }
+
+            union Outcome<T, E> {
+                Ok(T)
+                Err(E)
+            }
+
+            fn unwrapOr<T, E>(_ outcome: Outcome<T, E>, _ fallback: T) -> T {
+                return match outcome {
+                    case .Ok(let value) => value
+                    case .Err(_) => fallback
+                }
+            }
+
+            fn test() -> String {
+                let b = Box<Int> { item: 7 }
+                let s = Box<String> { item: "seven" }
+                let ok: Outcome<String, Int> = Outcome.Ok("fine")
+                let bad: Outcome<String, Int> = Outcome.Err(3)
+                return "\(b.replaced(with: b.get() * 6).item) \(s.get()) \(unwrapOr(ok, "?")) \(unwrapOr(bad, "?"))"
+            }
+            """
+        );
+
+        Assert.Equal("42 seven fine ?", Run(module, "test"));
+    }
+
+    [Fact]
+    public void GenericsOverArraysAndOptionals() {
+        var module = Lower(
+            """
+            fn firstOr<T>(_ items: T[>..], _ fallback: T) -> T {
+                for item in items {
+                    return item
+                }
+                return fallback
+            }
+
+            fn lastOf<T>(_ items: T[>..]) -> T? {
+                if items.count == 0 {
+                    return none
+                }
+                return items[items.count - 1]
+            }
+
+            fn reversed<T>(_ items: T[>..]) -> T[>..] {
+                var result: T[>..] = []
+                var i = items.count - 1
+                while i >= 0 {
+                    result.append(items[i])
+                    i = i - 1
+                }
+                return result
+            }
+
+            fn test() -> String {
+                let names: String[>..] = ["a", "b", "c"]
+                let empty: Int[>..] = []
+                let back = reversed(names)
+                return firstOr(names, "none") + "\(firstOr(empty, 9))" + (lastOf(names) ?? "?") + back[0] + back[2]
+            }
+            """
+        );
+
+        Assert.Equal("a9cca", Run(module, "test"));
+    }
+
+    [Fact]
+    public void AProtocolRequirementCalledOnATypeParameterReachesTheConcreteMember() {
+        var module = Lower(
+            """
+            protocol Shape {
+                fn area() -> Int
+                fn name() -> String
+            }
+
+            struct Square: Shape {
+                var side: Int
+                fn area() -> Int { return side * side }
+                fn name() -> String { return "square" }
+            }
+
+            struct Rect: Shape {
+                var w: Int
+                var h: Int
+                fn area() -> Int { return w * h }
+                fn name() -> String { return "rect" }
+            }
+
+            fn describe<S: Shape>(_ shape: S) -> String {
+                return shape.name() + " \(shape.area())"
+            }
+
+            fn total<S: Shape>(_ shapes: S[>..]) -> Int {
+                var sum = 0
+                for s in shapes {
+                    sum = sum + s.area()
+                }
+                return sum
+            }
+
+            fn test() -> String {
+                let squares: Square[>..] = [Square { side: 2 }, Square { side: 3 }]
+                return describe(Square { side: 4 }) + ", " + describe(Rect { w: 2, h: 5 }) + ", \(total(squares))"
+            }
+            """
+        );
+
+        Assert.Equal("square 16, rect 10, 13", Run(module, "test"));
+    }
+
+    [Fact]
+    public void ExtensionMembersLower() {
+        var module = Lower(
+            """
+            struct Point {
+                var x: Int
+                var y: Int
+            }
+
+            struct Box<Item> {
+                var item: Item
+            }
+
+            extension Point {
+                fn magnitudeSquared() -> Int {
+                    return x * x + y * y
+                }
+
+                static fn origin() -> Point {
+                    return Point { x: 0, y: 0 }
+                }
+            }
+
+            extension Box<T> {
+                fn held() -> T {
+                    return item
+                }
+            }
+
+            fn test() -> Int {
+                let p = Point { x: 3, y: 4 }
+                let b = Box<Int> { item: 100 }
+                return p.magnitudeSquared() + Point.origin().x + b.held()
+            }
+            """
+        );
+
+        Assert.Equal(125L, Run(module, "test"));
+    }
+}

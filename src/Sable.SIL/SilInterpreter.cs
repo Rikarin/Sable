@@ -90,6 +90,10 @@ public sealed class SilInterpreter(SilModule module, int stepLimit = 10_000_000,
 
                 return;
 
+            case (ThickFunctionType, ClosureValue closure):
+                Retain(SilType.Object, closure.Context);
+                return;
+
             case (StructType structType, object?[] fields):
                 for (var i = 0; i < fields.Length; i++) {
                     Retain(structType.Fields[i].Type, fields[i]);
@@ -120,6 +124,10 @@ public sealed class SilInterpreter(SilModule module, int stepLimit = 10_000_000,
         }
 
         switch (type, value) {
+            case (ThickFunctionType, ClosureValue closure):
+                Release(SilType.Object, closure.Context, depth);
+                return;
+
             case (_, Counted counted):
                 if (Alive(counted).Immortal) {
                     return;
@@ -239,6 +247,9 @@ public sealed class SilInterpreter(SilModule module, int stepLimit = 10_000_000,
     /// <summary>An enum value: which case, and its payload.</summary>
     public sealed record EnumValue(int Case, object? Payload);
 
+    /// <summary>A closure: its code, and the context it captured, or null.</summary>
+    sealed record ClosureValue(string Function, object? Context);
+
     /// <summary>What a throwing call gives back instead of a result.</summary>
     sealed record Thrown(object? Error);
 
@@ -268,7 +279,7 @@ public sealed class SilInterpreter(SilModule module, int stepLimit = 10_000_000,
         return plain;
     }
 
-    object? Call(SilFunction function, IReadOnlyList<object> arguments, int depth) {
+    object? Call(SilFunction function, IReadOnlyList<object?> arguments, int depth) {
         if (depth > depthLimit) {
             throw new SilTrap("stack overflow: calls nested too deeply");
         }
@@ -440,9 +451,8 @@ public sealed class SilInterpreter(SilModule module, int stepLimit = 10_000_000,
                         return new Thrown(Get(throwInst.Error));
 
                     case TryApplyInst tryApply: {
-                        var name = (string)Get(tryApply.Callee)!;
-                        var callee = module.Find(name) ?? throw new SilTrap($"call to undefined @{name}");
-                        var result = Call(callee, [..tryApply.Arguments.Select(a => Get(a)!)], depth + 1);
+                        var (callee, passed) = Callee(Get(tryApply.Callee)!, tryApply.Arguments.Select(Get));
+                        var result = Call(callee, passed, depth + 1);
                         if (result is Thrown error) {
                             next = tryApply.Error;
                             incoming = [error.Error];
@@ -458,10 +468,17 @@ public sealed class SilInterpreter(SilModule module, int stepLimit = 10_000_000,
                         values[reference] = reference.Function;
                         break;
 
+                    case PartialApplyInst partial:
+                        values[partial] = new ClosureValue((string)Get(partial.Function)!, partial.Context is { } context ? Get(context) : null);
+                        break;
+
+                    case UncheckedRefCastInst cast:
+                        values[cast] = Get(cast.Value);
+                        break;
+
                     case ApplyInst apply: {
-                        var name = (string)Get(apply.Callee)!;
-                        var callee = module.Find(name) ?? throw new SilTrap($"call to undefined @{name}");
-                        values[apply] = Call(callee, [..apply.Arguments.Select(a => Get(a)!)], depth + 1);
+                        var (callee, passed) = Callee(Get(apply.Callee)!, apply.Arguments.Select(Get));
+                        values[apply] = Call(callee, passed, depth + 1);
                         break;
                     }
 
@@ -491,6 +508,22 @@ public sealed class SilInterpreter(SilModule module, int stepLimit = 10_000_000,
 
             block = next ?? throw new SilTrap("fell off the end of a block");
         }
+    }
+
+    /// <summary>What a call runs: a function by name, or a closure's code with its context last.</summary>
+    (SilFunction Function, object?[] Arguments) Callee(object callee, IEnumerable<object?> arguments) {
+        var (name, context, hasContext) = callee switch {
+            ClosureValue closure => (closure.Function, closure.Context, true),
+            _ => ((string)callee, null, false),
+        };
+
+        var function = module.Find(name) ?? throw new SilTrap($"call to undefined @{name}");
+        var passed = arguments.ToList();
+        if (hasContext) {
+            passed.Add(context);
+        }
+
+        return (function, passed.ToArray());
     }
 
     // =======================================================================

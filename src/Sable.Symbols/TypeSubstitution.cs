@@ -11,7 +11,7 @@ namespace Sable.Symbols;
 ///     calling a generic function, where the arguments decide what its parameters
 ///     were.
 /// </remarks>
-internal sealed class TypeSubstitution {
+public sealed class TypeSubstitution {
     public static readonly TypeSubstitution Empty = new([]);
 
     readonly Dictionary<TypeParameterSymbol, TypeSymbol> _map;

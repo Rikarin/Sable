@@ -299,6 +299,16 @@ public static class SilPrinter {
                             .Append(Name(store.Address));
                         break;
 
+                    case PartialApplyInst partial:
+                        builder.Append(' ').Append(Name(partial.Function)).Append('(')
+                            .Append(partial.Context is { } context ? Name(context) : "")
+                            .Append(") : $").Append(partial.Type);
+                        break;
+
+                    case UncheckedRefCastInst cast:
+                        builder.Append(' ').Append(Name(cast.Value)).Append(" : $").Append(cast.Type);
+                        break;
+
                     case FunctionRefInst reference:
                         builder.Append(" @").Append(reference.Function).Append(" : $").Append(reference.Type);
                         break;

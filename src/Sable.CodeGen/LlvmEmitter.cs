@@ -274,6 +274,8 @@ public sealed class LlvmEmitter {
             _ when type == SilType.String => "ptr",
             _ when type == SilType.Unit => "void",
             AddressType or FunctionType or ClassType or ArrayType => "ptr",
+            _ when type == SilType.Object => "ptr",
+            ThickFunctionType => "{ ptr, ptr }",
             StructType structType => $"{{ {string.Join(", ", structType.Fields.Select(static f => Type(f.Type)))} }}",
             TupleType tuple => $"{{ {string.Join(", ", tuple.Elements.Select(Type))} }}",
             EnumType enumType => PayloadWords(enumType) == 0 ? "{ i64 }" : $"{{ i64, [{PayloadWords(enumType)} x i64] }}",
@@ -304,6 +306,8 @@ public sealed class LlvmEmitter {
             _ when type == SilType.Char => 4,
             _ when type == SilType.String => 8,
             AddressType or FunctionType or ClassType or ArrayType => 8,
+            _ when type == SilType.Object => 8,
+            ThickFunctionType => 16,
             EnumType enumType => 8 + PayloadWords(enumType) * 8,
             StructType structType => Aggregate(structType.Fields.Select(static f => f.Type)),
             TupleType tuple => Aggregate(tuple.Elements),
@@ -427,6 +431,15 @@ public sealed class LlvmEmitter {
                 }
 
                 body.Append($"  switch i64 {tag}, label %done [{arms} ]\n").Append(cases).Append("done:\n  ret void\n");
+                break;
+            }
+
+            // A closure: its context.
+            case ThickFunctionType: {
+                var context = Fresh();
+                body.Append($"  {context} = extractvalue {{ ptr, ptr }} %v, 1\n");
+                Ownership(body, "  ", copy, SilType.Object, context);
+                body.Append("  ret void\n");
                 break;
             }
 
@@ -842,9 +855,22 @@ public sealed class LlvmEmitter {
                     _names[reference] = "@" + Global(reference.Function);
                     return;
 
+                case PartialApplyInst partial: {
+                    var code = Fresh();
+                    var name = Fresh();
+                    _names[partial] = name;
+                    Line($"{code} = insertvalue {{ ptr, ptr }} poison, ptr {Name(partial.Function)}, 0");
+                    Line($"{name} = insertvalue {{ ptr, ptr }} {code}, ptr {(partial.Context is { } context ? Name(context) : "null")}, 1");
+                    return;
+                }
+
+                case UncheckedRefCastInst cast:
+                    _names[cast] = Name(cast.Value);
+                    return;
+
                 case ApplyInst apply: {
-                    var arguments = string.Join(", ", apply.Arguments.Select(a => $"{Type(a.Type)} {Name(a)}"));
-                    var call = $"call {Type(apply.Type)} {Name(apply.Callee)}({arguments})";
+                    var (target, arguments) = Callee(apply.Callee, apply.Arguments);
+                    var call = $"call {Type(apply.Type)} {target}({arguments})";
                     if (apply.Type == SilType.Unit) {
                         Line(call);
                     } else {
@@ -1051,14 +1077,32 @@ public sealed class LlvmEmitter {
             Line($"switch i64 {tag}, label %{fallback} [ {string.Join(" ", arms)} ]");
         }
 
+        /// <summary>
+        ///     What a call calls, and with what: a function as it is; a closure
+        ///     by its code, with its context passed after the arguments.
+        /// </summary>
+        (string Target, string Arguments) Callee(SilValue callee, IEnumerable<SilValue> arguments) {
+            var passed = arguments.Select(a => $"{Type(a.Type)} {Name(a)}").ToList();
+            if (callee.Type is not ThickFunctionType) {
+                return (Name(callee), string.Join(", ", passed));
+            }
+
+            var code = Fresh();
+            var context = Fresh();
+            Line($"{code} = extractvalue {{ ptr, ptr }} {Name(callee)}, 0");
+            Line($"{context} = extractvalue {{ ptr, ptr }} {Name(callee)}, 1");
+            passed.Add($"ptr {context}");
+            return (code, string.Join(", ", passed));
+        }
+
         void TryApply(TryApplyInst tryApply) {
-            var callee = (FunctionType)tryApply.Callee.Type;
+            var callee = tryApply.Callee.Type as FunctionType ?? ((ThickFunctionType)tryApply.Callee.Type).Signature;
             var type = ReturnType(callee);
-            var arguments = string.Join(", ", tryApply.Arguments.Select(a => $"{Type(a.Type)} {Name(a)}"));
+            var (target, arguments) = Callee(tryApply.Callee, tryApply.Arguments);
 
             var result = Fresh();
             var flag = Fresh();
-            Line($"{result} = call {type} {Name(tryApply.Callee)}({arguments})");
+            Line($"{result} = call {type} {target}({arguments})");
             Line($"{flag} = extractvalue {type} {result}, 0");
 
             var withResult = callee.Result != SilType.Unit;

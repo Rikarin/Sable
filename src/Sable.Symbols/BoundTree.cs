@@ -158,6 +158,13 @@ public sealed class BoundCall(
     public FunctionSymbol Function { get; } = function;
     public ImmutableArray<BoundExpression> Arguments { get; } = arguments;
 
+    /// <summary>
+    ///     What the callee's type parameters — its own, and those of the type
+    ///     it is a member of — stand for at this call, as inference settled
+    ///     them. Empty for a call to nothing generic.
+    /// </summary>
+    public TypeSubstitution Substitution { get; init; } = TypeSubstitution.Empty;
+
     public override IEnumerable<BoundNode> Children => Nodes([Receiver, ..Arguments]);
 }
 

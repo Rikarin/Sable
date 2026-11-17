@@ -2878,7 +2878,9 @@ public sealed class Binder {
         }
 
         var result = substitution.Apply(resolved.ReturnType);
-        var call = new BoundCall(syntax, group.Receiver, resolved, converted.ToImmutable(), result);
+        var call = new BoundCall(syntax, group.Receiver, resolved, converted.ToImmutable(), result) {
+            Substitution = substitution,
+        };
 
         return group.IsOptionalChain
             ? new BoundConversion(syntax, new OptionalTypeSymbol(result), call, ConversionKind.OptionalWrap)

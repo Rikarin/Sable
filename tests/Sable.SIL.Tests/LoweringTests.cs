@@ -349,10 +349,9 @@ public sealed class LoweringTests {
         var compilation = Compilation.Create(
             """
             module M
-            fn same<T>(_ x: T) -> T { return x }
             fn label(_ n: Int) -> Int {
-                let x = same(n)
-                return x
+                let counts = ["n": n]
+                return n
             }
             """
         );

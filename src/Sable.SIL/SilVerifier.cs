@@ -301,8 +301,19 @@ public static class SilVerifier {
 
                 return throwInst.Error.Type == thrown ? null : $"throws {throwInst.Error.Type} from a function throwing {thrown}";
 
+            case PartialApplyInst partial: {
+                if (partial.Function.Type is not FunctionType code || code != partial.ThickType.Implementation) {
+                    return $"partial_apply needs code of type {partial.ThickType.Implementation}, not {partial.Function.Type}";
+                }
+
+                return partial.Context is null or { Type: ClassType } ? null : $"a closure's context is an object, not {partial.Context.Type}";
+            }
+
+            case UncheckedRefCastInst cast when cast.Value.Type != SilType.Object:
+                return $"unchecked_ref_cast is from an Object, not {cast.Value.Type}";
+
             case TryApplyInst tryApply: {
-                if (tryApply.Callee.Type is not FunctionType { Thrown: { } calleeThrows } callee) {
+                if (Signature(tryApply.Callee.Type) is not { Thrown: { } calleeThrows } callee) {
                     return "try_apply needs a throwing function; call others with apply";
                 }
 
@@ -329,7 +340,7 @@ public static class SilVerifier {
             }
 
             case ApplyInst apply: {
-                if (apply.Callee.Type is not FunctionType callee) {
+                if (Signature(apply.Callee.Type) is not { } callee) {
                     return $"apply needs a function, not {apply.Callee.Type}";
                 }
 
@@ -366,6 +377,14 @@ public static class SilVerifier {
                 return null;
         }
     }
+
+    /// <summary>What calling a value of this type takes and gives: a function's own type, or a closure's.</summary>
+    static FunctionType? Signature(SilType type) =>
+        type switch {
+            FunctionType function => function,
+            ThickFunctionType thick => thick.Signature,
+            _ => null,
+        };
 
     static string? Arguments(SilBlock target, IEnumerable<SilValue> arguments) {
         var passed = arguments.Select(static a => a.Type).ToList();
@@ -444,7 +463,7 @@ public static class SilVerifier {
         value switch {
             _ when value.Type.IsTrivial => Ownership.Trivial,
             SilArgument argument when argument.Block == argument.Block.Function.Entry || argument.IsGuaranteed => Ownership.Guaranteed,
-            StructExtractInst or TupleExtractInst => Ownership.Guaranteed,
+            StructExtractInst or TupleExtractInst or UncheckedRefCastInst => Ownership.Guaranteed,
             _ => Ownership.Owned,
         };
 
@@ -457,6 +476,9 @@ public static class SilVerifier {
 
             case StructInst or TupleInst or EnumInst or ReturnInst or ThrowInst or DestroyValueInst:
                 return Enumerable.Range(0, instruction.Operands.Count);
+
+            case PartialApplyInst { Context: not null }:
+                return [1];
 
             case BranchInst branch:
                 return Enumerable.Range(0, branch.Operands.Count).Where(i => !branch.Target.Arguments[i].IsGuaranteed);
@@ -556,6 +578,7 @@ public static class SilVerifier {
                 // What a use derives borrows from the same place.
                 switch (instruction) {
                     case StructExtractInst or TupleExtractInst when !instruction.Type.IsTrivial:
+                    case UncheckedRefCastInst:
                     case RefElementAddrInst or StructElementAddrInst or TupleElementAddrInst when Tracked(instruction.Operands[0]):
                         roots[instruction] = RootOf(instruction.Operands[0]);
                         break;

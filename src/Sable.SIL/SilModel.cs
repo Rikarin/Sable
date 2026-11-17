@@ -30,6 +30,13 @@ public abstract class SilType : IEquatable<SilType> {
     /// </summary>
     public static readonly SilType String = new ScalarType("String", trivial: false);
 
+    /// <summary>
+    ///     A reference to some counted object, of a type not known here: a
+    ///     closure's context, as the closure's implementation receives it.
+    ///     It may be null, for a closure that captured nothing.
+    /// </summary>
+    public static readonly SilType Object = new ScalarType("Object", trivial: false);
+
     /// <summary><c>()</c>: no value. What a function that returns nothing returns.</summary>
     public static readonly SilType Unit = new ScalarType("()");
 
@@ -88,6 +95,22 @@ public sealed class FunctionType(ImmutableArray<SilType> parameters, SilType res
         Thrown is null
             ? $"({string.Join(", ", Parameters)}) -> {Result}"
             : $"({string.Join(", ", Parameters)}) throws({Thrown}) -> {Result}";
+}
+
+/// <summary>
+///     <c>@thick (Int) -&gt; Int</c>: a function as a value of the language —
+///     code and a counted context holding what it captured. Calling one calls
+///     the code with the arguments and then the context, so its code has the
+///     <see cref="Implementation" /> type: the same with an <c>Object</c> last.
+/// </summary>
+public sealed class ThickFunctionType(FunctionType signature) : SilType {
+    public FunctionType Signature { get; } = signature;
+
+    public FunctionType Implementation =>
+        new([..Signature.Parameters, Object], Signature.Result, Signature.Thrown);
+
+    public override bool IsTrivial => false;
+    public override string ToString() => $"@thick {Signature}";
 }
 
 /// <summary><c>(Int, Bool)</c>: a tuple, laid out inline. The empty tuple is <see cref="SilType.Unit" />.</summary>
@@ -416,6 +439,32 @@ public sealed class RefElementAddrInst(SilValue reference, int field) : SilInstr
     public int Field { get; } = field;
     public override SilType Type => SilType.Address(((ClassType)Reference.Type).Fields[Field].Type);
     public override string Opcode => "ref_element_addr";
+}
+
+/// <summary>
+///     <c>partial_apply %f(%context) : $@thick (Int) -&gt; Int</c>: a closure —
+///     the code, whose last parameter takes the context, with the context
+///     object, which it consumes. With no context, the closure captured
+///     nothing and its context is null.
+/// </summary>
+public sealed class PartialApplyInst(SilValue function, SilValue? context, ThickFunctionType type)
+    : SilInstruction(context is null ? [function] : [function, context]) {
+    public SilValue Function => Operands[0];
+    public SilValue? Context => Operands.Count > 1 ? Operands[1] : null;
+    public override SilType Type { get; } = type;
+    public ThickFunctionType ThickType => (ThickFunctionType)Type;
+    public override string Opcode => "partial_apply";
+}
+
+/// <summary>
+///     <c>unchecked_ref_cast %0 : $Context</c>: an <c>Object</c> seen as the
+///     class it is known to be — a closure's context, inside its code. The
+///     result is borrowed from the operand.
+/// </summary>
+public sealed class UncheckedRefCastInst(SilValue value, ClassType type) : SilInstruction(value) {
+    public SilValue Value => Operands[0];
+    public override SilType Type { get; } = type;
+    public override string Opcode => "unchecked_ref_cast";
 }
 
 /// <summary><c>function_ref @f : $(Int) -&gt; Int</c>: a function as a value.</summary>

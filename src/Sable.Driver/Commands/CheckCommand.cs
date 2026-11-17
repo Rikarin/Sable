@@ -1,4 +1,5 @@
 using Sable.Driver.Packages;
+using Sable.Symbols;
 using Sable.Syntax;
 
 namespace Sable.Driver.Commands;
@@ -20,9 +21,10 @@ public sealed class CheckCommand : PackageCommand {
                 return 1;
             }
 
-            var errors = Pipeline.Check([SyntaxTree.Parse(new SourceText(File.ReadAllText(file), Path.GetFileName(file)))]);
-            foreach (var error in errors) {
-                Console.Error.WriteLine(error);
+            var tree = SyntaxTree.Parse(new SourceText(File.ReadAllText(file), Path.GetFileName(file)));
+            var (errors, warnings) = Pipeline.CheckAndLint([tree], LintConfiguration.Default, [tree]);
+            foreach (var diagnostic in errors.Concat(warnings)) {
+                Console.Error.WriteLine(diagnostic);
                 Console.Error.WriteLine();
             }
 

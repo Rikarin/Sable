@@ -110,8 +110,14 @@ public static class PackageBuilder {
 
             targets.AddRange(member.Bins);
             foreach (var target in targets) {
-                var errors = Pipeline.Check(Program(graph, member.Name, target));
+                var program = Program(graph, member.Name, target);
+                // The lints look at this member's own files, each once: the
+                // library with the library target, a binary's entry file with it.
+                var ownLibrary = member.LibrarySources().Count;
+                IReadOnlyList<SyntaxTree> linted = target is null ? [..program.Skip(program.Count - ownLibrary)] : [program[0]];
+                var (errors, warnings) = Pipeline.CheckAndLint(program, member.Manifest.Lints, linted);
                 Report(environment, errors);
+                Report(environment, warnings);
                 failed |= errors.Count > 0;
             }
         }

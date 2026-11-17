@@ -85,6 +85,9 @@ public sealed partial class Manifest {
     /// <summary><c>[registry] path</c>: where this package's registry is, relative to the manifest.</summary>
     public string? RegistryPath { get; init; }
 
+    /// <summary>The <c>[lints]</c> table (docs/05 §5.7): each lint's level, which <c>sable check</c> reports at.</summary>
+    public Sable.Symbols.LintConfiguration Lints { get; init; } = Sable.Symbols.LintConfiguration.Default;
+
     /// <summary>What was accepted but means nothing to this toolchain: unknown keys, settings not yet acted on.</summary>
     public IReadOnlyList<ManifestError> Warnings { get; init; } = [];
 
@@ -187,6 +190,20 @@ public sealed partial class Manifest {
             var (dev, release) = ReadProfiles(root);
             var build = Table(root, "build", "build") is { } b ? ReadBuild(b) : null;
             var registry = Table(root, "registry", "registry") is { } r ? String(r, "path", "registry.path") : null;
+            var lints = Sable.Symbols.LintConfiguration.Default;
+            if (Table(root, "lints", "lints") is { } lintTable) {
+                var levels = new List<KeyValuePair<string, string>>();
+                foreach (var key in lintTable.Keys) {
+                    if (String(lintTable, key, $"lints.{key}") is { } level) {
+                        levels.Add(new(key, level));
+                    }
+                }
+
+                lints = Sable.Symbols.LintConfiguration.FromTable(levels, out var problems);
+                foreach (var problem in problems) {
+                    _errors.Add(new(file, lintTable.Position.Line, "lints", problem));
+                }
+            }
 
             if (_errors.Count > 0) {
                 throw new ManifestException(_errors);
@@ -206,6 +223,7 @@ public sealed partial class Manifest {
                 Workspace = workspace,
                 Build = build,
                 RegistryPath = registry,
+                Lints = lints,
                 Warnings = _warnings,
             };
         }

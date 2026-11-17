@@ -81,6 +81,31 @@ public static class Pipeline {
     /// </summary>
     public static IReadOnlyList<string> Check(IReadOnlyList<SyntaxTree> program) => Errors(CompilationOf(program), program);
 
+    /// <summary>
+    ///     <c>sable check</c> with the lint set (docs/05 §5.7): the errors, and
+    ///     what the lints report over <paramref name="linted" /> — a lint at
+    ///     the error level among the errors, the rest as warnings. The lints run
+    ///     only on a program that type-checks.
+    /// </summary>
+    public static (IReadOnlyList<string> Errors, IReadOnlyList<string> Warnings) CheckAndLint(
+        IReadOnlyList<SyntaxTree> program,
+        LintConfiguration configuration,
+        IReadOnlyList<SyntaxTree> linted
+    ) {
+        var compilation = CompilationOf(program);
+        var errors = Errors(compilation, program);
+        if (errors.Count > 0) {
+            return (errors, []);
+        }
+
+        var warnings = new List<string>();
+        foreach (var (diagnostic, tree) in Lints.RunByFile(compilation, configuration, linted)) {
+            (diagnostic.Severity == DiagnosticSeverity.Error ? errors : warnings).Add(diagnostic.Format(tree.Text));
+        }
+
+        return (errors, warnings);
+    }
+
     static List<string> Errors(Compilation compilation, IReadOnlyList<SyntaxTree> program) {
         var order = program.Select(static (tree, index) => (tree, index)).ToDictionary(static p => p.tree, static p => p.index);
         return [

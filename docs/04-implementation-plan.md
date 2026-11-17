@@ -1376,9 +1376,12 @@ report.
   `unused_local`, `unused_parameter` (not for overrides or protocol
   requirements), `unused_import`, `var_never_mutated`, `shadowed_parameter`.
   Unreachable code is already the compiler's warning S6005. Entry point
-  `Lints.Run(compilation, configuration)`; **`sable check` should call it**
-  — `sable lint` stands in until then. Plugin loading of third-party lints is
-  not built.
+  `Lints.Run(compilation, configuration)`. `sable check` runs them over the
+  package's own files (not its dependencies'), at the levels of the
+  manifest's `[lints]` table, once the package type-checks; a lint at
+  `error` fails the check. `sable lint <paths>` lints loose files with levels
+  given on the command line. Plugin loading of third-party lints is not
+  built.
 
 ### Exit criteria
 - [ ] Cold build of a 100-package graph < 60 s; warm incremental < 1 s

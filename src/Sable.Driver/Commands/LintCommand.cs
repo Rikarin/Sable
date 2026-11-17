@@ -7,13 +7,12 @@ namespace Sable.Driver.Commands;
 ///     <c>sable lint</c>: the lint set of docs/05 §5.7 over some files.
 /// </summary>
 /// <remarks>
-///     A stand-in until <c>sable check</c> runs the lints itself, as
-///     <c>Lints.Run(compilation, configuration)</c> with the package's
-///     <c>[lints]</c> table read by <c>LintConfiguration.FromTable</c>.
+///     For loose files, with levels from the command line. A package's
+///     lints run with <c>sable check</c>, at its <c>[lints]</c> table's levels.
 /// </remarks>
 public sealed class LintCommand : Command {
     public override string Name => "lint";
-    public override string Summary => "run the lints over source files (until 'check' does)";
+    public override string Summary => "run the lints over loose source files ('check' lints a package)";
 
     public override string Usage => $"""
         usage: sable lint [paths...] [--allow <lint>] [--warn <lint>] [--error <lint>] [--list]

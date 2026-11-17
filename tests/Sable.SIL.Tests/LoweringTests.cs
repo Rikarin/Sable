@@ -321,7 +321,7 @@ public sealed class LoweringTests {
             }
 
             """.ReplaceLineEndings("\n"),
-            SilPrinter.Print(module)
+            SilPrinter.Print(module.Find("M.max")!)
         );
     }
 

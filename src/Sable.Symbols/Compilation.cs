@@ -52,7 +52,11 @@ public sealed partial class Compilation {
     readonly DiagnosticBag _declarationDiagnostics = new();
 
     Compilation(ImmutableArray<SyntaxTree> syntaxTrees, ParseOptions options) {
-        SyntaxTrees = syntaxTrees;
+        // Sable.Core's source comes with every compilation, after the files
+        // given, so that those keep their places (CoreLibrary). A
+        // compilation made from another passes the core's trees back in;
+        // they are not added twice.
+        SyntaxTrees = [..syntaxTrees.Where(static t => !CoreLibrary.Contains(t)), ..CoreLibrary.Trees];
         Options = options;
 
         var coreModule = new ModuleSymbol("Sable.Core");
@@ -662,8 +666,15 @@ public sealed partial class Compilation {
             IsMutating = declaration.Modifiers.Any(SyntaxKind.MutatingKeyword),
             IsOverride = declaration.Modifiers.Any(SyntaxKind.OverrideKeyword),
             IsOpen = declaration.Modifiers.Any(SyntaxKind.OpenKeyword),
-            IsAbstract = declaration.Body is null && declaration.ExpressionBody is null
+            IsAbstract = declaration.Body is null && declaration.ExpressionBody is null,
+            Builtin = BuiltinOf(declaration)
         };
+
+        // A builtin's body is the builtin: the function is as concrete as one
+        // written in Sable, and witnesses a requirement as one would.
+        if (function.Builtin is not null) {
+            function.IsAbstract = false;
+        }
 
         if (declaration.TypeParameters is { } typeParameters) {
             function.TypeParameters = [
@@ -870,8 +881,13 @@ public sealed partial class Compilation {
                 || list.Accessors.Any(static a => a.Keyword.Kind == SyntaxKind.SetKeyword),
             IsAbstract = declaration.Accessors is { } accessors
                 && accessors.Accessors.All(static a => a.Body is null && a.ExpressionBody is null),
-            HasInitializer = declaration.Declarator.Initializer is not null
+            HasInitializer = declaration.Declarator.Initializer is not null,
+            Builtin = BuiltinOf(declaration)
         };
+
+        if (field.Builtin is not null) {
+            field.IsAbstract = false;
+        }
 
         TypeBinder.BindFieldType(field, declaration);
         RecordDeclaration(declaration, field);

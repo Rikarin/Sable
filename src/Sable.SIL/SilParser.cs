@@ -50,6 +50,13 @@ public sealed class SilParser {
 
         static bool IsNameChar(char c) => char.IsLetterOrDigit(c) || c is '_' or '.' or '$';
 
+        // An operator's function is named for it, 'Sable.Core.Int.<': its
+        // characters belong to the name when they follow a dot or each other.
+        static bool IsOperatorName(string text, int at) =>
+            IsOperatorChar(text[at]) && (text[at - 1] == '.' || IsOperatorChar(text[at - 1]));
+
+        static bool IsOperatorChar(char c) => "<>=!+-*/%&|^~?".Contains(c, StringComparison.Ordinal);
+
         while (i < text.Length) {
             var c = text[i];
 
@@ -76,7 +83,7 @@ public sealed class SilParser {
 
             if (c is '@' or '%' or '#') {
                 i++;
-                while (i < text.Length && IsNameChar(text[i])) {
+                while (i < text.Length && (IsNameChar(text[i]) || c == '@' && IsOperatorName(text, i))) {
                     i++;
                 }
 

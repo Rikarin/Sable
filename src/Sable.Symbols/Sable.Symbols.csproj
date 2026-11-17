@@ -6,4 +6,8 @@
   <ItemGroup>
     <ProjectReference Include="../Sable.Syntax/Sable.Syntax.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- Sable.Core: the primitives' members and the core protocols, in Sable, part of every compilation. -->
+    <EmbeddedResource Include="../../lib/Sable.Core/*.sab" LogicalName="lib/Sable.Core/%(Filename)%(Extension)" />
+  </ItemGroup>
 </Project>

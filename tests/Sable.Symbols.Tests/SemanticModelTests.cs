@@ -306,8 +306,11 @@ public sealed class SemanticModelTests {
         var compilation = Compilation.Create(source)
             .WithBindOptions(new() { StepBudget = 10 });
 
+        // A budget this small binds Sable.Core's longer expressions no better
+        // than the probe's: only the probe's file is counted.
+        var program = compilation.SyntaxTrees[0];
         Assert.Single(
-            compilation.GetAllDiagnostics(),
+            compilation.GetAllDiagnosticsByFile().Where(d => d.Tree == program).Select(static d => d.Diagnostic),
             static d => d.Code == ErrorCode.ERR_ExpressionTooComplex
         );
     }

@@ -44,7 +44,7 @@ public sealed class FileScope {
 ///         one declaration does not bind the program.
 ///     </para>
 /// </remarks>
-public sealed class Compilation {
+public sealed partial class Compilation {
     readonly Dictionary<string, ModuleSymbol> _modules = new(StringComparer.Ordinal);
     readonly Dictionary<SyntaxTree, FileScope> _fileScopes = [];
     readonly Dictionary<SyntaxNode, Symbol> _symbolsBySyntax = [];
@@ -307,6 +307,7 @@ public sealed class Compilation {
         }
 
         AttachExtensions();
+        DeclareDerivations();
     }
 
     void ResolveImports(CompilationUnitSyntax unit, FileScope scope) {
@@ -585,6 +586,13 @@ public sealed class Compilation {
             SynthesizeMemberwiseInitializer(type);
         }
 
+        // '@derive(…)': the members are made once every type is declared.
+        foreach (var attribute in attributes) {
+            if (attribute.Name.ToString().Trim() == "derive") {
+                _derivations.Add((type, attribute, CurrentScope));
+            }
+        }
+
         // A class or actor with no initialiser of its own, whose fields all
         // start with a value, is made with 'init()'.
         if (typeKind is TypeKind.Class or TypeKind.Actor && !type.GetMembers("init").Any()
@@ -714,6 +722,7 @@ public sealed class Compilation {
         CurrentScope = scope;
         try {
             DeclareMember(declaration, container);
+            DeclareDerivations();
         } finally {
             CurrentScope = saved;
         }

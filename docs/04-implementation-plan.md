@@ -870,6 +870,37 @@ an argument had no type; `HashMap<String, String[>..]>()` parsed as
 comparisons; a conditional could not be broken before its `?`; and
 String's hash overflowed past a dozen characters.
 
+### `@derive`, as implemented
+
+`@derive(Equatable, Hashable, Comparable, Debug)` on a struct or a union
+(docs/06 §6.5; `tests/Sable.CodeGen.Tests/DeriveTests.cs`,
+`tests/Sable.Symbols.Tests/DeriveTests.cs`). It is conformance synthesis,
+not source generation: once every type is declared, the compilation adds the
+members (`==`, `<`, `hash()`, `debugDescription()`) as symbols on the type and
+the protocols to its base list, and builds their bodies as bound trees from
+the fields (`Compilation.Derive.cs`, `DerivedBodies.cs`), which SIL lowering
+takes like any other body. `==` is field-wise, `<` lexicographic in declaration
+order, `hash()` folds the fields' hashes (kept below 10^9+7, so it cannot
+overflow), and a union compares case by case — by case first, in declaration
+order, then by payload. `Debug` is a new `Sable.Core` protocol,
+`fn debugDescription() -> String`, giving `Point(x: 1, y: 2)`,
+`Shape.Circle(radius: 1.5)`, strings quoted and escaped, characters in single
+quotes and floats with their point; every primitive conforms. Hashable or
+Comparable bring Equatable unless the type writes its own `==`.
+
+On a generic type the conformance is conditional: `Pair<A, B>` is Equatable
+where its fields' types, substituted, are — decided per construction in
+`Conversions.Satisfies`, coinductively for a type that holds itself. A field
+that can never conform (one that mentions no parameter) is an error at the
+declaration naming the field; using `==` or `hash()` on a construction that
+does not conform is an error naming the field that is why. Operators of
+generic types now work generally: the binder finds them through the operand's
+type arguments and SIL lowering instantiates them from the operands. Classes
+and actors are refused: an object has identity, and equality by its fields
+would contradict it. Not yet: `Copy` and `Serializable` (the latter waits for
+reflection), optional and array fields (neither conforms to the protocols
+yet), and a directly recursive union, which SIL lowering does not lay out.
+
 ### Async, as implemented
 
 Done ahead of `Sable.Concurrency`, with the core of it in `Sable.Core`

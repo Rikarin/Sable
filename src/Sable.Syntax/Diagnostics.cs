@@ -137,6 +137,9 @@ public enum ErrorCode {
     ERR_ReferenceNeedsPlace = 3060,
     ERR_ReferenceOutlivesRoot = 3061,
     ERR_OverlappingAccess = 3062,
+    ERR_UnknownDerivation = 3070,
+    ERR_CannotDerive = 3071,
+    ERR_DerivedFieldDoesNotConform = 3072,
     ERR_NotReflectableKind = 3080,
     ERR_NotSupportedYet = 3099,
 

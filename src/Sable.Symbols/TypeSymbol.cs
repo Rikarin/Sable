@@ -117,6 +117,13 @@ public sealed class NamedTypeSymbol : TypeSymbol {
     /// <summary>The <c>where C.Item: P</c> requirements on associated types.</summary>
     public ImmutableArray<ConformanceRequirement> ConformanceRequirements { get; internal set; } = [];
 
+    /// <summary>
+    ///     The protocols <c>@derive</c> conformed this generic type to. Each
+    ///     holds of a construction only where its fields' types, substituted,
+    ///     conform too (docs/06 §6.5); see <see cref="DerivedConformance" />.
+    /// </summary>
+    public ImmutableArray<NamedTypeSymbol> DerivedConformances { get; internal set; } = [];
+
     /// <summary>Inheritance control, per spec/SYNTAX.md §2.</summary>
     public bool IsOpen { get; internal set; }
 

@@ -107,6 +107,8 @@ public sealed partial class SilGen {
             }
         }
 
+        AddDerived(functions);
+
         foreach (var (symbol, _, _) in functions) {
             var overloaded = functions.Count(f => f.Symbol.Name == symbol.Name
                 && ReferenceEquals(f.Symbol.ContainingSymbol, symbol.ContainingSymbol)) > 1;
@@ -248,7 +250,7 @@ public sealed partial class SilGen {
     readonly Queue<(FunctionSymbol Symbol, string Name, FunctionType Type, TypeSubstitution Substitution)> _pending = new();
 
     void LowerBody(FunctionSymbol symbol, SyntaxNode syntax, SemanticModel model, string name, FunctionType type, TypeSubstitution substitution) {
-        if (model.GetBoundNode(syntax) is not BoundBlock body) {
+        if ((_compilation.GetDerivedBody(symbol) ?? model.GetBoundNode(syntax)) is not BoundBlock body) {
             return;
         }
 
@@ -3657,7 +3659,11 @@ public sealed partial class SilGen {
             };
 
             var resultType = binary.OperatorKind == BinaryOperatorKind.UserDefined ? binary.Type : Core.Bool;
-            if (Expression(new BoundCall(binary.Syntax, null, callee, [first, second], resultType)) is not { } result) {
+            // An operator of a generic type takes its type arguments from the operands'.
+            var call = new BoundCall(binary.Syntax, null, callee, [first, second], resultType) {
+                Substitution = OwnerOf(callee) is { IsGenericDefinition: true } ? TypeSubstitution.For(Sub(first.Type)) : TypeSubstitution.Empty,
+            };
+            if (Expression(call) is not { } result) {
                 return null;
             }
 

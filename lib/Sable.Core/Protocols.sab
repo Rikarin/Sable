@@ -142,3 +142,66 @@ extension Bool: Equatable, Hashable {
     public operator == (lhs: Bool, rhs: Bool) -> Bool { return lhs == rhs }
     public fn hash() -> Int { return self ? 1 : 0 }
 }
+
+/// Values that describe themselves for debugging, the way source would
+/// write them: `Point(x: 1, y: 2)`, `"text"`, `'c'`. What `@derive(Debug)`
+/// makes, from the fields' own descriptions.
+public protocol Debug {
+    fn debugDescription() -> String
+}
+
+extension Int: Debug { public fn debugDescription() -> String { return "\(self)" } }
+extension I8: Debug { public fn debugDescription() -> String { return "\(self)" } }
+extension I16: Debug { public fn debugDescription() -> String { return "\(self)" } }
+extension I32: Debug { public fn debugDescription() -> String { return "\(self)" } }
+extension I64: Debug { public fn debugDescription() -> String { return "\(self)" } }
+extension U8: Debug { public fn debugDescription() -> String { return "\(self)" } }
+extension U16: Debug { public fn debugDescription() -> String { return "\(self)" } }
+extension U32: Debug { public fn debugDescription() -> String { return "\(self)" } }
+extension U64: Debug { public fn debugDescription() -> String { return "\(self)" } }
+extension UInt: Debug { public fn debugDescription() -> String { return "\(self)" } }
+extension F32: Debug { public fn debugDescription() -> String { return floatDebugText("\(self)") } }
+extension F64: Debug { public fn debugDescription() -> String { return floatDebugText("\(self)") } }
+
+/// A float as a literal is written: '4.0', not '4', so it reads as a float.
+fn floatDebugText(_ text: String) -> String {
+    var i = 0
+    while i < text.count {
+        let c = text.at(i)
+        if c == '.' || c == 'e' || c == 'E' || c == 'n' || c == 'i' {
+            return text
+        }
+        i = i + 1
+    }
+    return text + ".0"
+}
+extension Bool: Debug { public fn debugDescription() -> String { return self ? "true" : "false" } }
+
+extension Char: Debug {
+    /// In single quotes, as a literal is written.
+    public fn debugDescription() -> String { return "'" + String.fromChar(self) + "'" }
+}
+
+extension String: Debug {
+    /// In double quotes, with a quote, a backslash, a newline or a tab escaped.
+    public fn debugDescription() -> String {
+        var result = "\""
+        var i = 0
+        while i < self.count {
+            let c = self.at(i)
+            if c == '"' {
+                result = result + "\\\""
+            } else if c == '\\' {
+                result = result + "\\\\"
+            } else if c == '\n' {
+                result = result + "\\n"
+            } else if c == '\t' {
+                result = result + "\\t"
+            } else {
+                result = result + String.fromChar(c)
+            }
+            i = i + 1
+        }
+        return result + "\""
+    }
+}

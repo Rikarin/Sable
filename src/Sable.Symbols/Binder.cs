@@ -1000,11 +1000,14 @@ public sealed class Binder
             };
         }
 
-        // Members of the enclosing type, reached implicitly through self.
-        if (EnclosingType() is { } enclosing)
+        // Members of the enclosing type, reached implicitly through self —
+        // including the ones it inherits, which is the whole point of a base
+        // class.
+        if (EnclosingType() is { } enclosing
+            && LookupMember(enclosing, name) is { } inherited)
         {
-            var members = enclosing.GetMembers(name).ToList();
-            if (members.Count > 0) return BindMemberGroup(syntax, null, members, enclosing);
+            return BindMemberGroup(
+                syntax, null, inherited.Members, inherited.Owner, inherited.Substitution);
         }
 
         var moduleMembers = _scope.Module.GetMembers(name).ToList();

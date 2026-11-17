@@ -1,0 +1,217 @@
+module Corpus.Game
+
+// A small turn-based game, written against the type checker. Classes and
+// protocols here, where the JSON parser was structs and unions.
+
+public enum Direction { North, South, East, West }
+
+public struct Position {
+    public var x: Int
+    public var y: Int
+
+    public fn moved(_ direction: Direction) -> Position {
+        return match direction {
+            case .North => Position { x: x, y: y - 1 }
+            case .South => Position { x: x, y: y + 1 }
+            case .East  => Position { x: x + 1, y: y }
+            case .West  => Position { x: x - 1, y: y }
+        }
+    }
+
+    public fn distance(to other: Position) -> Int {
+        return (other.x - x).abs() + (other.y - y).abs()
+    }
+}
+
+public protocol Describable {
+    fn describe() -> String
+}
+
+public protocol Actor: Describable {
+    var health: Int { get }
+    fn isAlive() -> Bool
+    mutating fn damage(_ amount: Int)
+}
+
+public open class Creature: Actor {
+    public var name: String
+    public var health: Int
+    public var position: Position
+
+    public init(name: String, health: Int, position: Position) {
+        self.name = name
+        self.health = health
+        self.position = position
+    }
+
+    public fn describe() -> String {
+        return name
+    }
+
+    public fn isAlive() -> Bool {
+        return health > 0
+    }
+
+    public mutating fn damage(_ amount: Int) {
+        health = health - amount
+        if health < 0 {
+            health = 0
+        }
+    }
+
+    public open fn attackPower() -> Int {
+        return 1
+    }
+}
+
+public class Goblin: Creature {
+    public var rage: Int
+
+    public init(position: Position) {
+        super.init(name: "goblin", health: 8, position: position)
+        self.rage = 0
+    }
+
+    public override fn attackPower() -> Int {
+        return 2 + rage
+    }
+
+    public mutating fn enrage() {
+        rage = rage + 1
+    }
+}
+
+public class Hero: Creature {
+    public var potions: Int
+
+    public init(position: Position) {
+        super.init(name: "hero", health: 20, position: position)
+        self.potions = 2
+    }
+
+    public override fn attackPower() -> Int {
+        return 3
+    }
+
+    public mutating fn drink() -> Bool {
+        if potions == 0 {
+            return false
+        }
+        potions = potions - 1
+        health = health + 5
+        return true
+    }
+}
+
+public union Event {
+    Moved(who: String, to: Position)
+    Struck(attacker: String, defender: String, amount: Int)
+    Died(who: String)
+    Nothing
+}
+
+public struct World {
+    public var hero: Hero
+    public var monsters: Creature[>..]
+    public var log: Event[>..]
+    public var turn: Int
+
+    public mutating fn record(_ event: Event) {
+        log.append(event)
+    }
+
+    public mutating fn step(_ direction: Direction) {
+        turn = turn + 1
+        hero.position = hero.position.moved(direction)
+        record(Event.Moved(who: hero.describe(), to: hero.position))
+
+        for monster in monsters where monster.isAlive() {
+            if monster.position.distance(to: hero.position) <= 1 {
+                strike(monster, hero)
+            }
+        }
+    }
+
+    public mutating fn strike(_ attacker: Creature, _ defender: Creature) {
+        let amount = attacker.attackPower()
+        defender.damage(amount)
+
+        record(Event.Struck(
+            attacker: attacker.describe(),
+            defender: defender.describe(),
+            amount: amount))
+
+        if !defender.isAlive() {
+            record(Event.Died(who: defender.describe()))
+        }
+    }
+
+    public fn living() -> Int {
+        var count = 0
+        for monster in monsters {
+            if monster.isAlive() {
+                count = count + 1
+            }
+        }
+        return count
+    }
+
+    public fn nearest() -> Creature? {
+        var best: Creature? = none
+        var bestDistance = 0
+
+        for monster in monsters {
+            if !monster.isAlive() {
+                continue
+            }
+
+            let distance = monster.position.distance(to: hero.position)
+            if best == none || distance < bestDistance {
+                best = monster
+                bestDistance = distance
+            }
+        }
+        return best
+    }
+
+    public fn summary() -> String {
+        return "turn " + turn.toString() + ", " + living().toString() + " alive"
+    }
+}
+
+public fn describeAll(_ actors: (any Describable)[>..]) -> String {
+    var result = ""
+    for each in actors {
+        result = result + each.describe() + " "
+    }
+    return result
+}
+
+public fn render(_ event: Event) -> String {
+    return match event {
+        case .Moved(let who, let to) => who + " moved"
+        case .Struck(let attacker, let defender, let amount) =>
+            attacker + " hit " + defender + " for " + amount.toString()
+        case .Died(let who) => who + " died"
+        case .Nothing => ""
+    }
+}
+
+public fn countBy(_ events: Event[>..], _ predicate: (Event) -> Bool) -> Int {
+    var total = 0
+    for event in events {
+        if predicate(event) {
+            total = total + 1
+        }
+    }
+    return total
+}
+
+public fn deaths(_ events: Event[>..]) -> Int {
+    return countBy(events) { event in
+        return match event {
+            case .Died(let who) => true
+            default => false
+        }
+    }
+}

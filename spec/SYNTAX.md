@@ -151,6 +151,8 @@ async (A) -> C      // async function type
 A | B | C           // structural union
 some P              // opaque type conforming to P
 any P               // existential box conforming to P
+(any P)[]           // an array of them: 'some' and 'any' take the whole
+                    // type after them, so the array suffix needs parentheses
 P & Q               // protocol composition
 Foo<T, U>           // generic instantiation
 ```

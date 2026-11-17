@@ -346,11 +346,20 @@ internal sealed class TypeBinder(Compilation compilation)
             }
 
             case OpaqueTypeSyntax opaque:
-                return new OpaqueTypeSymbol(BindType(opaque.ConstraintType, context, scope));
+            {
+                var constraint = BindType(opaque.ConstraintType, context, scope);
+                return RequireProtocol(constraint, "some", opaque.ConstraintType.Span)
+                    ? new OpaqueTypeSymbol(constraint)
+                    : ErrorTypeSymbol.Instance;
+            }
 
             case ExistentialTypeSyntax existential:
-                return new ExistentialTypeSymbol(
-                    BindType(existential.ConstraintType, context, scope));
+            {
+                var constraint = BindType(existential.ConstraintType, context, scope);
+                return RequireProtocol(constraint, "any", existential.ConstraintType.Span)
+                    ? new ExistentialTypeSymbol(constraint)
+                    : ErrorTypeSymbol.Instance;
+            }
 
             case CompositionTypeSyntax composition:
                 return new CompositionTypeSymbol(
@@ -588,6 +597,35 @@ internal sealed class TypeBinder(Compilation compilation)
             return member;
         }
         return null;
+    }
+
+    /// <summary>
+    /// <c>some</c> and <c>any</c> take a protocol, or several composed.
+    /// </summary>
+    /// <remarks>
+    /// They also take the whole type after them, so <c>any P[]</c> is an
+    /// existential over an array rather than an array of existentials. Saying
+    /// the constraint is not a protocol is how that reads back to whoever
+    /// wrote it.
+    /// </remarks>
+    private bool RequireProtocol(TypeSymbol constraint, string keyword, TextSpan span)
+    {
+        if (constraint.IsError) return false;
+
+        if (constraint is CompositionTypeSymbol composition)
+        {
+            var ok = true;
+            foreach (var part in composition.Parts)
+                ok &= RequireProtocol(part, keyword, span);
+            return ok;
+        }
+
+        if (constraint is NamedTypeSymbol { TypeKind: TypeKind.Protocol }) return true;
+        if (constraint is TypeParameterSymbol) return true;
+
+        _diagnostics.Error(ErrorCode.ERR_NotAProtocol, span,
+            $"'{keyword}' takes a protocol, and '{constraint.ToDisplayString()}' is not one");
+        return false;
     }
 
     private ErrorTypeSymbol Error(ErrorCode code, TextSpan span, string message)

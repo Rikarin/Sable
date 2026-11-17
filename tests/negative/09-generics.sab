@@ -55,3 +55,9 @@ fn conformanceIsNotInheritance(_ value: any Named) -> Person {
 fn opaqueIsNotTheConcreteType(_ value: some Named) -> Person {
     return value                        //! S3004
 }
+
+fn anyTakesAProtocol(_ value: any Point) { }   //! S3024 takes a protocol
+
+fn anyBindsTheWholeType(_ values: any Named[>..]) { }   //! S3024 takes a protocol
+
+fn anArrayOfExistentialsNeedsParentheses(_ values: (any Named)[>..]) { }

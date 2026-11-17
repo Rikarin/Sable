@@ -74,6 +74,9 @@ public sealed class Compilation
 
     public ImmutableArray<SyntaxTree> SyntaxTrees { get; }
     public ParseOptions Options { get; }
+
+    /// <summary>What binding is allowed to spend; see <see cref="BindOptions"/>.</summary>
+    public BindOptions BindOptions { get; init; } = BindOptions.Default;
     public CoreTypes Core { get; }
 
     internal TypeBinder TypeBinder { get; }
@@ -124,7 +127,11 @@ public sealed class Compilation
 
     /// <summary>Adds files, returning a new compilation.</summary>
     public Compilation AddSyntaxTrees(params SyntaxTree[] trees) =>
-        new([.. SyntaxTrees, .. trees], Options);
+        new([.. SyntaxTrees, .. trees], Options) { BindOptions = BindOptions };
+
+    /// <summary>Returns a compilation that binds under different limits.</summary>
+    public Compilation WithBindOptions(BindOptions options) =>
+        new([.. SyntaxTrees], Options) { BindOptions = options };
 
     /// <summary>Looks a type up by its dotted path, such as <c>App.Shapes.Circle</c>.</summary>
     public NamedTypeSymbol? GetTypeByQualifiedName(string qualifiedName)

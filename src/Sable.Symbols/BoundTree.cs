@@ -93,6 +93,17 @@ public sealed class BoundSelfAccess(SyntaxNode syntax, TypeSymbol type)
     public override IEnumerable<BoundNode> Children => [];
 }
 
+/// <summary>
+/// <c>super</c>: self, seen as the base class, so a member reached through it
+/// is the base's rather than the override.
+/// </summary>
+public sealed class BoundSuperAccess(SyntaxNode syntax, NamedTypeSymbol baseType)
+    : BoundExpression(syntax, baseType)
+{
+    public NamedTypeSymbol BaseType { get; } = baseType;
+    public override IEnumerable<BoundNode> Children => [];
+}
+
 /// <summary>A reference to a type used as a value, as in <c>Int.self</c>.</summary>
 public sealed class BoundTypeExpression(SyntaxNode syntax, TypeSymbol referencedType)
     : BoundExpression(syntax, referencedType)

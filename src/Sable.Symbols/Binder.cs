@@ -61,6 +61,10 @@ public sealed class Binder
     /// <summary>True when something under the innermost <c>try</c> can throw.</summary>
     private bool _threwInTry;
 
+    /// <summary>Expressions bound for the current statement, against the budget.</summary>
+    private int _steps;
+    private bool _budgetSpent;
+
     /// <summary>
     /// What the innermost <c>do</c> body can throw, which is what its
     /// <c>catch</c> clauses match against.
@@ -134,6 +138,14 @@ public sealed class Binder
                 "this statement can never be reached"));
         }
 
+        // An initialiser's "return type" is the type being built; it is not
+        // something the body returns.
+        if (function.FunctionKind
+            is FunctionKind.Initializer or FunctionKind.Deinitializer)
+        {
+            return;
+        }
+
         if (function.ReturnType.Equals(Core.Void) || function.ReturnType.IsError) return;
         if (FlowAnalysis.AlwaysExits(bound)) return;
 
@@ -168,6 +180,16 @@ public sealed class Binder
         _returnType = savedReturn;
 
         return new BoundBlock(expression, [], [new BoundReturn(expression, value)]);
+    }
+
+    /// <summary>Binds a stored member's initialiser against its declared type.</summary>
+    public BoundExpression BindInitializer(ExpressionSyntax value, TypeSymbol expected)
+    {
+        PushScope();
+        var bound = BindExpression(value, expected.IsError ? null : expected);
+        if (!expected.IsError) bound = Convert(bound, expected, value);
+        PopScope();
+        return bound;
     }
 
     /// <summary>Binds a standalone statement, for tests and scripts.</summary>
@@ -450,7 +472,16 @@ public sealed class Binder
     // Statements
     // -----------------------------------------------------------------------
 
-    public BoundStatement BindStatement(StatementSyntax statement) => statement switch
+    public BoundStatement BindStatement(StatementSyntax statement)
+    {
+        // The budget is per statement, so a long body costs nothing extra and
+        // the diagnostic points at the one expression that ran out.
+        _steps = 0;
+        _budgetSpent = false;
+        return BindStatementCore(statement);
+    }
+
+    private BoundStatement BindStatementCore(StatementSyntax statement) => statement switch
     {
         BlockSyntax block => BindBlock(block),
         LocalDeclarationStatementSyntax declaration => BindLocalDeclaration(declaration),
@@ -807,6 +838,18 @@ public sealed class Binder
     public BoundExpression BindExpression(
         ExpressionSyntax expression, TypeSymbol? expectedType = null)
     {
+        if (++_steps > _compilation.BindOptions.StepBudget)
+        {
+            if (!_budgetSpent)
+            {
+                _budgetSpent = true;
+                _diagnostics.Error(ErrorCode.ERR_ExpressionTooComplex, expression.Span,
+                    "this expression is too complex to type-check in one piece: "
+                    + "split it up, or annotate a binding inside it");
+            }
+            return new BoundError(expression);
+        }
+
         var bound = BindExpressionCore(expression, expectedType);
         _bound[expression] = bound;
         return bound;
@@ -820,6 +863,7 @@ public sealed class Binder
         IdentifierNameSyntax name => BindName(name, name.Identifier.Text),
         GenericNameSyntax name => BindName(name, name.Identifier.Text),
         SelfExpressionSyntax self => BindSelf(self),
+        SuperExpressionSyntax super => BindSuper(super),
         ParenthesizedExpressionSyntax parenthesized =>
             BindExpression(parenthesized.Expression, expectedType),
         MemberAccessExpressionSyntax member => BindMemberAccess(member),
@@ -910,6 +954,26 @@ public sealed class Binder
 
         _diagnostics.Error(ErrorCode.ERR_SelfOutsideType, syntax.Span,
             "'self' is only available inside a type");
+        return new BoundError(syntax);
+    }
+
+    private BoundExpression BindSuper(SuperExpressionSyntax syntax)
+    {
+        if (EnclosingType() is { } type)
+        {
+            foreach (var baseType in type.BaseTypes)
+            {
+                if (baseType is NamedTypeSymbol { TypeKind: TypeKind.Class } baseClass)
+                    return new BoundSuperAccess(syntax, baseClass);
+            }
+
+            _diagnostics.Error(ErrorCode.ERR_NameNotFound, syntax.Span,
+                $"'{type.Name}' has no base class, so there is no 'super'");
+            return new BoundError(syntax);
+        }
+
+        _diagnostics.Error(ErrorCode.ERR_SelfOutsideType, syntax.Span,
+            "'super' is only available inside a type");
         return new BoundError(syntax);
     }
 
@@ -1026,6 +1090,21 @@ public sealed class Binder
 
             _diagnostics.Error(ErrorCode.ERR_NameNotFound, syntax.Name.Span,
                 $"'{typeExpression.ReferencedType.ToDisplayString()}' has no member named '{name}'");
+            return new BoundError(syntax, receiver);
+        }
+
+        if (receiver is BoundSuperAccess super)
+        {
+            var baseMembers = super.BaseType.GetMembers(name).ToList();
+            if (baseMembers.Count > 0)
+            {
+                return BindMemberGroup(
+                    syntax, receiver, baseMembers, super.BaseType,
+                    TypeSubstitution.For(super.BaseType));
+            }
+
+            _diagnostics.Error(ErrorCode.ERR_NameNotFound, syntax.Name.Span,
+                $"'{super.BaseType.ToDisplayString()}' has no member named '{name}'");
             return new BoundError(syntax, receiver);
         }
 

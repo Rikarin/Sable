@@ -88,6 +88,40 @@ public sealed class SemanticModel
         };
     }
 
+    /// <summary>
+    /// What a statement does with the names around it: what it declares,
+    /// reads, writes and captures, and what would have to cross the boundary
+    /// if it were pulled out into a function of its own.
+    /// </summary>
+    public DataFlowAnalysis AnalyzeDataFlow(StatementSyntax statement)
+    {
+        EnsureBound();
+
+        if (GetBoundNode(statement) is not { } region) return DataFlowAnalysis.Failed;
+        if (EnclosingBody(statement) is not { } body) return DataFlowAnalysis.Failed;
+
+        return RegionFlow.Data(region, body);
+    }
+
+    /// <summary>How control enters and leaves a statement.</summary>
+    public ControlFlowAnalysis AnalyzeControlFlow(StatementSyntax statement)
+    {
+        EnsureBound();
+
+        return GetBoundNode(statement) is { } region
+            ? RegionFlow.Control(region)
+            : ControlFlowAnalysis.Failed;
+    }
+
+    /// <summary>The bound body of the declaration a statement sits in.</summary>
+    private BoundBlock? EnclosingBody(SyntaxNode statement)
+    {
+        for (var node = statement.Parent; node is not null; node = node.Parent)
+            if (_bound.TryGetValue(node, out var bound) && bound is BoundBlock body) return body;
+
+        return null;
+    }
+
     /// <summary>The bound body of a function declaration, binding it if needed.</summary>
     public BoundBlock? GetBoundBody(FunctionDeclarationSyntax declaration)
     {
@@ -100,6 +134,10 @@ public sealed class SemanticModel
         if (_bodiesBound) return;
         _bodiesBound = true;
 
+        // A body cannot be bound before the signatures it mentions, including
+        // base types and whatever extensions added elsewhere.
+        _compilation.TypeBinder.ForceAll();
+
         if (SyntaxTree.Root is not CompilationUnitSyntax unit) return;
 
         var scope = _compilation.GetFileScope(SyntaxTree);
@@ -111,7 +149,31 @@ public sealed class SemanticModel
         switch (member)
         {
             case FunctionDeclarationSyntax declaration:
-                BindFunction(declaration, scope);
+                BindBody(declaration, declaration.Body, declaration.ExpressionBody, scope);
+                return;
+
+            case InitDeclarationSyntax declaration:
+                BindBody(declaration, declaration.Body, null, scope);
+                return;
+
+            case DeinitDeclarationSyntax declaration:
+                BindBody(declaration, declaration.Body, null, scope);
+                return;
+
+            case OperatorDeclarationSyntax declaration:
+                BindBody(declaration, declaration.Body, declaration.ExpressionBody, scope);
+                return;
+
+            case SubscriptDeclarationSyntax declaration:
+                BindSubscript(declaration, scope);
+                return;
+
+            case FieldDeclarationSyntax declaration:
+                BindField(declaration, scope);
+                return;
+
+            case ConstDeclarationSyntax declaration:
+                BindConstant(declaration, scope);
                 return;
 
             case StructDeclarationSyntax type: BindAll(type.Members, scope); return;
@@ -132,24 +194,118 @@ public sealed class SemanticModel
         foreach (var member in members) BindMember(member, scope);
     }
 
-    private void BindFunction(FunctionDeclarationSyntax declaration, FileScope scope)
+    /// <summary>Binds whichever body a member declaration carries.</summary>
+    private void BindBody(
+        SyntaxNode declaration,
+        BlockSyntax? body,
+        ExpressionSyntax? expressionBody,
+        FileScope scope)
     {
         if (_compilation.GetDeclaredSymbol(declaration) is not FunctionSymbol function) return;
-        if (declaration.Body is null && declaration.ExpressionBody is null) return;
+        if (body is null && expressionBody is null) return;
 
         var binder = new Binder(_compilation, scope, function);
 
-        if (declaration.Body is { } body)
+        _bound[declaration] = body is not null
+            ? binder.BindFunctionBody(function, body)
+            : binder.BindExpressionBody(function, expressionBody!);
+
+        Collect(binder);
+    }
+
+    private void BindSubscript(SubscriptDeclarationSyntax declaration, FileScope scope)
+    {
+        if (declaration.ExpressionBody is { } expression)
         {
-            var bound = binder.BindFunctionBody(function, body);
-            _bound[declaration] = bound;
-        }
-        else if (declaration.ExpressionBody is { } expression)
-        {
-            var bound = binder.BindExpressionBody(function, expression);
-            _bound[declaration] = bound;
+            BindBody(declaration, null, expression, scope);
+            return;
         }
 
+        if (_compilation.GetDeclaredSymbol(declaration) is not FunctionSymbol subscript) return;
+        BindAccessors(declaration.Accessors, subscript, subscript.ReturnType, scope);
+    }
+
+    private void BindField(FieldDeclarationSyntax declaration, FileScope scope)
+    {
+        if (_compilation.GetDeclaredSymbol(declaration) is not FieldSymbol field) return;
+
+        if (declaration.Declarator.Initializer is { } initializer)
+            BindInitializer(initializer.Value, field, field.Type, scope);
+
+        BindAccessors(declaration.Accessors, field, field.Type, scope);
+    }
+
+    private void BindConstant(ConstDeclarationSyntax declaration, FileScope scope)
+    {
+        if (_compilation.GetDeclaredSymbol(declaration) is not FieldSymbol constant) return;
+        BindInitializer(declaration.Initializer.Value, constant, constant.Type, scope);
+    }
+
+    /// <summary>
+    /// Binds the accessors of a computed member, each as a little function.
+    /// </summary>
+    /// <remarks>
+    /// Accessors have no symbols of their own: a getter is the member's type
+    /// returned, and a setter takes it as <c>newValue</c> and returns nothing.
+    /// Synthesising that here is enough for the body to be checked, and keeps
+    /// the declaration table free of symbols nothing can name.
+    /// </remarks>
+    private void BindAccessors(
+        AccessorListSyntax? accessors, Symbol owner, TypeSymbol valueType, FileScope scope)
+    {
+        if (accessors is null) return;
+
+        foreach (var accessor in accessors.Accessors)
+        {
+            if (accessor.Body is null && accessor.ExpressionBody is null) continue;
+
+            var isGetter = accessor.Keyword.Kind == SyntaxKind.GetKeyword;
+            var name = accessor.Keyword.Text;
+
+            var function = new FunctionSymbol(
+                name, owner, accessor, owner.DeclaredAccessibility, FunctionKind.Accessor);
+
+            if (!isGetter)
+            {
+                var parameterName = accessor.ParameterName.IsNone
+                    ? DefaultParameterName(accessor.Keyword.Kind)
+                    : accessor.ParameterName.Text;
+
+                var parameter = new ParameterSymbol(parameterName, null, function, accessor, 0);
+                parameter.TypeResolver = () => valueType;
+                function.Parameters = [parameter];
+            }
+
+            var returnType = isGetter ? valueType : _compilation.Core.Void;
+            function.ReturnTypeResolver = () => returnType;
+
+            var binder = new Binder(_compilation, scope, function);
+
+            _bound[accessor] = accessor.Body is { } body
+                ? binder.BindFunctionBody(function, body)
+                : binder.BindExpressionBody(function, accessor.ExpressionBody!);
+
+            Collect(binder);
+        }
+    }
+
+    /// <summary>What a setter-like accessor calls its incoming value.</summary>
+    private static string DefaultParameterName(SyntaxKind keyword) => keyword switch
+    {
+        SyntaxKind.DidSetKeyword => "oldValue",
+        _ => "newValue",
+    };
+
+    private void BindInitializer(
+        ExpressionSyntax value, Symbol owner, TypeSymbol expected, FileScope scope)
+    {
+        var binder = new Binder(_compilation, scope, owner);
+        binder.BindInitializer(value, expected);
+        Collect(binder);
+    }
+
+    private void Collect(Binder binder)
+    {
         foreach (var (syntax, node) in binder.BoundNodes) _bound[syntax] = node;
         _diagnostics.AddRange(binder.Diagnostics);
     }

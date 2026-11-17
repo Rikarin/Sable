@@ -1,0 +1,286 @@
+using Sable.Symbols;
+
+namespace Sable.Symbols.Tests;
+
+/// <summary>
+/// The semantic model as a product: what it answers for the tools that read
+/// it, rather than what the binder happens to compute.
+/// </summary>
+public sealed class SemanticModelTests
+{
+    private static (SemanticModel Model, SyntaxTree Tree) Compile(string source)
+    {
+        var compilation = Compilation.Create("module M\n" + source);
+        var tree = compilation.SyntaxTrees[0];
+        return (compilation.GetSemanticModel(tree), tree);
+    }
+
+    private static StatementSyntax NthStatement(SyntaxTree tree, int index) =>
+        tree.Root.DescendantNodes().OfType<BlockSyntax>().First().Statements[index];
+
+    private static IReadOnlyList<string> Names(IEnumerable<Symbol> symbols) =>
+        [.. symbols.Select(s => s.Name).Order(StringComparer.Ordinal)];
+
+    // ---- Every body is bound, not just 'fn' --------------------------------
+
+    [Fact]
+    public void AnInitializerBodyIsChecked()
+    {
+        var (model, _) = Compile("""
+            struct Point {
+                var x: Int
+                init(_ n: Int) { self.x = "no" }
+            }
+            """);
+        Assert.Contains(model.GetDiagnostics(), d => d.Code == ErrorCode.ERR_TypeMismatch);
+    }
+
+    [Fact]
+    public void AnOperatorBodyIsChecked()
+    {
+        var (model, _) = Compile("""
+            struct Money {
+                var cents: I64
+                operator + (a: Money, b: Money) -> Money { return 1 }
+            }
+            """);
+        Assert.Contains(model.GetDiagnostics(), d => d.Code == ErrorCode.ERR_TypeMismatch);
+    }
+
+    [Fact]
+    public void AnAccessorBodyIsChecked()
+    {
+        var (model, _) = Compile("""
+            struct Temperature {
+                var celsius: F64
+                var label: String { get => celsius }
+            }
+            """);
+        Assert.Contains(model.GetDiagnostics(), d => d.Code == ErrorCode.ERR_TypeMismatch);
+    }
+
+    [Fact]
+    public void ASetterSeesNewValue()
+    {
+        var (model, _) = Compile("""
+            struct Box {
+                var stored: Int
+                var value: Int {
+                    get => stored
+                    set { stored = newValue }
+                }
+            }
+            """);
+        Assert.DoesNotContain(
+            model.GetDiagnostics(), d => d.Severity == DiagnosticSeverity.Error);
+    }
+
+    [Fact]
+    public void AFieldInitializerIsChecked()
+    {
+        var (model, _) = Compile("""
+            struct Point { var x: Int = "no" }
+            """);
+        Assert.Contains(model.GetDiagnostics(), d => d.Code == ErrorCode.ERR_TypeMismatch);
+    }
+
+    [Fact]
+    public void SuperReachesTheBaseClass()
+    {
+        var (model, _) = Compile("""
+            open class Node {
+                var value: Int
+                init(value: Int) { self.value = value }
+                open fn describe() -> String { return "node" }
+            }
+            class Leaf: Node {
+                init(value: Int) { super.init(value: value) }
+                override fn describe() -> String { return super.describe() }
+            }
+            """);
+        var errors = model.GetDiagnostics()
+            .Where(d => d.Severity == DiagnosticSeverity.Error).ToList();
+        Assert.True(errors.Count == 0,
+            string.Join("\n", errors.Select(e => $"{e.Id}: {e.Message}")));
+    }
+
+    // ---- Data flow ---------------------------------------------------------
+
+    [Fact]
+    public void DataFlowReportsWhatAStatementReadsAndWrites()
+    {
+        var (model, tree) = Compile("""
+            fn probe(_ a: Int, _ b: Int) -> Int {
+                var total = 0
+                total = a + b
+                return total
+            }
+            """);
+
+        var flow = model.AnalyzeDataFlow(NthStatement(tree, 1));
+
+        Assert.True(flow.Succeeded);
+        Assert.Equal(["a", "b"], Names(flow.ReadInside));
+        Assert.Equal(["total"], Names(flow.WrittenInside));
+        Assert.Empty(flow.VariablesDeclared);
+    }
+
+    [Fact]
+    public void DataFlowReportsWhatCrossesTheBoundary()
+    {
+        var (model, tree) = Compile("""
+            fn probe(_ a: Int) -> Int {
+                var total = 0
+                total = a + 1
+                return total
+            }
+            """);
+
+        var flow = model.AnalyzeDataFlow(NthStatement(tree, 1));
+
+        Assert.Equal(["a"], Names(flow.DataFlowsIn));
+        Assert.Equal(["total"], Names(flow.DataFlowsOut));
+    }
+
+    [Fact]
+    public void AValueWrittenAndNeverReadDoesNotFlowOut()
+    {
+        var (model, tree) = Compile("""
+            fn probe(_ a: Int) -> Int {
+                var unused = 0
+                unused = a
+                return a
+            }
+            """);
+
+        var flow = model.AnalyzeDataFlow(NthStatement(tree, 1));
+        Assert.Empty(flow.DataFlowsOut);
+    }
+
+    [Fact]
+    public void ADeclarationIsReportedAsDeclared()
+    {
+        var (model, tree) = Compile("""
+            fn probe(_ a: Int) -> Int {
+                let doubled = a * 2
+                return doubled
+            }
+            """);
+
+        var flow = model.AnalyzeDataFlow(NthStatement(tree, 0));
+        Assert.Equal(["doubled"], Names(flow.VariablesDeclared));
+        Assert.Equal(["a"], Names(flow.DataFlowsIn));
+    }
+
+    [Fact]
+    public void AClosureReportsWhatItCaptures()
+    {
+        var (model, tree) = Compile("""
+            fn probe(_ a: Int) -> Int {
+                let f = () => { return a }
+                return f()
+            }
+            """);
+
+        var flow = model.AnalyzeDataFlow(NthStatement(tree, 0));
+        Assert.Equal(["a"], Names(flow.Captured));
+    }
+
+    // ---- Control flow ------------------------------------------------------
+
+    [Fact]
+    public void ControlFlowFindsTheReturns()
+    {
+        var (model, tree) = Compile("""
+            fn probe(_ a: Int) -> Int {
+                if a > 0 {
+                    return 1
+                } else {
+                    return 2
+                }
+            }
+            """);
+
+        var flow = model.AnalyzeControlFlow(NthStatement(tree, 0));
+
+        Assert.True(flow.Succeeded);
+        Assert.Equal(2, flow.ReturnStatements.Length);
+        Assert.False(flow.EndPointIsReachable);
+    }
+
+    [Fact]
+    public void AStatementThatFallsThroughHasAReachableEnd()
+    {
+        var (model, tree) = Compile("""
+            fn probe(_ a: Int) -> Int {
+                if a > 0 {
+                    return 1
+                }
+                return 2
+            }
+            """);
+
+        var flow = model.AnalyzeControlFlow(NthStatement(tree, 0));
+        Assert.True(flow.EndPointIsReachable);
+        Assert.Single(flow.ReturnStatements);
+    }
+
+    [Fact]
+    public void ABreakIsAnExitPoint()
+    {
+        var (model, tree) = Compile("""
+            fn probe(_ items: Int[]) -> Int {
+                for i in items {
+                    break
+                }
+                return 0
+            }
+            """);
+
+        var flow = model.AnalyzeControlFlow(NthStatement(tree, 0));
+        Assert.Single(flow.ExitPoints);
+        Assert.Empty(flow.ReturnStatements);
+    }
+
+    // ---- The step budget ---------------------------------------------------
+
+    [Fact]
+    public void AnExpressionOverTheBudgetIsReportedRatherThanBound()
+    {
+        var source = "module M\nfn probe() -> Int { return "
+            + string.Join(" + ", Enumerable.Repeat("1", 50))
+            + " }";
+
+        var compilation = Compilation.Create(source)
+            .WithBindOptions(new BindOptions { StepBudget = 10 });
+
+        Assert.Contains(compilation.GetAllDiagnostics(),
+            d => d.Code == ErrorCode.ERR_ExpressionTooComplex);
+    }
+
+    [Fact]
+    public void TheBudgetIsReportedOncePerStatement()
+    {
+        var source = "module M\nfn probe() -> Int { return "
+            + string.Join(" + ", Enumerable.Repeat("1", 50))
+            + " }";
+
+        var compilation = Compilation.Create(source)
+            .WithBindOptions(new BindOptions { StepBudget = 10 });
+
+        Assert.Single(
+            compilation.GetAllDiagnostics(),
+            d => d.Code == ErrorCode.ERR_ExpressionTooComplex);
+    }
+
+    [Fact]
+    public void TheDefaultBudgetIsGenerous()
+    {
+        var source = "module M\nfn probe() -> Int { return "
+            + string.Join(" + ", Enumerable.Repeat("1", 500))
+            + " }";
+
+        Assert.DoesNotContain(Compilation.Create(source).GetAllDiagnostics(),
+            d => d.Code == ErrorCode.ERR_ExpressionTooComplex);
+    }
+}

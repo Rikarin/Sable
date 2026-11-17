@@ -121,7 +121,10 @@ public sealed class BindingTests
     {
         const string extra = """
             struct Money {
-                operator + (a: Money, b: Money) -> Money { }
+                var cents: I64
+                operator + (a: Money, b: Money) -> Money {
+                    return Money { cents: a.cents + b.cents }
+                }
             }
             """;
 

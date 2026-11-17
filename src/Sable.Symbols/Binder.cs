@@ -28,6 +28,21 @@ public sealed class Binder
     private TypeSymbol _returnType;
     private int _loopDepth;
 
+    /// <summary>
+    /// True inside a closure body whose return type was not written and could
+    /// not be read off the context: the first <c>return</c> with a value fixes
+    /// it, and the rest are checked against that.
+    /// </summary>
+    private bool _inferringReturn;
+
+    /// <summary>
+    /// Type parameters of the call being bound that inference has not settled
+    /// yet. A closure argument treats one of these as "not known", so its own
+    /// body decides, rather than being checked against a name that stands for
+    /// nothing.
+    /// </summary>
+    private ImmutableArray<TypeParameterSymbol> _openTypeParameters = [];
+
     internal Binder(Compilation compilation, FileScope scope, Symbol containingSymbol)
     {
         _compilation = compilation;
@@ -467,6 +482,14 @@ public sealed class Binder
             return Record(statement, new BoundReturn(statement, null));
         }
 
+        if (_inferringReturn)
+        {
+            var inferred = BindExpression(statement.Expression);
+            _returnType = inferred.Type;
+            _inferringReturn = false;
+            return Record(statement, new BoundReturn(statement, inferred));
+        }
+
         var value = BindExpression(statement.Expression, _returnType);
 
         if (_returnType.Equals(Core.Void))
@@ -544,6 +567,12 @@ public sealed class Binder
         CastExpressionSyntax cast => BindCast(cast),
         TypeTestExpressionSyntax test => BindTypeTest(test),
         MatchExpressionSyntax match => BindMatch(match, expectedType),
+        ClosureExpressionSyntax closure => BindClosure(
+            closure, closure.CaptureList, closure.Signature.Parameters,
+            closure.Signature.ReturnType, closure.Body, expectedType),
+        BraceClosureExpressionSyntax brace => BindBraceClosure(brace, expectedType),
+        ImplicitParameterExpressionSyntax implicitParameter =>
+            BindImplicitParameter(implicitParameter),
         TryExpressionSyntax tryExpression => BindExpression(tryExpression.Expression, expectedType),
         _ => Unsupported(expression),
     };
@@ -808,26 +837,46 @@ public sealed class Binder
 
     private BoundExpression BindInvocation(InvocationExpressionSyntax syntax)
     {
-        var arguments = syntax.ArgumentList is { } list
-            ? list.Arguments.Select(a => BindExpression(a.Expression)).ToImmutableArray()
-            : [];
+        // A closure argument is left unbound: its parameter types come from
+        // the signature that is chosen, which is not known yet.
+        var argumentSyntax = ImmutableArray.CreateBuilder<ExpressionSyntax>();
+        var labelBuilder = ImmutableArray.CreateBuilder<string?>();
 
-        var labels = syntax.ArgumentList is { } labelled
-            ? labelled.Arguments
-                .Select(a => a.NameToken.IsNone ? null : a.NameToken.Text)
-                .ToImmutableArray()
-            : ImmutableArray<string?>.Empty;
+        if (syntax.ArgumentList is { } list)
+        {
+            foreach (var argument in list.Arguments)
+            {
+                argumentSyntax.Add(argument.Expression);
+                labelBuilder.Add(argument.NameToken.IsNone ? null : argument.NameToken.Text);
+            }
+        }
+
+        if (syntax.TrailingClosure is { } trailing)
+        {
+            argumentSyntax.Add(trailing);
+            labelBuilder.Add(null);
+        }
+
+        var syntaxes = argumentSyntax.ToImmutable();
+        var labels = labelBuilder.ToImmutable();
+
+        var arguments = syntaxes
+            .Select(e => IsClosure(e) ? new BoundUnboundClosure(e) : BindExpression(e))
+            .ToImmutableArray();
 
         var callee = BindCallee(syntax.Expression, arguments);
 
         switch (callee)
         {
             case BoundFunctionGroup group:
-                return BindCallToGroup(syntax, group, arguments, labels);
+                return BindCallToGroup(syntax, group, arguments, labels, syntaxes);
 
             case BoundUnionCaseGroup unionCase:
                 return new BoundUnionCaseConstruction(
                     syntax, unionCase.Type, unionCase.UnionCase, arguments);
+
+            case BoundExpression value when Expand(value.Type) is FunctionTypeSymbol functionType:
+                return BindCallToValue(syntax, value, functionType, arguments, syntaxes);
 
             case BoundTypeExpression typeExpression
                 when typeExpression.ReferencedType is NamedTypeSymbol namedType:
@@ -843,7 +892,7 @@ public sealed class Binder
                 }
 
                 var group = new BoundFunctionGroup(syntax, null, initializers);
-                return BindCallToGroup(syntax, group, arguments, labels);
+                return BindCallToGroup(syntax, group, arguments, labels, syntaxes);
             }
 
             default:
@@ -854,6 +903,43 @@ public sealed class Binder
                 }
                 return new BoundError(syntax, [callee, .. arguments]);
         }
+    }
+
+    /// <summary>True for a closure argument, through any parentheses.</summary>
+    private static bool IsClosure(ExpressionSyntax expression) => expression switch
+    {
+        ClosureExpressionSyntax or BraceClosureExpressionSyntax => true,
+        ParenthesizedExpressionSyntax parenthesized => IsClosure(parenthesized.Expression),
+        _ => false,
+    };
+
+    /// <summary>Calls a value of function type, which has no overloads to pick between.</summary>
+    private BoundExpression BindCallToValue(
+        InvocationExpressionSyntax syntax,
+        BoundExpression callee,
+        FunctionTypeSymbol type,
+        ImmutableArray<BoundExpression> arguments,
+        ImmutableArray<ExpressionSyntax> syntaxes)
+    {
+        if (arguments.Length != type.ParameterTypes.Length)
+        {
+            _diagnostics.Error(ErrorCode.ERR_NoMatchingOverload, syntax.Span,
+                $"this takes {type.ParameterTypes.Length} argument(s), "
+                + $"not {arguments.Length}");
+            return new BoundError(syntax, [callee, .. arguments]);
+        }
+
+        var converted = ImmutableArray.CreateBuilder<BoundExpression>(arguments.Length);
+        for (var i = 0; i < arguments.Length; i++)
+        {
+            var argument = arguments[i] is BoundUnboundClosure
+                ? BindExpression(syntaxes[i], type.ParameterTypes[i])
+                : arguments[i];
+            converted.Add(Convert(argument, type.ParameterTypes[i], argument.Syntax));
+        }
+
+        return new BoundIndirectCall(
+            syntax, type.ReturnType, callee, converted.ToImmutable());
     }
 
     private BoundExpression BindCallee(
@@ -867,16 +953,53 @@ public sealed class Binder
         InvocationExpressionSyntax syntax,
         BoundFunctionGroup group,
         ImmutableArray<BoundExpression> arguments,
-        ImmutableArray<string?> labels)
+        ImmutableArray<string?> labels,
+        ImmutableArray<ExpressionSyntax> syntaxes)
     {
         var outer = group.Substitution ?? TypeSubstitution.Empty;
         var resolved = ResolveOverload(group.Candidates, arguments, labels, syntax, outer);
 
-        if (resolved is null) return new BoundError(syntax, arguments.ToArray());
+        if (resolved is null)
+        {
+            // Bind the closures anyway, so the body is still checked and the
+            // semantic model has something to say about it.
+            foreach (var argumentSyntax in syntaxes)
+                if (IsClosure(argumentSyntax)) BindExpression(argumentSyntax);
+
+            return new BoundError(syntax, arguments.ToArray());
+        }
 
         // The receiver's substitution, plus whatever the arguments imply for
         // the function's own type parameters.
         var substitution = Combine(outer, Infer(resolved, arguments, outer));
+
+        // Now that a signature is chosen, the closures have parameter types.
+        if (arguments.Any(a => a is BoundUnboundClosure))
+        {
+            var saved = _openTypeParameters;
+            _openTypeParameters =
+            [
+                .. resolved.TypeParameters.Where(p => substitution.Lookup(p) is null),
+            ];
+
+            var rebound = arguments.ToBuilder();
+            for (var i = 0; i < rebound.Count; i++)
+            {
+                if (rebound[i] is not BoundUnboundClosure) continue;
+
+                var expected = i < resolved.Parameters.Length
+                    ? substitution.Apply(resolved.Parameters[i].Type)
+                    : null;
+                rebound[i] = BindExpression(syntaxes[i], expected);
+            }
+
+            _openTypeParameters = saved;
+            arguments = rebound.ToImmutable();
+
+            // A closure's return type can settle a type parameter nothing else
+            // mentions, so inference runs again with them bound.
+            substitution = Combine(outer, Infer(resolved, arguments, outer));
+        }
 
         var converted = ImmutableArray.CreateBuilder<BoundExpression>(arguments.Length);
         for (var i = 0; i < arguments.Length; i++)
@@ -1110,6 +1233,274 @@ public sealed class Binder
 
         return new BoundArray(syntax, new ArrayTypeSymbol(elementType, arrayKind), elements);
     }
+
+    // -----------------------------------------------------------------------
+    // Closures
+    // -----------------------------------------------------------------------
+
+    private BoundExpression BindBraceClosure(
+        BraceClosureExpressionSyntax syntax, TypeSymbol? expectedType) =>
+        BindClosure(
+            syntax,
+            syntax.CaptureList,
+            syntax.Header?.Parameters ?? default,
+            syntax.Header?.ReturnType,
+            syntax,
+            expectedType);
+
+    /// <summary>
+    /// Binds a closure in either spelling, against the type the context wants.
+    /// </summary>
+    /// <remarks>
+    /// A closure parameter may leave its type out, in which case the expected
+    /// function type supplies it. When the closure declares no parameters at
+    /// all the expected type supplies them whole, under the names
+    /// <c>$0</c>, <c>$1</c> and so on, which is what the shorthand refers to.
+    /// </remarks>
+    private BoundExpression BindClosure(
+        ExpressionSyntax syntax,
+        CaptureListSyntax? captureList,
+        SeparatedSyntaxList<ClosureParameterSyntax> declared,
+        TypeSyntax? returnTypeSyntax,
+        SyntaxNode body,
+        TypeSymbol? expectedType)
+    {
+        var expected = Expand(expectedType) as FunctionTypeSymbol;
+
+        var symbol = new FunctionSymbol(
+            "", _containingSymbol, syntax, Accessibility.Private, FunctionKind.Ordinary)
+        {
+            IsAsync = expected?.IsAsync ?? false,
+        };
+
+        // Captures are bound in the enclosing scope, before the closure's own
+        // scope exists, because that is where their names are written.
+        var captures = BindCaptures(captureList);
+
+        var parameters = ImmutableArray.CreateBuilder<ParameterSymbol>();
+        var count = declared.Count;
+
+        for (var i = 0; i < count; i++)
+        {
+            var parameterSyntax = declared[i];
+            var parameter = new ParameterSymbol(
+                parameterSyntax.Identifier.Text, null, symbol, parameterSyntax, i);
+
+            TypeSymbol parameterType;
+            if (parameterSyntax.Type is { } annotation)
+            {
+                parameterType = _compilation.TypeBinder.BindType(annotation, symbol, _scope);
+            }
+            else if (expected is not null
+                     && i < expected.ParameterTypes.Length
+                     && !IsOpen(expected.ParameterTypes[i]))
+            {
+                parameterType = expected.ParameterTypes[i];
+            }
+            else
+            {
+                _diagnostics.Error(ErrorCode.ERR_CannotInferType, parameterSyntax.Span,
+                    $"the type of '{parameterSyntax.Identifier.Text}' cannot be inferred here, "
+                    + "so write it");
+                parameterType = ErrorTypeSymbol.Instance;
+            }
+
+            parameter.TypeResolver = () => parameterType;
+            parameters.Add(parameter);
+        }
+
+        // No parameter list: the expected type names them, and '$0' finds them.
+        if (count == 0 && expected is not null && !expected.ParameterTypes.Any(IsOpen))
+        {
+            for (var i = 0; i < expected.ParameterTypes.Length; i++)
+            {
+                var implicitType = expected.ParameterTypes[i];
+                var parameter = new ParameterSymbol($"${i}", null, symbol, null, i);
+                parameter.TypeResolver = () => implicitType;
+                parameters.Add(parameter);
+            }
+        }
+
+        symbol.Parameters = parameters.ToImmutable();
+
+        var returnType =
+            returnTypeSyntax is { } declaredReturn
+                ? _compilation.TypeBinder.BindType(declaredReturn, symbol, _scope)
+                : expected is not null && !IsOpen(expected.ReturnType)
+                    ? expected.ReturnType
+                    : null;
+
+        var inferring = returnType is null;
+        symbol.ReturnTypeResolver = () => returnType ?? Core.Void;
+
+        var bound = BindClosureBody(symbol, body, returnType ?? Core.Void, inferring, captures);
+
+        var type = new FunctionTypeSymbol(
+            [.. symbol.Parameters.Select(p => p.Type)],
+            symbol.ReturnType,
+            symbol.IsAsync);
+
+        return Record(syntax, new BoundClosure(syntax, type, symbol, captures, bound));
+    }
+
+    /// <summary>Binds a closure's body with its parameters in scope.</summary>
+    private BoundBlock BindClosureBody(
+        FunctionSymbol symbol,
+        SyntaxNode body,
+        TypeSymbol returnType,
+        bool inferring,
+        ImmutableArray<BoundCapture> captures)
+    {
+        var savedSymbol = _containingSymbol;
+        var savedReturn = _returnType;
+        var savedInferring = _inferringReturn;
+        var savedLoopDepth = _loopDepth;
+        var savedOpen = _openTypeParameters;
+
+        _containingSymbol = symbol;
+        _returnType = returnType;
+        _inferringReturn = inferring;
+        _loopDepth = 0;
+        _openTypeParameters = [];
+
+        PushScope();
+        foreach (var parameter in symbol.Parameters) Declare(parameter.Name, parameter);
+
+        // '[name = value]' introduces a name the body sees and the scope around
+        // it does not.
+        foreach (var capture in captures)
+            if (capture.Symbol is LocalSymbol local) Declare(local.Name, local);
+
+        BoundBlock bound;
+        switch (body)
+        {
+            case ExpressionSyntax expression and not BraceClosureExpressionSyntax:
+            {
+                var value = BindExpression(expression, inferring ? null : _returnType);
+                if (inferring)
+                {
+                    _returnType = value.Type.Equals(Core.Never) ? Core.Void : value.Type;
+                    _inferringReturn = false;
+                }
+                else if (!_returnType.Equals(Core.Void))
+                {
+                    value = Convert(value, _returnType, expression);
+                }
+
+                bound = new BoundBlock(expression, [],
+                    [_returnType.Equals(Core.Void)
+                        ? new BoundExpressionStatement(expression, value)
+                        : new BoundReturn(expression, value)]);
+                break;
+            }
+
+            case BlockSyntax block:
+                bound = BindBlock(block);
+                break;
+
+            case BraceClosureExpressionSyntax brace:
+            {
+                var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+                foreach (var statement in brace.Statements) statements.Add(BindStatement(statement));
+                var locals = _locals[^1].Values.OfType<LocalSymbol>().ToImmutableArray();
+                bound = new BoundBlock(brace, locals, statements.ToImmutable());
+                break;
+            }
+
+            default:
+                bound = new BoundBlock(body, [], []);
+                break;
+        }
+
+        // Nothing returned a value, so the closure returns nothing.
+        if (_inferringReturn) _returnType = Core.Void;
+
+        var resolved = _returnType;
+        symbol.ReturnTypeResolver = () => resolved;
+
+        PopScope();
+        _openTypeParameters = savedOpen;
+        _loopDepth = savedLoopDepth;
+        _inferringReturn = savedInferring;
+        _returnType = savedReturn;
+        _containingSymbol = savedSymbol;
+        return bound;
+    }
+
+    private ImmutableArray<BoundCapture> BindCaptures(CaptureListSyntax? captureList)
+    {
+        if (captureList is null) return [];
+
+        var captures = ImmutableArray.CreateBuilder<BoundCapture>();
+        foreach (var item in captureList.Items)
+        {
+            var kind = item.SpecifierToken.Kind switch
+            {
+                SyntaxKind.WeakKeyword => CaptureKind.Weak,
+                SyntaxKind.UnownedKeyword => CaptureKind.Unowned,
+                _ => item.Expression is null ? CaptureKind.Default : CaptureKind.ByValue,
+            };
+
+            var name = item.Identifier.Text;
+
+            if (item.Expression is { } expression)
+            {
+                var value = BindExpression(expression);
+                var local = new LocalSymbol(name, _containingSymbol, item, false);
+                local.TypeResolver = () => value.Type;
+                captures.Add(new BoundCapture(item, local, kind, value));
+                continue;
+            }
+
+            // A bare name in a capture list has to name something already in
+            // scope; 'self' is the one that needs no local.
+            if (name == "self" || item.Identifier.Kind == SyntaxKind.SelfKeyword)
+            {
+                if (EnclosingType() is { } enclosing)
+                {
+                    captures.Add(new BoundCapture(
+                        item, enclosing, kind, new BoundSelfAccess(item, enclosing)));
+                }
+                continue;
+            }
+
+            var captured = BindNameAsValue(name, item);
+            var symbol = captured switch
+            {
+                BoundLocalAccess local => (Symbol)local.Local,
+                BoundParameterAccess parameter => parameter.Parameter,
+                BoundFieldAccess field => field.Field,
+                _ => null,
+            };
+
+            if (symbol is not null) captures.Add(new BoundCapture(item, symbol, kind, captured));
+        }
+
+        return captures.ToImmutable();
+    }
+
+    private BoundExpression BindImplicitParameter(ImplicitParameterExpressionSyntax syntax)
+    {
+        var name = "$" + syntax.NumberToken.Text;
+
+        if (LookupLocal(name) is ParameterSymbol parameter)
+            return new BoundParameterAccess(syntax, parameter);
+
+        _diagnostics.Error(ErrorCode.ERR_NameNotFound, syntax.Span,
+            $"'{name}' is only available inside a closure whose parameter types are known");
+        return new BoundError(syntax);
+    }
+
+    /// <summary>True for a type inference has not settled yet.</summary>
+    private bool IsOpen(TypeSymbol type) =>
+        type is TypeParameterSymbol parameter && _openTypeParameters.Contains(parameter);
+
+    /// <summary>Looks through an alias or an optional for a function type.</summary>
+    private static TypeSymbol? Expand(TypeSymbol? type) => type switch
+    {
+        OptionalTypeSymbol optional => optional.UnderlyingType,
+        _ => type,
+    };
 
     private BoundExpression BindRecordExpression(RecordExpressionSyntax syntax)
     {

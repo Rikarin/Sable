@@ -414,6 +414,64 @@ public sealed class BoundDefer(SyntaxNode syntax, BoundStatement body) : BoundSt
     public override IEnumerable<BoundNode> Children => Nodes(Body);
 }
 
+/// <summary>A call through a value of function type, with no symbol to name.</summary>
+public sealed class BoundIndirectCall(
+    SyntaxNode syntax,
+    TypeSymbol type,
+    BoundExpression callee,
+    ImmutableArray<BoundExpression> arguments) : BoundExpression(syntax, type)
+{
+    public BoundExpression Callee { get; } = callee;
+    public ImmutableArray<BoundExpression> Arguments { get; } = arguments;
+
+    public override IEnumerable<BoundNode> Children => Nodes(Callee).Concat(Arguments);
+}
+
+/// <summary>One name a closure captures from the scope around it.</summary>
+public sealed class BoundCapture(
+    SyntaxNode syntax, Symbol symbol, CaptureKind captureKind, BoundExpression? initializer)
+{
+    public SyntaxNode Syntax { get; } = syntax;
+    public Symbol Symbol { get; } = symbol;
+    public CaptureKind CaptureKind { get; } = captureKind;
+
+    /// <summary>The value for <c>[name = expression]</c>, when one was given.</summary>
+    public BoundExpression? Initializer { get; } = initializer;
+}
+
+/// <summary>How a closure holds onto what it captured, per SYNTAX.md §17.</summary>
+public enum CaptureKind { Default, Weak, Unowned, ByValue }
+
+/// <summary>A closure: an anonymous function, with what it captured.</summary>
+public sealed class BoundClosure(
+    SyntaxNode syntax,
+    FunctionTypeSymbol type,
+    FunctionSymbol symbol,
+    ImmutableArray<BoundCapture> captures,
+    BoundBlock body) : BoundExpression(syntax, type)
+{
+    public FunctionSymbol Symbol { get; } = symbol;
+    public ImmutableArray<BoundCapture> Captures { get; } = captures;
+    public BoundBlock Body { get; } = body;
+
+    public override IEnumerable<BoundNode> Children =>
+        Captures.Select(c => c.Initializer).OfType<BoundNode>().Append(Body);
+}
+
+/// <summary>
+/// A closure argument whose parameter types are not known yet.
+/// </summary>
+/// <remarks>
+/// It stands in during overload resolution and is replaced by a
+/// <see cref="BoundClosure"/> once the chosen signature says what the
+/// parameters are. One should never survive into a finished bound tree.
+/// </remarks>
+public sealed class BoundUnboundClosure(SyntaxNode syntax)
+    : BoundExpression(syntax, ErrorTypeSymbol.Instance)
+{
+    public override IEnumerable<BoundNode> Children => [];
+}
+
 /// <summary>A function declared inside another function's body.</summary>
 public sealed class BoundLocalFunction(
     SyntaxNode syntax, FunctionSymbol symbol, BoundBlock? body) : BoundStatement(syntax)

@@ -1,0 +1,72 @@
+module Corpus.Closures
+
+public fn apply(_ value: Int, _ transform: (Int) -> Int) -> Int {
+    return transform(value)
+}
+
+public fn applyTwice(_ value: Int, _ transform: (Int) -> Int) -> Int {
+    return transform(transform(value))
+}
+
+public fn combine<T, U>(_ value: T, _ project: (T) -> U) -> U {
+    return project(value)
+}
+
+public fn doubled(_ n: Int) -> Int {
+    let double = (x: Int) => x * 2
+    return apply(n, double)
+}
+
+public fn inferredParameter(_ n: Int) -> Int {
+    return apply(n, x => x + 1)
+}
+
+public fn shorthand(_ n: Int) -> Int {
+    return apply(n, { $0 * 3 })
+}
+
+public fn trailing(_ n: Int) -> Int {
+    return applyTwice(n) { $0 - 1 }
+}
+
+public fn projected(_ n: Int) -> Bool {
+    return combine(n, x => x > 0)
+}
+
+public fn captures(_ n: Int) -> Int {
+    let offset = 10
+    let add = (x: Int) => x + offset
+    return add(n)
+}
+
+public fn explicitCapture(_ n: Int) -> Int {
+    let base = 2
+    let f = [copied = base] (x: Int) => x + copied
+    return f(n)
+}
+
+public fn blockBody(_ n: Int) -> Int {
+    let f = (x: Int) => {
+        let doubled = x * 2
+        return doubled + 1
+    }
+    return f(n)
+}
+
+public fn voidClosure() -> Int {
+    var total = 0
+    let bump = () => { total = total + 1 }
+    bump()
+    return total
+}
+
+public fn annotatedResult(_ n: Int) -> I64 {
+    let widen = (x: Int) -> I64 => 0
+    return widen(n)
+}
+
+public fn storedInVariable(_ n: Int) -> Int {
+    var transform: (Int) -> Int = x => x
+    transform = x => x * x
+    return transform(n)
+}

@@ -1478,7 +1478,13 @@ internal sealed class Parser
             else if (kind is SyntaxKind.CloseParenToken)
             {
                 depth--;
-                if (depth == 0) return Peek(offset + 1).Kind == SyntaxKind.FatArrowToken;
+                if (depth == 0)
+                {
+                    // '=>' is the body; '->' is a written return type, and no
+                    // expression can follow a parenthesised one with an arrow.
+                    return Peek(offset + 1).Kind
+                        is SyntaxKind.FatArrowToken or SyntaxKind.ArrowToken;
+                }
             }
             else if (kind is SyntaxKind.EndOfFile) return false;
             offset++;

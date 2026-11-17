@@ -145,6 +145,10 @@ internal sealed class TypeSubstitution
         switch (parameter)
         {
             case TypeParameterSymbol typeParameter when inferrable.Contains(typeParameter):
+                // An error says nothing about the parameter, and binding it to
+                // one would turn a single mistake into a cascade.
+                if (argument.IsError) return true;
+
                 if (into.TryGetValue(typeParameter, out var existing))
                     return existing.Equals(argument);
 

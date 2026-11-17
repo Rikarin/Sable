@@ -1,0 +1,51 @@
+module Negative.Inheritance
+
+public open class Shape {
+    public open fn area() -> F64 {
+        return 0.0
+    }
+
+    public fn name() -> String {
+        return "shape"
+    }
+}
+
+public sealed class Circle: Shape {
+    public override fn area() -> F64 {
+        return 3.0
+    }
+}
+
+public class Square: Circle { }         //! S3044 is sealed
+
+public abstract class Abstract {
+    public init() { }
+}
+
+fn instantiatingAnAbstractClass() -> Abstract {
+    return Abstract()                   //! S3045 is abstract
+}
+
+public class Missing: Shape {
+    public fn area() -> F64 {           //! S3042 needs 'override'
+        return 1.0
+    }
+}
+
+public class Spurious: Shape {
+    public override fn missing() -> Int {   //! S3043 no base class declares it
+        return 1
+    }
+}
+
+public class Shadowing: Shape {
+    public override fn name() -> String {
+        return "shadow"
+    }
+}
+
+public class DifferentSignature: Shape {
+    public fn area(_ scale: F64) -> F64 {
+        return scale
+    }
+}

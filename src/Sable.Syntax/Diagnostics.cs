@@ -112,6 +112,10 @@ public enum ErrorCode
     ERR_MemberAccessMismatch = 3039,
     ERR_NotAccessible = 3040,
     ERR_NotMutable = 3041,
+    ERR_MissingOverride = 3042,
+    ERR_NothingToOverride = 3043,
+    ERR_NotOpen = 3044,
+    ERR_CannotInstantiate = 3045,
     ERR_NotSupportedYet = 3099,
 
     // ---- Patterns and flow (S6000-S6999) ---------------------------------

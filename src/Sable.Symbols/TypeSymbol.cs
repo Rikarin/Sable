@@ -115,6 +115,15 @@ public sealed class NamedTypeSymbol : TypeSymbol
     /// </remarks>
     public ImmutableArray<TypeParameterSymbol> AssociatedTypes { get; internal set; } = [];
 
+    /// <summary>Inheritance control, per spec/SYNTAX.md §2.</summary>
+    public bool IsOpen { get; internal set; }
+
+    /// <summary>True for <c>sealed class</c>: it may not be subclassed.</summary>
+    public bool IsSealed { get; internal set; }
+
+    /// <summary>True for <c>abstract class</c>: it cannot be instantiated.</summary>
+    public bool IsAbstract { get; internal set; }
+
     public ImmutableArray<TypeSymbol> BaseTypes
     {
         get => _baseTypes;

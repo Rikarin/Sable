@@ -66,7 +66,111 @@ internal static class ConformanceChecker
         {
             Report(diagnostics, ErrorCode.ERR_CircularInheritance, type,
                 $"'{type.Name}' inherits from itself");
+            return;
         }
+
+        CheckInheritance(type, diagnostics);
+        CheckOverrides(type, diagnostics);
+    }
+
+    /// <summary>What a base class allows, per spec/SYNTAX.md §2.</summary>
+    private static void CheckInheritance(NamedTypeSymbol type, DiagnosticBag diagnostics)
+    {
+        foreach (var baseType in type.BaseTypes)
+        {
+            if (baseType is not NamedTypeSymbol { TypeKind: TypeKind.Class } baseClass) continue;
+
+            if (baseClass.IsSealed)
+            {
+                Report(diagnostics, ErrorCode.ERR_NotOpen, type,
+                    $"'{baseClass.Name}' is sealed, so '{type.Name}' cannot inherit from it");
+                continue;
+            }
+
+            // 'open' is required to subclass across modules; inside one, a
+            // class is open to its own module.
+            if (!baseClass.IsOpen
+                && !ReferenceEquals(baseClass.ContainingModule, type.ContainingModule))
+            {
+                Report(diagnostics, ErrorCode.ERR_NotOpen, type,
+                    $"'{baseClass.Name}' is not 'open', so it cannot be subclassed "
+                    + "outside the module that declares it");
+            }
+        }
+    }
+
+    /// <summary>
+    /// <c>override</c> is required where a member replaces a base one, and
+    /// forbidden where it replaces nothing.
+    /// </summary>
+    private static void CheckOverrides(NamedTypeSymbol type, DiagnosticBag diagnostics)
+    {
+        foreach (var member in type.Members)
+        {
+            if (member is not FunctionSymbol
+                { FunctionKind: FunctionKind.Ordinary } function)
+            {
+                continue;
+            }
+
+            var overridden = FindOverridden(type, function);
+
+            if (overridden is null)
+            {
+                if (!function.IsOverride) continue;
+
+                Report(diagnostics, ErrorCode.ERR_NothingToOverride, function,
+                    $"'{type.Name}.{function.Name}' is marked 'override' but no base class "
+                    + "declares it");
+                continue;
+            }
+
+            if (!function.IsOverride)
+            {
+                Report(diagnostics, ErrorCode.ERR_MissingOverride, function,
+                    $"'{type.Name}.{function.Name}' replaces a member of "
+                    + $"'{overridden.ContainingSymbol?.Name}', so it needs 'override'");
+                continue;
+            }
+
+            if (!overridden.IsOpen
+                && !ReferenceEquals(overridden.ContainingModule, type.ContainingModule))
+            {
+                Report(diagnostics, ErrorCode.ERR_NotOpen, function,
+                    $"'{overridden.ContainingSymbol?.Name}.{overridden.Name}' is not 'open', "
+                    + "so it cannot be overridden outside the module that declares it");
+            }
+        }
+    }
+
+    /// <summary>The base-class member a function replaces, if any.</summary>
+    private static FunctionSymbol? FindOverridden(
+        NamedTypeSymbol type, FunctionSymbol function)
+    {
+        foreach (var baseType in type.BaseTypes)
+        {
+            if (baseType is not NamedTypeSymbol { TypeKind: TypeKind.Class } baseClass) continue;
+
+            foreach (var candidate in baseClass.GetMembers(function.Name))
+            {
+                if (candidate is not FunctionSymbol other) continue;
+                if (other.Parameters.Length != function.Parameters.Length) continue;
+
+                var matches = true;
+                for (var i = 0; i < other.Parameters.Length; i++)
+                {
+                    if (other.Parameters[i].Type.Equals(function.Parameters[i].Type)) continue;
+                    matches = false;
+                    break;
+                }
+
+                if (matches) return other;
+            }
+
+            if (FindOverridden(baseClass, function) is { } inherited) return inherited;
+        }
+
+        return null;
     }
 
     /// <summary>
@@ -296,9 +400,10 @@ internal static class ConformanceChecker
     }
 
     private static void Report(
-        DiagnosticBag diagnostics, ErrorCode code, NamedTypeSymbol type, string message)
+        DiagnosticBag diagnostics, ErrorCode code, Symbol at, string message)
     {
-        var span = type.Location ?? default;
-        diagnostics.Error(code, span, message);
+        // A conformance failure belongs to the type, but an override mistake
+        // belongs to the member that made it.
+        diagnostics.Error(code, at.Location ?? default, message);
     }
 }

@@ -1523,6 +1523,13 @@ public sealed class Binder
                     return new BoundError(syntax, arguments.ToArray());
                 }
 
+                if (namedType.IsAbstract)
+                {
+                    _diagnostics.Error(ErrorCode.ERR_CannotInstantiate, syntax.Expression.Span,
+                        $"'{namedType.Name}' is abstract, so it has no values of its own");
+                    return new BoundError(syntax, arguments.ToArray());
+                }
+
                 var group = new BoundFunctionGroup(syntax, null, initializers);
                 return BindCallToGroup(syntax, group, arguments, labels, syntaxes);
             }

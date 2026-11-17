@@ -419,7 +419,12 @@ public sealed class Compilation
 
         var type = new NamedTypeSymbol(
             name, typeKind, container, declaration,
-            AccessibilityOf(modifiers, container), isVariableSize);
+            AccessibilityOf(modifiers, container), isVariableSize)
+        {
+            IsOpen = modifiers.Any(SyntaxKind.OpenKeyword),
+            IsSealed = modifiers.Any(SyntaxKind.SealedKeyword),
+            IsAbstract = modifiers.Any(SyntaxKind.AbstractKeyword),
+        };
 
         if (typeParameters is not null)
         {

@@ -23,7 +23,7 @@ fn instanceThroughTheType() -> Int {
 }
 
 struct MissingOverride: Base {          //! S3024
-    fn describe() -> String { return "x" }
+    fn describe() -> String { return "x" }   //! S3042 needs 'override'
 }
 
 struct SetterOnAGetOnly {

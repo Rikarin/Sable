@@ -383,4 +383,23 @@ public sealed class NativeTests {
         var plain = Programs.BuildAndRun(source);
         Assert.DoesNotContain("backtrace", plain.Stderr, StringComparison.Ordinal);
     }
+
+    /// <summary>
+    ///     Every function the program defines carries the host's attributes, so
+    ///     that LTO may inline the runtime into it; quoted names and debug
+    ///     metadata are kept as they were.
+    /// </summary>
+    [Fact]
+    public void DefinitionsTakeTheHostsAttributes() {
+        const string ir = """
+                          define void @"sable.P.f(x)"(i64 %a) !dbg !5 {
+                          define internal { i64, ptr } @g(ptr %p) {
+                          declare void @sable_retain(ptr)
+                          """;
+        var marked = NativeBuild.WithHostAttributes(ir, "\"target-cpu\"=\"x\"");
+        Assert.Contains("define void @\"sable.P.f(x)\"(i64 %a) #9000 !dbg !5 {", marked, StringComparison.Ordinal);
+        Assert.Contains("define internal { i64, ptr } @g(ptr %p) #9000 {", marked, StringComparison.Ordinal);
+        Assert.Contains("declare void @sable_retain(ptr)\n", marked, StringComparison.Ordinal);
+        Assert.EndsWith("attributes #9000 = { \"target-cpu\"=\"x\" }\n", marked, StringComparison.Ordinal);
+    }
 }

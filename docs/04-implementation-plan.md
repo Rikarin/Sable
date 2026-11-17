@@ -924,11 +924,15 @@ which leans towards .NET on purpose. Apple M1 Max, macOS, 17 Nov 2026:
 
 | benchmark  | .NET ms | Sable ms | ratio |
 |------------|--------:|---------:|------:|
-| list       |   123.3 |    141.5 |  1.15 |
-| map-int    |   133.7 |    147.2 |  1.10 |
-| map-string |    50.0 |     51.1 |  1.02 |
-| sort       |   109.7 |    112.6 |  1.03 |
-| string     |    56.2 |     53.0 |  0.94 |
+| list       |   125.8 |    143.9 |  1.14 |
+| map-int    |   136.0 |    149.6 |  1.10 |
+| map-string |    50.8 |     45.8 |  0.90 |
+| sort       |   109.6 |    109.6 |  1.00 |
+| string     |    59.9 |     42.8 |  0.72 |
+
+(Fastest of five, after the program's functions were given the host's
+`target-cpu` and `target-features`, below; the same run without them gave
+1.11, 1.24, 1.09, 1.02 and 0.88.)
 
 Measured on a busy machine (load average 11–30, other builds running); an
 earlier run the same evening gave the same ratios within 0.03. The .NET side
@@ -974,10 +978,14 @@ overflowed past a dozen bytes. What closed the gap, by cause:
 left: a `String` move in the sort is a retain and a release (the scratch
 array shares the elements), which an element swap without counts would take
 off; the merge's bounds checks stay, cheap and never taken. The runtime's
-`sable_retain` and `sable_release` are not inlined into Sable code even
-under LTO: the generated IR carries no `target-cpu`/`target-features`, and
-LLVM will not inline a callee built for more features than its caller —
-given the host's attributes the `String` sort is a further 2 ms faster.
+`sable_retain` and `sable_release` were not inlined into Sable code even
+under LTO: the generated IR carried no `target-cpu`/`target-features`, and
+LLVM will not inline a callee built for more features than its caller. An
+LTO build now asks clang once for the attributes it gives a C function on
+this machine and puts them on every function the program defines
+(`NativeBuild.WithHostAttributes`), so the runtime's small functions inline
+— the string-heavy benchmarks gained the most (`string` 54 ms to 43,
+`map-string` 57 to 46).
 `list` is mostly the operating system faulting in fresh pages, which .NET's
 warmed-up heap already has; a `HashMap<String, _>` hit still copies the key
 across the call to `==`, which SIL cannot yet inline. `Sable.Text`'s

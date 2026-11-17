@@ -60,6 +60,9 @@ public static class NativeBuild {
             // LLVM bitcode, as Apple's does; elsewhere it needs a plugin.
             if (optimise && !debug && OperatingSystem.IsMacOS()) {
                 arguments.Add("-flto");
+                if (HostAttributes.Value is { } host) {
+                    File.WriteAllText(irPath, WithHostAttributes(llvmIr, host));
+                }
             }
 
             // A trap's backtrace names frames through dladdr, which on Linux
@@ -75,6 +78,84 @@ public static class NativeBuild {
             return new(exitCode == 0, output);
         } finally {
             directory.Delete(true);
+        }
+    }
+
+    /// <summary>
+    ///     The <c>target-cpu</c> and <c>target-features</c> clang gives a C
+    ///     function on this machine, or null when they cannot be had.
+    /// </summary>
+    /// <remarks>
+    ///     LLVM inlines a function only into one built for at least its CPU
+    ///     features. The runtime is compiled by clang, which says what they
+    ///     are; the program's IR, written by hand, said nothing, so under LTO
+    ///     the runtime's retain and release were never inlined into it. Asked
+    ///     once per process, from a function compiled the way the runtime is.
+    /// </remarks>
+    static readonly Lazy<string?> HostAttributes = new(() => {
+        var directory = Directory.CreateTempSubdirectory("sable-probe-");
+        try {
+            var probe = Path.Combine(directory.FullName, "probe.c");
+            var output = Path.Combine(directory.FullName, "probe.ll");
+            File.WriteAllText(probe, "int sable_probe(int x) { return x + 1; }\n");
+            if (Run(CompilerPath, ["-O2", "-S", "-emit-llvm", probe, "-o", output]).ExitCode != 0) {
+                return null;
+            }
+
+            var text = File.ReadAllText(output);
+            var cpu = System.Text.RegularExpressions.Regex.Match(text, "\"target-cpu\"=\"[^\"]*\"");
+            var features = System.Text.RegularExpressions.Regex.Match(text, "\"target-features\"=\"[^\"]*\"");
+            return cpu.Success ? cpu.Value + (features.Success ? " " + features.Value : "") : null;
+        } catch (Exception e) when (e is IOException or System.ComponentModel.Win32Exception) {
+            return null;
+        } finally {
+            directory.Delete(true);
+        }
+    });
+
+    /// <summary>Every function the IR defines, given the host's attributes through one attribute group.</summary>
+    public static string WithHostAttributes(string llvmIr, string attributes) {
+        const string group = "#9000";
+        var lines = llvmIr.Split('\n');
+        for (var i = 0; i < lines.Length; i++) {
+            if (!lines[i].StartsWith("define ", StringComparison.Ordinal) || ParametersEnd(lines[i]) is not (> 0 and var end)) {
+                continue;
+            }
+
+            lines[i] = lines[i][..(end + 1)] + " " + group + lines[i][(end + 1)..];
+        }
+
+        return string.Join('\n', lines) + $"\nattributes {group} = {{ {attributes} }}\n";
+
+        // The ')' closing the parameter list: after the name, which may be quoted.
+        static int ParametersEnd(string line) {
+            var at = line.IndexOf('@');
+            if (at < 0) {
+                return -1;
+            }
+
+            var i = at + 1;
+            if (i < line.Length && line[i] == '"') {
+                i = line.IndexOf('"', i + 1) + 1;
+                if (i <= 0) {
+                    return -1;
+                }
+            }
+
+            i = line.IndexOf('(', i);
+            if (i < 0) {
+                return -1;
+            }
+
+            for (var depth = 0; i < line.Length; i++) {
+                if (line[i] == '(') {
+                    depth++;
+                } else if (line[i] == ')' && --depth == 0) {
+                    return i;
+                }
+            }
+
+            return -1;
         }
     }
 

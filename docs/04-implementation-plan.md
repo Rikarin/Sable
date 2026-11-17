@@ -678,6 +678,13 @@ Metadata records, protocol conformance registry, generic metadata caching,
 existential boxing, dynamic casts, the error ABI, backtraces, the memory
 allocator (a size-class allocator — mimalloc is the reference to copy or embed).
 
+As implemented so far: with `SABLE_BACKTRACE` set, a trap prints a backtrace
+after its message, one frame per line, named through `dladdr` (on Linux the
+program links with `-rdynamic` so its functions can be named). Each frame is
+looked up one byte before its return address, because a call that never
+returns leaves that address past the end of its caller. Under LTO most of a
+small program is inlined into `main`, so expect few frames.
+
 ### 4.2 Reflection
 
 - **Static metadata** for every type: size, alignment, field offsets, name,

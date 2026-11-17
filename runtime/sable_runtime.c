@@ -543,9 +543,38 @@ static void sable_weak_object_died(SableObject *object) {
 
 // Overflow, division by zero, an unreachable point reached: not catchable,
 // not unwound. Say why, then stop (docs/06 §6.6).
+#include <dlfcn.h>
+#include <execinfo.h>
+
+// With SABLE_BACKTRACE set, a trap says where it happened: a frame per line,
+// as 'sable.Module.function + offset' where the symbol is known. Off by
+// default, so that a trap's message is the whole of its output. Each return
+// address is looked up one byte back: after a call that never returns, the
+// address is past the end of the caller, inside whatever comes next.
+__attribute__((noinline)) static void print_backtrace(void) {
+    if (getenv("SABLE_BACKTRACE") == NULL) {
+        return;
+    }
+
+    void *frames[64];
+    int count = backtrace(frames, 64);
+    fprintf(stderr, "backtrace:\n");
+    // The first two frames are this function and sable_trap.
+    for (int i = 2; i < count; i++) {
+        const char *at = (const char *)frames[i] - 1;
+        Dl_info info;
+        if (dladdr(at, &info) != 0 && info.dli_sname != NULL) {
+            fprintf(stderr, "  %2d  %s + %ld\n", i - 2, info.dli_sname, (long)(at + 1 - (const char *)info.dli_saddr));
+        } else {
+            fprintf(stderr, "  %2d  %p\n", i - 2, frames[i]);
+        }
+    }
+}
+
 _Noreturn void sable_trap(const char *message) {
     fflush(stdout);
     fprintf(stderr, "fatal error: %s\n", message);
+    print_backtrace();
     abort();
 }
 

@@ -11,7 +11,7 @@ internal static class Programs {
 
     public sealed record Execution(string Stdout, string Stderr, int ExitCode);
 
-    public static Execution BuildAndRun(string source, bool optimise = true, string input = "") {
+    public static Execution BuildAndRun(string source, bool optimise = true, string input = "", IReadOnlyDictionary<string, string>? environment = null) {
         var result = Pipeline.Compile(new SourceText(source, "test.sab"));
         Assert.True(result.Succeeded, string.Join("\n", result.Errors));
 
@@ -23,6 +23,10 @@ internal static class Programs {
             // Every test program is held to freeing what it allocates.
             var start = new ProcessStartInfo(executable) { RedirectStandardOutput = true, RedirectStandardError = true, RedirectStandardInput = true };
             start.Environment["SABLE_CHECK_LEAKS"] = "1";
+            foreach (var (name, value) in environment ?? new Dictionary<string, string>()) {
+                start.Environment[name] = value;
+            }
+
             using var process = Process.Start(start)!;
             process.StandardInput.Write(input);
             process.StandardInput.Close();

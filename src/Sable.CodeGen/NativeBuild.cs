@@ -61,6 +61,13 @@ public static class NativeBuild {
             if (optimise && !debug && OperatingSystem.IsMacOS()) {
                 arguments.Add("-flto");
             }
+
+            // A trap's backtrace names frames through dladdr, which on Linux
+            // sees only the dynamic symbol table: the program's functions go there too.
+            if (OperatingSystem.IsLinux()) {
+                arguments.Add("-rdynamic");
+            }
+
             arguments.AddRange(["-Wno-override-module", irPath, runtimePath, "-o", outputPath]);
 
             var (exitCode, output) = Run(CompilerPath, arguments);

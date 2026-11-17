@@ -358,4 +358,29 @@ public sealed class NativeTests {
             File.Delete(executable);
         }
     }
+
+    /// <summary>With SABLE_BACKTRACE set, a trap says where it was; without it, only what happened.</summary>
+    [Fact]
+    public void ATrapCanSayWhereItWas() {
+        if (!CanBuild) {
+            return;
+        }
+
+        const string source = """
+                              module P
+                              fn at(_ values: Int[>..], _ i: Int) -> Int { return values[i] }
+                              @main
+                              fn main() {
+                                  print(at([1, 2], 5))
+                              }
+                              """;
+        var traced = Programs.BuildAndRun(source, environment: new Dictionary<string, string> { ["SABLE_BACKTRACE"] = "1" });
+        Assert.NotEqual(0, traced.ExitCode);
+        Assert.Contains("fatal error: ", traced.Stderr, StringComparison.Ordinal);
+        Assert.Contains("\nbacktrace:\n", traced.Stderr, StringComparison.Ordinal);
+        Assert.Contains("main", traced.Stderr, StringComparison.Ordinal);
+
+        var plain = Programs.BuildAndRun(source);
+        Assert.DoesNotContain("backtrace", plain.Stderr, StringComparison.Ordinal);
+    }
 }

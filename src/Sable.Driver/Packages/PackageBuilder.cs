@@ -1,0 +1,218 @@
+using System.Diagnostics;
+using Sable.CodeGen;
+using Sable.Syntax;
+
+namespace Sable.Driver.Packages;
+
+/// <summary>What <c>sable build</c>, <c>run</c> and <c>check</c> were asked to do with a package.</summary>
+public sealed record BuildRequest(
+    bool Release = false,
+    FeatureRequest? Features = null,
+    string? Package = null,
+    string? Bin = null,
+    bool Locked = false);
+
+/// <summary>An executable a build made.</summary>
+public sealed record BuiltBinary(string Package, string Name, string Path, Profile Profile);
+
+/// <summary>
+///     Builds packages: each binary is its entry file, the package's library
+///     files, and every dependency's library files, compiled as one program
+///     (docs/05 §5.4 will make that incremental; today it is whole-program).
+///     Executables go to <c>target/&lt;profile&gt;/</c>.
+/// </summary>
+public static class PackageBuilder {
+    /// <summary>The members a request is about: the one named, the one the command ran in, or all of them.</summary>
+    public static IReadOnlyList<LocalPackage> Selected(Workspace workspace, string? package) =>
+        package is not null ? [workspace.Member(package)]
+        : workspace.Current is { } current ? [current]
+        : workspace.Members;
+
+    static PackageGraph Resolve(Workspace workspace, PackageEnvironment environment, BuildRequest request) =>
+        PackageGraph.Resolve(workspace, environment, new(request.Features, null, request.Locked, [..Selected(workspace, request.Package).Select(static m => m.Name)]));
+
+    /// <summary>
+    ///     The trees of one target: the binary's entry file first (where the
+    ///     entry point is looked for), then the package's library files, then
+    ///     its dependencies' — each parsed with its own package's features.
+    /// </summary>
+    public static IReadOnlyList<SyntaxTree> Program(PackageGraph graph, string member, BinTarget? bin) {
+        var trees = new List<SyntaxTree>();
+        var own = graph.Packages[member];
+        if (bin is not null) {
+            trees.Add(Parse(graph, own, bin.Path));
+        }
+
+        foreach (var package in graph.Closure(member)) {
+            trees.AddRange(package.Package.LibrarySources().Select(file => Parse(graph, package, file)));
+        }
+
+        return trees;
+    }
+
+    static SyntaxTree Parse(PackageGraph graph, ResolvedPackage package, string file) {
+        if (!File.Exists(file)) {
+            throw new PackageException($"{package.Name}: no such file '{file}'");
+        }
+
+        var name = package.IsLocal
+            ? Path.GetRelativePath(graph.Workspace.Root, file).Replace(Path.DirectorySeparatorChar, '/')
+            : $"{package.Name}-{package.Version}/{Path.GetRelativePath(package.Package.Directory, file).Replace(Path.DirectorySeparatorChar, '/')}";
+        var options = ParseOptions.Default with { Features = [..package.Features] };
+        return SyntaxTree.Parse(new SourceText(File.ReadAllText(file), name), options);
+    }
+
+    static string Describe(ResolvedPackage package, Workspace workspace) =>
+        package.IsLocal ? $"{package.Name} v{package.Version} ({workspace.Relative(package.Package.Directory)})" : $"{package.Name} v{package.Version}";
+
+    static void Report(PackageEnvironment environment, IEnumerable<string> errors) {
+        foreach (var error in errors) {
+            environment.Error.WriteLine(error);
+            environment.Error.WriteLine();
+        }
+    }
+
+    /// <summary><c>sable check</c>: type-checks every target of the selected members, generating no code. Returns the exit code.</summary>
+    public static int Check(Workspace workspace, PackageEnvironment environment, BuildRequest request) {
+        var clock = Stopwatch.StartNew();
+        var graph = Resolve(workspace, environment, request);
+        var failed = false;
+        foreach (var member in Selected(workspace, request.Package)) {
+            var resolved = graph.Packages[member.Name];
+            environment.Error.WriteLine($"    Checking {Describe(resolved, workspace)}");
+            var targets = new List<BinTarget?>();
+            if (member.LibrarySources().Count > 0) {
+                targets.Add(null);
+            }
+
+            targets.AddRange(member.Bins);
+            foreach (var target in targets) {
+                var errors = Pipeline.Check(Program(graph, member.Name, target));
+                Report(environment, errors);
+                failed |= errors.Count > 0;
+            }
+        }
+
+        if (failed) {
+            environment.Error.WriteLine("error: could not check the package: it has errors");
+            return 1;
+        }
+
+        environment.Error.WriteLine($"    Finished checking in {clock.Elapsed.TotalSeconds:0.00}s");
+        return 0;
+    }
+
+    /// <summary>
+    ///     <c>sable build</c>: every binary of the selected members (or the one
+    ///     <see cref="BuildRequest.Bin" /> names), to <c>target/&lt;profile&gt;/</c>;
+    ///     a member with only a library is type-checked. Null binaries mean it failed.
+    /// </summary>
+    public static IReadOnlyList<BuiltBinary>? Build(Workspace workspace, PackageEnvironment environment, BuildRequest request) {
+        var clock = Stopwatch.StartNew();
+        var graph = Resolve(workspace, environment, request);
+        var profile = workspace.RootManifest.ProfileFor(request.Release);
+        var output = Path.Combine(workspace.TargetDirectory, profile.Name);
+        var built = new List<BuiltBinary>();
+        var members = Selected(workspace, request.Package);
+
+        if (members.Any(static m => m.Manifest.Build is not null)) {
+            environment.Error.WriteLine("warning: [build] scripts are not run yet (docs/05 §5.6); building without it");
+        }
+
+        foreach (var member in members) {
+            var bins = member.Bins.Where(b => request.Bin is null || b.Name == request.Bin).ToList();
+            if (request.Bin is not null && bins.Count == 0) {
+                continue;
+            }
+
+            foreach (var dependency in graph.Closure(member.Name).Skip(1)) {
+                environment.Error.WriteLine($"   Compiling {Describe(dependency, workspace)}");
+            }
+
+            environment.Error.WriteLine($"   Compiling {Describe(graph.Packages[member.Name], workspace)}");
+            if (bins.Count == 0) {
+                var errors = Pipeline.Check(Program(graph, member.Name, null));
+                if (errors.Count > 0) {
+                    Report(environment, errors);
+                    environment.Error.WriteLine($"error: could not compile {member.Name}");
+                    return null;
+                }
+
+                continue;
+            }
+
+            foreach (var bin in bins) {
+                var result = Pipeline.Compile(Program(graph, member.Name, bin), profile.Debug ? workspace.Root : null, profile.Exclusivity);
+                if (!result.Succeeded) {
+                    Report(environment, result.Errors);
+                    environment.Error.WriteLine($"error: could not compile {member.Name}");
+                    return null;
+                }
+
+                if (!NativeBuild.IsAvailable()) {
+                    environment.Error.WriteLine($"error: cannot run '{NativeBuild.CompilerPath}'; set CC to a clang that can link for this platform");
+                    return null;
+                }
+
+                Directory.CreateDirectory(output);
+                var executable = Path.Combine(output, bin.Name);
+                var native = NativeBuild.Build(result.LlvmIr!, executable, profile.Optimise, profile.Debug);
+                if (!native.Succeeded) {
+                    environment.Error.WriteLine("internal error: the native build failed:");
+                    environment.Error.Write(native.Output);
+                    return null;
+                }
+
+                built.Add(new(member.Name, bin.Name, executable, profile));
+            }
+        }
+
+        if (request.Bin is not null && built.Count == 0) {
+            throw new PackageException($"no binary called '{request.Bin}'");
+        }
+
+        var settings = $"{(profile.Optimise ? "optimised" : "unoptimised")}{(profile.Debug ? " + debuginfo" : "")}";
+        environment.Error.WriteLine($"    Finished `{profile.Name}` profile [{settings}] target(s) in {clock.Elapsed.TotalSeconds:0.00}s");
+        return built;
+    }
+
+    /// <summary><c>sable run</c>: builds the one binary there is (or the one asked for), runs it, and returns its exit code.</summary>
+    public static int Run(Workspace workspace, PackageEnvironment environment, BuildRequest request, IReadOnlyList<string> arguments) {
+        var candidates = Selected(workspace, request.Package).SelectMany(m => m.Bins.Select(b => (m, b))).Where(c => request.Bin is null || c.b.Name == request.Bin).ToList();
+        if (candidates.Count == 0) {
+            throw new PackageException(request.Bin is null ? "there is no binary to run: a package needs src/main.sab or a [[bin]]" : $"no binary called '{request.Bin}'");
+        }
+
+        if (candidates.Count > 1) {
+            throw new PackageException($"there are several binaries; say which with --bin: {string.Join(", ", candidates.Select(static c => c.b.Name))}");
+        }
+
+        var (member, bin) = candidates[0];
+        if (Build(workspace, environment, request with { Package = member.Name, Bin = bin.Name }) is not [var binary]) {
+            return 1;
+        }
+
+        environment.Error.WriteLine($"     Running `{Path.GetRelativePath(workspace.Root, binary.Path)}`");
+        var start = new ProcessStartInfo(binary.Path);
+        foreach (var argument in arguments) {
+            start.ArgumentList.Add(argument);
+        }
+
+        // leak-check: the runtime walks the heap at exit and reports what is left.
+        if (binary.Profile.LeakCheck) {
+            start.Environment["SABLE_CHECK_LEAKS"] = "1";
+        }
+
+        using var process = Process.Start(start) ?? throw new PackageException($"could not run '{binary.Path}'");
+        process.WaitForExit();
+        return process.ExitCode;
+    }
+
+    /// <summary><c>sable clean</c>: removes <c>target/</c>.</summary>
+    public static void Clean(Workspace workspace, PackageEnvironment environment) {
+        if (Directory.Exists(workspace.TargetDirectory)) {
+            Directory.Delete(workspace.TargetDirectory, true);
+            environment.Error.WriteLine($"     Removed {workspace.Relative(workspace.TargetDirectory)}");
+        }
+    }
+}

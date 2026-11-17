@@ -14,7 +14,7 @@ public union Variable..: Named {
     Small(a: Int)
     Big(a: Int, b: Int, c: Int)
 
-    fn name() -> String { return "v" }
+    public fn name() -> String { return "v" }
 }
 
 fn aVariableSizeValueCannotBeBoxed(_ v: Variable) -> any Named {

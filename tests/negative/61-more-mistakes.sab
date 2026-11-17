@@ -1,0 +1,81 @@
+module Negative.MoreMistakes
+
+public struct Rect { public var width: F64, public var height: F64 }
+public union Maybe<T> { Some(value: T), Nothing }
+public protocol Drawable { fn draw() -> String }
+
+fn areaWithIntegerLiterals(_ r: Rect) -> F64 {
+    return r.width * r.height
+}
+
+fn areaWithAnIntegerVariable(_ r: Rect, _ scale: Int) -> F64 {
+    return r.width * scale              //! S3009
+}
+
+fn forgettingPointFive() -> Rect {
+    return Rect { width: 1, height: 2 }
+}
+
+fn aStringWhereANumberGoes() -> Rect {
+    return Rect { width: "1", height: 2 }   //! S3004 expected 'F64'
+}
+
+fn usingAGenericUnionWithoutArguments(_ m: Maybe) -> Int {   //! S3002 takes 1 type argument
+    return 0
+}
+
+fn theWrongPayloadForAGenericUnion() -> Maybe<Int> {
+    return Maybe.Some(value: "text")    //! S3004 found 'Maybe<String>'
+}
+
+fn aNothingNeedsItsArguments() -> Maybe<Int> {
+    return Maybe.Nothing
+}
+
+fn matchingAGenericUnion(_ m: Maybe<Int>) -> Int {
+    return match m {
+        case .Some(let value) => value
+        case .Nothing => 0
+    }
+}
+
+fn thePayloadKeepsItsType(_ m: Maybe<String>) -> Int {
+    return match m {
+        case .Some(let value) => value  //! S6007 earlier arms gave
+        case .Nothing => 0
+    }
+}
+
+fn protocolWitnessMustBePublicEnough(_ d: any Drawable) -> String {
+    return d.draw()
+}
+
+public struct Hidden: Drawable {
+    private fn draw() -> String { return "x" }   //! S3023 is private
+}
+
+fn callingThroughTheProtocol(_ h: Hidden) -> String {
+    return describe(h)
+}
+
+fn describe(_ value: some Drawable) -> String { return value.draw() }
+
+fn twoReturnsWithDifferentTypes(_ flag: Bool) -> Int {
+    if flag {
+        return 1
+    }
+    return "two"                        //! S3004 expected 'Int'
+}
+
+fn aVoidFunctionWithAValue() {
+    return 1                            //! S3017 takes no value
+}
+
+fn aValueFunctionWithout() -> Int {
+    return                              //! S3016 needs a value
+}
+
+fn usingAnAssignmentResult(_ n: Int) -> Bool {
+    var m = n
+    return m = 1                        //! S3004 expected 'Bool'
+}

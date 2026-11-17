@@ -262,7 +262,23 @@ internal static class ConformanceChecker
         }
 
         foreach (var candidate in candidates)
-            if (Matches(requirement, candidate, protocol, type)) return;
+        {
+            if (!Matches(requirement, candidate, protocol, type)) continue;
+
+            // A witness has to be visible wherever the conformance is, or the
+            // protocol's promise is one the caller cannot collect on.
+            if (candidate.DeclaredAccessibility < type.DeclaredAccessibility)
+            {
+                Report(diagnostics, ErrorCode.ERR_DoesNotConform, candidate,
+                    $"'{type.Name}.{candidate.Name}' is "
+                    + $"{candidate.DeclaredAccessibility.ToString().ToLowerInvariant()}, but "
+                    + $"'{type.Name}' conforms to '{protocol.Name}' "
+                    + $"{type.DeclaredAccessibility.ToString().ToLowerInvariant()}ly");
+                return;
+            }
+
+            return;
+        }
 
         // A static requirement is not met by an instance member, nor the
         // other way round.

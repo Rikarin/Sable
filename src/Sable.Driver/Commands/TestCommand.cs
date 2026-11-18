@@ -86,27 +86,26 @@ public sealed class TestCommand : HarnessCommand {
             return Run(executable, arguments);
         }
 
-        // Each test process appends its counts to one file, which is then read.
+        // Each test process appends its counts to one file, which is then
+        // read. The file is named to those processes alone, not set in this
+        // process's environment, which every command running here shares.
         var counts = Path.Combine(Path.GetTempPath(), $"sable-coverage-{Guid.NewGuid():N}.txt");
-        var before = Environment.GetEnvironmentVariable("SABLE_COVERAGE");
-        Environment.SetEnvironmentVariable("SABLE_COVERAGE", counts);
         try {
-            var code = Run(executable, arguments);
+            var code = Run(executable, arguments, new Dictionary<string, string> { ["SABLE_COVERAGE"] = counts });
             if (!arguments.Contains("--list")) {
                 Report(counters, Coverage.ReadCounts(counts));
             }
 
             return code;
         } finally {
-            Environment.SetEnvironmentVariable("SABLE_COVERAGE", before);
             File.Delete(counts);
         }
     }
 
-    int Run(string executable, IReadOnlyList<string> arguments) =>
+    int Run(string executable, IReadOnlyList<string> arguments, IReadOnlyDictionary<string, string>? environment = null) =>
         TestRunner.Handles(arguments)
-            ? TestRunner.Run(executable, arguments, _jobs, _timeout, Console.Out, Console.Error)
-            : base.Execute(executable, arguments);
+            ? TestRunner.Run(executable, arguments, _jobs, _timeout, Console.Out, Console.Error, environment)
+            : Execute(executable, arguments, environment);
 
     /// <summary>
     ///     The lines of each measured file the tests ran: the share of them,

@@ -9,6 +9,7 @@ namespace Sable.CodeGen.Tests;
 ///     counted as it runs, in every test process — one that traps too — and
 ///     reported per file and line, and as LCOV.
 /// </summary>
+[Collection("Console")]
 public sealed class CoverageTests {
     const string Calc = """
         module Calc
@@ -100,4 +101,14 @@ public sealed class CoverageTests {
         Assert.Equal(0, lines["b.sb"][1]);
         Assert.Equal("SF:b.sb\nDA:1,0\nLF:1\nLH:0\nend_of_record\n", Coverage.Lcov(new() { ["b.sb"] = lines["b.sb"] }));
     }
+
+    /// <summary>
+    ///     A command keeps one run's options (--coverage, -j) and what it
+    ///     built, so two runs at once — tests in parallel — each need an
+    ///     instance of their own: sharing one, a run without --coverage
+    ///     turned another's off half-way through.
+    /// </summary>
+    [Fact]
+    public void EachRunOfACommandHasItsOwnState() =>
+        Assert.NotSame(Command.Find("test"), Command.Find("test"));
 }

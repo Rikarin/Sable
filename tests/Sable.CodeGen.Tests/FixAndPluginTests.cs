@@ -8,6 +8,7 @@ namespace Sable.CodeGen.Tests;
 ///     <c>sable fix</c>, which applies the fixes the lints carry, and lint
 ///     plugins named in a manifest or on <c>sable lint</c>'s command line (#204).
 /// </summary>
+[Collection("Console")]
 public sealed class FixAndPluginTests {
     const string Library = """
         module Shapes

@@ -43,13 +43,15 @@ internal static class TestRunner {
         !harnessArguments.Any(static a => a is "--list" or "--describe" or "--in-process" or "--run-test");
 
     /// <summary>Runs the tests the arguments select; returns the exit code, as the harness's runner would.</summary>
-    public static int Run(string executable, IReadOnlyList<string> harnessArguments, int jobs, TimeSpan? timeout, TextWriter output, TextWriter error) {
+    /// <param name="environment">Variables set for each test process (and only for it): a coverage run's counts file.</param>
+    public static int Run(string executable, IReadOnlyList<string> harnessArguments, int jobs, TimeSpan? timeout, TextWriter output, TextWriter error,
+        IReadOnlyDictionary<string, string>? environment = null) {
         var exact = harnessArguments.Contains("--exact");
         var showOutput = harnessArguments.Contains("--show-output");
         var filters = harnessArguments.Where(static a => !a.StartsWith("--", StringComparison.Ordinal)).ToList();
 
         // Every test, then those the filters select, as the harness selects them.
-        var described = Capture(executable, ["--describe"], null);
+        var described = Capture(executable, ["--describe"], null, environment);
         if (!described.Started || described.Status != 0) {
             error.Write(described.Errors);
             return described.Started && described.Status > 0 ? described.Status : 1;
@@ -64,7 +66,7 @@ internal static class TestRunner {
         var gate = new object();
         Parallel.For(0, chosen.Count, new ParallelOptions { MaxDegreeOfParallelism = Math.Max(1, jobs) }, i => {
             var test = chosen[i];
-            var outcome = RunOne(executable, test, timeout, () => {
+            var outcome = RunOne(executable, test, timeout, environment, () => {
                 lock (gate) {
                     output.WriteLine($"test {test.Name} has been running for over {SlowTest.TotalSeconds:0} s");
                 }
@@ -119,14 +121,15 @@ internal static class TestRunner {
     static bool Selected(string name, IReadOnlyList<string> filters, bool exact) =>
         filters.Count == 0 || filters.Any(f => exact ? name == f : name.Contains(f, StringComparison.Ordinal));
 
-    static Outcome RunOne(string executable, TestEntry test, TimeSpan? timeout, Action runningLong) {
+    static Outcome RunOne(string executable, TestEntry test, TimeSpan? timeout, IReadOnlyDictionary<string, string>? environment, Action runningLong) {
         var clock = Stopwatch.StartNew();
-        var result = Capture(executable, ["--run-test", test.Name], timeout, runningLong);
+        var result = Capture(executable, ["--run-test", test.Name], timeout, environment, runningLong);
         return new(test, result.Started, result.Status, result.Output, result.Errors, clock.Elapsed, result.TimedOut ? timeout : null);
     }
 
     /// <summary>Runs the harness to its end (or its time limit), keeping what it wrote; not started, with why in its errors, when it could not be.</summary>
-    static (bool Started, int Status, string Output, string Errors, bool TimedOut) Capture(string executable, IReadOnlyList<string> arguments, TimeSpan? timeout, Action? runningLong = null) {
+    static (bool Started, int Status, string Output, string Errors, bool TimedOut) Capture(string executable, IReadOnlyList<string> arguments, TimeSpan? timeout,
+        IReadOnlyDictionary<string, string>? environment, Action? runningLong = null) {
         var start = new ProcessStartInfo(executable) {
             RedirectStandardInput = true,
             RedirectStandardOutput = true,
@@ -139,6 +142,10 @@ internal static class TestRunner {
         };
         foreach (var argument in arguments) {
             start.ArgumentList.Add(argument);
+        }
+
+        foreach (var (name, value) in environment ?? new Dictionary<string, string>()) {
+            start.Environment[name] = value;
         }
 
         Process process;

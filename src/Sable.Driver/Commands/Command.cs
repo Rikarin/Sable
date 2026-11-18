@@ -34,6 +34,12 @@ public abstract class Command {
     /// <summary>Every command there is, by name.</summary>
     public static IReadOnlyList<Command> All => Discovered.Value;
 
-    /// <summary>The command named <paramref name="name" />, if there is one.</summary>
-    public static Command? Find(string name) => All.FirstOrDefault(c => c.Name == name);
+    /// <summary>
+    ///     The command named <paramref name="name" />, if there is one: an
+    ///     instance of its own, since a command keeps what one run's options
+    ///     were, and two runs at once — tests, a language server — must not
+    ///     share that.
+    /// </summary>
+    public static Command? Find(string name) =>
+        All.FirstOrDefault(c => c.Name == name) is { } found ? (Command)Activator.CreateInstance(found.GetType())! : null;
 }

@@ -130,6 +130,36 @@ public sealed class ArrayType(SilType element) : SilType {
     public SilType Element { get; } = element;
     public override bool IsTrivial => false;
     public override string ToString() => $"[{Element}]";
+
+    /// <summary>The element of an array or of a slice — what reading one gives — or null for any other type.</summary>
+    public static SilType? ElementOf(SilType? type) =>
+        type switch {
+            ArrayType array => array.Element,
+            SliceType slice => slice.Element,
+            _ => null,
+        };
+}
+
+/// <summary>
+///     <c>[T:]</c>: a slice (<c>T[:]</c>) — a view of a run of an array's
+///     elements, with no copy of them: the array's buffer, where the run
+///     starts in it and how many elements it has.
+/// </summary>
+/// <remarks>
+///     The view holds a strong reference to the buffer (docs/02 §2.5, "The
+///     array family"): the array copies on its next write while a slice
+///     shares it, so the elements a slice sees never change under it, and a
+///     slice may be stored or returned like any value. The empty slice is no
+///     buffer at all. A write through a slice makes it the only reference to
+///     its run first, as an array's does to its buffer.
+/// </remarks>
+public sealed class SliceType(SilType element) : SilType {
+    public SilType Element { get; } = element;
+    public override bool IsTrivial => false;
+    public override string ToString() => $"[{Element}:]";
+
+    /// <summary>How a slice is laid out: the buffer, the start and the count — as a tuple of them is.</summary>
+    public TupleType Parts => new([new ArrayType(Element), Int, Int]);
 }
 
 /// <summary><c>*T</c>: the address of storage holding a <c>T</c>.</summary>
@@ -1384,6 +1414,7 @@ public sealed class SilModule {
             TupleType tuple => tuple.Elements.Any(MayRunDeinit),
             EnumType enumType => enumType.Cases.Any(c => c.Payload is { } payload && MayRunDeinit(payload)),
             ArrayType array => MayRunDeinit(array.Element),
+            SliceType slice => MayRunDeinit(slice.Element),
 
             // Releasing a weak or unowned reference may free memory, but runs no deinit.
             WeakStorageType or UnownedStorageType => false,
@@ -1421,9 +1452,14 @@ public static class SilBuiltins {
 
     static readonly Dictionary<string, Signature> Table = Build();
 
-    /// <summary>The names whose signature depends on the element type of the array they work on.</summary>
+    /// <summary>
+    ///     The names whose signature depends on the element type of the array
+    ///     they work on. Those that read elements, or write one in place, work
+    ///     on a slice (<c>[T:]</c>) as on an array; those that change the
+    ///     count work on an array alone.
+    /// </summary>
     public static readonly ImmutableArray<string> ArrayOperations =
-        ["array_empty", "array_count", "array_get", "array_get_borrowed", "array_append", "array_set_unique", "array_element_addr", "array_make_unique", "array_set", "array_remove_last", "array_clear", "array_slice", "region_alloc"];
+        ["array_empty", "array_count", "array_get", "array_get_borrowed", "array_append", "array_set_unique", "array_element_addr", "array_make_unique", "array_set", "array_remove_last", "array_clear", "array_slice", "slice_of", "region_alloc"];
 
     /// <summary>
     ///     The prefix of the wrapping forms of integer arithmetic
@@ -1445,7 +1481,7 @@ public static class SilBuiltins {
         }
 
         if (name == "array_empty") {
-            return operands.Count == 0 && result is ArrayType ? new([], result) : null;
+            return operands.Count == 0 && result is ArrayType or SliceType ? new([], result) : null;
         }
 
         if (name.StartsWith("inline_", StringComparison.Ordinal)) {
@@ -1466,6 +1502,9 @@ public static class SilBuiltins {
             // Whether the running task has been cancelled.
             case "task_is_cancelled" when operands.Count == 0:
                 return new([], SilType.Bool);
+            // A block ran, for 'sable test --coverage' (Coverage.cs): its counter's number.
+            case Coverage.Builtin when operands is [var counter] && counter == SilType.Int:
+                return new([SilType.Int], SilType.Unit);
         }
 
         // Strings joined end to end in one allocation: an interpolation, or 'a + b + c'.
@@ -1507,13 +1546,14 @@ public static class SilBuiltins {
             return operands is [var region] && region == SilType.Region && result is AddressType ? new([SilType.Region], result) : null;
         }
 
-        SilType? Element(int index, bool address) {
+        // An array's or a slice's element; with 'arrayOnly', an array's.
+        SilType? Element(int index, bool address, bool arrayOnly = false) {
             if (index >= operands.Count) {
                 return null;
             }
 
             var type = address ? (operands[index] as AddressType)?.Pointee : operands[index];
-            return (type as ArrayType)?.Element;
+            return arrayOnly ? (type as ArrayType)?.Element : ArrayType.ElementOf(type);
         }
 
         switch (name) {
@@ -1525,7 +1565,7 @@ public static class SilBuiltins {
             case "array_get" or "array_get_borrowed" when Element(0, false) is { } element:
                 return new([operands[0], SilType.Int], element);
 
-            case "array_append" when Element(0, true) is { } element:
+            case "array_append" when Element(0, true, arrayOnly: true) is { } element:
                 return new([operands[0], element], SilType.Unit) { Consumed = [1] };
 
             // In place, on an array already made the only reference to its buffer.
@@ -1542,15 +1582,20 @@ public static class SilBuiltins {
             case "array_element_addr" when Element(0, true) is { } element:
                 return new([operands[0], SilType.Int], SilType.Address(element));
 
-            case "array_remove_last" when Element(0, true) is { } element:
+            case "array_remove_last" when Element(0, true, arrayOnly: true) is { } element:
                 return new([operands[0]], element);
 
-            case "array_clear" when Element(0, true) is not null:
+            case "array_clear" when Element(0, true, arrayOnly: true) is not null:
                 return new([operands[0]], SilType.Unit);
 
-            // A copy of elements [from, to): an array of its own.
-            case "array_slice" when Element(0, false) is not null:
-                return new([operands[0], SilType.Int, SilType.Int], operands[0]);
+            // Elements [from, to) of an array or a slice, as a slice: a view
+            // that shares the buffer, the range checked against the count.
+            case "array_slice" when Element(0, false) is { } element:
+                return new([operands[0], SilType.Int, SilType.Int], new SliceType(element));
+
+            // The whole of an array, as a slice: 'sum(xs)' of a 'sum(_: Int[:])'.
+            case "slice_of" when Element(0, false, arrayOnly: true) is { } element:
+                return new([operands[0]], new SliceType(element));
 
             default:
                 return null;
@@ -1558,7 +1603,7 @@ public static class SilBuiltins {
     }
 
     public static IEnumerable<string> Names =>
-        Table.Keys.Concat(ArrayOperations).Concat(["access_begin_read", "access_begin_modify", "access_end", "access_check_read", "access_check_modify", "task_spawn", "task_wait", "task_release", "task_cancel", "task_is_cancelled", "task_yield", "task_sleep", "task_drain"]);
+        Table.Keys.Concat(ArrayOperations).Concat(["access_begin_read", "access_begin_modify", "access_end", "access_check_read", "access_check_modify", "task_spawn", "task_wait", "task_release", "task_cancel", "task_is_cancelled", "task_yield", "task_sleep", "task_drain", Coverage.Builtin]);
 
     static SilType? Pointee(SilType? type) => (type as InlinePointerType)?.Pointee;
 

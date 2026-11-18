@@ -165,7 +165,7 @@ public sealed partial class LanguageServer {
                     visible.Add(symbol.Name);
                 }
 
-                AddImportable(context.Analysis, document, prefix, visible, rank, items);
+                AddImportable(context.Analysis, _library.Ready, document, prefix, visible, rank, items);
             }
 
             var id = Interlocked.Increment(ref _completions);
@@ -326,15 +326,17 @@ public sealed partial class LanguageServer {
     /// <summary>
     ///     The public types and functions of the compilation's other modules
     ///     that the file does not import, for a name of two letters or more:
-    ///     choosing one adds the import.
+    ///     choosing one adds the import. So are those of the library modules
+    ///     the compilation does not have, since nothing imports them yet,
+    ///     once the <see cref="LibraryIndex" /> is built.
     /// </summary>
-    static void AddImportable(Analysis analysis, Document document, string prefix, HashSet<string> visible, int rank, List<Offer> items) {
+    static void AddImportable(Analysis analysis, IReadOnlyList<LibraryIndex.Entry>? library, Document document, string prefix, HashSet<string> visible, int rank, List<Offer> items) {
         if (prefix.Length < 2 || document.Tree.Root is not CompilationUnitSyntax unit) {
             return;
         }
 
         var own = unit.Module?.Name.ToString().Trim();
-        var imported = unit.Members.OfType<ImportDeclarationSyntax>().Select(static i => i.Name.ToString().Trim()).ToHashSet(StringComparer.Ordinal);
+        var imported = unit.Imports.Select(static i => i.Name.ToString().Trim()).ToHashSet(StringComparer.Ordinal);
         foreach (var module in analysis.Compilation.Modules.OrderBy(static m => m.Name, StringComparer.Ordinal)) {
             if (module.Name.Length == 0 || module.Name == own || module.Name == CoreLibrary.ModuleName || imported.Contains(module.Name)) {
                 continue;
@@ -349,6 +351,14 @@ public sealed partial class LanguageServer {
                 }
             }
         }
+
+        var compiled = analysis.Compilation.Modules.Select(static m => m.Name).ToHashSet(StringComparer.Ordinal);
+        foreach (var (module, member) in library ?? []) {
+            if (!compiled.Contains(module) && module != own && !imported.Contains(module)
+                && !visible.Contains(member.Name) && Matches(prefix, member.Name)) {
+                items.Add(new(member, rank++, module));
+            }
+        }
     }
 
     /// <summary>The line a new import goes on: after the last import, or else after the module declaration.</summary>
@@ -357,7 +367,7 @@ public sealed partial class LanguageServer {
             return 0;
         }
 
-        var last = unit.Members.OfType<ImportDeclarationSyntax>().LastOrDefault() as SyntaxNode ?? unit.Module;
+        var last = unit.Imports.LastOrDefault() as SyntaxNode ?? unit.Module;
         return last is null ? 0 : document.Lines.PositionOf(last.Span.End).Line + 1;
     }
 

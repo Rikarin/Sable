@@ -14,6 +14,9 @@ public sealed record CompileResult(
 
     /// <summary>The front end's warnings about the program's own files, whether or not it compiled.</summary>
     public IReadOnlyList<string> Warnings { get; init; } = [];
+
+    /// <summary>For a build measured for coverage, the counters it was given.</summary>
+    public CoverageMap? Coverage { get; init; }
 }
 
 /// <summary>

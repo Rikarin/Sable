@@ -34,6 +34,9 @@ public sealed partial class LanguageServer {
     /// <summary>The client takes <c>workspace/diagnostic/refresh</c>: a pull need not wait for the SIL checks.</summary>
     bool _refresh;
 
+    /// <summary>Set when loading the files ends: the round it starts need not wait for the workspace to be quiet.</summary>
+    int _loaded;
+
     /// <summary>The workspace changed: diagnostics are due once it is quiet, and a round under way is out of date.</summary>
     void Changed() {
         _changed.Release();
@@ -53,18 +56,23 @@ public sealed partial class LanguageServer {
         while (!cancellation.IsCancellationRequested) {
             await _changed.WaitAsync(cancellation);
 
-            // Debounce: wait until nothing has changed for a while.
+            // Debounce: wait until nothing has changed for a while — unless
+            // the files were just loaded, which is no typing to wait out.
             do {
                 while (_changed.CurrentCount > 0) {
                     await _changed.WaitAsync(cancellation);
                 }
-            } while (await _changed.WaitAsync(_options.DiagnosticsDelay, cancellation));
+            } while (Interlocked.Exchange(ref _loaded, 0) == 0 && await _changed.WaitAsync(_options.DiagnosticsDelay, cancellation));
 
             using var round = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
             Volatile.Write(ref _round, round);
             try {
                 await _loading;
                 await DiagnoseAsync(round.Token);
+
+                // The library's names, for completion, once the first
+                // diagnostics are out of the way.
+                _ = _library.Ready;
             } catch (OperationCanceledException) when (!cancellation.IsCancellationRequested) {
                 // Superseded: the change that cancelled it starts the next round.
             } catch (Exception e) when (e is not OperationCanceledException and not OutOfMemoryException) {
@@ -111,7 +119,8 @@ public sealed partial class LanguageServer {
                 continue;
             }
 
-            changed |= await ReportAsync(document, analysis.DiagnosticsOf(document.Tree, cancellation), false);
+            changed |= await ReportAsync(document, analysis, analysis.DiagnosticsOf(document.Tree, cancellation), false);
+            _analyses.Bound(analysis);
         }
 
         await ForgetRemovedAsync(snapshot);
@@ -124,7 +133,7 @@ public sealed partial class LanguageServer {
             cancellation.ThrowIfCancellationRequested();
             var all = await AllDiagnosticsAsync(analysis, document, true, cancellation);
             if (IsCurrent(document)) {
-                changed |= await ReportAsync(document, all, true);
+                changed |= await ReportAsync(document, analysis, all, true);
             }
         }
 
@@ -155,8 +164,8 @@ public sealed partial class LanguageServer {
     }
 
     /// <summary>Keeps a document's report; publishes it if it changed and the client is sent diagnostics. True if it changed.</summary>
-    async Task<bool> ReportAsync(Document document, IReadOnlyList<Diagnostic> diagnostics, bool complete) {
-        var report = ReportOf(document, diagnostics, complete);
+    async Task<bool> ReportAsync(Document document, Analysis analysis, IReadOnlyList<Diagnostic> diagnostics, bool complete) {
+        var report = ReportOf(document, analysis, diagnostics, complete);
         var key = Workspace.KeyOf(document.Uri);
         var same = _reports.TryGetValue(key, out var previous)
                    && previous.ResultId == report.ResultId
@@ -174,8 +183,8 @@ public sealed partial class LanguageServer {
         return true;
     }
 
-    DiagnosticReport ReportOf(Document document, IReadOnlyList<Diagnostic> diagnostics, bool complete) {
-        var items = new JsonArray([..diagnostics.Select(d => DiagnosticNode(document, d))]);
+    DiagnosticReport ReportOf(Document document, Analysis analysis, IReadOnlyList<Diagnostic> diagnostics, bool complete) {
+        var items = new JsonArray([..diagnostics.Select(d => DiagnosticNode(document, analysis, d))]);
         return new(document.Uri, document.Version, document.IsOpen, ResultIdOf(items), items, document.Tree, complete);
     }
 
@@ -202,7 +211,7 @@ public sealed partial class LanguageServer {
         }
     }
 
-    JsonNode DiagnosticNode(Document document, Diagnostic diagnostic) {
+    JsonNode DiagnosticNode(Document document, Analysis analysis, Diagnostic diagnostic) {
         var node = new JsonObject {
             ["range"] = RangeNode(document.Lines.RangeOf(diagnostic.Span)),
             ["severity"] = diagnostic.Severity == DiagnosticSeverity.Error ? 1 : diagnostic.Severity == DiagnosticSeverity.Warning ? 2 : 3,
@@ -214,6 +223,21 @@ public sealed partial class LanguageServer {
         // The long-form page, which 'sable explain' prints, as a link.
         if (_options.ExplainLink(diagnostic.Id) is { } link) {
             node["codeDescription"] = new JsonObject { ["href"] = link };
+        }
+
+        // The other places it is about, each in the file it is in.
+        var related = new JsonArray();
+        foreach (var location in diagnostic.Related) {
+            if (FileOf(analysis, document, location.Anchor) is var (uri, lines)) {
+                related.Add(new JsonObject {
+                    ["location"] = new JsonObject { ["uri"] = uri, ["range"] = RangeNode(lines.RangeOf(location.Span)) },
+                    ["message"] = location.Message
+                });
+            }
+        }
+
+        if (related.Count > 0) {
+            node["relatedInformation"] = related;
         }
 
         // What nobody uses is shown faded, as editors show unused code.
@@ -257,7 +281,7 @@ public sealed partial class LanguageServer {
         var document = snapshot.Find(uri) ?? throw new LspException(LspException.InvalidParams, $"'{uri}' is not open");
         var analysis = await AnalysisOfAsync(snapshot, document);
         var diagnostics = await AllDiagnosticsAsync(analysis, document, !_refresh, cancellation);
-        var report = ReportOf(document, diagnostics, true);
+        var report = ReportOf(document, analysis, diagnostics, true);
         return parameters.GetString("previousResultId") == report.ResultId
             ? new JsonObject { ["kind"] = "unchanged", ["resultId"] = report.ResultId }
             : new JsonObject { ["kind"] = "full", ["resultId"] = report.ResultId, ["items"] = report.Items };

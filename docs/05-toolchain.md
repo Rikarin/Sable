@@ -188,7 +188,9 @@ let manifest = Package {
   functions. As it is loaded, a constructor starts the runtime, takes the
   process's arguments (where the C library passes them to constructors:
   Apple's and glibc) and gives its globals their initial values; the runtime
-  destroys them as the process exits, before its leak check. A single file
+  destroys them as the process exits, before its leak check. On Windows it
+  is compiled for the DLL C runtime, as `/MD` is, and a static library also
+  holds compiler-rt's builtins, which Microsoft's toolchain lacks. A single file
   is built so by `sable build file.sb --emit staticlib` (or `dylib`). Not
   yet cached between builds as a binary's units are.
 - Field names are the TOML keys in Sable's spelling (`defaultFeatures`,
@@ -224,8 +226,13 @@ A member takes a shared setting with `.workspace`: `version: .workspace`,
 `dependencies: [.workspace("image")]`. A `package.sb` cannot import its
 workspace's file. Inheritance goes through these named references, so a
 member stays readable on its own. (Not built yet: `Workspace` has `members`
-and `exclude`; `shared` and `.workspace` wait on the manifest model learning
-inheritance, which `sable.toml` never had either.)
+and `exclude`; `shared` and `.workspace` are not in `Sable.Build` yet.
+`sable.toml` has the inheritance, as Cargo writes it: `[workspace.package]`
+and `[workspace.dependencies]` in the root, and `version.workspace = true` or
+`image = { workspace = true, features = [...] }` in a member, which may add
+features, `optional` and `when`; a shared path dependency is relative to the
+workspace. A member that inherits cannot be published until it writes its
+settings out, since a consumer has no workspace to take them from.)
 
 A package that is also its workspace's root has both files in one directory.
 
@@ -340,7 +347,8 @@ with both kinds is an error, so there is never a question which one applies.
 
 ### 5.2.10 Not built yet
 
-- Workspace inheritance: `shared` and `.workspace` (§5.2.3).
+- Workspace inheritance in `package.sb` and `workspace.sb`: `shared` and
+  `.workspace` (§5.2.3); `sable.toml` has it.
 - Runtime profiles: `[targets.<triple>] runtime = "minimal"` or `"standard"`
   is accepted with a warning, and the full runtime is linked. The other
   per-target setting is built: `reflection = false`

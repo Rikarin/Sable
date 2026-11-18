@@ -123,6 +123,7 @@ public static class SilPrinter {
             EnumType enumType => enumType.Cases.Where(static c => c.Payload is not null).Select(static c => c.Payload!),
             TupleType tuple => tuple.Elements,
             ArrayType array => [array.Element],
+            SliceType slice => [slice.Element],
             WeakStorageType weak => [weak.Optional],
             UnownedStorageType unowned => [unowned.Referent],
             _ => [],

@@ -1,9 +1,38 @@
+using System.Text;
 using Sable.CodeGen;
 using Sable.Driver;
 using Sable.Driver.Commands;
 
 // The single toolchain binary of docs/05: `sable <command> …`, where each
 // command is a class under Commands/.
+
+// Text in and out is UTF-8, as source files are and as a Sable program
+// writes. Windows would read and write a pipe in the console's code page
+// instead, so an 'é' a program printed, or piped to 'sable fmt -', would
+// come through as other characters; a console is set to UTF-8, as the
+// runtime sets it for a program.
+if (OperatingSystem.IsWindows()) {
+    var utf8 = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+    if (Console.IsInputRedirected) {
+        Console.SetIn(new StreamReader(Console.OpenStandardInput(), utf8));
+    }
+
+    if (!Console.IsOutputRedirected || !Console.IsErrorRedirected) {
+        try {
+            Console.OutputEncoding = utf8;
+        } catch (IOException) {
+            // No console to set: the redirected streams below are all there is.
+        }
+    }
+
+    if (Console.IsOutputRedirected) {
+        Console.SetOut(new StreamWriter(Console.OpenStandardOutput(), utf8) { AutoFlush = true });
+    }
+
+    if (Console.IsErrorRedirected) {
+        Console.SetError(new StreamWriter(Console.OpenStandardError(), utf8) { AutoFlush = true });
+    }
+}
 
 if (GlobalOptions.Parse(args, out var badOption) is not { } parsed) {
     Console.Error.WriteLine($"sable: {badOption}");

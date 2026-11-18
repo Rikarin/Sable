@@ -582,10 +582,12 @@ public sealed class SilParser {
             return new RelativeReferenceType(target, width, relative.Text == "relative_optional");
         }
 
+        // '[T]' an array, '[T:]' a slice of one.
         if (Accept("[")) {
             var element = ParseTypeBody();
+            var slice = Accept(":");
             Expect("]");
-            return new ArrayType(element);
+            return slice ? new SliceType(element) : new ArrayType(element);
         }
 
         if (Accept("(")) {

@@ -72,43 +72,8 @@ public sealed class ResolverFuzzTests(Xunit.Abstractions.ITestOutputHelper outpu
         return builder.ToString();
     }
 
-    /// <summary>A registry in memory, with what a lock file holds deciding which yanked versions may still be chosen, as for a real one.</summary>
-    sealed class Registry : IPackageSource {
-        public readonly Dictionary<string, List<(SemVersion Version, bool Yanked, List<(string Package, VersionReq Requirement)> Dependencies)>> Packages = new(StringComparer.Ordinal);
-        public readonly Dictionary<string, SemVersion> Locked = new(StringComparer.Ordinal);
-
-        public IReadOnlyList<SemVersion> Versions(string package) =>
-            Packages.TryGetValue(package, out var versions)
-                ? [..versions.Where(v => !v.Yanked || Locked.GetValueOrDefault(package) == v.Version).Select(static v => v.Version)]
-                : [];
-
-        public IReadOnlyList<(string Package, VersionReq Requirement)> Dependencies(string package, SemVersion version) =>
-            Packages[package].First(v => v.Version == version).Dependencies;
-
-        public bool HasPrereleases => Packages.Values.Any(static vs => vs.Any(static v => v.Version.IsPrerelease || v.Dependencies.Any(static d => d.Requirement.MentionsPrerelease)));
-
-        public override string ToString() {
-            var builder = new StringBuilder();
-            foreach (var (package, versions) in Packages) {
-                foreach (var (version, yanked, dependencies) in versions) {
-                    builder.Append($"  {package} {version}{(yanked ? " (yanked)" : "")}: ")
-                        .AppendJoin(", ", dependencies.Select(static d => $"{d.Package} '{d.Requirement}'"))
-                        .AppendLine();
-                }
-            }
-
-            foreach (var (package, version) in Locked) {
-                builder.AppendLine($"  locked: {package} {version}");
-            }
-
-            return builder.ToString();
-        }
-    }
-
-    static readonly SemVersion RootVersion = SemVersion.Parse("1.0.0");
-
-    static Registry Generate(Random random) {
-        var registry = new Registry();
+    static MemoryRegistry Generate(Random random) {
+        var registry = new MemoryRegistry();
 
         // Half the registries without pre-releases, whose failures can be checked by trying everything.
         var prereleases = random.Next(2) == 0;
@@ -132,7 +97,7 @@ public sealed class ResolverFuzzTests(Xunit.Abstractions.ITestOutputHelper outpu
             return dependencies;
         }
 
-        registry.Packages["root"] = [(RootVersion, false, DependenciesOf("root"))];
+        registry.Packages["root"] = [(ResolverCheck.RootVersion, false, DependenciesOf("root"))];
         foreach (var name in names) {
             var versions = Versions.Where(v => prereleases || !v.Contains('-')).OrderBy(_ => random.Next()).Take(random.Next(1, 5)).Select(SemVersion.Parse)
                 .DistinctBy(static v => v.ToString().Split('+')[0]).ToList();
@@ -155,7 +120,7 @@ public sealed class ResolverFuzzTests(Xunit.Abstractions.ITestOutputHelper outpu
             Exception? failure = null;
             var thread = new Thread(() => {
                 try {
-                    solution = Resolver.Resolve(registry, "root", RootVersion, registry.Locked);
+                    solution = Resolver.Resolve(registry, "root", ResolverCheck.RootVersion, registry.Locked);
                 } catch (Exception e) {
                     failure = e;
                 }
@@ -168,8 +133,8 @@ public sealed class ResolverFuzzTests(Xunit.Abstractions.ITestOutputHelper outpu
                 Assert.False(string.IsNullOrWhiteSpace(failure.Message), $"an empty explanation\n{Reproduce(registry)}");
                 failed++;
                 if (!registry.HasPrereleases) {
-                    if (BruteForce(registry) is { } exists) {
-                        Assert.Fail($"the resolver found no solution, but {Describe(exists)} is one\n{failure.Message}\n{Reproduce(registry)}");
+                    if (ResolverCheck.BruteForce(registry) is { } exists) {
+                        Assert.Fail($"the resolver found no solution, but {ResolverCheck.Describe(exists)} is one\n{failure.Message}\n{Reproduce(registry)}");
                     }
 
                     provenImpossible++;
@@ -179,8 +144,8 @@ public sealed class ResolverFuzzTests(Xunit.Abstractions.ITestOutputHelper outpu
             }
 
             Assert.NotNull(solution);
-            if (Violation(registry, solution!) is { } violation) {
-                Assert.Fail($"{violation}; chose {Describe(solution!)}\n{Reproduce(registry)}");
+            if (ResolverCheck.Violation(registry, solution!) is { } violation) {
+                Assert.Fail($"{violation}; chose {ResolverCheck.Describe(solution!)}\n{Reproduce(registry)}");
             }
 
             solved++;
@@ -189,86 +154,23 @@ public sealed class ResolverFuzzTests(Xunit.Abstractions.ITestOutputHelper outpu
         output.WriteLine($"{solved} solved and checked; {failed} failed, {provenImpossible} of them shown to have no solution by trying every one");
     }
 
-    static string Reproduce(Registry registry) =>
+    /// <summary>
+    ///     A registry's text reads back as the same registry: what a failure
+    ///     prints is the input that reproduces it, here and for the
+    ///     coverage-guided fuzzer, whose inputs are that text.
+    /// </summary>
+    [Fact]
+    public void ARegistryReadsBackFromItsText() {
+        var random = RandomFor(20261126);
+        for (var iteration = 0; iteration < Iterations(200); iteration++) {
+            var registry = Generate(random);
+            var text = registry.ToString();
+            Assert.Equal(text, MemoryRegistry.Parse(text).ToString());
+        }
+    }
+
+    static string Reproduce(MemoryRegistry registry) =>
         $"SABLE_FUZZ_SEED={Environment.GetEnvironmentVariable("SABLE_FUZZ_SEED") ?? "(unset)"}; the registry:\n{registry}";
-
-    static string Describe(IReadOnlyDictionary<string, SemVersion> solution) =>
-        string.Join(", ", solution.OrderBy(static p => p.Key, StringComparer.Ordinal).Select(static p => $"{p.Key} {p.Value}"));
-
-    /// <summary>What is wrong with a solution, if anything.</summary>
-    static string? Violation(Registry registry, IReadOnlyDictionary<string, SemVersion> solution) {
-        if (solution.GetValueOrDefault("root") != RootVersion) {
-            return "the root is not chosen at its version";
-        }
-
-        foreach (var (package, version) in solution) {
-            if (!registry.Versions(package).Contains(version)) {
-                return $"{package} {version} is not a version to choose";
-            }
-
-            foreach (var (dependency, requirement) in registry.Dependencies(package, version)) {
-                if (!solution.TryGetValue(dependency, out var chosen)) {
-                    return $"{package} {version} needs {dependency} '{requirement}', and none is chosen";
-                }
-
-                if (!requirement.Set.Contains(chosen)) {
-                    return $"{package} {version} needs {dependency} '{requirement}', and {chosen} is chosen";
-                }
-            }
-
-            // A pre-release is chosen only where a requirement names one, or the lock holds it.
-            if (version.IsPrerelease && registry.Locked.GetValueOrDefault(package) != version
-                && !registry.Packages.Values.SelectMany(static vs => vs).SelectMany(static v => v.Dependencies).Any(d => d.Package == package && d.Requirement.MentionsPrerelease)) {
-                return $"the pre-release {package} {version} is chosen, and nothing asks for pre-releases of it";
-            }
-        }
-
-        // Only what the root needs, through what is chosen.
-        var needed = new HashSet<string>(StringComparer.Ordinal) { "root" };
-        var pending = new Stack<string>(["root"]);
-        while (pending.TryPop(out var package)) {
-            foreach (var (dependency, _) in registry.Dependencies(package, solution[package])) {
-                if (needed.Add(dependency)) {
-                    pending.Push(dependency);
-                }
-            }
-        }
-
-        return solution.Keys.FirstOrDefault(p => !needed.Contains(p)) is { } extra ? $"{extra} is chosen, and nothing chosen needs it" : null;
-    }
-
-    /// <summary>Every assignment of a version, or none, to each package: one that satisfies every requirement, if there is one.</summary>
-    static Dictionary<string, SemVersion>? BruteForce(Registry registry) {
-        var packages = registry.Packages.Keys.Where(static p => p != "root").ToList();
-        var choice = new Dictionary<string, SemVersion>(StringComparer.Ordinal) { ["root"] = RootVersion };
-
-        bool Works() =>
-            choice.All(chosen => registry.Dependencies(chosen.Key, chosen.Value)
-                .All(d => choice.TryGetValue(d.Package, out var version) && d.Requirement.Set.Contains(version)));
-
-        bool Search(int index) {
-            if (index == packages.Count) {
-                return Works();
-            }
-
-            var package = packages[index];
-            if (Search(index + 1)) {
-                return true;
-            }
-
-            foreach (var version in registry.Versions(package)) {
-                choice[package] = version;
-                if (Search(index + 1)) {
-                    return true;
-                }
-            }
-
-            choice.Remove(package);
-            return false;
-        }
-
-        return Search(0) ? choice : null;
-    }
 
     // ---- The version parsers and the set algebra ----------------------------------------------------
 

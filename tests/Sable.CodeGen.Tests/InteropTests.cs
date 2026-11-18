@@ -548,7 +548,7 @@ public sealed class InteropTests {
                 ? new ProcessStartInfo(executable)
                 : new ProcessStartInfo("/usr/bin/arch", ["-" + target.Arch, executable]);
             start.RedirectStandardOutput = true;
-            var run = Process.Start(start)!;
+            var run = Process.Start(start.Utf8())!;
             var output = run.StandardOutput.ReadToEnd();
             run.WaitForExit();
             Assert.Equal(0, run.ExitCode);

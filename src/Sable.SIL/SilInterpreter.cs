@@ -345,6 +345,23 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
         public List<object?> Elements { get; } = elements;
     }
 
+    /// <summary>
+    ///     A slice: a run of an array's elements, seen where they are — the
+    ///     buffer, which it holds a count of, or none for the empty slice.
+    ///     A value, never changed in place: a write makes a new one.
+    /// </summary>
+    sealed record SliceValue(HeapArray? Buffer, int Start, int Count) {
+        public static readonly SliceValue Empty = new(null, 0, 0);
+    }
+
+    /// <summary>The run of elements an array or a slice is: its buffer, where the run starts, and how long it is.</summary>
+    static (HeapArray? Buffer, int Start, int Count) ElementsOf(object? value) =>
+        value switch {
+            HeapArray array => (Alive(array), 0, array.Elements.Count),
+            SliceValue slice => (slice.Buffer is { } buffer ? Alive(buffer) : null, slice.Start, slice.Count),
+            _ => (null, 0, 0),
+        };
+
     T Allocate<T>(T value, bool onStack = false) where T : Counted {
         _live.Add(value);
         if (!onStack) {
@@ -398,6 +415,10 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                     Retain(tuple.Elements[i], elements[i]);
                 }
 
+                return;
+
+            case (SliceType slice, SliceValue view):
+                Retain(new ArrayType(slice.Element), view.Buffer);
                 return;
 
             case (EnumType enumType, EnumValue enumValue):
@@ -466,6 +487,10 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                     Release(tuple.Elements[i], elements[i], depth);
                 }
 
+                return;
+
+            case (SliceType slice, SliceValue view):
+                Release(new ArrayType(slice.Element), view.Buffer, depth);
                 return;
 
             case (EnumType enumType, EnumValue enumValue):
@@ -1113,8 +1138,22 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
 
     object? Perform(BuiltinInst builtin, object?[] operands, int depth) {
         switch (builtin.Name) {
-            case "array_empty":
+            // Counted by the native runtime only: interpreted, a block runs uncounted.
+            case Coverage.Builtin:
                 return null;
+
+            case "array_empty":
+                return builtin.Type is SliceType ? SliceValue.Empty : null;
+
+            // The whole of an array, viewed: the buffer shared, not copied.
+            case "slice_of": {
+                if (operands[0] is not HeapArray array || Alive(array).Elements.Count == 0) {
+                    return SliceValue.Empty;
+                }
+
+                Retain(builtin.Operands[0].Type, array);
+                return new SliceValue(array, 0, array.Elements.Count);
+            }
 
             case "region_create":
                 return Allocate(new RegionObject());
@@ -1363,6 +1402,12 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             case "process_run": {
                 var start = new System.Diagnostics.ProcessStartInfo(Sandbox?.CheckProgram(Text(operands[0]).Value) ?? Text(operands[0]).Value) {
                     RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false,
+                    // Text goes to and from the program as UTF-8, as the native
+                    // runtime passes it, and not in the console's code page,
+                    // which is what Windows would use.
+                    StandardInputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
+                    StandardOutputEncoding = Encoding.UTF8,
+                    StandardErrorEncoding = Encoding.UTF8,
                 };
                 if (Sandbox is { } confined) {
                     start.WorkingDirectory = confined.CurrentDirectory;
@@ -1519,16 +1564,18 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                 return IsWhitespace((Rune)operands[0]!);
 
             case "array_count":
-                return operands[0] is HeapArray counted ? (long)Alive(counted).Elements.Count : 0L;
+                return (long)ElementsOf(operands[0]).Count;
 
+            // An array's element, or a slice's — checked against the slice's
+            // count, not its buffer's.
             case "array_get" or "array_get_borrowed": {
-                var array = operands[0] is HeapArray held ? Alive(held) : null;
+                var (array, start, count) = ElementsOf(operands[0]);
                 var index = (long)operands[1]!;
-                if (array is null || index < 0 || index >= array.Elements.Count) {
+                if (array is null || index < 0 || index >= count) {
                     throw new SilTrap("array index out of range");
                 }
 
-                var element = array.Elements[(int)index];
+                var element = array.Elements[start + (int)index];
                 if (builtin.Name == "array_get") {
                     Retain(builtin.Type, element);
                 }
@@ -1543,35 +1590,28 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             case "array_make_unique":
                 if (((IReference)operands[0]!).Peek() is HeapArray) {
                     Unique(builtin.Operands[0], (IReference)operands[0]!);
+                } else if (((IReference)operands[0]!).Peek() is SliceValue) {
+                    UniqueSlice(builtin.Operands[0], (IReference)operands[0]!);
                 }
 
                 return null;
 
             case "array_set" or "array_set_unique": {
-                if (builtin.Name == "array_set_unique" && ((IReference)operands[0]!).Peek() is HeapArray { Strong: > 1 }) {
+                if (builtin.Name == "array_set_unique"
+                    && ((IReference)operands[0]!).Peek() is HeapArray { Strong: > 1 } or SliceValue { Buffer.Strong: > 1 }) {
                     throw new SilTrap("array_set_unique on a shared array");
                 }
 
-                var array = Unique(builtin.Operands[0], (IReference)operands[0]!);
-                var index = (long)operands[1]!;
-                if (index < 0 || index >= array.Elements.Count) {
-                    throw new SilTrap("array index out of range");
-                }
-
-                var old = array.Elements[(int)index];
-                array.Elements[(int)index] = operands[2];
+                var (array, at) = Writable(builtin.Operands[0], (IReference)operands[0]!, (long)operands[1]!);
+                var old = array.Elements[at];
+                array.Elements[at] = operands[2];
                 Release(array.Type.Element, old, depth);
                 return null;
             }
 
             case "array_element_addr": {
-                var array = Unique(builtin.Operands[0], (IReference)operands[0]!);
-                var index = (long)operands[1]!;
-                if (index < 0 || index >= array.Elements.Count) {
-                    throw new SilTrap("array index out of range");
-                }
-
-                return new ArrayElement(array, (int)index);
+                var (array, at) = Writable(builtin.Operands[0], (IReference)operands[0]!, (long)operands[1]!);
+                return new ArrayElement(array, at);
             }
 
             case "array_remove_last": {
@@ -1585,24 +1625,21 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                 return last;
             }
 
+            // Elements [from, to) of an array or a slice: a view of the same
+            // buffer, which it holds a count of; nothing is copied.
             case "array_slice": {
-                var source = operands[0] is HeapArray held ? Alive(held).Elements : [];
+                var (buffer, start, count) = ElementsOf(operands[0]);
                 var (from, to) = ((long)operands[1]!, (long)operands[2]!);
-                if (from < 0 || to > source.Count || from > to) {
+                if (from < 0 || to > count || from > to) {
                     throw new SilTrap("array slice out of range");
                 }
 
-                if (from == to) {
-                    return null;
+                if (from == to || buffer is null) {
+                    return SliceValue.Empty;
                 }
 
-                var type = (ArrayType)builtin.Type;
-                var copy = Allocate(new HeapArray(type, [..source.Skip((int)from).Take((int)(to - from))]));
-                foreach (var element in copy.Elements) {
-                    Retain(type.Element, element);
-                }
-
-                return copy;
+                Retain(buffer.Type, buffer);
+                return new SliceValue(buffer, start + (int)from, (int)(to - from));
             }
 
             case "array_clear": {
@@ -1937,6 +1974,53 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
         Releases++;
         address.Set(copy);
         return copy;
+    }
+
+    /// <summary>
+    ///     Where element <paramref name="index" /> of the array or slice at an
+    ///     address is, to change: the buffer made the only reference to the
+    ///     elements first, and the index checked against the count.
+    /// </summary>
+    (HeapArray Array, int At) Writable(SilValue addressValue, IReference address, long index) {
+        if (address.Peek() is SliceValue view) {
+            if (index < 0 || index >= view.Count) {
+                throw new SilTrap("array index out of range");
+            }
+
+            var unique = UniqueSlice(addressValue, address);
+            return (unique.Buffer!, unique.Start + (int)index);
+        }
+
+        var array = Unique(addressValue, address);
+        if (index < 0 || index >= array.Elements.Count) {
+            throw new SilTrap("array index out of range");
+        }
+
+        return (array, (int)index);
+    }
+
+    /// <summary>
+    ///     The slice at an address, made the only reference to its buffer: a
+    ///     shared one gives way to a copy of the slice's run alone, as an
+    ///     array's copy is of its own elements.
+    /// </summary>
+    SliceValue UniqueSlice(SilValue addressValue, IReference address) {
+        var view = (SliceValue)address.Peek()!;
+        if (view.Buffer is not { } buffer || Alive(buffer).Strong == 1) {
+            return view;
+        }
+
+        var type = new ArrayType(((SliceType)((AddressType)addressValue.Type).Pointee).Element);
+        var copy = Allocate(new HeapArray(type, [..buffer.Elements.Skip(view.Start).Take(view.Count)]));
+        foreach (var element in copy.Elements) {
+            Retain(type.Element, element);
+        }
+
+        buffer.Strong--;
+        Releases++;
+        var unique = new SliceValue(copy, 0, view.Count);
+        address.Set(unique);
+        return unique;
     }
 
     /// <summary>The whitespace the runtime knows: ASCII's.</summary>

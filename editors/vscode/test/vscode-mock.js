@@ -41,6 +41,11 @@ class Uri {
     return new Uri("file", path.resolve(file));
   }
 
+  static parse(text) {
+    const url = new URL(text);
+    return new Uri(url.protocol.replace(/:$/, ""), decodeURIComponent(url.pathname));
+  }
+
   static joinPath(base, ...parts) {
     return new Uri(base.scheme, path.join(base.fsPath, ...parts));
   }

@@ -2,6 +2,8 @@ using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Sable.Symbols;
+using Sable.Syntax;
 
 namespace Sable.LanguageServer;
 
@@ -164,6 +166,8 @@ public sealed partial class LanguageServer {
         var folders = _folders;
         _loading = Task.Run(async () => {
             await previous;
+            var watch = System.Diagnostics.Stopwatch.StartNew();
+            var warmUp = Task.Run(WarmUp);
             var work = Task.Run(() => {
                 _workspace.SetLayout(ReadProjects(folders));
                 var files = added
@@ -183,14 +187,54 @@ public sealed partial class LanguageServer {
             }
 
             try {
+                await warmUp;
                 var count = await work;
-                Log($"loaded {count} file(s) from {string.Join(", ", added)}");
+                Log($"loaded {count} file(s) from {string.Join(", ", added)} in {watch.ElapsedMilliseconds} ms");
             } catch (Exception e) when (e is not OutOfMemoryException) {
                 Log($"loading failed: {e}");
             }
 
+            Volatile.Write(ref _loaded, 1);
             Changed();
         });
+    }
+
+    static int _warmedUp;
+
+    /// <summary>
+    ///     The first compilation in a process is several times slower than
+    ///     the next — the compiler's code is compiled as it first runs — and
+    ///     it is the one the first diagnostics wait for. A small program
+    ///     compiled while the files are read takes that out of their way.
+    /// </summary>
+    void WarmUp() {
+        if (Interlocked.Exchange(ref _warmedUp, 1) == 1) {
+            return;
+        }
+
+        try {
+            const string program = """
+                                   module SableWarmUp
+
+                                   struct Point {
+                                       var x: Int
+                                       var y: Int
+                                   }
+
+                                   fn sum(_ points: Point[>..]) -> Int {
+                                       var total = 0
+                                       for p in points {
+                                           if p.x > 0 { total += p.x * p.y }
+                                       }
+                                       return total
+                                   }
+                                   """;
+            var tree = SyntaxTree.Parse(new SourceText(program, "<warm-up>"));
+            var compilation = Compilation.Create([tree, .._options.LibraryFor(tree)]);
+            compilation.GetSemanticModel(tree).GetDiagnostics();
+        } catch (Exception e) when (e is not OutOfMemoryException) {
+            Log($"warming up failed: {e.Message}");
+        }
     }
 
     /// <summary>

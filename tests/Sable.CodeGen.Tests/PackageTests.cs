@@ -392,7 +392,7 @@ public sealed class PackageTests {
         var sable = Path.Combine(AppContext.BaseDirectory, "sable.dll");
 
         (string Output, string Errors, int ExitCode) Run(string directory, params string[] arguments) {
-            var start = new ProcessStartInfo("dotnet") { WorkingDirectory = directory, RedirectStandardOutput = true, RedirectStandardError = true };
+            var start = new ProcessStartInfo("dotnet") { WorkingDirectory = directory, RedirectStandardOutput = true, RedirectStandardError = true }.Utf8();
             start.ArgumentList.Add(sable);
             foreach (var argument in arguments) {
                 start.ArgumentList.Add(argument);

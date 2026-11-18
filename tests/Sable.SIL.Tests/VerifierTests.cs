@@ -110,6 +110,56 @@ public sealed class VerifierTests {
             "no builtin named"
         );
 
+    /// <summary>A slice is read and written in place, as an array is, and viewed from one; its count never changes.</summary>
+    [Fact]
+    public void ASliceIsReadAndWrittenButNeverGrown() {
+        Assert.Empty(
+            SilVerifier.Verify(
+                SilParser.Parse(
+                    """
+                    sil @f : $([Int], Int) -> Int {
+                    bb0(%0 : $[Int], %1 : $Int):
+                      %2 = builtin "slice_of"(%0) : $[Int:]
+                      %3 = builtin "array_slice"(%2, %1, %1) : $[Int:]
+                      %4 = builtin "array_count"(%3) : $Int
+                      %5 = builtin "array_get"(%2, %4) : $Int
+                      destroy_value %3
+                      destroy_value %2
+                      return %5
+                    }
+                    """
+                )
+            )
+        );
+
+        AssertRejected(
+            """
+            sil @f : $([Int:], Int) -> () {
+            bb0(%0 : $[Int:], %1 : $Int):
+              %2 = alloc_stack $[Int:]
+              %3 = copy_value %0
+              store %3 to [init] %2
+              builtin "array_append"(%2, %1) : $()
+              destroy_addr %2
+              dealloc_stack %2
+              return
+            }
+            """,
+            "builtin \"array_append\" cannot take (*[Int:], Int)"
+        );
+
+        AssertRejected(
+            """
+            sil @f : $([Int:]) -> [Int:] {
+            bb0(%0 : $[Int:]):
+              %1 = builtin "slice_of"(%0) : $[Int:]
+              return %1
+            }
+            """,
+            "builtin \"slice_of\" cannot take ([Int:])"
+        );
+    }
+
     [Fact]
     public void AReturnMatchesTheSignature() =>
         AssertRejected(

@@ -315,7 +315,8 @@ public sealed partial class LlvmEmitter {
                                 declare ptr @sable_array_append_slot(ptr nocapture, ptr)
                                 declare ptr @sable_array_mutable_element(ptr nocapture, ptr, i64)
                                 declare ptr @sable_array_remove_last(ptr nocapture, ptr)
-                                declare ptr @sable_array_slice(ptr, i64, i64, ptr)
+                                declare ptr @sable_slice_mutable_element(ptr nocapture, ptr, i64)
+                                declare void @sable_slice_make_unique(ptr nocapture, ptr)
                                 declare ptr @sable_region_create()
                                 declare void @sable_region_reset(ptr)
                                 declare void @sable_region_push(ptr)
@@ -360,6 +361,7 @@ public sealed partial class LlvmEmitter {
                                 declare void @sable_task_yield()
                                 declare void @sable_task_sleep(i64)
                                 declare void @sable_tasks_drain()
+                                declare void @sable_coverage_hit(i64)
                                 declare void @sable_array_make_unique(ptr nocapture, ptr)
                                 @sable_empty_array_count = internal constant %SableArrayHeader zeroinitializer
                                 declare void @sable_access_begin(ptr, i64, i32)
@@ -504,6 +506,7 @@ public sealed partial class LlvmEmitter {
             WeakStorageType or UnownedStorageType => "ptr",
             StructType structType => LayoutOf(structType).Llvm,
             TupleType tuple => LayoutOf(tuple).Llvm,
+            SliceType slice => Type(slice.Parts),
             EnumType enumType when IsNullable(enumType) => "ptr",
             EnumType enumType when Niche(enumType) is { } niche => niche.Llvm,
             EnumType enumType => Area(enumType) is { Count: > 0 } area
@@ -629,6 +632,7 @@ public sealed partial class LlvmEmitter {
             EnumType enumType => TaggedSize(enumType),
             StructType structType => LayoutOf(structType).Size,
             TupleType tuple => LayoutOf(tuple).Size,
+            SliceType slice => Size(slice.Parts),
             _ => 0,
         };
     }
@@ -784,6 +788,12 @@ public sealed partial class LlvmEmitter {
 
             case TupleType tuple:
                 Parts([..tuple.Elements], LayoutOf(tuple).Slots);
+                body.Append("  ret void\n");
+                break;
+
+            // A slice: the buffer it shares.
+            case SliceType slice:
+                Parts([..slice.Parts.Elements], LayoutOf(slice.Parts).Slots);
                 body.Append("  ret void\n");
                 break;
 
@@ -2379,6 +2389,10 @@ public sealed partial class LlvmEmitter {
                 case "task_drain":
                     Line("call void @sable_tasks_drain()");
                     return;
+
+                case Coverage.Builtin:
+                    Line($"call void @sable_coverage_hit(i64 {operands[0]})");
+                    return;
             }
 
             if (builtin.Name.StartsWith("class_is:", StringComparison.Ordinal)) {
@@ -2778,18 +2792,22 @@ public sealed partial class LlvmEmitter {
                     Line($"{Result()} = call double @llvm.{(builtin.Name == "min_F64" ? "minnum" : "maxnum")}.f64(double {operands[0]}, double {operands[1]})");
                     return;
 
+                // The empty array is no buffer; the empty slice, no buffer and no elements.
                 case "array_empty":
-                    _names[builtin] = "null";
+                    _names[builtin] = builtin.Type is SliceType ? "zeroinitializer" : "null";
                     return;
 
                 // The array header is { object header (16), count, capacity, elements }:
-                // the count and the elements are read in place, not through a call.
+                // the count and the elements are read in place, not through a
+                // call. A slice's count is its own.
                 case "array_count":
-                    _names[builtin] = Count(operands[0]);
+                    _names[builtin] = builtin.Operands[0].Type is SliceType counted ? SlicePart(operands[0], counted, 2) : Count(operands[0]);
                     return;
 
                 case "array_get" or "array_get_borrowed": {
-                    var element = InlineElement(operands[0], operands[1], ((ArrayType)builtin.Operands[0].Type).Element, check: !builtin.InBounds);
+                    var element = builtin.Operands[0].Type is SliceType viewed
+                        ? SliceElement(operands[0], operands[1], viewed, check: !builtin.InBounds)
+                        : InlineElement(operands[0], operands[1], ((ArrayType)builtin.Operands[0].Type).Element, check: !builtin.InBounds);
                     var value = Result();
                     Line($"{value} = load {Type(builtin.Type)}, ptr {element}, !tbaa {TbaaElement}");
                     if (builtin.Name == "array_get") {
@@ -2805,6 +2823,26 @@ public sealed partial class LlvmEmitter {
                     Line($"store {Type(arrayType.Element)} {operands[1]}, ptr {element}, !tbaa {TbaaElement}");
                     return;
                 }
+
+                // A slice made the only reference to its buffer: the runtime
+                // copies its run alone when the buffer is shared.
+                case "array_make_unique" when builtin.Operands[0].Type is AddressType { Pointee: SliceType unique }:
+                    Line($"call void @sable_slice_make_unique(ptr {operands[0]}, ptr {module.ArrayMetadata(new ArrayType(unique.Element))})");
+                    return;
+
+                case "array_set" or "array_set_unique" when builtin.Operands[0].Type is AddressType { Pointee: SliceType written }: {
+                    var elementType = Type(written.Element);
+                    var element = SliceMutableElement(operands[0], operands[1], written);
+                    var old = Fresh();
+                    Line($"{old} = load {elementType}, ptr {element}");
+                    Line($"store {elementType} {operands[2]}, ptr {element}");
+                    Own(false, written.Element, old);
+                    return;
+                }
+
+                case "array_element_addr" when builtin.Operands[0].Type is AddressType { Pointee: SliceType addressed }:
+                    _names[builtin] = SliceMutableElement(operands[0], operands[1], addressed);
+                    return;
 
                 case "array_make_unique": {
                     var arrayType = (ArrayType)((AddressType)builtin.Operands[0].Type).Pointee;
@@ -2866,10 +2904,51 @@ public sealed partial class LlvmEmitter {
                     return;
                 }
 
-                case "array_slice":
-                    SiteForRuntime();
-                    Line($"{Result()} = call ptr @sable_array_slice(ptr {operands[0]}, i64 {operands[1]}, i64 {operands[2]}, ptr {module.ArrayMetadata((ArrayType)builtin.Type)})");
+                // The whole of an array, viewed: its buffer retained, from 0 for its count.
+                case "slice_of": {
+                    var count = Count(operands[0]);
+                    Line($"call void @sable_retain(ptr {operands[0]})");
+                    _names[builtin] = MakeSlice((SliceType)builtin.Type, operands[0], "0", count);
                     return;
+                }
+
+                // Elements [from, to) of an array or a slice: a view of the same
+                // buffer, retained, the range checked against the count. An
+                // empty range holds no buffer.
+                case "array_slice": {
+                    var slice = (SliceType)builtin.Type;
+                    string buffer, start, count;
+                    if (builtin.Operands[0].Type is SliceType) {
+                        (buffer, start, count) = (SlicePart(operands[0], slice, 0), SlicePart(operands[0], slice, 1), SlicePart(operands[0], slice, 2));
+                    } else {
+                        (buffer, start, count) = (operands[0], "0", Count(operands[0]));
+                    }
+
+                    var (from, to) = (operands[1], operands[2]);
+                    var negative = Fresh();
+                    var past = Fresh();
+                    var reversed = Fresh();
+                    var either = Fresh();
+                    var outside = Fresh();
+                    Line($"{negative} = icmp slt i64 {from}, 0");
+                    Line($"{past} = icmp sgt i64 {to}, {count}");
+                    Line($"{reversed} = icmp sgt i64 {from}, {to}");
+                    Line($"{either} = or i1 {negative}, {past}");
+                    Line($"{outside} = or i1 {either}, {reversed}");
+                    TrapIf(outside, "array slice out of range");
+
+                    var length = Fresh();
+                    var empty = Fresh();
+                    var held = Fresh();
+                    var first = Fresh();
+                    Line($"{length} = sub i64 {to}, {from}");
+                    Line($"{empty} = icmp eq i64 {length}, 0");
+                    Line($"{held} = select i1 {empty}, ptr null, ptr {buffer}");
+                    Line($"call void @sable_retain(ptr {held})");
+                    Line($"{first} = add i64 {start}, {from}");
+                    _names[builtin] = MakeSlice(slice, held, first, length);
+                    return;
+                }
 
                 case "array_clear": {
                     var old = Fresh();
@@ -3646,6 +3725,62 @@ public sealed partial class LlvmEmitter {
             Continue(done);
             var element = Fresh();
             Line($"{element} = phi ptr [ {direct}, %{fast} ], [ {called}, %{slow} ]");
+            return element;
+        }
+
+        /// <summary>Part of a slice: 0 its buffer, 1 where its run starts, 2 its count.</summary>
+        string SlicePart(string slice, SliceType type, int part) {
+            var value = Fresh();
+            Line($"{value} = extractvalue {Type(type)} {slice}, {part}");
+            return value;
+        }
+
+        /// <summary>A slice of its parts.</summary>
+        string MakeSlice(SliceType type, string buffer, string start, string count) {
+            var llvmType = Type(type);
+            var withBuffer = Fresh();
+            var withStart = Fresh();
+            var whole = Fresh();
+            Line($"{withBuffer} = insertvalue {llvmType} undef, ptr {buffer}, 0");
+            Line($"{withStart} = insertvalue {llvmType} {withBuffer}, i64 {start}, 1");
+            Line($"{whole} = insertvalue {llvmType} {withStart}, i64 {count}, 2");
+            return whole;
+        }
+
+        /// <summary>
+        ///     A slice's element's address, the index checked against the
+        ///     slice's count — not its buffer's — inline, with no call. A slice
+        ///     with elements has a buffer.
+        /// </summary>
+        string SliceElement(string slice, string index, SliceType type, bool check = true) {
+            var buffer = SlicePart(slice, type, 0);
+            var start = SlicePart(slice, type, 1);
+            if (check) {
+                var count = SlicePart(slice, type, 2);
+                var outside = Fresh();
+                Line($"{outside} = icmp uge i64 {index}, {count}");
+                TrapIf(outside, "array index out of range");
+            }
+
+            var elementsField = Fresh();
+            var elements = Fresh();
+            var position = Fresh();
+            var element = Fresh();
+            Line($"{elementsField} = getelementptr inbounds %SableArrayHeader, ptr {buffer}, i32 0, i32 3");
+            Line($"{elements} = load ptr, ptr {elementsField}, !tbaa {TbaaHeader}");
+            Line($"{position} = add i64 {start}, {index}");
+            Line($"{element} = getelementptr inbounds {Type(type.Element)}, ptr {elements}, i64 {position}");
+            return element;
+        }
+
+        /// <summary>
+        ///     A slice's element's address to write: the runtime makes the
+        ///     slice the only reference to its run first, and checks the index.
+        /// </summary>
+        string SliceMutableElement(string slot, string index, SliceType type) {
+            var element = Fresh();
+            SiteForRuntime();
+            Line($"{element} = call ptr @sable_slice_mutable_element(ptr {slot}, ptr {module.ArrayMetadata(new ArrayType(type.Element))}, i64 {index})");
             return element;
         }
 

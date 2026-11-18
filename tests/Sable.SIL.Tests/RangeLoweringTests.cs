@@ -143,4 +143,33 @@ public sealed class RangeLoweringTests {
         Assert.Equal(45L, Run(module, "count", 10L));
         Assert.DoesNotContain("struct", SilPrinter.Print(module.Find("M.count")!));
     }
+
+    /// <summary>
+    ///     <c>for i in a... { }</c> counts up from <c>a</c> with no bound,
+    ///     until the loop is left — and past <c>Int.max</c> it traps.
+    /// </summary>
+    [Fact]
+    public void AForOverAnOpenRangeCountsUntilItIsLeft() {
+        var module = Lower("""
+                           fn firstSquareOver(_ limit: Int) -> Int {
+                               for i in 1... {
+                                   if i * i > limit { return i }
+                               }
+                               return 0
+                           }
+
+                           fn summed(from start: Int, _ n: Int) -> Int {
+                               var total = 0
+                               for i in start... where i % 2 == 0 {
+                                   if i > start + n { break }
+                                   total = total + i
+                               }
+                               return total
+                           }
+                           """);
+
+        Assert.Equal(8L, Run(module, "firstSquareOver", 50L));
+        Assert.Equal(2L + 4 + 6, Run(module, "summed", 1L, 6L));
+        Assert.Throws<SilTrap>(() => Run(module, "summed", 9223372036854775806L, 6L));
+    }
 }

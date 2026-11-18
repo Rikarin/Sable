@@ -512,8 +512,14 @@ internal sealed class Parser {
             return left;
         }
 
+        // Where a brace opens the statement's body, 'for i in 3... {' is a
+        // range with no upper bound, not one bounded by a closure.
         var op = EatToken();
-        var right = CanStartExpression(Current.Kind) && !AtStatementStart ? ParseShift() : null;
+        var right = CanStartExpression(Current.Kind)
+            && !AtStatementStart
+            && !(_noBrace && At(SyntaxKind.OpenBraceToken))
+                ? ParseShift()
+                : null;
         return new RangeExpressionGreen(left, op, right);
     }
 

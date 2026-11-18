@@ -3175,13 +3175,22 @@ public sealed partial class SilGen {
         }
 
         /// <summary><c>for i in a..&lt;b</c> and <c>a...b</c>: a counting loop, with no range built.</summary>
+        /// <remarks>
+        ///     <c>for i in a...</c> has no upper bound: it counts until the loop
+        ///     is left, and stepping past <c>Int.max</c> traps as any overflow does.
+        /// </remarks>
         void ForRange(BoundForEach loop, BoundRange range) {
-            if (range.Lower is null || range.Upper is null || loop.Element is null) {
-                Fail(loop.Syntax, "a 'for' over an open range");
+            if (range.Lower is null || loop.Element is null) {
+                Fail(loop.Syntax, "a 'for' over a range with no lower bound");
                 return;
             }
 
-            if (Expression(range.Lower) is not { } lower || Expression(range.Upper) is not { } upper) {
+            if (Expression(range.Lower) is not { } lower) {
+                return;
+            }
+
+            SilValue? upper = null;
+            if (range.Upper is not null && (upper = Expression(range.Upper)) is null) {
                 return;
             }
 
@@ -3210,7 +3219,7 @@ public sealed partial class SilGen {
             CountingLoop(loop, lower, upper, isInclusive);
         }
 
-        void CountingLoop(BoundForEach loop, SilValue lower, SilValue upper, bool isInclusive) {
+        void CountingLoop(BoundForEach loop, SilValue lower, SilValue? upper, bool isInclusive) {
             if (lower.Type != SilType.Int || SlotFor(loop.Element!, loop.Syntax) is null) {
                 Fail(loop.Syntax, "a 'for' over a range that is not of Int");
                 return;
@@ -3226,10 +3235,14 @@ public sealed partial class SilGen {
             Branch(header);
 
             _current = header;
-            var current = Emit(new LoadInst(counter));
-            var compare = isInclusive ? "cmp_le_Int" : "cmp_lt_Int";
-            var inside = Emit(new BuiltinInst(compare, SilType.Bool, current, upper));
-            Jump(new CondBranchInst(inside, body, [], after, []));
+            if (upper is null) {
+                Branch(body);
+            } else {
+                var current = Emit(new LoadInst(counter));
+                var compare = isInclusive ? "cmp_le_Int" : "cmp_lt_Int";
+                var inside = Emit(new BuiltinInst(compare, SilType.Bool, current, upper));
+                Jump(new CondBranchInst(inside, body, [], after, []));
+            }
 
             _current = body;
             BindLocal(loop.Element!, Emit(new LoadInst(counter)), loop.Syntax);
@@ -3250,7 +3263,7 @@ public sealed partial class SilGen {
             _current = step;
             var last = Emit(new LoadInst(counter));
             var more = function.AddBlock();
-            if (isInclusive) {
+            if (isInclusive && upper is not null) {
                 var atEnd = Emit(new BuiltinInst("cmp_eq_Int", SilType.Bool, last, upper));
                 Jump(new CondBranchInst(atEnd, after, [], more, []));
             } else {

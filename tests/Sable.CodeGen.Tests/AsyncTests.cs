@@ -73,6 +73,20 @@ public sealed class AsyncTests {
         );
 
     [Fact]
+    public void ATaskWhoseBodyGivesNothingCanBeAwaited() =>
+        // A Task<Void>: its result is a Void?, whose 'Some' carries nothing.
+        Assert.Equal(
+            "spawned\nhi\nafter\nquiet\n",
+            AssertAgree(AsyncProgram("", """
+                    let t = Task.spawn { print("hi") }
+                    print("spawned")
+                    await t.value
+                    print("after")
+                    let unawaited = Task.spawn { print("quiet") }
+                """)).Stdout
+        );
+
+    [Fact]
     public void ATrapInATaskStopsTheProgram() {
         var execution = AssertAgree(AsyncProgram("", """
                 let failing = Task.spawn {

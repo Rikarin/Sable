@@ -50,6 +50,24 @@ public sealed class ExpressionParserTests {
             Parse("a ?? b ? c : d")
         );
 
+    [Theory]
+    [InlineData("n > 1 ? [1] : [2]")]
+    [InlineData("n > 1 ? (a) : b")]
+    [InlineData("flag ? [x] : []")]
+    [InlineData("a.count ? (b + c) : d")]
+    public void AQuestionMarkWithSpaceBeforeItIsTheConditional(string source) =>
+        Assert.StartsWith("(Conditional", Parse(source));
+
+    [Theory]
+    [InlineData("a?[0]", "ElementAccess")]
+    [InlineData("f?()", "Invocation")]
+    [InlineData("a.items?[i] ?? 0", "ElementAccess")]
+    public void AQuestionMarkAgainstWhatItChainsFromIndexesOrCalls(string source, string node) {
+        var dump = Parse(source);
+        Assert.DoesNotContain("Conditional", dump);
+        Assert.Contains(node, dump);
+    }
+
     [Fact]
     public void ConditionalIsRightAssociative() =>
         Assert.Equal(

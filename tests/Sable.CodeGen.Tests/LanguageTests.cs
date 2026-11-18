@@ -692,4 +692,37 @@ public sealed class LanguageTests {
             "struct Dice {\n    static var faces: Int { get { return 3 } }\n}",
             "    print(2 * F64.pi)\n    print(Dice.faces)"
         );
+
+    [Fact]
+    public void AConditionalChoosesBetweenArraysAndIndexingThroughNoneGivesNone() =>
+        Prints(
+            "2 1\n7\n9 -1\n5 -1\n1 -1 -1\nnothing\n",
+            """
+            fn pick(_ n: Int) -> Int[>..] {
+                return n > 1 ? [1, 1] : [2]
+            }
+
+            struct Grid {
+                var cells: Int[>..]
+                subscript(i: Int) -> Int { get => cells[i] }
+            }
+            """,
+            """
+                print("\(pick(5).count) \(pick(0).count)")
+                let flag = true
+                print(flag ? (3 + 4) : 0)
+                let nine: Int[>..] = [9]
+                let maybe: Int[>..]? = nine
+                let empty: Int[>..]? = none
+                print("\(maybe?[0] ?? -1) \(empty?[0] ?? -1)")
+                let g: Grid? = Grid { cells: [4, 5] }
+                let h: Grid? = none
+                print("\(g?[1] ?? -1) \(h?[0] ?? -1)")
+                let d: [String: Int]? = ["a": 1]
+                let e: [String: Int]? = none
+                print("\(d?["a"] ?? -1) \(d?["b"] ?? -1) \(e?["a"] ?? -1)")
+                let words: String[>..]? = none
+                print(words?[0] ?? "nothing")
+            """);
 }
+

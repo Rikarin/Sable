@@ -619,9 +619,10 @@ internal sealed class Parser {
                     continue;
                 }
 
-                // '?(' and '?[' are optional-chained calls and indexes; a bare
-                // '?' is left for the conditional operator.
-                case SyntaxKind.QuestionToken when Peek(1).Kind == SyntaxKind.OpenParenToken: {
+                // '?(' and '?[' are optional-chained calls and indexes, written
+                // against what they chain from; a bare '?', or one with space
+                // before it — 'n > 1 ? [1] : [2]' — is the conditional operator.
+                case SyntaxKind.QuestionToken when Peek(1).Kind == SyntaxKind.OpenParenToken && !HasSpaceBeforeCurrent: {
                     var question = EatToken();
                     var arguments = ParseArgumentList(SyntaxKind.OpenParenToken, SyntaxKind.CloseParenToken);
                     expression = new InvocationExpressionGreen(
@@ -633,7 +634,7 @@ internal sealed class Parser {
                     continue;
                 }
 
-                case SyntaxKind.QuestionToken when Peek(1).Kind == SyntaxKind.OpenBracketToken: {
+                case SyntaxKind.QuestionToken when Peek(1).Kind == SyntaxKind.OpenBracketToken && !HasSpaceBeforeCurrent: {
                     var question = EatToken();
                     var arguments = ParseArgumentList(SyntaxKind.OpenBracketToken, SyntaxKind.CloseBracketToken);
                     expression = new ElementAccessExpressionGreen(expression, question, arguments);

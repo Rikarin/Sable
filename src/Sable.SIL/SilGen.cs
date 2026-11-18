@@ -3764,6 +3764,35 @@ public sealed partial class SilGen {
                         }
                     );
 
+                // 'x?[i]': the binder unwraps x to index it, and wraps what it
+                // gives; indexed only when there is an x, and none when not.
+                case BoundConversion {
+                        ConversionKind: ConversionKind.OptionalWrap,
+                        Operand: BoundIndexAccess { Receiver: BoundConversion { ConversionKind: ConversionKind.Explicit, Operand: { Type: OptionalTypeSymbol } chainedFrom } } chainedIndex,
+                    } when chainedIndex.Syntax is ElementAccessExpressionSyntax { QuestionToken.IsNone: false }:
+                    return OptionalChain(
+                        expression,
+                        chainedFrom,
+                        through => new BoundIndexAccess(chainedIndex.Syntax, chainedIndex.Type, through, chainedIndex.Indices) {
+                            Subscript = chainedIndex.Subscript,
+                            Substitution = chainedIndex.Substitution,
+                        }
+                    );
+
+                // 'd?[k]' of a dictionary, whose indexing gives an optional
+                // already: that one, when there is a d.
+                case BoundIndexAccess { Receiver: BoundConversion { ConversionKind: ConversionKind.Explicit, Operand: { Type: OptionalTypeSymbol } chainedFrom }, Type: OptionalTypeSymbol } flatIndex
+                    when flatIndex.Syntax is ElementAccessExpressionSyntax { QuestionToken.IsNone: false }:
+                    return OptionalChain(
+                        expression,
+                        chainedFrom,
+                        through => new BoundIndexAccess(flatIndex.Syntax, flatIndex.Type, through, flatIndex.Indices) {
+                            Subscript = flatIndex.Subscript,
+                            Substitution = flatIndex.Substitution,
+                        },
+                        flatten: true
+                    );
+
                 case BoundConversion { ConversionKind: ConversionKind.OptionalWrap } conversion:
                     return Wrap(conversion);
 
@@ -5088,7 +5117,8 @@ public sealed partial class SilGen {
         ///     '?.': the receiver unwrapped into a temporary, the member reached
         ///     through it and its result wrapped; none when the receiver is none.
         /// </summary>
-        SilValue? OptionalChain(BoundExpression chained, BoundExpression receiver, Func<BoundExpression, BoundExpression> through) {
+        /// <remarks>With <paramref name="flatten" />, what is reached is optional already, and is the result as it is.</remarks>
+        SilValue? OptionalChain(BoundExpression chained, BoundExpression receiver, Func<BoundExpression, BoundExpression> through, bool flatten = false) {
             if (Expression(receiver) is not { Type: EnumType optional } value || LowerType(chained.Type) is not EnumType resultType) {
                 return Missing(chained, "this '?.'");
             }
@@ -5108,7 +5138,7 @@ public sealed partial class SilGen {
             BindLocal(temporary, payload, chained.Syntax, declaration: true);
             Destroy(value);
             if (Expression(through(new BoundLocalAccess(receiver.Syntax, temporary, unwrappedType))) is { } reached) {
-                Branch(after, Emit(new EnumInst(resultType, resultType.CaseIndex("Some"), Owned(reached))));
+                Branch(after, flatten ? Owned(reached) : Emit(new EnumInst(resultType, resultType.CaseIndex("Some"), Owned(reached))));
             }
 
             _current = absent;

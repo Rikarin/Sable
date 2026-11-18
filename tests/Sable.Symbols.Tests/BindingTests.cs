@@ -496,4 +496,46 @@ public sealed class BindingTests {
 
         Assert.Equal("Int", model.GetTypeOf(hole.Expression)!.ToDisplayString());
     }
+
+    // ---- Recovery ----------------------------------------------------------
+
+    static IReadOnlyList<Diagnostic> AllErrorsIn(string source) => [
+        ..Compilation.Create($"module M\n{source}").GetAllDiagnostics()
+            .Where(static d => d.Severity == DiagnosticSeverity.Error)
+    ];
+
+    /// <summary>An argument that is already an error matches every overload silently.</summary>
+    [Fact]
+    public void AnErrorArgumentDoesNotMakeTheCallAmbiguous() {
+        var errors = AllErrorsIn("fn main() { print(undefinedFn() + 1) }");
+        Assert.Equal(ErrorCode.ERR_NameNotFound, Assert.Single(errors).Code);
+    }
+
+    /// <summary>A parse error is reported by the parser, not again by the binder over what is missing.</summary>
+    [Theory]
+    [InlineData("fn main() {\n    let x?\n}", ErrorCode.ERR_ExpectedStatementEnd)]
+    [InlineData("fn main() -> Int {\n    return 1 + \n}", ErrorCode.ERR_ExpectedExpression)]
+    [InlineData("struct P { var x: Int }\nfn main(_ p: P) {\n    let a = p.\n    let b = 2\n}", ErrorCode.ERR_ExpectedIdentifier)]
+    public void AMissingNodeIsNotLookedUp(string source, ErrorCode code) {
+        var errors = AllErrorsIn(source);
+        Assert.DoesNotContain(errors, static e => e.Code == ErrorCode.ERR_NameNotFound);
+        Assert.Contains(errors, e => e.Code == code);
+    }
+
+    /// <summary>'none' alone says nothing about what it is optional of.</summary>
+    [Fact]
+    public void NoneAloneGivesNoType() {
+        var local = AllErrorsIn("fn main() { let r = none }");
+        Assert.Equal(ErrorCode.ERR_CannotInferType, Assert.Single(local).Code);
+
+        var call = AllErrorsIn("fn id<T>(_ x: T) -> T { return x }\nfn main() {\n    let q = id(none)\n    print(q)\n}");
+        var error = Assert.Single(call);
+        Assert.Equal(ErrorCode.ERR_CannotInferTypeArgument, error.Code);
+        Assert.Contains("'none'", error.Message);
+    }
+
+    [Fact]
+    public void NoneTakesItsTypeFromTheContext() {
+        Assert.Empty(AllErrorsIn("fn id<T>(_ x: T) -> T { return x }\nfn main() {\n    let w: Int? = id(none)\n    let r: String? = none\n}"));
+    }
 }

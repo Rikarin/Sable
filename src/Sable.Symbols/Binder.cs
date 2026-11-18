@@ -1335,6 +1335,16 @@ public sealed partial class Binder {
                 binding.Identifier.Span,
                 $"'{binding.Identifier.Text}' needs either a type annotation or an initialiser"
             );
+        } else if (declaredType is null && initializer is not null && IsNone(initializer)
+                   && initializer.Type is OptionalTypeSymbol { UnderlyingType.IsError: true }) {
+            // 'none' is no particular optional, so it cannot give the binding
+            // a type; left alone, the binding's type would be '??'.
+            _diagnostics.Error(
+                ErrorCode.ERR_CannotInferType,
+                binding.Identifier.Span,
+                $"'{binding.Identifier.Text}' needs a type annotation: 'none' alone does not say what it is optional of"
+            );
+            type = ErrorTypeSymbol.Instance;
         }
 
         var local = new LocalSymbol(binding.Identifier.Text, _containingSymbol, declaration, isMutable) {
@@ -1956,6 +1966,9 @@ public sealed partial class Binder {
         expression switch {
             LiteralExpressionSyntax literal => BindLiteral(literal, expectedType),
             InterpolatedStringExpressionSyntax interpolated => BindInterpolatedString(interpolated),
+            // A name the parser had to make up stands for an expression it
+            // has already reported missing; looking it up would say so again.
+            IdentifierNameSyntax { Identifier.IsMissing: true } missing => new BoundError(missing),
             IdentifierNameSyntax name => BindName(name, name.Identifier.Text),
             GenericNameSyntax name => BindGenericName(name),
             SelfExpressionSyntax self => BindSelf(self),
@@ -2360,7 +2373,8 @@ public sealed partial class Binder {
             _ => string.Empty,
         };
 
-        if (receiver.HasError) {
+        // 'p.' with the name missing: the parser has said so.
+        if (receiver.HasError || syntax.Name is IdentifierNameSyntax { Identifier.IsMissing: true }) {
             return new BoundError(syntax, receiver);
         }
 
@@ -3226,6 +3240,13 @@ public sealed partial class Binder {
                 wanted = variadic.ElementType;
             }
 
+            // A parameter type inference could not settle is reported below,
+            // once, rather than again as every argument that does not fit it.
+            if (ContainsUninferred(wanted, resolved)) {
+                converted.Add(arguments[i]);
+                continue;
+            }
+
             converted.Add(Convert(arguments[i], wanted, arguments[i].Syntax));
         }
 
@@ -3269,16 +3290,31 @@ public sealed partial class Binder {
             substitution = Combine(outer, new(map));
         }
 
+        // A parameter left uninferred because an argument was an error has
+        // had its error reported. One left so by 'none' has not: 'id(none)'
+        // says nothing about what it is optional of.
+        var uninferred = false;
         if (!resolved.TypeParameters.IsEmpty) {
+            var argumentError = arguments.Any(static a =>
+                a is not BoundUnboundClosure && TypeSubstitution.ContainsError(a.Type) && !IsNone(a)
+            );
             foreach (var typeParameter in resolved.TypeParameters) {
                 if (substitution.Lookup(typeParameter) is not null) {
+                    continue;
+                }
+
+                uninferred = true;
+                if (argumentError) {
                     continue;
                 }
 
                 _diagnostics.Error(
                     ErrorCode.ERR_CannotInferTypeArgument,
                     syntax.Span,
-                    $"cannot infer '{typeParameter.Name}' from these arguments"
+                    arguments.Any(IsNone)
+                        ? $"cannot infer '{typeParameter.Name}' from these arguments: 'none' alone does not say "
+                        + "what it is optional of, so give the call a type to produce, as in 'let x: Int? = ...'"
+                        : $"cannot infer '{typeParameter.Name}' from these arguments"
                 );
             }
         }
@@ -3316,6 +3352,12 @@ public sealed partial class Binder {
         }
 
         var result = substitution.Apply(resolved.ReturnType);
+
+        // What an uninferred parameter would have made the result is unknown,
+        // and saying so once is enough.
+        if (uninferred && ContainsUninferred(result, resolved)) {
+            result = ErrorTypeSymbol.Instance;
+        }
 
         // An initialiser of a generic type gives the type its arguments made:
         // 'Box<String>(…)' is a Box<String>, not the definition.
@@ -3474,9 +3516,20 @@ public sealed partial class Binder {
             tied.Add(candidate);
         }
 
+        // An argument that is already an error fits every candidate or none,
+        // and either way its own error has been reported: 'print(missing())'
+        // is not also ambiguous between every 'print'.
+        // A closure, 'none' or '[]' not bound yet stands in with an error
+        // type, and is no error.
+        var argumentError = arguments.Any(static a => a is not BoundUnboundClosure && TypeSubstitution.ContainsError(a.Type));
+
         // Each rejected candidate keeps its reason, so the error can say what
         // was wrong rather than only that something was (docs/04 §1.2).
         if (best is null) {
+            if (argumentError) {
+                return null;
+            }
+
             var name = candidates.IsEmpty ? "?" : candidates[0].Name;
             var message = candidates.Length == 1 && rejected.Count == 1
                 ? $"'{name}' cannot be called with these arguments: {rejected[0].Reason}"
@@ -3488,7 +3541,7 @@ public sealed partial class Binder {
             return null;
         }
 
-        if (ambiguous) {
+        if (ambiguous && !argumentError) {
             var contenders = new[] { best }.Concat(tied).Distinct().Take(3).Select(static c => $"'{Signature(c)}'");
             _diagnostics.Error(
                 ErrorCode.ERR_AmbiguousOverload,

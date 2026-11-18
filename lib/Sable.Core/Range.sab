@@ -1,0 +1,43 @@
+module Sable.Core
+
+// The ranges: what 'a..<b' and 'a...b' make. The binder knows the two
+// operators by sight and builds these types from them; everything a range
+// does is declared here. A 'for' over a range of integers counts, with no
+// range built when the range is written in the loop.
+
+/// The values from 'lowerBound' up to, not including, 'upperBound': what
+/// 'a..<b' makes. Empty when the bounds are equal, and when they are the
+/// wrong way round.
+public struct Range<Bound: Comparable> {
+    /// The first value in the range, when it has any.
+    public let lowerBound: Bound
+
+    /// The first value past the range.
+    public let upperBound: Bound
+
+    /// Whether the range has no values.
+    public var isEmpty: Bool { get { return !(lowerBound < upperBound) } }
+
+    /// Whether the value is in the range.
+    public fn contains(_ value: Bound) -> Bool {
+        return !(value < lowerBound) && value < upperBound
+    }
+}
+
+/// The values from 'lowerBound' to 'upperBound', both included: what
+/// 'a...b' makes. Empty only when the bounds are the wrong way round.
+public struct ClosedRange<Bound: Comparable> {
+    /// The first value in the range, when it has any.
+    public let lowerBound: Bound
+
+    /// The last value in the range, when it has any.
+    public let upperBound: Bound
+
+    /// Whether the range has no values.
+    public var isEmpty: Bool { get { return upperBound < lowerBound } }
+
+    /// Whether the value is in the range.
+    public fn contains(_ value: Bound) -> Bool {
+        return !(value < lowerBound) && !(upperBound < value)
+    }
+}

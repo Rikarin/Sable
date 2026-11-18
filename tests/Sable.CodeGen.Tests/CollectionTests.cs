@@ -84,4 +84,54 @@ public sealed class CollectionTests {
         Assert.Equal("2\nbc\n0\n", execution.Stdout);
         Assert.Equal("fatal error: array slice out of range\n", execution.Stderr);
     }
+
+    [Fact]
+    public void RangesAreValuesStoredPassedReturnedAndIterated() =>
+        Prints(
+            "5\n10\nfalse true\ntrue false\n12\ntrue false\nfalse true\ntrue false\n0 2 4\n",
+            """
+            struct Window {
+                var span: Range<Int>
+                var name: String
+            }
+
+            fn make(_ n: Int) -> Range<Int> {
+                return 0..<n
+            }
+
+            fn sum(_ r: Range<Int>) -> Int {
+                var total = 0
+                for i in r {
+                    total = total + i
+                }
+                return total
+            }
+
+            fn closed(_ n: Int) -> ClosedRange<Int> {
+                return 1...n
+            }
+            """,
+            """
+                let r = make(5)
+                print(r.lowerBound + r.upperBound)
+                print(sum(r))
+                print("\(r.isEmpty) \(make(0).isEmpty)")
+                print("\(r.contains(4)) \(r.contains(5))")
+                var t = 0
+                for i in closed(3) where i != 2 { t = t + i * 3 }
+                print(t)
+                let c = closed(4)
+                print("\(c.contains(4)) \(c.isEmpty)")
+                let s = "a"..<"c"
+                print("\(s.contains("c")) \(s.contains("b"))")
+                let f = 2.5...3.5
+                print("\(f.contains(3.0)) \(f.contains(3.75))")
+                let w = Window(span: 0..<6, name: "w")
+                var picked = ""
+                for i in w.span where i % 2 == 0 {
+                    picked = picked + (picked.isEmpty ? "" : " ") + "\(i)"
+                }
+                print(picked)
+            """
+        );
 }

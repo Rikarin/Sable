@@ -1085,8 +1085,11 @@ to the state machine where tasks are many.
       type; `Region.alloc`, generic and giving a reference into the region;
       `Task` (`spawn` builds the task object around a closure, `value` is an
       async getter); `Bytes.of`, `fromBytes` and `Decoded`, inline layout's,
-      synthesised per type; and `Range`'s bounds, declared beside the type
-      the binder makes of `a..<b` (and not yet lowered). The I128, U128 and F16 types no
+      synthesised per type. `Range` and `ClosedRange` — what the binder
+      makes of `a..<b` and `a...b` — are Sable now (`lib/Sable.Core/Range.sab`:
+      `lowerBound`, `upperBound`, `isEmpty`, `contains`, over a `Comparable`
+      bound), and lower as values: stored, passed, returned and iterated,
+      while a `for` over a range written in the loop still builds none. The I128, U128 and F16 types no
       longer declare `toString`, `abs`, `min` and `max`: nothing could lower
       them, and SIL has no such types yet
 - [x] Reflection: hello-world binary grows < 50 KB with reflection off —

@@ -1582,9 +1582,7 @@ public sealed partial class Binder {
             return array.ElementType;
         }
 
-        if (sequence is NamedTypeSymbol named
-            && named.OriginalDefinition.Equals(Core.Range)
-            && !named.TypeArguments.IsEmpty) {
+        if (sequence is NamedTypeSymbol named && Core.IsRange(named)) {
             // Only an integer range enumerates; a range of anything else is a
             // test of membership, not a sequence.
             if (Core.IsInteger(named.TypeArguments[0])) {
@@ -4284,12 +4282,20 @@ public sealed partial class Binder {
         return new BoundConversion(syntax, type, operand, ConversionKind.Explicit);
     }
 
-    /// <summary>Binds <c>a..&lt;b</c> and friends to a <c>Range&lt;T&gt;</c>.</summary>
+    /// <summary>
+    ///     Binds <c>a..&lt;b</c> to a <c>Range&lt;T&gt;</c> and <c>a...b</c> to a
+    ///     <c>ClosedRange&lt;T&gt;</c>, both declared in Sable.Core; the
+    ///     one-sided forms are a <c>Range</c> with a bound missing.
+    /// </summary>
     BoundExpression BindRange(RangeExpressionSyntax syntax, TypeSymbol? expectedType) {
-        var bound = (expectedType as NamedTypeSymbol)?.OriginalDefinition.Equals(Core.Range)
-            == true
-            && !((NamedTypeSymbol)expectedType!).TypeArguments.IsEmpty
-                ? ((NamedTypeSymbol)expectedType).TypeArguments[0]
+        var isInclusive = syntax.OperatorToken.Kind == SyntaxKind.DotDotDotToken;
+        var definition = isInclusive && syntax.Left is not null && syntax.Right is not null
+            ? Core.ClosedRange
+            : Core.Range;
+
+        var bound = expectedType is NamedTypeSymbol { TypeArguments.Length: 1 } expected
+            && Core.IsRange(expected)
+                ? expected.TypeArguments[0]
                 : null;
 
         var lower = syntax.Left is { } left ? BindExpression(left, bound) : null;
@@ -4314,15 +4320,32 @@ public sealed partial class Binder {
             upper = Convert(upper, element, upper.Syntax);
         }
 
+        if (definition is null) {
+            _diagnostics.Error(
+                ErrorCode.ERR_NameNotFound,
+                syntax.Span,
+                $"no type named '{(isInclusive ? "ClosedRange" : "Range")}' is declared in Sable.Core"
+            );
+            return new BoundError(syntax);
+        }
+
+        // A range's bounds are ordered: 'Range<Bound: Comparable>'.
+        if (!element.IsError) {
+            foreach (var constraint in definition.TypeParameters[0].Constraints) {
+                if (!Conversions.Satisfies(element, constraint, _conversions.Equivalence)) {
+                    _diagnostics.Error(
+                        ErrorCode.ERR_DoesNotConform,
+                        syntax.Span,
+                        $"'{element.ToDisplayString()}' does not conform to '{constraint.ToDisplayString()}', "
+                        + "which a range requires of its bounds"
+                    );
+                }
+            }
+        }
+
         return Record(
             syntax,
-            new BoundRange(
-                syntax,
-                Core.Range.Construct([element]),
-                lower,
-                upper,
-                syntax.OperatorToken.Kind == SyntaxKind.DotDotDotToken
-            )
+            new BoundRange(syntax, definition.Construct([element]), lower, upper, isInclusive)
         );
     }
 

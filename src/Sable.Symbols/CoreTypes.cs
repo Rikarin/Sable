@@ -56,10 +56,6 @@ public sealed class CoreTypes {
         // throws AppError propagate an IoError, converted (docs/03 §3.6).
         From = DeclareGeneric("From", TypeKind.Protocol, "Source");
 
-        // A range has a nominal form too, so that 'for i in 0..<n' iterates
-        // something rather than a shape the binder knows by sight.
-        Range = DeclareGeneric("Range", TypeKind.Struct, "Bound");
-
         // 'Optional<T>' exists so that 'T?' has a nominal form to desugar to.
         Optional = DeclareGeneric("Optional", TypeKind.Union, "Wrapped");
         Dictionary = DeclareGeneric("Dictionary", TypeKind.Struct, "Key", "Value");
@@ -96,8 +92,7 @@ public sealed class CoreTypes {
     ///     than one builtin: a region's <c>alloc</c> (its result is a
     ///     reference to whatever it is given), <c>Task</c>'s members (a spawn
     ///     builds a closure's task object), <c>Bytes.of</c> and
-    ///     <c>Decoded</c> (inline layout's), <c>Range</c>'s bounds, and the
-    ///     array members, built per element type in
+    ///     <c>Decoded</c> (inline layout's), and the array members, built per element type in
     ///     <see cref="GetArrayMembers" />.
     /// </remarks>
     void DeclarePrimitiveMembers() {
@@ -147,10 +142,6 @@ public sealed class CoreTypes {
         of.Parameters = [new ParameterSymbol("value", "_", of, null, 0) { TypeResolver = () => serialised }];
         of.ReturnTypeResolver = () => new ArrayTypeSymbol(U8, ArrayKind.Grow);
         Bytes.AddMember(of);
-
-        Property(Range, "lowerBound", Range.TypeParameters[0]);
-        Property(Range, "upperBound", Range.TypeParameters[0]);
-        Property(Range, "isEmpty", Bool);
     }
 
     /// <summary>The members every array has, built for one element type.</summary>
@@ -282,7 +273,26 @@ public sealed class CoreTypes {
     /// <summary><c>From&lt;Source&gt;</c>: the conversion a <c>try</c> applies between error types.</summary>
     public NamedTypeSymbol From { get; }
 
-    public NamedTypeSymbol Range { get; }
+    /// <summary>
+    ///     <c>Range&lt;Bound&gt;</c>, what <c>a..&lt;b</c> makes, and
+    ///     <c>ClosedRange&lt;Bound&gt;</c>, what <c>a...b</c> makes: declared in
+    ///     <c>lib/Sable.Core/Range.sab</c>, so null only in a compilation that
+    ///     brings a Sable.Core of its own without them.
+    /// </summary>
+    public NamedTypeSymbol? Range => _range ??= DeclaredStruct("Range");
+
+    /// <inheritdoc cref="Range" />
+    public NamedTypeSymbol? ClosedRange => _closedRange ??= DeclaredStruct("ClosedRange");
+
+    NamedTypeSymbol? _range, _closedRange;
+
+    NamedTypeSymbol? DeclaredStruct(string name) =>
+        Module.GetType(name) is { TypeKind: TypeKind.Struct } type ? type : null;
+
+    /// <summary>True for a <c>Range</c> or <c>ClosedRange</c> of some bound.</summary>
+    public bool IsRange(TypeSymbol type) =>
+        type is NamedTypeSymbol { TypeArguments.Length: 1 } named
+        && (named.OriginalDefinition.Equals(Range) || named.OriginalDefinition.Equals(ClosedRange));
 
     public NamedTypeSymbol Optional { get; }
     public NamedTypeSymbol Dictionary { get; }

@@ -201,23 +201,23 @@ extension Char: Debug {
 extension String: Debug {
     /// In double quotes, with a quote, a backslash, a newline or a tab escaped.
     public fn debugDescription() -> String {
-        var result = "\""
+        // Runs with nothing to escape are kept whole and the pieces joined
+        // once: a '+' per scalar would copy everything so far again.
+        var pieces: String[>..] = ["\""]
+        var start = 0
         var i = 0
         while i < self.count {
             let c = self.at(i)
-            if c == '"' {
-                result = result + "\\\""
-            } else if c == '\\' {
-                result = result + "\\\\"
-            } else if c == '\n' {
-                result = result + "\\n"
-            } else if c == '\t' {
-                result = result + "\\t"
-            } else {
-                result = result + String.fromChar(c)
+            let escape = c == '"' ? "\\\"" : c == '\\' ? "\\\\" : c == '\n' ? "\\n" : c == '\t' ? "\\t" : ""
+            if escape.count > 0 {
+                pieces.append(self.slice(from: start, to: i))
+                pieces.append(escape)
+                start = i + 1
             }
             i = i + 1
         }
-        return result + "\""
+        pieces.append(self.slice(from: start, to: self.count))
+        pieces.append("\"")
+        return Runtime.joinStrings(pieces, "")
     }
 }

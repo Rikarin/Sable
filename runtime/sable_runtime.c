@@ -257,8 +257,11 @@ static void *buffer_resize(void *buffer, int64_t old, int64_t size) {
     return grown;
 }
 
+static void forget_string(const SableObject *object);
+
 // An object's memory, given back: to its class, or to malloc.
 static void object_free(SableObject *object) {
+    forget_string(object);
     unsigned class = (object->flags & SABLE_CLASS_MASK) >> SABLE_CLASS_SHIFT;
     if (class != 0) {
         small_release(object, class);
@@ -888,20 +891,89 @@ static SableString *make_ctext(const char *text) {
     return make_text(text, (int64_t)strlen(text));
 }
 
-// The byte offset of scalar 'index'.
+// ---- Scalar positions
+//
+// A String is indexed by scalar, and a UTF-8 scalar is one to four bytes, so
+// the byte offset of scalar i is found by counting. Counting from the start
+// every time makes the usual loop — at(0), at(1), at(2)... over a string
+// that is not ASCII — quadratic. So the runtime remembers where it last
+// was in a few strings, and finds the next position by stepping from the
+// nearest of that, the start and the end. One task runs at a time, so the
+// table needs no lock; a string whose memory is given back is forgotten,
+// since the memory may become another string.
+
+enum { CURSORS = 8 };
+
+static struct {
+    const SableString *string;
+    int64_t index;
+    int64_t offset;
+} cursors[CURSORS];
+
+static unsigned cursor_slot(const void *string) {
+    // Objects are 8-byte aligned at least: the low bits say nothing.
+    return (unsigned)((((uintptr_t)string >> 3) * 0x9E3779B97F4A7C15ull) >> 61);
+}
+
+static void forget_string(const SableObject *object) {
+    unsigned slot = cursor_slot(object);
+    if ((const void *)cursors[slot].string == (const void *)object) {
+        cursors[slot].string = NULL;
+    }
+}
+
+static bool is_continuation(char byte) {
+    return ((unsigned char)byte & 0xC0) == 0x80;
+}
+
+// The byte offset of scalar 'index', from 0 to the scalar count; the count
+// gives the length.
 static int64_t offset_of(const SableString *s, int64_t index) {
     if (s->count == s->length) {
         return index;
     }
 
-    int64_t seen = -1;
-    for (int64_t i = 0; i < s->length; i++) {
-        if (((unsigned char)s->bytes[i] & 0xC0) != 0x80 && ++seen == index) {
-            return i;
+    if (index >= s->count) {
+        return s->length;
+    }
+
+    // The nearest known position: the start, the end, or where this string was last read.
+    int64_t at = 0, offset = 0;
+    if (s->count - index < index) {
+        at = s->count;
+        offset = s->length;
+    }
+
+    unsigned slot = cursor_slot(s);
+    if (cursors[slot].string == s) {
+        int64_t distance = cursors[slot].index > index ? cursors[slot].index - index : index - cursors[slot].index;
+        int64_t best = at > index ? at - index : index - at;
+        if (distance < best) {
+            at = cursors[slot].index;
+            offset = cursors[slot].offset;
         }
     }
 
-    return s->length;
+    while (at < index) {
+        offset++;
+        while (is_continuation(s->bytes[offset])) {
+            offset++;
+        }
+        at++;
+    }
+
+    while (at > index) {
+        offset--;
+        while (is_continuation(s->bytes[offset])) {
+            offset--;
+        }
+        at--;
+    }
+
+    cursors[slot].string = s;
+    cursors[slot].index = index;
+    cursors[slot].offset = offset;
+    return offset;
 }
 
 static int32_t decode(const char *bytes, int64_t *width) {

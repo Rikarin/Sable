@@ -88,4 +88,111 @@ public sealed class OptionalAndUnionLoweringTests {
         Assert.Equal(3L, Run(module, "some"));
         Assert.Equal(2L, Run(module, "array"));
     }
+
+    // ---- Unions (#146) ------------------------------------------------------
+
+    [Fact]
+    public void AnIfThatLeavesNarrowsToWhatIsLeft() {
+        var module = Lower(
+            """
+            struct Vec3 { var x: Int, var y: Int }
+            fn render(_ v: Int | String | Vec3) -> Int {
+                if v is Int { return v }
+                if v is String { return v.count }
+                return v.x + v.y
+            }
+            fn rest(_ v: Int | String | Vec3) -> Int {
+                if v is Int { return 0 }
+                let w: String | Vec3 = v
+                if w is String { return w.count * 10 }
+                return 2
+            }
+            fn a() -> Int { return render(7) }
+            fn b() -> Int { return render("four") }
+            fn c() -> Int { return render(Vec3 { x: 1, y: 2 }) }
+            fn d() -> Int { return rest("abc") }
+            fn e() -> Int { return rest(Vec3 { x: 1, y: 2 }) }
+            fn f() -> Int { return rest(5) }
+            fn last(_ v: F64 | String) -> Int {
+                if v is F64 { return 1 }
+                if v is String { return v.count }
+                return 3
+            }
+            fn g() -> Int { return last("hello") }
+            """
+        );
+
+        Assert.Equal(5L, Run(module, "g"));
+
+        Assert.Equal(7L, Run(module, "a"));
+        Assert.Equal(4L, Run(module, "b"));
+        Assert.Equal(3L, Run(module, "c"));
+        Assert.Equal(30L, Run(module, "d"));
+        Assert.Equal(2L, Run(module, "e"));
+        Assert.Equal(0L, Run(module, "f"));
+    }
+
+    [Fact]
+    public void NoneInAUnionIsItsAbsence() {
+        var module = Lower(
+            """
+            fn f(_ x: Int | String | None) -> Int {
+                guard let y = x else { return 0 }
+                if y is Int { return y }
+                return -1
+            }
+            fn a() -> Int { return f(none) }
+            fn b() -> Int { return f(4) }
+            fn c() -> Int { return f("s") }
+            """
+        );
+
+        Assert.Equal(0L, Run(module, "a"));
+        Assert.Equal(4L, Run(module, "b"));
+        Assert.Equal(-1L, Run(module, "c"));
+    }
+
+    [Fact]
+    public void ARecursiveUnionHoldsItself() {
+        var module = Lower(
+            """
+            alias Json = Bool | F64 | String | Json[] | [String: Json]
+            fn leaves(_ j: Json) -> Int {
+                if j is Json[] {
+                    var n = 0
+                    for x in j { n = n + leaves(x) }
+                    return n
+                }
+                if j is [String: Json] {
+                    var n = 0
+                    for (k, v) in j { n = n + leaves(v) }
+                    return n
+                }
+                return 1
+            }
+            fn shape(_ j: Json) -> Int {
+                return match j {
+                    case let b as Bool => 1
+                    case let f as F64 => 2
+                    case let s as String => 3
+                    case let xs as Json[] => 100 + xs.count
+                    case let d as [String: Json] => 200 + d.count
+                }
+            }
+            fn count() -> Int {
+                let inner: Json = [1.5, "x", false]
+                let object: Json = ["a": inner, "b": "y"]
+                let all: Json = [object, inner, true]
+                return leaves(all)
+            }
+            fn outer() -> Int {
+                let object: Json = ["a": true, "b": "y"]
+                return shape(object)
+            }
+            """
+        );
+
+        Assert.Equal(8L, Run(module, "count"));
+        Assert.Equal(202L, Run(module, "outer"));
+    }
 }

@@ -86,7 +86,7 @@ internal sealed class Conversions(CoreTypes core) {
             }
         }
 
-        if (target is StructuralUnionTypeSymbol union) {
+        if (StructuralUnionTypeSymbol.Of(target) is { } union) {
             foreach (var unionCase in union.Cases) {
                 if (source.Equals(unionCase)) {
                     return ConversionKind.UnionInjection;

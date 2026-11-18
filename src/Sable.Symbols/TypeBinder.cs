@@ -257,9 +257,18 @@ internal sealed class TypeBinder(Compilation compilation) {
     public void BindAliasTarget(AliasSymbol alias, TypeSyntax target) {
         var scope = compilation.CurrentScope;
 
+        // A union may mention itself inside its cases — 'Json[]' in
+        // 'alias Json = … | Json[]' — and is then known by its name
+        // (RecursiveUnionTypeSymbol). Made on the first mention of itself.
+        RecursiveUnionTypeSymbol? recursive = null;
+
         alias.TypeResolver = () => {
-            // 'alias A = A', or a longer ring, would otherwise resolve forever.
             if (!_resolvingAliases.Add(alias)) {
+                if (target is UnionTypeSyntax && alias.TypeParameters.IsEmpty) {
+                    return recursive ??= new RecursiveUnionTypeSymbol(alias);
+                }
+
+                // 'alias A = A', or a longer ring, would otherwise resolve forever.
                 return Error(
                     ErrorCode.ERR_CircularAlias,
                     target.Span,
@@ -268,7 +277,24 @@ internal sealed class TypeBinder(Compilation compilation) {
             }
 
             try {
-                return BindType(target, alias, scope);
+                var type = BindType(target, alias, scope);
+                if (recursive is null) {
+                    return type;
+                }
+
+                // Itself as one of its own cases, or behind '?', would be a
+                // value that holds itself: nothing to stop at, and no size.
+                if (type is not StructuralUnionTypeSymbol union || union.Cases.Contains(recursive)) {
+                    return Error(
+                        ErrorCode.ERR_CircularAlias,
+                        target.Span,
+                        $"'{alias.Name}' is defined in terms of itself: a union can mention itself only "
+                        + "inside one of its cases, as in an array or a dictionary of it"
+                    );
+                }
+
+                recursive.Union = union;
+                return recursive;
             } finally {
                 _resolvingAliases.Remove(alias);
             }
@@ -575,12 +601,7 @@ internal sealed class TypeBinder(Compilation compilation) {
                 );
 
             case UnionTypeSyntax union:
-                return StructuralUnionTypeSymbol.Create(
-                    [
-                        BindType(union.Left, context, scope),
-                        BindType(union.Right, context, scope)
-                    ]
-                );
+                return BindUnion(union, context, scope);
 
             case SelfTypeSyntax self: {
                 if (EnclosingType(context) is not { } enclosing) {
@@ -979,6 +1000,62 @@ internal sealed class TypeBinder(Compilation compilation) {
             $"'{keyword}' takes a protocol, and '{constraint.ToDisplayString()}' is not one"
         );
         return false;
+    }
+
+    /// <summary>
+    ///     <c>A | B | C</c>: the union of its members, normalised
+    ///     (<see cref="StructuralUnionTypeSymbol.Create" />).
+    /// </summary>
+    /// <remarks>
+    ///     <c>None</c> as a member is the absence of a value, as
+    ///     <c>Optional</c>'s case of that name is: <c>Int | String | None</c>
+    ///     is <c>(Int | String)?</c> (docs/03 §3.5), unless a type of that
+    ///     name is in scope. A union is closed, so it may not hold
+    ///     <c>any P</c>, whose conformers anyone can add to (docs/03 §3.1);
+    ///     <c>any Error</c> is the exception, as what a throw of several
+    ///     error types widens to.
+    /// </remarks>
+    TypeSymbol BindUnion(UnionTypeSyntax union, Symbol context, FileScope? scope) {
+        var members = new List<TypeSyntax>();
+        Collect(union);
+
+        var cases = new List<TypeSymbol>();
+        var hasNone = false;
+        foreach (var member in members) {
+            if (member is SimpleNameTypeSyntax { Identifier.Text: "None", TypeArgumentList: null } none
+                && Lookup("None", context, scope, none.Span) is null) {
+                hasNone = true;
+                continue;
+            }
+
+            var type = BindType(member, context, scope);
+            if (type is ExistentialTypeSymbol { Constraint: var constraint } && !constraint.Equals(compilation.Core.Error)) {
+                type = Error(
+                    ErrorCode.ERR_OpenExistentialInUnion,
+                    member.Span,
+                    $"a union's cases are closed, and '{type.ToDisplayString()}' is not: anything can conform to "
+                    + $"'{constraint.ToDisplayString()}'; name the conforming types instead"
+                );
+            }
+
+            cases.Add(type);
+        }
+
+        if (cases.Count == 0) {
+            return Error(ErrorCode.ERR_NotAType, union.Span, "a union of only 'None' has no values to hold");
+        }
+
+        var result = StructuralUnionTypeSymbol.Create(cases);
+        return hasNone && result is not OptionalTypeSymbol ? new OptionalTypeSymbol(result) : result;
+
+        void Collect(TypeSyntax syntax) {
+            if (syntax is UnionTypeSyntax pair) {
+                Collect(pair.Left);
+                Collect(pair.Right);
+            } else {
+                members.Add(syntax);
+            }
+        }
     }
 
     ErrorTypeSymbol Error(ErrorCode code, TextSpan span, string message) {

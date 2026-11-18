@@ -993,6 +993,11 @@ public sealed partial class Binder {
     BoundBlock BindBlock(BlockSyntax block) {
         PushScope();
 
+        // What a 'guard', or an 'if' that leaves, establishes for the rest
+        // of a block ends with it: a 'break' out of a loop's body is a way
+        // past the test with it false.
+        PushNarrowing([]);
+
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
         var gapStart = block.OpenBraceToken.Span.End;
         foreach (var statement in block.Statements) {
@@ -1004,6 +1009,7 @@ public sealed partial class Binder {
         CaptureScopeInGap(block, gapStart, block.CloseBraceToken.IsMissing ? block.Span.End : block.CloseBraceToken.Span.Start);
 
         var locals = _locals[^1].Values.OfType<LocalSymbol>().ToImmutableArray();
+        PopNarrowing();
         PopScope();
 
         return Record(block, new BoundBlock(block, locals, statements.ToImmutable()));
@@ -1328,7 +1334,28 @@ public sealed partial class Binder {
             PopNarrowing();
         }
 
+        // 'if v is Int { return … }': the only way on is with the test
+        // false, so what that establishes holds for the rest of the block,
+        // as after a 'guard'. Likewise the other way round, past an 'else'
+        // that leaves.
+        var consequenceExits = FlowAnalysis.AlwaysExits(consequence);
+        var alternativeExits = alternative is not null && FlowAnalysis.AlwaysExits(alternative);
+        if (consequenceExits != alternativeExits) {
+            KeepNarrowings(NarrowingsWhen(condition, !consequenceExits));
+        }
+
         return Record(statement, new BoundIf(statement, condition, consequence, alternative));
+    }
+
+    /// <summary>Narrowings that hold from here to the end of the enclosing block.</summary>
+    void KeepNarrowings(Dictionary<Symbol, TypeSymbol> narrowings) {
+        foreach (var (symbol, type) in narrowings) {
+            if (_narrowed.Count == 0) {
+                PushNarrowing([]);
+            }
+
+            _narrowed[^1][symbol] = type;
+        }
     }
 
     BoundStatement BindGuard(GuardStatementSyntax statement) {
@@ -1353,13 +1380,7 @@ public sealed partial class Binder {
 
         // What the guard established holds for the rest of the enclosing
         // block, because the only way past it is with the condition true.
-        foreach (var (symbol, type) in NarrowingsWhen(condition, true)) {
-            if (_narrowed.Count == 0) {
-                PushNarrowing([]);
-            }
-
-            _narrowed[^1][symbol] = type;
-        }
+        KeepNarrowings(NarrowingsWhen(condition, true));
 
         return Record(statement, new BoundIf(statement, condition, body, null));
     }
@@ -1400,6 +1421,16 @@ public sealed partial class Binder {
                 case BoundTypeTest test when whenTrue:
                     if (BindingOf(test.Operand) is { } tested) {
                         into[tested] = test.TestedType;
+                    }
+
+                    return;
+
+                // 'v is Int' failing on an 'Int | String' leaves a String:
+                // a union's other cases are what it can still hold.
+                case BoundTypeTest test
+                    when StructuralUnionTypeSymbol.Of(test.Operand.Type) is { } union && union.Cases.Contains(test.TestedType):
+                    if (BindingOf(test.Operand) is { } excluded) {
+                        into[excluded] = StructuralUnionTypeSymbol.Create(union.Cases.Where(c => !c.Equals(test.TestedType)));
                     }
 
                     return;
@@ -3760,6 +3791,7 @@ public sealed partial class Binder {
     }
 
     BoundExpression BindArray(ArrayExpressionSyntax syntax, TypeSymbol? expectedType) {
+        expectedType = TheCaseOf(expectedType, static t => t is ArrayTypeSymbol);
         var expectedElement = expectedType is ArrayTypeSymbol expectedArray
             ? expectedArray.ElementType
             : null;
@@ -3806,6 +3838,13 @@ public sealed partial class Binder {
                 );
                 elementType = ErrorTypeSymbol.Instance;
                 break;
+            }
+
+            // The first element said what the array holds; the others that
+            // differ get there by a conversion — '[j, true]' of a 'Json'
+            // puts the Bool in the union — and the array holds what it made.
+            if (!elementType.IsError) {
+                elements = [..elements.Select(e => Convert(e, elementType, e.Syntax))];
             }
         }
 
@@ -4201,6 +4240,20 @@ public sealed partial class Binder {
             _ => type,
         };
 
+    /// <summary>
+    ///     Where a union is expected, the one case of it a literal could be:
+    ///     '["a", 1.5]' for a 'Json' is its 'Json[]', so the elements are
+    ///     bound expecting a Json each. The expected type itself otherwise.
+    /// </summary>
+    static TypeSymbol? TheCaseOf(TypeSymbol? expected, Func<TypeSymbol, bool> fits) {
+        if (StructuralUnionTypeSymbol.Of(expected) is not { } union) {
+            return expected;
+        }
+
+        var candidates = union.Cases.Where(fits).Take(2).ToList();
+        return candidates.Count == 1 ? candidates[0] : expected;
+    }
+
     /// <summary>Binds <c>["a": 1]</c> and the empty <c>[:]</c>.</summary>
     BoundExpression BindDictionary(
         DictionaryExpressionSyntax syntax,
@@ -4209,6 +4262,7 @@ public sealed partial class Binder {
         TypeSymbol? expectedKey = null;
         TypeSymbol? expectedValue = null;
 
+        expectedType = TheCaseOf(expectedType, t => t is NamedTypeSymbol named && named.OriginalDefinition.Equals(Core.Dictionary));
         if (expectedType is NamedTypeSymbol wanted
             && wanted.OriginalDefinition.Equals(Core.Dictionary)
             && wanted.TypeArguments.Length == 2) {

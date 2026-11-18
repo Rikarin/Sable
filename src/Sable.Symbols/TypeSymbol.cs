@@ -559,13 +559,49 @@ public sealed class FunctionTypeSymbol(
 /// </remarks>
 public sealed class StructuralUnionTypeSymbol : TypeSymbol {
     /// <summary>
-    ///     Builds the union of these cases, which is one of them when, after
-    ///     flattening and removing duplicates, only one is left.
+    ///     Builds the union of these cases, normalised as docs/03 §3.1 says:
+    ///     flattened, without duplicates, and with what another case subsumes
+    ///     collapsed — so it is one of them when only one is left.
     /// </summary>
+    /// <remarks>
+    ///     <c>Never</c> has no values, so it adds no case: <c>Int | Never</c>
+    ///     is <c>Int</c>. An optional case makes the whole union optional,
+    ///     since an optional is itself a union with none: <c>T | T?</c> is
+    ///     <c>T?</c>, and <c>Int | String?</c> is <c>(Int | String)?</c> — one
+    ///     none, outside, rather than one hidden in a case.
+    /// </remarks>
     public static TypeSymbol Create(IEnumerable<TypeSymbol> cases) {
-        var union = new StructuralUnionTypeSymbol(cases);
+        var flattened = new List<TypeSymbol>();
+        Flatten(cases, flattened);
+
+        var live = flattened.Where(static t => !IsNever(t)).ToList();
+        if (live.Count == 0) {
+            return flattened[0];
+        }
+
+        if (live.Exists(static t => t is OptionalTypeSymbol)) {
+            return new OptionalTypeSymbol(
+                Create(live.Select(static t => t is OptionalTypeSymbol optional ? optional.UnderlyingType : t))
+            );
+        }
+
+        var union = new StructuralUnionTypeSymbol(live);
         return union.Cases.Length == 1 ? union.Cases[0] : union;
     }
+
+    /// <summary>
+    ///     The union a type is, seeing through an alias that defines one in
+    ///     terms of itself; null when it is not a structural union.
+    /// </summary>
+    public static StructuralUnionTypeSymbol? Of(TypeSymbol? type) =>
+        type switch {
+            StructuralUnionTypeSymbol union => union,
+            RecursiveUnionTypeSymbol recursive => recursive.Union,
+            _ => null,
+        };
+
+    static bool IsNever(TypeSymbol type) =>
+        type is NamedTypeSymbol { TypeKind: TypeKind.Builtin, Name: "Never", TypeArguments.IsEmpty: true };
 
     public StructuralUnionTypeSymbol(IEnumerable<TypeSymbol> cases) {
         var flattened = new List<TypeSymbol>();
@@ -629,6 +665,38 @@ public sealed class StructuralUnionTypeSymbol : TypeSymbol {
 
         return hash;
     }
+}
+
+/// <summary>
+///     A structural union defined in terms of itself, through an alias:
+///     <c>alias Json = Bool | String | Json[] | [String: Json]</c>.
+/// </summary>
+/// <remarks>
+///     The type is infinite when written out, so it is known by its alias,
+///     as a nominal type is by its declaration: each mention of <c>Json</c>,
+///     inside the union or out, is this one symbol, and it is equal only to
+///     itself. What it holds is <see cref="Union" />, whose cases mention it
+///     again — so walking a type's parts stops here rather than going round.
+///     Everything that asks a union for its cases asks
+///     <see cref="StructuralUnionTypeSymbol.Of" />, which sees through it.
+/// </remarks>
+public sealed class RecursiveUnionTypeSymbol : TypeSymbol {
+    internal RecursiveUnionTypeSymbol(AliasSymbol alias) => Alias = alias;
+
+    public AliasSymbol Alias { get; }
+
+    /// <summary>The union the alias stands for; null while it is being bound.</summary>
+    public StructuralUnionTypeSymbol? Union { get; internal set; }
+
+    public override SymbolKind Kind => SymbolKind.StructuralUnionType;
+    public override string Name => Alias.Name;
+    public override TypeKind TypeKind => TypeKind.Union;
+
+    public override string ToDisplayString() => Alias.Name;
+
+    public override bool Equals(TypeSymbol? other) => ReferenceEquals(this, other);
+
+    public override int GetHashCode() => System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(this);
 }
 
 /// <summary><c>any P</c>: a boxed value dispatched through a witness table.</summary>

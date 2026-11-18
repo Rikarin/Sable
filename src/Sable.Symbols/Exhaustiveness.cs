@@ -118,7 +118,7 @@ internal sealed class Exhaustiveness(CoreTypes core) {
             case BoundLiteralPattern { Value: null } when pattern.InputType is OptionalTypeSymbol:
                 return Leaf(NoneCtor());
 
-            case BoundLiteralPattern literal when pattern.InputType is not StructuralUnionTypeSymbol: {
+            case BoundLiteralPattern literal when StructuralUnionTypeSymbol.Of(pattern.InputType) is null: {
                 var text = $"{(literal.IsNegative ? "-" : "")}{literal.Value}";
                 var key = $"lit:{literal.Value?.GetType().Name}:{text}";
                 return Leaf(new Ctor(CtorKind.Literal, key, Quote(literal.Value, text), []));
@@ -165,7 +165,7 @@ internal sealed class Exhaustiveness(CoreTypes core) {
                     return Wild.Instance;
                 }
 
-                if (pattern.InputType is StructuralUnionTypeSymbol union
+                if (StructuralUnionTypeSymbol.Of(pattern.InputType) is { } union
                     && union.Cases.Any(c => c.Equals(test.TestedType))) {
                     return Leaf(TypeCaseCtor(test.TestedType));
                 }
@@ -261,7 +261,7 @@ internal sealed class Exhaustiveness(CoreTypes core) {
             case TupleTypeSymbol tuple:
                 return [TupleCtor(tuple)];
 
-            case StructuralUnionTypeSymbol union:
+            case StructuralUnionTypeSymbol or RecursiveUnionTypeSymbol when StructuralUnionTypeSymbol.Of(type) is { } union:
                 return [..union.Cases.Select(TypeCaseCtor)];
 
             case NamedTypeSymbol { TypeKind: TypeKind.Union } named:

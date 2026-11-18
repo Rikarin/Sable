@@ -1048,6 +1048,11 @@ public sealed partial class SilGen {
             case StructuralUnionTypeSymbol union:
                 return LowerUnion(union);
 
+            // 'alias Json = … | Json[]': the same, named for the alias, so
+            // the cases that mention it find it while it is being made.
+            case RecursiveUnionTypeSymbol { Union: { } union } recursive:
+                return LowerRecursiveUnion(recursive, union);
+
             // 'any P': a closure per requirement, sharing one box with the value.
             case ExistentialTypeSymbol { Constraint: NamedTypeSymbol { TypeKind: TypeKind.Protocol } protocol }:
                 return ExistentialLayout(protocol);
@@ -1329,10 +1334,39 @@ public sealed partial class SilGen {
 
         var enumType = Begin(union, new EnumType(name));
         foreach (var lowered in cases) {
-            enumType.Cases.Add((Sanitise(lowered.ToString()), lowered));
+            enumType.Cases.Add((UnionCaseName(lowered), lowered));
         }
 
         _unions.Add(enumType);
+        return HoldsItself(enumType) ? null : enumType;
+    }
+
+    /// <summary>
+    ///     A union's case is named for the type it carries — but a name must
+    ///     start with a letter to be read back, and an array's or a tuple's
+    ///     starts with a bracket.
+    /// </summary>
+    static string UnionCaseName(SilType payload) {
+        var name = Sanitise(payload.ToString());
+        return char.IsLetter(name[0]) ? name : "_" + name;
+    }
+
+    EnumType? LowerRecursiveUnion(RecursiveUnionTypeSymbol recursive, StructuralUnionTypeSymbol union) {
+        var name = "Union$" + Sanitise($"{recursive.Alias.ContainingSymbol?.Name}.{recursive.Alias.Name}");
+        if (_module.FindType(name) is EnumType existing) {
+            return existing;
+        }
+
+        var enumType = Begin(recursive, new EnumType(name));
+        _unions.Add(enumType);
+        foreach (var member in union.Cases) {
+            if (Lower(member) is not { } lowered || enumType.Cases.Exists(c => Equals(c.Payload, lowered))) {
+                return null;
+            }
+
+            enumType.Cases.Add((UnionCaseName(lowered), lowered));
+        }
+
         return HoldsItself(enumType) ? null : enumType;
     }
 
@@ -3725,8 +3759,8 @@ public sealed partial class SilGen {
             }
 
             // A binding a test narrowed out of a union: the case's payload (SilGen.Unions.cs).
-            if (NarrowedUnion(expression) is var (whole, unionCase)) {
-                return NarrowedRead(expression, whole, unionCase);
+            if (NarrowedUnion(expression) is var (whole, unionCases)) {
+                return NarrowedRead(expression, whole, unionCases);
             }
 
             switch (expression) {
@@ -4890,7 +4924,13 @@ public sealed partial class SilGen {
 
         /// <summary>'x is Dog': whether the object is of the class, or a subclass of it.</summary>
         SilValue? TypeTest(BoundTypeTest test) {
-            if (Sub(test.Operand.Type) is StructuralUnionTypeSymbol union) {
+            // A value already known to be of the type: a union's binding that
+            // an earlier test, failing, narrowed down to this one case.
+            if (Sub(test.Operand.Type).Equals(Sub(test.TestedType))) {
+                return Emit(new IntegerLiteralInst(SilType.Bool, 1));
+            }
+
+            if (StructuralUnionTypeSymbol.Of(Sub(test.Operand.Type)) is { } union) {
                 return UnionTypeTest(test, union);
             }
 

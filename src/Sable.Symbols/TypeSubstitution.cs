@@ -104,7 +104,7 @@ public sealed class TypeSubstitution {
             }
 
             case StructuralUnionTypeSymbol union:
-                return new StructuralUnionTypeSymbol(union.Cases.Select(Apply));
+                return StructuralUnionTypeSymbol.Create(union.Cases.Select(Apply));
 
             case CompositionTypeSymbol composition:
                 return new CompositionTypeSymbol(composition.Parts.Select(Apply));

@@ -886,6 +886,8 @@ public sealed partial class SilGen {
             return null;
         }
 
+        substitution = WithAssociatedTypes(symbol, substitution);
+
         var arguments = new List<string>();
         foreach (var parameter in TypeParametersOf(symbol)) {
             // Never has no values to lower, and is still an argument: the
@@ -920,6 +922,40 @@ public sealed partial class SilGen {
         _instanceOrigins[name] = (symbol, substitution, _loweringInstance);
         _pending.Enqueue((symbol, name, type, substitution));
         return (name, type);
+    }
+
+    /// <summary>
+    ///     A protocol's default implementation, for the type Self stands for:
+    ///     its associated types too, which its body names bare — 'Item' in
+    ///     an extension of Container is Self.Item, Int for a Pair whose
+    ///     'first' returns one. Self decides them, so they are not part of
+    ///     the instance's name.
+    /// </summary>
+    static TypeSubstitution WithAssociatedTypes(FunctionSymbol symbol, TypeSubstitution substitution) {
+        if (Owner(symbol)?.OriginalDefinition is not { TypeKind: TypeKind.Protocol, SelfTypeParameter: { } self } protocol
+            || substitution.Lookup(self) is null) {
+            return substitution;
+        }
+
+        var map = substitution.Parameters.ToDictionary(p => p, p => substitution.Lookup(p)!);
+        var seen = new HashSet<NamedTypeSymbol>(ReferenceEqualityComparer.Instance);
+        var pending = new Stack<NamedTypeSymbol>([protocol]);
+        while (pending.TryPop(out var current)) {
+            if (!seen.Add(current.OriginalDefinition)) {
+                continue;
+            }
+
+            foreach (var associated in current.OriginalDefinition.AssociatedTypes) {
+                // Self.Item, read through what Self is.
+                map.TryAdd(associated, substitution.Apply(new DependentMemberTypeSymbol(self, associated)));
+            }
+
+            foreach (var refined in current.OriginalDefinition.BaseTypes.OfType<NamedTypeSymbol>().Where(static b => b.TypeKind == TypeKind.Protocol)) {
+                pending.Push(refined);
+            }
+        }
+
+        return new(map);
     }
 
     /// <summary>
@@ -2580,6 +2616,12 @@ public sealed partial class SilGen {
         if (implementation is not null && !IsGeneric(implementation) && _names.TryGetValue(implementation, out var implementationName)) {
             target = implementationName;
             targetType = _module.Find(target)?.Type ?? SignatureOf(implementation, at, TypeSubstitution.Empty);
+        } else if (implementation is { ContainingSymbol: NamedTypeSymbol, TypeParameters.IsEmpty: true }
+                   && ConstructedOwner(concrete, implementation) is { } owner
+                   && Instance(implementation, TypeSubstitution.For(owner), at) is { } generic) {
+            // A method of a generic type, 'G<Int>' boxed as 'any P': its
+            // instance for the type arguments the boxed value has.
+            (target, targetType) = generic;
         } else if ((implementation is { ContainingSymbol: ExtensionSymbol }
                     || (implementation is { FunctionKind: FunctionKind.Accessor } && Owner(implementation) is { TypeKind: TypeKind.Protocol })
                         ? implementation
@@ -2660,6 +2702,21 @@ public sealed partial class SilGen {
 
         _module.Add(thunk);
         return (name, code);
+    }
+
+    /// <summary>
+    ///     The type, among a concrete type and its superclasses, that declares
+    ///     a method — with the type arguments the concrete type gives it.
+    /// </summary>
+    static NamedTypeSymbol? ConstructedOwner(NamedTypeSymbol concrete, FunctionSymbol method) {
+        var declaring = Owner(method)?.OriginalDefinition;
+        for (var type = (NamedTypeSymbol?)concrete; type is not null; type = SuperclassOf(type)) {
+            if (ReferenceEquals(type.OriginalDefinition, declaring)) {
+                return type;
+            }
+        }
+
+        return null;
     }
 
     /// <summary>
@@ -3256,6 +3313,11 @@ public sealed partial class SilGen {
 
         /// <summary>The end of a borrow: a temporary is taken off the temporaries and destroyed, a load_borrow ended.</summary>
         void End(SilValue value) {
+            if (value is WriteBack writeBack) {
+                writeBack.Run();
+                return;
+            }
+
             if (value is AccessMarker marker) {
                 if (marker.Begun) {
                     Emit(new BuiltinInst("access_end", SilType.Unit, marker.Address));
@@ -3294,6 +3356,13 @@ public sealed partial class SilGen {
             // after, would run its deinit.
             if (MoveOnlyPlace(expression) is { } place) {
                 return Hold(Emit(new LoadBorrowInst(place)));
+            }
+
+            // So is a move-only field of something in memory: a
+            // method that borrows 'self' borrows it in place, where a copy
+            // would be a move out of what holds it.
+            if (expression is BoundFieldAccess && LowerType(expression.Type) is NominalType { IsNoncopyable: true } && Place(expression) is { } inPlace) {
+                return Hold(Emit(new LoadBorrowInst(inPlace)));
             }
 
             // So is one a closure captures, in its box. The box is held by the
@@ -4468,11 +4537,14 @@ public sealed partial class SilGen {
 
                 case BoundBindingPattern binding:
                     if (SlotFor(binding.Local, binding.Syntax) is not null) {
-                        // The binding keeps a copy of its own, even of an owned
-                        // value: a match's subject is still the match's, which
-                        // destroys it once the arm is chosen, so storing the
-                        // subject itself would end its life twice.
-                        BindLocal(binding.Local, value.Type.IsTrivial || value is UnitValue ? value : Emit(new CopyValueInst(value)), binding.Syntax);
+                        // A value held while the pattern runs — a match's
+                        // subject, which the match destroys once the arm is
+                        // chosen — is still its holder's, so the binding keeps
+                        // a copy; storing it would end its life twice. A value
+                        // the pattern made for the binding (an element, the
+                        // rest of an array) is the binding's to keep.
+                        var held = !value.Type.IsTrivial && value is not UnitValue && _temporaries.Contains(value);
+                        BindLocal(binding.Local, held ? Emit(new CopyValueInst(value)) : value, binding.Syntax);
                         Branch(matched);
                     }
 
@@ -5296,9 +5368,7 @@ public sealed partial class SilGen {
                     return Missing(assignment, $"storing to the property '{property.Field.Name}'");
                 }
 
-                var receiver = property.Receiver
-                    ?? (setter.IsStatic ? null : new BoundSelfAccess(assignment.Syntax, Owner(setter) is { } owner ? SelfOf(owner) : property.Field.Type));
-                var stored = Expression(new BoundCall(assignment.Syntax, receiver, setter, [assignment.Value]));
+                var stored = Expression(SetterCall(property, setter, assignment.Value, assignment.Syntax));
                 return stored is null ? null : UnitValue.Instance;
             }
 
@@ -5690,6 +5760,46 @@ public sealed partial class SilGen {
         }
 
         /// <summary>
+        ///     A property with accessors has no address to change part of it
+        ///     at. Its value is read, by the getter, into a slot of its own,
+        ///     which is changed instead; once the change is done — when the
+        ///     caller ends <paramref name="borrows" /> — the slot's value is
+        ///     handed to the setter, so 'willSet' and 'didSet' run once, for
+        ///     the whole change.
+        /// </summary>
+        SilValue? ReadForWriteBack(BoundFieldAccess property, FunctionSymbol setter, List<SilValue> borrows) {
+            if (Expression(property) is not { } current) {
+                return null;
+            }
+
+            var slot = NewSlot(current.Type, $"${property.Field.Name}");
+            Emit(new StoreInst(Owned(current), slot, StoreKind.Init));
+            var temporary = new LocalSymbol($"${property.Field.Name}", Core.Module, null, true);
+            _slots[temporary] = slot;
+
+            var taken = new BoundUnaryOperator(property.Syntax, property.Type, UnaryOperatorKind.Move, new BoundLocalAccess(property.Syntax, temporary, property.Type));
+            var setterCall = SetterCall(property, setter, taken, property.Syntax);
+            borrows.Add(new WriteBack(() => Expression(setterCall)));
+            return slot;
+        }
+
+        /// <summary>A call to a property's setter, on its receiver — <c>self</c> when it is written bare.</summary>
+        BoundCall SetterCall(BoundFieldAccess property, FunctionSymbol setter, BoundExpression value, SyntaxNode syntax) {
+            var receiver = property.Receiver
+                ?? (setter.IsStatic ? null : new BoundSelfAccess(syntax, Owner(setter) is { } owner ? SelfOf(owner) : property.Field.Type));
+            return new BoundCall(syntax, receiver, setter, [value]);
+        }
+
+        /// <summary>
+        ///     Among an address's borrows: the setter call that writes a
+        ///     property's changed value back, made when the borrows end.
+        /// </summary>
+        sealed class WriteBack(Action run) : SilValue {
+            public void Run() => run();
+            public override SilType Type => SilType.Unit;
+        }
+
+        /// <summary>
         ///     Where an assignment stores: a local, <c>self</c>, or a field or
         ///     element inside one, or a field of an object. An object reached
         ///     on the way is borrowed until the caller ends <paramref name="borrows" />.
@@ -5736,6 +5846,13 @@ public sealed partial class SilGen {
                         ? Missing(target, $"storing to '{field.Name}'")
                         : Emit(new StructElementAddrInst(address, index));
                 }
+
+                // Part of a computed or observed property: 'h.c.n = 7',
+                // 'h.c.bump()', '&h.c'.
+                case BoundFieldAccess { Field: { IsComputed: true, IsStatic: false } property } computed
+                    when (computed.Receiver is null || Sub(computed.Receiver.Type) is not ExistentialTypeSymbol)
+                         && generator.SetterOf(property) is { } setter:
+                    return ReadForWriteBack(computed, setter, borrows);
 
                 case BoundTupleElementAccess element:
                     return Address(element.Receiver, borrows) is { } tuple
@@ -7713,6 +7830,11 @@ public sealed partial class SilGen {
                     case AccessMarker marker:
                         Emit(new BuiltinInst("access_end", SilType.Unit, marker.Address));
                         break;
+                    // A property changed in place is set again whichever way
+                    // the call leaves.
+                    case WriteBack writeBack:
+                        writeBack.Run();
+                        break;
                     case LoadBorrowInst borrowed:
                         Emit(new EndBorrowInst(borrowed));
                         break;
@@ -7751,9 +7873,16 @@ public sealed partial class SilGen {
         /// </summary>
         TypeSubstitution CallSubstitution(BoundCall call, FunctionSymbol callee) {
             // An array extension's member: what its element is, from the array's.
-            var receiver = call.Receiver is not { } r ? TypeSubstitution.Empty
-                : OwnerOf(callee) is { ExtendedArray: not null } carrier ? Compilation.MatchArray(carrier, Sub(r.Type)) ?? TypeSubstitution.Empty
-                : TypeSubstitution.For(Sub(r.Type));
+            // In a protocol's default implementation, 'first()' is called on
+            // self: the type Self stands for, whose own type arguments
+            // a generic conformer's member needs.
+            var receiverOf = call.Receiver is { } r ? Sub(r.Type)
+                : OwnerOf(call.Function)?.OriginalDefinition is { TypeKind: TypeKind.Protocol, SelfTypeParameter: { } implicitSelf }
+                    ? substitution.Lookup(implicitSelf)
+                    : null;
+            var receiver = receiverOf is null ? TypeSubstitution.Empty
+                : OwnerOf(callee) is { ExtendedArray: not null } carrier ? Compilation.MatchArray(carrier, receiverOf) ?? TypeSubstitution.Empty
+                : TypeSubstitution.For(receiverOf is NamedTypeSymbol named && ConstructedOwner(named, callee) is { } owner ? owner : receiverOf);
             // A local function sees the type parameters around it as this
             // instance has them.
             var map = IsLocalFunction(callee) ? substitution.Parameters.ToDictionary(p => p, p => substitution.Lookup(p)!) : new Dictionary<TypeParameterSymbol, TypeSymbol>();

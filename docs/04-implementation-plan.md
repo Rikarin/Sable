@@ -1380,8 +1380,7 @@ In `src/Sable.Driver/Packages/`, with a command per file under `Commands/`.
   and passing tests; `search`, `install`/`uninstall` and `cache list|gc|clean`
   exist.
 
-Deferred: `[build-dependencies]` (checked, not resolved or built, and warned
-about: a build script imports only the standard library); git dependencies (refused with an error); workspace inheritance
+Deferred: git dependencies (refused with an error); workspace inheritance
 (`version.workspace = true` and `{ workspace = true }` are refused,
 `[workspace.package]` and `[workspace.dependencies]` warned about); `[reflect]`
 and `[targets]` (accepted with a warning: nothing looks a type up by name
@@ -1792,8 +1791,8 @@ the foreign-function interface passes — integers, floats, `Bool` and structs
 of them — and lists the rest; pointers and C strings wait for the library
 half (`Sable.Interop`, #74). `sable toolchain` installs from a build, as
 there are no released toolchains to download. Build scripts (§5.6) run in
-the interpreter's sandbox, without build-dependencies yet; the network
-registry has a reference server, not a deployment.
+the interpreter's sandbox; the network registry has a reference server, not
+a deployment.
 
 ### Exit criteria
 - [x] Cold build of a 100-package graph < 60 s; warm incremental < 1 s

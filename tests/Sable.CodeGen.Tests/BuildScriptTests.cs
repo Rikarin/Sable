@@ -85,6 +85,46 @@ public sealed class BuildScriptTests {
     }
 
     [Fact]
+    public void AScriptIsCompiledWithItsBuildDependencies() {
+        using var fixture = new PackageFixture();
+        fixture.Package("helpers", "helpers", "1.0.0", "",
+            ("src/lib.sb", "module Helpers\n\npublic fn constant(_ name: String, _ value: Int) -> String {\n    return \"public fn \\(name)() -> Int {\\n    return \\(value)\\n}\\n\"\n}\n"));
+        const string script = """
+                              module Build
+
+                              import Helpers
+                              import Sable.IO
+
+                              fn main() {
+                                  let outDir = Environment.variable("OUT_DIR")!
+                                  try! File.write(Path.join(outDir, "generated.sb"), "module Generated\n\n" + constant("answer", 42) + constant("seven", 7))
+                              }
+                              """;
+        var directory = Package(fixture, "[build-dependencies]\nhelpers = { path = \"../helpers\" }\n", script, ("src/main.sb", Main));
+
+        var errors = new StringWriter();
+        Assert.Equal(0, PackageBuilder.Check(fixture.Load("gen"), fixture.Environment with { Error = errors }, new()));
+        Assert.Contains("return 42", File.ReadAllText(Path.Combine(directory, "target", "dev", "build", "gen-0.1.0", "out", "generated.sb")), StringComparison.Ordinal);
+        Assert.DoesNotContain("warning", errors.ToString(), StringComparison.Ordinal);
+
+        // Locked with the rest, and a build-dependency only: not part of the program.
+        var graph = PackageGraph.Resolve(fixture.Load("gen"), fixture.Environment);
+        Assert.NotNull(graph.Lock.Find("helpers"));
+        Assert.Equal(["helpers"], graph.Packages["gen"].BuildDependencies);
+        Assert.DoesNotContain(graph.Closure("gen"), static p => p.Name == "helpers");
+
+        // Changed, the script runs again.
+        File.WriteAllText(Path.Combine(fixture.Root, "helpers", "src", "lib.sb"),
+            "module Helpers\n\npublic fn constant(_ name: String, _ value: Int) -> String {\n    return \"public fn \\(name)() -> Int {\\n    return \\(value + 1)\\n}\\n\"\n}\n");
+        Assert.Equal(0, PackageBuilder.Check(fixture.Load("gen"), fixture.Environment with { Error = errors }, new()));
+        Assert.Contains("return 43", File.ReadAllText(Path.Combine(directory, "target", "dev", "build", "gen-0.1.0", "out", "generated.sb")), StringComparison.Ordinal);
+        if (Programs.CanBuild) {
+            var binary = Assert.Single(PackageBuilder.Build(fixture.Load("gen"), fixture.Environment, new())!);
+            Assert.Equal("51\n", PackageFixture.Execute(binary.Path).Output);
+        }
+    }
+
+    [Fact]
     public void ReadingWhatItDidNotDeclareStopsTheBuild() {
         using var fixture = new PackageFixture();
         Package(fixture, "", Generator, ("data/table.txt", "answer=1\n"), ("src/main.sb", Main));

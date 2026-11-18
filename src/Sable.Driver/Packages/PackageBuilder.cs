@@ -100,7 +100,7 @@ public static class PackageBuilder {
         ];
     }
 
-    static SyntaxTree Parse(PackageGraph graph, ResolvedPackage package, string file, bool optimise) {
+    internal static SyntaxTree Parse(PackageGraph graph, ResolvedPackage package, string file, bool optimise) {
         var source = SourceOf(graph, package, file);
         return SyntaxTree.Parse(new SourceText(File.ReadAllText(file), source.Name), Pipeline.ParseOptionsFor(optimise, source.Options));
     }

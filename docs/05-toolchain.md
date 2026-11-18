@@ -546,9 +546,10 @@ the package's library, and what it prints as `sable:link-lib=NAME`,
 the user. It runs again only when its text, the manifest, the profile, the
 features, the toolchain, or a file it read or directory it listed changed —
 the sandbox records those, so they need not be declared; what a program it ran
-read, it names with `rerun-if-changed`. Not built yet: `allowNet` allows
-nothing, as there is no network library to reach; `build-dependencies` are
-checked but not resolved, so a script imports only the standard library.
+read, it names with `rerun-if-changed`. Its `buildDependencies` are resolved
+and locked with the rest, and the script is compiled with their libraries (and
+theirs) — but they are not part of the package's program. Not built yet:
+`allowNet` allows nothing, as there is no network library to reach.
 
 ## 5.7 Formatting and linting
 

@@ -65,15 +65,35 @@ public static class BuildScripts {
     /// </summary>
     /// <exception cref="PackageException">A script does not compile, breaks its sandbox, or traps.</exception>
     public static IReadOnlyDictionary<string, BuildScriptOutput> Run(PackageGraph graph, Profile profile, PackageEnvironment environment) {
+        // Filled as the scripts run, so that a script compiled with a
+        // build-dependency's library has what that one's script wrote.
         var outputs = new Dictionary<string, BuildScriptOutput>(StringComparer.Ordinal);
-        foreach (var package in graph.Packages.Values.Where(static p => p.Package.Manifest.Build is not null).OrderBy(static p => p.Name, StringComparer.Ordinal)) {
-            outputs[package.Name] = RunOne(graph.Workspace, package, profile, environment);
+        graph.BuildOutputs = outputs;
+        var visited = new HashSet<string>(StringComparer.Ordinal);
+
+        void Visit(ResolvedPackage package) {
+            if (!visited.Add(package.Name)) {
+                return;
+            }
+
+            foreach (var dependency in graph.BuildClosure(package.Name)) {
+                Visit(dependency);
+            }
+
+            if (package.Package.Manifest.Build is not null) {
+                outputs[package.Name] = RunOne(graph, package, profile, environment);
+            }
+        }
+
+        foreach (var package in graph.Packages.Values.OrderBy(static p => p.Name, StringComparer.Ordinal)) {
+            Visit(package);
         }
 
         return outputs;
     }
 
-    static BuildScriptOutput RunOne(Workspace workspace, ResolvedPackage package, Profile profile, PackageEnvironment environment) {
+    static BuildScriptOutput RunOne(PackageGraph graph, ResolvedPackage package, Profile profile, PackageEnvironment environment) {
+        var workspace = graph.Workspace;
         var spec = package.Package.Manifest.Build!;
         var directory = package.Package.Directory;
         var script = Path.GetFullPath(Path.Combine(directory, spec.Script));
@@ -86,7 +106,13 @@ public static class BuildScripts {
         var stampPath = Path.Combine(buildDirectory, "stamp.json");
         var features = package.Features.Order(StringComparer.Ordinal).ToList();
         var text = File.ReadAllText(script);
+
+        // Its build-dependencies' libraries, as a debug build parses them: part of what it is.
+        var libraries = graph.BuildClosure(package.Name)
+            .SelectMany(p => graph.LibrarySources(p).Select(file => PackageBuilder.Parse(graph, p, file, optimise: false)))
+            .ToList();
         var key = Hash(string.Join("\n", [
+            Hash(string.Concat(libraries.Select(static t => $"{t.Text.FileName}\n{t.Text.Text}\n"))),
             typeof(BuildScripts).Assembly.ManifestModule.ModuleVersionId.ToString(),
             text,
             ManifestFiles.Text(directory),
@@ -118,7 +144,7 @@ public static class BuildScripts {
         };
         var name = $"{package.Name}/{spec.Script}";
         var sandbox = new BuildSandbox(name, directory, outDirectory, spec, variables);
-        var printed = Interpret(script, text, name, features, sandbox, package.Name);
+        var printed = Interpret(script, text, name, features, libraries, sandbox, package.Name);
 
         // What it printed for the build, a line each.
         var link = new List<string>();
@@ -167,9 +193,11 @@ public static class BuildScripts {
     }
 
     /// <summary>Compiles and interprets the script; what it printed. A failure is the package's error, with the script's own output.</summary>
-    static string Interpret(string path, string text, string name, IReadOnlyList<string> features, BuildSandbox sandbox, string package) {
+    static string Interpret(string path, string text, string name, IReadOnlyList<string> features, IReadOnlyList<SyntaxTree> libraries, BuildSandbox sandbox, string package) {
         var tree = SyntaxTree.Parse(new SourceText(text, name), Pipeline.ParseOptionsFor(false, features));
-        var compilation = Compilation.Create([tree, ..Library.For(tree)]);
+        var program = new List<SyntaxTree> { tree };
+        program.AddRange(libraries);
+        var compilation = Compilation.Create([..program, ..Library.For(program)]);
         var errors = compilation.GetAllDiagnosticsByFile()
             .Where(static d => d.Diagnostic.Severity == DiagnosticSeverity.Error)
             .Select(static d => d.Tree is { } t ? d.Diagnostic.Format(t.Text) : $"error[{d.Diagnostic.Id}]: {d.Diagnostic.Message}")

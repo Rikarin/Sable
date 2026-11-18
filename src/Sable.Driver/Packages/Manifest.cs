@@ -282,9 +282,9 @@ public sealed partial class Manifest {
             var dependencies = ReadDependencies(root, "dependencies");
             var devDependencies = ReadDependencies(root, "dev-dependencies");
             var buildDependencies = ReadDependencies(root, "build-dependencies");
-            if (buildDependencies.Count > 0) {
+            if (buildDependencies.Count > 0 && root["build"] is null) {
                 Warn(root, "build-dependencies", "build-dependencies",
-                    "are for a build script, which for now imports only the standard library (docs/05 §5.6): they are checked, not resolved or built");
+                    "are for a build script, and there is no [build] script to use them (docs/05 §5.6)");
             }
             var features = ReadFeatures(root, dependencies);
             var (dev, release) = ReadProfiles(root);

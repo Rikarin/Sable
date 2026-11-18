@@ -86,6 +86,9 @@ public sealed record ResolvedPackage(
     IReadOnlyList<string> DevDependencies) {
     public string Name => Package.Name;
     public SemVersion Version => Package.Version;
+
+    /// <summary>What its build script is compiled with (docs/05 §5.6): libraries for the script, not for the package.</summary>
+    public IReadOnlyList<string> BuildDependencies { get; init; } = [];
 }
 
 /// <summary>
@@ -249,6 +252,10 @@ public sealed partial class PackageGraph {
         order.Reverse();
         return order;
     }
+
+    /// <summary>The libraries <paramref name="package" />'s build script is compiled with: its build-dependencies and theirs.</summary>
+    public IReadOnlyList<ResolvedPackage> BuildClosure(string package) =>
+        [..Packages[package].BuildDependencies.SelectMany(d => Closure(d)).DistinctBy(static p => p.Name)];
 }
 
 /// <summary>Finds a registry package's source: in <c>vendor/</c>, in the cache, or fetched from the registry into the cache.</summary>
@@ -331,7 +338,10 @@ sealed class SourceStore(Workspace workspace, PackageEnvironment environment, IR
 /// </summary>
 sealed class GraphSource(Workspace workspace, IReadOnlyDictionary<string, LocalPackage> locals, IRegistry registry, LockFile? previous, SourceStore store) : IPackageSource {
     /// <summary>A version's dependencies and features, from whichever place knows them.</summary>
-    sealed record Spec(IReadOnlyList<DependencySpec> Normal, IReadOnlyList<DependencySpec> Dev, IReadOnlyDictionary<string, IReadOnlyList<string>> Features);
+    sealed record Spec(IReadOnlyList<DependencySpec> Normal, IReadOnlyList<DependencySpec> Dev, IReadOnlyDictionary<string, IReadOnlyList<string>> Features) {
+        /// <summary>Its build script's dependencies, resolved with the rest — a package's own, wherever it comes from, since its script runs wherever it is built.</summary>
+        public IReadOnlyList<DependencySpec> Build { get; init; } = [];
+    }
 
     readonly Dictionary<string, IReadOnlyList<IndexEntry>> _entries = new(StringComparer.Ordinal);
     readonly HashSet<string> _members = [..workspace.Members.Select(static m => m.Name)];
@@ -346,7 +356,7 @@ sealed class GraphSource(Workspace workspace, IReadOnlyDictionary<string, LocalP
         if (members is [var (single, features)] && !workspace.IsWorkspace) {
             _root = single.Name;
             _rootVersion = single.Version;
-            _rootDependencies = [..Expand(Of(single).Normal.Concat(Of(single).Dev).Where(static d => !d.Optional)), ..features.Select(f => (FeatureId(single.Name, f), VersionReq.Exactly(single.Version)))];
+            _rootDependencies = [..Expand(Of(single).Normal.Concat(Of(single).Dev).Concat(Of(single).Build).Where(static d => !d.Optional)), ..features.Select(f => (FeatureId(single.Name, f), VersionReq.Exactly(single.Version)))];
         } else {
             _root = PackageGraph.WorkspaceRoot;
             _rootVersion = new(0, 0, 0);
@@ -428,7 +438,7 @@ sealed class GraphSource(Workspace workspace, IReadOnlyDictionary<string, LocalP
         var (name, feature) = Split(package);
         var spec = Of(name, version);
         if (feature is null) {
-            var dependencies = spec.Normal.AsEnumerable();
+            var dependencies = spec.Normal.Concat(spec.Build);
             if (_members.Contains(name)) {
                 dependencies = dependencies.Concat(spec.Dev);
             }
@@ -527,7 +537,7 @@ sealed class GraphSource(Workspace workspace, IReadOnlyDictionary<string, LocalP
         }
     }
 
-    static Spec Of(LocalPackage package) => new(package.Manifest.Dependencies, package.Manifest.DevDependencies, package.Manifest.Features);
+    static Spec Of(LocalPackage package) => new(package.Manifest.Dependencies, package.Manifest.DevDependencies, package.Manifest.Features) { Build = package.Manifest.BuildDependencies };
 
     Spec Of(string name, SemVersion version) {
         if (locals.TryGetValue(name, out var local)) {
@@ -537,7 +547,7 @@ sealed class GraphSource(Workspace workspace, IReadOnlyDictionary<string, LocalP
         // A registry package as its manifest says, when on disk; else as the index says.
         var entry = Entries(name).FirstOrDefault(e => e.Version == version);
         if (entry is not null) {
-            return new([..entry.Specs("normal")], [..entry.Specs("dev")], entry.Features);
+            return new([..entry.Specs("normal")], [..entry.Specs("dev")], entry.Features) { Build = [..entry.Specs("build")] };
         }
 
         var directory = store.Present(name, version, Locked(name)?.Checksum)
@@ -546,14 +556,14 @@ sealed class GraphSource(Workspace workspace, IReadOnlyDictionary<string, LocalP
         return new(
             [..manifest.Dependencies.Select(static d => d with { Path = null })],
             [..manifest.DevDependencies.Select(static d => d with { Path = null })],
-            manifest.Features);
+            manifest.Features) { Build = [..manifest.BuildDependencies.Select(static d => d with { Path = null })] };
     }
 
     /// <summary>The lock file for a resolution: each real package, its source, checksum and dependencies.</summary>
     public LockFile LockFor(IReadOnlyDictionary<string, SemVersion> decisions, string root) {
         var packages = new List<LockedPackage>();
         foreach (var (name, version) in Real(decisions, root)) {
-            var dependencies = EnabledDependencies(name, version, decisions, true)
+            var dependencies = EnabledDependencies(name, version, decisions, true, includeBuild: true)
                 .Select(d => $"{d} {decisions[d]}")
                 .ToList();
             if (locals.TryGetValue(name, out var local)) {
@@ -580,7 +590,7 @@ sealed class GraphSource(Workspace workspace, IReadOnlyDictionary<string, LocalP
         decisions.Keys.Select(Split).Where(s => s.Name == name && s.Feature is not null).Select(static s => s.Feature!).ToHashSet(StringComparer.Ordinal);
 
     /// <summary>The dependencies a package has with the features chosen: its required ones, and the optional ones its features turn on.</summary>
-    List<string> EnabledDependencies(string name, SemVersion version, IReadOnlyDictionary<string, SemVersion> decisions, bool includeDev, bool forThisMachine = false) {
+    List<string> EnabledDependencies(string name, SemVersion version, IReadOnlyDictionary<string, SemVersion> decisions, bool includeDev, bool forThisMachine = false, bool includeBuild = false) {
         var spec = Of(name, version);
 
         // A dependency whose 'when' names another platform is resolved and
@@ -591,6 +601,10 @@ sealed class GraphSource(Workspace workspace, IReadOnlyDictionary<string, LocalP
             dependencies = dependencies.Concat(spec.Dev.Where(Applies).Select(static d => d.Name));
         }
 
+        if (includeBuild) {
+            dependencies = dependencies.Concat(spec.Build.Where(d => !d.Optional && Applies(d)).Select(static d => d.Name));
+        }
+
         // An optional dependency counts only if one of this package's features turned it on.
         var features = FeaturesOf(name, decisions);
         var turnedOn = features.SelectMany(f => spec.Features.TryGetValue(f, out var values) ? values : [$"dep:{f}"])
@@ -599,7 +613,7 @@ sealed class GraphSource(Workspace workspace, IReadOnlyDictionary<string, LocalP
         return [
             ..dependencies.Distinct()
                 .Where(d => decisions.ContainsKey(d))
-                .Where(d => spec.Normal.Concat(spec.Dev).First(s => s.Name == d) is not { Optional: true } || turnedOn.Contains(d))
+                .Where(d => spec.Normal.Concat(spec.Dev).Concat(spec.Build).First(s => s.Name == d) is not { Optional: true } || turnedOn.Contains(d))
                 .Order(StringComparer.Ordinal),
         ];
     }
@@ -610,9 +624,10 @@ sealed class GraphSource(Workspace workspace, IReadOnlyDictionary<string, LocalP
         foreach (var (name, version) in Real(decisions, root)) {
             var normal = EnabledDependencies(name, version, decisions, false, forThisMachine: true);
             var dev = EnabledDependencies(name, version, decisions, true, forThisMachine: true).Except(normal).ToList();
+            var build = Of(name, version).Build.Where(d => !d.Optional && d.AppliesHere && decisions.ContainsKey(d.Name)).Select(static d => d.Name).Distinct().Order(StringComparer.Ordinal).ToList();
             var features = FeaturesOf(name, decisions);
             if (locals.TryGetValue(name, out var local)) {
-                result[name] = new(local, true, null, features, normal, dev);
+                result[name] = new(local, true, null, features, normal, dev) { BuildDependencies = build };
                 continue;
             }
 
@@ -623,7 +638,7 @@ sealed class GraphSource(Workspace workspace, IReadOnlyDictionary<string, LocalP
                 throw new RegistryException($"the archive of {name} {version} holds {package.Name} {package.Version}");
             }
 
-            result[name] = new(package, false, checksum, features, normal, dev);
+            result[name] = new(package, false, checksum, features, normal, dev) { BuildDependencies = build };
         }
 
         return result;

@@ -632,6 +632,34 @@ public sealed partial class SilGen {
         return false;
     }
 
+    /// <summary>
+    ///     After an initialiser has stored the globals' values, marks every
+    ///     object an '@immortal' one holds immortal: its count is never
+    ///     touched again, it is never released, and what it keeps alive is
+    ///     no leak (docs/02 §2.2). Done where the initialiser returns.
+    /// </summary>
+    void MakeImmortal(SilFunction init, IEnumerable<FieldSymbol> fields) {
+        var immortal = fields.Where(static f => f.IsImmortal).Select(f => _globalsByField[f]).Where(static g => !g.Type.IsTrivial).ToList();
+        if (immortal.Count == 0) {
+            return;
+        }
+
+        foreach (var block in init.Blocks) {
+            if (block.Instructions.Count == 0 || block.Instructions[^1] is not ReturnInst returned) {
+                continue;
+            }
+
+            block.Instructions.RemoveAt(block.Instructions.Count - 1);
+            foreach (var (name, type) in immortal) {
+                var value = block.Append(new LoadBorrowInst(block.Append(new GlobalAddrInst(name, type))));
+                block.Append(new BuiltinInst("make_immortal", SilType.Unit, value));
+                block.Append(new EndBorrowInst(value));
+            }
+
+            block.Append(returned);
+        }
+    }
+
     internal (string Name, SilType Type)? GlobalOf(FieldSymbol field) => _globalsByField.TryGetValue(field, out var global) ? global : null;
 
     /// <summary>
@@ -675,6 +703,7 @@ public sealed partial class SilGen {
                 var own = new SilFunction(GlobalInitPrefix + name, unit);
                 new FunctionLowering(this, initSymbol, own, model.SyntaxTree.Text, TypeSubstitution.Empty).Lower(new BoundBlock(initial.Syntax, [], [assignment]));
                 own.RemoveUnreachableBlocks();
+                MakeImmortal(own, [field]);
                 _module.Add(own);
             }
 
@@ -686,13 +715,15 @@ public sealed partial class SilGen {
         var init = new SilFunction(GlobalsInit, unit);
         new FunctionLowering(this, initSymbol, init, source, TypeSubstitution.Empty).Lower(new BoundBlock(syntax, [], [..statements]));
         init.RemoveUnreachableBlocks();
+        MakeImmortal(init, ordered.Select(static g => g.Field));
         _module.Add(init);
 
         var deinit = new SilFunction(GlobalsDeinit, unit);
         var entry = deinit.AddBlock();
         for (var i = ordered.Count - 1; i >= 0; i--) {
             var (name, type) = _globalsByField[ordered[i].Field];
-            if (!type.IsTrivial) {
+            // An immortal global's objects are never released.
+            if (!type.IsTrivial && !ordered[i].Field.IsImmortal) {
                 entry.Append(new DestroyAddrInst(entry.Append(new GlobalAddrInst(name, type))));
             }
         }

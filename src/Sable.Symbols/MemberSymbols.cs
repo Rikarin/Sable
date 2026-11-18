@@ -362,6 +362,12 @@ public sealed class FieldSymbol(
     public bool IsStatic { get; internal set; }
     public bool IsLazy { get; internal set; }
 
+    /// <summary>
+    ///     <c>@immortal static let</c> (docs/02 §2.2): the objects its value
+    ///     holds are never released, and their counts never touched.
+    /// </summary>
+    public bool IsImmortal { get; internal set; }
+
     /// <summary><c>override var</c>: it replaces a property of a base class, whose type it keeps.</summary>
     public bool IsOverride { get; internal set; }
 

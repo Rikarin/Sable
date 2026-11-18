@@ -68,6 +68,22 @@ lists them by type and prints the reference cycles among them, each as the
 types along it, each step naming the field that holds the next object
 (`Test.Pet.toy -> Test.Toy.pet -> Test.Pet`).
 
+**Immortal objects.** An object with the immortal flag (bit 0 of the flags)
+is never counted: `sable_retain`, `sable_release` and compiled code's inline
+forms of them leave it alone, `isUnique` is false for it, and it is never
+released. String literals are made so, in read-only memory. So is every
+object an `@immortal static let` holds (SYNTAX.md §20): once the global's
+initial value is stored, `sable_make_immortal` is given each strong
+reference the value holds — through structs, tuples, unions and closure
+contexts, as the visitor finds them — and sets the flag, and the global is
+not destroyed as the program ends. Only those objects become immortal; what
+they hold is counted as before, so an object an immortal one lets go of is
+released as any other is. The leak check's rule: an immortal object is not
+a live object, and neither is any object reachable from an immortal one
+through strong references when the program ends — the check walks from the
+immortal objects with the same visitors before it counts what is left, so
+what remains is reported as before. The interpreter keeps the same rule.
+
 A class's metadata has one more field before its vtable (which is field 9):
 its type information, `SableTypeInfo`, which arrays and the runtime's own
 objects leave null. This is the format code casting to a protocol builds

@@ -168,6 +168,7 @@ static int64_t live_objects;
 static void object_born(SableObject *object);
 static void object_gone(SableObject *object);
 static void report_leaks(void);
+static void forget_immortal_reach(void);
 static bool tracking;
 
 // What ARC did: the counts the benchmarks track, and what the ARC passes are
@@ -202,6 +203,8 @@ SABLE_AT_EXIT(sable_report) {
     while (exit_hook_count > 0) {
         exit_hooks[--exit_hook_count]();
     }
+
+    forget_immortal_reach();
 
     if (live_objects != 0 && getenv("SABLE_CHECK_LEAKS") != NULL) {
         fflush(stdout);

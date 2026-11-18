@@ -128,7 +128,14 @@ static int64_t leaked_index(const void *object) {
 // A strong reference the object being visited holds: what its visitor,
 // the compiler's, calls for each. Only references between leaked objects
 // are kept; the rest of the heap is gone by now.
+static void (*visit_hook)(void *pointer);
+
 void sable_heap_visit(void *pointer) {
+    if (visit_hook != NULL) {
+        visit_hook(pointer);
+        return;
+    }
+
     int64_t to = pointer == NULL ? -1 : leaked_index(pointer);
     if (to < 0) {
         return;
@@ -449,4 +456,91 @@ static void report_leaks(void) {
     }
 
     free(shown);
+}
+
+// ---- Immortal objects ------------------------------------------------------
+
+// '@immortal static let' (docs/02 §2.2): each object the global's value holds
+// is made immortal once the global is set. Its count is never touched again
+// (sable_retain and sable_release, and compiled code's inline forms, skip an
+// object with the flag) and it is never released, so it is no longer one of
+// the live objects a leak is counted from. What it keeps alive is no leak
+// either: those objects are found at exit, by walking from the immortal
+// ones, before anything is reported.
+static SableObject **immortals;
+static int64_t immortal_count, immortal_capacity;
+
+void sable_make_immortal(void *pointer) {
+    SableObject *object = pointer;
+    // A string literal is immortal already, and in read-only memory.
+    if (object == NULL || (object->flags & SABLE_IMMORTAL)) {
+        return;
+    }
+
+    object->flags |= SABLE_IMMORTAL;
+    object_gone(object);
+    if (immortal_count == immortal_capacity) {
+        immortal_capacity = immortal_capacity < 16 ? 16 : immortal_capacity * 2;
+        immortals = realloc(immortals, (size_t)immortal_capacity * sizeof(SableObject *));
+        if (immortals == NULL) {
+            sable_trap("out of memory");
+        }
+    }
+
+    immortals[immortal_count++] = object;
+}
+
+static bool track_contains(const SableObject *object) {
+    if (tracked_capacity == 0) {
+        return false;
+    }
+
+    for (size_t i = tracked_slot(object); tracked[i] != NULL; i = (i + 1) & (tracked_capacity - 1)) {
+        if (tracked[i] == object) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+// The walk from the immortal objects: each live object found is taken out
+// of the count, and its own references followed in turn.
+static SableObject **reached;
+static int64_t reached_count, reached_capacity;
+
+static void reach_from_immortal(void *pointer) {
+    SableObject *object = pointer;
+    if (object == NULL || (object->flags & SABLE_IMMORTAL) || !track_contains(object)) {
+        return;
+    }
+
+    track_remove(object);
+    live_objects--;
+    if (reached_count == reached_capacity) {
+        reached_capacity = reached_capacity < 64 ? 64 : reached_capacity * 2;
+        reached = realloc(reached, (size_t)reached_capacity * sizeof(SableObject *));
+        if (reached == NULL) {
+            return;
+        }
+    }
+
+    reached[reached_count++] = object;
+}
+
+static void forget_immortal_reach(void) {
+    if (!tracking || immortal_count == 0) {
+        return;
+    }
+
+    visit_hook = reach_from_immortal;
+    for (int64_t i = 0; i < immortal_count; i++) {
+        visit_object(immortals[i]);
+    }
+
+    for (int64_t i = 0; i < reached_count; i++) {
+        visit_object(reached[i]);
+    }
+
+    visit_hook = NULL;
 }

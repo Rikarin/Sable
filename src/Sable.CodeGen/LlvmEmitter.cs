@@ -252,6 +252,7 @@ public sealed partial class LlvmEmitter {
                                 declare void @sable_retain(ptr)
                                 declare void @sable_release(ptr)
                                 declare void @sable_heap_visit(ptr)
+                                declare void @sable_make_immortal(ptr)
                                 declare void @sable_array_destroy(ptr)
                                 declare void @sable_unowned_retain(ptr)
                                 declare void @sable_unowned_release(ptr)
@@ -715,6 +716,9 @@ public sealed partial class LlvmEmitter {
         ///     runtime walks the heap, to say what a leak's objects keep alive.
         /// </summary>
         Visit,
+
+        /// <summary>Hands each strong reference to <c>sable_make_immortal</c>: an '@immortal' global's objects.</summary>
+        Immortal,
     }
 
     void Ownership(StringBuilder output, string indent, Witnessing what, SilType type, string value, string dbg = "") {
@@ -728,6 +732,7 @@ public sealed partial class LlvmEmitter {
             var call = what switch {
                 Witnessing.Copy => "sable.retain",
                 Witnessing.Destroy => "sable.release",
+                Witnessing.Immortal => "sable_make_immortal",
                 _ => "sable_heap_visit",
             };
             output.Append(indent).Append($"call void @{call}(ptr {value}){dbg}\n");
@@ -736,7 +741,7 @@ public sealed partial class LlvmEmitter {
 
         // A weak or unowned reference keeps nothing alive.
         if (type is WeakStorageType or UnownedStorageType) {
-            if (what == Witnessing.Visit) {
+            if (what is Witnessing.Visit or Witnessing.Immortal) {
                 return;
             }
 
@@ -2532,6 +2537,11 @@ public sealed partial class LlvmEmitter {
 
                 case "string_concat":
                     Line($"{Result()} = call ptr @sable_string_concat(ptr {operands[0]}, ptr {operands[1]})");
+                    return;
+
+                // Each object an '@immortal' global holds.
+                case "make_immortal":
+                    module.Ownership(_out, "  ", Witnessing.Immortal, builtin.Operands[0].Type, operands[0], _dbg);
                     return;
 
                 case "ref_identical":

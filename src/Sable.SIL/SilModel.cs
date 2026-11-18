@@ -1480,6 +1480,12 @@ public static class SilBuiltins {
             return operands is [AddressType { Pointee: ClassType }] ? new([operands[0]], SilType.Bool) : null;
         }
 
+        // '@immortal static let': every object the value holds made
+        // immortal — never counted, never released, and no leak.
+        if (name == "make_immortal") {
+            return operands is [var value] ? new([value], SilType.Unit) : null;
+        }
+
         // 'a === b': whether two references are to the one object.
         if (name == "ref_identical") {
             return operands is [ClassType, ClassType] ? new([operands[0], operands[1]], SilType.Bool) : null;

@@ -1085,6 +1085,8 @@ public sealed partial class Compilation {
             IsStatic = declaration.Modifiers.Any(SyntaxKind.StaticKeyword),
             IsOverride = declaration.Modifiers.Any(SyntaxKind.OverrideKeyword),
             IsFinal = declaration.Modifiers.Any(SyntaxKind.FinalKeyword),
+            IsImmortal = declaration.Modifiers.Any(SyntaxKind.StaticKeyword) && declaration.LetOrVarKeyword.Kind == SyntaxKind.LetKeyword
+                && AttributesOf(declaration).Any(static a => AttributeName(a) == "immortal"),
             SetterAccessibility = SetterAccessibilityOf(declaration.Modifiers),
             IsLazy = declaration.Modifiers.Any(SyntaxKind.LazyKeyword),
             ReferenceKind = declaration.Modifiers.Any(SyntaxKind.WeakKeyword) ? ReferenceKind.Weak

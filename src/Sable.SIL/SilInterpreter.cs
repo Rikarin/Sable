@@ -64,6 +64,9 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
     public sealed class Session {
         internal HashSet<Counted> Live { get; } = [];
 
+        /// <summary>The objects '@immortal' globals hold: never released, and what they keep alive no leak.</summary>
+        internal List<(SilType Type, Counted Object)> Immortal { get; } = [];
+
         /// <summary>The globals' storage, made as each is first reached.</summary>
         internal Dictionary<string, Slot> Globals { get; } = [];
 
@@ -128,8 +131,134 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
     /// <summary>Stops the program, as a trap, once cancelled: for a REPL, whose step limit is too high to wait for.</summary>
     public CancellationToken Interrupt { get; init; }
 
-    /// <summary>Heap objects allocated and not yet freed: after a whole program, a leak.</summary>
-    public int LiveObjects => _live.Count;
+    /// <summary>
+    ///     Heap objects allocated and not yet freed: after a whole program, a
+    ///     leak — unless an immortal object keeps it alive, as the runtime's
+    ///     report also leaves out.
+    /// </summary>
+    public int LiveObjects {
+        get {
+            if (State.Immortal.Count == 0) {
+                return _live.Count;
+            }
+
+            var reached = new HashSet<Counted>(ReferenceEqualityComparer.Instance);
+            foreach (var (type, immortal) in State.Immortal) {
+                Reach(type, immortal, reached, root: true);
+            }
+
+            return _live.Count(c => !reached.Contains(c));
+        }
+    }
+
+    /// <summary>Every counted object a value holds, and those they hold, strongly.</summary>
+    static void Reach(SilType type, object? value, HashSet<Counted> reached, bool root = false) {
+        if (value is null || type.IsTrivial) {
+            return;
+        }
+
+        switch (type, value) {
+            case (WeakStorageType or UnownedStorageType, _):
+                return;
+
+            case (ThickFunctionType, ClosureValue closure):
+                Reach(SilType.Object, closure.Context, reached);
+                return;
+
+            case (_, Counted counted):
+                if (!root && !reached.Add(counted)) {
+                    return;
+                }
+
+                switch (counted) {
+                    case HeapObject instance:
+                        for (var i = 0; i < instance.Fields.Length; i++) {
+                            Reach(instance.Type.Fields[i].Type, instance.Fields[i], reached);
+                        }
+
+                        break;
+
+                    case HeapArray array:
+                        foreach (var element in array.Elements) {
+                            Reach(array.Type.Element, element, reached);
+                        }
+
+                        break;
+                }
+
+                return;
+
+            case (StructType structType, object?[] fields):
+                for (var i = 0; i < fields.Length; i++) {
+                    Reach(structType.Fields[i].Type, fields[i], reached);
+                }
+
+                return;
+
+            case (TupleType tuple, object?[] elements):
+                for (var i = 0; i < elements.Length; i++) {
+                    Reach(tuple.Elements[i], elements[i], reached);
+                }
+
+                return;
+
+            case (EnumType enumType, EnumValue enumValue):
+                if (enumType.Cases[enumValue.Case].Payload is { } payload) {
+                    Reach(payload, enumValue.Payload, reached);
+                }
+
+                return;
+        }
+    }
+
+    /// <summary>
+    ///     '@immortal': each object the value holds is made immortal, its
+    ///     count never touched again, and no longer one of the live objects.
+    /// </summary>
+    void MakeImmortal(SilType type, object? value) {
+        if (value is null || type.IsTrivial) {
+            return;
+        }
+
+        switch (type, value) {
+            case (WeakStorageType or UnownedStorageType, _):
+                return;
+
+            case (ThickFunctionType, ClosureValue closure):
+                MakeImmortal(SilType.Object, closure.Context);
+                return;
+
+            case (_, Counted counted):
+                if (!Alive(counted).Immortal) {
+                    counted.Immortal = true;
+                    _live.Remove(counted);
+                    State.Immortal.Add((type, counted));
+                }
+
+                return;
+
+            case (StructType structType, object?[] fields):
+                for (var i = 0; i < fields.Length; i++) {
+                    MakeImmortal(structType.Fields[i].Type, fields[i]);
+                }
+
+                return;
+
+            case (TupleType tuple, object?[] elements):
+                for (var i = 0; i < elements.Length; i++) {
+                    MakeImmortal(tuple.Elements[i], elements[i]);
+                }
+
+                return;
+
+            case (EnumType enumType, EnumValue enumValue):
+                if (enumType.Cases[enumValue.Case].Payload is { } payload) {
+                    MakeImmortal(payload, enumValue.Payload);
+                }
+
+                return;
+        }
+    }
 
     /// <summary>How many instructions the last run carried out.</summary>
     public long Steps => _steps;
@@ -1028,6 +1157,10 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
 
             case "ref_is_unique":
                 return ((IReference)operands[0]!).Peek() is Counted { Strong: 1, Immortal: false };
+
+            case "make_immortal":
+                MakeImmortal(builtin.Operands[0].Type, operands[0]);
+                return null;
 
             case "string_count":
                 return (long)Text(operands[0]).Scalars.Count;

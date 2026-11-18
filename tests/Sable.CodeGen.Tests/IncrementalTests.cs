@@ -319,7 +319,9 @@ public sealed class IncrementalTests {
         // The program's three units (the standard library has none of its own).
         Assert.Equal(Units - 1, Directory.GetFiles(interfaces, "*.sbi").Length);
         var shapes = File.ReadAllText(Sbi("lib shapes-0.1.0"));
-        Assert.True(shapes.StartsWith("sable-interface 1\nunit lib shapes-0.1.0\nfile ../shapes/src/lib.sb ", StringComparison.Ordinal), shapes[..200]);
+        Assert.True(shapes.StartsWith("sable-interface 2\nunit lib shapes-0.1.0\nfile ../shapes/src/lib.sb ", StringComparison.Ordinal), shapes[..200]);
+        // The dotted names it writes, from which what depends on what is found.
+        Assert.Contains("\nrefs ", shapes, StringComparison.Ordinal);
         Assert.Contains("\n--- ../shapes/src/lib.sb\nmodule Shapes\n", shapes, StringComparison.Ordinal);
         Assert.Contains("fn scale(_ x: Int) -> Int { … }", shapes, StringComparison.Ordinal);
         Assert.DoesNotContain("return x\n", shapes, StringComparison.Ordinal);
@@ -331,16 +333,18 @@ public sealed class IncrementalTests {
         Assert.Equal(1, scenario.Check().Compiled);
         Assert.Equal(Units, Directory.GetFiles(interfaces, "*.sbi").Length);
 
-        // What the next build reads is what the program is keyed by. (The
-        // executable is removed, so that the build is not merely fresh.)
+        // What the next build reads is what the units are keyed by: a
+        // fingerprint planted in geometry's compiles the unit that depends
+        // on geometry again, and no other. (The executable is removed, so
+        // that the build is not merely fresh.)
         var executable = Platform.Executable(scenario.PathOf("app/target/dev/app"));
         var geometry = Sbi("lib geometry-0.1.0");
         var text = File.ReadAllText(geometry);
         var line = text.Split('\n')[2];
-        File.WriteAllText(geometry, text.Replace(line, line[..^64] + new string('0', 64), StringComparison.Ordinal));
+        File.WriteAllText(geometry, text.Replace(line, line[..^129] + new string('0', 64) + line[^65..], StringComparison.Ordinal));
         File.Delete(executable);
         var planted = scenario.Check();
-        Assert.Equal(("incremental", Units), (planted.Kind, planted.Compiled));
+        Assert.Equal(("incremental", 1), (planted.Kind, planted.Compiled));
 
         // One cut short is not read.
         File.WriteAllText(geometry, string.Join('\n', text.Split('\n').Take(3)));
@@ -365,11 +369,71 @@ public sealed class IncrementalTests {
         scenario.Edit("shapes/src/lib.sb", "public fn flourish() -> String {\n    return \"~fancy~\"", "public fn flourish(_ times: Int = 2) -> String {\n    return \"~fancy~ x\\(times)\"");
         var built = scenario.Check();
         Assert.Contains("7 3 plain x2", built.Output);
-        Assert.Equal(Units, built.Compiled);
+        // Shapes and what depends on it; the standard library does not.
+        Assert.Equal(Units - 1, built.Compiled);
 
         // So is a global's initial value, set up where the program starts.
         scenario.Edit("shapes/src/lib.sb", "public var created = 0", "public var created = 10");
         Assert.Contains("7 13 plain x2", scenario.Check().Output);
+    }
+
+    /// <summary>
+    ///     A change to what other units see of a package compiles again only
+    ///     the units that depend on it: a new public function in geometry, the
+    ///     app's unit and geometry's — not shapes', which geometry depends on,
+    ///     nor the standard library's.
+    /// </summary>
+    [Fact]
+    public void AnInterfaceChangeRecompilesOnlyItsDependents() {
+        if (!CanBuild) {
+            return;
+        }
+
+        using var scenario = new Scenario();
+        scenario.Check();
+        scenario.Edit("geometry/src/lib.sb", "/// The shapes' areas", "public fn sides() -> Int {\n    return 4\n}\n\n/// The shapes' areas");
+        var built = scenario.Check();
+        Assert.Equal(Expected, built.Output);
+        Assert.Equal(("incremental", 2, Units - 2), (built.Kind, built.Compiled, built.Reused));
+
+        // Used by the app: its unit alone.
+        scenario.Edit("app/src/main.sb", "print(survey(shapes))", "print(survey(shapes))\n    print(sides())");
+        var used = scenario.Check();
+        Assert.Contains("largest 12\n4\n", used.Output);
+        Assert.Equal(1, used.Compiled);
+
+        // A class's layout, which every unit that makes or reads one lays
+        // out: shapes', and the two that depend on it.
+        scenario.Edit("shapes/src/lib.sb", "public var label: String\n", "public var label: String\n    public var sides = 0\n");
+        var layout = scenario.Check();
+        Assert.Contains("circle of area 12", layout.Output);
+        Assert.Equal(Units - 1, layout.Compiled);
+    }
+
+    /// <summary>
+    ///     An extension adds to a type that units which do not depend on it can
+    ///     see — a conformance, an overload that changes how the type's
+    ///     methods are named — so changing one compiles every unit again.
+    /// </summary>
+    [Fact]
+    public void AnExtensionReachesEveryUnit() {
+        if (!CanBuild) {
+            return;
+        }
+
+        using var scenario = new Scenario();
+        scenario.Check();
+        scenario.Edit("geometry/src/lib.sb", "/// The shapes' areas", "extension Shape {\n    public fn twice() -> Int {\n        return area() * 2\n    }\n}\n\n/// The shapes' areas");
+        scenario.Edit("app/src/main.sb", "print(survey(shapes))", "print(survey(shapes))\n    print(Circle(radius: 1).twice())");
+        var built = scenario.Check();
+        Assert.Contains("largest 12\n6\n", built.Output);
+        Assert.Equal(Units, built.Compiled);
+
+        // Its body is its own unit's, as any other.
+        scenario.Edit("geometry/src/lib.sb", "return area() * 2", "return area() * 3");
+        var body = scenario.Check();
+        Assert.Contains("largest 12\n9\n", body.Output);
+        Assert.Equal(1, body.Compiled);
     }
 
     [Fact]
@@ -693,6 +757,10 @@ public sealed class IncrementalTests {
     const string Interface = """
         module M
 
+        public const fn seed() -> Int {
+            return 7
+        }
+
         public struct Box {
             var value: Int
 
@@ -734,6 +802,8 @@ public sealed class IncrementalTests {
     [InlineData("var value: Int", "var value: Int\n    var other: Int")]
     [InlineData("fn plain(_ x: Int) -> Int {\n    return x + 1", "fn plain(_ x: Int) -> Int {\n    let y = x\n    return y + 1")]
     [InlineData("public struct Box", "public struct Box<T>")]
+    // Another unit's constant may be computed from it.
+    [InlineData("return 7", "return 8")]
     public void WhatOtherUnitsSeeIsInterface(string old, string replacement) {
         var changed = Interface.Replace(old, replacement, StringComparison.Ordinal);
         Assert.NotEqual(Interface, changed);

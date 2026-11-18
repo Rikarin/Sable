@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
 using Sable.CodeGen;
@@ -108,10 +107,12 @@ public sealed record BuildOutcome(bool Succeeded, IReadOnlyList<string> Errors, 
 ///     <para>
 ///         <b>Separate compilation.</b> Each unit is lowered from a compilation
 ///         of the whole program (<see cref="SilGen.LowerUnit" />) to an object
-///         file keyed by its own files' contents and the program's interface —
-///         every file's <see cref="InterfaceFingerprint" />. A change to an
-///         ordinary function's body changes only its unit's key; anything
-///         else another unit could see changes every key. Units whose objects
+///         file keyed by its own files' contents and the interfaces
+///         (<see cref="InterfaceFingerprint" />) of the units it depends on
+///         (<see cref="UnitGraph" />). A change to an ordinary function's body
+///         changes only its unit's key; a change to what other units can see
+///         changes the keys of the units that depend on it — and an
+///         extension's, every key, since any unit may see it. Units whose objects
 ///         are cached are neither type-checked again (their checks passed with
 ///         the same inputs) nor lowered; the others are, and their objects are
 ///         compiled by clang in parallel. Before linking, the units' records of
@@ -297,51 +298,58 @@ public static class IncrementalBuild {
         });
         var indexing = Task.Run(() => SilProgram.Index([..program, ..standard.Trees]));
 
-        // ---- The program's interface ----------------------------------------
-        // Each unit's interface is read from its .sbi when the unit, and the
-        // program's concrete types, are as they were; otherwise it is worked
-        // out from the unit's files and its .sbi written.
-        string programInterface;
+        // ---- Each unit's interface ---------------------------------------------
+        // Read from the unit's .sbi when the unit, and which of the types its
+        // extensions extend the program declares concretely, are as they
+        // were; otherwise worked out from the unit's files and the .sbi written.
+        var own = units.Where(u => u != standard).ToList();
+        var faces = new FileInterface[own.Count][];
         var interfaces = Path.Combine(cacheDirectory, "interfaces");
-        var interfaceFiles = new List<string>();
+        var interfaceFiles = new string[own.Count];
         using (BuildTimings.Of(timings, "interface")) {
-            var allTrees = units.SelectMany(static u => u.Trees).ToList();
-            var concrete = InterfaceFingerprint.ConcreteTypeNames(allTrees);
-            var concreteKey = Hash(string.Join(",", concrete.Order(StringComparer.Ordinal)));
-            var fingerprints = new ConcurrentDictionary<SyntaxTree, string>();
+            var concrete = InterfaceFingerprint.ConcreteTypeNames(units.SelectMany(static u => u.Trees));
             var read = 0;
-            Parallel.ForEach(units.Where(u => u != standard), GlobalOptions.Current.ParallelOptions, unit => {
-                var path = Path.Combine(interfaces, Hash($"{settingsKey}\ninterface {unit.Name}\n{unit.ContentHash}\n{concreteKey}") + ".sbi");
-                lock (interfaceFiles) {
-                    interfaceFiles.Add(path);
-                }
-
+            Parallel.For(0, own.Count, GlobalOptions.Current.ParallelOptions, i => {
+                var unit = own[i];
+                var extended = unit.Trees.SelectMany(InterfaceFingerprint.ExtendedNames).Where(concrete.Contains).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal);
+                var path = interfaceFiles[i] = Path.Combine(interfaces, Hash($"{settingsKey}\ninterface {unit.Name}\n{unit.ContentHash}\n{string.Join(",", extended)}") + ".sbi");
                 var names = unit.Trees.Select(static t => t.Text.FileName).ToList();
-                if (InterfaceFile.ReadFingerprints(path, unit.Name, names) is { } known) {
-                    for (var i = 0; i < known.Count; i++) {
-                        fingerprints[unit.Trees[i]] = known[i];
-                    }
-
+                if (InterfaceFile.Read(path, unit.Name, names) is { } known) {
+                    faces[i] = [..known];
                     Interlocked.Increment(ref read);
                     return;
                 }
 
-                var worked = unit.Trees.AsParallel().AsOrdered().Select(tree => InterfaceFingerprint.Interface(tree, concrete)).ToList();
-                for (var i = 0; i < worked.Count; i++) {
-                    fingerprints[unit.Trees[i]] = worked[i].Fingerprint;
-                }
-
-                new InterfaceFile(unit.Name, [..names.Zip(worked, static (n, w) => (n, w.Fingerprint))], [..worked.Select(static w => w.Source)]).WriteTo(path);
+                faces[i] = [..unit.Trees.AsParallel().AsOrdered().Select(tree => InterfaceFingerprint.Interface(tree, concrete))];
+                new InterfaceFile(unit.Name, [..names.Zip(faces[i])]).WriteTo(path);
             });
             timings?.Count("interfaces read", read);
-            programInterface = Hash(string.Join("\n", units.Select(u => u == standard
-                ? $"{u.Name}:{u.ContentHash}"
-                : $"{u.Name}:{string.Join(",", u.Trees.Select(t => t.Text.FileName + "=" + fingerprints[t]))}")));
         }
 
-        for (var i = 0; i < units.Count; i++) {
-            var unit = units[i];
-            unit.Key = Hash($"{settingsKey}\nunit {unit.Name}\n{unit.ContentHash}\n{programInterface}");
+        // ---- Each unit's key -------------------------------------------------
+        // Its files, and the interfaces of the units it depends on — not the
+        // whole program's (UnitGraph) — and every unit's extensions, which
+        // any unit may see. The standard library depends on no unit of the
+        // program, and every unit on it.
+        using (BuildTimings.Of(timings, "unit graph")) {
+            var facts = own.Select((u, i) => {
+                var declared = u.Trees.Select(UnitFacts.Of).ToList();
+                return new UnitFacts(
+                    declared.Select(static d => d.Module).OfType<string>().ToHashSet(StringComparer.Ordinal),
+                    declared.SelectMany(static d => d.Imports).ToHashSet(StringComparer.Ordinal),
+                    faces[i].SelectMany(static f => f.References).ToHashSet(StringComparer.Ordinal));
+            }).ToList();
+            var dependencies = UnitGraph.Dependencies(facts);
+            var unitInterfaces = own.Select((u, i) => Hash(string.Join("\n", u.Trees.Select((t, j) => t.Text.FileName + "=" + faces[i][j].Fingerprint)))).ToList();
+            var extensions = Hash(string.Join("\n", faces.SelectMany(static f => f).Select(static f => f.Extensions)));
+            standard.Key = Hash($"{settingsKey}\nunit {standard.Name}\n{standard.ContentHash}\n{extensions}");
+            for (var i = 0; i < own.Count; i++) {
+                var seen = string.Join("\n", dependencies[i].Select(d => $"{own[d].Name}:{unitInterfaces[d]}"));
+                own[i].Key = Hash($"{settingsKey}\nunit {own[i].Name}\n{own[i].ContentHash}\n{extensions}\n{standard.ContentHash}\n{seen}");
+            }
+        }
+
+        foreach (var unit in units) {
             unit.ObjectPath = Path.Combine(objects, unit.Key + ".o");
             unit.Cached = File.Exists(unit.ObjectPath) && File.Exists(unit.AbiPath);
         }

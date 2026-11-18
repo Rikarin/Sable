@@ -1886,21 +1886,23 @@ Sable.CodeGen. `sable build` and `sable run` on a package go through it;
     with the executable as it was left (size and time, else content), does
     nothing more: it reads and hashes the files and stops.
   - `objects/<key>.o` and `.abi`: one per unit, keyed by its own files'
-    content and the **program's interface fingerprint**. The interface is
-    not a binary `.sbi` file (docs/05 §5.4) but a hash per file
+    content and the **interface fingerprints of the units it depends on**
+    (`UnitGraph`: what it imports or names in full, units sharing its
+    modules, and so on; the entry unit depends on all), plus every unit's
+    extensions'. The interface is a hash per file
     (`InterfaceFingerprint`) of its tokens with the bodies left out that
     only their own unit lowers: functions, initialisers, deinits, operators
     and getters with no type parameters, no `some` or `ref` in the
-    signature and no attribute, at module level or in a non-generic struct,
+    signature, no attribute and no `const`, at module level or in a non-generic struct,
     class, union, enum or actor, or in an extension of a type the program
     declares only as such. Generic bodies, protocol defaults, subscripts,
     setters, initial values and default arguments count as interface, since
     other units lower them; where such code is, its tokens' line and column
     count too (they reach debug information and the units that instantiate
     it), and elsewhere they do not, so a body growing by a line moves
-    nothing. So a change to an ordinary body recompiles one unit; anything
-    else recompiles every unit of the program (finer, dependents-only
-    invalidation is the query engine's job — below).
+    nothing. So a change to an ordinary body recompiles one unit; a change
+    to an interface recompiles the units that depend on it; a change to an
+    extension's interface recompiles every unit.
   - `objects/runtime-<key>.o`: the C runtime, compiled once per settings.
   - `target/resolution.txt`: the last resolution of a graph of local
     packages, keyed by every local manifest, the lock file and the

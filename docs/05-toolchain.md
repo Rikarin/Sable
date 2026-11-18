@@ -443,20 +443,33 @@ is a fingerprint-keyed cache rather than the query engine: the unit is the
 package's library (and a binary's entry file), each compiled to an object
 from a compilation of the whole program and cached in
 `target/<profile>/cache` under `(toolchain, profile, target, fingerprint)`,
-where the fingerprint is the unit's content and the program's interface. The
-interface is a hash of each file's public surface — declarations,
-signatures and the bodies other units lower. Each unit's is written to a
-text `.sbi` in `cache/interfaces/` (`sable-interface 1`: each file's
-fingerprint, then its source with every body other units cannot see written
-`{ … }`), and read back by the next build in place of walking the unchanged
-unit's files. It is not yet the binary interface planned above: no other
-compilation binds against it, and an interface change still invalidates every
-unit rather than only the dependents. A unit's lowering no longer reads
-facts of the units that depend on it: separately compiled, an `open` class's
-methods are dispatched through its vtable whatever subclasses the unit sees
-(any module may add one), while a class that is not open can be subclassed
-only in its own module, which the unit sees; and a unit makes storage only
-for the globals it names (the unit the program starts in, for all).
+where the fingerprint is the unit's content and the interfaces of the units
+it depends on. An interface is a hash of each file's public surface —
+declarations, signatures and the bodies other units lower (generic
+functions, `const fn`s, defaults). Each unit's is written to a `.sbi` in
+`cache/interfaces/` (each file's fingerprint, its extensions' fingerprint,
+the dotted names it writes, and its source with every body other units
+cannot see left out), and read back by the next build in place of walking
+the unchanged unit's files.
+
+**Dependents only.** A unit depends on the units declaring a module it
+imports or names in full (`Shapes.Square` needs no import), on the units
+that share one of its modules (what one declares there, the other sees as
+its own), and on what those depend on; the unit holding the entry point
+depends on every unit, since it sets up every global, and every unit on the
+standard library, which depends on none. A unit's key covers the interfaces
+of its dependencies, so a changed interface compiles again exactly the
+units that depend on it. What makes that sound is that a unit's lowering
+reads no fact of the units that depend on it: separately compiled, an
+`open` class's methods are dispatched through its vtable whatever
+subclasses the unit sees (any module may add one), while a class that is
+not open can be subclassed only in its own module, which the unit's key
+covers; and a unit makes storage only for the globals it names (the entry
+unit, for all). The one exception is extensions: an extension adds to a
+type that units which do not depend on it can see — a conformance, or an
+overload that changes how the type's methods are named — so every unit,
+the standard library's too, is keyed by every unit's extensions'
+fingerprint. A body inside an extension is its unit's own, as any other.
 Clang runs on units in parallel; lowering is still one unit at a time.
 An unoptimised debug build is compiled this way, and so is an optimised one
 whose profile asks for `lto = "thin"` (or `"off"`): each unit's SIL passes

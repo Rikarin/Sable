@@ -1,207 +1,236 @@
 # Sable
 
-> A protocol-oriented systems language with C#-shaped syntax, Swift-shaped memory
-> management, Rust-shaped safety, and a Goose-shaped data layout model.
-> Compiled to native code via LLVM.
+**A systems language with C#-shaped syntax, Swift-style value semantics and
+reference counting, Rust-style move checking, and compile-time checks on how
+memory is used — compiled ahead of time to native code through LLVM.**
 
-**`Sable` is a placeholder name.** It is short, unclaimed in the major package
-registries, and the file extension `.sb` is free. Rename at will — the only
-places the name is load-bearing are the toolchain binary (`sable`), the manifest
-(`package.sb`, docs/05 §5.2) and the module namespace root.
+```sable
+module Tour
 
----
+/// A closed union: a `match` over it must cover every case.
+union Shape {
+    Circle(radius: F64)
+    Rect(width: F64, height: F64)
+}
 
-## The one-paragraph pitch
+protocol Describable {
+    fn describe() -> String
+}
 
-Sable is what you get when you take C#'s syntax and tooling discipline, Swift's
-value semantics and ARC, Rust's move checking, and Goose's insight that *most
-object graphs do not need to be graphs at all*, and then refuse to pick only one.
-It compiles ahead-of-time to native binaries through LLVM. It has protocols with
-associated types, closed unions with exhaustive matching, generics that are
-monomorphised by default and boxed on demand, optional runtime reflection that
-you pay for only where you ask for it, and a single tool — `sable` — that builds,
-tests, formats, documents and resolves packages.
+extension Shape: Describable {
+    var area: F64 => match self {
+        case .Circle(let r)      => 3.14159 * r * r
+        case .Rect(let w, let h) => w * h
+    }
 
-## Documents in this repository
+    fn describe() -> String => "a shape of area \(area)"
+}
 
-| File | What it is |
+union ShapeError { Negative(side: F64) }
+
+/// Errors are typed: callers know exactly what can go wrong.
+fn square(side: F64) throws(ShapeError) -> Shape {
+    guard side >= 0.0 else {
+        throw .Negative(side: side)
+    }
+
+    return .Rect(width: side, height: side)
+}
+
+fn main() {
+    let shapes: Shape[] = [.Circle(radius: 1.0), .Rect(width: 2.0, height: 3.0)]
+    var total = 0.0
+    for shape in shapes {
+        print(shape.describe())
+        total += shape.area
+    }
+
+    print("total area: \(total)")
+
+    do {
+        print(try square(side: 4.0).describe())
+        print(try square(side: -1.0).describe())
+    } catch .Negative(let side) {
+        print("a side cannot be \(side)")
+    }
+}
+```
+
+```
+$ sable run tour.sb
+a shape of area 3.14159
+a shape of area 6.0
+total area: 9.14159
+a shape of area 16.0
+a side cannot be -1.0
+```
+
+> **Sable is pre-1.0 and changes often.** The language, the standard library
+> and the toolchain all work end to end, but nothing is stable yet: expect
+> source changes between versions, and don't ship production code on it.
+
+## Why Sable
+
+- **Familiar syntax.** If you read C# or Swift, you can read Sable: braces,
+  `fn`, `struct`, `class`, `protocol`, `extension`, generics with `where`
+  clauses, string interpolation.
+- **Memory safety without a garbage collector.** Values are copied, classes are
+  reference-counted, and move-only types (`@noncopy`) are checked at compile
+  time. Exclusive access to mutable state is enforced, statically where it can
+  be and at run time where it can't.
+- **Most data doesn't need to be a graph.** Sable lets you say where memory
+  lives — inline, in a region that is freed all at once, or counted — and
+  checks that references don't outlive what they point into. See
+  [the memory model](docs/02-memory-model.md).
+- **Protocols, unions and generics.** Protocols with associated types and
+  default implementations; closed unions whose `match` must be exhaustive;
+  structural unions like `Int | String`; generics that are specialised for
+  speed by default and boxed (`any P`) when you ask.
+- **Typed errors.** `throws(MyError)` says exactly what a function can throw,
+  and a `catch` that doesn't cover every case is a compile error.
+- **async/await and actors**, with `Sendable` checking at actor boundaries.
+- **Reflection you only pay for when you use it**, and source generators
+  instead of macros: ordinary Sable functions that write code while a package
+  compiles.
+- **C interop.** `@extern` and `@export` follow the platform's C calling
+  convention, and `sable bindgen` writes declarations from a C header.
+- **One tool.** `sable` builds, runs, tests, benchmarks, formats, lints,
+  documents, debugs and manages packages, and serves the language server.
+
+## Getting started
+
+### Install
+
+Sable has no binary releases yet; you build the toolchain from source. You
+need:
+
+- the [.NET 11 SDK](https://dotnet.microsoft.com/download)
+- `clang` (or set `$CC` to a clang that can link for your machine)
+- `lldb`, only for `sable debug`
+
+```bash
+git clone https://github.com/Rikarin/Sable.git
+```
+
+```bash
+cd Sable && dotnet publish src/Sable.Driver -c Release -o ~/.sable/bin
+```
+
+Then add `~/.sable/bin` to your `PATH`, and check it works:
+
+```bash
+sable --version
+```
+
+Supported platforms are macOS (Apple silicon and Intel) and Linux (x86-64 and
+arm64). Windows support is in progress.
+
+### Your first program
+
+A single file runs directly:
+
+```bash
+sable run hello.sb
+```
+
+For anything bigger, make a package:
+
+```bash
+sable new hello
+```
+
+```bash
+cd hello && sable run
+```
+
+That gives you this layout:
+
+```
+hello/
+├── package.sb     the manifest
+└── src/
+    └── main.sb    the entry point
+```
+
+### The manifest
+
+A package's manifest, `package.sb`, is itself written in Sable, so it is
+type-checked and your editor completes it:
+
+```sable
+import Sable.Build
+
+let manifest = Package {
+    name: "hello",
+    version: "0.1.0",
+    edition: 2027,
+    dependencies: [
+        .registry("sable-json", "^1.2"),
+        .path("shared", "../shared"),
+        .git("http", "https://github.com/example/http.git", tag: "v0.4.0"),
+    ],
+}
+```
+
+It runs at build time in a sandbox: no I/O, no clock, nothing that would make
+one machine's build differ from another's. `sable add` and `sable remove` edit
+it for you, keeping your comments and layout. Workspaces of several packages,
+features, build profiles and build scripts are all described in
+[docs/05](docs/05-toolchain.md).
+
+## The `sable` command
+
+| Command | What it does |
 |---|---|
-| [docs/01-overview.md](docs/01-overview.md) | Design pillars, influences, and the things deliberately left out |
-| [docs/02-memory-model.md](docs/02-memory-model.md) | The tiered memory model: inline values, regions, ARC, and root inference |
-| [docs/03-type-system.md](docs/03-type-system.md) | Protocols, unions, generics, variance, effects |
-| [docs/04-implementation-plan.md](docs/04-implementation-plan.md) | The actual build plan: 7 phases, ~30 months, Roslyn architecture |
-| [docs/05-toolchain.md](docs/05-toolchain.md) | `sable` CLI, manifest format, resolver, build graph |
-| [docs/06-runtime-and-stdlib.md](docs/06-runtime-and-stdlib.md) | Runtime ABI, reflection, metadata, framework layout |
-| [docs/07-references.md](docs/07-references.md) | Annotated reading list — papers, compilers, and prior art worth stealing from |
-| [docs/08-source-generators.md](docs/08-source-generators.md) | Source generators: Sable functions that write code while a package compiles, and why Sable has no macros |
-| [spec/SYNTAX.md](spec/SYNTAX.md) | **The full syntax reference**, with examples for every construct |
-| [spec/grammar.ebnf](spec/grammar.ebnf) | The complete formal grammar |
-| [spec/lexical.md](spec/lexical.md) | Tokens, literals, trivia, and the newline rules |
-| [examples/](examples/) | Working-shaped sample programs |
+| `sable new`, `sable init` | start a package |
+| `sable run`, `sable build` | compile (and run) a package or a single file |
+| `sable check` | type-check without generating code — fast |
+| `sable test` | run `@test` functions; `--doc` also runs doc examples |
+| `sable bench` | run `@bench` functions and compare with a baseline |
+| `sable fmt` | format source; there are no options, by design |
+| `sable lint` | run the lints, at the levels your manifest sets |
+| `sable doc` | generate documentation |
+| `sable debug` | build with debug info and run under lldb, with Sable-aware formatters |
+| `sable repl` | an interactive session |
+| `sable add`, `remove`, `update`, `tree`, `vendor` | manage dependencies |
+| `sable publish`, `yank`, `search`, `install` | work with a registry |
+| `sable explain S3004` | the full explanation of a compiler diagnostic |
+| `sable bindgen header.h` | Sable declarations for a C header |
+| `sable lsp` | the language server, for editors |
 
-## Read in this order
+`sable help <command>` shows each command's options. `--target <triple>`
+cross-compiles, and `--message-format json` gives machine-readable diagnostics.
 
-1. `docs/01-overview.md` — why the language exists
-2. `spec/SYNTAX.md` — what it looks like
-3. `docs/02-memory-model.md` — the part that is actually novel
-4. `docs/04-implementation-plan.md` — how to build it
+## Editor support
 
----
+The VS Code extension in [editors/vscode](editors/vscode) gives you
+highlighting, diagnostics as you type, completion, go to definition, find
+references, rename, hover, inlay hints, formatting, code actions, tasks and
+debugging. Any editor with LSP support can use `sable lsp` directly.
 
-## Repository layout
+## Learning the language
 
-```
-docs/        design documents; docs/diagnostics/ is what `sable explain` prints
-spec/        the language specification
-examples/    sample programs, and a static site generator (examples/ssg)
-src/         the compiler, written in C# (see docs/04 for why)
-               Sable.Syntax          lexer, parser, trees, formatter
-               Sable.Symbols         symbols, binding, type checking, lints
-               Sable.SIL             the mid-level IR: lowering, memory-model checks, passes, interpreter
-               Sable.CodeGen         LLVM IR and DWARF
-               Sable.Driver          the `sable` command, packages, the build
-               Sable.LanguageServer  `sable lsp`
-lib/         the standard library, in Sable
-runtime/     the C runtime native programs link
-editors/     the VS Code extension
-benchmarks/  the benchmark suite and its history
-tools/       Sable.Syntax.Generator  generates the node classes
-               Sable.Visualiser        the syntax-tree visualiser
-               and the scripts for benchmarks, Linux tests and the debugger
-tests/       the test suite
-```
-
-Node classes are generated from [src/Sable.Syntax/Syntax.xml](src/Sable.Syntax/Syntax.xml).
-After changing the schema:
-
-```bash
-dotnet run --project tools/Sable.Syntax.Generator
-```
-
-The generated files are committed, and a test fails if they drift from the schema.
-
-### Seeing what the compiler made of a file
-
-`sable-visualise` is the syntax-tree visualiser — Roslyn's Syntax Visualiser,
-for Sable. It shows every node, token and trivia, including the missing
-tokens and skipped text error recovery produces, and what the semantic model
-says about each node: its type and the symbol it binds to.
-
-```bash
-dotnet run --project tools/Sable.Visualiser -- examples/01-hello.sb
-```
-
-```bash
-dotnet run --project tools/Sable.Visualiser -- examples/01-hello.sb --html hello.html
-```
-
-The first prints the tree as indented text (`--trivia` adds whitespace and
-comments). The second writes one self-contained page: the source beside a
-collapsible tree and a property pane, where selecting a node highlights its
-span and clicking the source selects the deepest node under the caret.
-`--syntax-only` skips binding, and `--sil` prints what the file lowers to,
-verified, instead of the tree.
-
-## Building
-
-Requires the .NET 11 SDK. Building native programs also needs `clang`
-(`$CC` if set); the native tests pass vacuously without it.
-
-```bash
-dotnet build Sable.slnx
-```
-
-```bash
-dotnet test Sable.slnx
-```
-
-### Compiling a program
-
-`sable` compiles through SIL and LLVM IR to a native executable, linking the
-C runtime in [runtime/](runtime/). A package is a directory with a manifest,
-`package.sb`, written in Sable ([docs/05 §5.2](docs/05-toolchain.md)):
-
-```bash
-dotnet run --project src/Sable.Driver -- new hello
-cd hello
-dotnet run --project ../src/Sable.Driver -- run
-```
-
-`build`, `check`, `test`, `bench`, `fmt`, `doc`, `add`, `publish` and the
-rest work on the package; [docs/05 §5.1](docs/05-toolchain.md) lists them.
-A lone file builds too:
-
-```bash
-dotnet run --project src/Sable.Driver -- run hello.sb
-```
-
-`--emit sil` and `--emit llvm-ir` print a stage's output instead, and `-g`
-builds with DWARF debug information for lldb. When the compiler rejects a
-program, `sable explain S1234` says more about the diagnostic.
+| | |
+|---|---|
+| [spec/SYNTAX.md](spec/SYNTAX.md) | **The language reference**, with an example for every construct |
+| [examples/](examples/) | Sample programs, from hello world to an async service and a static site generator |
+| [docs/01-overview.md](docs/01-overview.md) | The design: what Sable is for, and what it deliberately leaves out |
+| [docs/02-memory-model.md](docs/02-memory-model.md) | Inline values, regions, reference counting, and how references are checked |
+| [docs/03-type-system.md](docs/03-type-system.md) | Protocols, unions, generics, variance and effects |
+| [docs/05-toolchain.md](docs/05-toolchain.md) | The `sable` command, manifests, packages and builds |
+| [docs/06-runtime-and-stdlib.md](docs/06-runtime-and-stdlib.md) | The runtime, reflection and the standard library |
+| [docs/08-source-generators.md](docs/08-source-generators.md) | Source generators |
+| [docs/diagnostics/](docs/diagnostics/) | What every compiler diagnostic means — the pages `sable explain` prints |
 
 ## Status
 
-**Phases 0 to 5 are built** — the syntax layer, the type checker, SIL and
-native code, the memory model, the runtime and standard library, and the
-toolchain with its package manager and language server. Phases 6
-(self-hosting) and 7 (hardening) have not started.
-[docs/04-implementation-plan.md](docs/04-implementation-plan.md) has each
-phase as built, with its measurements, and the exit criteria still open:
+The compiler, runtime, standard library, package manager and language server
+are all built and tested. What's still missing is tracked in
+[GitHub issues](https://github.com/Rikarin/Sable/issues). Issue #224 is the
+compiler's overview, and issue #1 tracks the standard library.
 
-| Phase | Open exit criteria |
-|---|---|
-| 0 — Syntax | every construct of `SYNTAX.md` parsing, a 2,000-file round-trip corpus, a 24-hour fuzz run (a nightly run starts from a new seed each night) |
-| 1 — Symbols and type checking | none: the go/no-go's 10,000 lines of real Sable are ~12,900 that type-check (`lib/` 6,600, `tests/corpus/` 2,900, `tests/programs/` 2,100, `examples/` 1,300) |
-| 2 — SIL and native code | none |
-| 3 — The memory model | none |
-| 4 — Runtime, reflection, core library | daily use of a real program (`examples/ssg` is written) |
-| 5 — Toolchain, packages, IDE | a third party publishing a package: there is no network registry yet |
+## Contributing
 
-`dotnet test Sable.slnx` runs the five test projects. Every file in
-[examples/](examples/) parses as a complete compilation unit with no
-diagnostics and an exact round-trip; [tests/corpus/](tests/corpus/) and
-[tests/programs/](tests/programs/) hold programs that must compile with
-nothing to say, and [tests/negative/](tests/negative/) holds programs that
-must fail, each claiming the exact diagnostic its line produces.
-
-### The syntax layer
-
-The lexer covers all of [spec/lexical.md](spec/lexical.md): full-fidelity
-trivia, nested block comments, every literal form including interpolated and
-raw strings, and the statement-terminator rule.
-
-The tree is Roslyn's red/green design: immutable, position-independent green
-nodes shared between tree versions, with thin red facades created on demand.
-The parser is hand-written recursive descent with error recovery that never
-drops text — unusable tokens become skipped-token trivia and absent ones are
-inserted as zero-width missing tokens.
-
-The full-fidelity round-trip invariant — concatenating every token's full text
-reproduces the source byte for byte — is enforced over the `examples/` corpus,
-a table of hand-written cases, deliberately malformed input, and several
-thousand rounds of random token soup that mixes every token the parser treats
-specially with newlines. Inputs the soup has found losing or duplicating text
-are kept, minimised, as regression tests. Nesting past 256 levels is reported
-and skipped rather than overflowing the stack.
-
-The newline rule of [spec/lexical.md §4](spec/lexical.md) is applied by the
-parser, not only computed by the lexer: a line that ends a statement ends it,
-so `foo` followed by `(1, 2)` on the next line is two statements, and two
-statements on one line need a `;`.
-
-`SyntaxTree.Parse` reads a whole file; `ParseExpression`, `ParseType` and
-`ParseStatement` read a single construct, which is what most of the tests use.
-`SyntaxTree.WithChange` applies an edit, reusing everything it did not touch:
-a one-character edit in a 10,000-line file reparses in about 1 ms (Release:
-0.9 ms at best, 1.2-1.5 ms median on a heavily loaded machine), against
-about 20-35 ms for a full parse — inside the plan's 2 ms. The contract
-is that the result is exactly the tree a full parse would have produced, token
-flags and diagnostics included, and every incremental test asserts it — among
-them chains of edits applied one after another, to files that already have
-errors.
-
-`SyntaxFormatter.Format` renders a tree as canonical source. It has no options,
-by design. Two properties are tested over every Sable file in the repository
-rather than asserted on sample output: formatting is idempotent, and
-formatting never changes the tree. `lib/`, `examples/` and the test corpora
-are kept formatted, and a test fails when one is not.
+Bug reports and pull requests are welcome. [CONTRIBUTING.md](CONTRIBUTING.md)
+explains how the repository is laid out, how to build and test the compiler,
+and the tools that help when working on it.

@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
 using Sable.CodeGen;
@@ -114,10 +113,12 @@ public sealed record BuildOutcome(bool Succeeded, IReadOnlyList<string> Errors, 
 ///     <para>
 ///         <b>Separate compilation.</b> Each unit is lowered from a compilation
 ///         of the whole program (<see cref="SilGen.LowerUnit" />) to an object
-///         file keyed by its own files' contents and the program's interface —
-///         every file's <see cref="InterfaceFingerprint" />. A change to an
-///         ordinary function's body changes only its unit's key; anything
-///         else another unit could see changes every key. Units whose objects
+///         file keyed by its own files' contents and the interfaces
+///         (<see cref="InterfaceFingerprint" />) of the units it depends on
+///         (<see cref="UnitGraph" />). A change to an ordinary function's body
+///         changes only its unit's key; a change to what other units can see
+///         changes the keys of the units that depend on it — and an
+///         extension's, every key, since any unit may see it. Units whose objects
 ///         are cached are neither type-checked again (their checks passed with
 ///         the same inputs) nor lowered; the others are, and their objects are
 ///         compiled by clang in parallel. Before linking, the units' records of
@@ -183,25 +184,30 @@ public static class IncrementalBuild {
         }
 
         // ---- Parse, for the target ------------------------------------------
+        // Separately, a unit whose .sbi is there is parsed from it: what other
+        // units bind and lower against, its bodies blanked. Only a unit then
+        // found to need compiling again is parsed from its source.
         var target = settings.Native.TargetOrHost;
-        SyntaxTree[][] trees;
+        // 'DEBUG' or 'RELEASE' follows from the settings, which key the cache.
+        var sources = new ProgramSources(units, texts, file => Pipeline.ParseOptionsFor(settings.Optimise, file.Options.ForTarget(target.Os, target.Arch)));
+        var known = new InterfaceFile?[units.Count];
         using (BuildTimings.Of(timings, "parse")) {
-            trees = [..units.Select(static u => new SyntaxTree[u.Files.Count])];
-            var all = units.SelectMany(static (u, i) => u.Files.Select((f, j) => (i, j, f))).ToList();
-            Parallel.ForEach(all, GlobalOptions.Current.ParallelOptions, item => {
-                var (i, j, file) = item;
-                // 'DEBUG' or 'RELEASE' follows from the settings, which key the cache.
-                trees[i][j] = SyntaxTree.Parse(new SourceText(texts[i][j], file.Name), Pipeline.ParseOptionsFor(settings.Optimise, file.Options.ForTarget(target.Os, target.Arch)));
-            });
-            timings?.Count("files parsed", all.Count);
+            if (settings.Separate) {
+                var interfaces = Path.Combine(cacheDirectory, "interfaces");
+                Parallel.For(0, units.Count, GlobalOptions.Current.ParallelOptions, i =>
+                    known[i] = InterfaceFile.Read(InterfacePath(interfaces, settingsKey, units[i].Name, fileHashes[i]), units[i].Name, [..units[i].Files.Select(static f => f.Name)]));
+            }
+
+            sources.Parse(known);
+            timings?.Count("files parsed", sources.Parsed);
+            timings?.Count("files parsed from interfaces", sources.FromInterfaces);
         }
 
-        var program = trees.SelectMany(static t => t).ToList();
-        var library = Library.For(program);
+        var library = Library.For(sources.Program);
 
         var outcome = settings.Separate
-            ? Separately(units, trees, fileHashes, library, settings, settingsKey, executable, cacheDirectory, timings, log)
-            : Whole(program, settings, executable, cacheDirectory, timings);
+            ? Separately(sources, known, fileHashes, library, settings, settingsKey, executable, cacheDirectory, timings, log)
+            : Whole(sources.Program, settings, executable, cacheDirectory, timings);
 
         if (outcome.Succeeded) {
             using var _ = BuildTimings.Of(timings, "record");
@@ -209,6 +215,68 @@ public static class IncrementalBuild {
         }
 
         return outcome;
+    }
+
+    /// <summary>Where a unit's <c>.sbi</c> is kept: under its content and the build's settings.</summary>
+    static string InterfacePath(string interfaces, string settingsKey, string unit, IEnumerable<string> fileHashes) =>
+        Path.Combine(interfaces, Hash($"{settingsKey}\ninterface {unit}\n{UnitContent(fileHashes)}") + ".sbi");
+
+    static string UnitContent(IEnumerable<string> fileHashes) => Hash(string.Join("\n", fileHashes));
+
+    /// <summary>
+    ///     The program's trees, each unit's parsed from its source or, where
+    ///     its <c>.sbi</c> was found, from its interface — and from its source
+    ///     again once that is needed: to compile the unit, to work its
+    ///     interface out, or to compile the program whole.
+    /// </summary>
+    sealed class ProgramSources(IReadOnlyList<UnitPlan> plans, string[][] texts, Func<SourceFile, ParseOptions> options) {
+        public IReadOnlyList<UnitPlan> Plans => plans;
+
+        public SyntaxTree[][] Trees { get; } = [..plans.Select(static p => new SyntaxTree[p.Files.Count])];
+
+        readonly bool[] _fromInterface = new bool[plans.Count];
+
+        public int Parsed;
+
+        public int FromInterfaces => _fromInterface.Select((f, i) => f ? plans[i].Files.Count : 0).Sum();
+
+        public List<SyntaxTree> Program => [..Trees.SelectMany(static t => t)];
+
+        public void Parse(IReadOnlyList<InterfaceFile?> known) {
+            var all = plans.SelectMany(static (p, i) => p.Files.Select((f, j) => (i, j, f))).ToList();
+            for (var i = 0; i < plans.Count; i++) {
+                _fromInterface[i] = known[i] is not null;
+            }
+
+            Parallel.ForEach(all, GlobalOptions.Current.ParallelOptions, item => {
+                var (i, j, file) = item;
+                var text = known[i] is { } face ? face.Files[j].Interface.Source : texts[i][j];
+                Trees[i][j] = SyntaxTree.Parse(new SourceText(text, file.Name), options(file));
+            });
+            Parsed += all.Count;
+        }
+
+        /// <summary>A unit's trees parsed from its source, as they are or parsed now.</summary>
+        public IReadOnlyList<SyntaxTree> Full(int unit) {
+            if (_fromInterface[unit]) {
+                var files = plans[unit].Files;
+                Parallel.For(0, files.Count, GlobalOptions.Current.ParallelOptions, j =>
+                    Trees[unit][j] = SyntaxTree.Parse(new SourceText(texts[unit][j], files[j].Name), options(files[j])));
+                Interlocked.Add(ref Parsed, files.Count);
+                _fromInterface[unit] = false;
+            }
+
+            return Trees[unit];
+        }
+
+        /// <summary>The whole program from its sources.</summary>
+        public List<SyntaxTree> Whole() {
+            for (var i = 0; i < plans.Count; i++) {
+                Full(i);
+            }
+
+            return Program;
+        }
     }
 
     // =======================================================================
@@ -267,7 +335,7 @@ public static class IncrementalBuild {
 
     sealed class Unit(string name, IReadOnlyList<SyntaxTree> trees, string contentHash) {
         public string Name { get; } = name;
-        public IReadOnlyList<SyntaxTree> Trees { get; } = trees;
+        public IReadOnlyList<SyntaxTree> Trees { get; set; } = trees;
         public string ContentHash { get; } = contentHash;
         public string Key { get; set; } = "";
         public string ObjectPath { get; set; } = "";
@@ -276,7 +344,7 @@ public static class IncrementalBuild {
     }
 
     static BuildOutcome Separately(
-        IReadOnlyList<UnitPlan> plans, SyntaxTree[][] trees, string[][] fileHashes, IReadOnlyList<SyntaxTree> library, BuildSettings settings,
+        ProgramSources sources, IReadOnlyList<InterfaceFile?> known, string[][] fileHashes, IReadOnlyList<SyntaxTree> library, BuildSettings settings,
         string settingsKey, string executable, string cacheDirectory, BuildTimings? timings, TextWriter? log
     ) {
         var objects = Path.Combine(cacheDirectory, "objects");
@@ -284,70 +352,62 @@ public static class IncrementalBuild {
 
         // The units: the program's, then the standard library's — the core,
         // which every compilation has, and the modules the program imports.
-        var units = plans.Select((p, i) => new Unit(p.Name, trees[i], Hash(string.Join("\n", fileHashes[i])))).ToList();
-        var standard = new Unit("std", [..library, ..CoreLibrary.TreesFor(trees[0][0].Options)], Hash(string.Join("\n", library.Select(static t => t.Text.FileName))));
+        var own = sources.Trees.Select((t, i) => new Unit(sources.Plans[i].Name, t, UnitContent(fileHashes[i]))).ToList();
+        var units = own.ToList();
+        var standard = new Unit("std", [..library, ..CoreLibrary.TreesFor(sources.Trees[0][0].Options)], Hash(string.Join("\n", library.Select(static t => t.Text.FileName))));
         units.Add(standard);
 
-        // Binding the program's declarations — every unit compiled needs them —
-        // runs while the interface is fingerprinted: a body changed, or the
-        // build would not have got this far, so something is likely compiled.
-        // (A compilation is used by one thread at a time: this one, then the
-        // build's, once it has waited for it.)
-        var program = trees.SelectMany(static t => t).ToList();
-        var binding = Task.Run(() => {
-            var started = System.Diagnostics.Stopwatch.GetTimestamp();
-            var created = Compilation.Create([..program, ..library]);
-            created.GetDiagnostics();
-            timings?.Add("declarations (alongside)", System.Diagnostics.Stopwatch.GetElapsedTime(started));
-            return created;
-        });
-        var indexing = Task.Run(() => SilProgram.Index([..program, ..standard.Trees]));
-
-        // ---- The program's interface ----------------------------------------
-        // Each unit's interface is read from its .sbi when the unit, and the
-        // program's concrete types, are as they were; otherwise it is worked
-        // out from the unit's files and its .sbi written.
-        string programInterface;
+        // ---- Each unit's interface ---------------------------------------------
+        // Read from the unit's .sbi when the unit is as it was, and so is
+        // which of the types its extensions extend the program declares
+        // concretely; otherwise worked out from the unit's source and the .sbi written.
+        var faces = new FileInterface[own.Count][];
         var interfaces = Path.Combine(cacheDirectory, "interfaces");
-        var interfaceFiles = new List<string>();
+        var interfaceFiles = new string[own.Count];
         using (BuildTimings.Of(timings, "interface")) {
-            var allTrees = units.SelectMany(static u => u.Trees).ToList();
-            var concrete = InterfaceFingerprint.ConcreteTypeNames(allTrees);
-            var concreteKey = Hash(string.Join(",", concrete.Order(StringComparer.Ordinal)));
-            var fingerprints = new ConcurrentDictionary<SyntaxTree, string>();
+            var concrete = InterfaceFingerprint.ConcreteTypeNames(units.SelectMany(static u => u.Trees));
             var read = 0;
-            Parallel.ForEach(units.Where(u => u != standard), GlobalOptions.Current.ParallelOptions, unit => {
-                var path = Path.Combine(interfaces, Hash($"{settingsKey}\ninterface {unit.Name}\n{unit.ContentHash}\n{concreteKey}") + ".sbi");
-                lock (interfaceFiles) {
-                    interfaceFiles.Add(path);
-                }
-
-                var names = unit.Trees.Select(static t => t.Text.FileName).ToList();
-                if (InterfaceFile.ReadFingerprints(path, unit.Name, names) is { } known) {
-                    for (var i = 0; i < known.Count; i++) {
-                        fingerprints[unit.Trees[i]] = known[i];
-                    }
-
+            Parallel.For(0, own.Count, GlobalOptions.Current.ParallelOptions, i => {
+                var unit = own[i];
+                IReadOnlyList<string> extended = [..unit.Trees.SelectMany(InterfaceFingerprint.ExtendedNames).Where(concrete.Contains).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)];
+                interfaceFiles[i] = InterfacePath(interfaces, settingsKey, unit.Name, fileHashes[i]);
+                if (known[i] is { } file && file.Assumed.SequenceEqual(extended)) {
+                    faces[i] = [..file.Files.Select(static f => f.Interface)];
                     Interlocked.Increment(ref read);
                     return;
                 }
 
-                var worked = unit.Trees.AsParallel().AsOrdered().Select(tree => InterfaceFingerprint.Interface(tree, concrete)).ToList();
-                for (var i = 0; i < worked.Count; i++) {
-                    fingerprints[unit.Trees[i]] = worked[i].Fingerprint;
-                }
-
-                new InterfaceFile(unit.Name, [..names.Zip(worked, static (n, w) => (n, w.Fingerprint))], [..worked.Select(static w => w.Source)]).WriteTo(path);
+                unit.Trees = sources.Full(i);
+                faces[i] = [..unit.Trees.AsParallel().AsOrdered().Select(tree => InterfaceFingerprint.Interface(tree, concrete))];
+                new InterfaceFile(unit.Name, extended, [..unit.Trees.Select(static t => t.Text.FileName).Zip(faces[i])]).WriteTo(interfaceFiles[i]);
             });
             timings?.Count("interfaces read", read);
-            programInterface = Hash(string.Join("\n", units.Select(u => u == standard
-                ? $"{u.Name}:{u.ContentHash}"
-                : $"{u.Name}:{string.Join(",", u.Trees.Select(t => t.Text.FileName + "=" + fingerprints[t]))}")));
         }
 
-        for (var i = 0; i < units.Count; i++) {
-            var unit = units[i];
-            unit.Key = Hash($"{settingsKey}\nunit {unit.Name}\n{unit.ContentHash}\n{programInterface}");
+        // ---- Each unit's key -------------------------------------------------
+        // Its files, and the interfaces of the units it depends on — not the
+        // whole program's (UnitGraph) — and every unit's extensions, which
+        // any unit may see. The standard library depends on no unit of the
+        // program, and every unit on it.
+        using (BuildTimings.Of(timings, "unit graph")) {
+            var facts = own.Select((u, i) => {
+                var declared = u.Trees.Select(UnitFacts.Of).ToList();
+                return new UnitFacts(
+                    declared.Select(static d => d.Module).OfType<string>().ToHashSet(StringComparer.Ordinal),
+                    declared.SelectMany(static d => d.Imports).ToHashSet(StringComparer.Ordinal),
+                    faces[i].SelectMany(static f => f.References).ToHashSet(StringComparer.Ordinal));
+            }).ToList();
+            var dependencies = UnitGraph.Dependencies(facts);
+            var unitInterfaces = own.Select((u, i) => Hash(string.Join("\n", u.Trees.Select((t, j) => t.Text.FileName + "=" + faces[i][j].Fingerprint)))).ToList();
+            var extensions = Hash(string.Join("\n", faces.SelectMany(static f => f).Select(static f => f.Extensions)));
+            standard.Key = Hash($"{settingsKey}\nunit {standard.Name}\n{standard.ContentHash}\n{extensions}");
+            for (var i = 0; i < own.Count; i++) {
+                var seen = string.Join("\n", dependencies[i].Select(d => $"{own[d].Name}:{unitInterfaces[d]}"));
+                own[i].Key = Hash($"{settingsKey}\nunit {own[i].Name}\n{own[i].ContentHash}\n{extensions}\n{standard.ContentHash}\n{seen}");
+            }
+        }
+
+        foreach (var unit in units) {
             unit.ObjectPath = Path.Combine(objects, unit.Key + ".o");
             unit.Cached = File.Exists(unit.ObjectPath) && File.Exists(unit.AbiPath);
         }
@@ -355,6 +415,19 @@ public static class IncrementalBuild {
         var stale = units.Where(static u => !u.Cached).ToList();
         timings?.Count("units reused", units.Count - stale.Count);
         timings?.Count("units compiled", stale.Count);
+
+        // A unit compiled again is checked and lowered from its source; the
+        // others are bound from their interfaces, which is all of them that
+        // another unit sees.
+        using (BuildTimings.Of(timings, "parse (compiled units)")) {
+            Parallel.For(0, own.Count, GlobalOptions.Current.ParallelOptions, i => {
+                if (!own[i].Cached) {
+                    own[i].Trees = sources.Full(i);
+                }
+            });
+        }
+
+        var program = sources.Program;
 
         // The runtime, as an object of its own.
         var runtime = Path.Combine(objects, "runtime-" + Hash(settingsKey + "\nruntime") + ".o");
@@ -370,7 +443,8 @@ public static class IncrementalBuild {
             Compilation compilation;
             List<string> errors;
             using (BuildTimings.Of(timings, "bind")) {
-                compilation = binding.Result;
+                compilation = Compilation.Create([..program, ..library]);
+                compilation.GetDiagnostics();
                 var checking = stale.SelectMany(static u => u.Trees).ToHashSet();
                 errors = Diagnostics(compilation, program, checking, DiagnosticSeverity.Error);
 
@@ -383,7 +457,7 @@ public static class IncrementalBuild {
                 return BuildOutcome.Failed(errors) with { Warnings = warnings };
             }
 
-            var index = indexing.Result;
+            var index = timings is null ? SilProgram.Index([..program, ..standard.Trees]) : timings.Measure("index", () => SilProgram.Index([..program, ..standard.Trees]));
             foreach (var unit in stale) {
                 var owned = unit.Trees.ToHashSet();
                 SilModule module;
@@ -400,7 +474,7 @@ public static class IncrementalBuild {
                 // whole program's compilation says authoritatively.
                 if (lowering.Count > 0) {
                     log?.WriteLine($"note: unit '{unit.Name}' could not be lowered on its own; compiling the program whole");
-                    return Whole(program, settings, executable, cacheDirectory, timings);
+                    return Whole(sources.Whole(), settings, executable, cacheDirectory, timings);
                 }
 
                 var problems = timings is null ? SilVerifier.Verify(module) : timings.Measure("verify", () => SilVerifier.Verify(module));
@@ -460,7 +534,7 @@ public static class IncrementalBuild {
         // ---- Every unit must have seen the same types -----------------------
         if ((timings is null ? Disagreement(units) : timings.Measure("abi check", () => Disagreement(units))) is { } disagreement) {
             log?.WriteLine($"note: the units disagree about {disagreement}; compiling the program whole");
-            return Whole(trees.SelectMany(static t => t).ToList(), settings, executable, cacheDirectory, timings);
+            return Whole(sources.Whole(), settings, executable, cacheDirectory, timings);
         }
 
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(executable))!);
@@ -471,7 +545,7 @@ public static class IncrementalBuild {
 
         if (!link.Succeeded) {
             log?.WriteLine($"note: the units did not link ({FirstLine(link.Output)}); compiling the program whole");
-            return Whole(trees.SelectMany(static t => t).ToList(), settings, executable, cacheDirectory, timings);
+            return Whole(sources.Whole(), settings, executable, cacheDirectory, timings);
         }
 
         using (BuildTimings.Of(timings, "cache upkeep")) {

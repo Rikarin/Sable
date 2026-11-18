@@ -1203,6 +1203,12 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             case "process_run": {
                 var start = new System.Diagnostics.ProcessStartInfo(Sandbox?.CheckProgram(Text(operands[0]).Value) ?? Text(operands[0]).Value) {
                     RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false,
+                    // Text goes to and from the program as UTF-8, as the native
+                    // runtime passes it, and not in the console's code page,
+                    // which is what Windows would use.
+                    StandardInputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
+                    StandardOutputEncoding = Encoding.UTF8,
+                    StandardErrorEncoding = Encoding.UTF8,
                 };
                 if (Sandbox is { } confined) {
                     start.WorkingDirectory = confined.CurrentDirectory;

@@ -33,7 +33,7 @@ internal static class Harnesses {
             var build = NativeBuild.Build(result.LlvmIr!, executable, kind == TestKind.Bench);
             Assert.True(build.Succeeded, build.Output);
 
-            var start = new ProcessStartInfo(executable) { RedirectStandardOutput = true, RedirectStandardError = true };
+            var start = new ProcessStartInfo(executable) { RedirectStandardOutput = true, RedirectStandardError = true }.Utf8();
             start.Environment["SABLE_CHECK_LEAKS"] = "1";
             foreach (var argument in arguments ?? []) {
                 start.ArgumentList.Add(argument);

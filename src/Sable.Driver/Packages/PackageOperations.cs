@@ -398,7 +398,10 @@ public static class PackageOperations {
             }
 
             environment.Status.WriteLine($"     Testing {package.Name} v{package.Version}: {tests.Count} test(s)");
-            var start = new ProcessStartInfo(executable) { RedirectStandardOutput = true, RedirectStandardError = true };
+            // A Sable program writes UTF-8, whatever the console's code page.
+            var start = new ProcessStartInfo(executable) {
+                RedirectStandardOutput = true, RedirectStandardError = true, StandardOutputEncoding = Encoding.UTF8, StandardErrorEncoding = Encoding.UTF8,
+            };
             using var process = Process.Start(start) ?? throw new PackageException($"could not run the tests of {package.Name}");
             var output = process.StandardOutput.ReadToEndAsync();
             var errors = process.StandardError.ReadToEnd();

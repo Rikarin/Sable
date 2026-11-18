@@ -189,7 +189,7 @@ public sealed class InteropTests {
             var linked = NativeObjects.Link([program, runtime, cObject, ..OperatingSystem.IsWindows() ? [] : new[] { "-lm" }], executable);
             Assert.True(linked.Succeeded, linked.Output);
 
-            var run = Process.Start(new ProcessStartInfo(executable) { RedirectStandardOutput = true })!;
+            var run = Process.Start(new ProcessStartInfo(executable) { RedirectStandardOutput = true }.Utf8())!;
             var output = run.StandardOutput.ReadToEnd();
             run.WaitForExit();
             Assert.Equal(0, run.ExitCode);

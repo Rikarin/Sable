@@ -1,3 +1,6 @@
+using System.Diagnostics;
+using System.Text;
+
 namespace Sable.CodeGen.Tests;
 
 /// <summary>What a test needs to know about the machine it runs on.</summary>
@@ -14,6 +17,29 @@ internal static class Platform {
         if (OperatingSystem.IsWindows()) {
             File.Delete(Path.ChangeExtension(path, ".pdb"));
         }
+    }
+
+    /// <summary>
+    ///     A process whose redirected streams are read and written as UTF-8,
+    ///     which is what a Sable program (and the driver) write whatever the
+    ///     console's code page. Left to .NET, Windows reads them in the
+    ///     console's code page, and 'é' comes back as two other characters.
+    /// </summary>
+    public static ProcessStartInfo Utf8(this ProcessStartInfo start) {
+        var utf8 = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+        if (start.RedirectStandardInput) {
+            start.StandardInputEncoding = utf8;
+        }
+
+        if (start.RedirectStandardOutput) {
+            start.StandardOutputEncoding = utf8;
+        }
+
+        if (start.RedirectStandardError) {
+            start.StandardErrorEncoding = utf8;
+        }
+
+        return start;
     }
 
     /// <summary>A path as a Sable string literal holds it: Windows' backslashes escaped.</summary>

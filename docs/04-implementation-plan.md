@@ -204,14 +204,21 @@ Copy Roslyn's **red/green tree** design exactly:
       yanked versions, pre-releases, locks naming what is gone) through
       PubGrub, every answer checked against every requirement and every
       failure without pre-releases against trying every assignment, plus
-      the version parsers and the set algebra. The compiler fuzzer is
-      guided by features (syntax kinds, diagnostic codes, the stage
-      reached), not by code coverage, which would need the compiler
-      instrumented, and no fuzzer has yet run for 24 hours on end. Found
-      and fixed so far: an extension nested in an extension threw while
+      the version parsers and the set algebra. Beside them,
+      `tools/fuzz/coverage.sh` fuzzes guided by code coverage: SharpFuzz
+      instruments the Sable assemblies, and libFuzzer (on Linux, through
+      libfuzzer-dotnet; on macOS, the fuzzer's own in-process loop) drives
+      the parser (round trips, spans that tile, incremental reparse equal to
+      a full one), the front end (as `CompilerFuzzTests` holds it), the
+      resolver and the package files, and `fromBytes` under libFuzzer with
+      ASan and UBSan, from the repository's sources and a dictionary from
+      the lexer's tables, nightly for four hours with the corpus kept from
+      night to night. No fuzzer has yet run for 24 hours on end. Found and
+      fixed so far: an extension nested in an extension threw while
       attaching; a self-dependency hung the resolver and crashed its
       explanation; a `-` in a requirement's build metadata threw; ranges
-      past the largest number wrapped round to nothing
+      past the largest number wrapped round to nothing; an edit in a file
+      with directives reparsed incrementally to a different tree
 
 ---
 

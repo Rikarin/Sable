@@ -148,6 +148,8 @@ public sealed partial class Compilation {
             ReferenceTypeSymbol reference => Mentions(reference.ReferencedType, parameter),
             TupleTypeSymbol tuple => tuple.ElementTypes.Any(e => Mentions(e, parameter)),
             NamedTypeSymbol named => named.TypeArguments.Any(a => Mentions(a, parameter)),
+            FunctionTypeSymbol function => function.ParameterTypes.Any(p => Mentions(p, parameter)) || Mentions(function.ReturnType, parameter),
+            MetatypeTypeSymbol metatype => Mentions(metatype.InstanceType, parameter),
             _ => false,
         };
 

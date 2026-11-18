@@ -766,6 +766,7 @@ public sealed partial class Compilation {
             IsConst = declaration.Modifiers.Any(SyntaxKind.ConstKeyword),
             IsFinal = declaration.Modifiers.Any(SyntaxKind.FinalKeyword),
             IsAbstract = declaration.Body is null && declaration.ExpressionBody is null,
+            IsPolymorphic = declaration.Attributes.Any(static a => AttributeName(a) == "polymorphic"),
             Builtin = BuiltinOf(declaration)
         };
 

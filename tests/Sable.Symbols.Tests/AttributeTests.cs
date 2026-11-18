@@ -96,6 +96,30 @@ public sealed class AttributeTests {
         Assert.Contains("'Plain' is not an attribute", error.Message, StringComparison.Ordinal);
     }
 
+    const string Shapes = """
+                          module M
+                          protocol Shape { fn area() -> Int }
+                          class Base { }
+
+                          """;
+
+    [Theory]
+    [InlineData("@polymorphic fn f(_ n: Int) -> Int { return n }", "it has no type parameters")]
+    [InlineData("@polymorphic fn f<T: Base>(_ t: T) { }", "'T: Base' is not a protocol")]
+    [InlineData("@polymorphic fn f<T: Equatable>(_ t: T) { }", "requires '==', which mentions Self")]
+    [InlineData("@polymorphic fn f<T: Shape>(_ ts: T[>..]) { }", "'ts: T[>..]' holds a type parameter inside it")]
+    [InlineData("@polymorphic fn f<T: Shape>() -> T? { return none }", "its result 'T?' holds a type parameter inside it")]
+    [InlineData("@polymorphic fn f<T: Shape>(_ t: inout T) { }", "'t' is 'inout'")]
+    [InlineData("struct G<U> { @polymorphic fn f<T: Shape>(_ t: T) { } }", "'G' around it is generic")]
+    public void APolymorphicFunctionPassesItsValuesInBoxes(string source, string why) {
+        var error = Assert.Single(Errors(Shapes + source), static e => e.Code == ErrorCode.ERR_NotPolymorphic);
+        Assert.Contains(why, error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void APolymorphicFunctionWithBoxableValuesIsOne() =>
+        AssertClean(Shapes + "@polymorphic fn larger<A: Shape, B: Shape>(_ a: A, _ b: B, _ n: Int) -> A { return a }");
+
     [Fact]
     public void TheAttributesThereAreAreAccepted() =>
         AssertClean("""

@@ -242,6 +242,7 @@ public enum ErrorCode {
     WRN_StrongReferenceCycle = 3460,
     ERR_AlignTooLarge = 3510,
     ERR_AttributeArgumentNotConstant = 3511,
+    ERR_NotPolymorphic = 3512,
 
     // ---- Patterns and flow (S6000-S6999) ---------------------------------
     ERR_PatternTypeMismatch = 6000,

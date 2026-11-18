@@ -159,6 +159,10 @@ public sealed partial class Compilation {
             if (name == "immutable" && attribute.Parent is ClassDeclarationSyntax immutableClass) {
                 TypeBinder.DeferLate(() => CheckImmutable(immutableClass));
             }
+
+            if (name == "polymorphic" && attribute.Parent is FunctionDeclarationSyntax polymorphicFunction) {
+                TypeBinder.DeferLate(() => CheckPolymorphic(polymorphicFunction, attribute));
+            }
         }
     }
 
@@ -362,6 +366,112 @@ public sealed partial class Compilation {
         }
 
         return 0;
+    }
+
+    /// <summary>
+    ///     A <c>@polymorphic</c> function is compiled once, each type
+    ///     parameter standing for <c>any</c> of its constraints: a value of it
+    ///     is passed boxed, with the witness table of its type's conformance.
+    ///     That needs a signature a box can be passed through and taken back
+    ///     out of, and constraints a box can meet (S3512).
+    /// </summary>
+    void CheckPolymorphic(FunctionDeclarationSyntax declaration, AttributeSyntax attribute) {
+        if (GetDeclaredSymbol(declaration) is not FunctionSymbol function) {
+            return;
+        }
+
+        void Refuse(string why) =>
+            ReportDeclaration(
+                ErrorCode.ERR_NotPolymorphic,
+                attribute.Span,
+                $"'@polymorphic' compiles '{function.Name}' once, each type parameter a box with its witness table, and {why}"
+            );
+
+        if (function.TypeParameters.IsEmpty) {
+            Refuse("it has no type parameters");
+            return;
+        }
+
+        for (Symbol? outer = function.ContainingSymbol; outer is not null; outer = outer.ContainingSymbol) {
+            if (outer is FunctionSymbol) {
+                Refuse("a local function is compiled with the one around it");
+                return;
+            }
+
+            if (outer is NamedTypeSymbol { TypeParameters.IsEmpty: false } generic) {
+                Refuse($"'{generic.Name}' around it is generic, and compiled for each type itself");
+                return;
+            }
+        }
+
+        bool MentionsAny(TypeSymbol type) => function.TypeParameters.Any(p => Mentions(type, p));
+
+        foreach (var parameter in function.TypeParameters) {
+            foreach (var constraint in parameter.Constraints) {
+                if (constraint is not NamedTypeSymbol { TypeKind: TypeKind.Protocol } protocol) {
+                    Refuse($"'{parameter.Name}: {constraint.ToDisplayString()}' is not a protocol, which a box can meet");
+                    return;
+                }
+
+                if (SelfBound(protocol) is { } requirement) {
+                    Refuse($"'{protocol.ToDisplayString()}' {requirement}, which a box of an unknown type cannot meet");
+                    return;
+                }
+            }
+        }
+
+        foreach (var parameter in function.Parameters) {
+            if (parameter.Type is TypeParameterSymbol && parameter.Modifier is not (ParameterModifier.None or ParameterModifier.In)) {
+                Refuse($"'{parameter.Name}' is '{parameter.Modifier.ToString().ToLowerInvariant()}', and a box passed so could not be given back as the caller's value");
+                return;
+            }
+
+            if (parameter.Type is not TypeParameterSymbol && MentionsAny(parameter.Type)) {
+                Refuse($"'{parameter.Name}: {parameter.Type.ToDisplayString()}' holds a type parameter inside it, which would need each part boxed; write it as a type parameter, or one that mentions none");
+                return;
+            }
+        }
+
+        if (function.ReturnType is not TypeParameterSymbol && MentionsAny(function.ReturnType)) {
+            Refuse($"its result '{function.ReturnType.ToDisplayString()}' holds a type parameter inside it; write it as a type parameter, or one that mentions none");
+            return;
+        }
+
+        if (function.ThrownType is { } thrown && MentionsAny(thrown)) {
+            Refuse($"what it throws, '{thrown.ToDisplayString()}', mentions a type parameter");
+        }
+    }
+
+    /// <summary>
+    ///     What of a protocol, or one it refines, a value in a box cannot do:
+    ///     an associated type, or a requirement that mentions Self — or null.
+    /// </summary>
+    static string? SelfBound(NamedTypeSymbol protocol) {
+        var seen = new HashSet<NamedTypeSymbol>(ReferenceEqualityComparer.Instance);
+        var pending = new Stack<NamedTypeSymbol>([protocol.OriginalDefinition]);
+        while (pending.TryPop(out var current)) {
+            if (!seen.Add(current)) {
+                continue;
+            }
+
+            if (!current.AssociatedTypes.IsEmpty) {
+                return $"has an associated type, '{current.AssociatedTypes[0].Name}'";
+            }
+
+            if (current.SelfTypeParameter is { } self) {
+                foreach (var function in current.Members.OfType<FunctionSymbol>()) {
+                    if (function.Parameters.Any(p => Mentions(p.Type, self)) || Mentions(function.ReturnType, self)) {
+                        return $"requires '{function.Name}', which mentions Self";
+                    }
+                }
+            }
+
+            foreach (var refined in current.BaseTypes.OfType<NamedTypeSymbol>().Where(static b => b.TypeKind == TypeKind.Protocol)) {
+                pending.Push(refined.OriginalDefinition);
+            }
+        }
+
+        return null;
     }
 
     /// <summary>The arguments of the attributes whose meaning depends on them, which are read later.</summary>

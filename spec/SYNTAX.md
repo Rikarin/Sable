@@ -617,7 +617,14 @@ fn zip<A, B, S1, S2>(_ a: S1, _ b: S2) -> some Sequence<(A, B)>
 - **Monomorphised by default.** Each distinct instantiation gets its own code.
 - `any P` opts into a single boxed, dynamically dispatched copy.
 - `@polymorphic` on a generic function forces a single boxed copy, to control
-  code size in large generic trees.
+  code size in large generic trees: each type parameter stands for `any` of
+  its constraints, so a value of it is passed boxed with its type's witness
+  table, and a result of a type parameter is taken back out of its box as
+  the type the call gives it. The function's own type parameters must each be
+  constrained to protocols alone, with no associated types or requirements
+  mentioning `Self`; each parameter and the result must be a type parameter
+  or mention none, and none of a type parameter `inout` (S3512). Taken as a
+  value rather than called, the function is still compiled for its types.
 - Constraints: protocol conformance (`T: P`), class inheritance (`T: Widget`),
   same-type (`where S.Element == T`), `Sized`, `Copyable`, `Sendable`.
 - Variance: generic types are invariant. Protocol existentials are covariant in

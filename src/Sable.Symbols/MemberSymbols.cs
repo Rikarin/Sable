@@ -126,6 +126,14 @@ public sealed class FunctionSymbol : Symbol {
     public bool IsStatic { get; internal set; }
     public bool IsAsync { get; internal set; }
     public bool IsMutating { get; internal set; }
+
+    /// <summary>
+    ///     <c>@polymorphic</c> (docs/03 §3.4): a generic function compiled
+    ///     once, each type parameter a box holding the value with its
+    ///     witness table, rather than once for each set of types it is
+    ///     called with.
+    /// </summary>
+    public bool IsPolymorphic { get; internal set; }
     public bool IsOverride { get; internal set; }
 
     /// <summary>

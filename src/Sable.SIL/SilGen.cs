@@ -978,6 +978,12 @@ public sealed partial class SilGen {
 
         substitution = WithAssociatedTypes(symbol, substitution);
 
+        // '@polymorphic': the one instance, whatever the types, for a call
+        // that passes its arguments as that instance takes them.
+        if (polymorphic && symbol.IsPolymorphic && PolymorphicInstance(symbol, at) is { } single) {
+            return single;
+        }
+
         var arguments = new List<string>();
         foreach (var parameter in TypeParametersOf(symbol)) {
             // Never has no values to lower, and is still an argument: the

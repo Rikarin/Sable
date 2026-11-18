@@ -1432,20 +1432,68 @@ against the snapshot current when it arrived, and `$/cancelRequest` cancels
 it. A compilation is not thread-safe, so whatever binds holds its gate, one
 member at a time.
 
-- Diagnostics for open documents, debounced (250 ms of quiet), bound member by
+- Diagnostics for every file of the workspace, open ones first, debounced
+  (250 ms of quiet; a change cancels a round under way), bound member by
   member. Declaration and signature diagnostics carry no file
   (`GetAllDiagnosticsByFile` says so); they are placed by span and the name
-  their message quotes.
-- Hover (signature, container, doc comment; an expression's type), definition
-  (into a copy of the library file when it lands there), references, rename
+  their message quotes. The type errors go out first; then the lints (at the
+  package's `[lints]` levels, on a file with no errors of its own) and the
+  checks on SIL (moves, exclusivity, roots: each package lowered once its types
+  are right). Each diagnostic links to its `docs/diagnostics/` page
+  (`codeDescription`) when it has one; unused code is tagged as such. A client
+  that can pull (`textDocument/diagnostic`, `workspace/diagnostic` for the
+  files not open) is not pushed to; it is sent `workspace/diagnostic/refresh`
+  when a round changes something. A package's analysis is reused while none of
+  its files change, so an edit elsewhere does not rebind or relower it.
+- The workspace is every folder the editor has open, kept as folders are added
+  and removed (`didChangeWorkspaceFolders`); a manifest saved, changed on disk
+  or the lock file changing reads the packages again. A client that allows it
+  is asked to watch `*.sb`, `sable.toml` and `sable.lock`; one that shows
+  progress is shown the loading. The setting `sable.diagnostics.workspace`
+  (initialisation options or `didChangeConfiguration`) turns off the files
+  nobody opened.
+- Formatting the document, a range (its lines, and any the formatter joins to
+  them) and on typing `}` (what it closes); a file with a syntax error has its
+  whole top-level declarations without one formatted. A place in the text is
+  matched to one in the formatted text by the non-whitespace characters before
+  it, which formatting keeps.
+- Hover (signature, container, doc comment; an expression's type; like a
+  completion, bound speculatively against the newest compilation), definition
+  (into a copy of the library file when it lands there), references (a
+  parameter whose label is its name is also named by each argument's label, in
+  any file), rename
   with `prepareRename` (refused for anything the library or the compiler
   declares, and for keywords), document symbols, signature help.
+- Declaration (the definition), type definition (through optionals,
+  references and arrays), implementation (the workspace's types conforming to a
+  protocol or inheriting from a class, however indirectly, and their members
+  of a requirement's name), document highlights (the declaration as a write),
+  workspace symbols (syntax alone, by the query's letters in order), folding
+  ranges (brackets over several lines, runs of imports and of comments),
+  selection ranges (the token, then each node around it), semantic tokens
+  (full and range: types by kind, parameters, locals, fields, cases,
+  functions and methods; declaration, readonly, static and library
+  modifiers), call hierarchy (callers by the references' enclosing members,
+  callees by the bound calls) and type hierarchy (supertypes from the
+  declaration, conforming extensions and `@derive`; subtypes in the
+  workspace). Quick fixes for the lints: what each message suggests (`_` before
+  an unused name, a parameter renamed keeping its label, the import removed,
+  `let` for `var`) and `@allow(lint)` on the declaration. `completionItem/resolve`
+  adds a symbol's doc comment to the item shown.
 - Completion: members after `.` and `?.` (statics after a type name), the
   names in scope — locals declared before the caret, parameters, the enclosing
   types' members, the module, imports, `Sable.Core` — and keywords; module
-  names after `import`.
-- Inlay hints: the type of each `let`/`var` written without one, and the
-  inferred roots — after a function's reference result, `roots(a, b)`, the
+  names after `import`. A function is written as a call with a placeholder per
+  argument, under its label, for a client that takes snippets. At the start of
+  an argument, the labels the call's parameters take come first. After a bare
+  `.`, the cases and statics of the type the context wants (a parameter's, an
+  annotated declaration's, an assignment's or comparison's other side, the
+  function's result). A public name of another module of the compilation that
+  the file does not import is offered with the `import` it needs.
+- Inlay hints: the type of each `let`/`var` written without one; the
+  parameter an argument without a label is for, where the call takes more than
+  one and the argument is not already that name; a closure's inferred
+  parameter and result types; and the inferred roots — after a function's reference result, `roots(a, b)`, the
   parameters it may refer into, from root inference's summaries
   (`SilFunction.ResultRoots`, read from a separate lowering so the server's
   compilation is not held); and on a local reference, what it refers into

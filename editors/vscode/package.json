@@ -94,6 +94,11 @@
           "default": true,
           "description": "Run the language server: diagnostics, completion, hover, navigation, rename, formatting and inlay hints."
         },
+        "sable.diagnostics.workspace": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Report the problems of every file in the workspace, not only of the open ones. Turn it off for a workspace too large to check after each edit."
+        },
         "sable.codeLens.enable": {
           "type": "boolean",
           "default": true,

@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using Sable.Symbols;
 using Sable.Syntax;
 
 namespace Sable.LanguageServer;
@@ -14,6 +15,9 @@ namespace Sable.LanguageServer;
 /// <param name="Features">The features it is built with by default.</param>
 /// <param name="Dependencies">Every file of every package it depends on, transitively, that a build compiles with it.</param>
 public sealed record LanguageProject(string Name, string Directory, IReadOnlyList<string> Features, IReadOnlyList<LanguageProjectFile> Dependencies) {
+    /// <summary>Its manifest's <c>[lints]</c> table: the level each lint is reported at, as <c>sable check</c> reports it.</summary>
+    public LintConfiguration Lints { get; init; } = LintConfiguration.Default;
+
     /// <summary>
     ///     Runs the package's source generators (docs/08 §8.7) over its
     ///     documents as they are: what they write, and what they report. None

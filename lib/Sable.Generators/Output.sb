@@ -1,0 +1,41 @@
+module Sable.Generators
+
+/// The files and messages a generator's run produces.
+public struct Output {
+    var names: String[>..] = []
+    var texts: String[>..] = []
+    var modules: String[>..] = []
+    var messages: String[>..] = []
+
+    public init() { }
+
+    /// A new source file: declarations, and any imports they need beyond
+    /// those of the declaration's file. The compiler adds the module line:
+    /// the declaration's module, or the one named, which must be one the
+    /// package declares.
+    public mutating fn add(file name: String, _ text: String, inModule moduleName: String = "") {
+        names.append(name)
+        texts.append(text)
+        modules.append(moduleName)
+    }
+
+    /// Fails the build, at the attribute that started this run.
+    public mutating fn error(_ message: String) {
+        messages.append("error\u{1f}\u{1f}" + message)
+    }
+
+    /// Fails the build, at the place given.
+    public mutating fn error(_ message: String, at location: Location) {
+        messages.append("error\u{1f}" + location.id + "\u{1f}" + message)
+    }
+
+    /// Warns, at the attribute that started this run.
+    public mutating fn warning(_ message: String) {
+        messages.append("warning\u{1f}\u{1f}" + message)
+    }
+
+    /// Warns, at the place given.
+    public mutating fn warning(_ message: String, at location: Location) {
+        messages.append("warning\u{1f}" + location.id + "\u{1f}" + message)
+    }
+}

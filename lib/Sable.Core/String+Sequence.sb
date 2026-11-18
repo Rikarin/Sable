@@ -1,0 +1,38 @@
+module Sable.Core
+
+/// A string's characters, one Unicode scalar at a time.
+public struct StringIterator: Iterator {
+    public alias Element = Char
+
+    let text: String
+
+    // Where the next character starts: a position only the runtime reads.
+    var cursor: Int
+
+    public mutating fn next() -> Char? {
+        if cursor >= StringIterator.end(text) {
+            return none
+        }
+        let character = StringIterator.scalar(text, cursor)
+        cursor = StringIterator.after(text, cursor)
+        return character
+    }
+
+    @builtin("string_cursor_end")
+    static fn end(_ text: String) -> Int
+
+    @builtin("string_cursor_scalar")
+    static fn scalar(_ text: String, _ cursor: Int) -> Char
+
+    @builtin("string_cursor_next")
+    static fn after(_ text: String, _ cursor: Int) -> Int
+}
+
+extension String: Sequence {
+    public alias Iter = StringIterator
+
+    /// An iterator over the characters, from the first.
+    public fn makeIterator() -> StringIterator {
+        return StringIterator { text: self, cursor: 0 }
+    }
+}

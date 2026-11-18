@@ -1,0 +1,9 @@
+module Sable.Build
+
+/// The root of several packages built together: one lock file, one
+/// `target/`.
+public struct Workspace {
+    /// The member directories; a trailing `*` takes every directory there.
+    public var members: String[>..]
+    public var exclude: String[>..] = []
+}

@@ -1,0 +1,21 @@
+module Sable.Diagnostics
+
+import Sable.Time
+
+/// A key and its value, already text.
+public struct Field {
+    public var key: String
+    public var value: String
+}
+
+public fn field(_ key: String, _ value: String) -> Field {
+    return Field { key: key, value: value }
+}
+
+public fn field(_ key: String, _ value: Int) -> Field {
+    return Field { key: key, value: value.toString() }
+}
+
+public fn field(_ key: String, _ value: Bool) -> Field {
+    return Field { key: key, value: value.toString() }
+}

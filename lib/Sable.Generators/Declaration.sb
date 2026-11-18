@@ -1,0 +1,123 @@
+module Sable.Generators
+
+// Source generators (docs/08). A generator is a function in a package's
+// `generators/` directory, run for each declaration that carries its
+// attribute:
+//
+//     @generator("json")
+//     fn json(_ declaration: Declaration, into output: inout Output) { ... }
+//
+// or once for each package, with all of them:
+//
+//     @generator("route")
+//     fn routes(_ pkg: Package, into output: inout Output) { ... }
+//
+// The compiler runs it in the interpreter. It is given the declarations as
+// data and adds files to `output`, which are compiled with the package.
+
+/// A declaration that carries a generator's attribute: a type, a function
+/// or a method.
+public struct Declaration {
+    /// How it is declared: "struct", "class", "actor", "union", "enum" or "fn".
+    public var keyword: String
+    /// Its name, as declared.
+    public var name: String
+    /// For a nested type or a method, the type it is in, as `Outer.Inner`;
+    /// otherwise "".
+    public var container: String = ""
+    /// The module of the file it is in.
+    public var moduleName: String
+    /// Whether it is declared `public`.
+    public var isPublic: Bool
+    /// Whether it is declared `static`.
+    public var isStatic: Bool = false
+    /// Its generic parameters' names, in order.
+    public var typeParameters: String[>..] = []
+    /// Its base list, each entry as written.
+    public var conformances: String[>..] = []
+    /// Every protocol a type conforms to, by name: its base list's and
+    /// those an extension declares.
+    public var allConformances: String[>..] = []
+    /// A class's superclass, by name.
+    public var superclass: String? = none
+    /// The attribute that started this run.
+    public var trigger: Attribute = Attribute { name: "", arguments: [] }
+    /// Every attribute on the declaration, the one that started this run among them.
+    public var attributes: Attribute[>..] = []
+    /// A type's stored fields, in order: a struct's, a class's or an actor's.
+    public var fields: Field[>..] = []
+    /// A type's cases, in order: a union's or an enum's.
+    public var cases: Case[>..] = []
+    /// A function's parameters, in order.
+    public var parameters: Parameter[>..] = []
+    /// A function's return type, as written; "" for none.
+    public var returnType: String = ""
+    /// A function's return type, resolved; none when it returns nothing.
+    public var returned: TypeRef? = none
+    /// Whether a function is `async`.
+    public var isAsync: Bool = false
+    /// Whether a function `throws`.
+    public var isThrowing: Bool = false
+    /// The imports of the file it is in, each as written after `import`.
+    public var imports: String[>..] = []
+    /// The name of the file it is in, for messages.
+    public var file: String = ""
+    /// Where it is: what a message that is about it is reported at.
+    public var location: Location = Location { id: "" }
+
+    /// The attribute named, if the declaration has it.
+    public fn attribute(named name: String) -> Attribute? {
+        for attribute in attributes {
+            if attribute.name == name {
+                return attribute
+            }
+        }
+        return none
+    }
+
+    /// Whether the type conforms to the protocol named: in its base list,
+    /// or by an extension.
+    public fn conforms(to name: String) -> Bool {
+        for conformance in allConformances {
+            if conformance == name {
+                return true
+            }
+        }
+        for conformance in conformances {
+            if conformance == name {
+                return true
+            }
+        }
+        return false
+    }
+
+    /// The name with its generic parameters, as a type is written:
+    /// `Pair<A, B>`, or `User`.
+    public var typeName: String => Declaration.written(name, typeParameters)
+
+    /// The name as code outside the type writes it: `Outer.Inner`, or `User`.
+    public var qualifiedName: String => Declaration.qualified(container, name)
+
+    static fn written(_ name: String, _ parameters: String[>..]) -> String {
+        if parameters.isEmpty {
+            return name
+        }
+        var text = name + "<"
+        var first = true
+        for parameter in parameters {
+            if !first {
+                text = text + ", "
+            }
+            text = text + parameter
+            first = false
+        }
+        return text + ">"
+    }
+
+    static fn qualified(_ container: String, _ name: String) -> String {
+        if container.isEmpty {
+            return name
+        }
+        return container + "." + name
+    }
+}

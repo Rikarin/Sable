@@ -1,0 +1,11 @@
+module Sable.Generators
+
+/// One argument of an attribute.
+public struct Argument {
+    /// Its label, or "" when it has none.
+    public var label: String
+    /// Its expression, as written.
+    public var text: String
+    /// The value, when the expression is a string literal without interpolation.
+    public var string: String?
+}

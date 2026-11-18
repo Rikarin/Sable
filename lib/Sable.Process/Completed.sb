@@ -1,0 +1,11 @@
+module Sable.Process
+
+/// How a program ended, and what it wrote.
+public struct Completed {
+    /// Its exit status; 128 and the signal when a signal ended it.
+    public var status: Int
+    public var output: String
+    public var errors: String
+
+    public var succeeded: Bool => status == 0
+}

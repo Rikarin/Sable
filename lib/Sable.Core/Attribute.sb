@@ -1,0 +1,7 @@
+module Sable.Core
+
+/// What a user-defined attribute is (SYNTAX.md §22): a struct conforming to
+/// it is written '@Name(arguments)' on a declaration, the arguments checked
+/// against its initialisers. On a @reflectable type, 'TypeInfo.attributes(of:)'
+/// gives the values.
+public protocol Attribute { }

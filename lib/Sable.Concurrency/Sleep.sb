@@ -1,0 +1,13 @@
+module Sable.Concurrency
+
+import Sable.Time
+
+/// Waits at least this long, letting every other task run meanwhile.
+public fn sleep(_ duration: Duration) async {
+    await Task.sleep(nanoseconds: duration.totalNanoseconds)
+}
+
+/// Lets every task queued run before this one goes on.
+public fn yieldNow() async {
+    await Task.yield()
+}

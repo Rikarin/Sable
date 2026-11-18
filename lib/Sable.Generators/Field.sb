@@ -1,0 +1,28 @@
+module Sable.Generators
+
+/// A stored field, or a union case's payload.
+public struct Field {
+    public var name: String
+    /// Its type, as written.
+    public var type: String
+    /// Its type, resolved.
+    public var resolved: TypeRef = TypeRef { kind: "unresolved", name: "", moduleName: "", text: "" }
+    /// Whether it is a `var`, not a `let`.
+    public var isMutable: Bool
+    /// Whether it is given a value where it is declared.
+    public var hasDefault: Bool
+    /// Whether it is declared `public`.
+    public var isPublic: Bool
+    public var attributes: Attribute[>..] = []
+    public var location: Location = Location { id: "" }
+
+    /// The attribute named, if the field has it.
+    public fn attribute(named name: String) -> Attribute? {
+        for attribute in attributes {
+            if attribute.name == name {
+                return attribute
+            }
+        }
+        return none
+    }
+}

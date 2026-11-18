@@ -1,0 +1,35 @@
+module Sable.IO
+
+public struct Directory {
+    public static fn exists(_ path: String) -> Bool {
+        return Runtime.isDirectory(path)
+    }
+
+    /// Makes the directory; its parent must be there already.
+    public static fn create(_ path: String) throws(IoError) {
+        if !Runtime.makeDirectory(path) {
+            throw IoError.Failed(path: path)
+        }
+    }
+
+    /// The names of what the directory holds, sorted.
+    public static fn list(_ path: String) throws(IoError) -> String[>..] {
+        if let names = Runtime.listDirectory(path) {
+            return names
+        }
+        if !Runtime.fileExists(path) {
+            throw IoError.NotFound(path: path)
+        }
+        throw IoError.Failed(path: path)
+    }
+
+    /// Removes the directory, which must be empty.
+    public static fn remove(_ path: String) throws(IoError) {
+        if !Runtime.isDirectory(path) {
+            throw IoError.NotFound(path: path)
+        }
+        if !Runtime.removeFile(path) {
+            throw IoError.Failed(path: path)
+        }
+    }
+}

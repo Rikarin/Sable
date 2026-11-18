@@ -1,0 +1,25 @@
+module Sable.Build
+
+/// Something a package builds.
+public struct Target {
+    var kind: TargetKind
+    var name: String
+    var path: String
+    var native: NativeLibrary? = none
+
+    /// The package's library, rooted at the file; with `native`, also built
+    /// as a library C links, which calls its `@export` functions.
+    public static fn library(path: String, native: NativeLibrary? = none) -> Target {
+        return Target { kind: .library, name: "", path: path, native: native }
+    }
+
+    /// An executable called `name`, whose `main` is in the file.
+    public static fn executable(_ name: String, path: String) -> Target {
+        return Target { kind: .executable, name: name, path: path }
+    }
+}
+
+enum TargetKind {
+    library,
+    executable
+}

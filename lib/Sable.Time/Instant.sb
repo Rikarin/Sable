@@ -1,0 +1,31 @@
+module Sable.Time
+
+/// A point on the monotonic clock: only for measuring, never for dates.
+public struct Instant: Comparable {
+    var nanoseconds: Int
+
+    public static fn now() -> Instant {
+        return Instant { nanoseconds: Runtime.monotonicNanoseconds() }
+    }
+
+    /// How long ago this was.
+    public var elapsed: Duration {
+        get { return Duration { totalNanoseconds: Runtime.monotonicNanoseconds() - nanoseconds } }
+    }
+
+    public fn durationSince(_ earlier: Instant) -> Duration {
+        return Duration { totalNanoseconds: nanoseconds - earlier.nanoseconds }
+    }
+
+    public fn adding(_ duration: Duration) -> Instant {
+        return Instant { nanoseconds: nanoseconds + duration.totalNanoseconds }
+    }
+
+    operator == (a: Instant, b: Instant) -> Bool {
+        return a.nanoseconds == b.nanoseconds
+    }
+
+    operator < (a: Instant, b: Instant) -> Bool {
+        return a.nanoseconds < b.nanoseconds
+    }
+}

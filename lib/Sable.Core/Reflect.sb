@@ -1,0 +1,47 @@
+module Sable.Core
+
+// Reflection (docs/06 §6.3). 'Mirror(of:)' looks at any value, read-only;
+// 'TypeInfo.of(T.self)' describes a @reflectable type's declaration. Both
+// are written over 'Reflect', whose members the compiler supplies: each is
+// expanded for the type it is called with, so a program pays only for the
+// types it reflects on, and one that reflects on nothing pays nothing.
+
+/// The compiler's floor under 'Mirror' and 'TypeInfo': each member is
+/// generated, per type, where it is called.
+public struct Reflect {
+    /// The type's name as written in source: 'Point', 'Box<Int>', 'Int[>..]'.
+    @intrinsic
+    public static fn typeName<T>(_ subject: T) -> String
+
+    /// What sort of type it is: 'struct', 'class', 'actor', 'union',
+    /// 'enum', 'optional', 'tuple', 'array', 'dictionary', 'function',
+    /// 'existential' or 'primitive'.
+    @intrinsic
+    public static fn kind<T>(_ subject: T) -> String
+
+    /// The case a union, enum or optional value is ('some' or 'none' for an
+    /// optional); empty for anything else.
+    @intrinsic
+    public static fn caseName<T>(_ subject: T) -> String
+
+    /// The names of the value's parts: a struct's or class's stored fields,
+    /// a union case's payload, a tuple's elements, an array's indices, a
+    /// dictionary's keys (described). An unlabelled part is named by its
+    /// position.
+    @intrinsic
+    public static fn fieldNames<T>(_ subject: T) -> String[>..]
+
+    /// The type of each part, as 'typeName' writes it.
+    @intrinsic
+    public static fn fieldTypeNames<T>(_ subject: T) -> String[>..]
+
+    /// Each part, described as 'describe' describes it.
+    @intrinsic
+    public static fn fieldValues<T>(_ subject: T) -> String[>..]
+
+    /// The value written out: 'Point(x: 1, y: 2)', 'Shape.circle(radius: 2.0)',
+    /// '[1, 2]', '"text"'. Objects are followed eight levels deep, so a cycle
+    /// ends in '...'.
+    @intrinsic
+    public static fn describe<T>(_ subject: T) -> String
+}

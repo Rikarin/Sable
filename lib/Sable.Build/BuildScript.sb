@@ -1,0 +1,17 @@
+module Sable.Build
+
+/// A program run before the package compiles, sandboxed to what it declares.
+public struct BuildScript {
+    var path: String
+    var allowNet: Bool
+    var allowExec: String[>..]
+    var allowRead: String[>..]
+    var allowWrite: String[>..]
+
+    /// The script at `path`, allowed only what is listed. `$OUT_DIR` names
+    /// the directory a script writes its output to.
+    public static fn script(_ path: String, allowNet: Bool = false, allowExec: String[>..] = [], allowRead: String[>..] = [],
+        allowWrite: String[>..] = []) -> BuildScript {
+        return BuildScript { path: path, allowNet: allowNet, allowExec: allowExec, allowRead: allowRead, allowWrite: allowWrite }
+    }
+}

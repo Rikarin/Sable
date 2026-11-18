@@ -1,0 +1,169 @@
+module Sable.Serialize
+
+public fn render(_ value: JsonValue) -> String {
+    return renderWith(value, compact())
+}
+
+public fn renderWith(_ value: JsonValue, _ options: PrintOptions) -> String {
+    var builder = newBuilder()
+    write(value, options, 0, builder)
+    return builder.build()
+}
+
+fn write(_ value: JsonValue, _ options: PrintOptions, _ level: Int, _ sink: inout TextBuilder) {
+    match value {
+        case .Null                => sink.add("null")
+        case .Bool(let b)         => sink.add(b ? "true" : "false")
+        case .Number(let n)       => sink.add(formatNumber(n))
+        case .Text(let t)         => sink.add(quote(t, options.asciiOnly))
+        case .Array(let items)    => writeArray(items, options, level, sink)
+        case .Object(let members) => writeObject(members, options, level, sink)
+    }
+}
+
+fn newline(_ options: PrintOptions, _ level: Int, _ sink: inout TextBuilder) {
+    sink.add("\n")
+    sink.add(repeated(" ", options.indent * level))
+}
+
+fn writeArray(_ items: JsonValue[>..], _ options: PrintOptions, _ level: Int, _ sink: inout TextBuilder) {
+    if items.count == 0 {
+        sink.add("[]")
+        return
+    }
+
+    sink.add("[")
+    var first = true
+    for item in items {
+        if !first {
+            sink.add(options.spaced && options.indent == 0 ? ", " : ",")
+        }
+        if options.indent > 0 {
+            newline(options, level + 1, sink)
+        }
+        write(item, options, level + 1, sink)
+        first = false
+    }
+    if options.indent > 0 {
+        newline(options, level, sink)
+    }
+    sink.add("]")
+}
+
+fn writeObject(_ members: Member[>..], _ options: PrintOptions, _ level: Int, _ sink: inout TextBuilder) {
+    if members.count == 0 {
+        sink.add("{}")
+        return
+    }
+
+    let ordered = options.sortKeys ? sortedMembers(members) : members
+    sink.add("{")
+    var first = true
+    for m in ordered {
+        if !first {
+            sink.add(options.spaced && options.indent == 0 ? ", " : ",")
+        }
+        if options.indent > 0 {
+            newline(options, level + 1, sink)
+        }
+        sink.add(quote(m.key, options.asciiOnly))
+        sink.add(options.spaced ? ": " : ":")
+        write(m.value, options, level + 1, sink)
+        first = false
+    }
+    if options.indent > 0 {
+        newline(options, level, sink)
+    }
+    sink.add("}")
+}
+
+public fn sortedMembers(_ members: Member[>..]) -> Member[>..] {
+    return sorted(members, (a: Member, b: Member) => compareText(a.key, b.key) < 0)
+}
+
+// A string as JSON writes it: quoted, with what must be escaped escaped, and
+// with everything past ASCII escaped too when asked — as a surrogate pair
+// above U+FFFF.
+public fn quote(_ s: String, _ asciiOnly: Bool) -> String {
+    var builder = newBuilder()
+    builder.add("\"")
+    var run = 0
+    var start = 0
+    let n = s.count
+    var i = 0
+    while i < n {
+        let c = s.at(i)
+        let code = c.codePoint
+        let plain = code >= 32 && code != 34 && code != 92 && (code < 127 || !asciiOnly)
+        if plain {
+            run = run + 1
+            i = i + 1
+            continue
+        }
+
+        if run > 0 {
+            builder.add(s.slice(from: start, to: i))
+        }
+        builder.add(escape(c))
+        i = i + 1
+        start = i
+        run = 0
+    }
+    if run > 0 {
+        builder.add(s.slice(from: start, to: n))
+    }
+    builder.add("\"")
+    return builder.build()
+}
+
+public fn escape(_ c: Char) -> String {
+    let code = c.codePoint
+    if code == 34 {
+        return "\\\""
+    }
+    if code == 92 {
+        return "\\\\"
+    }
+    if code == 10 {
+        return "\\n"
+    }
+    if code == 13 {
+        return "\\r"
+    }
+    if code == 9 {
+        return "\\t"
+    }
+    if code == 8 {
+        return "\\b"
+    }
+    if code == 12 {
+        return "\\f"
+    }
+    if code < 0x10000 {
+        return "\\u" + hex4(code)
+    }
+    let shifted = code - 0x10000
+    return "\\u" + hex4(0xD800 + shifted / 1024) + "\\u" + hex4(0xDC00 + shifted % 1024)
+}
+
+// Numbers as JSON writes them: whole numbers that an F64 holds exactly
+// without a point, the rest in the shortest form that reads back the same.
+// JSON has no NaN or infinity; they are written as null.
+public fn formatNumber(_ n: F64) -> String {
+    if n != n {
+        return "null"
+    }
+    if n > 1.7976931348623157e308 || n < -1.7976931348623157e308 {
+        return "null"
+    }
+    if n == n.abs() * 0.0 + n && n.abs() < 9007199254740992.0 {
+        let whole = n as Int
+        if whole as F64 == n {
+            if whole == 0 && 1.0 / n < 0.0 {
+                return "-0"
+            }
+            return whole.toString()
+        }
+    }
+    return n.toString()
+}

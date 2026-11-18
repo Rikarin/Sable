@@ -1,0 +1,54 @@
+module Sable.Serialize
+
+public struct Statistics {
+    public var values: Int
+    public var depth: Int
+    public var nulls: Int
+    public var booleans: Int
+    public var numbers: Int
+    public var strings: Int
+    public var arrays: Int
+    public var objects: Int
+    public var longestString: Int
+}
+
+public fn measure(_ value: JsonValue) -> Statistics {
+    var stats = Statistics {
+        values: 0, depth: 0, nulls: 0, booleans: 0, numbers: 0,
+        strings: 0, arrays: 0, objects: 0, longestString: 0
+    }
+    tally(value, 1, stats)
+    return stats
+}
+
+fn tally(_ value: JsonValue, _ depth: Int, _ stats: inout Statistics) {
+    stats.values = stats.values + 1
+    stats.depth = stats.depth.max(depth)
+    match value {
+        case .Null => {
+            stats.nulls = stats.nulls + 1
+        }
+        case .Bool(_) => {
+            stats.booleans = stats.booleans + 1
+        }
+        case .Number(_) => {
+            stats.numbers = stats.numbers + 1
+        }
+        case .Text(let t) => {
+            stats.strings = stats.strings + 1
+            stats.longestString = stats.longestString.max(t.count)
+        }
+        case .Array(let items) => {
+            stats.arrays = stats.arrays + 1
+            for item in items {
+                tally(item, depth + 1, stats)
+            }
+        }
+        case .Object(let members) => {
+            stats.objects = stats.objects + 1
+            for m in members {
+                tally(m.value, depth + 1, stats)
+            }
+        }
+    }
+}

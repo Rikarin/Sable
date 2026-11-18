@@ -157,29 +157,6 @@ fn shiftingAscii(_ text: String, from low: Int, to high: Int, by shift: Int) -> 
     return joined(pieces, separator: "")
 }
 
-/// Collects text piece by piece without rebuilding it each time a piece is
-/// added: the pieces are kept, and joined once.
-public class TextBuilder {
-    var pieces: String[>..] = []
-
-    public init() { }
-
-    public fn append(_ piece: String) {
-        pieces.append(piece)
-    }
-
-    public fn appendLine(_ line: String) {
-        pieces.append(line)
-        pieces.append("\n")
-    }
-
-    public fn build() -> String {
-        return joined(pieces, separator: "")
-    }
-}
-
-// ---- Lines and trimming ----------------------------------------------------
-
 /// The text's lines, without their endings ("\n" or "\r\n"); a last empty
 /// line — what a final newline leaves — is not one.
 public fn lines(_ text: String) -> String[>..] {
@@ -276,8 +253,6 @@ public fn occurrences(of part: String, within text: String) -> Int {
     return count
 }
 
-// ---- Escaping ----------------------------------------------------------------
-
 /// The text made safe to place in HTML, as content or inside a quoted
 /// attribute: '&', '<', '>', '"' and '\'' become character references.
 public fn escapedHtml(_ text: String) -> String {
@@ -301,8 +276,6 @@ public fn escapedHtml(_ text: String) -> String {
     result.append(text.slice(from: start, to: text.count))
     return result.build()
 }
-
-// ---- Formatting and parsing -------------------------------------------------
 
 /// The template with each "{}" replaced by the next argument and each "{n}"
 /// by argument n, counting from 0; "{{" and "}}" stand for the braces

@@ -1,0 +1,42 @@
+module Sable.Generators
+
+/// A type as the compiler resolved it.
+public struct TypeRef {
+    /// "struct", "class", "actor", "union", "enum", "protocol", "optional",
+    /// "array", "dictionary", "tuple", "function", "parameter" for a generic
+    /// parameter, or "unresolved".
+    public var kind: String
+    /// The type's name, without its module or arguments.
+    public var name: String
+    /// The module that declares it, or "".
+    public var moduleName: String
+    /// The whole type, as the compiler writes it.
+    public var text: String
+    /// Its generic arguments; an optional's or an array's element; a
+    /// dictionary's key and value; a tuple's elements.
+    public var arguments: TypeRef[>..] = []
+    /// Every protocol it conforms to, by name.
+    public var conformances: String[>..] = []
+    /// The attributes on its declaration, by name.
+    public var attributes: String[>..] = []
+
+    /// Whether it conforms to the protocol named.
+    public fn conforms(to name: String) -> Bool {
+        for conformance in conformances {
+            if conformance == name {
+                return true
+            }
+        }
+        return false
+    }
+
+    /// Whether its declaration carries the attribute named.
+    public fn has(attribute name: String) -> Bool {
+        for attribute in attributes {
+            if attribute == name {
+                return true
+            }
+        }
+        return false
+    }
+}

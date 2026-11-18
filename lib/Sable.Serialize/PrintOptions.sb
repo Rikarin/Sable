@@ -1,0 +1,23 @@
+module Sable.Serialize
+
+public struct PrintOptions {
+    // Spaces per level; zero writes everything on one line.
+    public var indent: Int
+    public var sortKeys: Bool
+    // Escape everything outside ASCII as '\uXXXX'.
+    public var asciiOnly: Bool
+    // A space after ':' and ',' in one-line output.
+    public var spaced: Bool
+}
+
+public fn compact() -> PrintOptions {
+    return PrintOptions { indent: 0, sortKeys: false, asciiOnly: false, spaced: false }
+}
+
+public fn pretty(_ indent: Int) -> PrintOptions {
+    return PrintOptions { indent: indent, sortKeys: false, asciiOnly: false, spaced: true }
+}
+
+public fn canonical() -> PrintOptions {
+    return PrintOptions { indent: 0, sortKeys: true, asciiOnly: true, spaced: false }
+}

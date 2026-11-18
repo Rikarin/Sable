@@ -1,0 +1,31 @@
+module Sable.Collections
+
+/// Distinct values, by hash; iteration is in insertion order.
+public class HashSet<Element: Hashable> {
+    var map: HashMap<Element, Bool> = HashMap<Element, Bool>()
+
+    public init() { }
+
+    public var count: Int => map.count
+
+    public var isEmpty: Bool => map.count == 0
+
+    /// Adds the value; true if it was not there before.
+    public fn insert(_ value: Element) -> Bool {
+        let before = map.count
+        map.set(value, true)
+        return map.count > before
+    }
+
+    public fn contains(_ value: Element) -> Bool {
+        return map.contains(value)
+    }
+
+    public fn remove(_ value: Element) -> Bool {
+        return map.remove(value)
+    }
+
+    public fn elements() -> Element[>..] {
+        return map.allKeys()
+    }
+}

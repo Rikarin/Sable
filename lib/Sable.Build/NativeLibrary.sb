@@ -1,0 +1,9 @@
+module Sable.Build
+
+/// A library C links: `sable build` writes it to `target/<profile>/`.
+public enum NativeLibrary {
+    /// An archive, `libname.a` (`name.lib` on Windows), linked in whole.
+    staticLibrary,
+    /// A shared library, `libname.so`, `libname.dylib` or `name.dll`.
+    dynamicLibrary
+}

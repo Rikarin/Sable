@@ -1,0 +1,26 @@
+module Sable.Generators
+
+/// A function's parameter.
+public struct Parameter {
+    /// Its argument label: "" for none (`_`), or its name when it has no other.
+    public var label: String
+    public var name: String
+    /// Its type, as written.
+    public var type: String
+    /// Its type, resolved.
+    public var resolved: TypeRef = TypeRef { kind: "unresolved", name: "", moduleName: "", text: "" }
+    /// Whether it has a default value.
+    public var hasDefault: Bool
+    public var attributes: Attribute[>..] = []
+    public var location: Location = Location { id: "" }
+
+    /// The attribute named, if the parameter has it.
+    public fn attribute(named name: String) -> Attribute? {
+        for attribute in attributes {
+            if attribute.name == name {
+                return attribute
+            }
+        }
+        return none
+    }
+}

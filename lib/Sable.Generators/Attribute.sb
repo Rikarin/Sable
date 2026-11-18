@@ -1,0 +1,39 @@
+module Sable.Generators
+
+/// An attribute as written: `@json(rename: "id")`.
+public struct Attribute {
+    /// Its name, without the `@`.
+    public var name: String
+    /// Its arguments, in order.
+    public var arguments: Argument[>..]
+
+    /// The source text of the argument with the label, if there is one.
+    public fn argument(named label: String) -> String? {
+        for argument in arguments {
+            if argument.label == label {
+                return argument.text
+            }
+        }
+        return none
+    }
+
+    /// The value of the string literal given for the label, if it is one.
+    public fn string(named label: String) -> String? {
+        for argument in arguments {
+            if argument.label == label {
+                return argument.string
+            }
+        }
+        return none
+    }
+
+    /// Whether the attribute has an argument with the label.
+    public fn has(_ label: String) -> Bool {
+        for argument in arguments {
+            if argument.label == label {
+                return true
+            }
+        }
+        return false
+    }
+}

@@ -6,53 +6,6 @@ import Sable.Time
 // "LEVEL name: message key=value ...", with values quoted when they hold a
 // space, a quote or an '='. Written in Sable over the runtime's calls.
 
-public union Level {
-    Trace
-    Debug
-    Info
-    Warning
-    Error
-}
-
-/// A level's rank, so that one can be compared with the logger's threshold.
-public fn rank(_ level: Level) -> Int {
-    return match level {
-        case .Trace   => 0
-        case .Debug   => 1
-        case .Info    => 2
-        case .Warning => 3
-        case .Error   => 4
-    }
-}
-
-public fn levelName(_ level: Level) -> String {
-    return match level {
-        case .Trace   => "TRACE"
-        case .Debug   => "DEBUG"
-        case .Info    => "INFO"
-        case .Warning => "WARN"
-        case .Error   => "ERROR"
-    }
-}
-
-/// A key and its value, already text.
-public struct Field {
-    public var key: String
-    public var value: String
-}
-
-public fn field(_ key: String, _ value: String) -> Field {
-    return Field { key: key, value: value }
-}
-
-public fn field(_ key: String, _ value: Int) -> Field {
-    return Field { key: key, value: value.toString() }
-}
-
-public fn field(_ key: String, _ value: Bool) -> Field {
-    return Field { key: key, value: value.toString() }
-}
-
 public class Logger {
     public var name: String
     public var threshold: Level
@@ -139,26 +92,6 @@ public class Logger {
     public fn info(_ message: String, _ fields: Field[>..]) { log(Level.Info, message, fields) }
     public fn warning(_ message: String, _ fields: Field[>..]) { log(Level.Warning, message, fields) }
     public fn error(_ message: String, _ fields: Field[>..]) { log(Level.Error, message, fields) }
-}
-
-public fn parseLevel(_ text: String) -> Level? {
-    let t = text.trimmed()
-    if t == "trace" || t == "TRACE" {
-        return Level.Trace
-    }
-    if t == "debug" || t == "DEBUG" {
-        return Level.Debug
-    }
-    if t == "info" || t == "INFO" {
-        return Level.Info
-    }
-    if t == "warn" || t == "warning" || t == "WARN" {
-        return Level.Warning
-    }
-    if t == "error" || t == "ERROR" {
-        return Level.Error
-    }
-    return none
 }
 
 /// The value as written, or in quotes with '"' and '\' escaped where it would be misread.

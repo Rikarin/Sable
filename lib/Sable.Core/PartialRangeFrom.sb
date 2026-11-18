@@ -1,0 +1,13 @@
+module Sable.Core
+
+/// The values from 'lowerBound' up, with no end: what 'a...' makes. A 'for'
+/// over one goes on until the loop is left, or the next value would overflow.
+public struct PartialRangeFrom<Bound: Comparable> {
+    /// The first value in the range.
+    public let lowerBound: Bound
+
+    /// Whether the value is in the range.
+    public fn contains(_ value: Bound) -> Bool {
+        return !(value < lowerBound)
+    }
+}

@@ -1,0 +1,22 @@
+module Sable.Text
+
+/// Collects text piece by piece without rebuilding it each time a piece is
+/// added: the pieces are kept, and joined once.
+public class TextBuilder {
+    var pieces: String[>..] = []
+
+    public init() { }
+
+    public fn append(_ piece: String) {
+        pieces.append(piece)
+    }
+
+    public fn appendLine(_ line: String) {
+        pieces.append(line)
+        pieces.append("\n")
+    }
+
+    public fn build() -> String {
+        return joined(pieces, separator: "")
+    }
+}

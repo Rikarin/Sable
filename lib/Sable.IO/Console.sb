@@ -1,0 +1,34 @@
+module Sable.IO
+
+/// Standard input, output and error.
+public struct Console {
+    public static fn write(_ text: String) {
+        Runtime.write(text)
+    }
+
+    public static fn writeLine(_ text: String) {
+        Runtime.write(text + "\n")
+    }
+
+    public static fn writeError(_ text: String) {
+        Runtime.writeError(text)
+    }
+
+    public static fn writeErrorLine(_ text: String) {
+        Runtime.writeError(text + "\n")
+    }
+
+    /// The next line of input, without its ending; none once input ends.
+    public static fn readLine() -> String? {
+        return Runtime.readLine()
+    }
+
+    /// Every line left in the input.
+    public static fn readLines() -> String[>..] {
+        var lines: String[>..] = []
+        while let line = Runtime.readLine() {
+            lines.append(line)
+        }
+        return lines
+    }
+}

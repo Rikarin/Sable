@@ -1,0 +1,44 @@
+module Sable.Build
+
+/// When a dependency applies. A manifest may not ask which machine evaluates
+/// it — that would make the package different on each one — so the choice
+/// is data, applied to each target as it is built.
+public struct Condition {
+    var text: String
+
+    /// Only when building for the operating system.
+    public static fn os(_ os: OperatingSystem) -> Condition {
+        return Condition { text: "os(\(osName(os)))" }
+    }
+
+    /// Only when building for the architecture.
+    public static fn arch(_ arch: Architecture) -> Condition {
+        return Condition { text: "arch(\(archName(arch)))" }
+    }
+}
+
+public enum OperatingSystem {
+    macOS,
+    linux,
+    windows
+}
+
+public enum Architecture {
+    arm64,
+    x64
+}
+
+fn osName(_ os: OperatingSystem) -> String {
+    return match os {
+        case .macOS   => "macos"
+        case .linux   => "linux"
+        case .windows => "windows"
+    }
+}
+
+fn archName(_ arch: Architecture) -> String {
+    return match arch {
+        case .arm64 => "arm64"
+        case .x64   => "x64"
+    }
+}

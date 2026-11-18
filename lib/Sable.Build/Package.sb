@@ -1,0 +1,53 @@
+module Sable.Build
+
+// What a package is, written in Sable (docs/05 §5.2). `p.sb` declares
+// `let manifest = Package { ... }`, and `workspace.sb` declares
+// `let workspace = Workspace { ... }`. The toolchain evaluates the file at
+// compile time and renders the value here as canonical TOML: the form the
+// resolver, the lock file and the registry read, so nothing outside the
+// toolchain has to run Sable to learn what a package depends on.
+
+/// A package: its identity, what it builds, what it needs, and how.
+public struct Package {
+    public var name: String
+    public var version: String
+    /// The year whose language the package is written in.
+    public var edition: Int = 2027
+    public var authors: String[>..] = []
+    public var license: String? = none
+    public var description: String? = none
+    public var repository: String? = none
+
+    /// The library and the executables. With none, `src/lib.sb` is the
+    /// library and `src/main.sb` the executable, when they exist.
+    public var targets: Target[>..] = []
+
+    public var dependencies: Dependency[>..] = []
+    public var devDependencies: Dependency[>..] = []
+    public var buildDependencies: Dependency[>..] = []
+
+    /// Each feature and what it turns on: other features, `dep:name` for an
+    /// optional dependency, `name/feature` for a dependency's feature.
+    public var features: [String: String[>..]] = [:]
+
+    public var profiles: Profile[>..] = []
+
+    /// Types reachable only through reflection, which the linker must keep.
+    public var reflect: String[>..] = []
+
+    /// What a build for a given target is, beyond what `--target` says.
+    public var targetSettings: TargetSettings[>..] = []
+
+    /// Each lint's level: "allow", "warn" or "deny".
+    public var lints: [String: String] = [:]
+
+    /// A registry of this package's own, as a directory relative to it.
+    public var registry: String? = none
+
+    /// A build script, and what it may touch (docs/05 §5.6).
+    public var build: BuildScript? = none
+
+    /// The files and directories, relative to the package, whose files its
+    /// package generators are given (docs/08 §8.3).
+    public var generatorInputs: String[>..] = []
+}

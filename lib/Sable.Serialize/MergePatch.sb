@@ -1,0 +1,40 @@
+module Sable.Serialize
+
+// JSON Merge Patch (RFC 7386).
+
+// A patch that is an object merges into the target, member by member: null
+// removes, an object merges, anything else replaces. Any other patch
+// replaces the target whole.
+public fn mergePatch(_ target: JsonValue, _ patch: JsonValue) -> JsonValue {
+    let patchMembers = match patch {
+        case .Object(let members) => members
+        default => {
+            return patch
+        }
+    }
+
+    var result: Member[>..] = []
+    let base = match target {
+        case .Object(let members) => members
+        default                   => []
+    }
+
+    for m in base {
+        let change = field(patch, m.key)
+        if let replacement = change {
+            if !isNull(replacement) {
+                result.append(Member { key: m.key, value: mergePatch(m.value, replacement) })
+            }
+        } else {
+            result.append(m)
+        }
+    }
+
+    for p in patchMembers {
+        if field(target, p.key) == none && !isNull(p.value) {
+            result.append(Member { key: p.key, value: mergePatch(JsonValue.Null, p.value) })
+        }
+    }
+
+    return JsonValue.Object(members: result)
+}

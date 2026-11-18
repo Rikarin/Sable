@@ -85,6 +85,53 @@ public sealed class ExistentialTests {
                 }
             """
         );
+
+    /// <summary>
+    ///     docs/03 §3.2: a protocol extension's member that is not a
+    ///     requirement is chosen by the static type. Through 'any P' and
+    ///     through 'T: P' that is the extension's, even where the concrete type
+    ///     declares one of the same name; a requirement is still the type's own.
+    /// </summary>
+    [Fact]
+    public void AnExtensionMemberThatIsNoRequirementIsChosenByTheStaticType() =>
+        Assert.Equal(
+            "10 10 20\n10 10 20\n1 1 5 5\n11\n",
+            AssertAgree(
+                Program(
+                    """
+                    protocol P { fn f() -> Int }
+
+                    extension P {
+                        fn g() -> Int { return 10 }
+                        fn f() -> Int { return 5 }
+                        var k: Int { get => 10 }
+                        fn h() -> Int { return g() + f() }
+                    }
+
+                    struct B: P {
+                        fn f() -> Int { return 1 }
+                        fn g() -> Int { return 20 }
+                        var k: Int { get => 20 }
+                    }
+
+                    struct C: P { }
+
+                    fn existentialG(_ x: any P) -> Int { return x.g() }
+                    fn existentialF(_ x: any P) -> Int { return x.f() }
+                    fn existentialK(_ x: any P) -> Int { return x.k }
+                    fn genericG<T: P>(_ x: T) -> Int { return x.g() }
+                    fn genericF<T: P>(_ x: T) -> Int { return x.f() }
+                    fn genericK<T: P>(_ x: T) -> Int { return x.k }
+                    """,
+                    """
+                        print("\(existentialG(B())) \(genericG(B())) \(B().g())")
+                        print("\(existentialK(B())) \(genericK(B())) \(B().k)")
+                        print("\(existentialF(B())) \(genericF(B())) \(existentialF(C())) \(genericF(C()))")
+                        print(B().h())
+                    """
+                )
+            ).Stdout
+        );
 }
 
 /// <summary>Computed properties: a getter lowered as a method, read directly, generically and through existentials.</summary>

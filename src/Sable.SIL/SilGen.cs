@@ -1883,8 +1883,44 @@ public sealed partial class SilGen {
         return null;
     }
 
+    /// <summary>
+    ///     A method or property a protocol extension adds that meets none of
+    ///     the protocol's requirements, nor those of a protocol it refines: it
+    ///     has no witness, only its own body.
+    /// </summary>
+    static bool IsExtensionOnly(Symbol member) {
+        if (member.ContainingSymbol is not ExtensionSymbol { ExtendedType: NamedTypeSymbol { TypeKind: TypeKind.Protocol } protocol }) {
+            return false;
+        }
+
+        bool Meets(Symbol requirement) =>
+            requirement.ContainingSymbol is NamedTypeSymbol
+            && requirement.Name == member.Name
+            && (requirement, member) switch {
+                (FunctionSymbol r, FunctionSymbol m) =>
+                    (r.IsStatic == m.IsStatic || r.FunctionKind == FunctionKind.Operator) && r.Parameters.Length == m.Parameters.Length,
+                (FieldSymbol r, FieldSymbol m) => r.IsStatic == m.IsStatic,
+                _ => false,
+            };
+
+        var visited = new HashSet<NamedTypeSymbol>();
+        bool Requires(NamedTypeSymbol current) =>
+            visited.Add(current.OriginalDefinition)
+            && (current.OriginalDefinition.Members.Any(Meets)
+                || current.OriginalDefinition.BaseTypes.OfType<NamedTypeSymbol>().Any(b => b.TypeKind == TypeKind.Protocol && Requires(b)));
+
+        return !Requires(protocol);
+    }
+
     /// <summary>The member of a concrete type that implements a protocol's method: its own, or a superclass's.</summary>
     internal static FunctionSymbol? Implementation(NamedTypeSymbol concrete, FunctionSymbol requirement) {
+        // docs/03 §3.2: a protocol extension's member that is not a
+        // requirement is chosen by the static type, not looked up on the
+        // concrete one — a 'g' the type declares itself does not replace it.
+        if (IsExtensionOnly(requirement)) {
+            return requirement;
+        }
+
         for (var type = (NamedTypeSymbol?)concrete.OriginalDefinition; type is not null; type = SuperclassOf(type)?.OriginalDefinition) {
             // An operator is static wherever it is written; a requirement's says nothing.
             var found = type.Members.OfType<FunctionSymbol>().FirstOrDefault(f =>
@@ -1928,8 +1964,11 @@ public sealed partial class SilGen {
         var context = entry.AddArgument(SilType.Object);
         var opened = entry.Append(new RefElementAddrInst(entry.Append(new UncheckedRefCastInst(context, box)), 0));
 
-        // A property the type computes: its getter is the implementation.
-        if (requirement is FieldSymbol computed
+        // A property an extension of the protocol adds, and no requirement:
+        // its own getter, whatever the type declares (docs/03 §3.2).
+        if (requirement is FieldSymbol { IsComputed: true } extensionOnly && IsExtensionOnly(extensionOnly) && GetterOf(extensionOnly) is { } extensionGetter) {
+            requirement = extensionGetter;
+        } else if (requirement is FieldSymbol computed
             && FindField(concrete, computed.Name) is { IsComputed: true } own && GetterOf(own) is { } getter) {
             requirement = getter;
         } else if (requirement is FieldSymbol { IsComputed: true } defaulted

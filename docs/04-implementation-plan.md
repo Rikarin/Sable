@@ -948,7 +948,7 @@ Written so far (`tests/Sable.CodeGen.Tests/LibraryTests.cs`):
   (unbounded, closable, `receive` awaits), `TaskGroup` (results in the order
   the tasks were added), and a `sleep` that yields so that other tasks run
   meanwhile. Tasks switch only where they await, so none of it needs a lock.
-  Not yet: bounded channels, cancellation, `Mutex` and `Atomic` (useless
+  `TaskGroup.cancelAll()` cancels its tasks. Not yet: bounded channels, `Mutex` and `Atomic` (useless
   until tasks run in parallel), and deadlock detection: a task waiting on
   nothing yields for ever.
 
@@ -1218,7 +1218,9 @@ tasks sleeping a second take a second. `Sable.Concurrency`'s `sleep` is
 `Task.sleep`; `Clock.sleep` does not await, so it still holds every task. An async function is an ordinary function,
 and `await` is its operand; `Task.spawn { … }` queues a task (a class holding
 the runtime's handle, the body and the result), `await task.value` waits for
-it, and the program ends once every task has. Actors lower as classes: with
+it, and the program ends once every task has. `task.cancel()` cancels
+cooperatively: the task sees `Task.isCancelled()`, and a sleep it is in, or
+starts, ends at once (it is taken off the sleepers and queued). Actors lower as classes: with
 one task running at a time a call into one runs alone, and the binder makes
 a call from outside it `await`. `async let` binds; reading it needs `await`.
 A class or actor whose fields all have initial values is made with `init()`.
@@ -1228,7 +1230,7 @@ per task — far less compiler for the same semantics, at the cost of a
 thread (8 MB of address space) for each task waiting at once. Not yet:
 `async let` runs its child to completion at the declaration rather than
 alongside; actors have no executor or mailbox of their own; no task groups
-as scopes, cancellation, `for await` or async sequences, priorities, I/O to
+as scopes, priorities, I/O to
 wait on (an I/O reactor), and no parallelism (a work-stealing pool, and
 with it atomic counts) — all `Sable.Concurrency`'s, along with the switch
 to the state machine where many tasks wait at once.
@@ -1719,19 +1721,23 @@ loaded in any test.
   `$BROWSER` or the system's browser. Not yet: doc tests, search beyond the
   index.
 - **`sable repl`**: `ReplSession` (separate from the console) keeps imports,
-  declarations and the statements that ran, and runs each entry as the next
-  statement of a `main` that replays them, under the SIL interpreter; an
-  expression is bound to `resN` and shown with its type; `:type`, `:reset`,
-  `:help`, `:quit`. What a statement does to the world (files, input, the
-  environment, processes, the clock, sleeping) goes through an
-  `EffectJournal`: carried out the first time, replayed from the journal
-  after, so nothing happens twice and the clock reads as it did; a failed
-  entry's effects are dropped from it. The interpreter runs without a step
-  limit (Ctrl-C interrupts an entry) and 100,000 calls deep. On a terminal,
-  `LineEditor` gives readline's editing keys, ↑/↓ history (kept in
-  `~/.sable/repl_history`) and Tab completion of keywords and the session's
-  names. Not yet: replay still repeats the earlier statements' computation
-  (snapshotting the interpreter would not). In a package the session is
+  declarations, bindings and the entries that ran, under the SIL
+  interpreter. An entry runs as a function of its own; each binding at its
+  top level becomes a global of the session (its type written out), set up
+  where the binding stood. The program is lowered with
+  `SilGen.LowerForSession` — each global has its own initialiser, run when
+  the global is first reached, and nothing destroys them at the end — and
+  run with the heap and globals the earlier entries' programs left
+  (`SilInterpreter.Session`), so nothing earlier is computed or done again.
+  Earlier entries' functions are compiled with each new one, so a closure
+  one made still has its code. A failed entry's bindings are forgotten; a
+  binding that cannot be a global (its value needs a name bound inside the
+  entry) lasts only for the entry. An expression is bound to `resN` and
+  shown with its type; `:type`, `:reset`, `:help`, `:quit`. The interpreter
+  runs without a step limit (Ctrl-C interrupts an entry) and 100,000 calls
+  deep. On a terminal, `LineEditor` gives readline's editing keys, ↑/↓
+  history (kept in `~/.sable/repl_history`) and Tab completion of keywords
+  and the session's names. In a package the session is
   compiled with the package's library and its dependencies, so `import`
   takes their modules (`--no-package` for a session without).
 - **Lints** (`src/Sable.Symbols/Lints/`): `Lint` over a file's

@@ -1,0 +1,26 @@
+module Negative.OpaqueMismatch
+
+// Two 'some Shape' results are two types that print alike; the message
+// says which function, variable or type arguments chose each.
+
+protocol Shape { fn area() -> Int }
+
+struct Square: Shape { fn area() -> Int { return 1 } }
+
+struct Circle: Shape { fn area() -> Int { return 2 } }
+
+fn square() -> some Shape { return Square() }
+
+fn circle() -> some Shape { return Circle() }
+
+fn made<T>(_ t: T) -> some Shape { return Square() }
+
+fn mixes() {
+    var s = square()
+    s = circle() //! S3004 expected the 'some Shape' returned by 'square()' but found the one returned by 'circle()'; each function's or variable's 'some Shape' is a type of its own
+    let local: some Shape = Circle()
+    s = local //! S3004 expected the 'some Shape' returned by 'square()' but found the one of 'local'; each function's or variable's 'some Shape' is a type of its own
+    var m = made(1)
+    m = made("x") //! S3004 expected the 'some Shape' returned by 'made()' with T = Int but found the one returned by 'made()' with T = String; each choice of its type parameters gives a type of its own
+    print(s.area() + m.area())
+}

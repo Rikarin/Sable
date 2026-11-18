@@ -281,6 +281,8 @@ public sealed partial class LlvmEmitter {
                                 declare ptr @sable_task_spawn(ptr, ptr)
                                 declare void @sable_task_wait(ptr)
                                 declare void @sable_task_release(ptr)
+                                declare void @sable_task_cancel(ptr)
+                                declare zeroext i1 @sable_task_is_cancelled()
                                 declare void @sable_task_yield()
                                 declare void @sable_task_sleep(i64)
                                 declare void @sable_tasks_drain()
@@ -2228,7 +2230,7 @@ public sealed partial class LlvmEmitter {
                     return;
                 }
 
-                case "task_wait" or "task_release": {
+                case "task_wait" or "task_release" or "task_cancel": {
                     var handle = Fresh();
                     Line($"{handle} = inttoptr i64 {operands[0]} to ptr");
                     Line($"call void @sable_{builtin.Name}(ptr {handle})");
@@ -2237,6 +2239,10 @@ public sealed partial class LlvmEmitter {
 
                 case "task_yield":
                     Line("call void @sable_task_yield()");
+                    return;
+
+                case "task_is_cancelled":
+                    Line($"{Result()} = call zeroext i1 @sable_task_is_cancelled()");
                     return;
 
                 case "task_sleep":

@@ -27,7 +27,9 @@ public sealed class NativeLibraryTests {
                            }
 
                            var total: Int = 40
-                           let resource = Resource(name: "the pool")
+                           // Declared before what it reads: set up after it, as in a program.
+                           let resource = Resource(name: label)
+                           let label = "the pool"
 
                            @export("counter_add")
                            public fn add(_ n: Int) -> Int {

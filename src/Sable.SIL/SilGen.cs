@@ -161,6 +161,29 @@ public sealed partial class SilGen {
     bool _denyReflection;
 
     /// <summary>
+    ///     Lowers a program for a session that outlives it, as a REPL's
+    ///     entries do: each global gets an initialiser of its own,
+    ///     <c>$global.init.&lt;name&gt;</c>, which the interpreter runs when the
+    ///     global is first reached (<see cref="SilInterpreter.Session" />), and
+    ///     the entry point neither initialises nor destroys the globals. A
+    ///     global an earlier program of the session set up keeps its value,
+    ///     and its initialiser is not run again.
+    /// </summary>
+    public static (SilModule Module, IReadOnlyList<Diagnostic> Diagnostics) LowerForSession(Compilation compilation) {
+        var generator = new SilGen(compilation) { _lazyGlobals = true };
+        generator.LowerAll();
+        return (generator._module, generator.Diagnostics);
+    }
+
+    bool _lazyGlobals;
+
+    /// <summary>The prefix of a global's own initialiser, in a module lowered for a session.</summary>
+    internal const string GlobalInitPrefix = "$global.init.";
+
+    /// <summary>Whether a function sets up globals — all of them, or a session's one — rather than being the entry point it is lowered as.</summary>
+    static bool IsGlobalInit(string function) => function == GlobalsInit || function.StartsWith(GlobalInitPrefix, StringComparison.Ordinal);
+
+    /// <summary>
     ///     Lowers one unit of a program compiled separately: the functions of
     ///     the files it owns, and whatever instances of generic functions they
     ///     use; the program's other functions are only declared. The module's
@@ -387,28 +410,13 @@ public sealed partial class SilGen {
             }
         }
 
-        // A generic class's vtable names instances of its methods, which
-        // are lowered in their turn — and may make more classes.
-        do {
-            while (_pending.Count > 0) {
-                var (symbol, name, type, substitution) = _pending.Dequeue();
-                if (_localGenerics.TryGetValue(symbol, out var local)) {
-                    LowerLocalFunction(symbol, local.Body, name, type, local.Source, substitution);
-                    continue;
-                }
+        LowerPendingInstances();
 
-                var (syntax, model) = _declarations[symbol];
-                _loweringInstance = name;
-                LowerBody(symbol, syntax, model, name, type, substitution);
-                _loweringInstance = null;
-            }
-
-            BuildVTables();
-        } while (_pending.Count > 0);
-
-        // Separately, the globals are set up by the unit the program starts in.
+        // Separately, the globals are set up by the unit the program starts
+        // in. Their initial values may ask for instances nothing else did.
         if (_unit is null || _module.EntryPoint is not null) {
             LowerGlobalLifetimes();
+            LowerPendingInstances();
         }
 
         BuildVTables();
@@ -579,6 +587,30 @@ public sealed partial class SilGen {
         }
     }
 
+    /// <summary>
+    ///     Lowers the instances of generic functions asked for so far. A
+    ///     generic class's vtable names instances of its methods, which are
+    ///     lowered in their turn — and may make more classes.
+    /// </summary>
+    void LowerPendingInstances() {
+        do {
+            while (_pending.Count > 0) {
+                var (symbol, name, type, substitution) = _pending.Dequeue();
+                if (_localGenerics.TryGetValue(symbol, out var local)) {
+                    LowerLocalFunction(symbol, local.Body, name, type, local.Source, substitution);
+                    continue;
+                }
+
+                var (syntax, model) = _declarations[symbol];
+                _loweringInstance = name;
+                LowerBody(symbol, syntax, model, name, type, substitution);
+                _loweringInstance = null;
+            }
+
+            BuildVTables();
+        } while (_pending.Count > 0);
+    }
+
     static bool InsideBody(SyntaxNode node) {
         for (var parent = node.Parent; parent is not null; parent = parent.Parent) {
             if (parent is DeclarationStatementSyntax) {
@@ -593,8 +625,9 @@ public sealed partial class SilGen {
 
     /// <summary>
     ///     Two functions the entry point calls: one that stores each global's
-    ///     initial value, in the order declared, before anything else runs;
-    ///     one that destroys them, last first, as the program returns.
+    ///     initial value, each after those it reads (SilGen.Globals.cs), before
+    ///     anything else runs; one that destroys them, last first, as the
+    ///     program returns.
     /// </summary>
     void LowerGlobalLifetimes() {
         // A library has no entry point: its globals' initialiser is lowered
@@ -606,14 +639,35 @@ public sealed partial class SilGen {
             return;
         }
 
+        var ordered = OrderGlobals();
+
         // Lowered in the entry point's context: a function of no parameters.
         var unit = new FunctionType([], SilType.Unit);
         var statements = new List<BoundStatement>();
-        foreach (var (field, _, model) in _globalFields) {
+        foreach (var (field, _, model) in ordered) {
             if (model.GetFieldInitializer(field) is { } initial) {
                 var target = new BoundFieldAccess(initial.Syntax, null, field);
                 statements.Add(new BoundExpressionStatement(initial.Syntax, new BoundAssignment(initial.Syntax, target, initial)));
             }
+        }
+
+        // A session's globals are set up one at a time, as each is reached,
+        // and outlive the program: nothing destroys them at its end.
+        if (_lazyGlobals) {
+            foreach (var (field, name, model) in _globalFields) {
+                if (model.GetFieldInitializer(field) is not { } initial) {
+                    continue;
+                }
+
+                var target = new BoundFieldAccess(initial.Syntax, null, field);
+                var assignment = new BoundExpressionStatement(initial.Syntax, new BoundAssignment(initial.Syntax, target, initial));
+                var own = new SilFunction(GlobalInitPrefix + name, unit);
+                new FunctionLowering(this, initSymbol, own, model.SyntaxTree.Text, TypeSubstitution.Empty).Lower(new BoundBlock(initial.Syntax, [], [assignment]));
+                own.RemoveUnreachableBlocks();
+                _module.Add(own);
+            }
+
+            return;
         }
 
         var source = _globalFields[0].Model.SyntaxTree.Text;
@@ -625,8 +679,8 @@ public sealed partial class SilGen {
 
         var deinit = new SilFunction(GlobalsDeinit, unit);
         var entry = deinit.AddBlock();
-        for (var i = _globalFields.Count - 1; i >= 0; i--) {
-            var (name, type) = _globalsByField[_globalFields[i].Field];
+        for (var i = ordered.Count - 1; i >= 0; i--) {
+            var (name, type) = _globalsByField[ordered[i].Field];
             if (!type.IsTrivial) {
                 entry.Append(new DestroyAddrInst(entry.Append(new GlobalAddrInst(name, type))));
             }
@@ -3059,7 +3113,7 @@ public sealed partial class SilGen {
             }
 
             // The entry point first gives every global its initial value.
-            if (ReferenceEquals(symbol, generator._entrySymbol) && generator._globalFields.Count > 0 && function.Name != GlobalsInit) {
+            if (ReferenceEquals(symbol, generator._entrySymbol) && generator._globalFields.Count > 0 && !IsGlobalInit(function.Name) && !generator._lazyGlobals) {
                 var unit = new FunctionType([], SilType.Unit);
                 Emit(new ApplyInst(Emit(new FunctionRefInst(GlobalsInit, unit)), SilType.Unit));
             }
@@ -3105,11 +3159,11 @@ public sealed partial class SilGen {
                 DestroyOwnedParameters();
                 Deallocate();
                 // The program ends once every task has, and then its globals go.
-                if (ReferenceEquals(symbol, generator._entrySymbol) && function.Name != GlobalsInit) {
+                if (ReferenceEquals(symbol, generator._entrySymbol) && !IsGlobalInit(function.Name)) {
                     Emit(new BuiltinInst("task_drain", SilType.Unit));
                 }
 
-                if (ReferenceEquals(symbol, generator._entrySymbol) && generator._globalFields.Count > 0 && function.Name != GlobalsInit) {
+                if (ReferenceEquals(symbol, generator._entrySymbol) && generator._globalFields.Count > 0 && !IsGlobalInit(function.Name) && !generator._lazyGlobals) {
                     var unit = new FunctionType([], SilType.Unit);
                     Emit(new ApplyInst(Emit(new FunctionRefInst(GlobalsDeinit, unit)), SilType.Unit));
                 }
@@ -7652,6 +7706,14 @@ public sealed partial class SilGen {
 
                         Emit(new BuiltinInst("task_sleep", SilType.Unit, nanoseconds));
                         return UnitValue.Instance;
+                    }
+
+                    if (callee.Name == "cancel") {
+                        return CancelTask(call);
+                    }
+
+                    if (callee.Name == "isCancelled") {
+                        return Emit(new BuiltinInst("task_is_cancelled", SilType.Bool));
                     }
 
                     Emit(new BuiltinInst("task_yield", SilType.Unit));

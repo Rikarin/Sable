@@ -188,6 +188,10 @@ void sable_runtime_at_exit(void (*hook)(void)) {
     }
 }
 
+// The small blocks' slabs (memory.c): how many are held now and were at
+// most, and how many were given back to the system.
+static int64_t slabs_held, slabs_most, slabs_returned;
+
 // With SABLE_CHECK_LEAKS set, a program that ends with objects still alive
 // says how many: tests run every program this way. With SABLE_STATS set, it
 // says what ARC did. Run as the program exits (platform.h).
@@ -208,5 +212,7 @@ SABLE_AT_EXIT(sable_report) {
         fflush(stdout);
         fprintf(stderr, "sable: allocations %lld, retains %lld, releases %lld\n",
             (long long)allocations, (long long)retains, (long long)releases);
+        fprintf(stderr, "sable: slabs %lld held, %lld at most, %lld given back\n",
+            (long long)slabs_held, (long long)slabs_most, (long long)slabs_returned);
     }
 }

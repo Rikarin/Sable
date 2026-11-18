@@ -53,6 +53,14 @@ static void condition_wait(TaskCondition *condition);
 // Starts a thread, detached, with a stack of 8 MiB, running body(argument).
 static bool start_thread(void (*body)(void *argument), void *argument);
 
+// ---- Memory --------------------------------------------------------------
+
+// 'size' bytes of zeroed memory straight from the system, starting at a
+// multiple of 'size' (a power of two, a multiple of the page); NULL when
+// there is none. unmap_slab gives it back to the system.
+static void *map_slab(size_t size);
+static void unmap_slab(void *slab, size_t size);
+
 // ---- Time ----------------------------------------------------------------
 
 // Nanoseconds from some fixed point, never going back; since 1970; and a

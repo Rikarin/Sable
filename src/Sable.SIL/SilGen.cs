@@ -277,7 +277,8 @@ public sealed partial class SilGen {
             }
         }
 
-        // Which classes something inherits from: their methods dispatch.
+        // Which classes something inherits from: their methods dispatch
+        // (and, compiled separately, those anything may: IsInherited).
         foreach (var tree in _compilation.SyntaxTrees) {
             foreach (var declaration in Declarations(tree).OfType<ClassDeclarationSyntax>()) {
                 if (_compilation.GetDeclaredSymbol(declaration) is NamedTypeSymbol type && SuperclassOf(type) is { } superclass) {
@@ -300,7 +301,10 @@ public sealed partial class SilGen {
             _declarations[symbol] = (syntax, model);
         }
 
-        DeclareGlobals();
+        // Separately, the unit the program starts in sets up every global;
+        // another makes storage only for those its code names.
+        DeclareGlobals(all: _unit is null || _evaluation is not null
+            || entry is not null && _declarations.TryGetValue(entry, out var start) && _unit.Owns(start.Model.SyntaxTree));
         _entrySymbol = entry;
 
         // Compile-time evaluation lowers what it runs, as it needs it.
@@ -519,35 +523,69 @@ public sealed partial class SilGen {
     internal static bool IsGlobal(FieldSymbol field) =>
         !field.IsComputed && (field.IsStatic || field.ContainingSymbol is ModuleSymbol);
 
-    void DeclareGlobals() {
+    /// <summary>
+    ///     The globals of other units' files that this unit has not yet named,
+    ///     each declared when its code first does (<see cref="GlobalOf" />).
+    /// </summary>
+    /// <remarks>
+    ///     Each unit has the storage of every global it uses, and the linker
+    ///     keeps one; one that made storage for every global of the program
+    ///     would depend on the units that depend on it — a global they add or
+    ///     retype would leave its object with storage of the wrong size, and
+    ///     their types' layouts in its records (docs/05 §5.4).
+    /// </remarks>
+    readonly Dictionary<FieldSymbol, SyntaxNode> _otherGlobals = [];
+
+    /// <param name="all">
+    ///     Declare every global of the program, as the whole program and the
+    ///     unit the program starts in, which sets them all up, do; otherwise
+    ///     only the unit's own, and the rest when named.
+    /// </param>
+    void DeclareGlobals(bool all) {
         foreach (var tree in _compilation.SyntaxTrees) {
             var model = _compilation.GetSemanticModel(tree);
             foreach (var declaration in Declarations(tree).Where(static d => d is FieldDeclarationSyntax or ConstDeclarationSyntax)) {
                 if (_compilation.GetDeclaredSymbol(declaration) is not FieldSymbol field || !IsGlobal(field)
-                    || field.ContainingSymbol is NamedTypeSymbol { IsGenericDefinition: true } || Lower(field.Type) is not { } type) {
+                    || field.ContainingSymbol is NamedTypeSymbol { IsGenericDefinition: true }) {
                     continue;
                 }
 
-                // A constant written where it is read needs no storage.
-                if (_evaluation is null && ConstantRead(field) is not null) {
+                if (!all && !_unit!.Owns(tree)) {
+                    _otherGlobals[field] = declaration;
                     continue;
                 }
 
-                // Separately, the unit the program starts in sets up every
-                // global, and sees no other unit's bodies: a static of a type
-                // declared in one is the whole program's to compile.
-                if (_unit is not null && InsideBody(declaration)) {
-                    Unsupported<object>(declaration, "a static stored property of a type declared in a function, compiled separately");
-                    continue;
+                if (DeclareGlobal(field, declaration) is { } name) {
+                    _globalFields.Add((field, name, model));
                 }
-
-                var owner = field.ContainingSymbol is NamedTypeSymbol named ? $"{named.ContainingSymbol?.Name}.{named.Name}" : field.ContainingSymbol?.Name;
-                var name = $"{owner}.{field.Name}";
-                _globalFields.Add((field, name, model));
-                _globalsByField[field] = (name, type);
-                _module.Globals.Add((name, type));
             }
         }
+    }
+
+    /// <summary>A global's storage, named for its owner; null for one that needs none, or cannot have it here.</summary>
+    string? DeclareGlobal(FieldSymbol field, SyntaxNode declaration) {
+        if (Lower(field.Type) is not { } type) {
+            return null;
+        }
+
+        // A constant written where it is read needs no storage.
+        if (_evaluation is null && ConstantRead(field) is not null) {
+            return null;
+        }
+
+        // Separately, the unit the program starts in sets up every
+        // global, and sees no other unit's bodies: a static of a type
+        // declared in one is the whole program's to compile.
+        if (_unit is not null && InsideBody(declaration)) {
+            Unsupported<object>(declaration, "a static stored property of a type declared in a function, compiled separately");
+            return null;
+        }
+
+        var owner = field.ContainingSymbol is NamedTypeSymbol named ? $"{named.ContainingSymbol?.Name}.{named.Name}" : field.ContainingSymbol?.Name;
+        var name = $"{owner}.{field.Name}";
+        _globalsByField[field] = (name, type);
+        _module.Globals.Add((name, type));
+        return name;
     }
 
     static bool InsideBody(SyntaxNode node) {
@@ -560,7 +598,14 @@ public sealed partial class SilGen {
         return false;
     }
 
-    internal (string Name, SilType Type)? GlobalOf(FieldSymbol field) => _globalsByField.TryGetValue(field, out var global) ? global : null;
+    internal (string Name, SilType Type)? GlobalOf(FieldSymbol field) {
+        if (!_globalsByField.TryGetValue(field, out var global) && _otherGlobals.Remove(field, out var declaration)) {
+            DeclareGlobal(field, declaration);
+            _globalsByField.TryGetValue(field, out global);
+        }
+
+        return global.Name is null ? null : global;
+    }
 
     /// <summary>
     ///     Two functions the entry point calls: one that stores each global's
@@ -996,8 +1041,30 @@ public sealed partial class SilGen {
     static NamedTypeSymbol? SuperclassOf(NamedTypeSymbol type) =>
         type.BaseTypes.OfType<NamedTypeSymbol>().FirstOrDefault(static b => b.TypeKind == TypeKind.Class);
 
-    /// <summary>The classes some other class inherits from: their methods are called through the vtable.</summary>
+    /// <summary>
+    ///     The classes some class this lowering can see inherits from: every
+    ///     class declared outside a body, and those in the bodies it lowers.
+    /// </summary>
     readonly HashSet<NamedTypeSymbol> _inherited = [];
+
+    /// <summary>
+    ///     Whether a class's methods are called through its vtable: whether
+    ///     anything may inherit from it.
+    /// </summary>
+    /// <remarks>
+    ///     Compiled whole, that is exactly whether something does. A unit
+    ///     must not depend on what the units that depend on it declare —
+    ///     each unit's object is kept until the units it depends on change
+    ///     (docs/05 §5.4) — so separately, an <c>open</c> class is taken to
+    ///     be inherited from: any module may subclass it, and another unit's
+    ///     subclass, added or removed, then leaves this unit's code as it
+    ///     was. A class that is not open can be subclassed only in its own
+    ///     module, which is the unit's own or one it shares with the units it
+    ///     is keyed by, so what is seen of it is all there is.
+    /// </remarks>
+    bool IsInherited(NamedTypeSymbol type) =>
+        _inherited.Contains(type.OriginalDefinition)
+        || _unit is not null && type.OriginalDefinition is { IsOpen: true, IsFinal: false, IsSealed: false };
 
     /// <summary>The language class each SIL class was lowered from, for building its vtable.</summary>
     readonly Dictionary<ClassType, NamedTypeSymbol> _classes = [];
@@ -1023,7 +1090,7 @@ public sealed partial class SilGen {
     ///     subclass may override — a property's getter and setter among them.
     /// </summary>
     internal bool IsDynamic(FunctionSymbol method) =>
-        IsVirtual(method) && _inherited.Contains(Owner(method)!.OriginalDefinition);
+        IsVirtual(method) && IsInherited(Owner(method)!);
 
     /// <summary>True for a member of a class that takes a slot in its vtable.</summary>
     static bool IsVirtual(FunctionSymbol method) =>
@@ -1048,7 +1115,7 @@ public sealed partial class SilGen {
                 type.VTable.AddRange(superclass.VTable);
             }
 
-            if (!_inherited.Contains(symbol.OriginalDefinition) && type.Superclass is null) {
+            if (!IsInherited(symbol) && type.Superclass is null) {
                 return;
             }
 

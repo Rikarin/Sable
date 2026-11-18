@@ -1915,9 +1915,11 @@ Sable.CodeGen. `sable build` and `sable run` on a package go through it;
   `.abi` files) disagree, or the link fails — the program is compiled whole
   instead, with a note. A stale or inconsistent object never reaches an
   executable. (Today a class declared inside a function body that
-  subclasses another unit's class always ends this way: the other unit
-  does not bind that body, so it thinks the superclass has no subclasses.
-  So does a static stored property of a type declared in a body.) Objects are written to a temporary name and renamed into
+  subclasses a class of another unit of its module which is not `open`
+  always ends this way: the other unit does not bind that body, so it
+  thinks the superclass has no subclasses. An `open` class is dispatched
+  dynamically by every unit, whatever subclasses it sees. So does a
+  static stored property of a type declared in a body.) Objects are written to a temporary name and renamed into
   place; past `max(256, 8 × units)` objects the least recently used go (an
   object's own time is left alone: lldb's debug map checks it).
 - **Parallel.** Files are read, hashed and parsed in parallel; the

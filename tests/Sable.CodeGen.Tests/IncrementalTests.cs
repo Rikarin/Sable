@@ -1,6 +1,7 @@
 using System.Text.RegularExpressions;
 using Sable.Driver.Build;
 using Sable.Driver.Packages;
+using Sable.Symbols;
 
 namespace Sable.CodeGen.Tests;
 
@@ -546,23 +547,20 @@ public sealed class IncrementalTests {
         Assert.Equal(("kept\n", 0), PackageFixture.Execute(built[0].Path));
     }
 
-    [Fact]
-    public void UnitsThatDisagreeAboutAClassAreNotLinked() {
-        if (!CanBuild) {
-            return;
-        }
-
-        // A class declared in a body, subclassing another unit's class: the
-        // other unit cannot see it, and takes the superclass to have no
-        // subclasses. Their records of it disagree, and the program is built whole.
-        var directory = Directory.CreateTempSubdirectory("sable-disagree-").FullName;
+    /// <summary>
+    ///     Two units of one module, <c>T</c>: <c>base</c> declares a class with
+    ///     a method a subclass may override, and <c>main</c> a subclass of it
+    ///     inside a body, which <c>base</c> does not see.
+    /// </summary>
+    static (BuildOutcome Outcome, string Log, string Output) BuildBaseAndLocal(string modifiers) {
+        var directory = Directory.CreateTempSubdirectory("sable-local-").FullName;
         try {
-            File.WriteAllText(Path.Combine(directory, "base.sb"), """
+            File.WriteAllText(Path.Combine(directory, "base.sb"), $$"""
                 module T
 
                 import Sable.IO
 
-                open class Base {
+                {{modifiers}}class Base {
                     init() { }
                     open fn name() -> String { return "base" }
                 }
@@ -588,12 +586,101 @@ public sealed class IncrementalTests {
             var executable = Platform.Executable(Path.Combine(directory, "program"));
             var outcome = IncrementalBuild.Build([Unit("main"), Unit("base")], new BuildSettings("dev", false, directory, true), executable, Path.Combine(directory, "cache"), null, log);
             Assert.True(outcome.Succeeded, string.Join("\n", outcome.Errors));
-            Assert.Equal("whole", outcome.Kind);
-            Assert.Contains("disagree about class T.Base", log.ToString());
-            Assert.Equal(("local\nbase\n", 0), PackageFixture.Execute(executable));
+            return (outcome, log.ToString(), PackageFixture.Execute(executable).Output);
         } finally {
             Directory.Delete(directory, true);
         }
+    }
+
+    [Fact]
+    public void UnitsThatDisagreeAboutAClassAreNotLinked() {
+        if (!CanBuild) {
+            return;
+        }
+
+        // A class that is not open, subclassed in a body of another unit of
+        // its module: its own unit cannot see the subclass, and takes the
+        // class to have none. Their records of it disagree, and the program
+        // is built whole.
+        var (outcome, log, output) = BuildBaseAndLocal("");
+        Assert.Equal("whole", outcome.Kind);
+        Assert.Contains("disagree about class T.Base", log);
+        Assert.Equal("local\nbase\n", output);
+    }
+
+    /// <summary>
+    ///     Separately, an open class's methods are dispatched whatever this
+    ///     unit sees of its subclasses — another unit may add one — so a
+    ///     subclass in a body the class's unit cannot see changes nothing
+    ///     there, and the units agree.
+    /// </summary>
+    [Fact]
+    public void AnOpenClassIsDispatchedWhateverAUnitSeesOfItsSubclasses() {
+        if (!CanBuild) {
+            return;
+        }
+
+        var (outcome, log, output) = BuildBaseAndLocal("open ");
+        Assert.Equal(("incremental", 3), (outcome.Kind, outcome.Compiled));
+        Assert.DoesNotContain("disagree", log);
+        Assert.Equal("local\nbase\n", output);
+    }
+
+    /// <summary>
+    ///     A unit's lowering is a function of what it can name: lowered with a
+    ///     unit that depends on it, whatever that unit declares — a subclass
+    ///     of its open class, globals of its own — it comes out as it does
+    ///     alone. (Each unit's object is kept until the units it depends on
+    ///     change.)
+    /// </summary>
+    [Fact]
+    public void AUnitsLoweringDoesNotDependOnItsDependents() {
+        const string shapes = """
+            module Shapes
+
+            public open class Shape {
+                public init() { }
+                public open fn area() -> Int { return 0 }
+            }
+
+            public fn total(_ shapes: Shape[>..]) -> Int {
+                var sum = 0
+                for shape in shapes {
+                    sum = sum + shape.area()
+                }
+                return sum
+            }
+
+            public var made = 0
+            """;
+        static string Lower(params string[] files) {
+            var trees = files.Select((text, i) => SyntaxTree.Parse(new SourceText(text, $"f{i}.sb"))).ToList();
+            var compilation = Compilation.Create(trees);
+            Assert.DoesNotContain(compilation.GetDiagnostics(), static d => d.Severity == DiagnosticSeverity.Error);
+            var (module, diagnostics) = SilGen.LowerUnit(compilation, new SilUnit(t => t == trees[0]), SilProgram.Index([..trees, ..CoreLibrary.TreesFor(trees[0].Options)]));
+            Assert.Empty(diagnostics);
+            return SilPrinter.Print(module);
+        }
+
+        var alone = Lower(shapes);
+        Assert.Equal(alone, Lower(shapes, """
+            module App
+
+            import Shapes
+
+            public class Square: Shape {
+                var side: Int
+                public init(side: Int) { self.side = side; super.init() }
+                public override fn area() -> Int { return side * side }
+            }
+
+            public var squares: Square[>..] = []
+            public var count = 0
+
+            fn main() {
+                made = total(squares)
+            }
+            """));
     }
 
     // ---- Interface fingerprints ---------------------------------------------

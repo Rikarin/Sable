@@ -451,10 +451,12 @@ fingerprint, then its source with every body other units cannot see written
 `{ … }`), and read back by the next build in place of walking the unchanged
 unit's files. It is not yet the binary interface planned above: no other
 compilation binds against it, and an interface change still invalidates every
-unit rather than only the dependents — a unit's lowering reads facts of the
-whole program (whether any class inherits from one of its classes decides
-how its method calls dispatch), which would first have to become part of the
-interface.
+unit rather than only the dependents. A unit's lowering no longer reads
+facts of the units that depend on it: separately compiled, an `open` class's
+methods are dispatched through its vtable whatever subclasses the unit sees
+(any module may add one), while a class that is not open can be subclassed
+only in its own module, which the unit sees; and a unit makes storage only
+for the globals it names (the unit the program starts in, for all).
 Clang runs on units in parallel; lowering is still one unit at a time.
 An unoptimised debug build is compiled this way, and so is an optimised one
 whose profile asks for `lto = "thin"` (or `"off"`): each unit's SIL passes

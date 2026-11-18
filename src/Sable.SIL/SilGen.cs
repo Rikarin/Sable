@@ -667,6 +667,11 @@ public sealed partial class SilGen {
             initialize.RemoveUnreachableBlocks();
             _module.Add(initialize);
             _module.Add(Allocator(function, classType, initialize));
+
+            // Its body is checked as any other is: 'self.h = h' moves a
+            // @noncopy parameter into the object, and is not a copy of it.
+            MoveChecker.Check(initialize, source, _diagnostics);
+            _sources[initialize] = source;
             return;
         }
 
@@ -3257,7 +3262,32 @@ public sealed partial class SilGen {
                 _temporaries.RemoveAt(_temporaries.LastIndexOf(value));
             }
 
+            // What a borrow is borrowed out of comes off with it.
+            if (value is LoadBorrowInst inner && _borrowedOutOf.TryGetValue(inner, out var outer)) {
+                Unhold(outer);
+            }
+
             return value;
+        }
+
+        /// <summary>
+        ///     A borrow of a field of an object, and the object, itself borrowed
+        ///     or a temporary, that must outlive it: ended right after it.
+        /// </summary>
+        readonly Dictionary<LoadBorrowInst, SilValue> _borrowedOutOf = new(ReferenceEqualityComparer.Instance);
+
+        /// <summary>Ends what a borrow, already ended and off the temporaries, was borrowed out of.</summary>
+        void ReleaseOuter(LoadBorrowInst inner) {
+            if (!_borrowedOutOf.TryGetValue(inner, out var outer)) {
+                return;
+            }
+
+            if (outer is LoadBorrowInst outerBorrow) {
+                Emit(new EndBorrowInst(outerBorrow));
+                ReleaseOuter(outerBorrow);
+            } else {
+                Destroy(outer);
+            }
         }
 
         /// <summary>The end of a borrow: a temporary is taken off the temporaries and destroyed, a load_borrow ended.</summary>
@@ -3278,6 +3308,7 @@ public sealed partial class SilGen {
             if (value is LoadBorrowInst borrowed) {
                 Unhold(borrowed);
                 Emit(new EndBorrowInst(borrowed));
+                ReleaseOuter(borrowed);
                 return;
             }
 
@@ -3312,6 +3343,19 @@ public sealed partial class SilGen {
             // would be a move out of what holds it.
             if (expression is BoundFieldAccess && LowerType(expression.Type) is NominalType { IsNoncopyable: true } && Place(expression) is { } inPlace) {
                 return Hold(Emit(new LoadBorrowInst(inPlace)));
+            }
+
+            // And one of an object: borrowed in the object, which stays
+            // borrowed, or alive, until the field's borrow ends.
+            if (expression is BoundFieldAccess && LowerType(expression.Type) is NominalType { IsNoncopyable: true }
+                && ObjectOf(expression) is not null) {
+                if (FieldInObject(expression) is not var (address, reference)) {
+                    return null;
+                }
+
+                var inObject = Emit(new LoadBorrowInst(address));
+                _borrowedOutOf[inObject] = reference;
+                return Hold(inObject);
             }
 
             // So is one a closure captures, in its box. The box is held by the
@@ -3370,7 +3414,56 @@ public sealed partial class SilGen {
         ///     address stands for its value; a parameter of reference type is
         ///     an address that is the value.
         /// </summary>
-        static bool IsByAddress(ParameterSymbol parameter) => parameter.Modifier is ParameterModifier.InOut or ParameterModifier.Out or ParameterModifier.Ref;
+        static bool IsByAddress(ParameterSymbol parameter) => IsByAddressModifier(parameter);
+
+        /// <summary>
+        ///     The object a stored field is in — 'c.box.value' is in 'c' —
+        ///     reached through value fields; null when it is in none.
+        /// </summary>
+        BoundExpression? ObjectOf(BoundExpression expression) =>
+            expression is BoundFieldAccess { Receiver: { } receiver, Field: { IsComputed: false, IsStatic: false } field } && !SilGen.IsGlobal(field)
+                ? Sub(receiver.Type).TypeKind is TypeKind.Class or TypeKind.Actor ? receiver
+                : Sub(receiver.Type).TypeKind == TypeKind.Struct && !IsInlineType(receiver.Type) ? ObjectOf(receiver)
+                : null
+                : null;
+
+        /// <summary>
+        ///     The address of a stored field inside an object, and the object,
+        ///     borrowed, which must outlive any use of the address.
+        /// </summary>
+        (SilValue Address, SilValue Reference)? FieldInObject(BoundExpression expression) {
+            var access = (BoundFieldAccess)expression;
+            var receiver = access.Receiver!;
+            if (Sub(receiver.Type).TypeKind is TypeKind.Class or TypeKind.Actor) {
+                if (Borrow(receiver) is not { Type: ClassType classType } reference) {
+                    return null;
+                }
+
+                var index = classType.FieldIndex(access.Field.Name);
+                if (index < 0) {
+                    End(reference);
+                    Missing(expression, $"the member '{access.Field.Name}'");
+                    return null;
+                }
+
+                return (Emit(new RefElementAddrInst(reference, index)), reference);
+            }
+
+            if (FieldInObject(receiver) is not var (outer, owner)) {
+                return null;
+            }
+
+            var fieldIndex = ((outer.Type as AddressType)?.Pointee as StructType)?.FieldIndex(access.Field.Name) ?? -1;
+            if (fieldIndex < 0) {
+                End(owner);
+                Missing(expression, $"the member '{access.Field.Name}'");
+                return null;
+            }
+
+            return (Emit(new StructElementAddrInst(outer, fieldIndex)), owner);
+        }
+
+        static bool IsByAddressModifier(ParameterSymbol parameter) => parameter.Modifier is ParameterModifier.InOut or ParameterModifier.Out or ParameterModifier.Ref;
 
         /// <summary>The slot of a move-only local or parameter, or null.</summary>
         AllocStackInst? MoveOnlyPlace(BoundExpression expression) =>
@@ -7778,6 +7871,7 @@ public sealed partial class SilGen {
                         break;
                     case LoadBorrowInst borrowed:
                         Emit(new EndBorrowInst(borrowed));
+                        ReleaseOuter(borrowed);
                         break;
                     default:
                         Destroy(borrow);

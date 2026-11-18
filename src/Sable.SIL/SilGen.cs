@@ -254,6 +254,11 @@ public sealed partial class SilGen {
 
         while (_pending.Count > 0) {
             var (symbol, name, type, substitution) = _pending.Dequeue();
+            if (_localGenerics.TryGetValue(symbol, out var local)) {
+                LowerLocalFunction(symbol, local.Body, name, type, local.Source, substitution);
+                continue;
+            }
+
             var (syntax, model) = _declarations[symbol];
             LowerBody(symbol, syntax, model, name, type, substitution);
         }
@@ -674,7 +679,7 @@ public sealed partial class SilGen {
     ///     ask for it. Null when the arguments are not all known types.
     /// </summary>
     internal (string Name, FunctionType Type)? Instance(FunctionSymbol symbol, TypeSubstitution substitution, SyntaxNode at) {
-        if (!_names.TryGetValue(symbol, out var baseName) || !_declarations.ContainsKey(symbol)) {
+        if (!_names.TryGetValue(symbol, out var baseName) || !(_declarations.ContainsKey(symbol) || _localGenerics.ContainsKey(symbol))) {
             return null;
         }
 
@@ -1568,6 +1573,19 @@ public sealed partial class SilGen {
     ///     A function declared in a body. Named, and in the module, before its
     ///     body is lowered — a call to it, its own among them, finds it there.
     /// </summary>
+    /// <summary>The bodies of the generic local functions declared so far, which each call instantiates.</summary>
+    readonly Dictionary<FunctionSymbol, (BoundBlock Body, SourceText Source)> _localGenerics = [];
+
+    /// <summary>
+    ///     A generic local function, met in the body of an instance of the
+    ///     function around it: its name is for that instance, so the
+    ///     instances its calls ask for are that instance's own.
+    /// </summary>
+    internal void DeclareLocalGeneric(FunctionSymbol symbol, BoundBlock body, string name, SourceText source) {
+        _names[symbol] = name;
+        _localGenerics[symbol] = (body, source);
+    }
+
     internal void LowerLocalFunction(FunctionSymbol symbol, BoundBlock body, string name, FunctionType type, SourceText source, TypeSubstitution substitution) {
         var syntax = symbol.DeclaringSyntax.FirstOrDefault();
         var function = new SilFunction(name, type) {
@@ -1575,7 +1593,15 @@ public sealed partial class SilGen {
             Line = syntax is null ? 0 : source.GetLinePosition(syntax.Span.Start).Line,
         };
         function.ParameterNames.AddRange(symbol.Parameters.Select(static p => p.Name));
-        _names[symbol] = name;
+
+        // A generic one's instance does not rename it: a call in the
+        // instance still asks for an instance of the declaration's, where a
+        // recursive call would otherwise name an instance of this instance,
+        // and so on without end.
+        if (!_localGenerics.ContainsKey(symbol)) {
+            _names[symbol] = name;
+        }
+
         _module.Add(function);
 
         new FunctionLowering(this, symbol, function, source, substitution).Lower(body);
@@ -4098,20 +4124,30 @@ public sealed partial class SilGen {
             }
 
             if (!callee.TypeParameters.IsEmpty) {
-                Fail(local.Syntax, $"the generic local function '{callee.Name}'");
+                // A closure is one value, and a generic function is code for
+                // each set of type arguments: one that captures has no one
+                // value to be.
+                if (generator.Captures(callee)) {
+                    Fail(local.Syntax, $"the generic local function '{callee.Name}', which captures");
+                    return;
+                }
+
+                // One that does not is instantiated for each call's type
+                // arguments, as a generic function of the module is — with
+                // this instance's for the type parameters around it.
+                generator.DeclareLocalGeneric(callee, local.Body, generator.LocalFunctionName(function.Name, callee.Name), source);
                 return;
             }
 
             // One that captures is a closure, kept in a slot of its own for
             // the rest of the scope; a call to it is a call through that.
             if (generator.Captures(callee)) {
-                if (callee.Parameters.Any(static p => p.Modifier is not (ParameterModifier.None or ParameterModifier.In))) {
-                    Fail(local.Syntax, $"the local function '{callee.Name}', which captures, with an '{callee.Parameters.First(static p => p.Modifier is not (ParameterModifier.None or ParameterModifier.In)).Modifier}' parameter");
+                if (callee.Parameters.Any(static p => p.Modifier is not (ParameterModifier.None or ParameterModifier.In or ParameterModifier.InOut))) {
+                    Fail(local.Syntax, $"the local function '{callee.Name}', which captures, with an '{callee.Parameters.First(static p => p.Modifier is not (ParameterModifier.None or ParameterModifier.In or ParameterModifier.InOut)).Modifier}' parameter");
                     return;
                 }
 
-                var valueType = TypeOf(callee);
-                if (LowerType(valueType) is not ThickFunctionType thick) {
+                if (LocalFunctionType(callee) is not { } thick) {
                     Fail(local.Syntax, $"the local function '{callee.Name}'");
                     return;
                 }
@@ -4137,6 +4173,18 @@ public sealed partial class SilGen {
             generator.LowerLocalFunction(callee, local.Body, generator.LocalFunctionName(function.Name, callee.Name), type, source, substitution);
         }
 
+        /// <summary>
+        ///     The closure a local function that captures is. A function type
+        ///     has no inout parameters, so one with them is typed from its own
+        ///     signature, where such a parameter is an address.
+        /// </summary>
+        ThickFunctionType? LocalFunctionType(FunctionSymbol local) =>
+            local.Parameters.Any(static p => p.Modifier == ParameterModifier.InOut)
+                ? local.DeclaringSyntax.FirstOrDefault() is { } declaration && generator.SignatureOf(local, declaration, substitution) is { } signature
+                    ? new ThickFunctionType(signature)
+                    : null
+                : LowerType(TypeOf(local)) as ThickFunctionType;
+
         /// <summary>The slots holding the closures of this function's local functions that capture.</summary>
         readonly Dictionary<FunctionSymbol, LocalSymbol> _localFunctions = [];
 
@@ -4150,7 +4198,7 @@ public sealed partial class SilGen {
                 return Emit(new LoadInst(Emit(new RefElementAddrInst(_context!, captured.Field))));
             }
 
-            if (ReferenceEquals(local, symbol) && _context is { } context && LowerType(TypeOf(local)) is ThickFunctionType thick) {
+            if (ReferenceEquals(local, symbol) && _context is { } context && LocalFunctionType(local) is { } thick) {
                 var reference = Emit(new FunctionRefInst(function.Name, thick.Implementation));
                 return Emit(new PartialApplyInst(reference, Emit(new CopyValueInst(context)), thick));
             }
@@ -4172,8 +4220,19 @@ public sealed partial class SilGen {
             Hold(callee);
             var arguments = new List<SilValue>();
             var borrows = new List<SilValue> { callee };
-            foreach (var argument in call.Arguments) {
-                if (Borrow(argument) is not { } value) {
+            for (var i = 0; i < call.Arguments.Length; i++) {
+                // An inout argument passes where it is, as to any function.
+                if (i < call.Function.Parameters.Length && call.Function.Parameters[i].Modifier == ParameterModifier.InOut) {
+                    if (Address(call.Arguments[i], borrows) is not { } address) {
+                        return null;
+                    }
+
+                    arguments.Add(address);
+                    BeginAccess(address, modify: true, borrows);
+                    continue;
+                }
+
+                if (Borrow(call.Arguments[i]) is not { } value) {
                     return null;
                 }
 
@@ -6056,7 +6115,9 @@ public sealed partial class SilGen {
             var receiver = call.Receiver is not { } r ? TypeSubstitution.Empty
                 : OwnerOf(callee) is { ExtendedArray: not null } carrier ? Compilation.MatchArray(carrier, Sub(r.Type)) ?? TypeSubstitution.Empty
                 : TypeSubstitution.For(Sub(r.Type));
-            var map = new Dictionary<TypeParameterSymbol, TypeSymbol>();
+            // A local function sees the type parameters around it as this
+            // instance has them.
+            var map = IsLocalFunction(callee) ? substitution.Parameters.ToDictionary(p => p, p => substitution.Lookup(p)!) : new Dictionary<TypeParameterSymbol, TypeSymbol>();
 
             // A protocol's default implementation: Self is the receiver's type.
             if (OwnerOf(callee)?.OriginalDefinition is { TypeKind: TypeKind.Protocol, SelfTypeParameter: { } self }) {
@@ -6226,7 +6287,8 @@ public sealed partial class SilGen {
             if (captures.Count > 0) {
                 contextType = generator._module.AddType(new ClassType($"{name}$context"));
                 foreach (var capture in captures) {
-                    if (LowerType(capture.Type) is not { } fieldType) {
+                    // A local function captured is its closure, typed as its own calls see it.
+                    if ((capture.Key is FunctionSymbol capturedFunction && IsLocalFunction(capturedFunction) ? LocalFunctionType(capturedFunction) : LowerType(capture.Type)) is not { } fieldType) {
                         return Missing(closureExpression, $"capturing a value of type '{capture.Type.ToDisplayString()}'");
                     }
 

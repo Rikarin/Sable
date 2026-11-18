@@ -166,6 +166,26 @@ public sealed class FunctionSymbol : Symbol {
     /// </summary>
     public string? Builtin { get; internal set; }
 
+    TypeSymbol? _explicitProtocol;
+    internal Func<TypeSymbol?>? ExplicitProtocolResolver { get; set; }
+
+    /// <summary>
+    ///     The protocol named before the function's name in an explicit
+    ///     implementation, <c>fn Drawable.render()</c> (SYNTAX.md §7): the
+    ///     function implements that protocol's requirement, and no other's.
+    ///     Null for an ordinary function.
+    /// </summary>
+    public TypeSymbol? ExplicitProtocol {
+        get {
+            if (ExplicitProtocolResolver is { } resolve) {
+                _explicitProtocol = resolve();
+                ExplicitProtocolResolver = null;
+            }
+
+            return _explicitProtocol;
+        }
+    }
+
     TypeSymbol? _returnType;
     internal Func<TypeSymbol>? ReturnTypeResolver { get; set; }
 

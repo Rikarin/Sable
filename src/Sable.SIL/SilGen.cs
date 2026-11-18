@@ -191,6 +191,22 @@ public sealed partial class SilGen {
             _names[symbol] = Mangle(symbol, overloaded);
         }
 
+        // Overloads with the same parameter types differ in their labels,
+        // 'g(a:)' and 'g(b:)': only those get the labels in their names too.
+        // A pair that still shares a name is one the binder has reported.
+        var lowered = functions.Select(static f => f.Symbol).Distinct().ToList();
+        foreach (var clash in lowered.GroupBy(s => _names[s], StringComparer.Ordinal).Where(static g => g.Count() > 1)) {
+            foreach (var symbol in clash) {
+                _names[symbol] += "$by$" + string.Join("$", symbol.Parameters.Select(static p => Sanitise(p.Label ?? p.Name)));
+            }
+        }
+
+        foreach (var clash in lowered.GroupBy(s => _names[s], StringComparer.Ordinal).Where(static g => g.Count() > 1)) {
+            foreach (var (symbol, i) in clash.Skip(1).Select(static (s, i) => (s, i + 1))) {
+                _names[symbol] += $"${i}";
+            }
+        }
+
         // Which classes something inherits from: their methods dispatch.
         foreach (var tree in _compilation.SyntaxTrees) {
             foreach (var declaration in Declarations(tree).OfType<ClassDeclarationSyntax>()) {
@@ -901,6 +917,9 @@ public sealed partial class SilGen {
             { FunctionKind: FunctionKind.Accessor, ContainingSymbol: FunctionSymbol { FunctionKind: FunctionKind.Subscript } subscript } =>
                 $"{owner}.{SubscriptName(subscript)}.{symbol.Name}",
             { FunctionKind: FunctionKind.Subscript } => $"{owner}.{SubscriptName(symbol)}.get",
+
+            // 'fn Drawable.render()' beside 'fn Printable.render()': 'M.Shape.Drawable.render'.
+            { ExplicitProtocol: NamedTypeSymbol protocol } => $"{owner}.{protocol.Name}.{symbol.Name}",
             _ => $"{owner}.{symbol.Name}",
         };
         if (symbol.FunctionKind == FunctionKind.Subscript || symbol.ContainingSymbol is FunctionSymbol { FunctionKind: FunctionKind.Subscript }) {
@@ -1974,14 +1993,30 @@ public sealed partial class SilGen {
     }
 
     /// <summary>The member of a concrete type that implements a protocol's method: its own, or a superclass's.</summary>
+    /// <summary>True when two functions' parameters have the same argument labels.</summary>
+    static bool SameLabels(FunctionSymbol a, FunctionSymbol b) =>
+        a.Parameters.Length == b.Parameters.Length
+        && a.Parameters.Zip(b.Parameters).All(static p => (p.First.Label ?? p.First.Name) == (p.Second.Label ?? p.Second.Name));
+
     internal static FunctionSymbol? Implementation(NamedTypeSymbol concrete, FunctionSymbol requirement) {
+        var required = Owner(requirement)?.OriginalDefinition;
         for (var type = (NamedTypeSymbol?)concrete.OriginalDefinition; type is not null; type = SuperclassOf(type)?.OriginalDefinition) {
-            // An operator is static wherever it is written; a requirement's says nothing.
-            var found = type.Members.OfType<FunctionSymbol>().FirstOrDefault(f =>
-                f.Name == requirement.Name
-                && (f.IsStatic == requirement.IsStatic || requirement.FunctionKind == FunctionKind.Operator)
-                && f.Parameters.Length == requirement.Parameters.Length
-                && Owner(f) is { TypeKind: not TypeKind.Protocol });
+            // An operator is static wherever it is written; a requirement's
+            // says nothing. 'fn Printable.render()' implements Printable's
+            // requirement and no other's, and is the one for it even beside
+            // an ordinary 'render'. Overloads told apart by their labels are
+            // told apart here the same way.
+            var found = type.Members.OfType<FunctionSymbol>()
+                .Where(f =>
+                    f.Name == requirement.Name
+                    && (f.IsStatic == requirement.IsStatic || requirement.FunctionKind == FunctionKind.Operator)
+                    && f.Parameters.Length == requirement.Parameters.Length
+                    && Owner(f) is { TypeKind: not TypeKind.Protocol }
+                    && (f.ExplicitProtocol is null
+                        || ReferenceEquals((f.ExplicitProtocol as NamedTypeSymbol)?.OriginalDefinition, required)))
+                .OrderBy(f => f.ExplicitProtocol is null)
+                .ThenBy(f => !SameLabels(f, requirement))
+                .FirstOrDefault();
             if (found is not null) {
                 return found;
             }

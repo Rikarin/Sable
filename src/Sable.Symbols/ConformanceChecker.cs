@@ -115,6 +115,79 @@ internal static class ConformanceChecker {
 
         CheckInheritance(type, diagnostics);
         CheckOverrides(type, diagnostics);
+        CheckExplicitImplementations(type, diagnostics);
+    }
+
+    static bool SameProtocol(TypeSymbol a, TypeSymbol b) =>
+        a is NamedTypeSymbol x && b is NamedTypeSymbol y && ReferenceEquals(x.OriginalDefinition, y.OriginalDefinition);
+
+    /// <summary>
+    ///     <c>fn Drawable.render()</c> (SYNTAX.md §7) names a protocol the type
+    ///     conforms to, and implements one of its requirements.
+    /// </summary>
+    static void CheckExplicitImplementations(NamedTypeSymbol type, DiagnosticBag diagnostics) {
+        foreach (var function in type.Members.OfType<FunctionSymbol>()) {
+            if (function.ExplicitProtocol is not { IsError: false } named) {
+                continue;
+            }
+
+            if (named is not NamedTypeSymbol { TypeKind: TypeKind.Protocol } protocol) {
+                Report(
+                    diagnostics,
+                    ErrorCode.ERR_NotAProtocol,
+                    function,
+                    $"'{named.ToDisplayString()}.{function.Name}' implements a requirement of '{named.ToDisplayString()}', "
+                    + "which is not a protocol"
+                );
+                continue;
+            }
+
+            if (ProtocolsOf(type).FirstOrDefault(p => SameProtocol(p, protocol)) is not { } conformed) {
+                Report(
+                    diagnostics,
+                    ErrorCode.ERR_DoesNotConform,
+                    function,
+                    $"'{protocol.Name}.{function.Name}' implements a requirement of '{protocol.Name}', "
+                    + $"but '{type.Name}' does not conform to '{protocol.Name}'"
+                );
+                continue;
+            }
+
+            var requirements = conformed.Members.OfType<FunctionSymbol>()
+                .Where(r => r.IsAbstract && r.Name == function.Name);
+            if (!requirements.Any(r => Matches(r, function, conformed, type))) {
+                Report(
+                    diagnostics,
+                    ErrorCode.ERR_RequirementSignatureMismatch,
+                    function,
+                    $"'{protocol.Name}.{function.Name}' matches no requirement of '{protocol.Name}'"
+                );
+            }
+        }
+    }
+
+    /// <summary>Every protocol a type conforms to: those it names, those they refine, and its base classes'.</summary>
+    static IEnumerable<NamedTypeSymbol> ProtocolsOf(NamedTypeSymbol type) {
+        var seen = new HashSet<NamedTypeSymbol>();
+        var queue = new Queue<NamedTypeSymbol>();
+        queue.Enqueue(type);
+
+        while (queue.Count > 0) {
+            var current = queue.Dequeue();
+            if (!seen.Add(current)) {
+                continue;
+            }
+
+            if (current.TypeKind == TypeKind.Protocol) {
+                yield return current;
+            }
+
+            foreach (var baseType in current.BaseTypes) {
+                if (baseType is NamedTypeSymbol named) {
+                    queue.Enqueue(named);
+                }
+            }
+        }
     }
 
     /// <summary>What a base class allows, per spec/SYNTAX.md §2.</summary>
@@ -322,7 +395,10 @@ internal static class ConformanceChecker {
         FunctionSymbol requirement,
         DiagnosticBag diagnostics
     ) {
-        var candidates = FindMembers(type, requirement.Name).OfType<FunctionSymbol>().ToList();
+        // 'fn Printable.render()' implements Printable's requirement only.
+        var candidates = FindMembers(type, requirement.Name).OfType<FunctionSymbol>()
+            .Where(c => c.ExplicitProtocol is null || SameProtocol(c.ExplicitProtocol, protocol))
+            .ToList();
 
         if (candidates.Count == 0) {
             Report(

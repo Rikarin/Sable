@@ -363,4 +363,69 @@ public sealed class GenericsAndConformanceTests {
             }
             """
         );
+
+    // ---- Explicit protocol implementation (SYNTAX.md §7) -------------------
+
+    const string Colliding = """
+                             protocol Drawable { fn render() -> Int }
+                             protocol Printable { fn render() -> String }
+                             """;
+
+    [Fact]
+    public void ExplicitImplementationsMeetTwoCollidingRequirements() =>
+        AssertClean(
+            Colliding + """
+
+            class Shape: Drawable, Printable {
+                fn Drawable.render() -> Int { return 1 }
+                fn Printable.render() -> String { return "page" }
+            }
+            """
+        );
+
+    [Fact]
+    public void AnExplicitImplementationMeetsOnlyItsOwnProtocol() =>
+        // 'Drawable.render' returns a String, as Printable's would: it does
+        // not meet Printable's requirement for being named the same.
+        Assert.Contains(
+            Errors(
+                Colliding + """
+
+                class Shape: Drawable, Printable {
+                    fn Drawable.render() -> String { return "page" }
+                }
+                """
+            ),
+            static e => e.Code == ErrorCode.ERR_RequirementSignatureMismatch && e.Message.Contains("'Drawable.render' matches no requirement")
+        );
+
+    [Fact]
+    public void AnExplicitImplementationNamesAProtocolTheTypeConformsTo() =>
+        Assert.Contains(
+            Errors(
+                Colliding + """
+
+                struct Shape: Drawable {
+                    fn render() -> Int { return 1 }
+                    fn Printable.render() -> String { return "page" }
+                }
+                """
+            ),
+            static e => e.Code == ErrorCode.ERR_DoesNotConform && e.Message.Contains("does not conform to 'Printable'")
+        );
+
+    [Fact]
+    public void TwoExplicitImplementationsOfOneRequirementAreADuplicate() =>
+        Assert.Contains(
+            Errors(
+                Colliding + """
+
+                struct Shape: Drawable {
+                    fn Drawable.render() -> Int { return 1 }
+                    fn Drawable.render() -> Int { return 2 }
+                }
+                """
+            ),
+            static e => e.Code == ErrorCode.ERR_DuplicateDeclaration
+        );
 }

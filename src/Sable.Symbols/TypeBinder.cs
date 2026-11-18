@@ -115,6 +115,10 @@ internal sealed class TypeBinder(Compilation compilation) {
             ? BindType(clause.Type, function, scope)
             : compilation.Core.Void;
 
+        if (declaration.ExplicitProtocol is { } explicitProtocol) {
+            function.ExplicitProtocolResolver = () => BindType(explicitProtocol, function, scope);
+        }
+
         function.IsRethrows =
             declaration.ThrowsSpec?.ThrowsKeyword.Kind == SyntaxKind.RethrowsKeyword;
 
@@ -139,6 +143,7 @@ internal sealed class TypeBinder(Compilation compilation) {
                 BindWhereClause(declaration.WhereClause, function, scope);
 
                 _ = function.ReturnType;
+                _ = function.ExplicitProtocol;
                 foreach (var parameter in function.Parameters) {
                     _ = parameter.Type;
                 }

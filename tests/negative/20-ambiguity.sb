@@ -3,12 +3,13 @@ module Negative.Ambiguity
 struct Value { var n: Int }
 protocol Shape { fn area() -> F64 }
 
-fn ambiguousOverload(_ v: Value) -> Int {
-    return pick(v)                      //! S3008 ambiguous
+fn ambiguousOverload() -> Int {
+    return pick(1, 1)                   //! S3008 ambiguous
 }
 
-fn pick(_ a: Value) -> Int { return 1 }
-fn pick(_ b: Value) -> Int { return 2 }
+// Each literal fits either parameter, so neither overload is the better one.
+fn pick(_ a: Int, _ b: F64) -> Int { return 1 }
+fn pick(_ a: F64, _ b: Int) -> Int { return 2 }
 
 fn aProtocolCannotBeConstructed() -> Int {
     let s = Shape()                     //! S3020 cannot be used as a value

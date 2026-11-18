@@ -2866,7 +2866,7 @@ public sealed partial class SilGen {
         if (implementation is not null && !IsGeneric(implementation) && _names.TryGetValue(implementation, out var implementationName)) {
             target = implementationName;
             targetType = _module.Find(target)?.Type ?? SignatureOf(implementation, at, TypeSubstitution.Empty);
-        } else if (implementation is { ContainingSymbol: NamedTypeSymbol, TypeParameters.IsEmpty: true }
+        } else if (implementation is { ContainingSymbol: NamedTypeSymbol or FieldSymbol { ContainingSymbol: NamedTypeSymbol }, TypeParameters.IsEmpty: true }
                    && ConstructedOwner(concrete, implementation) is { } owner
                    && Instance(implementation, TypeSubstitution.For(owner), at) is { } generic) {
             // A method of a generic type, 'G<Int>' boxed as 'any P': its
@@ -2991,8 +2991,21 @@ public sealed partial class SilGen {
         SilValue Owned(SilValue given) => given.Type.IsTrivial ? given : block.Append(new CopyValueInst(given));
 
         switch (FindField(concrete, property.Name)) {
-            case { IsComputed: true } own when SetterOf(own) is { } setter && !IsGeneric(setter) && _names.TryGetValue(setter, out var setterName): {
-                if ((_module.Find(setterName)?.Type ?? SignatureOf(setter, at, TypeSubstitution.Empty)) is not { Parameters.Length: 2 } setterType) {
+            case { IsComputed: true } own when SetterOf(own) is { } setter: {
+                // The setter itself, or, of a generic type, its instance for
+                // the type arguments the boxed value has.
+                string setterName;
+                FunctionType? found;
+                if (!IsGeneric(setter) && _names.TryGetValue(setter, out var plain)) {
+                    setterName = plain;
+                    found = _module.Find(setterName)?.Type ?? SignatureOf(setter, at, TypeSubstitution.Empty);
+                } else if (ConstructedOwner(concrete, setter) is { } owner && Instance(setter, TypeSubstitution.For(owner), at) is { } instance) {
+                    (setterName, found) = instance;
+                } else {
+                    return false;
+                }
+
+                if (found is not { Parameters.Length: 2 } setterType) {
                     return false;
                 }
 

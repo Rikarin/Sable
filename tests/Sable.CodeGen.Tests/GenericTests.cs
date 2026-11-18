@@ -356,12 +356,13 @@ public sealed class GenericTests {
     ///     Polymorphic recursion, which no set of copies can compile: the
     ///     copy that would ask for an endless series calls the one instance
     ///     that serves every type instead, boxing its arguments and unboxing
-    ///     its result (#105).
+    ///     its result — with the witnesses of what a type parameter is
+    ///     constrained to (#105).
     /// </summary>
     [Fact]
     public void PolymorphicRecursionRunsThroughOneInstanceForEveryType() =>
         Assert.Equal(
-            "3\n5\n1\n2\n3\nw\n4\n",
+            "3\n5\n1\n2\n3\nw\n4\n32\n",
             AssertAgree(
                 Program(
                     """
@@ -387,12 +388,33 @@ public sealed class GenericTests {
                         }
                         return 1 + count([xs, xs], n - 1)
                     }
+
+                    protocol Shape { fn area() -> Int }
+
+                    struct Sq: Shape {
+                        var side: Int
+                        fn area() -> Int { return side * side }
+                    }
+
+                    struct Two<A: Shape>: Shape {
+                        var a: A
+                        var b: A
+                        fn area() -> Int { return a.area() + b.area() }
+                    }
+
+                    fn total<T: Shape>(_ x: T, _ n: Int) -> Int {
+                        if n == 0 {
+                            return x.area()
+                        }
+                        return total(Two(a: x, b: x), n - 1)
+                    }
                     """,
                     """
                         print(deep(1, 3))
                         print(deep("s", 5))
                         print(wrap("w", 3))
                         print(count(1, 4))
+                        print(total(Sq(side: 2), 3))
                     """
                 )
             ).Stdout

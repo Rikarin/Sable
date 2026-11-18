@@ -289,6 +289,40 @@ public sealed class ExistentialTests {
             """
         );
 
+    /// <summary>A generic type's property, computed and stored, written through an existential.</summary>
+    [Fact]
+    public void AGenericTypesPropertyIsWrittenThroughAnExistential() =>
+        Prints(
+            "6\n7\n2\n",
+            """
+            protocol Sized { var size: Int { get set } }
+
+            struct G<T>: Sized {
+                var t: T
+                var raw: Int
+                var size: Int {
+                    get => raw
+                    set { raw = newValue + 1 }
+                }
+            }
+
+            struct H<T>: Sized {
+                var t: T
+                var size: Int
+            }
+            """,
+            """
+                var g: any Sized = G<String>(t: "x", raw: 1)
+                g.size = 5
+                print(g.size)
+                var h: any Sized = H<Int>(t: 1, size: 2)
+                let h2 = h
+                h.size = 7
+                print(h.size)
+                print(h2.size)
+            """
+        );
+
     /// <summary>
     ///     'as?', 'as!', 'is' and a type pattern on an existential: to a
     ///     concrete type, a class through its superclass's box, and another

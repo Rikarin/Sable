@@ -703,6 +703,10 @@ internal sealed class ControlFlowGraph {
                         Op(FlowOpKind.Write, error, tryExpression);
                     }
 
+                    if (tryExpression.FallbackBody is { } body) {
+                        Statement(body);
+                    }
+
                     Expression(fallback);
                     Edge(_current, after);
                     _current = after;

@@ -133,6 +133,35 @@ public sealed class ErrorLoweringTests {
     }
 
     [Fact]
+    public void AnInlineCatchBlockRunsEveryStatementBeforeItsValue() {
+        // The block's statements run, its locals are released and its defer
+        // runs after the value is computed: 15, with 'steps' at 11.
+        var module = Lower(
+            Errors + """
+
+            class Box {
+                var n: Int
+                init(_ n: Int) { self.n = n }
+            }
+
+            fn recover(_ n: Int) -> Int {
+                var steps = 0
+                let v = try read(n) catch {
+                    steps += 10
+                    let b = Box(steps)
+                    defer { steps += 1 }
+                    b.n + 5
+                }
+                return v * 100 + steps
+            }
+            """
+        );
+
+        Assert.Equal(300L, Run(module, "recover", 3L));
+        Assert.Equal(1511L, Run(module, "recover", 0L));
+    }
+
+    [Fact]
     public void AFunctionIsConvertedToOneThatThrowsMore() {
         var module = Lower(
             Errors + """

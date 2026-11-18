@@ -5573,7 +5573,24 @@ public sealed partial class SilGen {
                         Destroy(error);
                     }
 
-                    var alternative = Expression(fallback);
+                    // A 'catch { ... }' block's statements run before its
+                    // value, in a scope of their own that the value can see.
+                    if (tryExpression.FallbackBody is { } body) {
+                        _scopes.Add([]);
+                        foreach (var statement in body.Statements) {
+                            Statement(statement);
+                        }
+                    }
+
+                    var alternative = _current is null ? null : Expression(fallback);
+                    if (tryExpression.FallbackBody is not null) {
+                        if (_current is not null) {
+                            RunDefers(_scopes.Count - 1);
+                        }
+
+                        _scopes.RemoveAt(_scopes.Count - 1);
+                    }
+
                     if (alternative is not null && _current is not null) {
                         if (result is null) {
                             Destroy(alternative);

@@ -211,6 +211,23 @@ public sealed class LoweringGapTests {
         );
 
     [Fact]
+    public void AnInlineCatchBlockRunsItsStatementsBeforeItsValue() =>
+        Prints(
+            "in the block\ndeferred\nfallback!\n",
+            Errors,
+            """
+                let a = try bare("") catch {
+                    defer { print("deferred") }
+                    print("in the block")
+                    var s = "fallback"
+                    s += "!"
+                    s
+                }
+                print(a)
+            """
+        );
+
+    [Fact]
     public void AUnionOfErrorsCarriesEither() =>
         Prints(
             "x\nnet 7\nio\n",

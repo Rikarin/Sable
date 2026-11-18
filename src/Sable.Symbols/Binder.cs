@@ -784,11 +784,11 @@ public sealed partial class Binder {
                 return Record(syntax, new BoundTry(syntax, value.Type, value, kind, null));
 
             case TryKind.Fallback: {
-                var fallback = BindCatchBody(syntax.CatchBody!, value.Type, operandThrown ?? _declaredThrows);
+                var (body, fallback) = BindCatchBody(syntax.CatchBody!, value.Type, operandThrown ?? _declaredThrows);
 
                 return Record(
                     syntax,
-                    new BoundTry(syntax, value.Type, value, kind, fallback) { ErrorLocal = _catchError }
+                    new BoundTry(syntax, value.Type, value, kind, fallback) { ErrorLocal = _catchError, FallbackBody = body }
                 );
             }
 
@@ -812,7 +812,7 @@ public sealed partial class Binder {
     /// <summary>The <c>error</c> the catch being bound introduced.</summary>
     LocalSymbol? _catchError;
 
-    BoundExpression BindCatchBody(
+    (BoundBlock? Body, BoundExpression Value) BindCatchBody(
         SyntaxNode body,
         TypeSymbol expected,
         TypeSymbol? thrown
@@ -832,18 +832,20 @@ public sealed partial class Binder {
         }
     }
 
-    BoundExpression BindCatchValue(SyntaxNode body, TypeSymbol expected) {
+    (BoundBlock? Body, BoundExpression Value) BindCatchValue(SyntaxNode body, TypeSymbol expected) {
         switch (body) {
             case ExpressionSyntax expression:
-                return Convert(BindExpression(expression, expected), expected, expression);
+                return (null, Convert(BindExpression(expression, expected), expected, expression));
 
             case BlockSyntax block: {
                 // The block's value is what its last expression statement
-                // produces, which is how the spec writes it.
+                // produces, which is how the spec writes it. The statements
+                // before it run first, so they are kept as the catch's body.
                 var saved = SaveEffects();
                 _catchDepth++;
 
                 PushScope();
+                var statements = ImmutableArray.CreateBuilder<BoundStatement>();
                 BoundExpression? value = null;
                 foreach (var statement in block.Statements) {
                     if (statement is ExpressionStatementSyntax last
@@ -852,15 +854,17 @@ public sealed partial class Binder {
                         continue;
                     }
 
-                    BindStatement(statement);
+                    statements.Add(BindStatement(statement));
                 }
 
+                var locals = _locals[^1].Values.OfType<LocalSymbol>().ToImmutableArray();
                 PopScope();
 
                 RestoreEffects(saved);
 
+                var prelude = new BoundBlock(block, locals, statements.ToImmutable());
                 if (value is not null) {
-                    return value;
+                    return (prelude, value);
                 }
 
                 _diagnostics.Error(
@@ -869,11 +873,11 @@ public sealed partial class Binder {
                     "this 'catch' has to end in a value of type "
                     + $"'{expected.ToDisplayString()}'"
                 );
-                return new BoundError(block);
+                return (prelude, new BoundError(block));
             }
 
             default:
-                return new BoundError(body);
+                return (null, new BoundError(body));
         }
     }
 

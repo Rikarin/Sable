@@ -253,6 +253,33 @@ public sealed class DefiniteAssignmentTests {
             Throwing
         );
 
+    [Fact]
+    public void AnInlineCatchBlocksStatementsAreChecked() =>
+        // The statements before the block's value are part of the flow too.
+        AssertReported(
+            """
+            var x: Int
+            let t = try read("a") catch {
+                let y = x
+                "b"
+            }
+            """,
+            Throwing
+        );
+
+    [Fact]
+    public void AnInlineCatchBlockCanAssignWhatItsValueReads() =>
+        AssertClean(
+            """
+            let t = try read("a") catch {
+                var s: String
+                s = "b"
+                s
+            }
+            """,
+            Throwing
+        );
+
     const string Throwing = """
                             union IoError { Denied }
                             fn read(_ p: String) throws(IoError) -> String { return p }

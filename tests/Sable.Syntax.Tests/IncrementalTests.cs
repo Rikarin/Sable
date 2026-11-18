@@ -355,6 +355,22 @@ public sealed class IncrementalTests {
         AssertSameAsFullParse(tree, TextChange.Insert(source.Length, "\nfn c() { }\n"));
     }
 
+    /// <summary>
+    ///     An edit past a directive: the lexer that takes over after the
+    ///     reused tokens has to know which branches are open there, or the
+    ///     rest of an <c>#else</c> lexes as if no <c>#if</c> were open, and a
+    ///     branch that is off as if it were on. Found by the coverage-guided
+    ///     fuzzer (tools/fuzz/coverage.sh).
+    /// </summary>
+    [Theory]
+    [InlineData("module D\n#if NOPE\nfn a() { }\n#else\nfn b() { }\nfn c() { }\n#endif\n", "fn c", "fn d")]
+    [InlineData("module D\n#if NOPE\nlet g = \"\n#else\npublic fn e(_ m: String)\n#endif\n", "public fn e", "")]
+    [InlineData("module D\n#if YES\nfn a() { }\n#else\nfn b() { }\nfn c() { }\n#endif\n", "fn c", "fn d")]
+    public void AnEditPastADirectiveMatchesAFullParse(string source, string replaced, string replacement) {
+        var tree = SyntaxTree.Parse(new SourceText(source, "d.sb"), ParseOptions.Default.WithSymbols("YES"));
+        AssertSameAsFullParse(tree, TextChange.Replace(new(source.IndexOf(replaced, StringComparison.Ordinal), replaced.Length), replacement));
+    }
+
     // ---- Chained edits ------------------------------------------------------
 
     /// <summary>

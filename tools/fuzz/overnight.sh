@@ -25,7 +25,8 @@
 #     resolver   random registries through the package resolver
 #     frombytes  @inline_layout's fromBytes under AddressSanitizer and UBSan
 #
-# The duration takes s, m or h. Results go to artifacts/fuzz/<start time>/:
+# The duration takes s, m or h. Results go to artifacts/fuzz/<start time>/,
+# laid out as tools/fuzz/coverage.sh lays out its own (tools/fuzz/common.sh):
 #
 #     summary.txt         one line per distinct failure, with the seeds that hit it
 #     <fuzzer>/<seed>.log the whole output of each failing round
@@ -46,38 +47,11 @@ set -uo pipefail
 root=$(cd "$(dirname "$0")/../.." && pwd)
 cd "$root"
 
-# The results of a run, finished or not: one line per distinct failure, most
-# frequent first, with its seeds, and how many rounds each fuzzer has run.
-summarise() {
-    local run=$1
-    {
-        echo "run: $run"
-        local rounds
-        for rounds in "$run"/*/rounds; do
-            [ -e "$rounds" ] || continue
-            echo "  $(basename "$(dirname "$rounds")"): $(cat "$rounds") rounds"
-        done
-        echo
-        if [ -s "$run/failures.tsv" ]; then
-            echo "distinct failures:"
-            awk -F'\t' '{ key = $1 "\t" $3; n[key]++; s[key] = s[key] (s[key] ? " " : "") $2 }
-                END { for (k in n) { split(k, p, "\t"); printf "%4d  %-9s  %s  [seeds: %s]\n", n[k], p[1], p[2], s[k] } }' \
-                "$run/failures.tsv" | sort -rn
-        else
-            echo "no failures"
-        fi
-    } > "$run/summary.txt"
-    cat "$run/summary.txt"
-}
+. "$root/tools/fuzz/common.sh"
 
 if [ "${1:-}" = "--summary" ]; then
-    run=${2:-$(ls -d "$root"/artifacts/fuzz/*/ 2>/dev/null | sort | tail -1)}
-    run=${run%/}
-    if [ -z "$run" ] || [ ! -d "$run" ]; then
-        echo "error: no fuzz run in artifacts/fuzz" >&2
-        exit 1
-    fi
-    summarise "$run"
+    run=$(run_dir "${2:-}") || exit 1
+    summarise "$run" seeds
     exit 0
 fi
 
@@ -86,13 +60,7 @@ duration=${1:-8h}
 fuzzers=("$@")
 [ ${#fuzzers[@]} -eq 0 ] && fuzzers=(parser compiler resolver frombytes)
 
-case "$duration" in
-    *h) seconds=$(( ${duration%h} * 3600 )) ;;
-    *m) seconds=$(( ${duration%m} * 60 )) ;;
-    *s) seconds=${duration%s} ;;
-    *) seconds=$duration ;;
-esac
-deadline=$(( $(date +%s) + seconds ))
+deadline=$(( $(date +%s) + $(seconds_of "$duration") ))
 
 out="$root/artifacts/fuzz/$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$out"
@@ -108,15 +76,6 @@ for project in Syntax SIL CodeGen; do
         exit 1
     fi
 done
-
-# What makes two failures the same one: the first line that says what went
-# wrong, with numbers, addresses and quoted text taken out.
-signature() {
-    grep -m1 -E -A1 'Error Message:|ERROR: AddressSanitizer|runtime error:|fatal error|does not write back|hang' "$1" \
-        | grep -v -E '^\s*(Error Message:|--)\s*$' | head -1 \
-        | sed -E 's/0x[0-9a-f]+/ADDR/g; s/[0-9]+/N/g; s/"[^"]*"/"…"/g; s/^[[:space:]]+//' \
-        | cut -c1-200
-}
 
 stopped() { [ -e "$out/.stop" ]; }
 
@@ -184,15 +143,6 @@ fuzz() {
     echo "$(date +%H:%M) $name: done after $round rounds"
 }
 
-# Every process under a pid, deepest first.
-descendants() {
-    local child
-    for child in $(pgrep -P "$1"); do
-        descendants "$child"
-        echo "$child"
-    done
-}
-
 # On Ctrl-C or SIGTERM: say so, then stop every round in progress. A script
 # without job control starts its background jobs ignoring SIGINT, and the
 # test processes inherit that, so they are sent SIGTERM directly.
@@ -224,5 +174,5 @@ done
 rm -f "$out/.stop"
 
 echo
-summarise "$out"
+summarise "$out" seeds
 exit 0

@@ -329,6 +329,13 @@ match Order.fromBytes(buf) {
 before returning. Corrupt or hostile input returns `.Invalid`, never a bad
 reference. This is a validate-once-then-use model, not a trust-the-bytes model.
 
+`@inline_layout` is a conformance as well as a layout: every such struct
+conforms to `Sable.Core`'s `InlineLayout`, whose one requirement is
+`static fn fromBytes(_ bytes: U8[>..]) -> Decoded<Self>`, and the compiler
+writes the body for the struct's layout, as `@derive` writes `==`. Generic
+code asks for it by name (`fn load<T: InlineLayout>(…)`), and `Bytes.of`
+takes only a `T: InlineLayout`.
+
 ### Variant-sized unions
 
 ```sable

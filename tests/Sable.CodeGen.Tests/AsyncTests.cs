@@ -94,4 +94,33 @@ public sealed class AsyncTests {
         var result = Pipeline.Compile(new SourceText(AsyncProgram(Declarations, body), "test.sab"));
         Assert.Contains(result.Errors, e => e.Contains(message, StringComparison.Ordinal));
     }
+
+    /// <summary>'var x: T { async get { … } }': a getter that may wait, as Task's 'value' is declared.</summary>
+    [Fact]
+    public void AnAsyncGetterWaitsWhereItsTaskMay() =>
+        Assert.Equal(
+            "a\ngot 42\n",
+            AssertAgree(AsyncProgram(
+                """
+                class Later {
+                    var n: Int = 41
+                    var value: Int {
+                        async get {
+                            await Task.yield()
+                            return n + 1
+                        }
+                    }
+                }
+                """,
+                """
+                    let later = Later()
+                    let other = Task.spawn {
+                        print("a")
+                        return 0
+                    }
+                    let got = await later.value
+                    let zero = await other.value
+                    print("got \(got + zero)")
+                """)).Stdout
+        );
 }

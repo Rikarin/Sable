@@ -2717,6 +2717,16 @@ public sealed partial class Binder {
                     return new BoundError(syntax, arguments.ToArray());
                 }
 
+                // An initialiser written 'private' makes the type's values its
+                // own to make: 'Task' is made by 'spawn' alone.
+                var accessible = initializers.Where(i => i.DeclaringSyntax.IsEmpty || IsAccessible(i)).ToImmutableArray();
+                if (accessible.IsEmpty) {
+                    CheckAccessible(initializers[0], syntax.Expression);
+                    return new BoundError(syntax, arguments.ToArray());
+                }
+
+                initializers = accessible;
+
                 if (namedType.IsAbstract) {
                     _diagnostics.Error(
                         ErrorCode.ERR_CannotInstantiate,

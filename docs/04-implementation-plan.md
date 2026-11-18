@@ -906,6 +906,30 @@ parameters and result do not lower to the builtin's operands and result
 reflection uses, stays apart: its body is synthesised per type, not one
 builtin.
 
+`@intrinsic` also declares what is one builtin for no single signature, or
+more than one: `Region.alloc<T>(_ value: T) -> T&` (room bumped, the value
+stored, for any `T`); `Task<Success>` in `Task.sab`, a class whose
+`static fn spawn<T>(_ body: async () -> T) -> Task<T>` builds the task object
+around the closure, whose `var value: Success { async get }` waits for it,
+and whose ``static async fn `yield`()`` lets the queue run (it is made by
+`spawn` alone: its `init` is private, and a private initialiser is now
+enforced). Inline layout's are in `InlineLayout.sab`: `union Decoded<Value>
+{ Ok(value: Value), Invalid(why: String) }`; `protocol InlineLayout { static
+fn fromBytes(_ bytes: U8[>..]) -> Decoded<Self> }`; and `Bytes.of<T:
+InlineLayout>(_ value: T) -> U8[>..]`. The conformance is synthesised the way
+`@derive`'s are (`Compilation.InlineLayout.cs`): once every type is declared,
+an `@inline_layout` struct gets the requirement, `Self` substituted, as its
+`fromBytes`, and `InlineLayout` in its base list; SIL lowering writes the
+body from the layout. So the declarations are Sable and only the per-type
+body is the compiler's, and `Bytes.of` on a struct that is not
+`@inline_layout` is a type error where it is written rather than a lowering
+failure; naming `InlineLayout` in a base list without the attribute is an
+error too, since there is no body to write. Three small language additions
+came with it: `async get` (an async getter, awaited where it is read and
+free to await, in any type), an escaped identifier naming the function it
+declares (`` fn `yield`() `` declares `yield`), and conformance checking that
+substitutes `Self` inside a requirement's generic types (`Decoded<Self>`).
+
 To make this possible `Sable.Core` is now part of every compilation —
 embedded in `Sable.Symbols` and appended to whatever trees a compilation is
 given (`CoreLibrary`) — rather than something the driver adds, so a test
@@ -1079,13 +1103,16 @@ to the state machine where tasks are many.
       `Char`, the numbers, `Bool`, `print`, `Runtime` and `Region.reset`
       are declared in `lib/Sable.Core`, over `@builtin`s (see "Sable.Core
       in Sable"). The primitive types themselves stay compiler-known, as
-      the plan allows. What is still declared in C# (`CoreTypes`), and why:
+      the plan allows. `Region.alloc`, `Task` (`spawn`, the async getter
+      `value`, `yield`), `Decoded`, `Bytes.of` and the `InlineLayout`
+      protocol `fromBytes` comes from are Sable too, in `Runtime.sab`,
+      `Task.sab` and `InlineLayout.sab`, their bodies the compiler's
+      (`@intrinsic`, and `fromBytes` synthesised per `@inline_layout`
+      struct as `@derive` synthesises `==`; see "Sable.Core in Sable").
+      What is still declared in C# (`CoreTypes`), and why:
       the array family's members (`count`, `append`, `slice`, …), built per
       element type, since a declaration cannot yet range over every array
-      type; `Region.alloc`, generic and giving a reference into the region;
-      `Task` (`spawn` builds the task object around a closure, `value` is an
-      async getter); `Bytes.of`, `fromBytes` and `Decoded`, inline layout's,
-      synthesised per type; and `Range`'s bounds, declared beside the type
+      type; and `Range`'s bounds, declared beside the type
       the binder makes of `a..<b` (and not yet lowered). The I128, U128 and F16 types no
       longer declare `toString`, `abs`, `min` and `max`: nothing could lower
       them, and SIL has no such types yet

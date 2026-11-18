@@ -190,6 +190,12 @@ public struct Runtime {
 }
 
 extension Region {
+    /// The value, moved into the region; a reference to it, rooted in the
+    /// region, back (docs/02 §2.1). The compiler gives the body: room is
+    /// bumped in the region and the value stored there, for any type.
+    @intrinsic
+    public fn alloc<T>(_ value: T) -> T&
+
     /// Everything in the region destroyed, its memory kept for what comes next.
     @builtin("region_reset")
     public fn reset()

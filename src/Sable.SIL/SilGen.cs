@@ -1277,6 +1277,10 @@ public sealed partial class SilGen {
 
     /// <summary>Enters a named type before its members, so that they may refer to it.</summary>
     T Begin<T>(TypeSymbol symbol, T type) where T : NominalType {
+        if (symbol is NamedTypeSymbol { IsConstructed: true } constructed) {
+            type.DisplayName = $"{constructed.OriginalDefinition.ContainingSymbol?.Name}.{constructed.Name}<{string.Join(", ", constructed.TypeArguments.Select(static a => a.ToDisplayString()))}>";
+        }
+
         _types[symbol] = type;
         _lowered.Add(symbol);
         return _module.AddType(type);

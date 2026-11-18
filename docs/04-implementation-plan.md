@@ -1821,7 +1821,7 @@ object's metadata.
 (Int?) absent = none
 (any Values.Named) bird = Values.Bird { [value] = Values.Bird { legs = 2  [strong] = 1 } }
 (Values.Node) node = Values.Node { value = 7  label = "seven"  next = none  [strong] = 2 }
-(Sable.Collections.HashMap$of$String$Int) map = … count = 2 { ["one"] = 1  ["two"] = 2 }
+(Sable.Collections.HashMap<String, Int>) map = … count = 2 { ["one"] = 1  ["two"] = 2 }
 ((Int) -> Int) times = Values.main$closure0
 ```
 
@@ -1847,13 +1847,21 @@ A union case whose payload fields are named (`EnumType.PayloadLabels`) has a
 payload described as a struct of them, `U.Case$case`, laid out as the tuple
 is, which the plugin shows as the case's fields.
 
-Not yet: readable names for generic instances (`HashMap$of$String$Int`);
-`@inline_layout` values, which show as a pointer to their bytes; the standard
+A generic type's instance is named as Sable writes it (`NominalType.DisplayName`):
+`HashMap<String, Int>`, where its symbols and its metadata say
+`HashMap$of$String$Int`; the plugin finds the class by the metadata's name
+and shows the type's. For Windows the same nodes are written as CodeView (the
+`"CodeView"` module flag), which lld gathers into the PDB beside the
+executable, and which Windows' debuggers read; the debugger tests still drive
+lldb with the plugin's DWARF-shaped names, and are run on macOS and Linux only.
+
+Not yet: `@inline_layout` values, which show as a pointer to their bytes; the standard
 library's own source lines (its functions name a file the debugger cannot
 find); expression evaluation in Sable syntax (`expression` is lldb's C); a
 language code of Sable's own (the unit says `DW_LANG_C`, which is what lets
 lldb evaluate expressions at all); `inlinedAt` (a debug build inlines
-nothing); CodeView for Windows; and gdb.
+nothing); generic functions' readable names (`describe$of$Int`); debugger
+tests against a PDB on Windows; and gdb.
 
 ### Incremental builds, as implemented
 

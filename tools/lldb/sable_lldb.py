@@ -445,11 +445,15 @@ def object_summary(valobj, internal_dict):
         return "none" if (raw.GetType().GetName() or "").endswith("?") else "<null>"
     process = valobj.GetProcess()
     name = _metadata_name(process, address) or raw.GetType().GetName()
+    # The metadata names a generic class's instance as its symbols do,
+    # HashMap$of$String$Int; its type is named as Sable writes it.
+    sbtype = _find_type(valobj.GetTarget(), name)
+    shown = sbtype.GetName() if sbtype is not None and sbtype.GetName() else name
     if name.startswith(HASH_MAP):
         body = _object_body(raw)
         used = body.GetChildMemberWithName("used").GetValueAsSigned(0)
-        return "%s count = %d" % (name, used)
-    return name
+        return "%s count = %d" % (shown, used)
+    return shown
 
 
 # ---------------------------------------------------------------------------

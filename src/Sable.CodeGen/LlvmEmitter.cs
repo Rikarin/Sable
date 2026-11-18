@@ -46,7 +46,7 @@ public sealed partial class LlvmEmitter {
     /// <param name="directory">The directory the source file names are relative to.</param>
     public static string EmitWithDebugInfo(SilModule module, string directory, NativeTarget? target = null) =>
         new LlvmEmitter {
-            _debug = new DebugInfo(directory), _target = target ?? NativeTarget.Host, _arch = (target ?? NativeTarget.Host).Arch, _windows = (target ?? NativeTarget.Host).Platform == NativePlatform.Windows,
+            _debug = new DebugInfo(directory, codeView: (target ?? NativeTarget.Host).Platform == NativePlatform.Windows), _target = target ?? NativeTarget.Host, _arch = (target ?? NativeTarget.Host).Arch, _windows = (target ?? NativeTarget.Host).Platform == NativePlatform.Windows,
         }.EmitModule(module);
 
     DebugInfo? _debug;

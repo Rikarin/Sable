@@ -213,6 +213,13 @@ public sealed class TupleType(ImmutableArray<SilType> elements) : SilType {
 public abstract class NominalType(string name) : SilType {
     public string Name { get; } = name;
 
+    /// <summary>
+    ///     A generic type's instance as Sable writes it — <c>M.Box&lt;Int&gt;</c>,
+    ///     where <see cref="Name" /> is <c>M.Box$of$Int</c> — for a debugger to
+    ///     show; null for any other type, whose name is already the one written.
+    /// </summary>
+    public string? DisplayName { get; set; }
+
     /// <summary>A move-only struct or enum: a value of it is never copied, so it has ownership even when its parts are trivial.</summary>
     public bool IsNoncopyable { get; set; }
 

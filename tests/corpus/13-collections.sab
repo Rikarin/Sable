@@ -294,7 +294,7 @@ public struct Row<Value> {
     public var values: Value[>..]
 
     subscript(index: Int) -> Value {
-        get => values.removeLast()
+        get => values[index]
     }
 }
 

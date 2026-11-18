@@ -109,6 +109,16 @@ public sealed class FormatterTests {
     [InlineData("let p=Point{x:1,y:2}", "let p = Point { x: 1, y: 2 }\n")]
     public void NormalisesSpacing(string source, string expected) => Assert.Equal(expected, Format(source));
 
+    [Theory]
+    [InlineData("extension < Element > Element [ > .. ] { }", "extension<Element> Element[>..] { }\n")]
+    [InlineData("extension<Element:Equatable>Element[:]{}", "extension<Element: Equatable> Element[:] { }\n")]
+    [InlineData("extension<T> T[>..<] where T:Hashable { }", "extension<T> T[>..<] where T: Hashable { }\n")]
+    [InlineData("extension U8[:] { }", "extension U8[:] { }\n")]
+    public void FormatsArrayExtensions(string source, string expected) {
+        Assert.Equal(expected, Format(source));
+        Assert.Equal(expected, Format(expected));
+    }
+
     [Fact]
     public void IndentsBodies() {
         const string source = "fn f() { let x = 1\nlet y = 2 }";

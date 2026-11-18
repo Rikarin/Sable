@@ -96,9 +96,10 @@ public sealed class CoreTypes {
     ///     than one builtin: a region's <c>alloc</c> (its result is a
     ///     reference to whatever it is given), <c>Task</c>'s members (a spawn
     ///     builds a closure's task object), <c>Bytes.of</c> and
-    ///     <c>Decoded</c> (inline layout's), <c>Range</c>'s bounds, and the
-    ///     array members, built per element type in
-    ///     <see cref="GetArrayMembers" />.
+    ///     <c>Decoded</c> (inline layout's) and <c>Range</c>'s bounds. The
+    ///     array members are Sable too, in <c>lib/Sable.Core/Array.sab</c>:
+    ///     an array extension ranges over every element type
+    ///     (Compilation.ArrayExtensions.cs).
     /// </remarks>
     void DeclarePrimitiveMembers() {
         // 'arena.alloc(value)': the value, moved into the region; a reference
@@ -153,82 +154,11 @@ public sealed class CoreTypes {
         Property(Range, "isEmpty", Bool);
     }
 
-    /// <summary>The members every array has, built for one element type.</summary>
-    /// <remarks>
-    ///     An array is not a named type, so its members cannot live in a member
-    ///     list; they are built on demand and cached per array type.
-    /// </remarks>
-    public IReadOnlyList<Symbol> GetArrayMembers(ArrayTypeSymbol array) {
-        if (_arrayMembers.TryGetValue(array, out var cached)) {
-            return cached;
-        }
-
-        var owner = new NamedTypeSymbol(
-            array.ToDisplayString(),
-            TypeKind.Struct,
-            Module,
-            accessibility: Accessibility.Public
-        );
-
-        Property(owner, "count", Int);
-        Property(owner, "isEmpty", Bool);
-        Method(owner, "contains", [("element", array.ElementType)], Bool);
-        Method(
-            owner,
-            "slice",
-            [("from", Int), ("to", Int)],
-            new ArrayTypeSymbol(array.ElementType, ArrayKind.Slice)
-        );
-
-        // Bytes read as text: UTF-8, decoded.
-        if (array.ElementType.Equals(U8)) {
-            Method(owner, "toString", [], String);
-        }
-
-        // A bounded inline array grows within its bound.
-        if (array.ArrayKind is ArrayKind.Grow or ArrayKind.GrowShrink or ArrayKind.Inline) {
-            Method(owner, "append", [("element", array.ElementType)], Void);
-            Method(owner, "removeLast", [], array.ElementType);
-            Method(owner, "clear", [], Void);
-        }
-
-        var members = owner.Members;
-        _arrayMembers[array] = members;
-        return members;
-    }
-
-    readonly Dictionary<ArrayTypeSymbol, IReadOnlyList<Symbol>> _arrayMembers = [];
-
     static void Property(NamedTypeSymbol owner, string name, TypeSymbol type) {
         var field = new FieldSymbol(name, owner, null, Accessibility.Public, false) {
             IsComputed = true, TypeResolver = () => type
         };
         owner.AddMember(field);
-    }
-
-    static void Method(
-        NamedTypeSymbol owner,
-        string name,
-        (string Name, TypeSymbol Type)[] parameters,
-        TypeSymbol returnType,
-        bool isStatic = false
-    ) {
-        var function = new FunctionSymbol(name, owner, null, Accessibility.Public, FunctionKind.Ordinary) {
-            IsStatic = isStatic
-        };
-
-        function.Parameters = [
-            ..parameters.Select((parameter, i) => {
-                    // No declared label, so the name may be written or left out.
-                    var symbol = new ParameterSymbol(parameter.Name, null, function, null, i);
-                    symbol.TypeResolver = () => parameter.Type;
-                    return symbol;
-                }
-            )
-        ];
-
-        function.ReturnTypeResolver = () => returnType;
-        owner.AddMember(function);
     }
 
     public ModuleSymbol Module { get; }

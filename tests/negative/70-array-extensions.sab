@@ -1,0 +1,68 @@
+module Negative.ArrayExtensions
+
+// 'extension<Element> Element[>..]': members for every array of a kind.
+
+struct Point { var x: Int, var y: Int }
+struct Box<T> { var item: T }
+
+// A parameter the array does not mention could never be inferred.
+extension<T> Int[>..] { }                   //! S3083 'T' is not in 'Int[>..]'
+
+// Every size of the array, so no size is written.
+extension<T> T[8] { }                       //! S3083 every size
+
+// Members, not conformances.
+extension<T> T[>..<]: Equatable { }         //! S3083 not conformances
+
+// A named type's parameters go after its name.
+extension<T> Box<T> { }                     //! S3083 written after its name
+
+// Only named types and arrays.
+extension<T> (T, T) { }                     //! S3031 array type can be extended
+
+// An extension adds no storage, an array's no more than any other's.
+extension<T> T[:] {
+    var stored: Int = 0                     //! S3029 stored properties
+}
+
+// One of the program's own: every slice's, where the element is Comparable.
+extension<T: Comparable> T[:] {
+    fn largest() -> T {
+        var best = self[0]
+        for candidate in self {
+            if best < candidate {
+                best = candidate
+            }
+        }
+        return best
+    }
+}
+
+// And one for a single element type.
+extension Point[>..] {
+    fn xs() -> Int[>..] {
+        var result: Int[>..] = []
+        for point in self {
+            result.append(point.x)
+        }
+        return result
+    }
+}
+
+fn largestIsEverySlices(_ xs: Int[>..], _ ys: String[]) -> Int {
+    let name: String = ys.largest()
+    return xs.largest() + name.count
+}
+
+fn largestNeedsComparable(_ points: Point[>..]) -> Point {
+    return points.largest()                 //! S3023 only where 'T: Comparable'
+}
+
+fn largestGivesTheElement(_ xs: Int[>..]) -> String {
+    return xs.largest()                     //! S3004 expected 'String'
+}
+
+fn xsIsOnlyPointArrays(_ points: Point[>..], _ fixed: Point[]) -> Int {
+    let all = points.xs()
+    return all.count + fixed.xs().count     //! S2002 has no member named 'xs'
+}

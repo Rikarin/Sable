@@ -1,0 +1,121 @@
+module Sable.Core
+
+// The array family's members (docs/03, SYNTAX.md §11). An array extension
+// declares its parameters after the keyword, since an array has no name to
+// write them after, and is for every array of its kind whatever the element:
+// 'Element[>..]' every grow-only array, 'Element[..]' every inline capacity.
+// What 'Element[:]' declares, every kind has, as every array can be viewed
+// as a slice. What only the runtime can do is a '@builtin', applied where it
+// is called; the rest is Sable over those, monomorphised per element.
+
+extension<Element> Element[:] {
+    /// How many elements the array holds.
+    @builtin("array_count")
+    public var count: Int { get }
+
+    /// Whether the array holds no elements.
+    public var isEmpty: Bool { get { return self.count == 0 } }
+
+    /// The elements from 'from' up to, not including, 'to': a copy, for now,
+    /// rather than a view.
+    @builtin("array_slice")
+    public fn slice(from: Int, to: Int) -> Element[:]
+}
+
+extension<Element: Equatable> Element[:] {
+    /// Whether an element equal to this one is in the array.
+    public fn contains(element: Element) -> Bool {
+        for candidate in self {
+            if candidate == element {
+                return true
+            }
+        }
+        return false
+    }
+}
+
+extension<Element> Element[>..] {
+    /// The element, added at the end.
+    @builtin("array_append")
+    public mutating fn append(element: Element)
+
+    /// The last element, taken out; an empty array traps.
+    @builtin("array_remove_last")
+    public mutating fn removeLast() -> Element
+
+    /// Every element, taken out.
+    @builtin("array_clear")
+    public mutating fn clear()
+}
+
+extension<Element> Element[>..<] {
+    /// The element, added at the end.
+    @builtin("array_append")
+    public mutating fn append(element: Element)
+
+    /// The last element, taken out; an empty array traps.
+    @builtin("array_remove_last")
+    public mutating fn removeLast() -> Element
+
+    /// Every element, taken out.
+    @builtin("array_clear")
+    public mutating fn clear()
+}
+
+// An inline array grows within its capacity. Its members are lowered where
+// its inline layout is.
+extension<Element> Element[..] {
+    /// The element, added at the end; past the capacity traps.
+    @builtin("array_append")
+    public mutating fn append(element: Element)
+
+    /// The last element, taken out; an empty array traps.
+    @builtin("array_remove_last")
+    public mutating fn removeLast() -> Element
+
+    /// Every element, taken out.
+    @builtin("array_clear")
+    public mutating fn clear()
+}
+
+extension U8[:] {
+    /// The bytes read as UTF-8 text. A byte that cannot begin a scalar, or a
+    /// sequence cut short, reads as U+FFFD.
+    public fn toString() -> String {
+        var scalars: String[>..] = []
+        var i = 0
+        while i < self.count {
+            let lead = Int(self[i])
+            var length = 1
+            var value = 0xFFFD
+            if lead < 0x80 {
+                value = lead
+            } else if lead >= 0xC2 && lead < 0xE0 {
+                length = 2
+                value = lead & 0x1F
+            } else if lead >= 0xE0 && lead < 0xF0 {
+                length = 3
+                value = lead & 0x0F
+            } else if lead >= 0xF0 && lead < 0xF5 {
+                length = 4
+                value = lead & 0x07
+            }
+
+            var next = 1
+            while next < length {
+                if i + next >= self.count || (Int(self[i + next]) & 0xC0) != 0x80 {
+                    length = next
+                    value = 0xFFFD
+                    break
+                }
+                value = (value << 6) | (Int(self[i + next]) & 0x3F)
+                next = next + 1
+            }
+
+            let scalar = Char.fromCodePoint(value) ?? Char.fromCodePoint(0xFFFD)!
+            scalars.append(String.fromChar(scalar))
+            i = i + length
+        }
+        return Runtime.joinStrings(scalars, "")
+    }
+}

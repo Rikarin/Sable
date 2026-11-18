@@ -15,7 +15,7 @@ public struct Numbers: Sorted {
     public var values: Int[>..]
 
     public fn count() -> Int { return values.count }
-    public fn at(_ index: Int) -> Int { return values.removeLast() }
+    public fn at(_ index: Int) -> Int { return values[index] }
     public fn isSorted() -> Bool { return true }
 }
 
@@ -64,7 +64,7 @@ public struct Tagged<T>: Container {
     public var values: T[>..]
 
     public fn count() -> Int { return values.count }
-    public fn at(_ index: Int) -> T { return values.removeLast() }
+    public fn at(_ index: Int) -> T { return values[index] }
 }
 
 fn aGenericConformerBindsTheAssociatedType(_ t: Tagged<String>) -> String {

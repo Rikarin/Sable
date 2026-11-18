@@ -535,6 +535,42 @@ Extensions may add methods, computed properties, subscripts, operators, static
 members, nested types, and conformances. They may **not** add stored properties
 or designated initialisers.
 
+### Array extensions
+
+An array type has no name to write parameters after, so an extension of every
+array of a kind declares them after the keyword, as a generic function does
+after `fn`:
+
+```sable
+// every grow-only array, whatever its element
+extension<Element> Element[>..] {
+    mutating fn appendTwice(_ e: Element) { append(e); append(e) }
+}
+
+// every array: each kind can be viewed as a slice, so a slice's members are all of theirs
+extension<Element: Equatable> Element[:] {
+    fn contains(element: Element) -> Bool {
+        for x in self { if x == element { return true } }
+        return false
+    }
+}
+
+// one element type alone
+extension U8[:] { fn toString() -> String { } }
+```
+
+- Each kind is extended on its own: `T[]` (every fixed size), `T[..]` (every
+  inline capacity), `T[>..]`, `T[>..<]`, `T[:]`. No size or capacity is written.
+  What `T[:]` declares, every kind has; a kind's own member of the same name
+  comes first.
+- Inside, `self` is the array. The parameters may be constrained, inline or
+  with `where`; the members are an array's only where its element meets them.
+- Each parameter must appear in the array type. An array extension adds
+  members, not conformances.
+- Its members are generic over the parameters and monomorphised per element
+  type, like any generic. `Sable.Core` declares the array family's own members
+  (`count`, `append`, `contains`, …) this way.
+
 ---
 
 ## 12. Generics

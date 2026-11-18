@@ -301,6 +301,48 @@ public sealed class DeclarationParserTests {
         );
     }
 
+    [Theory]
+    [InlineData("extension<Element> Element[>..] { }", typeof(GrowArrayTypeSyntax))]
+    [InlineData("extension<Element> Element[>..<] { }", typeof(GrowArrayTypeSyntax))]
+    [InlineData("extension<Element> Element[:] { }", typeof(SliceTypeSyntax))]
+    [InlineData("extension<Element> Element[] { }", typeof(FixedSizeArrayTypeSyntax))]
+    [InlineData("extension<Element> Element[..] { }", typeof(InlineArrayTypeSyntax))]
+    [InlineData("extension<K, V> (K, V)[>..] { }", typeof(GrowArrayTypeSyntax))]
+    public void ParsesArrayExtensions(string source, Type arrayType) {
+        var extension = ParseMember<ExtensionDeclarationSyntax>(source);
+        Assert.NotNull(extension.TypeParameters);
+        Assert.IsType(arrayType, extension.Type);
+        Assert.Null(extension.WhereClause);
+    }
+
+    [Fact]
+    public void ParsesAConstrainedArrayExtension() {
+        var inline = ParseMember<ExtensionDeclarationSyntax>(
+            "extension<Element: Equatable> Element[:] { fn contains(element: Element) -> Bool { return false } }"
+        );
+        var parameter = Assert.Single(inline.TypeParameters!.Parameters);
+        Assert.Equal("Element", parameter.Identifier.Text);
+        Assert.NotNull(parameter.Constraint);
+        Assert.Single(inline.Members);
+
+        var where = ParseMember<ExtensionDeclarationSyntax>("extension<T> T[>..] where T: Hashable { }");
+        Assert.NotNull(where.WhereClause);
+        Assert.IsType<GrowArrayTypeSyntax>(where.Type);
+    }
+
+    [Fact]
+    public void AnExtensionWithoutParametersHasNone() {
+        Assert.Null(ParseMember<ExtensionDeclarationSyntax>("extension U8[:] { }").TypeParameters);
+        Assert.Null(ParseMember<ExtensionDeclarationSyntax>("extension Point { }").TypeParameters);
+    }
+
+    [Fact]
+    public void AnUnclosedParameterListIsReportedNotLost() {
+        var tree = SyntaxTree.Parse("module M\nextension<Element Element[>..] { }\n");
+        Assert.NotEmpty(tree.Diagnostics);
+        Assert.Equal("module M\nextension<Element Element[>..] { }\n", tree.Root.ToFullString());
+    }
+
     [Fact]
     public void ParsesActor() {
         var declaration = ParseMember<ActorDeclarationSyntax>(

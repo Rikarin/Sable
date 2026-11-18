@@ -160,7 +160,7 @@ public struct Evaluator {
     public var bindings: Binding[>..]
 
     public fn peek() -> Token {
-        return tokens.removeLast()
+        return tokens[index]
     }
 
     public mutating fn take() -> Token {

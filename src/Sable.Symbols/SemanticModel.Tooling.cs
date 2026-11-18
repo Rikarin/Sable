@@ -327,7 +327,7 @@ public sealed partial class SemanticModel {
                     break;
 
                 case ArrayTypeSymbol array:
-                    foreach (var member in _compilation.Core.GetArrayMembers(array)) {
+                    foreach (var member in _compilation.ArrayMembers(array)) {
                         if (seen.Add(member.Name + Arity(member))) {
                             members.Add(member);
                         }

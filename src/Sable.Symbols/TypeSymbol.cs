@@ -111,6 +111,18 @@ public sealed class NamedTypeSymbol : TypeSymbol {
     /// </remarks>
     public ImmutableArray<TypeParameterSymbol> AssociatedTypes { get; internal set; } = [];
 
+    /// <summary>
+    ///     For the type an array extension declares its members on, the array
+    ///     it extends, in terms of the extension's parameters:
+    ///     <c>Element[&gt;..]</c>. Null for every other type.
+    /// </summary>
+    /// <remarks>
+    ///     It is never a value's type: inside the extension <c>self</c> is
+    ///     this array, and outside a member is looked up on the array
+    ///     (Compilation.ArrayExtensions.cs).
+    /// </remarks>
+    public ArrayTypeSymbol? ExtendedArray { get; internal set; }
+
     /// <summary>The <c>where A == B</c> requirements on this type's parameters.</summary>
     public ImmutableArray<SameTypeRequirement> SameTypeRequirements { get; internal set; } = [];
 
@@ -183,9 +195,11 @@ public sealed class NamedTypeSymbol : TypeSymbol {
         typeArguments.IsEmpty ? this : new NamedTypeSymbol(OriginalDefinition, typeArguments);
 
     public override string ToDisplayString() =>
-        TypeArguments.IsEmpty
-            ? Name
-            : $"{Name}<{string.Join(", ", TypeArguments.Select(static t => t.ToDisplayString()))}>";
+        OriginalDefinition.ExtendedArray is { } array
+            ? array.ToDisplayString()
+            : TypeArguments.IsEmpty
+                ? Name
+                : $"{Name}<{string.Join(", ", TypeArguments.Select(static t => t.ToDisplayString()))}>";
 
     public override bool Equals(TypeSymbol? other) {
         if (other is not NamedTypeSymbol named) {

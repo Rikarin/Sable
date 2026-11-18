@@ -802,6 +802,11 @@ public sealed partial class SilGen {
             return substitution.Apply(self);
         }
 
+        // An array extension's member: self is the array, of this element.
+        if (owner.ExtendedArray is { } array) {
+            return substitution.Apply(array);
+        }
+
         return owner.TypeParameters.IsEmpty
             ? owner
             : owner.Construct([..owner.TypeParameters.Select(p => substitution.Apply(p))]);
@@ -4648,6 +4653,11 @@ public sealed partial class SilGen {
 
             var callee = call.Function;
 
+            // An inline array's members are the inline layout's, whatever declares them.
+            if (call.Receiver is { } inlineArray && IsInlineArray(inlineArray)) {
+                return callee.Name == "append" ? InlineAppend(call) : InlineArrayMember(inlineArray, callee.Name, call);
+            }
+
             // Sable.Core's @builtin members: the builtin, here (SilGen.Builtins.cs).
             if (callee.Builtin is not null) {
                 return BuiltinCall(call, callee);
@@ -4681,10 +4691,6 @@ public sealed partial class SilGen {
 
             if (callee is { Name: "fromBytes", IsStatic: true, ContainingSymbol: NamedTypeSymbol { IsInlineLayout: true } }) {
                 return FromBytes(call);
-            }
-
-            if (call.Receiver is { } inlineArray && IsInlineArray(inlineArray)) {
-                return callee.Name == "append" ? InlineAppend(call) : InlineArrayMember(inlineArray, callee.Name, call);
             }
 
             // A member of a core type: a builtin.
@@ -4918,7 +4924,10 @@ public sealed partial class SilGen {
         ///     same generic type.
         /// </summary>
         TypeSubstitution CallSubstitution(BoundCall call, FunctionSymbol callee) {
-            var receiver = call.Receiver is { } r ? TypeSubstitution.For(Sub(r.Type)) : TypeSubstitution.Empty;
+            // An array extension's member: what its element is, from the array's.
+            var receiver = call.Receiver is not { } r ? TypeSubstitution.Empty
+                : OwnerOf(callee) is { ExtendedArray: not null } carrier ? Compilation.MatchArray(carrier, Sub(r.Type)) ?? TypeSubstitution.Empty
+                : TypeSubstitution.For(Sub(r.Type));
             var map = new Dictionary<TypeParameterSymbol, TypeSymbol>();
 
             // A protocol's default implementation: Self is the receiver's type.
@@ -5162,8 +5171,8 @@ public sealed partial class SilGen {
         sealed record Handled(SilValue? Value);
 
         /// <summary>
-        ///     The members the compiler gives arrays and regions, as builtins on
-        ///     the receiver. Strings', numbers' and characters' are Sable's
+        ///     The member the compiler gives regions, as a builtin on the
+        ///     receiver. Strings', numbers', characters' and arrays' are Sable's
         ///     (lib/Sable.Core), lowered as calls or as @builtins.
         /// </summary>
         Handled? CoreMember(BoundCall call) {
@@ -5177,38 +5186,6 @@ public sealed partial class SilGen {
 
             if (call.Receiver is not { } receiver) {
                 return null;
-            }
-
-            // Mutating array members work on the array where it is.
-            if (Sub(receiver.Type) is ArrayTypeSymbol && callee.Name is "append" or "removeLast" or "clear") {
-                var borrows = new List<SilValue>();
-                if (Address(receiver, borrows) is not { Type: AddressType { Pointee: ArrayType arrayType } } address) {
-                    return new((SilValue?)null);
-                }
-
-                SilValue? result;
-                switch (callee.Name) {
-                    case "append":
-                        if (Expression(call.Arguments[0]) is not { } element) {
-                            return new((SilValue?)null);
-                        }
-
-                        Emit(new BuiltinInst("array_append", SilType.Unit, address, element));
-                        result = UnitValue.Instance;
-                        break;
-
-                    case "removeLast":
-                        result = Emit(new BuiltinInst("array_remove_last", arrayType.Element, address));
-                        break;
-
-                    default:
-                        Emit(new BuiltinInst("array_clear", SilType.Unit, address));
-                        result = UnitValue.Instance;
-                        break;
-                }
-
-                EndAll(borrows);
-                return new(result);
             }
 
             // 'arena.alloc(value)': room in the region, the value moved there, its address back.
@@ -5229,35 +5206,10 @@ public sealed partial class SilGen {
                 return new(room);
             }
 
-            if (Sub(receiver.Type) is not ArrayTypeSymbol) {
-                return null;
-            }
-
-            // 'array.slice(from, to)': a copy of the run, an array of its own.
-            if (callee.Name != "slice" || call.Arguments.Length != 2) {
-                return new(Missing(call, $"the member '{callee.Name}' of '{receiver.Type.ToDisplayString()}'"));
-            }
-
-            if (Borrow(receiver) is not { } array) {
-                return new((SilValue?)null);
-            }
-
-            var bounds = new List<SilValue>();
-            foreach (var argument in call.Arguments) {
-                if (Borrow(argument) is not { } value) {
-                    return new((SilValue?)null);
-                }
-
-                bounds.Add(value);
-            }
-
-            var slice = Emit(new BuiltinInst("array_slice", array.Type, array, bounds[0], bounds[1]));
-            EndAll(bounds);
-            End(array);
-            return new(slice);
+            return null;
         }
 
-        /// <summary>An array's computed properties, and a property read through an existential or a getter.</summary>
+        /// <summary>A property read through an existential or a getter.</summary>
         SilValue? ComputedProperty(BoundFieldAccess access, BoundExpression receiver) {
             if (Sub(receiver.Type) is ExistentialTypeSymbol) {
                 return ExistentialCall(receiver, GetterSlot(access.Field), [], access);
@@ -5279,24 +5231,7 @@ public sealed partial class SilGen {
                 }
             }
 
-            // An array's count: the rest of the core's properties are Sable's (lib/Sable.Core).
-            var name = access.Field.Name;
-            if (Sub(receiver.Type) is not ArrayTypeSymbol || name is not ("count" or "isEmpty")) {
-                return Missing(access, $"the property '{name}' of '{receiver.Type.ToDisplayString()}'");
-            }
-
-            if (Borrow(receiver) is not { } self) {
-                return null;
-            }
-
-            SilValue result = Emit(new BuiltinInst("array_count", SilType.Int, self));
-            End(self);
-
-            if (name == "isEmpty") {
-                result = Emit(new BuiltinInst("cmp_eq_Int", SilType.Bool, result, Emit(new IntegerLiteralInst(SilType.Int, 0))));
-            }
-
-            return result;
+            return Missing(access, $"the property '{access.Field.Name}' of '{receiver.Type.ToDisplayString()}'");
         }
 
         static string Describe(SyntaxNode syntax) {

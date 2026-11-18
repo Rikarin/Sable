@@ -2939,6 +2939,7 @@ public sealed class EnumDeclarationSyntax : DeclarationSyntax
 
 public sealed class ExtensionDeclarationSyntax : DeclarationSyntax
 {
+    private GenericParameterListSyntax? _typeParameters;
     private TypeSyntax? _type;
     private BaseTypeListSyntax? _baseTypes;
     private WhereClauseSyntax? _whereClause;
@@ -2949,18 +2950,20 @@ public sealed class ExtensionDeclarationSyntax : DeclarationSyntax
     public SyntaxList<AttributeSyntax> Attributes => GetList<AttributeSyntax>(0);
     public SyntaxTokenList Modifiers => GetTokenList(1);
     public SyntaxToken Keyword => GetToken(2);
-    public TypeSyntax Type => GetRed(ref _type, 3);
-    public BaseTypeListSyntax? BaseTypes => GetRedOptional(ref _baseTypes, 4);
-    public WhereClauseSyntax? WhereClause => GetRedOptional(ref _whereClause, 5);
-    public SyntaxToken OpenBraceToken => GetToken(6);
-    public SyntaxList<SyntaxNode> Members => GetList<SyntaxNode>(7);
-    public SyntaxToken CloseBraceToken => GetToken(8);
+    public GenericParameterListSyntax? TypeParameters => GetRedOptional(ref _typeParameters, 3);
+    public TypeSyntax Type => GetRed(ref _type, 4);
+    public BaseTypeListSyntax? BaseTypes => GetRedOptional(ref _baseTypes, 5);
+    public WhereClauseSyntax? WhereClause => GetRedOptional(ref _whereClause, 6);
+    public SyntaxToken OpenBraceToken => GetToken(7);
+    public SyntaxList<SyntaxNode> Members => GetList<SyntaxNode>(8);
+    public SyntaxToken CloseBraceToken => GetToken(9);
 
     internal override SyntaxNode? GetNodeSlot(int index) => index switch
     {
-        3 => Type,
-        4 => BaseTypes,
-        5 => WhereClause,
+        3 => TypeParameters,
+        4 => Type,
+        5 => BaseTypes,
+        6 => WhereClause,
         _ => null,
     };
 

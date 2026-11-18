@@ -3598,6 +3598,10 @@ internal sealed class Parser {
 
     GreenNode ParseExtensionDeclaration(GreenList attributes, GreenList modifiers) {
         var keyword = EatToken(SyntaxKind.ExtensionKeyword);
+
+        // 'extension<Element> Element[>..]': parameters for a type that has no
+        // name to write them after — every array of a kind.
+        var typeParameters = At(SyntaxKind.LessToken) ? ParseGenericParameterList() : null;
         var type = WithBracesSuppressed(() => ParsePostfixType());
         var baseTypes = At(SyntaxKind.ColonToken) ? ParseBaseTypeList() : null;
         var whereClause = At(SyntaxKind.WhereKeyword) ? ParseWhereClause() : null;
@@ -3615,6 +3619,7 @@ internal sealed class Parser {
             attributes,
             modifiers,
             keyword,
+            typeParameters,
             type,
             baseTypes,
             whereClause,

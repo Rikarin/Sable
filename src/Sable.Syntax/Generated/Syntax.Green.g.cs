@@ -4623,6 +4623,7 @@ internal sealed class ExtensionDeclarationGreen : GreenNode
     private readonly GreenList? _attributes;
     private readonly GreenList? _modifiers;
     private readonly GreenToken? _keyword;
+    private readonly GreenNode? _typeParameters;
     private readonly GreenNode? _type;
     private readonly GreenNode? _baseTypes;
     private readonly GreenNode? _whereClause;
@@ -4630,12 +4631,13 @@ internal sealed class ExtensionDeclarationGreen : GreenNode
     private readonly GreenList? _members;
     private readonly GreenToken? _closeBraceToken;
 
-    public ExtensionDeclarationGreen(GreenList? attributes, GreenList? modifiers, GreenToken? keyword, GreenNode? type, GreenNode? baseTypes, GreenNode? whereClause, GreenToken? openBraceToken, GreenList? members, GreenToken? closeBraceToken)
+    public ExtensionDeclarationGreen(GreenList? attributes, GreenList? modifiers, GreenToken? keyword, GreenNode? typeParameters, GreenNode? type, GreenNode? baseTypes, GreenNode? whereClause, GreenToken? openBraceToken, GreenList? members, GreenToken? closeBraceToken)
         : base(SyntaxKind.ExtensionDeclaration, 0)
     {
         _attributes = attributes;
         _modifiers = modifiers;
         _keyword = keyword;
+        _typeParameters = typeParameters;
         _type = type;
         _baseTypes = baseTypes;
         _whereClause = whereClause;
@@ -4645,6 +4647,7 @@ internal sealed class ExtensionDeclarationGreen : GreenNode
         FullWidth = (attributes?.FullWidth ?? 0)
                     + (modifiers?.FullWidth ?? 0)
                     + (keyword?.FullWidth ?? 0)
+                    + (typeParameters?.FullWidth ?? 0)
                     + (type?.FullWidth ?? 0)
                     + (baseTypes?.FullWidth ?? 0)
                     + (whereClause?.FullWidth ?? 0)
@@ -4653,19 +4656,20 @@ internal sealed class ExtensionDeclarationGreen : GreenNode
                     + (closeBraceToken?.FullWidth ?? 0);
     }
 
-    public override int SlotCount => 9;
+    public override int SlotCount => 10;
 
     public override GreenNode? GetSlot(int index) => index switch
     {
         0 => _attributes,
         1 => _modifiers,
         2 => _keyword,
-        3 => _type,
-        4 => _baseTypes,
-        5 => _whereClause,
-        6 => _openBraceToken,
-        7 => _members,
-        8 => _closeBraceToken,
+        3 => _typeParameters,
+        4 => _type,
+        5 => _baseTypes,
+        6 => _whereClause,
+        7 => _openBraceToken,
+        8 => _members,
+        9 => _closeBraceToken,
         _ => null,
     };
 

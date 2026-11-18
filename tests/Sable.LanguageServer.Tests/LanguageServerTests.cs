@@ -189,6 +189,23 @@ public sealed class LanguageServerTests : IDisposable {
     }
 
     [Fact]
+    public async Task HoverOnAnArrayMemberShowsItsSableDeclaration() {
+        await using var client = new TestClient();
+        await client.InitializeAsync();
+        const string uri = "file:///tmp/arrays.sab";
+        const string text = "module App\n\nfn f(_ xs: Int[>..]) -> Bool {\n    var ys = xs\n    ys.append(1)\n    return ys.contains(2)\n}\n";
+        await client.OpenAsync(uri, text);
+
+        var append = (await client.AtAsync("textDocument/hover", uri, text, At(text, "append", 1))).Get("contents")!.Value.GetString("value")!;
+        Assert.Contains("fn append(element: Element)", append, StringComparison.Ordinal);
+        Assert.Contains("Sable.Core.Element[>..]", append, StringComparison.Ordinal);
+        Assert.Contains("added at the end", append, StringComparison.Ordinal);
+
+        var contains = (await client.AtAsync("textDocument/hover", uri, text, At(text, "contains", 1))).Get("contents")!.Value.GetString("value")!;
+        Assert.Contains("Sable.Core.Element[:]", contains, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task DefinitionCrossesFiles() {
         var (client, geometry, main) = await OpenWorkspaceAsync();
         await using var _ = client;

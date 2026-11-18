@@ -481,6 +481,9 @@ public sealed partial class Binder {
         return false;
     }
 
+    /// <summary>What <c>self</c> is in a member of the type: the type, or the array an array extension extends.</summary>
+    static TypeSymbol SelfTypeOf(NamedTypeSymbol type) => type.ExtendedArray ?? (TypeSymbol)type;
+
     NamedTypeSymbol? EnclosingType() {
         for (var symbol = _containingSymbol; symbol is not null; symbol = symbol.ContainingSymbol) {
             if (symbol is NamedTypeSymbol type) {
@@ -1911,7 +1914,7 @@ public sealed partial class Binder {
 
     BoundExpression BindSelf(SelfExpressionSyntax syntax) {
         if (EnclosingType() is { } type) {
-            return new BoundSelfAccess(syntax, type, SelfIsMutable(type));
+            return new BoundSelfAccess(syntax, SelfTypeOf(type), SelfIsMutable(type));
         }
 
         _diagnostics.Error(
@@ -2050,7 +2053,7 @@ public sealed partial class Binder {
         // including the ones it inherits, which is the whole point of a base
         // class.
         if (EnclosingType() is { } enclosing
-            && LookupMember(enclosing, name) is { } inherited) {
+            && LookupMember(SelfTypeOf(enclosing), name) is { } inherited) {
             return BindMemberGroup(syntax, null, inherited.Members, inherited.Owner, inherited.Substitution);
         }
 
@@ -2115,7 +2118,9 @@ public sealed partial class Binder {
         switch (member) {
             case FieldSymbol field:
                 if (receiver is null && !field.IsStatic && containingType is not null) {
-                    receiver = new BoundSelfAccess(syntax, containingType, SelfIsMutable(containingType));
+                    // An array extension's member, reached from another's: self is this one's array.
+                    var self = containingType.ExtendedArray is not null && EnclosingType() is { } enclosing ? SelfTypeOf(enclosing) : containingType;
+                    receiver = new BoundSelfAccess(syntax, self, SelfIsMutable(containingType));
                 }
 
                 // 'task.value' waits for the task.
@@ -2264,7 +2269,17 @@ public sealed partial class Binder {
             return BindTupleElementAccess(syntax, receiver, tuple, name);
         }
 
+        _unmetArrayRequirement = null;
         if (LookupMember(receiverType, name) is not { } found) {
+            if (_unmetArrayRequirement is { } unmet) {
+                _diagnostics.Error(
+                    ErrorCode.ERR_DoesNotConform,
+                    syntax.Name.Span,
+                    $"'{receiverType.ToDisplayString()}' has '{name}' only where {unmet}"
+                );
+                return new BoundError(syntax, receiver);
+            }
+
             _diagnostics.Error(
                 ErrorCode.ERR_NameNotFound,
                 syntax.Name.Span,
@@ -2430,6 +2445,12 @@ public sealed partial class Binder {
             _ => false,
         };
 
+    /// <summary>
+    ///     Set when an array member was not found only because the element
+    ///     does not meet its extension's constraint: what the constraint is.
+    /// </summary>
+    string? _unmetArrayRequirement;
+
     /// <summary>What a member lookup found, and what it has to be read through.</summary>
     private readonly record struct MemberLookup(
         IReadOnlyList<Symbol> Members,
@@ -2514,18 +2535,18 @@ public sealed partial class Binder {
                 return null;
             }
 
+            // An array's members are its extensions' (Compilation.ArrayExtensions.cs).
             case ArrayTypeSymbol array: {
-                var members = Core.GetArrayMembers(array)
-                    .Where(m => string.Equals(m.Name, name, StringComparison.Ordinal))
-                    .ToList();
+                if (_compilation.LookupArrayMember(array, name, _conversions.Equivalence) is not { } found) {
+                    return null;
+                }
 
-                return members.Count == 0
-                    ? null
-                    : new MemberLookup(
-                        members,
-                        (NamedTypeSymbol)members[0].ContainingSymbol!,
-                        TypeSubstitution.Empty
-                    );
+                if (found.Owner is null) {
+                    _unmetArrayRequirement = found.Unmet;
+                    return null;
+                }
+
+                return new MemberLookup(found.Members, found.Owner, Combine(outer, found.Substitution));
             }
 
             case TypeParameterSymbol or DependentMemberTypeSymbol:
@@ -4021,7 +4042,7 @@ public sealed partial class Binder {
                             item,
                             enclosing,
                             kind,
-                            new BoundSelfAccess(item, enclosing, SelfIsMutable(enclosing))
+                            new BoundSelfAccess(item, SelfTypeOf(enclosing), SelfIsMutable(enclosing))
                         )
                     );
                 }

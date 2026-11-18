@@ -195,6 +195,9 @@ public enum ErrorCode {
     // A type declared ': Sendable' that holds something that is not (S3410).
     ERR_DeclaredSendableIsNot = 3410,
 
+    // Globals and statics whose initial values need each other (S3411).
+    ERR_GlobalInitializationCycle = 3411,
+
     // ---- Compile-time evaluation (S3220-S3222): 'const', 'const fn' and
     // 'comptime' (SYNTAX.md §21).
     ERR_NotConstant = 3220,

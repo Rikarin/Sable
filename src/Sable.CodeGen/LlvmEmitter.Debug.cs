@@ -407,9 +407,12 @@ public sealed partial class LlvmEmitter {
                 case TupleType tuple:
                     return Aggregate(DisplayName(tuple), tuple.Elements.Select(static (e, i) => (i.ToString(System.Globalization.CultureInfo.InvariantCulture), e)), Size(tuple), live: false);
 
-                // A slice: the buffer it views, where its run starts, and how long it is.
+                // A slice: the buffer it views, where its run starts, and how
+                // long it is — named '$slice' under the typedef, for the
+                // formatters to show its elements as a list's.
                 case SliceType slice:
-                    return Aggregate(DisplayName(slice), [("buffer", slice.Parts.Elements[0]), ("start", SilType.Int), ("count", SilType.Int)], Size(slice), live: false);
+                    return Typedef(DisplayName(slice),
+                        Aggregate(DisplayName(slice) + "$slice", [("$array", slice.Parts.Elements[0]), ("start", SilType.Int), ("count", SilType.Int)], Size(slice), live: false));
 
                 case StructType structType when structType.Name.StartsWith("any$", StringComparison.Ordinal):
                     return Typedef(DisplayName(structType), Aggregate(DisplayName(structType) + "$existential", structType.Fields, Size(structType), live: false));

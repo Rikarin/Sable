@@ -95,3 +95,8 @@ fn missingFieldInitializer() -> Point {
 fn unknownFieldInitializer() -> Point {
     return Point { x: 1, y: 2, z: 3 }   //! S2002 has no field named 'z'
 }
+
+fn aBoundedArrayLiteralFits() {
+    let fits: Int[..2] = [1, 2]
+    let over: Int[..2] = [1, 2, 3]      //! S3004 holds at most 2 elements
+}

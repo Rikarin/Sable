@@ -956,9 +956,13 @@ public sealed partial class SilGen {
             }
 
             // The growable kinds, the fixed one and slices share a counted
-            // buffer; a slice is a copy, for now, rather than a view.
+            // buffer; a slice is a copy, for now, rather than a view. So
+            // does a bounded array outside an @inline_layout struct — 'T[..k]'
+            // as a local, a parameter or a field of a plain struct — with its
+            // bound checked where it grows; inside one it is bytes in the
+            // block (InlineField).
             // An array copies its elements on write, so a move-only element has no array yet.
-            case ArrayTypeSymbol { ArrayKind: ArrayKind.Grow or ArrayKind.GrowShrink or ArrayKind.Fixed or ArrayKind.Slice } array:
+            case ArrayTypeSymbol { ArrayKind: ArrayKind.Grow or ArrayKind.GrowShrink or ArrayKind.Fixed or ArrayKind.Slice or ArrayKind.Inline } array:
                 return Lower(array.ElementType) is { } elementType && elementType is not NominalType { IsNoncopyable: true }
                     ? new ArrayType(elementType)
                     : null;
@@ -5484,6 +5488,15 @@ public sealed partial class SilGen {
                     case "append":
                         if (Expression(call.Arguments[0]) is not { } element) {
                             return new((SilValue?)null);
+                        }
+
+                        // 'T[..k]' grows within its bound, and no further.
+                        if (Sub(receiver.Type) is ArrayTypeSymbol { ArrayKind: ArrayKind.Inline, Capacity: { } capacity }) {
+                            var bounded = Emit(new LoadBorrowInst(address));
+                            var count = Emit(new BuiltinInst("array_count", SilType.Int, bounded));
+                            Emit(new EndBorrowInst(bounded));
+                            var full = Emit(new BuiltinInst("cmp_ge_Int", SilType.Bool, count, Emit(new IntegerLiteralInst(SilType.Int, capacity))));
+                            Emit(new CondFailInst(full, "inline array is full"));
                         }
 
                         Emit(new BuiltinInst("array_append", SilType.Unit, address, element));

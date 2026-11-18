@@ -3654,6 +3654,15 @@ public sealed partial class Binder {
             .Select(e => BindExpression(e, expectedElement))
             .ToImmutableArray();
 
+        // 'T[..k]' holds at most k.
+        if (expectedType is ArrayTypeSymbol { ArrayKind: ArrayKind.Inline, Capacity: { } capacity } bounded && elements.Length > capacity) {
+            _diagnostics.Error(
+                ErrorCode.ERR_TypeMismatch,
+                syntax.Span,
+                $"'{bounded.ToDisplayString()}' holds at most {capacity} elements, and this literal has {elements.Length}"
+            );
+        }
+
         TypeSymbol elementType;
         if (expectedElement is not null) {
             // The context says what the elements are, so each one is checked

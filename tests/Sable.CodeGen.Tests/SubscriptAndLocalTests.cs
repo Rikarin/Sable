@@ -228,6 +228,49 @@ public sealed class SubscriptAndLocalTests {
             """
         );
 
+    // ---- Bounded arrays outside an inline struct --------------------------------
+
+    [Fact]
+    public void ABoundedArrayGrowsWithinItsBoundAndIsAValue() =>
+        Prints(
+            "3\n6\n1\n2\n0\n",
+            """
+            struct Small {
+                var items: Int[..4]
+            }
+
+            fn total(_ values: Int[..4]) -> Int {
+                var sum = 0
+                for value in values {
+                    sum = sum + value
+                }
+                return sum
+            }
+            """,
+            """
+                var inline: Int[..8] = []
+                inline.append(1)
+                inline.append(2)
+                inline.append(3)
+                print(inline.count)
+                var small = Small(items: [1, 2])
+                let copy = small
+                small.items.append(3)
+                print(total(small.items))
+                print(small.items[0])
+                print(copy.items.count)
+                inline.clear()
+                print(inline.count)
+            """
+        );
+
+    [Fact]
+    public void ABoundedArrayTrapsWhenItIsFull() {
+        var run = AssertAgree(Program("", "    var pair: Int[..2] = [1, 2]\n    print(pair.count)\n    pair.append(3)\n    print(pair.count)"));
+        Assert.Equal("2\n", run.Stdout);
+        Assert.Equal("fatal error: inline array is full\n", run.Stderr);
+    }
+
     // ---- Compiler builtins ------------------------------------------------------
 
     [Fact]

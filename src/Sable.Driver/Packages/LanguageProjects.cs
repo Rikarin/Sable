@@ -52,7 +52,9 @@ public static class LanguageProjects {
                 member.Name,
                 member.Directory,
                 [..own.Features.Order(StringComparer.Ordinal)],
-                [..Dependencies(graph, member.Name).SelectMany(static p => p.Package.LibrarySources().Select(f => new LanguageProjectFile(f, [..p.Features.Order(StringComparer.Ordinal)])))]);
+                [..Dependencies(graph, member.Name).SelectMany(static p => p.Package.LibrarySources().Select(f => new LanguageProjectFile(f, [..p.Features.Order(StringComparer.Ordinal)])))]) {
+                Lints = member.Manifest.Lints
+            };
         }
     }
 

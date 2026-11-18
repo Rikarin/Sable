@@ -1409,10 +1409,19 @@ against the snapshot current when it arrived, and `$/cancelRequest` cancels
 it. A compilation is not thread-safe, so whatever binds holds its gate, one
 member at a time.
 
-- Diagnostics for open documents, debounced (250 ms of quiet), bound member by
+- Diagnostics for every file of the workspace, open ones first, debounced
+  (250 ms of quiet; a change cancels a round under way), bound member by
   member. Declaration and signature diagnostics carry no file
   (`GetAllDiagnosticsByFile` says so); they are placed by span and the name
-  their message quotes.
+  their message quotes. The type errors go out first; then the lints (at the
+  package's `[lints]` levels, on a file with no errors of its own) and the
+  checks on SIL (moves, exclusivity, roots: each package lowered once its types
+  are right). Each diagnostic links to its `docs/diagnostics/` page
+  (`codeDescription`) when it has one; unused code is tagged as such. A client
+  that can pull (`textDocument/diagnostic`, `workspace/diagnostic` for the
+  files not open) is not pushed to; it is sent `workspace/diagnostic/refresh`
+  when a round changes something. A package's analysis is reused while none of
+  its files change, so an edit elsewhere does not rebind or relower it.
 - Hover (signature, container, doc comment; an expression's type), definition
   (into a copy of the library file when it lands there), references, rename
   with `prepareRename` (refused for anything the library or the compiler

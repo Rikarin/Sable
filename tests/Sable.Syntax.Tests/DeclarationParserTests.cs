@@ -78,6 +78,30 @@ public sealed class DeclarationParserTests {
         Assert.Equal("where", fn.Parameters.Parameters[0].Label.Text);
     }
 
+    /// <summary>
+    ///     'in r: region' is labelled 'in' — 'build(in: arena)' — while the
+    ///     other modifiers before a name stay modifiers, and 'in' is still
+    ///     the modifier after the colon or before a label.
+    /// </summary>
+    [Fact]
+    public void ParsesInBeforeANameAsTheLabel() {
+        var parameters = ParseMember<FunctionDeclarationSyntax>(
+            "fn build(in r: region, inout v: Int, s: in region, in _ t: region) { }"
+        ).Parameters.Parameters;
+
+        Assert.Equal("in", parameters[0].Label.Text);
+        Assert.Equal("r", parameters[0].Identifier.Text);
+        Assert.Empty(parameters[0].Modifiers);
+
+        Assert.True(parameters[1].Label.IsNone);
+        Assert.Equal("inout", Assert.Single(parameters[1].Modifiers).Text);
+
+        Assert.Equal("in", parameters[2].TypeModifierToken.Text);
+
+        Assert.Equal("in", Assert.Single(parameters[3].Modifiers).Text);
+        Assert.Equal("_", parameters[3].Label.Text);
+    }
+
     [Fact]
     public void ParsesUnderscoreLabelSuppression() {
         var fn = ParseMember<FunctionDeclarationSyntax>("fn insert(_ item: T, at index: Int) { }");

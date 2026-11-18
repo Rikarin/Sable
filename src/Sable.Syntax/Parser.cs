@@ -3291,8 +3291,14 @@ internal sealed class Parser {
     GreenNode ParseParameter() {
         var attributes = ParseAttributes();
 
+        // 'fn build(in r: region)' is labelled 'in', as the spec calls it —
+        // 'build(in: arena)' — not an unlabelled parameter with the 'in'
+        // modifier: that modifier only borrows, as every parameter does, so
+        // reading the word as the label loses nothing. The modifier can still
+        // be written after the colon ('r: in region') or before a label
+        // ('in _ r: region').
         var modifierItems = ImmutableArray.CreateBuilder<GreenNode>();
-        while (IsParameterModifier(Current.Kind)) {
+        while (IsParameterModifier(Current.Kind) && !IsInLabel()) {
             modifierItems.Add(EatToken());
         }
 
@@ -3335,6 +3341,12 @@ internal sealed class Parser {
             defaultValue
         );
     }
+
+    /// <summary>Whether a parameter starts 'in name:', where 'in' is the external label.</summary>
+    bool IsInLabel() =>
+        At(SyntaxKind.InKeyword)
+        && Peek(1).Kind == SyntaxKind.IdentifierToken
+        && Peek(2).Kind == SyntaxKind.ColonToken;
 
     static bool IsParameterModifier(SyntaxKind kind) =>
         kind switch {

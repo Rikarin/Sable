@@ -1097,7 +1097,8 @@ unowned(unsafe) let fast: Node      // no trap, no check
 
 region arena { }                    // scoped bump allocator
 let node = arena.alloc(Node)
-fn build(in r: region) -> ref Node  // root inferred as 'r'
+fn build(in r: region) -> ref Node  // root inferred as 'r'; 'in' is the label
+let tree = build(in: arena)
 ```
 
 See [../docs/02-memory-model.md](../docs/02-memory-model.md) for the semantics.

@@ -139,6 +139,7 @@ public static class PackageBuilder {
         var clock = Stopwatch.StartNew();
         var graph = Resolve(workspace, environment, request);
         var failed = false;
+        var reported = new List<string>();
         foreach (var member in Selected(workspace, request.Package)) {
             var resolved = graph.Packages[member.Name];
             environment.Error.WriteLine($"    Checking {Describe(resolved, workspace)}");
@@ -157,10 +158,12 @@ public static class PackageBuilder {
                 var (errors, warnings) = Pipeline.CheckAndLint(program, member.Manifest.Lints, linted);
                 Report(environment, errors);
                 Report(environment, warnings);
+                reported.AddRange(errors.Concat(warnings));
                 failed |= errors.Count > 0;
             }
         }
 
+        DiagnosticDocs.WriteHint(environment.Error, reported);
         if (failed) {
             environment.Error.WriteLine("error: could not check the package: it has errors");
             return 1;
@@ -211,6 +214,7 @@ public static class PackageBuilder {
                 var errors = Pipeline.Check(Program(graph, member.Name, null));
                 if (errors.Count > 0) {
                     Report(environment, errors);
+                    DiagnosticDocs.WriteHint(environment.Error, errors);
                     environment.Error.WriteLine($"error: could not compile {member.Name}");
                     return null;
                 }
@@ -231,6 +235,7 @@ public static class PackageBuilder {
                 var outcome = IncrementalBuild.Build(Units(graph, member.Name, bin), buildSettings, executable, Path.Combine(output, "cache"), timings, environment.Error);
                 if (!outcome.Succeeded) {
                     Report(environment, outcome.Errors);
+                    DiagnosticDocs.WriteHint(environment.Error, outcome.Errors);
                     environment.Error.WriteLine($"error: could not compile {member.Name}");
                     return null;
                 }

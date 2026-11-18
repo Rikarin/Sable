@@ -139,6 +139,8 @@ public class BuildCommand : Command {
             Console.Error.WriteLine(error);
             Console.Error.WriteLine();
         }
+
+        DiagnosticDocs.WriteHint(Console.Error, errors);
     }
 
     /// <summary>Runs <paramref name="executable" /> and returns its exit code.</summary>

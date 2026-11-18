@@ -1207,7 +1207,7 @@ Full design in [05-toolchain.md](05-toolchain.md).
 
 - `sable` single binary: `new init build run test bench fmt doc check add
   update publish clean bindgen repl`
-- `sable.toml` manifest, `sable.lock`, semver resolution (PubGrub), workspaces,
+- A manifest, `sable.lock`, semver resolution (PubGrub), workspaces,
   feature flags, build scripts with a capability sandbox. The manifest is
   `package.sb` (and `workspace.sb`) — Sable, evaluated in the interpreter
   under docs/05 §5.2.4's rules to the canonical `sable.toml`, which is cached
@@ -1302,7 +1302,8 @@ In `src/Sable.Driver/Packages/`, with a command per file under `Commands/`.
 - **Manifest.** A TOML 1.0 reader (tables, arrays of tables, inline tables,
   dotted and quoted keys, every string and integer form, floats, booleans,
   arrays, comments; dates kept as text) whose errors carry file, line and
-  column. `sable.toml` is read into a `Manifest` — `[package]`, `[lib]`,
+  column. `sable.toml` (written by hand, or what a `package.sb` evaluates
+  to) is read into a `Manifest` — `[package]`, `[lib]`,
   `[[bin]]`, the three dependency tables, `[features]`, `[profile.dev]` and
   `[profile.release]`, `[workspace]`, `[build]`, `[registry] path` — and
   every validation error names the file, the line and the key. Profiles act
@@ -1507,12 +1508,16 @@ VS Code's own test host.
   test keeps them so; `tests/negative/` is not, since its expectation
   comments sit in a column of their own.
 - **`sable explain <code>`** prints `docs/diagnostics/S####.md`, embedded in
-  the driver; `--list` lists them. There is a page for every code but five no
-  user can meet (S1005, S3082, S3099, S7001, S7002). `ExplainTests` compiles
-  each page's example and requires exactly its code, and its fix to be clean;
-  a few pages (S0001, S1002, S1009, S2003, S3038, S7000) explain without an
-  example, since no short program isolates them. Compiler output does not yet
-  point at `sable explain`; `sable lint` does.
+  the driver; `--list` lists them. There is a page for every code, those a
+  user rarely meets included (S1005 from the single-construct parsers, the
+  builtins' S3082, S7001 and S7002, the binder's fallback S3099).
+  `ExplainTests` compiles each page's example and requires exactly its code,
+  and its fix to be clean; a few pages (S0001, S1002, S1009, S2003, S3038,
+  S7000, and those five) explain without an example, since no short program
+  isolates them. A report of diagnostics from `build`, `run`, `check`,
+  `test`, `bench` and `debug` ends with a note naming `sable explain` and the
+  codes in it that have a page, as rustc's does; `sable lint` points at it
+  under each warning.
 - **`sable doc [paths] [--std] [--out dir] [--json]`**: HTML (index with a
   filter box, a page per module and per type, signatures rendered from the
   symbols with type names linked, `///` and `//!` comments as light Markdown)

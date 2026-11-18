@@ -327,7 +327,7 @@ public sealed class FieldSymbol(
     public bool HasInitializer { get; internal set; }
 }
 
-/// <summary>A name introduced by <c>alias</c> or <c>typealias</c>.</summary>
+/// <summary>A name introduced by <c>alias</c>.</summary>
 public sealed class AliasSymbol(
     string name,
     Symbol container,

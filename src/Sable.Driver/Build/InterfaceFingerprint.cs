@@ -71,7 +71,6 @@ public static class InterfaceFingerprint {
                     case ActorDeclarationSyntax a: other.Add(a.Identifier.Text); break;
                     case ProtocolDeclarationSyntax p: other.Add(p.Identifier.Text); break;
                     case AliasDeclarationSyntax alias: other.Add(alias.Identifier.Text); break;
-                    case TypealiasDeclarationSyntax alias: other.Add(alias.Identifier.Text); break;
                     case AssociatedTypeDeclarationSyntax associated: other.Add(associated.Identifier.Text); break;
                 }
             }

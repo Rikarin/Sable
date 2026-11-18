@@ -388,8 +388,8 @@ public protocol Drawable where Self: Sized {
 
 ```sable
 struct Range: Collection {
-    typealias Element = Int
-    typealias Index = Int
+    alias Element = Int
+    alias Index = Int
     var count: Int { get => upper - lower }
     subscript(i: Int) -> Int { get => lower + i }
     fn makeIterator() -> some Iterator<Int> => RangeIterator(self)

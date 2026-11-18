@@ -222,7 +222,7 @@ internal static class SymbolDisplay {
             FieldDeclarationSyntax => 8,
             ConstDeclarationSyntax => 14,
             UnionCaseDeclarationSyntax or EnumCaseDeclarationSyntax => 22,
-            AliasDeclarationSyntax or TypealiasDeclarationSyntax => 26,
+            AliasDeclarationSyntax => 26,
             _ => 13,
         };
 }

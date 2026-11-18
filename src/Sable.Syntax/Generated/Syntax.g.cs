@@ -3265,30 +3265,6 @@ public sealed class AliasDeclarationSyntax : DeclarationSyntax
     public override void Accept(SyntaxVisitor visitor) => visitor.VisitAliasDeclaration(this);
 }
 
-/// <summary>`typealias Element = Int` inside a conforming type.</summary>
-public sealed class TypealiasDeclarationSyntax : DeclarationSyntax
-{
-    private TypeSyntax? _type;
-
-    internal TypealiasDeclarationSyntax(GreenNode green, SyntaxNode? parent, int position)
-        : base(green, parent, position) { }
-
-    public SyntaxList<AttributeSyntax> Attributes => GetList<AttributeSyntax>(0);
-    public SyntaxTokenList Modifiers => GetTokenList(1);
-    public SyntaxToken TypealiasKeyword => GetToken(2);
-    public SyntaxToken Identifier => GetToken(3);
-    public SyntaxToken EqualsToken => GetToken(4);
-    public TypeSyntax Type => GetRed(ref _type, 5);
-
-    internal override SyntaxNode? GetNodeSlot(int index) => index switch
-    {
-        5 => Type,
-        _ => null,
-    };
-
-    public override void Accept(SyntaxVisitor visitor) => visitor.VisitTypealiasDeclaration(this);
-}
-
 public sealed class AssociatedTypeDeclarationSyntax : DeclarationSyntax
 {
     private BaseTypeListSyntax? _baseTypes;
@@ -3572,7 +3548,6 @@ public abstract class SyntaxVisitor
     public virtual void VisitAccessor(AccessorSyntax node) => DefaultVisit(node);
     public virtual void VisitConstDeclaration(ConstDeclarationSyntax node) => DefaultVisit(node);
     public virtual void VisitAliasDeclaration(AliasDeclarationSyntax node) => DefaultVisit(node);
-    public virtual void VisitTypealiasDeclaration(TypealiasDeclarationSyntax node) => DefaultVisit(node);
     public virtual void VisitAssociatedTypeDeclaration(AssociatedTypeDeclarationSyntax node) => DefaultVisit(node);
     public virtual void VisitUnionCaseDeclaration(UnionCaseDeclarationSyntax node) => DefaultVisit(node);
     public virtual void VisitUnionCasePayloadList(UnionCasePayloadListSyntax node) => DefaultVisit(node);

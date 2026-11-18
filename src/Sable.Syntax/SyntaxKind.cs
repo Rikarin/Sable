@@ -364,7 +364,6 @@ public enum SyntaxKind : ushort {
     EnumDeclaration = 1420,
     ExtensionDeclaration = 1421,
     AliasDeclaration = 1422,
-    TypealiasDeclaration = 1423,
     AssociatedTypeDeclaration = 1424,
     FieldDeclaration = 1425,
     AccessorList = 1426,

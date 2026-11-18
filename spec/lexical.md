@@ -92,6 +92,10 @@ throw      throws     true       try        typealias  union      unowned
 unsafe     using      var        weak       where      while
 ```
 
+`typealias` declares nothing: Sable spells it `alias`, which also gives a
+protocol's `associatedtype` its type in a conforming one. It is reserved so
+that code written in Swift's spelling is told so (S1012).
+
 ### Contextual
 
 Usable as identifiers except in their syntactic position:

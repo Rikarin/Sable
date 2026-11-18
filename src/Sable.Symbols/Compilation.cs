@@ -486,10 +486,6 @@ public sealed partial class Compilation {
                 DeclareAlias(declaration, container);
                 return;
 
-            case TypealiasDeclarationSyntax declaration:
-                DeclareTypealias(declaration, container);
-                return;
-
             case UnionCaseDeclarationSyntax declaration
                 when container is NamedTypeSymbol union:
                 DeclareUnionCase(declaration, union);
@@ -1124,23 +1120,6 @@ public sealed partial class Compilation {
                 )
             ];
         }
-
-        TypeBinder.BindAliasTarget(alias, declaration.Type);
-        AddTo(container, alias);
-    }
-
-    void DeclareTypealias(TypealiasDeclarationSyntax declaration, Symbol container) {
-        var name = declaration.Identifier.Text;
-        if (name.Length == 0) {
-            return;
-        }
-
-        if (FindExisting(container, name) is { } existing) {
-            ReportDuplicate(declaration.Identifier, name, existing);
-            return;
-        }
-
-        var alias = new AliasSymbol(name, container, declaration, AccessibilityOf(declaration.Modifiers, container));
 
         TypeBinder.BindAliasTarget(alias, declaration.Type);
         AddTo(container, alias);

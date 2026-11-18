@@ -3085,11 +3085,16 @@ internal sealed class Parser {
                 );
             }
 
+            // Swift's 'typealias' is Sable's 'alias', protocol requirements'
+            // included; the word stays reserved so that it says so, and what
+            // follows parses as the alias it meant.
             case SyntaxKind.TypealiasKeyword: {
+                ReportUnexpected(ErrorCode.ERR_TypealiasIsAlias, "Sable writes 'typealias' as 'alias': 'alias Element = Int'");
                 var keyword = EatToken();
                 var identifier = EatIdentifier();
+                var typeParameters = At(SyntaxKind.LessToken) ? ParseGenericParameterList() : null;
                 var equals = EatToken(SyntaxKind.EqualsToken);
-                return new TypealiasDeclarationGreen(attributes, modifiers, keyword, identifier, equals, ParseType());
+                return new AliasDeclarationGreen(attributes, modifiers, keyword, identifier, typeParameters, equals, ParseType());
             }
 
             case SyntaxKind.AssociatedtypeKeyword: {

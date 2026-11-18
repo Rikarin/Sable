@@ -63,6 +63,7 @@ public enum ErrorCode {
     ERR_NestedTooDeeply = 1009,
     ERR_ExpectedStatementEnd = 1010,
     ERR_BraceOnNewLine = 1011,
+    ERR_TypealiasIsAlias = 1012,
 
     // ---- Name resolution (S2000-S2999) -----------------------------------
     ERR_DuplicateDeclaration = 2000,

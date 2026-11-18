@@ -5197,50 +5197,6 @@ internal sealed class AliasDeclarationGreen : GreenNode
         new AliasDeclarationSyntax(this, parent, position);
 }
 
-/// <summary>Green node for <see cref="TypealiasDeclarationSyntax"/>.</summary>
-internal sealed class TypealiasDeclarationGreen : GreenNode
-{
-    private readonly GreenList? _attributes;
-    private readonly GreenList? _modifiers;
-    private readonly GreenToken? _typealiasKeyword;
-    private readonly GreenToken? _identifier;
-    private readonly GreenToken? _equalsToken;
-    private readonly GreenNode? _type;
-
-    public TypealiasDeclarationGreen(GreenList? attributes, GreenList? modifiers, GreenToken? typealiasKeyword, GreenToken? identifier, GreenToken? equalsToken, GreenNode? type)
-        : base(SyntaxKind.TypealiasDeclaration, 0)
-    {
-        _attributes = attributes;
-        _modifiers = modifiers;
-        _typealiasKeyword = typealiasKeyword;
-        _identifier = identifier;
-        _equalsToken = equalsToken;
-        _type = type;
-        FullWidth = (attributes?.FullWidth ?? 0)
-                    + (modifiers?.FullWidth ?? 0)
-                    + (typealiasKeyword?.FullWidth ?? 0)
-                    + (identifier?.FullWidth ?? 0)
-                    + (equalsToken?.FullWidth ?? 0)
-                    + (type?.FullWidth ?? 0);
-    }
-
-    public override int SlotCount => 6;
-
-    public override GreenNode? GetSlot(int index) => index switch
-    {
-        0 => _attributes,
-        1 => _modifiers,
-        2 => _typealiasKeyword,
-        3 => _identifier,
-        4 => _equalsToken,
-        5 => _type,
-        _ => null,
-    };
-
-    public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
-        new TypealiasDeclarationSyntax(this, parent, position);
-}
-
 /// <summary>Green node for <see cref="AssociatedTypeDeclarationSyntax"/>.</summary>
 internal sealed class AssociatedTypeDeclarationGreen : GreenNode
 {

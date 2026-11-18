@@ -406,6 +406,18 @@ public sealed class DeclarationParserTests {
     }
 
     [Fact]
+    public void TypealiasIsReadAsTheAliasItMeantAndSaysSo() {
+        const string source = "module M\nstruct S {\n    typealias Element = Int\n}\n";
+        var tree = SyntaxTree.Parse(source);
+        var error = Assert.Single(tree.Diagnostics);
+        Assert.Equal(ErrorCode.ERR_TypealiasIsAlias, error.Code);
+        var type = Assert.IsType<StructDeclarationSyntax>(Assert.Single(((CompilationUnitSyntax)tree.Root).Members));
+        var alias = Assert.IsType<AliasDeclarationSyntax>(Assert.Single(type.Members));
+        Assert.Equal("Element", alias.Identifier.Text);
+        Assert.Equal(source, tree.ToFullString());
+    }
+
+    [Fact]
     public void ParsesSetterWithNamedParameter() {
         var declaration = ParseMember<ClassDeclarationSyntax>("class C { var x: Int { get => y  set(v) { y = v } } }");
         var field = Assert.IsType<FieldDeclarationSyntax>(declaration.Members[0]);

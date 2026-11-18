@@ -297,7 +297,6 @@ internal sealed class IncrementalReuse {
                 or SyntaxKind.EnumDeclaration
                 or SyntaxKind.ExtensionDeclaration => true,
             SyntaxKind.AliasDeclaration
-                or SyntaxKind.TypealiasDeclaration
                 or SyntaxKind.AssociatedTypeDeclaration => true,
             SyntaxKind.UnionCaseDeclaration or SyntaxKind.EnumCaseDeclaration => true,
             SyntaxKind.IncompleteDeclaration => true,

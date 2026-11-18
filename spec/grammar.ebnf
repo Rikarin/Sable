@@ -137,7 +137,6 @@ ProtocolBody      = "{" { ProtocolMember } "}" ;
 MemberDecl        = Declaration
                   | TerseFieldDecl
                   | AssociatedTypeDecl
-                  | TypeAliasDecl
                   | ConditionalCompilation ;
 
 ProtocolMember    = { Attribute } { Modifier }
@@ -150,7 +149,6 @@ ProtocolMember    = { Attribute } { Modifier }
 
 AssociatedTypeDecl = "associatedtype" Identifier [ ":" TypeList ]
                      [ "=" Type ] NL ;
-TypeAliasDecl      = "typealias" Identifier "=" Type NL ;
 
 UnionBody         = "{" { UnionCase } { MemberDecl } "}" ;
 UnionCase         = { Attribute } Identifier [ "(" [ CasePayload ] ")" ]

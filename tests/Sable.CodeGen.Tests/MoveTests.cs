@@ -115,6 +115,51 @@ public sealed class MoveTests {
             ).Stdout
         );
 
+    /// <summary>
+    ///     A method that borrows 'self', called on a move-only field, borrows
+    ///     the field where it is — in a local, nested, or through an inout
+    ///     parameter — and the deinit still runs once, with the whole (#235).
+    /// </summary>
+    [Fact]
+    public void AMethodOnAMoveOnlyFieldBorrowsItInPlace() =>
+        Assert.Equal(
+            "opened 1\nhandle 1\nhandle 2\nopened 5\nhandle 5\nend\nclosed 5\nclosed 2\n",
+            AssertAgree(
+                Program(
+                    Handle + """
+
+                             @noncopy struct Box { var value: Handle }
+                             @noncopy struct Outer { var box: Box, var tag: Int }
+
+                             fn bump(_ b: inout Box) {
+                                 b.value.id = b.value.id + 1
+                                 print(b.value.describe())
+                             }
+                             """,
+                    """
+                        var box = Box { value: acquire(1) }
+                        print(box.value.describe())
+                        bump(&box)
+                        let outer = Outer { box: Box { value: acquire(5) }, tag: 0 }
+                        print(outer.box.value.describe())
+                        print("end")
+                    """
+                )
+            ).Stdout
+        );
+
+    [Fact]
+    public void AMoveOnlyFieldStillCannotBeMovedOut() =>
+        Rejects(
+            Handle + "\n@noncopy struct Box { var value: Handle }\n",
+            """
+                let box = Box { value: acquire(1) }
+                let moved = box.value
+                print(moved.id)
+            """,
+            "cannot be moved out of a field or an element; move the whole value"
+        );
+
     [Fact]
     public void ExplicitMoveOfACopyableValue() =>
         Assert.Equal(

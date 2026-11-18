@@ -3245,6 +3245,13 @@ public sealed partial class SilGen {
                 return Hold(Emit(new LoadBorrowInst(place)));
             }
 
+            // So is a move-only field of something in memory: a
+            // method that borrows 'self' borrows it in place, where a copy
+            // would be a move out of what holds it.
+            if (expression is BoundFieldAccess && LowerType(expression.Type) is NominalType { IsNoncopyable: true } && Place(expression) is { } inPlace) {
+                return Hold(Emit(new LoadBorrowInst(inPlace)));
+            }
+
             // So is one a closure captures, in its box. The box is held by the
             // variable's slot, or by the closure's context, for longer than this.
             if (CapturedMoveOnly(expression) is { } captured) {

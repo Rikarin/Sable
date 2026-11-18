@@ -1096,7 +1096,10 @@ internal sealed class TypeBinder(Compilation compilation) {
         // An alias the file imported stands for the module it names:
         // 'M.Vector' after 'import Sable.Math as M'.
         var full = Compilation.NameOf(syntax.Left);
-        if (compilation.ResolveModule(full, scope) is { } module) {
+        // 'T.Type' where a module is also called T, and declares no 'Type':
+        // the metatype of the type, below.
+        if (compilation.ResolveModule(full, scope) is { } module
+            && !(syntax.Right is { Identifier.Text: "Type", TypeArgumentList: null } && !module.GetMembers("Type").Any())) {
             full = module.Name;
             var member = module.GetMembers(syntax.Right.Identifier.Text).FirstOrDefault();
             if (member is null) {

@@ -163,6 +163,8 @@ public sealed class Inliner : ISilPass {
                     _ => instruction.Clone(static v => v, b => blocks[b]),
                 };
 
+                // The debugger steps over the call as a line; a trap still names the line inside.
+                copy.InlinedSite = instruction.TrapSite(callee);
                 copy.Location = apply.Location;
                 values[instruction] = copy;
                 into.Append(copy);

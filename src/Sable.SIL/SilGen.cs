@@ -383,6 +383,7 @@ public sealed partial class SilGen {
         }
 
         BuildVTables();
+        SharedStorage.InsertChecks(_module);
         RootChecker.Check(_module, _sources, _diagnostics, (before, source) => {
             if (TreeOf(source) is { } tree) {
                 Place(before, tree);

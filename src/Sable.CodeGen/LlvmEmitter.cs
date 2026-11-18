@@ -1388,13 +1388,7 @@ public sealed partial class LlvmEmitter {
         }
 
         void Instruction(SilInstruction instruction) {
-            _site = instruction.Location is { } at && function.SourceFile is { } file
-                ? module.TrapMessage($"{file}:{at.Line}:{at.Column}")
-                : "null";
-
-            if (module._checkExclusivity && SharedStorage.CheckedAccessOf(instruction) is var (accessed, modify)) {
-                CheckAccess(accessed, modify);
-            }
+            _site = instruction.TrapSite(function) is { } site ? module.TrapMessage(site) : "null";
 
             // A slot is made where the function starts, whatever line declared its variable.
             if (_scope is not null && instruction.Location is { } location && instruction is not AllocStackInst) {
@@ -2114,7 +2108,9 @@ public sealed partial class LlvmEmitter {
 
             // Exclusivity markers: kept in checked builds, gone in the others.
             if (builtin.Name.StartsWith("access_", StringComparison.Ordinal)) {
-                if (module._checkExclusivity) {
+                if (module._checkExclusivity && builtin.Name.StartsWith("access_check_", StringComparison.Ordinal)) {
+                    CheckAccess(builtin.Operands[0], builtin.Name == "access_check_modify");
+                } else if (module._checkExclusivity) {
                     var call = builtin.Name == "access_end" ? "sable_access_end" : "sable_access_begin";
                     var kind = builtin.Name == "access_end" ? "" : $", i64 {StorageSize(builtin.Operands[0])}, i32 {(builtin.Name == "access_begin_modify" ? 1 : 0)}";
                     if (builtin.Name != "access_end") {

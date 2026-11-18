@@ -1001,6 +1001,14 @@ let c = [weak self, count = localCount] (x: Int) => {
 }
 ```
 
+`[weak x]` and `[unowned x]` capture a class instance without keeping it
+alive, under a name of the closure's own — `self` included. A weak capture is
+optional, and reads as `none` once the object is gone, so the body unwraps
+it (`guard let self`, `if let s = self`, `self?.total`); a member reached
+implicitly through a weak `self` is an error until it is unwrapped. An
+unowned capture is the object itself, and reading it once the object is gone
+traps. `[weak x = expression]` captures what the expression gives.
+
 An escaping closure must be declared `@escaping` on the parameter; non-escaping
 closures are stack-allocated and cost nothing.
 

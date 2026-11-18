@@ -212,4 +212,77 @@ public sealed class ClosureTests {
         );
         Assert.Contains(errors, static e => e.Code == ErrorCode.ERR_NotAllPathsReturn);
     }
+
+    // ---- Weak and unowned captures ----------------------------------------
+
+    const string Counter = """
+                           class Counter {
+                               var total: Int = 10
+                               init() { }
+                               fn bump() -> Int { total += 1
+                                   return total }
+                               fn adder() -> (Int) -> Int {
+                                   let localCount = 2
+                                   return [weak self, count = localCount] (x: Int) => {
+                                       guard let self else { return 0 }
+                                       return self.total + count + x + bump()
+                                   }
+                               }
+                               fn other() -> () -> Int {
+                                   return [weak self] () => {
+                                       if let s = self { return s.total }
+                                       return -1
+                                   }
+                               }
+                               fn peek() -> () -> Int { return [unowned self] () => total + self.bump() }
+                           }
+                           """;
+
+    [Fact]
+    public void AWeakSelfIsOptionalInTheClosure() => AssertClean("", Counter);
+
+    [Fact]
+    public void AWeakNameIsOptionalInTheClosure() =>
+        AssertClean(
+            """
+            let c = Counter()
+            let f = [weak c] () => {
+                guard let c else { return 0 }
+                return c.total
+            }
+            let g = [weak d = c] () => d?.total ?? 0
+            """,
+            Counter);
+
+    [Fact]
+    public void AWeakCaptureIsAFreshOptionalLocal() {
+        var (compilation, tree) = Compile("let c = Counter()\nlet f = [weak c] () => c", Counter);
+        var model = compilation.GetSemanticModel(tree);
+        var closure = tree.Root.DescendantNodes().OfType<ClosureExpressionSyntax>().Last();
+        var bound = Assert.IsType<BoundClosure>(model.GetBoundNode(closure));
+        var capture = Assert.Single(bound.Captures);
+        Assert.Equal(CaptureKind.Weak, capture.CaptureKind);
+        Assert.Equal("Counter?", Assert.IsType<LocalSymbol>(capture.Symbol).Type.ToDisplayString());
+        Assert.Equal("() -> Counter?", bound.Type.ToDisplayString());
+    }
+
+    [Fact]
+    public void AMemberOfAWeakSelfNeedsItUnwrapped() {
+        var errors = ErrorsIn(
+            "",
+            """
+            class Counter {
+                var total: Int = 10
+                init() { }
+                fn f() -> () -> Int { return [weak self] () => total }
+            }
+            """);
+        Assert.Contains(errors, static e => e.Code == ErrorCode.ERR_NameNotFound && e.Message.Contains("guard let self", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("let n = 1\nlet f = [weak n] () => 0", ErrorCode.ERR_WeakNeedsOptionalClass)]
+    [InlineData("let c: Counter? = none\nlet f = [unowned c] () => 0", ErrorCode.ERR_UnownedNeedsClass)]
+    public void OnlyAClassInstanceIsCapturedWeakOrUnowned(string body, ErrorCode code) =>
+        Assert.Contains(ErrorsIn(body, Counter), e => e.Code == code);
 }

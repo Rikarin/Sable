@@ -1967,6 +1967,13 @@ public sealed partial class Binder {
     }
 
     BoundExpression BindSelf(SelfExpressionSyntax syntax) {
+        // In a closure that captured it '[weak self]' or '[unowned self]',
+        // 'self' is the closure's own name for the object — or what
+        // 'guard let self' unwrapped it to.
+        if (LookupLocal("self") is LocalSymbol captured) {
+            return new BoundLocalAccess(syntax, captured, NarrowedType(captured));
+        }
+
         if (EnclosingType() is { } type) {
             return new BoundSelfAccess(syntax, SelfTypeOf(type), SelfIsMutable(type));
         }
@@ -2177,12 +2184,22 @@ public sealed partial class Binder {
 
         var functions = members.OfType<FunctionSymbol>().ToImmutableArray();
         if (!functions.IsEmpty) {
+            if (receiver is null && containingType is not null
+                && functions.Any(static f => f is { IsStatic: false, FunctionKind: FunctionKind.Ordinary })
+                && CapturedSelf(syntax, functions[0].Name) is { } captured) {
+                receiver = captured;
+            }
+
             return new BoundFunctionGroup(syntax, receiver, functions) { Substitution = substitution };
         }
 
         var member = members[0];
         switch (member) {
             case FieldSymbol field:
+                if (receiver is null && !field.IsStatic && containingType is not null && CapturedSelf(syntax, field.Name) is { } captured) {
+                    receiver = captured;
+                }
+
                 if (receiver is null && !field.IsStatic && containingType is not null) {
                     // An array extension's member, reached from another's: self is this one's array.
                     var self = containingType.ExtendedArray is not null && EnclosingType() is { } enclosing ? SelfTypeOf(enclosing) : containingType;
@@ -4159,6 +4176,29 @@ public sealed partial class Binder {
         );
     }
 
+    /// <summary>
+    ///     A member reached implicitly through <c>self</c>, in a closure that
+    ///     captured <c>self</c> weakly or unowned: through the closure's own
+    ///     name for it, which a weak capture must first unwrap. Null where
+    ///     <c>self</c> is the ordinary one.
+    /// </summary>
+    BoundExpression? CapturedSelf(SyntaxNode syntax, string member) {
+        if (LookupLocal("self") is not LocalSymbol captured) {
+            return null;
+        }
+
+        if ((NarrowedType(captured) ?? captured.Type) is OptionalTypeSymbol optional) {
+            _diagnostics.Error(
+                ErrorCode.ERR_NameNotFound,
+                syntax.Span,
+                $"'{member}' is reached through 'self', which this closure holds weakly, as '{optional.ToDisplayString()}': "
+                + "unwrap it first, with 'guard let self'"
+            );
+        }
+
+        return new BoundLocalAccess(syntax, captured, NarrowedType(captured));
+    }
+
     ImmutableArray<BoundCapture> BindCaptures(CaptureListSyntax? captureList) {
         if (captureList is null) {
             return [];
@@ -4173,6 +4213,14 @@ public sealed partial class Binder {
             };
 
             var name = item.Identifier.Text;
+
+            if (kind is CaptureKind.Weak or CaptureKind.Unowned) {
+                if (BindHeldCapture(item, name, kind) is { } held) {
+                    captures.Add(held);
+                }
+
+                continue;
+            }
 
             if (item.Expression is { } expression) {
                 var value = BindExpression(expression);
@@ -4213,6 +4261,51 @@ public sealed partial class Binder {
         }
 
         return captures.ToImmutable();
+    }
+
+    /// <summary>
+    ///     <c>[weak x]</c>, <c>[unowned self]</c>, <c>[weak x = e]</c>: an
+    ///     object the closure holds without keeping it alive, under a name of
+    ///     the closure's own — optional for a weak one, which reads as none
+    ///     once the object is gone, so the body unwraps it:
+    ///     <c>guard let self else { … }</c>.
+    /// </summary>
+    BoundCapture? BindHeldCapture(CaptureItemSyntax item, string name, CaptureKind kind) {
+        BoundExpression value;
+        if (item.Expression is { } expression) {
+            value = BindExpression(expression);
+        } else if (item.Identifier.Kind == SyntaxKind.SelfKeyword || name == "self") {
+            if (LookupLocal("self") is LocalSymbol outer) {
+                value = new BoundLocalAccess(item, outer, NarrowedType(outer));
+            } else if (EnclosingType() is { } enclosing) {
+                value = new BoundSelfAccess(item, SelfTypeOf(enclosing), SelfIsMutable(enclosing));
+            } else {
+                _diagnostics.Error(ErrorCode.ERR_SelfOutsideType, item.Identifier.Span, "'self' is only available inside a type");
+                return null;
+            }
+        } else {
+            value = BindNameAsValue(name, item);
+        }
+
+        if (value.HasError || value.Type.IsError) {
+            return null;
+        }
+
+        var weak = kind == CaptureKind.Weak;
+        var objectType = weak && value.Type is OptionalTypeSymbol optional ? optional.UnderlyingType : value.Type;
+        if (objectType.TypeKind is not (TypeKind.Class or TypeKind.Actor)) {
+            _diagnostics.Error(
+                weak ? ErrorCode.ERR_WeakNeedsOptionalClass : ErrorCode.ERR_UnownedNeedsClass,
+                item.Span,
+                $"'{item.SpecifierToken.Text}' holds an object without keeping it alive, so it captures a class instance; "
+                + $"'{name}' is '{value.Type.ToDisplayString()}'"
+            );
+            return null;
+        }
+
+        var type = weak ? (TypeSymbol)new OptionalTypeSymbol(objectType) : objectType;
+        var local = new LocalSymbol(name, _containingSymbol, item, false) { TypeResolver = () => type };
+        return new(item, local, kind, Convert(value, type, item));
     }
 
     BoundExpression BindImplicitParameter(ImplicitParameterExpressionSyntax syntax) {

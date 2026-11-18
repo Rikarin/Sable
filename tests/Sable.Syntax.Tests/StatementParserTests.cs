@@ -470,4 +470,18 @@ public sealed class StatementParserTests {
         var block = Assert.IsType<BlockSyntax>(tree.Root);
         Assert.Equal(5, block.Statements.Count);
     }
+
+    [Theory]
+    [InlineData("let h = [weak c] () => 1")]
+    [InlineData("let h = [weak c] { 1 }")]
+    [InlineData("let h = [weak c] x => x")]
+    [InlineData("let h = run([weak c, unowned d] () => 3)")]
+    [InlineData("let h = [weak c = other.c] () => 1")]
+    public void ParsesAWeakCaptureOfAName(string source) {
+        var tree = SyntaxTree.ParseStatement(source);
+        Assert.False(tree.HasErrors, tree.FormatDiagnostics());
+        var item = tree.Root.DescendantNodes().OfType<CaptureItemSyntax>().First();
+        Assert.Equal("c", item.Identifier.Text);
+        Assert.Equal("weak", item.SpecifierToken.Text);
+    }
 }

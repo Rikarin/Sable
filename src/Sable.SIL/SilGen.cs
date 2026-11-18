@@ -1556,8 +1556,12 @@ public sealed partial class SilGen {
         return $"{function}$closure{count}";
     }
 
-    /// <summary>One thing a closure captured: where in its context it is, and whether that is a box.</summary>
-    internal sealed record Capture(object Key, TypeSymbol Type, int Field, bool Boxed, BoundExpression? Initializer);
+    /// <summary>
+    ///     One thing a closure captured: where in its context it is, whether
+    ///     that is a box, and whether it holds an object without keeping it —
+    ///     '[weak x]', '[unowned self]'.
+    /// </summary>
+    internal sealed record Capture(object Key, TypeSymbol Type, int Field, bool Boxed, BoundExpression? Initializer, CaptureKind Kind = CaptureKind.Default);
 
     /// <summary>The key a captured <c>self</c> is filed under.</summary>
     internal const string SelfKey = "self";
@@ -1601,9 +1605,9 @@ public sealed partial class SilGen {
         var captures = new List<Capture>();
         var seen = new HashSet<object>();
 
-        void Add(object key, TypeSymbol type, bool boxed, BoundExpression? initializer) {
+        void Add(object key, TypeSymbol type, bool boxed, BoundExpression? initializer, CaptureKind kind = CaptureKind.Default) {
             if (seen.Add(key)) {
-                captures.Add(new(key, type, captures.Count, boxed, initializer));
+                captures.Add(new(key, type, captures.Count, boxed, initializer, kind));
             }
         }
 
@@ -1619,7 +1623,7 @@ public sealed partial class SilGen {
 
                 case BoundLocalAccess access when !inner.Contains(access.Local.ContainingSymbol!):
                     if (listed.TryGetValue(access.Local, out var listedCapture)) {
-                        Add(access.Local, access.Local.Type, false, listedCapture.Initializer);
+                        Add(access.Local, access.Local.Type, false, listedCapture.Initializer, listedCapture.CaptureKind);
                     } else {
                         Add(access.Local, access.Local.Type, true, null);
                     }
@@ -2473,7 +2477,8 @@ public sealed partial class SilGen {
                 return null;
             }
 
-            var value = Emit(new LoadInst(address));
+            // A weak or unowned capture reads as its storage says.
+            var value = ReadField(address);
             EndAll(borrows);
             return value;
         }
@@ -6158,7 +6163,14 @@ public sealed partial class SilGen {
                         fieldName = $"{fieldName}${capture.Field}";
                     }
 
-                    contextType.Fields.Add((fieldName, capture.Boxed ? generator.BoxType(fieldType) : fieldType));
+                    // A weak or unowned capture is held as a weak or unowned field is.
+                    SilType stored = (capture.Kind, fieldType) switch {
+                        _ when capture.Boxed => generator.BoxType(fieldType),
+                        (CaptureKind.Weak, EnumType optional) => new WeakStorageType(optional),
+                        (CaptureKind.Unowned, ClassType referent) => new UnownedStorageType(referent),
+                        _ => fieldType,
+                    };
+                    contextType.Fields.Add((fieldName, stored));
                 }
             }
 
@@ -6186,7 +6198,23 @@ public sealed partial class SilGen {
                     return null;
                 }
 
-                Emit(new StoreInst(Owned(value), Emit(new RefElementAddrInst(context, capture.Field)), StoreKind.Assign));
+                var field = Emit(new RefElementAddrInst(context, capture.Field));
+                switch (((AddressType)field.Type).Pointee) {
+                    // Given the object without keeping it: the value is let go.
+                    case WeakStorageType:
+                        Emit(new StoreWeakInst(value, field));
+                        Destroy(value);
+                        break;
+
+                    case UnownedStorageType:
+                        Emit(new StoreUnownedInst(value, field));
+                        Destroy(value);
+                        break;
+
+                    default:
+                        Emit(new StoreInst(Owned(value), field, StoreKind.Assign));
+                        break;
+                }
             }
 
             return Emit(new PartialApplyInst(reference, Unhold(context), thick));

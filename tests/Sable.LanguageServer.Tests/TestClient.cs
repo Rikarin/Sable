@@ -25,11 +25,14 @@ internal sealed class TestClient : IAsyncDisposable {
 
     public Task<int> Running { get; }
 
+    /// <summary>The server, for what only a test asks of it.</summary>
+    internal LanguageServer Server { get; }
+
     /// <param name="projects">How the server finds the packages under its folder; none, by default.</param>
     public TestClient(TimeSpan? diagnosticsDelay = null, Func<string, IReadOnlyList<LanguageProject>>? projects = null) {
         _serverInput = new(PipeDirection.In, _toServer.ClientSafePipeHandle);
         _clientInput = new(PipeDirection.In, _toClient.ClientSafePipeHandle);
-        var server = new LanguageServer(_serverInput, _toClient, new LanguageServerOptions {
+        var server = Server = new LanguageServer(_serverInput, _toClient, new LanguageServerOptions {
             LibraryFor = Library.For,
             LibraryModules = Library.ModuleNames,
             ProjectsFor = projects ?? (static _ => []),

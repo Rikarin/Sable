@@ -112,6 +112,7 @@ public sealed partial class LanguageServer {
             }
 
             changed |= await ReportAsync(document, analysis.DiagnosticsOf(document.Tree, cancellation), false);
+            _analyses.Bound(analysis);
         }
 
         await ForgetRemovedAsync(snapshot);

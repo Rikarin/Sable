@@ -87,7 +87,13 @@ public sealed partial class LanguageServer {
         _analyses = new(BuildAnalysis);
     }
 
+    /// <summary>How many analyses have been built, for tests of what waits for one.</summary>
+    internal int AnalysesBuilt => Volatile.Read(ref _analysesBuilt);
+
+    int _analysesBuilt;
+
     Analysis BuildAnalysis(WorkspaceSnapshot snapshot, string key) {
+        Interlocked.Increment(ref _analysesBuilt);
         var project = snapshot.Layout.Projects.FirstOrDefault(p => p.Directory == key);
         var dependencies = project is null ? [] : _dependencies.For(project, snapshot, Log);
         return Analysis.Build(

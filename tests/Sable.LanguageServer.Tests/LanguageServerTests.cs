@@ -316,6 +316,58 @@ public sealed class LanguageServerTests : IDisposable {
     }
 
     [Fact]
+    public async Task ReferencesAfterAnEditInABodyNeedNoNewCompilation() {
+        Write("geometry.sb", Geometry);
+        var main = Write("main.sb", Main);
+        // No round of diagnostics runs: only the requests build analyses.
+        await using var client = new TestClient(TimeSpan.FromHours(1));
+        await client.InitializeAsync(_root);
+        await client.NotifyAsync("initialized", new { });
+        await client.OpenAsync(main, Main);
+        await client.AtAsync("textDocument/definition", main, Main, At(Main, "origin()", 2));
+        var built = client.Server.AnalysesBuilt;
+
+        // A statement added to main's body, before the use there was.
+        var at = At(Main, "    let total");
+        const string Added = "    let twice = p.sum() + p.sum()\n";
+        var text = Main.Insert(at, Added);
+        await client.ChangeAsync(main, 2, Main, at, at, Added);
+        var references = await client.AtAsync("textDocument/references", main, text, At(text, "p.sum() +", 3), new { context = new { includeDeclaration = false } });
+        Assert.Equal(built, client.Server.AnalysesBuilt);
+
+        var lines = LineIndex.Of(text);
+        var expected = new[] { At(text, "p.sum() +", 2), At(text, "+ p.sum()", 4), At(text, "total = p.sum()", 10) }
+            .Select(o => lines.PositionOf(o)).ToList();
+        var found = references.EnumerateArray()
+            .Where(r => r.GetString("uri") == main)
+            .Select(static r => r.Get("range")!.Value.Get("start")!.Value)
+            .Select(static s => new LspPosition(s.GetInt("line")!.Value, s.GetInt("character")!.Value))
+            .OrderBy(static p => p.Line)
+            .ThenBy(static p => p.Character)
+            .ToList();
+        Assert.Equal(expected, found);
+
+        // A local the edit declared renames where it is.
+        var rename = await client.AtAsync("textDocument/rename", main, text, At(text, "twice", 1), new { newName = "doubled" });
+        var edits = rename.Get("changes")!.Value.Get(main)!.Value;
+        Assert.Equal(lines.PositionOf(At(text, "twice")), ReadStart(edits[0]));
+        Assert.Equal(built, client.Server.AnalysesBuilt);
+
+        // An edit to a declaration does need one: main is renamed.
+        var name = At(text, "fn main()", 7);
+        await client.ChangeAsync(main, 3, text, name, name, "Program");
+        var renamed = text.Insert(name, "Program");
+        var after = await client.AtAsync("textDocument/references", main, renamed, At(renamed, "p.sum() +", 3), new { context = new { includeDeclaration = false } });
+        Assert.True(client.Server.AnalysesBuilt > built);
+        Assert.Equal(3, after.EnumerateArray().Count(r => r.GetString("uri") == main));
+    }
+
+    static LspPosition ReadStart(JsonElement edit) {
+        var start = edit.Get("range")!.Value.Get("start")!.Value;
+        return new(start.GetInt("line")!.Value, start.GetInt("character")!.Value);
+    }
+
+    [Fact]
     public async Task RenameRefusesTheLibraryAndKeywords() {
         var (client, _, main) = await OpenWorkspaceAsync();
         await using var _ = client;

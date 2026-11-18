@@ -213,6 +213,39 @@ public sealed class InheritanceTests {
         );
 
     [Fact]
+    public void AnOverriddenPropertyIsReadAndWrittenThroughTheVTable() =>
+        Prints(
+            "2 der\nset 7\n1 base\n",
+            """
+            open class Base {
+                var stored: Int = 0
+                open var q: Int { get => 1 }
+                open var label: String { get => "base" }
+                open var level: Int {
+                    get => stored
+                    set { stored = newValue }
+                }
+            }
+
+            class Der: Base {
+                override var q: Int { get => 2 }
+                override var label: String { get => "der" }
+                override var level: Int {
+                    get => stored
+                    set { print("set \(newValue)") }
+                }
+            }
+            """,
+            """
+                let b: Base = Der()
+                print("\(b.q) \(b.label)")
+                b.level = 7
+                let plain = Base()
+                print("\(plain.q) \(plain.label)")
+            """
+        );
+
+    [Fact]
     public void AGenericClassIsInheritedAndItsMethodsOverridden() =>
         Prints(
             "1\n5\n5\n9\n",

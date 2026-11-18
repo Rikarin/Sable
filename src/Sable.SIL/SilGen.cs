@@ -734,20 +734,29 @@ public sealed partial class SilGen {
         method.Parameters.IsEmpty ? method.Name : method.Name + string.Concat(method.Parameters.Select(static p => "$" + Sanitise(p.Type.ToDisplayString())));
 
     /// <summary>
-    ///     The slot a method takes in a vtable: an override takes the slot of
-    ///     what it overrides, whatever its own parameter types say —
-    ///     'take(_ x: Int)' overriding 'take(_ x: T)' is 'take$T'.
+    ///     The slot a method or a property's getter or setter takes in a
+    ///     vtable: an override takes the slot of what it overrides, whatever
+    ///     its own parameter types say — 'take(_ x: Int)' overriding
+    ///     'take(_ x: T)' is 'take$T' — and an accessor is named for its
+    ///     property, which an override shares.
     /// </summary>
-    internal static string VTableSlot(FunctionSymbol method) => SlotName(method.RootOverridden ?? method);
+    internal static string VTableSlot(FunctionSymbol method) =>
+        method is { FunctionKind: FunctionKind.Accessor, ContainingSymbol: FieldSymbol property }
+            ? $"{method.Name}${property.Name}"
+            : SlotName(method.RootOverridden ?? method);
 
-    /// <summary>True for a method a call must find through the vtable: one a subclass may override.</summary>
+    /// <summary>
+    ///     True for a method a call must find through the vtable: one a
+    ///     subclass may override — a property's getter and setter among them.
+    /// </summary>
     internal bool IsDynamic(FunctionSymbol method) =>
         IsVirtual(method) && _inherited.Contains(Owner(method)!.OriginalDefinition);
 
     /// <summary>True for a member of a class that takes a slot in its vtable.</summary>
     static bool IsVirtual(FunctionSymbol method) =>
         !method.IsStatic
-        && method.FunctionKind == FunctionKind.Ordinary && method.ContainingSymbol is NamedTypeSymbol
+        && (method.FunctionKind == FunctionKind.Ordinary && method.ContainingSymbol is NamedTypeSymbol
+            || method is { FunctionKind: FunctionKind.Accessor, Name: "get" or "set", ContainingSymbol: FieldSymbol { ContainingSymbol: NamedTypeSymbol } })
         && Owner(method) is { TypeKind: TypeKind.Class or TypeKind.Actor };
 
     /// <summary>
@@ -773,7 +782,11 @@ public sealed partial class SilGen {
             // A generic class's methods, for this class's type arguments:
             // instances, lowered once the vtables are built.
             var arguments = TypeSubstitution.For(symbol);
-            foreach (var method in symbol.OriginalDefinition.Members.OfType<FunctionSymbol>()) {
+            var accessors = symbol.OriginalDefinition.Members.OfType<FieldSymbol>()
+                .Where(static f => f is { IsStatic: false, IsComputed: true })
+                .SelectMany(f => new[] { GetterOf(f), SetterOf(f) })
+                .OfType<FunctionSymbol>();
+            foreach (var method in symbol.OriginalDefinition.Members.OfType<FunctionSymbol>().Concat(accessors)) {
                 if (method is { FunctionKind: FunctionKind.Ordinary, IsStatic: false, IsAbstract: true } && method.ContainingSymbol is NamedTypeSymbol && !IsGeneric(method)) {
                     AbstractStub(method);
                 }

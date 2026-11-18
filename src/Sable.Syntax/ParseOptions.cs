@@ -44,6 +44,17 @@ public sealed record ParseOptions {
     /// </summary>
     public string? Package { get; init; }
 
+    /// <summary>
+    ///     The attributes the package's source generators answer to (docs/08):
+    ///     each may be written on a type, as the compiler's own are.
+    /// </summary>
+    public ImmutableHashSet<string> GeneratorAttributes { get; init; } =
+        ImmutableHashSet<string>.Empty.WithComparer(StringComparer.Ordinal);
+
+    /// <summary>The attributes those generators read on a type's fields and cases.</summary>
+    public ImmutableHashSet<string> GeneratorMemberAttributes { get; init; } =
+        ImmutableHashSet<string>.Empty.WithComparer(StringComparer.Ordinal);
+
     public ParseOptions WithSymbols(params string[] symbols) => this with { Symbols = [..symbols] };
 
     public ParseOptions WithFeatures(params string[] features) => this with { Features = [..features] };

@@ -55,6 +55,7 @@ public static class LanguageProjects {
         foreach (var member in workspace.Members) {
             var own = graph.Packages[member.Name];
             var generated = PackageGenerators.Run(graph, member.Name, dev: true, optimise: false);
+            var attributes = PackageGenerators.AttributesFor(graph, own);
             yield return new(
                 member.Name,
                 member.Directory,
@@ -62,9 +63,14 @@ public static class LanguageProjects {
                 [
                     ..Dependencies(graph, member.Name).SelectMany(p => p.Package.LibrarySources()
                         .SelectMany(f => (IEnumerable<string>)[f, ..generated.For(f)])
-                        .Select(f => new LanguageProjectFile(f, [..p.Features.Order(StringComparer.Ordinal)]))),
+                        .Select(f => new LanguageProjectFile(f, [..p.Features.Order(StringComparer.Ordinal)]) {
+                            GeneratorAttributes = PackageGenerators.AttributesFor(graph, p).Types,
+                            GeneratorMemberAttributes = PackageGenerators.AttributesFor(graph, p).Members,
+                        })),
                 ]) {
                 Generate = trees => PackageGenerators.ForEditor(graph, member.Name, trees),
+                GeneratorAttributes = attributes.Types,
+                GeneratorMemberAttributes = attributes.Members,
             };
 
             var generators = Path.Combine(member.Directory, Generators.SourceGenerators.DirectoryName);

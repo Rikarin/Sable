@@ -15,7 +15,7 @@ public sealed class SourceGeneratorTests {
         import Sable.Generators
         import Sable.Text
 
-        @generator("describe")
+        @generator("describe", members: ["hidden"])
         fn describe(_ declaration: Declaration, into output: inout Output) {
             let text = TextBuilder()
             let label = declaration.trigger.string(named: "label") ?? declaration.name
@@ -45,10 +45,12 @@ public sealed class SourceGeneratorTests {
 
     /// <summary>The program with what the generators wrote, interpreted: its output.</summary>
     static string RunProgram(GeneratorSet set, string source) {
-        var tree = SyntaxTree.Parse(new SourceText(source, "src/main.sb"));
+        // As a package that can see the generators parses its files.
+        var options = ParseOptions.Default with { GeneratorAttributes = [..set.Attributes.Types], GeneratorMemberAttributes = [..set.Attributes.Members] };
+        var tree = SyntaxTree.Parse(new SourceText(source, "src/main.sb"), options);
         var result = SourceGenerators.Run("app", [set], [tree]);
         Assert.False(result.HasErrors, string.Join("\n", Messages(result)));
-        var generated = result.Files.Select(static f => SyntaxTree.Parse(new SourceText(f.Text, $"target/generated/app/{f.Generator}/{f.FileName}")));
+        var generated = result.Files.Select(f => SyntaxTree.Parse(new SourceText(f.Text, $"target/generated/app/{f.Generator}/{f.FileName}"), options));
         var compiled = Pipeline.Compile([tree, ..generated]);
         Assert.True(compiled.Succeeded, string.Join("\n", compiled.Errors) + "\n\n" + string.Join("\n\n", result.Files.Select(static f => f.Text)));
         var interpreter = new SilInterpreter(compiled.Sil!);
@@ -423,8 +425,21 @@ public sealed class SourceGeneratorTests {
         Packages(fixture, "module Top\n\nimport App\n\n@describe\nstruct Local { var a: Int }\n\nfn main() {\n    print(Local(a: 1).describe())\n}\n");
         var workspace = fixture.Load("top");
         Assert.Equal(1, PackageBuilder.Check(workspace, fixture.Environment, new()));
-        Assert.Contains("'Local' has no member named 'describe'", fixture.Errors.ToString());
+        Assert.Contains("there is no attribute '@describe'", fixture.Errors.ToString());
         Assert.False(Directory.Exists(Path.Combine(workspace.TargetDirectory, "generated", "top")));
+    }
+
+    [Fact]
+    public void AGeneratorsAttributesAreAcceptedOnlyWhereItReadsThem() {
+        using var fixture = new PackageFixture();
+        Packages(fixture);
+        fixture.Write("app/src/more.sb", "module App\n\n@describe\nfn notAType() { }\n\nstruct Holder {\n    @describe var a: Int\n    @hidden var b: Int\n}\n\n@hidden\nstruct Wrong { }\n");
+        Assert.Equal(1, PackageBuilder.Check(fixture.Load("top"), fixture.Environment, new()));
+        var errors = fixture.Errors.ToString();
+        Assert.Contains("'@describe' starts a source generator, which is given a struct, a class, an actor, a union or an enum at the top level of a file, not a function", errors);
+        Assert.Contains("'@describe' starts a source generator, which is given a struct, a class, an actor, a union or an enum at the top level of a file, not a property", errors);
+        Assert.Contains("'@hidden' is read by a source generator on a field or a case of the type it is given, not on a struct", errors);
+        Assert.DoesNotContain("src/more.sb:8", errors);
     }
 
     [Fact]

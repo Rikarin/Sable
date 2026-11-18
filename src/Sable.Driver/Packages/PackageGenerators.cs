@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+using System.Runtime.CompilerServices;
 using Sable.Driver.Build;
 using Sable.Driver.Generators;
 using Sable.LanguageServer;
@@ -133,6 +135,27 @@ public static class PackageGenerators {
 
         return new(trees, result.Diagnostics);
     }
+
+    static readonly ConditionalWeakTable<PackageGraph, ConcurrentDictionary<string, GeneratorAttributes>> Attributes = new();
+
+    /// <summary>
+    ///     The attributes a package's files may write for its generators and
+    ///     its dependencies' and dev-dependencies' (docs/08 §8.2), which the
+    ///     compiler accepts as it does its own.
+    /// </summary>
+    public static GeneratorAttributes AttributesFor(PackageGraph graph, ResolvedPackage package) =>
+        Attributes.GetOrCreateValue(graph).GetOrAdd(package.Name, _ => {
+            IEnumerable<string> names = [package.Name, ..package.Dependencies, ..package.DevDependencies];
+            var sets = names.Distinct(StringComparer.Ordinal)
+                .Where(graph.Packages.ContainsKey)
+                .Select(name => GeneratorSet.Load(name, graph.Packages[name].Package.Directory, static f => f))
+                .OfType<GeneratorSet>()
+                .ToList();
+            return sets.Count == 0
+                ? GeneratorAttributes.None
+                : new([..sets.SelectMany(static s => s.Attributes.Types).Distinct().Order(StringComparer.Ordinal)],
+                    [..sets.SelectMany(static s => s.Attributes.Members).Distinct().Order(StringComparer.Ordinal)]);
+        });
 
     /// <summary>Where a package's generated files go: <c>target/generated/&lt;package&gt;/</c>.</summary>
     public static string GeneratedDirectory(Workspace workspace, string package) =>

@@ -70,6 +70,13 @@ fn anything(_ declaration: Declaration, into output: inout Output)
 declaration that carries `@json` or `@json(...)`. One package may have any
 number of generators, but no two may share a name.
 
+The compiler rejects an attribute it does not know (S3092), so a generator
+also names the attributes it reads on fields and cases:
+`@generator("json", members: ["rename", "skip"])`. A package that can see the
+generator may then write `@json` on a type at the top level of a file, and
+`@rename(...)` or `@skip` on that type's fields and cases. Written anywhere
+else, they are S3093.
+
 ## 8.2 Which declarations a generator sees
 
 A generator runs over two kinds of package:

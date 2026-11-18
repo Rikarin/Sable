@@ -67,6 +67,7 @@ public sealed partial class Compilation {
         ["frozen"] = (AttributeTargets.Struct | AttributeTargets.Union | AttributeTargets.Enum, "a struct, a union or an enum"),
         ["derive"] = (AttributeTargets.Type, "a type"),
         ["indirect"] = (AttributeTargets.Union | AttributeTargets.UnionCase, "a union or a union case"),
+        ["generator"] = (AttributeTargets.Function, "a function in a package's generators/ directory (docs/08)"),
 
         // The compiler's own: lint levels, and Sable.Core's ties to the
         // runtime, which are checked where they are read.
@@ -120,6 +121,14 @@ public sealed partial class Compilation {
             }
 
             if (!KnownAttributes.TryGetValue(name, out var known)) {
+                if (IsGeneratorAttribute(tree, attribute, name, out var problem)) {
+                    if (problem is not null) {
+                        ReportDeclaration(ErrorCode.ERR_AttributeDoesNotApply, attribute.Span, problem);
+                    }
+
+                    continue;
+                }
+
                 ReportDeclaration(
                     ErrorCode.ERR_UnknownAttribute,
                     attribute.Name.Span,
@@ -152,6 +161,38 @@ public sealed partial class Compilation {
                 TypeBinder.DeferLate(() => CheckImmutable(immutableClass));
             }
         }
+    }
+
+    /// <summary>
+    ///     An attribute a source generator the file's package can see answers
+    ///     to, or reads on members (docs/08), and if so, in
+    ///     <paramref name="problem" />, why it does not apply where it is
+    ///     written. A generator is given only the types at the top level of a
+    ///     file, and their fields and cases.
+    /// </summary>
+    static bool IsGeneratorAttribute(SyntaxTree tree, AttributeSyntax attribute, string name, out string? problem) {
+        const AttributeTargets types = AttributeTargets.Struct | AttributeTargets.Class | AttributeTargets.Actor | AttributeTargets.Union | AttributeTargets.Enum;
+        const AttributeTargets members = AttributeTargets.Field | AttributeTargets.UnionCase | AttributeTargets.EnumCase;
+        var target = AttributeTargetOf(attribute.Parent)?.Target ?? AttributeTargets.None;
+        var noun = AttributeTargetOf(attribute.Parent)?.Noun ?? "this";
+        var onType = (target & types) != 0 && attribute.Parent?.Parent is CompilationUnitSyntax;
+        var onMember = (target & members) != 0;
+        problem = null;
+        if (tree.Options.GeneratorAttributes.Contains(name) && onType || tree.Options.GeneratorMemberAttributes.Contains(name) && onMember) {
+            return true;
+        }
+
+        if (tree.Options.GeneratorAttributes.Contains(name)) {
+            problem = $"'@{name}' starts a source generator, which is given a struct, a class, an actor, a union or an enum at the top level of a file, not {noun}";
+            return true;
+        }
+
+        if (tree.Options.GeneratorMemberAttributes.Contains(name)) {
+            problem = $"'@{name}' is read by a source generator on a field or a case of the type it is given, not on {noun}";
+            return true;
+        }
+
+        return false;
     }
 
     /// <summary>

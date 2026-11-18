@@ -56,6 +56,11 @@ public sealed class GeneratorSet {
     /// <summary>The functions marked <c>@generator</c>, in the order the files declare them.</summary>
     public IReadOnlyList<GeneratorFunction> Generators { get; }
 
+    /// <summary>The attributes the generators answer to on types, and read on members: what a file that can see them may write.</summary>
+    public (IReadOnlyList<string> Types, IReadOnlyList<string> Members) Attributes =>
+        ([..Generators.Select(static g => g.Name).Where(static n => n.Length > 0)],
+            [..Generators.SelectMany(static g => MemberAttributes(g.Attribute))]);
+
     /// <summary>What a cache of anything the program computes is keyed by: the toolchain, the library and its files.</summary>
     public string Key { get; }
 
@@ -82,11 +87,36 @@ public sealed class GeneratorSet {
     public static GeneratorSet FromSources(string package, IReadOnlyList<(string Name, string Text)> files) =>
         new(package, [..files.Select(static f => SyntaxTree.Parse(new SourceText(f.Text, f.Name)))]);
 
-    /// <summary>The name in <c>@generator("name")</c>, if it is written as a string literal.</summary>
-    static string? GeneratorName(AttributeSyntax attribute) =>
-        attribute.ArgumentList is { Arguments: [{ NameToken.IsNone: true, Expression: LiteralExpressionSyntax { Token: { Kind: SyntaxKind.StringLiteralToken, Value: string name } } }] }
-            ? name
-            : null;
+    /// <summary>
+    ///     The name in <c>@generator("name")</c>, if it is written as a string
+    ///     literal, with nothing else but <c>members:</c>.
+    /// </summary>
+    static string? GeneratorName(AttributeSyntax attribute) {
+        if (attribute.ArgumentList is not { Arguments: [{ NameToken.IsNone: true, Expression: var first }, ..] arguments }
+            || StringValue(first) is not { } name) {
+            return null;
+        }
+
+        return arguments.Skip(1).All(static a => a.NameToken.Text == "members" && MemberAttributes(a.Expression) is not null) && arguments.Count <= 2 ? name : null;
+    }
+
+    /// <summary>The names in <c>members: ["rename", "skip"]</c>: the attributes a generator reads on fields and cases.</summary>
+    internal static IReadOnlyList<string> MemberAttributes(AttributeSyntax attribute) =>
+        attribute.ArgumentList?.Arguments.FirstOrDefault(static a => a.NameToken.Text == "members") is { } members
+            ? MemberAttributes(members.Expression) ?? []
+            : [];
+
+    static IReadOnlyList<string>? MemberAttributes(ExpressionSyntax expression) {
+        if (expression is not ArrayExpressionSyntax array) {
+            return null;
+        }
+
+        var names = array.Elements.Select(StringValue).ToList();
+        return names.Contains(null) ? null : [..names.OfType<string>()];
+    }
+
+    static string? StringValue(ExpressionSyntax expression) =>
+        expression is LiteralExpressionSyntax { Token: { Kind: SyntaxKind.StringLiteralToken, Value: string value } } ? value : null;
 }
 
 /// <summary>A file a generator wrote, and the file whose declaration it was written for.</summary>
@@ -217,7 +247,7 @@ public static class SourceGenerators {
         foreach (var set in visible) {
             foreach (var generator in set.Generators) {
                 if (generator.Name.Length == 0) {
-                    diagnostics.Add((Rule(generator.Attribute.Span, "a generator is named by a string: '@generator(\"name\")' runs for types marked '@name'"), generator.Tree));
+                    diagnostics.Add((Rule(generator.Attribute.Span, "a generator is named by a string: '@generator(\"name\")' runs for types marked '@name', and 'members: [\"a\", \"b\"]' names the attributes it reads on their fields and cases"), generator.Tree));
                 } else if (BuiltInAttributes.Contains(generator.Name)) {
                     diagnostics.Add((Rule(generator.Attribute.Span, $"'@{generator.Name}' is the compiler's own attribute; a generator cannot answer to it"), generator.Tree));
                 } else if (byName.TryGetValue(generator.Name, out var other)) {

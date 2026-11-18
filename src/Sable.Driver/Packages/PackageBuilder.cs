@@ -135,7 +135,9 @@ public static class PackageBuilder {
             : $"{package.Name}-{package.Version}/{Path.GetRelativePath(package.Package.Directory, file).Replace(Path.DirectorySeparatorChar, '/')}";
         // A workspace's own packages share 'package' members; a registry
         // dependency is a workspace of its own.
-        return new(file, name, [..package.Features.Order(StringComparer.Ordinal)], package.IsLocal ? null : $"{package.Name}-{package.Version}", package.Name);
+        return new(file, name, [..package.Features.Order(StringComparer.Ordinal)], package.IsLocal ? null : $"{package.Name}-{package.Version}", package.Name) {
+            Generators = PackageGenerators.AttributesFor(graph, package),
+        };
     }
 
     /// <summary>

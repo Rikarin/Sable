@@ -1,6 +1,5 @@
 module Examples.Service
 
-import Sable.Net
 import Sable.Concurrency
 import Sable.Serialize
 import Sable.Time
@@ -9,22 +8,46 @@ import Sable.Time
 // Typed errors. 'throws(E)' compiles to a discriminated return, not unwinding.
 // ---------------------------------------------------------------------------
 
+public union StoreError {
+    Unavailable(shard: U64)
+}
+
 public union ServiceError {
     NotFound(id: U64)
-    Upstream(HttpError)
-    Timeout(after: Duration)
+    Upstream(cause: StoreError)
     Invalid(reason: String)
 }
 
-extension ServiceError: From<HttpError> {
-    public static fn from(_ e: HttpError) -> ServiceError => .Upstream(e)
+extension ServiceError: From<StoreError> {
+    public static fn from(_ e: StoreError) -> ServiceError => .Upstream(cause: e)
 }
 
 // ---------------------------------------------------------------------------
-// An actor: its state is isolated, so data races are a compile error.
+// Actors: their state is isolated, so data races are a compile error.
 // ---------------------------------------------------------------------------
 
-public actor Cache<Key: Hashable & Sendable, Value: Sendable> {
+/// The upstream: user records as JSON documents, sharded by id.
+public actor UserStore {
+    private var documents: [U64: String] = [:]
+    private let shards: U64
+
+    public init(shards: U64) { self.shards = shards }
+
+    public fn put(_ id: U64, _ json: String) {
+        documents[id] = json
+    }
+
+    public async fn load(_ id: U64) throws(StoreError) -> String? {
+        await Task.yield() // a round trip, of sorts
+        let shard = id % shards
+        if shard == 0 { // down for maintenance
+            throw .Unavailable(shard: shard)
+        }
+        return documents[id]
+    }
+}
+
+public actor Cache<Key: Hashable, Value> {
     private var entries: [Key: (value: Value, at: Instant)] = [:]
     private let ttl: Duration
 
@@ -32,93 +55,140 @@ public actor Cache<Key: Hashable & Sendable, Value: Sendable> {
 
     public fn get(_ key: Key) -> Value? {
         guard let entry = entries[key] else { return none }
-        if Instant.now - entry.at > ttl {
-            entries.remove(key)
+        if entry.at.elapsed > ttl {
+            entries[key] = none
             return none
         }
         return entry.value
     }
 
     public fn set(_ key: Key, _ value: Value) {
-        entries[key] = (value: value, at: Instant.now)
+        entries[key] = (value: value, at: Instant.now())
     }
 }
 
 // ---------------------------------------------------------------------------
-// Structured concurrency: children cannot outlive the scope.
+// async, await, and errors converted at the 'try' that crosses a boundary.
 // ---------------------------------------------------------------------------
 
-@derive(Serializable, Equatable)
+@derive(Equatable)
 public struct User {
     public let id: U64
     public let name: String
 }
 
 public class UserService {
-    private let http: HttpClient
+    private let store: UserStore
     private let cache: Cache<U64, User>
 
-    public init(http: HttpClient) {
-        self.http = http
+    public init(store: UserStore) {
+        self.store = store
         self.cache = Cache(ttl: .minutes(5))
     }
 
     public async fn fetch(_ id: U64) throws(ServiceError) -> User {
-        if let hit = await cache.get(id) { return hit }
-
-        let response = try await withTimeout(.seconds(3)) {
-            try await http.get("/users/\(id)")       // HttpError converts via From
+        if let hit = await cache.get(id) {
+            return hit
         }
 
-        guard response.status == 200 else {
+        // A StoreError converts to a ServiceError, via From.
+        guard let body = try await store.load(id) else {
             throw .NotFound(id: id)
         }
 
-        let user = try Json.decode(User.self, from: response.body)
-            catch { throw ServiceError.Invalid(reason: "malformed user payload") }
+        guard let document = try? parse(body) else {
+            throw .Invalid(reason: "malformed user payload")
+        }
+        guard let name = field(document, "name") else {
+            throw .Invalid(reason: "user \(id) has no name")
+        }
 
+        let user = User { id: id, name: asText(name) ?? "?" }
         await cache.set(id, user)
         return user
     }
 
-    /// Fan out, bounded by the scope. Every child is awaited or cancelled here.
-    public async fn fetchMany(_ ids: U64[]) -> [U64: User] {
-        return await withTaskGroup(of: (U64, User)?.self) { group in
-            for id in ids {
-                group.spawn {
-                    return try? await (id, self.fetch(id))
-                }
-            }
-            var found: [U64: User] = [:]
-            for await result in group {
-                if let (id, user) = result { found[id] = user }
-            }
-            return found
+    /// Fan out, then wait: every child is awaited before this returns.
+    public async fn fetchMany(_ ids: U64[>..]) -> User[>..] {
+        let group = TaskGroup<User?>()
+        for id in ids {
+            group.add(Task.spawn { try? await self.fetch(id) })
         }
+
+        var found: User[>..] = []
+        for result in await group.waitForAll() {
+            if let user = result {
+                found.append(user)
+            }
+        }
+        return found
+    }
+}
+
+/// Every way a fetch can end, matched exhaustively.
+async fn report(_ service: UserService, _ id: U64) -> String {
+    do {
+        let user = try await service.fetch(id)
+        return "\(id): \(user.name)"
+    } catch .NotFound(let missing) {
+        return "\(missing): no such user"
+    } catch .Upstream(let cause) {
+        return match cause {
+            case .Unavailable(let shard) => "\(id): shard \(shard) is down"
+        }
+    } catch .Invalid(let reason) {
+        return "\(id): \(reason)"
     }
 }
 
 // ---------------------------------------------------------------------------
 
 @main
-async fn main() throws {
-    let service = UserService(http: HttpClient())
+async fn main() {
+    let store = UserStore(shards: 7)
+    await store.put(1, "{\"id\": 1, \"name\": \"Ada\"}")
+    await store.put(2, "{\"id\": 2, \"name\": \"Grace\"}")
+    await store.put(3, "{\"id\": 3, \"name\": \"Barbara\"}")
+    await store.put(4, "{\"id\": 4, \"name\": \"Edsger\"}")
+    await store.put(5, "{\"id\": 5}")
+    await store.put(6, "{\"id\": 6, \"name\": ")
+    let service = UserService(store: store)
 
-    async let a = service.fetch(1)
-    async let b = service.fetch(2)
-    let (first, second) = try await (a, b)
-    print("\(first.name), \(second.name)")
+    // Two fetches in flight at once.
+    async let a = report(service, 1)
+    async let b = report(service, 2)
+    print(await a)
+    print(await b)
 
-    let many = await service.fetchMany([3, 4, 5, 6, 7])
-    print("fetched \(many.count)")
-
-    let listener = try TcpListener.bind("0.0.0.0:8080")
-    for await conn in listener.connections {
-        Task.spawn { await handle(conn, service) }
+    let awkward: U64[>..] = [5, 6, 7, 8]
+    for id in awkward {
+        print(await report(service, id))
     }
-}
 
-async fn handle(_ conn: TcpConnection, _ service: UserService) {
-    using let c = conn
-    // ...
+    let many = await service.fetchMany([1, 2, 3, 4, 7])
+    print("fetched \(many.count) of 5")
+
+    // Requests queued on a channel, served by two workers.
+    let requests = Channel<U64>()
+    let workers = TaskGroup<Int>()
+    for worker in 1...2 {
+        workers.add(Task.spawn {
+            var served = 0
+            while let id = await requests.receive() {
+                print("worker \(worker): \(await report(service, id))")
+                served += 1
+            }
+            return served
+        })
+    }
+    let queued: U64[>..] = [8, 3, 9, 14]
+    for id in queued {
+        requests.send(id)
+    }
+    requests.close()
+    var served = 0
+    for count in await workers.waitForAll() {
+        served += count
+    }
+    print("served \(served)")
 }

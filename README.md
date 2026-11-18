@@ -188,7 +188,7 @@ features, build profiles and build scripts are all described in
 | `sable test` | run `@test` functions; `--doc` also runs doc examples |
 | `sable bench` | run `@bench` functions and compare with a baseline |
 | `sable fmt` | format source; there are no options, by design |
-| `sable lint` | run the lints, at the levels your manifest sets |
+| `sable lint`, `sable fix` | run the lints, at the levels your manifest sets; apply their fixes |
 | `sable doc` | generate documentation |
 | `sable debug` | build with debug info and run under lldb, with Sable-aware formatters |
 | `sable repl` | an interactive session |
@@ -206,7 +206,8 @@ cross-compiles, and `--message-format json` gives machine-readable diagnostics.
 The VS Code extension in [editors/vscode](editors/vscode) gives you
 highlighting, diagnostics as you type, completion, go to definition, find
 references, rename, hover, inlay hints, formatting, code actions, tasks and
-debugging. Any editor with LSP support can use `sable lsp` directly.
+debugging. [editors/](editors/) also has setups for Vim and Neovim, Helix, Emacs
+and Sublime Text, and any other editor with LSP support can run `sable lsp`.
 
 ## Learning the language
 

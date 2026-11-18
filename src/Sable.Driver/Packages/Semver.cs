@@ -429,13 +429,21 @@ public sealed class VersionReq {
         }
 
         // A partial version: major[.minor[.patch[-pre]]], with '*' or 'x' for what is left out.
+        // Build metadata goes first: a '-' in it ('1.0.0+b-2') starts no pre-release.
         string[] pre = [];
-        var dash = rest.IndexOf('-', StringComparison.Ordinal);
         var plus = rest.IndexOf('+', StringComparison.Ordinal);
         if (plus >= 0) {
+            // Ignored, as a version's is in comparing; but checked, so that junk after a '+' is not taken.
+            var build = rest[(plus + 1)..];
+            if (build.Split('.').Any(static p => p.Length == 0 || !p.All(static c => char.IsAsciiLetterOrDigit(c) || c == '-'))) {
+                error = $"'{text}' is not a version requirement: '{build}' is not valid build metadata";
+                return false;
+            }
+
             rest = rest[..plus];
         }
 
+        var dash = rest.IndexOf('-', StringComparison.Ordinal);
         if (dash >= 0) {
             pre = rest[(dash + 1)..].Split('.');
             rest = rest[..dash];

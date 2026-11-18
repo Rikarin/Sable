@@ -75,6 +75,19 @@ public sealed class SemverTests {
     [InlineData("^1.2-beta")]
     public void NotRequirements(string text) => Assert.False(VersionReq.TryParse(text, out _, out _));
 
+    /// <summary>
+    ///     Found by the resolver fuzzer: the '-' was looked for before build
+    ///     metadata was cut off, so one inside it was past the end of what was
+    ///     left, and parsing threw.
+    /// </summary>
+    [Fact]
+    public void ADashInBuildMetadataIsNotAPrerelease() {
+        Assert.True(VersionReq.TryParse("1.0.0+b-2", out var req, out var error), error);
+        Assert.True(req.Matches(V("1.0.0")));
+        Assert.False(req.MentionsPrerelease);
+        Assert.False(VersionReq.TryParse("1+27X-.a>8", out _, out _));
+    }
+
     [Fact]
     public void SetsAreClosedUnderTheBooleanOperations() {
         var a = VersionReq.Parse("^1.2").Set;

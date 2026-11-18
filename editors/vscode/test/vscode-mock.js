@@ -119,6 +119,32 @@ class TestMessage {
   }
 }
 
+// Test coverage, as VS Code 1.88 has it.
+class TestCoverageCount {
+  constructor(covered, total) {
+    this.covered = covered;
+    this.total = total;
+  }
+}
+
+class FileCoverage {
+  constructor(uri, statementCoverage, branchCoverage, declarationCoverage) {
+    Object.assign(this, { uri, statementCoverage, branchCoverage, declarationCoverage });
+  }
+}
+
+class StatementCoverage {
+  constructor(executed, location, branches = []) {
+    Object.assign(this, { executed, location, branches });
+  }
+}
+
+class BranchCoverage {
+  constructor(executed, location, label) {
+    Object.assign(this, { executed, location, label });
+  }
+}
+
 class ProcessExecution {
   constructor(process, args, options) {
     this.process = process;
@@ -178,12 +204,13 @@ function createTestController(id, label) {
       return profile;
     },
     createTestRun(request) {
-      const run = { request, events: [], output: "", ended: false };
+      const run = { request, events: [], output: "", ended: false, coverage: [] };
       for (const event of ["started", "passed", "failed", "errored", "skipped"]) {
         run[event] = (item, ...rest) => run.events.push({ event, id: item.id, rest });
       }
 
       run.appendOutput = (text) => (run.output += text);
+      run.addCoverage = (coverage) => run.coverage.push(coverage);
       run.end = () => (run.ended = true);
       controller.runs.push(run);
       return run;
@@ -301,6 +328,10 @@ function create(world = {}) {
     CodeActionKind,
     MarkdownString,
     TestMessage,
+    TestCoverageCount,
+    FileCoverage,
+    StatementCoverage,
+    BranchCoverage,
     Task,
     ProcessExecution,
     TaskGroup,
@@ -419,7 +450,7 @@ function load(world) {
   };
 
   const modules = {};
-  for (const name of ["sable", "client", "commands", "tasks", "testing", "debug", "extension"]) {
+  for (const name of ["sable", "client", "commands", "tasks", "coverage", "testing", "debug", "extension"]) {
     modules[name] = require(path.join(source, name));
   }
 

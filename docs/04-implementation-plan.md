@@ -1417,12 +1417,25 @@ Full design in [05-toolchain.md](05-toolchain.md).
   runner adds them up and prints the share of lines run per file with the
   lines that never ran, and writes `target/coverage/lcov.info`. A line counts
   as often as the most-run block it is in; code the optimiser removes is
-  still a line, since the counters go in first. The SIL interpreter runs a
-  counter as nothing.
+  still a line, since the counters go in first. The SIL interpreter counts
+  them too (`SilInterpreter.CoverageCounts`), the same as native code.
+- Branch coverage: lowering, asked to (`SilGen.Lower(…, markDecisions)`,
+  `SilGen.Decisions.cs`), records each decision of the source
+  (`SilFunction.Decisions`: `if`, `guard`, `while`, `?:`, `&&`/`||`,
+  `match`, `switch`, `if let`/`if case`, `??`, `try?`/`try!`/`catch`) and
+  gives each outcome a block only it enters (`SilBlock.Outcome`) — one of
+  its own on the way to a target entered other ways too — which
+  `Coverage.Instrument` starts with a counter like a line's. Unmarked
+  builds lower as before. An outcome's count is the sum of its blocks', a
+  decision lowered more than once (a generic's, a `defer`'s) adds up. The
+  runner prints branches run per file and each decision some of whose
+  outcomes never happened, and `lcov.info` has `BRDA`/`BRF`/`BRH`.
+- The VS Code extension's Test Explorer has a Coverage profile: it runs
+  `sable test --coverage` for the selected tests and reports each file's
+  lines and branches from `lcov.info` (`editors/vscode/src/coverage.js`).
 - **Deferred:** a `blackBox` to keep the optimiser from deleting a
   benchmark's work (it needs a core builtin); async benchmarks; snapshot and
-  property testing (docs/06 lists them under Sable.Testing; #73, #107); the
-  Test Explorer's Coverage profile reading `lcov.info`; branch coverage; a
+  property testing (docs/06 lists them under Sable.Testing; #73, #107); a
   time limit inside the harness's own runner, which would need a builtin to
   wait on a child with one.
 

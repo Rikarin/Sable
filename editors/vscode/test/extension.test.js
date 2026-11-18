@@ -48,6 +48,10 @@ if [ "$1" = "test" ] && [ "$2" = "-g" ] && [ "$3" = "--harness-out" ]; then
   exit 0
 fi
 if [ "$1" = "test" ]; then
+  case " $* " in
+    *" --coverage "*) coverage=1 ;;
+    *) coverage= ;;
+  esac
   echo "running 2 tests"
   echo "test Demo.adds ... ok (1.5 ms)"
   echo "test Demo.fails ... FAILED (2 µs)"
@@ -61,6 +65,12 @@ if [ "$1" = "test" ]; then
   echo "    Demo.fails"
   echo ""
   echo "test result: FAILED. 1 passed; 1 failed"
+  if [ -n "$coverage" ]; then
+    mkdir -p target/coverage
+    printf 'SF:src/main.sb\nDA:3,2\nDA:4,2\nDA:7,0\nLF:3\nLH:2\nBRDA:3,0,0,2\nBRDA:3,0,1,0\nBRF:2\nBRH:1\nend_of_record\n' > target/coverage/lcov.info
+    echo ""
+    echo "coverage: 66.7% of lines (2 of 3), 50% of branches (1 of 2); target/coverage/lcov.info"
+  fi
   exit 1
 fi
 exit 0
@@ -415,6 +425,112 @@ test("the Test Explorer debugs a test in a harness built with debug information"
   const run = controller.runs[0];
   assert.ok(run.ended);
   assert.deepEqual(run.events.map((e) => e.event), ["started", "skipped"]);
+});
+
+test("an LCOV report's lines and branches are read per file", () => {
+  const { modules } = load();
+  const records = modules.coverage.parseLcov([
+    "TN:",
+    "SF:/p/src/a.sb",
+    "DA:1,3",
+    "DA:2,0",
+    "LF:2",
+    "LH:1",
+    "BRDA:1,0,0,3",
+    "BRDA:1,0,1,0",
+    "BRDA:1,1,0,-",
+    "BRDA:1,1,1,-",
+    "BRF:4",
+    "BRH:1",
+    "end_of_record",
+    "SF:src/b.sb",
+    "DA:5,1",
+    "end_of_record",
+    "",
+  ].join("\r\n"));
+  assert.deepEqual(records.map((r) => [r.file, [...r.lines]]), [["/p/src/a.sb", [[1, 3], [2, 0]]], ["src/b.sb", [[5, 1]]]]);
+  assert.deepEqual(records[0].branches, [
+    { line: 1, block: 0, branch: 0, taken: 3 },
+    { line: 1, block: 0, branch: 1, taken: 0 },
+    { line: 1, block: 1, branch: 0, taken: undefined },
+    { line: 1, block: 1, branch: 1, taken: undefined },
+  ]);
+  assert.deepEqual(records[1].branches, []);
+});
+
+test("an LCOV record becomes a file's coverage: counts, lines, and each line's branches", () => {
+  const { modules } = load();
+  const [record] = modules.coverage.parseLcov("SF:src/a.sb\nDA:1,3\nDA:2,0\nDA:4,1\nBRDA:1,0,0,3\nBRDA:1,0,1,0\nBRDA:1,1,0,-\nBRDA:1,1,1,-\nBRDA:4,0,0,1\nBRDA:4,0,1,0\nend_of_record\n");
+  const root = path.resolve("/work/pkg");
+  const { coverage, details } = modules.coverage.toFileCoverage(record, root);
+
+  // A relative path is the run's directory's.
+  assert.equal(coverage.uri.fsPath, path.join(root, "src", "a.sb"));
+  assert.deepEqual([coverage.statementCoverage.covered, coverage.statementCoverage.total], [2, 3]);
+  assert.deepEqual([coverage.branchCoverage.covered, coverage.branchCoverage.total], [2, 6]);
+
+  assert.deepEqual(details.map((s) => [s.location.line, s.location.character, s.executed, s.branches.length]), [[0, 0, 3, 4], [1, 0, 0, 0], [3, 0, 1, 2]]);
+  // A decision never reached ('-') happened no times; two on a line are told apart.
+  assert.deepEqual(details[0].branches.map((b) => [b.executed, b.label, b.location.line]), [
+    [3, "decision 1, outcome 1", 0],
+    [0, "decision 1, outcome 2", 0],
+    [0, "decision 2, outcome 1", 0],
+    [0, "decision 2, outcome 2", 0],
+  ]);
+  assert.deepEqual(details[2].branches.map((b) => [b.executed, b.label]), [[1, "outcome 1"], [0, "outcome 2"]]);
+
+  // A file with no decisions has no branch count, rather than none of none.
+  const [plain] = modules.coverage.parseLcov("SF:/x.sb\nDA:1,1\nend_of_record\n");
+  const plainCoverage = modules.coverage.toFileCoverage(plain, root).coverage;
+  assert.equal(plainCoverage.uri.fsPath, path.resolve("/x.sb"));
+  assert.equal(plainCoverage.branchCoverage, undefined);
+});
+
+test("the report is the one the run's summary names, and none without a summary", () => {
+  const { modules } = load();
+  const root = path.resolve("/work/pkg");
+  assert.equal(
+    modules.coverage.lcovPath(root, "test result: ok.\n\ncoverage: 50% of lines (1 of 2), 100% of branches (2 of 2); target/coverage/lcov.info\n  a.sb: 50%\n"),
+    path.join(root, "target", "coverage", "lcov.info"));
+  assert.equal(modules.coverage.lcovPath(root, "error[S2002]: no symbol named 'x'\n"), undefined);
+});
+
+test("the Coverage profile runs the selected tests with --coverage and reports each file", { skip: !posix && "needs a shell script for sable" }, async () => {
+  const root = tree({ "package.sb": PACKAGE, "src/main.sb": MAIN });
+  const sablePath = fakeSable(root);
+  const { modules, recorded } = load({ folders: [root], settings: { "sable.path": sablePath } });
+  modules.testing.register(context(root));
+  const controller = recorded.controllers[0];
+  await controller.resolveHandler(undefined);
+
+  const profile = controller.profiles.find((p) => p.kind === 3);
+  assert.ok(profile, "a Coverage profile");
+  assert.deepEqual(controller.profiles.map((p) => p.label), ["Run", "Debug", "Coverage"]);
+  const packageItem = [];
+  controller.items.forEach((item) => packageItem.push(item));
+  const tests = [];
+  packageItem[0].children.forEach((item) => tests.push(item));
+  await profile.handler({ include: [tests.find((t) => t.label === "adds")], exclude: [] }, { isCancellationRequested: false, onCancellationRequested: () => {} });
+
+  const run = controller.runs[0];
+  assert.ok(run.ended);
+  assert.deepEqual(run.events.filter((e) => e.event !== "started").map((e) => e.event), ["passed"]);
+  assert.equal(run.coverage.length, 1);
+  const [file] = run.coverage;
+  assert.equal(file.uri.fsPath, path.join(root, "src", "main.sb"));
+  assert.deepEqual([file.statementCoverage.covered, file.statementCoverage.total, file.branchCoverage.covered, file.branchCoverage.total], [2, 3, 1, 2]);
+
+  const details = await profile.loadDetailedCoverage(run, file, { isCancellationRequested: false });
+  assert.deepEqual(details.map((s) => [s.location.line, s.executed]), [[2, 2], [3, 2], [6, 0]]);
+  assert.deepEqual(details[0].branches.map((b) => b.executed), [2, 0]);
+});
+
+test("without VS Code's coverage API there is no Coverage profile", { skip: !posix && "needs a shell script for sable" }, async () => {
+  const root = tree({ "package.sb": PACKAGE, "src/main.sb": MAIN });
+  const { modules, recorded, vscode } = load({ folders: [root], settings: { "sable.path": fakeSable(root) } });
+  delete vscode.FileCoverage;
+  modules.testing.register(context(root));
+  assert.deepEqual(recorded.controllers[0].profiles.map((p) => p.label), ["Run", "Debug"]);
 });
 
 test("every snippet and grammar the manifest names exists", () => {

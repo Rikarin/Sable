@@ -185,7 +185,7 @@ public sealed class NativeLibraryTests {
     }
 
     static (int ExitCode, string Output) Run(string program, IReadOnlyList<string> arguments, string? checkLeaks) {
-        var start = new ProcessStartInfo(program) { RedirectStandardOutput = true, RedirectStandardError = true };
+        var start = new ProcessStartInfo(program) { RedirectStandardOutput = true, RedirectStandardError = true }.Utf8();
         foreach (var argument in arguments) {
             start.ArgumentList.Add(argument);
         }

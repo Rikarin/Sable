@@ -167,7 +167,7 @@ public sealed class TypeMetadataTests {
             var linked = NativeObjects.Link([..NativeTarget.Host.ClangFlags, source, runtime], executable, NativeOptions.Of(true, false));
             Assert.True(linked.Succeeded, linked.Output);
 
-            using var run = Process.Start(new ProcessStartInfo(executable) { RedirectStandardOutput = true })!;
+            using var run = Process.Start(new ProcessStartInfo(executable) { RedirectStandardOutput = true }.Utf8())!;
             var output = run.StandardOutput.ReadToEnd();
             run.WaitForExit();
             Assert.Equal("1 1 1 1 0 1\n", output.Replace("\r\n", "\n", StringComparison.Ordinal));

@@ -7711,7 +7711,13 @@ public sealed partial class Binder {
         // Only a single type is narrowed to: a binding of it reads it
         // straight out of the subject, where several left would be a union
         // of their own, which the subject would have to be converted to.
-        if (pattern is not BindingPatternSyntax || remaining.Equals(subject) || remaining.IsError
+        // '(let v)' is 'let v'.
+        var inner = pattern;
+        while (inner is ParenthesizedPatternSyntax parenthesized) {
+            inner = parenthesized.Pattern;
+        }
+
+        if (inner is not BindingPatternSyntax || remaining.Equals(subject) || remaining.IsError
             || remaining is StructuralUnionTypeSymbol) {
             return BindPattern(pattern, subject);
         }

@@ -4417,7 +4417,11 @@ public sealed partial class SilGen {
 
                 case BoundBindingPattern binding:
                     if (SlotFor(binding.Local, binding.Syntax) is not null) {
-                        BindLocal(binding.Local, value, binding.Syntax);
+                        // The binding keeps a copy of its own, even of an owned
+                        // value: a match's subject is still the match's, which
+                        // destroys it once the arm is chosen, so storing the
+                        // subject itself would end its life twice.
+                        BindLocal(binding.Local, value.Type.IsTrivial || value is UnitValue ? value : Emit(new CopyValueInst(value)), binding.Syntax);
                         Branch(matched);
                     }
 

@@ -306,4 +306,48 @@ public sealed class OptionalAndUnionLoweringTests {
         Assert.Equal(true, Run(module, "checked"));
         Assert.Equal("unwrapped a none", Assert.Throws<SilTrap>(() => new SilInterpreter(module).Run("M.nothing")).Message);
     }
+
+    // ---- A binding that takes the whole subject -----------------------------
+
+    /// <summary>
+    ///     A match's subject is the match's own copy, destroyed once an arm
+    ///     is chosen; a <c>let</c> that binds all of it keeps a copy of its
+    ///     own, so the subject's life is not ended twice.
+    /// </summary>
+    [Fact]
+    public void ABindingOfTheWholeSubjectKeepsItsOwnCopy() {
+        var module = Lower(
+            """
+            fn only(_ s: String) -> String {
+                return match s {
+                    case let n => "x"
+                }
+            }
+
+            fn after(_ s: String) -> String {
+                return match s {
+                    case "a" => "A"
+                    case let n => n
+                }
+            }
+
+            fn either(_ value: Int | String) -> String {
+                return match value {
+                    case let n as Int => "a number"
+                    case (let text) => text
+                }
+            }
+
+            fn number() -> String => either(1)
+
+            fn text() -> String => either("t")
+            """
+        );
+
+        Assert.Equal("x", Run(module, "only", "q"));
+        Assert.Equal("A", Run(module, "after", "a"));
+        Assert.Equal("q", Run(module, "after", "q"));
+        Assert.Equal("a number", Run(module, "number"));
+        Assert.Equal("t", Run(module, "text"));
+    }
 }

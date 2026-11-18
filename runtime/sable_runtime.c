@@ -823,6 +823,71 @@ static SableString *make_cstring(const char *text) {
     return make_string(text, (int64_t)strlen(text));
 }
 
+// The length of the well-formed UTF-8 sequence starting at bytes[i], or 0 if
+// none does: no overlong forms, no surrogates, nothing past U+10FFFF.
+static int utf8_sequence(const uint8_t *bytes, int64_t i, int64_t length) {
+    uint8_t b = bytes[i];
+    int need = b < 0x80 ? 0 : b >= 0xC2 && b <= 0xDF ? 1 : b >= 0xE0 && b <= 0xEF ? 2 : b >= 0xF0 && b <= 0xF4 ? 3 : -1;
+    if (need < 0 || i + need >= length) {
+        return 0;
+    }
+
+    for (int k = 1; k <= need; k++) {
+        uint8_t c = bytes[i + k];
+        uint8_t low = 0x80, high = 0xBF;
+        if (k == 1 && b == 0xE0) low = 0xA0;
+        if (k == 1 && b == 0xED) high = 0x9F;
+        if (k == 1 && b == 0xF0) low = 0x90;
+        if (k == 1 && b == 0xF4) high = 0x8F;
+        if (c < low || c > high) {
+            return 0;
+        }
+    }
+
+    return need + 1;
+}
+
+// Bytes from outside the program — a file, a line, an argument, the
+// environment — as a string. A String holds well-formed UTF-8, which its
+// scalar count and indexing rely on, so each byte of an ill-formed sequence
+// becomes U+FFFD, as inline layout's text does. Well-formed input, the usual
+// case, is copied as it is.
+static SableString *make_text(const char *text, int64_t length) {
+    const uint8_t *bytes = (const uint8_t *)text;
+    int64_t count = 0, size = 0;
+    for (int64_t i = 0; i < length;) {
+        int width = utf8_sequence(bytes, i, length);
+        size += width == 0 ? 3 : width;
+        i += width == 0 ? 1 : width;
+        count++;
+    }
+
+    if (size == length) {
+        return make_counted(text, length, count);
+    }
+
+    SableString *string = new_string(size, count);
+    char *out = string->bytes;
+    for (int64_t i = 0; i < length;) {
+        int width = utf8_sequence(bytes, i, length);
+        if (width == 0) {
+            memcpy(out, "\xEF\xBF\xBD", 3);
+            out += 3;
+            i++;
+        } else {
+            memcpy(out, text + i, (size_t)width);
+            out += width;
+            i += width;
+        }
+    }
+
+    return string;
+}
+
+static SableString *make_ctext(const char *text) {
+    return make_text(text, (int64_t)strlen(text));
+}
+
 // The byte offset of scalar 'index'.
 static int64_t offset_of(const SableString *s, int64_t index) {
     if (s->count == s->length) {
@@ -1087,22 +1152,115 @@ SableString *sable_string_from_int(int64_t value) {
     return make_counted(start, end - start, end - start);
 }
 
-// The shortest %.Ng that reads back as the same double — 0.1, not
-// 0.10000000000000001. %.17g always does. The interpreter formats the same way.
-static void format_f64(double value, char *text, size_t size) {
-    if (isnan(value)) {
-        snprintf(text, size, "nan");
-        return;
+// A float is written as its shortest round-tripping digits — 0.1, not
+// 0.10000000000000001 — laid out the way Python's repr does: plain decimal
+// with a point for exponents -4 through 15 (100.0, 4.0, -0.0, 0.0001), and
+// scientific outside them (1e+20, 1.5e-07). The point keeps a whole float
+// from reading as an integer. The interpreter formats the same way.
+//
+// 'scientific' is printf's %.Ne of the value, whose digits are already the
+// shortest that round-trip; this only moves the point.
+static void layout_float(const char *scientific, char *text, size_t size) {
+    const char *p = scientific;
+    bool negative = *p == '-';
+    if (negative) {
+        p++;
     }
 
-    for (int precision = 1; precision < 17; precision++) {
-        snprintf(text, size, "%.*g", precision, value);
-        if (strtod(text, NULL) == value) {
-            return;
+    char digits[32];
+    int count = 0;
+    for (; *p != 'e' && *p != '\0'; p++) {
+        if (*p != '.' && count < (int)sizeof digits - 1) {
+            digits[count++] = *p;
         }
     }
 
-    snprintf(text, size, "%.17g", value);
+    int exponent = *p == 'e' ? atoi(p + 1) : 0;
+
+    // %.Ne pads with zeros the shortest digits never need.
+    while (count > 1 && digits[count - 1] == '0') {
+        count--;
+    }
+
+    digits[count] = '\0';
+
+    char *out = text, *limit = text + size - 1;
+#define PUT(c) do { if (out < limit) *out++ = (c); } while (0)
+    if (negative) {
+        PUT('-');
+    }
+
+    if (exponent < -4 || exponent >= 16) {
+        PUT(digits[0]);
+        if (count > 1) {
+            PUT('.');
+            for (int i = 1; i < count; i++) {
+                PUT(digits[i]);
+            }
+        }
+
+        char tail[8];
+        snprintf(tail, sizeof tail, "e%c%02d", exponent < 0 ? '-' : '+', exponent < 0 ? -exponent : exponent);
+        for (char *t = tail; *t != '\0'; t++) {
+            PUT(*t);
+        }
+    } else if (exponent < 0) {
+        PUT('0');
+        PUT('.');
+        for (int i = -1; i > exponent; i--) {
+            PUT('0');
+        }
+
+        for (int i = 0; i < count; i++) {
+            PUT(digits[i]);
+        }
+    } else {
+        for (int i = 0; i <= exponent; i++) {
+            PUT(i < count ? digits[i] : '0');
+        }
+
+        PUT('.');
+        if (count > exponent + 1) {
+            for (int i = exponent + 1; i < count; i++) {
+                PUT(digits[i]);
+            }
+        } else {
+            PUT('0');
+        }
+    }
+#undef PUT
+
+    *out = '\0';
+}
+
+static bool format_special(double value, char *text, size_t size) {
+    if (isnan(value)) {
+        snprintf(text, size, "nan");
+        return true;
+    }
+
+    if (isinf(value)) {
+        snprintf(text, size, value > 0 ? "inf" : "-inf");
+        return true;
+    }
+
+    return false;
+}
+
+static void format_f64(double value, char *text, size_t size) {
+    if (format_special(value, text, size)) {
+        return;
+    }
+
+    char scientific[40];
+    for (int precision = 1; precision <= 17; precision++) {
+        snprintf(scientific, sizeof scientific, "%.*e", precision - 1, value);
+        if (precision == 17 || strtod(scientific, NULL) == value) {
+            break;
+        }
+    }
+
+    layout_float(scientific, text, size);
 }
 
 SableString *sable_string_from_f64(double value) {
@@ -1113,19 +1271,19 @@ SableString *sable_string_from_f64(double value) {
 
 // F32 the same way, against a float: 1.1, not 1.10000002.
 static void format_f32(float value, char *text, size_t size) {
-    if (isnan(value)) {
-        snprintf(text, size, "nan");
+    if (format_special(value, text, size)) {
         return;
     }
 
-    for (int precision = 1; precision < 9; precision++) {
-        snprintf(text, size, "%.*g", precision, (double)value);
-        if (strtof(text, NULL) == value) {
-            return;
+    char scientific[40];
+    for (int precision = 1; precision <= 9; precision++) {
+        snprintf(scientific, sizeof scientific, "%.*e", precision - 1, (double)value);
+        if (precision == 9 || strtof(scientific, NULL) == value) {
+            break;
         }
     }
 
-    snprintf(text, size, "%.9g", (double)value);
+    layout_float(scientific, text, size);
 }
 
 SableString *sable_string_from_f32(float value) {
@@ -1978,36 +2136,7 @@ void sable_inline_ref_set(SableBlock **slot, uint8_t *field, int32_t width, cons
 SableString *sable_inline_to_string(const SableInlineSlot *s, const uint8_t *array) {
     const uint8_t *bytes;
     int64_t count = array_count(s, array, &bytes);
-    char *text = malloc((size_t)(count * 3 + 1));
-    int64_t length = 0;
-    for (int64_t i = 0; i < count;) {
-        uint8_t b = bytes[i];
-        int need = b < 0x80 ? 0 : b >= 0xC2 && b <= 0xDF ? 1 : b >= 0xE0 && b <= 0xEF ? 2 : b >= 0xF0 && b <= 0xF4 ? 3 : -1;
-        bool ok = need >= 0 && i + need < count;
-        for (int k = 1; ok && k <= need; k++) {
-            uint8_t c = bytes[i + k];
-            uint8_t low = 0x80, high = 0xBF;
-            if (k == 1 && b == 0xE0) low = 0xA0;
-            if (k == 1 && b == 0xED) high = 0x9F;
-            if (k == 1 && b == 0xF0) low = 0x90;
-            if (k == 1 && b == 0xF4) high = 0x8F;
-            ok = c >= low && c <= high;
-        }
-
-        if (ok) {
-            memcpy(text + length, bytes + i, (size_t)(need + 1));
-            length += need + 1;
-            i += need + 1;
-        } else {
-            memcpy(text + length, "\xEF\xBF\xBD", 3);
-            length += 3;
-            i++;
-        }
-    }
-
-    SableString *result = make_string(text, length);
-    free(text);
-    return result;
+    return count == 0 ? make_string("", 0) : make_text((const char *)bytes, count);
 }
 
 SableArray *sable_inline_bytes(const SableInlineLayout *layout, const uint8_t *p, const SableMetadata *type) {
@@ -2455,7 +2584,7 @@ SableString *sable_io_argument(int64_t index) {
         sable_trap("argument index out of range");
     }
 
-    return make_cstring(saved_argv[index + 1]);
+    return make_ctext(saved_argv[index + 1]);
 }
 
 // A string as a C path: its bytes, NUL-terminated, in memory the caller frees.
@@ -2516,7 +2645,7 @@ SableString *sable_io_read_line(void) {
     }
 
     io_last_failed = !any;
-    SableString *result = make_string(line, (int64_t)length);
+    SableString *result = make_text(line, (int64_t)length);
     free(line);
     return result;
 }
@@ -2554,7 +2683,7 @@ SableString *sable_io_read_file(const SableString *path) {
 
     io_last_failed = ferror(file) != 0;
     fclose(file);
-    SableString *result = make_string(bytes, (int64_t)length);
+    SableString *result = make_text(bytes, (int64_t)length);
     free(bytes);
     return result;
 }
@@ -2642,7 +2771,7 @@ SableArray *sable_io_list_directory(const SableString *path) {
     closedir(directory);
     qsort(names, count, sizeof(char *), compare_names);
     for (size_t i = 0; i < count; i++) {
-        *(SableString **)sable_array_append_slot(&entries, &string_array_metadata) = make_cstring(names[i]);
+        *(SableString **)sable_array_append_slot(&entries, &string_array_metadata) = make_ctext(names[i]);
         free(names[i]);
     }
 
@@ -2656,7 +2785,7 @@ SableString *sable_io_environment(const SableString *variable) {
     const char *value = getenv(name);
     free(name);
     io_last_failed = value == NULL;
-    return value == NULL ? make_string("", 0) : make_cstring(value);
+    return value == NULL ? make_string("", 0) : make_ctext(value);
 }
 
 // ---- Time (Sable.Time's floor) ------------------------------------------
@@ -2706,7 +2835,7 @@ int64_t sable_process_status(void) {
 }
 
 SableString *sable_process_error_output(void) {
-    return make_string(process_last_errors == NULL ? "" : process_last_errors, (int64_t)process_last_errors_length);
+    return make_text(process_last_errors == NULL ? "" : process_last_errors, (int64_t)process_last_errors_length);
 }
 
 typedef struct {
@@ -2930,7 +3059,7 @@ SableString *sable_process_run(const SableString *program, const SableArray *arg
     free(process_last_errors);
     process_last_errors = errors.bytes;
     process_last_errors_length = errors.length;
-    SableString *result = make_string(output.bytes == NULL ? "" : output.bytes, (int64_t)output.length);
+    SableString *result = make_text(output.bytes == NULL ? "" : output.bytes, (int64_t)output.length);
     free(output.bytes);
     io_last_failed = false;
     return result;
@@ -2942,7 +3071,7 @@ SableString *sable_process_current_directory(void) {
         return make_string("", 0);
     }
 
-    return make_cstring(path);
+    return make_ctext(path);
 }
 
 bool sable_process_change_directory(const SableString *path) {
@@ -2968,13 +3097,13 @@ SableString *sable_process_executable_path(void) {
     if (strchr(saved_argv[0], '/') != NULL) {
         char *resolved = realpath(saved_argv[0], NULL);
         if (resolved != NULL) {
-            SableString *path = make_cstring(resolved);
+            SableString *path = make_ctext(resolved);
             free(resolved);
             return path;
         }
     }
 
-    return make_cstring(saved_argv[0]);
+    return make_ctext(saved_argv[0]);
 }
 
 // ---- Joining (Sable.Text's floor) ------------------------------------

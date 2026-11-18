@@ -621,6 +621,13 @@ public sealed partial class SemanticModel {
         }
 
         BindInitializer(declaration.Initializer.Value, constant, constant.Type, scope);
+
+        // A constant's arithmetic is the compiler's to do, and to find overflowing.
+        if (_initializers.GetValueOrDefault(constant) is { HasError: false } value) {
+            var folding = new DiagnosticBag();
+            ConstantFolding.Fold(value, _compilation.Core, folding);
+            _diagnostics.AddRange(folding);
+        }
     }
 
     /// <summary>

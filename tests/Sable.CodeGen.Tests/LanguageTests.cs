@@ -55,7 +55,7 @@ public sealed class LanguageTests {
     [Fact]
     public void StructsFieldsAndMethods() =>
         Prints(
-            "11\n6\n3\n9\n",
+            "11.0\n6.0\n3.0\n9.0\n",
             Vector,
             """
                 let a = Vec(x: 1.0, y: 2.0)
@@ -74,7 +74,7 @@ public sealed class LanguageTests {
     public void AStructIsAValue() =>
         // Copying then changing the copy leaves the original alone.
         Prints(
-            "1\n5\n",
+            "1.0\n5.0\n",
             Vector,
             """
                 let a = Vec(x: 1.0, y: 2.0)
@@ -161,7 +161,7 @@ public sealed class LanguageTests {
     [Fact]
     public void UnionsAndMatch() =>
         Prints(
-            "12\n6\n0\n",
+            "12.0\n6.0\n0.0\n",
             Shapes,
             """
                 print(area(.Circle(radius: 2.0)))
@@ -241,7 +241,7 @@ public sealed class LanguageTests {
     [Fact]
     public void IfCaseBindsThePayload() =>
         Prints(
-            "radius\n2\nnot a circle\n",
+            "radius\n2.0\nnot a circle\n",
             Shapes,
             """
                 let one = Shape.Circle(radius: 2.0)
@@ -601,7 +601,7 @@ public sealed class LanguageTests {
     [Fact]
     public void AStructuralUnionHoldsOneOfItsTypesAndNarrows() =>
         Prints(
-            "number 2.5\ntext wide\n42\nnumber 1\ntext 7\n",
+            "number 2.5\ntext wide\n42.0\nnumber 1.0\ntext 7\n",
             """
             alias Width = F64 | String
 

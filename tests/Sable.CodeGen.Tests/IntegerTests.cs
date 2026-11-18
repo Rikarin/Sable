@@ -64,6 +64,53 @@ public sealed class IntegerTests {
         Assert.Equal($"fatal error: {trap}\n", execution.Stderr);
     }
 
+    [Theory]
+    [InlineData("let x: I32 = 300000\nprint(x as I16)", "I32 does not fit in I16")]
+    [InlineData("print(300 as U8)", "Int does not fit in U8")]
+    public void AsTrapsWhereTheValueDoesNotFit(string body, string trap) {
+        var execution = AssertAgree(Program("", body));
+        Assert.Equal($"fatal error: {trap}\n", execution.Stderr);
+    }
+
+    /// <summary>
+    ///     'unchecked as' (spec/SYNTAX.md §16) never traps: an integer keeps
+    ///     its low bits, a float goes toward zero and stops at the bounds.
+    /// </summary>
+    [Fact]
+    public void UncheckedAsWrapsAndTruncates() =>
+        Assert.Equal(
+            "44\n18446744073709551615\n65535\n4464\n-56\n200\n-1\n2147483647\n-2147483648\n2\n0\n0\n4294967295\n255\n3\n",
+            AssertAgree(
+                Program(
+                    "",
+                    """
+                        print(300 unchecked as U8)
+                        let n = -1
+                        print(n unchecked as U64)
+                        print(n unchecked as U16)
+                        let big: I64 = 70000
+                        print(big unchecked as I16)
+                        let u: U8 = 200
+                        print(u unchecked as I8)
+                        print(u unchecked as Int)
+                        let all: U64 = 18446744073709551615
+                        print(all unchecked as Int)
+                        let f = 3.0e10
+                        print(f unchecked as I32)
+                        print((-f) unchecked as I32)
+                        print(2.9 unchecked as U8)
+                        print((-2.9) unchecked as U8)
+                        let nan = 0.0 / 0.0
+                        print(nan unchecked as I32)
+                        let wide: F32 = 1.0e20
+                        print(wide unchecked as U32)
+                        print(wide unchecked as U8)
+                        print(3.75 unchecked as I8)
+                    """
+                )
+            ).Stdout
+        );
+
     [Fact]
     public void SizedValuesLiveInStructsArraysAndOptionals() =>
         Assert.Equal(

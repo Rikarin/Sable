@@ -154,6 +154,89 @@ public sealed class EffectTests {
             """
         );
 
+    [Fact]
+    public void CatchesThatMissAnErrorLeaveItWithNowhereToGo() {
+        var errors = ErrorsIn(
+            """
+            fn probe() -> Int {
+                do { let s = try read("a"); return 1 } catch .NotFound { return 0 }
+            }
+            """
+        );
+
+        var error = Assert.Single(errors);
+        Assert.Equal(ErrorCode.ERR_ThrowsNotDeclared, error.Code);
+        Assert.Contains("'.Denied'", error.Message);
+    }
+
+    [Fact]
+    public void AGuardedCatchCoversNothing() =>
+        AssertReports(
+            ErrorCode.ERR_ThrowsNotDeclared,
+            """
+            fn probe(_ b: Bool) -> Int {
+                do { let s = try read("a"); return 1 } catch where b { return 0 }
+            }
+            """
+        );
+
+    [Fact]
+    public void CatchesThatCoverEveryCaseNeedNoBareCatch() =>
+        AssertClean(
+            """
+            fn probe() -> Int {
+                do { let s = try read("a"); return 1 } catch .NotFound { return 0 } catch .Denied { return 1 }
+            }
+            """
+        );
+
+    [Fact]
+    public void WhatTheCatchesMissPropagatesFromAThrowingFunction() =>
+        AssertClean(
+            """
+            fn probe() throws(IoError) -> Int {
+                do { let s = try read("a"); return 1 } catch .NotFound { return 0 }
+            }
+            """
+        );
+
+    [Fact]
+    public void WhatTheCatchesMissHasToFitTheDeclaredError() =>
+        AssertReports(
+            ErrorCode.ERR_ErrorTypeDoesNotFit,
+            """
+            union AppError { Io }
+            fn probe() throws(AppError) -> Int {
+                do { let s = try read("a"); return 1 } catch .NotFound { return 0 }
+            }
+            """
+        );
+
+    [Fact]
+    public void WhatTheCatchesMissGoesToAnEnclosingDo() =>
+        AssertClean(
+            """
+            fn probe() -> Int {
+                do {
+                    do { let s = try read("a"); return 1 } catch .NotFound { return 0 }
+                } catch {
+                    return 1
+                }
+            }
+            """
+        );
+
+    [Fact]
+    public void ARethrowsFunctionMayNotLetItsOwnErrorPastItsCatches() =>
+        AssertReports(
+            ErrorCode.ERR_RethrowsThrowsItsOwn,
+            """
+            fn probe(_ f: () throws -> Int) rethrows -> Int {
+                do { let s = try read("a"); return 1 } catch .NotFound { return 0 }
+            }
+            """
+        );
+
     // ---- throw -------------------------------------------------------------
 
     [Fact]

@@ -256,6 +256,51 @@ public sealed class LiteralTests {
         Assert.Equal("a b", TestHelpers.LexSingle(source).Value);
     }
 
+    /// <summary>
+    ///     A joined line is still a line of the literal: it loses the closing
+    ///     delimiter's indentation like every other, keeping only what it has
+    ///     beyond that.
+    /// </summary>
+    [Theory]
+    [InlineData("\"\"\"\n  indented \\\n  joined\n  \"\"\"", "indented joined")]
+    [InlineData("\"\"\"\n  indented \\\n        joined\n  \"\"\"", "indented       joined")]
+    [InlineData("\"\"\"\n    a\\\n    b\\\n    c\n    \"\"\"", "abc")]
+    [InlineData("\"\"\"\n  \\(x) \\\n  y\n  \"\"\"", "\\(x) y")]
+    public void AJoinedLineLosesTheDelimitersIndentation(string source, string expected) {
+        var (tokens, diagnostics) = TestHelpers.LexWithDiagnostics(source);
+        Assert.Empty(diagnostics);
+        Assert.Equal(expected, string.Concat(tokens[0].Parts.Select(static p => p.ToString())));
+    }
+
+    [Fact]
+    public void AJoinedLineIndentedTooLittleIsReported() {
+        var (_, diagnostics) = TestHelpers.LexWithDiagnostics("\"\"\"\n    a \\\n  b\n    \"\"\"");
+        Assert.Contains(diagnostics, static d => d.Code == ErrorCode.ERR_InsufficientIndentation);
+    }
+
+    /// <summary>
+    ///     Only the source's lines are dedented: a line break written as an
+    ///     escape starts no line, so the spaces after it stay.
+    /// </summary>
+    [Fact]
+    public void AnEscapedLineBreakIsNotDedented() {
+        const string source = "\"\"\"\n  a\\n  b\n  \"\"\"";
+        Assert.Equal("a\n  b", TestHelpers.LexSingle(source).Value);
+    }
+
+    /// <summary>
+    ///     A line that opens with an interpolation has no indentation, so it is
+    ///     short of the delimiter's; a blank line need not reach it.
+    /// </summary>
+    [Fact]
+    public void ALineOfAnInterpolationMustBeIndentedAndABlankOneNeedNot() {
+        var (_, diagnostics) = TestHelpers.LexWithDiagnostics("\"\"\"\n  a\n\\(x)\n  \"\"\"");
+        Assert.Contains(diagnostics, static d => d.Code == ErrorCode.ERR_InsufficientIndentation);
+
+        (_, diagnostics) = TestHelpers.LexWithDiagnostics("\"\"\"\n    a\n\n  \n    \\(x) b\n    \"\"\"");
+        Assert.Empty(diagnostics);
+    }
+
     // ---- Raw strings ------------------------------------------------------
 
     [Theory]

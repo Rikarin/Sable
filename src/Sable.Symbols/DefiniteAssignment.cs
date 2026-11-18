@@ -28,9 +28,34 @@ internal static class DefiniteAssignment {
     ///     of the one around it, which were checked there, where it is
     ///     declared; here only its own are.
     /// </param>
-    public static void Analyze(ControlFlowGraph graph, DiagnosticBag diagnostics, Symbol? owner = null) {
-        // Only locals are tracked: a parameter always has a value.
-        var index = new Dictionary<LocalSymbol, int>();
+    /// <param name="self">
+    ///     For an initialiser, the fields its body has to set, built into the
+    ///     graph as steps: each is tracked as a local is, every use of self
+    ///     as a whole needs them all, and so does every way out but a throw.
+    /// </param>
+    /// <param name="initializer">Where an initialiser that leaves a field unset is reported.</param>
+    public static void Analyze(
+        ControlFlowGraph graph,
+        DiagnosticBag diagnostics,
+        Symbol? owner = null,
+        InitializedSelf? self = null,
+        TextSpan initializer = default
+    ) {
+        // Locals, an initialiser's fields, and 'out' parameters, which come
+        // in with no value and must go out with one. Any other parameter has
+        // a value.
+        var index = new Dictionary<Symbol, int>();
+        foreach (var field in self?.Fields ?? []) {
+            index[field] = index.Count;
+        }
+
+        var outs = owner is FunctionSymbol function
+            ? function.Parameters.Where(static p => p.Modifier == ParameterModifier.Out).ToList()
+            : [];
+        foreach (var parameter in outs) {
+            index[parameter] = index.Count;
+        }
+
         foreach (var (_, _, op) in graph.AllOps()) {
             if (op.Symbol is LocalSymbol local && !index.ContainsKey(local) && (owner is null || IsWithin(local, owner))) {
                 index[local] = index.Count;
@@ -60,7 +85,7 @@ internal static class DefiniteAssignment {
                 }
 
                 var state = In(block, graph, assignedOut, index.Count, reachable);
-                Transfer(block, state, index, null);
+                Transfer(block, state, index, self, null);
 
                 if (!SameBits(state, assignedOut[block.Ordinal])) {
                     assignedOut[block.Ordinal] = state;
@@ -69,23 +94,74 @@ internal static class DefiniteAssignment {
             }
         }
 
-        // Then once more, reporting the first read of each unassigned local.
-        var first = new Dictionary<LocalSymbol, BoundNode>();
+        // Then once more, reporting the first read of each unassigned binding.
+        var first = new Dictionary<Symbol, (BoundNode Node, string Message)>();
         foreach (var block in blocks) {
             if (!reachable.Contains(block)) {
                 continue;
             }
 
-            Transfer(block, In(block, graph, assignedOut, index.Count, reachable), index, first);
+            Transfer(block, In(block, graph, assignedOut, index.Count, reachable), index, self, first);
         }
 
-        foreach (var (local, node) in first.OrderBy(static p => p.Value.Syntax.Span.Start)) {
-            diagnostics.Error(
-                ErrorCode.ERR_UseBeforeAssignment,
-                node.Syntax.Span,
-                $"'{local.Name}' is read here before anything assigns to it"
-            );
+        foreach (var (_, (node, message)) in first.OrderBy(static p => p.Value.Node.Syntax.Span.Start)) {
+            diagnostics.Error(ErrorCode.ERR_UseBeforeAssignment, node.Syntax.Span, message);
         }
+
+        if (self is not null) {
+            ReportUnset(graph, assignedOut, index, self, reachable, diagnostics, initializer);
+        }
+
+        // Every way back to the caller — a 'return', or falling off the end —
+        // gives each 'out' parameter a value. A throw need not.
+        foreach (var parameter in outs) {
+            var unassigned = new[] { graph.Return, graph.End }
+                .Where(reachable.Contains)
+                .Any(exit => !In(exit, graph, assignedOut, index.Count, reachable)[index[parameter]]);
+            if (unassigned && parameter.Location is { } at) {
+                diagnostics.Error(
+                    ErrorCode.ERR_OutNotAssigned,
+                    at,
+                    $"'out' parameter '{parameter.Name}' is not assigned on every path that returns; the caller reads it afterwards"
+                );
+            }
+        }
+    }
+
+    /// <summary>
+    ///     The fields an initialiser leaves unset on some way out of it: off
+    ///     the end, or by a <c>return</c>. A throw builds nothing, so it need not.
+    /// </summary>
+    static void ReportUnset(
+        ControlFlowGraph graph,
+        BitArray[] assignedOut,
+        Dictionary<Symbol, int> index,
+        InitializedSelf self,
+        HashSet<BasicBlock> reachable,
+        DiagnosticBag diagnostics,
+        TextSpan at
+    ) {
+        var missing = new List<string>();
+        foreach (var field in self.Fields) {
+            foreach (var exit in new[] { graph.End, graph.Return }) {
+                if (reachable.Contains(exit) && !In(exit, graph, assignedOut, index.Count, reachable)[index[field]]) {
+                    missing.Add(field.Name);
+                    break;
+                }
+            }
+        }
+
+        if (missing.Count == 0) {
+            return;
+        }
+
+        diagnostics.Error(
+            ErrorCode.ERR_MissingFieldInitializer,
+            at,
+            missing.Count == 1
+                ? $"'{missing[0]}' is not initialised on every path through this initialiser"
+                : $"'{string.Join("', '", missing)}' are not initialised on every path through this initialiser"
+        );
     }
 
     /// <summary>
@@ -132,15 +208,28 @@ internal static class DefiniteAssignment {
     static void Transfer(
         BasicBlock block,
         BitArray state,
-        Dictionary<LocalSymbol, int> index,
-        Dictionary<LocalSymbol, BoundNode>? report
+        Dictionary<Symbol, int> index,
+        InitializedSelf? self,
+        Dictionary<Symbol, (BoundNode Node, string Message)>? report
     ) {
         foreach (var op in block.Ops) {
-            if (op.Symbol is not LocalSymbol local) {
+            // Self as a whole: a method called on it, or self passed on, may
+            // read any field, so all of them must have their values by now.
+            if (self is not null && ReferenceEquals(op.Symbol, self.Type) && op.Kind == FlowOpKind.Read) {
+                if (report is not null && !report.ContainsKey(self.Type)) {
+                    var unset = self.Fields.Where(f => !state[index[f]]).Select(static f => f.Name).ToList();
+                    if (unset.Count > 0) {
+                        report[self.Type] = (op.Node, $"'self' is used here before {Names(unset)} {(unset.Count == 1 ? "is" : "are")} initialised");
+                    }
+                }
+
                 continue;
             }
 
-            var bit = index[local];
+            if (op.Symbol is not { } symbol || !index.TryGetValue(symbol, out var bit)) {
+                continue;
+            }
+
             switch (op.Kind) {
                 case FlowOpKind.Declare:
                     state[bit] = false;
@@ -151,15 +240,19 @@ internal static class DefiniteAssignment {
                     break;
 
                 case FlowOpKind.Read when !state[bit] && report is not null:
-                    if (!report.TryGetValue(local, out var earlier)
-                        || op.Node.Syntax.Span.Start < earlier.Syntax.Span.Start) {
-                        report[local] = op.Node;
+                    if (!report.TryGetValue(symbol, out var earlier)
+                        || op.Node.Syntax.Span.Start < earlier.Node.Syntax.Span.Start) {
+                        report[symbol] = (op.Node, symbol is FieldSymbol
+                            ? $"'{symbol.Name}' is read here before the initialiser assigns it"
+                            : $"'{symbol.Name}' is read here before anything assigns to it");
                     }
 
                     break;
             }
         }
     }
+
+    static string Names(List<string> names) => "'" + string.Join("', '", names) + "'";
 
     static bool SameBits(BitArray a, BitArray b) {
         for (var i = 0; i < a.Length; i++) {

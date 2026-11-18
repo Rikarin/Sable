@@ -30,7 +30,12 @@ public struct WrongItem: Container {    //! S3027 at
     public fn at(_ index: Int) -> String { return "" }
 }
 
-public struct NoItem: Container {       //! S3023 Item //! S3027 at
+public struct NoItem: Container {       //! S3023 Item //! S3023 at
+    public fn count() -> Int { return 0 }
+}
+
+// No alias, but 'at' says what Item is.
+public struct InferredItem: Container {
     public fn count() -> Int { return 0 }
     public fn at(_ index: Int) -> Int { return 0 }
 }

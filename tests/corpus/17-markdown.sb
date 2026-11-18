@@ -239,10 +239,10 @@ public fn renderList(_ ordered: Bool, _ items: String[>..]) -> String {
 
 public fn renderInline(_ inline: Inline) -> String {
     return match inline {
-        case .Text(let value) => escape(value)
+        case .Text(let value)     => escape(value)
         case .Emphasis(let value) => openTag("em") + escape(value) + closeTag("em")
-        case .Strong(let value) => openTag("strong") + escape(value) + closeTag("strong")
-        case .Code(let value) => openTag("code") + escape(value) + closeTag("code")
+        case .Strong(let value)   => openTag("strong") + escape(value) + closeTag("strong")
+        case .Code(let value)     => openTag("code") + escape(value) + closeTag("code")
         case .Link(let label, let target) =>
             "<a href=\"" + escape(target) + "\">" + escape(label) + "</a>"
     }
@@ -275,7 +275,7 @@ public fn escapeChar(_ c: Char) -> String {
         case '>' => "&gt;"
         case '&' => "&amp;"
         case '"' => "&quot;"
-        default => String.fromChar(c)
+        default  => String.fromChar(c)
     }
 }
 
@@ -290,11 +290,11 @@ public fn summarise(_ blocks: Block[>..]) -> [String: Int] {
 
 public fn kindOf(_ block: Block) -> String {
     return match block {
-        case .Heading(let level, let text) => "heading"
-        case .Paragraph(let text) => "paragraph"
+        case .Heading(let level, let text)  => "heading"
+        case .Paragraph(let text)           => "paragraph"
         case .Code(let language, let lines) => "code"
-        case .Quote(let blocks) => "quote"
-        case .List(let ordered, let items) => "list"
-        case .Rule => "rule"
+        case .Quote(let blocks)             => "quote"
+        case .List(let ordered, let items)  => "list"
+        case .Rule                          => "rule"
     }
 }

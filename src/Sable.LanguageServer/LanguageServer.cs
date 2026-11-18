@@ -17,6 +17,14 @@ public sealed class LanguageServerOptions {
     /// <summary>The library modules there are, offered after <c>import</c>.</summary>
     public IReadOnlyCollection<string> LibraryModules { get; init; } = [];
 
+    /// <summary>
+    ///     The packages under a folder, read from their manifests — the
+    ///     driver's <c>LanguageProjects.For</c>. Each is compiled on its own,
+    ///     with its features and its dependencies; with none, every file is
+    ///     one program.
+    /// </summary>
+    public Func<string, IReadOnlyList<LanguageProject>> ProjectsFor { get; init; } = static _ => [];
+
     /// <summary>How long the workspace must be quiet before diagnostics are recomputed.</summary>
     public TimeSpan DiagnosticsDelay { get; init; } = TimeSpan.FromMilliseconds(250);
 
@@ -57,6 +65,7 @@ public sealed partial class LanguageServer {
     readonly LanguageServerOptions _options;
     readonly Workspace _workspace = new();
     readonly AnalysisCache _analyses;
+    readonly DependencyTrees _dependencies = new();
     readonly ConcurrentDictionary<string, CancellationTokenSource> _pending = new(StringComparer.Ordinal);
     readonly CancellationTokenSource _stopping = new();
     readonly SemaphoreSlim _changed = new(0);
@@ -70,8 +79,36 @@ public sealed partial class LanguageServer {
     public LanguageServer(Stream input, Stream output, LanguageServerOptions? options = null) {
         _channel = new(input, output);
         _options = options ?? new();
-        _analyses = new(_options.LibraryFor);
+        _analyses = new(BuildAnalysis);
     }
+
+    Analysis BuildAnalysis(WorkspaceSnapshot snapshot, string key) {
+        var project = snapshot.Layout.Projects.FirstOrDefault(p => p.Directory == key);
+        var dependencies = project is null ? [] : _dependencies.For(project, snapshot, Log);
+        return Analysis.Build(snapshot, key, dependencies, _options.LibraryFor);
+    }
+
+    /// <summary>
+    ///     The packages under the folder, as the driver reads them. A failure
+    ///     is logged, and leaves every file loose.
+    /// </summary>
+    ProjectLayout ReadProjects(string folder) {
+        try {
+            var projects = _options.ProjectsFor(folder);
+            foreach (var project in projects) {
+                Log($"package {project.Name} in {project.Directory}: features [{string.Join(", ", project.Features)}], {project.Dependencies.Count} dependency file(s)");
+            }
+
+            return new(projects);
+        } catch (Exception e) when (e is not OutOfMemoryException) {
+            Log($"cannot read the packages under {folder}: {e.Message}");
+            return ProjectLayout.None;
+        }
+    }
+
+    /// <summary>A file whose change can change the packages: a manifest, or the lock file.</summary>
+    static bool IsPackageFile(string uri) =>
+        Path.GetFileName(Workspace.PathOf(uri) ?? uri) is "package.sb" or "workspace.sb" or "sable.toml" or "sable.lock";
 
     /// <summary>
     ///     Serves until <c>exit</c> or the end of the input; returns the exit
@@ -254,15 +291,33 @@ public sealed partial class LanguageServer {
                 return;
             }
 
-            case "workspace/didChangeWatchedFiles":
+            case "workspace/didChangeWatchedFiles": {
+                var packages = false;
                 foreach (var change in parameters.Get("changes")?.EnumerateArray() ?? default) {
-                    if (change.GetString("uri") is { } uri && uri.EndsWith(".sb", StringComparison.Ordinal)) {
+                    if (change.GetString("uri") is not { } uri) {
+                        continue;
+                    }
+
+                    if (uri.EndsWith(".sb", StringComparison.Ordinal)) {
                         _workspace.Reload(uri);
                     }
+
+                    packages |= IsPackageFile(uri);
+                }
+
+                // A manifest or the lock changed: the packages may have too.
+                if (packages && _root is { } folder && Directory.Exists(folder)) {
+                    var previous = _loading;
+                    _loading = Task.Run(async () => {
+                        await previous;
+                        _workspace.SetLayout(ReadProjects(folder));
+                        Changed();
+                    });
                 }
 
                 Changed();
                 return;
+            }
 
             default:
                 return;
@@ -282,9 +337,11 @@ public sealed partial class LanguageServer {
 
         if (_root is { } folder && Directory.Exists(folder)) {
             _loading = Task.Run(() => {
+                // The packages first: each file is parsed with its package's features.
+                _workspace.SetLayout(ReadProjects(folder));
                 var files = Workspace.SourceFilesUnder(folder)
                     .AsParallel()
-                    .Select(static path => (path, SyntaxTree.Parse(new SourceText(File.ReadAllText(path), path))))
+                    .Select(path => (path, _workspace.Parse(path, File.ReadAllText(path))))
                     .ToList();
                 _workspace.AddFromDisk(files);
                 Changed();
@@ -350,9 +407,10 @@ public sealed partial class LanguageServer {
 
     async Task PublishDiagnosticsAsync(CancellationToken cancellation) {
         var snapshot = _workspace.Current;
-        var analysis = await _analyses.GetAsync(snapshot);
-        foreach (var document in snapshot.Documents.Values.Where(static d => d.IsOpen)) {
+        var published = new List<(Document Document, Analysis Analysis)>();
+        foreach (var document in snapshot.Documents.Values.Where(static d => d.IsOpen).OrderBy(snapshot.KeyOf, StringComparer.Ordinal)) {
             cancellation.ThrowIfCancellationRequested();
+            var analysis = await _analyses.GetAsync(snapshot, snapshot.KeyOf(document));
 
             // A document edited since is the next round's.
             if (!ReferenceEquals(_workspace.Current.Find(document.Uri)?.Tree, document.Tree)) {
@@ -361,6 +419,23 @@ public sealed partial class LanguageServer {
 
             var diagnostics = analysis.DiagnosticsOf(document.Tree, cancellation);
             _published[document.Uri] = true;
+            published.Add((document, analysis));
+            await PublishAsync(document.Uri, document.Version, [..diagnostics.Select(d => DiagnosticNode(document, d))]);
+        }
+
+        // Use after move, overlapping accesses and dangling references are
+        // found on SIL, by lowering each package's compilation — slower than
+        // binding, so the type errors above go out first, and these follow,
+        // with them. Documents are in package order, so each is lowered once.
+        foreach (var (document, analysis) in published) {
+            cancellation.ThrowIfCancellationRequested();
+            var checks = await RootSummariesAsync(analysis);
+            var found = checks.ChecksOf(document.Tree);
+            if (found.Count == 0 || !ReferenceEquals(_workspace.Current.Find(document.Uri)?.Tree, document.Tree)) {
+                continue;
+            }
+
+            var diagnostics = analysis.DiagnosticsOf(document.Tree, cancellation).Concat(found).OrderBy(static d => d.Span.Start);
             await PublishAsync(document.Uri, document.Version, [..diagnostics.Select(d => DiagnosticNode(document, d))]);
         }
     }

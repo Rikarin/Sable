@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using Sable.Syntax;
 
 namespace Sable.Symbols;
@@ -115,6 +116,81 @@ internal static class ConformanceChecker {
 
         CheckInheritance(type, diagnostics);
         CheckOverrides(type, diagnostics);
+        CheckExplicitImplementations(type, diagnostics);
+    }
+
+    static bool SameProtocol(TypeSymbol a, TypeSymbol b) =>
+        a is NamedTypeSymbol x && b is NamedTypeSymbol y && ReferenceEquals(x.OriginalDefinition, y.OriginalDefinition);
+
+    /// <summary>
+    ///     <c>fn Drawable.render()</c> (SYNTAX.md §7) names a protocol the type
+    ///     conforms to, and implements one of its requirements.
+    /// </summary>
+    static void CheckExplicitImplementations(NamedTypeSymbol type, DiagnosticBag diagnostics) {
+        foreach (var function in type.Members.OfType<FunctionSymbol>()) {
+            if (function.ExplicitProtocol is not { IsError: false } named) {
+                continue;
+            }
+
+            if (named is not NamedTypeSymbol { TypeKind: TypeKind.Protocol } protocol) {
+                Report(
+                    diagnostics,
+                    ErrorCode.ERR_NotAProtocol,
+                    function,
+                    $"'{named.ToDisplayString()}.{function.Name}' implements a requirement of '{named.ToDisplayString()}', "
+                    + "which is not a protocol"
+                );
+                continue;
+            }
+
+            if (ProtocolsOf(type).FirstOrDefault(p => SameProtocol(p, protocol)) is not { } conformed) {
+                Report(
+                    diagnostics,
+                    ErrorCode.ERR_DoesNotConform,
+                    function,
+                    $"'{protocol.Name}.{function.Name}' implements a requirement of '{protocol.Name}', "
+                    + $"but '{type.Name}' does not conform to '{protocol.Name}'"
+                );
+                continue;
+            }
+
+            // A generic protocol's requirements are read with its arguments.
+            var arguments = TypeSubstitution.For(conformed);
+            var requirements = conformed.OriginalDefinition.Members.OfType<FunctionSymbol>()
+                .Where(r => r.IsAbstract && r.Name == function.Name);
+            if (!requirements.Any(r => Matches(r, function, conformed.OriginalDefinition, arguments, type))) {
+                Report(
+                    diagnostics,
+                    ErrorCode.ERR_RequirementSignatureMismatch,
+                    function,
+                    $"'{protocol.Name}.{function.Name}' matches no requirement of '{protocol.Name}'"
+                );
+            }
+        }
+    }
+
+    /// <summary>Every protocol a type conforms to: those it names, those they refine, and its base classes'.</summary>
+    static IEnumerable<NamedTypeSymbol> ProtocolsOf(NamedTypeSymbol type) {
+        var seen = new HashSet<NamedTypeSymbol>();
+        var queue = new Queue<NamedTypeSymbol>();
+        queue.Enqueue(type);
+
+        while (queue.Count > 0) {
+            var current = queue.Dequeue();
+            if (!seen.Add(current)) {
+                continue;
+            }
+
+            if (current.TypeKind == TypeKind.Protocol) {
+                yield return current;
+            }
+
+            foreach (var baseType in current.BaseTypes) {
+                if (baseType is NamedTypeSymbol named) {
+                    queue.Enqueue(named);
+                }
+            }
+        }
     }
 
     /// <summary>What a base class allows, per spec/SYNTAX.md §2.</summary>
@@ -124,12 +200,13 @@ internal static class ConformanceChecker {
                 continue;
             }
 
-            if (baseClass.IsSealed) {
+            if (baseClass.IsSealed || baseClass.IsFinal) {
+                var keyword = baseClass.IsFinal ? "final" : "sealed";
                 Report(
                     diagnostics,
                     ErrorCode.ERR_NotOpen,
                     type,
-                    $"'{baseClass.Name}' is sealed, so '{type.Name}' cannot inherit from it"
+                    $"'{baseClass.Name}' is {keyword}, so '{type.Name}' cannot inherit from it"
                 );
                 continue;
             }
@@ -151,17 +228,22 @@ internal static class ConformanceChecker {
 
     /// <summary>
     ///     <c>override</c> is required where a member replaces a base one, and
-    ///     forbidden where it replaces nothing.
+    ///     forbidden where it replaces nothing. What it replaces must allow it,
+    ///     and the replacement must keep its signature: a call through the base
+    ///     reaches the override, and reads what it returns as the base's type.
     /// </summary>
     static void CheckOverrides(NamedTypeSymbol type, DiagnosticBag diagnostics) {
         foreach (var member in type.Members) {
+            if (member is FieldSymbol { IsOverride: true } property) {
+                CheckPropertyOverride(type, property, diagnostics);
+                continue;
+            }
+
             if (member is not FunctionSymbol { FunctionKind: FunctionKind.Ordinary } function) {
                 continue;
             }
 
-            var overridden = FindOverridden(type, function);
-
-            if (overridden is null) {
+            if (FindOverridden(type, function) is not var (overridden, seen)) {
                 if (!function.IsOverride) {
                     continue;
                 }
@@ -187,6 +269,16 @@ internal static class ConformanceChecker {
                 continue;
             }
 
+            if (overridden.IsFinal) {
+                Report(
+                    diagnostics,
+                    ErrorCode.ERR_NotOpen,
+                    function,
+                    $"'{overridden.ContainingSymbol?.Name}.{overridden.Name}' is 'final', so it cannot be overridden"
+                );
+                continue;
+            }
+
             if (!overridden.IsOpen
                 && !ReferenceEquals(overridden.ContainingModule, type.ContainingModule)) {
                 Report(
@@ -196,8 +288,145 @@ internal static class ConformanceChecker {
                     $"'{overridden.ContainingSymbol?.Name}.{overridden.Name}' is not 'open', "
                     + "so it cannot be overridden outside the module that declares it"
                 );
+                continue;
+            }
+
+            if (OverrideMismatch(function, overridden, seen) is { } mismatch) {
+                Report(
+                    diagnostics,
+                    ErrorCode.ERR_OverrideSignatureMismatch,
+                    function,
+                    $"'{type.Name}.{function.Name}' overrides '{overridden.ContainingSymbol?.Name}.{overridden.Name}', "
+                    + mismatch
+                );
             }
         }
+    }
+
+    /// <summary>
+    ///     How an override's signature differs from what it replaces, beyond the
+    ///     parameter types that matched it: the base's callers read its result,
+    ///     handle what it throws and await it as the base declares, so each has
+    ///     to stay the same.
+    /// </summary>
+    static string? OverrideMismatch(FunctionSymbol function, FunctionSymbol overridden, TypeSubstitution seen) {
+        var returned = seen.Apply(overridden.ReturnType);
+        if (!function.ReturnType.Equals(returned)
+            && !function.ReturnType.IsError && !returned.IsError) {
+            return $"which returns '{returned.ToDisplayString()}', "
+                + $"but returns '{function.ReturnType.ToDisplayString()}'";
+        }
+
+        if (function.IsAsync != overridden.IsAsync) {
+            return overridden.IsAsync
+                ? "which is 'async', but is not"
+                : "which is not 'async', but is";
+        }
+
+        if (function.IsStatic != overridden.IsStatic) {
+            return overridden.IsStatic
+                ? "which is 'static', but is not"
+                : "which is not 'static', but is";
+        }
+
+        var thrown = function.ThrownType;
+        var allowed = overridden.ThrownType is { } declared ? seen.Apply(declared) : null;
+        if (thrown?.IsError == true || allowed?.IsError == true) {
+            return null;
+        }
+
+        // Callers through the base handle exactly what the base says it
+        // throws, in the shape the base's slot has, so the effect is kept.
+        if (thrown is not null && allowed is null) {
+            return $"which throws nothing, but throws '{thrown.ToDisplayString()}'";
+        }
+
+        if (thrown is null && allowed is not null) {
+            return $"which throws '{allowed.ToDisplayString()}', but throws nothing";
+        }
+
+        if (thrown is not null && !thrown.Equals(allowed)) {
+            return $"which throws '{allowed!.ToDisplayString()}', but throws '{thrown.ToDisplayString()}'";
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    ///     <c>override var p</c>: there must be a base property <c>p</c> to
+    ///     replace, of the same type, writable if the base's is, and not
+    ///     <c>final</c>.
+    /// </summary>
+    static void CheckPropertyOverride(NamedTypeSymbol type, FieldSymbol property, DiagnosticBag diagnostics) {
+        var found = FindOverriddenProperty(type, property.Name);
+
+        if (found is not var (overridden, seen) || overridden.IsStatic != property.IsStatic) {
+            Report(
+                diagnostics,
+                ErrorCode.ERR_NothingToOverride,
+                property,
+                $"'{type.Name}.{property.Name}' is marked 'override' but no base class declares it"
+            );
+            return;
+        }
+
+        if (overridden.IsFinal) {
+            Report(
+                diagnostics,
+                ErrorCode.ERR_NotOpen,
+                property,
+                $"'{overridden.ContainingSymbol?.Name}.{overridden.Name}' is 'final', so it cannot be overridden"
+            );
+            return;
+        }
+
+        var expected = seen.Apply(overridden.Type);
+        if (!property.Type.Equals(expected) && !property.Type.IsError && !expected.IsError) {
+            Report(
+                diagnostics,
+                ErrorCode.ERR_OverrideSignatureMismatch,
+                property,
+                $"'{type.Name}.{property.Name}' overrides '{overridden.ContainingSymbol?.Name}.{overridden.Name}', "
+                + $"which is '{expected.ToDisplayString()}', but is '{property.Type.ToDisplayString()}'"
+            );
+            return;
+        }
+
+        var baseWritable = overridden.IsComputed ? overridden.HasSetter : overridden.IsMutable;
+        var writable = property.IsComputed ? property.HasSetter : property.IsMutable;
+        if (baseWritable && !writable) {
+            Report(
+                diagnostics,
+                ErrorCode.ERR_OverrideSignatureMismatch,
+                property,
+                $"'{type.Name}.{property.Name}' overrides '{overridden.ContainingSymbol?.Name}.{overridden.Name}', "
+                + "which can be written, but cannot be"
+            );
+        }
+    }
+
+    /// <summary>The nearest base-class property of this name, if any, and the base's type arguments as this type sees them.</summary>
+    static (FieldSymbol Property, TypeSubstitution Seen)? FindOverriddenProperty(
+        NamedTypeSymbol type,
+        string name,
+        TypeSubstitution? outer = null
+    ) {
+        foreach (var baseType in type.BaseTypes) {
+            if ((outer ?? TypeSubstitution.Empty).Apply(baseType) is not NamedTypeSymbol { TypeKind: TypeKind.Class } baseClass) {
+                continue;
+            }
+
+            var seen = TypeSubstitution.For(baseClass);
+            if (baseClass.GetMembers(name).OfType<FieldSymbol>().FirstOrDefault() is { } found) {
+                return (found, seen);
+            }
+
+            if (FindOverriddenProperty(baseClass.OriginalDefinition, name, seen) is { } inherited) {
+                return inherited;
+            }
+        }
+
+        return null;
     }
 
     /// <summary>
@@ -210,30 +439,31 @@ internal static class ConformanceChecker {
         }
 
         FunctionSymbol? root = null;
-        for (var current = FindOverridden(type, function); current is not null;) {
+        for (var current = FindOverridden(type, function)?.Method; current is not null;) {
             root = current;
-            current = current.IsOverride && current.ContainingSymbol is NamedTypeSymbol owner ? FindOverridden(owner, current) : null;
+            current = current.IsOverride && current.ContainingSymbol is NamedTypeSymbol owner ? FindOverridden(owner, current)?.Method : null;
         }
 
         return root;
     }
 
     /// <summary>
-    ///     The base-class member a function replaces, if any — compared in
-    ///     the base's terms as this class names it: 'GDer: GBase&lt;Int&gt;'
-    ///     overrides 'take(_ x: T)' with 'take(_ x: Int)'.
+    ///     The base-class member a function replaces, if any, and what the
+    ///     base's type parameters are where this type inherits it:
+    ///     <c>class Ints: Box&lt;Int&gt;</c> sees <c>Box.get() -&gt; T</c> as returning Int.
     /// </summary>
-    static FunctionSymbol? FindOverridden(
+    static (FunctionSymbol Method, TypeSubstitution Seen)? FindOverridden(
         NamedTypeSymbol type,
-        FunctionSymbol function
+        FunctionSymbol function,
+        TypeSubstitution? outer = null
     ) {
-        var arguments = TypeSubstitution.For(type);
-        foreach (var declared in type.BaseTypes) {
-            if (arguments.Apply(declared) is not NamedTypeSymbol { TypeKind: TypeKind.Class } baseClass) {
+        foreach (var baseType in type.BaseTypes) {
+            if ((outer ?? TypeSubstitution.Empty).Apply(baseType) is not NamedTypeSymbol { TypeKind: TypeKind.Class } baseClass) {
                 continue;
             }
 
-            var members = TypeSubstitution.For(baseClass);
+            var seen = TypeSubstitution.For(baseClass);
+
             foreach (var candidate in baseClass.GetMembers(function.Name)) {
                 if (candidate is not FunctionSymbol other) {
                     continue;
@@ -245,7 +475,9 @@ internal static class ConformanceChecker {
 
                 var matches = true;
                 for (var i = 0; i < other.Parameters.Length; i++) {
-                    if (members.Apply(other.Parameters[i].Type).Equals(function.Parameters[i].Type)) {
+                    // In the base's terms as this class names it: 'GDer: GBase<Int>'
+                    // overrides 'take(_ x: T)' with 'take(_ x: Int)'.
+                    if (seen.Apply(other.Parameters[i].Type).Equals(function.Parameters[i].Type)) {
                         continue;
                     }
 
@@ -254,11 +486,11 @@ internal static class ConformanceChecker {
                 }
 
                 if (matches) {
-                    return other;
+                    return (other, seen);
                 }
             }
 
-            if (FindOverridden(baseClass, function) is { } inherited) {
+            if (FindOverridden(baseClass.OriginalDefinition, function, seen) is { } inherited) {
                 return inherited;
             }
         }
@@ -271,8 +503,10 @@ internal static class ConformanceChecker {
     /// </summary>
     /// <remarks>
     ///     A conformer names them: <c>alias Element = Int</c>, or a nested type
-    ///     called Element. Failing that the declaration's own default applies, and
-    ///     failing that the conformance is not met.
+    ///     called Element. Failing that its witnesses say: <c>fn get() -&gt; Int</c>
+    ///     meeting <c>fn get() -&gt; Item</c> makes Item an Int. Failing that the
+    ///     declaration's own default applies, and failing that the conformance
+    ///     is not met.
     /// </remarks>
     public static TypeSymbol? ResolveAssociated(
         NamedTypeSymbol conformer,
@@ -292,7 +526,62 @@ internal static class ConformanceChecker {
             }
         }
 
-        return associated.DefaultType;
+        return InferAssociated(conformer, associated) ?? associated.DefaultType;
+    }
+
+    /// <summary>The (conformer, associated type) pairs being inferred, so inference never asks itself.</summary>
+    [ThreadStatic]
+    static HashSet<(NamedTypeSymbol, TypeParameterSymbol)>? s_inferring;
+
+    /// <summary>
+    ///     An associated type read off the conformer's witnesses: the first
+    ///     requirement that mentions it, matched against the conformer's own
+    ///     member of that name and shape.
+    /// </summary>
+    static TypeSymbol? InferAssociated(NamedTypeSymbol conformer, TypeParameterSymbol associated) {
+        if (associated.ContainingSymbol is not NamedTypeSymbol { TypeKind: TypeKind.Protocol } protocol) {
+            return null;
+        }
+
+        conformer = conformer.OriginalDefinition;
+        s_inferring ??= [];
+        if (!s_inferring.Add((conformer, associated))) {
+            return null;
+        }
+
+        try {
+            ImmutableArray<TypeParameterSymbol> inferrable = [associated];
+            foreach (var requirement in protocol.Members) {
+                foreach (var witness in FindMembers(conformer, requirement.Name)) {
+                    // A protocol's default speaks of the associated type
+                    // itself, so it says nothing about what it is.
+                    if (witness.ContainingSymbol is NamedTypeSymbol { TypeKind: TypeKind.Protocol }
+                        or ExtensionSymbol { ExtendedType.TypeKind: TypeKind.Protocol }) {
+                        continue;
+                    }
+
+                    var map = new Dictionary<TypeParameterSymbol, TypeSymbol>();
+                    var fits = (requirement, witness) switch {
+                        (FunctionSymbol { IsAbstract: true } wanted, FunctionSymbol given) =>
+                            wanted.IsStatic == given.IsStatic
+                            && wanted.Parameters.Length == given.Parameters.Length
+                            && wanted.Parameters.Zip(given.Parameters).All(p => TypeSubstitution.Unify(p.First.Type, p.Second.Type, inferrable, map))
+                            && TypeSubstitution.Unify(wanted.ReturnType, given.ReturnType, inferrable, map),
+                        (FieldSymbol { IsAbstract: true } wanted, FieldSymbol given) =>
+                            TypeSubstitution.Unify(wanted.Type, given.Type, inferrable, map),
+                        _ => false,
+                    };
+
+                    if (fits && map.TryGetValue(associated, out var inferred) && !inferred.IsError) {
+                        return inferred;
+                    }
+                }
+            }
+
+            return null;
+        } finally {
+            s_inferring.Remove((conformer, associated));
+        }
     }
 
     static void CheckProtocol(
@@ -307,8 +596,13 @@ internal static class ConformanceChecker {
             return;
         }
 
+        // 'struct Ones: Source<Int>' conforms to Source with T as Int: its
+        // requirements are the definition's, read with the arguments.
+        var arguments = TypeSubstitution.For(protocol);
+        protocol = protocol.OriginalDefinition;
+
         foreach (var refined in protocol.BaseTypes) {
-            if (refined is NamedTypeSymbol { TypeKind: TypeKind.Protocol } parent) {
+            if (arguments.Apply(refined) is NamedTypeSymbol { TypeKind: TypeKind.Protocol } parent) {
                 CheckProtocol(type, parent, diagnostics, seen);
             }
         }
@@ -330,11 +624,11 @@ internal static class ConformanceChecker {
         foreach (var requirement in protocol.Members) {
             switch (requirement) {
                 case FunctionSymbol { IsAbstract: true } function:
-                    CheckFunction(type, protocol, function, diagnostics);
+                    CheckFunction(type, protocol, arguments, function, diagnostics);
                     break;
 
                 case FieldSymbol { IsAbstract: true } field:
-                    CheckProperty(type, protocol, field, diagnostics);
+                    CheckProperty(type, protocol, arguments, field, diagnostics);
                     break;
             }
         }
@@ -343,10 +637,14 @@ internal static class ConformanceChecker {
     static void CheckFunction(
         NamedTypeSymbol type,
         NamedTypeSymbol protocol,
+        TypeSubstitution arguments,
         FunctionSymbol requirement,
         DiagnosticBag diagnostics
     ) {
-        var candidates = FindMembers(type, requirement.Name).OfType<FunctionSymbol>().ToList();
+        // 'fn Printable.render()' implements Printable's requirement only.
+        var candidates = FindMembers(type, requirement.Name).OfType<FunctionSymbol>()
+            .Where(c => c.ExplicitProtocol is null || SameProtocol(c.ExplicitProtocol, protocol))
+            .ToList();
 
         if (candidates.Count == 0) {
             Report(
@@ -360,7 +658,7 @@ internal static class ConformanceChecker {
         }
 
         foreach (var candidate in candidates) {
-            if (!Matches(requirement, candidate, protocol, type)) {
+            if (!Matches(requirement, candidate, protocol, arguments, type)) {
                 continue;
             }
 
@@ -409,6 +707,7 @@ internal static class ConformanceChecker {
     static void CheckProperty(
         NamedTypeSymbol type,
         NamedTypeSymbol protocol,
+        TypeSubstitution arguments,
         FieldSymbol requirement,
         DiagnosticBag diagnostics
     ) {
@@ -441,7 +740,7 @@ internal static class ConformanceChecker {
             return;
         }
 
-        var expected = SubstituteSelf(requirement.Type, protocol, type);
+        var expected = arguments.Apply(SubstituteSelf(requirement.Type, protocol, type));
         if (candidate.Type.Equals(expected) || candidate.Type.IsError || expected.IsError) {
             return;
         }
@@ -460,6 +759,7 @@ internal static class ConformanceChecker {
         FunctionSymbol requirement,
         FunctionSymbol candidate,
         NamedTypeSymbol protocol,
+        TypeSubstitution arguments,
         NamedTypeSymbol conformer
     ) {
         if (candidate.IsStatic != requirement.IsStatic) {
@@ -488,7 +788,7 @@ internal static class ConformanceChecker {
 
         var rename = new TypeSubstitution(renamed);
 
-        TypeSymbol Expected(TypeSymbol type) => rename.Apply(SubstituteSelf(type, protocol, conformer));
+        TypeSymbol Expected(TypeSymbol type) => rename.Apply(arguments.Apply(SubstituteSelf(type, protocol, conformer)));
 
         for (var i = 0; i < requirement.Parameters.Length; i++) {
             var expected = Expected(requirement.Parameters[i].Type);
@@ -639,7 +939,9 @@ internal static class ConformanceChecker {
             function.Parameters.Select(static p => $"{p.Name}: {p.Type.ToDisplayString()}")
         );
 
-        return $"fn {function.Name}({parameters}) -> {function.ReturnType.ToDisplayString()}";
+        return function.FunctionKind == FunctionKind.Initializer
+            ? $"init({parameters})"
+            : $"fn {function.Name}({parameters}) -> {function.ReturnType.ToDisplayString()}";
     }
 
     static void Report(

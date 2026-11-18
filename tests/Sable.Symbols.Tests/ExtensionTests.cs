@@ -223,6 +223,137 @@ public sealed class ExtensionTests {
             """
         );
 
+    // ---- Constrained extensions -------------------------------------------
+
+    const string Describable = """
+                               protocol Describable { fn describe() -> String }
+                               struct Cat: Describable { fn describe() -> String => "cat" }
+                               struct Box<T> { var v: T }
+                               """;
+
+    [Fact]
+    public void AConstrainedExtensionsBodySeesItsConformanceRequirement() =>
+        AssertClean(
+            $$"""
+              {{Describable}}
+              extension Box where T: Describable {
+                  fn describe() -> String => "box of " + v.describe()
+              }
+              fn probe(_ b: Box<Cat>) -> String => b.describe()
+              """
+        );
+
+    [Fact]
+    public void AConstrainedExtensionsBodySeesItsSameTypeRequirement() =>
+        AssertClean(
+            """
+            struct Wrapper<T> { var v: T }
+            extension Wrapper where T == Int {
+                fn doubled() -> Int => v * 2
+                fn quadrupled() -> Int => doubled() * 2
+            }
+            fn probe(_ w: Wrapper<Int>) -> Int => w.doubled()
+            """
+        );
+
+    [Fact]
+    public void ARenamedParameterCarriesTheRequirement() =>
+        AssertClean(
+            $$"""
+              {{Describable}}
+              extension Box<U> where U: Describable {
+                  fn describe() -> String => v.describe()
+              }
+              """
+        );
+
+    [Fact]
+    public void AConstrainedExtensionsRequirementDoesNotLeakIntoTheType() {
+        var errors = ErrorsIn(
+            $$"""
+              {{Describable}}
+              extension Box where T: Describable { fn describe() -> String => v.describe() }
+              extension Box { fn other() -> String => v.describe() }
+              """
+        );
+        Assert.Contains(errors, static e => e.Code == ErrorCode.ERR_NameNotFound && e.Message.Contains("'describe'"));
+    }
+
+    [Fact]
+    public void AConstrainedMemberIsNotThereWhereTheRequirementFails() {
+        var errors = ErrorsIn(
+            """
+            struct Wrapper<T> { var v: T }
+            extension Wrapper where T == Int { fn doubled() -> Int => v * 2 }
+            fn probe(_ w: Wrapper<String>) -> Int => w.doubled()
+            """
+        );
+        var error = Assert.Single(errors);
+        Assert.Equal(ErrorCode.ERR_DoesNotConform, error.Code);
+        Assert.Contains("'Wrapper<String>' has 'doubled' only where 'T == Int'", error.Message);
+    }
+
+    [Fact]
+    public void AConstrainedMemberIsNotThereThroughSelfOutsideTheExtension() {
+        var errors = ErrorsIn(
+            """
+            struct Wrapper<T> {
+                var v: T
+                fn tryIt() -> Int => doubled()
+            }
+            extension Wrapper where T == Int { fn doubled() -> Int => v * 2 }
+            """
+        );
+        var error = Assert.Single(errors);
+        Assert.Equal(ErrorCode.ERR_DoesNotConform, error.Code);
+        Assert.Contains("only where 'T == Int'", error.Message);
+    }
+
+    [Fact]
+    public void AConditionalConformanceHoldsWhereItsRequirementDoes() =>
+        AssertClean(
+            $$"""
+              {{Describable}}
+              extension Box: Describable where T: Describable {
+                  fn describe() -> String => "box of " + v.describe()
+              }
+              fn show<D: Describable>(_ d: D) -> String => d.describe()
+              fn probe() -> String => show(Box(v: Box(v: Cat())))
+              """
+        );
+
+    [Fact]
+    public void AConditionalConformanceFailsWhereItsRequirementDoes() {
+        var errors = ErrorsIn(
+            $$"""
+              {{Describable}}
+              extension Box: Describable where T: Describable {
+                  fn describe() -> String => "box of " + v.describe()
+              }
+              fn show<D: Describable>(_ d: D) -> String => d.describe()
+              fn probe() -> String => show(Box(v: 3))
+              """
+        );
+        Assert.Contains(errors, static e => e.Code == ErrorCode.ERR_NoMatchingOverload && e.Message.Contains("'Box<Int>', which is not 'Describable'"));
+    }
+
+    [Fact]
+    public void AConditionalConformanceThroughAGenericParameterNeedsItsRequirement() {
+        var errors = ErrorsIn(
+            $$"""
+              {{Describable}}
+              extension Box: Describable where T: Describable {
+                  fn describe() -> String => v.describe()
+              }
+              fn show<D: Describable>(_ d: D) -> String => d.describe()
+              fn good<T: Describable>(_ t: T) -> String => show(Box(v: t))
+              fn bad<T>(_ t: T) -> String => show(Box(v: t))
+              """
+        );
+        var error = Assert.Single(errors);
+        Assert.Equal(ErrorCode.ERR_NoMatchingOverload, error.Code);
+    }
+
     // ---- Memberwise initialisers ------------------------------------------
 
     [Fact]
@@ -313,6 +444,16 @@ public sealed class ExtensionTests {
                 let i = IntBox(item: 3)
                 return b.a + c.b + s.side + t.side + i.item
             }
+            """
+        );
+
+    [Fact]
+    public void AnInheritedOrImplicitInitialiserMeetsAProtocolsRequirement() =>
+        AssertClean(
+            """
+            protocol Makeable { init() }
+            class K: Makeable { var x: Int = 3 }
+            class L: K { }
             """
         );
 

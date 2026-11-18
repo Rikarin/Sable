@@ -392,6 +392,22 @@ public sealed class StatementParserTests {
         Assert.Equal(SyntaxKind.IdentifierName, forStatement.Sequence.Kind);
     }
 
+    /// <summary>
+    ///     A range with no upper bound ends at the body's brace: the brace is
+    ///     not a closure taken for the bound.
+    /// </summary>
+    [Theory]
+    [InlineData("for i in 3... { print(i) }")]
+    [InlineData("for i in a + 1... where i > 4 { print(i) }")]
+    [InlineData("for i in 0... { }")]
+    public void AnOpenRangesBraceOpensTheBody(string source) {
+        var root = ParseRoot(source);
+        var range = root.DescendantNodes().OfType<RangeExpressionSyntax>().Single();
+        Assert.NotNull(range.Left);
+        Assert.Null(range.Right);
+        Assert.DoesNotContain(root.DescendantNodes(), static n => n.Kind is SyntaxKind.ClosureExpression or SyntaxKind.BraceClosureExpression);
+    }
+
     [Fact]
     public void BracesAreAllowedAgainInsideParentheses() {
         var root = ParseRoot("if f(Point { x: 1 }) { }");

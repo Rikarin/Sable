@@ -23,7 +23,8 @@ public sealed partial class Compilation {
     /// <summary>
     ///     For a class or actor that declares no initialiser: <c>init()</c>
     ///     now, when nothing can be its superclass; otherwise once base types
-    ///     are bound, when it is known whether one is.
+    ///     are bound, when it is known whether one is, and before anything
+    ///     checks what initialisers it has.
     /// </summary>
     void DeclareImplicitInitializers(NamedTypeSymbol type, SyntaxNode declaration) {
         if (type.GetMembers("init").Any() || !OwnFieldsStartWithAValue(type)) {
@@ -37,7 +38,10 @@ public sealed partial class Compilation {
 
         var tree = CurrentScope?.Tree;
         _implicitPending.Add(type);
-        TypeBinder.DeferLate(() => InheritInitializers(type, declaration, tree));
+        // Once every base list declared so far is bound — a deferral made
+        // while running the deferrals runs after them all — and before
+        // conformances are checked, which may ask for an 'init()'.
+        TypeBinder.Defer(() => TypeBinder.Defer(() => InheritInitializers(type, declaration, tree)));
     }
 
     static bool OwnFieldsStartWithAValue(NamedTypeSymbol type) =>

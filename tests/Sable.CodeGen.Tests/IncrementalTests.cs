@@ -615,4 +615,46 @@ public sealed class IncrementalTests {
             Directory.Delete(directory, true);
         }
     }
+
+    /// <summary>
+    ///     A separate build's link takes what the whole program's build does on
+    ///     each platform: on Linux, <c>-rdynamic</c> for a trap's backtrace and
+    ///     libm for the <c>fmod</c> a float's remainder calls. Checked by its
+    ///     arguments, as this may not run where Linux does.
+    /// </summary>
+    [Theory]
+    [InlineData(NativePlatform.Linux, new[] { "-rdynamic", "-lm" })]
+    [InlineData(NativePlatform.MacOS, new string[0])]
+    public void ASeparateLinkTakesThePlatformsLibraries(NativePlatform platform, string[] flags) {
+        Assert.Equal(flags, NativeBuild.PlatformLinkFlags(platform));
+        Assert.Equal(
+            ["a.o", "runtime.o", "-o", "program", ..flags],
+            NativeObjects.LinkArguments(["a.o", "runtime.o"], "program", platform)
+        );
+    }
+
+    /// <summary>
+    ///     A profile's settings as clang's flags: each opt-level its own, debug
+    ///     information at any of them, link-time optimisation on Linux through
+    ///     lld (where it links), and what the link strips on each platform.
+    /// </summary>
+    [Fact]
+    public void AProfilesSettingsAreClangsFlags() {
+        Assert.Equal(["-Os"], NativeBuild.CompileFlags(new NativeOptions { OptLevel = "s" }));
+        Assert.Equal(["-g", "-O3"], NativeBuild.CompileFlags(new NativeOptions { OptLevel = "3", DebugInfo = true }));
+        Assert.Equal(["-g", "-O0"], NativeBuild.CompileFlags(NativeOptions.Of(optimise: true, debug: true)));
+
+        var release = new NativeOptions { OptLevel = "3" };
+        Assert.Equal(["-flto"], NativeBuild.LtoFlags(release, NativePlatform.MacOS, linksBitcode: true));
+        Assert.Equal(["-flto=thin", "-fuse-ld=lld"], NativeBuild.LtoFlags(release with { Lto = LtoMode.Thin }, NativePlatform.Linux, linksBitcode: true));
+        Assert.Empty(NativeBuild.LtoFlags(release, NativePlatform.Linux, linksBitcode: false));
+        Assert.Empty(NativeBuild.LtoFlags(release with { Lto = LtoMode.Off }, NativePlatform.MacOS, linksBitcode: true));
+        Assert.Empty(NativeBuild.LtoFlags(release with { OptLevel = "0" }, NativePlatform.MacOS, linksBitcode: true));
+
+        Assert.Equal(["-rdynamic", "-lm", "-Wl,--strip-all", "-Wl,-rpath,$ORIGIN"],
+            NativeBuild.LinkFlags(release with { Strip = StripMode.Symbols, Rpath = true }, NativePlatform.Linux));
+        Assert.Equal(["-Wl,-S"], NativeBuild.LinkFlags(release with { Strip = StripMode.DebugInfo }, NativePlatform.MacOS));
+        Assert.Equal(["a.o", "-o", "program", "-rdynamic", "-lm", "-Wl,--strip-debug"],
+            NativeObjects.LinkArguments(["a.o"], "program", NativePlatform.Linux, release with { Strip = StripMode.DebugInfo }));
+    }
 }

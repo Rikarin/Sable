@@ -217,4 +217,71 @@ public sealed class GenericLoweringTests {
 
         Assert.Equal(125L, Run(module, "test"));
     }
+
+    // ---- Polymorphic recursion ---------------------------------------------
+
+    /// <summary>The lowering diagnostics of a module the front end accepts.</summary>
+    static List<Diagnostic> LoweringErrors(string source) {
+        var compilation = Compilation.Create($"module M\n{source}");
+        var errors = compilation.GetAllDiagnostics().Where(static d => d.Severity == DiagnosticSeverity.Error).ToList();
+        Assert.True(errors.Count == 0, string.Join("\n", errors.Select(static e => $"{e.Id}: {e.Message}")));
+        return [..SilGen.Lower(compilation).Diagnostics];
+    }
+
+    [Theory]
+    [InlineData(
+        // Each call doubles the type: Int, (Int, Int), ((Int, Int), (Int, Int))…
+        """
+        fn deep<T>(_ x: T, _ n: Int) -> Int {
+            if n == 0 { return 0 }
+            return deep((x, x), n - 1)
+        }
+        fn test() -> Int { return deep(1, 3) }
+        """
+    )]
+    [InlineData(
+        // The same, through a second function and an array.
+        """
+        fn there<T>(_ x: T, _ n: Int) -> Int {
+            if n == 0 { return 0 }
+            return back([x], n - 1)
+        }
+        fn back<T>(_ x: T, _ n: Int) -> Int { return there(x, n) }
+        fn test() -> Int { return there(1, 3) }
+        """
+    )]
+    [InlineData(
+        // A generic type's method that asks for a copy of itself one level deeper.
+        """
+        struct Nest<T> {
+            let inner: T
+            fn depth(_ n: Int) -> Int {
+                if n == 0 { return 0 }
+                let next = Nest<Nest<T>> { inner: Nest<T> { inner: inner } }
+                return 1 + next.depth(n - 1)
+            }
+        }
+        fn test() -> Int { return Nest<Int> { inner: 1 }.depth(3) }
+        """
+    )]
+    public void PolymorphicRecursionIsReportedNotInstantiatedForever(string source) {
+        var errors = LoweringErrors(source);
+        Assert.Contains(errors, static e => e.Code == ErrorCode.ERR_EndlessInstantiation);
+    }
+
+    [Fact]
+    public void ARecursionThatSettlesOnOneTypeIsNotPolymorphicRecursion() {
+        // 'show<String>' asks for 'show<Int>', which asks only for itself.
+        var module = Lower(
+            """
+            fn show<T>(_ x: T, _ n: Int) -> Int {
+                if n == 0 { return 0 }
+                return 1 + show(n, n - 1)
+            }
+            fn test() -> Int { return show("start", 4) }
+            """
+        );
+
+        Assert.Equal(4L, Run(module, "test"));
+    }
 }

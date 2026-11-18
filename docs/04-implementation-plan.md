@@ -1436,7 +1436,9 @@ member at a time.
   it, which formatting keeps.
 - Hover (signature, container, doc comment; an expression's type; like a
   completion, bound speculatively against the newest compilation), definition
-  (into a copy of the library file when it lands there), references, rename
+  (into a copy of the library file when it lands there), references (a
+  parameter whose label is its name is also named by each argument's label, in
+  any file), rename
   with `prepareRename` (refused for anything the library or the compiler
   declares, and for keywords), document symbols, signature help.
 - Declaration (the definition), type definition (through optionals,
@@ -1458,9 +1460,17 @@ member at a time.
 - Completion: members after `.` and `?.` (statics after a type name), the
   names in scope — locals declared before the caret, parameters, the enclosing
   types' members, the module, imports, `Sable.Core` — and keywords; module
-  names after `import`.
-- Inlay hints: the type of each `let`/`var` written without one, and the
-  inferred roots — after a function's reference result, `roots(a, b)`, the
+  names after `import`. A function is written as a call with a placeholder per
+  argument, under its label, for a client that takes snippets. At the start of
+  an argument, the labels the call's parameters take come first. After a bare
+  `.`, the cases and statics of the type the context wants (a parameter's, an
+  annotated declaration's, an assignment's or comparison's other side, the
+  function's result). A public name of another module of the compilation that
+  the file does not import is offered with the `import` it needs.
+- Inlay hints: the type of each `let`/`var` written without one; the
+  parameter an argument without a label is for, where the call takes more than
+  one and the argument is not already that name; a closure's inferred
+  parameter and result types; and the inferred roots — after a function's reference result, `roots(a, b)`, the
   parameters it may refer into, from root inference's summaries
   (`SilFunction.ResultRoots`, read from a separate lowering so the server's
   compilation is not held); and on a local reference, what it refers into

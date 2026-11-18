@@ -218,12 +218,17 @@ public sealed partial class LanguageServer {
 
     /// <summary>
     ///     Every reference to a symbol in the workspace's documents, its
-    ///     declaration included. A local or a parameter can only be named in
-    ///     its own file; anything else is looked for in each file whose text
-    ///     mentions it, binding only the members that do.
+    ///     declaration included. A local can only be named in its own file,
+    ///     and so can a parameter — but one whose label is its name is also
+    ///     named by the label of each argument for it, in any file. Anything
+    ///     else is looked for in each file whose text mentions it, binding
+    ///     only the members that do.
     /// </summary>
     static List<(Document Document, TextSpan Span, bool IsDeclaration)> References(Analysis analysis, Symbol symbol, Document origin, CancellationToken cancellation) {
-        IReadOnlyList<Document> documents = symbol is LocalSymbol or ParameterSymbol
+        var labelled = symbol is ParameterSymbol { Label: null, ContainingSymbol: FunctionSymbol { FunctionKind: not FunctionKind.Accessor } } parameter
+            ? parameter
+            : null;
+        IReadOnlyList<Document> documents = symbol is LocalSymbol || symbol is ParameterSymbol && labelled is null
             ? [origin]
             : [..analysis.Documents];
 
@@ -245,6 +250,40 @@ public sealed partial class LanguageServer {
             foreach (var span in spans) {
                 var isDeclaration = ReferenceEquals(declaredIn, document) && !declaration.IsNone && declaration.Span == span;
                 found.Add((document, span, isDeclaration));
+            }
+
+            if (labelled is not null) {
+                foreach (var span in ArgumentLabels(analysis, document, labelled, cancellation)) {
+                    found.Add((document, span, false));
+                }
+            }
+        }
+
+        return found;
+    }
+
+    /// <summary>The labels of the arguments for a parameter in calls to its function: <c>x</c> in <c>f(x: 1)</c>.</summary>
+    static IEnumerable<TextSpan> ArgumentLabels(Analysis analysis, Document document, ParameterSymbol parameter, CancellationToken cancellation) {
+        var function = (FunctionSymbol)parameter.ContainingSymbol!;
+        var found = new List<TextSpan>();
+        foreach (var argument in document.Tree.Root.DescendantNodes().OfType<ArgumentSyntax>()) {
+            cancellation.ThrowIfCancellationRequested();
+            if (argument.NameToken is not { IsNone: false } label
+                || label.Text != parameter.Name
+                || argument.Parent?.Parent is not InvocationExpressionSyntax invocation
+                || SemanticModel.FindMember(document.Tree.Root, invocation.Span.Start) is not { } member) {
+                continue;
+            }
+
+            lock (analysis.Gate) {
+                var bound = analysis.Model(document.Tree).GetMemberModel(member).GetBoundNode(invocation);
+                while (bound is BoundConversion conversion) {
+                    bound = conversion.Operand;
+                }
+
+                if (bound is BoundCall call && SemanticModel.SameSymbol(call.Function, function)) {
+                    found.Add(label.Span);
+                }
             }
         }
 

@@ -139,26 +139,233 @@ public sealed partial class LanguageServer {
         var context = await EditContextAsync(snapshot, document, offset);
         cancellation.ThrowIfCancellationRequested();
 
-        var items = new List<(Symbol Symbol, int Rank)>();
+        var items = new List<Offer>();
+        var labels = new List<string>();
         var root = document.Tree.Root;
         var keywords = true;
         lock (context.Analysis.Gate) {
             if (start > 0 && SemanticModel.FindTokenAt(root, start - 1) is { Kind: SyntaxKind.DotToken or SyntaxKind.QuestionDotToken } dot) {
                 keywords = false;
-                if (dot.Parent is MemberAccessExpressionSyntax access) {
-                    AddMembers(context.Model, access, dot.Kind == SyntaxKind.QuestionDotToken, items);
+                switch (dot.Parent) {
+                    case MemberAccessExpressionSyntax access:
+                        AddMembers(context.Model, access, dot.Kind == SyntaxKind.QuestionDotToken, items);
+                        break;
+
+                    // '.Red' where a Color is wanted: the type's cases and statics.
+                    case ImplicitMemberAccessExpressionSyntax implicitMember when ExpectedTypeOf(context.Model, implicitMember) is { } expected:
+                        AddStatics(context.Model, expected, items);
+                        break;
                 }
             } else {
+                labels.AddRange(ArgumentLabels(context.Model, root, start, offset));
                 var rank = 0;
+                var visible = new HashSet<string>(StringComparer.Ordinal);
                 foreach (var symbol in context.Model.LookupSymbols(offset)) {
-                    items.Add((symbol, rank++));
+                    items.Add(new(symbol, rank++));
+                    visible.Add(symbol.Name);
                 }
+
+                AddImportable(context.Analysis, document, prefix, visible, rank, items);
             }
 
             var id = Interlocked.Increment(ref _completions);
             Volatile.Write(ref _lastCompletion, new CompletionMemory(id, context.Analysis, [..items.Select(static i => i.Symbol)]));
-            return CompletionList(document, start, offset, prefix, items, keywords, id);
+            var snippets = _snippets && !(offset < text.Length && text[offset] == '(');
+            return CompletionList(document, start, offset, prefix, items, labels, keywords, snippets, id);
         }
+    }
+
+    /// <summary>
+    ///     A symbol offered, ranked; <see cref="Import" /> names the module
+    ///     whose import the item adds, for a symbol not yet in scope.
+    /// </summary>
+    internal sealed record Offer(Symbol Symbol, int Rank, string? Import = null);
+
+    /// <summary>
+    ///     The type a context wants of <c>.Name</c>: what a parameter, an
+    ///     annotated declaration, an assignment, a comparison or a
+    ///     <c>return</c> expects there. The binder knows it only while it
+    ///     binds, so it is worked out again from the syntax around.
+    /// </summary>
+    static TypeSymbol? ExpectedTypeOf(SemanticModel model, ImplicitMemberAccessExpressionSyntax implicitMember) {
+        SyntaxNode node = implicitMember;
+        // Through parentheses, and a call of the member: '.circle(r)' is a
+        // value of the type wanted too, and a dot typed at the end of a line
+        // is read as calling what the next line starts with.
+        while (node.Parent is ParenthesizedExpressionSyntax
+               || node.Parent is InvocationExpressionSyntax call && ReferenceEquals(call.Expression, node)) {
+            node = node.Parent;
+        }
+
+        var type = node.Parent switch {
+            ArgumentSyntax { Parent.Parent: InvocationExpressionSyntax invocation } argument => ParameterTypeAt(model, invocation, argument),
+            EqualsValueClauseSyntax { Parent: { } declarator } => DeclaredTypeOf(model, declarator),
+            AssignmentExpressionSyntax assignment when ReferenceEquals(assignment.Right, node) => model.GetTypeOf(assignment.Left),
+            BinaryExpressionSyntax binary => model.GetTypeOf(ReferenceEquals(binary.Right, node) ? binary.Left : binary.Right),
+            ReturnStatementSyntax ret => ReturnTypeAt(model, ret),
+            _ => null,
+        };
+
+        type = type is OptionalTypeSymbol optional ? optional.UnderlyingType : type;
+        return type is NamedTypeSymbol { IsError: false } ? type : null;
+    }
+
+    /// <summary>The type of the parameter an argument is for: by its label, or by its place among those without one.</summary>
+    static TypeSymbol? ParameterTypeAt(SemanticModel model, InvocationExpressionSyntax invocation, ArgumentSyntax argument) {
+        var arguments = invocation.ArgumentList!.Arguments.ToList();
+        var index = arguments.IndexOf(argument);
+        foreach (var function in CallCandidates(model, invocation).Candidates) {
+            var parameter = argument.NameToken is { IsNone: false } label && label.Text.Length > 0
+                ? function.Parameters.FirstOrDefault(p => LabelOf(p) == label.Text)
+                : index >= 0 && index < function.Parameters.Length ? function.Parameters[index] : null;
+            if (parameter is not null && !parameter.Type.IsError) {
+                return parameter.Type;
+            }
+        }
+
+        return null;
+    }
+
+    static TypeSymbol? DeclaredTypeOf(SemanticModel model, SyntaxNode declarator) {
+        for (var node = declarator; node is not null; node = node.Parent) {
+            switch (model.GetBoundNode(node)) {
+                case BoundLocalDeclaration declaration:
+                    return declaration.Local.Type;
+            }
+
+            if (node is StatementSyntax or DeclarationSyntax) {
+                break;
+            }
+        }
+
+        return null;
+    }
+
+    static TypeSymbol? ReturnTypeAt(SemanticModel model, SyntaxNode node) {
+        for (var at = node.Parent; at is not null; at = at.Parent) {
+            if (at is ClosureExpressionSyntax or BraceClosureExpressionSyntax) {
+                return null;
+            }
+
+            if (at is FunctionDeclarationSyntax function) {
+                return (model.GetSymbolOf(function) as FunctionSymbol)?.ReturnType;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>What a call's arguments write for a parameter: its label, or its name when it has none; null for one written without.</summary>
+    static string? LabelOf(ParameterSymbol parameter) =>
+        parameter.Label switch {
+            "_" => null,
+            { } label => label,
+            null => parameter.Name,
+        };
+
+    /// <summary>The functions a call may be to: the one it binds to first, then the rest of its group or the type's initialisers.</summary>
+    static (List<FunctionSymbol> Candidates, FunctionSymbol? Chosen) CallCandidates(SemanticModel model, InvocationExpressionSyntax invocation) {
+        var candidates = new List<FunctionSymbol>();
+        FunctionSymbol? chosen = null;
+        switch (model.GetBoundNode(invocation)) {
+            case BoundCall call:
+                chosen = call.Function;
+                break;
+            case BoundConversion { Operand: BoundCall call }:
+                chosen = call.Function;
+                break;
+        }
+
+        switch (model.GetBoundNode(invocation.Expression)) {
+            case BoundFunctionGroup group:
+                candidates.AddRange(group.Candidates);
+                break;
+            case BoundTypeExpression { ReferencedType: var type }:
+                candidates.AddRange(model.GetMembersOf(type).OfType<FunctionSymbol>().Where(static f => f.FunctionKind == FunctionKind.Initializer));
+                break;
+        }
+
+        if (chosen is not null && !candidates.Contains(chosen)) {
+            candidates.Insert(0, chosen);
+        }
+
+        if (candidates.Count == 0 && model.GetSymbolOf(invocation.Expression) is FunctionSymbol named) {
+            candidates.Add(named);
+        }
+
+        return (candidates, chosen);
+    }
+
+    /// <summary>
+    ///     At the start of an argument, the labels the call's parameters take
+    ///     that no other argument has written yet: <c>to:</c> in
+    ///     <c>add(1, t|)</c>.
+    /// </summary>
+    static IEnumerable<string> ArgumentLabels(SemanticModel model, SyntaxNode root, int start, int offset) {
+        var before = start > 0 ? SemanticModel.FindTokenAt(root, start - 1) : default;
+        if (before.Kind is not (SyntaxKind.OpenParenToken or SyntaxKind.CommaToken) || before.Parent is not ArgumentListSyntax { Parent: InvocationExpressionSyntax invocation } list) {
+            return [];
+        }
+
+        var written = list.Arguments
+            .Where(a => a.NameToken is { IsNone: false } name && name.Text.Length > 0 && !(a.Span.Start <= offset && offset <= a.Span.End))
+            .Select(static a => a.NameToken.Text)
+            .ToHashSet(StringComparer.Ordinal);
+        var labels = new List<string>();
+        foreach (var function in CallCandidates(model, invocation).Candidates) {
+            foreach (var parameter in function.Parameters) {
+                if (LabelOf(parameter) is { } label && !written.Contains(label) && !labels.Contains(label)) {
+                    labels.Add(label);
+                }
+            }
+        }
+
+        return labels;
+    }
+
+    /// <summary>
+    ///     The public types and functions of the compilation's other modules
+    ///     that the file does not import, for a name of two letters or more:
+    ///     choosing one adds the import.
+    /// </summary>
+    static void AddImportable(Analysis analysis, Document document, string prefix, HashSet<string> visible, int rank, List<Offer> items) {
+        if (prefix.Length < 2 || document.Tree.Root is not CompilationUnitSyntax unit) {
+            return;
+        }
+
+        var own = unit.Module?.Name.ToString().Trim();
+        var imported = unit.Members.OfType<ImportDeclarationSyntax>().Select(static i => i.Name.ToString().Trim()).ToHashSet(StringComparer.Ordinal);
+        foreach (var module in analysis.Compilation.Modules.OrderBy(static m => m.Name, StringComparer.Ordinal)) {
+            if (module.Name.Length == 0 || module.Name == own || module.Name == CoreLibrary.ModuleName || imported.Contains(module.Name)) {
+                continue;
+            }
+
+            foreach (var member in module.Members) {
+                if (member is NamedTypeSymbol or FunctionSymbol { FunctionKind: FunctionKind.Ordinary } or AliasSymbol
+                    && member.DeclaredAccessibility == Accessibility.Public
+                    && !visible.Contains(member.Name)
+                    && Matches(prefix, member.Name)) {
+                    items.Add(new(member, rank++, module.Name));
+                }
+            }
+        }
+    }
+
+    /// <summary>The line a new import goes on: after the last import, or else after the module declaration.</summary>
+    static int ImportLineOf(Document document) {
+        if (document.Tree.Root is not CompilationUnitSyntax unit) {
+            return 0;
+        }
+
+        var last = unit.Members.OfType<ImportDeclarationSyntax>().LastOrDefault() as SyntaxNode ?? unit.Module;
+        return last is null ? 0 : document.Lines.PositionOf(last.Span.End).Line + 1;
+    }
+
+    /// <summary>A call written out as a snippet: each argument a placeholder, under its label if it has one.</summary>
+    static string CallSnippet(FunctionSymbol function) {
+        var arguments = function.Parameters.Select(static (p, i) =>
+            (LabelOf(p) is { } label ? label + ": " : "") + "${" + (i + 1).ToString(System.Globalization.CultureInfo.InvariantCulture) + ":" + p.Name + "}");
+        return $"{function.Name}({string.Join(", ", arguments)})$0";
     }
 
     /// <summary>
@@ -184,7 +391,7 @@ public sealed partial class LanguageServer {
         return Task.FromResult<JsonNode?>(item);
     }
 
-    static void AddMembers(SemanticModel model, MemberAccessExpressionSyntax access, bool optionalChain, List<(Symbol, int)> items) {
+    static void AddMembers(SemanticModel model, MemberAccessExpressionSyntax access, bool optionalChain, List<Offer> items) {
         var receiver = access.Expression;
         var bound = model.GetBoundNode(receiver);
         var isType = bound is BoundTypeExpression;
@@ -197,27 +404,53 @@ public sealed partial class LanguageServer {
             type = optional.UnderlyingType;
         }
 
+        if (isType) {
+            AddStatics(model, type, items);
+            return;
+        }
+
         var rank = 0;
         foreach (var member in model.GetMembersOf(type)) {
-            var offered = isType
-                ? member is FunctionSymbol { IsStatic: true, FunctionKind: FunctionKind.Ordinary }
-                    or FieldSymbol { IsStatic: true }
-                    or UnionCaseSymbol or EnumCaseSymbol or NamedTypeSymbol or AliasSymbol
-                : member is FunctionSymbol { IsStatic: false, FunctionKind: FunctionKind.Ordinary }
-                    or FieldSymbol { IsStatic: false };
-            if (offered) {
-                items.Add((member, rank++));
+            if (member is FunctionSymbol { IsStatic: false, FunctionKind: FunctionKind.Ordinary } or FieldSymbol { IsStatic: false }) {
+                items.Add(new(member, rank++));
             }
         }
     }
 
-    static JsonNode CompletionList(Document document, int start, int offset, string prefix, List<(Symbol Symbol, int Rank)> symbols, bool keywords, int id) {
+    /// <summary>What a type offers after its name and a dot: its cases, statics and nested types.</summary>
+    static void AddStatics(SemanticModel model, TypeSymbol type, List<Offer> items) {
+        var rank = 0;
+        foreach (var member in model.GetMembersOf(type)) {
+            if (member is FunctionSymbol { IsStatic: true, FunctionKind: FunctionKind.Ordinary }
+                or FieldSymbol { IsStatic: true }
+                or UnionCaseSymbol or EnumCaseSymbol or NamedTypeSymbol or AliasSymbol) {
+                items.Add(new(member, rank++));
+            }
+        }
+    }
+
+    static JsonNode CompletionList(
+        Document document, int start, int offset, string prefix, List<Offer> symbols, List<string> labels, bool keywords, bool snippets, int id) {
         var range = RangeNode(document.Lines.RangeOf(new TextSpan(start, offset - start)));
         var items = new JsonArray();
         var incomplete = false;
 
+        // An argument's label first: at the start of an argument, it is
+        // what comes next.
+        foreach (var label in labels) {
+            if (Matches(prefix, label)) {
+                items.Add(new JsonObject {
+                    ["label"] = label + ":",
+                    ["kind"] = 5,
+                    ["detail"] = "argument label",
+                    ["sortText"] = "!" + label,
+                    ["textEdit"] = new JsonObject { ["range"] = range.DeepClone(), ["newText"] = label + ": " }
+                });
+            }
+        }
+
         for (var index = 0; index < symbols.Count; index++) {
-            var (symbol, rank) = symbols[index];
+            var (symbol, rank, import) = symbols[index];
             if (!Matches(prefix, symbol.Name) || !IsIdentifier(symbol.Name)) {
                 continue;
             }
@@ -227,14 +460,33 @@ public sealed partial class LanguageServer {
                 break;
             }
 
-            items.Add(new JsonObject {
+            var item = new JsonObject {
                 ["label"] = symbol.Name,
                 ["kind"] = SymbolDisplay.CompletionKind(symbol),
                 ["detail"] = SymbolDisplay.Signature(symbol),
                 ["sortText"] = rank.ToString("D6", System.Globalization.CultureInfo.InvariantCulture),
                 ["textEdit"] = new JsonObject { ["range"] = range.DeepClone(), ["newText"] = symbol.Name },
                 ["data"] = new JsonObject { ["completion"] = id, ["index"] = index }
-            });
+            };
+
+            // A function, written as a call with a placeholder per argument.
+            if (snippets && symbol is FunctionSymbol { FunctionKind: FunctionKind.Ordinary } function) {
+                item["textEdit"]!["newText"] = CallSnippet(function);
+                item["insertTextFormat"] = 2;
+            }
+
+            // From a module the file does not import: the import comes with it.
+            if (import is not null) {
+                var line = ImportLineOf(document);
+                item["labelDetails"] = new JsonObject { ["description"] = import };
+                item["detail"] = $"import {import}\n{SymbolDisplay.Signature(symbol)}";
+                item["additionalTextEdits"] = new JsonArray(new JsonObject {
+                    ["range"] = RangeNode(new LspRange(new(line, 0), new(line, 0))),
+                    ["newText"] = $"import {import}\n"
+                });
+            }
+
+            items.Add(item);
         }
 
         if (keywords) {
@@ -340,35 +592,7 @@ public sealed partial class LanguageServer {
         cancellation.ThrowIfCancellationRequested();
 
         lock (context.Analysis.Gate) {
-            var model = context.Model;
-            var candidates = new List<FunctionSymbol>();
-            FunctionSymbol? chosen = null;
-            switch (model.GetBoundNode(invocation)) {
-                case BoundCall call:
-                    chosen = call.Function;
-                    break;
-                case BoundConversion { Operand: BoundCall call }:
-                    chosen = call.Function;
-                    break;
-            }
-
-            switch (model.GetBoundNode(invocation.Expression)) {
-                case BoundFunctionGroup group:
-                    candidates.AddRange(group.Candidates);
-                    break;
-                case BoundTypeExpression { ReferencedType: var type }:
-                    candidates.AddRange(model.GetMembersOf(type).OfType<FunctionSymbol>().Where(static f => f.FunctionKind == FunctionKind.Initializer));
-                    break;
-            }
-
-            if (chosen is not null && !candidates.Contains(chosen)) {
-                candidates.Insert(0, chosen);
-            }
-
-            if (candidates.Count == 0 && model.GetSymbolOf(invocation.Expression) is FunctionSymbol named) {
-                candidates.Add(named);
-            }
-
+            var (candidates, chosen) = CallCandidates(context.Model, invocation);
             if (candidates.Count == 0) {
                 return null;
             }

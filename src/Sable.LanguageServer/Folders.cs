@@ -21,6 +21,9 @@ public sealed partial class LanguageServer {
     /// <summary>The client shows progress the server reports (<c>window.workDoneProgress</c>).</summary>
     bool _progress;
 
+    /// <summary>The client takes completions as snippets, with placeholders to fill in.</summary>
+    bool _snippets;
+
     /// <summary>The client lets the server say which files it wants to hear about.</summary>
     bool _registerWatchers;
 
@@ -56,6 +59,7 @@ public sealed partial class LanguageServer {
         _refresh = client?.Get("workspace")?.Get("diagnostics")?.GetBool("refreshSupport") ?? false;
         _progress = client?.Get("window")?.GetBool("workDoneProgress") ?? false;
         _registerWatchers = client?.Get("workspace")?.Get("didChangeWatchedFiles")?.GetBool("dynamicRegistration") ?? false;
+        _snippets = client?.Get("textDocument")?.Get("completion")?.Get("completionItem")?.GetBool("snippetSupport") ?? false;
         if (parameters.Get("initializationOptions") is { } options) {
             ReadSettings(options);
         }

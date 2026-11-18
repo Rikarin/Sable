@@ -62,8 +62,10 @@ starts the debug adapter with the plugin imported.
 
 | Setting | Default | |
 | --- | --- | --- |
-| `sable.path` | `sable` | The `sable` binary. `${workspaceFolder}` and `~` are expanded. |
+| `sable.path` | `sable` | The `sable` binary. `${workspaceFolder}` and `~` are expanded; in a workspace of several folders, each folder may set its own. |
 | `sable.server.enable` | `true` | Run the language server. |
+| `sable.inlayHints.enable` | `true` | Inlay hints: inferred types, and the roots a returned reference may point into. |
+| `sable.lints.enable` | `true` | Report `sable check`'s lints as you type, at the package's `[lints]` levels. |
 | `sable.codeLens.enable` | `true` | Run and Debug above `main`. |
 | `sable.trace.server` | `off` | Log the language server's messages to the Sable output. |
 
@@ -73,7 +75,8 @@ starts the debug adapter with the plugin imported.
 cd editors/vscode
 npm install
 npm run check      # type-check the JavaScript (tsc, checkJs)
-npm test           # the grammar, against samples and every .sb file in the repository
+npm test           # the grammar, against samples and every .sb file in the repository; then
+                   # the extension's code under node, against a stand-in for VS Code
 npm run package    # sable.vsix
 ```
 

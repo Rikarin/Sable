@@ -114,6 +114,22 @@ internal sealed class Workspace {
             return builder.ToImmutable();
         });
 
+    /// <summary>
+    ///     A workspace folder was removed: the files read from under it go,
+    ///     unless another folder still holds them; those open in the editor stay.
+    /// </summary>
+    public WorkspaceSnapshot RemoveFromDisk(string root, IReadOnlyList<string> remaining) =>
+        Update(current => {
+            var builder = current.Documents.ToBuilder();
+            foreach (var (key, document) in current.Documents) {
+                if (!document.IsOpen && PathOf(document.Uri) is { } path && IsUnder(path, root) && !remaining.Any(r => IsUnder(path, r))) {
+                    builder.Remove(key);
+                }
+            }
+
+            return builder.ToImmutable();
+        });
+
     public WorkspaceSnapshot Open(string uri, string text, int? version) =>
         Update(current => {
             var tree = SyntaxTree.Parse(new SourceText(text, PathOf(uri) ?? uri), current.Layout.OptionsFor(PathOf(uri)));
@@ -154,10 +170,10 @@ internal sealed class Workspace {
     ///     Closes a document: it goes back to what is on disk, if it is a
     ///     file of the workspace, and away otherwise.
     /// </summary>
-    public WorkspaceSnapshot Close(string uri, string? root) {
+    public WorkspaceSnapshot Close(string uri, IReadOnlyList<string> roots) {
         var key = KeyOf(uri);
         var path = PathOf(uri);
-        if (path is not null && root is not null && File.Exists(path) && IsUnder(path, root)) {
+        if (path is not null && File.Exists(path) && roots.Any(root => IsUnder(path, root))) {
             var text = File.ReadAllText(path);
             return Update(current => current.Documents.SetItem(key, new(uri, SyntaxTree.Parse(new SourceText(text, path), current.Layout.OptionsFor(path)), null, false)));
         }

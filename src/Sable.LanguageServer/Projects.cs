@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using Sable.Symbols;
 using Sable.Syntax;
 
 namespace Sable.LanguageServer;
@@ -13,32 +14,44 @@ namespace Sable.LanguageServer;
 /// <param name="Directory">Its root: a file under it is its, unless a package nested deeper has it.</param>
 /// <param name="Features">The features it is built with by default.</param>
 /// <param name="Dependencies">Every file of every package it depends on, transitively, that a build compiles with it.</param>
-public sealed record LanguageProject(string Name, string Directory, IReadOnlyList<string> Features, IReadOnlyList<LanguageProjectFile> Dependencies);
+public sealed record LanguageProject(string Name, string Directory, IReadOnlyList<string> Features, IReadOnlyList<LanguageProjectFile> Dependencies) {
+    /// <summary>The levels of its manifest's <c>[lints]</c> table: the editor reports its files' lints at them, as <c>sable check</c> does.</summary>
+    public LintConfiguration Lints { get; init; } = LintConfiguration.Default;
+}
 
 /// <summary>A dependency's file, and the features its package is built with.</summary>
 public sealed record LanguageProjectFile(string Path, IReadOnlyList<string> Features);
 
 /// <summary>
-///     The packages of the workspace folder, and which one a file is in:
+///     The packages of the workspace folders, and which one a file is in:
 ///     the one with the deepest directory holding it. A file in no package
-///     is compiled with the others like it, as a loose program.
+///     is compiled with the others like it in its folder, as a loose program.
 /// </summary>
 internal sealed class ProjectLayout {
     public static readonly ProjectLayout None = new([]);
 
-    /// <summary>The key of the loose files' compilation.</summary>
+    /// <summary>The key of the loose files' compilation (of those under no workspace folder, with several folders).</summary>
     public const string Loose = "";
 
     readonly IReadOnlyList<(string Prefix, LanguageProject Project, ParseOptions Options)> _projects;
+    readonly IReadOnlyList<string> _roots;
 
-    public ProjectLayout(IReadOnlyList<LanguageProject> projects) {
+    /// <param name="roots">
+    ///     The workspace folders. With several, the loose files of each are
+    ///     a program of their own: two folders opened side by side are two
+    ///     projects, whose files would otherwise clash with each other.
+    /// </param>
+    public ProjectLayout(IReadOnlyList<LanguageProject> projects, IReadOnlyList<string>? roots = null) {
         Projects = projects;
         _projects = [
             ..projects
-                .Select(static p => (Path.GetFullPath(p.Directory).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, p, OptionsWith(p.Features)))
+                .Select(static p => (Prefix(p.Directory), p, OptionsWith(p.Features)))
                 .OrderByDescending(static p => p.Item1.Length),
         ];
+        _roots = [..(roots ?? []).Select(Prefix).Distinct(StringComparer.Ordinal).OrderByDescending(static r => r.Length)];
     }
+
+    static string Prefix(string directory) => Path.GetFullPath(directory).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
 
     public IReadOnlyList<LanguageProject> Projects { get; }
 
@@ -58,7 +71,19 @@ internal sealed class ProjectLayout {
     }
 
     /// <summary>Which compilation a file is in: its package's directory, or <see cref="Loose" />.</summary>
-    public string KeyOf(string? path) => ProjectOf(path)?.Directory ?? Loose;
+    public string KeyOf(string? path) {
+        if (ProjectOf(path) is { } project) {
+            return project.Directory;
+        }
+
+        if (path is null || _roots.Count <= 1) {
+            return Loose;
+        }
+
+        // The deepest folder holding it; "loose:" keeps the key from being any package's directory.
+        var full = Path.GetFullPath(path);
+        return _roots.FirstOrDefault(r => full.StartsWith(r, StringComparison.Ordinal)) is { } root ? "loose:" + root : Loose;
+    }
 
     /// <summary>What a file is parsed with: its package's features.</summary>
     public ParseOptions OptionsFor(string? path) {

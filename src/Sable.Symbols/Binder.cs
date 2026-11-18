@@ -2157,7 +2157,7 @@ public sealed partial class Binder {
         var name = syntax.Identifier.Text;
 
         if (LookupLocal(name) is null
-            && _compilation.TypeBinder.Lookup(name, _containingSymbol, _scope, syntax.Span)
+            && _compilation.TypeBinder.Lookup(name, _containingSymbol, _scope, syntax.Span, report: false)
                 is NamedTypeSymbol or AliasSymbol) {
             var type = _compilation.TypeBinder.BindGenericName(syntax, _containingSymbol, _scope);
             return type.IsError
@@ -2231,6 +2231,14 @@ public sealed partial class Binder {
         // class.
         if (EnclosingType() is { } enclosing
             && LookupMember(SelfTypeOf(enclosing), name) is { } inherited) {
+            // Reached through 'self' or not, a member is only as visible as
+            // it is: an extension in another module does not see the type's
+            // private ones.
+            if (inherited.Members.Count > 0 && !inherited.Members.Any(IsAccessible)) {
+                ReportInaccessible(inherited.Members[0], syntax);
+                return new BoundError(syntax);
+            }
+
             return BindMemberGroup(syntax, null, inherited.Members, inherited.Owner, inherited.Substitution);
         }
 
@@ -2239,7 +2247,11 @@ public sealed partial class Binder {
             return BindMemberGroup(syntax, null, farther, null);
         }
 
-        var moduleMembers = _scope.Module.GetMembers(name).ToList();
+        // A name that is there but hidden from here is reported as hidden,
+        // not as missing, unless something visible answers to it after all.
+        Symbol? hidden = null;
+
+        var moduleMembers = Visible(_scope.Module.GetMembers(name), ref hidden);
         if (moduleMembers.Count > 0) {
             return BindMemberGroup(syntax, null, moduleMembers, null);
         }
@@ -2249,9 +2261,7 @@ public sealed partial class Binder {
         }
 
         foreach (var module in _scope.Imports) {
-            var candidates = module.GetMembers(name)
-                .Where(static m => m.DeclaredAccessibility == Accessibility.Public)
-                .ToList();
+            var candidates = Visible(module.GetMembers(name), ref hidden);
             if (candidates.Count > 0) {
                 return BindMemberGroup(syntax, null, candidates, null);
             }
@@ -2264,9 +2274,14 @@ public sealed partial class Binder {
 
         // A type parameter can be named, to reach a static member through
         // what it is constrained to: 'T.decode(from: reader)'.
-        if (_compilation.TypeBinder.Lookup(name, _containingSymbol, _scope, syntax.Span)
+        if (_compilation.TypeBinder.Lookup(name, _containingSymbol, _scope, syntax.Span, report: false)
             is TypeParameterSymbol named) {
             return new BoundTypeExpression(syntax, named);
+        }
+
+        if (hidden is not null) {
+            ReportInaccessible(hidden, syntax);
+            return new BoundError(syntax);
         }
 
         _diagnostics.Error(
@@ -2548,22 +2563,30 @@ public sealed partial class Binder {
             return true;
         }
 
-        _diagnostics.Error(
-            ErrorCode.ERR_NotAccessible,
-            syntax.Span,
-            $"'{member.Name}' is {Describe(member.DeclaredAccessibility)} to "
-            + $"'{member.ContainingSymbol?.Name ?? "its module"}'"
-        );
+        ReportInaccessible(member, syntax);
         return false;
     }
 
-    static string Describe(Accessibility accessibility) =>
-        accessibility switch {
-            Accessibility.Private => "private",
-            Accessibility.Internal => "internal",
-            Accessibility.Package => "visible only",
-            _ => "visible",
-        };
+    /// <summary>The members a file can see at the top level, noting the first it cannot.</summary>
+    List<Symbol> Visible(IEnumerable<Symbol> members, ref Symbol? hidden) {
+        var visible = new List<Symbol>();
+        foreach (var member in members) {
+            if (Visibility.IsVisible(member, _scope, _compilation)) {
+                visible.Add(member);
+            } else {
+                hidden ??= member;
+            }
+        }
+
+        return visible;
+    }
+
+    void ReportInaccessible(Symbol member, SyntaxNode syntax) =>
+        _diagnostics.Error(
+            ErrorCode.ERR_NotAccessible,
+            syntax.Span,
+            $"'{member.Name}' is {Visibility.Describe(member, member.DeclaredAccessibility)}"
+        );
 
     static FunctionSymbol? RequirementAndDefault(FunctionSymbol first, FunctionSymbol second) {
         static Symbol? Owner(FunctionSymbol f) => f.ContainingSymbol is ExtensionSymbol extension ? extension.ExtendedType : f.ContainingSymbol;
@@ -2583,37 +2606,28 @@ public sealed partial class Binder {
     bool IsAccessible(Symbol member) => IsAccessible(member, member.DeclaredAccessibility);
 
     bool IsAccessible(Symbol member, Accessibility accessibility) {
-        switch (accessibility) {
-            case Accessibility.Public or Accessibility.Package:
-                return true;
+        if (accessibility != Accessibility.Private || member.ContainingSymbol is null or ModuleSymbol) {
+            return Visibility.IsVisible(member, accessibility, _scope, _compilation);
+        }
 
-            case Accessibility.Internal:
-                return ReferenceEquals(member.ContainingModule, _scope.Module)
-                    || member.ContainingModule is null;
+        // Private: somewhere inside the declaration that holds it. One an
+        // extension declares is the extended type's, like the rest of what
+        // the extension adds; and the type's extensions in the same module
+        // see it as the type does — but not ones in another module, nor the
+        // type itself when the extension that declared it is elsewhere.
+        var owner = member.ContainingSymbol is ExtensionSymbol declaredIn
+            ? declaredIn.ExtendedType
+            : member.ContainingSymbol;
+        var module = Visibility.ModuleOf(member);
 
-            default: {
-                // Private: somewhere inside the declaration that holds it.
-                var owner = member.ContainingSymbol;
-                if (owner is null) {
-                    return true;
-                }
-
-                for (var here = _containingSymbol; here is not null; here = here.ContainingSymbol) {
-                    if (ReferenceEquals(here, owner)) {
-                        return true;
-                    }
-
-                    // An extension's members are the extended type's, and a
-                    // private member is visible to them in the same module.
-                    if (here is ExtensionSymbol extension
-                        && ReferenceEquals(extension.ExtendedType, owner)) {
-                        return true;
-                    }
-                }
-
-                return false;
+        for (var here = _containingSymbol; here is not null; here = here.ContainingSymbol) {
+            var type = here is ExtensionSymbol extension ? extension.ExtendedType : here;
+            if (ReferenceEquals(type, owner)) {
+                return ReferenceEquals(Visibility.ModuleOf(here), module);
             }
         }
+
+        return false;
     }
 
     /// <summary>

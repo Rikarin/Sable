@@ -8,8 +8,14 @@ using Sable.Syntax;
 
 namespace Sable.Driver.Build;
 
-/// <summary>A source file of a program: where it is, the name diagnostics give it, and the features it is parsed with.</summary>
-public sealed record SourceFile(string Path, string Name, IReadOnlyList<string> Features);
+/// <summary>
+///     A source file of a program: where it is, the name diagnostics give it,
+///     the features it is parsed with, and — for a registry dependency — the
+///     workspace outside this one it comes from, which <c>package</c> stops at.
+/// </summary>
+public sealed record SourceFile(string Path, string Name, IReadOnlyList<string> Features, string? Workspace = null) {
+    public ParseOptions Options => ParseOptions.Default with { Features = [..Features], Workspace = Workspace };
+}
 
 /// <summary>
 ///     A unit of separate compilation: a package's library, or a binary's
@@ -137,7 +143,7 @@ public static class IncrementalBuild {
             var all = units.SelectMany(static (u, i) => u.Files.Select((f, j) => (i, j, f))).ToList();
             Parallel.ForEach(all, item => {
                 var (i, j, file) = item;
-                trees[i][j] = SyntaxTree.Parse(new SourceText(texts[i][j], file.Name), ParseOptions.Default with { Features = [..file.Features] });
+                trees[i][j] = SyntaxTree.Parse(new SourceText(texts[i][j], file.Name), file.Options);
             });
             timings?.Count("files parsed", all.Count);
         }

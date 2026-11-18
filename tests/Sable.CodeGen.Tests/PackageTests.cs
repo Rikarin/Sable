@@ -73,6 +73,41 @@ public sealed class PackageTests {
         }
     }
 
+    /// <summary>
+    ///     A profile's settings reach the build: an optimised release with
+    ///     debug information (the SIL passes run, and on macOS the dSYM holds
+    ///     the program's functions), and a dev build of one codegen unit
+    ///     compiled whole. What it cannot honour is said.
+    /// </summary>
+    [Fact]
+    public void AProfileBuildsAsItsSettingsSay() {
+        if (!CanBuild) {
+            return;
+        }
+
+        using var fixture = new PackageFixture();
+        WriteUtil(fixture);
+        WriteApp(fixture);
+        var manifest = Path.Combine(fixture.Root, "app", "sable.toml");
+        File.AppendAllText(manifest, "\n[profile.release]\nopt-level = 1\ndebug = true\nlto = \"thin\"\npanic = \"unwind\"\n\n[profile.dev]\ncodegen-units = 1\n");
+        var workspace = fixture.Load("app");
+
+        var release = Assert.Single(PackageBuilder.Build(workspace, fixture.Environment, new(Release: true, Timings: true))!);
+        Assert.Equal(("hello from a package\n42\n", 0), PackageFixture.Execute(release.Path));
+        Assert.Contains("profile.release.panic: a trap always aborts the program", fixture.Errors.ToString(), StringComparison.Ordinal);
+        Assert.Contains("[optimised + debuginfo]", fixture.Errors.ToString(), StringComparison.Ordinal);
+        if (OperatingSystem.IsMacOS()) {
+            using var dwarf = Process.Start(new ProcessStartInfo("dwarfdump", ["--debug-info", release.Path + ".dSYM"]) { RedirectStandardOutput = true })!;
+            var info = dwarf.StandardOutput.ReadToEnd();
+            dwarf.WaitForExit();
+            Assert.Contains("src/main.sb", info, StringComparison.Ordinal);
+        }
+
+        var dev = Assert.Single(PackageBuilder.Build(workspace, fixture.Environment, new(Timings: true))!);
+        Assert.Equal(("hello from a package\n42\n", 0), PackageFixture.Execute(dev.Path));
+        Assert.Contains("Built app: whole", fixture.Errors.ToString(), StringComparison.Ordinal);
+    }
+
     [Fact]
     public void ErrorsAreReportedAgainstTheFileTheyAreIn() {
         using var fixture = new PackageFixture();

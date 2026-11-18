@@ -67,7 +67,8 @@ public sealed class SableManifestTests {
         Assert.Equal(["bench-harness"], manifest.DevDependencies.Select(static d => d.Name));
 
         Assert.Equal(["dep:vulkan-sys"], manifest.Features["vulkan"]);
-        Assert.Equal(3, manifest.Release.OptLevel);
+        Assert.Equal("3", manifest.Release.OptLevel);
+        Assert.Equal(LtoMode.Fat, manifest.Release.Lto);
         Assert.False(manifest.Release.Exclusivity);
         Assert.Equal("fat", manifest.Release.Recorded["lto"]);
         Assert.True(manifest.Dev.LeakCheck);

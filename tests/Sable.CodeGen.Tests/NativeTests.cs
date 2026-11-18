@@ -193,6 +193,45 @@ public sealed class NativeTests {
     }
 
     [Fact]
+    public void AWholeFloatKeepsItsPoint() {
+        if (!CanBuild) {
+            return;
+        }
+
+        // Shortest digits, laid out as Python's repr: a point in decimal for
+        // exponents -4 through 15, scientific outside them.
+        var run = AssertAgree(
+            """
+            module Points
+
+            @main
+            fn main() {
+                print(100.0)
+                print(4.0)
+                print(-0.0)
+                print(0.0)
+                print(1e20)
+                print(1e15)
+                print(1e16)
+                print(123456.75)
+                print(0.0001)
+                print(0.00001)
+                print(-1.5e-7)
+                print(0.1 + 0.2)
+                let f: F32 = 3.0
+                print("\(f) \(1.1 as F32) \(2.5)")
+            }
+            """
+        );
+
+        Assert.Equal(
+            "100.0\n4.0\n-0.0\n0.0\n1e+20\n1000000000000000.0\n1e+16\n123456.75\n0.0001\n1e-05\n-1.5e-07\n"
+            + "0.30000000000000004\n3.0 1.1 2.5\n",
+            run.Stdout
+        );
+    }
+
+    [Fact]
     public void LabelledJumps() {
         if (!CanBuild) {
             return;

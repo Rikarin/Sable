@@ -1276,8 +1276,8 @@ Full design in [05-toolchain.md](05-toolchain.md).
   rest of the arguments, exit with its code. With no file named they test
   the package in the current directory (or the nearest above): its library,
   the files under its `tests/` and `benches/` — which an ordinary build
-  leaves out — and its dependencies' libraries
-  (`PackageBuilder.TestProgram`).
+  leaves out — and its dependencies' libraries, its `[dev-dependencies]`
+  and what they depend on among them (`PackageBuilder.TestProgram`).
 - **`--doc`.** Each ` ```sable ` block of a `///` comment (not ` ```sable
   ignore `) becomes `@test fn doc_<item>_<n>()` in a file of the documented
   file's module, with that file's imports and Sable.Testing; the file has the
@@ -1290,8 +1290,7 @@ Full design in [05-toolchain.md](05-toolchain.md).
   benchmark's work (it needs a core builtin); async tests; a parallel test
   runner; timeouts for a hung test; printing the error a throwing test threw;
   `#[should_panic]`-style expected traps; snapshot and property testing
-  (docs/06 lists them under Sable.Testing); `[dev-dependencies]` in a test
-  build (they are resolved, not yet compiled in).
+  (docs/06 lists them under Sable.Testing).
 
 ### Packages, as implemented
 
@@ -1304,10 +1303,16 @@ In `src/Sable.Driver/Packages/`, with a command per file under `Commands/`.
   `[[bin]]`, the three dependency tables, `[features]`, `[profile.dev]` and
   `[profile.release]`, `[workspace]`, `[build]`, `[registry] path` — and
   every validation error names the file, the line and the key. Profiles act
-  on `opt-level`, `debug`, `exclusivity` and `leak-check` (`sable run` sets
-  `SABLE_CHECK_LEAKS`); `lto`, `codegen-units`, `panic`, `strip` and
-  `arc-checks` are recorded only, and `overflow-checks = false` is warned
-  about, since arithmetic is always checked.
+  on `opt-level` (clang's `-O0` to `-O3`, `-Os`, `-Oz`), `debug` (at any
+  level: an optimised build with debug information runs the SIL passes and
+  keeps the entry point out of the C `main`, so the program's functions keep
+  theirs), `lto` (`fat`, `thin` or off; on Linux through lld, used when clang
+  can link with it), `codegen-units = 1` (compile whole even in an
+  unoptimised debug build), `strip`, `rpath`, `exclusivity` and `leak-check`
+  (`sable run` sets `SABLE_CHECK_LEAKS`). A build prints the warnings of the
+  profile it uses: `panic = "unwind"` (a trap always aborts), `arc-checks`
+  (there are no optional ARC checks) and `overflow-checks = false`
+  (arithmetic is always checked) have no effect.
 - **Packages of many files.** A package is every `.sb` under `src/`:
   `src/main.sb` (or `[[bin]]`, or `src/bin/*.sb`) is a binary's entry, the
   rest is the library. A binary is compiled with its package's library and
@@ -1600,9 +1605,9 @@ Sable.CodeGen. `sable build` and `sable run` on a package go through it;
   thunks, reflection functions, globals' storage, and class metadata, whose
   address is a class's identity to `is` and `as?`. The unit with the entry
   point sets up and tears down every global. This is the dev profile's
-  path (a debug build runs no SIL passes and no LTO, so nothing needs the
-  whole program); a release build is compiled whole, as before, and only
-  an unchanged one is skipped.
+  path (an unoptimised debug build runs no SIL passes and no LTO, so
+  nothing needs the whole program); an optimised build is compiled whole,
+  with or without debug information, and only an unchanged one is skipped.
 - **The cache** is `target/<profile>/cache/`. Every key is a SHA-256 over
   the toolchain — the compiler's assemblies (which embed the standard
   library), `clang --version` with `$CC`, the OS and architecture — the

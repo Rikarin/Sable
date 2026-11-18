@@ -24,12 +24,25 @@ public sealed record BuildSettings(string Profile, bool Optimise, string? DebugD
     public bool Debug => DebugDirectory is not null;
 
     /// <summary>
-    ///     Separately compiled — each unit to an object of its own, cached —
-    ///     when nothing needs to see the whole program: a debug build, which
-    ///     runs no SIL passes and no link-time optimisation. Otherwise the
-    ///     program is compiled whole, and only an unchanged build is skipped.
+    ///     What clang is asked for: by default <c>-O2</c> or <c>-O0</c> as
+    ///     <see cref="Optimise" /> says, with debug information when there is
+    ///     a debug directory; a profile says more.
     /// </summary>
-    public bool Separate => Debug && !Whole;
+    public NativeOptions Native {
+        get => _native ?? NativeOptions.Of(Optimise, Debug);
+        init => _native = value;
+    }
+
+    readonly NativeOptions? _native;
+
+    /// <summary>
+    ///     Separately compiled — each unit to an object of its own, cached —
+    ///     when nothing needs to see the whole program: an unoptimised debug
+    ///     build, which runs no SIL passes and no link-time optimisation.
+    ///     Otherwise the program is compiled whole, and only an unchanged
+    ///     build is skipped.
+    /// </summary>
+    public bool Separate => Debug && !Optimise && !Whole;
 
     /// <summary>Compile the program whole even where it could be compiled separately: what a separate build is checked against.</summary>
     public bool Whole { get; init; }
@@ -107,7 +120,7 @@ public static class IncrementalBuild {
             _ = Toolchain;
         }
 
-        var settingsKey = $"{CacheVersion}|{Toolchain}|{settings.Profile}|opt={settings.Optimise}|debug={settings.DebugDirectory}|exclusivity={settings.Exclusivity}|whole={settings.Whole}";
+        var settingsKey = $"{CacheVersion}|{Toolchain}|{settings.Profile}|opt={settings.Optimise}|debug={settings.DebugDirectory}|exclusivity={settings.Exclusivity}|whole={settings.Whole}|native={settings.Native}";
 
         // ---- Read and hash every file --------------------------------------
         string[][] texts;
@@ -191,7 +204,7 @@ public static class IncrementalBuild {
     // =======================================================================
 
     static BuildOutcome Whole(IReadOnlyList<SyntaxTree> program, BuildSettings settings, string executable, BuildTimings? timings) {
-        var result = Pipeline.Compile(program, settings.DebugDirectory, settings.Exclusivity, timings);
+        var result = Pipeline.Compile(program, settings.DebugDirectory, settings.Exclusivity, timings, optimised: settings.Optimise);
         if (!result.Succeeded) {
             return BuildOutcome.Failed(result.Errors);
         }
@@ -199,7 +212,7 @@ public static class IncrementalBuild {
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(executable))!);
         NativeBuildResult native;
         using (BuildTimings.Of(timings, "clang")) {
-            native = NativeBuild.Build(result.LlvmIr!, executable, settings.Optimise, settings.Debug);
+            native = NativeBuild.Build(result.LlvmIr!, executable, settings.Native);
         }
 
         return native.Succeeded
@@ -358,7 +371,7 @@ public static class IncrementalBuild {
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(executable))!);
         NativeBuildResult link;
         using (BuildTimings.Of(timings, "link")) {
-            link = NativeObjects.Link([..units.Select(static u => u.ObjectPath), runtime], executable);
+            link = NativeObjects.Link([..units.Select(static u => u.ObjectPath), runtime], executable, settings.Native);
         }
 
         if (!link.Succeeded) {

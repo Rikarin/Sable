@@ -72,7 +72,7 @@ public sealed class ClassTests {
     public void ClassesWorkAsTheLanguageSays() =>
         Assert.Equal(
             "rex has 4 legs and says woof\nhello, rex\ntweety has 2 legs and says tweet, flying\nhello, tweety\n"
-            + "pingu has 2 legs and says squawk\nhello, pingu\nhello, fido\narea 9\ncast ok rex\n2 4 1\n"
+            + "pingu has 2 legs and says squawk\nhello, pingu\nhello, fido\narea 9.0\ncast ok rex\n2 4 1\n"
             + "false true\n3\nbye fido\nbye rex\nbye tweety\nbye pingu\n",
             AssertAgree(
                 Program(

@@ -15,7 +15,7 @@ public sealed class ExistentialTests {
     [Fact]
     public void ExistentialsOfStructsAndClasses() =>
         Prints(
-            "circle 12.56: a circle\nsquare 4: a square\nlabel 0: tagged label\ntotal 16.560000000000002\nwolf says howl\npup says yip\n",
+            "circle 12.56: a circle\nsquare 4.0: a square\nlabel 0.0: tagged label\ntotal 16.560000000000002\nwolf says howl\npup says yip\n",
             """
             protocol Shape {
                 var name: String { get }

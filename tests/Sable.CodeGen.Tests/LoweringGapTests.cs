@@ -95,7 +95,7 @@ public sealed class LoweringGapTests {
     [Fact]
     public void TheRemainderOfFloatsIsFmod() =>
         Prints(
-            "1.5\n-1.5\n1.5\n0\n",
+            "1.5\n-1.5\n1.5\n0.0\n",
             """
             fn rem(_ a: F64, _ b: F64) -> F64 { return a % b }
             """,

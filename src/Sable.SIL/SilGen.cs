@@ -1327,13 +1327,13 @@ public sealed partial class SilGen {
                     : null;
 
             // A dictionary, until Sable.Core writes one: its entries, in an
-            // array, with key equality from the builtins.
+            // array, with the key type's equality — a builtin, or its '=='.
             case NamedTypeSymbol { TypeArguments: [var key, var value] } named when named.OriginalDefinition.Equals(Core.Dictionary): {
                 if (Lower(key) is not { } keyType || Lower(value) is not { } valueType) {
                     return null;
                 }
 
-                return SilBuiltins.Find($"cmp_eq_{keyType}") is null
+                return SilBuiltins.Find($"cmp_eq_{keyType}") is null && KeyEquality(key) is null
                     ? null
                     : new ArrayType(SilType.Tuple([keyType, valueType]));
             }
@@ -2137,13 +2137,42 @@ public sealed partial class SilGen {
         return thunkName;
     }
 
+    /// <summary>
+    ///     The '==' a dictionary compares keys of a type with, when its
+    ///     equality is not a builtin: the operator the type declares or
+    ///     '@derive' gave it, as the binder would find for 'a == b'.
+    /// </summary>
+    static FunctionSymbol? KeyEquality(TypeSymbol key) =>
+        key is NamedTypeSymbol named
+            ? named.OriginalDefinition.Members.OfType<FunctionSymbol>().FirstOrDefault(static f =>
+                f is { FunctionKind: FunctionKind.Operator, Fixity: OperatorFixity.Infix, Name: "==", Parameters.Length: 2 })
+            : null;
+
+    /// <summary>The SIL function a key type's '==' is, for its construction; null when it cannot be had.</summary>
+    internal (string Name, FunctionType Type)? KeyEqualityFunction(TypeSymbol key, SyntaxNode at) {
+        if (KeyEquality(key) is not { } equality) {
+            return null;
+        }
+
+        if (IsGeneric(equality)) {
+            return Instance(equality, TypeSubstitution.For(key), at);
+        }
+
+        if (!_names.TryGetValue(equality, out var name)) {
+            return null;
+        }
+
+        return (_module.Find(name)?.Type ?? SignatureOf(equality, at, TypeSubstitution.Empty)) is { } type ? (name, type) : null;
+    }
+
     /// <summary>The functions a dictionary of these entries is read and written with: get, set and remove.</summary>
     /// <remarks>
     ///     Each looks for the key from the front, comparing with the key
-    ///     type's builtin equality: linear, and a stand-in until Sable.Core
-    ///     has a dictionary of its own that hashes.
+    ///     type's builtin equality, or else with its <paramref name="equality" />:
+    ///     linear, and a stand-in until Sable.Core has a dictionary of its own
+    ///     that hashes.
     /// </remarks>
-    internal (string Get, string Set, string Remove) DictionaryFunctions(ArrayType entries, EnumType optional) {
+    internal (string Get, string Set, string Remove) DictionaryFunctions(ArrayType entries, EnumType optional, (string Name, FunctionType Type)? equality = null) {
         var tuple = (TupleType)entries.Element;
         var (key, value) = (tuple.Elements[0], tuple.Elements[1]);
         var stem = Sanitise(entries.ToString());
@@ -2186,7 +2215,10 @@ public sealed partial class SilGen {
 
             var array = byAddress ? test.Append(new LoadBorrowInst(searched)) : searched;
             var element = test.Append(new BuiltinInst("array_get_borrowed", tuple, array, index));
-            var same = test.Append(new BuiltinInst(equal, SilType.Bool, test.Append(new TupleExtractInst(element, 0)), function.Entry.Arguments[1]));
+            var stored = test.Append(new TupleExtractInst(element, 0));
+            SilValue same = equality is { } byOperator
+                ? test.Append(new ApplyInst(test.Append(new FunctionRefInst(byOperator.Name, byOperator.Type)), SilType.Bool, stored, function.Entry.Arguments[1]))
+                : test.Append(new BuiltinInst(equal, SilType.Bool, stored, function.Entry.Arguments[1]));
             if (byAddress) {
                 test.Append(new EndBorrowInst(array));
             }
@@ -5264,7 +5296,17 @@ public sealed partial class SilGen {
                 return null;
             }
 
-            return generator.DictionaryFunctions(entries, optional);
+            var key = named.TypeArguments[0];
+            if (SilBuiltins.Find($"cmp_eq_{((TupleType)entries.Element).Elements[0]}") is not null) {
+                return generator.DictionaryFunctions(entries, optional);
+            }
+
+            if (generator.KeyEqualityFunction(Sub(key), at.Syntax) is not { } equality) {
+                Missing(at, $"comparing keys of type '{key.ToDisplayString()}'");
+                return null;
+            }
+
+            return generator.DictionaryFunctions(entries, optional, equality);
         }
 
         /// <summary>Stores an optional value under a key: set when it holds one, remove when it is none.</summary>
@@ -6431,6 +6473,25 @@ public sealed partial class SilGen {
                     : Emit(new BuiltinInst("not_Bool", SilType.Bool, same));
             }
 
+            // '[1, 2] == [1, 2]': as many elements, each equal to the other's.
+            if (binary.Structural is { } byIndex && Sub(binary.Left.Type) is ArrayTypeSymbol) {
+                if (Borrow(binary.Left) is not { } leftArray) {
+                    return null;
+                }
+
+                if (Borrow(binary.Right) is not { } rightArray) {
+                    End(leftArray);
+                    return null;
+                }
+
+                var same = ArrayEquals(leftArray, rightArray, byIndex, binary);
+                End(rightArray);
+                End(leftArray);
+                return same is null || binary.OperatorKind == BinaryOperatorKind.Equal
+                    ? same
+                    : Emit(new BuiltinInst("not_Bool", SilType.Bool, same));
+            }
+
             // 'a + b + c' on strings: one string of the three, not one for each '+'.
             if (IsStringConcat(binary) && IsStringConcat(binary.Left)) {
                 var operands = new List<BoundExpression>();
@@ -6677,6 +6738,45 @@ public sealed partial class SilGen {
         ///     them (<paramref name="byPayload" />): a type's own '==', or a
         ///     tuple's element by element.
         /// </remarks>
+        /// <summary>
+        ///     Two arrays compared: unequal at once if their counts differ, and
+        ///     otherwise element by element, each pair bound to the comparison's
+        ///     locals, until one pair differs.
+        /// </summary>
+        SilValue? ArrayEquals(SilValue left, SilValue right, StructuralComparison byIndex, BoundNode at) {
+            if (left.Type is not ArrayType { Element: var element }) {
+                return Missing(at, "comparing arrays");
+            }
+
+            var count = Emit(new BuiltinInst("array_count", SilType.Int, left));
+            var sameCount = Emit(new BuiltinInst("cmp_eq_Int", SilType.Bool, count, Emit(new BuiltinInst("array_count", SilType.Int, right))));
+            var header = function.AddBlock();
+            var index = header.AddArgument(SilType.Int);
+            var body = function.AddBlock();
+            var after = function.AddBlock();
+            var result = after.AddArgument(SilType.Bool);
+            var differ = Emit(new IntegerLiteralInst(SilType.Bool, 0));
+            Jump(new CondBranchInst(sameCount, header, [Emit(new IntegerLiteralInst(SilType.Int, 0))], after, [differ]));
+
+            // Every index looked at, and every element equal: the arrays are.
+            _current = header;
+            var more = Emit(new BuiltinInst("cmp_lt_Int", SilType.Bool, index, count));
+            Jump(new CondBranchInst(more, body, [], after, [Emit(new IntegerLiteralInst(SilType.Bool, 1))]));
+
+            _current = body;
+            BindLocal(byIndex.Left, Emit(new BuiltinInst("array_get", element, left, index)), at.Syntax, declaration: true);
+            BindLocal(byIndex.Right, Emit(new BuiltinInst("array_get", element, right, index)), at.Syntax, declaration: true);
+            if (Expression(byIndex.Equal) is not { } same) {
+                return null;
+            }
+
+            var next = Emit(new BuiltinInst("add_Int", SilType.Int, index, Emit(new IntegerLiteralInst(SilType.Int, 1))));
+            Jump(new CondBranchInst(same, header, [next], after, [Emit(new IntegerLiteralInst(SilType.Bool, 0))]));
+
+            _current = after;
+            return result;
+        }
+
         SilValue? OptionalEquals(EnumType optional, SilType payloadType, SilValue left, SilValue right, BoundNode at, StructuralComparison? byPayload = null) {
             var compare = $"cmp_eq_{payloadType}";
             if (SilBuiltins.Find(compare) is null && byPayload is null) {

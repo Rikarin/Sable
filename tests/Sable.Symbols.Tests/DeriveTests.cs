@@ -90,6 +90,29 @@ public sealed class DeriveTests {
         Assert.Contains("'Hashable'", error.Message);
     }
 
+    /// <summary>
+    ///     An optional or an array is equal where what it holds is — '==' on
+    ///     them is the language's own — but has no hash or order of its own.
+    /// </summary>
+    [Fact]
+    public void OptionalAndArrayFieldsAreEquatableButNotHashable() {
+        AssertClean("@derive(Equatable) struct Holder { var count: Int?, var tags: String[>..], var grid: Int[>..][>..]? }");
+
+        var error = Single("@derive(Hashable) struct Holder { var count: Int? }", ErrorCode.ERR_DerivedFieldDoesNotConform);
+        Assert.Contains("field 'count'", error.Message);
+        Assert.Contains("'Hashable'", error.Message);
+
+        var opaque = Single(
+            """
+            struct Opaque { var n: Int }
+            @derive(Equatable)
+            struct Holder { var things: Opaque[>..] }
+            """,
+            ErrorCode.ERR_DerivedFieldDoesNotConform
+        );
+        Assert.Contains("field 'things'", opaque.Message);
+    }
+
     [Fact]
     public void APayloadThatDoesNotConformIsNamed() {
         var error = Single(

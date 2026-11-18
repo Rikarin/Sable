@@ -534,7 +534,14 @@ public static class NativeBuild {
                 return (path, new(false, output));
             }
 
-            File.Move(temporary, path, overwrite: true);
+            try {
+                File.Move(temporary, path, overwrite: true);
+            } catch (Exception e) when (e is IOException or UnauthorizedAccessException && File.Exists(path)) {
+                // Another build compiled it at the same time, and on Windows
+                // a file a link has open cannot be replaced. Its key says
+                // everything it was compiled from, so theirs is as good.
+            }
+
             return (path, new(true, output));
         } finally {
             if (Directory.Exists(sources)) {

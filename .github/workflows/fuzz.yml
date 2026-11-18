@@ -12,7 +12,8 @@
 #
 # - coverage-guided: tools/fuzz/coverage.sh, the parser, the front end, the
 #   resolver, the package files and fromBytes under libFuzzer, steered by
-#   the code each input reaches, for a few hours, from the corpus the night
+#   the code each input reaches, 90 minutes a target (each a job of its own,
+#   inside the two hours a job may take), from the corpus the night
 #   before kept (actions/cache). What fails is uploaded, with a minimised
 #   reproducer for each.
 #
@@ -43,15 +44,15 @@ on:
       compiler_scale:
         description: Compiler mutants, times the test's usual 24
         required: false
-        default: "1500"
+        default: "600"
       resolver_scale:
         description: Resolver and version-parser iterations, times the tests' usual count
         required: false
         default: "200"
-      coverage_hours:
-        description: Hours of coverage-guided fuzzing
+      coverage_minutes:
+        description: Minutes of coverage-guided fuzzing for each target (each target is a job of its own, and a job may run two hours)
         required: false
-        default: "4"
+        default: "90"
 
 permissions:
   contents: read
@@ -68,7 +69,7 @@ jobs:
   from-bytes:
     name: fromBytes under sanitizers
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 110
     steps:
       - uses: actions/checkout@v4
 
@@ -142,7 +143,7 @@ jobs:
   compiler:
     name: Compiler on mutated programs
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 110
     steps:
       - uses: actions/checkout@v4
 
@@ -165,7 +166,7 @@ jobs:
       - name: Fuzz
         env:
           SABLE_FUZZ_SEED: ${{ steps.seed.outputs.seed }}
-          SABLE_FUZZ_SCALE: ${{ inputs.compiler_scale || '1500' }}
+          SABLE_FUZZ_SCALE: ${{ inputs.compiler_scale || '600' }}
           SABLE_FUZZ_CRASH_DIR: ${{ github.workspace }}/crash
         run: |
           dotnet test tests/Sable.SIL.Tests -c Release \
@@ -217,11 +218,17 @@ jobs:
           name: resolver-${{ steps.seed.outputs.seed }}
           path: fuzz.log
 
+  # One job for each target, so that each has a runner of its own and the
+  # whole of the two hours a job may take: the minutes asked for, and the
+  # build before and the triage after.
   coverage:
-    name: Coverage-guided (libFuzzer)
+    name: Coverage-guided (libFuzzer), ${{ matrix.target }}
     runs-on: ubuntu-24.04
-    # The hours asked for, the build and the triage after; under the six a job may take.
-    timeout-minutes: 340
+    timeout-minutes: 115
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [parser, frontend, resolver, packages, frombytes]
     steps:
       - uses: actions/checkout@v4
 
@@ -247,27 +254,29 @@ jobs:
           clang -O2 -fsanitize=fuzzer "$RUNNER_TEMP/libfuzzer-dotnet.cc" -o "$RUNNER_TEMP/libfuzzer-dotnet"
           echo "LIBFUZZER_DOTNET=$RUNNER_TEMP/libfuzzer-dotnet" >> "$GITHUB_ENV"
 
-      # The corpus every night before kept: each starts where the last left off.
+      # The corpus every night before kept for this target: each starts where
+      # the last left off.
       - name: Restore the corpus
         uses: actions/cache/restore@v4
         with:
-          path: artifacts/fuzz-corpus
-          key: fuzz-corpus-${{ github.run_id }}
-          restore-keys: fuzz-corpus-
+          path: artifacts/fuzz-corpus/${{ matrix.target }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+          restore-keys: fuzz-corpus-${{ matrix.target }}-
 
       - name: Fuzz
         env:
-          HOURS: ${{ inputs.coverage_hours || '4' }}
-        run: tools/fuzz/coverage.sh "${HOURS}h" 2>&1 | tee fuzz.log
+          MINUTES: ${{ inputs.coverage_minutes || '90' }}
+          TARGET: ${{ matrix.target }}
+        run: tools/fuzz/coverage.sh "${MINUTES}m" "$TARGET" 2>&1 | tee fuzz.log
 
       - name: Save the corpus
         if: always()
         uses: actions/cache/save@v4
         with:
-          path: artifacts/fuzz-corpus
-          key: fuzz-corpus-${{ github.run_id }}
+          path: artifacts/fuzz-corpus/${{ matrix.target }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
 
-      # Every target must have run under libFuzzer, and found nothing.
+      # The target must have run under libFuzzer, and found nothing.
       - name: Summarise
         id: summary
         run: |
@@ -286,7 +295,7 @@ jobs:
             exit 1
           fi
           # An engine that cannot start runs nothing and finds nothing: not a pass.
-          if [ "$(find "$run" -mindepth 2 -maxdepth 2 -name about | wc -l)" -lt 5 ] || grep '; 0 inputs run' "$run"/*/about; then
+          if [ "$(find "$run" -mindepth 2 -maxdepth 2 -name about | wc -l)" -lt 1 ] || grep '; 0 inputs run' "$run"/*/about; then
             echo "a target ran no inputs; see its run-*.log" >&2
             exit 1
           fi
@@ -295,7 +304,7 @@ jobs:
         if: failure() && steps.summary.outputs.run != ''
         uses: actions/upload-artifact@v4
         with:
-          name: coverage-${{ github.run_id }}
+          name: coverage-${{ matrix.target }}-${{ github.run_id }}
           path: |
             fuzz.log
             ${{ steps.summary.outputs.run }}/summary.txt

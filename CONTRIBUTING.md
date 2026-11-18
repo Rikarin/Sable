@@ -160,7 +160,7 @@ tools/fuzz/coverage.sh --summary           # the latest run's results so far
 ```
 
 On Linux, with `LIBFUZZER_DOTNET` set to a built libfuzzer-dotnet, the engine
-is libFuzzer, as the nightly job runs it for four hours. On macOS, Apple's
+is libFuzzer, as the nightly jobs run it, one job and 90 minutes a target. On macOS, Apple's
 clang has no libFuzzer runtime: the .NET targets run under the fuzzer's own
 in-process loop, on the same coverage, and `fromBytes` is not fuzzed (its seeds
 are only checked under the sanitizers). The corpus persists in

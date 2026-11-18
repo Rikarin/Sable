@@ -216,7 +216,7 @@ Copy Roslyn's **red/green tree** design exactly:
       a full one), the front end (as `CompilerFuzzTests` holds it), the
       resolver and the package files, and `fromBytes` under libFuzzer with
       ASan and UBSan, from the repository's sources and a dictionary from
-      the lexer's tables, nightly for four hours with the corpus kept from
+      the lexer's tables, nightly for 90 minutes a target with the corpus kept from
       night to night. No fuzzer has yet run for 24 hours on end. Found and
       fixed so far: an extension nested in an extension threw while
       attaching; a self-dependency hung the resolver and crashed its

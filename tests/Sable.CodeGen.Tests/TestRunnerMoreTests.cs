@@ -164,7 +164,7 @@ public sealed class TestRunnerMoreTests {
         Assert.StartsWith("running 8 tests\n", text, StringComparison.Ordinal);
         AssertTheSuitesVerdicts(text);
         Assert.Contains("test Suite.hangs ... FAILED (", text, StringComparison.Ordinal);
-        Assert.Contains("---- Suite.hangs (test.sb:51) ----\n    the test did not finish within 3", text, StringComparison.Ordinal);
+        Assert.True(text.Contains("---- Suite.hangs (test.sb:51) ----\n    the test did not finish within 3", StringComparison.Ordinal), text);
         Assert.Contains("test result: FAILED. 3 passed; 5 failed; 0 filtered out; finished in ", text, StringComparison.Ordinal);
 
         // Failures are reported in the order the tests are declared, whatever order they finished in.

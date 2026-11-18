@@ -264,7 +264,8 @@ internal static class ConformanceChecker {
                     ErrorCode.ERR_MissingOverride,
                     function,
                     $"'{type.Name}.{function.Name}' replaces a member of "
-                    + $"'{overridden.ContainingSymbol?.Name}', so it needs 'override'"
+                    + $"'{overridden.ContainingSymbol?.Name}', so it needs 'override'",
+                    overridden.DeclaredHere("the member it replaces")
                 );
                 continue;
             }
@@ -274,7 +275,8 @@ internal static class ConformanceChecker {
                     diagnostics,
                     ErrorCode.ERR_NotOpen,
                     function,
-                    $"'{overridden.ContainingSymbol?.Name}.{overridden.Name}' is 'final', so it cannot be overridden"
+                    $"'{overridden.ContainingSymbol?.Name}.{overridden.Name}' is 'final', so it cannot be overridden",
+                    overridden.DeclaredHere("declared 'final' here")
                 );
                 continue;
             }
@@ -297,7 +299,8 @@ internal static class ConformanceChecker {
                     ErrorCode.ERR_OverrideSignatureMismatch,
                     function,
                     $"'{type.Name}.{function.Name}' overrides '{overridden.ContainingSymbol?.Name}.{overridden.Name}', "
-                    + mismatch
+                    + mismatch,
+                    overridden.DeclaredHere("the member it overrides")
                 );
             }
         }
@@ -646,13 +649,15 @@ internal static class ConformanceChecker {
             .Where(c => c.ExplicitProtocol is null || SameProtocol(c.ExplicitProtocol, protocol))
             .ToList();
 
+        var required = requirement.DeclaredHere($"'{protocol.Name}' requires it here");
         if (candidates.Count == 0) {
             Report(
                 diagnostics,
                 ErrorCode.ERR_DoesNotConform,
                 type,
                 $"'{type.Name}' does not conform to '{protocol.Name}': "
-                + $"it is missing '{Describe(requirement)}'"
+                + $"it is missing '{Describe(requirement)}'",
+                required
             );
             return;
         }
@@ -690,7 +695,8 @@ internal static class ConformanceChecker {
                 $"'{type.Name}.{requirement.Name}' is "
                 + $"{(requirement.IsStatic ? "an instance" : "a static")} member, but "
                 + $"'{protocol.Name}' requires "
-                + $"{(requirement.IsStatic ? "a static" : "an instance")} one"
+                + $"{(requirement.IsStatic ? "a static" : "an instance")} one",
+                required
             );
             return;
         }
@@ -700,7 +706,8 @@ internal static class ConformanceChecker {
             ErrorCode.ERR_RequirementSignatureMismatch,
             type,
             $"'{type.Name}.{requirement.Name}' does not match the signature "
-            + $"'{protocol.Name}' requires: '{Describe(requirement)}'"
+            + $"'{protocol.Name}' requires: '{Describe(requirement)}'",
+            required
         );
     }
 
@@ -712,6 +719,7 @@ internal static class ConformanceChecker {
         DiagnosticBag diagnostics
     ) {
         var candidate = FindMembers(type, requirement.Name).OfType<FieldSymbol>().FirstOrDefault();
+        var required = requirement.DeclaredHere($"'{protocol.Name}' requires it here");
 
         if (candidate is null) {
             Report(
@@ -720,7 +728,8 @@ internal static class ConformanceChecker {
                 type,
                 $"'{type.Name}' does not conform to '{protocol.Name}': "
                 + $"it is missing '{requirement.Name}: "
-                + $"{requirement.Type.ToDisplayString()}'"
+                + $"{requirement.Type.ToDisplayString()}'",
+                required
             );
             return;
         }
@@ -735,7 +744,8 @@ internal static class ConformanceChecker {
                 ErrorCode.ERR_RequirementSignatureMismatch,
                 type,
                 $"'{type.Name}.{requirement.Name}' cannot be written, but "
-                + $"'{protocol.Name}' requires '{requirement.Name}' to have a setter"
+                + $"'{protocol.Name}' requires '{requirement.Name}' to have a setter",
+                required
             );
             return;
         }
@@ -751,7 +761,8 @@ internal static class ConformanceChecker {
             type,
             $"'{type.Name}.{requirement.Name}' is "
             + $"'{candidate.Type.ToDisplayString()}' but '{protocol.Name}' requires "
-            + $"'{expected.ToDisplayString()}'"
+            + $"'{expected.ToDisplayString()}'",
+            required
         );
     }
 
@@ -948,10 +959,11 @@ internal static class ConformanceChecker {
         DiagnosticBag diagnostics,
         ErrorCode code,
         Symbol at,
-        string message
+        string message,
+        DiagnosticLocation? related = null
     ) {
         // A conformance failure belongs to the type, but an override mistake
         // belongs to the member that made it.
-        diagnostics.Error(code, at.Location ?? default, message);
+        diagnostics.Add(Diagnostic.Error(code, at.Location ?? default, message).WithRelated(related));
     }
 }

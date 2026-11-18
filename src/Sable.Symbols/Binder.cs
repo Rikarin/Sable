@@ -436,12 +436,12 @@ public sealed partial class Binder {
         }
 
         var scope = _locals[^1];
-        if (scope.ContainsKey(name)) {
-            _diagnostics.Error(
+        if (scope.TryGetValue(name, out var earlier)) {
+            _diagnostics.Add(Diagnostic.Error(
                 ErrorCode.ERR_DuplicateDeclaration,
                 symbol.Location ?? default,
                 $"'{name}' is already declared in this scope"
-            );
+            ).WithRelated(earlier.DeclaredHere("declared first here")));
             return;
         }
 

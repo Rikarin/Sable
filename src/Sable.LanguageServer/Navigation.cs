@@ -159,17 +159,34 @@ public sealed partial class LanguageServer {
         }
 
         var declaration = symbol.DeclaringSyntax[0];
-        if (analysis.DocumentOf(declaration) is { } owner) {
-            return (owner.Uri, owner.Lines, declaration);
+        return FileOf(analysis, null, declaration) is var (uri, lines) ? (uri, lines, declaration) : null;
+    }
+
+    /// <summary>
+    ///     The file a node of an analysis is in, as the editor can open it:
+    ///     a document — <paramref name="document" />, if it is that one's —
+    ///     a dependency's file on disk, or a copy of the library's.
+    /// </summary>
+    (string Uri, LineIndex Lines)? FileOf(Analysis analysis, Document? document, SyntaxNode? node) {
+        if (document is not null && (node is null || ReferenceEquals(RootOf(node), document.Tree.Root))) {
+            return (document.Uri, document.Lines);
         }
 
-        if (analysis.TreeOf(declaration) is not { } tree) {
+        if (node is null) {
+            return null;
+        }
+
+        if (analysis.DocumentOf(node) is { } owner) {
+            return (owner.Uri, owner.Lines);
+        }
+
+        if (analysis.TreeOf(node) is not { } tree) {
             return null;
         }
 
         // A dependency's file is on disk, where the editor can open it.
         if (analysis.IsDependencyFile(tree)) {
-            return (Workspace.UriOf(tree.Text.FileName), LineIndex.Of(tree.Text), declaration);
+            return (Workspace.UriOf(tree.Text.FileName), LineIndex.Of(tree.Text));
         }
 
         // A library file lives in the compiler; the editor is shown a copy.
@@ -184,7 +201,7 @@ public sealed partial class LanguageServer {
             return null;
         }
 
-        return (Workspace.UriOf(path), LineIndex.Of(tree.Text), declaration);
+        return (Workspace.UriOf(path), LineIndex.Of(tree.Text));
     }
 
     // -----------------------------------------------------------------------

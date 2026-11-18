@@ -2749,6 +2749,8 @@ public sealed partial class SilGen {
 
     internal void Report(ErrorCode code, Sable.Syntax.TextSpan span, string message) => _diagnostics.Error(code, span, message);
 
+    internal void Report(Diagnostic diagnostic) => _diagnostics.Add(diagnostic);
+
     /// <summary>A stored property's initial value, bound: from the model of the file that declares it.</summary>
     internal BoundExpression? FieldInitializer(FieldSymbol field) {
         if (field.DeclaringSyntax.FirstOrDefault() is not { } syntax) {

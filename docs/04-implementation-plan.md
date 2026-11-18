@@ -177,7 +177,12 @@ Copy Roslyn's **red/green tree** design exactly:
 ### 0.5 Exit criteria
 
 - [ ] Every construct in `SYNTAX.md` parses
-- [ ] Round-trip invariant holds on a 2,000-file corpus
+- [ ] Round-trip invariant holds on a 2,000-file corpus — it holds on all
+      the corpus there is: `RoundTripCorpusTests` takes every `.sb` file
+      (140) and every `sable` block in the Markdown (418), broken ones
+      included, each whole and cut short at seven points, and requires the
+      text back exactly and spans that tile (it found the lexer dropping a
+      byte order mark). 558 inputs, not 2,000 files
 - [x] Incremental reparse of a 10,000-line file after a one-character edit
       completes in < 2 ms — about 1 ms in Release (0.9 ms at best, 1.2-1.5 ms
       median under heavy load), against 20-35 ms for a full parse
@@ -186,7 +191,27 @@ Copy Roslyn's **red/green tree** design exactly:
       and `tests/programs/` to being formatted already
 - [x] A syntax-tree visualiser exists (Roslyn's Syntax Visualiser equivalent)
       — `tools/Sable.Visualiser`
-- [ ] Fuzzer runs for 24h without a crash or an assertion failure
+- [ ] Fuzzer runs for 24h without a crash or an assertion failure — the
+      fuzzers exist and run nightly (`.github/workflows/fuzz.yml`, a new
+      seed each night, `SABLE_FUZZ_SEED`/`SABLE_FUZZ_SCALE` to reproduce):
+      the parser's random-input round trips; `CompilerFuzzTests`, which
+      mutates the repository's programs at token boundaries (a token for
+      another of its kind, runs deleted, duplicated, spliced, swapped)
+      through parsing, binding, the semantic model, constant evaluation,
+      lowering, the SIL verifier and the passes, with a time limit per
+      input and failures minimised by delta debugging; and
+      `ResolverFuzzTests`, random registries (cycles, self-dependencies,
+      yanked versions, pre-releases, locks naming what is gone) through
+      PubGrub, every answer checked against every requirement and every
+      failure without pre-releases against trying every assignment, plus
+      the version parsers and the set algebra. The compiler fuzzer is
+      guided by features (syntax kinds, diagnostic codes, the stage
+      reached), not by code coverage, which would need the compiler
+      instrumented, and no fuzzer has yet run for 24 hours on end. Found
+      and fixed so far: an extension nested in an extension threw while
+      attaching; a self-dependency hung the resolver and crashed its
+      explanation; a `-` in a requirement's build metadata threw; ranges
+      past the largest number wrapped round to nothing
 
 ---
 

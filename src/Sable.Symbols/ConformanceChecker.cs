@@ -430,6 +430,24 @@ internal static class ConformanceChecker {
     }
 
     /// <summary>
+    ///     The member a method of a class finally overrides: the one a
+    ///     vtable gives its slot. Null for a method that overrides nothing.
+    /// </summary>
+    public static FunctionSymbol? RootOverridden(FunctionSymbol function) {
+        if (!function.IsOverride || function.ContainingSymbol is not NamedTypeSymbol { TypeKind: TypeKind.Class } type) {
+            return null;
+        }
+
+        FunctionSymbol? root = null;
+        for (var current = FindOverridden(type, function)?.Method; current is not null;) {
+            root = current;
+            current = current.IsOverride && current.ContainingSymbol is NamedTypeSymbol owner ? FindOverridden(owner, current)?.Method : null;
+        }
+
+        return root;
+    }
+
+    /// <summary>
     ///     The base-class member a function replaces, if any, and what the
     ///     base's type parameters are where this type inherits it:
     ///     <c>class Ints: Box&lt;Int&gt;</c> sees <c>Box.get() -&gt; T</c> as returning Int.
@@ -457,7 +475,9 @@ internal static class ConformanceChecker {
 
                 var matches = true;
                 for (var i = 0; i < other.Parameters.Length; i++) {
-                    if (other.Parameters[i].Type.Equals(function.Parameters[i].Type)) {
+                    // In the base's terms as this class names it: 'GDer: GBase<Int>'
+                    // overrides 'take(_ x: T)' with 'take(_ x: Int)'.
+                    if (seen.Apply(other.Parameters[i].Type).Equals(function.Parameters[i].Type)) {
                         continue;
                     }
 

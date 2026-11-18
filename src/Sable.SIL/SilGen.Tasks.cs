@@ -143,5 +143,50 @@ public sealed partial class SilGen {
 
             return made;
         }
+
+        /// <summary>'flags.contains(other)': '(flags & other) == other', on the integers they are.</summary>
+        SilValue? FlagsContains(BoundCall call, NamedTypeSymbol flagsType) {
+            if (call is not { Receiver: { } receiver, Arguments: [var argument] } || LowerType(flagsType) is not { } raw
+                || SilBuiltins.Find($"and_{raw}") is null || SilBuiltins.Find($"cmp_eq_{raw}") is null) {
+                return Missing(call, $"'contains' on '{flagsType.Name}'");
+            }
+
+            if (Borrow(receiver) is not { } flags) {
+                return null;
+            }
+
+            if (Borrow(argument) is not { } other) {
+                End(flags);
+                return null;
+            }
+
+            var common = Emit(new BuiltinInst($"and_{raw}", raw, flags, other));
+            var contains = Emit(new BuiltinInst($"cmp_eq_{raw}", SilType.Bool, common, other));
+            End(other);
+            End(flags);
+            return contains;
+        }
+
+        /// <summary>
+        ///     'super.init()' to a superclass that declares no initialiser:
+        ///     its fields' initial values, stored into this object — and its
+        ///     own superclass's, had it one, by the initialiser it inherits.
+        /// </summary>
+        SilValue? SuperImplicitInit(BoundCall call, BoundSuperAccess super) {
+            if (SelfType(symbol, substitution) is not { } selfType) {
+                return Missing(call, "'super.init()' here");
+            }
+
+            foreach (var field in super.BaseType.OriginalDefinition.Members.OfType<FieldSymbol>()) {
+                if (field is not { IsStatic: false, IsComputed: false, HasInitializer: true } || generator.FieldInitializer(field) is not { } initial) {
+                    continue;
+                }
+
+                var self = new BoundSelfAccess(initial.Syntax, selfType, true);
+                Statement(new BoundExpressionStatement(initial.Syntax, new BoundAssignment(initial.Syntax, new BoundFieldAccess(initial.Syntax, self, field), initial)));
+            }
+
+            return UnitValue.Instance;
+        }
     }
 }

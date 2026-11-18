@@ -878,4 +878,21 @@ public sealed class GenericsAndConformanceTests {
         AssertClean("fn eq<T: Equatable>(_ a: T, _ b: T) -> Bool { return a == b }");
         AssertClean("fn some<T>(_ a: T?) -> Bool { return a != none }");
     }
+
+    [Fact]
+    public void AGenericSubclassOverridesInItsBasesTermsAndIsItsBase() {
+        var source = """
+                     module M
+                     open class GBase<T> { open fn take(_ x: T) -> Int { return 1 } }
+                     class GDer: GBase<Int> { override fn take(_ x: Int) -> Int { return x } }
+                     class GDer2<U>: GBase<U> { override fn take(_ x: U) -> Int { return 5 } }
+                     fn probe() -> Int {
+                         let g: GBase<Int> = GDer()
+                         let h: GBase<String> = GDer2<String>()
+                         return g.take(1) + h.take("a")
+                     }
+                     """;
+        var errors = Compilation.Create(source).GetAllDiagnostics().Where(static d => d.Severity == DiagnosticSeverity.Error).ToList();
+        Assert.True(errors.Count == 0, string.Join("\n", errors.Select(static e => $"{e.Id}: {e.Message}")));
+    }
 }

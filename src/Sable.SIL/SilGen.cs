@@ -178,15 +178,22 @@ public sealed partial class SilGen {
 
             // A computed property's getter and setter: methods of the type,
             // named for the property, that reading and writing it call.
+            // An observed property's 'willSet' and 'didSet' are methods too,
+            // which the setter the compiler writes for it calls.
             foreach (var accessor in Declarations(tree).OfType<AccessorSyntax>()) {
-                if (accessor.Keyword.Kind is not (SyntaxKind.GetKeyword or SyntaxKind.SetKeyword)
+                if (accessor.Keyword.Kind is not (SyntaxKind.GetKeyword or SyntaxKind.SetKeyword or SyntaxKind.WillSetKeyword or SyntaxKind.DidSetKeyword)
                     || (_unit is null || _unit.Owns(tree) ? model.GetAccessorSymbol(accessor) : model.GetAccessorDeclaration(accessor))
                         is not { ContainingSymbol: FieldSymbol field } function
                     || !IsLowerable(function)) {
                     continue;
                 }
 
-                (accessor.Keyword.Kind == SyntaxKind.GetKeyword ? _getters : _setters)[field] = function;
+                if (accessor.Keyword.Kind is SyntaxKind.GetKeyword or SyntaxKind.SetKeyword) {
+                    (accessor.Keyword.Kind == SyntaxKind.GetKeyword ? _getters : _setters)[field] = function;
+                } else if (!_compilation.ObservedProperties.ContainsKey(field)) {
+                    continue;
+                }
+
                 functions.Add((function, accessor, model));
             }
 
@@ -220,6 +227,7 @@ public sealed partial class SilGen {
 
         AddDerived(functions);
         AddLazy(functions);
+        AddInheritedInitializers(functions);
         CheckBuiltins();
 
         // Overloads: functions of one name in one container (counted once per
@@ -318,13 +326,19 @@ public sealed partial class SilGen {
             }
         }
 
-        while (_pending.Count > 0) {
-            var (symbol, name, type, substitution) = _pending.Dequeue();
-            var (syntax, model) = _declarations[symbol];
-            _loweringInstance = name;
-            LowerBody(symbol, syntax, model, name, type, substitution);
-            _loweringInstance = null;
-        }
+        // A generic class's vtable names instances of its methods, which
+        // are lowered in their turn — and may make more classes.
+        do {
+            while (_pending.Count > 0) {
+                var (symbol, name, type, substitution) = _pending.Dequeue();
+                var (syntax, model) = _declarations[symbol];
+                _loweringInstance = name;
+                LowerBody(symbol, syntax, model, name, type, substitution);
+                _loweringInstance = null;
+            }
+
+            BuildVTables();
+        } while (_pending.Count > 0);
 
         // Separately, the globals are set up by the unit the program starts in.
         if (_unit is null || _module.EntryPoint is not null) {
@@ -378,7 +392,8 @@ public sealed partial class SilGen {
             AccessorSyntax a => a.Body is not null || a.ExpressionBody is not null,
             _ => false,
         };
-        if (!hasBody && _compilation.GetDerivedBody(symbol) is null && _compilation.GetLazyBody(symbol) is null) {
+        if (!hasBody && _compilation.GetDerivedBody(symbol) is null && _compilation.GetLazyBody(symbol) is null
+            && _compilation.GetInheritedInitializerBody(symbol) is null) {
             return;
         }
 
@@ -570,7 +585,8 @@ public sealed partial class SilGen {
     const int MaxInstanceDepth = 200;
 
     void LowerBody(FunctionSymbol symbol, SyntaxNode syntax, SemanticModel model, string name, FunctionType type, TypeSubstitution substitution) {
-        if ((_compilation.GetDerivedBody(symbol) ?? _compilation.GetLazyBody(symbol) ?? model.GetBoundNode(syntax)) is not BoundBlock body) {
+        if ((_compilation.GetDerivedBody(symbol) ?? _compilation.GetLazyBody(symbol) ?? _compilation.GetInheritedInitializerBody(symbol)
+                ?? model.GetBoundNode(syntax)) is not BoundBlock body) {
             return;
         }
 
@@ -892,18 +908,38 @@ public sealed partial class SilGen {
     internal static string SlotName(FunctionSymbol method) =>
         method.Parameters.IsEmpty ? method.Name : method.Name + string.Concat(method.Parameters.Select(static p => "$" + Sanitise(p.Type.ToDisplayString())));
 
-    /// <summary>True for a method a call must find through the vtable: one a subclass may override.</summary>
+    /// <summary>
+    ///     The slot a method or a property's getter or setter takes in a
+    ///     vtable: an override takes the slot of what it overrides, whatever
+    ///     its own parameter types say — 'take(_ x: Int)' overriding
+    ///     'take(_ x: T)' is 'take$T' — and an accessor is named for its
+    ///     property, which an override shares.
+    /// </summary>
+    internal static string VTableSlot(FunctionSymbol method) =>
+        method is { FunctionKind: FunctionKind.Accessor, ContainingSymbol: FieldSymbol property }
+            ? $"{method.Name}${property.Name}"
+            : SlotName(method.RootOverridden ?? method);
+
+    /// <summary>
+    ///     True for a method a call must find through the vtable: one a
+    ///     subclass may override — a property's getter and setter among them.
+    /// </summary>
     internal bool IsDynamic(FunctionSymbol method) =>
-        method.FunctionKind == FunctionKind.Ordinary && !method.IsStatic
-        && method.ContainingSymbol is NamedTypeSymbol { TypeKind: TypeKind.Class or TypeKind.Actor } owner
-        && _inherited.Contains(owner.OriginalDefinition);
+        IsVirtual(method) && _inherited.Contains(Owner(method)!.OriginalDefinition);
+
+    /// <summary>True for a member of a class that takes a slot in its vtable.</summary>
+    static bool IsVirtual(FunctionSymbol method) =>
+        !method.IsStatic
+        && (method.FunctionKind == FunctionKind.Ordinary && method.ContainingSymbol is NamedTypeSymbol
+            || method is { FunctionKind: FunctionKind.Accessor, Name: "get" or "set", ContainingSymbol: FieldSymbol { ContainingSymbol: NamedTypeSymbol } })
+        && Owner(method) is { TypeKind: TypeKind.Class or TypeKind.Actor };
 
     /// <summary>
     ///     Fills each class's vtable: its superclass's slots, each override in
     ///     its base's slot, then the methods it adds.
     /// </summary>
     void BuildVTables() {
-        var built = new HashSet<ClassType>();
+        var built = _builtVTables;
         void Build(ClassType type) {
             if (!built.Add(type) || !_classes.TryGetValue(type, out var symbol)) {
                 return;
@@ -918,17 +954,34 @@ public sealed partial class SilGen {
                 return;
             }
 
-            foreach (var method in symbol.OriginalDefinition.Members.OfType<FunctionSymbol>()) {
-                if (method is { FunctionKind: FunctionKind.Ordinary, IsStatic: false, IsAbstract: true } && method.ContainingSymbol is NamedTypeSymbol) {
+            // A generic class's methods, for this class's type arguments:
+            // instances, lowered once the vtables are built.
+            var arguments = TypeSubstitution.For(symbol);
+            var accessors = symbol.OriginalDefinition.Members.OfType<FieldSymbol>()
+                .Where(static f => f is { IsStatic: false, IsComputed: true })
+                .SelectMany(f => new[] { GetterOf(f), SetterOf(f) })
+                .OfType<FunctionSymbol>();
+            foreach (var method in symbol.OriginalDefinition.Members.OfType<FunctionSymbol>().Concat(accessors)) {
+                if (method is { FunctionKind: FunctionKind.Ordinary, IsStatic: false, IsAbstract: true } && method.ContainingSymbol is NamedTypeSymbol && !IsGeneric(method)) {
                     AbstractStub(method);
                 }
 
-                if (method is not { FunctionKind: FunctionKind.Ordinary, IsStatic: false } || method.ContainingSymbol is not NamedTypeSymbol
-                    || !_names.TryGetValue(method, out var name) || _module.Find(name) is null && (_unit is null || External(name) is null)) {
+                if (!IsVirtual(method) || !_names.TryGetValue(method, out var name)) {
                     continue;
                 }
 
-                var slot = SlotName(method);
+                if (IsGeneric(method)) {
+                    if (!method.TypeParameters.IsEmpty || method.DeclaringSyntax.FirstOrDefault() is not { } at
+                        || Instance(method, arguments, at) is not { } instance) {
+                        continue;
+                    }
+
+                    name = instance.Name;
+                } else if (_module.Find(name) is null && (_unit is null || External(name) is null)) {
+                    continue;
+                }
+
+                var slot = VTableSlot(method);
                 var index = type.MethodIndex(slot);
                 if (index >= 0) {
                     type.VTable[index] = (slot, name);
@@ -942,6 +995,9 @@ public sealed partial class SilGen {
             Build(type);
         }
     }
+
+    /// <summary>The classes whose vtables are built: building one may lower more code, which may lower more classes.</summary>
+    readonly HashSet<ClassType> _builtVTables = [];
 
     /// <summary>
     ///     An abstract method's slot: code that traps, never reached — the
@@ -1390,6 +1446,10 @@ public sealed partial class SilGen {
                 return HoldsItself(enumType) ? null : enumType;
             }
 
+            // A '@flags' enum is any set of its cases: the integer it is.
+            case NamedTypeSymbol { TypeKind: TypeKind.Enum, IsFlags: true } flags:
+                return Lower(_compilation.EnumRawType(flags));
+
             case NamedTypeSymbol { TypeKind: TypeKind.Enum } named: {
                 var enumType = Begin(named, new EnumType(TypeName(named)));
                 foreach (var enumCase in named.Members.OfType<EnumCaseSymbol>()) {
@@ -1823,8 +1883,19 @@ public sealed partial class SilGen {
         return $"{function}$closure{count}";
     }
 
-    /// <summary>One thing a closure captured: where in its context it is, and whether that is a box.</summary>
-    internal sealed record Capture(object Key, TypeSymbol Type, int Field, bool Boxed, BoundExpression? Initializer);
+    /// <summary>
+    ///     One thing a closure captured: where in its context it is, whether
+    ///     that is a box, and whether it holds an object without keeping it —
+    ///     '[weak x]', '[unowned self]'.
+    /// </summary>
+    internal sealed record Capture(object Key, TypeSymbol Type, int Field, bool Boxed, BoundExpression? Initializer, CaptureKind Kind = CaptureKind.Default);
+
+    /// <summary>
+    ///     True for an initialiser that hands its work to another of its
+    ///     type's own, <c>self.init(…)</c>: that one initialises the fields.
+    /// </summary>
+    static bool Delegates(BoundBlock body) =>
+        Descendants(body).Any(static n => n is BoundCall { Function.FunctionKind: FunctionKind.Initializer, Receiver: BoundSelfAccess });
 
     /// <summary>The key a captured <c>self</c> is filed under.</summary>
     internal const string SelfKey = "self";
@@ -1868,9 +1939,9 @@ public sealed partial class SilGen {
         var captures = new List<Capture>();
         var seen = new HashSet<object>();
 
-        void Add(object key, TypeSymbol type, bool boxed, BoundExpression? initializer) {
+        void Add(object key, TypeSymbol type, bool boxed, BoundExpression? initializer, CaptureKind kind = CaptureKind.Default) {
             if (seen.Add(key)) {
-                captures.Add(new(key, type, captures.Count, boxed, initializer));
+                captures.Add(new(key, type, captures.Count, boxed, initializer, kind));
             }
         }
 
@@ -1886,7 +1957,7 @@ public sealed partial class SilGen {
 
                 case BoundLocalAccess access when !inner.Contains(access.Local.ContainingSymbol!):
                     if (listed.TryGetValue(access.Local, out var listedCapture)) {
-                        Add(access.Local, access.Local.Type, false, listedCapture.Initializer);
+                        Add(access.Local, access.Local.Type, false, listedCapture.Initializer, listedCapture.CaptureKind);
                     } else {
                         Add(access.Local, access.Local.Type, true, null);
                     }
@@ -2707,8 +2778,10 @@ public sealed partial class SilGen {
             }
 
             // 'var name = "x"': every initialiser of the type that declares it
-            // stores the initial value first, before its own body runs.
-            if (symbol.FunctionKind == FunctionKind.Initializer
+            // stores the initial value first, before its own body runs — but
+            // one that hands the work to another, 'self.init(…)', leaves it
+            // to that one.
+            if (symbol.FunctionKind == FunctionKind.Initializer && !Delegates(body)
                 && (symbol.ContainingSymbol is ExtensionSymbol extension ? extension.ExtendedType : symbol.ContainingSymbol) is NamedTypeSymbol owner
                 && SelfType(symbol, substitution) is { } selfType) {
                 foreach (var field in owner.OriginalDefinition.Members.OfType<FieldSymbol>()) {
@@ -2896,7 +2969,8 @@ public sealed partial class SilGen {
                 return null;
             }
 
-            var value = Emit(new LoadInst(address));
+            // A weak or unowned capture reads as its storage says.
+            var value = ReadField(address);
             EndAll(borrows);
             return value;
         }
@@ -4249,6 +4323,13 @@ public sealed partial class SilGen {
                     Jump(new SwitchEnumInst(value, [(enumType.CaseIndex(enumCase.EnumCase.Name), matched)], failed));
                     return;
 
+                // A '@flags' enum's case, matched: the value is exactly it.
+                case BoundEnumCasePattern flag when SilBuiltins.Find($"cmp_eq_{value.Type}") is not null: {
+                    var same = Emit(new BuiltinInst($"cmp_eq_{value.Type}", SilType.Bool, value, Emit(new IntegerLiteralInst(value.Type, flag.EnumCase.RawValue))));
+                    Jump(new CondBranchInst(same, matched, [], failed, []));
+                    return;
+                }
+
                 case BoundOrPattern or: {
                     var right = function.AddBlock();
                     Pattern(or.Left, value, matched, right);
@@ -5328,7 +5409,14 @@ public sealed partial class SilGen {
                 return Emit(new EnumInst(optional, none, null));
             }
 
-            // A plain enum's case is bound as a literal naming it.
+            // A plain enum's case is bound as a literal naming it; a
+            // '@flags' enum's is the integer it is.
+            if (literal.Value is string flagName && Sub(type) is NamedTypeSymbol { TypeKind: TypeKind.Enum, IsFlags: true } flags) {
+                return LowerType(flags) is { } flagsType && flags.GetMembers(flagName).OfType<EnumCaseSymbol>().FirstOrDefault() is { } flag
+                    ? Emit(new IntegerLiteralInst(flagsType, flag.RawValue))
+                    : Missing(literal, $"the flag '{flagName}'");
+            }
+
             if (literal.Value is string caseName && type is NamedTypeSymbol { TypeKind: TypeKind.Enum }) {
                 return LowerType(type) is EnumType enumType && enumType.CaseIndex(caseName) is var index and >= 0
                     ? Emit(new EnumInst(enumType, index, null))
@@ -5458,6 +5546,12 @@ public sealed partial class SilGen {
         SilValue? Stringify(SilValue value, BoundNode at) {
             if (value.Type == SilType.String) {
                 return value;
+            }
+
+            // An enum's value is its case's name; a '@flags' enum's, the
+            // name of the case it is exactly, or else its integer.
+            if (at is BoundExpression { Type: var enumSymbol } && Sub(enumSymbol) is NamedTypeSymbol { TypeKind: TypeKind.Enum } named) {
+                return value.Type is EnumType enumType ? CaseName(value, enumType) : FlagsName(value, named, at);
             }
 
             var name = $"string_from_{value.Type}";
@@ -5630,6 +5724,34 @@ public sealed partial class SilGen {
         SilValue? NumericConversion(BoundConversion conversion) {
             if (Expression(conversion.Operand) is not { } value || LowerType(conversion.Type) is not { } target) {
                 return null;
+            }
+
+            // 'Status.Closed as U8': the integer the case is; '9 as Status':
+            // the case that integer is, or a trap.
+            if (value.Type is EnumType && Sub(conversion.Operand.Type) is NamedTypeSymbol { TypeKind: TypeKind.Enum } from) {
+                if (LowerType(generator._compilation.EnumRawType(from)) is not { } fromRaw) {
+                    return null;
+                }
+
+                value = RawValue(value, from, fromRaw);
+                if (value.Type == target) {
+                    return value;
+                }
+            } else if (target is EnumType && Sub(conversion.Type) is NamedTypeSymbol { TypeKind: TypeKind.Enum } to) {
+                if (LowerType(generator._compilation.EnumRawType(to)) is not { } toRaw) {
+                    return null;
+                }
+
+                if (value.Type != toRaw) {
+                    var widen = $"convert_{value.Type}_{toRaw}";
+                    if (SilBuiltins.Find(widen) is null) {
+                        return Missing(conversion, $"the conversion from {value.Type} to {toRaw}");
+                    }
+
+                    value = Emit(new BuiltinInst(widen, toRaw, value));
+                }
+
+                return CaseOfValue(value, to, (EnumType)target);
             }
 
             if (value.Type == target) {
@@ -6232,6 +6354,94 @@ public sealed partial class SilGen {
             return Emit(new BuiltinInst(equal ? "cmp_eq_Int" : "cmp_ne_Int", SilType.Bool, first, second));
         }
 
+        /// <summary>A plain enum's value as the integer its case is: one block per case, joined.</summary>
+        SilValue RawValue(SilValue value, NamedTypeSymbol enumSymbol, SilType raw) {
+            var cases = enumSymbol.OriginalDefinition.Members.OfType<EnumCaseSymbol>().ToList();
+            return ByCase(value, (EnumType)value.Type, raw, i => Emit(new IntegerLiteralInst(raw, cases[i].RawValue)));
+        }
+
+        /// <summary>A plain enum's value as its case's name.</summary>
+        SilValue CaseName(SilValue value, EnumType type) =>
+            ByCase(value, type, SilType.String, i => Emit(new StringLiteralInst(type.Cases[i].Name)));
+
+        /// <summary>One value for each case of a payload-free enum: a block per case, joined.</summary>
+        SilValue ByCase(SilValue value, EnumType type, SilType result, Func<int, SilValue> make) {
+            var joined = function.AddBlock();
+            var made = joined.AddArgument(result);
+            var targets = new List<(int, SilBlock)>();
+            for (var i = 0; i < type.Cases.Count; i++) {
+                targets.Add((i, function.AddBlock()));
+            }
+
+            Jump(new SwitchEnumInst(value, targets, null));
+            foreach (var (index, block) in targets) {
+                _current = block;
+                Branch(joined, make(index));
+            }
+
+            _current = joined;
+            return made;
+        }
+
+        /// <summary>
+        ///     The case an integer is, compared with each case's value in
+        ///     turn; one that is no case's traps, as an unwrapped none does.
+        /// </summary>
+        SilValue? CaseOfValue(SilValue raw, NamedTypeSymbol enumSymbol, EnumType type) {
+            var compare = $"cmp_eq_{raw.Type}";
+            if (SilBuiltins.Find(compare) is null) {
+                return null;
+            }
+
+            var cases = enumSymbol.OriginalDefinition.Members.OfType<EnumCaseSymbol>().ToList();
+            var joined = function.AddBlock();
+            var made = joined.AddArgument(type);
+            for (var i = 0; i < cases.Count; i++) {
+                var found = function.AddBlock();
+                var next = function.AddBlock();
+                var same = Emit(new BuiltinInst(compare, SilType.Bool, raw, Emit(new IntegerLiteralInst(raw.Type, cases[i].RawValue))));
+                Jump(new CondBranchInst(same, found, [], next, []));
+                _current = found;
+                Branch(joined, Emit(new EnumInst(type, type.CaseIndex(cases[i].Name), null)));
+                _current = next;
+            }
+
+            Emit(new CondFailInst(Emit(new IntegerLiteralInst(SilType.Bool, 1)), $"no case of '{enumSymbol.Name}' has this value"));
+            Jump(new UnreachableInst());
+            _current = joined;
+            return made;
+        }
+
+        /// <summary>A '@flags' enum's value as the name of the case it is exactly, or else its integer.</summary>
+        SilValue? FlagsName(SilValue raw, NamedTypeSymbol flags, BoundNode at) {
+            var compare = $"cmp_eq_{raw.Type}";
+            var digits = $"string_from_{raw.Type}";
+            if (SilBuiltins.Find(compare) is null || SilBuiltins.Find(digits) is null) {
+                return Missing(at, $"interpolating a value of '{flags.Name}'");
+            }
+
+            var joined = function.AddBlock();
+            var made = joined.AddArgument(SilType.String);
+            var seen = new HashSet<long>();
+            foreach (var flag in flags.OriginalDefinition.Members.OfType<EnumCaseSymbol>()) {
+                if (!seen.Add(flag.RawValue)) {
+                    continue;
+                }
+
+                var found = function.AddBlock();
+                var next = function.AddBlock();
+                var same = Emit(new BuiltinInst(compare, SilType.Bool, raw, Emit(new IntegerLiteralInst(raw.Type, flag.RawValue))));
+                Jump(new CondBranchInst(same, found, [], next, []));
+                _current = found;
+                Branch(joined, Emit(new StringLiteralInst(flag.Name)));
+                _current = next;
+            }
+
+            Branch(joined, Emit(new BuiltinInst(digits, SilType.String, raw)));
+            _current = joined;
+            return made;
+        }
+
         /// <summary>Which case a payload-free enum value is, as an Int: one block per case, joined.</summary>
         SilValue CaseNumber(SilValue value, EnumType type) {
             var joined = function.AddBlock();
@@ -6720,8 +6930,39 @@ public sealed partial class SilGen {
                 return Intrinsic(call);
             }
 
-            // A class or actor's implicit 'init()'.
+            // 'flags.contains(.Write)', on a '@flags' enum: every flag of the
+            // argument set in the receiver.
+            if (callee is { Name: "contains", DeclaringSyntax.IsEmpty: true, ContainingSymbol: NamedTypeSymbol { IsFlags: true } flagsType }) {
+                return FlagsContains(call, flagsType);
+            }
+
+            // 'self.init(…)' in a value type's initialiser: what the other
+            // initialiser builds is self, stored where self is being built.
+            if (callee.FunctionKind == FunctionKind.Initializer && call.Receiver is BoundSelfAccess
+                && LowerType(call.Type) is not ClassType) {
+                if (_selfAddress is not { } selfSlot) {
+                    return Missing(call, "'self.init' here");
+                }
+
+                var built = Expression(new BoundCall(call.Syntax, null, callee, call.Arguments, call.Type) { Substitution = call.Substitution });
+                if (built is null) {
+                    return null;
+                }
+
+                Emit(new StoreInst(Owned(built), selfSlot, StoreKind.Init));
+                return UnitValue.Instance;
+            }
+
+            // 'super.init()' where the superclass has only the implicit
+            // initialiser: its fields' initial values, stored into this object.
+            var inheritedInit = generator._compilation.InheritedInitializers.ContainsKey(callee);
             if (callee is { FunctionKind: FunctionKind.Initializer, DeclaringSyntax.IsEmpty: true, Parameters.IsEmpty: true }
+                && !inheritedInit && call.Receiver is BoundSuperAccess super) {
+                return SuperImplicitInit(call, super);
+            }
+
+            // A class or actor's implicit 'init()'.
+            if (!inheritedInit && callee is { FunctionKind: FunctionKind.Initializer, DeclaringSyntax.IsEmpty: true, Parameters.IsEmpty: true }
                 && LowerType(call.Type) is ClassType implicitClass) {
                 return ImplicitInit(call, implicitClass);
             }
@@ -6733,7 +6974,7 @@ public sealed partial class SilGen {
             }
 
             // A synthesised memberwise initialiser is the struct, built from its fields.
-            if (callee is { FunctionKind: FunctionKind.Initializer, DeclaringSyntax.IsEmpty: true }) {
+            if (!inheritedInit && callee is { FunctionKind: FunctionKind.Initializer, DeclaringSyntax.IsEmpty: true }) {
                 if (LowerType(call.Type) is not StructType structType) {
                     return Missing(call, $"initialising '{Sub(call.Type).ToDisplayString()}'");
                 }
@@ -6793,8 +7034,10 @@ public sealed partial class SilGen {
                 }
             }
 
-            // 'super.init(...)': the superclass's initialising half, given this object.
-            var superInit = callee.FunctionKind == FunctionKind.Initializer && call.Receiver is BoundSuperAccess;
+            // 'super.init(...)': the superclass's initialising half, given this
+            // object; 'self.init(...)' in a class's initialiser: its own
+            // class's other one, likewise.
+            var superInit = callee.FunctionKind == FunctionKind.Initializer && call.Receiver is BoundSuperAccess or BoundSelfAccess;
             if (superInit) {
                 name = InitializerName(name);
                 type = InitializerType(type);
@@ -6912,7 +7155,7 @@ public sealed partial class SilGen {
             // A method a subclass may override is found through the vtable;
             // 'super.m()' calls the superclass's own.
             SilValue code = HasSelf(callee) && call.Receiver is not BoundSuperAccess && generator.IsDynamic(callee)
-                ? Emit(new ClassMethodInst(arguments[0], SlotName(callee), type))
+                ? Emit(new ClassMethodInst(arguments[0], VTableSlot(callee), type))
                 : Emit(new FunctionRefInst(name, type));
             // A 'rethrows' callee given functions that throw nothing throws
             // nothing: the binder asked for no 'try', and nothing handles it.
@@ -7175,7 +7418,14 @@ public sealed partial class SilGen {
                         fieldName = $"{fieldName}${capture.Field}";
                     }
 
-                    contextType.Fields.Add((fieldName, capture.Boxed ? generator.BoxType(fieldType) : fieldType));
+                    // A weak or unowned capture is held as a weak or unowned field is.
+                    SilType stored = (capture.Kind, fieldType) switch {
+                        _ when capture.Boxed => generator.BoxType(fieldType),
+                        (CaptureKind.Weak, EnumType optional) => new WeakStorageType(optional),
+                        (CaptureKind.Unowned, ClassType referent) => new UnownedStorageType(referent),
+                        _ => fieldType,
+                    };
+                    contextType.Fields.Add((fieldName, stored));
                 }
             }
 
@@ -7207,7 +7457,23 @@ public sealed partial class SilGen {
                     return null;
                 }
 
-                Emit(new StoreInst(Owned(value), Emit(new RefElementAddrInst(context, capture.Field)), StoreKind.Assign));
+                var field = Emit(new RefElementAddrInst(context, capture.Field));
+                switch (((AddressType)field.Type).Pointee) {
+                    // Given the object without keeping it: the value is let go.
+                    case WeakStorageType:
+                        Emit(new StoreWeakInst(value, field));
+                        Destroy(value);
+                        break;
+
+                    case UnownedStorageType:
+                        Emit(new StoreUnownedInst(value, field));
+                        Destroy(value);
+                        break;
+
+                    default:
+                        Emit(new StoreInst(Owned(value), field, StoreKind.Assign));
+                        break;
+                }
             }
 
             return Emit(new PartialApplyInst(reference, Unhold(context), thick));

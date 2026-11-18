@@ -138,5 +138,67 @@ public sealed class PropertyTests {
                         return d.words + d.peek()
                     }
                     """);
-}
 
+    [Fact]
+    public void AnObservedPropertyIsStoredAndCanBeAssigned() {
+        const string source = """
+                              struct S {
+                                  var tracked: Int = 0 {
+                                      willSet { print("to \(newValue)") }
+                                      didSet { print("from \(oldValue)") }
+                                  }
+                              }
+                              fn f() {
+                                  var s = S()
+                                  s.tracked = 4
+                                  s.tracked += 1
+                                  let t = S(tracked: 2)
+                                  let u = S { tracked: 3 }
+                              }
+                              """;
+        AssertClean(source);
+        var compilation = Compile(source);
+        var tracked = Field(compilation, "S", "tracked");
+        Assert.True(tracked is { HasSetter: true, BackingField.HasInitializer: true });
+        Assert.True(compilation.ObservedProperties.ContainsKey(tracked));
+    }
+
+    [Fact]
+    public void AnObservedPropertyWithoutAValueIsSetByTheInitialiser() =>
+        AssertClean("""
+                    class C {
+                        var count: Int { didSet { if count > 10 { count = 10 } } }
+                        init(count: Int) { self.count = count }
+                    }
+                    struct S { var log: String { willSet(next) { print(next) } } }
+                    fn f() -> S { return S(log: "a") }
+                    """);
+
+    [Fact]
+    public void AnObservedPropertyNamesItsStorageInItsObserversAndInitialisers() {
+        const string source = """
+                              class C {
+                                  var count: Int = 0 { didSet { count = 10 } }
+                                  init() { count = 3 }
+                                  fn reset() { count = 0 }
+                              }
+                              """;
+        var compilation = Compile(source);
+        var model = compilation.GetSemanticModel(compilation.SyntaxTrees[0]);
+        var stores = compilation.SyntaxTrees[0].Root.DescendantNodes().OfType<AssignmentExpressionSyntax>()
+            .Select(a => ((BoundAssignment)model.GetBoundNode(a)!).Target)
+            .Cast<BoundFieldAccess>()
+            .Select(static t => t.Field.Name)
+            .ToList();
+        Assert.Equal(["count$field", "count$field", "count"], stores);
+    }
+
+    [Theory]
+    [InlineData("struct S { let a: Int = 0 { didSet { } } }")]
+    [InlineData("struct S { var b: Int = 0 { get => 1\n    didSet { } } }")]
+    [InlineData("struct S { lazy var c: Int = 0 { didSet { } } }")]
+    [InlineData("struct S { }\nextension S { var d: Int = 0 { didSet { } } }")]
+    [InlineData("var global: Int = 0 { didSet { } }")]
+    public void AnObservedPropertyThatCannotBeOneIsReported(string source) =>
+        Assert.Contains(ErrorsIn(source), static e => e.Code is ErrorCode.ERR_PropertyObservers or ErrorCode.ERR_LazyProperty);
+}

@@ -211,5 +211,49 @@ public sealed class PropertyTests {
                 print(d.letters.count - copy.letters.count)
                 print("box: \(r.box.name)")
             """);
-}
 
+    [Fact]
+    public void AStoreToAnObservedPropertyRunsItsObservers() =>
+        Prints(
+            "to 4 from 0\nwas 0, now 4\nto 6 from 4\nwas 4, now 6\nlog was 'a'\n9 c\n50 10\nrenaming to m\nnow 2, was 0\n",
+            """
+            struct S {
+                var tracked: Int = 0 {
+                    willSet { print("to \(newValue) from \(tracked)") }
+                    didSet { print("was \(oldValue), now \(tracked)") }
+                }
+                var log: String {
+                    didSet { print("log was '\(oldValue)'") }
+                }
+            }
+
+            class C {
+                var count: Int {
+                    didSet {
+                        if count > 10 { count = 10 }
+                    }
+                }
+                var name: String = "n" { willSet(next) { print("renaming to \(next)") } }
+                init(count: Int) { self.count = count }
+            }
+
+            struct G<T> {
+                var items: T[] = [] { didSet { print("now \(items.count), was \(oldValue.count)") } }
+            }
+            """,
+            """
+                var s = S(log: "a")
+                s.tracked = 4
+                s.tracked += 2
+                s.log = "b"
+                let r = S { tracked: 9, log: "c" }
+                print("\(r.tracked) \(r.log)")
+                let c = C(count: 50)
+                let before = c.count
+                c.count = 50
+                print("\(before) \(c.count)")
+                c.name = "m"
+                var g = G<String>()
+                g.items = ["x", "y"]
+            """);
+}

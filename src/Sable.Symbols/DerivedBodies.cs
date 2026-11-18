@@ -39,7 +39,7 @@ internal sealed class DerivedBodies(CoreTypes core, Func<string, string, Functio
         var type = derivation.Type;
         var self = type.IsGenericDefinition ? type.Construct([..type.TypeParameters]) : type;
 
-        var value = derivation.Member switch {
+        var value = type.TypeKind == TypeKind.Enum ? Enum(derivation.Member, type, self) : derivation.Member switch {
             DerivedMember.Equals => type.TypeKind == TypeKind.Union ? UnionEquals(type, self) : StructEquals(type, self),
             DerivedMember.LessThan => type.TypeKind == TypeKind.Union ? UnionLessThan(type, self) : StructLessThan(type, self),
             DerivedMember.Hash => type.TypeKind == TypeKind.Union ? UnionHash(type, self) : StructHash(type, self),
@@ -157,6 +157,29 @@ internal sealed class DerivedBodies(CoreTypes core, Func<string, string, Functio
     }
 
     static List<UnionCaseSymbol> Cases(NamedTypeSymbol type) => [..type.Members.OfType<UnionCaseSymbol>()];
+
+    // ---- Enums ------------------------------------------------------------
+
+    /// <summary>
+    ///     An enum's members, by case, as a union's are with no payloads:
+    ///     equal when the same case, ordered as the cases are declared,
+    ///     hashed by position, described as <c>Direction.North</c>.
+    /// </summary>
+    BoundExpression? Enum(DerivedMember member, NamedTypeSymbol type, NamedTypeSymbol self) {
+        var cases = type.Members.OfType<EnumCaseSymbol>().ToList();
+        BoundPattern Case(int i) => new BoundEnumCasePattern(_at, self, cases[i]);
+        var (lhs, rhs) = Operands(self);
+
+        BoundExpression ByCase(BoundExpression subject, TypeSymbol result, Func<int, BoundExpression> arm) =>
+            new BoundMatch(_at, result, subject, [..cases.Select((_, i) => Arm(Case(i), arm(i)))]);
+
+        return member switch {
+            DerivedMember.Equals => ByCase(lhs(), core.Bool, i => new BoundMatch(_at, core.Bool, rhs(), [Arm(Case(i), Literal(true)), new BoundMatchArm(_at, [], null, Literal(false))])),
+            DerivedMember.LessThan => ByCase(lhs(), core.Bool, i => ByCase(rhs(), core.Bool, j => Literal(i < j))),
+            DerivedMember.Hash => ByCase(new BoundSelfAccess(_at, self), core.Int, i => Literal(i + 1L)),
+            _ => ByCase(new BoundSelfAccess(_at, self), core.String, i => Literal($"{type.Name}.{cases[i].Name}")),
+        };
+    }
 
     /// <summary><c>case .A(let a0, let a1)</c>, with the locals it binds.</summary>
     (BoundPattern Pattern, ImmutableArray<LocalSymbol> Locals) Bind(NamedTypeSymbol self, UnionCaseSymbol unionCase, string prefix) {

@@ -92,5 +92,8 @@ jobs:
       - run: npm ci
       - name: Type-check
         run: npm run check
-      - name: Grammar tests
+      - name: Grammar and extension tests
         run: npm test
+      - name: Other editors' files (Vim, Neovim, Helix, Emacs, Sublime)
+        working-directory: editors
+        run: node --test test/editors.test.js

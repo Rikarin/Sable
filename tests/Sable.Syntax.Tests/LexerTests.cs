@@ -247,6 +247,20 @@ public sealed class LexerTests {
         Assert.Contains(diagnostics, static d => d.Code == ErrorCode.ERR_ByteOrderMarkNotAllowed);
     }
 
+    /// <summary>
+    ///     Found by the round-trip corpus (S0018's page): the mark was stepped
+    ///     over, not kept, so the tree of a file with one gave back the file
+    ///     without it.
+    /// </summary>
+    [Fact]
+    public void AByteOrderMarkIsKeptInTheTree() {
+        const string text = "\uFEFFmodule M\n\nfn one() -> Int { return 1 }\n";
+        var tree = SyntaxTree.Parse(new SourceText(text));
+        Assert.Equal(text, tree.ToFullString());
+        Assert.Single(tree.Diagnostics, static d => d.Code == ErrorCode.ERR_ByteOrderMarkNotAllowed);
+        Assert.Equal(SyntaxKind.SkippedTokensTrivia, tree.Root.GetFirstToken().LeadingTrivia[0].Kind);
+    }
+
     [Fact]
     public void UnexpectedCharacterProducesBadTokenAndDiagnostic() {
         var (tokens, diagnostics) = TestHelpers.LexWithDiagnostics("let x = §");

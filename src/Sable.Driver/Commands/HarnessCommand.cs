@@ -30,7 +30,10 @@ public abstract class HarnessCommand : Command {
         bool Optimise,
         bool Debug,
         bool? Exclusivity,
-        bool Bless = false);
+        bool Bless = false) {
+        /// <summary>'--harness-out': where to write the harness, built and not run (to debug a test with).</summary>
+        public string? Output { get; init; }
+    }
 
     protected Options? Parse(IReadOnlyList<string> args) {
         var files = new List<string>();
@@ -40,6 +43,7 @@ public abstract class HarnessCommand : Command {
         var debug = false;
         var bless = false;
         bool? exclusivity = null;
+        string? output = null;
         for (var i = 0; i < args.Count; i++) {
             var argument = args[i];
             switch (argument) {
@@ -54,6 +58,13 @@ public abstract class HarnessCommand : Command {
                 case "-g": debug = true; break;
                 case "--exclusivity=checked": exclusivity = true; break;
                 case "--exclusivity=unchecked": exclusivity = false; break;
+                case "--harness-out":
+                    if (i + 1 >= args.Count) {
+                        return null;
+                    }
+
+                    output = Path.GetFullPath(args[++i]);
+                    break;
                 default:
                     if (HarnessOptions.TryGetValue(argument, out var takesValue)) {
                         harness.Add(argument);
@@ -77,7 +88,7 @@ public abstract class HarnessCommand : Command {
             }
         }
 
-        return new(files, harness, doc, optimise, debug, exclusivity, bless);
+        return new(files, harness, doc, optimise, debug, exclusivity, bless) { Output = output };
     }
 
     public override int Run(IReadOnlyList<string> arguments) {
@@ -96,12 +107,17 @@ public abstract class HarnessCommand : Command {
             return 1;
         }
 
-        var executable = Path.Combine(Path.GetTempPath(), $"sable-{Name}-{Guid.NewGuid():N}{NativeTarget.Host.ExecutableSuffix}");
+        // Built to be run here, and then gone; or, with '--harness-out',
+        // written there and kept, for a debugger to start.
+        var executable = options.Output ?? Path.Combine(Path.GetTempPath(), $"sable-{Name}-{Guid.NewGuid():N}{NativeTarget.Host.ExecutableSuffix}");
         try {
-            var code = Build(program.Trees, program.Directory, options, executable, program.Cache, program.Link, program.LinkInputs) ?? Execute(executable, options.HarnessArguments);
+            var code = Build(program.Trees, program.Directory, options, executable, program.Cache, program.Link, program.LinkInputs)
+                ?? (options.Output is null ? Execute(executable, options.HarnessArguments) : 0);
             return snapshots is { Outcome.Failed: > 0 } ? 1 : code;
         } finally {
-            File.Delete(executable);
+            if (options.Output is null) {
+                File.Delete(executable);
+            }
         }
     }
 
@@ -251,7 +267,8 @@ public abstract class HarnessCommand : Command {
         return null;
     }
 
-    static int Execute(string executable, IReadOnlyList<string> arguments) {
+    /// <summary>Runs the built harness with the arguments meant for it; returns its exit code.</summary>
+    protected virtual int Execute(string executable, IReadOnlyList<string> arguments) {
         var start = new ProcessStartInfo(executable);
         foreach (var argument in arguments) {
             start.ArgumentList.Add(argument);

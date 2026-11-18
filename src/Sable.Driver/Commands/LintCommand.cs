@@ -19,9 +19,9 @@ public sealed class LintCommand : PackageCommand {
     public override string Summary => "run the lints over the package (or some files)";
 
     public override string Usage => $"""
-        usage: sable lint [-p <package>] [--allow <lint>] [--warn <lint>] [--error <lint>]
-               sable lint <paths...> [--allow <lint>] [--warn <lint>] [--error <lint>]
-               sable lint --list
+        usage: sable lint [-p <package>] [--allow <lint>] [--warn <lint>] [--error <lint>] [--plugin <dll>]
+               sable lint <paths...> [--allow <lint>] [--warn <lint>] [--error <lint>] [--plugin <dll>]
+               sable lint --list [--plugin <dll>]
 
           (no paths)       in a package: its own files, at its [lints] levels
           paths            .sb files, or directories of them (outside a package: the current directory)
@@ -29,28 +29,114 @@ public sealed class LintCommand : PackageCommand {
           --allow <lint>   turn a lint off
           --warn <lint>    report it as a warning
           --error <lint>   report it as an error, and fail
+          --plugin <dll>   load more lints from a plugin (docs/05 §5.7)
           --list           list the lints with their default levels
+          'sable fix' applies the fixes the lints suggest.
 
           The lints: {string.Join(", ", Lints.All.Select(static l => l.Name))}
         """;
 
-    public override int Run(IReadOnlyList<string> arguments) {
-        var levels = new List<(string Name, LintLevel Level)>();
-        var paths = new List<string>();
-        string? package = null;
-        for (var i = 0; i < arguments.Count; i++) {
-            if (arguments[i] == "--list") {
-                foreach (var lint in Lints.All) {
-                    Console.WriteLine($"{lint.Name,-20} {lint.DefaultLevel.ToString().ToLowerInvariant(),-6} S{(int)lint.Code:D4}  {lint.Description}");
-                }
+    /// <summary>
+    ///     Reads the lint options <c>sable fix</c> takes for loose files: the
+    ///     plugins, then the levels (which may name a plugin's lints), and
+    ///     the paths. Null when they are all right; otherwise the exit code,
+    ///     having said what is wrong.
+    /// </summary>
+    internal static int? ReadOptions(IReadOnlyList<string> arguments, string command, out List<string> paths, out LintConfiguration configuration) {
+        paths = [];
+        if (Plugins(arguments, command, LintConfiguration.Default) is not { } loaded) {
+            configuration = LintConfiguration.Default;
+            return 1;
+        }
 
-                return 0;
+        configuration = loaded;
+        for (var i = 0; i < arguments.Count; i++) {
+            if (arguments[i] == "--plugin") {
+                i++;
+                continue;
             }
 
             if (arguments[i] is "--allow" or "--warn" or "--error" && i + 1 < arguments.Count) {
                 var level = LintConfiguration.ParseLevel(arguments[i][2..])!.Value;
                 var name = arguments[++i];
-                if (Lints.Find(name) is null) {
+                if (configuration.Find(name) is null) {
+                    Console.Error.WriteLine($"sable {command}: no lint named '{name}'; 'sable lint --list' lists them");
+                    return 2;
+                }
+
+                configuration = configuration.With(name, level);
+                continue;
+            }
+
+            if (arguments[i].StartsWith('-')) {
+                Console.Error.WriteLine($"sable {command}: unknown option '{arguments[i]}'");
+                return 2;
+            }
+
+            paths.Add(arguments[i]);
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    ///     The configuration with the plugins <c>--plugin</c> names; one it
+    ///     has already (from a manifest) is not loaded twice. Null, having
+    ///     said why, when one cannot be loaded.
+    /// </summary>
+    static LintConfiguration? Plugins(IReadOnlyList<string> arguments, string command, LintConfiguration configuration) {
+        for (var i = 0; i < arguments.Count; i++) {
+            if (arguments[i] != "--plugin") {
+                continue;
+            }
+
+            if (i + 1 >= arguments.Count) {
+                Console.Error.WriteLine($"sable {command}: '--plugin' needs the plugin's path");
+                return null;
+            }
+
+            var path = Path.GetFullPath(arguments[++i]);
+            if (configuration.Plugins.Any(p => p.Path == path)) {
+                continue;
+            }
+
+            try {
+                configuration = configuration.WithPlugin(Lints.LoadPlugin(path));
+            } catch (Exception e) when (e is LintPluginException or ArgumentException) {
+                Console.Error.WriteLine($"sable {command}: {e.Message}");
+                return null;
+            }
+        }
+
+        return configuration;
+    }
+
+    public override int Run(IReadOnlyList<string> arguments) {
+        var levels = new List<(string Name, LintLevel Level)>();
+        var paths = new List<string>();
+        string? package = null;
+        if (Plugins(arguments, Name, LintConfiguration.Default) is not { } known) {
+            return 1;
+        }
+
+        if (arguments.Contains("--list")) {
+            foreach (var lint in known.All) {
+                Console.WriteLine($"{lint.Name,-20} {lint.DefaultLevel.ToString().ToLowerInvariant(),-6} S{(int)lint.Code:D4}  {lint.Description}");
+            }
+
+            return 0;
+        }
+
+        for (var i = 0; i < arguments.Count; i++) {
+            if (arguments[i] == "--plugin") {
+                i++;
+                continue;
+            }
+
+            if (arguments[i] is "--allow" or "--warn" or "--error" && i + 1 < arguments.Count) {
+                var level = LintConfiguration.ParseLevel(arguments[i][2..])!.Value;
+                var name = arguments[++i];
+                if (known.Find(name) is null) {
                     Console.Error.WriteLine($"sable lint: no lint named '{name}'; 'sable lint --list' lists them");
                     return 2;
                 }
@@ -71,7 +157,9 @@ public sealed class LintCommand : PackageCommand {
             paths.Add(arguments[i]);
         }
 
-        LintConfiguration Levels(LintConfiguration configuration) => levels.Aggregate(configuration, static (c, l) => c.With(l.Name, l.Level));
+        // The plugins first, over the manifest's, so that the levels may name their lints.
+        LintConfiguration Levels(LintConfiguration configuration) =>
+            levels.Aggregate(Plugins(arguments, Name, configuration) ?? configuration, static (c, l) => c.Find(l.Name) is null ? c : c.With(l.Name, l.Level));
 
         if (paths.Count == 0 && Workspace.FindManifestDirectory(Directory.GetCurrentDirectory()) is not null) {
             return Guard(() => LintPackage(package, Levels));

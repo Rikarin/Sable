@@ -27,6 +27,15 @@ public sealed record TestFunction(
     string CallPath,
     bool Throws,
     bool TakesBencher) {
+    /// <summary>An async test: the harness awaits it.</summary>
+    public bool IsAsync => Symbol.IsAsync;
+
+    /// <summary>
+    ///     <c>@test(traps)</c>: null for a test that must not trap; for one
+    ///     that must, what the trap's message must contain — empty for any.
+    /// </summary>
+    public string? ExpectedTrap { get; init; }
+
     /// <summary>As the harness lists and filters it: <c>Module.function</c>, or <c>Module.Type.function</c>.</summary>
     public string QualifiedName => Module.Length == 0 ? CallPath : $"{Module}.{CallPath}";
 
@@ -45,7 +54,14 @@ public sealed record TestFunction(
 ///         body is timed, or takes a <c>Sable.Testing.Bencher</c>, and times
 ///         what it hands the bencher's <c>iterate</c>. Either is a function of
 ///         a module or a static method of a type that is not generic, so that
-///         the harness has one thing to call; neither is async or generic.
+///         the harness has one thing to call; neither is generic, and a
+///         benchmark is not async. A test may be async, and is awaited.
+///     </para>
+///     <para>
+///         <c>@test(traps)</c> marks a test that passes by trapping — an index
+///         out of range, an overflow, a <c>fatal</c> — and fails if it returns;
+///         <c>@test(traps: "out of range")</c> also wants the trap's message
+///         to contain that. A failed assertion is not the trap: it fails it.
 ///     </para>
 ///     <para>
 ///         In an ordinary build they are functions like any other. The
@@ -114,8 +130,16 @@ public sealed partial class Compilation {
             Report(ErrorCode.ERR_TestAndBench, attributes[1].Span, "a function is a test or a benchmark, not both");
         }
 
+        string? expectedTrap = null;
         foreach (var attribute in attributes.Where(static a => a.ArgumentList is not null)) {
-            Report(ErrorCode.ERR_TestAttributeArguments, attribute.ArgumentList!.Span, $"{(attribute.Name.ToString().Trim() == TestAttribute ? "'@test'" : "'@bench'")} takes no arguments");
+            if (attribute.Name.ToString().Trim() == BenchAttribute) {
+                Report(ErrorCode.ERR_TestAttributeArguments, attribute.ArgumentList!.Span, "'@bench' takes no arguments");
+            } else if (TrapExpected(attribute) is { } trap) {
+                expectedTrap = trap;
+            } else {
+                Report(ErrorCode.ERR_TestAttributeArguments, attribute.ArgumentList!.Span,
+                    "'@test' takes nothing, or 'traps' for a test that must trap, or 'traps: \"text\"' for one whose trap must say that");
+            }
         }
 
         if (GetDeclaredSymbol(declaration) is not FunctionSymbol function || function.ContainingSymbol is FunctionSymbol) {
@@ -127,8 +151,8 @@ public sealed partial class Compilation {
             Report(ErrorCode.ERR_TestIsGeneric, declaration.TypeParameters.Span, $"a {Noun(kind)} cannot be generic: the harness calls it with no type arguments to give");
         }
 
-        if (function.IsAsync) {
-            Report(ErrorCode.ERR_TestIsAsync, declaration.Identifier.Span, $"a {Noun(kind)} cannot be async yet: the harness calls it synchronously");
+        if (function.IsAsync && kind == TestKind.Bench) {
+            Report(ErrorCode.ERR_TestIsAsync, declaration.Identifier.Span, "a benchmark cannot be async yet: the bencher times a body synchronously");
         }
 
         if (function.ReturnType is var returned && !ReferenceEquals(returned, Core.Void) && returned is not ErrorTypeSymbol) {
@@ -188,8 +212,32 @@ public sealed partial class Compilation {
         }
 
         return ok
-            ? new(function, declaration, tree, kind, _fileScopes[tree].Module.Name, callPath, function.ThrownType is not null, takesBencher)
+            ? new(function, declaration, tree, kind, _fileScopes[tree].Module.Name, callPath, function.ThrownType is not null, takesBencher) { ExpectedTrap = expectedTrap }
             : null;
+    }
+
+    /// <summary>
+    ///     What <c>@test(traps)</c> or <c>@test(traps: "text")</c> expects of
+    ///     the trap: "" for any, the text for one saying it; null for any
+    ///     other arguments.
+    /// </summary>
+    static string? TrapExpected(AttributeSyntax attribute) {
+        if (attribute.ArgumentList is not { Arguments: [var argument] }) {
+            return null;
+        }
+
+        // 'traps' alone, as a name.
+        if (argument.NameToken.IsNone && argument.Expression.ToString().Trim() == "traps") {
+            return "";
+        }
+
+        // 'traps: "text"', a plain string: no interpolation, nothing to evaluate.
+        if (argument.NameToken.Text == "traps" && argument.Expression is LiteralExpressionSyntax { Token.Kind: SyntaxKind.StringLiteralToken } literal
+            && literal.Token.Parts.All(static p => p.Kind == StringPartKind.Literal) && literal.Token.Value is string text) {
+            return text;
+        }
+
+        return null;
     }
 
     static string Noun(TestKind kind) => kind == TestKind.Test ? "test" : "benchmark";

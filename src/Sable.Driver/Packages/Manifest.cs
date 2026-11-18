@@ -319,14 +319,26 @@ public sealed partial class Manifest {
             var registry = Table(root, "registry", "registry") is { } r ? String(r, "path", "registry.path") : null;
             var lints = Sable.Symbols.LintConfiguration.Default;
             if (Table(root, "lints", "lints") is { } lintTable) {
+                // 'plugins' names assemblies of more lints (docs/05 §5.7),
+                // relative to the manifest: loaded first, so the levels
+                // below may name their lints too.
+                foreach (var plugin in Strings(lintTable, "plugins", "lints.plugins") ?? []) {
+                    var path = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(file)) ?? ".", plugin);
+                    try {
+                        lints = lints.WithPlugin(Sable.Symbols.Lints.LoadPlugin(path));
+                    } catch (Exception e) when (e is Sable.Symbols.LintPluginException or ArgumentException) {
+                        Error(lintTable, "plugins", "lints.plugins", e.Message);
+                    }
+                }
+
                 var levels = new List<KeyValuePair<string, string>>();
-                foreach (var key in lintTable.Keys) {
+                foreach (var key in lintTable.Keys.Where(static k => k != "plugins")) {
                     if (String(lintTable, key, $"lints.{key}") is { } level) {
                         levels.Add(new(key, level));
                     }
                 }
 
-                lints = Sable.Symbols.LintConfiguration.FromTable(levels, out var problems);
+                lints = Sable.Symbols.LintConfiguration.FromTable(levels, out var problems, lints);
                 foreach (var problem in problems) {
                     _errors.Add(new(file, lintTable.Position.Line, "lints", problem));
                 }

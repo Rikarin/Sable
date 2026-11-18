@@ -25,6 +25,23 @@ public sealed class ExtensionTests {
                          struct Point { var x: Int, var y: Int }
                          """;
 
+    /// <summary>
+    ///     Found by the compiler fuzzer: an extension inside an extension was
+    ///     recorded while the extensions were being attached, which threw
+    ///     instead of attaching it like one nested in a type.
+    /// </summary>
+    [Fact]
+    public void AnExtensionInsideAnExtensionIsAttachedNotACrash() =>
+        AssertClean(
+            $$"""
+              {{Point}}
+              extension Point {
+                  extension Point { fn sum() -> Int { return x + y } }
+              }
+              fn probe(_ p: Point) -> Int { return p.sum() }
+              """
+        );
+
     // ---- Where the members land -------------------------------------------
 
     [Fact]

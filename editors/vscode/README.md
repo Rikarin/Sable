@@ -15,7 +15,8 @@ through `sable` too.
   syntax error is left alone.
 - **Run and Debug** above a program's `main`, and in the editor title; `Cmd/Ctrl+F5` runs.
 - **The Test Explorer**: each package's `@test` functions, listed by `sable test --list` and run
-  from the gutter, with failures (and the values that differ) shown where the test is.
+  from the gutter, with failures (and the values that differ) shown where the test is; or debugged,
+  in a harness built with debug information (the Debug profile).
 - **Tasks** for `build`, `check`, `run`, `test`, `bench`, `fmt` and `clean` in every package
   (Terminal → Run Task → sable). Their diagnostics reach the Problems panel through `$sable`.
 - **Debugging** with lldb: Sable's formatters are loaded, so a `String` shows its text, a list its
@@ -62,8 +63,11 @@ starts the debug adapter with the plugin imported.
 
 | Setting | Default | |
 | --- | --- | --- |
-| `sable.path` | `sable` | The `sable` binary. `${workspaceFolder}` and `~` are expanded. |
+| `sable.path` | `sable` | The `sable` binary. `${workspaceFolder}` and `~` are expanded; in a workspace of several folders, each folder may set its own. |
 | `sable.server.enable` | `true` | Run the language server. |
+| `sable.inlayHints.enable` | `true` | Inlay hints: inferred types, and the roots a returned reference may point into. |
+| `sable.lints.enable` | `true` | Report `sable check`'s lints as you type, at the package's `[lints]` levels. |
+| `sable.diagnostics.workspace` | `true` | Report the problems of every file in the workspace, not only of the open ones. |
 | `sable.codeLens.enable` | `true` | Run and Debug above `main`. |
 | `sable.trace.server` | `off` | Log the language server's messages to the Sable output. |
 
@@ -73,7 +77,8 @@ starts the debug adapter with the plugin imported.
 cd editors/vscode
 npm install
 npm run check      # type-check the JavaScript (tsc, checkJs)
-npm test           # the grammar, against samples and every .sb file in the repository
+npm test           # the grammar, against samples and every .sb file in the repository; then
+                   # the extension's code under node, against a stand-in for VS Code
 npm run package    # sable.vsix
 ```
 

@@ -151,14 +151,18 @@ public struct TestCase {
     public var name: String
     /// Where it is declared, 'file:line'.
     public var location: String
-    /// Runs it: false when it threw an error, which fails it.
-    public var run: () -> Bool
+    /// Runs it, awaiting it if it is async: none when it returned, and what
+    /// it threw, described, when it threw — which fails it.
+    public var run: async () -> String?
+    /// '@test(traps)': none for a test that must not trap; for one that
+    /// must, what the trap's message must contain ("" for any trap).
+    public var traps: String?
 }
 
-/// Runs the test, failing it if it throws.
-fn runOne(_ test: TestCase) {
-    if !test.run() {
-        fail("the test threw an error")
+/// Runs the test, failing it if it throws, and saying what it threw.
+async fn runOne(_ test: TestCase) {
+    if let thrown = await test.run() {
+        fail("the test threw an error: \(thrown)")
     }
 }
 
@@ -166,6 +170,7 @@ fn runOne(_ test: TestCase) {
 struct TestOptions {
     var filters: String[>..]
     var list: Bool
+    var describe: Bool
     var inProcess: Bool
     var only: String?
     var showOutput: Bool
@@ -173,13 +178,15 @@ struct TestOptions {
 }
 
 fn parseTestOptions() -> TestOptions? {
-    var options = TestOptions { filters: [], list: false, inProcess: false, only: none, showOutput: false, exact: false }
+    var options = TestOptions { filters: [], list: false, describe: false, inProcess: false, only: none, showOutput: false, exact: false }
     var i = 0
     let count = Runtime.argumentCount()
     while i < count {
         let argument = Runtime.argument(i)
         if argument == "--list" {
             options.list = true
+        } else if argument == "--describe" {
+            options.describe = true
         } else if argument == "--in-process" {
             options.inProcess = true
         } else if argument == "--show-output" {
@@ -218,7 +225,10 @@ fn selected(_ name: String, _ filters: String[>..], _ exact: Bool) -> Bool {
 /// each in a process of its own, and reports on each and on them all.
 /// Gives the exit code: 0 when every test selected passed, 1 when one
 /// failed, 2 for arguments it does not understand.
-public fn runTests(_ tests: TestCase[>..]) -> Int {
+/// ('sable test' itself runs the processes, several at once and with a
+/// time limit, from what '--describe' says; this is the harness run on its
+/// own, one test after another.)
+public async fn runTests(_ tests: TestCase[>..]) -> Int {
     guard let options = parseTestOptions() else {
         return 2
     }
@@ -227,7 +237,7 @@ public fn runTests(_ tests: TestCase[>..]) -> Int {
     if let name = options.only {
         for test in tests {
             if test.name == name {
-                runOne(test)
+                await runOne(test)
                 return 0
             }
         }
@@ -251,19 +261,36 @@ public fn runTests(_ tests: TestCase[>..]) -> Int {
         return 0
     }
 
+    // For 'sable test': a line a test, its name, place and expected trap,
+    // separated by tabs; '-' for a test that must not trap.
+    if options.describe {
+        for test in chosen {
+            let traps = test.traps ?? "-"
+            print("\(test.name)\t\(test.location)\t\(traps)")
+        }
+        return 0
+    }
+
     print("running \(chosen.count) test\(plural(chosen.count))")
 
     // Without process isolation, as asked or where there is no executable
     // to start again (the interpreter): a failure stops the run, and no
-    // times are shown, so that two runs print the same.
+    // times are shown, so that two runs print the same. A test that must
+    // trap cannot run here: its trap would end the run.
     let program = Runtime.executablePath()
     if options.inProcess || program.count == 0 {
+        var ignored = 0
         for test in chosen {
-            runOne(test)
+            if test.traps != none {
+                ignored = ignored + 1
+                print("test \(test.name) ... ignored (it must trap, which only a process of its own can)")
+                continue
+            }
+            await runOne(test)
             print("test \(test.name) ... ok")
         }
         print("")
-        print("test result: ok. \(chosen.count) passed; 0 failed; \(filteredOut) filtered out")
+        print("test result: ok. \(chosen.count - ignored) passed; 0 failed; \(ignoredCount(ignored))\(filteredOut) filtered out")
         return 0
     }
 
@@ -278,16 +305,16 @@ public fn runTests(_ tests: TestCase[>..]) -> Int {
         let status = output == none ? -1 : Runtime.lastExitStatus()
         let errors = output == none ? "" : Runtime.lastErrorOutput()
         let written = output ?? ""
-        if status == 0 {
+        if let why = verdict(test, status, errors) {
+            print("test \(test.name) ... FAILED (\(formatDuration(took)))")
+            failures.append(test.name)
+            reports.append(failureReport(test, status, written, errors, why))
+        } else {
             passed = passed + 1
             print("test \(test.name) ... ok (\(formatDuration(took)))")
             if options.showOutput && written.count > 0 {
                 print(indented(written))
             }
-        } else {
-            print("test \(test.name) ... FAILED (\(formatDuration(took)))")
-            failures.append(test.name)
-            reports.append(failureReport(test, status, written, errors))
         }
     }
     let total = Runtime.monotonicNanoseconds() - started
@@ -306,13 +333,41 @@ public fn runTests(_ tests: TestCase[>..]) -> Int {
         }
     }
     print("")
-    let verdict = failures.count == 0 ? "ok" : "FAILED"
-    print("test result: \(verdict). \(passed) passed; \(failures.count) failed; \(filteredOut) filtered out; finished in \(formatDuration(total))")
+    let outcome = failures.count == 0 ? "ok" : "FAILED"
+    print("test result: \(outcome). \(passed) passed; \(failures.count) failed; \(filteredOut) filtered out; finished in \(formatDuration(total))")
     return failures.count == 0 ? 0 : 1
 }
 
+fn ignoredCount(_ ignored: Int) -> String {
+    return ignored == 0 ? "" : "\(ignored) ignored; "
+}
+
+/// Whether a test's process ended as it should have: none when it did;
+/// otherwise why not, for its report ("" when what it wrote says it all).
+/// A test that must trap passes by trapping — not by failing an
+/// assertion, which is the test failing — with the message it names.
+public fn verdict(_ test: TestCase, _ status: Int, _ errors: String) -> String? {
+    guard let expected = test.traps else {
+        return status == 0 ? none : ""
+    }
+    if status == 0 {
+        return "the test was to trap\(trapWanted(expected)), and it returned"
+    }
+    if status < 0 || contains(errors, failureMarker) {
+        return ""
+    }
+    if expected.count > 0 && !contains(errors, expected) {
+        return "the test trapped, but not with '\(expected)'"
+    }
+    return none
+}
+
+fn trapWanted(_ expected: String) -> String {
+    return expected.count == 0 ? "" : " with '\(expected)'"
+}
+
 /// What a failed test's process said, and how it ended.
-fn failureReport(_ test: TestCase, _ status: Int, _ output: String, _ errors: String) -> String {
+fn failureReport(_ test: TestCase, _ status: Int, _ output: String, _ errors: String, _ why: String) -> String {
     let report = TextBuilder()
     report.append("---- \(test.name) (\(test.location)) ----")
     if status < 0 {
@@ -329,6 +384,9 @@ fn failureReport(_ test: TestCase, _ status: Int, _ output: String, _ errors: St
     }
     if shown.count > 0 {
         report.append("\n" + indented(shown))
+    }
+    if why.count > 0 {
+        report.append("\n    \(why)")
     }
     if !contains(errors, failureMarker) {
         report.append("\n    (exit status \(status))")

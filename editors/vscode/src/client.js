@@ -32,19 +32,17 @@ async function start(context) {
         { scheme: "file", language: "sable" },
         { scheme: "untitled", language: "sable" },
       ],
+      // What the server starts with; a change is sent as the "sable"
+      // section of workspace/didChangeConfiguration, which it reads the same.
+      initializationOptions: serverSettings(),
       synchronize: {
         // Sources, and what decides how they are compiled: a manifest
         // (package.sb, or sable.toml) or the lock file changing makes the
         // server read the packages again.
         fileEvents: vscode.workspace.createFileSystemWatcher("**/{*.sb,sable.toml,sable.lock}"),
-        // The server's settings ('sable.diagnostics.*'), sent again whenever
-        // they change.
+        // The server's settings ('sable.diagnostics.*', hints and lints),
+        // sent again whenever they change.
         configurationSection: "sable",
-      },
-      initializationOptions: {
-        diagnostics: {
-          workspace: vscode.workspace.getConfiguration("sable").get("diagnostics.workspace", true),
-        },
       },
       outputChannel: sable.channel(),
       markdown: { isTrusted: false, supportHtml: false },
@@ -81,6 +79,16 @@ async function start(context) {
       sable.channel().show();
     }
   }
+}
+
+/** The settings the server takes: inlay hints and lints, on or off. */
+function serverSettings() {
+  const configuration = vscode.workspace.getConfiguration("sable");
+  return {
+    inlayHints: { enable: configuration.get("inlayHints.enable", true) },
+    lints: { enable: configuration.get("lints.enable", true) },
+    diagnostics: { workspace: configuration.get("diagnostics.workspace", true) },
+  };
 }
 
 async function stop() {
@@ -121,4 +129,4 @@ function showStatus(text, tooltip, command) {
   status.show();
 }
 
-module.exports = { start, stop, restart };
+module.exports = { start, stop, restart, serverSettings };

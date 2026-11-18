@@ -1,0 +1,7 @@
+// What `sable fmt` writes: four spaces, no tabs.
+{
+	"tab_size": 4,
+	"translate_tabs_to_spaces": true,
+	"detect_indentation": false,
+	"ensure_newline_at_eof_on_save": true,
+}

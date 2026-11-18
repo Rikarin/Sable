@@ -1,9 +1,12 @@
 // @ts-check
 // The Test Explorer: each package's @test functions, as `sable test --list`
-// lists them, run by `sable test <names> --exact`.
+// lists them, run by `sable test <names> --exact`, or debugged one at a
+// time in the harness `sable test -g --harness-out` builds.
 "use strict";
 
 const vscode = require("vscode");
+const fs = require("fs");
+const os = require("os");
 const path = require("path");
 const sable = require("./sable");
 
@@ -123,6 +126,107 @@ function register(context) {
   );
 
   controller.createRunProfile("Run", vscode.TestRunProfileKind.Run, (request, token) => runTests(controller, packages, request, token), true);
+  controller.createRunProfile("Debug", vscode.TestRunProfileKind.Debug, (request, token) => debugTests(controller, packages, request, token), true);
+}
+
+/**
+ * The tests a request names, by package root: a package stands for each of its tests.
+ * @param {Map<string, vscode.TestItem>} packages
+ * @param {vscode.TestRunRequest} request
+ * @returns {Map<string, vscode.TestItem[]>}
+ */
+function selectedTests(packages, request) {
+  const excluded = new Set(request.exclude?.map((t) => t.id) ?? []);
+  /** @type {Map<string, vscode.TestItem[]>} */
+  const plan = new Map();
+  const roots = [...packages.keys()];
+  for (const item of request.include ?? [...packages.values()]) {
+    const root = roots.find((r) => item.id === r || item.id.startsWith(`${r}::`));
+    if (!root || excluded.has(item.id)) {
+      continue;
+    }
+
+    const tests = plan.get(root) ?? [];
+    if (item.id === root) {
+      item.children.forEach((child) => {
+        if (!excluded.has(child.id)) {
+          tests.push(child);
+        }
+      });
+    } else {
+      tests.push(item);
+    }
+
+    plan.set(root, tests);
+  }
+
+  return plan;
+}
+
+/**
+ * Debugs the selected tests: each package's harness is built once with
+ * debug information, and each test is started in it under the debugger,
+ * one after the other (`<harness> --run-test <name>`, as `sable test` runs it).
+ * @param {vscode.TestController} controller
+ * @param {Map<string, vscode.TestItem>} packages
+ * @param {vscode.TestRunRequest} request
+ * @param {vscode.CancellationToken} token
+ */
+async function debugTests(controller, packages, request, token) {
+  const run = controller.createTestRun(request);
+  try {
+    for (const [root, tests] of selectedTests(packages, request)) {
+      if (token.isCancellationRequested || tests.length === 0) {
+        break;
+      }
+
+      const harness = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "sable-debug-")), "harness");
+      run.appendOutput(`Building the tests of ${root} with debug information...\r\n`);
+      const built = await sable.run(["test", "-g", "--harness-out", harness], { cwd: root, token });
+      if (built.code !== 0) {
+        const message = new vscode.TestMessage((built.stderr || built.stdout).trim() || `sable test exited with ${built.code}`);
+        tests.forEach((test) => run.errored(test, message));
+        continue;
+      }
+
+      const folder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(root));
+      for (const test of tests) {
+        if (token.isCancellationRequested) {
+          break;
+        }
+
+        const name = test.id.slice(root.length + 2);
+        run.started(test);
+        const ended = new Promise((resolve) => {
+          const watch = vscode.debug.onDidTerminateDebugSession((session) => {
+            if (session.configuration?.sableTest === test.id) {
+              watch.dispose();
+              resolve(undefined);
+            }
+          });
+        });
+        const started = await vscode.debug.startDebugging(folder, {
+          type: "sable",
+          request: "launch",
+          name: `Debug ${name}`,
+          program: harness,
+          args: ["--run-test", name],
+          cwd: root,
+          sableTest: test.id,
+        });
+        if (!started) {
+          run.errored(test, new vscode.TestMessage("the debugger did not start"));
+          continue;
+        }
+
+        await ended;
+        // Whether it passed is the debugger's to show; the run only says it ran.
+        run.skipped(test);
+      }
+    }
+  } finally {
+    run.end();
+  }
 }
 
 /**

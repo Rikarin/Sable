@@ -313,7 +313,12 @@ public sealed class Resolver {
         var conflict = false;
         foreach (var incompatibility in DependencyIncompatibilities(package, version)) {
             AddIncompatibility(incompatibility);
-            conflict |= incompatibility.Terms.All(t => t.Package == package || _solution.Satisfies(t));
+            // The package's own term holds of the version being chosen — but
+            // not always: a package depending on itself merges its two terms
+            // into one, the versions outside its own requirement, which a
+            // version within the requirement does not satisfy. Taking it as
+            // satisfied would refuse that version again on every pass.
+            conflict |= incompatibility.Terms.All(t => t.Package == package ? t.Set.Contains(version) == t.Positive : _solution.Satisfies(t));
         }
 
         if (!conflict) {
@@ -411,6 +416,10 @@ public sealed class Resolver {
     string Describe(Incompatibility incompatibility) {
         var terms = incompatibility.Terms;
         switch (incompatibility.Kind) {
+            // A package depending on itself: its two terms are one package's, so
+            // they merged into one, the versions outside its own requirement.
+            case IncompatibilityKind.Dependency when terms is [var self]:
+                return $"{Terse(self)} depends on a version of {Display(self.Package)} other than itself";
             case IncompatibilityKind.Dependency:
                 return $"{Terse(terms[0])} depends on {Terse(terms[1])}";
             case IncompatibilityKind.NoVersions:
@@ -517,6 +526,7 @@ public sealed class Resolver {
         var why = latter.Kind switch {
             IncompatibilityKind.NoVersions => "which doesn't match any versions",
             IncompatibilityKind.UnknownPackage => "which doesn't exist",
+            IncompatibilityKind.Dependency => $"which depends on a version of {Display(latterTerm.Package)} other than itself",
             _ => $"which is forbidden{Line(latterLine)}",
         };
         return $"{Terse(priorPositive)} {verb} {Terse(priorNegative)}{Line(priorLine)} {why}";
@@ -564,7 +574,8 @@ public sealed class Resolver {
         ///     Cargo users will not expect (docs/05 §5.3).
         /// </summary>
         string? MajorVersionNote() {
-            var external = _derivations.Keys.Where(static i => i.Kind == IncompatibilityKind.Dependency).ToList();
+            // Not a self-dependency, whose one term names no dependency.
+            var external = _derivations.Keys.Where(static i => i is { Kind: IncompatibilityKind.Dependency, Terms.Count: 2 }).ToList();
             foreach (var group in external.GroupBy(i => resolver.Display(i.Terms[1].Package))) {
                 var sets = group.Select(static i => i.Terms[1].Set).ToList();
                 foreach (var a in sets) {

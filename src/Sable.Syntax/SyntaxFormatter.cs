@@ -691,8 +691,9 @@ public static class SyntaxFormatter {
                     or SyntaxKind.DotDotLessToken
                     or SyntaxKind.DotDotDotToken => true,
 
+                // '&x' as an argument follows '(' with no space, as anything
+                // does, but a comma or a label's colon with one: 'f(a, &b)'.
                 SyntaxKind.AmpersandToken => parentKind is SyntaxKind.ReferenceType
-                    or SyntaxKind.Argument
                     or SyntaxKind.PrefixUnaryExpression,
 
                 _ => false,

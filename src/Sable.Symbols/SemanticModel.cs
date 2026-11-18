@@ -530,7 +530,10 @@ public sealed partial class SemanticModel {
             // A setter writes the value it belongs to; a getter does not.
             IsMutating = !isGetter,
             // 'async get' may await, as its readers do.
-            IsAsync = isGetter && accessor.Modifiers.Any(SyntaxKind.AsyncKeyword)
+            IsAsync = isGetter && accessor.Modifiers.Any(SyntaxKind.AsyncKeyword),
+
+            // A static property's accessors have no value to belong to.
+            IsStatic = owner is FieldSymbol { IsStatic: true },
         };
 
         // A subscript's accessors see its indices.

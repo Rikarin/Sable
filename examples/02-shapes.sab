@@ -1,11 +1,25 @@
 module Examples.Shapes
 
 import Sable.Math
+import Sable.Text
+import Sable.Testing
+
+/// A point in the plane.
+public struct Vec2 {
+    public var x: F64
+    public var y: F64
+
+    public fn distance(to other: Vec2) -> F64 {
+        let dx = other.x - x
+        let dy = other.y - y
+        return squareRoot(dx * dx + dy * dy)
+    }
+}
 
 /// A protocol with an associated type, a default implementation,
 /// and a static requirement.
 public protocol Shape {
-    associatedtype Unit: Numeric = F64
+    associatedtype Unit: Comparable = F64
 
     var area: Unit { get }
     var perimeter: Unit { get }
@@ -13,7 +27,7 @@ public protocol Shape {
     static fn unitShape() -> Self
 
     /// Default implementation — statically dispatched.
-    var describe: String { get => "\(Self.self): area \(area)" }
+    var describe: String { get => "\(Reflect.typeName(self)): area \(area)" }
 }
 
 // ---------------------------------------------------------------------------
@@ -30,66 +44,118 @@ public union Geometry {
 extension Geometry: Shape {
     public var area: F64 {
         get => match self {
-            case .Circle(let r)            => F64.pi * r * r
-            case .Rect(let w, let h)       => w * h
+            case .Circle(let r) => F64.pi * r * r
+            case .Rect(let w, let h) => w * h
             case .Triangle(let a, let b, let c) =>
                 ((b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y)).abs() / 2
-            case .Compound(let parts)      => parts.sum { $0.area }
+            case .Compound(let parts) => totalArea(parts)
         }
     }
 
     public var perimeter: F64 {
         get => match self {
-            case .Circle(let r)      => 2 * F64.pi * r
+            case .Circle(let r) => 2 * F64.pi * r
             case .Rect(let w, let h) => 2 * (w + h)
             case .Triangle(let a, let b, let c) =>
                 a.distance(to: b) + b.distance(to: c) + c.distance(to: a)
-            case .Compound(let parts) => parts.sum { $0.perimeter }
+            case .Compound(let parts) => totalPerimeter(parts)
         }
     }
 
     public static fn unitShape() -> Geometry => .Circle(radius: 1)
 }
 
+/// A second conformer, nominal this time: a struct.
+public struct Square: Shape {
+    public var side: F64
+
+    public var area: F64 { get => side * side }
+    public var perimeter: F64 { get => 4 * side }
+
+    public static fn unitShape() -> Square => Square { side: 1 }
+}
+
+fn totalArea(_ shapes: Geometry[>..]) -> F64 {
+    var sum = 0.0
+    for s in shapes {
+        sum += s.area
+    }
+    return sum
+}
+
+fn totalPerimeter(_ shapes: Geometry[>..]) -> F64 {
+    var sum = 0.0
+    for s in shapes {
+        sum += s.perimeter
+    }
+    return sum
+}
+
 // ---------------------------------------------------------------------------
 // 'some' is monomorphised and free. 'any' is boxed and dynamic.
 // ---------------------------------------------------------------------------
 
-fn totalArea(_ shapes: some Sequence<Geometry>) -> F64 {
-    var sum = 0.0
-    for s in shapes { sum += s.area }
-    return sum
+fn report(_ shape: some Shape) -> String {
+    return "\(shape.describe), perimeter \(shape.perimeter)"
 }
 
-fn describeAll(_ shapes: any Shape[]) {
-    for s in shapes { print(s.describe) }
+fn describeAll(_ shapes: (any Shape)[>..]) {
+    for s in shapes {
+        print(s.describe)
+    }
 }
 
 // ---------------------------------------------------------------------------
 // Structural unions and flow-sensitive narrowing.
 // ---------------------------------------------------------------------------
 
-alias Dimension = F64 | String | None
+alias Dimension = F64 | String
 
 fn resolve(_ d: Dimension, relativeTo parent: F64) -> F64 {
-    if d is F64 { return d }                       // narrowed to F64
+    if d is F64 {
+        return d // narrowed to F64
+    }
     if d is String {
-        guard d.hasSuffix("%") else { return 0 }   // narrowed to String
-        let pct = F64.parse(d.dropLast(1)) ?? 0
+        guard hasSuffix(d, "%") else { return 0 } // narrowed to String
+        let pct = removingSuffix(d, "%").toF64() ?? 0
         return parent * pct / 100
     }
-    return 0                                        // d is None here
+    return 0
+}
+
+@main
+fn main() {
+    let shapes: Geometry[>..] = [
+        .Circle(radius: 2),
+        .Rect(width: 3, height: 4),
+        .Triangle(a: Vec2 { x: 0, y: 0 }, b: Vec2 { x: 4, y: 0 }, c: Vec2 { x: 0, y: 3 }),
+        .Compound(parts: [.Rect(width: 1, height: 1), Geometry.unitShape()]),
+    ]
+    for s in shapes {
+        print(s.describe)
+    }
+    print("total area \(totalArea(shapes))")
+    print("total perimeter \(totalPerimeter(shapes))")
+
+    let mixed: (any Shape)[>..] = [Square { side: 2 }, Geometry.unitShape(), Square.unitShape()]
+    describeAll(mixed)
+    print(report(Square { side: 1.5 }))
+    print(report(Geometry.Rect(width: 2, height: 3.5)))
+
+    print("42 within 200 is \(resolve(42.0, relativeTo: 200))")
+    print("42.5% of 200 is \(resolve("42.5%", relativeTo: 200))")
 }
 
 @test
 fn testAreas() {
-    let shapes: Geometry[] = [
+    let shapes: Geometry[>..] = [
         .Circle(radius: 2),
         .Rect(width: 3, height: 4),
         .Compound(parts: [.Rect(width: 1, height: 1), .Circle(radius: 1)]),
     ]
     assert(totalArea(shapes) > 0)
+    assert(Square.unitShape().area == 1)
     assert(resolve("50%", relativeTo: 200) == 100)
     assert(resolve(42.0, relativeTo: 200) == 42)
-    assert(resolve(none, relativeTo: 200) == 0)
+    assert(resolve("wide", relativeTo: 200) == 0)
 }

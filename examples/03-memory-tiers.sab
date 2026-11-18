@@ -1,7 +1,6 @@
 module Examples.MemoryTiers
 
 import Sable.IO
-import Sable.Collections
 
 // ===========================================================================
 // Tier 0 — inline, contiguous, no header, no refcount.
@@ -9,42 +8,43 @@ import Sable.Collections
 // ===========================================================================
 
 @inline_layout
-@derive(Equatable, Hashable)
 public struct OrderLine {
-    public var sku:   U8[..16]      // inline, bounded
-    public var qty:   U16
-    public var price: U32           // cents
+    public var sku: U8[..16] // inline, bounded
+    public var qty: U16
+    public var price: U32 // cents
 }
 
 @inline_layout
 public struct Order {
-    public var id:       U64
+    public var id: U64
     public var customer: U8[..32]
-    public var lines:    OrderLine[>..]    // grow-only, stored inline
-    public var parent:   Order&<u32>?      // 4-byte relative ref, 0 == null
+    public var lines: OrderLine[>..] // grow-only, stored inline
+    public var parent: Order&<u32>? // 4-byte relative ref, 0 == null
 
     public var total: U64 {
         get {
             var t: U64 = 0
-            for line in lines { t += U64(line.qty) * U64(line.price) }
+            for line in lines {
+                t += U64(line.qty) * U64(line.price)
+            }
             return t
         }
     }
 }
 
 /// Zero-copy persistence: the value is already bytes.
-fn save(_ order: Order, to path: String) throws(IoError) {
-    try Files.write(path, Bytes.of(order))
+fn save(_ order: Order) -> U8[>..] {
+    return Bytes.of(order)
 }
 
-fn load(_ path: String) throws(IoError) -> Order? {
-    let buf = try Files.read(path)
+fn load(_ bytes: U8[>..]) -> Order? {
     // fromBytes validates framing, tags, lengths and every relative link
     // before returning. Corrupt input yields .Invalid, never a bad reference.
-    return match Order.fromBytes(buf) {
-        case .Ok(let o)        => o
-        case .Invalid(let why) => { log.warn("rejected order file: \(why)"); none }
+    match Order.fromBytes(bytes) {
+        case .Ok(let o) => { return o }
+        case .Invalid(let why) => { print("rejected order: \(why)") }
     }
+    return none
 }
 
 // ===========================================================================
@@ -52,62 +52,118 @@ fn load(_ path: String) throws(IoError) -> Order? {
 // References into a region have an inferred root; nothing escapes.
 // ===========================================================================
 
-public union Ast.. {                 // variant-sized: each node is exactly its size
-    Number(value: F64)
-    Ident(name: U8[..24])
-    Binary(op: U8, left: Ast&<u32>, right: Ast&<u32>)
-    Call(callee: Ast&<u32>, args: Ast&<u32>[>..])
+public struct Expr {
+    public var op: Char // '+', '*', or '#' for a number
+    public var value: F64
+    public var left: Expr&?
+    public var right: Expr&?
 }
 
-fn parse(_ source: String) -> OwnedAst {
+/// A recursive-descent parser for sums of products of digits, building its
+/// tree in the region it is given. Every node's root is inferred as 'r'.
+fn parseSum(_ text: String, _ at: inout Int, in r: region) -> ref Expr {
+    var left = parseProduct(text, &at, r)
+    while at < text.count && text.at(index: at) == '+' {
+        at += 1
+        let right = parseProduct(text, &at, r)
+        left = r.alloc(Expr { op: '+', value: 0, left: left, right: right })
+    }
+    return left
+}
+
+fn parseProduct(_ text: String, _ at: inout Int, in r: region) -> ref Expr {
+    var left = parseNumber(text, &at, r)
+    while at < text.count && text.at(index: at) == '*' {
+        at += 1
+        let right = parseNumber(text, &at, r)
+        left = r.alloc(Expr { op: '*', value: 0, left: left, right: right })
+    }
+    return left
+}
+
+fn parseNumber(_ text: String, _ at: inout Int, in r: region) -> ref Expr {
+    var value = 0.0
+    while at < text.count && text.at(index: at).isDigit {
+        value = value * 10 + F64(text.at(index: at).codePoint - 48)
+        at += 1
+    }
+    return r.alloc(Expr { op: '#', value: value, left: none, right: none })
+}
+
+fn evaluate(_ e: ref Expr) -> F64 {
+    if e.op == '+' {
+        return evaluate(e.left!) + evaluate(e.right!)
+    }
+    if e.op == '*' {
+        return evaluate(e.left!) * evaluate(e.right!)
+    }
+    return e.value
+}
+
+fn calculate(_ source: String) -> F64 {
     region arena {
-        let tokens: Token[>..] = arena.alloc()
-        lex(source, into: tokens)
-        let root = parseExpr(tokens, in: arena)   // root inferred as 'arena'
-        return root.toOwned()                      // copies out before release
-    }                                              // entire arena freed: one store
+        var at = 0
+        let root = parseSum(source, &at, arena) // root inferred as 'arena'
+        return evaluate(root) // an owned F64 leaves
+    } // entire arena freed: one store
 }
 
 // This would be rejected — the compiler infers that the returned reference is
 // rooted in a region that dies at the end of the function:
 //
-//   fn bad() -> ref Ast {
-//       region r { return parseExpr(tokens, in: r) }
+//   fn bad(_ source: String) -> ref Expr {
+//       region r {
+//           var at = 0
+//           return parseSum(source, &at, r)
+//       }
 //   }
 //
-//   error[S4012]: cannot return a reference rooted in region 'r'
-//     help: return an owned value with .toOwned(), or take the region as a
-//           parameter:  fn ok(in r: region) -> ref Ast
+//   error[S3061]: cannot return a reference rooted in region 'r': it dies
+//   when the function returns. To fix it: return a copy of the value, out of
+//   the region; or allocate it in a region the caller passes
 
 // ===========================================================================
 // Tier 2 — classes. Identity, ARC, weak references, reflection.
 // ===========================================================================
 
+public struct DrawCall {
+    public var path: String
+    public var frame: Int
+}
+
 @reflectable
 public class Workspace {
-    public private(set) var documents: List<Document> = []
-    private let frameArena = Region(reserving: .megabytes(16))
+    public private(set) var documents: Document[>..] = []
+    private var frames: Int = 0
 
-    public fn open(_ path: String) throws(IoError) -> Document {
+    public init() { }
+
+    public fn open(_ path: String) -> Document {
         let doc = Document(path: path, owner: self)
         documents.append(doc)
         return doc
     }
 
-    /// Per-frame work: no allocation, no retain/release in the hot loop.
-    public fn render(dt: F32) {
-        frameArena.reset()
-        region frame = frameArena {
-            let visible: Document&[>..] = frame.alloc()
-            for d in documents where d.isVisible { visible.append(&d) }
-            for d in visible { d.draw(dt) }     // borrowed — zero ARC traffic
+    /// Per-frame work: its scratch lives in a region, released in one store.
+    public fn render() -> Int {
+        frames += 1
+        var drawn = 0
+        region frame {
+            for d in documents {
+                if d.isVisible {
+                    let call = frame.alloc(DrawCall { path: d.path, frame: frames })
+                    d.draw(call) // borrowed — zero ARC traffic
+                    drawn += 1
+                }
+            }
         }
+        return drawn
     }
 }
 
 public class Document {
     public var path: String
-    public weak var owner: Workspace?       // breaks the reference cycle
+    public weak var owner: Workspace? // breaks the reference cycle
     public var isVisible = true
 
     public init(path: String, owner: Workspace) {
@@ -115,32 +171,86 @@ public class Document {
         self.owner = owner
     }
 
-    deinit { log.debug("closing \(path)") }
+    deinit { print("closing \(path)") }
 
-    fn draw(_ dt: F32) { }
+    fn draw(_ call: ref DrawCall) {
+        print("frame \(call.frame): \(call.path)")
+    }
 }
 
 // ===========================================================================
 // Move-only resources: use-after-move is a compile error.
 // ===========================================================================
 
+/// A scratch file that exists exactly as long as its handle.
 @noncopy
-public struct FileHandle {
-    private let fd: I32
+public struct ScratchFile {
+    public let path: String
 
-    public static fn open(_ path: String) throws(IoError) -> FileHandle { }
-    public fn read(into buf: inout U8[]) throws(IoError) -> Int { }
-    deinit { sys.close(fd) }
+    public static fn create(_ path: String, _ text: String) throws(IoError) -> ScratchFile {
+        try File.write(path, text)
+        return ScratchFile { path: path }
+    }
+
+    public fn read() throws(IoError) -> String {
+        return try File.read(path)
+    }
+
+    deinit {
+        try? File.remove(path)
+        print("removed \(Path.fileName(path))")
+    }
 }
 
-fn copyFile(from src: String, to dst: String) throws(IoError) {
-    using let input  = try FileHandle.open(src)
-    using let output = try FileHandle.open(dst)
-    var buf = U8[8192]()
-    while true {
-        let n = try input.read(into: &buf)
-        if n == 0 { break }
-        try output.write(buf[0..<n])
+fn copyThrough(_ text: String, inside directory: String) throws(IoError) -> String {
+    using let input = try ScratchFile.create(Path.join(directory, "tiers-input.txt"), text)
+    using let output = try ScratchFile.create(Path.join(directory, "tiers-output.txt"), try input.read())
+    return try output.read()
+    // both files removed here, in reverse order
+}
+
+// A handle is moved, never copied, so it is removed exactly once:
+//
+//   let kept = input
+//   print(try input.read())
+//
+//   error[S3057]: 'input' is used after its value was moved out of it, at
+//   line 1; 'Examples.MemoryTiers.ScratchFile' is @noncopy, so using it moves it
+
+// ===========================================================================
+
+@main
+fn main() {
+    var order = Order { id: 7, customer: "Ann", lines: [], parent: none }
+    order.lines.append(OrderLine { sku: "A-1", qty: 2, price: 1999 })
+    order.lines.append(OrderLine { sku: "B-22", qty: 1, price: 500 })
+    let bytes = save(order)
+    print("order \(order.id) is \(bytes.count) bytes, total \(order.total)")
+    if let copy = load(bytes) {
+        print("loaded order \(copy.id) for \(copy.customer.toString()), total \(copy.total)")
     }
-    // both handles released here, in reverse order
+    var corrupt = bytes
+    corrupt.append(0)
+    if load(corrupt) == none {
+        print("the corrupt copy was refused")
+    }
+
+    print("1+2*3+4*5 = \(calculate("1+2*3+4*5"))")
+
+    let workspace = Workspace()
+    let notes = workspace.open("notes.md")
+    let plan = workspace.open("plan.md")
+    plan.isVisible = false
+    print("drew \(workspace.render())")
+    print("\(notes.path) belongs to a workspace: \(notes.owner != none)")
+
+    let directory = Environment.variable("TMPDIR") ?? "/tmp"
+    do {
+        let copied = try copyThrough("tiers", inside: directory)
+        print("copied: \(copied)")
+    } catch .NotFound(let path) {
+        print("not found: \(path)")
+    } catch .Failed(let path) {
+        print("could not write \(path)")
+    }
 }

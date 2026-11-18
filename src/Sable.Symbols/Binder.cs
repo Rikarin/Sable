@@ -2871,7 +2871,12 @@ public sealed partial class Binder {
                 );
             }
 
-            converted.Add(Convert(arguments[i], substitution.Apply(field.Type), arguments[i].Syntax));
+            // What waited for a context — '[.Circle(radius: 1)]', '.None' —
+            // has one now: the payload's type.
+            var argument = arguments[i] is BoundUnboundClosure unbound
+                ? BindExpression((ExpressionSyntax)unbound.Syntax, substitution.Apply(field.Type))
+                : arguments[i];
+            converted.Add(Convert(argument, substitution.Apply(field.Type), argument.Syntax));
         }
 
         return new BoundUnionCaseConstruction(syntax, union ?? group.Type, unionCase, converted.ToImmutable());
@@ -2900,6 +2905,10 @@ public sealed partial class Binder {
             // Nor is '[]' any particular array: 'run(name, [])' takes the
             // element type and the kind from the parameter.
             ArrayExpressionSyntax { Elements.Count: 0 } => true,
+
+            // Nor is '[.Circle(radius: 1), .Square]' until the parameter
+            // says what its elements' leading dots name.
+            ArrayExpressionSyntax array => array.Elements.Any(IsClosure),
 
             ParenthesizedExpressionSyntax parenthesized => IsClosure(parenthesized.Expression),
             _ => false,
@@ -4395,6 +4404,16 @@ public sealed partial class Binder {
         return new BoundTypeTest(syntax, Core.Bool, operand, target);
     }
 
+    /// <summary>
+    ///     <c>self.ttl = ttl</c> in an initialiser: a stored <c>let</c> of the
+    ///     type being initialised gets its value there, as it has none before.
+    /// </summary>
+    bool InitialisesLetField(BoundExpression target) =>
+        target is BoundFieldAccess { Receiver: BoundSelfAccess, Field: { IsStatic: false, IsComputed: false } field }
+        && _containingSymbol is FunctionSymbol { FunctionKind: FunctionKind.Initializer } initializer
+        && initializer.ContainingSymbol is NamedTypeSymbol owner
+        && ReferenceEquals(field.ContainingSymbol, owner.OriginalDefinition);
+
     BoundExpression BindAssignment(AssignmentExpressionSyntax syntax) {
         var target = BindExpression(syntax.Left);
 
@@ -4413,7 +4432,7 @@ public sealed partial class Binder {
 
         var value = BindExpression(syntax.Right, target.Type);
 
-        if (!target.HasError && !target.IsAssignable) {
+        if (!target.HasError && !target.IsAssignable && !InitialisesLetField(target)) {
             _diagnostics.Error(
                 ErrorCode.ERR_NotAssignable,
                 syntax.Left.Span,

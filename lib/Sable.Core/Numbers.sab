@@ -181,6 +181,9 @@ extension UInt {
 }
 
 extension F64 {
+    /// The ratio of a circle's circumference to its diameter, as near as an F64 holds it.
+    public static var pi: F64 { get { return 3.141592653589793 } }
+
     /// The number in decimal.
     @builtin("string_from_F64")
     public fn toString() -> String

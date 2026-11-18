@@ -74,6 +74,7 @@ public enum ErrorCode {
     ERR_CircularAlias = 2005,
     ERR_ModuleNotFound = 2006,
     ERR_NoModuleDeclaration = 2007,
+    ERR_ModuleInTwoPackages = 2090,
 
     // ---- Types (S3000-S3999) ---------------------------------------------
     ERR_WrongTypeArgumentCount = 3000,
@@ -148,6 +149,13 @@ public enum ErrorCode {
     ERR_BuiltinOutsideCore = 3081,
     ERR_MalformedBuiltin = 3082,
     ERR_MalformedArrayExtension = 3083,
+    ERR_HalfOpenRangeWithoutEnd = 3091,
+    ERR_UnknownAttribute = 3092,
+    ERR_AttributeDoesNotApply = 3093,
+    ERR_MalformedAttribute = 3094,
+    WRN_Deprecated = 3095,
+    ERR_NotAvailable = 3096,
+    ERR_NotDeeplyImmutable = 3097,
     ERR_NotSupportedYet = 3099,
 
     // '@test' and '@bench' (docs/05 §5.1): what the harness can call.
@@ -193,6 +201,13 @@ public enum ErrorCode {
     ERR_MalformedForeign = 3223,
     ERR_NotACType = 3224,
 
+    // ---- Source generators (S3230-S3239): docs/08.
+    ERR_GeneratorRule = 3230,
+    ERR_GeneratorFailed = 3231,
+    ERR_GeneratorReported = 3232,
+    WRN_GeneratorReported = 3233,
+    ERR_GeneratedFileInvalid = 3234,
+
     // ---- Lints (S3300-S3399): reported by Sable.Symbols' Lints, which
     // 'sable check' runs, never by compiling. Their severity is configured.
     LNT_UnusedLocal = 3300,
@@ -200,6 +215,7 @@ public enum ErrorCode {
     LNT_UnusedImport = 3302,
     LNT_VarNeverMutated = 3303,
     LNT_ShadowedParameter = 3304,
+    LNT_UnusedResult = 3308,
     LNT_UnknownLint = 3399,
 
     // ---- Patterns and flow (S6000-S6999) ---------------------------------

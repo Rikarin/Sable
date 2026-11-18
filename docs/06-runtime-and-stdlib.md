@@ -123,7 +123,7 @@ Sable.Text          Unicode tables, normalisation, formatting, parsing,
 Sable.Math          BigInt, Decimal, SIMD<T, N>, Matrix, Quaternion,
                     Random (PCG + ChaCha), statistics
 Sable.IO            File Directory Path Stream MemoryMappedFile stdio
-Sable.Serialize     Encoder/Decoder protocols, derive macro equivalent via
+Sable.Serialize     Encoder/Decoder protocols, conformance synthesis via
                     @derive(Serializable), JSON, TOML, MessagePack, and the
                     zero-copy @inline_layout path
 Sable.Concurrency   Task TaskGroup Actor Channel Mutex RwLock Atomic<T>
@@ -165,7 +165,8 @@ sable-web           an HTTP server framework
 
 ## 6.5 Derivation
 
-Instead of macros (deferred past 1.0), `@derive` covers the cases that matter:
+Sable has no macros (docs/01 §1.6). `@derive` covers the conformances the
+standard library defines:
 
 ```sable
 @derive(Equatable, Hashable, Comparable, Serializable, Debug, Copy)
@@ -176,6 +177,11 @@ Derivation is implemented as compiler-known conformance synthesis against the
 always-present `FieldDescriptor` metadata, not as source generation. It
 composes with generics (`@derive(Equatable)` on `Pair<T, U>` yields a
 conditional conformance `where T: Equatable, U: Equatable`).
+
+Conformances defined outside the standard library are written by source
+generators (docs/08). A package declares a `@generator("name")` function, and
+any package that depends on it can write `@name` on a type to get the
+generated code.
 
 ## 6.6 Error ABI
 

@@ -191,8 +191,14 @@ Phase 3, not deferred.
 - **No exceptions for control flow.** `throws(E)` is a typed, checked effect
   compiled to a return-value discriminant, not to unwinding tables. Panics
   (`abort`) are separate, unrecoverable, and used for invariant violations.
-- **No macros in v1.** Compile-time code execution (`const fn`, `comptime`
-  blocks) covers most of the need; a hygienic macro system is a post-1.0
-  question so the grammar is not frozen around it.
+- **No macros, ever.** This is a decision, not a deferral. Compile-time
+  code execution (`const fn`, `comptime` blocks) computes values. `@derive`
+  writes the built-in conformances. Source generators (docs/08) cover what
+  is left: Sable functions that read declarations and write new files, which
+  are ordinary Sable. Generators add code and cannot rewrite it, so the
+  grammar never needs quote and splice syntax, there is no hygiene problem,
+  and every tool reads generated code as it reads any other code. A proposal
+  for macros has to show something that a generator cannot do, and why that
+  is worth the cost (docs/08 §8.9).
 - **No inheritance from generic base classes across modules** without an
   explicit `open` declaration — devirtualisation matters more than flexibility.

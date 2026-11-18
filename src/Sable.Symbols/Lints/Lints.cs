@@ -14,6 +14,7 @@ public static class Lints {
         new UnusedImportLint(),
         new VarNeverMutatedLint(),
         new ShadowedParameterLint(),
+        new UnusedResultLint(),
     ];
 
     public static Lint? Find(string name) => All.FirstOrDefault(l => l.Name == name);

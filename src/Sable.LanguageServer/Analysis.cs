@@ -24,7 +24,11 @@ internal sealed partial class Analysis {
     readonly HashSet<SyntaxTree> _dependencies = new(ReferenceEqualityComparer.Instance);
     readonly Dictionary<SyntaxTree, IReadOnlyList<Diagnostic>> _diagnostics = new(ReferenceEqualityComparer.Instance);
     readonly Dictionary<SyntaxTree, IReadOnlyList<Diagnostic>> _lints = new(ReferenceEqualityComparer.Instance);
+    readonly Dictionary<SyntaxTree, List<Diagnostic>> _generatorDiagnostics = new(ReferenceEqualityComparer.Instance);
     IReadOnlyList<Diagnostic>? _unplaced;
+
+    /// <summary>Whether its package's generators wrote some of its trees, from programs the snapshot does not show.</summary>
+    bool _generated;
 
     public object Gate { get; } = new();
     public WorkspaceSnapshot Snapshot { get; }
@@ -79,12 +83,22 @@ internal sealed partial class Analysis {
         string key,
         IReadOnlyList<SyntaxTree> dependencies,
         Func<SyntaxTree, IReadOnlyList<SyntaxTree>> libraryFor,
-        LintConfiguration? lints = null) {
+        Func<IReadOnlyList<SyntaxTree>, GeneratedTrees>? generate = null,
+        LintConfiguration? lints = null
+    ) {
         var trees = snapshot.Documents.Values
             .Where(d => snapshot.KeyOf(d) == key)
             .Select(static d => d.Tree)
             .OrderBy(static t => t.Text.FileName, StringComparer.Ordinal)
             .ToList();
+
+        // What the package's generators write for its documents, as they are
+        // now (docs/08 §8.7): compiled with them, as a dependency's files are.
+        var generated = generate?.Invoke(trees) ?? GeneratedTrees.None;
+        if (generated.Trees.Count > 0) {
+            dependencies = [..generated.Trees, ..dependencies];
+        }
+
         var own = trees.ToHashSet(ReferenceEqualityComparer.Instance);
         trees.AddRange(dependencies.Where(t => own.Add(t)));
 
@@ -107,7 +121,15 @@ internal sealed partial class Analysis {
         }
 
         var compilation = Compilation.Create([..trees, ..library]);
-        var analysis = new Analysis(snapshot, key, lints ?? LintConfiguration.Default, compilation, library, dependencies);
+        var analysis = new Analysis(snapshot, key, lints ?? LintConfiguration.Default, compilation, library, dependencies) { _generated = generate is not null };
+        foreach (var (diagnostic, tree) in generated.Diagnostics) {
+            if (!analysis._generatorDiagnostics.TryGetValue(tree, out var list)) {
+                analysis._generatorDiagnostics[tree] = list = [];
+            }
+
+            list.Add(diagnostic);
+        }
+
         lock (analysis.Gate) {
             // Binding every signature reports the declarations' problems too.
             analysis._unplaced = [..compilation.GetDiagnostics().Except(trees.SelectMany(static t => t.Diagnostics))];
@@ -141,7 +163,9 @@ internal sealed partial class Analysis {
     ///     disk is not noticed — no one is told it changed.
     /// </remarks>
     public bool IsCurrentIn(WorkspaceSnapshot snapshot) {
-        if (!ReferenceEquals(snapshot.Layout, Snapshot.Layout)) {
+        // What generators write depends on their programs too, which are
+        // other files: such a package is built again.
+        if (_generated || !ReferenceEquals(snapshot.Layout, Snapshot.Layout)) {
             return false;
         }
 
@@ -224,6 +248,10 @@ internal sealed partial class Analysis {
         }
 
         var all = new List<Diagnostic>(tree.Diagnostics);
+        if (_generatorDiagnostics.TryGetValue(tree, out var generated)) {
+            all.AddRange(generated);
+        }
+
         foreach (var member in MembersOf(tree.Root)) {
             cancellation.ThrowIfCancellationRequested();
             lock (Gate) {

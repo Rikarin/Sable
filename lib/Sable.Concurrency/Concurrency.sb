@@ -9,7 +9,9 @@ import Sable.Time
 // ever; there is no deadlock detection yet.
 
 /// Values passed from task to task in the order sent; unbounded.
-public class Channel<Element> {
+public class Channel<Element>: AsyncSequence {
+    public alias Iter = ChannelIterator<Element>
+
     var buffer: Element[>..] = []
     var head: Int = 0
     var closed: Bool = false
@@ -44,6 +46,11 @@ public class Channel<Element> {
         return take()
     }
 
+    /// Its values as they are received, for 'for await'.
+    public fn makeAsyncIterator() -> ChannelIterator<Element> {
+        return ChannelIterator<Element> { channel: self }
+    }
+
     /// The next value if one is there now; none otherwise.
     public fn tryReceive() -> Element? {
         if head >= buffer.count {
@@ -61,6 +68,18 @@ public class Channel<Element> {
             head = 0
         }
         return value
+    }
+}
+
+/// Receives a channel's values, one per 'next()': what 'for await value in
+/// channel' goes through, until the channel is closed and empty.
+public struct ChannelIterator<Value>: AsyncIterator {
+    public alias Element = Value
+
+    let channel: Channel<Value>
+
+    public mutating fn next() async -> Value? {
+        return await channel.receive()
     }
 }
 

@@ -1,0 +1,356 @@
+module Sable.Generators
+
+// Source generators (docs/08). A generator is a function in a package's
+// `generators/` directory:
+//
+//     @generator("json")
+//     fn json(_ declaration: Declaration, into output: inout Output) { ... }
+//
+// The compiler runs it, in the interpreter, for every type marked `@json`
+// in the packages that can see it. It is given the type as data and adds
+// files to `output`, which are compiled with the package.
+
+// ---- What a generator is given --------------------------------------------
+
+/// A type that carries a generator's attribute.
+public struct Declaration {
+    /// How it is declared: "struct", "class", "actor", "union" or "enum".
+    public var keyword: String
+    /// Its name, as declared.
+    public var name: String
+    /// The module of the file it is in.
+    public var moduleName: String
+    /// Whether it is declared `public`.
+    public var isPublic: Bool
+    /// Its generic parameters' names, in order.
+    public var typeParameters: String[>..] = []
+    /// Its base list, each entry as written.
+    public var conformances: String[>..] = []
+    /// The attribute that started this run.
+    public var trigger: Attribute = Attribute { name: "", arguments: [] }
+    /// Every attribute on the declaration, the one that started this run among them.
+    public var attributes: Attribute[>..] = []
+    /// Its stored fields, in order: a struct's, a class's or an actor's.
+    public var fields: Field[>..] = []
+    /// Its cases, in order: a union's or an enum's.
+    public var cases: Case[>..] = []
+    /// The imports of the file it is in, each as written after `import`.
+    public var imports: String[>..] = []
+    /// The name of the file it is in, for messages.
+    public var file: String = ""
+
+    /// The attribute named, if the declaration has it.
+    public fn attribute(named name: String) -> Attribute? {
+        for attribute in attributes {
+            if attribute.name == name {
+                return attribute
+            }
+        }
+        return none
+    }
+
+    /// Whether the declaration names the protocol in its base list.
+    public fn conforms(to name: String) -> Bool {
+        for conformance in conformances {
+            if conformance == name {
+                return true
+            }
+        }
+        return false
+    }
+
+    /// The name with its generic parameters, as a type is written:
+    /// `Pair<A, B>`, or `User`.
+    public var typeName: String => Declaration.written(name, typeParameters)
+
+    static fn written(_ name: String, _ parameters: String[>..]) -> String {
+        if parameters.isEmpty {
+            return name
+        }
+        return name + "<" + Runtime.joinStrings(parameters, ", ") + ">"
+    }
+}
+
+/// An attribute as written: `@json(rename: "id")`.
+public struct Attribute {
+    /// Its name, without the `@`.
+    public var name: String
+    /// Its arguments, in order.
+    public var arguments: Argument[>..]
+
+    /// The source text of the argument with the label, if there is one.
+    public fn argument(named label: String) -> String? {
+        for argument in arguments {
+            if argument.label == label {
+                return argument.text
+            }
+        }
+        return none
+    }
+
+    /// The value of the string literal given for the label, if it is one.
+    public fn string(named label: String) -> String? {
+        for argument in arguments {
+            if argument.label == label {
+                return argument.string
+            }
+        }
+        return none
+    }
+
+    /// Whether the attribute has an argument with the label.
+    public fn has(_ label: String) -> Bool {
+        for argument in arguments {
+            if argument.label == label {
+                return true
+            }
+        }
+        return false
+    }
+}
+
+/// One argument of an attribute.
+public struct Argument {
+    /// Its label, or "" when it has none.
+    public var label: String
+    /// Its expression, as written.
+    public var text: String
+    /// The value, when the expression is a string literal without interpolation.
+    public var string: String?
+}
+
+/// A stored field.
+public struct Field {
+    public var name: String
+    /// Its type, as written.
+    public var type: String
+    /// Whether it is a `var`, not a `let`.
+    public var isMutable: Bool
+    /// Whether it is given a value where it is declared.
+    public var hasDefault: Bool
+    /// Whether it is declared `public`.
+    public var isPublic: Bool
+    public var attributes: Attribute[>..] = []
+
+    /// The attribute named, if the field has it.
+    public fn attribute(named name: String) -> Attribute? {
+        for attribute in attributes {
+            if attribute.name == name {
+                return attribute
+            }
+        }
+        return none
+    }
+}
+
+/// A union's case and its payload, or an enum's case and its raw value.
+public struct Case {
+    public var name: String
+    /// A union case's payload: each with its label, or "" for none.
+    public var payload: Field[>..] = []
+    /// An enum case's raw value, as written.
+    public var rawValue: String? = none
+    public var attributes: Attribute[>..] = []
+
+    /// The attribute named, if the case has it.
+    public fn attribute(named name: String) -> Attribute? {
+        for attribute in attributes {
+            if attribute.name == name {
+                return attribute
+            }
+        }
+        return none
+    }
+}
+
+// ---- What a generator gives back ------------------------------------------
+
+/// The files and messages a generator's run produces.
+public struct Output {
+    var names: String[>..] = []
+    var texts: String[>..] = []
+    var errors: String[>..] = []
+    var warnings: String[>..] = []
+
+    public init() { }
+
+    /// A new source file: declarations, and any imports they need beyond
+    /// those of the declaration's file. The compiler adds the module line.
+    public mutating fn add(file name: String, _ text: String) {
+        names.append(name)
+        texts.append(text)
+    }
+
+    /// Fails the build, at the attribute that started this run.
+    public mutating fn error(_ message: String) {
+        errors.append(message)
+    }
+
+    /// Warns, at the attribute that started this run.
+    public mutating fn warning(_ message: String) {
+        warnings.append(message)
+    }
+}
+
+// ---- Talking to the compiler ----------------------------------------------
+// The compiler writes each request as lines of fields on standard input
+// and reads the output as records on standard output. These are what the
+// main it writes for a generator program calls; a generator never does.
+
+/// One declaration to give to one generator.
+public struct GeneratorRequest {
+    public var generator: String
+    public var index: String
+    public var declaration: Declaration
+}
+
+/// The next request, or none at the end of the input.
+public fn readGeneratorRequest() -> GeneratorRequest? {
+    var reader = RequestReader()
+    while let line = Runtime.readLine() {
+        if reader.read(line.split(separator: '\u{1f}')) {
+            return reader.request()
+        }
+    }
+    return none
+}
+
+// A request as it is read: a field, a case or an attribute is kept here
+// until it is whole, then added where it belongs.
+struct RequestReader {
+    var generator: String = ""
+    var index: String = ""
+    var declaration: Declaration = Declaration { keyword: "", name: "", moduleName: "", isPublic: false }
+    var field: Field = Field { name: "", type: "", isMutable: false, hasDefault: false, isPublic: false }
+    var hasField: Bool = false
+    var kase: Case = Case { name: "" }
+    var hasCase: Bool = false
+    var attribute: Attribute = Attribute { name: "", arguments: [] }
+    var hasAttribute: Bool = false
+    // Where the attribute goes: "d" the declaration, "f" the field, "c" the case.
+    var target: String = "d"
+
+    init() { }
+
+    // Whether the line ends the request.
+    mutating fn read(_ fields: String[>..]) -> Bool {
+        let tag = fields[0]
+        if tag == "R" {
+            generator = fields[1]
+            index = fields[2]
+        } else if tag == "D" {
+            declaration.keyword = fields[1]
+            declaration.name = fields[2]
+            declaration.moduleName = fields[3]
+            declaration.isPublic = fields[4] == "1"
+            declaration.file = restored(fields[5])
+        } else if tag == "I" {
+            declaration.imports.append(restored(fields[1]))
+        } else if tag == "T" {
+            declaration.typeParameters.append(fields[1])
+        } else if tag == "C" {
+            declaration.conformances.append(restored(fields[1]))
+        } else if tag == "A" {
+            finishAttribute()
+            target = fields[1]
+            attribute = Attribute { name: fields[2], arguments: [] }
+            hasAttribute = true
+        } else if tag == "G" {
+            var string: String? = none
+            if fields[3] == "1" {
+                string = restored(fields[4])
+            }
+            attribute.arguments.append(Argument { label: fields[1], text: restored(fields[2]), string: string })
+        } else if tag == "F" {
+            finishMember()
+            field = Field {
+                name: fields[1],
+                type: restored(fields[2]),
+                isMutable: fields[3] == "1",
+                hasDefault: fields[4] == "1",
+                isPublic: fields[5] == "1"
+            }
+            hasField = true
+        } else if tag == "K" {
+            finishMember()
+            var rawValue: String? = none
+            if fields[2] == "1" {
+                rawValue = restored(fields[3])
+            }
+            kase = Case { name: fields[1], rawValue: rawValue }
+            hasCase = true
+        } else if tag == "P" {
+            kase.payload.append(Field { name: fields[1], type: restored(fields[2]), isMutable: false, hasDefault: false, isPublic: false })
+        } else if tag == "E" {
+            finishMember()
+            return true
+        }
+        return false
+    }
+
+    mutating fn finishAttribute() {
+        if !hasAttribute {
+            return
+        }
+        if target == "f" {
+            field.attributes.append(attribute)
+        } else if target == "c" {
+            kase.attributes.append(attribute)
+        } else {
+            declaration.attributes.append(attribute)
+            if attribute.name == generator {
+                declaration.trigger = attribute
+            }
+        }
+        hasAttribute = false
+    }
+
+    mutating fn finishMember() {
+        finishAttribute()
+        if hasField {
+            declaration.fields.append(field)
+            hasField = false
+        }
+        if hasCase {
+            declaration.cases.append(kase)
+            hasCase = false
+        }
+    }
+
+    fn request() -> GeneratorRequest {
+        return GeneratorRequest { generator: generator, index: index, declaration: declaration }
+    }
+}
+
+/// Writes what a run produced, for the request with the index.
+public fn writeGeneratorOutput(_ output: Output, for index: String) {
+    print("\u{1e}run\u{1f}\(index)")
+    for message in output.errors {
+        print("\u{1e}error\u{1f}\(flattened(message))")
+    }
+    for message in output.warnings {
+        print("\u{1e}warning\u{1f}\(flattened(message))")
+    }
+    var i = 0
+    while i < output.names.count {
+        print("\u{1e}file\u{1f}\(flattened(output.names[i]))")
+        print(output.texts[i])
+        i = i + 1
+    }
+}
+
+// A value with a line break in it comes with each break as U+001D.
+fn restored(_ text: String) -> String {
+    if !text.contains('\u{1d}') {
+        return text
+    }
+    return Runtime.joinStrings(text.split(separator: '\u{1d}'), "\n")
+}
+
+// A message or a file name is one line of the output.
+fn flattened(_ text: String) -> String {
+    if !text.contains('\n') {
+        return text
+    }
+    return Runtime.joinStrings(text.split(separator: '\n'), " ")
+}

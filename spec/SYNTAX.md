@@ -1243,12 +1243,17 @@ an optimised one; never both.
 | `@packed` / `@align(16)` | struct | Layout control |
 | `@test` / `@bench` | fn | Collected by `sable test` / `sable bench` |
 | `@main` | fn, type | Program entry point |
+| `@generator("name", members: [...])` | fn in `generators/` | A source generator, run for types marked `@name`; `members` are the attributes it reads on their fields and cases (docs/08) |
 | `@discardable` | fn | Result may be ignored without `_ =` |
 | `@MainActor` | any | Main-executor isolation |
 | `@frozen` | struct, union | ABI-stable layout; no new cases/fields ever |
 
 User-defined attributes are declared as structs conforming to `Attribute` and
-are readable through reflection on `@reflectable` types.
+are readable through reflection on `@reflectable` types. (Not built yet: an
+attribute that is not in this table, or `@derive`, `@indirect`, `@allow` and
+`@warn`, is an error — S3092 — as is one written where it does not apply,
+S3093.) A public union matched from another module needs `default` unless
+it is `@frozen` (docs/03 §3.3).
 
 ---
 

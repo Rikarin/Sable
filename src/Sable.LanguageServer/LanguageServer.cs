@@ -90,7 +90,18 @@ public sealed partial class LanguageServer {
     Analysis BuildAnalysis(WorkspaceSnapshot snapshot, string key) {
         var project = snapshot.Layout.Projects.FirstOrDefault(p => p.Directory == key);
         var dependencies = project is null ? [] : _dependencies.For(project, snapshot, Log);
-        return Analysis.Build(snapshot, key, dependencies, _options.LibraryFor, project?.Lints);
+        return Analysis.Build(
+            snapshot, key, dependencies, _options.LibraryFor, project?.Generate is { } generate ? trees => Generated(generate, trees) : null, project?.Lints);
+    }
+
+    /// <summary>The generators' output; a generator program that fails outright is logged, and leaves the package without it.</summary>
+    GeneratedTrees Generated(Func<IReadOnlyList<SyntaxTree>, GeneratedTrees> generate, IReadOnlyList<SyntaxTree> trees) {
+        try {
+            return generate(trees);
+        } catch (Exception e) when (e is not OutOfMemoryException) {
+            Log($"the source generators failed: {e.Message}");
+            return GeneratedTrees.None;
+        }
     }
 
     /// <summary>A file whose change can change the packages: a manifest, or the lock file.</summary>

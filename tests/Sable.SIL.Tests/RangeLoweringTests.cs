@@ -172,4 +172,74 @@ public sealed class RangeLoweringTests {
         Assert.Equal(2L + 4 + 6, Run(module, "summed", 1L, 6L));
         Assert.Throws<SilTrap>(() => Run(module, "summed", 9223372036854775806L, 6L));
     }
+
+    /// <summary>
+    ///     A range of a sized integer counts in its own type, so stepping past
+    ///     its largest value traps; a range of characters counts their code
+    ///     points, stepping over the surrogates.
+    /// </summary>
+    [Fact]
+    public void ARangeOfSizedIntegersOrCharactersCounts() {
+        var module = Lower("""
+                           fn bytes(_ low: U8) -> Int {
+                               var total = 0
+                               for b in low...255 { total = total + Int(b) }
+                               return total
+                           }
+
+                           fn open(_ low: U8) -> Int {
+                               var total = 0
+                               for b in low... { total = total + Int(b) }
+                               return total
+                           }
+
+                           fn letters() -> Int {
+                               var n = 0
+                               for c in 'a'..<'e' { n = n * 10 + (c.codePoint - 96) }
+                               return n
+                           }
+
+                           fn acrossSurrogates() -> Int {
+                               var n = 0
+                               for c in '\u{D7FE}'...'\u{E001}' { n = n + 1 }
+                               return n
+                           }
+                           """);
+
+        Assert.Equal(253L + 254 + 255, Run(module, "bytes", 253L));
+        Assert.Throws<SilTrap>(() => Run(module, "open", 254L));
+        Assert.Equal(1234L, Run(module, "letters"));
+        Assert.Equal(4L, Run(module, "acrossSurrogates"));
+        Assert.DoesNotContain("struct", SilPrinter.Print(module.Find("M.bytes")!));
+    }
+
+    [Fact]
+    public void AOneSidedRangeIsAStructOfItsOneBound() {
+        var module = Lower("""
+                           fn upTo(_ n: Int, _ x: Int) -> Bool {
+                               let r = ..<n
+                               return r.contains(x)
+                           }
+
+                           fn through(_ n: Int, _ x: Int) -> Bool {
+                               let r = ...n
+                               return r.contains(x)
+                           }
+
+                           fn from(_ n: Int, _ limit: Int) -> Int {
+                               let r = n...
+                               var total = 0
+                               for i in r {
+                                   if i > limit { break }
+                                   total = total + i
+                               }
+                               return total
+                           }
+                           """);
+
+        Assert.Equal(true, Run(module, "upTo", 5L, 4L));
+        Assert.Equal(false, Run(module, "upTo", 5L, 5L));
+        Assert.Equal(true, Run(module, "through", 5L, 5L));
+        Assert.Equal(3L + 4 + 5, Run(module, "from", 3L, 5L));
+    }
 }

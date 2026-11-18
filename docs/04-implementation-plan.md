@@ -176,7 +176,11 @@ Copy Roslyn's **red/green tree** design exactly:
 
 ### 0.5 Exit criteria
 
-- [ ] Every construct in `SYNTAX.md` parses
+- [x] Every construct in `SYNTAX.md` parses — `SyntaxSpecTests` parses each of
+      its 59 `sable` blocks as a file, a function body, or piece by piece
+      (listings of types, patterns and literals item by item); a block that is
+      deliberately not Sable would be marked `<!-- not-sable: why -->` in the
+      spec, and none is
 - [ ] Round-trip invariant holds on a 2,000-file corpus — it holds on all
       the corpus there is: `RoundTripCorpusTests` takes every `.sb` file
       (140) and every `sable` block in the Markdown (418), broken ones
@@ -204,14 +208,21 @@ Copy Roslyn's **red/green tree** design exactly:
       yanked versions, pre-releases, locks naming what is gone) through
       PubGrub, every answer checked against every requirement and every
       failure without pre-releases against trying every assignment, plus
-      the version parsers and the set algebra. The compiler fuzzer is
-      guided by features (syntax kinds, diagnostic codes, the stage
-      reached), not by code coverage, which would need the compiler
-      instrumented, and no fuzzer has yet run for 24 hours on end. Found
-      and fixed so far: an extension nested in an extension threw while
+      the version parsers and the set algebra. Beside them,
+      `tools/fuzz/coverage.sh` fuzzes guided by code coverage: SharpFuzz
+      instruments the Sable assemblies, and libFuzzer (on Linux, through
+      libfuzzer-dotnet; on macOS, the fuzzer's own in-process loop) drives
+      the parser (round trips, spans that tile, incremental reparse equal to
+      a full one), the front end (as `CompilerFuzzTests` holds it), the
+      resolver and the package files, and `fromBytes` under libFuzzer with
+      ASan and UBSan, from the repository's sources and a dictionary from
+      the lexer's tables, nightly for 90 minutes a target with the corpus kept from
+      night to night. No fuzzer has yet run for 24 hours on end. Found and
+      fixed so far: an extension nested in an extension threw while
       attaching; a self-dependency hung the resolver and crashed its
       explanation; a `-` in a requirement's build metadata threw; ranges
-      past the largest number wrapped round to nothing
+      past the largest number wrapped round to nothing; an edit in a file
+      with directives reparsed incrementally to a different tree
 
 ---
 
@@ -1397,13 +1408,23 @@ Full design in [05-toolchain.md](05-toolchain.md).
   `--harness-out <path>` (with `-g`) builds the harness and runs nothing, so
   the VS Code Test Explorer's Debug profile starts `<harness> --run-test
   <name>` under the debugger.
+- `sable test --coverage` counts lines with counters in the code
+  (`Sable.SIL/Coverage.cs`): before any pass, each block of a function from
+  the package's own files (not `tests/`, not dependencies or the library)
+  starts with the builtin `coverage_hit(n)`, which the runtime counts
+  (`runtime/coverage.c`) and appends to the file `SABLE_COVERAGE` names when
+  the program ends, or traps. Every test process appends to one file; the
+  runner adds them up and prints the share of lines run per file with the
+  lines that never ran, and writes `target/coverage/lcov.info`. A line counts
+  as often as the most-run block it is in; code the optimiser removes is
+  still a line, since the counters go in first. The SIL interpreter runs a
+  counter as nothing.
 - **Deferred:** a `blackBox` to keep the optimiser from deleting a
   benchmark's work (it needs a core builtin); async benchmarks; snapshot and
-  property testing (docs/06 lists them under Sable.Testing; #73, #107); a
-  coverage tool (it needs the code generator to count lines, as
-  `-fprofile-instr-generate` does, and the Test Explorer then a Coverage
-  profile); a time limit inside the harness's own runner, which would need a
-  builtin to wait on a child with one.
+  property testing (docs/06 lists them under Sable.Testing; #73, #107); the
+  Test Explorer's Coverage profile reading `lcov.info`; branch coverage; a
+  time limit inside the harness's own runner, which would need a builtin to
+  wait on a child with one.
 
 ### Packages, as implemented
 
@@ -1573,8 +1594,18 @@ member at a time.
   declaration, conforming extensions and `@derive`; subtypes in the
   workspace). Quick fixes for the lints: what each message suggests (`_` before
   an unused name, a parameter renamed keeping its label, the import removed,
-  `let` for `var`) and `@allow(lint)` on the declaration. `completionItem/resolve`
-  adds a symbol's doc comment to the item shown.
+  `let` for `var`) and `@allow(lint)` on the declaration. Quick fixes for the
+  compiler's own errors: `try` before a call that can throw, a match's missing
+  cases, a stub of each requirement a type lacks (the bodies `unreachable()`,
+  which `Sable.Core` now has: a trap of type `Never`), the import of a module —
+  the workspace's or any library one — with a name not found, and the label a
+  call's parameter has. `source.fixAll` and the `sable.fixAll` command
+  (`workspace/executeCommand`, applied through `workspace/applyEdit`) take
+  every first fix at once. Code lenses count each type's and function's
+  references (resolved when shown; `sable.showReferences` is the client's
+  command that lists them), and document links take an import to its
+  module's first file and a URL in a comment to its page.
+  `completionItem/resolve` adds a symbol's doc comment to the item shown.
 - Completion: members after `.` and `?.` (statics after a type name), the
   names in scope — locals declared before the caret, parameters, the enclosing
   types' members, the module, imports, `Sable.Core` — and keywords; module
@@ -1584,7 +1615,9 @@ member at a time.
   `.`, the cases and statics of the type the context wants (a parameter's, an
   annotated declaration's, an assignment's or comparison's other side, the
   function's result). A public name of another module of the compilation that
-  the file does not import is offered with the `import` it needs.
+  the file does not import is offered with the `import` it needs, and so is
+  one of a library module nothing imports yet (every library module is
+  compiled once, in the background, for its names).
 - Inlay hints: the type of each `let`/`var` written without one; the
   parameter an argument without a label is for, where the call takes more than
   one and the argument is not already that name; a closure's inferred
@@ -1608,8 +1641,13 @@ records what each written name resolved to).
 with every signature bound before it is used. A completion or signature help
 never waits for one: it binds the member being edited, as it is now, against
 the newest compilation there is. Only a member the newest compilation does not
-have — one being written from scratch — waits for a new compilation; hover,
-references and rename always use one of exactly the current text.
+have — one being written from scratch — waits for a new compilation. Hover
+binds the member under the cursor the same way. References and rename, after
+edits inside members' bodies only, answer from an older compilation — the one
+with the most files already bound — with each edited member bound again
+speculatively and the rest of its file moved by the edits (a body cannot
+change what anything outside it means); any other edit waits for a
+compilation of exactly the current text.
 `tools/Sable.LspBench` writes a 205,180-line project (180 files, nine modules
 importing one another), starts `sable lsp` as a process, and types statements
 into function bodies a key at a time (40–120 ms apart), asking for completion
@@ -1617,9 +1655,22 @@ after each and pausing so the server rebuilds in the background (two dozen rebui
 per run), timed at the client. Release build, macOS arm64, four runs of 831
 completions: p50 1.0–1.7 ms, **p95 5.2–9.4 ms**, p99 10–24 ms, max 15–34 ms;
 after a `.` alone, p95 2.7–12.6 ms. For contrast, a hover just after an edit,
-which waits for a compilation of the whole project, takes 125–170 ms, and the
-first diagnostics come 1.3–1.5 s after start (reading and parsing 205k lines
+which waited for a compilation of the whole project, took 125–170 ms, and the
+first diagnostics came 1.3–1.5 s after start (reading and parsing 205k lines
 included).
+
+The benchmark also times references just after an edit in a body. They used
+to wait for a new compilation and then bind every file naming the symbol in
+it — all 180 here — every time: 10–28 s per request on a heavily loaded
+machine (load average 60–200, other builds running). Answered from the
+compilation already bound, the first takes as long (binding it), and the
+next five 0.4–0.65 s on the same machine. The first diagnostics now skip the
+quiet period after loading (there is no typing to wait out), and a small
+program is compiled while the files are read, so the compiler's code is
+jitted by the time the workspace's compilation starts: that compilation
+went from 1.6–2.1 s to 0.9–1.2 s, and first diagnostics from about 3.5 s to
+1.9–2.4 s, measured back to back under the same load. Unloaded figures are
+still to be taken again.
 
 Deferred: diagnostics for files that are not open; completion of argument
 labels, implicit members (`.Case` with no receiver) and snippets; references

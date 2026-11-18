@@ -107,7 +107,9 @@ public sealed record PackageIndex(string Name, IReadOnlyList<string> Owners, IRe
     /// <exception cref="RegistryException">It is not an index.</exception>
     public static PackageIndex Parse(string name, string json) {
         try {
-            var root = JsonNode.Parse(json)!.AsObject();
+            // A key named twice is refused as the text is read: left to the
+            // node, it would throw an ArgumentException at the first lookup.
+            var root = JsonNode.Parse(json, documentOptions: new JsonDocumentOptions { AllowDuplicateProperties = false })!.AsObject();
             var owner = root["owner"]?.GetValue<string>();
             IReadOnlyList<string> owners = root["owners"] is JsonArray list ? [..list.Select(static o => o!.GetValue<string>())] : owner is null ? [] : [owner];
             IReadOnlyList<string> keys = root["keys"] is JsonArray all ? [..all.Select(static o => o!.GetValue<string>())] : owners;

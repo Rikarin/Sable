@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Sable.CodeGen;
+using Sable.SIL;
 using Sable.Driver.Build;
 using Sable.Driver.Generators;
 using Sable.Driver.Packages;
@@ -21,6 +22,15 @@ public abstract class HarnessCommand : Command {
 
     /// <summary>The harness's options this command passes on as they are, and whether each takes a value.</summary>
     protected abstract IReadOnlyDictionary<string, bool> HarnessOptions { get; }
+
+    /// <summary>Whether the build counts the lines the program's code runs (<c>sable test --coverage</c>).</summary>
+    protected virtual bool MeasureCoverage => false;
+
+    /// <summary>The counters of the harness just built, when it measures coverage.</summary>
+    protected CoverageMap? CoverageCounters { get; private set; }
+
+    /// <summary>The directory of what is built: the workspace's root, or the first file's.</summary>
+    protected string ProgramDirectory { get; private set; } = ".";
 
     /// <summary>What the command line asked for.</summary>
     protected sealed record Options(
@@ -110,6 +120,7 @@ public abstract class HarnessCommand : Command {
         // Built to be run here, and then gone; or, with '--harness-out',
         // written there and kept, for a debugger to start.
         var executable = options.Output ?? Path.Combine(Path.GetTempPath(), $"sable-{Name}-{Guid.NewGuid():N}{NativeTarget.Host.ExecutableSuffix}");
+        ProgramDirectory = program.Directory;
         try {
             var code = Build(program.Trees, program.Directory, options, executable, program.Cache, program.Link, program.LinkInputs)
                 ?? (options.Output is null ? Execute(executable, options.HarnessArguments) : 0);
@@ -204,7 +215,9 @@ public abstract class HarnessCommand : Command {
         IReadOnlyList<string>? link = null, string linkInputs = "") {
         link ??= [];
         string? kept = null, record = null, key = null;
-        if (cache is not null && !options.Debug) {
+
+        // A build measured for coverage is not kept: its counters are this build's.
+        if (cache is not null && !options.Debug && !MeasureCoverage) {
             kept = Path.Combine(cache, Name);
             record = kept + ".json";
             key = ResultCache.Key(trees, $"{Name}|{Kind}|doc={options.DocExamples}|opt={options.Optimise}|exclusivity={options.Exclusivity}|link={string.Join(' ', link)}|{linkInputs}");
@@ -225,8 +238,10 @@ public abstract class HarnessCommand : Command {
             out _,
             options.DocExamples,
             options.Debug ? directory : null,
-            options.Exclusivity ?? (options.Debug || !options.Optimise)
+            options.Exclusivity ?? (options.Debug || !options.Optimise),
+            MeasureCoverage ? file => IsUnder(file, directory) : null
         );
+        CoverageCounters = result.Coverage;
         foreach (var warning in result.Warnings) {
             Console.Error.WriteLine(warning);
             Console.Error.WriteLine();
@@ -265,6 +280,21 @@ public abstract class HarnessCommand : Command {
         }
 
         return null;
+    }
+
+    /// <summary>
+    ///     Whether a file is the program's own, to measure: under its
+    ///     directory but not its build's output, or a file named on the
+    ///     command line (whose name has no directory).
+    /// </summary>
+    static bool IsUnder(string file, string directory) {
+        if (!Path.IsPathRooted(file)) {
+            return !file.StartsWith('<');
+        }
+
+        var relative = Path.GetRelativePath(directory, file).Replace('\\', '/');
+        return !relative.StartsWith("../", StringComparison.Ordinal) && !relative.StartsWith("target/", StringComparison.Ordinal)
+            && !relative.StartsWith("vendor/", StringComparison.Ordinal) && !Path.IsPathRooted(relative);
     }
 
     /// <summary>Runs the built harness with the arguments meant for it; returns its exit code.</summary>

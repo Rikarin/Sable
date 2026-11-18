@@ -12,14 +12,16 @@ namespace Sable.SIL.Tests;
 ///         ends, within a time limit, by returning — with diagnostics, or
 ///         with none — and never by throwing; and a program that type-checks
 ///         and lowers with nothing to say lowers to SIL the verifier accepts,
-///         before and after the passes. Mutating real programs rather than
-///         generating random tokens is what gets past the parser: most
-///         mutants are nearly programs, so they reach the binder and, often
-///         enough, lowering.
+///         before and after the passes (<see cref="FrontEndCheck" />, which
+///         the coverage-guided fuzzer in tools/fuzz/Sable.Fuzz shares).
+///         Mutating real programs rather than generating random tokens is
+///         what gets past the parser: most mutants are nearly programs, so
+///         they reach the binder and, often enough, lowering.
 ///     </para>
 ///     <para>
-///         It is feedback-guided, though not by code coverage, which would
-///         need instrumenting the compiler: each mutant's outcome is summed up
+///         It is feedback-guided, though not by code coverage, which needs
+///         the compiler instrumented (tools/fuzz/coverage.sh does that, for
+///         long runs): each mutant's outcome is summed up
 ///         as features — the syntax kinds in its tree, the diagnostic codes
 ///         reported, how far down the pipeline it got — and a mutant that
 ///         shows a feature no input has shown before joins the pool that
@@ -122,7 +124,7 @@ public sealed class CompilerFuzzTests(Xunit.Abstractions.ITestOutputHelper outpu
         Exception? failure = null;
         var thread = new Thread(() => {
             try {
-                features = Compile(source);
+                features = FrontEndCheck.Compile(source);
             } catch (Exception e) {
                 failure = e;
             }
@@ -166,61 +168,6 @@ public sealed class CompilerFuzzTests(Xunit.Abstractions.ITestOutputHelper outpu
         }
 
         return current;
-    }
-
-    static HashSet<string> Compile(string source) {
-        var features = new HashSet<string>(StringComparer.Ordinal);
-        var tree = SyntaxTree.Parse(new SourceText(source, "fuzz.sb"));
-        if (tree.ToFullString() != source) {
-            throw new InvalidOperationException("the tree does not give back its text");
-        }
-
-        foreach (var node in tree.Root.DescendantNodes()) {
-            features.Add(node.Kind.ToString());
-        }
-
-        var compilation = Compilation.Create([tree]);
-        var diagnostics = compilation.GetAllDiagnostics();
-        foreach (var diagnostic in diagnostics) {
-            features.Add(diagnostic.Id);
-        }
-
-        // The semantic model is what the editor asks, of broken code above all.
-        var model = compilation.GetSemanticModel(tree);
-        foreach (var node in tree.Root.DescendantNodes()) {
-            model.GetSymbolOf(node);
-        }
-
-        if (diagnostics.Any(static d => d.Severity == DiagnosticSeverity.Error)) {
-            return features;
-        }
-
-        features.Add("stage:type-checked");
-        foreach (var (diagnostic, _) in SilGen.EvaluateConstants(compilation)) {
-            features.Add("const:" + diagnostic.Id);
-        }
-
-        var (module, lowering) = SilGen.Lower(compilation);
-        foreach (var diagnostic in lowering) {
-            features.Add("sil:" + diagnostic.Id);
-        }
-
-        if (lowering.Count > 0) {
-            return features;
-        }
-
-        features.Add("stage:lowered");
-        if (SilVerifier.Verify(module) is { Count: > 0 } before) {
-            throw new InvalidOperationException("lowering made SIL the verifier rejects:\n" + string.Join("\n", before));
-        }
-
-        SilPassManager.Run(module, SilPassManager.Default);
-        if (SilVerifier.Verify(module) is { Count: > 0 } after) {
-            throw new InvalidOperationException("the passes made SIL the verifier rejects:\n" + string.Join("\n", after));
-        }
-
-        features.Add("stage:verified");
-        return features;
     }
 
     /// <summary>

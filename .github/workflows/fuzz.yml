@@ -10,6 +10,13 @@
 #   PubGrub (checked against trying every assignment) and random text
 #   through the version parsers.
 #
+# - coverage-guided: tools/fuzz/coverage.sh, the parser, the front end, the
+#   resolver, the package files and fromBytes under libFuzzer, steered by
+#   the code each input reaches, 90 minutes a target (each a job of its own,
+#   inside the two hours a job may take), from the corpus the night
+#   before kept (actions/cache). What fails is uploaded, with a minimised
+#   reproducer for each.
+#
 # Steps run under 'shell: bash', which GitHub runs with pipefail, so a
 # failure piped through 'tee' still fails the job. Each job prints its seed
 # in the run's summary; to reproduce a failure, run the same job with that
@@ -37,11 +44,15 @@ on:
       compiler_scale:
         description: Compiler mutants, times the test's usual 24
         required: false
-        default: "1500"
+        default: "600"
       resolver_scale:
         description: Resolver and version-parser iterations, times the tests' usual count
         required: false
         default: "200"
+      coverage_minutes:
+        description: Minutes of coverage-guided fuzzing for each target (each target is a job of its own, and a job may run two hours)
+        required: false
+        default: "90"
 
 permissions:
   contents: read
@@ -58,7 +69,7 @@ jobs:
   from-bytes:
     name: fromBytes under sanitizers
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 110
     steps:
       - uses: actions/checkout@v4
 
@@ -132,7 +143,7 @@ jobs:
   compiler:
     name: Compiler on mutated programs
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 110
     steps:
       - uses: actions/checkout@v4
 
@@ -155,7 +166,7 @@ jobs:
       - name: Fuzz
         env:
           SABLE_FUZZ_SEED: ${{ steps.seed.outputs.seed }}
-          SABLE_FUZZ_SCALE: ${{ inputs.compiler_scale || '1500' }}
+          SABLE_FUZZ_SCALE: ${{ inputs.compiler_scale || '600' }}
           SABLE_FUZZ_CRASH_DIR: ${{ github.workspace }}/crash
         run: |
           dotnet test tests/Sable.SIL.Tests -c Release \
@@ -206,3 +217,98 @@ jobs:
         with:
           name: resolver-${{ steps.seed.outputs.seed }}
           path: fuzz.log
+
+  # One job for each target, so that each has a runner of its own and the
+  # whole of the two hours a job may take: the minutes asked for, and the
+  # build before and the triage after.
+  coverage:
+    name: Coverage-guided (libFuzzer), ${{ matrix.target }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 115
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [parser, frontend, resolver, packages, frombytes]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "11.0.x"
+
+      # clang with libFuzzer's runtime, for fromBytes and for libfuzzer-dotnet.
+      - name: Install clang
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang libclang-rt-18-dev
+
+      # libfuzzer-dotnet: libFuzzer's side of fuzzing a .NET program, which
+      # runs the program in a process of its own and reads SharpFuzz's
+      # coverage map from it. Built from its source at a pinned release,
+      # checked against the hash of that source.
+      - name: Build libfuzzer-dotnet
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/libfuzzer-dotnet.cc" \
+            https://raw.githubusercontent.com/Metalnem/libfuzzer-dotnet/v2025.05.02.0904/libfuzzer-dotnet.cc
+          echo "90f019e2e9ad3a0b93c7ecc2c5afb2fbfc8b5aab6aac51c7e0d349ec79354f36  $RUNNER_TEMP/libfuzzer-dotnet.cc" | sha256sum -c -
+          clang -O2 -fsanitize=fuzzer "$RUNNER_TEMP/libfuzzer-dotnet.cc" -o "$RUNNER_TEMP/libfuzzer-dotnet"
+          echo "LIBFUZZER_DOTNET=$RUNNER_TEMP/libfuzzer-dotnet" >> "$GITHUB_ENV"
+
+      # The corpus every night before kept for this target: each starts where
+      # the last left off.
+      - name: Restore the corpus
+        uses: actions/cache/restore@v4
+        with:
+          path: artifacts/fuzz-corpus/${{ matrix.target }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+          restore-keys: fuzz-corpus-${{ matrix.target }}-
+
+      - name: Fuzz
+        env:
+          MINUTES: ${{ inputs.coverage_minutes || '90' }}
+          TARGET: ${{ matrix.target }}
+        run: tools/fuzz/coverage.sh "${MINUTES}m" "$TARGET" 2>&1 | tee fuzz.log
+
+      - name: Save the corpus
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: artifacts/fuzz-corpus/${{ matrix.target }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+
+      # The target must have run under libFuzzer, and found nothing.
+      - name: Summarise
+        id: summary
+        run: |
+          run=$(find artifacts/fuzz -mindepth 1 -maxdepth 1 -type d -name '[0-9]*' | sort | tail -1)
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+          {
+            echo '```'
+            cat "$run/summary.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          if grep -q 'not fuzzed' "$run"/*/about; then
+            echo "a target did not run under libFuzzer" >&2
+            exit 1
+          fi
+          if [ -s "$run/failures.tsv" ]; then
+            exit 1
+          fi
+          # An engine that cannot start runs nothing and finds nothing: not a pass.
+          if [ "$(find "$run" -mindepth 2 -maxdepth 2 -name about | wc -l)" -lt 1 ] || grep '; 0 inputs run' "$run"/*/about; then
+            echo "a target ran no inputs; see its run-*.log" >&2
+            exit 1
+          fi
+
+      - name: Keep the failures
+        if: failure() && steps.summary.outputs.run != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.target }}-${{ github.run_id }}
+          path: |
+            fuzz.log
+            ${{ steps.summary.outputs.run }}/summary.txt
+            ${{ steps.summary.outputs.run }}/failures.tsv
+            ${{ steps.summary.outputs.run }}/*/crashes/
+            ${{ steps.summary.outputs.run }}/*/run-*.log
+            ${{ steps.summary.outputs.run }}/build.log

@@ -358,6 +358,7 @@ public sealed partial class LlvmEmitter {
                                 declare void @sable_task_yield()
                                 declare void @sable_task_sleep(i64)
                                 declare void @sable_tasks_drain()
+                                declare void @sable_coverage_hit(i64)
                                 declare void @sable_array_make_unique(ptr nocapture, ptr)
                                 @sable_empty_array_count = internal constant %SableArrayHeader zeroinitializer
                                 declare void @sable_access_begin(ptr, i64, i32)
@@ -2329,6 +2330,10 @@ public sealed partial class LlvmEmitter {
 
                 case "task_drain":
                     Line("call void @sable_tasks_drain()");
+                    return;
+
+                case Coverage.Builtin:
+                    Line($"call void @sable_coverage_hit(i64 {operands[0]})");
                     return;
             }
 

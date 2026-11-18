@@ -104,5 +104,15 @@ public abstract class Symbol {
     /// <summary>The first location this symbol was declared at, if any.</summary>
     public TextSpan? Location => DeclaringSyntax.IsEmpty ? null : DeclaringSyntax[0].Span;
 
+    /// <summary>Its name where it is first declared, as a place a diagnostic about something else points at too.</summary>
+    public DiagnosticLocation? DeclaredHere(string message) {
+        if (DeclaringSyntax.IsEmpty) {
+            return null;
+        }
+
+        var name = SemanticModel.NameTokenOf(this, DeclaringSyntax[0]);
+        return name.IsNone ? DiagnosticLocation.At(DeclaringSyntax[0], message) : DiagnosticLocation.At(name, message);
+    }
+
     public override string ToString() => QualifiedName;
 }

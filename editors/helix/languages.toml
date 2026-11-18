@@ -1,8 +1,10 @@
 # Sable for Helix: copy into ~/.config/helix/languages.toml (or a project's
 # .helix/languages.toml). The language server gives diagnostics and lints,
 # completion, hover, navigation, rename, signature help, inlay hints and
-# formatting. Helix highlights through tree-sitter, and Sable has no
-# tree-sitter grammar yet: files are recognised and served, not coloured.
+# formatting. Helix highlights through tree-sitter: the grammar is
+# editors/tree-sitter-sable. Point the [[grammar]] below at a checkout, run
+# 'hx --grammar build', and copy its queries/highlights.scm to
+# ~/.config/helix/runtime/queries/sable/highlights.scm.
 
 [[language]]
 name = "sable"
@@ -23,6 +25,10 @@ auto-format = true
 '[' = ']'
 '"' = '"'
 "'" = "'"
+
+[[grammar]]
+name = "sable"
+source = { path = "/path/to/Sable/editors/tree-sitter-sable" }
 
 [language-server.sable-lsp]
 command = "sable"

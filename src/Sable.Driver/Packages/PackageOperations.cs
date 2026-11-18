@@ -223,6 +223,13 @@ public static class PackageOperations {
     ///     and never run Sable to learn what a package depends on.
     /// </summary>
     public static IReadOnlyDictionary<string, byte[]> Published(string directory) {
+        // What a member takes from its workspace is not in its file, and a
+        // consumer of the package has no workspace to take it from.
+        if (ManifestFiles.Load(directory).InheritsFromWorkspace) {
+            throw new PackageException(
+                $"{ManifestFiles.PathIn(directory)} takes settings from its workspace ('workspace = true'), which a published package cannot: write them out in it before publishing");
+        }
+
         var files = new SortedDictionary<string, byte[]>(StringComparer.Ordinal);
         foreach (var (path, bytes) in Files(directory)) {
             files[path] = bytes;

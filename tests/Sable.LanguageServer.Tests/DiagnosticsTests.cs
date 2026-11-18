@@ -53,6 +53,85 @@ public sealed class DiagnosticsTests : IDisposable {
         Assert.Equal([1], unused.Get("tags")!.Value.EnumerateArray().Select(static t => t.GetInt32()));
     }
 
+    static (string Uri, int Line, string Message) Related(JsonElement diagnostic) {
+        var related = diagnostic.Get("relatedInformation")!.Value.EnumerateArray().Single();
+        var location = related.Get("location")!.Value;
+        return (location.GetString("uri")!, location.Get("range")!.Value.Get("start")!.Value.GetInt("line")!.Value, related.GetString("message")!);
+    }
+
+    [Fact]
+    public async Task ADuplicatePointsAtTheDeclarationItClashesWith() {
+        const string First = "module App\n\nstruct Point { var x: Int }\n";
+        const string Second = "module App\n\nfn f() { }\n\nstruct Point { var y: Int }\n";
+        var first = Write("first.sb", First);
+        var second = Write("second.sb", Second);
+        await using var client = new TestClient();
+        await client.InitializeAsync(_root);
+        await client.NotifyAsync("initialized", new { });
+        await client.OpenAsync(second, Second);
+
+        var diagnostics = await client.DiagnosticsAsync(second, static d => Has(d, "S2000"));
+        var duplicate = diagnostics.EnumerateArray().Single(static d => d.GetString("code") == "S2000");
+        Assert.Equal((first, 2, "declared first here"), Related(duplicate));
+    }
+
+    [Fact]
+    public async Task ALocalDeclaredTwicePointsAtTheFirst() {
+        const string Text = "module App\n\nfn f() -> Int {\n    let a = 1\n    let a = 2\n    return a\n}\n";
+        await using var client = new TestClient();
+        await client.InitializeAsync();
+        const string uri = "file:///tmp/twice.sb";
+        await client.OpenAsync(uri, Text);
+
+        var diagnostics = await client.DiagnosticsAsync(uri, static d => Has(d, "S2000"));
+        var duplicate = diagnostics.EnumerateArray().Single(static d => d.GetString("code") == "S2000");
+        Assert.Equal(4, duplicate.Get("range")!.Value.Get("start")!.Value.GetInt("line"));
+        Assert.Equal((uri, 3, "declared first here"), Related(duplicate));
+    }
+
+    [Fact]
+    public async Task AConformanceThatFailsPointsAtTheRequirement() {
+        const string Text = "module App\n\nprotocol Shape {\n    fn area() -> Int\n}\n\nstruct Square: Shape {\n    var side: Int\n    fn area() -> String { return \"\" }\n}\n";
+        await using var client = new TestClient();
+        await client.InitializeAsync();
+        const string uri = "file:///tmp/conformance.sb";
+        await client.OpenAsync(uri, Text);
+
+        var diagnostics = await client.DiagnosticsAsync(uri, static d => d.GetArrayLength() > 0);
+        var mismatch = diagnostics.EnumerateArray().First(static d => d.Get("relatedInformation") is not null);
+        Assert.Equal((uri, 3, "'Shape' requires it here"), Related(mismatch));
+    }
+
+    [Fact]
+    public async Task AUseAfterAMovePointsAtTheMove() {
+        await using var client = new TestClient();
+        await client.InitializeAsync();
+        const string uri = "file:///tmp/moved-related.sb";
+        await client.OpenAsync(uri, Moved);
+
+        var diagnostics = await client.DiagnosticsAsync(uri, static d => Has(d, "S3057"));
+        var used = diagnostics.EnumerateArray().Single(static d => d.GetString("code") == "S3057");
+        Assert.Equal(9, used.Get("range")!.Value.Get("start")!.Value.GetInt("line"));
+        Assert.Equal((uri, 8, "'h' is moved here"), Related(used));
+    }
+
+    [Fact]
+    public async Task AnOverlappingAccessPointsAtBothArguments() {
+        const string Text = "module App\n\nfn swap(_ a: inout Int, _ b: inout Int) { }\n\nfn f() {\n    var x = 1\n    swap(&x, &x)\n}\n";
+        await using var client = new TestClient();
+        await client.InitializeAsync();
+        const string uri = "file:///tmp/overlap.sb";
+        await client.OpenAsync(uri, Text);
+
+        var diagnostics = await client.DiagnosticsAsync(uri, static d => Has(d, "S3062"));
+        var overlap = diagnostics.EnumerateArray().Single(static d => d.GetString("code") == "S3062");
+        var related = overlap.Get("relatedInformation")!.Value.EnumerateArray().ToList();
+        Assert.Equal(2, related.Count);
+        // Each is the variable an argument passes: 'x' in '    swap(&x, &x)'.
+        Assert.Equal([10, 14], related.Select(static r => r.Get("location")!.Value.Get("range")!.Value.Get("start")!.Value.GetInt("character")!.Value));
+        Assert.StartsWith("argument 1", related[0].GetString("message"), StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task AFileWithErrorsIsNotLinted() {
         await using var client = new TestClient();

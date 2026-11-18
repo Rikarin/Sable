@@ -1436,6 +1436,9 @@ public static class SilBuiltins {
             // Whether the running task has been cancelled.
             case "task_is_cancelled" when operands.Count == 0:
                 return new([], SilType.Bool);
+            // A block ran, for 'sable test --coverage' (Coverage.cs): its counter's number.
+            case Coverage.Builtin when operands is [var counter] && counter == SilType.Int:
+                return new([SilType.Int], SilType.Unit);
         }
 
         // Strings joined end to end in one allocation: an interpolation, or 'a + b + c'.
@@ -1522,7 +1525,7 @@ public static class SilBuiltins {
     }
 
     public static IEnumerable<string> Names =>
-        Table.Keys.Concat(ArrayOperations).Concat(["access_begin_read", "access_begin_modify", "access_end", "access_check_read", "access_check_modify", "task_spawn", "task_wait", "task_release", "task_cancel", "task_is_cancelled", "task_yield", "task_sleep", "task_drain"]);
+        Table.Keys.Concat(ArrayOperations).Concat(["access_begin_read", "access_begin_modify", "access_end", "access_check_read", "access_check_modify", "task_spawn", "task_wait", "task_release", "task_cancel", "task_is_cancelled", "task_yield", "task_sleep", "task_drain", Coverage.Builtin]);
 
     static SilType? Pointee(SilType? type) => (type as InlinePointerType)?.Pointee;
 

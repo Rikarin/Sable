@@ -436,12 +436,12 @@ public sealed partial class Binder {
         }
 
         var scope = _locals[^1];
-        if (scope.ContainsKey(name)) {
-            _diagnostics.Error(
+        if (scope.TryGetValue(name, out var earlier)) {
+            _diagnostics.Add(Diagnostic.Error(
                 ErrorCode.ERR_DuplicateDeclaration,
                 symbol.Location ?? default,
                 $"'{name}' is already declared in this scope"
-            );
+            ).WithRelated(earlier.DeclaredHere("declared first here")));
             return;
         }
 
@@ -683,11 +683,11 @@ public sealed partial class Binder {
             return;
         }
 
-        _diagnostics.Error(
+        _diagnostics.Add(QuickFixes.MissingTry(Diagnostic.Error(
             ErrorCode.ERR_MustUseTry,
             span,
             $"{what} can throw, so the expression needs 'try'"
-        );
+        ), span));
     }
 
     /// <summary>
@@ -7917,13 +7917,23 @@ public sealed partial class Binder {
         }
 
         // Every case named, of a union that may gain more: only 'default' covers those.
+        // The fix covers every case left out, not just those the message names.
+        Diagnostic Fixed(Diagnostic diagnostic) {
+            if (match.Syntax is not MatchExpressionSyntax syntax) {
+                return diagnostic;
+            }
+
+            var all = checker.Missing(rows, subject, int.MaxValue);
+            return QuickFixes.MissingArms(diagnostic, syntax, [..all.Where(static m => m != Exhaustiveness.LaterCase)], all.Contains(Exhaustiveness.LaterCase));
+        }
+
         if (missing is [Exhaustiveness.LaterCase]) {
-            _diagnostics.Error(
+            _diagnostics.Add(Fixed(Diagnostic.Error(
                 ErrorCode.ERR_MatchNotExhaustive,
                 match.Syntax.Span,
                 $"match is not exhaustive: '{subject.ToDisplayString()}' is another module's, and not '@frozen', "
                 + "so it may gain cases; add 'default => ...' for them"
-            );
+            )));
             return;
         }
 
@@ -7932,11 +7942,11 @@ public sealed partial class Binder {
             : $"'{string.Join("', '", missing.Take(3))}'"
             + (missing.Count > 3 ? " and more" : string.Empty);
 
-        _diagnostics.Error(
+        _diagnostics.Add(Fixed(Diagnostic.Error(
             ErrorCode.ERR_MatchNotExhaustive,
             match.Syntax.Span,
             $"match is not exhaustive: {witness} not covered"
-        );
+        )));
     }
 
     void ReportCovered(BoundMatchArm arm) =>

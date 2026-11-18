@@ -127,7 +127,23 @@ public sealed record Profile(
     public static Profile Release { get; } = new("release", "3", false, false, true, false, false, new Dictionary<string, string>());
 }
 
-public sealed record WorkspaceSpec(IReadOnlyList<string> Members, IReadOnlyList<string> Exclude);
+public sealed record WorkspaceSpec(IReadOnlyList<string> Members, IReadOnlyList<string> Exclude) {
+    /// <summary><c>[workspace.package]</c>: settings a member's <c>[package]</c> takes with <c>key.workspace = true</c>.</summary>
+    public TomlTable? Package { get; init; }
+
+    /// <summary>
+    ///     <c>[workspace.dependencies]</c>: dependencies a member takes with
+    ///     <c>name = { workspace = true }</c>; a path in one is relative to the
+    ///     workspace's directory.
+    /// </summary>
+    public IReadOnlyList<DependencySpec> Dependencies { get; init; } = [];
+}
+
+/// <summary>
+///     What a member's manifest inherits from: its workspace's settings, and
+///     the directory a workspace dependency's path is relative to.
+/// </summary>
+public sealed record WorkspaceInheritance(string Directory, string File, WorkspaceSpec Workspace);
 
 /// <summary>
 ///     <c>[targets.&lt;triple&gt;]</c> (docs/05 §5.2.10): what a build for that
@@ -195,6 +211,15 @@ public sealed partial class Manifest {
     /// <summary>What was accepted but means nothing to this toolchain: unknown keys, settings not yet acted on.</summary>
     public IReadOnlyList<ManifestError> Warnings { get; init; } = [];
 
+    /// <summary>Whether a setting or dependency is taken from the workspace (<c>workspace = true</c>), so the file alone does not say it.</summary>
+    public bool InheritsFromWorkspace { get; init; }
+
+    /// <summary>Whether a manifest's text takes anything from its workspace, to know before reading it whether the workspace is needed.</summary>
+    public static bool UsesInheritance(string text) => WorkspaceTrue().IsMatch(text);
+
+    [GeneratedRegex(@"(^|[\s{,.])workspace\s*=\s*true", RegexOptions.Multiline)]
+    private static partial Regex WorkspaceTrue();
+
     public Profile ProfileFor(bool release) => release ? Release : Dev;
 
     /// <summary>
@@ -221,6 +246,7 @@ public sealed partial class Manifest {
         GeneratorInputs = GeneratorInputs,
         Targets = Targets,
         Warnings = [..Warnings.Select(w => w with { File = file, Line = 1 })],
+        InheritsFromWorkspace = InheritsFromWorkspace,
     };
 
     public sealed record PackageInfo(
@@ -245,8 +271,12 @@ public sealed partial class Manifest {
     /// <exception cref="ManifestException">It is not a valid manifest.</exception>
     public static Manifest Load(string path) => Parse(System.IO.File.ReadAllText(path), path);
 
+    /// <param name="inheritance">
+    ///     The workspace a member takes <c>workspace = true</c> settings from;
+    ///     a manifest that is its own workspace takes them from itself.
+    /// </param>
     /// <exception cref="ManifestException">It is not a valid manifest.</exception>
-    public static Manifest Parse(string text, string file = "sable.toml") {
+    public static Manifest Parse(string text, string file = "sable.toml", WorkspaceInheritance? inheritance = null) {
         TomlTable root;
         try {
             root = TomlReader.Parse(text, file);
@@ -254,13 +284,18 @@ public sealed partial class Manifest {
             throw new ManifestException([new(file, e.Position.Line, "(syntax)", e.Reason)]);
         }
 
-        return new Reader(file).Read(root);
+        return new Reader(file, inheritance).Read(root);
     }
 
     /// <summary>Turns a TOML table into a manifest, collecting every error on the way.</summary>
-    sealed class Reader(string file) {
+    sealed class Reader(string file, WorkspaceInheritance? inheritance) {
         readonly List<ManifestError> _errors = [];
         readonly List<ManifestError> _warnings = [];
+
+        /// <summary>Where <c>workspace = true</c> settings come from, once known: given, or this manifest's own <c>[workspace]</c>.</summary>
+        WorkspaceInheritance? _inheritance = inheritance;
+
+        bool _inherits;
 
         void Error(TomlTable table, string key, string path, string message) => _errors.Add(new(file, table.KeyPosition(key).Line, path, message));
 
@@ -327,8 +362,14 @@ public sealed partial class Manifest {
                 }
             }
 
-            var package = Table(root, "package", "package") is { } p ? ReadPackage(p) : null;
+            // The workspace first: a package that is its own workspace's root
+            // may take its settings from it.
             var workspace = Table(root, "workspace", "workspace") is { } w ? ReadWorkspace(w) : null;
+            if (workspace is not null) {
+                _inheritance ??= new(Path.GetDirectoryName(Path.GetFullPath(file)) ?? ".", file, workspace);
+            }
+
+            var package = Table(root, "package", "package") is { } p ? ReadPackage(Inherited(p)) : null;
             if (package is null && workspace is null && _errors.Count == 0) {
                 _errors.Add(new(file, 1, "package", "a manifest needs a [package] table, or a [workspace] one"));
             }
@@ -443,8 +484,41 @@ public sealed partial class Manifest {
                 Lints = lints,
                 GeneratorInputs = generatorInputs,
                 Warnings = _warnings,
+                InheritsFromWorkspace = _inherits,
             };
         }
+
+        /// <summary>
+        ///     <c>[package]</c> with each <c>key.workspace = true</c> replaced by
+        ///     the workspace's <c>[workspace.package]</c> value for the key.
+        /// </summary>
+        TomlTable Inherited(TomlTable table) {
+            if (!table.Entries.Any(static e => IsInherited(e.Value))) {
+                return table;
+            }
+
+            var resolved = new TomlTable { Position = table.Position };
+            foreach (var (key, value) in table.Entries) {
+                if (!IsInherited(value)) {
+                    resolved.Add(key, value, table.KeyPosition(key));
+                    continue;
+                }
+
+                _inherits = true;
+                if (_inheritance?.Workspace.Package?[key] is { } shared) {
+                    resolved.Add(key, shared, table.KeyPosition(key));
+                } else {
+                    Error(table, key, $"package.{key}", _inheritance is null
+                        ? "takes its value from the workspace, but no workspace above lists this package as a member"
+                        : $"takes its value from the workspace, and {_inheritance.File} has no '{key}' under [workspace.package]");
+                }
+            }
+
+            return resolved;
+        }
+
+        /// <summary>A value written <c>{ workspace = true }</c>, or <c>key.workspace = true</c>.</summary>
+        static bool IsInherited(TomlValue value) => value is TomlTable { Count: 1 } table && table["workspace"] is TomlBoolean { Value: true };
 
         TomlTable? Table(TomlTable parent, string key, string path) {
             if (parent[key] is not { } value) {
@@ -504,12 +578,6 @@ public sealed partial class Manifest {
                 Warn(table, key, $"package.{key}", "unknown key, ignored");
             }
 
-            foreach (var (key, value) in table.Entries) {
-                if (value is TomlTable { } inherited && inherited["workspace"] is not null) {
-                    Error(table, key, $"package.{key}", "inheriting a setting from the workspace is not supported yet (docs/05 §5.2.10): write it out here");
-                }
-            }
-
             var name = String(table, "name", "package.name");
             if (name is null && table["name"] is null) {
                 Error(table, "package", "package.name", "a package needs a name");
@@ -542,24 +610,44 @@ public sealed partial class Manifest {
         }
 
         WorkspaceSpec ReadWorkspace(TomlTable table) {
-            foreach (var key in table.Keys.Where(static k => k is not ("members" or "exclude" or "resolver"))) {
-                Warn(table, key, $"workspace.{key}",
-                    key is "package" or "dependencies" or "metadata"
-                        ? "members cannot inherit from the workspace yet (docs/05 §5.2.10); ignored"
-                        : "unknown key, ignored");
+            foreach (var key in table.Keys.Where(static k => k is not ("members" or "exclude" or "resolver" or "package" or "dependencies"))) {
+                Warn(table, key, $"workspace.{key}", key == "metadata" ? "nothing reads workspace metadata; ignored" : "unknown key, ignored");
             }
 
-            return new(Strings(table, "members", "workspace.members") ?? [], Strings(table, "exclude", "workspace.exclude") ?? []);
+            // What members may take: the [package] keys, each as its own
+            // [package] would have it, and dependencies as a member writes them.
+            var package = Table(table, "package", "workspace.package");
+            string[] inheritable = ["version", "edition", "authors", "license", "description", "repository", "readme", "keywords", "categories", "homepage", "documentation", "include", "exclude", "publish"];
+            foreach (var key in package?.Keys.Where(k => !inheritable.Contains(k)) ?? []) {
+                Error(package!, key, $"workspace.package.{key}", key == "name"
+                    ? "each member names itself; a name cannot be shared"
+                    : "is not a setting members can take from the workspace");
+            }
+
+            if (package?["version"] is TomlString { Value: var version } && !SemVersion.TryParse(version, out _, out var problem)) {
+                Error(package, "version", "workspace.package.version", $"'{version}' is not a semantic version: {problem}");
+            }
+
+            var dependencies = ReadDependencies(table, "dependencies", "workspace.dependencies");
+            foreach (var dependency in dependencies.Where(static d => d.Optional)) {
+                Error(table, "dependencies", $"workspace.dependencies.{dependency.Name}", "whether a dependency is optional is the member's to say");
+            }
+
+            return new(Strings(table, "members", "workspace.members") ?? [], Strings(table, "exclude", "workspace.exclude") ?? []) {
+                Package = package,
+                Dependencies = dependencies,
+            };
         }
 
-        List<DependencySpec> ReadDependencies(TomlTable root, string section) {
+        List<DependencySpec> ReadDependencies(TomlTable root, string section, string? fullName = null) {
             var result = new List<DependencySpec>();
-            if (Table(root, section, section) is not { } table) {
+            fullName ??= section;
+            if (Table(root, section, fullName) is not { } table) {
                 return result;
             }
 
             foreach (var (name, value) in table.Entries) {
-                var path = $"{section}.{name}";
+                var path = $"{fullName}.{name}";
                 var line = table.KeyPosition(name).Line;
                 if (!IsValidPackageName(name)) {
                     Error(table, name, path, $"'{name}' is not a package name");
@@ -573,6 +661,12 @@ public sealed partial class Manifest {
                         }
 
                         break;
+                    case TomlTable detail when detail["workspace"] is TomlBoolean { Value: true } && fullName != "workspace.dependencies":
+                        if (Inherit(table, name, path, detail, line) is { } inherited) {
+                            result.Add(inherited);
+                        }
+
+                        break;
                     case TomlTable detail:
                         string[] known = ["version", "path", "git", "tag", "branch", "rev", "optional", "default-features", "features", "when"];
                         foreach (var key in detail.Keys.Where(k => !known.Contains(k))) {
@@ -581,7 +675,9 @@ public sealed partial class Manifest {
                                 // package, so a second name for it would mean nothing.
                                 "package" => "a dependency cannot be renamed: code imports its modules, not its name, so the key must be the package's name",
                                 "registry" => "every dependency comes from the workspace's registry ([registry] path, else $SABLE_REGISTRY); naming another one is not supported",
-                                "workspace" => "inheriting a dependency from the workspace is not supported yet (docs/05 §5.2.10): write it out here",
+                                "workspace" => fullName == "workspace.dependencies"
+                                    ? "a workspace's own dependency cannot take itself from the workspace"
+                                    : "takes the dependency from the workspace only as 'workspace = true'",
                                 _ => "unknown key in a dependency",
                             });
                         }
@@ -641,6 +737,45 @@ public sealed partial class Manifest {
             }
 
             return result;
+        }
+
+        /// <summary>
+        ///     <c>name = { workspace = true }</c>: the workspace's dependency of
+        ///     that name, its path made relative to this manifest. The member may
+        ///     add features, say it is optional, and say when it applies.
+        /// </summary>
+        DependencySpec? Inherit(TomlTable table, string name, string path, TomlTable detail, int line) {
+            _inherits = true;
+            foreach (var key in detail.Keys.Where(static k => k is not ("workspace" or "features" or "optional" or "when"))) {
+                Error(detail, key, $"{path}.{key}", $"comes from the workspace, which says '{key}' for it");
+            }
+
+            if (_inheritance is null) {
+                Error(table, name, path, "takes the dependency from the workspace, but no workspace above lists this package as a member");
+                return null;
+            }
+
+            if (_inheritance.Workspace.Dependencies.FirstOrDefault(d => d.Name == name) is not { } shared) {
+                Error(table, name, path, $"takes the dependency from the workspace, and {_inheritance.File} has no '{name}' under [workspace.dependencies]");
+                return null;
+            }
+
+            var directory = Path.GetDirectoryName(Path.GetFullPath(file)) ?? ".";
+            var relocated = shared.Path is { } sharedPath
+                ? Path.GetRelativePath(directory, Path.GetFullPath(Path.Combine(_inheritance.Directory, sharedPath))).Replace('\\', '/')
+                : null;
+            var when = String(detail, "when", $"{path}.when") ?? shared.When;
+            if (when is not null && !DependencyCondition.IsValid(when)) {
+                Error(detail, "when", $"{path}.when", $"'{when}' is not a condition: os(macos), os(linux), os(windows), arch(arm64) or arch(x64)");
+            }
+
+            return shared with {
+                Path = relocated,
+                Optional = Bool(detail, "optional", $"{path}.optional") ?? false,
+                Features = [..shared.Features.Union(Strings(detail, "features", $"{path}.features") ?? [], StringComparer.Ordinal)],
+                Line = line,
+                When = when,
+            };
         }
 
         VersionReq? Requirement(string text, TomlValue value, string path) {

@@ -370,6 +370,21 @@ public sealed class SourceGeneratorTests {
     }
 
     [Fact]
+    public void AProgramCompiledBeforeIsReportedOnTheTreesThatAskAgain() {
+        // The editor reads a generator from disk, then parses it again when
+        // it is opened: the second set's text is the first's, so its program
+        // comes from the cache, and the error must be on the second's tree.
+        const string Text = "module Local\n\nimport Sable.Generators\n\n@generator(\"local\")\nfn local(_ d: Declaration, into output: inout Output) {\n    print(d.name)\n}\n// trees test\n";
+        var first = SyntaxTree.Parse(new SourceText(Text, "generators/local.sb"));
+        Assert.Contains(SourceGenerators.Check(GeneratorSet.FromTrees("app", [first])), d => d.Tree == first && d.Diagnostic.Code == ErrorCode.ERR_GeneratorRule);
+
+        var second = SyntaxTree.Parse(new SourceText(Text, "generators/local.sb"));
+        var again = SourceGenerators.Check(GeneratorSet.FromTrees("app", [second]));
+        Assert.Contains(again, d => d.Diagnostic.Code == ErrorCode.ERR_GeneratorRule);
+        Assert.All(again, d => Assert.Same(second, d.Tree));
+    }
+
+    [Fact]
     public void AnAttributeInAGeneratedFileStartsNoGenerator() {
         using var fixture = new PackageFixture();
         fixture.Package("app", "app", "1.0.0", "",

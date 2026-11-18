@@ -48,7 +48,11 @@ public static class PackageOperations {
                 : $"{{ version = {TomlText.Quote(requirement.Text)}, path = {TomlText.Quote(relative)} }}";
         } else {
             var registry = environment.RegistryFor(workspace);
-            var available = registry.Entries(name).Where(static e => !e.Yanked).ToList();
+            if (registry.Offline) {
+                throw new PackageException($"cannot look {name} up: {registry.WhyUnavailable}; add it with --path, or without --offline");
+            }
+
+            var available =registry.Entries(name).Where(static e => !e.Yanked).ToList();
             if (available.Count == 0) {
                 throw new PackageException(registry.Entries(name).Count > 0 ? $"every version of {name} is yanked" : $"the registry has no package called '{name}'");
             }
@@ -78,7 +82,7 @@ public static class PackageOperations {
             throw;
         }
 
-        environment.Error.WriteLine($"      Adding {name} {(path is not null ? $"(path {path})" : requirement!.Text)} to {(dev ? "dev-dependencies" : "dependencies")}");
+        environment.Status.WriteLine($"      Adding {name} {(path is not null ? $"(path {path})" : requirement!.Text)} to {(dev ? "dev-dependencies" : "dependencies")}");
         return value;
     }
 
@@ -94,7 +98,7 @@ public static class PackageOperations {
         }
 
         PackageGraph.Resolve(Workspace.Load(member.Directory), environment);
-        environment.Error.WriteLine($"    Removing {name} from {member.Name}");
+        environment.Status.WriteLine($"    Removing {name} from {member.Name}");
     }
 
     /// <summary>Writes an edited <c>package.sb</c>, and puts the original back if it no longer evaluates.</summary>
@@ -295,9 +299,9 @@ public static class PackageOperations {
             return plan;
         }
 
-        using var key = Registry.LoadOrCreateKey(environment.KeyPath, environment.Error);
+        using var key = Registry.LoadOrCreateKey(environment.KeyPath, environment.Status);
         var entry = registry.Publish(plan.Entry, plan.Archive, key);
-        environment.Error.WriteLine($"   Published {package.Name} v{package.Version} to {registry.Directory}");
+        environment.Status.WriteLine($"   Published {package.Name} v{package.Version} to {registry.Directory}");
         return plan with { Entry = entry };
     }
 
@@ -357,7 +361,7 @@ public static class PackageOperations {
             }
 
             vendored.Add($"{locked.Name} v{locked.Version}");
-            environment.Error.WriteLine($"   Vendoring {locked.Name} v{locked.Version} to {workspace.Relative(target)}");
+            environment.Status.WriteLine($"   Vendoring {locked.Name} v{locked.Version} to {workspace.Relative(target)}");
         }
 
         if (Directory.Exists(workspace.VendorDirectory)) {

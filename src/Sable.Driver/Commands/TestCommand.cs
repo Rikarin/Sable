@@ -11,7 +11,10 @@ public sealed class TestCommand : HarnessCommand {
     public override string Summary => "run the @test functions (and, with --doc, the doc examples)";
 
     public override string Usage => """
-        usage: sable test <file.sb>... [filter...] [--doc] [--list] [--exact] [--show-output] [--release] [-g] [-- <harness options>]
+        usage: sable test [<file.sb>...] [filter...] [--doc] [--list] [--exact] [--show-output] [--release] [-g] [-- <harness options>]
+
+        Without a file, tests the package in this directory or the nearest above it: its
+        library with the files under tests/, and its dependencies.
 
           filter             run the tests whose names (Module.function) contain it
           --doc              also run the ```sable examples in doc comments, as tests

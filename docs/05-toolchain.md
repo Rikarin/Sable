@@ -29,7 +29,28 @@ sable repl                         interactive, backed by the const evaluator
 sable lsp                          language server (stdio)
 sable explain <S1234>              print the full documentation for a diagnostic
 sable toolchain <install|list|pin>  manage toolchain versions
+sable completions <bash|zsh|fish>  print a shell completion script
+sable help <command>               a command's arguments, as <command> --help
 ```
+
+Every command also takes, before or after its name: `-q` (no status lines),
+`-v` (also the commands run), `--color auto|always|never` (`auto` honours
+`NO_COLOR`), `--message-format human|json` (json: each diagnostic as one
+object a line on standard output — `severity`, `code`, `message`, `file`,
+`line`, `column`, `rendered` — for editors and CI), `-j <n>` and
+`--offline`; and `sable -V` prints the version. None of them changes what a
+build produces.
+
+`sable bindgen` writes Sable source, not `.sbi` (which waits on the
+interface file format of §5.4): a module of `@extern("c")` functions,
+structs and integer constants, read from the header by clang itself. What
+cannot cross to C yet — pointers, arrays, unions, variadic functions — is
+listed in a comment, until `Sable.Interop` (#74). `sable toolchain` installs
+toolchains side by side in `$SABLE_HOME/toolchains/<version>` from a build
+(`--from <directory or archive>`; there is no release server yet), and `pin`
+writes `sable-toolchain` at the workspace root, after which the `sable` on
+the path hands every command there to the pinned toolchain — or stops,
+naming how to install it.
 
 Design rules:
 - **No global state that changes the result of a build.** No environment

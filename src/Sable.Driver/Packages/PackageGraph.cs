@@ -7,12 +7,37 @@ namespace Sable.Driver.Packages;
 ///     tests make their own, in temporary directories.
 /// </summary>
 public sealed record PackageEnvironment(string RegistryDirectory, string CacheDirectory, string KeyPath, TextWriter Out, TextWriter Error) {
-    public static PackageEnvironment FromProcess() {
-        var home = Environment.GetEnvironmentVariable("SABLE_HOME") is { Length: > 0 } h
+    /// <summary>
+    ///     Where the status lines go (<c>   Compiling app v1.0.0</c>): standard
+    ///     error, unless <c>-q</c> asked for quiet.
+    /// </summary>
+    public TextWriter Status {
+        get => _status ?? Error;
+        init => _status = value;
+    }
+
+    readonly TextWriter? _status;
+
+    /// <summary><c>--offline</c>: the registry is never read; the cache and <c>vendor/</c> are all there is.</summary>
+    public bool Offline { get; init; }
+
+    /// <summary><c>$SABLE_HOME</c>: the directory the cache, the key and the credentials are in.</summary>
+    public string Home => Path.GetDirectoryName(CacheDirectory)!;
+
+    /// <summary>The user's directory for Sable: <c>SABLE_HOME</c>, else <c>~/.sable</c>.</summary>
+    public static string HomeFromProcess =>
+        Environment.GetEnvironmentVariable("SABLE_HOME") is { Length: > 0 } h
             ? h
             : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".sable");
+
+    public static PackageEnvironment FromProcess() {
+        var home = HomeFromProcess;
         var registry = Environment.GetEnvironmentVariable("SABLE_REGISTRY") is { Length: > 0 } r ? r : Path.Combine(home, "registry");
-        return new(registry, Path.Combine(home, "cache"), Path.Combine(home, "key"), Console.Out, Console.Error);
+        var options = GlobalOptions.Current;
+        return new(registry, Path.Combine(home, "cache"), Path.Combine(home, "key"), Console.Out, Console.Error) {
+            Status = options.Verbosity == Verbosity.Quiet ? TextWriter.Null : Console.Error,
+            Offline = options.Offline,
+        };
     }
 
     /// <summary>Everything under one directory: <c>registry/</c>, <c>cache/</c> and <c>key</c>.</summary>
@@ -21,7 +46,7 @@ public sealed record PackageEnvironment(string RegistryDirectory, string CacheDi
 
     /// <summary>The registry a workspace uses: its <c>[registry] path</c>, else this environment's.</summary>
     public Registry RegistryFor(Workspace workspace) =>
-        new(workspace.RootManifest.RegistryPath is { } path ? Path.GetFullPath(Path.Combine(workspace.Root, path)) : RegistryDirectory);
+        new(workspace.RootManifest.RegistryPath is { } path ? Path.GetFullPath(Path.Combine(workspace.Root, path)) : RegistryDirectory) { Offline = Offline };
 }
 
 /// <summary>Which features to turn on in the packages being built (<c>--features</c>, <c>--no-default-features</c>, <c>--all-features</c>).</summary>
@@ -107,7 +132,7 @@ public sealed partial class PackageGraph {
         try {
             full = ResolveWithWeakFeatures(source, root, rootVersion, preferred);
         } catch (ResolutionException e) when (!registry.IsAvailable) {
-            throw new ResolutionException($"{e.Message}\nnote: the registry at '{registry.Directory}' cannot be read, so only versions in the cache and vendor/ were considered\n", e.Incompatibility);
+            throw new ResolutionException($"{e.Message}\nnote: {registry.WhyUnavailable}, so only versions in the cache and vendor/ were considered\n", e.Incompatibility);
         }
 
         var lockFile = source.LockFor(full, root);
@@ -235,7 +260,7 @@ sealed class SourceStore(Workspace workspace, PackageEnvironment environment, Re
         }
 
         if (!registry.IsAvailable) {
-            throw new PackageException($"{name} {version} is not in the cache or vendor/, and the registry at '{registry.Directory}' cannot be read");
+            throw new PackageException($"{name} {version} is not in the cache or vendor/, and {registry.WhyUnavailable}");
         }
 
         var entry = registry.Entry(name, version) ?? throw new PackageException($"the registry has no {name} {version}");

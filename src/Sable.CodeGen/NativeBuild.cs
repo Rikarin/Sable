@@ -380,6 +380,23 @@ public static class NativeBuild {
         }
     }
 
+    /// <summary>
+    ///     Where each command run to build is written before it runs, for
+    ///     <c>sable -v</c>; null to write nothing.
+    /// </summary>
+    public static TextWriter? CommandLog { get; set; }
+
+    /// <summary>Writes a command to <see cref="CommandLog" />, quoted as a shell would need it.</summary>
+    public static void LogCommand(string program, IReadOnlyList<string> arguments) {
+        if (CommandLog is { } log) {
+            static string Quote(string text) =>
+                text.Length > 0 && text.All(static c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_' or '.' or '/' or '=' or ',' or ':' or '+')
+                    ? text
+                    : "'" + text.Replace("'", "'\\''", StringComparison.Ordinal) + "'";
+            log.WriteLine($"     Running `{string.Join(' ', new[] { program }.Concat(arguments).Select(Quote))}`");
+        }
+    }
+
     static (int ExitCode, string Output) Run(string program, IEnumerable<string> arguments) {
         var start = new ProcessStartInfo(program) {
             RedirectStandardOutput = true,
@@ -389,6 +406,8 @@ public static class NativeBuild {
         foreach (var argument in arguments) {
             start.ArgumentList.Add(argument);
         }
+
+        LogCommand(program, [..start.ArgumentList]);
 
         using var process = Process.Start(start) ?? throw new InvalidOperationException($"could not start {program}");
         var stdout = process.StandardOutput.ReadToEndAsync();

@@ -138,7 +138,7 @@ public static class IncrementalBuild {
             texts = [..units.Select(static u => new string[u.Files.Count])];
             fileHashes = [..units.Select(static u => new string[u.Files.Count])];
             var all = units.SelectMany(static (u, i) => u.Files.Select((f, j) => (i, j, f))).ToList();
-            Parallel.ForEach(all, item => {
+            Parallel.ForEach(all, GlobalOptions.Current.ParallelOptions, item => {
                 var (i, j, file) = item;
                 var text = File.ReadAllText(file.Path);
                 texts[i][j] = text;
@@ -157,7 +157,7 @@ public static class IncrementalBuild {
         using (BuildTimings.Of(timings, "parse")) {
             trees = [..units.Select(static u => new SyntaxTree[u.Files.Count])];
             var all = units.SelectMany(static (u, i) => u.Files.Select((f, j) => (i, j, f))).ToList();
-            Parallel.ForEach(all, item => {
+            Parallel.ForEach(all, GlobalOptions.Current.ParallelOptions, item => {
                 var (i, j, file) = item;
                 // 'DEBUG' or 'RELEASE' follows from the settings, which key the cache.
                 trees[i][j] = SyntaxTree.Parse(new SourceText(texts[i][j], file.Name), Pipeline.ParseOptionsFor(settings.Optimise, file.Options));
@@ -278,7 +278,7 @@ public static class IncrementalBuild {
             var allTrees = units.SelectMany(static u => u.Trees).ToList();
             var concrete = InterfaceFingerprint.ConcreteTypeNames(allTrees);
             var fingerprints = new ConcurrentDictionary<SyntaxTree, string>();
-            Parallel.ForEach(units.Where(u => u != standard).SelectMany(static u => u.Trees), tree => fingerprints[tree] = InterfaceFingerprint.Of(tree, concrete));
+            Parallel.ForEach(units.Where(u => u != standard).SelectMany(static u => u.Trees), GlobalOptions.Current.ParallelOptions, tree => fingerprints[tree] = InterfaceFingerprint.Of(tree, concrete));
             programInterface = Hash(string.Join("\n", units.Select(u => u == standard
                 ? $"{u.Name}:{u.ContentHash}"
                 : $"{u.Name}:{string.Join(",", u.Trees.Select(t => t.Text.FileName + "=" + fingerprints[t]))}")));
@@ -302,7 +302,8 @@ public static class IncrementalBuild {
             : Task.Run(() => NativeObjects.CompileRuntime(runtime, settings.Optimise, settings.Debug));
 
         var compiling = new List<(Unit Unit, Task<NativeBuildResult> Task)>();
-        var throttle = new SemaphoreSlim(Environment.ProcessorCount);
+        // '-j' bounds how many clang processes run at once.
+        var throttle = new SemaphoreSlim(GlobalOptions.Current.Parallelism);
         List<string> warnings = [];
         if (stale.Count > 0) {
             Compilation compilation;

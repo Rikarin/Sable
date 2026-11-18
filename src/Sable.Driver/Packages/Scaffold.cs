@@ -36,7 +36,7 @@ public static partial class Scaffold {
         }
 
         Write(directory, name, library);
-        environment.Error.WriteLine($"     Created {(library ? "library" : "binary")} package `{name}` in {directory}");
+        environment.Status.WriteLine($"     Created {(library ? "library" : "binary")} package `{name}` in {directory}");
         JoinWorkspace(directory, environment);
         return directory;
     }
@@ -50,7 +50,7 @@ public static partial class Scaffold {
 
         name ??= NameFrom(Path.GetFileName(directory));
         Write(directory, name, library);
-        environment.Error.WriteLine($"     Created {(library ? "library" : "binary")} package `{name}` in {directory}");
+        environment.Status.WriteLine($"     Created {(library ? "library" : "binary")} package `{name}` in {directory}");
         JoinWorkspace(directory, environment);
     }
 
@@ -100,7 +100,7 @@ public static partial class Scaffold {
                     throw new PackageException("the edited manifest was not valid, so it was put back");
                 }
 
-                environment.Error.WriteLine($"      Adding `{member}` as a member of the workspace at {parent.FullName}");
+                environment.Status.WriteLine($"      Adding `{member}` as a member of the workspace at {parent.FullName}");
             } catch (PackageException e) {
                 environment.Error.WriteLine($"warning: this package is inside the workspace at {parent.FullName}, which does not list it: add \"{member}\" to its members ({e.Message})");
             }

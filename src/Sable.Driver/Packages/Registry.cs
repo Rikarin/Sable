@@ -63,8 +63,14 @@ public sealed class Registry(string directory) {
 
     string BlobPath(string checksum) => Path.Combine(Directory, "blobs", checksum.Replace("sha256:", "", StringComparison.Ordinal) + ".tar");
 
+    /// <summary><c>--offline</c>: the registry is not to be read, though it may be there.</summary>
+    public bool Offline { get; init; }
+
     /// <summary>Whether the registry is there to read: offline, it may not be.</summary>
-    public bool IsAvailable => System.IO.Directory.Exists(Path.Combine(Directory, "index"));
+    public bool IsAvailable => !Offline && System.IO.Directory.Exists(Path.Combine(Directory, "index"));
+
+    /// <summary>Why it is not available, for a message: "the registry at '…' cannot be read".</summary>
+    public string WhyUnavailable => Offline ? $"--offline keeps the registry at '{Directory}' from being read" : $"the registry at '{Directory}' cannot be read";
 
     /// <summary>Every version of <paramref name="name" /> published, yanked or not, oldest first.</summary>
     public IReadOnlyList<IndexEntry> Entries(string name) {

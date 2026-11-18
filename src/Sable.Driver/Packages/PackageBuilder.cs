@@ -145,7 +145,7 @@ public static class PackageBuilder {
         var reported = new List<string>();
         foreach (var member in Selected(workspace, request.Package)) {
             var resolved = graph.Packages[member.Name];
-            environment.Error.WriteLine($"    Checking {Describe(resolved, workspace)}");
+            environment.Status.WriteLine($"    Checking {Describe(resolved, workspace)}");
             var targets = new List<BinTarget?>();
             if (member.LibrarySources().Count > 0) {
                 targets.Add(null);
@@ -172,7 +172,7 @@ public static class PackageBuilder {
             return 1;
         }
 
-        environment.Error.WriteLine($"    Finished checking in {clock.Elapsed.TotalSeconds:0.00}s");
+        environment.Status.WriteLine($"    Finished checking in {clock.Elapsed.TotalSeconds:0.00}s");
         return 0;
     }
 
@@ -215,10 +215,10 @@ public static class PackageBuilder {
             }
 
             foreach (var dependency in graph.Closure(member.Name).Skip(1)) {
-                environment.Error.WriteLine($"   Compiling {Describe(dependency, workspace)}");
+                environment.Status.WriteLine($"   Compiling {Describe(dependency, workspace)}");
             }
 
-            environment.Error.WriteLine($"   Compiling {Describe(graph.Packages[member.Name], workspace)}");
+            environment.Status.WriteLine($"   Compiling {Describe(graph.Packages[member.Name], workspace)}");
             if (bins.Count == 0) {
                 var (errors, warnings) = Pipeline.Diagnose(Program(graph, member.Name, null, profile.Optimise));
                 Report(environment, warnings);
@@ -255,7 +255,7 @@ public static class PackageBuilder {
                 }
 
                 if (timings is not null) {
-                    environment.Error.WriteLine($"       Built {bin.Name}: {outcome.Kind}, {outcome.Compiled} unit(s) compiled, {outcome.Reused} reused");
+                    environment.Status.WriteLine($"       Built {bin.Name}: {outcome.Kind}, {outcome.Compiled} unit(s) compiled, {outcome.Reused} reused");
                 }
 
                 built.Add(new(member.Name, bin.Name, executable, profile));
@@ -267,7 +267,7 @@ public static class PackageBuilder {
         }
 
         var settings = $"{(profile.Optimise ? "optimised" : "unoptimised")}{(profile.Debug ? " + debuginfo" : "")}";
-        environment.Error.WriteLine($"    Finished `{profile.Name}` profile [{settings}] target(s) in {clock.Elapsed.TotalSeconds:0.00}s");
+        environment.Status.WriteLine($"    Finished `{profile.Name}` profile [{settings}] target(s) in {clock.Elapsed.TotalSeconds:0.00}s");
         timings?.Write(environment.Error);
         return built;
     }
@@ -288,7 +288,7 @@ public static class PackageBuilder {
             return 1;
         }
 
-        environment.Error.WriteLine($"     Running `{Path.GetRelativePath(workspace.Root, binary.Path)}`");
+        environment.Status.WriteLine($"     Running `{Path.GetRelativePath(workspace.Root, binary.Path)}`");
         var start = new ProcessStartInfo(binary.Path);
         foreach (var argument in arguments) {
             start.ArgumentList.Add(argument);
@@ -308,7 +308,7 @@ public static class PackageBuilder {
     public static void Clean(Workspace workspace, PackageEnvironment environment) {
         if (Directory.Exists(workspace.TargetDirectory)) {
             Directory.Delete(workspace.TargetDirectory, true);
-            environment.Error.WriteLine($"     Removed {workspace.Relative(workspace.TargetDirectory)}");
+            environment.Status.WriteLine($"     Removed {workspace.Relative(workspace.TargetDirectory)}");
         }
     }
 }

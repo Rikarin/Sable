@@ -7144,10 +7144,19 @@ public sealed partial class SilGen {
             if (IsIntrinsic(callee)) {
                 var owner = Owner(callee)?.OriginalDefinition;
 
-                // Tasks: made, and yielded to (SilGen.Tasks.cs).
+                // Tasks: made, slept, and yielded to (SilGen.Tasks.cs).
                 if (owner is not null && ReferenceEquals(owner, Core.Task)) {
                     if (callee.Name == "spawn") {
                         return Spawn(call);
+                    }
+
+                    if (callee.Name == "sleep") {
+                        if (Expression(call.Arguments[0]) is not { } nanoseconds) {
+                            return null;
+                        }
+
+                        Emit(new BuiltinInst("task_sleep", SilType.Unit, nanoseconds));
+                        return UnitValue.Instance;
                     }
 
                     Emit(new BuiltinInst("task_yield", SilType.Unit));

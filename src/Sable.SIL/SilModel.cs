@@ -1247,6 +1247,9 @@ public static class SilBuiltins {
                 return new([operands[0], operands[1]], SilType.Int) { Consumed = [1] };
             case "task_wait" or "task_release" when operands is [var handle] && handle == SilType.Int:
                 return new([SilType.Int], SilType.Unit);
+            // Off the run queue for at least this many nanoseconds, while the other tasks run.
+            case "task_sleep" when operands is [var nanoseconds] && nanoseconds == SilType.Int:
+                return new([SilType.Int], SilType.Unit);
             case "task_yield" or "task_drain" when operands.Count == 0:
                 return new([], SilType.Unit);
         }
@@ -1328,7 +1331,7 @@ public static class SilBuiltins {
     }
 
     public static IEnumerable<string> Names =>
-        Table.Keys.Concat(ArrayOperations).Concat(["access_begin_read", "access_begin_modify", "access_end", "task_spawn", "task_wait", "task_release", "task_yield", "task_drain"]);
+        Table.Keys.Concat(ArrayOperations).Concat(["access_begin_read", "access_begin_modify", "access_end", "task_spawn", "task_wait", "task_release", "task_yield", "task_sleep", "task_drain"]);
 
     static SilType? Pointee(SilType? type) => (type as InlinePointerType)?.Pointee;
 

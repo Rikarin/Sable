@@ -1161,11 +1161,19 @@ it is now one runtime call (`Runtime.joinStrings`) that sizes the result once.
 
 Done ahead of `Sable.Concurrency`, with the core of it in `Sable.Core`
 (`tests/Sable.CodeGen.Tests/AsyncTests.cs`). Tasks are scheduled
-cooperatively: each runs on a thread of its own, but one lock is held by
-whichever task is running, so exactly one runs at a time and switches only
-where a task waits — awaiting a task not yet finished, or `Task.yield()`. The
-interleaving is therefore deterministic, the interpreter reproduces it, and
-reference counts stay non-atomic. An async function is an ordinary function,
+cooperatively: each runs on a thread, but one lock is held by whichever
+task is running, so exactly one runs at a time and switches only where a
+task waits — awaiting a task not yet finished, `Task.yield()`, or
+`Task.sleep(nanoseconds:)`. The interleaving is therefore deterministic
+(sleepers wake in the order of their deadlines), the interpreter reproduces
+it, and reference counts stay non-atomic. A task is given a thread only
+when it first runs, and a thread whose task finished runs the next task
+that has not begun, or waits to be given one: threads are held only by
+tasks waiting part-way through, so twenty thousand tasks that each run to
+the end take one thread between them. A sleeping task is off the run queue;
+when nothing is queued the scheduler waits for the earliest sleeper, so two
+tasks sleeping a second take a second. `Sable.Concurrency`'s `sleep` is
+`Task.sleep`; `Clock.sleep` does not await, so it still holds every task. An async function is an ordinary function,
 and `await` is its operand; `Task.spawn { … }` queues a task (a class holding
 the runtime's handle, the body and the result), `await task.value` waits for
 it, and the program ends once every task has. Actors lower as classes: with
@@ -1174,12 +1182,14 @@ a call from outside it `await`. `async let` binds; reading it needs `await`.
 A class or actor whose fields all have initial values is made with `init()`.
 
 This trades the planned stackless state machine (§2.2, item 4) for a stack
-per task — far less compiler for the same semantics, at the cost of memory
-per task and of thread creation. Not yet: `async let` runs its child to
-completion at the declaration rather than alongside; no task groups,
-cancellation, `for await` or async sequences, no sleeping or I/O to wait
-on, and no parallelism — all `Sable.Concurrency`'s, along with the switch
-to the state machine where tasks are many.
+per task — far less compiler for the same semantics, at the cost of a
+thread (8 MB of address space) for each task waiting at once. Not yet:
+`async let` runs its child to completion at the declaration rather than
+alongside; actors have no executor or mailbox of their own; no task groups
+as scopes, cancellation, `for await` or async sequences, priorities, I/O to
+wait on (an I/O reactor), and no parallelism (a work-stealing pool, and
+with it atomic counts) — all `Sable.Concurrency`'s, along with the switch
+to the state machine where many tasks wait at once.
 
 ### 4.4 Exit criteria
 

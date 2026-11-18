@@ -98,6 +98,55 @@ public sealed class AsyncTests {
                 """)).Stdout
         );
 
+    /// <summary>
+    ///     A sleeping task is off the run queue: two tasks sleeping at once take
+    ///     as long as the longer, not the sum, and wake in the order of their
+    ///     deadlines (#185).
+    /// </summary>
+    [Fact]
+    public void SleepingTasksSleepTogether() =>
+        Assert.Equal(
+            "short\nlong\n3\ntrue\n",
+            AssertAgree(AsyncProgram("import Sable.Time", """
+                    let start = Instant.now()
+                    let long = Task.spawn {
+                        await Task.sleep(nanoseconds: 400_000_000)
+                        print("long")
+                        return 1
+                    }
+                    let short = Task.spawn {
+                        await Task.sleep(nanoseconds: 300_000_000)
+                        print("short")
+                        return 2
+                    }
+                    print(await long.value + await short.value)
+                    let took = start.elapsed
+                    print(took >= Duration.milliseconds(400) && took < Duration.milliseconds(650))
+                """)).Stdout
+        );
+
+    /// <summary>
+    ///     A task is given a thread only when it first runs, and a finished
+    ///     task's thread runs the next: twenty thousand tasks, which would be
+    ///     twenty thousand threads, run on a few (#185).
+    /// </summary>
+    [Fact]
+    public void ManyTasksDoNotNeedAThreadEach() =>
+        Assert.Equal(
+            "199990000\n",
+            AssertAgree(AsyncProgram("", """
+                    var tasks: Task<Int>[>..] = []
+                    for i in 0..<20000 {
+                        tasks.append(Task.spawn { i })
+                    }
+                    var sum = 0
+                    for task in tasks {
+                        sum += await task.value
+                    }
+                    print(sum)
+                """), stepLimit: 50_000_000).Stdout
+        );
+
     [Fact]
     public void ATrapInATaskStopsTheProgram() {
         var execution = AssertAgree(AsyncProgram("", """

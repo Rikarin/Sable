@@ -230,6 +230,7 @@ public sealed partial class LlvmEmitter {
                                 declare void @sable_task_wait(ptr)
                                 declare void @sable_task_release(ptr)
                                 declare void @sable_task_yield()
+                                declare void @sable_task_sleep(i64)
                                 declare void @sable_tasks_drain()
                                 declare void @sable_array_make_unique(ptr nocapture, ptr)
                                 @sable_empty_array_count = internal constant [3 x i64] zeroinitializer
@@ -1828,6 +1829,10 @@ public sealed partial class LlvmEmitter {
 
                 case "task_yield":
                     Line("call void @sable_task_yield()");
+                    return;
+
+                case "task_sleep":
+                    Line($"call void @sable_task_sleep(i64 {operands[0]})");
                     return;
 
                 case "task_drain":

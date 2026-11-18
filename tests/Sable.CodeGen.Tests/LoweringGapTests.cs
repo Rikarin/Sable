@@ -144,4 +144,149 @@ public sealed class LoweringGapTests {
                 print(bracketed(Label(text: "hi")))
             """
         );
+
+    // ---- Untyped and union throws ----------------------------------------------
+
+    const string Errors = """
+                          union IoError { NotFound(path: String), Denied }
+                          union NetError { Down(code: Int) }
+
+                          fn read(_ path: String) throws(IoError) -> String {
+                              if path == "" { throw IoError.Denied }
+                              if path == "?" { throw IoError.NotFound(path: "nowhere") }
+                              return path
+                          }
+
+                          fn fetch(_ url: String) throws(NetError) -> String {
+                              if url == "down" { throw NetError.Down(code: 503) }
+                              return url
+                          }
+
+                          fn bare(_ path: String) throws -> String {
+                              if path == "net" { return try fetch("down") }
+                              return try read(path)
+                          }
+
+                          fn both(_ path: String) throws(IoError | NetError) -> String {
+                              if path == "net" { throw NetError.Down(code: 7) }
+                              return try read(path)
+                          }
+                          """;
+
+    [Fact]
+    public void BareThrowsKeepsTheErrorItWas() =>
+        Prints(
+            "ok\nnot found nowhere\ndown 503\ndenied\n",
+            Errors,
+            """
+                for path in ["ok", "?", "net", ""] {
+                    do {
+                        print(try bare(path))
+                    } catch let e as IoError {
+                        match e {
+                            case .NotFound(let p): print("not found " + p)
+                            case .Denied: print("denied")
+                        }
+                    } catch let n as NetError {
+                        match n {
+                            case .Down(let code): print("down \(code)")
+                        }
+                    } catch {
+                        print("other")
+                    }
+                }
+            """
+        );
+
+    [Fact]
+    public void AnUntypedErrorIsCaughtByACatchAll() =>
+        Prints(
+            "fallback\n-\nnone\n",
+            Errors,
+            """
+                print(try bare("") catch { "fallback" })
+                print(try bare("net") catch { "-" })
+                print((try? bare("?")) ?? "none")
+            """
+        );
+
+    [Fact]
+    public void AUnionOfErrorsCarriesEither() =>
+        Prints(
+            "x\nnet 7\nio\n",
+            Errors,
+            """
+                for path in ["x", "net", ""] {
+                    do {
+                        print(try both(path))
+                    } catch let n as NetError {
+                        match n {
+                            case .Down(let code): print("net \(code)")
+                        }
+                    } catch {
+                        print("io")
+                    }
+                }
+            """
+        );
+
+    // ---- rethrows and function conversions -------------------------------------
+
+    const string Rethrowing = Errors + """
+
+                              fn twice(_ body: () throws -> Int) rethrows -> Int {
+                                  return try body() + body()
+                              }
+
+                              fn twiceTyped(_ body: () throws(IoError) -> Int) rethrows -> Int {
+                                  return try body() + body()
+                              }
+
+                              fn apply(_ f: (Int) throws(IoError) -> Int, _ x: Int) throws(IoError) -> Int {
+                                  return try f(x)
+                              }
+
+                              fn length(_ path: String) throws(IoError) -> Int {
+                                  return (try read(path)).count
+                              }
+                              """;
+
+    [Fact]
+    public void RethrowsThrowsOnlyWhatItsArgumentDoes() =>
+        Prints(
+            "6\n4\nthrew\n10\nthrew denied\n",
+            Rethrowing,
+            """
+                print(twice(() => 3))
+                print(try! twice(() => { return try length("ab") }))
+                print(try twice(() => { return try length("") }) catch { -1 } == -1 ? "threw" : "no")
+                print(try! twiceTyped(() => { return try length("hello") }))
+                do {
+                    print(try twiceTyped(() => { return try length("") }))
+                } catch .Denied {
+                    print("threw denied")
+                } catch {
+                    print("other")
+                }
+            """
+        );
+
+    [Fact]
+    public void AFunctionThatCannotThrowIsPassedWhereOneThatMayIsWanted() =>
+        Prints(
+            "5\n12\nnot found\n",
+            Rethrowing,
+            """
+                print(try! apply((x: Int) => x + 1, 4))
+                let triple = (x: Int) => x * 3
+                print(try! apply(triple, 4))
+                do {
+                    print(try apply((x: Int) => { return try length("?") }, 1))
+                } catch .NotFound(let p) {
+                    print("not found")
+                } catch {
+                    print("other")
+                }
+            """
+        );
 }

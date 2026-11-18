@@ -543,6 +543,18 @@ public abstract class SilInstruction : SilValue {
 
     public SilBlock Block { get; internal set; } = null!;
 
+    /// <summary>
+    ///     Where a trap here happened, as <c>file:line:column</c>, for an
+    ///     instruction inlined from another function: its place there, which
+    ///     its <see cref="Location" />, the call's, no longer says. Null for
+    ///     one in the function it was written in.
+    /// </summary>
+    public string? InlinedSite { get; set; }
+
+    /// <summary>The place a trap at this instruction reports: where it was written, or null when that is not known.</summary>
+    public string? TrapSite(SilFunction function) =>
+        InlinedSite ?? (Location is { } at && function.SourceFile is { } file ? $"{file}:{at.Line}:{at.Column}" : null);
+
     /// <summary>The source position it was lowered from, for debug information.</summary>
     public SilLocation? Location { get; set; }
 
@@ -957,6 +969,42 @@ public static class SharedStorage {
     /// <summary>The plain access an instruction makes of shared storage, which a checked build checks; null for none.</summary>
     public static (SilValue Address, bool Modify)? CheckedAccessOf(SilInstruction instruction) =>
         AccessOf(instruction) is { } access && Contains(access.Address) ? access : null;
+
+    /// <summary>
+    ///     Puts an <c>access_check_read</c> or <c>access_check_modify</c> before
+    ///     every plain access to shared storage, as lowered. Explicit, the
+    ///     checks are what the passes move and copy: inlined, a callee's
+    ///     access through an inout parameter becomes one through the caller's
+    ///     field, which is the access in progress and must not be checked
+    ///     against itself. A build without the checks drops them, with the
+    ///     markers, before its passes run (<see cref="DropChecks" />).
+    /// </summary>
+    public static void InsertChecks(SilModule module) {
+        foreach (var block in module.Functions.SelectMany(static f => f.Blocks)) {
+            for (var i = 0; i < block.Instructions.Count; i++) {
+                if (CheckedAccessOf(block.Instructions[i]) is not var (address, modify)) {
+                    continue;
+                }
+
+                var check = new BuiltinInst(modify ? "access_check_modify" : "access_check_read", SilType.Unit, address) {
+                    Block = block,
+                    Location = block.Instructions[i].Location,
+                };
+                block.Instructions.Insert(i++, check);
+            }
+        }
+    }
+
+    /// <summary>The dynamic exclusivity markers and checks, gone: a build that does not keep them.</summary>
+    public static void DropChecks(SilModule module) {
+        foreach (var block in module.Functions.SelectMany(static f => f.Blocks)) {
+            block.Instructions.RemoveAll(static i => i is BuiltinInst builtin && IsMarker(builtin.Name));
+        }
+    }
+
+    /// <summary>The builtins of dynamic exclusivity: an access begun and ended, and a plain one checked.</summary>
+    public static bool IsMarker(string name) =>
+        name is "access_begin_read" or "access_begin_modify" or "access_end" or "access_check_read" or "access_check_modify";
 }
 
 public sealed class GlobalAddrInst(string global, SilType type) : SilInstruction {
@@ -1350,7 +1398,7 @@ public static class SilBuiltins {
 
         // The dynamic exclusivity markers (docs/02 §2.3): an access to storage
         // begins, read or modify, and ends — a conflict with one in progress traps.
-        if (name is "access_begin_read" or "access_begin_modify" or "access_end") {
+        if (SharedStorage.IsMarker(name)) {
             return operands is [AddressType address] ? new([address], SilType.Unit) : null;
         }
 
@@ -1410,7 +1458,7 @@ public static class SilBuiltins {
     }
 
     public static IEnumerable<string> Names =>
-        Table.Keys.Concat(ArrayOperations).Concat(["access_begin_read", "access_begin_modify", "access_end", "task_spawn", "task_wait", "task_release", "task_yield", "task_sleep", "task_drain"]);
+        Table.Keys.Concat(ArrayOperations).Concat(["access_begin_read", "access_begin_modify", "access_end", "access_check_read", "access_check_modify", "task_spawn", "task_wait", "task_release", "task_yield", "task_sleep", "task_drain"]);
 
     static SilType? Pointee(SilType? type) => (type as InlinePointerType)?.Pointee;
 

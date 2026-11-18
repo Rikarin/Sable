@@ -296,7 +296,7 @@ public static partial class SilVerifier {
                 // Naming the object, or a field's address, uses neither.
                 case UpcastInst or CopyValueInst or UncheckedRefCastInst when aliases.Contains(instruction):
                 case RefElementAddrInst or StructElementAddrInst or TupleElementAddrInst when fieldOf.ContainsKey(instruction):
-                case BuiltinInst { Name: "access_begin_read" or "access_begin_modify" or "access_end" }:
+                case BuiltinInst { Name: "access_begin_read" or "access_begin_modify" or "access_end" or "access_check_read" or "access_check_modify" }:
                 // Destroying it destroys what is stored; an empty field is nothing to destroy.
                 case DestroyValueInst:
                     return;

@@ -129,6 +129,10 @@ public sealed class BorrowFields : ISilPass {
                     case StoreInst { Kind: StoreKind.Assign } assigned when module.MayRunDeinit(assigned.Value.Type):
                         return true;
 
+                    // An exclusivity marker or check writes nothing.
+                    case BuiltinInst builtin when SharedStorage.IsMarker(builtin.Name):
+                        break;
+
                     case BuiltinInst builtin when builtin.Operands.Any(static o => o.Type is AddressType && !LocalSlot(o)):
                         return true;
 

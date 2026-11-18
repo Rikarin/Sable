@@ -122,6 +122,12 @@ public static class SilPassManager {
     }
 
     public static void Run(SilModule module, IEnumerable<ISilPass> passes) {
+        // A build without dynamic exclusivity checks loses them before the
+        // passes, which then see the code as it runs.
+        if (!module.CheckExclusivity) {
+            SharedStorage.DropChecks(module);
+        }
+
         foreach (var pass in passes) {
             pass.Run(module);
 

@@ -434,6 +434,11 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             return;
         }
 
+        if (name.StartsWith("access_check_", StringComparison.Ordinal)) {
+            CheckAccess(address, name == "access_check_modify");
+            return;
+        }
+
         var storage = StorageOf(address);
         if (name == "access_end") {
             _accesses.RemoveAt(_accesses.FindLastIndex(a => a.Storage.SequenceEqual(storage)));
@@ -589,9 +594,7 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
         } catch (SilTrap trap) when (trap is { Site: null, Located: true }) {
             // The innermost call that sees it says where: the instruction
             // that trapped, as the native program's trap does.
-            if (current?.Location is { } at && function.SourceFile is { } file) {
-                trap.Site = $"{file}:{at.Line}:{at.Column}";
-            }
+            trap.Site = current?.TrapSite(function);
 
             throw;
         }
@@ -610,9 +613,6 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             SilBlock? next = null;
             foreach (var instruction in block.Instructions) {
                 current = instruction;
-                if (SharedStorage.CheckedAccessOf(instruction) is var (accessed, modify)) {
-                    CheckAccess((IReference)values[accessed]!, modify);
-                }
                 if (++_steps > stepLimit) {
                     throw new SilTrap("step limit reached", located: false);
                 }

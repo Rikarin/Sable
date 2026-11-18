@@ -3128,6 +3128,10 @@ public sealed partial class Binder {
                 wanted = variadic.ElementType;
             }
 
+            if (parameter.Modifier is ParameterModifier.InOut or ParameterModifier.Out) {
+                CheckWritableArgument(arguments[i], parameter);
+            }
+
             converted.Add(Convert(arguments[i], wanted, arguments[i].Syntax));
         }
 
@@ -4489,6 +4493,37 @@ public sealed partial class Binder {
         && _containingSymbol is FunctionSymbol { FunctionKind: FunctionKind.Initializer } initializer
         && initializer.ContainingSymbol is NamedTypeSymbol owner
         && ReferenceEquals(field.ContainingSymbol, owner.OriginalDefinition);
+
+    /// <summary>
+    ///     An <c>inout</c> or <c>out</c> argument is written by the callee, so it
+    ///     must be a place an assignment could write: <c>inc(&amp;n)</c> changes
+    ///     <c>n</c> as <c>n = n + 1</c> would, and is refused where that is.
+    /// </summary>
+    void CheckWritableArgument(BoundExpression argument, ParameterSymbol parameter) {
+        var place = argument is BoundUnaryOperator { OperatorKind: UnaryOperatorKind.AddressOf, Operand: var operand }
+            ? operand
+            : argument;
+
+        if (place.HasError) {
+            return;
+        }
+
+        var keyword = parameter.Modifier == ParameterModifier.Out ? "out" : "inout";
+
+        if (!place.IsAssignable && !InitialisesLetField(place)) {
+            _diagnostics.Error(
+                ErrorCode.ERR_NotAssignable,
+                argument.Syntax.Span,
+                $"an '{keyword}' argument is written by the call, so it must be a mutable binding"
+            );
+        } else if (place is BoundFieldAccess { Field.SetterAccessibility: { } setter } field && !IsAccessible(field.Field, setter)) {
+            _diagnostics.Error(
+                ErrorCode.ERR_NotAssignable,
+                argument.Syntax.Span,
+                $"'{field.Field.Name}' can be read here but not written: its setter is {setter.ToString().ToLowerInvariant()}"
+            );
+        }
+    }
 
     BoundExpression BindAssignment(AssignmentExpressionSyntax syntax) {
         var target = BindExpression(syntax.Left);

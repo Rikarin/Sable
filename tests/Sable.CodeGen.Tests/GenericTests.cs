@@ -397,4 +397,42 @@ public sealed class GenericTests {
                 )
             ).Stdout
         );
+
+    /// <summary>
+    ///     A value generic parameter: the number each instance is given, read
+    ///     in the body, sizing an array, passed on to another generic type,
+    ///     and inferred from an argument's type (#158).
+    /// </summary>
+    [Fact]
+    public void AValueGenericParameterIsTheNumberEachInstanceIsGiven() =>
+        Assert.Equal(
+            "8\n6\nb\n3\n3\n",
+            AssertAgree(
+                Program(
+                    """
+                    struct Buf<T, N: Int> where N > 0, N <= 64 {
+                        var items: T[N]
+                        fn size() -> Int { return N * 2 }
+                    }
+
+                    struct Pair<N: Int> {
+                        var inner: Buf<String, N>
+                        fn total() -> Int { return inner.size() + N }
+                    }
+
+                    fn count<T, N: Int>(_ b: Buf<T, N>) -> Int { return N }
+                    """,
+                    """
+                        let b = Buf<Int, 4> { items: [1, 2, 3, 4] }
+                        print(b.size())
+                        let p = Pair<2> { inner: Buf<String, 2> { items: ["a", "b"] } }
+                        print(p.total())
+                        print(p.inner.items[1])
+                        let c = Buf<Int, 3> { items: [7, 8, 9] }
+                        print(count(c))
+                        print(c.items.count)
+                    """
+                )
+            ).Stdout
+        );
 }

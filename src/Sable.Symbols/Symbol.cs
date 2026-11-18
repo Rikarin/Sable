@@ -25,7 +25,10 @@ public enum SymbolKind {
     OpaqueType,
     ErrorType,
     Extension,
-    DependentMemberType
+    DependentMemberType,
+
+    /// <summary><c>4</c> in <c>Buf&lt;Int, 4&gt;</c>.</summary>
+    ValueTypeArgument
 }
 
 /// <summary>Visibility, per spec/SYNTAX.md §2.</summary>

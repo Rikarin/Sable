@@ -793,6 +793,30 @@ internal sealed class SelfTypeGreen : GreenNode
         new SelfTypeSyntax(this, parent, position);
 }
 
+/// <summary>Green node for <see cref="LiteralTypeSyntax"/>.</summary>
+internal sealed class LiteralTypeGreen : GreenNode
+{
+    private readonly GreenToken? _token;
+
+    public LiteralTypeGreen(GreenToken? token)
+        : base(SyntaxKind.LiteralType, 0)
+    {
+        _token = token;
+        FullWidth = (token?.FullWidth ?? 0);
+    }
+
+    public override int SlotCount => 1;
+
+    public override GreenNode? GetSlot(int index) => index switch
+    {
+        0 => _token,
+        _ => null,
+    };
+
+    public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
+        new LiteralTypeSyntax(this, parent, position);
+}
+
 /// <summary>Green node for <see cref="ParenthesizedTypeSyntax"/>.</summary>
 internal sealed class ParenthesizedTypeGreen : GreenNode
 {

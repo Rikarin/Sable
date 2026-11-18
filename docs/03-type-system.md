@@ -202,6 +202,14 @@ Mitigations, in the order they should be implemented:
 | `T: Sendable` | safe to cross an isolation boundary |
 | `where N > 0` | const-generic predicate, evaluated at instantiation |
 
+A generic parameter constrained to an integer type, `N: Int`, is a value
+parameter: it stands for a number rather than a type, is given one as
+`Buf<Int, 4>` (or inferred from such a type), reads as that number in the
+body, and sizes an array as `T[N]`. Each instance is a type of its own. A
+type's `where` predicates over its value parameters — whole numbers,
+`true`, `false` and operators — are evaluated for the numbers each
+instance written with them is given, and a false one is S3421.
+
 `~Copyable` is the opt-out that lets a generic container hold move-only types:
 
 ```sable

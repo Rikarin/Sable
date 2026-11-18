@@ -1721,7 +1721,8 @@ internal sealed class Parser {
 
         if (!IsTypeArgumentListEnd()) {
             while (true) {
-                arguments.Add(ParseType());
+                // 'Buf<Int, 4>': a value for a value generic parameter.
+                arguments.Add(At(SyntaxKind.IntegerLiteralToken) ? new LiteralTypeGreen(EatToken()) : ParseType());
                 var comma = TryEatToken(SyntaxKind.CommaToken);
                 if (comma is null) {
                     break;
@@ -1828,6 +1829,8 @@ internal sealed class Parser {
 
                         break;
 
+                    // 'Buf<Int, 4>': a value given to a value generic parameter.
+                    case SyntaxKind.IntegerLiteralToken when Peek(-1).Kind is SyntaxKind.LessToken or SyntaxKind.CommaToken:
                     case SyntaxKind.IdentifierToken:
                     case SyntaxKind.DotToken:
                     case SyntaxKind.CommaToken:

@@ -850,6 +850,12 @@ public sealed partial class SilGen {
                 continue;
             }
 
+            // A value generic parameter's number names the instance as a type does.
+            if (substitution.Lookup(parameter) is ValueTypeArgumentSymbol value) {
+                arguments.Add(value.ToDisplayString());
+                continue;
+            }
+
             if (substitution.Lookup(parameter) is not { } argument || Lower(argument) is not { } lowered) {
                 Unsupported<object>(at, $"'{symbol.Name}' with its type arguments unknown here");
                 return null;
@@ -5431,6 +5437,12 @@ public sealed partial class SilGen {
 
                 case BoundTypeTest test:
                     return TypeTest(test);
+
+                // 'N' of 'Buf<T, N: Int>': the number this instance gives it.
+                case BoundValueParameter valueParameter:
+                    return Sub(valueParameter.Parameter) is ValueTypeArgumentSymbol number && LowerType(valueParameter.Type) is { } numberType
+                        ? Emit(new IntegerLiteralInst(numberType, number.Value))
+                        : Missing(valueParameter, $"'{valueParameter.Parameter.Name}' with its number unknown here");
 
                 case BoundConversion { ConversionKind: ConversionKind.Explicit } conversion:
                     return NumericConversion(conversion);

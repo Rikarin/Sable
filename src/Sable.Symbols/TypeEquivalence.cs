@@ -157,7 +157,7 @@ internal sealed class TypeEquivalence {
 
             OptionalTypeSymbol optional => new OptionalTypeSymbol(Canonical(optional.UnderlyingType), optional.IsImplicitlyUnwrapped),
 
-            ArrayTypeSymbol array => new ArrayTypeSymbol(Canonical(array.ElementType), array.ArrayKind),
+            ArrayTypeSymbol array => new ArrayTypeSymbol(Canonical(array.ElementType), array.ArrayKind, array.Capacity, array.CapacityParameter),
 
             ReferenceTypeSymbol reference =>
                 new ReferenceTypeSymbol(Canonical(reference.ReferencedType), reference.RelativeWidth, reference.Pool),

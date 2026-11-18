@@ -21,12 +21,11 @@ namespace Sable.CodeGen;
 ///     <para>
 ///         The classification is the target's — the one the program is built
 ///         for, the machine building it unless a target says otherwise:
-///         AAPCS64 (Apple's and Linux's arm64), the System V x86-64 ABI, or
-///         on Windows Microsoft's x64 convention.
-///         An integer narrower than 32 bits, and <c>Bool</c>, is widened by
-///         the side the ABI says (<c>signext</c>, <c>zeroext</c>).
-///         (WebAssembly's C ABI, which passes most structs through memory,
-///         is not written yet: there a struct crosses to C as on x86-64.)
+///         AAPCS64 (Apple's and Linux's arm64), the System V x86-64 ABI, on
+///         Windows Microsoft's x64 convention, or WebAssembly's (clang's for
+///         WASI: a struct of one scalar as that scalar, any other through
+///         memory). An integer narrower than 32 bits, and <c>Bool</c>, is
+///         widened by the side the ABI says (<c>signext</c>, <c>zeroext</c>).
 ///     </para>
 ///     <para>
 ///         AAPCS64: a struct of one to four floats or doubles of one kind
@@ -40,10 +39,9 @@ namespace Sable.CodeGen;
 ///         System V x86-64: a struct of up to 16 bytes is split into
 ///         eightbytes, each passed in an SSE register when it holds only
 ///         floats, in an integer register otherwise; a larger one is passed
-///         <c>byval</c> on the stack and returned through <c>sret</c>. When
-///         the registers run out, LLVM passes the rest on the stack piece by
-///         piece, where C would pass that struct whole in memory: the one
-///         case this does not follow.
+///         <c>byval</c> on the stack and returned through <c>sret</c>. A
+///         struct whose eightbytes no longer all fit in the registers left
+///         goes whole on the stack too, as C passes it (<see cref="CArguments" />).
 ///     </para>
 /// </remarks>
 public sealed partial class LlvmEmitter {
@@ -72,7 +70,59 @@ public sealed partial class LlvmEmitter {
     /// </summary>
     bool IsWin64 => _windows && _arch == "x86_64";
 
-    /// <summary>How C passes a value of the type as an argument.</summary>
+    /// <summary>
+    ///     WebAssembly's C ABI (clang's, for WASI): a struct of one scalar,
+    ///     however nested, is passed and returned as that scalar; any other
+    ///     is passed <c>byval</c> at its own alignment and returned through
+    ///     <c>sret</c>.
+    /// </summary>
+    bool IsWasm => _arch == "wasm32";
+
+    /// <summary>The alignment of a struct C passes or returns through memory: its own on WebAssembly, at least 8 elsewhere.</summary>
+    int MemoryAlign(SilType type) => IsWasm ? Align(type) : Math.Max(8, Align(type));
+
+    /// <summary>
+    ///     How C passes each of a function's arguments. On System V x86-64 a
+    ///     struct goes in registers only if all of its eightbytes still fit
+    ///     in those left — six integer and eight SSE registers, one integer
+    ///     register fewer when the result is returned through memory —
+    ///     otherwise the whole struct goes on the stack, <c>byval</c>; LLVM
+    ///     would split it, part in registers and part on the stack.
+    /// </summary>
+    List<CType> CArguments(IReadOnlyList<SilType> parameters, bool indirectResult) {
+        var arguments = parameters.Select(CArgument).ToList();
+        if (IsWin64 || IsArm64 || IsWasm) {
+            return arguments;
+        }
+
+        var integers = indirectResult ? 5 : 6;
+        var sse = 8;
+        for (var i = 0; i < arguments.Count; i++) {
+            if (arguments[i].Passing != CPassing.Direct) {
+                continue;
+            }
+
+            if (parameters[i] is StructType structure) {
+                var classes = EightByteClasses(structure);
+                var (wantedIntegers, wantedSse) = (classes.Count(static c => !c), classes.Count(static c => c));
+                if (wantedIntegers > integers || wantedSse > sse) {
+                    arguments[i] = new(CPassing.ByValue, "ptr", $"byval({Type(structure)}) align {MemoryAlign(structure)}");
+                    continue;
+                }
+
+                integers -= wantedIntegers;
+                sse -= wantedSse;
+            } else if (SilType.IsFloat(parameters[i])) {
+                sse = Math.Max(0, sse - 1);
+            } else {
+                integers = Math.Max(0, integers - (SilType.IntegerInfo(parameters[i]) is (128, _) ? 2 : 1));
+            }
+        }
+
+        return arguments;
+    }
+
+    /// <summary>How C passes a value of the type as an argument, were the registers never to run out.</summary>
     CType CArgument(SilType type) {
         if (type is not StructType structure) {
             return new(CPassing.Direct, Type(type), Extension(type));
@@ -81,6 +131,12 @@ public sealed partial class LlvmEmitter {
         var size = Size(structure);
         if (IsWin64) {
             return size is 1 or 2 or 4 or 8 ? new(CPassing.Direct, $"i{size * 8}", "") : new(CPassing.Indirect, "ptr", "noundef");
+        }
+
+        if (IsWasm) {
+            return SingleScalar(structure) is { } scalar
+                ? new(CPassing.Direct, Type(scalar), "")
+                : new(CPassing.ByValue, "ptr", $"byval({Type(structure)}) align {MemoryAlign(structure)}");
         }
 
         if (IsArm64) {
@@ -107,6 +163,10 @@ public sealed partial class LlvmEmitter {
         var size = Size(structure);
         if (IsWin64) {
             return size is 1 or 2 or 4 or 8 ? new(CPassing.Direct, $"i{size * 8}", "") : null;
+        }
+
+        if (IsWasm) {
+            return SingleScalar(structure) is { } scalar ? new(CPassing.Direct, Type(scalar), "") : null;
         }
 
         if (size > 16) {
@@ -153,6 +213,24 @@ public sealed partial class LlvmEmitter {
             : null;
     }
 
+    /// <summary>WebAssembly: the one scalar a struct holds, however nested; null when it holds more, or none.</summary>
+    static SilType? SingleScalar(StructType structure) =>
+        Flatten(structure).ToList() is [var (scalar, _)] && Size(scalar) == Size(structure) ? scalar : null;
+
+    /// <summary>System V x86-64: whether each eightbyte of a struct of up to 16 bytes goes in an SSE register (true) or an integer one.</summary>
+    static List<bool> EightByteClasses(StructType structure) {
+        var size = Size(structure);
+        var scalars = Flatten(structure).ToList();
+        var classes = new List<bool>();
+        for (var start = 0; start < size; start += 8) {
+            var end = Math.Min(start + 8, size);
+            var inside = scalars.Where(s => s.Offset >= start && s.Offset < end).Select(static s => s.Type).ToList();
+            classes.Add(inside.Count > 0 && inside.TrueForAll(static t => SilType.IsFloat(t)));
+        }
+
+        return classes;
+    }
+
     /// <summary>System V x86-64: each eightbyte of a struct of up to 16 bytes, as the register class it goes in.</summary>
     static string EightBytes(StructType structure) {
         var size = Size(structure);
@@ -182,10 +260,10 @@ public sealed partial class LlvmEmitter {
         var declared = new HashSet<string>(StringComparer.Ordinal);
         foreach (var (name, (symbol, type)) in module.Foreign) {
             var result = CResult(type.Result);
-            var arguments = type.Parameters.Select(CArgument).ToList();
+            var arguments = CArguments(type.Parameters, indirectResult: result is null);
             var cParameters = new List<string>();
             if (result is null) {
-                cParameters.Add($"ptr sret({Type(type.Result)}) align {Math.Max(8, Align(type.Result))}");
+                cParameters.Add($"ptr sret({Type(type.Result)}) align {MemoryAlign(type.Result)}");
             }
 
             cParameters.AddRange(arguments.Select(static a => $"{a.Coerced}{(a.Attributes.Length > 0 ? " " + a.Attributes : "")}"));
@@ -203,8 +281,8 @@ public sealed partial class LlvmEmitter {
 
             var passed = new List<string>();
             if (result is null) {
-                text.Append($"  %out = alloca {Type(type.Result)}, align {Math.Max(8, Align(type.Result))}\n");
-                passed.Add($"ptr sret({Type(type.Result)}) align {Math.Max(8, Align(type.Result))} %out");
+                text.Append($"  %out = alloca {Type(type.Result)}, align {MemoryAlign(type.Result)}\n");
+                passed.Add($"ptr sret({Type(type.Result)}) align {MemoryAlign(type.Result)} %out");
             }
 
             for (var i = 0; i < arguments.Count; i++) {
@@ -255,10 +333,10 @@ public sealed partial class LlvmEmitter {
 
             var type = function.Type;
             var result = CResult(type.Result);
-            var arguments = type.Parameters.Select(CArgument).ToList();
+            var arguments = CArguments(type.Parameters, indirectResult: result is null);
             var cParameters = new List<string>();
             if (result is null) {
-                cParameters.Add($"ptr sret({Type(type.Result)}) align {Math.Max(8, Align(type.Result))} %out");
+                cParameters.Add($"ptr sret({Type(type.Result)}) align {MemoryAlign(type.Result)} %out");
             }
 
             cParameters.AddRange(arguments.Select(static (a, i) => $"{a.Coerced}{(a.Attributes.Length > 0 ? " " + a.Attributes : "")} %c{i}"));

@@ -164,32 +164,194 @@ public sealed class InteropTests {
         Assert.Equal("1011 12 13 5\n3.0 1204\n3.0 1.0 2.5\n42 true -600\n1\n", BuildWithC(source, c));
     }
 
-    /// <summary>The program, with the C beside it, built and run: what it prints.</summary>
-    static string BuildWithC(string source, string c) {
-        var result = Pipeline.Compile(new SourceText(source, "test.sb"));
+    // Shapes System V x86-64 passes in registers only while enough are left.
+    const string RegisterStructs = """
+                                   struct Pair {
+                                       a: Int
+                                       b: Int
+                                   }
+
+                                   struct DPair {
+                                       x: F64
+                                       y: F64
+                                   }
+
+                                   struct Mixed {
+                                       x: F64
+                                       n: I32
+                                   }
+
+                                   struct Big {
+                                       a: Int
+                                       b: Int
+                                       c: Int
+                                       d: I8
+                                   }
+
+                                   """;
+
+    const string RegisterC = """
+                             #include <stdint.h>
+                             typedef struct { int64_t a, b; } Pair;
+                             typedef struct { double x, y; } DPair;
+                             typedef struct { double x; int32_t n; } Mixed;
+                             typedef struct { int64_t a, b, c; int8_t d; } Big;
+                             int64_t sable_five(int64_t a, int64_t b, int64_t c, int64_t d, int64_t e, Pair p, int64_t f);
+                             int64_t c_five(int64_t a, int64_t b, int64_t c, int64_t d, int64_t e, Pair p, int64_t f) {
+                                 return a + b + c + d + e + p.a * 100 + p.b * 1000 + f * 10000;
+                             }
+                             double c_many(double a, double b, double c, double d, double e, double f, double g, DPair p, double h) {
+                                 return a + b + c + d + e + f + g + p.x * 100 + p.y * 1000 + h * 10000;
+                             }
+                             Mixed c_tail(int64_t a, int64_t b, int64_t c, int64_t d, int64_t e, Mixed m) {
+                                 Mixed r = { m.x + (double)(a + b + c + d + e), m.n * 2 };
+                                 return r;
+                             }
+                             Big c_sret(int64_t a, int64_t b, int64_t c, int64_t d, Pair p) {
+                                 Big r = { a + b + c + d, p.a, p.b, 9 };
+                                 return r;
+                             }
+                             int64_t c_calls_five(void) { Pair p = { 6, 7 }; return sable_five(1, 2, 3, 4, 5, p, 8); }
+                             """;
+
+    const string RegisterProgram = $$"""
+                                     module Main
+
+                                     {{RegisterStructs}}
+                                     @extern("c")
+                                     fn c_five(_ a: Int, _ b: Int, _ c: Int, _ d: Int, _ e: Int, _ p: Pair, _ f: Int) -> Int
+
+                                     @extern("c")
+                                     fn c_many(_ a: F64, _ b: F64, _ c: F64, _ d: F64, _ e: F64, _ f: F64, _ g: F64, _ p: DPair, _ h: F64) -> F64
+
+                                     @extern("c")
+                                     fn c_tail(_ a: Int, _ b: Int, _ c: Int, _ d: Int, _ e: Int, _ m: Mixed) -> Mixed
+
+                                     @extern("c")
+                                     fn c_sret(_ a: Int, _ b: Int, _ c: Int, _ d: Int, _ p: Pair) -> Big
+
+                                     @extern("c")
+                                     fn c_calls_five() -> Int
+
+                                     @export("sable_five")
+                                     fn five(_ a: Int, _ b: Int, _ c: Int, _ d: Int, _ e: Int, _ p: Pair, _ f: Int) -> Int {
+                                         return a + b + c + d + e + p.a * 100 + p.b * 1000 + f * 10000
+                                     }
+
+                                     fn main() {
+                                         print(c_five(1, 2, 3, 4, 5, Pair(a: 6, b: 7), 8))
+                                         print(c_many(1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, DPair(x: 8.0, y: 9.0), 10.0))
+                                         let m = c_tail(1, 2, 3, 4, 5, Mixed(x: 1.5, n: 7))
+                                         print("\(m.x) \(m.n)")
+                                         let s = c_sret(1, 2, 3, 4, Pair(a: 5, b: 6))
+                                         print("\(s.a) \(s.b) \(s.c) \(s.d)")
+                                         print(c_calls_five())
+                                     }
+                                     """;
+
+    const string RegisterOutput = "87615\n109828.0\n16.5 14\n10 5 6 9\n87615\n";
+
+    /// <summary>
+    ///     A struct whose parts no longer all fit in the registers left goes
+    ///     whole on the stack, as System V x86-64 says — after five integers,
+    ///     a pair of them; after seven doubles, a pair of those; after an
+    ///     sret pointer and four integers, a pair again — while one that fits
+    ///     the registers left still goes in them. Run on this machine, and on
+    ///     x86-64 where this one can run it (natively, or under Rosetta).
+    /// </summary>
+    [Fact]
+    public void AStructGoesWholeOnTheStackWhenTheRegistersRunOut() {
+        if (!Programs.CanBuild) {
+            return;
+        }
+
+        Assert.Equal(RegisterOutput, BuildWithC(RegisterProgram, RegisterC));
+        if (NativeTarget.Host.Arch != "x86_64" && OperatingSystem.IsMacOS() && Rosetta()) {
+            Assert.Equal(RegisterOutput, BuildWithC(RegisterProgram, RegisterC, NativeTarget.Of("x86_64-apple-darwin")));
+        }
+    }
+
+    /// <summary>The declarations each target's C sees, as clang declares the same C functions.</summary>
+    [Theory]
+    [InlineData("x86_64-unknown-linux-gnu", "declare i64 @\"c_five\"(i64, i64, i64, i64, i64, ptr byval({ i64, i64 }) align 8, i64)")]
+    [InlineData("x86_64-unknown-linux-gnu", "declare double @\"c_many\"(double, double, double, double, double, double, double, ptr byval({ double, double }) align 8, double)")]
+    [InlineData("x86_64-unknown-linux-gnu", "declare { double, i64 } @\"c_tail\"(i64, i64, i64, i64, i64, { double, i64 })")]
+    [InlineData("x86_64-unknown-linux-gnu", "declare void @\"c_sret\"(ptr sret({ i64, i64, i64, i8 }) align 8, i64, i64, i64, i64, ptr byval({ i64, i64 }) align 8)")]
+    [InlineData("wasm32-wasi", "declare void @\"c_tail\"(ptr sret({ double, i32 }) align 8, i64, i64, i64, i64, i64, ptr byval({ double, i32 }) align 8)")]
+    [InlineData("wasm32-wasi", "declare i64 @\"c_five\"(i64, i64, i64, i64, i64, ptr byval({ i64, i64 }) align 8, i64)")]
+    [InlineData("wasm32-wasi", "declare i32 @\"c_one\"(i32, ptr byval({ float, float, float }) align 4)")]
+    [InlineData("wasm32-wasi", "declare void @\"c_f3\"(ptr sret({ float, float, float }) align 4, ptr byval({ float, float, float }) align 4)")]
+    public void EachTargetPassesStructsAsItsC(string triple, string declaration) {
+        const string extra = """
+                             struct One {
+                                 v: I32
+                             }
+
+                             struct F3 {
+                                 a: F32
+                                 b: F32
+                                 c: F32
+                             }
+
+                             @extern("c")
+                             fn c_one(_ o: One, _ f: F3) -> One
+
+                             @extern("c")
+                             fn c_f3(_ f: F3) -> F3
+
+                             """;
+        var target = NativeTarget.Of(triple);
+        var source = RegisterProgram.Replace("fn main() {", extra + "fn main() {\n    print(c_one(One(v: 1), F3(a: 1.0, b: 2.0, c: 3.0)).v)\n    print(c_f3(F3(a: 1.0, b: 2.0, c: 3.0)).a)", StringComparison.Ordinal);
+        var tree = SyntaxTree.Parse(new SourceText(source, "test.sb"), Pipeline.ParseOptionsFor(true, target));
+        var result = Pipeline.Compile([tree], target: target);
         Assert.True(result.Succeeded, string.Join("\n", result.Errors));
+        Assert.Contains(declaration + "\n", result.LlvmIr!, StringComparison.Ordinal);
+    }
+
+    static bool Rosetta() {
+        try {
+            using var process = Process.Start(new ProcessStartInfo("/usr/bin/arch", ["-x86_64", "/usr/bin/true"]) { RedirectStandardError = true })!;
+            process.StandardError.ReadToEnd();
+            process.WaitForExit();
+            return process.ExitCode == 0;
+        } catch (System.ComponentModel.Win32Exception) {
+            return false;
+        }
+    }
+
+    /// <summary>The program, with the C beside it, built for the target (this machine's by default) and run: what it prints.</summary>
+    static string BuildWithC(string source, string c, NativeTarget? target = null) {
+        var tree = SyntaxTree.Parse(new SourceText(source, "test.sb"), Pipeline.ParseOptionsFor(true, target ?? NativeTarget.Host));
+        var result = Pipeline.Compile([tree], target: target);
+        Assert.True(result.Succeeded, string.Join("\n", result.Errors));
+        var options = NativeOptions.Of(true, false) with { Lto = LtoMode.Off, Target = target };
 
         var directory = Directory.CreateTempSubdirectory("sable-interop-");
         try {
             var cSource = Path.Combine(directory.FullName, "side.c");
             File.WriteAllText(cSource, c);
             var cObject = Path.Combine(directory.FullName, "side.o");
-            var compile = Process.Start(new ProcessStartInfo(NativeBuild.CompilerPath, ["-O2", "-c", cSource, "-o", cObject]) { RedirectStandardError = true })!;
+            var compile = Process.Start(new ProcessStartInfo(NativeBuild.CompilerPath, [..target?.ClangFlags ?? [], "-O2", "-c", cSource, "-o", cObject]) { RedirectStandardError = true })!;
             var errors = compile.StandardError.ReadToEnd();
             compile.WaitForExit();
             Assert.True(compile.ExitCode == 0, errors);
 
             var program = Path.Combine(directory.FullName, "program.o");
-            var built = NativeObjects.CompileIr(result.LlvmIr!, program, true, false);
+            var built = NativeObjects.CompileIr(result.LlvmIr!, program, options);
             Assert.True(built.Succeeded, built.Output);
             var runtime = Path.Combine(directory.FullName, "runtime.o");
-            Assert.True(NativeObjects.CompileRuntime(runtime, true, false).Succeeded);
+            Assert.True(NativeObjects.CompileRuntime(runtime, options).Succeeded);
             var executable = Platform.Executable(Path.Combine(directory.FullName, "program"));
             // C's maths is in libm on POSIX, in the C runtime itself on Windows.
-            var linked = NativeObjects.Link([program, runtime, cObject, ..OperatingSystem.IsWindows() ? [] : new[] { "-lm" }], executable);
+            var linked = NativeObjects.Link([program, runtime, cObject, ..OperatingSystem.IsWindows() ? [] : new[] { "-lm" }], executable, options);
             Assert.True(linked.Succeeded, linked.Output);
 
-            var run = Process.Start(new ProcessStartInfo(executable) { RedirectStandardOutput = true })!;
+            // Another architecture this Mac runs through Rosetta.
+            var start = target is null || target.IsHost
+                ? new ProcessStartInfo(executable)
+                : new ProcessStartInfo("/usr/bin/arch", ["-" + target.Arch, executable]);
+            start.RedirectStandardOutput = true;
+            var run = Process.Start(start)!;
             var output = run.StandardOutput.ReadToEnd();
             run.WaitForExit();
             Assert.Equal(0, run.ExitCode);

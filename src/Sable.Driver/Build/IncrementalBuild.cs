@@ -280,12 +280,42 @@ public static class IncrementalBuild {
         var indexing = Task.Run(() => SilProgram.Index([..program, ..standard.Trees]));
 
         // ---- The program's interface ----------------------------------------
+        // Each unit's interface is read from its .sbi when the unit, and the
+        // program's concrete types, are as they were; otherwise it is worked
+        // out from the unit's files and its .sbi written.
         string programInterface;
+        var interfaces = Path.Combine(cacheDirectory, "interfaces");
+        var interfaceFiles = new List<string>();
         using (BuildTimings.Of(timings, "interface")) {
             var allTrees = units.SelectMany(static u => u.Trees).ToList();
             var concrete = InterfaceFingerprint.ConcreteTypeNames(allTrees);
+            var concreteKey = Hash(string.Join(",", concrete.Order(StringComparer.Ordinal)));
             var fingerprints = new ConcurrentDictionary<SyntaxTree, string>();
-            Parallel.ForEach(units.Where(u => u != standard).SelectMany(static u => u.Trees), tree => fingerprints[tree] = InterfaceFingerprint.Of(tree, concrete));
+            var read = 0;
+            Parallel.ForEach(units.Where(u => u != standard), unit => {
+                var path = Path.Combine(interfaces, Hash($"{settingsKey}\ninterface {unit.Name}\n{unit.ContentHash}\n{concreteKey}") + ".sbi");
+                lock (interfaceFiles) {
+                    interfaceFiles.Add(path);
+                }
+
+                var names = unit.Trees.Select(static t => t.Text.FileName).ToList();
+                if (InterfaceFile.ReadFingerprints(path, unit.Name, names) is { } known) {
+                    for (var i = 0; i < known.Count; i++) {
+                        fingerprints[unit.Trees[i]] = known[i];
+                    }
+
+                    Interlocked.Increment(ref read);
+                    return;
+                }
+
+                var worked = unit.Trees.AsParallel().AsOrdered().Select(tree => InterfaceFingerprint.Interface(tree, concrete)).ToList();
+                for (var i = 0; i < worked.Count; i++) {
+                    fingerprints[unit.Trees[i]] = worked[i].Fingerprint;
+                }
+
+                new InterfaceFile(unit.Name, [..names.Zip(worked, static (n, w) => (n, w.Fingerprint))], [..worked.Select(static w => w.Source)]).WriteTo(path);
+            });
+            timings?.Count("interfaces read", read);
             programInterface = Hash(string.Join("\n", units.Select(u => u == standard
                 ? $"{u.Name}:{u.ContentHash}"
                 : $"{u.Name}:{string.Join(",", u.Trees.Select(t => t.Text.FileName + "=" + fingerprints[t]))}")));
@@ -418,6 +448,7 @@ public static class IncrementalBuild {
 
         using (BuildTimings.Of(timings, "cache upkeep")) {
             Collect(objects, units);
+            CollectInterfaces(interfaces, interfaceFiles);
         }
 
         return new(true, [], "incremental", stale.Count, units.Count - stale.Count) { Warnings = warnings };
@@ -444,6 +475,24 @@ public static class IncrementalBuild {
         foreach (var marker in markers.OrderBy(static m => m.LastWriteTimeUtc).Take(markers.Length - limit)) {
             File.Delete(Path.ChangeExtension(marker.FullName, ".o"));
             marker.Delete();
+        }
+    }
+
+    /// <summary>The same for the <c>.sbi</c> files: those this build used are marked, and past a limit the least recently used go.</summary>
+    static void CollectInterfaces(string interfaces, IReadOnlyList<string> used) {
+        if (!Directory.Exists(interfaces)) {
+            return;
+        }
+
+        var now = DateTime.UtcNow;
+        foreach (var path in used.Where(File.Exists)) {
+            File.SetLastWriteTimeUtc(path, now);
+        }
+
+        var limit = Math.Max(256, 8 * used.Count);
+        var files = new DirectoryInfo(interfaces).GetFiles("*.sbi");
+        foreach (var file in files.OrderBy(static f => f.LastWriteTimeUtc).Take(Math.Max(0, files.Length - limit))) {
+            file.Delete();
         }
     }
 

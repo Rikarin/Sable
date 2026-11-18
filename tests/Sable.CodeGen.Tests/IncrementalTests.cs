@@ -297,6 +297,59 @@ public sealed class IncrementalTests {
         Assert.Equal(("incremental", Units), scenario.Check(release) is var off ? (off.Kind, off.Compiled) : default);
     }
 
+    /// <summary>
+    ///     Each unit's interface is written as a <c>.sbi</c> file — its
+    ///     files' fingerprints and their source without the bodies other
+    ///     units cannot see — and read back by the next build in place of
+    ///     the unit's files: a fingerprint planted in one is what the program
+    ///     is keyed by, and one cut short is worked out again.
+    /// </summary>
+    [Fact]
+    public void EachUnitsInterfaceIsWrittenAndReadBack() {
+        if (!CanBuild) {
+            return;
+        }
+
+        using var scenario = new Scenario();
+        scenario.Check();
+        var interfaces = scenario.PathOf("app/target/dev/cache/interfaces");
+        string Sbi(string unit) => Assert.Single(Directory.GetFiles(interfaces, "*.sbi"), f => File.ReadLines(f).Skip(1).First() == "unit " + unit);
+
+        // The program's three units (the standard library has none of its own).
+        Assert.Equal(Units - 1, Directory.GetFiles(interfaces, "*.sbi").Length);
+        var shapes = File.ReadAllText(Sbi("lib shapes-0.1.0"));
+        Assert.True(shapes.StartsWith("sable-interface 1\nunit lib shapes-0.1.0\nfile ../shapes/src/lib.sb ", StringComparison.Ordinal), shapes[..200]);
+        Assert.Contains("\n--- ../shapes/src/lib.sb\nmodule Shapes\n", shapes, StringComparison.Ordinal);
+        Assert.Contains("fn scale(_ x: Int) -> Int { … }", shapes, StringComparison.Ordinal);
+        Assert.DoesNotContain("return x\n", shapes, StringComparison.Ordinal);
+        // A generic body is lowered where it is used: it is interface.
+        Assert.Contains("if x > best {", shapes, StringComparison.Ordinal);
+
+        // A body change writes the changed unit's interface beside the old one.
+        scenario.Edit("shapes/src/lib.sb", "    return x\n", "    return x + 1\n");
+        Assert.Equal(1, scenario.Check().Compiled);
+        Assert.Equal(Units, Directory.GetFiles(interfaces, "*.sbi").Length);
+
+        // What the next build reads is what the program is keyed by. (The
+        // executable is removed, so that the build is not merely fresh.)
+        var executable = scenario.PathOf("app/target/dev/app");
+        var geometry = Sbi("lib geometry-0.1.0");
+        var text = File.ReadAllText(geometry);
+        var line = text.Split('\n')[2];
+        File.WriteAllText(geometry, text.Replace(line, line[..^64] + new string('0', 64), StringComparison.Ordinal));
+        File.Delete(executable);
+        var planted = scenario.Check();
+        Assert.Equal(("incremental", Units), (planted.Kind, planted.Compiled));
+
+        // One cut short is not read.
+        File.WriteAllText(geometry, string.Join('\n', text.Split('\n').Take(3)));
+        File.Delete(executable);
+        var cut = scenario.Check();
+        Assert.Equal(Expected.Replace("12", "13", StringComparison.Ordinal), cut.Output);
+        Assert.Equal(0, cut.Compiled);
+        Assert.Contains("--- ../geometry/src/lib.sb", File.ReadAllText(geometry), StringComparison.Ordinal);
+    }
+
     [Fact]
     public void APublicSignatureChangeRecompilesWhatDependsOnIt() {
         if (!CanBuild) {

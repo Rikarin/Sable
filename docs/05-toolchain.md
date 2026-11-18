@@ -407,8 +407,16 @@ from a compilation of the whole program and cached in
 `target/<profile>/cache` under `(toolchain, profile, target, fingerprint)`,
 where the fingerprint is the unit's content and the program's interface. The
 interface is a hash of each file's public surface — declarations,
-signatures and the bodies other units lower — not yet a `.sbi` file, and an
-interface change invalidates every unit rather than only the dependents.
+signatures and the bodies other units lower. Each unit's is written to a
+text `.sbi` in `cache/interfaces/` (`sable-interface 1`: each file's
+fingerprint, then its source with every body other units cannot see written
+`{ … }`), and read back by the next build in place of walking the unchanged
+unit's files. It is not yet the binary interface planned above: no other
+compilation binds against it, and an interface change still invalidates every
+unit rather than only the dependents — a unit's lowering reads facts of the
+whole program (whether any class inherits from one of its classes decides
+how its method calls dispatch), which would first have to become part of the
+interface.
 Clang runs on units in parallel; lowering is still one unit at a time.
 An unoptimised debug build is compiled this way, and so is an optimised one
 whose profile asks for `lto = "thin"` (or `"off"`): each unit's SIL passes

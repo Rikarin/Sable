@@ -720,7 +720,7 @@ public sealed class ImplicitMemberAccessExpressionSyntax : ExpressionSyntax
     public override void Accept(SyntaxVisitor visitor) => visitor.VisitImplicitMemberAccessExpression(this);
 }
 
-/// <summary>`f(x)`, `f?(x)`, or `f(x) { ... }` with a trailing closure.</summary>
+/// <summary>`f(x)`, `f?(x)`, or `f(x) { ... }` with a trailing closure, and `onFail: { ... }` after it with more.</summary>
 public sealed class InvocationExpressionSyntax : ExpressionSyntax
 {
     private ExpressionSyntax? _expression;
@@ -734,6 +734,7 @@ public sealed class InvocationExpressionSyntax : ExpressionSyntax
     public SyntaxToken QuestionToken => GetToken(1);
     public ArgumentListSyntax? ArgumentList => GetRedOptional(ref _argumentList, 2);
     public BraceClosureExpressionSyntax? TrailingClosure => GetRedOptional(ref _trailingClosure, 3);
+    public SyntaxList<LabeledClosureSyntax> LabeledClosures => GetList<LabeledClosureSyntax>(4);
 
     internal override SyntaxNode? GetNodeSlot(int index) => index switch
     {
@@ -744,6 +745,46 @@ public sealed class InvocationExpressionSyntax : ExpressionSyntax
     };
 
     public override void Accept(SyntaxVisitor visitor) => visitor.VisitInvocationExpression(this);
+}
+
+/// <summary>`if c { a } else { b }` where a value is wanted: each branch's last line is its value.</summary>
+public sealed class IfExpressionSyntax : ExpressionSyntax
+{
+    private IfStatementSyntax? _statement;
+
+    internal IfExpressionSyntax(GreenNode green, SyntaxNode? parent, int position)
+        : base(green, parent, position) { }
+
+    public IfStatementSyntax Statement => GetRed(ref _statement, 0);
+
+    internal override SyntaxNode? GetNodeSlot(int index) => index switch
+    {
+        0 => Statement,
+        _ => null,
+    };
+
+    public override void Accept(SyntaxVisitor visitor) => visitor.VisitIfExpression(this);
+}
+
+/// <summary>`onFail: { ... }`: a trailing closure after the first, labelled for its parameter.</summary>
+public sealed class LabeledClosureSyntax : SyntaxNode
+{
+    private BraceClosureExpressionSyntax? _closure;
+
+    internal LabeledClosureSyntax(GreenNode green, SyntaxNode? parent, int position)
+        : base(green, parent, position) { }
+
+    public SyntaxToken NameToken => GetToken(0);
+    public SyntaxToken ColonToken => GetToken(1);
+    public BraceClosureExpressionSyntax Closure => GetRed(ref _closure, 2);
+
+    internal override SyntaxNode? GetNodeSlot(int index) => index switch
+    {
+        2 => Closure,
+        _ => null,
+    };
+
+    public override void Accept(SyntaxVisitor visitor) => visitor.VisitLabeledClosure(this);
 }
 
 /// <summary>A parenthesised or bracketed argument list.</summary>
@@ -1822,6 +1863,26 @@ public sealed class BindingTypeTestPatternSyntax : PatternSyntax
     };
 
     public override void Accept(SyntaxVisitor visitor) => visitor.VisitBindingTypeTestPattern(this);
+}
+
+/// <summary>`let v?`: an optional that holds a value, which the pattern matches; `.Some(let v)`.</summary>
+public sealed class OptionalPatternSyntax : PatternSyntax
+{
+    private PatternSyntax? _pattern;
+
+    internal OptionalPatternSyntax(GreenNode green, SyntaxNode? parent, int position)
+        : base(green, parent, position) { }
+
+    public PatternSyntax Pattern => GetRed(ref _pattern, 0);
+    public SyntaxToken QuestionToken => GetToken(1);
+
+    internal override SyntaxNode? GetNodeSlot(int index) => index switch
+    {
+        0 => Pattern,
+        _ => null,
+    };
+
+    public override void Accept(SyntaxVisitor visitor) => visitor.VisitOptionalPattern(this);
 }
 
 /// <summary>`a | b`.</summary>
@@ -3474,6 +3535,8 @@ public abstract class SyntaxVisitor
     public virtual void VisitMemberAccessExpression(MemberAccessExpressionSyntax node) => DefaultVisit(node);
     public virtual void VisitImplicitMemberAccessExpression(ImplicitMemberAccessExpressionSyntax node) => DefaultVisit(node);
     public virtual void VisitInvocationExpression(InvocationExpressionSyntax node) => DefaultVisit(node);
+    public virtual void VisitIfExpression(IfExpressionSyntax node) => DefaultVisit(node);
+    public virtual void VisitLabeledClosure(LabeledClosureSyntax node) => DefaultVisit(node);
     public virtual void VisitArgumentList(ArgumentListSyntax node) => DefaultVisit(node);
     public virtual void VisitArgument(ArgumentSyntax node) => DefaultVisit(node);
     public virtual void VisitElementAccessExpression(ElementAccessExpressionSyntax node) => DefaultVisit(node);
@@ -3526,6 +3589,7 @@ public abstract class SyntaxVisitor
     public virtual void VisitRestPattern(RestPatternSyntax node) => DefaultVisit(node);
     public virtual void VisitTypeTestPattern(TypeTestPatternSyntax node) => DefaultVisit(node);
     public virtual void VisitBindingTypeTestPattern(BindingTypeTestPatternSyntax node) => DefaultVisit(node);
+    public virtual void VisitOptionalPattern(OptionalPatternSyntax node) => DefaultVisit(node);
     public virtual void VisitOrPattern(OrPatternSyntax node) => DefaultVisit(node);
     public virtual void VisitBlock(BlockSyntax node) => DefaultVisit(node);
     public virtual void VisitExpressionStatement(ExpressionStatementSyntax node) => DefaultVisit(node);

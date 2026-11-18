@@ -141,10 +141,17 @@ internal sealed class ControlFlowGraph {
         /// <summary>True inside a closure or local function, whose jumps do not leave the body.</summary>
         int _nestedBodies;
 
+        /// <summary>
+        ///     The cases a <c>fallthrough</c> goes to, innermost <c>switch</c>
+        ///     last: null in a last case, where the binder has reported it.
+        /// </summary>
+        List<BasicBlock?> _fallthroughs = [];
+
+        /// <summary>A loop, or a <c>switch</c>, which a <c>break</c> leaves but a <c>continue</c> passes through: its Continue is null.</summary>
         /// <summary>In an initialiser's body: the stored fields it must set, whose reads and writes are steps too.</summary>
         public InitializedSelf? Self { get; init; }
 
-        sealed record Loop(string? Label, BasicBlock Break, BasicBlock Continue);
+        sealed record Loop(string? Label, BasicBlock Break, BasicBlock? Continue);
 
         public ControlFlowGraph Build(BoundStatement body, IEnumerable<Symbol> parameters) {
             var entry = NewBlock();
@@ -317,7 +324,14 @@ internal sealed class ControlFlowGraph {
                     return;
 
                 case BoundContinue jump:
-                    Jump(FindLoop(jump.Label, jump) is { } continueLoop ? continueLoop.Continue : _escape);
+                    Jump(FindLoop(jump.Label, jump, continues: true)?.Continue ?? _escape);
+                    return;
+
+                case BoundFallthrough:
+                    if (_fallthroughs.Count > 0 && _fallthroughs[^1] is { } nextCase) {
+                        Jump(nextCase);
+                    }
+
                     return;
 
                 case BoundDefer defer:
@@ -369,8 +383,12 @@ internal sealed class ControlFlowGraph {
         }
 
         /// <summary>The loop a jump leaves, or null when it is outside the body — and so leaves the body too.</summary>
-        Loop? FindLoop(string? label, BoundStatement jump) {
+        Loop? FindLoop(string? label, BoundStatement jump, bool continues = false) {
             for (var i = _loops.Count - 1; i >= 0; i--) {
+                if (continues && _loops[i].Continue is null) {
+                    continue;
+                }
+
                 if (label is null || string.Equals(_loops[i].Label, label, StringComparison.Ordinal)) {
                     return _loops[i];
                 }
@@ -466,48 +484,40 @@ internal sealed class ControlFlowGraph {
         void Switch(BoundSwitch switchStatement) {
             Expression(switchStatement.Subject);
 
-            var dispatch = _current;
+            // The values are tested in order, each after the last; any of
+            // them, or 'default' after all of them, chooses a case.
             var after = NewBlock();
-            var hasDefault = false;
-            BasicBlock? fallingInto = null;
-
-            _loops.Add(new(null, after, after));
+            var bodies = switchStatement.Cases.Select(_ => NewBlock()).ToList();
+            BasicBlock? defaultBody = null;
             for (var i = 0; i < switchStatement.Cases.Length; i++) {
                 var switchCase = switchStatement.Cases[i];
-                hasDefault |= switchCase.Values.IsEmpty;
+                if (switchCase.Values.IsEmpty) {
+                    defaultBody = bodies[i];
+                }
 
-                var caseBlock = NewBlock();
-                _current = caseBlock;
                 foreach (var value in switchCase.Values) {
                     Expression(value);
+                    Edge(_current, bodies[i]);
                 }
+            }
 
-                Edge(dispatch, caseBlock);
-                if (fallingInto is not null) {
-                    Edge(fallingInto, caseBlock);
-                    fallingInto = null;
-                }
+            Jump(defaultBody ?? after);
 
-                foreach (var statement in switchCase.Statements) {
-                    if (statement is BoundFallthrough) {
-                        Op(FlowOpKind.Statement, null, statement);
-                        fallingInto = _current;
-                        _current = NewBlock();
-                        continue;
-                    }
-
+            // A 'break' leaves the switch; a 'continue' goes on to the loop
+            // around it.
+            _loops.Add(new(null, after, null));
+            for (var i = 0; i < switchStatement.Cases.Length; i++) {
+                _current = bodies[i];
+                _fallthroughs.Add(i + 1 < bodies.Count ? bodies[i + 1] : null);
+                foreach (var statement in switchStatement.Cases[i].Statements) {
                     Statement(statement);
                 }
 
+                _fallthroughs.RemoveAt(_fallthroughs.Count - 1);
                 Edge(_current, after);
             }
 
             _loops.RemoveAt(_loops.Count - 1);
-
-            if (!hasDefault) {
-                Edge(dispatch, after);
-            }
-
             _current = after;
         }
 
@@ -861,12 +871,14 @@ internal sealed class ControlFlowGraph {
         void NestedBody(IEnumerable<ParameterSymbol> parameters, BoundBlock body, BoundNode owner) {
             var savedReturn = _returnTarget;
             var savedLoops = _loops;
+            var savedFallthroughs = _fallthroughs;
             var savedThrows = _throwTargets;
 
             SideBranch(() => {
                     var end = NewBlock();
                     _returnTarget = end;
                     _loops = [];
+                    _fallthroughs = [];
                     _throwTargets = [end];
                     _nestedBodies++;
 
@@ -881,6 +893,7 @@ internal sealed class ControlFlowGraph {
                     _nestedBodies--;
                     _throwTargets = savedThrows;
                     _loops = savedLoops;
+                    _fallthroughs = savedFallthroughs;
                     _returnTarget = savedReturn;
                 }
             );

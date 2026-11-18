@@ -165,6 +165,7 @@ public enum ErrorCode {
     ERR_BackedPropertyNeedsInitializer = 3111,
     ERR_MissingBody = 3112,
     ERR_LazyProperty = 3113,
+    ERR_IfValueNeedsElse = 3130,
     ERR_PropertyObservers = 3140,
     ERR_ConvenienceMustDelegate = 3141,
     ERR_EnumCaseValue = 3142,
@@ -199,6 +200,7 @@ public enum ErrorCode {
     ERR_MatchArmTypesDiffer = 6007,
     ERR_UseBeforeAssignment = 6008,
     ERR_RefutablePatternInDeclaration = 6009,
+    ERR_FallthroughOutOfPlace = 6020,
 
     // ---- Code generation (S7000-S7999) ---------------------------------
     ERR_NotLoweredYet = 7000,

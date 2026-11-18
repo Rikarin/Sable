@@ -612,7 +612,9 @@ public static class SyntaxFormatter {
 
         static bool StartsOnItsOwnLine(SyntaxNode node, SyntaxKind parentKind) =>
             // 'else if' is one line: the 'if' continues the 'else'.
-            (node is StatementSyntax && node.Kind != SyntaxKind.Block && parentKind is not (SyntaxKind.ElseClause or SyntaxKind.LabeledStatement))
+            // An 'if' that gives a value stays where the value goes: 'let s = if c {'.
+            (node is StatementSyntax && node.Kind != SyntaxKind.Block
+                                     && parentKind is not (SyntaxKind.ElseClause or SyntaxKind.LabeledStatement or SyntaxKind.IfExpression))
             || IsMember(node)
             || (node.Kind == SyntaxKind.Accessor && !IsPropertyArrow(node))
             || node.Kind is SyntaxKind.ImportDeclaration
@@ -689,9 +691,21 @@ public static class SyntaxFormatter {
 
                 // 'if a { return 1 } else { return 2 }': the whole chain on
                 // one line as written, each block of it one simple statement.
-                IfStatementSyntax or ElseClauseSyntax => IsOneLineIf(block),
+                IfStatementSyntax or ElseClauseSyntax => IsOneLineIf(block)
+                                                         || (IsIfValueBranch(block) && IsSimpleBlock(block) && WrittenOnOneLine(block)),
                 _ => false,
             };
+
+        /// <summary>A branch of an 'if' that gives a value, which reads as a conditional does: 'if c { a } else { b }'.</summary>
+        static bool IsIfValueBranch(BlockSyntax block) {
+            for (var node = block.Parent; node is IfStatementSyntax or ElseClauseSyntax; node = node.Parent) {
+                if (node.Parent is IfExpressionSyntax) {
+                    return true;
+                }
+            }
+
+            return false;
+        }
 
         static bool IsSimpleBlock(BlockSyntax block) => block.Statements.Count == 1 && IsSimple(block.Statements[0]);
 
@@ -866,6 +880,7 @@ public static class SyntaxFormatter {
                 SyntaxKind.ColonToken => parentKind != SyntaxKind.ConditionalExpression,
 
                 SyntaxKind.QuestionToken => parentKind is SyntaxKind.OptionalType
+                    or SyntaxKind.OptionalPattern
                     or SyntaxKind.ReferenceType
                     or SyntaxKind.CastExpression
                     or SyntaxKind.TryExpression

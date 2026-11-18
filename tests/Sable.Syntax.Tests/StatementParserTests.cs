@@ -237,8 +237,14 @@ public sealed class StatementParserTests {
     [InlineData("\"a\"", """(LiteralPattern "a")""")]
     [InlineData("none", "(LiteralPattern none)")]
     [InlineData("let v", "(BindingPattern let v)")]
+    [InlineData("let v?", "(OptionalPattern (BindingPattern let v) ?)")]
+    [InlineData(
+        ".Ok(let v)?",
+        "(OptionalPattern (UnionCasePattern . Ok (PatternArgumentList (SubPattern (BindingPattern let v)))) ?)"
+    )]
     [InlineData("1...9", "(RangePattern (LiteralPattern 1) ... (LiteralPattern 9))")]
     [InlineData("..<10", "(RangePattern ..< (LiteralPattern 10))")]
+    [InlineData("5...", "(RangePattern (LiteralPattern 5) ...)")]
     [InlineData("is Drawable", "(TypeTestPattern is (SimpleNameType Drawable))")]
     [InlineData(
         "let s as String",
@@ -281,6 +287,20 @@ public sealed class StatementParserTests {
         + "(PatternArgumentList (SubPattern (BindingPattern let v)))))))"
     )]
     public void ParsesPatternForms(string pattern, string expected) => Assert.Equal(expected, ParsePattern(pattern));
+
+    [Fact]
+    public void AnIfLetWithAnOptionalPatternIsOneError() {
+        // 'if let' unwraps already; the '?' is said once, not as a cascade.
+        var tree = SyntaxTree.ParseStatement("if let x? = o { use(x) }");
+        Assert.Single(tree.Diagnostics);
+        Assert.Equal("if let x? = o { use(x) }", tree.ToFullString());
+    }
+
+    [Fact]
+    public void AHalfOpenRangeNeedsAnUpperBound() {
+        var tree = SyntaxTree.ParseStatement("match n { case 5..< => true }");
+        Assert.Contains(tree.Diagnostics, static d => d.Code == ErrorCode.ERR_ExpectedPattern);
+    }
 
     [Fact]
     public void ParsesOrPatterns() =>
@@ -356,6 +376,39 @@ public sealed class StatementParserTests {
         );
         Assert.NotNull(invocation.ArgumentList);
         Assert.NotNull(invocation.TrailingClosure);
+    }
+
+    [Fact]
+    public void AnIfWhereAValueIsWantedIsAnExpression() {
+        var root = ParseRoot("let s = if x > 3 { \"big\" } else if x > 1 { \"some\" } else { \"small\" }");
+        var declaration = Assert.IsType<LocalDeclarationStatementSyntax>(root);
+        var ifExpression = Assert.IsType<IfExpressionSyntax>(declaration.Declarator.Initializer!.Value);
+        Assert.IsType<IfStatementSyntax>(ifExpression.Statement.ElseClause!.Body);
+    }
+
+    [Fact]
+    public void AnIfAtTheStartOfAStatementIsTheStatement() =>
+        Assert.IsType<IfStatementSyntax>(ParseRoot("if x > 3 { f() } else { g() }"));
+
+    [Fact]
+    public void ParsesLabelledTrailingClosuresAfterTheFirst() {
+        var root = ParseRoot("both { 1 } onFail: { 2 } onDone: { 3 }");
+        var invocation = Assert.IsType<InvocationExpressionSyntax>(
+            Assert.IsType<ExpressionStatementSyntax>(root).Expression
+        );
+        Assert.NotNull(invocation.TrailingClosure);
+        Assert.Equal(["onFail", "onDone"], invocation.LabeledClosures.Select(static c => c.NameToken.Text));
+    }
+
+    [Fact]
+    public void ALabelledClosureOnTheNextLineIsAStatementOfItsOwn() {
+        // A new line ends the call, as it does before a lone brace.
+        var tree = SyntaxTree.ParseStatement("{\n    both { 1 }\n    onFail: { 2 }\n}");
+        var block = Assert.IsType<BlockSyntax>(tree.Root);
+        var invocation = Assert.IsType<InvocationExpressionSyntax>(
+            Assert.IsType<ExpressionStatementSyntax>(block.Statements[0]).Expression
+        );
+        Assert.Empty(invocation.LabeledClosures);
     }
 
     [Fact]

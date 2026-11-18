@@ -253,6 +253,24 @@ public sealed class BindingTests {
         );
     }
 
+    /// <summary>A variadic parameter's label goes on its first element, and only there (SYNTAX.md §5).</summary>
+    [Fact]
+    public void ALabelledVariadicTakesItsLabelOnce() {
+        const string extra = "fn sum(of values: Int...) -> Int { return 0 }\nfn join(_ sep: String, items: Int...) { }";
+        AssertClean("let s = sum(of: 1, 2, 3)", extra);
+        AssertClean("let s = sum(of: 1)", extra);
+        AssertClean("let s = sum()", extra);
+        AssertClean("""join(",", items: 1, 2)""", extra);
+        Assert.Contains(
+            ErrorsIn("let s = sum(of: 1, of: 2)", extra),
+            static e => e.Code == ErrorCode.ERR_NoMatchingOverload && e.Message.Contains("another element of 'values'")
+        );
+        Assert.Contains(
+            ErrorsIn("let s = sum(1, 2)", extra),
+            static e => e.Code == ErrorCode.ERR_NoMatchingOverload && e.Message.Contains("needs the label 'of:'")
+        );
+    }
+
     [Fact]
     public void CallingSomethingUncallableIsReported() =>
         Assert.Contains(

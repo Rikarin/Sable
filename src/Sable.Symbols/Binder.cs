@@ -3560,8 +3560,17 @@ public sealed partial class Binder {
                 break;
             }
 
-            // A written label must match the parameter's.
-            if (i < labels.Length && labels[i] is { } label) {
+            // A variadic parameter's label goes on the first of its elements
+            // only, as in 'sum(of: 1, 2, 3)'; the rest follow unlabelled.
+            if (parameter.IsVariadic && i > 0 && slots[i - 1] == slots[i]) {
+                if (i < labels.Length && labels[i] is { } repeated) {
+                    return Reject(
+                        $"argument {i + 1} is labelled '{repeated}', and it is another element "
+                        + $"of '{parameter.Name}', which takes its label only on the first"
+                    );
+                }
+            } else if (i < labels.Length && labels[i] is { } label) {
+                // A written label must match the parameter's.
                 var expected = parameter.Label ?? parameter.Name;
                 if (!string.Equals(expected, label, StringComparison.Ordinal)) {
                     return Reject($"argument {i + 1} is labelled '{label}', and the parameter is '{expected}'");

@@ -3148,10 +3148,19 @@ public sealed partial class Binder {
             return new BoundError(syntax, receiver);
         }
 
-        // 'T.self' names the type itself.
+        // A metatype value reaches its type's static members, as the type
+        // does: 't.zero()' with 't: T.Type'. Its one value is the type, so
+        // reading it has nothing to keep but what evaluating it does, which
+        // a name or 'X.self' does not.
+        if (receiver is BoundMetatype or BoundLocalAccess or BoundParameterAccess
+            && receiver.Type is MetatypeTypeSymbol { InstanceType: var instanceType } && name != "self") {
+            receiver = new BoundTypeExpression(syntax.Expression, instanceType);
+        }
+
+        // 'T.self' is the type itself, as a value of type 'T.Type'.
         if (receiver is BoundTypeExpression typeExpression) {
             if (name == "self") {
-                return new BoundTypeExpression(syntax, typeExpression.Type);
+                return new BoundMetatype(syntax, typeExpression.ReferencedType);
             }
 
             // A type parameter reaches the static members of its constraints,
@@ -3494,6 +3503,7 @@ public sealed partial class Binder {
                 NamedTypeSymbol named => named.TypeArguments.Any(Mentions),
                 ArrayTypeSymbol array => Mentions(array.ElementType),
                 OptionalTypeSymbol optional => Mentions(optional.UnderlyingType),
+                MetatypeTypeSymbol metatype => Mentions(metatype.InstanceType),
                 TupleTypeSymbol tuple => tuple.ElementTypes.Any(Mentions),
                 FunctionTypeSymbol function => function.ParameterTypes.Any(Mentions) || Mentions(function.ReturnType),
                 ReferenceTypeSymbol reference => Mentions(reference.ReferencedType),
@@ -4917,6 +4927,7 @@ public sealed partial class Binder {
             DependentMemberTypeSymbol member => ContainsUninferred(member.BaseType, candidate),
             NamedTypeSymbol named => named.TypeArguments.Any(a => ContainsUninferred(a, candidate)),
             OptionalTypeSymbol optional => ContainsUninferred(optional.UnderlyingType, candidate),
+            MetatypeTypeSymbol metatype => ContainsUninferred(metatype.InstanceType, candidate),
             ArrayTypeSymbol array => ContainsUninferred(array.ElementType, candidate),
             TupleTypeSymbol tuple => tuple.ElementTypes.Any(e => ContainsUninferred(e, candidate)),
             FunctionTypeSymbol function =>
@@ -7127,16 +7138,35 @@ public sealed partial class Binder {
 
         if (Expand(expected) is FunctionTypeSymbol wanted) {
             foreach (var candidate in group.Candidates) {
-                var type = Apply(candidate.FunctionType, substitution);
+                // A generic function's own type parameters are what the type
+                // wanted makes them: 'let f: (Int) -> Int = id' is id<Int>.
+                var inferred = InferFromFunctionType(candidate, substitution, wanted);
+                if (inferred is null) {
+                    continue;
+                }
+
+                var type = Apply(candidate.FunctionType, inferred);
                 if (!_conversions.HasImplicitConversion(type, wanted)) {
                     continue;
                 }
 
                 chosen = candidate;
+                substitution = inferred;
                 break;
             }
         } else if (group.Candidates.Length == 1) {
             chosen = group.Candidates[0];
+
+            // Nothing says what a generic function's own type parameters are.
+            if (!chosen.TypeParameters.IsEmpty) {
+                _diagnostics.Error(
+                    ErrorCode.ERR_CannotInferTypeArgument,
+                    group.Syntax.Span,
+                    $"cannot infer '{chosen.TypeParameters[0].Name}' of '{chosen.Name}' taken as a value; "
+                    + "say which function type is wanted, as in 'let f: (Int) -> Int = ...'"
+                );
+                return new BoundError(group.Syntax);
+            }
         }
 
         if (chosen is null) {
@@ -7169,7 +7199,34 @@ public sealed partial class Binder {
             Apply(chosen.FunctionType, substitution),
             group.Receiver,
             chosen
-        );
+        ) { Substitution = substitution };
+    }
+
+    /// <summary>
+    ///     What a function's own type parameters are when it is taken as a
+    ///     value of the function type wanted, added to what the group already
+    ///     knows (its receiver's type arguments); null when the type cannot
+    ///     settle them all, or settles one to a type its constraints refuse.
+    /// </summary>
+    TypeSubstitution? InferFromFunctionType(FunctionSymbol candidate, TypeSubstitution known, FunctionTypeSymbol wanted) {
+        if (candidate.TypeParameters.IsEmpty) {
+            return known;
+        }
+
+        var map = new Dictionary<TypeParameterSymbol, TypeSymbol>();
+        if (!TypeSubstitution.Unify(Apply(candidate.FunctionType, known), wanted, candidate.TypeParameters, map)
+            || candidate.TypeParameters.Any(p => !map.ContainsKey(p))) {
+            return null;
+        }
+
+        var inferred = Combine(known, new(map));
+        foreach (var typeParameter in candidate.TypeParameters) {
+            if (typeParameter.Constraints.Any(c => !Conversions.Satisfies(map[typeParameter], inferred.Apply(c), _conversions.Equivalence))) {
+                return null;
+            }
+        }
+
+        return inferred;
     }
 
     static FunctionTypeSymbol Apply(

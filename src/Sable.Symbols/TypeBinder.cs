@@ -1122,6 +1122,13 @@ internal sealed class TypeBinder(Compilation compilation) {
             return left;
         }
 
+        // 'T.Type': the type of 'T.self' — unless the type has a nested type
+        // of that name, which its own name reaches first.
+        if (syntax.Right is { Identifier.Text: "Type", TypeArgumentList: null }
+            && (left is not NamedTypeSymbol owner || !owner.GetMembers("Type").Any())) {
+            return new MetatypeTypeSymbol(left);
+        }
+
         // 'C.Item' where C is constrained: the associated type of whatever
         // protocol declares it, read through C — so that A.Item and B.Item
         // stay different types. 'C.Slice.Element' reads through C.Slice.

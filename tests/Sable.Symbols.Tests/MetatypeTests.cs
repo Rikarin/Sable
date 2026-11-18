@@ -42,19 +42,66 @@ public sealed class MetatypeTests {
     }
 
     [Theory]
-    [InlineData("Point.self", "Point")]
-    [InlineData("Int.self", "Int")]
-    [InlineData("Point?.self", "Point?")]
-    [InlineData("Point??.self", "Point??")]
-    [InlineData("Point[].self", "Point[]")]
-    [InlineData("Point[>..].self", "Point[>..]")]
-    [InlineData("Int[][].self", "Int[][]")]
-    [InlineData("(Int, String).self", "(Int, String)")]
-    [InlineData("(Int) -> Bool.self", "(Int) -> Bool")]
-    [InlineData("(Int) throws -> Bool.self", "(Int) throws(any Error) -> Bool")]
-    [InlineData("(Int | String).self", "Int | String")]
-    [InlineData("any Named.self", "any Named")]
+    [InlineData("Point.self", "Point.Type")]
+    [InlineData("Int.self", "Int.Type")]
+    [InlineData("Point?.self", "Point?.Type")]
+    [InlineData("Point??.self", "Point??.Type")]
+    [InlineData("Point[].self", "Point[].Type")]
+    [InlineData("Point[>..].self", "Point[>..].Type")]
+    [InlineData("Int[][].self", "Int[][].Type")]
+    [InlineData("(Int, String).self", "(Int, String).Type")]
+    [InlineData("(Int) -> Bool.self", "((Int) -> Bool).Type")]
+    [InlineData("(Int) throws -> Bool.self", "((Int) throws(any Error) -> Bool).Type")]
+    [InlineData("(Int | String).self", "(Int | String).Type")]
+    [InlineData("any Named.self", "(any Named).Type")]
     public void NamesTheType(string body, string displayed) => AssertNamesType(body, displayed);
+
+    static IReadOnlyList<Diagnostic> Errors(string source) =>
+        Compilation.Create(source).GetAllDiagnostics().Where(static d => d.Severity == DiagnosticSeverity.Error).ToList();
+
+    /// <summary>A metatype is a type of its own: not the type it is of, and written 'T.Type'.</summary>
+    [Fact]
+    public void AMetatypeIsWrittenTDotTypeAndIsNotItsInstanceType() {
+        Assert.Empty(Errors($$"""
+                              {{Preamble}}
+                              fn probe() { let t: Point.Type = Point.self }
+                              """));
+
+        var mismatch = Errors($$"""
+                                {{Preamble}}
+                                fn probe() { let p: Point = Point.self }
+                                """);
+        Assert.Contains(mismatch, static d => d.Message.Contains("Point.Type", StringComparison.Ordinal));
+    }
+
+    /// <summary>A generic parameter is inferred through 'T.Type', and its static members reached through the value.</summary>
+    [Fact]
+    public void AMetatypeParameterInfersItsTypeAndReachesStatics() {
+        var compilation = Compilation.Create(
+            $$"""
+              {{Preamble}}
+              protocol Zero { static fn zero() -> Self }
+              struct Meters: Zero { var v: Int
+                  static fn zero() -> Meters { return Meters(v: 0) } }
+              fn make<T: Zero>(_ type: T.Type) -> T { return type.zero() }
+              fn probe() { let m = make(Meters.self) }
+              """
+        );
+        Assert.DoesNotContain(compilation.GetAllDiagnostics(), static d => d.Severity == DiagnosticSeverity.Error);
+
+        var tree = compilation.SyntaxTrees[0];
+        var initializer = tree.Root.DescendantNodes().OfType<LocalDeclarationStatementSyntax>().Single().Declarator.Initializer!.Value;
+        Assert.Equal("Meters", compilation.GetSemanticModel(tree).GetTypeOf(initializer)!.ToDisplayString());
+    }
+
+    /// <summary>A type with a nested type named 'Type' keeps it.</summary>
+    [Fact]
+    public void ANestedTypeNamedTypeIsStillReached() =>
+        Assert.Empty(Errors("""
+                            module M
+                            struct Token { struct Type { var n: Int } }
+                            fn probe() { let t: Token.Type = Token.Type(n: 1) }
+                            """));
 
     [Fact]
     public void ACompoundMetatypeRoundTripsThroughTheTree() {

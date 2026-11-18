@@ -928,6 +928,7 @@ public sealed partial class SilGen {
             NamedTypeSymbol named => named.TypeArguments.Any(a => Occurs(part, a)),
             ArrayTypeSymbol array => Occurs(part, array.ElementType),
             OptionalTypeSymbol optional => Occurs(part, optional.UnderlyingType),
+            MetatypeTypeSymbol metatype => Occurs(part, metatype.InstanceType),
             ReferenceTypeSymbol reference => Occurs(part, reference.ReferencedType),
             TupleTypeSymbol tuple => tuple.ElementTypes.Any(e => Occurs(part, e)),
             FunctionTypeSymbol function =>
@@ -1359,6 +1360,13 @@ public sealed partial class SilGen {
             // 'any P': a closure per requirement, sharing one box with the value.
             case ExistentialTypeSymbol { Constraint: NamedTypeSymbol { TypeKind: TypeKind.Protocol } protocol }:
                 return ExistentialLayout(protocol);
+
+            // 'T.Type': its one value is the type, which each instance of the
+            // code is generated for, so it holds nothing. SIL has no value of
+            // type (), so it is a Bool that is always false: a byte, and free
+            // to copy.
+            case MetatypeTypeSymbol:
+                return SilType.Bool;
 
             // A reference to an inline value, absolute or relative: a view of its bytes.
             case ReferenceTypeSymbol reference when Lower(reference.ReferencedType) is StructType { IsInline: true } inline:
@@ -1865,7 +1873,7 @@ public sealed partial class SilGen {
         var box = entry.Append(new UncheckedRefCastInst(context, BoxType(type.Parameters[0])));
         var self = entry.Append(new LoadInst(entry.Append(new RefElementAddrInst(box, 0))));
         SilValue callee = dynamic
-            ? entry.Append(new ClassMethodInst(self, SlotName(method), type))
+            ? entry.Append(new ClassMethodInst(self, VTableSlot(method), type))
             : entry.Append(new FunctionRefInst(name, type));
         SilValue[] all = [self, ..arguments];
 
@@ -4895,6 +4903,10 @@ public sealed partial class SilGen {
 
                 case BoundFunctionReference reference:
                     return FunctionValue(reference);
+
+                // 'Int.self': the type is known here, so the value holds nothing.
+                case BoundMetatype:
+                    return Emit(new IntegerLiteralInst(SilType.Bool, 0));
 
                 case BoundIndirectCall indirect:
                     return IndirectCall(indirect);
@@ -7994,18 +8006,60 @@ public sealed partial class SilGen {
                 return BoundMethodValue(reference, receiver);
             }
 
-            if (reference.Receiver is not null || IsGeneric(callee) || !generator._names.TryGetValue(callee, out var name)
-                || LowerType(reference.Type) is not ThickFunctionType thick) {
+            if (reference.Receiver is not null || LowerType(reference.Type) is not ThickFunctionType thick) {
                 return Missing(reference, $"'{callee.Name}' as a value");
             }
 
-            var type = generator._module.Find(name)?.Type ?? generator.SignatureOf(callee, reference.Syntax, TypeSubstitution.Empty);
-            if (type is null || type != thick.Signature || !type.Owned.IsEmpty) {
+            if (ReferencedFunction(reference, callee) is not var (name, type)) {
+                return null;
+            }
+
+            if (type != thick.Signature || !type.Owned.IsEmpty) {
                 return Missing(reference, $"'{callee.Name}' as a value");
             }
 
             var thunk = generator.Thunk(name, type);
             return Emit(new PartialApplyInst(Emit(new FunctionRefInst(thunk, thick.Implementation)), null, thick));
+        }
+
+        /// <summary>
+        ///     The function a reference names, and its signature: for a generic
+        ///     one, the instance for the type arguments the reference settled
+        ///     and its receiver's type gives. Null, with the error reported,
+        ///     when there is none.
+        /// </summary>
+        (string Name, FunctionType Type)? ReferencedFunction(BoundFunctionReference reference, FunctionSymbol callee) {
+            if (IsGeneric(callee)) {
+                var receiver = reference.Receiver is { } r ? TypeSubstitution.For(Sub(r.Type)) : TypeSubstitution.Empty;
+                var map = new Dictionary<TypeParameterSymbol, TypeSymbol>();
+                foreach (var parameter in TypeParametersOf(callee)) {
+                    var bound = reference.Substitution.Lookup(parameter) is { } settled
+                        ? Sub(settled)
+                        : receiver.Lookup(parameter) ?? substitution.Lookup(parameter);
+                    if (bound is not null) {
+                        map[parameter] = bound;
+                    }
+                }
+
+                if (generator.Instance(callee, new TypeSubstitution(map), reference.Syntax) is not { } instance) {
+                    _failed = true;
+                    return null;
+                }
+
+                return instance;
+            }
+
+            if (!generator._names.TryGetValue(callee, out var name)) {
+                Missing(reference, $"'{callee.Name}' as a value");
+                return null;
+            }
+
+            if ((generator._module.Find(name)?.Type ?? generator.SignatureOf(callee, reference.Syntax, TypeSubstitution.Empty)) is not { } type) {
+                _failed = true;
+                return null;
+            }
+
+            return (name, type);
         }
 
         /// <summary>
@@ -8015,10 +8069,24 @@ public sealed partial class SilGen {
         /// </summary>
         SilValue? BoundMethodValue(BoundFunctionReference reference, BoundExpression receiver) {
             var callee = reference.Function;
-            if (IsGeneric(callee) || !generator._names.TryGetValue(callee, out var name)
-                || generator.SignatureOf(callee, reference.Syntax, TypeSubstitution.Empty) is not { } type
-                || LowerType(reference.Type) is not ThickFunctionType thick) {
+            if (LowerType(reference.Type) is not ThickFunctionType thick) {
                 return Missing(reference, $"'{callee.Name}' as a value");
+            }
+
+            // A protocol's requirement, named on a type parameter: the
+            // concrete type's own member, now that the type is known. An
+            // existential's would need its witness at run time.
+            if (OwnerOf(callee) is { TypeKind: TypeKind.Protocol }) {
+                if (Sub(receiver.Type) is not NamedTypeSymbol { TypeKind: not TypeKind.Protocol } concrete
+                    || Implementation(concrete, callee) is not { Builtin: null } witness) {
+                    return Missing(reference, $"the requirement '{callee.Name}' of '{Sub(receiver.Type).ToDisplayString()}' as a value");
+                }
+
+                callee = witness;
+            }
+
+            if (ReferencedFunction(reference, callee) is not var (name, type)) {
+                return null;
             }
 
             // A mutating method changes the value it is called on, which the

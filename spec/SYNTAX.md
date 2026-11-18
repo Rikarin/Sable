@@ -940,6 +940,17 @@ only a name: `Int?.self`, `Point[].self`, `Token[>..].self`,
 expression position when `.self` follows it, so `xs[0]` stays an index and
 `p?.x` stays an optional chain.
 
+The type of `T.self` is the metatype `T.Type` (written after a type's name,
+unless the type has a nested type called `Type`). Its one value is the type,
+so it holds nothing at run time. A `T.Type` parameter infers `T`, and a
+metatype value reaches the type's static members:
+
+```sable
+fn make<T: Zero>(_ type: T.Type) -> T { return type.zero() }
+let m = make(Meters.self)              // T is Meters
+let info = TypeInfo.of(Point.self)     // of<T: Reflectable>(_ type: T.Type)
+```
+
 ### Member access and optionals
 
 ```sable

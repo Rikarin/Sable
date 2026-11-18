@@ -25,7 +25,8 @@ public enum SymbolKind {
     OpaqueType,
     ErrorType,
     Extension,
-    DependentMemberType
+    DependentMemberType,
+    MetatypeType
 }
 
 /// <summary>Visibility, per spec/SYNTAX.md §2.</summary>

@@ -85,6 +85,27 @@ public sealed class ResolverTests(ITestOutputHelper output) {
         }), "foo 1.0.0", "bar 1.0.0");
     }
 
+    /// <summary>
+    ///     Found by the resolver fuzzer: a package depending on itself at
+    ///     another version has its two terms merged into one, and explaining
+    ///     the failure read a second term that was not there.
+    /// </summary>
+    [Fact]
+    public void APackageDependingOnAnotherVersionOfItselfIsExplained() {
+        var message = Failure(new() {
+            ["root"] = Package(("1.0.0", Deps("foo ^1.0.0"))),
+            ["foo"] = Package(("1.0.0", Deps("foo ^2.0.0")), ("2.0.0", Deps())),
+        });
+        Assert.Contains("foo ^1.0.0 which depends on a version of foo other than itself", message, StringComparison.Ordinal);
+
+        // The root, too, and a self-dependency it satisfies is no obstacle.
+        Assert.Contains("other than itself", Failure(new() { ["root"] = Package(("1.0.0", Deps("root 0"))) }), StringComparison.Ordinal);
+        Chosen(Solve(new() {
+            ["root"] = Package(("1.0.0", Deps("foo ^1.0.0"))),
+            ["foo"] = Package(("1.0.0", Deps("foo ^1.0.0"))),
+        }), "foo 1.0.0");
+    }
+
     [Fact]
     public void TheLockFilesVersionIsPreferredWhileItFits() {
         var packages = new Dictionary<string, Dictionary<string, Dictionary<string, string>>> {

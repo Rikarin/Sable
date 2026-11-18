@@ -112,7 +112,9 @@ public static class Pipeline {
                 .Where(static d => d.Diagnostic.Severity == DiagnosticSeverity.Error)
                 .OrderBy(d => order.TryGetValue(d.Tree, out var index) ? index : int.MaxValue)
                 .ThenBy(static d => d.Diagnostic.Span.Start)
-                .Select(d => order.ContainsKey(d.Tree) ? d.Diagnostic.Format(d.Tree.Text) : $"error[{d.Diagnostic.Id}] in the standard library: {d.Diagnostic.Message}"),
+                .Select(d => order.ContainsKey(d.Tree) && d.Diagnostic.Span.End <= d.Tree.Text.Length
+                    ? d.Diagnostic.Format(d.Tree.Text)
+                    : $"error[{d.Diagnostic.Id}] in the standard library: {d.Diagnostic.Message}"),
         ];
     }
 

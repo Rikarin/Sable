@@ -164,15 +164,41 @@ public sealed partial class Binder {
         var bound = BindBlock(body);
 
         // One graph serves all three flow checks.
-        var graph = ControlFlowGraph.Build(bound, function.Parameters);
+        var self = InitializedSelfOf(function);
+        var graph = ControlFlowGraph.Build(bound, function.Parameters, self);
         CheckFlow(function, body, graph);
-        DefiniteAssignment.Analyze(graph, _diagnostics, function);
+        DefiniteAssignment.Analyze(
+            graph,
+            _diagnostics,
+            function,
+            self,
+            function.DeclaringSyntax.FirstOrDefault() is InitDeclarationSyntax declaration ? declaration.InitKeyword.Span : body.Span
+        );
 
         PopScope();
         RestoreEffects(savedEffects);
         _containingSymbol = savedSymbol;
         _returnType = savedReturn;
         return bound;
+    }
+
+    /// <summary>
+    ///     For an initialiser of a struct, class or actor, the stored fields its
+    ///     body has to set: those without an initial value, as a record literal
+    ///     has to give them (S3028). A value with one unset would hold whatever
+    ///     bytes were there, and a reference field would be followed to nothing.
+    /// </summary>
+    static InitializedSelf? InitializedSelfOf(FunctionSymbol function) {
+        if (function is not { FunctionKind: FunctionKind.Initializer, ContainingSymbol: NamedTypeSymbol { TypeKind: TypeKind.Struct or TypeKind.Class or TypeKind.Actor } type }) {
+            return null;
+        }
+
+        var fields = type.Members
+            .OfType<FieldSymbol>()
+            .Where(static f => f is { IsStatic: false, IsComputed: false, HasInitializer: false })
+            .ToList();
+
+        return fields.Count == 0 ? null : new InitializedSelf(type, fields);
     }
 
     /// <summary>Checks that a function returns on every path, and warns on dead code.</summary>
@@ -251,8 +277,48 @@ public sealed partial class Binder {
             bound = Convert(bound, expected, value);
         }
 
+        // A stored field's initial value is stored before the initialiser's
+        // body runs, in declaration order, when the other fields may hold
+        // nothing yet: 'var x: Int = y' would read a 'y' not yet there. A
+        // lazy one is computed on its first read, from a finished instance.
+        // One written 'lazy' that cannot be (S3113) has said enough.
+        if (_containingSymbol is FieldSymbol { IsStatic: false, IsLazy: false } field
+            && !(field.DeclaringSyntax.FirstOrDefault() is FieldDeclarationSyntax declaration && declaration.Modifiers.Any(SyntaxKind.LazyKeyword))
+            && FirstSelfUse(bound) is var (use, what)) {
+            _diagnostics.Error(
+                ErrorCode.ERR_UseBeforeAssignment,
+                use.Syntax.Span,
+                $"{what} is used here before the instance exists: a field's initial value cannot use 'self'"
+            );
+        }
+
         PopScope();
         return bound;
+    }
+
+    /// <summary>The first place a bound tree uses self, explicitly or not, and how to name it.</summary>
+    static (BoundNode Node, string What)? FirstSelfUse(BoundNode node) {
+        switch (node) {
+            case BoundFieldAccess { Receiver: BoundSelfAccess, Field: var field }:
+                return (node, $"'{field.Name}'");
+
+            case BoundCall { Receiver: null, Function: { IsStatic: false, FunctionKind: FunctionKind.Ordinary, ContainingSymbol: NamedTypeSymbol or ExtensionSymbol } function }:
+                return (node, $"'{function.Name}'");
+
+            case BoundSelfAccess:
+                return (node, "'self'");
+
+            case BoundSuperAccess:
+                return (node, "'super'");
+        }
+
+        foreach (var child in node.Children) {
+            if (FirstSelfUse(child) is { } found) {
+                return found;
+            }
+        }
+
+        return null;
     }
 
     /// <summary>Binds a standalone statement, for tests and scripts.</summary>

@@ -171,11 +171,26 @@ public sealed partial class SilInterpreter {
     }
 
     /// <summary>As the runtime's splice: bytes replaced, what follows moved, every relative reference kept pointing where it did.</summary>
-    void Splice(IReference slot, InlineLayout root, int at, int removed, byte[] inserted, int depth) {
+    void Splice(IReference slot, InlineLayout root, int at, int removed, byte[] inserted, int depth) =>
+        Splice(slot, root, at, removed, inserted, depth, Links(slot, root, depth));
+
+    /// <summary>
+    ///     Every relative reference in the block, read while its bytes are a
+    ///     value — before a change that takes more than one splice, as an
+    ///     append does: between the two, the count does not yet take in the
+    ///     element, and a walk of it reads into whatever follows.
+    /// </summary>
+    List<Link> Links(IReference slot, InlineLayout root, int depth) {
+        var links = new List<Link>();
+        Collect(root, Unique(slot, root.Type, depth).Bytes, 0, links);
+        return links;
+    }
+
+    /// <summary>A splice with the links read before it, which it moves with the bytes, for the next.</summary>
+    void Splice(IReference slot, InlineLayout root, int at, int removed, byte[] inserted, int depth, List<Link> links) {
         var block = Unique(slot, root.Type, depth);
         var bytes = block.Bytes;
-        var links = new List<Link>();
-        Collect(root, bytes, 0, links);
+        var moved = new List<Link>();
 
         var delta = inserted.Length - removed;
         bytes.RemoveRange(at, removed);
@@ -198,7 +213,11 @@ public sealed partial class SilInterpreter {
             }
 
             WriteUnsigned(bytes, from, link.Width, offset);
+            moved.Add(new(from, to, link.Width));
         }
+
+        links.Clear();
+        links.AddRange(moved);
     }
 
     static InlineView View(object? value) =>
@@ -367,10 +386,13 @@ public sealed partial class SilInterpreter {
                 var element = InlineLayout.Scalar(builtin.Operands[2].Type) is not null
                     ? ScalarBytes(builtin.Operands[2].Type, operands[2])
                     : ValueBytes(InlineLayout.Of(slot.Layout!), View(operands[2]));
+                // The element, then the count that takes it in: the links read
+                // once, before either, from bytes that are a value.
                 var end = SkipSlot(slot, bytes, array.Offset);
-                Splice(root, rootLayout, end, 0, element, depth);
+                var links = Links(root, rootLayout, depth);
+                Splice(root, rootLayout, end, 0, element, depth, links);
                 var encoded = slot.Kind == InlineLayout.BoundedKind ? CountBytes(slot.Width, count + 1) : Varint(count + 1);
-                Splice(root, rootLayout, array.Offset, elements - array.Offset, encoded, depth);
+                Splice(root, rootLayout, array.Offset, elements - array.Offset, encoded, depth, links);
                 return null;
             }
 

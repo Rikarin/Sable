@@ -208,6 +208,96 @@ public sealed class InlineLayoutTests {
             ).Stdout
         );
 
+    /// <summary>
+    ///     An append is two splices — the element, then the count that takes
+    ///     it in — and between them the bytes are no value: walked then, the
+    ///     count stops short and reads the element as the next field. The
+    ///     relative references are read once, before either, so an array
+    ///     followed by another variable-size one grows, interpreted as natively.
+    /// </summary>
+    [Fact]
+    public void AnArrayGrowsBeforeAnotherVariableField() =>
+        Assert.Equal(
+            "3 2\n12 7\n",
+            AssertAgree(
+                Program(
+                    """
+                    @inline_layout
+                    struct Line {
+                        var sku: U8[..16]
+                        var qty: U16
+                    }
+
+                    @inline_layout
+                    struct Order {
+                        var id: U64
+                        var codes: U16[..8]
+                        var lines: Line[>..]
+                        var parent: Order&<u32>?
+                    }
+                    """,
+                    """
+                        var order = Order { id: 7, codes: [], lines: [], parent: none }
+                        order.codes.append(3)
+                        order.codes.append(4)
+                        order.lines.append(Line { sku: "a", qty: 2 })
+                        order.codes.append(5)
+                        order.lines.append(Line { sku: "bb", qty: 5 })
+                        print("\(order.codes.count) \(order.lines.count)")
+                        var codes = 0
+                        for code in order.codes { codes = codes + Int(code) }
+                        var qty = 0
+                        for line in order.lines { qty = qty + Int(line.qty) }
+                        print("\(codes) \(qty)")
+                    """
+                )
+            ).Stdout
+        );
+
+    /// <summary>
+    ///     A grow-only array's count takes a second byte at 128, a splice of
+    ///     its own after the element's; with a relative reference across it,
+    ///     that reference is still measured from the bytes as they were.
+    /// </summary>
+    [Fact]
+    public void ACountThatTakesAnotherByteKeepsReferencesAcrossIt() =>
+        Assert.Equal(
+            "200 10 20\nok\n",
+            AssertAgree(
+                Program(
+                    """
+                    @inline_layout
+                    struct Node {
+                        var value: U32
+                    }
+
+                    @inline_layout
+                    struct Graph {
+                        var root: Node&<u32>?
+                        var tags: U8[>..]
+                        var nodes: Node[>..]
+                    }
+                    """,
+                    """
+                        var graph = Graph { root: none, tags: [], nodes: [] }
+                        graph.nodes.append(Node { value: 10 })
+                        graph.nodes.append(Node { value: 20 })
+                        graph.root = &graph.nodes[1]
+                        var i = 0
+                        while i < 200 {
+                            graph.tags.append(1)
+                            i = i + 1
+                        }
+                        print("\(graph.tags.count) \(graph.nodes[0].value) \(graph.root!.value)")
+                        match Graph.fromBytes(Bytes.of(graph)) {
+                            case .Ok(let copy) => print(copy.root!.value == 20 ? "ok" : "wrong")
+                            case .Invalid(let why) => print(why)
+                        }
+                    """
+                )
+            ).Stdout
+        );
+
     [Fact]
     public void EveryScalarKeepsItsBits() =>
         Assert.Equal(

@@ -289,39 +289,37 @@ public sealed class SliceTests {
     [Fact]
     public void AnInlineArrayFieldIsASlice() =>
         Prints(
-            "294\n7\n2\n",
+            "12\n7\n2\n",
             """
             @inline_layout
-            struct OrderLine {
+            struct Line {
                 var sku: U8[..16]
                 var qty: U16
-                var price: U32
             }
 
             @inline_layout
             struct Order {
                 var id: U64
-                var codes: U8[..32]
-                var lines: OrderLine[>..]
-                var parent: Order&<u32>?
+                var codes: U16[..8]
+                var lines: Line[>..]
             }
 
-            fn total(_ xs: U8[:]) -> Int {
+            fn total(_ xs: U16[:]) -> Int {
                 var sum = 0
                 for x in xs { sum = sum + Int(x) }
                 return sum
             }
 
-            fn quantities(_ lines: OrderLine[:]) -> Int {
+            fn quantities(_ lines: Line[:]) -> Int {
                 var sum = 0
                 for line in lines { sum = sum + Int(line.qty) }
                 return sum
             }
             """,
             """
-                var order = Order { id: 7, codes: "abc", lines: [], parent: none }
-                order.lines.append(OrderLine { sku: "a", qty: 2, price: 1 })
-                order.lines.append(OrderLine { sku: "bb", qty: 5, price: 1 })
+                var order = Order { id: 7, codes: [3, 4, 5], lines: [] }
+                order.lines.append(Line { sku: "a", qty: 2 })
+                order.lines.append(Line { sku: "bb", qty: 5 })
                 print(total(order.codes))
                 print(quantities(order.lines))
                 print(order.lines.count)

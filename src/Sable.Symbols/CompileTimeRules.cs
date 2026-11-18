@@ -31,48 +31,9 @@ namespace Sable.Symbols;
 /// </remarks>
 public static class CompileTimeRules {
     /// <summary>Checks a constant's bound value.</summary>
-    public static void CheckConstant(BoundExpression value, FieldSymbol constant, List<Diagnostic> diagnostics) {
+    /// <remarks>Whether a literal fits its type is the binder's (S3200), as for any literal.</remarks>
+    public static void CheckConstant(BoundExpression value, FieldSymbol constant, List<Diagnostic> diagnostics) =>
         new Walker(diagnostics, $"the constant '{constant.Name}'", null).Visit(value);
-
-        // A literal is not computed — it is its own value — so whether it
-        // fits is told here: 'const D: U8 = 300' is not a U8.
-        if (IntegerLiteral(value) is { } number && Range(constant.Type) is var (low, high) && (number < low || number > high)) {
-            diagnostics.Add(Diagnostic.Error(
-                ErrorCode.ERR_ConstantEvaluationFailed,
-                value.Syntax.Span,
-                $"the constant '{constant.Name}' is {number}, which does not fit in {constant.Type.ToDisplayString()} ({low} to {high})"
-            ));
-        }
-    }
-
-    static System.Numerics.BigInteger? IntegerLiteral(BoundExpression value) =>
-        value switch {
-            BoundConversion conversion => IntegerLiteral(conversion.Operand),
-            BoundLiteral { Value: long or int or ulong } literal => new System.Numerics.BigInteger(System.Convert.ToDecimal(literal.Value)),
-            BoundUnaryOperator { OperatorKind: UnaryOperatorKind.Negate, Method: null } negated => -IntegerLiteral(negated.Operand),
-            _ => null,
-        };
-
-    static (System.Numerics.BigInteger Low, System.Numerics.BigInteger High)? Range(TypeSymbol type) {
-        static (System.Numerics.BigInteger, System.Numerics.BigInteger) Signed(int bits) =>
-            (-(System.Numerics.BigInteger.One << (bits - 1)), (System.Numerics.BigInteger.One << (bits - 1)) - 1);
-
-        static (System.Numerics.BigInteger, System.Numerics.BigInteger) Unsigned(int bits) =>
-            (System.Numerics.BigInteger.Zero, (System.Numerics.BigInteger.One << bits) - 1);
-
-        return type is not NamedTypeSymbol { TypeKind: TypeKind.Builtin } primitive ? null
-            : primitive.Name switch {
-                "I8" => Signed(8),
-                "I16" => Signed(16),
-                "I32" => Signed(32),
-                "I64" or "Int" => Signed(64),
-                "U8" => Unsigned(8),
-                "U16" => Unsigned(16),
-                "U32" => Unsigned(32),
-                "U64" or "UInt" => Unsigned(64),
-                _ => null,
-            };
-    }
 
     /// <summary>
     ///     Checks a function's bound body: all of it, for a <c>const fn</c>;

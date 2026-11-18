@@ -913,6 +913,12 @@ x is Drawable         // conformance/type test, narrows in the true branch
 x unchecked as I32    // explicit wrapping/truncating conversion
 ```
 
+`as` and `unchecked as` convert between numeric types. `unchecked as` never
+traps: an integer keeps its low bits, and a float goes toward zero and stops
+at the target's bounds (NaN gives 0). A cast that could never succeed — between
+unrelated types, or classes on different lines of inheritance — is an error
+(S3066).
+
 ### Literals
 
 ```sable
@@ -1097,7 +1103,8 @@ unowned(unsafe) let fast: Node      // no trap, no check
 
 region arena { }                    // scoped bump allocator
 let node = arena.alloc(Node)
-fn build(in r: region) -> ref Node  // root inferred as 'r'
+fn build(in r: region) -> ref Node  // root inferred as 'r'; 'in' is the label
+let tree = build(in: arena)
 ```
 
 See [../docs/02-memory-model.md](../docs/02-memory-model.md) for the semantics.
@@ -1141,13 +1148,16 @@ literal, wherever it is read; its type may be left out when its value is a
 literal, another constant, a call, or arithmetic on those. What a constant's
 value, a `const fn` or a `comptime` block calls must be a `const fn`,
 something the compiler wrote (a memberwise initialiser), or a member of
-`Sable.Core` that neither reads, writes nor waits (S3200). A trap while
+`Sable.Core` that neither reads, writes nor waits (S3220). A trap while
 computing one — overflow, division by zero, a loop past the step limit — is
-an error at compile time (S3201), and so is reaching `compileError("...")`
-(S3202). A `comptime` block, at the top level or in a body, runs once, while
+an error at compile time (S3201 for arithmetic, S3221 otherwise), and so is reaching `compileError("...")`
+(S3222). A `comptime` block, at the top level or in a body, runs once, while
 compiling, and leaves no code; one in a body cannot see the function's
 parameters or locals. `Platform.os`, `Platform.arch` and
 `Platform.pointerWidth` are the target's, as constants.
+
+`DEBUG` is defined in an unoptimised build (and by `sable check`), `RELEASE` in
+an optimised one; never both.
 
 ---
 
@@ -1221,9 +1231,9 @@ public fn entry(argc: I32, argv: RawPtr<CString>) -> I32 { }
 `@extern("c")` alone takes the C name to be the function's, and
 `@export("name")` alone takes the language to be C. Either is a function of
 the module, not generic, not `async`, not throwing; an `@extern` one has no
-body (S3210). What crosses is passed by value and must be something C has the
+body (S3223). What crosses is passed by value and must be something C has the
 same way — an integer type, `F32`, `F64`, `Bool`, or a struct of those, which
-is passed as the platform's C passes the struct of the same fields (S3211).
+is passed as the platform's C passes the struct of the same fields (S3224).
 Pointers, C strings, variadic calls and callbacks are `Sable.Interop`'s.
 
 Header import (`sable bindgen`) generates `.sbi` interface files from C headers

@@ -181,7 +181,9 @@ Copy Roslyn's **red/green tree** design exactly:
 - [x] Incremental reparse of a 10,000-line file after a one-character edit
       completes in < 2 ms — about 1 ms in Release (0.9 ms at best, 1.2-1.5 ms
       median under heavy load), against 20-35 ms for a full parse
-- [ ] `sable fmt` is idempotent and reproduces the corpus modulo normalisation
+- [x] `sable fmt` is idempotent and reproduces the corpus modulo normalisation
+      — `FormatterRepositoryTests` holds `lib/`, `examples/`, `tests/corpus/`
+      and `tests/programs/` to being formatted already
 - [x] A syntax-tree visualiser exists (Roslyn's Syntax Visualiser equivalent)
       — `tools/Sable.Visualiser`
 - [ ] Fuzzer runs for 24h without a crash or an assertion failure
@@ -1211,7 +1213,7 @@ Full design in [05-toolchain.md](05-toolchain.md).
 
 - `sable` single binary: `new init build run test bench fmt doc check add
   update publish clean bindgen repl`
-- `sable.toml` manifest, `sable.lock`, semver resolution (PubGrub), workspaces,
+- A manifest, `sable.lock`, semver resolution (PubGrub), workspaces,
   feature flags, build scripts with a capability sandbox. The manifest is
   `package.sb` (and `workspace.sb`) — Sable, evaluated in the interpreter
   under docs/05 §5.2.4's rules to the canonical `sable.toml`, which is cached
@@ -1282,8 +1284,8 @@ Full design in [05-toolchain.md](05-toolchain.md).
   rest of the arguments, exit with its code. With no file named they test
   the package in the current directory (or the nearest above): its library,
   the files under its `tests/` and `benches/` — which an ordinary build
-  leaves out — and its dependencies' libraries
-  (`PackageBuilder.TestProgram`).
+  leaves out — and its dependencies' libraries, its `[dev-dependencies]`
+  and what they depend on among them (`PackageBuilder.TestProgram`).
 - **`--doc`.** Each ` ```sable ` block of a `///` comment (not ` ```sable
   ignore `) becomes `@test fn doc_<item>_<n>()` in a file of the documented
   file's module, with that file's imports and Sable.Testing; the file has the
@@ -1296,8 +1298,7 @@ Full design in [05-toolchain.md](05-toolchain.md).
   benchmark's work (it needs a core builtin); async tests; a parallel test
   runner; timeouts for a hung test; printing the error a throwing test threw;
   `#[should_panic]`-style expected traps; snapshot and property testing
-  (docs/06 lists them under Sable.Testing); `[dev-dependencies]` in a test
-  build (they are resolved, not yet compiled in).
+  (docs/06 lists them under Sable.Testing).
 
 ### Packages, as implemented
 
@@ -1306,14 +1307,21 @@ In `src/Sable.Driver/Packages/`, with a command per file under `Commands/`.
 - **Manifest.** A TOML 1.0 reader (tables, arrays of tables, inline tables,
   dotted and quoted keys, every string and integer form, floats, booleans,
   arrays, comments; dates kept as text) whose errors carry file, line and
-  column. `sable.toml` is read into a `Manifest` — `[package]`, `[lib]`,
+  column. `sable.toml` (written by hand, or what a `package.sb` evaluates
+  to) is read into a `Manifest` — `[package]`, `[lib]`,
   `[[bin]]`, the three dependency tables, `[features]`, `[profile.dev]` and
   `[profile.release]`, `[workspace]`, `[build]`, `[registry] path` — and
   every validation error names the file, the line and the key. Profiles act
-  on `opt-level`, `debug`, `exclusivity` and `leak-check` (`sable run` sets
-  `SABLE_CHECK_LEAKS`); `lto`, `codegen-units`, `panic`, `strip` and
-  `arc-checks` are recorded only, and `overflow-checks = false` is warned
-  about, since arithmetic is always checked.
+  on `opt-level` (clang's `-O0` to `-O3`, `-Os`, `-Oz`), `debug` (at any
+  level: an optimised build with debug information runs the SIL passes and
+  keeps the entry point out of the C `main`, so the program's functions keep
+  theirs), `lto` (`fat`, `thin` or off; on Linux through lld, used when clang
+  can link with it), `codegen-units = 1` (compile whole even in an
+  unoptimised debug build), `strip`, `rpath`, `exclusivity` and `leak-check`
+  (`sable run` sets `SABLE_CHECK_LEAKS`). A build prints the warnings of the
+  profile it uses: `panic = "unwind"` (a trap always aborts), `arc-checks`
+  (there are no optional ARC checks) and `overflow-checks = false`
+  (arithmetic is always checked) have no effect.
 - **Packages of many files.** A package is every `.sb` under `src/`:
   `src/main.sb` (or `[[bin]]`, or `src/bin/*.sb`) is a binary's entry, the
   rest is the library. A binary is compiled with its package's library and
@@ -1336,7 +1344,10 @@ In `src/Sable.Driver/Packages/`, with a command per file under `Commands/`.
   plus a note when a failure comes from two major versions of one package.
   Features are packages of their own (`name[feature]` depends on its
   package at the same version and on what the feature turns on, `dep:`
-  included), so the resolver unifies them across the graph.
+  included), so the resolver unifies them across the graph. A weak
+  `dep?/feature` is applied after resolution, at the version chosen, when
+  something else turned `dep` on, and resolution runs again until there is
+  nothing left to turn on.
 - **Lock file.** `sable.lock`, written deterministically (sorted, no times,
   same bytes for the same resolution), holds each package's version, source
   and dependencies, and each registry package's sha256. It resolves with
@@ -1361,9 +1372,17 @@ In `src/Sable.Driver/Packages/`, with a command per file under `Commands/`.
   what the lock names, nothing reads the registry.
 
 Deferred: build scripts (`[build]` is read and validated, and a build warns
-that it is not run — the capability sandbox needs runtime support); git
-dependencies (refused with an error); weak `dep?/feature` features (accepted,
-not acted on); `[build-dependencies]` are resolved but nothing uses them;
+that it is not run — the capability sandbox needs runtime support), and with
+them `[build-dependencies]` (checked, not resolved or built, and warned
+about); git dependencies (refused with an error); workspace inheritance
+(`version.workspace = true` and `{ workspace = true }` are refused,
+`[workspace.package]` and `[workspace.dependencies]` warned about); `[reflect]`
+and `[targets]` (accepted with a warning: nothing looks a type up by name
+yet, and there is no cross-compilation). A dependency's `package =` and
+`registry =` are refused: code imports a package's modules, so a rename means
+nothing, and every dependency comes from the workspace's one registry. Cargo's
+`[target.'cfg(...)'.dependencies]` is refused in favour of `when`. Every
+manifest warning is printed by `check`, `build`, `run`, `test` and `bench`.
 `publish` checks neither for a tag nor for passing tests; `org/name`
 packages are accepted but unprefixed names are not reserved; module names
 are not namespaced by package, so two packages declaring the same module
@@ -1374,8 +1393,15 @@ merge; the cache has no garbage collection; there is no network registry.
 `sable lsp` (`src/Sable.LanguageServer`, `src/Sable.Driver/Commands/LspCommand.cs`):
 JSON-RPC 2.0 over stdio with `Content-Length` framing, System.Text.Json and
 nothing else. The workspace is the open documents plus the `.sb` files under
-the root, compiled together with the library modules they import (the
-library's trees are shared, parsed once). Edits are incremental
+the root (less `target/`, `vendor/` and hidden directories). Each package
+under the root — found by its manifest, `package.sb` or `sable.toml`, and
+resolved as `sable check` resolves it — is a compilation of its own: its
+files, parsed with the features it is built with by default, and every
+library file of every package it depends on (path, registry or vendored,
+with theirs), so the members of a workspace are compiled apart. Files in no
+package are one loose program, as before. Each compilation has the library
+modules its trees import (the library's trees are shared, parsed once). A
+change to a manifest or to `sable.lock` reads the packages again. Edits are incremental
 (`TextDocumentSyncKind.Incremental`) and reparsed by the incremental parser;
 positions are UTF-16 columns, as the protocol defaults to. The message loop
 applies document changes in order; each request runs on the thread pool
@@ -1483,16 +1509,26 @@ VS Code's own test host.
   off the brace's line. Rules added: the author's line breaks inside
   expressions are kept, with one continuation indent (gofmt's rule, since
   there is no line width); a declaration's, an expression's or a guard's
-  one-statement body written on one line stays there; `operator == (`.
-  `lib/` is not reformatted yet (others were editing it): once it is, a test
-  that `sable fmt --check lib` is clean should follow.
+  one-statement body written on one line stays there, and so do an
+  `if`/`else` chain of such bodies, a closure with a header around one
+  expression, and a type's body of members without bodies of their own
+  (`struct P { var x: Int }`, `enum Dir { north, south }`, `;` between
+  members); `operator == (`; a run of match arms whose `=>` the author lined
+  up stays lined up (kept, as a line break is, not imposed). `lib/`,
+  `examples/`, `tests/corpus/` and `tests/programs/` are formatted, and a
+  test keeps them so; `tests/negative/` is not, since its expectation
+  comments sit in a column of their own.
 - **`sable explain <code>`** prints `docs/diagnostics/S####.md`, embedded in
-  the driver; `--list` lists them. There is a page for every code but five no
-  user can meet (S1005, S3082, S3099, S7001, S7002). `ExplainTests` compiles
-  each page's example and requires exactly its code, and its fix to be clean;
-  a few pages (S0001, S1002, S1009, S2003, S3038, S7000) explain without an
-  example, since no short program isolates them. Compiler output does not yet
-  point at `sable explain`; `sable lint` does.
+  the driver; `--list` lists them. There is a page for every code, those a
+  user rarely meets included (S1005 from the single-construct parsers, the
+  builtins' S3082, S7001 and S7002, the binder's fallback S3099).
+  `ExplainTests` compiles each page's example and requires exactly its code,
+  and its fix to be clean; a few pages (S0001, S1002, S1009, S2003, S3038,
+  S7000, and those five) explain without an example, since no short program
+  isolates them. A report of diagnostics from `build`, `run`, `check`,
+  `test`, `bench` and `debug` ends with a note naming `sable explain` and the
+  codes in it that have a page, as rustc's does; `sable lint` points at it
+  under each warning.
 - **`sable doc [paths] [--std] [--out dir] [--json]`**: HTML (index with a
   filter box, a page per module and per type, signatures rendered from the
   symbols with type names linked, `///` and `//!` comments as light Markdown)
@@ -1606,9 +1642,9 @@ Sable.CodeGen. `sable build` and `sable run` on a package go through it;
   thunks, reflection functions, globals' storage, and class metadata, whose
   address is a class's identity to `is` and `as?`. The unit with the entry
   point sets up and tears down every global. This is the dev profile's
-  path (a debug build runs no SIL passes and no LTO, so nothing needs the
-  whole program); a release build is compiled whole, as before, and only
-  an unchanged one is skipped.
+  path (an unoptimised debug build runs no SIL passes and no LTO, so
+  nothing needs the whole program); an optimised build is compiled whole,
+  with or without debug information, and only an unchanged one is skipped.
 - **The cache** is `target/<profile>/cache/`. Every key is a SHA-256 over
   the toolchain — the compiler's assemblies (which embed the standard
   library), `clang --version` with `$CC`, the OS and architecture — the

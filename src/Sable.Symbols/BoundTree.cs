@@ -313,6 +313,10 @@ public sealed class BoundConversion(
     : BoundExpression(syntax, type) {
     public BoundExpression Operand { get; } = operand;
     public ConversionKind ConversionKind { get; } = conversionKind;
+
+    /// <summary><c>x unchecked as U8</c>: a numeric conversion that wraps or truncates rather than trapping.</summary>
+    public bool IsUnchecked { get; init; }
+
     public override IEnumerable<BoundNode> Children => Nodes(Operand);
 }
 
@@ -577,11 +581,17 @@ public sealed class BoundTry(
     /// <summary>The value an inline <c>catch</c> supplies instead.</summary>
     public BoundExpression? Fallback { get; } = fallback;
 
+    /// <summary>
+    ///     The statements of a <c>catch { ... }</c> block that come before its
+    ///     value, run first and in its scope: <see cref="Fallback" /> may use
+    ///     the locals they declare. Null when the catch is a lone expression.
+    /// </summary>
+    public BoundBlock? FallbackBody { get; init; }
+
     /// <summary>The <c>error</c> an inline <c>catch</c> binds implicitly.</summary>
     public LocalSymbol? ErrorLocal { get; init; }
 
-    public override IEnumerable<BoundNode> Children =>
-        Fallback is null ? Nodes(Expression) : Nodes(Expression, Fallback);
+    public override IEnumerable<BoundNode> Children => Nodes(Expression, FallbackBody, Fallback);
 }
 
 /// <summary>What a <c>try</c> does with the error, per SYNTAX.md §18.</summary>

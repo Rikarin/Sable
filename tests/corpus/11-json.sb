@@ -133,7 +133,7 @@ public struct Parser {
             case 'n' => '\n'
             case 't' => '\t'
             case 'r' => '\r'
-            default => c
+            default  => c
         }
     }
 
@@ -239,7 +239,7 @@ public fn parse(_ text: String) throws(JsonError) -> JsonValue {
 public fn lookup(_ value: JsonValue, _ key: String) -> JsonValue? {
     return match value {
         case .Object(let entries) => findEntry(entries, key)
-        default => none
+        default                   => none
     }
 }
 
@@ -255,17 +255,17 @@ public fn findEntry(_ entries: JsonEntry[>..], _ key: String) -> JsonValue? {
 public fn asNumber(_ value: JsonValue) -> F64? {
     return match value {
         case .Number(let n) => n
-        default => none
+        default             => none
     }
 }
 
 public fn render(_ value: JsonValue) -> String {
     return match value {
-        case .Null => "null"
-        case .Bool(let b) => b.toString()
-        case .Number(let n) => n.toString()
-        case .Text(let t) => "\"" + t + "\""
-        case .Array(let items) => renderArray(items)
+        case .Null                => "null"
+        case .Bool(let b)         => b.toString()
+        case .Number(let n)       => n.toString()
+        case .Text(let t)         => "\"" + t + "\""
+        case .Array(let items)    => renderArray(items)
         case .Object(let entries) => renderObject(entries)
     }
 }

@@ -2,7 +2,7 @@ namespace Sable.Symbols.Tests;
 
 /// <summary>
 ///     <c>@extern</c> and <c>@export</c> (SYNTAX.md §24): what they declare,
-///     and what C can be given (S3210, S3211).
+///     and what C can be given (S3223, S3224).
 /// </summary>
 public sealed class InteropTests {
     static Compilation Compile(string source) => Compilation.Create($"module M\n{source}");

@@ -33,7 +33,7 @@ namespace Sable.SIL;
 ///     <para>
 ///         What goes wrong is reported where it went wrong: a trap
 ///         (overflow, division by zero, too many steps) at the constant or
-///         block (S3201), <c>compileError("...")</c> at the call (S3202).
+///         block (S3201, S3221), <c>compileError("...")</c> at the call (S3222).
 ///     </para>
 /// </remarks>
 public sealed partial class SilGen {
@@ -241,10 +241,14 @@ public sealed partial class SilGen {
                 return false;
             }
 
+            // Arithmetic that overflows or divides by zero is what the
+            // binder's folding of plain arithmetic reports too (S3201): one
+            // code, whether the arithmetic was written here or in a const fn.
+            var arithmetic = trap.Message is "integer overflow" or "division by zero";
             var reason = trap.Message.Contains("step limit", StringComparison.Ordinal)
                 ? $"computing it took more than {ConstantStepLimit:N0} steps"
                 : trap.Message;
-            table.Diagnostics.Add((Diagnostic.Error(ErrorCode.ERR_ConstantEvaluationFailed, at.Span,
+            table.Diagnostics.Add((Diagnostic.Error(arithmetic ? ErrorCode.ERR_ConstantOverflow : ErrorCode.ERR_ConstantEvaluationFailed, at.Span,
                 $"{what} cannot be computed while compiling: {reason}"), tree));
             return false;
         }
@@ -414,8 +418,5 @@ public sealed partial class SilGen {
             Jump(new UnreachableInst());
             return UnitValue.Instance;
         }
-
-        static BoundExpression Unconverted(BoundExpression expression) =>
-            expression is BoundConversion conversion ? Unconverted(conversion.Operand) : expression;
     }
 }

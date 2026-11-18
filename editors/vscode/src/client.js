@@ -33,7 +33,10 @@ async function start(context) {
         { scheme: "untitled", language: "sable" },
       ],
       synchronize: {
-        fileEvents: vscode.workspace.createFileSystemWatcher("**/*.sb"),
+        // Sources, and what decides how they are compiled: a manifest
+        // (package.sb, or sable.toml) or the lock file changing makes the
+        // server read the packages again.
+        fileEvents: vscode.workspace.createFileSystemWatcher("**/{*.sb,sable.toml,sable.lock}"),
       },
       outputChannel: sable.channel(),
       markdown: { isTrusted: false, supportHtml: false },

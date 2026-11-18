@@ -121,6 +121,9 @@ public sealed class FunctionSymbol : Symbol {
     public bool IsOverride { get; internal set; }
     public bool IsOpen { get; internal set; }
 
+    /// <summary><c>final</c>: no subclass may override it (spec/SYNTAX.md §7).</summary>
+    public bool IsFinal { get; internal set; }
+
     /// <summary>
     ///     Declared <c>const fn</c>: it may run in the compiler, so a
     ///     <c>const</c> initialiser or a <c>comptime</c> block can call it. Its
@@ -186,6 +189,26 @@ public sealed class FunctionSymbol : Symbol {
     ///     the operation costs and nothing more.
     /// </summary>
     public string? Builtin { get; internal set; }
+
+    TypeSymbol? _explicitProtocol;
+    internal Func<TypeSymbol?>? ExplicitProtocolResolver { get; set; }
+
+    /// <summary>
+    ///     The protocol named before the function's name in an explicit
+    ///     implementation, <c>fn Drawable.render()</c> (SYNTAX.md §7): the
+    ///     function implements that protocol's requirement, and no other's.
+    ///     Null for an ordinary function.
+    /// </summary>
+    public TypeSymbol? ExplicitProtocol {
+        get {
+            if (ExplicitProtocolResolver is { } resolve) {
+                _explicitProtocol = resolve();
+                ExplicitProtocolResolver = null;
+            }
+
+            return _explicitProtocol;
+        }
+    }
 
     TypeSymbol? _returnType;
     internal Func<TypeSymbol>? ReturnTypeResolver { get; set; }
@@ -258,6 +281,14 @@ public sealed class ParameterSymbol(
     public bool HasDefaultValue { get; internal set; }
     public bool IsVariadic { get; internal set; }
     public ParameterModifier Modifier { get; internal set; } = ParameterModifier.None;
+
+    /// <summary>
+    ///     <c>@escaping</c>: a closure passed here may outlive the call — be
+    ///     stored, returned, or captured by a closure that does. Without it, a
+    ///     closure parameter may only be called, or passed on to another that
+    ///     does not escape (SYNTAX.md §17).
+    /// </summary>
+    public bool IsEscaping { get; internal set; }
 }
 
 public enum ParameterModifier {
@@ -309,6 +340,12 @@ public sealed class FieldSymbol(
 
     public bool IsStatic { get; internal set; }
     public bool IsLazy { get; internal set; }
+
+    /// <summary><c>override var</c>: it replaces a property of a base class, whose type it keeps.</summary>
+    public bool IsOverride { get; internal set; }
+
+    /// <summary><c>final</c>: no subclass may override it (spec/SYNTAX.md §7).</summary>
+    public bool IsFinal { get; internal set; }
 
     /// <summary>How a field of a class type holds its object (docs/02 §2.2): strongly, unless declared otherwise.</summary>
     public ReferenceKind ReferenceKind { get; internal set; }

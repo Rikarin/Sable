@@ -1412,6 +1412,9 @@ public static class SilBuiltins {
             foreach (var to in SilType.Numbers) {
                 if (from != to) {
                     table[$"convert_{from}_{to}"] = new([from], to);
+
+                    // 'unchecked as': an integer wraps, a float saturates.
+                    table[$"wrap_{from}_{to}"] = new([from], to);
                 }
             }
         }

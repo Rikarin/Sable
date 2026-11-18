@@ -605,6 +605,16 @@ public sealed partial class SemanticModel {
         BindInitializer(declaration.Initializer.Value, constant, constant.Type, scope);
         if (_initializers.GetValueOrDefault(constant) is { } value) {
             CompileTimeRules.CheckConstant(value, constant, _diagnostics);
+
+            // Plain integer arithmetic is checked as it is bound, so that the
+            // editor reports its overflow (S3201); the value itself, and
+            // anything that calls, is computed by lowering, in the
+            // interpreter (SilGen.Constants.cs), which reports the same way.
+            if (!value.HasError) {
+                var folding = new DiagnosticBag();
+                ConstantFolding.Fold(value, _compilation.Core, folding);
+                _diagnostics.AddRange(folding);
+            }
         }
 
         _constantFunctions[constant] = new(constant.Name, constant.ContainingSymbol!, declaration, Accessibility.Private, FunctionKind.Ordinary) {

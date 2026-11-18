@@ -15,7 +15,7 @@ public class PriorityQueue<Element: Comparable> {
     }
 
     /// First whatever 'before' puts ahead: '(a, b) => a > b' for largest first.
-    public init(by before: (Element, Element) -> Bool) {
+    public init(by before: @escaping (Element, Element) -> Bool) {
         self.before = before
     }
 

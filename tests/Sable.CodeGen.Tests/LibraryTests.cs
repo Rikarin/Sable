@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using static Sable.CodeGen.Tests.Programs;
 
 namespace Sable.CodeGen.Tests;
@@ -55,6 +56,31 @@ fn main() {
     print("\(true.toString()) \(Char.fromCodePoint(55) ?? 'z') \('A'.code) \(Char.fromCodePoint(65) ?? 'z') \(String.fromChar('q').appending("r"))")
     let surrogate = Char.fromCodePoint(55296) == none ? "none" : "some"
     print("\(surrogate) \("2.5".toF64() ?? 0.0)")
+}
+""").Stdout
+        );
+
+    /// <summary>
+    ///     Characters order by scalar value, an instruction. Sable.Core's
+    ///     'operator &lt;' on Char is written 'lhs &lt; rhs', which used to bind to
+    ///     itself and never return — directly, through Comparable, and in a
+    ///     range's 'contains'.
+    /// </summary>
+    [Fact]
+    public void CharactersAreOrderedByScalar() =>
+        Assert.Equal(
+            "true false true true false\nz true false true\n",
+            AssertAgree("""
+module P
+fn larger<T: Comparable>(a: T, b: T) -> T {
+    return a < b ? b : a
+}
+@main
+fn main() {
+    let a = 'a'
+    let z = 'z'
+    print("\(a < z) \(z < a) \(a <= a) \(z > a) \(a >= z)")
+    print("\(larger(a, z)) \(('a'...'z').contains('q')) \(('a'...'z').contains('Q')) \('é' > 'z')")
 }
 """).Stdout
         );
@@ -234,6 +260,94 @@ fn main() {
         }
     }
 
+    /// <summary>
+    ///     A file's bytes need not be UTF-8, but a String's are: each byte of an
+    ///     ill-formed sequence reads as U+FFFD, and a byte-order mark is just
+    ///     U+FEFF — not a request for UTF-16, and not dropped.
+    /// </summary>
+    [Fact]
+    public void AFileOfIllFormedUtf8ReadsAsReplacementCharacters() {
+        var path = Path.Combine(Path.GetTempPath(), $"sable-utf8-{Guid.NewGuid():N}");
+        File.WriteAllBytes(path, [0xEF, 0xBB, 0xBF, 0xFF, 0xFE, 0x41, 0xE2, 0x82, 0x41, 0xC3, 0xA9, 0xED, 0xA0, 0x80, 0xF4, 0x90, 0x80, 0x80]);
+        try {
+            var run = AssertAgree(
+                $$"""
+                module P
+                import Sable.IO
+
+                @main
+                fn main() {
+                    let text = try! File.read("{{path}}")
+                    print(text.count)
+                    var i = 0
+                    while i < text.count {
+                        Console.write("\(text.at(i).codePoint) ")
+                        i += 1
+                    }
+                    Console.writeLine("")
+                }
+                """
+            );
+            Assert.Equal(
+                "15\n65279 65533 65533 65 65533 65533 65 233 65533 65533 65533 65533 65533 65533 65533 \n",
+                run.Stdout
+            );
+        } finally {
+            File.Delete(path);
+        }
+    }
+
+    /// <summary>
+    ///     The same for a line, an argument and an environment variable, which
+    ///     only a shell can hand a program as raw bytes.
+    /// </summary>
+    [Fact]
+    public void IllFormedUtf8FromOutsideReadsAsReplacementCharacters() {
+        if (!CanBuild) {
+            return;
+        }
+
+        var result = Pipeline.Compile(new SourceText(
+            """
+            module P
+            import Sable.IO
+
+            fn show(_ text: String) {
+                var i = 0
+                while i < text.count {
+                    Console.write("\(text.at(i).codePoint) ")
+                    i += 1
+                }
+                Console.writeLine("")
+            }
+
+            @main
+            fn main() {
+                show(Console.readLine() ?? "")
+                show(Environment.arguments()[0])
+                show(Environment.variable("SABLE_BYTES") ?? "")
+            }
+            """,
+            "test.sb"
+        ));
+        Assert.True(result.Succeeded, string.Join("\n", result.Errors));
+        var executable = Path.Combine(Path.GetTempPath(), $"sable-test-{Guid.NewGuid():N}");
+        try {
+            Assert.True(NativeBuild.Build(result.LlvmIr!, executable, optimise: true).Succeeded);
+            var start = new ProcessStartInfo("/bin/sh") { RedirectStandardOutput = true };
+            start.ArgumentList.Add("-c");
+            start.ArgumentList.Add("""printf 'x\377\376A\n' | SABLE_BYTES="$(printf '\360\220\200')z" "$0" "$(printf 'a\300\257b')" """);
+            start.ArgumentList.Add(executable);
+            using var process = Process.Start(start)!;
+            var stdout = process.StandardOutput.ReadToEnd();
+            process.WaitForExit();
+            Assert.Equal(0, process.ExitCode);
+            Assert.Equal("120 65533 65533 65 \n97 65533 65533 98 \n65533 65533 65533 122 \n", stdout);
+        } finally {
+            File.Delete(executable);
+        }
+    }
+
     [Fact]
     public void ReadingAnArgumentThatIsNotThereTraps() {
         var run = AssertAgree("""
@@ -394,7 +508,7 @@ fn main() {
     [Fact]
     public void JsonIsWrittenInSable() =>
         Assert.Equal(
-            "{\"name\":\"Sable\",\"tags\":[\"fast\",\"safe\"],\"version\":4}\n4\nsafe\n{\n  \"name\": \"Sable\",\n  \"tags\": [\n    \"fast\",\n    \"safe\"\n  ],\n  \"version\": 4\n}\nerror\n",
+            "{\"name\":\"Sable\",\"tags\":[\"fast\",\"safe\"],\"version\":4}\n4.0\nsafe\n{\n  \"name\": \"Sable\",\n  \"tags\": [\n    \"fast\",\n    \"safe\"\n  ],\n  \"version\": 4\n}\nerror\n",
             AssertAgree("""
                 module P
                 import Sable.Serialize

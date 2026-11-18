@@ -324,6 +324,8 @@ public sealed class TypeBindingTests {
             "module App\nimport Lib\nstruct S { h: Hidden }"
         );
 
-        Assert.Contains(compilation.GetDiagnostics(), static e => e.Code == ErrorCode.ERR_TypeNotFound);
+        // It is there, and hidden: saying it is missing would send the reader
+        // looking for a typo.
+        Assert.Contains(compilation.GetDiagnostics(), static e => e.Code == ErrorCode.ERR_NotAccessible);
     }
 }

@@ -62,7 +62,7 @@ public fn maxOf(_ a: Int, _ b: Int) -> Int {
 
 public fn count<Value>(_ tree: Tree<Value>) -> Int {
     return match tree {
-        case .Leaf => 0
+        case .Leaf                                 => 0
         case .Node(let value, let left, let right) => 1 + count(left) + count(right)
     }
 }

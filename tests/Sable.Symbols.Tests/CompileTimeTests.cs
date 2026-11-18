@@ -3,7 +3,7 @@ namespace Sable.Symbols.Tests;
 /// <summary>
 ///     Compile-time evaluation, as the binder sees it (SYNTAX.md §21): what a
 ///     constant's type is when it is not written, and what code that runs in
-///     the compiler may do (S3200). Computing the values is lowering's, and
+///     the compiler may do (S3220). Computing the values is lowering's, and
 ///     tested there.
 /// </summary>
 public sealed class CompileTimeTests {
@@ -199,14 +199,12 @@ public sealed class CompileTimeTests {
         );
 
     [Fact]
-    public void ALiteralThatDoesNotFitItsTypeIsReported() {
-        var error = AssertReports(ErrorCode.ERR_ConstantEvaluationFailed, "const D: U8 = 300");
-        Assert.Contains("does not fit in U8", error.Message, StringComparison.Ordinal);
-    }
+    public void ALiteralThatDoesNotFitItsTypeIsTheBindersToReport() =>
+        AssertReports(ErrorCode.ERR_IntegerDoesNotFit, "const D: U8 = 300");
 
     [Fact]
-    public void ANegativeLiteralThatDoesNotFitIsReported() =>
-        AssertReports(ErrorCode.ERR_ConstantEvaluationFailed, "const D: I8 = -129");
+    public void PlainArithmeticThatOverflowsIsReportedAsItIsBound() =>
+        AssertReports(ErrorCode.ERR_ConstantOverflow, "const Big: Int = 9223372036854775807 + 1");
 
     [Fact]
     public void ALiteralThatFitsIsClean() => AssertClean("const D: U8 = 255\nconst E: I8 = -128");

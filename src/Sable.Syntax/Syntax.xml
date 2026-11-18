@@ -165,6 +165,18 @@
     <Field Name="ConstraintType" Type="TypeSyntax" />
   </Node>
 
+  <Node Name="SuppressedTypeSyntax" Base="TypeSyntax" Kind="SuppressedType"
+        Doc="`~Copyable`: a constraint a generic parameter has unless it says otherwise, lifted.">
+    <Field Name="TildeToken" Type="Token" />
+    <Field Name="ConstraintType" Type="TypeSyntax" />
+  </Node>
+
+  <Node Name="AttributedTypeSyntax" Base="TypeSyntax" Kind="AttributedType"
+        Doc="`@escaping () -> Int`: a parameter's type with an attribute on it.">
+    <Field Name="Attributes" Type="List:AttributeSyntax" />
+    <Field Name="Type" Type="TypeSyntax" />
+  </Node>
+
   <Node Name="RefTypeSyntax" Base="TypeSyntax" Kind="RefType"
         Doc="`ref T`: a borrowed reference whose root is inferred.">
     <Field Name="RefKeyword" Type="Token" />

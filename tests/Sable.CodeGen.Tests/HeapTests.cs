@@ -34,7 +34,7 @@ public sealed class HeapTests {
     [Fact]
     public void TheCoreStringMembersMatchTheInterpreter() =>
         Prints(
-            "héllo, world\n12\né\nhéllo\ntrue\n5\n-1\n12\n25\n-7\n2\nb\ntrue\n0.1\n",
+            "héllo, world\n12\né\nhéllo\ntrue\n5\n-1\n12\n25.0\n-7\n2\nb\ntrue\n0.1\n",
             "",
             """
                 let t = "  héllo, world  ".trimmed()
@@ -278,14 +278,14 @@ public sealed class HeapTests {
         Assert.Equal(
             """
             {"name":"Sable","tags":["fast","safe"],"version":2.5,"ok":true,"none":null}
-            [1,[2,[3,[]]],{}]
+            [1.0,[2.0,[3.0,[]]],{}]
             "esc
             aped"
             unexpected end at 5
             unexpected ';' at 2
             trailing text at 3
             invalid number at 0
-            42
+            42.0
             true
 
             """,

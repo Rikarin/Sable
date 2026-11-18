@@ -57,6 +57,21 @@ public static class TestHarness {
         string? debugDirectory = null,
         bool checkExclusivity = true
     ) {
+        var warnings = new List<string>();
+        var result = Compile(trees, kind, out tests, docExamples, debugDirectory, checkExclusivity, warnings);
+        return result with { Warnings = warnings };
+    }
+
+    /// <param name="warnings">Filled with the program's warnings, once it has been checked.</param>
+    static CompileResult Compile(
+        IReadOnlyList<SyntaxTree> trees,
+        TestKind kind,
+        out IReadOnlyList<TestFunction> tests,
+        bool docExamples,
+        string? debugDirectory,
+        bool checkExclusivity,
+        List<string> warnings
+    ) {
         tests = [];
         var program = trees.ToList();
         if (docExamples) {
@@ -68,6 +83,7 @@ public static class TestHarness {
         var primary = program[0];
 
         var checkedAlone = Compilation.Create([..program, ..LibraryFor([..program, testing])]);
+        warnings.AddRange(Pipeline.Warnings(checkedAlone, program));
         if (Errors(checkedAlone, primary) is { Count: > 0 } errors) {
             return new(null, null, errors);
         }

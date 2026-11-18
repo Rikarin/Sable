@@ -124,6 +124,176 @@ public sealed class MoveTests {
             "is borrowed, so it cannot be moved; take it as 'consuming'"
         );
 
+    // 'borrowing' and 'out' parameters lower (#132).
+    [Fact]
+    public void ABorrowingParameterIsBorrowed() =>
+        Assert.Equal(
+            "opened 1\n1\n1\nclosed 1\n",
+            AssertAgree(
+                Program(
+                    Handle + """
+
+                             fn look(borrowing h: Handle) -> Int {
+                                 return h.id
+                             }
+                             """,
+                    """
+                        let h = acquire(1)
+                        print(look(h))
+                        print(look(h))
+                    """
+                )
+            ).Stdout
+        );
+
+    [Fact]
+    public void ABorrowingParameterCannotBeMoved() =>
+        Rejects(
+            Handle + """
+
+                     fn steal(borrowing h: Handle) {
+                         close(h)
+                     }
+                     """,
+            "",
+            "is borrowed, so it cannot be moved; take it as 'consuming'"
+        );
+
+    [Fact]
+    public void AnOutParameterIsWrittenWhereTheCallerSays() =>
+        Assert.Equal(
+            "positive 3\nnot\n7\n",
+            AssertAgree(
+                Program(
+                    """
+                    fn describe(_ n: Int, out text: String) -> Bool {
+                        if n > 0 {
+                            text = "positive \(n)"
+                            return true
+                        }
+                        text = "not"
+                        return false
+                    }
+
+                    fn parse(_ s: String, out value: Int) -> Bool {
+                        value = s.count + 6
+                        return true
+                    }
+                    """,
+                    """
+                        var text: String
+                        if describe(3, out text) {
+                            print(text)
+                        }
+                        var other = "old"
+                        if !describe(0, out other) {
+                            print(other)
+                        }
+                        var n = 0
+                        if parse("x", out n) {
+                            print(n)
+                        }
+                    """
+                )
+            ).Stdout
+        );
+
+    // The implicit Copyable constraint, and '~Copyable' lifting it (#132).
+    [Fact]
+    public void AMoveOnlyGenericParameterTakesAMoveOnlyValue() =>
+        Assert.Equal(
+            "opened 1\n1\nopened 2\n2\nclosed 2\nclosed 1\n",
+            AssertAgree(
+                Program(
+                    Handle + """
+
+                             struct Holder<T: ~Copyable> {
+                                 var item: T
+                             }
+
+                             fn hold<T>(_ x: consuming T) -> Holder<T> where T: ~Copyable {
+                                 return Holder(item: x)
+                             }
+
+                             fn pass<T: ~Copyable>(_ x: consuming T) -> T {
+                                 return x
+                             }
+                             """,
+                    """
+                        let a = pass(acquire(1))
+                        print(a.id)
+                        let b = hold(acquire(2))
+                        print(b.item.id)
+                    """
+                )
+            ).Stdout
+        );
+
+    [Fact]
+    public void ACopyingGenericParameterRefusesAMoveOnlyValueAtTheCall() =>
+        Rejects(
+            Handle + """
+
+                     struct Holder<T> {
+                         var a: T
+                         var b: T
+                     }
+
+                     fn two<T>(_ x: T) -> Holder<T> {
+                         return Holder(a: x, b: x)
+                     }
+                     """,
+            """
+                let h = acquire(1)
+                let p = two(h)
+            """,
+            "'Handle' is @noncopy, so it cannot be 'T' of 'two'"
+        );
+
+    // A captured move-only variable lives in a box the closure shares (#132, #125).
+    [Fact]
+    public void AClosureBorrowsAMoveOnlyValueItCaptures() =>
+        Assert.Equal(
+            "opened 1\nhandle 1\nhandle 1\nclosed 1\n",
+            AssertAgree(
+                Program(
+                    Handle,
+                    """
+                        let h = acquire(1)
+                        let f = () => h.describe()
+                        print(f())
+                        print(f())
+                    """
+                )
+            ).Stdout
+        );
+
+    [Fact]
+    public void AMoveOnlyValueCannotBeMovedOnceCaptured() =>
+        Rejects(
+            Handle,
+            """
+                let h = acquire(1)
+                let f = () => h.id
+                print(f())
+                close(h)
+            """,
+            "'h' is captured by a closure, so its @noncopy value"
+        );
+
+    [Fact]
+    public void AClosureCannotMoveAMoveOnlyValueItCaptures() =>
+        Rejects(
+            Handle,
+            """
+                let h = acquire(1)
+                let f = () => close(h)
+                f()
+                f()
+            """,
+            "'h' is captured by a closure, so its @noncopy value"
+        );
+
     [Fact]
     public void AnExplicitMoveIsCheckedToo() =>
         Rejects(

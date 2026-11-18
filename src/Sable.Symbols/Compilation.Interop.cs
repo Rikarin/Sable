@@ -20,11 +20,11 @@ namespace Sable.Symbols;
 ///         types, <c>F32</c> and <c>F64</c>, <c>Bool</c>, and a struct of
 ///         those, which is passed as C passes the struct of the same fields
 ///         (LlvmEmitter's C calling convention). A string, a class, an
-///         optional or a closure is not, and is S3211.
+///         optional or a closure is not, and is S3224.
 ///     </para>
 /// </remarks>
 public sealed partial class Compilation {
-    /// <summary>Reads the function's <c>@extern</c> and <c>@export</c>, reporting what is wrong with them (S3210).</summary>
+    /// <summary>Reads the function's <c>@extern</c> and <c>@export</c>, reporting what is wrong with them (S3223).</summary>
     void DeclareForeign(FunctionSymbol function, FunctionDeclarationSyntax declaration, Symbol container) {
         foreach (var attribute in declaration.Attributes) {
             var name = attribute.Name.ToString().Trim();
@@ -115,7 +115,7 @@ public sealed partial class Compilation {
 
     /// <summary>
     ///     Reports each parameter or result of an <c>@extern</c> or
-    ///     <c>@export</c> function that C does not have (S3211).
+    ///     <c>@export</c> function that C does not have (S3224).
     /// </summary>
     internal IEnumerable<Diagnostic> CheckForeignSignature(FunctionSymbol function, FunctionDeclarationSyntax declaration) {
         if (function.ForeignName is null && function.ExportName is null) {

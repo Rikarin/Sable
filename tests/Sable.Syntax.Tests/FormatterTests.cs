@@ -133,7 +133,8 @@ public sealed class FormatterTests {
 
     [Fact]
     public void IndentsNestedBodies() {
-        const string source = "struct S { fn f() { if x { g() } } }";
+        // The 'if' is written over two lines: one on one line would stay there.
+        const string source = "struct S { fn f() { if x {\ng() } } }";
         Assert.Equal(
             "struct S {\n    fn f() {\n        if x {\n            g()\n        }\n    }\n}\n",
             Format(source)

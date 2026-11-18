@@ -88,7 +88,7 @@ public sealed class InteropTests {
             """
         );
 
-        Assert.Equal("5\n50000000000\n3 2\n14285714285 5\n5\n", run.Stdout);
+        Assert.Equal("5\n50000000000\n3 2\n14285714285 5\n5.0\n", run.Stdout);
     }
 
     [Fact]
@@ -161,7 +161,7 @@ public sealed class InteropTests {
                        }
                        """;
 
-        Assert.Equal("1011 12 13 5\n3 1204\n3 1 2.5\n42 true -600\n1\n", BuildWithC(source, c));
+        Assert.Equal("1011 12 13 5\n3.0 1204\n3.0 1.0 2.5\n42 true -600\n1\n", BuildWithC(source, c));
     }
 
     /// <summary>The program, with the C beside it, built and run: what it prints.</summary>

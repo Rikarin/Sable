@@ -36,7 +36,7 @@ public sealed class RegionTests {
                                 fn total(in r: Region, _ n: Int) -> Int {
                                     var sum = 0
                                     for i in 0..<n {
-                                        let node = build(r, i)
+                                        let node = build(in: r, i)
                                         sum = sum + node.value + node.label.count
                                     }
                                     return sum
@@ -52,11 +52,11 @@ public sealed class RegionTests {
                     Declarations,
                     """
                         region arena {
-                            let a = build(arena, 1)
+                            let a = build(in: arena, 1)
                             let b = arena.alloc(Node { value: 2, label: "two" })
                             print(a.label + " " + b.label)
                             print(a.value + b.value)
-                            print(total(arena, 100))
+                            print(total(in: arena, 100))
                             let h = arena.alloc(Holder { held: Noisy("held") })
                             print("in the region")
                         }
@@ -142,8 +142,8 @@ public sealed class RegionTests {
                     Linked,
                     """
                         region arena {
-                            print(sum(chain(arena, 100)))
-                            print(sum(chain(arena, 10)))
+                            print(sum(chain(in: arena, 100)))
+                            print(sum(chain(in: arena, 10)))
                         }
                     """
                 )
@@ -169,11 +169,11 @@ public sealed class RegionTests {
                             var keep = pool.alloc(Link { value: 7, next: none })
                             for i in 0..<3 {
                                 pool.reset()
-                                keep = chain(pool, i + 1)
+                                keep = chain(in: pool, i + 1)
                                 print(keep.value)
                             }
                             region frame = pool {
-                                print("frame \(sum(chain(frame, 5)) + keep.value + 1)")
+                                print("frame \(sum(chain(in: frame, 5)) + keep.value + 1)")
                             }
                             print("left \(sum(keep))")
                         }

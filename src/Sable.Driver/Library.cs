@@ -28,7 +28,9 @@ public static class Library {
         foreach (var resource in assembly.GetManifestResourceNames().Where(static n => n.StartsWith("lib/", StringComparison.Ordinal)).Order(StringComparer.Ordinal)) {
             using var stream = assembly.GetManifestResourceStream(resource)!;
             using var reader = new StreamReader(stream);
-            var tree = SyntaxTree.Parse(new SourceText(reader.ReadToEnd(), resource));
+            // The standard library is a workspace of its own: what it marks
+            // 'package' is shared between its modules, not with programs.
+            var tree = SyntaxTree.Parse(new SourceText(reader.ReadToEnd(), resource), ParseOptions.Default with { Workspace = "sable" });
             if (tree.Root is not CompilationUnitSyntax { Module: { } declaration }) {
                 continue;
             }

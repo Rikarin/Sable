@@ -8,8 +8,14 @@ using Sable.Syntax;
 
 namespace Sable.Driver.Build;
 
-/// <summary>A source file of a program: where it is, the name diagnostics give it, and the features it is parsed with.</summary>
-public sealed record SourceFile(string Path, string Name, IReadOnlyList<string> Features);
+/// <summary>
+///     A source file of a program: where it is, the name diagnostics give it,
+///     the features it is parsed with, and — for a registry dependency — the
+///     workspace outside this one it comes from, which <c>package</c> stops at.
+/// </summary>
+public sealed record SourceFile(string Path, string Name, IReadOnlyList<string> Features, string? Workspace = null) {
+    public ParseOptions Options => ParseOptions.Default with { Features = [..Features], Workspace = Workspace };
+}
 
 /// <summary>
 ///     A unit of separate compilation: a package's library, or a binary's
@@ -24,12 +30,25 @@ public sealed record BuildSettings(string Profile, bool Optimise, string? DebugD
     public bool Debug => DebugDirectory is not null;
 
     /// <summary>
-    ///     Separately compiled — each unit to an object of its own, cached —
-    ///     when nothing needs to see the whole program: a debug build, which
-    ///     runs no SIL passes and no link-time optimisation. Otherwise the
-    ///     program is compiled whole, and only an unchanged build is skipped.
+    ///     What clang is asked for: by default <c>-O2</c> or <c>-O0</c> as
+    ///     <see cref="Optimise" /> says, with debug information when there is
+    ///     a debug directory; a profile says more.
     /// </summary>
-    public bool Separate => Debug && !Whole;
+    public NativeOptions Native {
+        get => _native ?? NativeOptions.Of(Optimise, Debug);
+        init => _native = value;
+    }
+
+    readonly NativeOptions? _native;
+
+    /// <summary>
+    ///     Separately compiled — each unit to an object of its own, cached —
+    ///     when nothing needs to see the whole program: an unoptimised debug
+    ///     build, which runs no SIL passes and no link-time optimisation.
+    ///     Otherwise the program is compiled whole, and only an unchanged
+    ///     build is skipped.
+    /// </summary>
+    public bool Separate => Debug && !Optimise && !Whole;
 
     /// <summary>Compile the program whole even where it could be compiled separately: what a separate build is checked against.</summary>
     public bool Whole { get; init; }
@@ -39,6 +58,9 @@ public sealed record BuildSettings(string Profile, bool Optimise, string? DebugD
 /// <param name="Kind"><c>fresh</c> (nothing to do), <c>incremental</c> or <c>whole</c>.</param>
 public sealed record BuildOutcome(bool Succeeded, IReadOnlyList<string> Errors, string Kind, int Compiled, int Reused) {
     public static BuildOutcome Failed(IReadOnlyList<string> errors) => new(false, errors, "failed", 0, 0);
+
+    /// <summary>The front end's warnings about the files it checked: none when nothing was compiled again.</summary>
+    public IReadOnlyList<string> Warnings { get; init; } = [];
 }
 
 /// <summary>
@@ -107,7 +129,7 @@ public static class IncrementalBuild {
             _ = Toolchain;
         }
 
-        var settingsKey = $"{CacheVersion}|{Toolchain}|{settings.Profile}|opt={settings.Optimise}|debug={settings.DebugDirectory}|exclusivity={settings.Exclusivity}|whole={settings.Whole}";
+        var settingsKey = $"{CacheVersion}|{Toolchain}|{settings.Profile}|opt={settings.Optimise}|debug={settings.DebugDirectory}|exclusivity={settings.Exclusivity}|whole={settings.Whole}|native={settings.Native}";
 
         // ---- Read and hash every file --------------------------------------
         string[][] texts;
@@ -137,7 +159,8 @@ public static class IncrementalBuild {
             var all = units.SelectMany(static (u, i) => u.Files.Select((f, j) => (i, j, f))).ToList();
             Parallel.ForEach(all, item => {
                 var (i, j, file) = item;
-                trees[i][j] = SyntaxTree.Parse(new SourceText(texts[i][j], file.Name), ParseOptions.Default with { Features = [..file.Features] });
+                // 'DEBUG' or 'RELEASE' follows from the settings, which key the cache.
+                trees[i][j] = SyntaxTree.Parse(new SourceText(texts[i][j], file.Name), Pipeline.ParseOptionsFor(settings.Optimise, file.Options));
             });
             timings?.Count("files parsed", all.Count);
         }
@@ -191,20 +214,20 @@ public static class IncrementalBuild {
     // =======================================================================
 
     static BuildOutcome Whole(IReadOnlyList<SyntaxTree> program, BuildSettings settings, string executable, BuildTimings? timings) {
-        var result = Pipeline.Compile(program, settings.DebugDirectory, settings.Exclusivity, timings);
+        var result = Pipeline.Compile(program, settings.DebugDirectory, settings.Exclusivity, timings, optimised: settings.Optimise);
         if (!result.Succeeded) {
-            return BuildOutcome.Failed(result.Errors);
+            return BuildOutcome.Failed(result.Errors) with { Warnings = result.Warnings };
         }
 
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(executable))!);
         NativeBuildResult native;
         using (BuildTimings.Of(timings, "clang")) {
-            native = NativeBuild.Build(result.LlvmIr!, executable, settings.Optimise, settings.Debug);
+            native = NativeBuild.Build(result.LlvmIr!, executable, settings.Native);
         }
 
-        return native.Succeeded
+        return (native.Succeeded
             ? new(true, [], "whole", 1, 0)
-            : BuildOutcome.Failed([$"internal error: the native build failed:\n{native.Output}"]);
+            : BuildOutcome.Failed([$"internal error: the native build failed:\n{native.Output}"])) with { Warnings = result.Warnings };
     }
 
     // =======================================================================
@@ -280,16 +303,22 @@ public static class IncrementalBuild {
 
         var compiling = new List<(Unit Unit, Task<NativeBuildResult> Task)>();
         var throttle = new SemaphoreSlim(Environment.ProcessorCount);
+        List<string> warnings = [];
         if (stale.Count > 0) {
             Compilation compilation;
             List<string> errors;
             using (BuildTimings.Of(timings, "bind")) {
                 compilation = binding.Result;
-                errors = Errors(compilation, program, stale.SelectMany(static u => u.Trees).ToHashSet());
+                var checking = stale.SelectMany(static u => u.Trees).ToHashSet();
+                errors = Diagnostics(compilation, program, checking, DiagnosticSeverity.Error);
+
+                // The program's own: the standard library's are not the program's to act on.
+                checking.IntersectWith(program);
+                warnings = Diagnostics(compilation, program, checking, DiagnosticSeverity.Warning);
             }
 
             if (errors.Count > 0) {
-                return BuildOutcome.Failed(errors);
+                return BuildOutcome.Failed(errors) with { Warnings = warnings };
             }
 
             var index = indexing.Result;
@@ -358,7 +387,7 @@ public static class IncrementalBuild {
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(executable))!);
         NativeBuildResult link;
         using (BuildTimings.Of(timings, "link")) {
-            link = NativeObjects.Link([..units.Select(static u => u.ObjectPath), runtime], executable);
+            link = NativeObjects.Link([..units.Select(static u => u.ObjectPath), runtime], executable, settings.Native);
         }
 
         if (!link.Succeeded) {
@@ -370,7 +399,7 @@ public static class IncrementalBuild {
             Collect(objects, units);
         }
 
-        return new(true, [], "incremental", stale.Count, units.Count - stale.Count);
+        return new(true, [], "incremental", stale.Count, units.Count - stale.Count) { Warnings = warnings };
     }
 
     /// <summary>
@@ -421,13 +450,14 @@ public static class IncrementalBuild {
 
     /// <summary>
     ///     The errors of the files being compiled, and the program's
-    ///     declarations', each formatted against its file, in program order.
+    ///     declarations', each formatted against its file, in program order —
+    ///     or, asked for warnings, those of the files being compiled alone.
     /// </summary>
-    static List<string> Errors(Compilation compilation, IReadOnlyList<SyntaxTree> program, HashSet<SyntaxTree> checking) {
+    static List<string> Diagnostics(Compilation compilation, IReadOnlyList<SyntaxTree> program, HashSet<SyntaxTree> checking, DiagnosticSeverity severity) {
         var order = program.Select(static (tree, index) => (tree, index)).ToDictionary(static p => p.tree, static p => p.index);
         var all = new List<(Diagnostic Diagnostic, SyntaxTree? Tree)>();
         var parse = new HashSet<Diagnostic>(ReferenceEqualityComparer.Instance);
-        foreach (var tree in compilation.SyntaxTrees) {
+        foreach (var tree in compilation.SyntaxTrees.Where(t => severity == DiagnosticSeverity.Error || checking.Contains(t))) {
             all.AddRange(tree.Diagnostics.Select(d => (d, (SyntaxTree?)tree)));
             parse.UnionWith(tree.Diagnostics);
         }
@@ -439,7 +469,7 @@ public static class IncrementalBuild {
         // Declarations and signatures: the whole program's.
         all.AddRange(compilation.GetDiagnostics().Where(d => !parse.Contains(d)).Select(static d => (d, (SyntaxTree?)null)));
         return [
-            ..all.Where(static d => d.Diagnostic.Severity == DiagnosticSeverity.Error)
+            ..all.Where(d => d.Diagnostic.Severity == severity && (severity == DiagnosticSeverity.Error || d.Tree is not null))
                 .OrderBy(d => d.Tree is { } t && order.TryGetValue(t, out var index) ? index : int.MaxValue)
                 .ThenBy(static d => d.Diagnostic.Span.Start)
                 .Select(static d => d.Tree is { } file ? d.Diagnostic.Format(file.Text) : $"error[{d.Diagnostic.Id}]: {d.Diagnostic.Message}"),

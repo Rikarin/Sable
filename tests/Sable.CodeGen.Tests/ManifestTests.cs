@@ -183,6 +183,80 @@ public sealed class ManifestTests {
         Assert.Contains(manifest.Warnings, static w => w.Key == "profile.dev.turbo");
     }
 
+    /// <summary>
+    ///     Every profile setting means what it says: each opt-level its own
+    ///     clang level, and lto, codegen-units, strip and rpath acted on. What
+    ///     cannot be acted on — unwinding, ARC checks — is warned about.
+    /// </summary>
+    [Fact]
+    public void ProfileSettingsReachTheNativeBuild() {
+        var manifest = Parse("""
+            [package]
+            name = "a"
+            version = "1.0.0"
+
+            [profile.release]
+            opt-level = "z"
+            debug = true
+            lto = "thin"
+            codegen-units = 1
+            strip = "debuginfo"
+            rpath = true
+            panic = "unwind"
+            arc-checks = true
+
+            [profile.dev]
+            opt-level = 1
+            lto = false
+            strip = true
+            """);
+
+        Assert.Equal(
+            new NativeOptions { OptLevel = "z", DebugInfo = true, Lto = LtoMode.Thin, Strip = StripMode.DebugInfo, Rpath = true },
+            manifest.Release.Native
+        );
+        Assert.Equal(1, manifest.Release.CodegenUnits);
+        Assert.Equal(new NativeOptions { OptLevel = "1", DebugInfo = true, Lto = LtoMode.Off, Strip = StripMode.Symbols }, manifest.Dev.Native);
+        Assert.True(manifest.Dev.Optimise);
+        Assert.Contains(manifest.Warnings, static w => w is { Line: 12, Key: "profile.release.panic" });
+        Assert.Contains(manifest.Warnings, static w => w is { Line: 13, Key: "profile.release.arc-checks" });
+
+        foreach (var (level, expected) in new[] { ("0", "0"), ("2", "2"), ("3", "3"), ("\"s\"", "s") }) {
+            Assert.Equal(expected, Parse($"[package]\nname = \"a\"\nversion = \"1.0.0\"\n[profile.release]\nopt-level = {level}\n").Release.OptLevel);
+        }
+
+        var errors = Errors("[package]\nname = \"a\"\nversion = \"1.0.0\"\n[profile.release]\nlto = \"medium\"\ncodegen-units = 0\nstrip = 3\npanic = \"retry\"\nrpath = \"yes\"\n");
+        Assert.Equal(
+            ["profile.release.lto", "profile.release.codegen-units", "profile.release.strip", "profile.release.panic", "profile.release.rpath"],
+            errors.Select(static e => e.Key)
+        );
+    }
+
+    [Fact]
+    public void SettingsNothingActsOnAreRefusedOrWarnedAbout() {
+        const string Package = "[package]\nname = \"a\"\nversion = \"1.0.0\"\n";
+
+        // Refused: building without them would build something else than asked.
+        Assert.Contains(Errors(Package + "[dependencies]\nb = { version = \"1\", package = \"c\" }\n"),
+            static e => e.Key == "dependencies.b.package" && e.Message.Contains("cannot be renamed", StringComparison.Ordinal));
+        Assert.Contains(Errors(Package + "[dependencies]\nb = { version = \"1\", registry = \"other\" }\n"),
+            static e => e.Key == "dependencies.b.registry");
+        Assert.Contains(Errors(Package + "[dependencies]\nb = { workspace = true }\n"),
+            static e => e.Key == "dependencies.b.workspace" && e.Message.Contains("not supported yet", StringComparison.Ordinal));
+        Assert.Contains(Errors("[package]\nname = \"a\"\nversion.workspace = true\n"),
+            static e => e.Key == "package.version" && e.Message.Contains("inheriting", StringComparison.Ordinal));
+        Assert.Contains(Errors(Package + "[target.'cfg(unix)'.dependencies]\nb = \"1\"\n"),
+            static e => e.Key == "target" && e.Message.Contains("when", StringComparison.Ordinal));
+
+        // Warned about: accepted, with a word that nothing uses them yet.
+        var manifest = Parse(Package + "[build-dependencies]\nb = \"1\"\n[reflect]\ninclude = [\"Scene\"]\n[targets.wasm]\nx = 1\n");
+        Assert.Contains(manifest.Warnings, static w => w.Key == "build-dependencies");
+        Assert.Contains(manifest.Warnings, static w => w.Key == "reflect");
+        Assert.Contains(manifest.Warnings, static w => w.Key == "targets");
+        Assert.Contains(Parse("[workspace]\nmembers = [\"a\"]\n[workspace.dependencies]\nb = \"1\"\n").Warnings,
+            static w => w.Key == "workspace.dependencies" && w.Message.Contains("inherit", StringComparison.Ordinal));
+    }
+
     [Fact]
     public void AVirtualWorkspaceHasNoPackage() {
         var manifest = Parse("[workspace]\nmembers = [\"a\", \"b\"]\n");

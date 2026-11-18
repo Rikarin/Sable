@@ -1,0 +1,27 @@
+module Negative.IntegerRanges
+
+// An integer literal its type cannot hold is a type error, not something
+// lowering finds out (#130).
+
+const Byte: U8 = 300                    //! S3200 '300' does not fit in 'U8'
+const Small: I8 = -129                  //! S3200 '-129' does not fit in 'I8'
+const Smallest: I8 = -128
+const Largest: Int = 9223372036854775807
+const Least: Int = -9223372036854775808
+const Unsigned: UInt = 18446744073709551615
+
+// A constant's arithmetic is folded, and overflowing it is an error.
+const Over: Int = 9223372036854775807 + 1   //! S3201 does not fit in 'Int'
+const Under: Int = -9223372036854775807 - 2 //! S3201 does not fit in 'Int'
+const Zero: Int = 10 / (5 - 5)              //! S3201 divides by zero
+const Fine: Int = 9223372036854775806 + 1
+
+fn locals() {
+    let a: I8 = 200                     //! S3200 '200' does not fit in 'I8'
+    let b: U8 = -1                      //! S3200 '-1' does not fit in 'U8'
+    let c: U16 = 65536                  //! S3200 '65536' does not fit in 'U16'
+    let d: U16? = 70000                 //! S3200 '70000' does not fit in 'U16'
+    let e: I8 = -128
+    let f: U64 = 18446744073709551615
+    let g = 9223372036854775808         //! S3200 does not fit in 'Int'
+}

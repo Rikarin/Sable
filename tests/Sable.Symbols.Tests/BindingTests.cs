@@ -229,6 +229,18 @@ public sealed class BindingTests {
         );
     }
 
+    /// <summary>The spec's 'fn build(in r: region)' is called 'build(in: a)'.</summary>
+    [Fact]
+    public void InIsAnArgumentLabel() {
+        const string extra = "fn build(in r: region, _ n: Int) -> Int { return n }";
+        AssertClean("region a {\n    let n = build(in: a, 1)\n}", extra);
+
+        Assert.Contains(
+            ErrorsIn("region a {\n    let n = build(r: a, 1)\n}", extra),
+            static e => e.Code == ErrorCode.ERR_NoMatchingOverload
+        );
+    }
+
     [Fact]
     public void DefaultedParametersMayBeOmitted() {
         const string extra = "fn connect(host: String, port: Int = 443) { }";
@@ -250,6 +262,24 @@ public sealed class BindingTests {
         Assert.Contains(
             ErrorsIn("""connect(host: "a", timeout: 5)""", extra),
             static e => e.Code == ErrorCode.ERR_NoMatchingOverload
+        );
+    }
+
+    /// <summary>A variadic parameter's label goes on its first element, and only there (SYNTAX.md §5).</summary>
+    [Fact]
+    public void ALabelledVariadicTakesItsLabelOnce() {
+        const string extra = "fn sum(of values: Int...) -> Int { return 0 }\nfn join(_ sep: String, items: Int...) { }";
+        AssertClean("let s = sum(of: 1, 2, 3)", extra);
+        AssertClean("let s = sum(of: 1)", extra);
+        AssertClean("let s = sum()", extra);
+        AssertClean("""join(",", items: 1, 2)""", extra);
+        Assert.Contains(
+            ErrorsIn("let s = sum(of: 1, of: 2)", extra),
+            static e => e.Code == ErrorCode.ERR_NoMatchingOverload && e.Message.Contains("another element of 'values'")
+        );
+        Assert.Contains(
+            ErrorsIn("let s = sum(1, 2)", extra),
+            static e => e.Code == ErrorCode.ERR_NoMatchingOverload && e.Message.Contains("needs the label 'of:'")
         );
     }
 
@@ -477,5 +507,47 @@ public sealed class BindingTests {
             .Single();
 
         Assert.Equal("Int", model.GetTypeOf(hole.Expression)!.ToDisplayString());
+    }
+
+    // ---- Recovery ----------------------------------------------------------
+
+    static IReadOnlyList<Diagnostic> AllErrorsIn(string source) => [
+        ..Compilation.Create($"module M\n{source}").GetAllDiagnostics()
+            .Where(static d => d.Severity == DiagnosticSeverity.Error)
+    ];
+
+    /// <summary>An argument that is already an error matches every overload silently.</summary>
+    [Fact]
+    public void AnErrorArgumentDoesNotMakeTheCallAmbiguous() {
+        var errors = AllErrorsIn("fn main() { print(undefinedFn() + 1) }");
+        Assert.Equal(ErrorCode.ERR_NameNotFound, Assert.Single(errors).Code);
+    }
+
+    /// <summary>A parse error is reported by the parser, not again by the binder over what is missing.</summary>
+    [Theory]
+    [InlineData("fn main() {\n    let x?\n}", ErrorCode.ERR_ExpectedStatementEnd)]
+    [InlineData("fn main() -> Int {\n    return 1 + \n}", ErrorCode.ERR_ExpectedExpression)]
+    [InlineData("struct P { var x: Int }\nfn main(_ p: P) {\n    let a = p.\n    let b = 2\n}", ErrorCode.ERR_ExpectedIdentifier)]
+    public void AMissingNodeIsNotLookedUp(string source, ErrorCode code) {
+        var errors = AllErrorsIn(source);
+        Assert.DoesNotContain(errors, static e => e.Code == ErrorCode.ERR_NameNotFound);
+        Assert.Contains(errors, e => e.Code == code);
+    }
+
+    /// <summary>'none' alone says nothing about what it is optional of.</summary>
+    [Fact]
+    public void NoneAloneGivesNoType() {
+        var local = AllErrorsIn("fn main() { let r = none }");
+        Assert.Equal(ErrorCode.ERR_CannotInferType, Assert.Single(local).Code);
+
+        var call = AllErrorsIn("fn id<T>(_ x: T) -> T { return x }\nfn main() {\n    let q = id(none)\n    print(q)\n}");
+        var error = Assert.Single(call);
+        Assert.Equal(ErrorCode.ERR_CannotInferTypeArgument, error.Code);
+        Assert.Contains("'none'", error.Message);
+    }
+
+    [Fact]
+    public void NoneTakesItsTypeFromTheContext() {
+        Assert.Empty(AllErrorsIn("fn id<T>(_ x: T) -> T { return x }\nfn main() {\n    let w: Int? = id(none)\n    let r: String? = none\n}"));
     }
 }

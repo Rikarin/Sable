@@ -104,13 +104,14 @@ public sealed class CompileTimeLoweringTests {
 
     [Fact]
     public void DivisionByZeroIsAnErrorAtTheConstant() {
-        var error = Reports(ErrorCode.ERR_ConstantEvaluationFailed, "const fn zero() -> Int => 0\nconst E: Int = 1 / zero()");
+        var error = Reports(ErrorCode.ERR_ConstantOverflow, "const fn zero() -> Int => 0\nconst E: Int = 1 / zero()");
         Assert.Contains("division by zero", error.Message, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void OverflowIsAnErrorAtTheConstant() =>
-        Assert.Contains("overflow", Reports(ErrorCode.ERR_ConstantEvaluationFailed, "const Big: Int = 9223372036854775807 + 1").Message,
+    public void OverflowInAConstFnIsAnErrorAtTheConstant() =>
+        Assert.Contains("overflow", Reports(ErrorCode.ERR_ConstantOverflow,
+                "const fn next(_ n: Int) -> Int => n + 1\nconst Big: Int = next(9223372036854775807)").Message,
             StringComparison.Ordinal);
 
     [Fact]

@@ -23,10 +23,19 @@ public sealed record ReplResult(string Output, bool Failed = false, bool Quit = 
 ///         its type.
 ///     </para>
 ///     <para>
-///         Replay is simple and exact for pure code. Its limits: an earlier
-///         statement's side effects outside the program (a file written, a
-///         line read) happen again, and a value from the clock or a random
-///         source is a new one each time.
+///         Replay is exact because what the program does to the world goes
+///         through an <see cref="EffectJournal" />: a statement's effects —
+///         a file written, a line read, the clock — are carried out when it
+///         first runs, and on every replay it is given what they gave then
+///         instead, so nothing happens twice and the clock reads as it did.
+///         An entry that fails leaves nothing behind in the journal, as it
+///         leaves nothing in the session.
+///     </para>
+///     <para>
+///         Natively a program has the whole stack and as long as it likes;
+///         here the interpreter's own limits are raised to match: calls as
+///         deep as an eight-megabyte stack allows, and no limit on steps —
+///         Ctrl-C (<see cref="Interrupt" />) stops a runaway entry instead.
 ///     </para>
 /// </remarks>
 public sealed class ReplSession {
@@ -35,7 +44,29 @@ public sealed class ReplSession {
     readonly List<string> _imports = [];
     readonly List<(HashSet<string> Names, string Text)> _declarations = [];
     readonly List<string> _statements = [];
+    readonly EffectJournal _journal = new();
     int _results;
+
+    /// <summary>
+    ///     How deep calls nest before an entry traps: about what a native
+    ///     program's eight-megabyte stack holds. The interpreter's thread has
+    ///     room for it.
+    /// </summary>
+    public const int DepthLimit = 100_000;
+
+    /// <summary>The entry running now, to interrupt; null between entries.</summary>
+    CancellationTokenSource? _running;
+
+    /// <summary>Stops the entry that is running, if one is, with a trap: what Ctrl-C does.</summary>
+    /// <returns>Whether an entry was running.</returns>
+    public bool Interrupt() {
+        if (Volatile.Read(ref _running) is not { } running) {
+            return false;
+        }
+
+        running.Cancel();
+        return true;
+    }
 
     /// <summary>Statements and declarations kept so far, for <c>:history</c>-like inspection in tests.</summary>
     public int StatementCount => _statements.Count;
@@ -50,8 +81,26 @@ public sealed class ReplSession {
           :quit          leave (or end of input)
 
         'import Sable.Collections' brings in a library module. An entry may span
-        lines: it continues while a bracket is open.
+        lines: it continues while a bracket is open. Up and down recall earlier
+        lines, Tab completes a name, and Ctrl-C stops an entry that runs too long.
         """;
+
+    /// <summary>
+    ///     What a name being typed could become, for Tab: the commands after
+    ///     a colon; otherwise the keywords, the core's common names, and what
+    ///     the session has declared, bound and imported.
+    /// </summary>
+    public IReadOnlyList<string> Completions(string prefix) {
+        if (prefix.StartsWith(':')) {
+            return [":type", ":reset", ":help", ":quit"];
+        }
+
+        var names = new List<string>(SyntaxFacts.KeywordTexts) { "Int", "String", "Bool", "F64", "Char", "print", "Runtime", "Reflect" };
+        names.AddRange(_imports);
+        names.AddRange(_declarations.SelectMany(static d => d.Names));
+        names.AddRange(_statements.SelectMany(static s => System.Text.RegularExpressions.Regex.Matches(s, @"\b(?:let|var)\s+([A-Za-z_][A-Za-z0-9_]*)").Select(static m => m.Groups[1].Value)));
+        return [..names.Where(n => n.StartsWith(prefix, StringComparison.Ordinal)).Distinct(StringComparer.Ordinal)];
+    }
 
     /// <summary>True when an entry's brackets and strings are closed, so it can be submitted.</summary>
     public static bool IsComplete(string text) {
@@ -122,6 +171,7 @@ public sealed class ReplSession {
                 _imports.Clear();
                 _declarations.Clear();
                 _statements.Clear();
+                _journal.Clear();
                 _results = 0;
                 return new("forgot everything");
             case ":type" or ":t" when argument.Length > 0:
@@ -297,7 +347,18 @@ public sealed class ReplSession {
     }
 
     /// <summary>Lowers and interprets a program that type-checks; its output after the mark.</summary>
-    static ReplResult Run(string program) {
+    ReplResult Run(string program) {
+        // Its effects are kept only if it succeeds, as its statement is.
+        var journaled = _journal.Count;
+        var result = RunJournaled(program);
+        if (result.Failed) {
+            _journal.Truncate(journaled);
+        }
+
+        return result;
+    }
+
+    ReplResult RunJournaled(string program) {
         var tree = SyntaxTree.Parse(new SourceText(program, "repl"));
         var compilation = Compilation.Create([tree, ..Library.For(tree)]);
         var (module, lowering) = SilGen.Lower(compilation);
@@ -315,11 +376,15 @@ public sealed class ReplSession {
             return new($"internal error: {failure.Message}", Failed: true);
         }
 
-        var interpreter = new SilInterpreter(module);
+        using var running = new CancellationTokenSource();
+        var interpreter = new SilInterpreter(module, long.MaxValue, DepthLimit) { Journal = _journal, Interrupt = running.Token };
+        Volatile.Write(ref _running, running);
         try {
             interpreter.Run(module.EntryPoint!);
         } catch (SilTrap trap) {
             return new(After(interpreter.Output.ToString()) + $"trap: {trap.Message}", Failed: true);
+        } finally {
+            Volatile.Write(ref _running, null);
         }
 
         return new(After(interpreter.Output.ToString()));

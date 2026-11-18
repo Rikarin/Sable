@@ -66,6 +66,7 @@ public static class LanguageProjects {
                             GeneratorMemberAttributes = PackageGenerators.AttributesFor(graph, p).Members,
                         })),
                 ]) {
+                Lints = member.Manifest.Lints,
                 Generate = (trees, dependencies) => PackageGenerators.ForEditor(graph, member.Name, trees, dependencies),
                 GeneratorAttributes = attributes.Types,
                 GeneratorMemberAttributes = attributes.Members,

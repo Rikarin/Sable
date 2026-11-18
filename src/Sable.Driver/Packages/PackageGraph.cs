@@ -33,11 +33,17 @@ public sealed record FeatureRequest(IReadOnlyList<string> Features, bool NoDefau
 /// <param name="Update">null to keep the lock file's versions where they fit; empty to re-resolve everything; else the packages to re-resolve.</param>
 /// <param name="Locked">Fail rather than change the lock file.</param>
 /// <param name="Packages">The members being built, whose features <paramref name="Features" /> selects; null for all.</param>
+/// <param name="Target">
+///     What is built for — the <c>os(...)</c> and <c>arch(...)</c> a
+///     dependency's <c>when:</c> tests — as <c>#if</c> names them; null for
+///     this machine. The lock file keeps every dependency either way.
+/// </param>
 public sealed record ResolveOptions(
     FeatureRequest? Features = null,
     IReadOnlySet<string>? Update = null,
     bool Locked = false,
-    IReadOnlyList<string>? Packages = null);
+    IReadOnlyList<string>? Packages = null,
+    (string Os, string Arch)? Target = null);
 
 /// <summary>A package a build uses, at the version chosen, with the features turned on and where its source is.</summary>
 public sealed record ResolvedPackage(
@@ -129,7 +135,7 @@ public sealed partial class PackageGraph {
         (root, rootVersion) = source.SetRoot(requests);
         var locked = lockFile.Packages.ToDictionary(static p => p.Name, static p => p.Version, StringComparer.Ordinal);
         var build = ResolveWithWeakFeatures(source, root, rootVersion, locked);
-        return new(workspace, source.Packages(build, root, lockFile), lockFile, store);
+        return new(workspace, source.Packages(build, root, lockFile, options.Target ?? (Sable.Syntax.ParseOptions.HostOs, Sable.Syntax.ParseOptions.HostArch)), lockFile, store);
     }
 
     /// <summary>
@@ -532,12 +538,12 @@ sealed class GraphSource(
         decisions.Keys.Select(Split).Where(s => s.Name == name && s.Feature is not null).Select(static s => s.Feature!).ToHashSet(StringComparer.Ordinal);
 
     /// <summary>The dependencies a package has with the features chosen: its required ones, and the optional ones its features turn on.</summary>
-    List<string> EnabledDependencies(string name, SemVersion version, IReadOnlyDictionary<string, SemVersion> decisions, bool includeDev, bool forThisMachine = false) {
+    List<string> EnabledDependencies(string name, SemVersion version, IReadOnlyDictionary<string, SemVersion> decisions, bool includeDev, (string Os, string Arch)? target = null) {
         var spec = Of(name, version);
 
         // A dependency whose 'when' names another platform is resolved and
         // locked, so the lock is the same on every machine, but not built.
-        bool Applies(DependencySpec d) => !forThisMachine || d.AppliesHere;
+        bool Applies(DependencySpec d) => target is not { } built || d.AppliesTo(built.Os, built.Arch);
         var dependencies = spec.Normal.Where(d => (!d.Optional || decisions.ContainsKey(d.Name)) && Applies(d)).Select(static d => d.Name);
         if (includeDev && _members.Contains(name)) {
             dependencies = dependencies.Concat(spec.Dev.Where(Applies).Select(static d => d.Name));
@@ -557,11 +563,11 @@ sealed class GraphSource(
     }
 
     /// <summary>The packages of a build resolution, with their sources found and their features chosen.</summary>
-    public IReadOnlyDictionary<string, ResolvedPackage> Packages(IReadOnlyDictionary<string, SemVersion> decisions, string root, LockFile lockFile) {
+    public IReadOnlyDictionary<string, ResolvedPackage> Packages(IReadOnlyDictionary<string, SemVersion> decisions, string root, LockFile lockFile, (string Os, string Arch) target) {
         var result = new Dictionary<string, ResolvedPackage>(StringComparer.Ordinal);
         foreach (var (name, version) in Real(decisions, root)) {
-            var normal = EnabledDependencies(name, version, decisions, false, forThisMachine: true);
-            var dev = EnabledDependencies(name, version, decisions, true, forThisMachine: true).Except(normal).ToList();
+            var normal = EnabledDependencies(name, version, decisions, false, target);
+            var dev = EnabledDependencies(name, version, decisions, true, target).Except(normal).ToList();
             var features = FeaturesOf(name, decisions);
             if (locals.TryGetValue(name, out var local)) {
                 // A package from git is, like a registry package, a workspace of its own.

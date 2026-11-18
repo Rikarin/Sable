@@ -18,7 +18,7 @@ internal static class Programs {
         IReadOnlyList<string>? arguments = null,
         IReadOnlyDictionary<string, string>? environment = null
     ) {
-        var result = Pipeline.Compile(new SourceText(source, "test.sb"));
+        var result = Pipeline.Compile(new SourceText(source, "test.sb"), optimised: optimise);
         Assert.True(result.Succeeded, string.Join("\n", result.Errors));
 
         var executable = Path.Combine(Path.GetTempPath(), $"sable-test-{Guid.NewGuid():N}");

@@ -30,8 +30,8 @@ public static class Pipeline {
     ///     Keep the dynamic exclusivity checks (docs/02 §2.3): on unless a
     ///     release build turns them off.
     /// </param>
-    public static CompileResult Compile(SourceText source, string? debugDirectory = null, bool checkExclusivity = true) =>
-        Compile([SyntaxTree.Parse(source)], debugDirectory, checkExclusivity);
+    public static CompileResult Compile(SourceText source, string? debugDirectory = null, bool checkExclusivity = true, bool optimised = false) =>
+        Compile([SyntaxTree.Parse(source)], debugDirectory, checkExclusivity, optimised: optimised);
 
     /// <summary>
     ///     What a program's files are parsed with: <c>DEBUG</c> defined for an
@@ -45,22 +45,35 @@ public static class Pipeline {
     public static ParseOptions ParseOptionsFor(bool optimise, ParseOptions options) =>
         options with { Symbols = [optimise ? "RELEASE" : "DEBUG"] };
 
+    /// <summary>A program's files' options for <paramref name="target" />: <c>#if os(...)</c> and <c>#if arch(...)</c> test it.</summary>
+    public static ParseOptions ParseOptionsFor(bool optimise, NativeTarget target) =>
+        ParseOptionsFor(optimise, ParseOptions.Default.ForTarget(target.Os, target.Arch));
+
     /// <summary>
     ///     A program of many files — a package and its dependencies — compiled
     ///     together. The first tree is the one that should hold the entry
     ///     point: '@main', or a function called main, is looked for there first.
     /// </summary>
     /// <param name="optimised">
-    ///     An optimised build with debug information: the SIL passes run
-    ///     anyway, and the debugger sees what they leave. Without it, a build
-    ///     with debug information keeps every local in its slot.
+    ///     An optimised build: the SIL passes that move code between functions
+    ///     — devirtualising, inlining — run too, which an unoptimised build
+    ///     leaves out so that a trap's backtrace names every frame. With debug
+    ///     information, the SIL passes run anyway, and the debugger sees what
+    ///     they leave; without it, a build with debug information keeps every
+    ///     local in its slot.
+    /// </param>
+    /// <param name="target">
+    ///     What the program is built for, whose C calling convention its
+    ///     <c>@extern</c> calls follow; the host when null. (What its files'
+    ///     <c>#if os(...)</c> says is the parse's: <see cref="ParseOptionsFor(bool, NativeTarget)" />.)
     /// </param>
     public static CompileResult Compile(
         IReadOnlyList<SyntaxTree> program,
         string? debugDirectory = null,
         bool checkExclusivity = true,
         BuildTimings? timings = null,
-        bool optimised = false
+        bool optimised = false,
+        NativeTarget? target = null
     ) {
         Compilation compilation;
         List<string> errors;
@@ -73,7 +86,7 @@ public static class Pipeline {
         }
 
         // The warnings go with whatever comes back, an error or the IR.
-        return CompileChecked(compilation, program, errors, debugDirectory, checkExclusivity, timings, optimised) with { Warnings = warnings };
+        return CompileChecked(compilation, program, errors, debugDirectory, checkExclusivity, timings, optimised, target) with { Warnings = warnings };
     }
 
     /// <summary>The rest of <see cref="Compile(IReadOnlyList{SyntaxTree}, string?, bool, BuildTimings?, bool)" />, from a checked program.</summary>
@@ -84,7 +97,8 @@ public static class Pipeline {
         string? debugDirectory,
         bool checkExclusivity,
         BuildTimings? timings,
-        bool optimised
+        bool optimised,
+        NativeTarget? target
     ) {
         if (errors.Count > 0) {
             return new(null, null, errors);
@@ -119,7 +133,7 @@ public static class Pipeline {
         if (debugDirectory is null || optimised) {
             try {
                 using var _ = BuildTimings.Of(timings, "passes");
-                SilPassManager.Run(module, SilPassManager.Default);
+                SilPassManager.Run(module, optimised ? SilPassManager.Optimising : SilPassManager.Default);
             } catch (SilPassException failure) {
                 return new(module, null, [$"internal error: {failure.Message}"]);
             }
@@ -127,7 +141,7 @@ public static class Pipeline {
 
         string ir;
         using (BuildTimings.Of(timings, "emit")) {
-            ir = debugDirectory is null ? LlvmEmitter.Emit(module) : LlvmEmitter.EmitWithDebugInfo(module, debugDirectory);
+            ir = debugDirectory is null ? LlvmEmitter.Emit(module, target) : LlvmEmitter.EmitWithDebugInfo(module, debugDirectory, target);
         }
 
         return new(module, ir, []);

@@ -424,6 +424,13 @@ public sealed class InlineLayout {
 public sealed class EnumType(string name) : NominalType(name) {
     public List<(string Name, SilType? Payload)> Cases { get; } = [];
 
+    /// <summary>
+    ///     A union case's payload fields' names, by case, for a debugger to
+    ///     show (<c>Rect(width: 2, height: 3)</c>); only for a case whose
+    ///     fields all have one. The payload itself is the bare value or tuple.
+    /// </summary>
+    public Dictionary<string, ImmutableArray<string>> PayloadLabels { get; } = [];
+
     public int CaseIndex(string @case) => Cases.FindIndex(c => c.Name == @case);
 
     public override bool IsTrivial => !IsNoncopyable && Cases.All(static c => c.Payload?.IsTrivial ?? true);
@@ -511,17 +518,24 @@ public sealed class SilArgument(SilBlock block, SilType type, bool guaranteed = 
 // Instructions
 // ===========================================================================
 
-/// <summary>Where in the source an instruction came from: one-based line and column.</summary>
-public readonly record struct SilLocation(int Line, int Column) {
+/// <summary>
+///     Where in the source an instruction came from: one-based line and
+///     column, and the lexical scope it is in — 0 for the function's own,
+///     otherwise one of <see cref="SilFunction.Scopes" />, counted from 1.
+/// </summary>
+public readonly record struct SilLocation(int Line, int Column, int Scope = 0) {
     public override string ToString() => $"{Line}:{Column}";
 }
+
+/// <summary>A block of a function's source that its locals can be declared in: the scope it is inside (0 for the function's), and where it starts.</summary>
+public readonly record struct SilScope(int Parent, int Line, int Column);
 
 /// <summary>
 ///     One SIL instruction. An instruction that produces a value is itself the
 ///     value, as in Swift's SIL, so a use names the instruction.
 /// </summary>
 public abstract class SilInstruction : SilValue {
-    readonly SilValue[] _operands;
+    SilValue[] _operands;
 
     protected SilInstruction(params SilValue[] operands) {
         _operands = operands;
@@ -535,6 +549,35 @@ public abstract class SilInstruction : SilValue {
     public IReadOnlyList<SilValue> Operands => _operands;
 
     internal void SetOperand(int index, SilValue value) => _operands[index] = value;
+
+    /// <summary>
+    ///     A copy, for another block — what the inliner makes of a callee's
+    ///     body: the same operands, each passed through <paramref name="value" />,
+    ///     and the same targets, through <paramref name="block" />.
+    /// </summary>
+    internal SilInstruction Clone(Func<SilValue, SilValue> value, Func<SilBlock, SilBlock> block) {
+        var copy = this is SwitchEnumInst switchEnum
+            ? new SwitchEnumInst(switchEnum.Value, [..switchEnum.Cases.Select(c => (c.Case, block(c.Target)))], switchEnum.Default is { } fallback ? block(fallback) : null)
+            : (SilInstruction)MemberwiseClone();
+        copy._operands = [.._operands.Select(value)];
+        copy.Block = null!;
+        copy.Location = Location;
+        switch (copy) {
+            case BranchInst branch:
+                branch.Target = block(branch.Target);
+                break;
+            case CondBranchInst conditional:
+                conditional.WhenTrue = block(conditional.WhenTrue);
+                conditional.WhenFalse = block(conditional.WhenFalse);
+                break;
+            case TryApplyInst tryApply:
+                tryApply.Normal = block(tryApply.Normal);
+                tryApply.Error = block(tryApply.Error);
+                break;
+        }
+
+        return copy;
+    }
 
     /// <summary>The text that names the instruction in SIL: <c>apply</c>, <c>cond_br</c>.</summary>
     public abstract string Opcode { get; }
@@ -1043,6 +1086,13 @@ public sealed class SilFunction(string name, FunctionType type) {
 
     /// <summary>The name of each parameter, <c>self</c> included, for a debugger.</summary>
     public List<string> ParameterNames { get; } = [];
+
+    /// <summary>
+    ///     The blocks within the function's body that a debugger tells apart,
+    ///     so that a name shadowed in one shows only there; scope <c>n</c> of
+    ///     a <see cref="SilLocation" /> is the <c>n</c>-th.
+    /// </summary>
+    public List<SilScope> Scopes { get; } = [];
 
     public SilBlock Entry => Blocks[0];
 

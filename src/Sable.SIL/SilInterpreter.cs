@@ -31,8 +31,8 @@ public sealed class SilTrap(string message) : Exception(message);
 ///         <see cref="LiveObjects" /> above zero.
 ///     </para>
 /// </remarks>
-public sealed partial class SilInterpreter(SilModule module, int stepLimit = 10_000_000, int depthLimit = 2_000) {
-    int _steps;
+public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10_000_000, int depthLimit = 2_000) {
+    long _steps;
     readonly HashSet<Counted> _live = [];
     readonly Dictionary<StringLiteralInst, HeapString> _literals = [];
 
@@ -58,6 +58,22 @@ public sealed partial class SilInterpreter(SilModule module, int stepLimit = 10_
 
     /// <summary>Whether the last runtime call that can fail did.</summary>
     bool _ioFailed;
+
+    /// <summary>
+    ///     Where the program's effects on the world — what it reads, the
+    ///     files it writes, the clock — are recorded, and replayed instead of
+    ///     carried out again while the journal has more; null to carry every
+    ///     one out. A REPL session runs its earlier statements again for
+    ///     each entry, and with this they read what they read the first time
+    ///     and change nothing twice.
+    /// </summary>
+    public EffectJournal? Journal { get; init; }
+
+    /// <summary>Stops the program, as a trap, once cancelled: for a REPL, whose step limit is too high to wait for.</summary>
+    public CancellationToken Interrupt { get; init; }
+
+    /// <summary>How many of the journal's effects this run has replayed.</summary>
+    int _replayed;
 
     /// <summary>Heap objects allocated and not yet freed: after a whole program, a leak.</summary>
     public int LiveObjects => _live.Count;
@@ -516,6 +532,11 @@ public sealed partial class SilInterpreter(SilModule module, int stepLimit = 10_
                     throw new SilTrap("step limit reached");
                 }
 
+                // Asked every so many steps, not every one: a REPL's Ctrl-C.
+                if ((_steps & 0xFFFF) == 0 && Interrupt.IsCancellationRequested) {
+                    throw new SilTrap("interrupted");
+                }
+
                 object? Get(SilValue value) => values[value];
 
                 switch (instruction) {
@@ -838,7 +859,40 @@ public sealed partial class SilInterpreter(SilModule module, int stepLimit = 10_
     // Builtins
     // =======================================================================
 
-    object? Builtin(BuiltinInst builtin, object?[] operands, int depth) {
+    object? Builtin(BuiltinInst builtin, object?[] operands, int depth) =>
+        Journal is { } journal && EffectJournal.Records(builtin.Name) ? Journaled(journal, builtin, operands, depth) : Perform(builtin, operands, depth);
+
+    /// <summary>
+    ///     An effect, through the journal: what it gave the last time, while
+    ///     there is a last time to replay; otherwise carried out, and what it
+    ///     gave written down.
+    /// </summary>
+    object? Journaled(EffectJournal journal, BuiltinInst builtin, object?[] operands, int depth) {
+        if (_replayed < journal.Count) {
+            var effect = journal.Entries[_replayed++];
+            if (effect.Name != builtin.Name) {
+                throw new SilTrap($"the session replayed differently: '{builtin.Name}' where '{effect.Name}' ran before");
+            }
+
+            (_ioFailed, _lastStatus, _lastErrorOutput) = (effect.IoFailed, effect.LastStatus, effect.LastErrorOutput);
+            return effect.Result switch {
+                string text => Allocate(new HeapString(text)),
+                string[] texts => Allocate(new HeapArray(new ArrayType(SilType.String), [..texts.Select(t => (object?)Allocate(new HeapString(t)))])),
+                var value => value,
+            };
+        }
+
+        var result = Perform(builtin, operands, depth);
+        var plain = result switch {
+            HeapString text => text.Value,
+            HeapArray array => array.Elements.Select(static e => ((HeapString)e!).Value).ToArray(),
+            var value => value,
+        };
+        journal.Entries.Add(new(builtin.Name, plain, _ioFailed, _lastStatus, _lastErrorOutput));
+        return result;
+    }
+
+    object? Perform(BuiltinInst builtin, object?[] operands, int depth) {
         switch (builtin.Name) {
             case "array_empty":
                 return null;

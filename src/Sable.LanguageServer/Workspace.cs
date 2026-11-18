@@ -154,16 +154,29 @@ internal sealed class Workspace {
     ///     Closes a document: it goes back to what is on disk, if it is a
     ///     file of the workspace, and away otherwise.
     /// </summary>
-    public WorkspaceSnapshot Close(string uri, string? root) {
+    public WorkspaceSnapshot Close(string uri, IReadOnlyList<string> folders) {
         var key = KeyOf(uri);
         var path = PathOf(uri);
-        if (path is not null && root is not null && File.Exists(path) && IsUnder(path, root)) {
+        if (path is not null && File.Exists(path) && folders.Any(f => IsUnder(path, f))) {
             var text = File.ReadAllText(path);
             return Update(current => current.Documents.SetItem(key, new(uri, SyntaxTree.Parse(new SourceText(text, path), current.Layout.OptionsFor(path)), null, false)));
         }
 
         return Update(current => current.Documents.Remove(key));
     }
+
+    /// <summary>
+    ///     A folder was removed from the workspace: its files go, but for
+    ///     those the editor has open and those under a folder still there.
+    /// </summary>
+    public WorkspaceSnapshot Forget(string folder, IReadOnlyList<string> remaining) =>
+        Update(current => current.Documents.RemoveRange(
+            current.Documents
+                .Where(d => !d.Value.IsOpen
+                            && PathOf(d.Value.Uri) is { } path
+                            && IsUnder(path, folder)
+                            && !remaining.Any(f => IsUnder(path, f)))
+                .Select(static d => d.Key)));
 
     /// <summary>A file changed on disk: read it again, unless the editor has it open.</summary>
     public WorkspaceSnapshot? Reload(string uri) {

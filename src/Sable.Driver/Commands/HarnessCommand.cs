@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Sable.CodeGen;
+using Sable.Driver.Generators;
 using Sable.Driver.Packages;
 using Sable.Symbols;
 using Sable.Syntax;
@@ -27,7 +28,8 @@ public abstract class HarnessCommand : Command {
         bool DocExamples,
         bool Optimise,
         bool Debug,
-        bool? Exclusivity);
+        bool? Exclusivity,
+        bool Bless = false);
 
     protected Options? Parse(IReadOnlyList<string> args) {
         var files = new List<string>();
@@ -35,6 +37,7 @@ public abstract class HarnessCommand : Command {
         var doc = false;
         var optimise = OptimiseByDefault;
         var debug = false;
+        var bless = false;
         bool? exclusivity = null;
         for (var i = 0; i < args.Count; i++) {
             var argument = args[i];
@@ -44,6 +47,7 @@ public abstract class HarnessCommand : Command {
                     i = args.Count;
                     break;
                 case "--doc" when Kind == TestKind.Test: doc = true; break;
+                case "--bless" when Kind == TestKind.Test: bless = true; break;
                 case "-O0": optimise = false; break;
                 case "--release": optimise = true; break;
                 case "-g": debug = true; break;
@@ -72,12 +76,19 @@ public abstract class HarnessCommand : Command {
             }
         }
 
-        return new(files, harness, doc, optimise, debug, exclusivity);
+        return new(files, harness, doc, optimise, debug, exclusivity, bless);
     }
 
     public override int Run(IReadOnlyList<string> arguments) {
         if (Parse(arguments) is not { } options) {
             return BadUsage();
+        }
+
+        // A package's generator snapshots run first (docs/08 §8.8); a package
+        // of generators alone has nothing else to test.
+        var snapshots = Kind == TestKind.Test && options.Files.Count == 0 ? Snapshots(options.Bless) : null;
+        if (snapshots is { HasSources: false } only) {
+            return only.Outcome.Failed == 0 ? 0 : 1;
         }
 
         if (Program(options) is not { } program) {
@@ -86,9 +97,30 @@ public abstract class HarnessCommand : Command {
 
         var executable = Path.Combine(Path.GetTempPath(), $"sable-{Name}-{Guid.NewGuid():N}");
         try {
-            return Build(program.Trees, program.Directory, options, executable) ?? Execute(executable, options.HarnessArguments);
+            var code = Build(program.Trees, program.Directory, options, executable) ?? Execute(executable, options.HarnessArguments);
+            return snapshots is { Outcome.Failed: > 0 } ? 1 : code;
         } finally {
             File.Delete(executable);
+        }
+    }
+
+    /// <summary>
+    ///     The generator snapshot cases of the package in this directory, run;
+    ///     null when it has none (or there is no package here).
+    /// </summary>
+    static (SnapshotOutcome Outcome, bool HasSources)? Snapshots(bool bless) {
+        try {
+            var workspace = Workspace.Load(Directory.GetCurrentDirectory());
+            var member = workspace.Current ?? workspace.Members[0];
+            if (GeneratorSnapshots.Run(member.Name, member.Directory, bless, Console.Out) is not { } outcome) {
+                return null;
+            }
+
+            var hasSources = member.LibrarySources().Count > 0
+                || new[] { "tests", "benches" }.Any(d => Directory.Exists(Path.Combine(member.Directory, d)));
+            return (outcome, hasSources);
+        } catch (Exception e) when (e is PackageException or ManifestException or IOException) {
+            return null;
         }
     }
 

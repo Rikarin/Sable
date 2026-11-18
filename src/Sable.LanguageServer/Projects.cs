@@ -15,11 +15,12 @@ namespace Sable.LanguageServer;
 /// <param name="Dependencies">Every file of every package it depends on, transitively, that a build compiles with it.</param>
 public sealed record LanguageProject(string Name, string Directory, IReadOnlyList<string> Features, IReadOnlyList<LanguageProjectFile> Dependencies) {
     /// <summary>
-    ///     Runs the package's source generators (docs/08 §8.7) over its
-    ///     documents as they are: what they write, and what they report. None
-    ///     for a package that has no generators it can see.
+    ///     Runs the source generators (docs/08 §8.7) over the package's
+    ///     documents and its dependencies' files, as they are: what they
+    ///     write, and what they report about the documents. None for a package
+    ///     with no generators in reach.
     /// </summary>
-    public Func<IReadOnlyList<SyntaxTree>, GeneratedTrees>? Generate { get; init; }
+    public Func<IReadOnlyList<SyntaxTree>, IReadOnlyList<SyntaxTree>, GeneratedTrees>? Generate { get; init; }
 
     /// <summary>The attributes its generators answer to on types, which its files may write (docs/08).</summary>
     public IReadOnlyList<string> GeneratorAttributes { get; init; } = [];

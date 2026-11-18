@@ -74,7 +74,7 @@ internal sealed partial class Analysis {
         string key,
         IReadOnlyList<SyntaxTree> dependencies,
         Func<SyntaxTree, IReadOnlyList<SyntaxTree>> libraryFor,
-        Func<IReadOnlyList<SyntaxTree>, GeneratedTrees>? generate = null
+        Func<IReadOnlyList<SyntaxTree>, IReadOnlyList<SyntaxTree>, GeneratedTrees>? generate = null
     ) {
         var trees = snapshot.Documents.Values
             .Where(d => snapshot.KeyOf(d) == key)
@@ -84,7 +84,7 @@ internal sealed partial class Analysis {
 
         // What the package's generators write for its documents, as they are
         // now (docs/08 §8.7): compiled with them, as a dependency's files are.
-        var generated = generate?.Invoke(trees) ?? GeneratedTrees.None;
+        var generated = generate?.Invoke(trees, dependencies) ?? GeneratedTrees.None;
         if (generated.Trees.Count > 0) {
             dependencies = [..generated.Trees, ..dependencies];
         }

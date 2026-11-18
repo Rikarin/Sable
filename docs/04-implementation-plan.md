@@ -1805,8 +1805,25 @@ longer written. `PackageBuilder` puts each generated file right after the
 file it was written for, and into that file's unit in an incremental build.
 The language server runs a member's generators on its documents for each
 analysis, compiles their output as dependency files, and shows their
-messages on the attribute. Dependencies' generated files come from disk,
-and each `generators/` directory is a project of its own.
+messages where they point. Its dependencies' generators run too, over their
+files as the editor has them. Each `generators/` directory is a project of
+its own, checked against the rules as it is edited, and so is each snapshot
+case under `generators/tests/`.
+
+Before the requests are written, the package's files, its dependencies' and
+what their generators wrote are bound without bodies (`GeneratorRequests`).
+That resolves each field's, payload's, parameter's and return type into a
+`TypeRef` line table, written arguments-first so the reader builds each type
+from those before it. A type's conformances are every protocol it
+`Satisfies`, which covers extensions. Locations are `declaration:part`
+indexes into the spans the request kept, so `output.error(_, at:)` lands on a
+field, a case or a parameter. A package generator (`fn (_: Package, into:)`)
+gets one request with all its declarations and the manifest's
+`[generators] inputs`. With `always: true` it runs with none, and its files go
+beside the package's first file with a module, or into `inModule:`.
+`sable test` runs `generators/tests/<case>/` first (`GeneratorSnapshots`): it
+generates, compiles the case with the output, and compares both with
+`expected/`. `--bless` rewrites `expected/`.
 
 ### Not built in Phase 5
 

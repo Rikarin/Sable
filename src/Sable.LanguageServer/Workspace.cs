@@ -187,6 +187,18 @@ internal sealed class Workspace {
     }
 
     /// <summary>The source files under a folder, skipping build output, dependencies and hidden folders.</summary>
+    /// <summary>
+    ///     A generator snapshot case's <c>expected/</c> (docs/08 §8.8): what a
+    ///     generator should write, kept to compare with, not compiled.
+    /// </summary>
+    static bool IsGeneratorSnapshot(string directory) {
+        var testCase = Path.GetDirectoryName(directory);
+        var tests = Path.GetDirectoryName(testCase);
+        return Path.GetFileName(directory) == "expected"
+            && Path.GetFileName(tests) == "tests"
+            && Path.GetFileName(Path.GetDirectoryName(tests)) == "generators";
+    }
+
     public static IEnumerable<string> SourceFilesUnder(string root) {
         var pending = new Stack<string>();
         pending.Push(root);
@@ -207,7 +219,7 @@ internal sealed class Workspace {
             foreach (var child in folders) {
                 var name = Path.GetFileName(child);
                 // vendor/ holds copies of dependencies, which their packages compile.
-                if (name.StartsWith('.') || name is "bin" or "obj" or "target" or "vendor" or "node_modules") {
+                if (name.StartsWith('.') || name is "bin" or "obj" or "target" or "vendor" or "node_modules" || IsGeneratorSnapshot(child)) {
                     continue;
                 }
 

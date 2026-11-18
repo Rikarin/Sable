@@ -35,6 +35,8 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
         sable_fuzz_push(data[i]);
     }
     if (sable_fuzz_check() < 0) {
+        fflush(stdout);
+        fprintf(stderr, "fromBytes accepted a record that does not write back as it was read\n");
         abort();
     }
     return 0;

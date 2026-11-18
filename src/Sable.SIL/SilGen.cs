@@ -835,6 +835,8 @@ public sealed partial class SilGen {
             return null;
         }
 
+        substitution = WithAssociatedTypes(symbol, substitution);
+
         var arguments = new List<string>();
         foreach (var parameter in TypeParametersOf(symbol)) {
             // Never has no values to lower, and is still an argument: the
@@ -869,6 +871,40 @@ public sealed partial class SilGen {
         _instanceOrigins[name] = (symbol, substitution, _loweringInstance);
         _pending.Enqueue((symbol, name, type, substitution));
         return (name, type);
+    }
+
+    /// <summary>
+    ///     A protocol's default implementation, for the type Self stands for:
+    ///     its associated types too, which its body names bare — 'Item' in
+    ///     an extension of Container is Self.Item, Int for a Pair whose
+    ///     'first' returns one. Self decides them, so they are not part of
+    ///     the instance's name.
+    /// </summary>
+    static TypeSubstitution WithAssociatedTypes(FunctionSymbol symbol, TypeSubstitution substitution) {
+        if (Owner(symbol)?.OriginalDefinition is not { TypeKind: TypeKind.Protocol, SelfTypeParameter: { } self } protocol
+            || substitution.Lookup(self) is null) {
+            return substitution;
+        }
+
+        var map = substitution.Parameters.ToDictionary(p => p, p => substitution.Lookup(p)!);
+        var seen = new HashSet<NamedTypeSymbol>(ReferenceEqualityComparer.Instance);
+        var pending = new Stack<NamedTypeSymbol>([protocol]);
+        while (pending.TryPop(out var current)) {
+            if (!seen.Add(current.OriginalDefinition)) {
+                continue;
+            }
+
+            foreach (var associated in current.OriginalDefinition.AssociatedTypes) {
+                // Self.Item, read through what Self is.
+                map.TryAdd(associated, substitution.Apply(new DependentMemberTypeSymbol(self, associated)));
+            }
+
+            foreach (var refined in current.OriginalDefinition.BaseTypes.OfType<NamedTypeSymbol>().Where(static b => b.TypeKind == TypeKind.Protocol)) {
+                pending.Push(refined);
+            }
+        }
+
+        return new(map);
     }
 
     /// <summary>
@@ -7720,9 +7756,16 @@ public sealed partial class SilGen {
         /// </summary>
         TypeSubstitution CallSubstitution(BoundCall call, FunctionSymbol callee) {
             // An array extension's member: what its element is, from the array's.
-            var receiver = call.Receiver is not { } r ? TypeSubstitution.Empty
-                : OwnerOf(callee) is { ExtendedArray: not null } carrier ? Compilation.MatchArray(carrier, Sub(r.Type)) ?? TypeSubstitution.Empty
-                : TypeSubstitution.For(Sub(r.Type));
+            // In a protocol's default implementation, 'first()' is called on
+            // self: the type Self stands for, whose own type arguments
+            // a generic conformer's member needs.
+            var receiverOf = call.Receiver is { } r ? Sub(r.Type)
+                : OwnerOf(call.Function)?.OriginalDefinition is { TypeKind: TypeKind.Protocol, SelfTypeParameter: { } implicitSelf }
+                    ? substitution.Lookup(implicitSelf)
+                    : null;
+            var receiver = receiverOf is null ? TypeSubstitution.Empty
+                : OwnerOf(callee) is { ExtendedArray: not null } carrier ? Compilation.MatchArray(carrier, receiverOf) ?? TypeSubstitution.Empty
+                : TypeSubstitution.For(receiverOf is NamedTypeSymbol named && ConstructedOwner(named, callee) is { } owner ? owner : receiverOf);
             // A local function sees the type parameters around it as this
             // instance has them.
             var map = IsLocalFunction(callee) ? substitution.Parameters.ToDictionary(p => p, p => substitution.Lookup(p)!) : new Dictionary<TypeParameterSymbol, TypeSymbol>();

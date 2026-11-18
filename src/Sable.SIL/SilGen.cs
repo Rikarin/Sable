@@ -3921,6 +3921,16 @@ public sealed partial class SilGen {
             // lowered into a block of its own, which is then dropped.
             _current ??= function.AddBlock();
             instruction.Location ??= _location;
+
+            // A UnitValue is only a marker, defined nowhere: where one is used
+            // as a value — `let x = f()` for an f returning nothing, `(f(), 1)`,
+            // `[f()]` — it is the empty tuple, made here.
+            for (var i = 0; i < instruction.Operands.Count; i++) {
+                if (instruction.Operands[i] is UnitValue) {
+                    instruction.SetOperand(i, _current.Append(new TupleInst(new TupleType([])) { Location = instruction.Location }));
+                }
+            }
+
             return _current.Append(instruction);
         }
 

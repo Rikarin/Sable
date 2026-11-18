@@ -771,7 +771,8 @@ public sealed class SilParser {
             }
 
             case "tuple": {
-                if (ParseType() is not TupleType tupleType) {
+                // `$()` reads as Unit, the empty tuple's other spelling.
+                if (ParseType() is not { } parsed || (parsed == SilType.Unit ? new TupleType([]) : parsed) is not TupleType tupleType) {
                     throw new SilParseException("tuple needs a tuple type", line);
                 }
 

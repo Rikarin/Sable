@@ -36,7 +36,7 @@ function task(command, args, cwd, scope, definition) {
     scope,
     name,
     "sable",
-    new vscode.ProcessExecution(sable.binary(), [command, ...args], { cwd }),
+    new vscode.ProcessExecution(sable.binary(cwd), [command, ...args], { cwd }),
     known?.matcher === false ? [] : ["$sable"],
   );
   if (known) {
@@ -86,7 +86,7 @@ const provider = {
     }
 
     const scope = resolved.scope ?? vscode.TaskScope.Workspace;
-    const folder = typeof scope === "object" ? scope.uri.fsPath : vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
+    const folder = typeof scope === "object" ? scope.uri.fsPath : sable.folderOf()?.uri.fsPath ?? process.cwd();
     const cwd = typeof definition.cwd === "string" ? definition.cwd.replace(/\$\{workspaceFolder\}/g, folder) : folder;
     const args = Array.isArray(definition.args) ? definition.args.map(String) : [];
     return task(definition.command, args, cwd, scope, definition);

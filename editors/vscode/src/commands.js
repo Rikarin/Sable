@@ -144,7 +144,7 @@ async function newPackage() {
     canSelectFiles: false,
     canSelectFolders: true,
     openLabel: "Create Here",
-    defaultUri: vscode.workspace.workspaceFolders?.[0]?.uri,
+    defaultUri: sable.folderOf()?.uri,
   });
   if (!parent?.[0]) {
     return;

@@ -364,7 +364,14 @@
     },
     "lints": {
       "type": "object",
-      "additionalProperties": false,
+      "additionalProperties": {
+        "enum": [
+          "allow",
+          "warn",
+          "error",
+          "deny"
+        ]
+      },
       "properties": {
         "unused_local": {
           "enum": [
@@ -405,6 +412,53 @@
             "error",
             "deny"
           ]
+        },
+        "unused_result": {
+          "enum": [
+            "allow",
+            "warn",
+            "error",
+            "deny"
+          ]
+        },
+        "shadowed_local": {
+          "enum": [
+            "allow",
+            "warn",
+            "error",
+            "deny"
+          ]
+        },
+        "self_assignment": {
+          "enum": [
+            "allow",
+            "warn",
+            "error",
+            "deny"
+          ]
+        },
+        "unused_private": {
+          "enum": [
+            "allow",
+            "warn",
+            "error",
+            "deny"
+          ]
+        },
+        "constant_arithmetic": {
+          "enum": [
+            "allow",
+            "warn",
+            "error",
+            "deny"
+          ]
+        },
+        "plugins": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Lint plugins: .NET assemblies of more lints, relative to the manifest (docs/05 §5.7)."
         }
       }
     },

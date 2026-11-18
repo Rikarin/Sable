@@ -1,0 +1,34 @@
+# Sable for Helix: copy into ~/.config/helix/languages.toml (or a project's
+# .helix/languages.toml). The language server gives diagnostics and lints,
+# completion, hover, navigation, rename, signature help, inlay hints and
+# formatting. Helix highlights through tree-sitter, and Sable has no
+# tree-sitter grammar yet: files are recognised and served, not coloured.
+
+[[language]]
+name = "sable"
+scope = "source.sable"
+file-types = ["sb"]
+shebangs = ["sable"]
+roots = ["workspace.sb", "package.sb", "sable.toml"]
+comment-tokens = ["//", "///"]
+block-comment-tokens = { start = "/*", end = "*/" }
+indent = { tab-width = 4, unit = "    " }
+language-servers = ["sable-lsp"]
+# Formatting goes through the server, which runs `sable fmt`'s formatter.
+auto-format = true
+
+[language.auto-pairs]
+'(' = ')'
+'{' = '}'
+'[' = ']'
+'"' = '"'
+"'" = "'"
+
+[language-server.sable-lsp]
+command = "sable"
+args = ["lsp"]
+
+# What the server takes at start; both on by default.
+[language-server.sable-lsp.config]
+inlayHints = { enable = true }
+lints = { enable = true }

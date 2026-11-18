@@ -138,7 +138,7 @@ public sealed class LanguageServerTests : IDisposable {
         await using var client = new TestClient();
         await client.InitializeAsync();
         const string uri = "file:///tmp/broken.sb";
-        var text = "module App\n\nfn f() -> Int {\n    let s: String = 1\n    return 2\n}\n";
+        var text = "module App\n\nfn f() -> Int {\n    let _s: String = 1\n    return 2\n}\n";
         await client.OpenAsync(uri, text);
 
         var diagnostics = await client.DiagnosticsAsync(uri, static d => d.GetArrayLength() > 0);

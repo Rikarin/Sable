@@ -241,6 +241,28 @@ public sealed class FeatureTests {
     }
 
     [Fact]
+    public async Task ALintsOwnFixIsAQuickFix() {
+        await using var client = new TestClient();
+        await client.InitializeAsync();
+        const string uri = "file:///tmp/self-assignment.sb";
+        const string text = "module App\n\nfn clamp(_ value: Int, _ high: Int) -> Int {\n    var result = value\n    if result > high {\n        result = result\n    }\n    return result\n}\n";
+        await client.OpenAsync(uri, text);
+        var diagnostics = await client.DiagnosticsAsync(uri, static d => d.EnumerateArray().Any(static e => e.GetString("code") == "S3391"));
+        var actions = await client.RequestAsync("textDocument/codeAction", new {
+            textDocument = new { uri },
+            range = new { start = new { line = 5, character = 0 }, end = new { line = 5, character = 0 } },
+            context = new { diagnostics }
+        });
+
+        var remove = actions.EnumerateArray().First(static a => a.GetString("title") == "Remove the assignment");
+        Assert.True(remove.GetBool("isPreferred"));
+        var edit = remove.Get("edit")!.Value.Get("changes")!.Value.Get(uri)!.Value[0];
+        Assert.Equal("", edit.GetString("newText"));
+        Assert.Equal(5, StartLine(edit));
+        Assert.Equal(6, edit.Get("range")!.Value.Get("end")!.Value.GetInt("line"));
+    }
+
+    [Fact]
     public async Task ACompletionItemIsDocumentedWhenResolved() {
         await using var client = await OpenAsync();
         var completion = await client.AtAsync("textDocument/completion", Uri, Shapes, At("print(total"));

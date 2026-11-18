@@ -132,6 +132,11 @@ public sealed partial class LanguageServer {
     async Task<JsonNode?> InlayHintsAsync(WorkspaceSnapshot snapshot, JsonElement parameters, CancellationToken cancellation) {
         var uri = parameters.Get("textDocument")?.GetString("uri") ?? "";
         var document = snapshot.Find(uri) ?? throw new LspException(LspException.InvalidParams, $"'{uri}' is not open");
+        if (!_inlayHints) {
+            // Turned off by the editor's 'inlayHints' setting.
+            return new JsonArray();
+        }
+
         var range = parameters.Get("range") is { } r ? ReadRange(r) : new LspRange(default, new(int.MaxValue, 0));
         var start = document.Lines.OffsetOf(range.Start);
         var end = document.Lines.OffsetOf(range.End);

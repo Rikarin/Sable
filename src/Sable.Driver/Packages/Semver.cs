@@ -429,13 +429,21 @@ public sealed class VersionReq {
         }
 
         // A partial version: major[.minor[.patch[-pre]]], with '*' or 'x' for what is left out.
+        // Build metadata goes first: a '-' in it ('1.0.0+b-2') starts no pre-release.
         string[] pre = [];
-        var dash = rest.IndexOf('-', StringComparison.Ordinal);
         var plus = rest.IndexOf('+', StringComparison.Ordinal);
         if (plus >= 0) {
+            // Ignored, as a version's is in comparing; but checked, so that junk after a '+' is not taken.
+            var build = rest[(plus + 1)..];
+            if (build.Split('.').Any(static p => p.Length == 0 || !p.All(static c => char.IsAsciiLetterOrDigit(c) || c == '-'))) {
+                error = $"'{text}' is not a version requirement: '{build}' is not valid build metadata";
+                return false;
+            }
+
             rest = rest[..plus];
         }
 
+        var dash = rest.IndexOf('-', StringComparison.Ordinal);
         if (dash >= 0) {
             pre = rest[(dash + 1)..].Split('.');
             rest = rest[..dash];
@@ -499,34 +507,38 @@ public sealed class VersionReq {
         var low = new SemVersion(major, minor, patch, pre);
 
         // The first version past what a partial version names.
-        SemVersion PastPartial() => numbers.Count switch {
+        SemVersion PastPartial() => checked(numbers.Count switch {
             1 => new SemVersion(major + 1, 0, 0),
             2 => new SemVersion(major, minor + 1, 0),
             _ => new SemVersion(major, minor, patch + 1),
-        };
+        });
 
         static VersionSet Range(SemVersion low, SemVersion high) => VersionSet.Between(low, true, high.FirstPrerelease, false);
 
-        set = op switch {
-            "" or "^" => Range(low, numbers.Count switch {
-                _ when major > 0 => new SemVersion(major + 1, 0, 0),
-                1 => new SemVersion(1, 0, 0),
-                2 when minor > 0 => new SemVersion(0, minor + 1, 0),
-                2 => new SemVersion(0, 1, 0),
-                _ when minor > 0 => new SemVersion(0, minor + 1, 0),
-                _ => new SemVersion(0, 0, patch + 1),
-            }),
-            "~" => Range(low, numbers.Count == 1 ? new SemVersion(major + 1, 0, 0) : new SemVersion(major, minor + 1, 0)),
-            "=" => numbers.Count == 3 ? VersionSet.Exactly(low) : Range(low, PastPartial()),
-            ">=" => VersionSet.AtLeast(low),
-            ">" => numbers.Count == 3 ? VersionSet.Between(low, false, null, false) : VersionSet.AtLeast(PastPartial()),
-            "<" => VersionSet.Below(numbers.Count == 3 && prerelease ? low : low.FirstPrerelease),
-            "<=" => numbers.Count == 3 ? VersionSet.Between(null, false, low, true) : VersionSet.Below(PastPartial().FirstPrerelease),
-            _ => VersionSet.None,
-        };
-
-        if (wildcard) {
-            set = Range(low, PastPartial());
+        // A range's end is the next major, minor or patch; past the largest
+        // number there is none, and wrapping round to a negative one would
+        // make '^9223372036854775807' match nothing, silently.
+        try {
+            set = wildcard ? Range(low, PastPartial()) : checked(op switch {
+                "" or "^" => Range(low, numbers.Count switch {
+                    _ when major > 0 => new SemVersion(major + 1, 0, 0),
+                    1 => new SemVersion(1, 0, 0),
+                    2 when minor > 0 => new SemVersion(0, minor + 1, 0),
+                    2 => new SemVersion(0, 1, 0),
+                    _ when minor > 0 => new SemVersion(0, minor + 1, 0),
+                    _ => new SemVersion(0, 0, patch + 1),
+                }),
+                "~" => Range(low, numbers.Count == 1 ? new SemVersion(major + 1, 0, 0) : new SemVersion(major, minor + 1, 0)),
+                "=" => numbers.Count == 3 ? VersionSet.Exactly(low) : Range(low, PastPartial()),
+                ">=" => VersionSet.AtLeast(low),
+                ">" => numbers.Count == 3 ? VersionSet.Between(low, false, null, false) : VersionSet.AtLeast(PastPartial()),
+                "<" => VersionSet.Below(numbers.Count == 3 && prerelease ? low : low.FirstPrerelease),
+                "<=" => numbers.Count == 3 ? VersionSet.Between(null, false, low, true) : VersionSet.Below(PastPartial().FirstPrerelease),
+                _ => VersionSet.None,
+            });
+        } catch (OverflowException) {
+            error = $"'{text}' is not a version requirement: its numbers are too large to have a next version";
+            return false;
         }
 
         error = "";

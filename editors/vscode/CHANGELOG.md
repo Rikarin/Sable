@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Every folder of a multi-root workspace: `sable.path` and `${workspaceFolder}` are the folder's.
+- `sable.inlayHints.enable` and `sable.lints.enable`, to turn off the server's inlay hints and lints.
+- Tests of the extension's own code, run under node against a stand-in for VS Code.
+- A Debug profile in the Test Explorer: a test runs under the debugger, in a harness built with `-g`.
+
 ## 0.2.0
 
 - Formatting, through the language server's `textDocument/formatting` (`sable fmt`'s one style).

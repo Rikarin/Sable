@@ -13,9 +13,10 @@ sable new <name> [--lib|--bin]     scaffold a package
 sable init                         scaffold in the current directory
 sable build [--release] [--target] compile
 sable run [-- args...]             build and execute
-sable test [filter] [--doc]        run @test functions and doc examples
+sable test [filter] [--doc] [-j n] [--timeout s]  run @test functions and doc examples
 sable bench [filter]               run @bench functions, compare to baseline
 sable check                        type-check only, no codegen (fast)
+sable fix [--check]                apply the fixes the lints suggest
 sable fmt [--check]                format; no options, ever
 sable doc [--open] [--json]        generate documentation + symbol graph
 sable add <pkg>[@<ver>] [--dev]    add a dependency, update the lock
@@ -592,3 +593,7 @@ the declarations but cannot read, write or run anything.
 - Third-party lints are packages that implement a `Lint` protocol against the
   `SemanticModel` API, loaded as plugins by `sable check`. This only works
   because the semantic layer was designed as a product in Phase 1.
+  Today a plugin is a .NET assembly of `Sable.Symbols.Lint` subclasses,
+  named by `[lints] plugins = [...]` or `sable lint --plugin`.
+- `sable fix` applies the fixes lints carry (`var` to `let`, an unused import
+  removed, ...), and `sable fix --check` says what it would change.

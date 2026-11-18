@@ -1593,7 +1593,10 @@ public sealed partial class Compilation {
     ///     precede the declaration it extends, in this file or another.
     /// </remarks>
     void AttachExtensions() {
-        foreach (var (declaration, container, scope) in Extensions) {
+        // By index, not 'foreach': an extension written inside another is
+        // declared, and so added to the list, while its outer one is attached.
+        for (var i = 0; i < Extensions.Count; i++) {
+            var (declaration, container, scope) = Extensions[i];
             CurrentScope = scope;
 
             if (IsArrayExtension(declaration)) {

@@ -34,6 +34,12 @@ public sealed partial class LanguageServer {
     /// </summary>
     volatile bool _diagnoseClosed = true;
 
+    /// <summary>The editor's <c>inlayHints.enable</c>: off, the server answers no hints.</summary>
+    volatile bool _inlayHints = true;
+
+    /// <summary>The editor's <c>lints.enable</c>: off, the lints are not reported as one types.</summary>
+    volatile bool _lints = true;
+
     /// <summary>The folders the client opened with: every workspace folder, or else the root.</summary>
     static IEnumerable<string> FoldersOf(JsonElement parameters) {
         if (parameters.Get("workspaceFolders") is { ValueKind: JsonValueKind.Array } folders && folders.GetArrayLength() > 0) {
@@ -74,7 +80,28 @@ public sealed partial class LanguageServer {
         if (settings.Get("diagnostics")?.Get("workspace") is { ValueKind: JsonValueKind.True or JsonValueKind.False } workspace) {
             _diagnoseClosed = workspace.ValueKind == JsonValueKind.True;
         }
+
+        if (Enabled(settings, "inlayHints") is { } hints) {
+            _inlayHints = hints;
+        }
+
+        if (Enabled(settings, "lints") is { } lints) {
+            _lints = lints;
+        }
     }
+
+    /// <summary>A setting written <c>{ "enable": b }</c>, or as <c>b</c> alone.</summary>
+    static bool? Enabled(JsonElement settings, string name) =>
+        settings.Get(name) switch {
+            { ValueKind: JsonValueKind.True } => true,
+            { ValueKind: JsonValueKind.False } => false,
+            { ValueKind: JsonValueKind.Object } section => section.Get("enable") switch {
+                { ValueKind: JsonValueKind.True } => true,
+                { ValueKind: JsonValueKind.False } => false,
+                _ => null,
+            },
+            _ => null,
+        };
 
     /// <summary>
     ///     <c>initialized</c>: the client is ready for the server's requests.

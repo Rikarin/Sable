@@ -143,7 +143,9 @@ public sealed partial class LanguageServer {
     /// </summary>
     async Task<IReadOnlyList<Diagnostic>> AllDiagnosticsAsync(Analysis analysis, Document document, bool waitForChecks, CancellationToken cancellation) {
         var found = new List<Diagnostic>(analysis.DiagnosticsOf(document.Tree, cancellation));
-        found.AddRange(analysis.LintsOf(document.Tree, cancellation));
+        if (_lints) {
+            found.AddRange(analysis.LintsOf(document.Tree, cancellation));
+        }
         var checks = waitForChecks ? await RootSummariesAsync(analysis).WaitAsync(cancellation) : RootSummariesIfDone(analysis);
         if (checks is not null) {
             found.AddRange(checks.ChecksOf(document.Tree));

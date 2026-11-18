@@ -177,7 +177,12 @@ Copy Roslyn's **red/green tree** design exactly:
 ### 0.5 Exit criteria
 
 - [ ] Every construct in `SYNTAX.md` parses
-- [ ] Round-trip invariant holds on a 2,000-file corpus
+- [ ] Round-trip invariant holds on a 2,000-file corpus — it holds on all
+      the corpus there is: `RoundTripCorpusTests` takes every `.sb` file
+      (140) and every `sable` block in the Markdown (418), broken ones
+      included, each whole and cut short at seven points, and requires the
+      text back exactly and spans that tile (it found the lexer dropping a
+      byte order mark). 558 inputs, not 2,000 files
 - [x] Incremental reparse of a 10,000-line file after a one-character edit
       completes in < 2 ms — about 1 ms in Release (0.9 ms at best, 1.2-1.5 ms
       median under heavy load), against 20-35 ms for a full parse
@@ -186,7 +191,27 @@ Copy Roslyn's **red/green tree** design exactly:
       and `tests/programs/` to being formatted already
 - [x] A syntax-tree visualiser exists (Roslyn's Syntax Visualiser equivalent)
       — `tools/Sable.Visualiser`
-- [ ] Fuzzer runs for 24h without a crash or an assertion failure
+- [ ] Fuzzer runs for 24h without a crash or an assertion failure — the
+      fuzzers exist and run nightly (`.github/workflows/fuzz.yml`, a new
+      seed each night, `SABLE_FUZZ_SEED`/`SABLE_FUZZ_SCALE` to reproduce):
+      the parser's random-input round trips; `CompilerFuzzTests`, which
+      mutates the repository's programs at token boundaries (a token for
+      another of its kind, runs deleted, duplicated, spliced, swapped)
+      through parsing, binding, the semantic model, constant evaluation,
+      lowering, the SIL verifier and the passes, with a time limit per
+      input and failures minimised by delta debugging; and
+      `ResolverFuzzTests`, random registries (cycles, self-dependencies,
+      yanked versions, pre-releases, locks naming what is gone) through
+      PubGrub, every answer checked against every requirement and every
+      failure without pre-releases against trying every assignment, plus
+      the version parsers and the set algebra. The compiler fuzzer is
+      guided by features (syntax kinds, diagnostic codes, the stage
+      reached), not by code coverage, which would need the compiler
+      instrumented, and no fuzzer has yet run for 24 hours on end. Found
+      and fixed so far: an extension nested in an extension threw while
+      attaching; a self-dependency hung the resolver and crashed its
+      explanation; a `-` in a requirement's build metadata threw; ranges
+      past the largest number wrapped round to nothing
 
 ---
 
@@ -1351,11 +1376,29 @@ Full design in [05-toolchain.md](05-toolchain.md).
 - **Proved on the library:** `tests/lib/CollectionsTests.sb` and
   `tests/lib/TextTests.sb` test Sable.Collections and Sable.Text with
   `@test`/`@bench`, and the test suite runs them.
+- **Later (#205).** A test may be `async`: each test's closure is
+  `async () -> String?` and the harness's entry point and `runTests` are
+  async, awaiting it (a benchmark still may not be, S3104). What a test
+  throws is in its failure's report (`the test threw an error: Oops.Bad`,
+  as interpolation describes it). `@test(traps)` passes by trapping and fails
+  by returning, `@test(traps: "out of range")` also wants that in the trap's
+  message; a failed assertion is not the trap. In one process such a test
+  is ignored, said so. `sable test` now runs the processes itself
+  (`TestRunner.cs`) from what the harness's `--describe` says: several at
+  once (`-j`, one per processor by default), each line as its test
+  finishes, failures reported in declaration order, the same text the
+  harness's own runner prints; `--timeout <s>` stops and fails a test that
+  runs longer, and one running over 60 s with no limit is said to be.
+  `--harness-out <path>` (with `-g`) builds the harness and runs nothing, so
+  the VS Code Test Explorer's Debug profile starts `<harness> --run-test
+  <name>` under the debugger.
 - **Deferred:** a `blackBox` to keep the optimiser from deleting a
-  benchmark's work (it needs a core builtin); async tests; a parallel test
-  runner; timeouts for a hung test; printing the error a throwing test threw;
-  `#[should_panic]`-style expected traps; snapshot and property testing
-  (docs/06 lists them under Sable.Testing).
+  benchmark's work (it needs a core builtin); async benchmarks; snapshot and
+  property testing (docs/06 lists them under Sable.Testing; #73, #107); a
+  coverage tool (it needs the code generator to count lines, as
+  `-fprofile-instr-generate` does, and the Test Explorer then a Coverage
+  profile); a time limit inside the harness's own runner, which would need a
+  builtin to wait on a child with one.
 
 ### Packages, as implemented
 
@@ -1588,6 +1631,8 @@ the toolchain:
 - The Test Explorer, from `sable test --list`. A run is one `sable test <names>
   --exact` per package, read as it prints; a failure carries the differing
   values as expected and actual output.
+  A Debug profile builds the package's harness with `-g --harness-out` and
+  debugs each selected test in it, one after another.
 - A `sable` debug type. It builds the package (its dev profile has debug
   information) or a lone file with `-g`. It writes the formatter plugin with
   the new `sable debug --write-plugin`, and becomes an `lldb-dap` (or
@@ -1604,6 +1649,25 @@ were checked against the real `sable`. Debugging was checked by driving Xcode's
 breakpoint in a package build is verified and hit, frames are named, and a
 `String` local shows its text. Not checked: CodeLLDB, and the extension inside
 VS Code's own test host.
+
+Later (#206): `npm test` also runs the extension's own code under plain node
+against a stand-in for the `vscode` module and the language client
+(`test/vscode-mock.js`, no display and no VS Code download): activation
+against the manifest, the server's command and settings, tasks, Run and
+Debug, lenses, quick fixes, debug configurations (the lldb-dap one included;
+CodeLLDB's only as far as being chosen), and the Test Explorer against a
+`sable` that prints what the real one does. The server takes
+`inlayHints.enable` and `lints.enable` as initialization options or
+configuration, which the extension sets from `sable.inlayHints.enable` and
+`sable.lints.enable`; `sable.path` and `${workspaceFolder}` are those of the
+folder a file, task or test is in. Beyond VS Code, `editors/` has Vim and Neovim (syntax,
+filetype, indentation, and `lsp/sable.lua` for Neovim 0.11), Helix
+(`languages.toml`), Emacs (`sable-mode` with Eglot) and Sublime Text (the
+TextMate grammar, generated from VS Code's), checked by
+`editors/test/editors.test.js` — in Vim itself when it is installed, which
+CI's runner has. Not yet: a tree-sitter grammar (no tree-sitter CLI here to
+generate and test one), and so Zed and highlighting in Helix; Emacs is not
+loaded in any test.
 
 ### Formatting, docs, explain, repl and lints, as implemented
 
@@ -1678,8 +1742,32 @@ VS Code's own test host.
   manifest's `[lints]` table, once the package type-checks; a lint at
   `error` fails the check. `sable lint` does the same without the rest of
   the check, with levels from the command line over the manifest's; `sable
-  lint <paths>` lints loose files with levels given on the command line. Plugin loading of third-party lints is not
-  built.
+  lint <paths>` lints loose files with levels given on the command line.
+  Later (#204): `unused_result` (S3308), and `shadowed_local` (S3390: a
+  `let` in an inner block hiding one from a block around it; rebinding in
+  the same block and `if let x = x` are not), `self_assignment` (S3391),
+  `unused_private` (S3392: a private function or type named nowhere outside
+  its own declaration, every file of the module searched), and
+  `constant_arithmetic` (S3394: arithmetic on numbers written out that
+  overflows, or division by a zero written out, in a body — a `const`'s is
+  already the compiler's S3201). Deprecated use, unknown and misplaced
+  attributes are the compiler's (S3095, S3092, S3093), and a `catch` whose
+  `do` throws nothing has its body reported unreachable (S6005). A lint's
+  report can carry a fix (`Diagnostic.Fixes`, text edits): prefixing `_`,
+  renaming a parameter but keeping its label, removing an import or a
+  self-assignment, `var` to `let`, `let _ =` before a dropped result.
+  **`sable fix`** applies them to the package's own files (or to loose
+  files, with `sable lint`'s options), compiling and linting again after
+  each round until nothing is left, putting the files back if a round ever
+  broke the program; `--check` says what it would do. The language server
+  offers each lint's fix as its preferred quick fix. **Plugins**: a .NET
+  assembly whose public `Lint` subclasses are lints, loaded beside the
+  compiler by `[lints] plugins = ["path.dll"]` or `sable lint --plugin`;
+  their lints report as S3397, take levels and `@allow` like built-in
+  ones, and one that throws is reported (S3398) while the rest run. Not
+  yet: plugins written in Sable (they would need the semantic model exposed
+  to Sable code), and `_ = f()` (SYNTAX.md's discard) does not parse, so
+  the fix writes `let _ =`.
 
 ### Debugging, as implemented
 

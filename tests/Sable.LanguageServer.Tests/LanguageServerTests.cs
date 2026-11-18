@@ -154,6 +154,20 @@ public sealed class LanguageServerTests : IDisposable {
     }
 
     [Fact]
+    public async Task AUseAfterMoveIsPublished() {
+        // Move checking runs on SIL, which only a build used to lower (#130).
+        await using var client = new TestClient();
+        await client.InitializeAsync();
+        const string uri = "file:///tmp/moved.sb";
+        var text = "module App\n\n@noncopy struct H { var v: Int }\n\nfn take(_ h: consuming H) -> Int { return h.v }\n\nfn f() -> Int {\n    let h = H(v: 1)\n    let a = take(h)\n    return a + take(h)\n}\n";
+        await client.OpenAsync(uri, text);
+
+        var diagnostics = await client.DiagnosticsAsync(uri, static d => d.EnumerateArray().Any(static e => e.GetString("code") == "S3057"));
+        var moved = diagnostics.EnumerateArray().First(static e => e.GetString("code") == "S3057");
+        Assert.Equal(9, moved.Get("range")!.Value.Get("start")!.Value.GetInt("line"));
+    }
+
+    [Fact]
     public async Task ASignatureProblemIsPublishedInItsFile() {
         await using var client = new TestClient();
         await client.InitializeAsync();

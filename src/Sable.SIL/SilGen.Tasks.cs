@@ -46,7 +46,9 @@ public sealed partial class SilGen {
         var body = block.Append(new LoadInst(block.Append(new RefElementAddrInst(owned, TaskBody))));
         var value = block.Append(new ApplyInst(body, result));
         block.Append(new DestroyValueInst(body));
-        var some = block.Append(new EnumInst(optional, optional.CaseIndex("Some"), value));
+        // A body that gives nothing makes a Void?, whose 'Some' carries nothing.
+        var carried = optional.Cases[optional.CaseIndex("Some")].Payload is null ? null : value;
+        var some = block.Append(new EnumInst(optional, optional.CaseIndex("Some"), carried));
         block.Append(new StoreInst(some, block.Append(new RefElementAddrInst(owned, TaskResult)), StoreKind.Assign));
         block.Append(new DestroyValueInst(owned));
         block.Append(new ReturnInst(null));
@@ -92,7 +94,8 @@ public sealed partial class SilGen {
             End(receiver);
 
             var some = function.AddBlock();
-            var payload = Payload(some, optional.Cases[optional.CaseIndex("Some")].Payload!);
+            var payloadType = optional.Cases[optional.CaseIndex("Some")].Payload;
+            var payload = payloadType is null ? null : Payload(some, payloadType);
             var none = function.AddBlock();
             Jump(new SwitchEnumInst(result, [(optional.CaseIndex("Some"), some)], none));
             _current = none;
@@ -100,6 +103,13 @@ public sealed partial class SilGen {
             Emit(new CondFailInst(Emit(new IntegerLiteralInst(SilType.Bool, 1)), "a task finished without a result"));
             Jump(new UnreachableInst());
             _current = some;
+
+            // A task whose body gives nothing has finished, and that is all
+            // there is to know: its value is Void.
+            if (payload is null) {
+                return UnitValue.Instance;
+            }
+
             var copied = Owned(payload);
             if (!ReferenceEquals(copied, payload) || payload.Type.IsTrivial) {
                 Destroy(result);

@@ -261,6 +261,16 @@ public sealed partial class Compilation {
         return all;
     }
 
+    /// <summary>A declaration diagnostic found by a later check, in the file it was captured from.</summary>
+    void ReportDeclaration(Diagnostic diagnostic, SyntaxTree? tree) {
+        _declarationDiagnostics.Add(diagnostic);
+        if (tree is not null) {
+            lock (_files) {
+                _files[diagnostic] = tree;
+            }
+        }
+    }
+
     internal void ReportDeclaration(ErrorCode code, TextSpan span, string message) {
         var diagnostic = Diagnostic.Error(code, span, message);
         _declarationDiagnostics.Add(diagnostic);
@@ -574,6 +584,7 @@ public sealed partial class Compilation {
         ) {
             IsOpen = modifiers.Any(SyntaxKind.OpenKeyword),
             IsSealed = modifiers.Any(SyntaxKind.SealedKeyword),
+            IsFinal = modifiers.Any(SyntaxKind.FinalKeyword),
             IsAbstract = modifiers.Any(SyntaxKind.AbstractKeyword),
             IsNoncopyable = typeKind is TypeKind.Struct or TypeKind.Union
                 && attributes.Any(static a => a.Name.ToString().Trim() == "noncopy"),
@@ -709,6 +720,7 @@ public sealed partial class Compilation {
             IsMutating = declaration.Modifiers.Any(SyntaxKind.MutatingKeyword),
             IsOverride = declaration.Modifiers.Any(SyntaxKind.OverrideKeyword),
             IsOpen = declaration.Modifiers.Any(SyntaxKind.OpenKeyword),
+            IsFinal = declaration.Modifiers.Any(SyntaxKind.FinalKeyword),
             IsAbstract = declaration.Body is null && declaration.ExpressionBody is null,
             Builtin = BuiltinOf(declaration)
         };
@@ -740,6 +752,105 @@ public sealed partial class Compilation {
         TypeBinder.BindFunctionSignature(function, declaration);
         RecordDeclaration(declaration, function);
         AddTo(container, function);
+
+        // Whether it repeats an earlier overload is known once every
+        // parameter type is: after all the signatures are bound.
+        var tree = CurrentScope?.Tree;
+        TypeBinder.DeferLate(() => CheckRedeclaration(function, declaration, container, tree));
+    }
+
+    /// <summary>
+    ///     Overloads differ in their parameters' types or labels (SYNTAX.md §5):
+    ///     a function that takes what an earlier one of its name in the same
+    ///     scope takes, under the same labels, is a second declaration of it —
+    ///     whatever its result type, since a result alone cannot choose
+    ///     between them.
+    /// </summary>
+    /// <remarks>
+    ///     Generic functions, and functions in a constrained extension, may
+    ///     differ in their constraints, which this does not compare; they are
+    ///     left alone. So are a protocol's requirement and the default an
+    ///     extension of it gives, which are meant to match.
+    /// </remarks>
+    void CheckRedeclaration(FunctionSymbol function, FunctionDeclarationSyntax declaration, Symbol container, SyntaxTree? tree) {
+        if (!function.TypeParameters.IsEmpty || IsConstrained(container)) {
+            return;
+        }
+
+        var members = container switch {
+            ModuleSymbol module => module.GetMembers(function.Name),
+            NamedTypeSymbol type => type.GetMembers(function.Name),
+            ExtensionSymbol extension => extension.ExtendedType.GetMembers(function.Name),
+            _ => [],
+        };
+
+        foreach (var member in members) {
+            if (ReferenceEquals(member, function)) {
+                return;
+            }
+
+            if (member is not FunctionSymbol { FunctionKind: FunctionKind.Ordinary, TypeParameters.IsEmpty: true } earlier
+                || earlier.DeclaringSyntax.FirstOrDefault() is not FunctionDeclarationSyntax
+                || IsConstrained(earlier.ContainingSymbol)
+                || !SameSignature(earlier, function)
+                || earlier.ContainingSymbol is not { } earlierContainer
+                || (ProtocolOf(earlierContainer) is not null && !ReferenceEquals(earlierContainer, container))) {
+                continue;
+            }
+
+            var labels = string.Concat(function.Parameters.Select(static p => (p.Label ?? p.Name) + ":"));
+            var where = earlier.Location is { } location ? $" (already declared at offset {location.Start})" : string.Empty;
+            var diagnostic = Diagnostic.Error(
+                ErrorCode.ERR_DuplicateDeclaration,
+                declaration.Identifier.Span,
+                $"'{function.Name}({labels})' is already declared in this scope with the same parameters{where}; "
+                + "overloads differ in their parameter types or labels, not in their result type alone"
+            );
+            ReportDeclaration(diagnostic, tree);
+            return;
+        }
+
+        static NamedTypeSymbol? ProtocolOf(Symbol container) =>
+            (container is ExtensionSymbol extension ? extension.ExtendedType : container as NamedTypeSymbol)
+                is { TypeKind: TypeKind.Protocol } protocol
+                ? protocol
+                : null;
+
+        static bool IsConstrained(Symbol? container) =>
+            container is ExtensionSymbol extension
+            && (extension.DeclaringSyntax.FirstOrDefault() is ExtensionDeclarationSyntax { WhereClause: not null }
+                || extension.ExtendedType.ExtendedArray is not null);
+    }
+
+    /// <summary>
+    ///     True when two functions take the same thing the same way: as both
+    ///     static or both not, the same parameters under the same labels,
+    ///     passed alike, and implementing the same protocol, if either names one.
+    /// </summary>
+    static bool SameSignature(FunctionSymbol a, FunctionSymbol b) {
+        if (a.IsStatic != b.IsStatic || a.Parameters.Length != b.Parameters.Length) {
+            return false;
+        }
+
+        var explicitA = (a.ExplicitProtocol as NamedTypeSymbol)?.OriginalDefinition;
+        var explicitB = (b.ExplicitProtocol as NamedTypeSymbol)?.OriginalDefinition;
+        if (!ReferenceEquals(explicitA, explicitB)) {
+            return false;
+        }
+
+        for (var i = 0; i < a.Parameters.Length; i++) {
+            var (x, y) = (a.Parameters[i], b.Parameters[i]);
+            if ((x.Label ?? x.Name) != (y.Label ?? y.Name)
+                || x.Modifier != y.Modifier
+                || x.IsVariadic != y.IsVariadic
+                || x.Type.IsError
+                || y.Type.IsError
+                || !x.Type.Equals(y.Type)) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /// <summary>
@@ -867,7 +978,9 @@ public sealed partial class Compilation {
         var parameter = new ParameterSymbol(syntax.Identifier.Text, label, container, syntax, ordinal) {
             HasDefaultValue = syntax.DefaultValue is not null,
             IsVariadic = !syntax.EllipsisToken.IsNone,
-            Modifier = ModifierOf(syntax)
+            Modifier = ModifierOf(syntax),
+            IsEscaping = syntax.Attributes.Concat((syntax.Type as AttributedTypeSyntax)?.Attributes ?? [])
+                .Any(static a => a.Name.ToString().Trim() == "escaping"),
         };
 
         TypeBinder.BindParameterType(parameter, syntax);
@@ -919,6 +1032,8 @@ public sealed partial class Compilation {
             declaration.LetOrVarKeyword.Kind == SyntaxKind.VarKeyword
         ) {
             IsStatic = declaration.Modifiers.Any(SyntaxKind.StaticKeyword),
+            IsOverride = declaration.Modifiers.Any(SyntaxKind.OverrideKeyword),
+            IsFinal = declaration.Modifiers.Any(SyntaxKind.FinalKeyword),
             SetterAccessibility = SetterAccessibilityOf(declaration.Modifiers),
             IsLazy = declaration.Modifiers.Any(SyntaxKind.LazyKeyword),
             ReferenceKind = declaration.Modifiers.Any(SyntaxKind.WeakKeyword) ? ReferenceKind.Weak
@@ -1205,7 +1320,16 @@ public sealed partial class Compilation {
             )
         ];
 
-        function.ReturnTypeResolver = () => type;
+        // A protocol's 'init(seed: Int)' is a requirement, met by the
+        // conformer's own initialiser, and it makes a Self: through a T it
+        // makes a T.
+        if (type.TypeKind == TypeKind.Protocol) {
+            function.IsAbstract = declaration.Body is null;
+            function.ReturnTypeResolver = () => type.SelfTypeParameter ?? (TypeSymbol)type;
+        } else {
+            function.ReturnTypeResolver = () => type;
+        }
+
         RecordDeclaration(declaration, function);
         type.AddMember(function);
     }
@@ -1308,7 +1432,7 @@ public sealed partial class Compilation {
         TypeBinder.Defer(() => {
                 if (declaration.BaseTypes is { } constraints) {
                     parameter.Constraints = [
-                        ..constraints.Types.Select(syntax => TypeBinder.BindType(syntax, protocol, scope))
+                        ..constraints.Types.SelectMany(syntax => CompositionTypeSymbol.PartsOf(TypeBinder.BindType(syntax, protocol, scope)))
                     ];
                 }
 
@@ -1364,11 +1488,14 @@ public sealed partial class Compilation {
                 continue;
             }
 
-            var extension = new ExtensionSymbol(extended, declaration);
+            var extension = new ExtensionSymbol(extended, declaration) { DeclaringModule = scope?.Module };
             extension.TypeParameterAliases = AliasTypeParameters(declaration, extension, extended);
             RecordDeclaration(declaration, extension);
+            TypeBinder.BindExtensionWhereClause(extension, declaration, scope);
 
-            // ': P' on an extension is retroactive conformance.
+            // ': P' on an extension is retroactive conformance. With a 'where'
+            // clause it is conditional: 'extension Box: P where T: P' makes a
+            // Box<T> a P only where T is one, which the extension remembers.
             if (declaration.BaseTypes is { } baseTypes) {
                 var written = scope;
                 TypeBinder.Defer(() => {
@@ -1376,9 +1503,12 @@ public sealed partial class Compilation {
                             var bound = TypeBinder.BindType(baseType, extension, written);
                             CheckCoherence(extended, bound, written, baseType.Span);
                             extended.BaseTypes = extended.BaseTypes.Add(bound);
+                            extension.Conformances = extension.Conformances.Add(bound);
                         }
                     }
                 );
+
+                extended.Extensions = extended.Extensions.Add(extension);
             }
 
             foreach (var member in declaration.Members) {

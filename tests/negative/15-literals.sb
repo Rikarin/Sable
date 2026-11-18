@@ -1,7 +1,7 @@
 module Negative.Literals
 
 fn strayCharacter() -> Int {
-    return 1 ¤ 2   //! S0001 unexpected character //! S1002 expected an expression //! S2002 no symbol //! S6005
+    return 1 ¤ 2   //! S0001 unexpected character //! S1002 expected an expression //! S6005
 }
 
 fn unterminatedRawString() -> String {

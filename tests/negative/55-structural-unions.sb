@@ -69,7 +69,7 @@ fn anOptionalCaseIsSubsumed(_ v: Int | Int?) -> Int? {
     return v
 }
 
-fn anOpenExistentialIsNotACase(_ v: any Named | Point) -> Int {   //! S3130 'any Named'
+fn anOpenExistentialIsNotACase(_ v: any Named | Point) -> Int {   //! S3150 'any Named'
     return 0
 }
 

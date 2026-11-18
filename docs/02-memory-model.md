@@ -239,7 +239,7 @@ structs, custom arena types with lifetime parameters, and anything requiring
 variance reasoning. Sable rejects them with a diagnostic naming the fix:
 
 ```
-error[S0412]: cannot return a reference rooted in local 'tmp'
+error[S3061]: cannot return a reference rooted in local 'tmp'
   --> src/parse.sb:41:12
    |
 41 |     return &tmp.name

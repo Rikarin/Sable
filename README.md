@@ -50,16 +50,24 @@ tests, formats, documents and resolves packages.
 ## Repository layout
 
 ```
-docs/      design documents
-spec/      the language specification
-examples/  sample programs, also used as the lexer test corpus
-src/       the compiler, written in C# (see docs/04 for why)
-             Sable.Syntax   lexer, parser, trees, formatter
-             Sable.Symbols  symbols, declaration table, type binding
-             Sable.SIL      the mid-level IR: model, text, verifier, lowering, interpreter
-tools/     Sable.Syntax.Generator  generates the node classes
-             Sable.Visualiser        the syntax-tree visualiser
-tests/     the test suite
+docs/        design documents; docs/diagnostics/ is what `sable explain` prints
+spec/        the language specification
+examples/    sample programs, and a static site generator (examples/ssg)
+src/         the compiler, written in C# (see docs/04 for why)
+               Sable.Syntax          lexer, parser, trees, formatter
+               Sable.Symbols         symbols, binding, type checking, lints
+               Sable.SIL             the mid-level IR: lowering, memory-model checks, passes, interpreter
+               Sable.CodeGen         LLVM IR and DWARF
+               Sable.Driver          the `sable` command, packages, the build
+               Sable.LanguageServer  `sable lsp`
+lib/         the standard library, in Sable
+runtime/     the C runtime native programs link
+editors/     the VS Code extension
+benchmarks/  the benchmark suite and its history
+tools/       Sable.Syntax.Generator  generates the node classes
+               Sable.Visualiser        the syntax-tree visualiser
+               and the scripts for benchmarks, Linux tests and the debugger
+tests/       the test suite
 ```
 
 Node classes are generated from [src/Sable.Syntax/Syntax.xml](src/Sable.Syntax/Syntax.xml).
@@ -108,93 +116,54 @@ dotnet test Sable.slnx
 
 ### Compiling a program
 
-`sable` compiles one file to a native executable through SIL and LLVM IR,
-linking the small C runtime in [runtime/](runtime/):
+`sable` compiles through SIL and LLVM IR to a native executable, linking the
+C runtime in [runtime/](runtime/). A package is a directory with a manifest,
+`package.sb`, written in Sable ([docs/05 §5.2](docs/05-toolchain.md)):
 
 ```bash
-dotnet run --project src/Sable.Driver -- build hello.sb -o hello
+dotnet run --project src/Sable.Driver -- new hello
+cd hello
+dotnet run --project ../src/Sable.Driver -- run
 ```
+
+`build`, `check`, `test`, `bench`, `fmt`, `doc`, `add`, `publish` and the
+rest work on the package; [docs/05 §5.1](docs/05-toolchain.md) lists them.
+A lone file builds too:
 
 ```bash
 dotnet run --project src/Sable.Driver -- run hello.sb
 ```
 
 `--emit sil` and `--emit llvm-ir` print a stage's output instead, and `-g`
-builds with DWARF debug information for lldb. What lowers so far: `Int`,
-`Bool`, `F64`, string literals, structs with methods and initialisers, tuples,
-unions, enums and optionals with `match`, `throws`/`try`/`do`/`catch`,
-`defer`, and the control flow around them. Anything else — arrays, built
-strings, classes, closures, generics — is reported as `S7000` by construct.
+builds with DWARF debug information for lldb. When the compiler rejects a
+program, `sable explain S1234` says more about the diagnostic.
 
 ## Status
 
-**Phase 0's syntax layer works, but three of its exit criteria are open: a
-2,000-file round-trip corpus, a 24-hour fuzz run, and a < 2 ms incremental
-edit. Phase 1 is nearly done** — see
-[docs/04-implementation-plan.md](docs/04-implementation-plan.md).
+**Phases 0 to 5 are built** — the syntax layer, the type checker, SIL and
+native code, the memory model, the runtime and standard library, and the
+toolchain with its package manager and language server. Phases 6
+(self-hosting) and 7 (hardening) have not started.
+[docs/04-implementation-plan.md](docs/04-implementation-plan.md) has each
+phase as built, with its measurements, and the exit criteria still open:
 
-| Component | State |
+| Phase | Open exit criteria |
 |---|---|
-| `Sable.Syntax` — source text, spans, diagnostics | done |
-| `Sable.Syntax` — tokens, trivia, `SyntaxFacts` | done |
-| `Sable.Syntax` — lexer | done |
-| `Sable.Syntax` — green/red tree, lists, visitor | done |
-| `Sable.Syntax` — node generator | done |
-| `Sable.Syntax` — parser: types and expressions | done |
-| `Sable.Syntax` — parser: statements, patterns, closures | done |
-| `Sable.Syntax` — parser: declarations and compilation units | done |
-| `Sable.Syntax` — conditional compilation | done |
-| `Sable.Syntax` — structured string interpolation | done |
-| `Sable.Syntax` — incremental reparse | done |
-| `Sable.Syntax` — formatter | done |
-| `Sable.Symbols` — symbol model, declaration table | done |
-| `Sable.Symbols` — type binding and signatures | done |
-| `Sable.Symbols` — bound tree, expression and statement binding | done |
-| `Sable.Symbols` — SemanticModel | done |
-| `Sable.Symbols` — patterns, match, exhaustiveness (Maranget, with witnesses), flow | done |
-| `Sable.Symbols` — generic substitution and inference | done |
-| `Sable.Symbols` — protocol conformance | done |
-| `Sable.Symbols` — `Self` and associated types | done |
-| `Sable.Symbols` — same-type and associated-type requirements (`where A.Item == B.Item`, `where C.Item: P`) | done |
-| `Sable.Symbols` — `some P` concreteness, infinite-size and duplicate-conformance checks | done |
-| `Sable.Symbols` — accessibility, mutability, inheritance control | done |
-| `Sable.Symbols` — coherence and declaration-site variance | done |
-| `Sable.Symbols` — flow-sensitive narrowing | done |
-| `Sable.Symbols` — closures and function values | done |
-| `Sable.Symbols` — extensions and memberwise initialisers | done |
-| `Sable.Symbols` — local types, destructuring, generic aliases | done |
-| `Sable.Symbols` — effects: `throws`, `rethrows` and `async` | done |
-| `Sable.Symbols` — control-flow graph; reachability, definite return and definite assignment over it | done |
-| `Sable.Symbols` — `AnalyzeDataFlow` / `AnalyzeControlFlow` by reaching definitions, over statement ranges | done |
-| `Sable.Symbols` — negative-diagnostic corpus (631 cases) | done |
-| `Sable.Symbols` — throughput: 100,000 lines in under 5 s | done |
-| `tools/Sable.Visualiser` — syntax-tree visualiser | done |
-| `Sable.SIL` — types, values, instructions, blocks, functions | scalars, structs, tuples, enums, addresses; `switch_enum`, `try_apply`, `throw`, `cond_fail` |
-| `Sable.SIL` — textual printer and parser (`tests/sil/*.sil`) | done for the subset |
-| `Sable.SIL` — verifier: structure, SSA dominance, types, stack discipline, enum coverage, throws | done for the subset; ownership checks wait for owned values |
-| `Sable.SIL` — pass manager, verifying after every pass; slot promotion (mem2reg) | done |
-| `Sable.SIL` — lowering from the bound tree | value types, `match`, optionals, errors, `defer`; 59 of the corpus's 343 functions lower — the rest need the heap (arrays, strings, classes) or generics |
-| `Sable.SIL` — interpreter, so tests run lowered code | done for the subset |
-| `Sable.CodeGen` — LLVM IR text: phis, aggregates, tagged enums, discriminated returns for `throws`, traps | done for the subset |
-| `Sable.CodeGen` — DWARF debug information (`sable build -g`, `sable debug`) | done: frames, locals, stepping, and an lldb formatter plugin (`tools/lldb/sable_lldb.py`) for strings, lists, unions, optionals, classes, closures and existentials |
-| `runtime/` — C runtime: print, trap | started |
-| `sable build` / `sable run` — native executables via clang | done for the subset; hello world is 34 KB |
+| 0 — Syntax | every construct of `SYNTAX.md` parsing, a 2,000-file round-trip corpus, a < 2 ms incremental edit, a 24-hour fuzz run (a nightly run starts from a new seed each night) |
+| 1 — Symbols and type checking | the go/no-go: 10,000 lines of real Sable written against the checker (`tests/corpus/`, `tests/programs/`, `examples/ssg` and `lib/` so far) |
+| 2 — SIL and native code | none |
+| 3 — The memory model | none |
+| 4 — Runtime, reflection, core library | daily use of a real program (`examples/ssg` is written) |
+| 5 — Toolchain, packages, IDE | a third party publishing a package: there is no network registry yet |
 
-Phase 1's exit criteria, as docs/04 §1.4 states them:
-
-| Criterion | State |
-|---|---|
-| The full type system of `docs/03` is checked | done |
-| ≥ 600 negative programs, each asserting code, span and message | 631, over 99 diagnostics |
-| `AnalyzeDataFlow` correct on a 300-case corpus | 300: 105 written by hand, 195 generated against an independent oracle |
-| Type-checking 100,000 lines in under 5 s | 0.98 s |
-| Go/no-go: 10,000 lines of real Sable | ~2,900 in `tests/corpus/` |
-
-**1,713 tests green**, and every file in [examples/](examples/) parses as a
-complete compilation unit with no diagnostics and an exact round-trip.
-[tests/corpus/](tests/corpus/) holds programs that must type-check with
+`dotnet test Sable.slnx` runs the five test projects. Every file in
+[examples/](examples/) parses as a complete compilation unit with no
+diagnostics and an exact round-trip; [tests/corpus/](tests/corpus/) and
+[tests/programs/](tests/programs/) hold programs that must compile with
 nothing to say, and [tests/negative/](tests/negative/) holds programs that
 must fail, each claiming the exact diagnostic its line produces.
+
+### The syntax layer
 
 The lexer covers all of [spec/lexical.md](spec/lexical.md): full-fidelity
 trivia, nested block comments, every literal form including interpolated and
@@ -230,5 +199,7 @@ them chains of edits applied one after another, to files that already have
 errors.
 
 `SyntaxFormatter.Format` renders a tree as canonical source. It has no options,
-by design. Two properties are tested over the corpus rather than asserted on
-sample output: formatting is idempotent, and formatting never changes the tree.
+by design. Two properties are tested over every Sable file in the repository
+rather than asserted on sample output: formatting is idempotent, and
+formatting never changes the tree. `lib/`, `examples/` and the test corpora
+are kept formatted, and a test fails when one is not.

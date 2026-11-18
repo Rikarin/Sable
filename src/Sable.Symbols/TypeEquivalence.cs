@@ -78,6 +78,7 @@ internal sealed class TypeEquivalence {
             var own = symbol switch {
                 FunctionSymbol function => function.ConformanceRequirements,
                 NamedTypeSymbol type => type.ConformanceRequirements,
+                ExtensionSymbol extension => extension.ConformanceRequirements,
                 _ => [],
             };
 
@@ -93,6 +94,7 @@ internal sealed class TypeEquivalence {
             var own = symbol switch {
                 FunctionSymbol function => function.SameTypeRequirements,
                 NamedTypeSymbol type => type.SameTypeRequirements,
+                ExtensionSymbol extension => extension.SameTypeRequirements,
                 _ => [],
             };
 

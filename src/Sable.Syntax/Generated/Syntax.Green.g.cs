@@ -621,6 +621,62 @@ internal sealed class ExistentialTypeGreen : GreenNode
         new ExistentialTypeSyntax(this, parent, position);
 }
 
+/// <summary>Green node for <see cref="SuppressedTypeSyntax"/>.</summary>
+internal sealed class SuppressedTypeGreen : GreenNode
+{
+    private readonly GreenToken? _tildeToken;
+    private readonly GreenNode? _constraintType;
+
+    public SuppressedTypeGreen(GreenToken? tildeToken, GreenNode? constraintType)
+        : base(SyntaxKind.SuppressedType, 0)
+    {
+        _tildeToken = tildeToken;
+        _constraintType = constraintType;
+        FullWidth = (tildeToken?.FullWidth ?? 0)
+                    + (constraintType?.FullWidth ?? 0);
+    }
+
+    public override int SlotCount => 2;
+
+    public override GreenNode? GetSlot(int index) => index switch
+    {
+        0 => _tildeToken,
+        1 => _constraintType,
+        _ => null,
+    };
+
+    public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
+        new SuppressedTypeSyntax(this, parent, position);
+}
+
+/// <summary>Green node for <see cref="AttributedTypeSyntax"/>.</summary>
+internal sealed class AttributedTypeGreen : GreenNode
+{
+    private readonly GreenList? _attributes;
+    private readonly GreenNode? _type;
+
+    public AttributedTypeGreen(GreenList? attributes, GreenNode? type)
+        : base(SyntaxKind.AttributedType, 0)
+    {
+        _attributes = attributes;
+        _type = type;
+        FullWidth = (attributes?.FullWidth ?? 0)
+                    + (type?.FullWidth ?? 0);
+    }
+
+    public override int SlotCount => 2;
+
+    public override GreenNode? GetSlot(int index) => index switch
+    {
+        0 => _attributes,
+        1 => _type,
+        _ => null,
+    };
+
+    public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
+        new AttributedTypeSyntax(this, parent, position);
+}
+
 /// <summary>Green node for <see cref="RefTypeSyntax"/>.</summary>
 internal sealed class RefTypeGreen : GreenNode
 {

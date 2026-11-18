@@ -7,9 +7,11 @@ using Sable.Syntax;
 namespace Sable.LanguageServer;
 
 public sealed partial class LanguageServer {
-    /// <summary>The analysis of exactly a snapshot: what a request about declarations and references needs.</summary>
-    async Task<Analysis> AnalysisOfAsync(WorkspaceSnapshot snapshot) =>
-        await _analyses.GetAsync(await LoadedAsync(snapshot));
+    /// <summary>The analysis of a document's package in exactly a snapshot: what a request about declarations and references needs.</summary>
+    async Task<Analysis> AnalysisOfAsync(WorkspaceSnapshot snapshot, Document document) {
+        snapshot = await LoadedAsync(snapshot);
+        return await _analyses.GetAsync(snapshot, snapshot.KeyOf(snapshot.Find(document.Uri) ?? document));
+    }
 
     /// <summary>
     ///     The snapshot once the workspace's files are loaded: a request that
@@ -30,7 +32,8 @@ public sealed partial class LanguageServer {
 
     async Task<JsonNode?> HoverAsync(WorkspaceSnapshot snapshot, JsonElement parameters, CancellationToken cancellation) {
         var (document, offset) = Locate(snapshot, parameters);
-        var analysis = await AnalysisOfAsync(snapshot);
+        var analysis = await AnalysisOfAsync(snapshot, document);
+        document = analysis.Snapshot.Find(document.Uri) ?? document;
         cancellation.ThrowIfCancellationRequested();
 
         lock (analysis.Gate) {
@@ -100,7 +103,8 @@ public sealed partial class LanguageServer {
 
     async Task<JsonNode?> DefinitionAsync(WorkspaceSnapshot snapshot, JsonElement parameters, CancellationToken cancellation) {
         var (document, offset) = Locate(snapshot, parameters);
-        var analysis = await AnalysisOfAsync(snapshot);
+        var analysis = await AnalysisOfAsync(snapshot, document);
+        document = analysis.Snapshot.Find(document.Uri) ?? document;
         cancellation.ThrowIfCancellationRequested();
 
         lock (analysis.Gate) {
@@ -127,6 +131,11 @@ public sealed partial class LanguageServer {
             return null;
         }
 
+        // A dependency's file is on disk, where the editor can open it.
+        if (analysis.IsDependencyFile(tree)) {
+            return new JsonObject { ["uri"] = Workspace.UriOf(tree.Text.FileName), ["range"] = RangeNode(LineIndex.Of(tree.Text).RangeOf(span)) };
+        }
+
         // A library file lives in the compiler; the editor is shown a copy.
         var path = Path.Combine(_options.LibraryCacheDirectory, tree.Text.FileName);
         try {
@@ -148,7 +157,8 @@ public sealed partial class LanguageServer {
 
     async Task<JsonNode?> ReferencesAsync(WorkspaceSnapshot snapshot, JsonElement parameters, CancellationToken cancellation) {
         var (document, offset) = Locate(snapshot, parameters);
-        var analysis = await AnalysisOfAsync(snapshot);
+        var analysis = await AnalysisOfAsync(snapshot, document);
+        document = analysis.Snapshot.Find(document.Uri) ?? document;
         var includeDeclaration = parameters.Get("context")?.GetBool("includeDeclaration") ?? true;
 
         Symbol? symbol;
@@ -177,9 +187,9 @@ public sealed partial class LanguageServer {
     ///     mentions it, binding only the members that do.
     /// </summary>
     static List<(Document Document, TextSpan Span, bool IsDeclaration)> References(Analysis analysis, Symbol symbol, Document origin, CancellationToken cancellation) {
-        var documents = symbol is LocalSymbol or ParameterSymbol
+        IReadOnlyList<Document> documents = symbol is LocalSymbol or ParameterSymbol
             ? [origin]
-            : analysis.Snapshot.Documents.Values.OrderBy(static d => d.Uri, StringComparer.Ordinal).ToList();
+            : [..analysis.Documents];
 
         var declaration = !symbol.DeclaringSyntax.IsEmpty ? SemanticModel.NameTokenOf(symbol, symbol.DeclaringSyntax[0]) : default;
         var declaredIn = !symbol.DeclaringSyntax.IsEmpty ? analysis.DocumentOf(symbol.DeclaringSyntax[0]) : null;
@@ -207,7 +217,7 @@ public sealed partial class LanguageServer {
 
     async Task<JsonNode?> PrepareRenameAsync(WorkspaceSnapshot snapshot, JsonElement parameters, CancellationToken cancellation) {
         var (document, offset) = Locate(snapshot, parameters);
-        var analysis = await AnalysisOfAsync(snapshot);
+        var analysis = await AnalysisOfAsync(snapshot, document);
         lock (analysis.Gate) {
             var token = SemanticModel.FindToken(document.Tree.Root, offset);
             var symbol = token.IsNone ? null : analysis.Model(document.Tree).GetSymbolOfToken(token);
@@ -249,7 +259,7 @@ public sealed partial class LanguageServer {
             throw new LspException(LspException.InvalidParams, $"'{newName}' is not a name");
         }
 
-        var analysis = await AnalysisOfAsync(snapshot);
+        var analysis = await AnalysisOfAsync(snapshot, document);
         Symbol? symbol;
         lock (analysis.Gate) {
             symbol = analysis.Model(document.Tree).GetSymbolAt(offset);

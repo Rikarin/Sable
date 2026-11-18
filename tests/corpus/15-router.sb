@@ -84,13 +84,13 @@ public fn matchSegments(_ pattern: String[>..], _ actual: String[>..]) -> Bool {
 // ---- Middleware ----------------------------------------------------------
 
 public protocol Middleware {
-    fn wrap(_ next: Handler) -> Handler
+    fn wrap(_ next: @escaping Handler) -> Handler
 }
 
 public struct Logging: Middleware {
     public var label: String
 
-    public fn wrap(_ next: Handler) -> Handler {
+    public fn wrap(_ next: @escaping Handler) -> Handler {
         return (request: Request) => {
             return try next(request)
         }
@@ -100,7 +100,7 @@ public struct Logging: Middleware {
 public struct RequireHeader: Middleware {
     public var name: String
 
-    public fn wrap(_ next: Handler) -> Handler {
+    public fn wrap(_ next: @escaping Handler) -> Handler {
         return (request: Request) => {
             guard let value = request.header(name) else {
                 throw RouteError.Unauthorised
@@ -114,7 +114,7 @@ public struct AddHeader: Middleware {
     public var name: String
     public var value: String
 
-    public fn wrap(_ next: Handler) -> Handler {
+    public fn wrap(_ next: @escaping Handler) -> Handler {
         let headerName = name
         let headerValue = value
 
@@ -125,7 +125,7 @@ public struct AddHeader: Middleware {
     }
 }
 
-public fn applyAll(_ middleware: (any Middleware)[>..], _ route: Handler) -> Handler {
+public fn applyAll(_ middleware: (any Middleware)[>..], _ route: @escaping Handler) -> Handler {
     var result = route
     for layer in middleware {
         result = layer.wrap(result)
@@ -139,7 +139,7 @@ public struct Router {
     public var routes: Route[>..]
     public var middleware: (any Middleware)[>..]
 
-    public mutating fn add(_ method: Method, _ pattern: String, _ route: Handler) {
+    public mutating fn add(_ method: Method, _ pattern: String, _ route: @escaping Handler) {
         routes.append(Route { method: method, pattern: pattern, run: route })
     }
 
@@ -164,18 +164,18 @@ public struct Router {
 
 public fn describe(_ error: RouteError) -> Response {
     return match error {
-        case .NotFound(let path) => Response.error(404, path)
+        case .NotFound(let path)   => Response.error(404, path)
         case .BadMethod(let found) => Response.error(405, name(found))
-        case .BadBody(let reason) => Response.error(400, reason)
-        case .Unauthorised => Response.error(401, "unauthorised")
+        case .BadBody(let reason)  => Response.error(400, reason)
+        case .Unauthorised         => Response.error(401, "unauthorised")
     }
 }
 
 public fn name(_ method: Method) -> String {
     return match method {
-        case .Get => "GET"
-        case .Post => "POST"
-        case .Put => "PUT"
+        case .Get    => "GET"
+        case .Post   => "POST"
+        case .Put    => "PUT"
         case .Delete => "DELETE"
     }
 }

@@ -93,7 +93,7 @@ public struct Lexer {
             case '^' => TokenKind.Caret
             case '(' => TokenKind.OpenParen
             case ')' => TokenKind.CloseParen
-            default => none
+            default  => none
         }
     }
 
@@ -240,13 +240,13 @@ public struct Evaluator {
 
     public fn apply(_ operation: Token, _ left: F64, _ right: F64) throws(EvalError) -> F64 {
         return match operation.kind {
-            case .Plus => left + right
-            case .Minus => left - right
-            case .Star => left * right
-            case .Slash => try divide(operation, left, right)
+            case .Plus    => left + right
+            case .Minus   => left - right
+            case .Star    => left * right
+            case .Slash   => try divide(operation, left, right)
             case .Percent => try modulo(operation, left, right)
-            case .Caret => power(left, right)
-            default => { throw EvalError.UnexpectedToken(at: operation.position) }
+            case .Caret   => power(left, right)
+            default       => { throw EvalError.UnexpectedToken(at: operation.position) }
         }
     }
 
@@ -277,13 +277,13 @@ public struct Evaluator {
 
 public fn precedence(_ kind: TokenKind) -> Int? {
     return match kind {
-        case .Plus => 1
-        case .Minus => 1
-        case .Star => 2
-        case .Slash => 2
+        case .Plus    => 1
+        case .Minus   => 1
+        case .Star    => 2
+        case .Slash   => 2
         case .Percent => 2
-        case .Caret => 3
-        default => none
+        case .Caret   => 3
+        default       => none
     }
 }
 
@@ -299,16 +299,16 @@ public fn evaluate(_ text: String, _ bindings: Binding[>..]) -> F64? {
 
 public fn describeError(_ error: EvalError) -> String {
     return match error {
-        case .Lexing(let cause) => describeLexError(cause)
+        case .Lexing(let cause)       => describeLexError(cause)
         case .UnexpectedToken(let at) => "unexpected token at " + at.toString()
-        case .UnknownName(let name) => "unknown name " + name
-        case .DivisionByZero(let at) => "division by zero at " + at.toString()
+        case .UnknownName(let name)   => "unknown name " + name
+        case .DivisionByZero(let at)  => "division by zero at " + at.toString()
     }
 }
 
 public fn describeLexError(_ error: LexError) -> String {
     return match error {
         case .BadCharacter(let at, let found) => "bad character at " + at.toString()
-        case .BadNumber(let at) => "bad number at " + at.toString()
+        case .BadNumber(let at)               => "bad number at " + at.toString()
     }
 }

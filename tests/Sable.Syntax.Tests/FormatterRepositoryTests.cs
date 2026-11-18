@@ -111,6 +111,34 @@ public sealed class FormatterRepositoryTests {
         Assert.Empty(tree.Diagnostics);
     }
 
+    /// <summary>The directories whose files are kept formatted: <c>sable fmt --check</c> is clean on each.</summary>
+    /// <remarks>
+    ///     Not <c>tests/negative</c>: its expectation comments sit in a column
+    ///     of their own, which the formatter would close up.
+    /// </remarks>
+    public static TheoryData<string> FormattedFiles {
+        get {
+            var data = new TheoryData<string>();
+            foreach (var root in (string[])["lib", "examples", "tests/corpus", "tests/programs"]) {
+                foreach (var file in Directory.GetFiles(Path.Combine(TestHelpers.RepositoryRoot, root), "*.sb", SearchOption.AllDirectories).Order(StringComparer.Ordinal)) {
+                    if (Parses(File.ReadAllText(file))) {
+                        data.Add(Relative(file));
+                    }
+                }
+            }
+
+            return data;
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(FormattedFiles))]
+    public void TheRepositoryIsFormatted(string file) {
+        var source = Read(file);
+        var formatted = SyntaxFormatter.Format(source);
+        Assert.True(source == formatted, $"{file} is not formatted (run 'sable fmt {file}'); first difference:\n{FirstDifference(source, formatted)}");
+    }
+
     [Theory]
     [MemberData(nameof(Files))]
     public void FormattingIsIdempotent(string file) {

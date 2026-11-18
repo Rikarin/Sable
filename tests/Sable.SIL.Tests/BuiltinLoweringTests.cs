@@ -41,6 +41,24 @@ public sealed class BuiltinLoweringTests {
         Assert.Equal(3L, new SilInterpreter(module).Run("M.tidy", "  abc "));
     }
 
+    /// <summary>
+    ///     Two characters order by an instruction, as integers do — not by
+    ///     Sable.Core's 'operator &lt;' on Char, whose body is the same
+    ///     comparison and so used to call itself forever.
+    /// </summary>
+    [Fact]
+    public void CharactersAreOrderedByTheBuiltin() {
+        var (module, diagnostics) = Lower("module M\nfn probe(_ a: Char, _ b: Char) -> Bool { return a < b || a >= b }");
+        Assert.Empty(diagnostics);
+
+        var probe = module.Find("M.probe")!;
+        var instructions = probe.Blocks.SelectMany(static b => b.Instructions).ToList();
+        Assert.Contains(instructions.OfType<BuiltinInst>(), static b => b.Name == "cmp_lt_Char");
+        Assert.Contains(instructions.OfType<BuiltinInst>(), static b => b.Name == "cmp_ge_Char");
+        Assert.Empty(instructions.OfType<ApplyInst>());
+        Assert.Equal(true, new SilInterpreter(module).Run("M.probe", new System.Text.Rune('a'), new System.Text.Rune('b')));
+    }
+
     [Fact]
     public void ANameNoBuiltinHasIsAnError() {
         var error = Single(ErrorCode.ERR_UnknownBuiltin, "extension String {\n    @builtin(\"string_reversed\")\n    public fn reversed() -> String\n}");

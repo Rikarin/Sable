@@ -46,4 +46,17 @@ public static class CoreLibrary {
 
     /// <summary>True for one of the core's own trees.</summary>
     public static bool Contains(SyntaxTree tree) => Trees.Contains(tree);
+
+    /// <summary>The module a file declares (<c>module A.B</c>), or null when it declares none.</summary>
+    public static string? ModuleOf(SyntaxTree tree) =>
+        tree.Root is CompilationUnitSyntax { Module: { } declaration } ? declaration.Name.ToString().Trim() : null;
+
+    /// <summary>
+    ///     True when the files bring a Sable.Core of their own — the compiler's
+    ///     repository opened in an editor, its <c>lib/Sable.Core</c> read from
+    ///     disk — which then stands in for the embedded one rather than
+    ///     declaring everything in it a second time.
+    /// </summary>
+    public static bool IsBroughtBy(IEnumerable<SyntaxTree> trees) =>
+        trees.Any(static t => !Contains(t) && ModuleOf(t) == ModuleName);
 }

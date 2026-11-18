@@ -55,10 +55,18 @@ internal sealed partial class Analysis {
             .OrderBy(static t => t.Text.FileName, StringComparer.Ordinal)
             .ToList();
 
+        // A library module the workspace has its own files for — the
+        // compiler's repository, its lib/ read from disk — is those files:
+        // the embedded copy would declare everything in it a second time.
+        var declared = trees.Select(CoreLibrary.ModuleOf).OfType<string>().ToHashSet(StringComparer.Ordinal);
         var library = new List<SyntaxTree>();
         var seen = new HashSet<SyntaxTree>(ReferenceEqualityComparer.Instance);
         foreach (var tree in trees) {
             foreach (var needed in libraryFor(tree)) {
+                if (CoreLibrary.ModuleOf(needed) is { } module && declared.Contains(module)) {
+                    continue;
+                }
+
                 if (seen.Add(needed)) {
                     library.Add(needed);
                 }

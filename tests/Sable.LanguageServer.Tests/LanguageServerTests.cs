@@ -334,6 +334,52 @@ public sealed class LanguageServerTests : IDisposable {
         Assert.Equal(1, help.GetInt("activeParameter"));
     }
 
+    // ---- A workspace with the library's source -------------------------------
+
+    /// <summary>
+    ///     The compiler's own repository open in an editor: lib/ is in the
+    ///     workspace, and it is the library — not a second copy of it beside
+    ///     the embedded one, which made every call into it ambiguous between
+    ///     two identical declarations.
+    /// </summary>
+    [Fact]
+    public async Task TheLibrarysOwnSourceInTheWorkspaceIsTheLibrary() {
+        var repository = AppContext.BaseDirectory;
+        while (!Directory.Exists(Path.Combine(repository, "lib", "Sable.Core"))) {
+            repository = Path.GetDirectoryName(repository) ?? throw new InvalidOperationException("no lib/ above the tests");
+        }
+
+        foreach (var module in new[] { "Sable.Core", "Sable.Text" }) {
+            var target = Directory.CreateDirectory(Path.Combine(_root, "lib", module)).FullName;
+            foreach (var file in Directory.GetFiles(Path.Combine(repository, "lib", module), "*.sab")) {
+                File.Copy(file, Path.Combine(target, Path.GetFileName(file)));
+            }
+        }
+
+        const string source = """
+                              module App
+
+                              import Sable.Text
+
+                              fn main() {
+                                  let a = "  padded  ".trimmed()
+                                  let b = trimmedEnd(a)
+                                  print(b)
+                              }
+                              """;
+        var main = Write("main.sab", source);
+        await using var client = new TestClient();
+        await client.InitializeAsync(_root);
+        await client.NotifyAsync("initialized", new { });
+        await client.OpenAsync(main, source);
+
+        var diagnostics = await client.DiagnosticsAsync(main);
+        Assert.True(diagnostics.GetArrayLength() == 0, diagnostics.GetRawText());
+
+        var definition = await client.AtAsync("textDocument/definition", main, source, At(source, "trimmed()", 1));
+        Assert.StartsWith(new Uri(Path.Combine(_root, "lib", "Sable.Core")).AbsoluteUri, definition.GetString("uri"), StringComparison.Ordinal);
+    }
+
     // ---- Formatting ----------------------------------------------------------
 
     [Fact]

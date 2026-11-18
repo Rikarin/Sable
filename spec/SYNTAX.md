@@ -942,8 +942,11 @@ expression position when `.self` follows it, so `xs[0]` stays an index and
 
 The type of `T.self` is the metatype `T.Type` (written after a type's name,
 unless the type has a nested type called `Type`). Its one value is the type,
-so it holds nothing at run time. A `T.Type` parameter infers `T`, and a
-metatype value reaches the type's static members:
+so it holds nothing at run time. `Int?.Type` and `Int[>..].Type` are the
+metatypes of compound types. Two metatypes compare with `==` and `!=`:
+equal when they are the type of the same type, which in generic code is
+decided for each instance. A `T.Type` parameter infers `T`, and a metatype
+value reaches the type's static members:
 
 ```sable
 fn make<T: Zero>(_ type: T.Type) -> T { return type.zero() }

@@ -1421,10 +1421,12 @@ internal sealed class Parser {
                     );
                     continue;
 
-                // 'Int?.self' lexes '?.' whole, and here the '?' belongs to
-                // the type while the '.' introduces the metatype.
+                // 'Int?.self' and 'Int?.Type' lex '?.' whole, and here the
+                // '?' belongs to the type while the '.' introduces the
+                // metatype, as a value or as a type.
                 case SyntaxKind.QuestionDotToken
-                    when Peek(1).Kind == SyntaxKind.SelfKeyword:
+                    when Peek(1).Kind == SyntaxKind.SelfKeyword
+                         || Peek(1) is { Kind: SyntaxKind.IdentifierToken, Text: "Type" }:
                     type = new OptionalTypeGreen(
                         type,
                         SplitLeadingCharacter(SyntaxKind.QuestionToken, SyntaxKind.DotToken)

@@ -6668,6 +6668,14 @@ public sealed partial class Binder {
             }
         }
 
+        // 'T.self == Int.self': two metatypes are equal when they are the
+        // type of the same type. A metatype's one value is its type, so the
+        // answer is known in each instance of the code (SYNTAX.md §16).
+        if (kind is BinaryOperatorKind.Equal or BinaryOperatorKind.NotEqual
+            && left.Type is MetatypeTypeSymbol && right.Type is MetatypeTypeSymbol) {
+            return new BoundBinaryOperator(syntax, Core.Bool, kind, left, right);
+        }
+
         // A type of the program's own, or a type parameter, uses the operators
         // it declares, or its constraints require: 'a == b' on two Moneys is
         // Money's '=='. '!=', '>', '<=' and '>=' follow from '==' and '<'.

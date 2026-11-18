@@ -6864,6 +6864,21 @@ public sealed partial class SilGen {
         }
 
         SilValue? Binary(BoundBinaryOperator binary) {
+            // 'T.self == Int.self': a metatype holds nothing, as its value is
+            // its type, so in this instance of the code the two are equal or
+            // not already. The operands are still evaluated, for what they do.
+            if (binary.OperatorKind is BinaryOperatorKind.Equal or BinaryOperatorKind.NotEqual
+                && Sub(binary.Left.Type) is MetatypeTypeSymbol leftMetatype
+                && Sub(binary.Right.Type) is MetatypeTypeSymbol rightMetatype) {
+                if (Expression(binary.Left) is null || Expression(binary.Right) is null) {
+                    return null;
+                }
+
+                var same = leftMetatype.InstanceType.Equals(rightMetatype.InstanceType);
+                var equal = binary.OperatorKind == BinaryOperatorKind.Equal;
+                return Emit(new IntegerLiteralInst(SilType.Bool, same == equal ? 1 : 0));
+            }
+
             // 'x == none': only the case matters, so any optional compares.
             if (binary.OperatorKind is BinaryOperatorKind.Equal or BinaryOperatorKind.NotEqual
                 && (IsNone(binary.Right) ? binary.Left : IsNone(binary.Left) ? binary.Right : null) is { } tested) {
@@ -8414,9 +8429,28 @@ public sealed partial class SilGen {
                 return Missing(reference, $"'{callee.Name}' as a value");
             }
 
+            // A protocol's requirement, named on an existential: its witness
+            // is only known at run time, and the existential already holds
+            // it as a closure over the value — its slot — so the value is a
+            // copy of that closure, which keeps the box alive.
+            if (OwnerOf(callee) is { TypeKind: TypeKind.Protocol } && Sub(receiver.Type) is ExistentialTypeSymbol) {
+                var layout = LowerType(receiver.Type) as StructType;
+                var index = layout?.FieldIndex(SlotName(callee)) ?? -1;
+                if (layout is null || index < 0 || layout.Fields[index].Type != thick) {
+                    return Missing(reference, $"the requirement '{callee.Name}' of '{Sub(receiver.Type).ToDisplayString()}' as a value");
+                }
+
+                if (Borrow(receiver) is not { } existential) {
+                    return null;
+                }
+
+                var slot = Emit(new CopyValueInst(Emit(new StructExtractInst(existential, index))));
+                End(existential);
+                return slot;
+            }
+
             // A protocol's requirement, named on a type parameter: the
-            // concrete type's own member, now that the type is known. An
-            // existential's would need its witness at run time.
+            // concrete type's own member, now that the type is known.
             if (OwnerOf(callee) is { TypeKind: TypeKind.Protocol }) {
                 if (Sub(receiver.Type) is not NamedTypeSymbol { TypeKind: not TypeKind.Protocol } concrete
                     || Implementation(concrete, callee) is not { Builtin: null } witness) {

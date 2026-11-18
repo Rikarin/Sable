@@ -287,4 +287,75 @@ public sealed class ExpressionFormTests {
                 print(Reflect.typeName(Int?.self))
             """
         );
+
+    [Fact]
+    public void MetatypesCompareAndAnOptionalHasOne() =>
+        // Two metatypes are equal when they are the type of the same type,
+        // known in each instance of generic code; 'Int?.Type' is a type.
+        Prints(
+            "true\nfalse\ntrue\ntrue\nfalse\ntrue\nfalse\nInt?.Type\n",
+            """
+            fn same<A, B>(_ a: A.Type, _ b: B.Type) -> Bool { return a == b }
+            fn isInt<T>(_ t: T.Type) -> Bool { return t == Int.self }
+            fn name<T>(_ type: T.Type) -> String { return Reflect.typeName(type) }
+            """,
+            """
+                let t: Int?.Type = Int?.self
+                let u: Int.Type = Int.self
+                print(Int.self == Int.self)
+                print(Int.self == String.self)
+                print(u != String.self)
+                print(same(Int.self, Int.self))
+                print(same(Int.self, Int?.self))
+                print(isInt(Int.self))
+                print(isInt(String.self))
+                print(name(t))
+            """
+        );
+
+    [Fact]
+    public void ARequirementNamedOnAnExistentialIsItsWitness() =>
+        // 'd.shout' with 'd: any Shout' is the witness the existential holds
+        // for the value in it; the closure keeps the value alive after the
+        // existential is gone.
+        Prints(
+            "woof rex\nmeow tom!\n2\nwoof rex\n",
+            """
+            protocol Shout {
+                fn shout() -> String
+                fn shout(_ end: String) -> String
+            }
+
+            struct Dog: Shout {
+                var name: String
+                fn shout() -> String { return "woof \(name)" }
+                fn shout(_ end: String) -> String { return "woof \(name)\(end)" }
+            }
+
+            class Cat: Shout {
+                var name: String
+                init(_ name: String) { self.name = name }
+                fn shout() -> String { return "meow \(name)" }
+                fn shout(_ end: String) -> String { return "meow \(name)\(end)" }
+            }
+
+            fn louder(_ s: any Shout) -> (String) -> String {
+                return s.shout
+            }
+            """,
+            """
+                let d: any Shout = Dog(name: "rex")
+                let h: () -> String = d.shout
+                print(h())
+                let end = louder(Cat("tom"))
+                print(end("!"))
+                var all: (() -> String)[>..] = []
+                for s in [d, Cat("kit") as any Shout] {
+                    let f: () -> String = s.shout
+                    all.append(f)
+                }
+                print(all.count)
+                print(all[0]())
+            """
+        );
 }

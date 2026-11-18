@@ -121,6 +121,9 @@ public sealed class FunctionSymbol : Symbol {
     public bool IsOverride { get; internal set; }
     public bool IsOpen { get; internal set; }
 
+    /// <summary><c>final</c>: no subclass may override it (spec/SYNTAX.md §7).</summary>
+    public bool IsFinal { get; internal set; }
+
     /// <summary>
     ///     Declared <c>rethrows</c>: it throws exactly when one of the closures
     ///     handed to it does, so <see cref="ThrownType" /> is what those closures
@@ -288,6 +291,12 @@ public sealed class FieldSymbol(
 
     public bool IsStatic { get; internal set; }
     public bool IsLazy { get; internal set; }
+
+    /// <summary><c>override var</c>: it replaces a property of a base class, whose type it keeps.</summary>
+    public bool IsOverride { get; internal set; }
+
+    /// <summary><c>final</c>: no subclass may override it (spec/SYNTAX.md §7).</summary>
+    public bool IsFinal { get; internal set; }
 
     /// <summary>How a field of a class type holds its object (docs/02 §2.2): strongly, unless declared otherwise.</summary>
     public ReferenceKind ReferenceKind { get; internal set; }

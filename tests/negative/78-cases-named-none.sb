@@ -1,0 +1,30 @@
+module Negative.CasesNamedNone
+
+// 'none' is the optional with no value and nothing else; a case named
+// '`none`' is '.none', and an optional's own cases are '.Some' and '.None'.
+
+enum Mode {
+    `none`
+    all
+}
+
+fn plain(_ m: Mode) -> Int {
+    return match m {
+        case none => 0 //! S6000 'Mode' is not optional, so 'none' cannot match it; its case 'none' is '.none'
+        case .all => 1
+    }
+}
+
+fn number(_ n: Int) -> Int {
+    return match n {
+        case none => 0 //! S6000 'Int' is not optional, so 'none' cannot match it
+        default => 1
+    }
+}
+
+fn wrapped(_ m: Mode?) -> Int {
+    return match m {
+        case .none => 0 //! S6001 'Mode?' has no case named 'none': an optional is '.Some' or '.None'; the 'Mode' case is '.Some(.none)'
+        default => 1
+    }
+}

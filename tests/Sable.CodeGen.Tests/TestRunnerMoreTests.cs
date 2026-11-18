@@ -8,6 +8,7 @@ namespace Sable.CodeGen.Tests;
 ///     the failure's report, tests that must trap, and the runner of
 ///     <c>sable test</c> itself — several tests at once, each with a time limit.
 /// </summary>
+[Collection("Console")]
 public sealed class TestRunnerMoreTests {
     const string Suite = """
         module Suite

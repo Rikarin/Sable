@@ -9,6 +9,7 @@ namespace Sable.CodeGen.Tests;
 ///     counted as it runs, in every test process — one that traps too — and
 ///     reported per file and line, and as LCOV.
 /// </summary>
+[Collection("Console")]
 public sealed class CoverageTests {
     const string Calc = """
         module Calc
@@ -86,9 +87,19 @@ public sealed class CoverageTests {
         // The test that traps ran the line it trapped on, and its counts were kept.
         Assert.Equal(1, lines[LineOf("return xs[xs.count]")]);
 
+        // Both tests found n not negative; one found it zero, one not.
+        var negative = LineOf("if n < 0");
+        var zero = LineOf("if n == 0");
+        Assert.Equal(
+            [$"BRDA:{negative},0,0,0", $"BRDA:{negative},0,1,2", $"BRDA:{zero},0,0,1", $"BRDA:{zero},0,1,1", "BRF:4", "BRH:3"],
+            lcov.Split('\n').Where(static l => l.StartsWith("BR", StringComparison.Ordinal)));
+
         var text = output.ToString().ReplaceLineEndings("\n");
         Assert.Contains("coverage: ", text, StringComparison.Ordinal);
-        Assert.Matches(@"  calc\.sb: [0-9.]+% \(\d+ of \d+\), not run: ", text);
+        Assert.Contains("75% of branches (3 of 4)", text, StringComparison.Ordinal);
+        Assert.Matches(@"  calc\.sb: [0-9.]+% \(\d+ of \d+\), not run: .*; branches 75% \(3 of 4\)", text);
+        Assert.Contains($"    {negative}:5 'if' never: true\n", text, StringComparison.Ordinal);
+        Assert.DoesNotContain($"    {zero}:5", text, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -100,4 +111,14 @@ public sealed class CoverageTests {
         Assert.Equal(0, lines["b.sb"][1]);
         Assert.Equal("SF:b.sb\nDA:1,0\nLF:1\nLH:0\nend_of_record\n", Coverage.Lcov(new() { ["b.sb"] = lines["b.sb"] }));
     }
+
+    /// <summary>
+    ///     A command keeps one run's options (--coverage, -j) and what it
+    ///     built, so two runs at once — tests in parallel — each need an
+    ///     instance of their own: sharing one, a run without --coverage
+    ///     turned another's off half-way through.
+    /// </summary>
+    [Fact]
+    public void EachRunOfACommandHasItsOwnState() =>
+        Assert.NotSame(Command.Find("test"), Command.Find("test"));
 }

@@ -30,7 +30,8 @@ public static class SilPrinter {
 
             switch (type) {
                 case StructType structType:
-                    builder.Append("sil_struct ").Append(structType.Name).Append(structType.IsNoncopyable ? " @noncopy" : "").Append(structType.IsInline ? " @inline" : "").Append(" { ")
+                    builder.Append("sil_struct ").Append(structType.Name).Append(structType.IsNoncopyable ? " @noncopy" : "").Append(structType.IsInline ? " @inline" : "")
+                        .Append(structType.IsPacked ? " @packed" : "").Append(structType.Alignment > 0 ? $" @align({structType.Alignment})" : "").Append(" { ")
                         .Append(string.Join(", ", structType.Fields.Select(static f => $"{f.Name}: ${f.Type}")))
                         .Append(" }");
                     if (structType.Deinit is { } structDeinit) {
@@ -122,6 +123,7 @@ public static class SilPrinter {
             EnumType enumType => enumType.Cases.Where(static c => c.Payload is not null).Select(static c => c.Payload!),
             TupleType tuple => tuple.Elements,
             ArrayType array => [array.Element],
+            SliceType slice => [slice.Element],
             WeakStorageType weak => [weak.Optional],
             UnownedStorageType unowned => [unowned.Referent],
             _ => [],

@@ -298,10 +298,17 @@ public abstract class HarnessCommand : Command {
     }
 
     /// <summary>Runs the built harness with the arguments meant for it; returns its exit code.</summary>
-    protected virtual int Execute(string executable, IReadOnlyList<string> arguments) {
+    protected virtual int Execute(string executable, IReadOnlyList<string> arguments) => Execute(executable, arguments, null);
+
+    /// <param name="environment">Variables set for the harness's process only: this process's own are shared by every command it runs.</param>
+    protected static int Execute(string executable, IReadOnlyList<string> arguments, IReadOnlyDictionary<string, string>? environment) {
         var start = new ProcessStartInfo(executable);
         foreach (var argument in arguments) {
             start.ArgumentList.Add(argument);
+        }
+
+        foreach (var (name, value) in environment ?? new Dictionary<string, string>()) {
+            start.Environment[name] = value;
         }
 
         using var process = Process.Start(start) ?? throw new InvalidOperationException();

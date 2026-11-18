@@ -15,6 +15,7 @@ in a suffix saying what kind of thing it is:
 
     String          -> SableString *          header, length, count, bytes
     [T]             -> [T]$list               $buffer -> header, count, capacity, elements (null when empty)
+    [T:]            -> [T:]$slice             $array (a [T], the buffer viewed), start, count
     class C         -> C$ref                  $object -> header, then the fields
     union U         -> U$union                $tag (an enumeration of the cases), $payload (a C union)
     T?              -> T?$optional            the same; an optional class is the reference, null for none
@@ -261,6 +262,56 @@ class ListProvider(object):
         if index < 0 or index >= self.count:
             return None
         return self.valobj.CreateValueFromAddress("[%d]" % index, self.base + index * self.element_size, self.element_type)
+
+
+class SliceProvider(object):
+    """A slice's elements as children, [0] to [count - 1]: its run of the buffer it views."""
+
+    def __init__(self, valobj, internal_dict):
+        self.valobj = valobj
+        self.count = 0
+        self.base = 0
+        self.element_type = None
+        self.element_size = 0
+
+    def update(self):
+        self.count = 0
+        raw = _raw(self.valobj)
+        count = raw.GetChildMemberWithName("count").GetValueAsSigned(0)
+        start = raw.GetChildMemberWithName("start").GetValueAsSigned(0)
+        pointer = _raw(raw.GetChildMemberWithName("$array")).GetChildMemberWithName("$buffer")
+        if count <= 0 or pointer.GetValueAsUnsigned(0) == 0:
+            return False
+        elements = pointer.Dereference().GetChildMemberWithName("elements")
+        self.element_type = elements.GetType().GetPointeeType()
+        self.element_size = self.element_type.GetByteSize()
+        base = elements.GetValueAsUnsigned(0)
+        if count > (1 << 32) or start < 0 or base == 0:
+            return False
+        self.base = base + start * self.element_size
+        self.count = count
+        return False
+
+    def num_children(self, max_children=None):
+        return self.count
+
+    def has_children(self):
+        return True
+
+    def get_child_index(self, name):
+        try:
+            return int(name.lstrip("[").rstrip("]"))
+        except ValueError:
+            return -1
+
+    def get_child_at_index(self, index):
+        if index < 0 or index >= self.count:
+            return None
+        return self.valobj.CreateValueFromAddress("[%d]" % index, self.base + index * self.element_size, self.element_type)
+
+
+def slice_summary(valobj, internal_dict):
+    return "count = %d" % _raw(valobj).GetChildMemberWithName("count").GetValueAsSigned(0)
 
 
 def list_summary(valobj, internal_dict):
@@ -632,6 +683,7 @@ def _register(debugger, module):
         ("^SableString \\*$", "string_summary", "-v"),
         ("^Char$", "char_summary", "-v"),
         ("\\$list$", "list_summary", "-e"),
+        ("\\$slice$", "slice_summary", "-e"),
         ("\\$union$", "union_summary", ""),
         ("\\$optional$", "optional_summary", ""),
         ("\\$ref$", "object_summary", "-e"),
@@ -642,6 +694,7 @@ def _register(debugger, module):
     ]
     synthetics = [
         ("\\$list$", "ListProvider"),
+        ("\\$slice$", "SliceProvider"),
         ("\\$union$", "UnionProvider"),
         ("\\$optional$", "OptionalProvider"),
         ("\\$ref$", "ObjectProvider"),

@@ -317,17 +317,27 @@ static void collect_value(const SableInlineLayout *layout, const uint8_t *base, 
     }
 }
 
-// Replaces 'removed' bytes at 'at' with 'inserted' ones, moving what
-// follows, and keeps every relative reference pointing where it did: one
-// whose field or target moved is measured again; one whose target went
-// is a trap.
-static SableBlock *splice(SableBlock **slot, const SableInlineLayout *layout, int64_t at, int64_t removed, const uint8_t *inserted, int64_t count) {
-    SableBlock *block = unique_block(slot, count > removed ? count - removed : 0);
+// Every relative reference in the block, if it may hold any: read while its
+// bytes are a value, before a change that takes more than one splice.
+static InlineLinks collect_links(SableBlock *block, const SableInlineLayout *layout) {
     InlineLinks links = { NULL, 0, 0 };
     if (block->header.flags & SABLE_LINKED) {
         collect_value(layout, block->bytes, block->bytes, &links);
     }
 
+    return links;
+}
+
+// Replaces 'removed' bytes at 'at' with 'inserted' ones, moving what
+// follows, and keeps every relative reference in 'links' pointing where it
+// did: one whose field or target moved is measured again; one whose target
+// went is a trap. The links are moved with the bytes, so a change made of
+// several splices — an element, then the count that takes it in — reads
+// them once, from the block as it was, and never from bytes between two
+// splices, which are no value: a count not yet taking in an element walks
+// into whatever follows.
+static SableBlock *splice_links(SableBlock **slot, int64_t at, int64_t removed, const uint8_t *inserted, int64_t count, InlineLinks *links) {
+    SableBlock *block = unique_block(slot, count > removed ? count - removed : 0);
     int64_t delta = count - removed;
     if (block->length - at - removed > 0 && delta != 0) {
         memmove(block->bytes + at + count, block->bytes + at + removed, (size_t)(block->length - at - removed));
@@ -336,8 +346,9 @@ static SableBlock *splice(SableBlock **slot, const SableInlineLayout *layout, in
     memcpy(block->bytes + at, inserted, (size_t)count);
     block->length += delta;
 
-    for (int64_t i = 0; i < links.count; i++) {
-        InlineLink link = links.links[i];
+    int64_t kept = 0;
+    for (int64_t i = 0; i < links->count; i++) {
+        InlineLink link = links->links[i];
         if (link.at >= at && link.at < at + removed) {
             continue; // the reference itself was replaced
         }
@@ -354,8 +365,17 @@ static SableBlock *splice(SableBlock **slot, const SableInlineLayout *layout, in
         }
 
         write_unsigned(block->bytes + from, link.width, (uint32_t)offset);
+        links->links[kept++] = (InlineLink){ from, to, link.width };
     }
 
+    links->count = kept;
+    return block;
+}
+
+// One splice, its links read from the block as it is.
+static SableBlock *splice(SableBlock **slot, const SableInlineLayout *layout, int64_t at, int64_t removed, const uint8_t *inserted, int64_t count) {
+    InlineLinks links = collect_links(unique_block(slot, count > removed ? count - removed : 0), layout);
+    SableBlock *block = splice_links(slot, at, removed, inserted, count, &links);
     free(links.links);
     return block;
 }
@@ -407,8 +427,10 @@ void sable_inline_append_at(SableBlock **slot, const SableInlineLayout *root, co
         block->header.flags |= SABLE_LINKED;
     }
 
-    // The element first, then the count, which may take another byte.
-    block = splice(slot, root, end, 0, element, size);
+    // The element first, then the count, which may take another byte: two
+    // splices, with the links read once, before either.
+    InlineLinks links = collect_links(unique_block(slot, size), root);
+    block = splice_links(slot, end, 0, element, size, &links);
     free(copy);
 
     uint8_t encoded[10];
@@ -424,8 +446,10 @@ void sable_inline_append_at(SableBlock **slot, const SableInlineLayout *root, co
     if (new_size == old_size) {
         memcpy(block->bytes + at, encoded, (size_t)new_size);
     } else {
-        splice(slot, root, at, old_size, encoded, new_size);
+        splice_links(slot, at, old_size, encoded, new_size, &links);
     }
+
+    free(links.links);
 }
 
 // Bytes as a bounded U8 array's elements: a string, as UTF-8.

@@ -130,6 +130,36 @@ public sealed class ArrayType(SilType element) : SilType {
     public SilType Element { get; } = element;
     public override bool IsTrivial => false;
     public override string ToString() => $"[{Element}]";
+
+    /// <summary>The element of an array or of a slice — what reading one gives — or null for any other type.</summary>
+    public static SilType? ElementOf(SilType? type) =>
+        type switch {
+            ArrayType array => array.Element,
+            SliceType slice => slice.Element,
+            _ => null,
+        };
+}
+
+/// <summary>
+///     <c>[T:]</c>: a slice (<c>T[:]</c>) — a view of a run of an array's
+///     elements, with no copy of them: the array's buffer, where the run
+///     starts in it and how many elements it has.
+/// </summary>
+/// <remarks>
+///     The view holds a strong reference to the buffer (docs/02 §2.5, "The
+///     array family"): the array copies on its next write while a slice
+///     shares it, so the elements a slice sees never change under it, and a
+///     slice may be stored or returned like any value. The empty slice is no
+///     buffer at all. A write through a slice makes it the only reference to
+///     its run first, as an array's does to its buffer.
+/// </remarks>
+public sealed class SliceType(SilType element) : SilType {
+    public SilType Element { get; } = element;
+    public override bool IsTrivial => false;
+    public override string ToString() => $"[{Element}:]";
+
+    /// <summary>How a slice is laid out: the buffer, the start and the count — as a tuple of them is.</summary>
+    public TupleType Parts => new([new ArrayType(Element), Int, Int]);
 }
 
 /// <summary><c>*T</c>: the address of storage holding a <c>T</c>.</summary>
@@ -246,6 +276,19 @@ public sealed class StructType(string name) : NominalType(name) {
     /// </summary>
     public bool IsInline { get; set; }
 
+    /// <summary>
+    ///     <c>@packed</c>: its fields one after another, with no padding
+    ///     between them, and the struct aligned to a byte (or to
+    ///     <see cref="Alignment" />, when that is given too).
+    /// </summary>
+    public bool IsPacked { get; set; }
+
+    /// <summary>
+    ///     <c>@align(n)</c>: the struct is aligned to at least n bytes, and
+    ///     its size is a multiple of that; 0 when it is aligned as its fields are.
+    /// </summary>
+    public int Alignment { get; set; }
+
     public override bool IsTrivial => !IsInline && !IsNoncopyable && Fields.All(static f => f.Type.IsTrivial);
 }
 
@@ -323,9 +366,15 @@ public sealed class InlineLayout {
         var fixedSlots = new List<Slot>();
         var variableSlots = new List<Slot>();
         var offset = 0;
+        var alignment = Math.Max(1, type.Alignment);
         for (var i = 0; i < type.Fields.Count; i++) {
             var (name, fieldType) = type.Fields[i];
             if (FixedSizeOf(fieldType) is { } size) {
+                // An '@align(n)' struct, nested, starts at a multiple of n
+                // from the start of the value, after zero bytes.
+                var fieldAlignment = fieldType is StructType { IsInline: true } nested ? Of(nested).Alignment : 1;
+                alignment = Math.Max(alignment, fieldAlignment);
+                offset = (offset + fieldAlignment - 1) / fieldAlignment * fieldAlignment;
                 fixedSlots.Add(Describe(i, name, fieldType, offset));
                 offset += size;
             } else {
@@ -333,6 +382,10 @@ public sealed class InlineLayout {
             }
         }
 
+        // The fixed fields are rounded up to the alignment, so a value of a
+        // fixed size is a multiple of it: a record format's fixed stride.
+        Alignment = alignment;
+        offset = (offset + alignment - 1) / alignment * alignment;
         Prefix = offset;
         Slots = [..fixedSlots, ..variableSlots];
         FixedSize = variableSlots.Count == 0 ? offset : null;
@@ -343,7 +396,14 @@ public sealed class InlineLayout {
     /// <summary>The fields in the order they are stored: fixed ones first.</summary>
     public ImmutableArray<Slot> Slots { get; }
 
-    /// <summary>The bytes the fixed-size fields take, at the start.</summary>
+    /// <summary>
+    ///     What offsets from the start of a value its fixed part is laid out
+    ///     at multiples of: its own '@align(n)', or a nested struct's; 1 when
+    ///     neither says, and the fields are packed.
+    /// </summary>
+    public int Alignment { get; }
+
+    /// <summary>The bytes the fixed-size fields take, at the start, padding to the alignment included.</summary>
     public int Prefix { get; }
 
     /// <summary>The size of every value of it, when that does not vary.</summary>
@@ -1145,6 +1205,13 @@ public sealed class SilBlock(SilFunction function) {
     public List<SilArgument> Arguments { get; } = [];
     public List<SilInstruction> Instructions { get; } = [];
 
+    /// <summary>
+    ///     For branch coverage, the outcome of a decision that entering this
+    ///     block means — a block that only that outcome's edges enter — or
+    ///     null. Set only when lowering marks decisions (<see cref="SilDecision" />).
+    /// </summary>
+    public (SilDecision Decision, int Outcome)? Outcome { get; set; }
+
     public SilInstruction? Terminator =>
         Instructions.Count > 0 && Instructions[^1].IsTerminator ? Instructions[^1] : null;
 
@@ -1170,6 +1237,17 @@ public sealed class SilBlock(SilFunction function) {
     }
 }
 
+/// <summary>
+///     A decision in the source — an <c>if</c>'s condition, a <c>match</c>,
+///     the left side of <c>&amp;&amp;</c> — and the outcomes it can have, for
+///     branch coverage: lowering, asked to, marks the blocks that stand for
+///     each outcome (<see cref="SilBlock.Outcome" />), and coverage counts them.
+/// </summary>
+/// <param name="At">Where it is written: the keyword or operator that makes it.</param>
+/// <param name="Kind">What it is, as written: <c>if</c>, <c>&amp;&amp;</c>, <c>match</c>.</param>
+/// <param name="Outcomes">A name for each outcome: <c>true</c> and <c>false</c>, a match's arms.</param>
+public sealed record SilDecision(SilLocation At, string Kind, IReadOnlyList<string> Outcomes);
+
 /// <summary>A SIL function: a signature and blocks, the first of which is the entry.</summary>
 public sealed class SilFunction(string name, FunctionType type) {
     public string Name { get; } = name;
@@ -1185,6 +1263,9 @@ public sealed class SilFunction(string name, FunctionType type) {
     public IReadOnlyList<int>? ResultRoots { get; set; }
     public FunctionType Type { get; } = type;
     public List<SilBlock> Blocks { get; } = [];
+
+    /// <summary>The decisions of its source that lowering marked, for branch coverage: each kept though its blocks may be gone, as code never reached.</summary>
+    public List<SilDecision> Decisions { get; } = [];
 
     /// <summary>The source file and line it was declared at, for debug information.</summary>
     public string? SourceFile { get; set; }
@@ -1354,6 +1435,7 @@ public sealed class SilModule {
             TupleType tuple => tuple.Elements.Any(MayRunDeinit),
             EnumType enumType => enumType.Cases.Any(c => c.Payload is { } payload && MayRunDeinit(payload)),
             ArrayType array => MayRunDeinit(array.Element),
+            SliceType slice => MayRunDeinit(slice.Element),
 
             // Releasing a weak or unowned reference may free memory, but runs no deinit.
             WeakStorageType or UnownedStorageType => false,
@@ -1391,9 +1473,14 @@ public static class SilBuiltins {
 
     static readonly Dictionary<string, Signature> Table = Build();
 
-    /// <summary>The names whose signature depends on the element type of the array they work on.</summary>
+    /// <summary>
+    ///     The names whose signature depends on the element type of the array
+    ///     they work on. Those that read elements, or write one in place, work
+    ///     on a slice (<c>[T:]</c>) as on an array; those that change the
+    ///     count work on an array alone.
+    /// </summary>
     public static readonly ImmutableArray<string> ArrayOperations =
-        ["array_empty", "array_count", "array_get", "array_get_borrowed", "array_append", "array_set_unique", "array_element_addr", "array_make_unique", "array_set", "array_remove_last", "array_clear", "array_slice", "region_alloc"];
+        ["array_empty", "array_count", "array_get", "array_get_borrowed", "array_append", "array_set_unique", "array_element_addr", "array_make_unique", "array_set", "array_remove_last", "array_clear", "array_slice", "slice_of", "region_alloc"];
 
     /// <summary>
     ///     The prefix of the wrapping forms of integer arithmetic
@@ -1415,7 +1502,7 @@ public static class SilBuiltins {
         }
 
         if (name == "array_empty") {
-            return operands.Count == 0 && result is ArrayType ? new([], result) : null;
+            return operands.Count == 0 && result is ArrayType or SliceType ? new([], result) : null;
         }
 
         if (name.StartsWith("inline_", StringComparison.Ordinal)) {
@@ -1453,6 +1540,12 @@ public static class SilBuiltins {
             return operands is [AddressType { Pointee: ClassType }] ? new([operands[0]], SilType.Bool) : null;
         }
 
+        // '@immortal static let': every object the value holds made
+        // immortal — never counted, never released, and no leak.
+        if (name == "make_immortal") {
+            return operands is [var value] ? new([value], SilType.Unit) : null;
+        }
+
         // 'a === b': whether two references are to the one object.
         if (name == "ref_identical") {
             return operands is [ClassType, ClassType] ? new([operands[0], operands[1]], SilType.Bool) : null;
@@ -1474,13 +1567,14 @@ public static class SilBuiltins {
             return operands is [var region] && region == SilType.Region && result is AddressType ? new([SilType.Region], result) : null;
         }
 
-        SilType? Element(int index, bool address) {
+        // An array's or a slice's element; with 'arrayOnly', an array's.
+        SilType? Element(int index, bool address, bool arrayOnly = false) {
             if (index >= operands.Count) {
                 return null;
             }
 
             var type = address ? (operands[index] as AddressType)?.Pointee : operands[index];
-            return (type as ArrayType)?.Element;
+            return arrayOnly ? (type as ArrayType)?.Element : ArrayType.ElementOf(type);
         }
 
         switch (name) {
@@ -1492,7 +1586,7 @@ public static class SilBuiltins {
             case "array_get" or "array_get_borrowed" when Element(0, false) is { } element:
                 return new([operands[0], SilType.Int], element);
 
-            case "array_append" when Element(0, true) is { } element:
+            case "array_append" when Element(0, true, arrayOnly: true) is { } element:
                 return new([operands[0], element], SilType.Unit) { Consumed = [1] };
 
             // In place, on an array already made the only reference to its buffer.
@@ -1509,15 +1603,20 @@ public static class SilBuiltins {
             case "array_element_addr" when Element(0, true) is { } element:
                 return new([operands[0], SilType.Int], SilType.Address(element));
 
-            case "array_remove_last" when Element(0, true) is { } element:
+            case "array_remove_last" when Element(0, true, arrayOnly: true) is { } element:
                 return new([operands[0]], element);
 
-            case "array_clear" when Element(0, true) is not null:
+            case "array_clear" when Element(0, true, arrayOnly: true) is not null:
                 return new([operands[0]], SilType.Unit);
 
-            // A copy of elements [from, to): an array of its own.
-            case "array_slice" when Element(0, false) is not null:
-                return new([operands[0], SilType.Int, SilType.Int], operands[0]);
+            // Elements [from, to) of an array or a slice, as a slice: a view
+            // that shares the buffer, the range checked against the count.
+            case "array_slice" when Element(0, false) is { } element:
+                return new([operands[0], SilType.Int, SilType.Int], new SliceType(element));
+
+            // The whole of an array, as a slice: 'sum(xs)' of a 'sum(_: Int[:])'.
+            case "slice_of" when Element(0, false, arrayOnly: true) is { } element:
+                return new([operands[0]], new SliceType(element));
 
             default:
                 return null;

@@ -326,6 +326,18 @@ public sealed class SilParser {
             type.IsInline = true;
         }
 
+        if (Current is { Kind: TokenKind.Global, Text: "packed" }) {
+            Next();
+            type.IsPacked = true;
+        }
+
+        if (Current is { Kind: TokenKind.Global, Text: "align" }) {
+            Next();
+            Expect("(");
+            type.Alignment = int.Parse(Expect(TokenKind.Number, "an alignment").Text, CultureInfo.InvariantCulture);
+            Expect(")");
+        }
+
         Expect("{");
         if (!At("}")) {
             do {
@@ -570,10 +582,12 @@ public sealed class SilParser {
             return new RelativeReferenceType(target, width, relative.Text == "relative_optional");
         }
 
+        // '[T]' an array, '[T:]' a slice of one.
         if (Accept("[")) {
             var element = ParseTypeBody();
+            var slice = Accept(":");
             Expect("]");
-            return new ArrayType(element);
+            return slice ? new SliceType(element) : new ArrayType(element);
         }
 
         if (Accept("(")) {

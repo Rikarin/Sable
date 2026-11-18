@@ -2,7 +2,7 @@
   "name": "sable",
   "displayName": "Sable",
   "description": "Sable language support: diagnostics, completion, navigation, rename, formatting, the Test Explorer, tasks and debugging, from the sable toolchain.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "publisher": "sable-lang",
   "license": "MIT OR Apache-2.0",
   "icon": "images/icon.png",

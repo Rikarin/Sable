@@ -617,7 +617,14 @@ fn zip<A, B, S1, S2>(_ a: S1, _ b: S2) -> some Sequence<(A, B)>
 - **Monomorphised by default.** Each distinct instantiation gets its own code.
 - `any P` opts into a single boxed, dynamically dispatched copy.
 - `@polymorphic` on a generic function forces a single boxed copy, to control
-  code size in large generic trees.
+  code size in large generic trees: each type parameter stands for `any` of
+  its constraints, so a value of it is passed boxed with its type's witness
+  table, and a result of a type parameter is taken back out of its box as
+  the type the call gives it. The function's own type parameters must each be
+  constrained to protocols alone, with no associated types or requirements
+  mentioning `Self`; each parameter and the result must be a type parameter
+  or mention none, and none of a type parameter `inout` (S3512). Taken as a
+  value rather than called, the function is still compiled for its types.
 - Constraints: protocol conformance (`T: P`), class inheritance (`T: Widget`),
   same-type (`where S.Element == T`), `Sized`, `Copyable`, `Sendable`.
 - Variance: generic types are invariant. Protocol existentials are covariant in
@@ -942,8 +949,11 @@ expression position when `.self` follows it, so `xs[0]` stays an index and
 
 The type of `T.self` is the metatype `T.Type` (written after a type's name,
 unless the type has a nested type called `Type`). Its one value is the type,
-so it holds nothing at run time. A `T.Type` parameter infers `T`, and a
-metatype value reaches the type's static members:
+so it holds nothing at run time. `Int?.Type` and `Int[>..].Type` are the
+metatypes of compound types. Two metatypes compare with `==` and `!=`:
+equal when they are the type of the same type, which in generic code is
+decided for each instance. A `T.Type` parameter infers `T`, and a metatype
+value reaches the type's static members:
 
 ```sable
 fn make<T: Zero>(_ type: T.Type) -> T { return type.zero() }
@@ -1259,12 +1269,42 @@ an optimised one; never both.
 | `@MainActor` | any | Main-executor isolation |
 | `@frozen` | struct, union | ABI-stable layout; no new cases/fields ever |
 
+`@packed` lays a struct's fields one after another with no padding, and
+aligns the struct to a byte. `@align(n)`, a power of two up to 16 (the
+alignment of every block the runtime allocates; more is S3510), aligns the
+struct to at least `n` and rounds its size up to a multiple of it; with
+`@packed`, the struct is aligned to exactly `n`. Both are C's layouts —
+`__attribute__((packed))` and `_Alignas(n)` — and a struct passed to or from
+C is passed as C passes its own. A field of a packed struct passed `inout`
+is copied to an aligned place and back. On an `@inline_layout` struct,
+`@align(n)` puts the struct at a multiple of `n` from the start of a value
+that holds it, and rounds its fixed part up to one.
+
 User-defined attributes are declared as structs conforming to `Attribute` and
-are readable through reflection on `@reflectable` types. (Not built yet: an
-attribute that is not in this table, or `@derive`, `@indirect`, `@allow` and
-`@warn`, is an error — S3092 — as is one written where it does not apply,
-S3093.) A public union matched from another module needs `default` unless
-it is `@frozen` (docs/03 §3.3).
+are readable through reflection on `@reflectable` types:
+
+```sable
+struct Route: Attribute {
+    var path: String
+    var method: String = "GET"
+}
+
+@reflectable
+@Route("/users", method: "POST")
+struct Users { }
+
+for route in TypeInfo.of(Users.self).attributes(of: Route.self) { }
+```
+
+The attribute's arguments are checked as a call to one of the struct's
+initialisers would be, and are constants — literals, cases, and arrays and
+tuples of them (S3511). One may be written on any declaration, and more than
+once; on a `@reflectable` type, `attributes(of:)` gives the values of those
+of one type in the order written. A name that is neither in this table nor
+such a struct, or `@derive`, `@indirect`, `@allow` and `@warn`, is S3092; one
+of the table's written where it does not apply is S3093. A public union
+matched from another module needs `default` unless it is `@frozen` (docs/03
+§3.3).
 
 ---
 

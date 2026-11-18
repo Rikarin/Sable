@@ -343,6 +343,35 @@ public sealed class LoweringTests {
         );
     }
 
+    /// <summary>
+    ///     '@packed' and '@align(n)' are flags of the SIL struct, which the
+    ///     emitter lays out by; printed, parsed back, and of no matter to
+    ///     what the interpreter computes.
+    /// </summary>
+    [Fact]
+    public void PackedAndAlignedStructsCarryTheirLayout() {
+        var module = Lower(
+            """
+            @packed struct Header { var tag: U8, var length: U32 }
+            @packed @align(4) struct Word { var a: U8, var b: U16 }
+            @align(16) struct Vec { var x: F32, var y: F32 }
+            fn sum() -> Int {
+                var h = Header(tag: 1, length: 2)
+                h.length += 3
+                let v = Vec(x: 1.0, y: 2.0)
+                let w = Word(a: 4, b: 5)
+                return Int(h.tag) + Int(h.length) + Int(v.y) + Int(w.b)
+            }
+            """
+        );
+
+        var text = SilPrinter.Print(module);
+        Assert.Contains("sil_struct M.Header @packed { tag: $U8, length: $U32 }", text, StringComparison.Ordinal);
+        Assert.Contains("sil_struct M.Word @packed @align(4) { a: $U8, b: $U16 }", text, StringComparison.Ordinal);
+        Assert.Contains("sil_struct M.Vec @align(16) { x: $F32, y: $F32 }", text, StringComparison.Ordinal);
+        Assert.Equal(13L, Run(module, "sum"));
+    }
+
     // ---- What is not lowered yet --------------------------------------------
 
     [Fact]

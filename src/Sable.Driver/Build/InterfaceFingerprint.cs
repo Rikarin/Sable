@@ -1,8 +1,18 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.RegularExpressions;
 using Sable.Syntax;
 
 namespace Sable.Driver.Build;
+
+/// <summary>
+///     What a file shows other units, and what of theirs it may use: its
+///     interface's <see cref="Fingerprint" />; its <see cref="Source" /> as
+///     others see it; the fingerprint of its <see cref="Extensions" />, which
+///     reach every unit; and the dotted names it writes
+///     (<see cref="References" />), from which the units it depends on are found.
+/// </summary>
+public sealed record FileInterface(string Fingerprint, string Source, string Extensions, IReadOnlyList<string> References);
 
 /// <summary>
 ///     A file's interface, as a fingerprint: everything in it that another
@@ -23,7 +33,8 @@ namespace Sable.Driver.Build;
 ///         no type parameters — or in an extension of a type that the program
 ///         declares, and declares only as such a type. Everything else counts
 ///         as interface: a generic body is instantiated in the units that use
-///         it, a protocol's defaults in the conforming types', a subscript or
+///         it, a <c>const fn</c>'s run by the compiler for the units whose
+///         constants call it, a protocol's defaults in the conforming types', a subscript or
 ///         setter where it is used, and anything unrecognised is kept.
 ///     </para>
 ///     <para>
@@ -35,7 +46,7 @@ namespace Sable.Driver.Build;
 ///         a body growing by a line does not move every declaration after it.
 ///     </para>
 /// </remarks>
-public static class InterfaceFingerprint {
+public static partial class InterfaceFingerprint {
     /// <summary>
     ///     The simple names of the types whose extensions may hold bodies that
     ///     are not interface: declared, somewhere in the program, as a
@@ -109,28 +120,89 @@ public static class InterfaceFingerprint {
 
     static bool Same(SyntaxNode node, SyntaxNode? other) => other is not null && node.Kind == other.Kind && node.Span == other.Span;
 
+    /// <summary>
+    ///     The simple names of the types a file's extensions extend: all that
+    ///     the program's <see cref="ConcreteTypeNames" /> can change of its interface.
+    /// </summary>
+    public static IEnumerable<string> ExtendedNames(SyntaxTree tree) {
+        var pending = new Stack<SyntaxNode>(tree.Root is CompilationUnitSyntax unit ? unit.Members : []);
+        while (pending.TryPop(out var node)) {
+            foreach (var member in MembersOf(node)) {
+                pending.Push(member);
+            }
+
+            if (node is ExtensionDeclarationSyntax extension && LastName(extension) is { } name) {
+                yield return name;
+            }
+        }
+    }
+
+    static string? LastName(ExtensionDeclarationSyntax extension) {
+        string? last = null;
+        foreach (var token in extension.Type.DescendantTokens()) {
+            last = token.Kind == SyntaxKind.IdentifierToken ? token.Text : last;
+        }
+
+        return last;
+    }
+
     /// <summary>The fingerprint of one file's interface, given the program's <see cref="ConcreteTypeNames" />.</summary>
     public static string Of(SyntaxTree tree, IReadOnlySet<string> concreteTypes) => Interface(tree, concreteTypes).Fingerprint;
+
+    /// <summary>A name with a dot in it, which may name a module or something in one.</summary>
+    [GeneratedRegex(@"(?<![\w.])[\p{L}_][\p{L}\p{Nd}_]*(?:\.[\p{L}_][\p{L}\p{Nd}_]*)+")]
+    private static partial Regex DottedName();
 
     /// <summary>
     ///     One file's interface: its fingerprint, and its source as another
     ///     unit sees it — the file with each body that is not interface
-    ///     written <c>{ … }</c>, what a <c>.sbi</c> file holds (<see cref="InterfaceFile" />).
+    ///     blanked (<see cref="Blank" />), what a <c>.sbi</c> file holds
+    ///     (<see cref="InterfaceFile" />) and other units bind against —
+    ///     the fingerprint of its extensions, and the dotted names it writes.
     /// </summary>
-    public static (string Fingerprint, string Source) Interface(SyntaxTree tree, IReadOnlySet<string> concreteTypes) {
+    /// <remarks>
+    ///     The dotted names are looked for in the text, bodies and comments
+    ///     included: a module can be named in full without an import
+    ///     (<c>Sable.Math.sqrt(x)</c>), and a name found that is not a
+    ///     module's costs only a dependency that is not there.
+    /// </remarks>
+    public static FileInterface Interface(SyntaxTree tree, IReadOnlySet<string> concreteTypes) {
         var writer = new Writer(tree, concreteTypes);
         writer.Node(tree.Root, positional: false);
-        var source = new StringBuilder();
         var text = tree.Text.Text;
-        var at = 0;
+        var source = new StringBuilder(text);
         foreach (var body in writer.Elided) {
-            source.Append(text, at, body.Start - at).Append("{ … }");
-            at = body.End;
+            Blank(source, body);
         }
 
-        source.Append(text, at, text.Length - at);
-        return (Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(writer.Text.ToString()))), source.ToString());
+        var references = DottedName().Matches(text).Select(static m => m.Value).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList();
+        return new(Hash(writer.Text.ToString()), source.ToString(), Hash(writer.Extensions.ToString()), references);
     }
+
+    /// <summary>
+    ///     A body left out of a file's source as other units see it: a block
+    ///     becomes an empty one, an expression <c>0</c>, and the rest spaces —
+    ///     with its line breaks kept, so that everything after it is where it
+    ///     was, and what other units lower from the file (a generic body, a
+    ///     default) has the lines and columns it has in the file.
+    /// </summary>
+    static void Blank(StringBuilder source, TextSpan body) {
+        var block = source[body.Start] == '{';
+        for (var i = body.Start; i < body.End; i++) {
+            if (source[i] is not ('\n' or '\r')) {
+                source[i] = ' ';
+            }
+        }
+
+        if (block) {
+            source[body.Start] = '{';
+            source[body.End - 1] = '}';
+        } else {
+            source[body.Start] = '0';
+        }
+    }
+
+    static string Hash(string text) => Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(text)));
 
     sealed class Writer(SyntaxTree tree, IReadOnlySet<string> concreteTypes) {
         public StringBuilder Text { get; } = new();
@@ -138,7 +210,26 @@ public static class InterfaceFingerprint {
         /// <summary>The spans of the bodies left out, in document order.</summary>
         public List<TextSpan> Elided { get; } = [];
 
+        /// <summary>
+        ///     The extensions' part of <see cref="Text" />. An extension adds to
+        ///     a type that units which do not depend on it can see — a
+        ///     conformance, an overload that changes how the type's methods
+        ///     are named — so every unit is keyed by every extension.
+        /// </summary>
+        public StringBuilder Extensions { get; } = new();
+
         public void Node(SyntaxNode node, bool positional, bool elide = true) {
+            if (node is not ExtensionDeclarationSyntax) {
+                Write(node, positional, elide);
+                return;
+            }
+
+            var from = Text.Length;
+            Write(node, positional, elide);
+            Extensions.Append(Text, from, Text.Length - from);
+        }
+
+        void Write(SyntaxNode node, bool positional, bool elide) {
             if (elide && !positional && Body(node) is { } body) {
                 // The declaration without its body: the body is its unit's own.
                 // A default argument is code too, made at each call.
@@ -195,7 +286,8 @@ public static class InterfaceFingerprint {
         /// <summary>The body of a declaration whose body is not interface, or null.</summary>
         SyntaxNode? Body(SyntaxNode node) {
             SyntaxNode? body = node switch {
-                FunctionDeclarationSyntax { TypeParameters: null, Attributes.Count: 0 } f => (SyntaxNode?)f.Body ?? f.ExpressionBody,
+                // A 'const fn' runs wherever a constant calls it, while that unit compiles.
+                FunctionDeclarationSyntax { TypeParameters: null, Attributes.Count: 0 } f when !f.Modifiers.Any(SyntaxKind.ConstKeyword) => (SyntaxNode?)f.Body ?? f.ExpressionBody,
                 InitDeclarationSyntax { TypeParameters: null, Attributes.Count: 0 } i => i.Body,
                 DeinitDeclarationSyntax { Attributes.Count: 0 } d => d.Body,
                 OperatorDeclarationSyntax { Attributes.Count: 0 } o => (SyntaxNode?)o.Body ?? o.ExpressionBody,

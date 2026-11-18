@@ -366,7 +366,21 @@ Borrowed wholesale from Goose, because the taxonomy is correct:
 | `T[..]` | inline capacity, inferred | within cap | yes |
 | `T[>..]` | **grow-only** — the common case | yes | yes |
 | `T[>..<]` | grow and shrink — stacks, queues, heaps | yes | no |
-| `T[:]` | non-copying slice view | no | borrows |
+| `T[:]` | non-copying slice view | no | shares the array's buffer |
+
+A slice is a view of a run of an array's elements — the array's buffer, where
+the run starts and how many elements it has — and taking one copies nothing:
+`xs[1..<3]`, a slice of a slice, and any kind of array passed where a `T[:]` is
+wanted. The view shares the buffer the way a second copy of the array would,
+holding a reference to it, so a slice is a value like the others: it may be
+stored and returned, and it outlives the array it was taken from rather than
+being checked against it. The array copies its buffer on its next write while
+a slice shares it, and a write through a slice copies the slice's run, so
+neither sees the other's changes — the copy-on-write the array kinds already
+have, not a borrow that freezes the array. An index or a range is checked
+against the slice's own count and traps outside it, whatever lies beyond in
+the buffer. An array field of an `@inline_layout` struct is bytes in its block,
+laid out for the block, so passing one as a slice copies its elements out once.
 
 `String` is `U8[>..]` with a UTF-8 invariant. `List<T>` in the standard library
 is a Tier 2, heap-backed, copy-on-write container for the cases where none of

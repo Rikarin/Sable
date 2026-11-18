@@ -84,6 +84,54 @@ public sealed class InlineLayoutTests {
             ).Stdout
         );
 
+    /// <summary>
+    ///     '@align(n)' on an inline struct rounds its fixed part up to a
+    ///     multiple of n, and puts it at a multiple of n in one that holds it,
+    ///     with zero bytes between: a record format's fixed stride.
+    /// </summary>
+    [Fact]
+    public void AlignPadsTheFixedPart() =>
+        Assert.Equal(
+            "8\n33\n1 0 0 0 0 0 0 0 2 0 0 0 0 0 0 0\n3 0 1 7 9\n5 9 7 1 2\n",
+            AssertAgree(
+                Program(
+                    """
+                    @inline_layout
+                    @align(8)
+                    struct Stamp {
+                        var kind: U8
+                        var code: U16
+                    }
+
+                    @inline_layout
+                    struct Entry {
+                        var flag: U8
+                        var stamp: Stamp
+                        var count: U8
+                        var stamps: Stamp[..4]
+                    }
+                    """,
+                    """
+                        print(Bytes.of(Stamp { kind: 1, code: 2 }).count)
+                        var e = Entry { flag: 1, stamp: Stamp { kind: 2, code: 0 }, count: 3, stamps: [] }
+                        e.stamps.append(Stamp { kind: 7, code: 9 })
+                        let bytes = Bytes.of(e)
+                        print(bytes.count)
+                        var line = ""
+                        for i in 0..<16 {
+                            line = line + (i == 0 ? "" : " ") + "\(bytes[i])"
+                        }
+                        print(line)
+                        print("\(bytes[16]) \(bytes[17]) \(bytes[24]) \(bytes[25]) \(bytes[26])")
+                        match Entry.fromBytes(bytes) {
+                            case .Ok(let copy) => print("\(copy.count + 2) \(copy.stamps[0].code) \(copy.stamps[0].kind) \(copy.flag) \(copy.stamp.kind)")
+                            case .Invalid(let why) => print(why)
+                        }
+                    """
+                )
+            ).Stdout
+        );
+
     [Fact]
     public void ValuesAreCopiedOnWrite() =>
         Assert.Equal(
@@ -201,6 +249,96 @@ public sealed class InlineLayoutTests {
                         print("root \(tree.root!.value)")
                         match Tree.fromBytes(Bytes.of(tree)) {
                             case .Ok(let copy) => print(copy.nodes.count == 4 ? "ok" : "wrong")
+                            case .Invalid(let why) => print(why)
+                        }
+                    """
+                )
+            ).Stdout
+        );
+
+    /// <summary>
+    ///     An append is two splices — the element, then the count that takes
+    ///     it in — and between them the bytes are no value: walked then, the
+    ///     count stops short and reads the element as the next field. The
+    ///     relative references are read once, before either, so an array
+    ///     followed by another variable-size one grows, interpreted as natively.
+    /// </summary>
+    [Fact]
+    public void AnArrayGrowsBeforeAnotherVariableField() =>
+        Assert.Equal(
+            "3 2\n12 7\n",
+            AssertAgree(
+                Program(
+                    """
+                    @inline_layout
+                    struct Line {
+                        var sku: U8[..16]
+                        var qty: U16
+                    }
+
+                    @inline_layout
+                    struct Order {
+                        var id: U64
+                        var codes: U16[..8]
+                        var lines: Line[>..]
+                        var parent: Order&<u32>?
+                    }
+                    """,
+                    """
+                        var order = Order { id: 7, codes: [], lines: [], parent: none }
+                        order.codes.append(3)
+                        order.codes.append(4)
+                        order.lines.append(Line { sku: "a", qty: 2 })
+                        order.codes.append(5)
+                        order.lines.append(Line { sku: "bb", qty: 5 })
+                        print("\(order.codes.count) \(order.lines.count)")
+                        var codes = 0
+                        for code in order.codes { codes = codes + Int(code) }
+                        var qty = 0
+                        for line in order.lines { qty = qty + Int(line.qty) }
+                        print("\(codes) \(qty)")
+                    """
+                )
+            ).Stdout
+        );
+
+    /// <summary>
+    ///     A grow-only array's count takes a second byte at 128, a splice of
+    ///     its own after the element's; with a relative reference across it,
+    ///     that reference is still measured from the bytes as they were.
+    /// </summary>
+    [Fact]
+    public void ACountThatTakesAnotherByteKeepsReferencesAcrossIt() =>
+        Assert.Equal(
+            "200 10 20\nok\n",
+            AssertAgree(
+                Program(
+                    """
+                    @inline_layout
+                    struct Node {
+                        var value: U32
+                    }
+
+                    @inline_layout
+                    struct Graph {
+                        var root: Node&<u32>?
+                        var tags: U8[>..]
+                        var nodes: Node[>..]
+                    }
+                    """,
+                    """
+                        var graph = Graph { root: none, tags: [], nodes: [] }
+                        graph.nodes.append(Node { value: 10 })
+                        graph.nodes.append(Node { value: 20 })
+                        graph.root = &graph.nodes[1]
+                        var i = 0
+                        while i < 200 {
+                            graph.tags.append(1)
+                            i = i + 1
+                        }
+                        print("\(graph.tags.count) \(graph.nodes[0].value) \(graph.root!.value)")
+                        match Graph.fromBytes(Bytes.of(graph)) {
+                            case .Ok(let copy) => print(copy.root!.value == 20 ? "ok" : "wrong")
                             case .Invalid(let why) => print(why)
                         }
                     """

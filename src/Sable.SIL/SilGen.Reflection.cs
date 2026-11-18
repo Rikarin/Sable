@@ -63,7 +63,7 @@ public sealed partial class SilGen {
             (_, ScalarType) => Shape.Scalar,
             (OptionalTypeSymbol, EnumType) => Shape.Optional,
             (TupleTypeSymbol, TupleType) => Shape.Tuple,
-            (ArrayTypeSymbol, ArrayType) => Shape.Array,
+            (ArrayTypeSymbol, ArrayType or SliceType) => Shape.Array,
             (NamedTypeSymbol named, ArrayType) when named.OriginalDefinition.Equals(Core.Dictionary) => Shape.Dictionary,
             (NamedTypeSymbol { TypeKind: TypeKind.Struct }, StructType { IsInline: false }) => Shape.Struct,
             (NamedTypeSymbol { TypeKind: TypeKind.Class or TypeKind.Actor } named, ClassType) when !named.OriginalDefinition.Equals(Core.Task) => Shape.Class,
@@ -301,7 +301,7 @@ public sealed partial class SilGen {
             Block = header;
             Emit(new CondBranchInst(Emit(new BuiltinInst("cmp_lt_Int", SilType.Bool, index, count)), each, [], exit, []));
             Block = each;
-            var element = Emit(new BuiltinInst("array_get_borrowed", ((ArrayType)array.Type).Element, array, index));
+            var element = Emit(new BuiltinInst("array_get_borrowed", ArrayType.ElementOf(array.Type)!, array, index));
             body(index, element);
             Emit(new BranchInst(header, Emit(new BuiltinInst("add_Int", SilType.Int, index, Int(1)))));
             Block = exit;
@@ -644,8 +644,17 @@ public sealed partial class SilGen {
             .Where(static b => b.TypeKind == TypeKind.Protocol)
             .Select(b => members.Apply(b).ToDisplayString()));
 
-        values["attributes"] = s.Strings(type.OriginalDefinition.DeclaringSyntax.FirstOrDefault()?.ChildNodes().OfType<AttributeSyntax>()
+        values["attributeNames"] = s.Strings(type.OriginalDefinition.DeclaringSyntax.FirstOrDefault()?.ChildNodes().OfType<AttributeSyntax>()
             .Select(static a => a.Name.ToString().Trim() + (a.ArgumentList?.ToString().Trim() ?? "")) ?? []);
+
+        var valuesIndex = info.FieldIndex("attributeValues");
+        if (valuesIndex >= 0) {
+            if (AttributeValuesBuilder(type, info.Fields[valuesIndex].Type) is not { } builder) {
+                return null;
+            }
+
+            values["attributeValues"] = s.Emit(new ApplyInst(s.Emit(new FunctionRefInst(builder, new FunctionType([], info.Fields[valuesIndex].Type))), info.Fields[valuesIndex].Type, []));
+        }
 
         var made = new SilValue[info.Fields.Count];
         for (var i = 0; i < made.Length; i++) {
@@ -662,6 +671,45 @@ public sealed partial class SilGen {
         return name;
     }
 
+    /// <summary>
+    ///     The function that makes a type's own attributes' values, as
+    ///     <c>(any Attribute)[&gt;..]</c>: each attribute's initialiser called
+    ///     with its arguments, constants all, lowered as the binder bound them.
+    /// </summary>
+    string? AttributeValuesBuilder(NamedTypeSymbol type, SilType arrayType) {
+        var name = $"$reflect.attributes${Sanitise(type.ToDisplayString())}";
+        if (_module.Find(name) is not null) {
+            return name;
+        }
+
+        var function = new SilFunction(name, new FunctionType([], arrayType));
+        var attributes = _compilation.UserAttributesOf(type.OriginalDefinition);
+        if (attributes.Count == 0 || Core.Attribute is not { } protocol || type.OriginalDefinition.DeclaringSyntax is not [var declaration, ..]) {
+            var s = new Synthesis(function);
+            s.Emit(new ReturnInst(s.Emit(new BuiltinInst("array_empty", arrayType))));
+            _module.Add(function);
+            return name;
+        }
+
+        var root = declaration;
+        while (root.Parent is { } parent) {
+            root = parent;
+        }
+
+        if (_compilation.SyntaxTrees.FirstOrDefault(t => ReferenceEquals(t.Root, root)) is not { } tree) {
+            return null;
+        }
+
+        var existential = new ExistentialTypeSymbol(protocol);
+        var array = new BoundArray(declaration, new ArrayTypeSymbol(existential, ArrayKind.Grow),
+            [..attributes.Select(a => (BoundExpression)new BoundConversion(a.Value.Syntax, existential, a.Value, ConversionKind.Existential))]);
+        var symbol = FunctionSymbol.Synthesized(name, type.OriginalDefinition);
+        new FunctionLowering(this, symbol, function, tree.Text, TypeSubstitution.Empty).Lower(new BoundBlock(declaration, [], [new BoundReturn(declaration, array)]));
+        function.RemoveUnreachableBlocks();
+        _module.Add(function);
+        return name;
+    }
+
     /// <summary>The struct an array field of TypeInfo holds.</summary>
     static StructType? Element(StructType info, string field) {
         var index = info.FieldIndex(field);
@@ -671,7 +719,7 @@ public sealed partial class SilGen {
     /// <summary>A field the compiler has nothing for: false, zero, empty.</summary>
     static SilValue Zero(Synthesis s, SilType type) =>
         type == SilType.String ? s.Text("")
-        : type is ArrayType ? s.Emit(new BuiltinInst("array_empty", type))
+        : type is ArrayType or SliceType ? s.Emit(new BuiltinInst("array_empty", type))
         : s.Emit(new IntegerLiteralInst(type, 0));
 
     /// <summary>A member as it would be declared: 'static fn origin() -> Point', 'init(x: Int, y: Int)'.</summary>

@@ -1417,12 +1417,25 @@ Full design in [05-toolchain.md](05-toolchain.md).
   runner adds them up and prints the share of lines run per file with the
   lines that never ran, and writes `target/coverage/lcov.info`. A line counts
   as often as the most-run block it is in; code the optimiser removes is
-  still a line, since the counters go in first. The SIL interpreter runs a
-  counter as nothing.
+  still a line, since the counters go in first. The SIL interpreter counts
+  them too (`SilInterpreter.CoverageCounts`), the same as native code.
+- Branch coverage: lowering, asked to (`SilGen.Lower(…, markDecisions)`,
+  `SilGen.Decisions.cs`), records each decision of the source
+  (`SilFunction.Decisions`: `if`, `guard`, `while`, `?:`, `&&`/`||`,
+  `match`, `switch`, `if let`/`if case`, `??`, `try?`/`try!`/`catch`) and
+  gives each outcome a block only it enters (`SilBlock.Outcome`) — one of
+  its own on the way to a target entered other ways too — which
+  `Coverage.Instrument` starts with a counter like a line's. Unmarked
+  builds lower as before. An outcome's count is the sum of its blocks', a
+  decision lowered more than once (a generic's, a `defer`'s) adds up. The
+  runner prints branches run per file and each decision some of whose
+  outcomes never happened, and `lcov.info` has `BRDA`/`BRF`/`BRH`.
+- The VS Code extension's Test Explorer has a Coverage profile: it runs
+  `sable test --coverage` for the selected tests and reports each file's
+  lines and branches from `lcov.info` (`editors/vscode/src/coverage.js`).
 - **Deferred:** a `blackBox` to keep the optimiser from deleting a
   benchmark's work (it needs a core builtin); async benchmarks; snapshot and
-  property testing (docs/06 lists them under Sable.Testing; #73, #107); the
-  Test Explorer's Coverage profile reading `lcov.info`; branch coverage; a
+  property testing (docs/06 lists them under Sable.Testing; #73, #107); a
   time limit inside the harness's own runner, which would need a builtin to
   wait on a child with one.
 
@@ -1961,21 +1974,23 @@ Sable.CodeGen. `sable build` and `sable run` on a package go through it;
     with the executable as it was left (size and time, else content), does
     nothing more: it reads and hashes the files and stops.
   - `objects/<key>.o` and `.abi`: one per unit, keyed by its own files'
-    content and the **program's interface fingerprint**. The interface is
-    not a binary `.sbi` file (docs/05 §5.4) but a hash per file
+    content and the **interface fingerprints of the units it depends on**
+    (`UnitGraph`: what it imports or names in full, units sharing its
+    modules, and so on; the entry unit depends on all), plus every unit's
+    extensions'. The interface is a hash per file
     (`InterfaceFingerprint`) of its tokens with the bodies left out that
     only their own unit lowers: functions, initialisers, deinits, operators
     and getters with no type parameters, no `some` or `ref` in the
-    signature and no attribute, at module level or in a non-generic struct,
+    signature, no attribute and no `const`, at module level or in a non-generic struct,
     class, union, enum or actor, or in an extension of a type the program
     declares only as such. Generic bodies, protocol defaults, subscripts,
     setters, initial values and default arguments count as interface, since
     other units lower them; where such code is, its tokens' line and column
     count too (they reach debug information and the units that instantiate
     it), and elsewhere they do not, so a body growing by a line moves
-    nothing. So a change to an ordinary body recompiles one unit; anything
-    else recompiles every unit of the program (finer, dependents-only
-    invalidation is the query engine's job — below).
+    nothing. So a change to an ordinary body recompiles one unit; a change
+    to an interface recompiles the units that depend on it; a change to an
+    extension's interface recompiles every unit.
   - `objects/runtime-<key>.o`: the C runtime, compiled once per settings.
   - `target/resolution.txt`: the last resolution of a graph of local
     packages, keyed by every local manifest, the lock file and the
@@ -1990,9 +2005,11 @@ Sable.CodeGen. `sable build` and `sable run` on a package go through it;
   `.abi` files) disagree, or the link fails — the program is compiled whole
   instead, with a note. A stale or inconsistent object never reaches an
   executable. (Today a class declared inside a function body that
-  subclasses another unit's class always ends this way: the other unit
-  does not bind that body, so it thinks the superclass has no subclasses.
-  So does a static stored property of a type declared in a body.) Objects are written to a temporary name and renamed into
+  subclasses a class of another unit of its module which is not `open`
+  always ends this way: the other unit does not bind that body, so it
+  thinks the superclass has no subclasses. An `open` class is dispatched
+  dynamically by every unit, whatever subclasses it sees. So does a
+  static stored property of a type declared in a body.) Objects are written to a temporary name and renamed into
   place; past `max(256, 8 × units)` objects the least recently used go (an
   object's own time is left alone: lldb's debug map checks it).
 - **Parallel.** Files are read, hashed and parsed in parallel; the
@@ -2060,15 +2077,16 @@ than "every unit" when an interface changes (today a signature change
 anywhere is a ~6 s rebuild here); keeping parsed trees and bound
 declarations in a long-lived process (a build daemon, or the LSP server)
 so a warm build re-parses only what changed; and early cut-off when a
-change's result is unchanged. Also deferred: a binary `.sbi` (the
-interface is a fingerprint, and each unit still binds every file's
-declarations from source); separate compilation for optimised builds
+change's result is unchanged. (Since done: invalidation by dependency,
+and a binary `.sbi` that units whose objects are kept are parsed and bound
+from — docs/05 §5.4, "As built". Declarations are still bound from source
+text, the interfaces', on each build.) Also deferred: separate compilation for optimised builds
 (they need the whole program for the SIL passes and LTO — ThinLTO over
 units would parallelise their 26 s of clang); escape and root summaries
 across units (a unit assumes the worst, and the program is compiled whole
 when that rejects it); lowering units in parallel; packages built once
-for several binaries or members (a unit's key includes the whole
-program's interface, so each binary has its own objects); a `.dSYM` for
+for several binaries or members (the entry unit depends on every unit,
+and each binary's units are keyed by the program it is in); a `.dSYM` for
 separately compiled builds (lldb reads DWARF from the cached objects
 through the debug map; `sable clean` removes them); `sable test` and
 `sable bench` still compile whole.

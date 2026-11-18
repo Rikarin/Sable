@@ -81,6 +81,8 @@ public sealed class DebuggerFormatterTests {
                               let numbers: Int[>..] = [10, 20, 30]
                               let names: String[>..] = ["ann", "bob"]
                               let nothingYet: Int[>..] = []
+                              let middle = numbers[1...]
+                              let noneOfThem: Int[:] = []
                               let circle = Shape.Circle(radius: 1.5)
                               let rect = Shape.Rect(width: 2, height: 3)
                               let tagged = Shape.Named(label: "box")
@@ -265,6 +267,14 @@ public sealed class DebuggerFormatterTests {
             "([Int]) numbers = count = 3 {\n  [0] = 10\n  [1] = 20\n  [2] = 30\n}",
             "([String]) names = count = 2 {\n  [0] = \"ann\"\n  [1] = \"bob\"\n}",
             "([Int]) nothingYet = count = 0"
+        );
+
+    /// <summary>A slice shows its own run of the buffer it views: its count, and its elements from its start.</summary>
+    [PosixFact(NeedsLldb)]
+    public void SlicesShowTheirCountAndElements() =>
+        Shows(
+            "([Int:]) middle = count = 2 {\n  [0] = 20\n  [1] = 30\n}",
+            "([Int:]) noneOfThem = count = 0"
         );
 
     [PosixFact(NeedsLldb)]

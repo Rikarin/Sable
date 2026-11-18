@@ -349,6 +349,40 @@ public sealed partial class Binder {
         return null;
     }
 
+    /// <summary>
+    ///     A user-defined attribute, <c>@Route("/users", method: "GET")</c>:
+    ///     its arguments as a call to one of the struct's initialisers, as
+    ///     <c>Route("/users", method: "GET")</c> would be — a value of the
+    ///     struct, which reflection gives back.
+    /// </summary>
+    public BoundExpression BindAttribute(AttributeSyntax attribute, NamedTypeSymbol type) {
+        PushScope();
+        var syntaxes = ImmutableArray.CreateBuilder<ExpressionSyntax>();
+        var labels = ImmutableArray.CreateBuilder<string?>();
+        foreach (var argument in attribute.ArgumentList?.Arguments ?? default) {
+            syntaxes.Add(argument.Expression);
+            labels.Add(argument.NameToken.IsNone ? null : argument.NameToken.Text);
+        }
+
+        var arguments = syntaxes.Select(e => BindExpression(e)).ToImmutableArray();
+        var initializers = type.GetMembers("init").OfType<FunctionSymbol>().Where(i => i.DeclaringSyntax.IsEmpty || IsAccessible(i)).ToImmutableArray();
+        BoundExpression bound;
+        if (initializers.IsEmpty) {
+            _diagnostics.Error(
+                ErrorCode.ERR_MalformedAttribute,
+                attribute.Span,
+                $"'{type.ToDisplayString()}' has no initialiser here, so '@{type.Name}' cannot make one"
+            );
+            bound = new BoundError(attribute, arguments.ToArray());
+        } else {
+            var group = new BoundFunctionGroup(attribute, new BoundTypeExpression(attribute.Name, type), initializers);
+            bound = BindCallToGroup(attribute, group, arguments, labels.ToImmutable(), syntaxes.ToImmutable(), type);
+        }
+
+        PopScope();
+        return bound;
+    }
+
     /// <summary>Binds a standalone statement, for tests and scripts.</summary>
     public BoundStatement BindStatementInNewScope(StatementSyntax statement) {
         PushScope();
@@ -6671,6 +6705,14 @@ public sealed partial class Binder {
             }
         }
 
+        // 'T.self == Int.self': two metatypes are equal when they are the
+        // type of the same type. A metatype's one value is its type, so the
+        // answer is known in each instance of the code (SYNTAX.md §16).
+        if (kind is BinaryOperatorKind.Equal or BinaryOperatorKind.NotEqual
+            && left.Type is MetatypeTypeSymbol && right.Type is MetatypeTypeSymbol) {
+            return new BoundBinaryOperator(syntax, Core.Bool, kind, left, right);
+        }
+
         // A type of the program's own, or a type parameter, uses the operators
         // it declares, or its constraints require: 'a == b' on two Moneys is
         // Money's '=='. '!=', '>', '<=' and '>=' follow from '==' and '<'.
@@ -7422,6 +7464,21 @@ public sealed partial class Binder {
     ) {
         var token = pattern.Token;
 
+        // 'none' is the optional with no value, and nothing else: on a value
+        // that is not optional it would match nothing, and where the type has
+        // a case of that name ('`none`'), that case is '.none'.
+        if (token.Kind == SyntaxKind.NoneKeyword && inputType is not OptionalTypeSymbol && !inputType.IsError) {
+            var hint = inputType is NamedTypeSymbol named && named.GetMembers("none").Any(m => m is EnumCaseSymbol or UnionCaseSymbol)
+                ? "; its case 'none' is '.none'"
+                : "";
+            _diagnostics.Error(
+                ErrorCode.ERR_PatternTypeMismatch,
+                pattern.Span,
+                $"'{inputType.ToDisplayString()}' is not optional, so 'none' cannot match it{hint}"
+            );
+            return new BoundErrorPattern(pattern);
+        }
+
         var literalType = token.Kind switch {
             SyntaxKind.IntegerLiteralToken => Core.Int,
             SyntaxKind.FloatLiteralToken => Core.F64,
@@ -7596,13 +7653,20 @@ public sealed partial class Binder {
 
                 return new BoundSomePattern(pattern, optional, BindPattern(one[0].Pattern, optional.UnderlyingType));
 
-            default:
+            default: {
+                // The optional's cases are never looked through: '.none' on a
+                // 'Mode?' is not the 'Mode' case, which is '.Some(.none)'.
+                var wrapped = optional.UnderlyingType is NamedTypeSymbol underlying
+                              && underlying.GetMembers(name).Any(m => m is EnumCaseSymbol or UnionCaseSymbol)
+                    ? $"; the '{optional.UnderlyingType.ToDisplayString()}' case is '.Some(.{name})'"
+                    : "";
                 _diagnostics.Error(
                     ErrorCode.ERR_UnknownUnionCase,
                     pattern.Identifier.Span,
-                    $"'{optional.ToDisplayString()}' has no case named '{name}': an optional is '.Some' or '.None'"
+                    $"'{optional.ToDisplayString()}' has no case named '{name}': an optional is '.Some' or '.None'{wrapped}"
                 );
                 return new BoundErrorPattern(pattern);
+            }
         }
     }
 

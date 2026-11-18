@@ -1477,7 +1477,7 @@ public sealed partial class Compilation {
                 continue;
             }
 
-            var extension = new ExtensionSymbol(extended, declaration);
+            var extension = new ExtensionSymbol(extended, declaration) { DeclaringModule = scope?.Module };
             extension.TypeParameterAliases = AliasTypeParameters(declaration, extension, extended);
             RecordDeclaration(declaration, extension);
 

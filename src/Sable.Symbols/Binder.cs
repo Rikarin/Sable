@@ -107,6 +107,13 @@ public sealed partial class Binder {
     TypeSymbol? _thrownInBody;
 
     /// <summary>
+    ///     True when the innermost <c>do</c> body throws something that did not
+    ///     come from a closure parameter — which a <c>rethrows</c> function may
+    ///     not let out, should its catches not take it.
+    /// </summary>
+    bool _threwOwnError;
+
+    /// <summary>
     ///     What the closure body just bound can let out, which is what its
     ///     function type claims. Written by <c>BindClosureBody</c>, read by the
     ///     caller that builds the type.
@@ -643,6 +650,7 @@ public sealed partial class Binder {
         // One 'do' body may call several throwing functions. When they do not
         // agree, what reaches the catches is the union of them.
         _thrownInBody = Union(_thrownInBody, thrown);
+        _threwOwnError |= !viaParameter;
 
         if (_tryDepth > 0) {
             _threwInTry = true;
@@ -950,20 +958,25 @@ public sealed partial class Binder {
     BoundStatement BindDo(DoStatementSyntax statement) {
         var saved = SaveEffects();
         var savedThrown = _thrownInBody;
+        var savedOwn = _threwOwnError;
         if (statement.Catches.Count > 0) {
             _catchDepth++;
         }
 
         _thrownInBody = null;
+        _threwOwnError = false;
 
         var body = BindBlock(statement.Body);
 
         // The catches match what the body can actually throw; failing that,
         // what the enclosing function declares; failing that, anything.
-        var errorType = _thrownInBody ?? _declaredThrows ?? Core.AnyError;
+        var thrownByBody = _thrownInBody;
+        var threwOwn = _threwOwnError;
+        var errorType = thrownByBody ?? _declaredThrows ?? Core.AnyError;
 
         RestoreEffects(saved);
         _thrownInBody = savedThrown;
+        _threwOwnError = savedOwn;
         var catches = ImmutableArray.CreateBuilder<BoundCatch>();
 
         foreach (var clause in statement.Catches) {
@@ -991,7 +1004,91 @@ public sealed partial class Binder {
             catches.Add(new(clause, pattern, guard, clauseBody, errorLocal));
         }
 
+        if (thrownByBody is not null && statement.Catches.Count > 0) {
+            CheckUncaught(statement, catches, thrownByBody, threwOwn);
+        }
+
         return Record(statement, new BoundDo(statement, body, catches.ToImmutable()));
+    }
+
+    /// <summary>
+    ///     Checks where an error goes when the catches of a <c>do</c> do not
+    ///     take every error its body throws.
+    /// </summary>
+    /// <remarks>
+    ///     The catches are tried in order and an error none of them matches
+    ///     leaves the <c>do</c>, as in Swift. So what they miss is thrown again
+    ///     from the <c>do</c> itself, and has to have somewhere to go like any
+    ///     other throw: an enclosing <c>do</c>, or the function's
+    ///     <c>throws</c>. Whether they miss anything is the same usefulness
+    ///     question a <c>match</c> asks of its arms — a guarded catch can fail,
+    ///     so it covers nothing.
+    /// </remarks>
+    void CheckUncaught(
+        DoStatementSyntax statement,
+        IReadOnlyList<BoundCatch> catches,
+        TypeSymbol thrown,
+        bool threwOwn
+    ) {
+        if (thrown.IsError) {
+            return;
+        }
+
+        var checker = new Exhaustiveness(Core);
+        var rows = new List<Exhaustiveness.Pat>();
+        foreach (var clause in catches) {
+            if (clause.Guard is not null) {
+                continue;
+            }
+
+            if (clause.Pattern is null) {
+                return;
+            }
+
+            rows.Add(checker.Lower(clause.Pattern));
+        }
+
+        var missing = checker.Missing(rows, thrown);
+        if (missing.Count == 0 || checker.GaveUp || checker.HasErrors) {
+            return;
+        }
+
+        // A wildcard as the witness means no unguarded catch matched anything
+        // in particular, which reads better said plainly.
+        var witness = missing is ["_"] ? "every error"
+            : missing.Count == 1 ? $"'{missing[0]}'"
+            : $"'{string.Join("', '", missing.Take(3))}'" + (missing.Count > 3 ? " and more" : string.Empty);
+        var span = statement.DoKeyword.Span;
+
+        // What escapes is part of what this body throws, for an enclosing
+        // 'do' to match and a closure's type to claim.
+        _thrownInBody = Union(_thrownInBody, thrown);
+        _threwOwnError |= threwOwn;
+
+        if (_rethrows && _catchDepth == 0) {
+            if (threwOwn) {
+                _diagnostics.Error(
+                    ErrorCode.ERR_RethrowsThrowsItsOwn,
+                    span,
+                    $"the catches do not cover {witness}, so that error leaves this 'do', and a "
+                    + "'rethrows' function may only throw what one of its own closure parameters throws"
+                );
+            }
+
+            return;
+        }
+
+        if (!CanThrowHere()) {
+            _diagnostics.Error(
+                ErrorCode.ERR_ThrowsNotDeclared,
+                span,
+                $"the catches do not cover {witness}, so that error has nowhere to go: "
+                + "add a catch for it, or declare 'throws'"
+            );
+            return;
+        }
+
+        CheckErrorFits(thrown, span, $"this 'do', whose catches do not cover {witness},");
     }
 
     // -----------------------------------------------------------------------
@@ -1141,6 +1238,7 @@ public sealed partial class Binder {
     BoundStatement BindThrow(ThrowStatementSyntax statement) {
         var value = BindExpression(statement.Expression, _declaredThrows);
         _thrownInBody = Union(_thrownInBody, value.Type);
+        _threwOwnError = true;
 
         if (!value.HasError && CanThrowHere() && !(_rethrows && _catchDepth == 0)) {
             CheckErrorFits(value.Type, statement.Expression.Span, "this");
@@ -1307,6 +1405,16 @@ public sealed partial class Binder {
                 binding.Identifier.Span,
                 $"'{binding.Identifier.Text}' needs either a type annotation or an initialiser"
             );
+        } else if (declaredType is null && initializer is not null && IsNone(initializer)
+                   && initializer.Type is OptionalTypeSymbol { UnderlyingType.IsError: true }) {
+            // 'none' is no particular optional, so it cannot give the binding
+            // a type; left alone, the binding's type would be '??'.
+            _diagnostics.Error(
+                ErrorCode.ERR_CannotInferType,
+                binding.Identifier.Span,
+                $"'{binding.Identifier.Text}' needs a type annotation: 'none' alone does not say what it is optional of"
+            );
+            type = ErrorTypeSymbol.Instance;
         }
 
         var local = new LocalSymbol(binding.Identifier.Text, _containingSymbol, declaration, isMutable) {
@@ -1928,6 +2036,9 @@ public sealed partial class Binder {
         expression switch {
             LiteralExpressionSyntax literal => BindLiteral(literal, expectedType),
             InterpolatedStringExpressionSyntax interpolated => BindInterpolatedString(interpolated),
+            // A name the parser had to make up stands for an expression it
+            // has already reported missing; looking it up would say so again.
+            IdentifierNameSyntax { Identifier.IsMissing: true } missing => new BoundError(missing),
             IdentifierNameSyntax name => BindName(name, name.Identifier.Text),
             GenericNameSyntax name => BindGenericName(name),
             SelfExpressionSyntax self => BindSelf(self),
@@ -2116,7 +2227,7 @@ public sealed partial class Binder {
         var name = syntax.Identifier.Text;
 
         if (LookupLocal(name) is null
-            && _compilation.TypeBinder.Lookup(name, _containingSymbol, _scope, syntax.Span)
+            && _compilation.TypeBinder.Lookup(name, _containingSymbol, _scope, syntax.Span, report: false)
                 is NamedTypeSymbol or AliasSymbol) {
             var type = _compilation.TypeBinder.BindGenericName(syntax, _containingSymbol, _scope);
             return type.IsError
@@ -2190,6 +2301,14 @@ public sealed partial class Binder {
         // class.
         if (EnclosingType() is { } enclosing
             && LookupMember(SelfTypeOf(enclosing), name) is { } inherited) {
+            // Reached through 'self' or not, a member is only as visible as
+            // it is: an extension in another module does not see the type's
+            // private ones.
+            if (inherited.Members.Count > 0 && !inherited.Members.Any(IsAccessible)) {
+                ReportInaccessible(inherited.Members[0], syntax);
+                return new BoundError(syntax);
+            }
+
             return BindMemberGroup(syntax, null, inherited.Members, inherited.Owner, inherited.Substitution);
         }
 
@@ -2198,7 +2317,11 @@ public sealed partial class Binder {
             return BindMemberGroup(syntax, null, farther, null);
         }
 
-        var moduleMembers = _scope.Module.GetMembers(name).ToList();
+        // A name that is there but hidden from here is reported as hidden,
+        // not as missing, unless something visible answers to it after all.
+        Symbol? hidden = null;
+
+        var moduleMembers = Visible(_scope.Module.GetMembers(name), ref hidden);
         if (moduleMembers.Count > 0) {
             return BindMemberGroup(syntax, null, moduleMembers, null);
         }
@@ -2208,9 +2331,7 @@ public sealed partial class Binder {
         }
 
         foreach (var module in _scope.Imports) {
-            var candidates = module.GetMembers(name)
-                .Where(static m => m.DeclaredAccessibility == Accessibility.Public)
-                .ToList();
+            var candidates = Visible(module.GetMembers(name), ref hidden);
             if (candidates.Count > 0) {
                 return BindMemberGroup(syntax, null, candidates, null);
             }
@@ -2223,9 +2344,14 @@ public sealed partial class Binder {
 
         // A type parameter can be named, to reach a static member through
         // what it is constrained to: 'T.decode(from: reader)'.
-        if (_compilation.TypeBinder.Lookup(name, _containingSymbol, _scope, syntax.Span)
+        if (_compilation.TypeBinder.Lookup(name, _containingSymbol, _scope, syntax.Span, report: false)
             is TypeParameterSymbol named) {
             return new BoundTypeExpression(syntax, named);
+        }
+
+        if (hidden is not null) {
+            ReportInaccessible(hidden, syntax);
+            return new BoundError(syntax);
         }
 
         _diagnostics.Error(
@@ -2332,7 +2458,8 @@ public sealed partial class Binder {
             _ => string.Empty,
         };
 
-        if (receiver.HasError) {
+        // 'p.' with the name missing: the parser has said so.
+        if (receiver.HasError || syntax.Name is IdentifierNameSyntax { Identifier.IsMissing: true }) {
             return new BoundError(syntax, receiver);
         }
 
@@ -2506,22 +2633,30 @@ public sealed partial class Binder {
             return true;
         }
 
-        _diagnostics.Error(
-            ErrorCode.ERR_NotAccessible,
-            syntax.Span,
-            $"'{member.Name}' is {Describe(member.DeclaredAccessibility)} to "
-            + $"'{member.ContainingSymbol?.Name ?? "its module"}'"
-        );
+        ReportInaccessible(member, syntax);
         return false;
     }
 
-    static string Describe(Accessibility accessibility) =>
-        accessibility switch {
-            Accessibility.Private => "private",
-            Accessibility.Internal => "internal",
-            Accessibility.Package => "visible only",
-            _ => "visible",
-        };
+    /// <summary>The members a file can see at the top level, noting the first it cannot.</summary>
+    List<Symbol> Visible(IEnumerable<Symbol> members, ref Symbol? hidden) {
+        var visible = new List<Symbol>();
+        foreach (var member in members) {
+            if (Visibility.IsVisible(member, _scope, _compilation)) {
+                visible.Add(member);
+            } else {
+                hidden ??= member;
+            }
+        }
+
+        return visible;
+    }
+
+    void ReportInaccessible(Symbol member, SyntaxNode syntax) =>
+        _diagnostics.Error(
+            ErrorCode.ERR_NotAccessible,
+            syntax.Span,
+            $"'{member.Name}' is {Visibility.Describe(member, member.DeclaredAccessibility)}"
+        );
 
     static FunctionSymbol? RequirementAndDefault(FunctionSymbol first, FunctionSymbol second) {
         static Symbol? Owner(FunctionSymbol f) => f.ContainingSymbol is ExtensionSymbol extension ? extension.ExtendedType : f.ContainingSymbol;
@@ -2541,37 +2676,28 @@ public sealed partial class Binder {
     bool IsAccessible(Symbol member) => IsAccessible(member, member.DeclaredAccessibility);
 
     bool IsAccessible(Symbol member, Accessibility accessibility) {
-        switch (accessibility) {
-            case Accessibility.Public or Accessibility.Package:
-                return true;
+        if (accessibility != Accessibility.Private || member.ContainingSymbol is null or ModuleSymbol) {
+            return Visibility.IsVisible(member, accessibility, _scope, _compilation);
+        }
 
-            case Accessibility.Internal:
-                return ReferenceEquals(member.ContainingModule, _scope.Module)
-                    || member.ContainingModule is null;
+        // Private: somewhere inside the declaration that holds it. One an
+        // extension declares is the extended type's, like the rest of what
+        // the extension adds; and the type's extensions in the same module
+        // see it as the type does — but not ones in another module, nor the
+        // type itself when the extension that declared it is elsewhere.
+        var owner = member.ContainingSymbol is ExtensionSymbol declaredIn
+            ? declaredIn.ExtendedType
+            : member.ContainingSymbol;
+        var module = Visibility.ModuleOf(member);
 
-            default: {
-                // Private: somewhere inside the declaration that holds it.
-                var owner = member.ContainingSymbol;
-                if (owner is null) {
-                    return true;
-                }
-
-                for (var here = _containingSymbol; here is not null; here = here.ContainingSymbol) {
-                    if (ReferenceEquals(here, owner)) {
-                        return true;
-                    }
-
-                    // An extension's members are the extended type's, and a
-                    // private member is visible to them in the same module.
-                    if (here is ExtensionSymbol extension
-                        && ReferenceEquals(extension.ExtendedType, owner)) {
-                        return true;
-                    }
-                }
-
-                return false;
+        for (var here = _containingSymbol; here is not null; here = here.ContainingSymbol) {
+            var type = here is ExtensionSymbol extension ? extension.ExtendedType : here;
+            if (ReferenceEquals(type, owner)) {
+                return ReferenceEquals(Visibility.ModuleOf(here), module);
             }
         }
+
+        return false;
     }
 
     /// <summary>
@@ -2909,8 +3035,10 @@ public sealed partial class Binder {
                 var constructed = namedType;
                 if (namedType is { TypeArguments.IsEmpty: true, TypeParameters.IsEmpty: false }) {
                     var map = new Dictionary<TypeParameterSymbol, TypeSymbol>();
+                    var fromContext = false;
                     if (Expand(expectedType) is NamedTypeSymbol { IsConstructed: true } wanted
                         && ReferenceEquals(wanted.OriginalDefinition, namedType.OriginalDefinition)) {
+                        fromContext = true;
                         for (var i = 0; i < namedType.TypeParameters.Length; i++) {
                             map[namedType.TypeParameters[i]] = wanted.TypeArguments[i];
                         }
@@ -2926,6 +3054,20 @@ public sealed partial class Binder {
 
                     if (map.Count == namedType.TypeParameters.Length) {
                         constructed = namedType.Construct([..namedType.TypeParameters.Select(p => map[p])]);
+
+                        // Arguments written in a type were checked where the
+                        // type was bound; ones inferred from the initialiser's
+                        // arguments have to meet the same constraints and
+                        // 'where' clause, or 'Box(t: notAShape)' makes a Box
+                        // whose methods call what its T does not have.
+                        if (!fromContext) {
+                            _compilation.TypeBinder.CheckTypeArguments(
+                                namedType,
+                                constructed.TypeArguments,
+                                syntax.Span,
+                                _containingSymbol
+                            );
+                        }
                     }
                 }
 
@@ -3202,6 +3344,13 @@ public sealed partial class Binder {
                 CheckWritableArgument(arguments[i], parameter);
             }
 
+            // A parameter type inference could not settle is reported below,
+            // once, rather than again as every argument that does not fit it.
+            if (ContainsUninferred(wanted, resolved)) {
+                converted.Add(arguments[i]);
+                continue;
+            }
+
             converted.Add(Convert(arguments[i], wanted, arguments[i].Syntax));
         }
 
@@ -3245,16 +3394,31 @@ public sealed partial class Binder {
             substitution = Combine(outer, new(map));
         }
 
+        // A parameter left uninferred because an argument was an error has
+        // had its error reported. One left so by 'none' has not: 'id(none)'
+        // says nothing about what it is optional of.
+        var uninferred = false;
         if (!resolved.TypeParameters.IsEmpty) {
+            var argumentError = arguments.Any(static a =>
+                a is not BoundUnboundClosure && TypeSubstitution.ContainsError(a.Type) && !IsNone(a)
+            );
             foreach (var typeParameter in resolved.TypeParameters) {
                 if (substitution.Lookup(typeParameter) is not null) {
+                    continue;
+                }
+
+                uninferred = true;
+                if (argumentError) {
                     continue;
                 }
 
                 _diagnostics.Error(
                     ErrorCode.ERR_CannotInferTypeArgument,
                     syntax.Span,
-                    $"cannot infer '{typeParameter.Name}' from these arguments"
+                    arguments.Any(IsNone)
+                        ? $"cannot infer '{typeParameter.Name}' from these arguments: 'none' alone does not say "
+                        + "what it is optional of, so give the call a type to produce, as in 'let x: Int? = ...'"
+                        : $"cannot infer '{typeParameter.Name}' from these arguments"
                 );
             }
         }
@@ -3292,6 +3456,12 @@ public sealed partial class Binder {
         }
 
         var result = substitution.Apply(resolved.ReturnType);
+
+        // What an uninferred parameter would have made the result is unknown,
+        // and saying so once is enough.
+        if (uninferred && ContainsUninferred(result, resolved)) {
+            result = ErrorTypeSymbol.Instance;
+        }
 
         // An initialiser of a generic type gives the type its arguments made:
         // 'Box<String>(…)' is a Box<String>, not the definition.
@@ -3450,9 +3620,20 @@ public sealed partial class Binder {
             tied.Add(candidate);
         }
 
+        // An argument that is already an error fits every candidate or none,
+        // and either way its own error has been reported: 'print(missing())'
+        // is not also ambiguous between every 'print'.
+        // A closure, 'none' or '[]' not bound yet stands in with an error
+        // type, and is no error.
+        var argumentError = arguments.Any(static a => a is not BoundUnboundClosure && TypeSubstitution.ContainsError(a.Type));
+
         // Each rejected candidate keeps its reason, so the error can say what
         // was wrong rather than only that something was (docs/04 §1.2).
         if (best is null) {
+            if (argumentError) {
+                return null;
+            }
+
             var name = candidates.IsEmpty ? "?" : candidates[0].Name;
             var message = candidates.Length == 1 && rejected.Count == 1
                 ? $"'{name}' cannot be called with these arguments: {rejected[0].Reason}"
@@ -3464,7 +3645,7 @@ public sealed partial class Binder {
             return null;
         }
 
-        if (ambiguous) {
+        if (ambiguous && !argumentError) {
             var contenders = new[] { best }.Concat(tied).Distinct().Take(3).Select(static c => $"'{Signature(c)}'");
             _diagnostics.Error(
                 ErrorCode.ERR_AmbiguousOverload,
@@ -3536,8 +3717,17 @@ public sealed partial class Binder {
                 break;
             }
 
-            // A written label must match the parameter's.
-            if (i < labels.Length && labels[i] is { } label) {
+            // A variadic parameter's label goes on the first of its elements
+            // only, as in 'sum(of: 1, 2, 3)'; the rest follow unlabelled.
+            if (parameter.IsVariadic && i > 0 && slots[i - 1] == slots[i]) {
+                if (i < labels.Length && labels[i] is { } repeated) {
+                    return Reject(
+                        $"argument {i + 1} is labelled '{repeated}', and it is another element "
+                        + $"of '{parameter.Name}', which takes its label only on the first"
+                    );
+                }
+            } else if (i < labels.Length && labels[i] is { } label) {
+                // A written label must match the parameter's.
                 var expected = parameter.Label ?? parameter.Name;
                 if (!string.Equals(expected, label, StringComparison.Ordinal)) {
                     return Reject($"argument {i + 1} is labelled '{label}', and the parameter is '{expected}'");
@@ -5051,6 +5241,12 @@ public sealed partial class Binder {
                 : new BoundBinaryOperator(syntax, Core.Bool, kind, left, right, order);
         }
 
+        // 'x == none' asks only which case x is, so any optional compares.
+        if (kind is BinaryOperatorKind.Equal or BinaryOperatorKind.NotEqual
+            && (IsNone(left) && right.Type is OptionalTypeSymbol || IsNone(right) && left.Type is OptionalTypeSymbol)) {
+            return new BoundBinaryOperator(syntax, Core.Bool, kind, left, right);
+        }
+
         var type = ResultTypeOf(kind, left.Type, right.Type);
         if (type is not null) {
             return new BoundBinaryOperator(syntax, type, kind, left, right);
@@ -5113,12 +5309,15 @@ public sealed partial class Binder {
 
             // 'T → T?' is implicit (docs/03 §3.7), so comparing an optional with
             // a value of its type is comparing two optionals.
+            // Only what has an equality of its own compares without an '==':
+            // an unconstrained 'T' does not, whatever it is made at the call.
             BinaryOperatorKind.Equal or BinaryOperatorKind.NotEqual =>
-                left.Equals(right)
-                || (left is OptionalTypeSymbol leftOptional
-                    && leftOptional.UnderlyingType.Equals(right))
-                || (right is OptionalTypeSymbol rightOptional
-                    && rightOptional.UnderlyingType.Equals(left))
+                (left.Equals(right)
+                 || (left is OptionalTypeSymbol leftOptional
+                     && leftOptional.UnderlyingType.Equals(right))
+                 || (right is OptionalTypeSymbol rightOptional
+                     && rightOptional.UnderlyingType.Equals(left)))
+                && HasBuiltinEquality(left is OptionalTypeSymbol { UnderlyingType: var underlying } ? underlying : left)
                     ? Core.Bool
                     : null,
 
@@ -5168,6 +5367,19 @@ public sealed partial class Binder {
 
     /// <summary>Looks for an <c>operator</c> member on either operand's type.</summary>
     /// <summary>A type the built-in operators are defined on: what never looks for one of its own.</summary>
+    /// <summary>
+    ///     True for a type '==' compares without an operator of its own: the
+    ///     scalars, and an enum or union whose cases carry nothing, which are
+    ///     equal when they are the same case.
+    /// </summary>
+    bool HasBuiltinEquality(TypeSymbol type) =>
+        type.IsError
+        || Core.IsNumeric(type) || type.Equals(Core.String) || type.Equals(Core.Bool) || type.Equals(Core.Char)
+        || type is NamedTypeSymbol { TypeKind: TypeKind.Enum }
+        || type is NamedTypeSymbol { TypeKind: TypeKind.Union } union
+        && union.Members.OfType<UnionCaseSymbol>().All(static c => !c.HasPayload)
+        || type is TupleTypeSymbol tuple && tuple.ElementTypes.All(HasBuiltinEquality);
+
     bool IsBuiltinOperand(TypeSymbol type) =>
         Core.IsNumeric(type) || type.Equals(Core.String) || type.Equals(Core.Bool) || type.Equals(Core.Char)
         || type is OptionalTypeSymbol || type.IsError;

@@ -95,7 +95,7 @@ public static class PackageBuilder {
 
     static SyntaxTree Parse(PackageGraph graph, ResolvedPackage package, string file, bool optimise) {
         var source = SourceOf(graph, package, file);
-        return SyntaxTree.Parse(new SourceText(File.ReadAllText(file), source.Name), Pipeline.ParseOptionsFor(optimise, source.Features));
+        return SyntaxTree.Parse(new SourceText(File.ReadAllText(file), source.Name), Pipeline.ParseOptionsFor(optimise, source.Options));
     }
 
     /// <summary>A file of a package, with the name its diagnostics give it and the features it is parsed with.</summary>
@@ -107,7 +107,9 @@ public static class PackageBuilder {
         var name = package.IsLocal
             ? Path.GetRelativePath(graph.Workspace.Root, file).Replace(Path.DirectorySeparatorChar, '/')
             : $"{package.Name}-{package.Version}/{Path.GetRelativePath(package.Package.Directory, file).Replace(Path.DirectorySeparatorChar, '/')}";
-        return new(file, name, [..package.Features.Order(StringComparer.Ordinal)]);
+        // A workspace's own packages share 'package' members; a registry
+        // dependency is a workspace of its own.
+        return new(file, name, [..package.Features.Order(StringComparer.Ordinal)], package.IsLocal ? null : $"{package.Name}-{package.Version}");
     }
 
     /// <summary>

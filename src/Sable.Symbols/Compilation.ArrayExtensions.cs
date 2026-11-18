@@ -127,7 +127,7 @@ public sealed partial class Compilation {
 
         TypeBinder.BindArrayExtension(carrier, declaration, scope);
 
-        var extension = new ExtensionSymbol(carrier, declaration);
+        var extension = new ExtensionSymbol(carrier, declaration) { DeclaringModule = scope?.Module };
         RecordDeclaration(declaration, extension);
         ArrayExtensions.Add(carrier);
 

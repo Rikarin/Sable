@@ -39,10 +39,11 @@ public static class Pipeline {
     ///     §21), and the package's features.
     /// </summary>
     public static ParseOptions ParseOptionsFor(bool optimise, IEnumerable<string>? features = null) =>
-        ParseOptions.Default with {
-            Symbols = [optimise ? "RELEASE" : "DEBUG"],
-            Features = [..features ?? []],
-        };
+        ParseOptionsFor(optimise, ParseOptions.Default with { Features = [..features ?? []] });
+
+    /// <summary>The options a file already has — its features and workspace — with <c>DEBUG</c> or <c>RELEASE</c> defined.</summary>
+    public static ParseOptions ParseOptionsFor(bool optimise, ParseOptions options) =>
+        options with { Symbols = [optimise ? "RELEASE" : "DEBUG"] };
 
     /// <summary>
     ///     A program of many files — a package and its dependencies — compiled

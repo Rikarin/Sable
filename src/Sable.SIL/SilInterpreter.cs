@@ -1032,6 +1032,25 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             case "string_hash":
                 return StringHash(Encoding.UTF8.GetBytes(Text(operands[0]).Value));
 
+            // Scalar by scalar, as the runtime's byte search finds the same place.
+            case "string_find": {
+                var text = Text(operands[0]).Scalars;
+                var part = Text(operands[1]).Scalars;
+                var from = Math.Max(0L, (long)operands[2]!);
+                for (var i = from; i + part.Count <= text.Count; i++) {
+                    var k = 0;
+                    while (k < part.Count && text[(int)i + k] == part[k]) {
+                        k++;
+                    }
+
+                    if (k == part.Count) {
+                        return i;
+                    }
+                }
+
+                return -1L;
+            }
+
             // UTF-8's byte order is the scalars' order, as the runtime compares.
             case "string_compare":
                 return (long)Math.Sign(Encoding.UTF8.GetBytes(Text(operands[0]).Value).AsSpan()

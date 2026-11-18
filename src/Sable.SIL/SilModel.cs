@@ -1633,6 +1633,8 @@ public static class SilBuiltins {
         Add("string_hash", SilType.Int, SilType.String);
         Add("string_join", SilType.String, new ArrayType(SilType.String), SilType.String);
         Add("string_compare", SilType.Int, SilType.String, SilType.String);
+        // Where a part next occurs in a text, at or after a scalar position: a scalar index, or -1.
+        Add("string_find", SilType.Int, SilType.String, SilType.String, SilType.Int);
         Add("string_from_Char", SilType.String, SilType.Char);
         foreach (var number in SilType.Numbers) {
             Add($"string_from_{number}", SilType.String, number);

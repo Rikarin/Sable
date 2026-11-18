@@ -288,6 +288,7 @@ public sealed partial class LlvmEmitter {
                                 declare i64 @sable_string_hash(ptr)
                                 declare ptr @sable_string_join(ptr, ptr)
                                 declare i64 @sable_string_compare(ptr, ptr)
+                                declare i64 @sable_string_find(ptr, ptr, i64)
                                 declare ptr @sable_string_from_char(i32)
                                 declare ptr @sable_string_from_int(i64)
                                 declare ptr @sable_string_from_f64(double)
@@ -2354,6 +2355,10 @@ public sealed partial class LlvmEmitter {
 
                 case "string_hash":
                     Line($"{Result()} = call i64 @sable_string_hash(ptr {operands[0]})");
+                    return;
+
+                case "string_find":
+                    Line($"{Result()} = call i64 @sable_string_find(ptr {operands[0]}, ptr {operands[1]}, i64 {operands[2]})");
                     return;
 
                 case "string_compare":

@@ -265,6 +265,91 @@ public sealed class IncrementalTests {
         Assert.Equal(("incremental", 1, Units - 1), (built.Kind, built.Compiled, built.Reused));
     }
 
+    /// <summary>
+    ///     A release profile that asks for ThinLTO is compiled separately too:
+    ///     each unit's SIL passes run on the unit, its object is LLVM bitcode,
+    ///     and the link optimises across units. A body change compiles one
+    ///     unit again, and the program behaves as the whole program built
+    ///     from nothing does. The default, whole-program LTO, stays whole.
+    /// </summary>
+    [Fact]
+    public void AThinLtoReleaseBuildIsCompiledSeparately() {
+        if (!CanBuild) {
+            return;
+        }
+
+        using var scenario = new Scenario();
+        var release = new BuildRequest(Release: true);
+        Assert.Equal("whole", scenario.Check(release).Kind);
+
+        File.AppendAllText(scenario.PathOf("app/sable.toml"), "\n[profile.release]\nlto = \"thin\"\n");
+        var first = scenario.Check(release);
+        Assert.Equal(Expected, first.Output);
+        Assert.Equal(("incremental", Units, 0), (first.Kind, first.Compiled, first.Reused));
+
+        scenario.Edit("shapes/src/lib.sb", "    return x\n", "    return x + 1\n");
+        var built = scenario.Check(release);
+        Assert.Contains("circle of area 13", built.Output);
+        Assert.Equal(("incremental", 1, Units - 1), (built.Kind, built.Compiled, built.Reused));
+
+        // Without link-time optimisation, the units are native objects.
+        scenario.Edit("app/sable.toml", "lto = \"thin\"", "lto = \"off\"");
+        Assert.Equal(("incremental", Units), scenario.Check(release) is var off ? (off.Kind, off.Compiled) : default);
+    }
+
+    /// <summary>
+    ///     Each unit's interface is written as a <c>.sbi</c> file — its
+    ///     files' fingerprints and their source without the bodies other
+    ///     units cannot see — and read back by the next build in place of
+    ///     the unit's files: a fingerprint planted in one is what the program
+    ///     is keyed by, and one cut short is worked out again.
+    /// </summary>
+    [Fact]
+    public void EachUnitsInterfaceIsWrittenAndReadBack() {
+        if (!CanBuild) {
+            return;
+        }
+
+        using var scenario = new Scenario();
+        scenario.Check();
+        var interfaces = scenario.PathOf("app/target/dev/cache/interfaces");
+        string Sbi(string unit) => Assert.Single(Directory.GetFiles(interfaces, "*.sbi"), f => File.ReadLines(f).Skip(1).First() == "unit " + unit);
+
+        // The program's three units (the standard library has none of its own).
+        Assert.Equal(Units - 1, Directory.GetFiles(interfaces, "*.sbi").Length);
+        var shapes = File.ReadAllText(Sbi("lib shapes-0.1.0"));
+        Assert.True(shapes.StartsWith("sable-interface 1\nunit lib shapes-0.1.0\nfile ../shapes/src/lib.sb ", StringComparison.Ordinal), shapes[..200]);
+        Assert.Contains("\n--- ../shapes/src/lib.sb\nmodule Shapes\n", shapes, StringComparison.Ordinal);
+        Assert.Contains("fn scale(_ x: Int) -> Int { … }", shapes, StringComparison.Ordinal);
+        Assert.DoesNotContain("return x\n", shapes, StringComparison.Ordinal);
+        // A generic body is lowered where it is used: it is interface.
+        Assert.Contains("if x > best {", shapes, StringComparison.Ordinal);
+
+        // A body change writes the changed unit's interface beside the old one.
+        scenario.Edit("shapes/src/lib.sb", "    return x\n", "    return x + 1\n");
+        Assert.Equal(1, scenario.Check().Compiled);
+        Assert.Equal(Units, Directory.GetFiles(interfaces, "*.sbi").Length);
+
+        // What the next build reads is what the program is keyed by. (The
+        // executable is removed, so that the build is not merely fresh.)
+        var executable = scenario.PathOf("app/target/dev/app");
+        var geometry = Sbi("lib geometry-0.1.0");
+        var text = File.ReadAllText(geometry);
+        var line = text.Split('\n')[2];
+        File.WriteAllText(geometry, text.Replace(line, line[..^64] + new string('0', 64), StringComparison.Ordinal));
+        File.Delete(executable);
+        var planted = scenario.Check();
+        Assert.Equal(("incremental", Units), (planted.Kind, planted.Compiled));
+
+        // One cut short is not read.
+        File.WriteAllText(geometry, string.Join('\n', text.Split('\n').Take(3)));
+        File.Delete(executable);
+        var cut = scenario.Check();
+        Assert.Equal(Expected.Replace("12", "13", StringComparison.Ordinal), cut.Output);
+        Assert.Equal(0, cut.Compiled);
+        Assert.Contains("--- ../geometry/src/lib.sb", File.ReadAllText(geometry), StringComparison.Ordinal);
+    }
+
     [Fact]
     public void APublicSignatureChangeRecompilesWhatDependsOnIt() {
         if (!CanBuild) {
@@ -581,7 +666,14 @@ public sealed class IncrementalTests {
     [InlineData("benchmarks/sort.sb", 3)]
     [InlineData("benchmarks/binary-trees.sb", 4)]
     [InlineData("benchmarks/orders.sb", 4)]
-    public void SeparatelyCompiledProgramsBehaveAsWholeOnes(string file, int parts) {
+    // Optimised with ThinLTO: the SIL passes run on each unit apart.
+    [InlineData("examples/ssg/ssg.sb", 6, true)]
+    [InlineData("benchmarks/shapes.sb", 3, true)]
+    [InlineData("benchmarks/words.sb", 3, true)]
+    [InlineData("benchmarks/sort.sb", 3, true)]
+    [InlineData("benchmarks/binary-trees.sb", 4, true)]
+    [InlineData("benchmarks/orders.sb", 4, true)]
+    public void SeparatelyCompiledProgramsBehaveAsWholeOnes(string file, int parts, bool release = false) {
         if (!CanBuild) {
             return;
         }
@@ -604,7 +696,9 @@ public sealed class IncrementalTests {
                 return new UnitPlan($"part{i}", [new SourceFile(path, $"part{i}.sb", [])]);
             }).ToList();
 
-            var settings = new BuildSettings("dev", false, directory, true);
+            var settings = release
+                ? new BuildSettings("release", true, null, false) { Native = new NativeOptions { OptLevel = "3", Lto = LtoMode.Thin } }
+                : new BuildSettings("dev", false, directory, true);
             var separate = IncrementalBuild.Build(units, settings, Path.Combine(directory, "separate"), Path.Combine(directory, "cache"));
             Assert.True(separate.Succeeded, string.Join("\n", separate.Errors));
             Assert.Equal(("incremental", units.Count + 1), (separate.Kind, separate.Compiled));

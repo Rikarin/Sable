@@ -127,7 +127,8 @@ public class BuildCommand : Command {
             [SyntaxTree.Parse(source, Pipeline.ParseOptionsFor(options.Optimise, target))],
             options.Debug ? Path.GetDirectoryName(Path.GetFullPath(options.Input)) : null,
             options.Exclusivity ?? (options.Debug || !options.Optimise),
-            target: target
+            target: target,
+            optimised: options.Optimise && !options.Debug
         );
         Report(result.Warnings);
 

@@ -30,8 +30,8 @@ public static class Pipeline {
     ///     Keep the dynamic exclusivity checks (docs/02 §2.3): on unless a
     ///     release build turns them off.
     /// </param>
-    public static CompileResult Compile(SourceText source, string? debugDirectory = null, bool checkExclusivity = true) =>
-        Compile([SyntaxTree.Parse(source)], debugDirectory, checkExclusivity);
+    public static CompileResult Compile(SourceText source, string? debugDirectory = null, bool checkExclusivity = true, bool optimised = false) =>
+        Compile([SyntaxTree.Parse(source)], debugDirectory, checkExclusivity, optimised: optimised);
 
     /// <summary>
     ///     What a program's files are parsed with: <c>DEBUG</c> defined for an
@@ -55,9 +55,12 @@ public static class Pipeline {
     ///     point: '@main', or a function called main, is looked for there first.
     /// </summary>
     /// <param name="optimised">
-    ///     An optimised build with debug information: the SIL passes run
-    ///     anyway, and the debugger sees what they leave. Without it, a build
-    ///     with debug information keeps every local in its slot.
+    ///     An optimised build: the SIL passes that move code between functions
+    ///     — devirtualising, inlining — run too, which an unoptimised build
+    ///     leaves out so that a trap's backtrace names every frame. With debug
+    ///     information, the SIL passes run anyway, and the debugger sees what
+    ///     they leave; without it, a build with debug information keeps every
+    ///     local in its slot.
     /// </param>
     /// <param name="target">
     ///     What the program is built for, whose C calling convention its
@@ -130,7 +133,7 @@ public static class Pipeline {
         if (debugDirectory is null || optimised) {
             try {
                 using var _ = BuildTimings.Of(timings, "passes");
-                SilPassManager.Run(module, SilPassManager.Default);
+                SilPassManager.Run(module, optimised ? SilPassManager.Optimising : SilPassManager.Default);
             } catch (SilPassException failure) {
                 return new(module, null, [$"internal error: {failure.Message}"]);
             }

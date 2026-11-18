@@ -45,7 +45,8 @@ internal sealed class PackageFixture : IDisposable {
     /// <summary>Publishes the package in <paramref name="directory" /> to this fixture's registry.</summary>
     public void Publish(string directory) {
         var workspace = Load(directory);
-        PackageOperations.Publish(workspace, Environment, workspace.Members[0], dryRun: false, allowDirty: true);
+        // What publishing checks beyond the package — its tests, the tag — is tested apart.
+        PackageOperations.Publish(workspace, Environment, workspace.Members[0], dryRun: false, allowDirty: true, verify: false);
     }
 
     /// <summary>A library package with one public function returning <paramref name="value" />, published.</summary>

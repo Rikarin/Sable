@@ -344,9 +344,9 @@ public sealed class SourceGeneratorTests {
             """));
         var result = Run(set, "module App\n\n@same\nstruct A { }\n\n@same\nstruct B { }\n");
         Assert.Equal([
-            "S3234 the generator 'same' wrote a 'module' line in 'A.module.sb': the compiler puts the file in the module of 'A' itself",
+            "S3234 the generator 'same' wrote a 'module' line in 'A.module.sb': the compiler puts the file in a module itself; to choose it, say 'inModule:'",
             "S3234 the generator 'same' wrote 'same.sb' for 'A' already, in package 'app': each file it writes needs a name of its own, such as one with the type's name in it",
-            "S3234 the generator 'same' wrote a 'module' line in 'B.module.sb': the compiler puts the file in the module of 'B' itself",
+            "S3234 the generator 'same' wrote a 'module' line in 'B.module.sb': the compiler puts the file in a module itself; to choose it, say 'inModule:'",
         ], Messages(result));
         Assert.Equal(["same.sb"], result.Files.Select(static f => f.FileName));
     }
@@ -392,6 +392,340 @@ public sealed class SourceGeneratorTests {
         Assert.Equal(["SMore.sb"], Directory.GetFiles(generated).Select(Path.GetFileName));
     }
 
+    // ---- Where messages go ------------------------------------------------------
+
+    [Fact]
+    public void AMessageCanPointAtAFieldACaseOrAParameter() {
+        var set = Set(("generators/v.sb", """
+            module V
+
+            import Sable.Generators
+
+            @generator("checked")
+            fn check(_ d: Declaration, into output: inout Output) {
+                for field in d.fields {
+                    if field.type == "Int" {
+                        output.error("'\(field.name)' cannot be an Int", at: field.location)
+                    }
+                }
+                for c in d.cases {
+                    output.warning("case \(c.name)", at: c.location)
+                }
+                for p in d.parameters {
+                    output.warning("parameter \(p.name)", at: p.location)
+                }
+                output.warning("about \(d.name)", at: d.location)
+            }
+            """));
+        var result = Run(set, """
+            module App
+
+            @checked
+            struct S {
+                var ok: String
+                var bad: Int
+            }
+
+            @checked
+            union U { A, B(Int) }
+
+            @checked
+            fn f(x: Int, _ y: String) { }
+            """);
+        var placed = result.Diagnostics.Select(static d => $"{d.Diagnostic.Id} {d.Tree.Text.ToString(d.Diagnostic.Span)}: {d.Diagnostic.Message}").ToList();
+        Assert.Equal([
+            "S3232 bad: checked: 'bad' cannot be an Int",
+            "S3233 S: checked: about S",
+            "S3233 A: checked: case A",
+            "S3233 B: checked: case B",
+            "S3233 U: checked: about U",
+            "S3233 x: checked: parameter x",
+            "S3233 y: checked: parameter y",
+            "S3233 f: checked: about f",
+        ], placed);
+    }
+
+    // ---- Resolved types -----------------------------------------------------------
+
+    /// <summary>A generator that writes what it was given about types as comments.</summary>
+    const string Types = """
+        module Types
+
+        import Sable.Generators
+        import Sable.Text
+
+        fn shape(_ t: TypeRef) -> String {
+            var arguments: String[>..] = []
+            for a in t.arguments {
+                arguments.append(shape(a))
+            }
+            var text = "\(t.kind):\(t.name)"
+            if !t.moduleName.isEmpty {
+                text = text + "@" + t.moduleName
+            }
+            if !arguments.isEmpty {
+                text = text + "<" + joined(arguments, separator: ",") + ">"
+            }
+            return text
+        }
+
+        @generator("types")
+        fn types(_ d: Declaration, into output: inout Output) {
+            let t = TextBuilder()
+            t.appendLine("// \(d.keyword) \(d.qualifiedName) all=[\(joined(d.allConformances, separator: ","))] super=\(d.superclass ?? "-")")
+            for f in d.fields {
+                t.appendLine("// field \(f.name) \(shape(f.resolved)) json=\(f.resolved.has(attribute: "types")) eq=\(f.resolved.conforms(to: "Equatable"))")
+            }
+            for c in d.cases {
+                for p in c.payload {
+                    t.appendLine("// payload \(c.name).\(p.name) \(shape(p.resolved))")
+                }
+            }
+            for p in d.parameters {
+                t.appendLine("// parameter \(p.label)/\(p.name) \(shape(p.resolved)) default=\(p.hasDefault)")
+            }
+            if let r = d.returned {
+                t.appendLine("// returns \(d.returnType) \(shape(r)) async=\(d.isAsync) throws=\(d.isThrowing)")
+            }
+            let file = joined(splitting(d.qualifiedName, by: "."), separator: "_")
+            output.add(file: "\(file).types.sb", t.build())
+        }
+        """;
+
+    [Fact]
+    public void TypesAreGivenResolved() {
+        var result = Run(Set(("generators/types.sb", Types)), """
+            module App
+
+            protocol Named { fn name() -> String }
+
+            @types
+            struct Point: Equatable {
+                var x: Int
+                var y: Int
+            }
+
+            class Base { }
+
+            @types
+            final class Shape: Base {
+                var points: Point[>..] = []
+                var label: String?
+                var tags: [String: Int] = [:]
+                var pair: (Int, Bool) = (0, false)
+            }
+
+            extension Shape: Named {
+                fn name() -> String => "shape"
+            }
+
+            @types
+            union Event {
+                Moved(by: Point),
+                Renamed(String)
+            }
+
+            @types
+            fn scale(_ point: Point, by factor: Int = 2) throws -> Point? {
+                return none
+            }
+            """);
+        Assert.False(result.HasErrors, string.Join("\n", Messages(result)));
+        string Of(string name) => Comments(result.Files.Single(f => f.FileName == name));
+        Assert.Contains("Equatable", Of("Point.types.sb").Split('\n')[0]);
+        Assert.True(Of("Point.types.sb").Contains("// field x struct:Int@Sable.Core json=false eq=true\n// field y struct:Int@Sable.Core json=false eq=true", StringComparison.Ordinal),
+            string.Join("\n----\n", result.Files.Select(Comments)));
+        Assert.Contains("// class Shape all=[", Of("Shape.types.sb"));
+        Assert.Contains("Named", Of("Shape.types.sb").Split('\n')[0]);
+        Assert.Contains("super=Base", Of("Shape.types.sb"));
+        Assert.Contains("// field points array:Array<struct:Point@App> json=false eq=", Of("Shape.types.sb"));
+        Assert.Contains("// field label optional:Optional<struct:String@Sable.Core>", Of("Shape.types.sb"));
+        Assert.Contains("// field tags dictionary:Dictionary@Sable.Core<struct:String@Sable.Core,struct:Int@Sable.Core>", Of("Shape.types.sb"));
+        Assert.Contains("// field pair tuple:<struct:Int@Sable.Core,struct:Bool@Sable.Core>", Of("Shape.types.sb"));
+        Assert.Contains("// payload Moved.by struct:Point@App", Of("Event.types.sb"));
+        Assert.Contains("// payload Renamed. struct:String@Sable.Core", Of("Event.types.sb"));
+        Assert.Equal("""
+            // fn scale all=[] super=-
+            // parameter /point struct:Point@App default=false
+            // parameter by/factor struct:Int@Sable.Core default=true
+            // returns Point? optional:Optional<struct:Point@App> async=false throws=true
+            """, Of("scale.types.sb"));
+    }
+
+    [Fact]
+    public void AFieldsTypeShowsItsOwnAttributes() {
+        var result = Run(Set(("generators/types.sb", Types)), """
+            module App
+
+            @types
+            struct Inner { var a: Int }
+
+            @types
+            struct Outer { var inner: Inner }
+            """);
+        Assert.Contains("// field inner struct:Inner@App json=true", Comments(result.Files.Single(static f => f.FileName == "Outer.types.sb")));
+    }
+
+    [Fact]
+    public void NestedTypesFunctionsAndMethodsAreGiven() {
+        var result = Run(Set(("generators/types.sb", Types)), """
+            module App
+
+            struct Outer {
+                @types
+                struct Inner { var a: Int }
+
+                @types
+                static fn make() -> Outer { return Outer() }
+            }
+
+            extension Outer {
+                @types
+                fn describe(verbose: Bool) -> String { return "" }
+            }
+
+            @types
+            fn top() { }
+            """);
+        Assert.False(result.HasErrors, string.Join("\n", Messages(result)));
+        Assert.Equal(["Outer_Inner.types.sb", "Outer_make.types.sb", "Outer_describe.types.sb", "top.types.sb"], result.Files.Select(static f => f.FileName));
+        Assert.Contains("// struct Outer.Inner", Comments(result.Files[0]));
+        Assert.Contains("// fn Outer.make", Comments(result.Files[1]));
+        Assert.Contains("// parameter verbose/verbose struct:Bool@Sable.Core default=false", Comments(result.Files[2]));
+        Assert.DoesNotContain("returns", Comments(result.Files[3]));
+    }
+
+    [Fact]
+    public void AGeneratorsAttributeIsAcceptedOnNestedTypesFunctionsMethodsAndParameters() {
+        var set = Set(("generators/types.sb", Types.Replace("@generator(\"types\")", "@generator(\"types\", members: [\"note\"])", StringComparison.Ordinal)));
+        var options = ParseOptions.Default with { GeneratorAttributes = [..set.Attributes.Types], GeneratorMemberAttributes = [..set.Attributes.Members] };
+        var tree = SyntaxTree.Parse(new SourceText("""
+            module App
+
+            struct Outer {
+                @types
+                struct Inner { }
+
+                @types
+                fn method(@note x: Int) { }
+            }
+
+            @types
+            fn top() { }
+
+            fn main() { }
+            """, "src/main.sb"), options);
+        var result = SourceGenerators.Run("app", [set], [tree]);
+        var compiled = Pipeline.Compile([tree, ..result.Files.Select(f => SyntaxTree.Parse(new SourceText(f.Text, f.FileName), options))]);
+        Assert.True(compiled.Succeeded, string.Join("\n", compiled.Errors));
+    }
+
+    // ---- Package generators ---------------------------------------------------------
+
+    const string Routes = """
+        module Routes
+
+        import Sable.Generators
+        import Sable.Text
+
+        @generator("route", members: ["param"])
+        fn routes(_ pkg: Package, into output: inout Output) {
+            let t = TextBuilder()
+            t.appendLine("public fn allRoutes() -> String[>..] {")
+            t.appendLine("    var routes: String[>..] = []")
+            for d in pkg.declarations {
+                let path = d.trigger.string(named: "path") ?? "/"
+                t.appendLine("    routes.append(\"\(path) -> \(d.qualifiedName)\")")
+                if d.keyword != "fn" {
+                    output.warning("a route is usually a function", at: d.location)
+                }
+            }
+            t.appendLine("    return routes")
+            t.appendLine("}")
+            output.add(file: "Routes.sb", t.build())
+        }
+
+        @generator("schema", always: true)
+        fn schema(_ pkg: Package, into output: inout Output) {
+            let t = TextBuilder()
+            t.appendLine("// package \(pkg.name), \(pkg.declarations.count) declaration(s)")
+            for input in pkg.inputs {
+                t.appendLine("public fn schema_\(joined(splitting(input.path, by: "/"), separator: "_"))() -> String => \"\(trimmedEnd(input.text))\"")
+            }
+            output.add(file: "Schema.sb", t.build(), inModule: pkg.inputs.isEmpty ? "" : "App.Data")
+        }
+        """;
+
+    [Fact]
+    public void APackageGeneratorIsGivenEveryDeclarationAtOnce() {
+        var set = Set(("generators/routes.sb", Routes));
+        var options = ParseOptions.Default with { GeneratorAttributes = [..set.Attributes.Types], GeneratorMemberAttributes = [..set.Attributes.Members] };
+        var first = SyntaxTree.Parse(new SourceText("module App\n\n@route(path: \"/users\")\nfn users() { }\n\nfn main() {\n    for r in allRoutes() {\n        print(r)\n    }\n}\n", "src/main.sb"), options);
+        var second = SyntaxTree.Parse(new SourceText("module App\n\n@route(path: \"/health\")\nstruct Health { }\n", "src/health.sb"), options);
+        var result = SourceGenerators.Run("app", [set], [first, second]);
+        Assert.Equal(["S3233 route: a route is usually a function"], Messages(result));
+        Assert.Equal("Health", result.Diagnostics[0].Tree.Text.ToString(result.Diagnostics[0].Diagnostic.Span));
+        Assert.Equal(["Routes.sb", "Schema.sb"], result.Files.Select(static f => f.FileName).Order());
+        Assert.Contains("// Written by the generator 'route' for 2 declaration(s).", result.Files.Single(static f => f.FileName == "Routes.sb").Text);
+
+        var compiled = Pipeline.Compile([first, second, ..result.Files.Select(f => SyntaxTree.Parse(new SourceText(f.Text, f.FileName), options))]);
+        Assert.True(compiled.Succeeded, string.Join("\n", compiled.Errors));
+        var interpreter = new SilInterpreter(compiled.Sil!);
+        interpreter.Run(compiled.Sil!.EntryPoint!);
+        Assert.Equal("/users -> users\n/health -> Health\n", interpreter.Output.ToString());
+    }
+
+    [Fact]
+    public void AnAlwaysGeneratorRunsWithNoDeclarationAndIsGivenTheInputs() {
+        var set = Set(("generators/routes.sb", Routes));
+        var lib = SyntaxTree.Parse(new SourceText("module App\n\npublic fn nothing() { }\n", "src/lib.sb"));
+        var data = SyntaxTree.Parse(new SourceText("module App.Data\n", "src/data.sb"));
+        var none = SourceGenerators.Run(new GenerationInput("app", [set], [lib, data]));
+        var file = Assert.Single(none.Files);
+        Assert.Equal("Schema.sb", file.FileName);
+        Assert.Same(lib, file.Origin);
+        Assert.Contains("module App\n", file.Text);
+        Assert.Contains("// package app, 0 declaration(s)", file.Text);
+
+        var withInputs = SourceGenerators.Run(new GenerationInput("app", [set], [lib, data]) {
+            Inputs = [new("schemas/user", "name\n"), new("schemas/item", "id\n")],
+        });
+        var schema = Assert.Single(withInputs.Files);
+        Assert.Contains("module App.Data\n", schema.Text);
+        Assert.Contains("public fn schema_schemas_user() -> String => \"name\"", schema.Text);
+        Assert.Contains("public fn schema_schemas_item() -> String => \"id\"", schema.Text);
+
+        // A change to an input is a change to the run's input.
+        var runs = SourceGenerators.Executions;
+        SourceGenerators.Run(new GenerationInput("app", [set], [lib, data]) { Inputs = [new("schemas/user", "name\n"), new("schemas/item", "id\n")] });
+        Assert.Equal(runs, SourceGenerators.Executions);
+        SourceGenerators.Run(new GenerationInput("app", [set], [lib, data]) { Inputs = [new("schemas/user", "email\n")] });
+        Assert.Equal(runs + 1, SourceGenerators.Executions);
+    }
+
+    [Fact]
+    public void AFileCanOnlyGoInAModuleThePackageDeclares() {
+        var set = Set(("generators/m.sb", """
+            module M
+
+            import Sable.Generators
+
+            @generator("m")
+            fn m(_ d: Declaration, into output: inout Output) {
+                output.add(file: "x.sb", "", inModule: "Elsewhere")
+            }
+            """));
+        var result = Run(set, "module App\n\n@m\nstruct S { }\n");
+        Assert.Equal(["S3234 the generator 'm' wrote 'x.sb' in module 'Elsewhere', which package 'app' does not declare: a generated file goes in one of the package's own modules"], Messages(result));
+    }
+
+    [Fact]
+    public void AlwaysIsOnlyForAPackageGenerator() {
+        var set = Set(("generators/a.sb", "module A\n\nimport Sable.Generators\n\n@generator(\"a\", always: true)\nfn a(_ d: Declaration, into output: inout Output) { }\n"));
+        var result = Run(set, "module App\n\n@a\nstruct S { }\n");
+        Assert.StartsWith("S3230 'always: true' is for a generator given the whole package", Assert.Single(Messages(result)));
+    }
+
     // ---- In packages ----------------------------------------------------------
 
     /// <summary>A workspace of 'describe', with the generator, 'app', which depends on it, and 'top', which depends on 'app'.</summary>
@@ -433,13 +767,13 @@ public sealed class SourceGeneratorTests {
     public void AGeneratorsAttributesAreAcceptedOnlyWhereItReadsThem() {
         using var fixture = new PackageFixture();
         Packages(fixture);
-        fixture.Write("app/src/more.sb", "module App\n\n@describe\nfn notAType() { }\n\nstruct Holder {\n    @describe var a: Int\n    @hidden var b: Int\n}\n\n@hidden\nstruct Wrong { }\n");
+        fixture.Write("app/src/more.sb", "module App\n\nprotocol P {\n    @describe fn inAProtocol()\n}\n\nstruct Holder {\n    @describe var a: Int\n    @hidden var b: Int\n}\n\n@hidden\nstruct Wrong { }\n");
         Assert.Equal(1, PackageBuilder.Check(fixture.Load("top"), fixture.Environment, new()));
         var errors = fixture.Errors.ToString();
-        Assert.Contains("'@describe' starts a source generator, which is given a struct, a class, an actor, a union or an enum at the top level of a file, not a function", errors);
-        Assert.Contains("'@describe' starts a source generator, which is given a struct, a class, an actor, a union or an enum at the top level of a file, not a property", errors);
-        Assert.Contains("'@hidden' is read by a source generator on a field or a case of the type it is given, not on a struct", errors);
-        Assert.DoesNotContain("src/more.sb:8", errors);
+                Assert.Contains("'@describe' starts a source generator, which is given a type, a function or a method, not a property", errors);
+        Assert.Contains("src/more.sb:4:5", errors);
+        Assert.Contains("'@hidden' is read by a source generator on a field, a case or a parameter, not on a struct", errors);
+        Assert.DoesNotContain("src/more.sb:9:", errors);
     }
 
     [Fact]
@@ -466,5 +800,76 @@ public sealed class SourceGeneratorTests {
         fixture.Write("app/src/lib.sb", "module App\n\npublic fn origin() -> String { return \"none\" }\n");
         Assert.Equal(0, PackageBuilder.Check(workspace, fixture.Environment, new()));
         Assert.False(File.Exists(generated));
+    }
+
+    [Fact]
+    public void ADependencysTypesResolve() {
+        using var fixture = new PackageFixture();
+        fixture.Package("gen", "gen", "1.0.0", "", ("generators/types.sb", Types));
+        fixture.Package("base", "base", "1.0.0", "[dependencies]\ngen = { path = \"../gen\" }\n",
+            ("src/lib.sb", "module Base\n\n@types\npublic struct Id {\n    public var value: Int\n}\n"));
+        fixture.Package("app", "app", "1.0.0", "[dependencies]\ngen = { path = \"../gen\" }\nbase = { path = \"../base\" }\n",
+            ("src/lib.sb", "module App\n\nimport Base\n\n@types\npublic struct User {\n    public var id: Id\n}\n"));
+        var workspace = fixture.Load("app");
+        Assert.True(PackageBuilder.Check(workspace, fixture.Environment, new()) == 0, fixture.Errors.ToString());
+        var user = File.ReadAllText(Path.Combine(workspace.TargetDirectory, "generated", "app", "types", "User.types.sb"));
+        Assert.Contains("// field id struct:Id@Base json=true", user);
+    }
+
+    [Fact]
+    public void AManifestCanListInputsForItsGenerators() {
+        using var fixture = new PackageFixture();
+        fixture.Package("app", "app", "1.0.0", "[generators]\ninputs = [\"schemas\"]\n",
+            ("src/lib.sb", "module App\n"),
+            ("src/data.sb", "module App.Data\n"),
+            ("schemas/user", "name\n"),
+            ("generators/routes.sb", Routes));
+        var workspace = fixture.Load("app");
+        Assert.True(PackageBuilder.Check(workspace, fixture.Environment, new()) == 0, fixture.Errors.ToString());
+        var schema = File.ReadAllText(Path.Combine(workspace.TargetDirectory, "generated", "app", "schema", "Schema.sb"));
+        Assert.Contains("public fn schema_schemas_user() -> String => \"name\"", schema);
+
+        fixture.Write("app/sable.toml", "[package]\nname = \"app\"\nversion = \"1.0.0\"\n[generators]\ninputs = [\"missing\"]\n");
+        Assert.Equal(1, PackageBuilder.Check(fixture.Load("app"), fixture.Environment, new()));
+        Assert.Contains("the generator input 'missing' that its manifest lists does not exist", fixture.Errors.ToString());
+    }
+
+    // ---- Snapshot tests ---------------------------------------------------------
+
+    [Fact]
+    public void ASnapshotCaseIsBlessedThenCompared() {
+        using var fixture = new PackageFixture();
+        var directory = fixture.Package("describe", "describe", "1.0.0", "",
+            ("generators/describe.sb", Describer),
+            ("generators/tests/basic/model.sb", "module Model\n\n@describe\nstruct Point {\n    var x: Int\n    @hidden var y: Int\n}\n"));
+        var output = new StringWriter();
+
+        // Nothing expected yet: the written file is a difference.
+        var first = GeneratorSnapshots.Run("describe", directory, bless: false, output)!;
+        Assert.Equal((0, 1), (first.Passed, first.Failed));
+        Assert.Contains("describe/Point.describe.sb: written, but not expected:", output.ToString());
+
+        Assert.Equal(1, GeneratorSnapshots.Run("describe", directory, bless: true, new StringWriter())!.Blessed);
+        var expected = Path.Combine(directory, "generators", "tests", "basic", "expected", "describe", "Point.describe.sb");
+        Assert.Contains("return \"Point { x: \\(self.x) }\"", File.ReadAllText(expected));
+        Assert.False(File.Exists(Path.Combine(directory, "generators", "tests", "basic", "expected", "diagnostics.txt")));
+        Assert.Equal((1, 0), (GeneratorSnapshots.Run("describe", directory, bless: false, new StringWriter())! is var again ? (again.Passed, again.Failed) : default));
+
+        // The generator changes: the case fails, and says where.
+        fixture.Write("describe/generators/describe.sb", Describer.Replace("{ \\(all) }", "[\\(all)]", StringComparison.Ordinal));
+        output = new StringWriter();
+        Assert.Equal(1, GeneratorSnapshots.Run("describe", directory, bless: false, output)!.Failed);
+        Assert.Contains("describe/Point.describe.sb differs at line", output.ToString());
+    }
+
+    [Fact]
+    public void ASnapshotCaseMustCompileWithWhatWasWritten() {
+        using var fixture = new PackageFixture();
+        var directory = fixture.Package("bad", "bad", "1.0.0", "",
+            ("generators/bad.sb", "module Bad\n\nimport Sable.Generators\n\n@generator(\"bad\")\nfn bad(_ d: Declaration, into output: inout Output) {\n    output.add(file: \"\\(d.name).bad.sb\", \"fn broken() -> Int { return \\\"text\\\" }\\n\")\n}\n"),
+            ("generators/tests/one/model.sb", "module Model\n\n@bad\nstruct S { }\n"));
+        GeneratorSnapshots.Run("bad", directory, bless: true, new StringWriter());
+        var diagnostics = File.ReadAllText(Path.Combine(directory, "generators", "tests", "one", "expected", "diagnostics.txt"));
+        Assert.StartsWith("error S3004 expected/bad/S.bad.sb:", diagnostics);
     }
 }

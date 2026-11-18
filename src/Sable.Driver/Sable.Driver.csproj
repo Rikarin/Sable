@@ -3,6 +3,8 @@
     <OutputType>Exe</OutputType>
     <RootNamespace>Sable.Driver</RootNamespace>
     <AssemblyName>sable</AssemblyName>
+    <!-- The toolchain's version: what 'sable -V' prints and 'sable toolchain pin' names. -->
+    <Version>0.5.0</Version>
     <!-- A build parses, binds and lowers on every core at once, allocating as it
          goes: the server collector keeps up with that (docs/04, incremental builds). -->
     <ServerGarbageCollection>true</ServerGarbageCollection>

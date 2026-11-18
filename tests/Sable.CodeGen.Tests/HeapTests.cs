@@ -293,6 +293,85 @@ public sealed class HeapTests {
         );
     }
 
+    /// <summary>
+    ///     A program that ends with objects alive says which, and the reference
+    ///     cycles that keep them — through fields, optionals and arrays, but
+    ///     not through a weak reference, which keeps nothing alive (#188).
+    /// </summary>
+    [Fact]
+    public void ALeakSaysWhichCyclesKeepItsObjects() {
+        if (!CanBuild) {
+            return;
+        }
+
+        var run = BuildAndRun("""
+            module Test
+
+            class Node {
+                var next: Node? = none
+                var children: Node[>..] = []
+            }
+
+            class Owner {
+                var pet: Pet? = none
+            }
+
+            class Pet {
+                weak var owner: Owner? = none
+                var toy: Toy? = none
+            }
+
+            class Toy {
+                var pet: Pet? = none
+            }
+
+            @main
+            fn main() {
+                let a = Node()
+                let b = Node()
+                a.next = b
+                b.next = a
+                let parent = Node()
+                parent.children.append(Node())
+                parent.children[0].next = parent
+                let owner = Owner()
+                let pet = Pet()
+                owner.pet = pet
+                pet.owner = owner
+                let toy = Toy()
+                pet.toy = toy
+                toy.pet = pet
+                print("done")
+            }
+            """);
+        Assert.Equal("done\n", run.Stdout);
+        Assert.Equal(0, run.ExitCode);
+        Assert.Equal(
+            """
+            sable: 7 object(s) leaked
+              4 Test.Node
+              1 Test.Pet
+              1 Test.Toy
+              1 [Test.Node]
+
+            """,
+            Before(run.Stderr, "  a reference cycle")
+        );
+
+        // The owner is held by the pet only weakly: it is freed, and the pet's cycle with its toy is all that is left.
+        var cycles = run.Stderr.Split('\n').Where(static l => l.StartsWith("  a reference cycle: ", StringComparison.Ordinal)).Order(StringComparer.Ordinal).ToList();
+        Assert.Equal(
+            [
+                "  a reference cycle: Test.Node -> Test.Node -> Test.Node",
+                "  a reference cycle: Test.Pet -> Test.Toy -> Test.Pet",
+            ],
+            cycles.Where(static c => !c.Contains('[', StringComparison.Ordinal)).Select(static c => c.Replace("Test.Toy -> Test.Pet -> Test.Toy", "Test.Pet -> Test.Toy -> Test.Pet", StringComparison.Ordinal))
+        );
+        Assert.Single(cycles, static c => c.Contains("[Test.Node]", StringComparison.Ordinal));
+    }
+
+    static string Before(string text, string marker) => text.IndexOf(marker, StringComparison.Ordinal) is var at and >= 0 ? text[..at] : text;
+
     static string Root {
         get {
             var directory = new DirectoryInfo(AppContext.BaseDirectory);

@@ -39,6 +39,16 @@ public sealed class CorpusLoweringTests {
         Assert.Empty(SilVerifier.Verify(module));
     }
 
+    /// <summary>And what an optimised build makes of it: devirtualised, inlined, simplified.</summary>
+    [Theory]
+    [MemberData(nameof(Files))]
+    public void WhatLowersVerifiesOptimised(string file) {
+        var tree = SyntaxTree.Parse(new SourceText(File.ReadAllText(Path.Combine(Root, file)), Path.GetFileName(file)));
+        var (module, _) = SilGen.Lower(Compilation.Create([tree]));
+        SilPassManager.Run(module, SilPassManager.Optimising);
+        Assert.Empty(SilVerifier.Verify(module));
+    }
+
     static string Root {
         get {
             var directory = new DirectoryInfo(AppContext.BaseDirectory);

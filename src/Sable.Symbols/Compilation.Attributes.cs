@@ -167,28 +167,38 @@ public sealed partial class Compilation {
     ///     An attribute a source generator the file's package can see answers
     ///     to, or reads on members (docs/08), and if so, in
     ///     <paramref name="problem" />, why it does not apply where it is
-    ///     written. A generator is given only the types at the top level of a
-    ///     file, and their fields and cases.
+    ///     written. A generator is given types, at the top level of a file or
+    ///     in another type, functions at the top level, and methods of types and
+    ///     extensions; and it reads attributes on their fields, cases and
+    ///     parameters.
     /// </summary>
     static bool IsGeneratorAttribute(SyntaxTree tree, AttributeSyntax attribute, string name, out string? problem) {
         const AttributeTargets types = AttributeTargets.Struct | AttributeTargets.Class | AttributeTargets.Actor | AttributeTargets.Union | AttributeTargets.Enum;
-        const AttributeTargets members = AttributeTargets.Field | AttributeTargets.UnionCase | AttributeTargets.EnumCase;
+        const AttributeTargets members = AttributeTargets.Field | AttributeTargets.UnionCase | AttributeTargets.EnumCase | AttributeTargets.Parameter;
         var target = AttributeTargetOf(attribute.Parent)?.Target ?? AttributeTargets.None;
         var noun = AttributeTargetOf(attribute.Parent)?.Noun ?? "this";
-        var onType = (target & types) != 0 && attribute.Parent?.Parent is CompilationUnitSyntax;
+
+        // Where the declaration is: at the top level, or in a type or an extension that is, in turn.
+        static bool Placed(SyntaxNode? container) =>
+            container is CompilationUnitSyntax
+            || container is ExtensionDeclarationSyntax extension && extension.Parent is CompilationUnitSyntax
+            || container is StructDeclarationSyntax or ClassDeclarationSyntax or ActorDeclarationSyntax or UnionDeclarationSyntax or EnumDeclarationSyntax
+            && Placed(container.Parent);
+
+        var onDeclaration = ((target & types) != 0 || target == AttributeTargets.Function) && Placed(attribute.Parent?.Parent);
         var onMember = (target & members) != 0;
         problem = null;
-        if (tree.Options.GeneratorAttributes.Contains(name) && onType || tree.Options.GeneratorMemberAttributes.Contains(name) && onMember) {
+        if (tree.Options.GeneratorAttributes.Contains(name) && onDeclaration || tree.Options.GeneratorMemberAttributes.Contains(name) && onMember) {
             return true;
         }
 
         if (tree.Options.GeneratorAttributes.Contains(name)) {
-            problem = $"'@{name}' starts a source generator, which is given a struct, a class, an actor, a union or an enum at the top level of a file, not {noun}";
+            problem = $"'@{name}' starts a source generator, which is given a type, a function or a method, not {noun}";
             return true;
         }
 
         if (tree.Options.GeneratorMemberAttributes.Contains(name)) {
-            problem = $"'@{name}' is read by a source generator on a field or a case of the type it is given, not on {noun}";
+            problem = $"'@{name}' is read by a source generator on a field, a case or a parameter, not on {noun}";
             return true;
         }
 

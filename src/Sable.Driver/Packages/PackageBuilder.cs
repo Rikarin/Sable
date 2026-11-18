@@ -37,11 +37,18 @@ public static class PackageBuilder {
         : workspace.Current is { } current ? [current]
         : workspace.Members;
 
+    /// <summary>
+    ///     Resolves what a request builds, and runs the build scripts of the
+    ///     packages that have one (docs/05 §5.6), for the request's profile:
+    ///     what they write is part of the program every command compiles.
+    /// </summary>
     internal static PackageGraph Resolve(Workspace workspace, PackageEnvironment environment, BuildRequest request) {
         ReportManifestWarnings(workspace, environment);
-        return PackageGraph.ResolveCached(workspace, environment, new(
+        var graph = PackageGraph.ResolveCached(workspace, environment, new(
             request.Features, null, request.Locked, [..Selected(workspace, request.Package).Select(static m => m.Name)],
             request.Target is { } target ? (target.Os, target.Arch) : null));
+        graph.BuildOutputs = BuildScripts.Run(graph, workspace.RootManifest.ProfileFor(request.Release), environment);
+        return graph;
     }
 
     /// <summary>
@@ -81,7 +88,7 @@ public static class PackageBuilder {
         }
 
         foreach (var package in graph.Closure(member)) {
-            trees.AddRange(package.Package.LibrarySources().SelectMany(file => ParseWithGenerated(graph, package, file, optimise, generated, target)));
+            trees.AddRange(graph.LibrarySources(package).SelectMany(file => ParseWithGenerated(graph, package, file, optimise, generated, target)));
         }
 
         return trees;
@@ -97,10 +104,10 @@ public static class PackageBuilder {
     public static IReadOnlyList<SyntaxTree> TestProgram(PackageGraph graph, string member, bool optimise = false, GeneratedSources? generated = null) {
         var own = graph.Packages[member];
         return [
-            ..own.Package.LibrarySources().SelectMany(file => ParseWithGenerated(graph, own, file, optimise, generated)),
+            ..graph.LibrarySources(own).SelectMany(file => ParseWithGenerated(graph, own, file, optimise, generated)),
             ..TestFiles(own).SelectMany(file => ParseWithGenerated(graph, own, file, optimise, generated)),
             ..graph.Closure(member, dev: true).Where(p => p.Name != member)
-                .SelectMany(p => p.Package.LibrarySources().SelectMany(file => ParseWithGenerated(graph, p, file, optimise, generated))),
+                .SelectMany(p => graph.LibrarySources(p).SelectMany(file => ParseWithGenerated(graph, p, file, optimise, generated))),
         ];
     }
 
@@ -162,7 +169,7 @@ public static class PackageBuilder {
         var own = graph.Packages[member];
         var units = new List<UnitPlan> { new($"bin {member}/{bin.Name}", [..WithGenerated(graph, own, bin.Path, generated)]) };
         foreach (var package in graph.Closure(member)) {
-            units.Add(new($"lib {package.Name}-{package.Version}", [..package.Package.LibrarySources().SelectMany(file => WithGenerated(graph, package, file, generated))]));
+            units.Add(new($"lib {package.Name}-{package.Version}", [..graph.LibrarySources(package).SelectMany(file => WithGenerated(graph, package, file, generated))]));
         }
 
         return units;
@@ -205,7 +212,7 @@ public static class PackageBuilder {
         var reported = new List<string>();
         foreach (var member in Selected(workspace, request.Package)) {
             var resolved = graph.Packages[member.Name];
-            environment.Error.WriteLine($"    Checking {Describe(resolved, workspace)}");
+            environment.Status.WriteLine($"    Checking {Describe(resolved, workspace)}");
             var targets = new List<BinTarget?>();
             if (member.LibrarySources().Count > 0) {
                 targets.Add(null);
@@ -251,7 +258,7 @@ public static class PackageBuilder {
             return 1;
         }
 
-        environment.Error.WriteLine($"    Finished checking in {clock.Elapsed.TotalSeconds:0.00}s");
+        environment.Status.WriteLine($"    Finished checking in {clock.Elapsed.TotalSeconds:0.00}s");
         return 0;
     }
 
@@ -334,10 +341,6 @@ public static class PackageBuilder {
             environment.Error.WriteLine($"warning: {warning}");
         }
 
-        if (members.Any(static m => m.Manifest.Build is not null)) {
-            environment.Error.WriteLine("warning: [build] scripts are not run yet (docs/05 §5.6); building without it");
-        }
-
         foreach (var member in members) {
             var bins = member.Bins.Where(b => request.Bin is null || b.Name == request.Bin).ToList();
             if (request.Bin is not null && bins.Count == 0) {
@@ -345,10 +348,10 @@ public static class PackageBuilder {
             }
 
             foreach (var dependency in graph.Closure(member.Name).Skip(1)) {
-                environment.Error.WriteLine($"   Compiling {Describe(dependency, workspace)}");
+                environment.Status.WriteLine($"   Compiling {Describe(dependency, workspace)}");
             }
 
-            environment.Error.WriteLine($"   Compiling {Describe(graph.Packages[member.Name], workspace)}");
+            environment.Status.WriteLine($"   Compiling {Describe(graph.Packages[member.Name], workspace)}");
             var reported = new List<string>();
             if (Generate(graph, member.Name, environment, reported, profile.Optimise, timings) is not { } generated) {
                 DiagnosticDocs.WriteHint(environment.Error, reported);
@@ -379,7 +382,13 @@ public static class PackageBuilder {
                 Directory.CreateDirectory(output);
                 var executable = Path.Combine(output, bin.Name + (request.Target ?? NativeTarget.Host).ExecutableSuffix);
                 var buildSettings = new BuildSettings(profile.Name, profile.Optimise, profile.Debug ? workspace.Root : null, profile.Exclusivity) {
-                    Native = profile.Native with { Target = request.Target, Sysroot = request.Sysroot },
+                    // What the build scripts found for the link: native libraries and where they are.
+                    Native = profile.Native with {
+                        Target = request.Target,
+                        Sysroot = request.Sysroot,
+                        LinkArguments = graph.LinkArguments(member.Name),
+                        LinkInputs = graph.LinkInputs(member.Name),
+                    },
                     Whole = profile.CodegenUnits == 1,
                 };
                 var outcome = IncrementalBuild.Build(Units(graph, member.Name, bin, generated), buildSettings, executable, Path.Combine(output, "cache"), timings, environment.Error);
@@ -392,7 +401,7 @@ public static class PackageBuilder {
                 }
 
                 if (timings is not null) {
-                    environment.Error.WriteLine($"       Built {bin.Name}: {outcome.Kind}, {outcome.Compiled} unit(s) compiled, {outcome.Reused} reused");
+                    environment.Status.WriteLine($"       Built {bin.Name}: {outcome.Kind}, {outcome.Compiled} unit(s) compiled, {outcome.Reused} reused");
                 }
 
                 built.Add(new(member.Name, bin.Name, executable, profile));
@@ -404,7 +413,7 @@ public static class PackageBuilder {
         }
 
         var settings = $"{(profile.Optimise ? "optimised" : "unoptimised")}{(profile.Debug ? " + debuginfo" : "")}";
-        environment.Error.WriteLine($"    Finished `{profile.Name}` profile [{settings}] target(s) in {clock.Elapsed.TotalSeconds:0.00}s");
+        environment.Status.WriteLine($"    Finished `{profile.Name}` profile [{settings}] target(s) in {clock.Elapsed.TotalSeconds:0.00}s");
         timings?.Write(environment.Error);
         return built;
     }
@@ -425,7 +434,7 @@ public static class PackageBuilder {
             return 1;
         }
 
-        environment.Error.WriteLine($"     Running `{Path.GetRelativePath(workspace.Root, binary.Path)}`");
+        environment.Status.WriteLine($"     Running `{Path.GetRelativePath(workspace.Root, binary.Path)}`");
         var start = new ProcessStartInfo(binary.Path);
         foreach (var argument in arguments) {
             start.ArgumentList.Add(argument);
@@ -445,7 +454,7 @@ public static class PackageBuilder {
     public static void Clean(Workspace workspace, PackageEnvironment environment) {
         if (Directory.Exists(workspace.TargetDirectory)) {
             Directory.Delete(workspace.TargetDirectory, true);
-            environment.Error.WriteLine($"     Removed {workspace.Relative(workspace.TargetDirectory)}");
+            environment.Status.WriteLine($"     Removed {workspace.Relative(workspace.TargetDirectory)}");
         }
     }
 }

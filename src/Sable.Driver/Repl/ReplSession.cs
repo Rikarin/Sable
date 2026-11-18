@@ -38,8 +38,19 @@ public sealed record ReplResult(string Output, bool Failed = false, bool Quit = 
 ///         Ctrl-C (<see cref="Interrupt" />) stops a runaway entry instead.
 ///     </para>
 /// </remarks>
-public sealed class ReplSession {
+public sealed class ReplSession(IReadOnlyList<SyntaxTree>? package = null) {
     const string Mark = "\u0001repl-mark\u0001";
+
+    /// <summary>
+    ///     The package the session was started in, with its dependencies
+    ///     (<c>sable repl</c> in a package): compiled with every entry, so that
+    ///     its modules can be imported as the library's are.
+    /// </summary>
+    readonly IReadOnlyList<SyntaxTree> _package = package ?? [];
+
+    readonly HashSet<string> _packageModules = [
+        ..(package ?? []).Select(static t => t.Root is CompilationUnitSyntax { Module: { } module } ? module.Name.ToString().Trim() : null).OfType<string>(),
+    ];
 
     readonly List<string> _imports = [];
     readonly List<(HashSet<string> Names, string Text)> _declarations = [];
@@ -185,8 +196,8 @@ public sealed class ReplSession {
         var added = new List<string>();
         foreach (var import in imports) {
             var module = import.Name.ToString().Trim();
-            if (module != Library.Core && !Library.ModuleNames.Contains(module)) {
-                return new($"no library module '{module}'; there are {string.Join(", ", Library.ModuleNames.Order(StringComparer.Ordinal))}", Failed: true);
+            if (module != Library.Core && !Library.ModuleNames.Contains(module) && !_packageModules.Contains(module)) {
+                return new($"no library module '{module}'; there are {string.Join(", ", Library.ModuleNames.Concat(_packageModules).Order(StringComparer.Ordinal))}", Failed: true);
             }
 
             if (!_imports.Contains(module)) {
@@ -316,9 +327,9 @@ public sealed class ReplSession {
     ///     Compiles a program; its errors, if it has any, as a result to show,
     ///     each placed in the entry when it falls inside it.
     /// </summary>
-    static (Compilation? Compilation, SyntaxTree? Tree, ReplResult? Errors) Check(string program, int entryStart, int entryLength) {
+    (Compilation? Compilation, SyntaxTree? Tree, ReplResult? Errors) Check(string program, int entryStart, int entryLength) {
         var tree = SyntaxTree.Parse(new SourceText(program, "repl"));
-        var compilation = Compilation.Create([tree, ..Library.For(tree)]);
+        var compilation = Compile(tree);
         var errors = compilation.GetAllDiagnosticsByFile()
             .Where(d => d.Diagnostic.Severity == DiagnosticSeverity.Error && (d.Tree is null || d.Tree == tree))
             .Select(static d => d.Diagnostic)
@@ -346,6 +357,9 @@ public sealed class ReplSession {
         return (compilation, tree, new(text.ToString(), Failed: true));
     }
 
+    /// <summary>The session's program with the package it is in, and the library modules either imports.</summary>
+    Compilation Compile(SyntaxTree tree) => Compilation.Create([tree, .._package, ..Library.For([tree, .._package])]);
+
     /// <summary>Lowers and interprets a program that type-checks; its output after the mark.</summary>
     ReplResult Run(string program) {
         // Its effects are kept only if it succeeds, as its statement is.
@@ -360,7 +374,7 @@ public sealed class ReplSession {
 
     ReplResult RunJournaled(string program) {
         var tree = SyntaxTree.Parse(new SourceText(program, "repl"));
-        var compilation = Compilation.Create([tree, ..Library.For(tree)]);
+        var compilation = Compile(tree);
         var (module, lowering) = SilGen.Lower(compilation);
         if (lowering.Any(static d => d.Severity == DiagnosticSeverity.Error)) {
             return new(string.Join("\n", lowering.Select(static d => $"error[{d.Id}]: {d.Message}")), Failed: true);

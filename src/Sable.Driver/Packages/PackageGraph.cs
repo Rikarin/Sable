@@ -7,12 +7,37 @@ namespace Sable.Driver.Packages;
 ///     tests make their own, in temporary directories.
 /// </summary>
 public sealed record PackageEnvironment(string RegistryDirectory, string CacheDirectory, string KeyPath, TextWriter Out, TextWriter Error) {
-    public static PackageEnvironment FromProcess() {
-        var home = Environment.GetEnvironmentVariable("SABLE_HOME") is { Length: > 0 } h
+    /// <summary>
+    ///     Where the status lines go (<c>   Compiling app v1.0.0</c>): standard
+    ///     error, unless <c>-q</c> asked for quiet.
+    /// </summary>
+    public TextWriter Status {
+        get => _status ?? Error;
+        init => _status = value;
+    }
+
+    readonly TextWriter? _status;
+
+    /// <summary><c>--offline</c>: the registry is never read; the cache and <c>vendor/</c> are all there is.</summary>
+    public bool Offline { get; init; }
+
+    /// <summary><c>$SABLE_HOME</c>: the directory the cache, the key and the credentials are in.</summary>
+    public string Home => Path.GetDirectoryName(CacheDirectory)!;
+
+    /// <summary>The user's directory for Sable: <c>SABLE_HOME</c>, else <c>~/.sable</c>.</summary>
+    public static string HomeFromProcess =>
+        Environment.GetEnvironmentVariable("SABLE_HOME") is { Length: > 0 } h
             ? h
             : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".sable");
+
+    public static PackageEnvironment FromProcess() {
+        var home = HomeFromProcess;
         var registry = Environment.GetEnvironmentVariable("SABLE_REGISTRY") is { Length: > 0 } r ? r : Path.Combine(home, "registry");
-        return new(registry, Path.Combine(home, "cache"), Path.Combine(home, "key"), Console.Out, Console.Error);
+        var options = GlobalOptions.Current;
+        return new(registry, Path.Combine(home, "cache"), Path.Combine(home, "key"), Console.Out, Console.Error) {
+            Status = options.Verbosity == Verbosity.Quiet ? TextWriter.Null : Console.Error,
+            Offline = options.Offline,
+        };
     }
 
     /// <summary>Everything under one directory: <c>registry/</c>, <c>cache/</c> and <c>key</c>.</summary>
@@ -20,8 +45,20 @@ public sealed record PackageEnvironment(string RegistryDirectory, string CacheDi
         new(Path.Combine(home, "registry"), Path.Combine(home, "cache"), Path.Combine(home, "key"), output ?? TextWriter.Null, error ?? TextWriter.Null);
 
     /// <summary>The registry a workspace uses: its <c>[registry] path</c>, else this environment's.</summary>
-    public Registry RegistryFor(Workspace workspace) =>
-        new(workspace.RootManifest.RegistryPath is { } path ? Path.GetFullPath(Path.Combine(workspace.Root, path)) : RegistryDirectory);
+    public IRegistry RegistryFor(Workspace? workspace) =>
+        workspace?.RootManifest.RegistryPath is { } path
+            ? Open(HttpRegistry.IsUrl(path) ? path : Path.GetFullPath(Path.Combine(workspace.Root, path)))
+            : Open(RegistryDirectory);
+
+    /// <summary>
+    ///     The registry at <paramref name="location" />: a network registry for
+    ///     an <c>http://</c> or <c>https://</c> URL, with the token
+    ///     <c>sable login</c> kept for it; else a directory.
+    /// </summary>
+    public IRegistry Open(string location) =>
+        HttpRegistry.IsUrl(location)
+            ? new HttpRegistry(location, Credentials.Token(Home, location), Offline)
+            : new Registry(location) { Offline = Offline };
 }
 
 /// <summary>Which features to turn on in the packages being built (<c>--features</c>, <c>--no-default-features</c>, <c>--all-features</c>).</summary>
@@ -56,6 +93,9 @@ public sealed record ResolvedPackage(
     GitCheckout? Git = null) {
     public string Name => Package.Name;
     public SemVersion Version => Package.Version;
+
+    /// <summary>What its build script is compiled with (docs/05 §5.6): libraries for the script, not for the package.</summary>
+    public IReadOnlyList<string> BuildDependencies { get; init; } = [];
 }
 
 /// <summary>
@@ -81,6 +121,21 @@ public sealed partial class PackageGraph {
     public IReadOnlyDictionary<string, ResolvedPackage> Packages { get; }
 
     public LockFile Lock { get; }
+
+    /// <summary>What the packages' build scripts left, by package: set once they have run (<see cref="BuildScripts" />).</summary>
+    public IReadOnlyDictionary<string, BuildScriptOutput> BuildOutputs { get; internal set; } = new Dictionary<string, BuildScriptOutput>();
+
+    /// <summary>A package's library files: its own, then what its build script wrote.</summary>
+    public IReadOnlyList<string> LibrarySources(ResolvedPackage package) =>
+        BuildOutputs.TryGetValue(package.Name, out var output) ? [..package.Package.LibrarySources(), ..output.Sources] : package.Package.LibrarySources();
+
+    /// <summary>What linking <paramref name="member" />'s binaries needs from the build scripts of it and its dependencies.</summary>
+    public IReadOnlyList<string> LinkArguments(string member) =>
+        [..Closure(member).SelectMany(p => BuildOutputs.TryGetValue(p.Name, out var output) ? output.LinkArguments : []).Distinct()];
+
+    /// <summary>A hash of what those build scripts wrote, for the build's cache: a library rebuilt is a new link.</summary>
+    public string LinkInputs(string member) =>
+        string.Join(",", Closure(member).Select(p => BuildOutputs.TryGetValue(p.Name, out var output) ? output.Fingerprint : "").Where(static f => f.Length > 0));
 
     /// <summary>The name a resolution gives the workspace when it has several members.</summary>
     public const string WorkspaceRoot = "(workspace)";
@@ -115,7 +170,7 @@ public sealed partial class PackageGraph {
         try {
             full = ResolveWithWeakFeatures(source, root, rootVersion, preferred);
         } catch (ResolutionException e) when (!registry.IsAvailable) {
-            throw new ResolutionException($"{e.Message}\nnote: the registry at '{registry.Directory}' cannot be read, so only versions in the cache and vendor/ were considered\n", e.Incompatibility);
+            throw new ResolutionException($"{e.Message}\nnote: {registry.WhyUnavailable}, so only versions in the cache and vendor/ were considered\n", e.Incompatibility);
         }
 
         var lockFile = source.LockFor(full, root);
@@ -205,10 +260,14 @@ public sealed partial class PackageGraph {
         order.Reverse();
         return order;
     }
+
+    /// <summary>The libraries <paramref name="package" />'s build script is compiled with: its build-dependencies and theirs.</summary>
+    public IReadOnlyList<ResolvedPackage> BuildClosure(string package) =>
+        [..Packages[package].BuildDependencies.SelectMany(d => Closure(d)).DistinctBy(static p => p.Name)];
 }
 
 /// <summary>Finds a registry package's source: in <c>vendor/</c>, in the cache, or fetched from the registry into the cache.</summary>
-sealed class SourceStore(Workspace workspace, PackageEnvironment environment, Registry registry, LockFile? previous) {
+sealed class SourceStore(Workspace workspace, PackageEnvironment environment, IRegistry registry, LockFile? previous) {
     public const string ChecksumFile = ".sable-checksum";
 
     static string DirectoryName(string name, SemVersion version) => $"{name.Replace('/', '~')}-{version}";
@@ -229,7 +288,12 @@ sealed class SourceStore(Workspace workspace, PackageEnvironment environment, Re
         }
 
         var cached = CacheDirectory(name, version);
-        return Holds(cached, checksum) ? cached : null;
+        if (!Holds(cached, checksum)) {
+            return null;
+        }
+
+        PackageCache.MarkUsed(cached);
+        return cached;
     }
 
     /// <summary>The checksum the lock file has for a version, if it locks that version.</summary>
@@ -243,7 +307,7 @@ sealed class SourceStore(Workspace workspace, PackageEnvironment environment, Re
         }
 
         if (!registry.IsAvailable) {
-            throw new PackageException($"{name} {version} is not in the cache or vendor/, and the registry at '{registry.Directory}' cannot be read");
+            throw new PackageException($"{name} {version} is not in the cache or vendor/, and {registry.WhyUnavailable}");
         }
 
         var entry = registry.Entry(name, version) ?? throw new PackageException($"the registry has no {name} {version}");
@@ -268,6 +332,7 @@ sealed class SourceStore(Workspace workspace, PackageEnvironment environment, Re
 
         Directory.CreateDirectory(Path.GetDirectoryName(target)!);
         Directory.Move(temporary, target);
+        PackageCache.MarkUsed(target);
         return target;
     }
 }
@@ -282,12 +347,15 @@ sealed class SourceStore(Workspace workspace, PackageEnvironment environment, Re
 sealed class GraphSource(
     Workspace workspace,
     IReadOnlyDictionary<string, LocalPackage> locals,
-    Registry registry,
+    IRegistry registry,
     LockFile? previous,
     SourceStore store,
     IReadOnlyDictionary<string, GitCheckout> git) : IPackageSource {
     /// <summary>A version's dependencies and features, from whichever place knows them.</summary>
-    sealed record Spec(IReadOnlyList<DependencySpec> Normal, IReadOnlyList<DependencySpec> Dev, IReadOnlyDictionary<string, IReadOnlyList<string>> Features);
+    sealed record Spec(IReadOnlyList<DependencySpec> Normal, IReadOnlyList<DependencySpec> Dev, IReadOnlyDictionary<string, IReadOnlyList<string>> Features) {
+        /// <summary>Its build script's dependencies, resolved with the rest — a package's own, wherever it comes from, since its script runs wherever it is built.</summary>
+        public IReadOnlyList<DependencySpec> Build { get; init; } = [];
+    }
 
     readonly Dictionary<string, IReadOnlyList<IndexEntry>> _entries = new(StringComparer.Ordinal);
     readonly HashSet<string> _members = [..workspace.Members.Select(static m => m.Name)];
@@ -302,7 +370,7 @@ sealed class GraphSource(
         if (members is [var (single, features)] && !workspace.IsWorkspace) {
             _root = single.Name;
             _rootVersion = single.Version;
-            _rootDependencies = [..Expand(Of(single).Normal.Concat(Of(single).Dev).Where(static d => !d.Optional)), ..features.Select(f => (FeatureId(single.Name, f), VersionReq.Exactly(single.Version)))];
+            _rootDependencies = [..Expand(Of(single).Normal.Concat(Of(single).Dev).Concat(Of(single).Build).Where(static d => !d.Optional)), ..features.Select(f => (FeatureId(single.Name, f), VersionReq.Exactly(single.Version)))];
         } else {
             _root = PackageGraph.WorkspaceRoot;
             _rootVersion = new(0, 0, 0);
@@ -384,7 +452,7 @@ sealed class GraphSource(
         var (name, feature) = Split(package);
         var spec = Of(name, version);
         if (feature is null) {
-            var dependencies = spec.Normal.AsEnumerable();
+            var dependencies = spec.Normal.Concat(spec.Build);
             if (_members.Contains(name)) {
                 dependencies = dependencies.Concat(spec.Dev);
             }
@@ -483,7 +551,7 @@ sealed class GraphSource(
         }
     }
 
-    static Spec Of(LocalPackage package) => new(package.Manifest.Dependencies, package.Manifest.DevDependencies, package.Manifest.Features);
+    static Spec Of(LocalPackage package) => new(package.Manifest.Dependencies, package.Manifest.DevDependencies, package.Manifest.Features) { Build = package.Manifest.BuildDependencies };
 
     Spec Of(string name, SemVersion version) {
         if (locals.TryGetValue(name, out var local)) {
@@ -493,7 +561,7 @@ sealed class GraphSource(
         // A registry package as its manifest says, when on disk; else as the index says.
         var entry = Entries(name).FirstOrDefault(e => e.Version == version);
         if (entry is not null) {
-            return new([..entry.Specs("normal")], [..entry.Specs("dev")], entry.Features);
+            return new([..entry.Specs("normal")], [..entry.Specs("dev")], entry.Features) { Build = [..entry.Specs("build")] };
         }
 
         var directory = store.Present(name, version, Locked(name)?.Checksum)
@@ -502,14 +570,14 @@ sealed class GraphSource(
         return new(
             [..manifest.Dependencies.Select(static d => d with { Path = null, Git = null, Reference = null })],
             [..manifest.DevDependencies.Select(static d => d with { Path = null, Git = null, Reference = null })],
-            manifest.Features);
+            manifest.Features) { Build = [..manifest.BuildDependencies.Select(static d => d with { Path = null, Git = null, Reference = null })] };
     }
 
     /// <summary>The lock file for a resolution: each real package, its source, checksum and dependencies.</summary>
     public LockFile LockFor(IReadOnlyDictionary<string, SemVersion> decisions, string root) {
         var packages = new List<LockedPackage>();
         foreach (var (name, version) in Real(decisions, root)) {
-            var dependencies = EnabledDependencies(name, version, decisions, true)
+            var dependencies = EnabledDependencies(name, version, decisions, true, includeBuild: true)
                 .Select(d => $"{d} {decisions[d]}")
                 .ToList();
             if (git.TryGetValue(name, out var checkout)) {
@@ -538,7 +606,7 @@ sealed class GraphSource(
         decisions.Keys.Select(Split).Where(s => s.Name == name && s.Feature is not null).Select(static s => s.Feature!).ToHashSet(StringComparer.Ordinal);
 
     /// <summary>The dependencies a package has with the features chosen: its required ones, and the optional ones its features turn on.</summary>
-    List<string> EnabledDependencies(string name, SemVersion version, IReadOnlyDictionary<string, SemVersion> decisions, bool includeDev, (string Os, string Arch)? target = null) {
+    List<string> EnabledDependencies(string name, SemVersion version, IReadOnlyDictionary<string, SemVersion> decisions, bool includeDev, (string Os, string Arch)? target = null, bool includeBuild = false) {
         var spec = Of(name, version);
 
         // A dependency whose 'when' names another platform is resolved and
@@ -549,6 +617,10 @@ sealed class GraphSource(
             dependencies = dependencies.Concat(spec.Dev.Where(Applies).Select(static d => d.Name));
         }
 
+        if (includeBuild) {
+            dependencies = dependencies.Concat(spec.Build.Where(d => !d.Optional && Applies(d)).Select(static d => d.Name));
+        }
+
         // An optional dependency counts only if one of this package's features turned it on.
         var features = FeaturesOf(name, decisions);
         var turnedOn = features.SelectMany(f => spec.Features.TryGetValue(f, out var values) ? values : [$"dep:{f}"])
@@ -557,7 +629,7 @@ sealed class GraphSource(
         return [
             ..dependencies.Distinct()
                 .Where(d => decisions.ContainsKey(d))
-                .Where(d => spec.Normal.Concat(spec.Dev).First(s => s.Name == d) is not { Optional: true } || turnedOn.Contains(d))
+                .Where(d => spec.Normal.Concat(spec.Dev).Concat(spec.Build).First(s => s.Name == d) is not { Optional: true } || turnedOn.Contains(d))
                 .Order(StringComparer.Ordinal),
         ];
     }
@@ -568,11 +640,14 @@ sealed class GraphSource(
         foreach (var (name, version) in Real(decisions, root)) {
             var normal = EnabledDependencies(name, version, decisions, false, target);
             var dev = EnabledDependencies(name, version, decisions, true, target).Except(normal).ToList();
+
+            // A build script runs on this machine, whatever the target.
+            var build = Of(name, version).Build.Where(d => !d.Optional && d.AppliesHere && decisions.ContainsKey(d.Name)).Select(static d => d.Name).Distinct().Order(StringComparer.Ordinal).ToList();
             var features = FeaturesOf(name, decisions);
             if (locals.TryGetValue(name, out var local)) {
                 // A package from git is, like a registry package, a workspace of its own.
                 var checkout = git.GetValueOrDefault(name);
-                result[name] = new(local, checkout is null, null, features, normal, dev, checkout);
+                result[name] = new(local, checkout is null, null, features, normal, dev, checkout) { BuildDependencies = build };
                 continue;
             }
 
@@ -583,7 +658,7 @@ sealed class GraphSource(
                 throw new RegistryException($"the archive of {name} {version} holds {package.Name} {package.Version}");
             }
 
-            result[name] = new(package, false, checksum, features, normal, dev);
+            result[name] = new(package, false, checksum, features, normal, dev) { BuildDependencies = build };
         }
 
         return result;

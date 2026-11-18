@@ -12,7 +12,7 @@ namespace Sable.Driver.Packages;
 ///     workspace, is resolved every time.
 /// </summary>
 public sealed partial class PackageGraph {
-    const string ResolutionVersion = "sable-resolution-1";
+    const string ResolutionVersion = "sable-resolution-2";
 
     /// <summary>Resolves as <see cref="Resolve" /> does, reusing the last resolution when nothing it read has changed.</summary>
     public static PackageGraph ResolveCached(Workspace workspace, PackageEnvironment environment, ResolveOptions options) {
@@ -62,7 +62,8 @@ public sealed partial class PackageGraph {
             text.Append(package.Name).Append('\t')
                 .Append(string.Join(",", package.Features.Order(StringComparer.Ordinal))).Append('\t')
                 .Append(string.Join(",", package.Dependencies)).Append('\t')
-                .Append(string.Join(",", package.DevDependencies)).Append('\n');
+                .Append(string.Join(",", package.DevDependencies)).Append('\t')
+                .Append(string.Join(",", package.BuildDependencies)).Append('\n');
         }
 
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
@@ -84,12 +85,12 @@ public sealed partial class PackageGraph {
         var packages = new Dictionary<string, ResolvedPackage>(StringComparer.Ordinal);
         foreach (var line in lines.Skip(1)) {
             var fields = line.Split('\t');
-            if (fields.Length != 4 || !locals.TryGetValue(fields[0], out var local)) {
+            if (fields.Length != 5 || !locals.TryGetValue(fields[0], out var local)) {
                 return null;
             }
 
             static string[] List(string field) => field.Length == 0 ? [] : field.Split(',');
-            packages[fields[0]] = new(local, true, null, List(fields[1]).ToHashSet(StringComparer.Ordinal), List(fields[2]), List(fields[3]));
+            packages[fields[0]] = new(local, true, null, List(fields[1]).ToHashSet(StringComparer.Ordinal), List(fields[2]), List(fields[3])) { BuildDependencies = List(fields[4]) };
         }
 
         var lockFile = LockFile.Load(workspace.LockPath);

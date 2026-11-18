@@ -55,6 +55,21 @@ typedef struct {
 } TypeMetadata;
 ```
 
+As implemented so far (`runtime/sable_runtime.c`), the metadata of a
+counted object is smaller: the destroy function, the name, an array's
+element size, copier and destroyer (a class keeps its superclass there),
+the instance's size and alignment, and a visitor that hands each strong
+reference the object holds — a class's fields, an array's elements, through
+optionals, structs, unions and closure contexts, but not weak or unowned
+references — to `sable_heap_visit`. A class's vtable follows. The visitor is
+what the leak check walks (docs/02 §2.2): with `SABLE_CHECK_LEAKS` set every
+live object is kept in a set, and a program that ends with objects alive
+lists them by type and prints the reference cycles among them, each as the
+types along it. Not yet: a kind, a stride, a value-witness table for
+non-class types, field descriptors with names and offsets, conformance
+records — so no registry and no dynamic cast to a protocol — and the
+profiles and `--deny-reflection`. The allocator's size classes reach 1 KB.
+
 `FieldDescriptor` (name, type, offset) is **always** emitted, for every type.
 It costs a few bytes per field and it buys: debugger formatters, `Mirror`,
 structural equality/hashing derivation, and the zero-copy validator. `FullTypeInfo`

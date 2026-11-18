@@ -34,19 +34,33 @@ namespace Sable.SIL;
 ///             consumed. A guaranteed value, and an address into an object, is
 ///             used only while the owned value it borrows from is still live.
 ///         </item>
+///         <item>
+///             <b>Accesses.</b> Every dynamic access begun is ended, on every
+///             path that leaves the function, and every path into a block
+///             arrives with the same accesses in progress.
+///         </item>
+///         <item>
+///             <b>Objects.</b> A new object's references are all stored before
+///             it is used as a whole (<see cref="VerifyObjects" />); each
+///             class's vtable and deinit name functions of the right types.
+///         </item>
 ///     </list>
 /// </remarks>
-public static class SilVerifier {
+public static partial class SilVerifier {
     public static IReadOnlyList<string> Verify(SilModule module) {
         var errors = new List<string>();
+        var initialised = new Dictionary<SilFunction, HashSet<int>?>();
         foreach (var function in module.Functions) {
-            errors.AddRange(Verify(function, module));
+            errors.AddRange(Verify(function, module, initialised));
         }
 
+        VerifyTypes(module, errors);
         return errors;
     }
 
-    public static IReadOnlyList<string> Verify(SilFunction function, SilModule? module = null) {
+    public static IReadOnlyList<string> Verify(SilFunction function, SilModule? module = null) => Verify(function, module, []);
+
+    static List<string> Verify(SilFunction function, SilModule? module, Dictionary<SilFunction, HashSet<int>?> initialised) {
         var errors = new List<string>();
         void Error(SilBlock? block, string message) =>
             errors.Add(block is null
@@ -94,8 +108,21 @@ public static class SilVerifier {
             return errors;
         }
 
-        // ---- SSA: definitions dominate uses ---------------------------------
+        // A block nothing branches to escapes every check below, which follow
+        // control from the entry; and nothing produces one on purpose — the
+        // lowering and the passes drop the blocks they strand.
         var dominators = Dominators(function);
+        foreach (var block in function.Blocks) {
+            if (!dominators.ContainsKey(block)) {
+                Error(block, "cannot be reached from the entry block");
+            }
+        }
+
+        if (errors.Count > 0) {
+            return errors;
+        }
+
+        // ---- SSA: definitions dominate uses ---------------------------------
         var definedIn = new Dictionary<SilValue, (SilBlock Block, int Index)>();
         foreach (var block in function.Blocks) {
             foreach (var argument in block.Arguments) {
@@ -108,10 +135,6 @@ public static class SilVerifier {
         }
 
         foreach (var block in function.Blocks) {
-            if (!dominators.ContainsKey(block)) {
-                continue; // unreachable: nothing runs, nothing to check
-            }
-
             for (var i = 0; i < block.Instructions.Count; i++) {
                 var instruction = block.Instructions[i];
                 foreach (var operand in instruction.Operands) {
@@ -155,8 +178,20 @@ public static class SilVerifier {
             return errors;
         }
 
+        // ---- Accesses ---------------------------------------------------------
+        VerifyAccesses(function, Error);
+        if (errors.Count > 0) {
+            return errors;
+        }
+
         // ---- Ownership -------------------------------------------------------
         VerifyOwnership(function, Error);
+        if (errors.Count > 0) {
+            return errors;
+        }
+
+        // ---- Objects ----------------------------------------------------------
+        VerifyObjects(function, module, initialised, Error);
 
         return errors;
     }

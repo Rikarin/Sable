@@ -199,6 +199,6 @@ Phase 3, not deferred.
   grammar never needs quote and splice syntax, there is no hygiene problem,
   and every tool reads generated code as it reads any other code. A proposal
   for macros has to show something that a generator cannot do, and why that
-  is worth the cost (docs/08 §8.9).
+  is worth the cost (docs/08 §8.10).
 - **No inheritance from generic base classes across modules** without an
   explicit `open` declaration — devirtualisation matters more than flexibility.

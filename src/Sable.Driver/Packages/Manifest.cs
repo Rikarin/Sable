@@ -129,7 +129,7 @@ public sealed record Profile(
 
 public sealed record WorkspaceSpec(IReadOnlyList<string> Members, IReadOnlyList<string> Exclude);
 
-/// <summary><c>[build]</c>: a build script and what it may touch (docs/05 §5.6) — read and checked, not yet run.</summary>
+/// <summary><c>[build]</c>: a build script and what it may touch (docs/05 §5.6), run by <see cref="BuildScripts" />.</summary>
 public sealed record BuildSpec(string Script, bool AllowNet, IReadOnlyList<string> AllowExec, IReadOnlyList<string> AllowRead, IReadOnlyList<string> AllowWrite);
 
 /// <summary>
@@ -165,6 +165,12 @@ public sealed partial class Manifest {
     /// <summary>The <c>[lints]</c> table (docs/05 §5.7): each lint's level, which <c>sable check</c> reports at.</summary>
     public Sable.Symbols.LintConfiguration Lints { get; init; } = Sable.Symbols.LintConfiguration.Default;
 
+    /// <summary>
+    ///     <c>[generators] inputs</c> (docs/08 §8.3): the files and directories,
+    ///     relative to the package, whose files its package generators are given.
+    /// </summary>
+    public IReadOnlyList<string> GeneratorInputs { get; init; } = [];
+
     /// <summary>What was accepted but means nothing to this toolchain: unknown keys, settings not yet acted on.</summary>
     public IReadOnlyList<ManifestError> Warnings { get; init; } = [];
 
@@ -190,6 +196,7 @@ public sealed partial class Manifest {
         Build = Build,
         RegistryPath = RegistryPath,
         Lints = Lints,
+        GeneratorInputs = GeneratorInputs,
         Warnings = [..Warnings.Select(w => w with { File = file, Line = 1 })],
     };
 
@@ -239,7 +246,7 @@ public sealed partial class Manifest {
         void Warn(TomlTable table, string key, string path, string message) => _warnings.Add(new(file, table.KeyPosition(key).Line, path, message));
 
         public Manifest Read(TomlTable root) {
-            string[] known = ["package", "lib", "bin", "dependencies", "dev-dependencies", "build-dependencies", "features", "profile", "workspace", "reflect", "targets", "build", "registry", "lints"];
+            string[] known = ["package", "lib", "bin", "dependencies", "dev-dependencies", "build-dependencies", "features", "profile", "workspace", "reflect", "targets", "build", "registry", "lints", "generators"];
             foreach (var key in root.Keys.Where(k => !known.Contains(k))) {
                 if (key == "target") {
                     // Cargo's [target.'cfg(...)'.dependencies]: ignoring it would build without them.
@@ -302,9 +309,9 @@ public sealed partial class Manifest {
             var dependencies = ReadDependencies(root, "dependencies");
             var devDependencies = ReadDependencies(root, "dev-dependencies");
             var buildDependencies = ReadDependencies(root, "build-dependencies");
-            if (buildDependencies.Count > 0) {
+            if (buildDependencies.Count > 0 && root["build"] is null) {
                 Warn(root, "build-dependencies", "build-dependencies",
-                    "are for a build script, and build scripts are not run yet (docs/05 §5.6): they are checked, not resolved or built");
+                    "are for a build script, and there is no [build] script to use them (docs/05 §5.6)");
             }
             var features = ReadFeatures(root, dependencies);
             var (dev, release) = ReadProfiles(root);
@@ -337,6 +344,7 @@ public sealed partial class Manifest {
                 }
             }
 
+            var generatorInputs = Table(root, "generators", "generators") is { } g ? Strings(g, "inputs", "generators.inputs") ?? [] : [];
             if (_errors.Count > 0) {
                 throw new ManifestException(_errors);
             }
@@ -356,6 +364,7 @@ public sealed partial class Manifest {
                 Build = build,
                 RegistryPath = registry,
                 Lints = lints,
+                GeneratorInputs = generatorInputs,
                 Warnings = _warnings,
             };
         }

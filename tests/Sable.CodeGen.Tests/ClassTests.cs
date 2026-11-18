@@ -105,7 +105,7 @@ public sealed class ClassTests {
     [Fact]
     public void AFailedForcedCastTraps() {
         var execution = AssertAgree(Program(Declarations, "    let a: Animal = Dog(\"rex\")\n    let b = a as! Bird\n    print(b.name)"));
-        Assert.Equal("fatal error: cast to 'Bird' failed\n", execution.Stderr);
+        Assert.Equal("fatal error: cast to 'Bird' failed\n  at test.sb:60:13\n", execution.Stderr);
     }
 
     [Theory]

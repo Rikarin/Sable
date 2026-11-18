@@ -393,4 +393,229 @@ public sealed class VerifierTests {
             """,
             "never consumed: %0 (argument)"
         );
+
+    // ---- Blind spots: unreachable blocks, accesses, objects, vtables --------
+
+    [Fact]
+    public void ABlockNothingReachesIsRejected() =>
+        AssertRejected(
+            """
+            sil @f : $() -> () {
+            bb0:
+              return
+            bb1:
+              %0 = builtin "add_Int"(%0, %0) : $Int
+              return
+            }
+            """,
+            "bb1: cannot be reached from the entry block"
+        );
+
+    const string Node = """
+                        sil_class M.Node { value: $Int, next: $Optional$M.Node }
+                        sil_enum Optional$M.Node { Some($M.Node), None }
+
+                        """;
+
+    [Fact]
+    public void AnAccessMustEndBeforeTheFunctionDoes() =>
+        AssertRejected(
+            Node + """
+                   sil @f : $(M.Node) -> () {
+                   bb0(%0 : $M.Node):
+                     %1 = ref_element_addr %0, #value
+                     builtin "access_begin_modify"(%1) : $()
+                     return
+                   }
+                   """,
+            "leaves the function with 1 access(es) still in progress"
+        );
+
+    [Fact]
+    public void AnAccessEndNeedsAnAccessInProgress() =>
+        AssertRejected(
+            Node + """
+                   sil @f : $(M.Node) -> () {
+                   bb0(%0 : $M.Node):
+                     %1 = ref_element_addr %0, #value
+                     builtin "access_end"(%1) : $()
+                     return
+                   }
+                   """,
+            "access_end ends an access that is not in progress"
+        );
+
+    [Fact]
+    public void PathsMustAgreeOnTheAccessesInProgress() =>
+        AssertRejected(
+            Node + """
+                   sil @f : $(M.Node, Bool) -> () {
+                   bb0(%0 : $M.Node, %1 : $Bool):
+                     %2 = ref_element_addr %0, #value
+                     builtin "access_begin_read"(%2) : $()
+                     cond_br %1, bb1, bb2
+                   bb1:
+                     builtin "access_end"(%2) : $()
+                     br bb2
+                   bb2:
+                     return
+                   }
+                   """,
+            "is entered with different accesses in progress on different paths"
+        );
+
+    [Fact]
+    public void ANewObjectsReferencesAreStoredBeforeItIsUsed() =>
+        AssertRejected(
+            Node + """
+                   sil @make : $() -> M.Node {
+                   bb0:
+                     %0 = alloc_ref $M.Node
+                     %1 = integer_literal $Int, 1
+                     %2 = ref_element_addr %0, #value
+                     store %1 to [init] %2
+                     return %0
+                   }
+                   """,
+            "'return' uses %0 (alloc_ref $M.Node) before its field #next is stored"
+        );
+
+    [Fact]
+    public void AFieldIsNotReadBeforeItIsStored() =>
+        AssertRejected(
+            Node + """
+                   sil @make : $() -> M.Node {
+                   bb0:
+                     %0 = alloc_ref $M.Node
+                     %1 = ref_element_addr %0, #next
+                     %2 = load [copy] %1
+                     store %2 to [init] %1
+                     return %0
+                   }
+                   """,
+            "'load' uses %0 (alloc_ref $M.Node) before its field #next is stored"
+        );
+
+    // The bug this check exists for: an initialiser that forgot a field, its
+    // object handed back zeroed.
+    const string Initialiser = """
+                               sil @M.Node.init$initialize : $(M.Node, Int, @owned Optional$M.Node) -> () {
+                               bb0(%0 : $M.Node, %1 : $Int, %2 : $Optional$M.Node):
+                                 %3 = ref_element_addr %0, #value
+                                 store %1 to [assign] %3
+                                 %4 = ref_element_addr %0, #next
+                                 cond_br %5, bb1, bb2
+                               bb1:
+                                 store %2 to [assign] %4
+                                 br bb3
+                               bb2:
+                                 STORE_OR_NOT
+                                 br bb3
+                               bb3:
+                                 return
+                               }
+
+                               sil @M.Node.init : $(Int, @owned Optional$M.Node) -> M.Node {
+                               bb0(%0 : $Int, %1 : $Optional$M.Node):
+                                 %2 = alloc_ref $M.Node
+                                 %3 = function_ref @M.Node.init$initialize : $(M.Node, Int, @owned Optional$M.Node) -> ()
+                                 apply %3(%2, %0, %1) : $()
+                                 return %2
+                               }
+                               """;
+
+    [Fact]
+    public void AnInitialiserThatStoresEveryFieldOnEveryPathVerifies() {
+        var text = Node + Initialiser.Replace("cond_br %5", "%5 = builtin \"cmp_eq_Int\"(%1, %1) : $Bool\n  cond_br %5")
+            .Replace("STORE_OR_NOT", "store %2 to [assign] %4");
+        Assert.Empty(SilVerifier.Verify(SilParser.Parse(text)));
+    }
+
+    [Fact]
+    public void AnInitialiserThatMissesAFieldOnOnePathIsCaughtWhereTheObjectIsUsed() =>
+        AssertRejected(
+            Node + Initialiser.Replace("cond_br %5", "%5 = builtin \"cmp_eq_Int\"(%1, %1) : $Bool\n  cond_br %5")
+                .Replace("STORE_OR_NOT", "destroy_value %2"),
+            "@M.Node.init bb0: 'return' uses %2 (alloc_ref $M.Node) before its field #next is stored"
+        );
+
+    [Fact]
+    public void AVTableNamesFunctionsThatExist() {
+        var problems = SilVerifier.Verify(
+            SilParser.Parse(
+                """
+                sil_class M.Shape { } vtable { area: @M.Shape.area }
+
+                sil @f : $() -> () {
+                bb0:
+                  return
+                }
+                """
+            )
+        );
+        Assert.Contains(problems, p => p.Contains("vtable slot #area names @M.Shape.area, which the module does not define", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void AnOverrideHasItsSlotsSignature() {
+        var problems = SilVerifier.Verify(
+            SilParser.Parse(
+                """
+                sil_class M.Shape { } vtable { area: @M.Shape.area }
+                sil_class M.Circle : M.Shape { } vtable { area: @M.Circle.area }
+
+                sil @M.Shape.area : $(M.Shape) -> F64 {
+                bb0(%0 : $M.Shape):
+                  %1 = float_literal $F64, 0.0
+                  return %1
+                }
+
+                sil @M.Circle.area : $(M.Circle) -> Int {
+                bb0(%0 : $M.Circle):
+                  %1 = integer_literal $Int, 0
+                  return %1
+                }
+                """
+            )
+        );
+        Assert.Contains(problems, p => p.Contains("M.Circle: vtable slot #area names @M.Circle.area : (M.Circle) -> Int, which does not match", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void AVTableKeepsItsSuperclasssSlots() {
+        var problems = SilVerifier.Verify(
+            SilParser.Parse(
+                """
+                sil_class M.Shape { } vtable { area: @M.Shape.area }
+                sil_class M.Circle : M.Shape { }
+
+                sil @M.Shape.area : $(M.Shape) -> F64 {
+                bb0(%0 : $M.Shape):
+                  %1 = float_literal $F64, 0.0
+                  return %1
+                }
+                """
+            )
+        );
+        Assert.Contains(problems, p => p.Contains("M.Circle: vtable slot 0 must be #area, as in M.Shape", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ADeinitTakesItsType() {
+        var problems = SilVerifier.Verify(
+            SilParser.Parse(
+                """
+                sil_class M.File { } deinit @M.File.deinit
+                sil_class M.Other { } deinit @M.Missing
+
+                sil @M.File.deinit : $(Int) -> () {
+                bb0(%0 : $Int):
+                  return
+                }
+                """
+            )
+        );
+        Assert.Contains(problems, p => p.Contains("M.File: its deinit @M.File.deinit is (Int) -> (), not (M.File) -> ()", StringComparison.Ordinal));
+        Assert.Contains(problems, p => p.Contains("M.Other: its deinit @M.Missing is not a function the module defines", StringComparison.Ordinal));
+    }
 }

@@ -198,4 +198,115 @@ public sealed class DeriveTests {
                 }
                 """).Stdout
         );
+    /// <summary>
+    ///     A field that is an optional or an array of what compares is
+    ///     compared by what it holds: '==' on them is the language's own.
+    /// </summary>
+    [Fact]
+    public void OptionalAndArrayFieldsAreComparedByWhatTheyHold() =>
+        Assert.Equal(
+            "true\nfalse\nfalse\nfalse\ntrue\nfalse\n",
+            AssertAgree("""
+                module P
+
+                @derive(Equatable)
+                struct Point {
+                    var x: Int
+                    var y: Int
+                }
+
+                @derive(Equatable)
+                struct Record {
+                    var count: Int?
+                    var tags: String[>..]
+                    var path: Point[>..]?
+                    var label: String?
+                }
+
+                @main
+                fn main() {
+                    let a = Record(count: 3, tags: ["x", "y"], path: [Point(x: 1, y: 2)], label: none)
+                    print(a == Record(count: 3, tags: ["x", "y"], path: [Point(x: 1, y: 2)], label: none))
+                    print(a == Record(count: none, tags: ["x", "y"], path: [Point(x: 1, y: 2)], label: none))
+                    print(a == Record(count: 3, tags: ["x"], path: [Point(x: 1, y: 2)], label: none))
+                    print(a == Record(count: 3, tags: ["x", "y"], path: [Point(x: 2, y: 2)], label: none))
+                    print(a != Record(count: 3, tags: ["x", "y"], path: none, label: none))
+                    print(a == Record(count: 3, tags: ["x", "y"], path: [Point(x: 1, y: 2)], label: "l"))
+                }
+                """).Stdout
+        );
+
+    /// <summary>Arrays compare: as long as each other, and equal element by element.</summary>
+    [Fact]
+    public void ArraysCompareElementByElement() =>
+        Assert.Equal(
+            "true\nfalse\ntrue\ntrue\nfalse\ntrue\ntrue\n",
+            AssertAgree("""
+                module P
+
+                @derive(Equatable)
+                struct Point {
+                    var x: Int
+                    var y: Int
+                }
+
+                @main
+                fn main() {
+                    print([1, 2] == [1, 2])
+                    print([1, 2] == [1, 2, 3])
+                    let a: Int[>..] = [1, 2]
+                    var b: Int[>..] = [1]
+                    b.append(2)
+                    print(a == b)
+                    print(["x", "y"] != ["x", "z"])
+                    print([Point(x: 1, y: 2)] == [Point(x: 2, y: 1)])
+                    let empty: String[>..] = []
+                    print(empty == [])
+                    let nested: Int[>..][>..] = [[1], [2, 3]]
+                    print(nested == [[1], [2, 3]])
+                }
+                """).Stdout
+        );
+
+    /// <summary>
+    ///     The built-in dictionary takes any key with an '==': a derived one,
+    ///     or the program's own, as well as a builtin's.
+    /// </summary>
+    [Fact]
+    public void ADictionaryTakesKeysWithAnEqualityOfTheirOwn() =>
+        Assert.Equal(
+            "a\nb\nnone\n2\nc\n1\n",
+            AssertAgree("""
+                module P
+
+                @derive(Hashable)
+                struct Point {
+                    var x: Int
+                    var y: Int
+                }
+
+                struct Name {
+                    var text: String
+                    operator == (lhs: Name, rhs: Name) -> Bool {
+                        return lhs.text.count == rhs.text.count
+                    }
+                }
+
+                @main
+                fn main() {
+                    var d: [Point: String] = [:]
+                    d[Point(x: 1, y: 2)] = "a"
+                    d[Point(x: 2, y: 1)] = "b"
+                    print(d[Point(x: 1, y: 2)] ?? "none")
+                    print(d[Point(x: 2, y: 1)] ?? "none")
+                    print(d[Point(x: 9, y: 9)] ?? "none")
+                    print(d.count)
+                    d[Point(x: 1, y: 2)] = "c"
+                    print(d[Point(x: 1, y: 2)] ?? "none")
+                    var byLength: [Name: Int] = [:]
+                    byLength[Name(text: "ab")] = 1
+                    print(byLength[Name(text: "xy")] ?? 0)
+                }
+                """).Stdout
+        );
 }

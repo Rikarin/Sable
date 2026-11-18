@@ -146,4 +146,93 @@ public sealed class ArcTests {
         Assert.Equal("0 1 2 7 8 9 10 12\n", AssertAgree(source).Stdout);
         Assert.Contains("array_set_unique", SilPrinter.Print(Pipeline.Compile(new SourceText(source, "test.sb")).Sil!), StringComparison.Ordinal);
     }
+
+    const string Walk = """
+                        class Node {
+                            var value: Int
+                            var next: Node?
+                            init(_ value: Int, _ next: Node?) {
+                                self.value = value
+                                self.next = next
+                            }
+                        }
+
+                        fn total(_ list: Node?) -> Int {
+                            var sum = 0
+                            var p = list
+                            while let n = p {
+                                sum = sum + n.value
+                                p = n.next
+                            }
+                            return sum
+                        }
+                        """;
+
+    /// <summary>
+    ///     A list walk — <c>while let n = p { …; p = n.next }</c> — reads
+    ///     <c>n</c> only while <c>p</c> still holds its node, so <c>n</c>
+    ///     borrows it: a node is retained once on the way past, for
+    ///     <c>p</c>, not twice.
+    /// </summary>
+    [Fact]
+    public void ABindingOfALocalBorrowsItWhileTheLocalIsUnchanged() {
+        var source = Program(
+            Walk,
+            """
+                var list: Node? = none
+                var i = 1
+                while i <= 100 {
+                    list = Node(i, list)
+                    i = i + 1
+                }
+                var sum = 0
+                var k = 0
+                while k < 10 {
+                    sum = sum + total(list)
+                    k = k + 1
+                }
+                print(sum)
+            """
+        );
+        Assert.Equal("50500\n", AssertAgree(source).Stdout);
+
+        var sil = SilPrinter.Print(Pipeline.Compile(new SourceText(source, "test.sb")).Sil!);
+        Assert.Contains("alloc_stack [unmanaged] $Test.Node, var \"n\"", sil, StringComparison.Ordinal);
+
+        if (CanBuild) {
+            // Building the list retains each node but the last for the node
+            // made before it; each walk retains the first node for 'p = list'
+            // and every other for 'p = n.next' — none for 'n'.
+            var stats = BuildAndRun(source, environment: new Dictionary<string, string> { ["SABLE_STATS"] = "1" }).Stderr;
+            Assert.Contains("retains " + (99 + 10 * 100) + ",", stats, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>A binding read after its local changes keeps its own count.</summary>
+    [Fact]
+    public void ABindingReadAfterItsLocalChangesKeepsItsCopy() {
+        var source = Program(
+            """
+            class Named {
+                var name: String
+                init(_ name: String) {
+                    self.name = name
+                }
+                deinit {
+                    print("bye " + name)
+                }
+            }
+            """,
+            """
+                var p: Named? = Named("a")
+                if let n = p {
+                    p = Named("b")
+                    print(n.name)
+                }
+                print("end")
+            """
+        );
+        Assert.Equal("a\nend\nbye a\nbye b\n", AssertAgree(source).Stdout);
+        Assert.DoesNotContain("[unmanaged] $Test.Named, var \"n\"", SilPrinter.Print(Pipeline.Compile(new SourceText(source, "test.sb")).Sil!), StringComparison.Ordinal);
+    }
 }

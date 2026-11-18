@@ -24,13 +24,40 @@ sable remove <pkg>
 sable update [pkg]                 re-resolve within semver bounds
 sable tree                         print the resolved dependency graph
 sable publish [--dry-run]          publish to the registry
+sable search <query>               search the registry
+sable login / logout               keep or forget a network registry's token
+sable owner [<pkg>] [--add|--remove <key>]  who may publish a package
+sable install <pkg>[@<ver>]        build a package's binaries into ~/.sable/bin
+sable cache <list|gc|clean>        the package cache, and collecting it
+sable registry <serve|token>       run a network registry, issue its tokens
 sable clean                        remove the target directory
 sable bindgen <header.h>           generate .sbi from a C header
 sable repl                         interactive, backed by the const evaluator
 sable lsp                          language server (stdio)
 sable explain <S1234>              print the full documentation for a diagnostic
 sable toolchain <install|list|pin>  manage toolchain versions
+sable completions <bash|zsh|fish>  print a shell completion script
+sable help <command>               a command's arguments, as <command> --help
 ```
+
+Every command also takes, before or after its name: `-q` (no status lines),
+`-v` (also the commands run), `--color auto|always|never` (`auto` honours
+`NO_COLOR`), `--message-format human|json` (json: each diagnostic as one
+object a line on standard output — `severity`, `code`, `message`, `file`,
+`line`, `column`, `rendered` — for editors and CI), `-j <n>` and
+`--offline`; and `sable -V` prints the version. None of them changes what a
+build produces.
+
+`sable bindgen` writes Sable source, not `.sbi` (which waits on the
+interface file format of §5.4): a module of `@extern("c")` functions,
+structs and integer constants, read from the header by clang itself. What
+cannot cross to C yet — pointers, arrays, unions, variadic functions — is
+listed in a comment, until `Sable.Interop` (#74). `sable toolchain` installs
+toolchains side by side in `$SABLE_HOME/toolchains/<version>` from a build
+(`--from <directory or archive>`; there is no release server yet), and `pin`
+writes `sable-toolchain` at the workspace root, after which the `sable` on
+the path hands every command there to the pinned toolchain — or stops,
+naming how to install it.
 
 Design rules:
 - **No global state that changes the result of a build.** No environment
@@ -452,6 +479,51 @@ The runtime is compiled once per set of options and kept, in the build cache
 - Namespacing: `org/package`, with unprefixed names reserved for the standard
   ecosystem.
 
+**As built.** A registry is a directory or a URL (`$SABLE_REGISTRY`, a
+manifest's `[registry] path`, or `--registry`). A directory registry is a
+private or local one: `index/<name>.json` (the owners' keys, every key that
+ever owned it, and each version with its checksum, dependencies and ECDSA
+P-256 signature) and `blobs/<sha256>.tar`. A network registry serves the same
+files, and an API for writing:
+
+```
+GET  config.json                     {"api": "v1"}: is it there
+GET  index/<org>/<name>.json         the index, as a directory keeps it
+GET  blobs/<sha256>.tar              an archive
+GET  api/v1/search?q=&limit=         {"packages": [{name, version, description}]}
+GET  api/v1/me                       {"user"}: whom the token stands for
+PUT  api/v1/packages                 {name, entry (signed), archive (base64)}
+POST api/v1/yank                     {name, version, yanked, key, signature}
+POST api/v1/owners                   {name, action: add|remove, owner, key, signature}
+```
+
+Writing takes `Authorization: Bearer <token>` (`sable login` keeps it in
+`~/.sable/credentials.json`, mode 0600), which says who may write to the
+server and under which namespaces: a user publishes `user/…` and the `org/…`
+its token names; only a token of the standard ecosystem publishes an
+unprefixed name. The package's own key says who owns the package, and signs
+every version, yank and owner change — the last two over text naming the
+state they change, so a request cannot be replayed. The client verifies
+every entry and archive as it does a directory's, so the server is trusted
+to keep packages, not to vouch for them; the server checks besides that an
+archive's `sable.toml` is the package and version its entry claims.
+`sable registry serve --root <dir>` is the reference server, and `sable
+registry token` issues its tokens (only their hashes are kept).
+
+`publish` refuses a dirty tree (`--allow-dirty`), a commit without a tag for
+the version — `v1.2.0`, `1.2.0`, or a member's `name-v1.2.0` —
+(`--allow-untagged`), and failing tests (`--no-verify`). `search`,
+`install` (a package's binaries, built with the release profile, into
+`~/.sable/bin`), `uninstall`, `owner` and `cache list|gc|clean` (packages no
+build used, and evaluated manifests, in `--max-age` days) exist.
+
+What a real deployment needs beyond this: TLS in front of the server (it
+speaks plain HTTP), a store that is backed up and served from more than one
+machine (it is a directory), sign-up and token management for third parties
+(tokens are issued by hand), a policy for who holds the standard ecosystem's
+token and org names, rate limits, and a mirror (`vendor/` covers offline
+builds, not a second registry).
+
 ## 5.6 Build scripts
 
 `build.sb` runs before the package compiles, for code generation and native
@@ -475,6 +547,37 @@ A build script that wants more than it declared fails rather than being
 silently permitted. `cargo` not having this is a known supply-chain weakness and
 there is no reason to repeat it.
 
+**As built.** The script is compiled with the standard library and run by the
+SIL interpreter, as a manifest is (§5.2.6), before any command that compiles
+the package (`build`, `run`, `check`, `test`, `doc`, …), for the profile in
+use. Every runtime call that touches the machine asks the sandbox first, so
+the declaration is enforced, not trusted:
+
+- It reads under `allowRead` and `allowWrite`, writes under `allowWrite`, and
+  always reads and writes its own `$OUT_DIR`
+  (`target/<profile>/build/<package>-<version>/out`). Paths are taken from
+  the package's directory with links followed, so a link cannot lead out.
+- It runs only the programs `allowExec` names. Such a program is a process of
+  its own, which the interpreter cannot confine: `allowExec` is the line.
+- It sees only the build's variables: `OUT_DIR`, `SABLE_PACKAGE_DIR`,
+  `SABLE_PACKAGE_NAME`, `SABLE_PACKAGE_VERSION`, `SABLE_PROFILE`,
+  `SABLE_FEATURES`, `SABLE_TARGET_OS`, `SABLE_TARGET_ARCH`; and its working
+  directory is its own.
+- A refusal stops the build, naming the path or program and the list to add it
+  to; so does a trap or a type error in the script, with what it wrote to
+  standard error.
+
+What it leaves: the `.sb` files it writes under `$OUT_DIR` are compiled into
+the package's library, and what it prints as `sable:link-lib=NAME`,
+`sable:link-search=DIR`, `sable:rerun-if-changed=PATH` and
+`sable:warning=TEXT` goes to the link (and the test harness's), the cache and
+the user. It runs again only when its text, the manifest, the profile, the
+features, the toolchain, or a file it read or directory it listed changed —
+the sandbox records those, so they need not be declared; what a program it ran
+read, it names with `rerun-if-changed`. Its `buildDependencies` are resolved
+and locked with the rest, and the script is compiled with their libraries (and
+theirs) — but they are not part of the package's program. Not built yet:
+`allowNet` allows nothing, as there is no network library to reach.
 A build script is for code that comes from outside the program, such as a
 schema file, a C header or a shader. Code that comes from the program's own
 declarations is written by a source generator (docs/08). A generator can read

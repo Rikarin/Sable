@@ -154,6 +154,7 @@ public static class NativeObjects {
             start.ArgumentList.Add(argument);
         }
 
+        NativeBuild.LogCommand(program, [..start.ArgumentList]);
         using var process = Process.Start(start) ?? throw new InvalidOperationException($"could not start {program}");
         var stdout = process.StandardOutput.ReadToEndAsync();
         var stderr = process.StandardError.ReadToEnd();

@@ -11,7 +11,10 @@ public sealed class BenchCommand : HarnessCommand {
     public override string Summary => "run the @bench functions and compare with a baseline";
 
     public override string Usage => """
-        usage: sable bench <file.sb>... [filter...] [--save-baseline <name>] [--baseline <name>] [--baseline-dir <path>] [--quick] [--samples <n>] [--list] [-O0]
+        usage: sable bench [<file.sb>...] [filter...] [--save-baseline <name>] [--baseline <name>] [--baseline-dir <path>] [--quick] [--samples <n>] [--list] [-O0]
+
+        Without a file, benchmarks the package in this directory or the nearest above it: its
+        library with the files under benches/, and its dependencies.
 
           filter                  run the benchmarks whose names (Module.function) contain it
           --save-baseline <name>  keep the results, as <baseline-dir>/<name>.txt

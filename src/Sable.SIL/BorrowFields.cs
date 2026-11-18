@@ -66,7 +66,7 @@ public sealed class BorrowFields : ISilPass {
     }
 
     /// <summary>A class reference, or an optional one: one pointer, kept alive by whatever holds it.</summary>
-    static bool Referential(SilType type) =>
+    internal static bool Referential(SilType type) =>
         type is ClassType || type is EnumType { IsNoncopyable: false } optional && optional.Cases.All(static c => c.Payload is null or ClassType);
 
     /// <summary>A value borrowed from a field of an object the caller lends: kept alive by it while the field is unchanged.</summary>
@@ -128,6 +128,10 @@ public sealed class BorrowFields : ISilPass {
                     // An assignment into a slot releases what was there.
                     case StoreInst { Kind: StoreKind.Assign } assigned when module.MayRunDeinit(assigned.Value.Type):
                         return true;
+
+                    // An exclusivity marker or check writes nothing.
+                    case BuiltinInst builtin when SharedStorage.IsMarker(builtin.Name):
+                        break;
 
                     case BuiltinInst builtin when builtin.Operands.Any(static o => o.Type is AddressType && !LocalSlot(o)):
                         return true;

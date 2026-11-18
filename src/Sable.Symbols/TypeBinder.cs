@@ -105,6 +105,17 @@ internal sealed class TypeBinder(Compilation compilation) {
         return thrown;
     }
 
+    /// <summary>
+    ///     A function's result type, where a <c>some P</c> is the function's
+    ///     own: the type its body returns, hidden.
+    /// </summary>
+    public TypeSymbol BindReturnType(TypeSyntax syntax, FunctionSymbol function, FileScope? scope) {
+        var type = BindType(syntax, function, scope);
+        return type is OpaqueTypeSymbol { Origin: null } opaque
+            ? new OpaqueTypeSymbol(opaque.Constraint, function)
+            : type;
+    }
+
     public void BindFunctionSignature(
         FunctionSymbol function,
         FunctionDeclarationSyntax declaration
@@ -112,7 +123,7 @@ internal sealed class TypeBinder(Compilation compilation) {
         var scope = compilation.CurrentScope;
 
         function.ReturnTypeResolver = () => declaration.ReturnClause is { } clause
-            ? BindType(clause.Type, function, scope)
+            ? BindReturnType(clause.Type, function, scope)
             : compilation.Core.Void;
 
         function.IsRethrows =

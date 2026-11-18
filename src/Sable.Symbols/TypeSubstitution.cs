@@ -112,8 +112,10 @@ public sealed class TypeSubstitution {
             case ExistentialTypeSymbol existential:
                 return new ExistentialTypeSymbol(Apply(existential.Constraint));
 
+            // A result's opaque type keeps its origin, and learns what the
+            // origin's type parameters are here.
             case OpaqueTypeSymbol opaque:
-                return new OpaqueTypeSymbol(Apply(opaque.Constraint));
+                return new OpaqueTypeSymbol(Apply(opaque.Constraint), opaque.Origin, opaque.Origin is null ? null : Compose(opaque.Context));
 
             case DependentMemberTypeSymbol member: {
                 // 'C.Item' with C = WordBag is whatever WordBag says Item is;
@@ -128,6 +130,25 @@ public sealed class TypeSubstitution {
                 return type;
         }
     }
+
+    /// <summary>
+    ///     <paramref name="inner" /> followed by this: what it maps is mapped on
+    ///     through this, and what it leaves alone this maps itself.
+    /// </summary>
+    TypeSubstitution Compose(TypeSubstitution inner) {
+        var map = new Dictionary<TypeParameterSymbol, TypeSymbol>(_map);
+        foreach (var (parameter, type) in inner._map) {
+            map[parameter] = Apply(type);
+        }
+
+        return new(map);
+    }
+
+    /// <summary>True when the two map the same parameters to the same types.</summary>
+    public bool SameAs(TypeSubstitution other) =>
+        ReferenceEquals(this, other)
+        || (_map.Count == other._map.Count
+            && _map.All(pair => other._map.TryGetValue(pair.Key, out var type) && type.Equals(pair.Value)));
 
     static bool Changed(
         ImmutableArray<TypeSymbol> before,

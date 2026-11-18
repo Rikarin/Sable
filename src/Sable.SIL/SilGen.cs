@@ -635,8 +635,9 @@ public sealed partial class SilGen {
         });
 
     /// <summary>A type with these type arguments in force, a <c>some P</c> parameter's type among them.</summary>
+    /// <remarks>A <c>some P</c> result or local is what it hides: code is generated for the concrete type.</remarks>
     internal static TypeSymbol Substitute(TypeSubstitution substitution, TypeSymbol type) {
-        if (type is OpaqueTypeSymbol opaque) {
+        if (type is OpaqueTypeSymbol { Origin: null } opaque) {
             foreach (var parameter in substitution.Parameters) {
                 if (s_opaqueOf.TryGetValue(parameter, out var standsFor) && standsFor.Equals(opaque)) {
                     return substitution.Lookup(parameter)!;
@@ -644,7 +645,19 @@ public sealed partial class SilGen {
             }
         }
 
-        return substitution.Apply(type);
+        return Reveal(substitution.Apply(type));
+    }
+
+    /// <summary>
+    ///     The concrete type behind a <c>some P</c> result or local — itself
+    ///     perhaps another's result — or the type unchanged.
+    /// </summary>
+    static TypeSymbol Reveal(TypeSymbol type) {
+        while (type is OpaqueTypeSymbol { Origin: not null, HiddenType: { } hidden }) {
+            type = hidden;
+        }
+
+        return type;
     }
 
     static bool IsGeneric(FunctionSymbol symbol) => TypeParametersOf(symbol).Any();
@@ -836,12 +849,6 @@ public sealed partial class SilGen {
     FunctionType? SignatureOf(FunctionSymbol symbol, SyntaxNode at, TypeSubstitution substitution) {
         SilType? Lower(TypeSymbol type) => this.Lower(Substitute(substitution, type));
 
-        // An opaque result hides a type the body chooses, which an anonymous
-        // generic parameter of the same constraint would otherwise be taken for.
-        if (symbol.ReturnType is OpaqueTypeSymbol) {
-            return Unsupported<FunctionType>(at, $"a result of type '{symbol.ReturnType.ToDisplayString()}'");
-        }
-
         // An async function is an ordinary one: a task suspends only where
         // it waits, in the runtime, with its whole stack (docs/04 §5). A
         // 'rethrows' one throws what its function parameters throw, together:
@@ -964,6 +971,12 @@ public sealed partial class SilGen {
     }
 
     SilType? LowerUncached(TypeSymbol type) {
+        // A 'some P' result or local is laid out as what it hides; inside an
+        // optional or an array, too.
+        if (type is OpaqueTypeSymbol { Origin: not null } opaque) {
+            return Reveal(opaque) is var hidden && hidden is not OpaqueTypeSymbol ? Lower(hidden) : null;
+        }
+
         if (type.Equals(Core.Int)) {
             return SilType.Int;
         }

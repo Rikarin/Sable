@@ -119,6 +119,13 @@ internal sealed class Conversions(CoreTypes core) {
                 : null;
         }
 
+        // A result's or a local's 'some P' is a type of its own, which only
+        // the origin's own definition gives values of: the binder converts
+        // those itself. Nothing else converts to it, not even the type it hides.
+        if (target is OpaqueTypeSymbol { Origin: not null }) {
+            return null;
+        }
+
         if (target is OpaqueTypeSymbol opaque) {
             return Satisfies(source, opaque.Constraint, Equivalence) ? ConversionKind.Existential : null;
         }

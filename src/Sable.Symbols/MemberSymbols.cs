@@ -171,6 +171,13 @@ public sealed class FunctionSymbol : Symbol {
 
     public TypeSymbol ReturnType => _returnType ??= ReturnTypeResolver?.Invoke() ?? ErrorTypeSymbol.Instance;
 
+    /// <summary>
+    ///     The concrete type a <c>some P</c> result hides: what the body's
+    ///     returns give, recorded as they are bound. Null until then, and for
+    ///     a function whose result is not opaque.
+    /// </summary>
+    public TypeSymbol? HiddenResultType { get; internal set; }
+
     TypeSymbol? _thrownType;
     internal Func<TypeSymbol?>? ThrownTypeResolver { get; set; }
     bool _thrownResolved;
@@ -402,4 +409,10 @@ public sealed class LocalSymbol(
     public bool IsAsyncLet { get; internal set; }
 
     public bool IsMutable { get; } = isMutable;
+
+    /// <summary>
+    ///     The concrete type a <c>let s: some P = …</c> hides: its
+    ///     initialiser's. Null for a local whose type is not opaque.
+    /// </summary>
+    public TypeSymbol? HiddenType { get; internal set; }
 }

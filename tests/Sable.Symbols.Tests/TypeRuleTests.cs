@@ -69,6 +69,40 @@ public sealed class TypeRuleTests {
             """
         );
 
+    [Fact]
+    public void TwoCallsOfOneFunctionGiveOneType() =>
+        AssertClean(
+            """
+            fn one() -> some Shape { return Circle(r: 1) }
+            fn both<T: Shape>(_ a: T, _ b: T) -> F64 { return a.area() + b.area() }
+            fn f() -> F64 {
+                var shape = one()
+                shape = one()
+                return both(shape, one())
+            }
+            """
+        );
+
+    [Theory]
+    [InlineData("var shape = one()\n    shape = two()")]
+    [InlineData("let total = both(one(), two())")]
+    [InlineData("let circle: Circle = one()")]
+    [InlineData("var shape = one()\n    shape = Circle(r: 2)")]
+    [InlineData("var shape: some Shape = Circle(r: 1)\n    shape = Circle(r: 2)")]
+    public void ResultsOfTwoFunctionsDoNotMixAndHideTheirType(string body) =>
+        Assert.NotEmpty(
+            ErrorsIn(
+                $$"""
+                  fn one() -> some Shape { return Circle(r: 1) }
+                  fn two() -> some Shape { return Circle(r: 1) }
+                  fn both<T: Shape>(_ a: T, _ b: T) -> F64 { return a.area() + b.area() }
+                  fn f() {
+                      {{body}}
+                  }
+                  """
+            )
+        );
+
     // ---- Infinite size ------------------------------------------------------
 
     [Fact]

@@ -232,7 +232,8 @@ public sealed partial class Binder {
 
         var value = BindExpression(expression, _returnType);
         if (!_returnType.Equals(Core.Void)) {
-            value = Convert(value, _returnType, expression);
+            CheckOpaqueReturn(value, expression);
+            value = ConvertResult(value, expression);
         }
 
         PopScope();
@@ -1240,9 +1241,20 @@ public sealed partial class Binder {
         }
 
         var local = new LocalSymbol(binding.Identifier.Text, _containingSymbol, declaration, isMutable) {
-            TypeResolver = () => type,
             IsAsyncLet = isAsyncLet,
         };
+
+        // 'let s: some Shape = Circle()' hides the initialiser's type behind
+        // one of the local's own: later code sees only a Shape, and a 'var'
+        // takes only values of that same hidden type.
+        if (type is OpaqueTypeSymbol { Origin: null } opaque && initializer is { HasError: false }) {
+            local.HiddenType = initializer is BoundConversion { ConversionKind: ConversionKind.Existential } opened
+                ? opened.Operand.Type
+                : initializer.Type;
+            type = new OpaqueTypeSymbol(opaque.Constraint, local);
+        }
+
+        local.TypeResolver = () => type;
 
         Declare(local.Name, local);
         TrackRethrowSource(local, initializer);
@@ -1721,10 +1733,29 @@ public sealed partial class Binder {
             );
         } else {
             CheckOpaqueReturn(value, statement.Expression);
-            value = Convert(value, _returnType, statement.Expression);
+            value = ConvertResult(value, statement.Expression);
         }
 
         return Record(statement, new BoundReturn(statement, value));
+    }
+
+    /// <summary>Converts what a <c>return</c> gives to the function's result type.</summary>
+    /// <remarks>
+    ///     A <c>some P</c> result is a type only this function's returns make:
+    ///     a value converts to it here as it would to an anonymous <c>some P</c>,
+    ///     and nowhere else (see <see cref="Conversions.Classify" />).
+    /// </remarks>
+    BoundExpression ConvertResult(BoundExpression value, SyntaxNode syntax) {
+        if (_returnType is not OpaqueTypeSymbol { Origin: { } origin } opaque || !ReferenceEquals(origin, _containingSymbol)) {
+            return Convert(value, _returnType, syntax);
+        }
+
+        var converted = Convert(value, new OpaqueTypeSymbol(opaque.Constraint), syntax);
+        return converted switch {
+            { HasError: true } => converted,
+            BoundConversion conversion => new BoundConversion(conversion.Syntax, opaque, conversion.Operand, conversion.ConversionKind),
+            _ => new BoundConversion(syntax, opaque, converted, ConversionKind.Existential),
+        };
     }
 
     /// <summary>
@@ -1748,6 +1779,12 @@ public sealed partial class Binder {
 
         if (!_opaqueReturns.TryGetValue(_containingSymbol, out var first)) {
             _opaqueReturns[_containingSymbol] = (value.Type, syntax);
+
+            // What the first return gives is the type the result hides.
+            if (opaque.Origin is FunctionSymbol origin && ReferenceEquals(origin, _containingSymbol)) {
+                origin.HiddenResultType = value.Type;
+            }
+
             return;
         }
 

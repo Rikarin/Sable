@@ -658,19 +658,52 @@ public sealed class ExistentialTypeSymbol(TypeSymbol constraint) : TypeSymbol {
 }
 
 /// <summary><c>some P</c>: one concrete type, hidden from the caller.</summary>
-public sealed class OpaqueTypeSymbol(TypeSymbol constraint) : TypeSymbol {
+/// <remarks>
+///     A <c>some P</c> parameter has no <see cref="Origin" />: it is an
+///     anonymous generic parameter, and the caller chooses its type. A result
+///     or a local's has one — the function or local whose definition chooses
+///     the type — and is a type of its own: two functions returning
+///     <c>some Shape</c> return two types, which may not mix, while two calls
+///     of one function return the same. A generic origin's hidden type may
+///     mention its type parameters, so the opaque type carries what they stand
+///     for where it is used, in <see cref="Context" />.
+/// </remarks>
+public sealed class OpaqueTypeSymbol(TypeSymbol constraint, Symbol? origin = null, TypeSubstitution? context = null) : TypeSymbol {
     public override SymbolKind Kind => SymbolKind.OpaqueType;
     public override string Name => string.Empty;
     public override TypeKind TypeKind => TypeKind.Struct;
 
     public TypeSymbol Constraint { get; } = constraint;
 
+    /// <summary>The function whose result, or the local whose value, this is the type of; null for a parameter.</summary>
+    public Symbol? Origin { get; } = origin;
+
+    /// <summary>What the origin's type parameters stand for where this type is used.</summary>
+    public TypeSubstitution Context { get; } = context ?? TypeSubstitution.Empty;
+
+    /// <summary>
+    ///     The concrete type behind it, which only code generation may look at;
+    ///     null for a parameter, or before the origin's body is bound.
+    /// </summary>
+    public TypeSymbol? HiddenType =>
+        (Origin switch {
+            FunctionSymbol function => function.HiddenResultType,
+            LocalSymbol local => local.HiddenType,
+            _ => null,
+        }) is { } hidden
+            ? Context.Apply(hidden)
+            : null;
+
     public override string ToDisplayString() => $"some {Constraint.ToDisplayString()}";
 
     public override bool Equals(TypeSymbol? other) =>
-        other is OpaqueTypeSymbol opaque && opaque.Constraint.Equals(Constraint);
+        other is OpaqueTypeSymbol opaque
+        && ReferenceEquals(opaque.Origin, Origin)
+        && opaque.Constraint.Equals(Constraint)
+        && opaque.Context.SameAs(Context);
 
-    public override int GetHashCode() => HashCode.Combine(Constraint, 0x50E);
+    public override int GetHashCode() =>
+        HashCode.Combine(Constraint, Origin is null ? 0 : System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(Origin), 0x50E);
 }
 
 /// <summary>

@@ -833,7 +833,7 @@ public sealed partial class Compilation {
         ];
 
         function.ReturnTypeResolver = () => declaration.ReturnClause is { } clause
-            ? TypeBinder.BindType(clause.Type, function, scope)
+            ? TypeBinder.BindReturnType(clause.Type, function, scope)
             : Core.Void;
 
         function.IsRethrows =

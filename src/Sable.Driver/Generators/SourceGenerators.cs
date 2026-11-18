@@ -9,118 +9,8 @@ using Sable.Syntax;
 
 namespace Sable.Driver.Generators;
 
-/// <summary>A function marked <c>@generator("name")</c>, and where it is.</summary>
-public sealed record GeneratorFunction(string Name, string Module, string Function, SyntaxTree Tree, FunctionDeclarationSyntax Declaration, AttributeSyntax Attribute);
-
-/// <summary>
-///     A package's generator program (docs/08 §8.1): the files under its
-///     <c>generators/</c> directory and the generators they declare.
-/// </summary>
-public sealed class GeneratorSet {
-    GeneratorSet(string package, IReadOnlyList<SyntaxTree> files) {
-        Package = package;
-        Files = files;
-        var generators = new List<GeneratorFunction>();
-        foreach (var tree in files) {
-            if (tree.Root is not CompilationUnitSyntax unit) {
-                continue;
-            }
-
-            var module = unit.Module is { } declaration ? declaration.Name.ToString().Trim() : "";
-            foreach (var function in unit.Members.OfType<FunctionDeclarationSyntax>()) {
-                foreach (var attribute in function.Attributes) {
-                    if (attribute.Name.ToString().Trim() == "generator") {
-                        generators.Add(new(GeneratorName(attribute) ?? "", module, function.Identifier.Text, tree, function, attribute));
-                    }
-                }
-            }
-        }
-
-        Generators = generators;
-        var key = new StringBuilder()
-            .Append(typeof(GeneratorSet).Assembly.ManifestModule.ModuleVersionId).Append('\n')
-            .Append(Library.Source(SourceGenerators.LibraryModule)).Append('\n');
-        foreach (var tree in files) {
-            key.Append(tree.Text.FileName).Append('\n').Append(tree.Text.Text).Append('\n');
-        }
-
-        Key = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(key.ToString())));
-    }
-
-    /// <summary>The package the generators are in.</summary>
-    public string Package { get; }
-
-    /// <summary>The generator program's files.</summary>
-    public IReadOnlyList<SyntaxTree> Files { get; }
-
-    /// <summary>The functions marked <c>@generator</c>, in the order the files declare them.</summary>
-    public IReadOnlyList<GeneratorFunction> Generators { get; }
-
-    /// <summary>The attributes the generators answer to on types, and read on members: what a file that can see them may write.</summary>
-    public (IReadOnlyList<string> Types, IReadOnlyList<string> Members) Attributes =>
-        ([..Generators.Select(static g => g.Name).Where(static n => n.Length > 0)],
-            [..Generators.SelectMany(static g => MemberAttributes(g.Attribute))]);
-
-    /// <summary>What a cache of anything the program computes is keyed by: the toolchain, the library and its files.</summary>
-    public string Key { get; }
-
-    /// <summary>
-    ///     The generators of the package in <paramref name="directory" />, each
-    ///     file named as <paramref name="nameOf" /> says; null when it has no
-    ///     <c>generators/</c> directory, or nothing in it.
-    /// </summary>
-    public static GeneratorSet? Load(string package, string directory, Func<string, string> nameOf) {
-        var generators = Path.Combine(directory, SourceGenerators.DirectoryName);
-        if (!Directory.Exists(generators)) {
-            return null;
-        }
-
-        var files = Directory.GetFiles(generators, "*.sb", SearchOption.AllDirectories)
-            .Select(Path.GetFullPath)
-            .Order(StringComparer.Ordinal)
-            .Select(f => (nameOf(f), File.ReadAllText(f)))
-            .ToList();
-        return files.Count == 0 ? null : FromSources(package, files);
-    }
-
-    /// <summary>A generator program from its files' names and text.</summary>
-    public static GeneratorSet FromSources(string package, IReadOnlyList<(string Name, string Text)> files) =>
-        new(package, [..files.Select(static f => SyntaxTree.Parse(new SourceText(f.Text, f.Name)))]);
-
-    /// <summary>
-    ///     The name in <c>@generator("name")</c>, if it is written as a string
-    ///     literal, with nothing else but <c>members:</c>.
-    /// </summary>
-    static string? GeneratorName(AttributeSyntax attribute) {
-        if (attribute.ArgumentList is not { Arguments: [{ NameToken.IsNone: true, Expression: var first }, ..] arguments }
-            || StringValue(first) is not { } name) {
-            return null;
-        }
-
-        return arguments.Skip(1).All(static a => a.NameToken.Text == "members" && MemberAttributes(a.Expression) is not null) && arguments.Count <= 2 ? name : null;
-    }
-
-    /// <summary>The names in <c>members: ["rename", "skip"]</c>: the attributes a generator reads on fields and cases.</summary>
-    internal static IReadOnlyList<string> MemberAttributes(AttributeSyntax attribute) =>
-        attribute.ArgumentList?.Arguments.FirstOrDefault(static a => a.NameToken.Text == "members") is { } members
-            ? MemberAttributes(members.Expression) ?? []
-            : [];
-
-    static IReadOnlyList<string>? MemberAttributes(ExpressionSyntax expression) {
-        if (expression is not ArrayExpressionSyntax array) {
-            return null;
-        }
-
-        var names = array.Elements.Select(StringValue).ToList();
-        return names.Contains(null) ? null : [..names.OfType<string>()];
-    }
-
-    static string? StringValue(ExpressionSyntax expression) =>
-        expression is LiteralExpressionSyntax { Token: { Kind: SyntaxKind.StringLiteralToken, Value: string value } } ? value : null;
-}
-
 /// <summary>A file a generator wrote, and the file whose declaration it was written for.</summary>
-/// <param name="Origin">The file with the declaration.</param>
+/// <param name="Origin">The file with the declaration; for a package generator's file, its first declaration's, or the package's first file.</param>
 /// <param name="Generator">The generator's name.</param>
 /// <param name="FileName">The name the generator gave it.</param>
 /// <param name="Text">The text to compile: the module line and the origin's imports, then what the generator wrote.</param>
@@ -131,6 +21,24 @@ public sealed record GenerationResult(IReadOnlyList<GeneratedFile> Files, IReadO
     public static readonly GenerationResult Empty = new([], []);
 
     public bool HasErrors => Diagnostics.Any(static d => d.Diagnostic.Severity == DiagnosticSeverity.Error);
+}
+
+/// <summary>A file a package lists for its generators (docs/08 §8.3): its path relative to the package, and its text.</summary>
+public sealed record GeneratorInputFile(string Path, string Text);
+
+/// <summary>What the generators of one package are run over.</summary>
+/// <param name="Package">The package's name.</param>
+/// <param name="Visible">The generators it can see: its own, and its direct dependencies'.</param>
+/// <param name="Files">Its files, the declarations in which are given to the generators.</param>
+public sealed record GenerationInput(string Package, IReadOnlyList<GeneratorSet> Visible, IReadOnlyList<SyntaxTree> Files) {
+    /// <summary>What else its types resolve against: its dependencies' files, with what their generators wrote.</summary>
+    public IReadOnlyList<SyntaxTree> References { get; init; } = [];
+
+    /// <summary>The files its manifest lists for its generators.</summary>
+    public IReadOnlyList<GeneratorInputFile> Inputs { get; init; } = [];
+
+    /// <summary>The steps one declaration may take a generator.</summary>
+    public int StepLimit { get; init; } = SourceGenerators.StepLimit;
 }
 
 /// <summary>
@@ -147,9 +55,9 @@ public sealed record GenerationResult(IReadOnlyList<GeneratedFile> Files, IReadO
 ///         <c>writeGeneratorOutput</c>).
 ///     </para>
 ///     <para>
-///         A run is cached by the program's key, the generator and the
-///         declaration as it is given, so a declaration that did not change
-///         is never given to a generator again.
+///         A run is cached by the program's key, the generator and the run's
+///         input as it is given, so a declaration that did not change is never
+///         given to a generator again.
 ///     </para>
 /// </remarks>
 public static class SourceGenerators {
@@ -169,12 +77,11 @@ public static class SourceGenerators {
     static readonly HashSet<string> BuiltInAttributes = new(StringComparer.Ordinal) {
         "inline", "inline_layout", "noncopy", "reflectable", "immutable", "immortal", "flags", "escaping", "polymorphic",
         "deprecated", "available", "extern", "export", "packed", "align", "test", "bench", "main", "discardable",
-        "MainActor", "frozen", "derive", "generator", "builtin", "comptime", "allow", "warn", "deny",
+        "MainActor", "frozen", "derive", "generator", "builtin", "comptime", "allow", "warn", "deny", "indirect", "intrinsic",
     };
 
     const char FieldSeparator = '\u001f';
     const char RecordStart = '\u001e';
-    const char LineBreak = '\u001d';
     const string HostModule = "SableGeneratorHost";
 
     static readonly ConcurrentDictionary<string, Lazy<CompiledGenerators>> Compiled = new(StringComparer.Ordinal);
@@ -190,12 +97,28 @@ public static class SourceGenerators {
         public readonly object Gate = new();
     }
 
-    /// <summary>What one run of a generator for one declaration produced.</summary>
-    sealed record RunOutput(IReadOnlyList<string> Errors, IReadOnlyList<string> Warnings, IReadOnlyList<(string Name, string Text)> Files);
+    /// <summary>A message a run reported, and where: a location's id, or "" for the attribute that started it.</summary>
+    sealed record RunMessage(DiagnosticSeverity Severity, string Location, string Text);
 
-    /// <summary>One declaration to give to one generator.</summary>
-    sealed record Request(GeneratorSet Set, GeneratorFunction Generator, SyntaxTree Tree, CompilationUnitSyntax Unit, AttributeSyntax Attribute, string Input) {
-        public string Key => Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes($"{Set.Key}\n{Generator.Name}\n{Input}")));
+    /// <summary>What one run produced.</summary>
+    sealed record RunOutput(IReadOnlyList<RunMessage> Messages, IReadOnlyList<(string Name, string Module, string Text)> Files);
+
+    /// <summary>
+    ///     One run: a declaration for a declaration generator, or every
+    ///     declaration with the attribute for a package generator.
+    /// </summary>
+    sealed class Request(GeneratorSet set, GeneratorFunction generator, IReadOnlyList<GeneratorItem> items, string input) {
+        public GeneratorSet Set { get; } = set;
+        public GeneratorFunction Generator { get; } = generator;
+        public IReadOnlyList<GeneratorItem> Items { get; } = items;
+
+        /// <summary>The lines after <c>R</c>, through <c>Z</c>.</summary>
+        public string Input { get; } = input;
+
+        public string Key { get; } = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes($"{set.Key}\n{generator.Name}\n{input}")));
+
+        /// <summary>What it is about, for messages.</summary>
+        public string Subject => Items.Count == 0 ? "the package" : Generator.Kind == GeneratorKind.Package ? $"{Items.Count} declaration(s)" : $"'{Items[0].Name}'";
     }
 
     /// <summary>
@@ -203,22 +126,21 @@ public static class SourceGenerators {
     ///     <paramref name="package" />: the generators of the package itself
     ///     and of those it depends on directly (docs/08 §8.2).
     /// </summary>
-    public static GenerationResult Run(string package, IReadOnlyList<GeneratorSet> visible, IReadOnlyList<SyntaxTree> files, int stepLimit = StepLimit) {
-        if (visible.Count == 0) {
+    public static GenerationResult Run(string package, IReadOnlyList<GeneratorSet> visible, IReadOnlyList<SyntaxTree> files, int stepLimit = StepLimit) =>
+        Run(new GenerationInput(package, visible, files) { StepLimit = stepLimit });
+
+    /// <summary>Runs a package's generators over its files, as <paramref name="input" /> describes them.</summary>
+    public static GenerationResult Run(GenerationInput input) {
+        if (input.Visible.Count == 0) {
             return GenerationResult.Empty;
         }
 
         var diagnostics = new List<(Diagnostic, SyntaxTree)>();
-        var byName = Visible(visible, diagnostics);
-
-        var requests = new List<Request>();
-        foreach (var tree in files) {
-            if (tree.Root is CompilationUnitSyntax unit) {
-                requests.AddRange(RequestsIn(tree, unit, byName));
-            }
-        }
+        var byName = Visible(input.Visible, diagnostics);
+        var requests = Requests(input, byName);
 
         var generated = new List<GeneratedFile>();
+        var modules = input.Files.Select(static f => (f.Root as CompilationUnitSyntax)?.Module?.Name.ToString().Trim()).OfType<string>().ToHashSet(StringComparer.Ordinal);
         foreach (var group in requests.GroupBy(static r => r.Set)) {
             var compiled = Compile(group.Key);
             diagnostics.AddRange(compiled.Diagnostics);
@@ -226,16 +148,29 @@ public static class SourceGenerators {
                 continue;
             }
 
-            var outputs = Execute(compiled, module, [..group], stepLimit, diagnostics);
+            var outputs = Execute(compiled, module, [..group], input.StepLimit, diagnostics);
             var names = new Dictionary<(string Generator, string Name), Request>();
             foreach (var request in group) {
                 if (outputs.TryGetValue(request, out var output)) {
-                    generated.AddRange(Collect(package, request, output, names, diagnostics));
+                    generated.AddRange(Collect(input, request, output, names, modules, diagnostics));
                 }
             }
         }
 
         return new(generated, diagnostics);
+    }
+
+    /// <summary>
+    ///     What is wrong with a generator program, as the editor shows it on
+    ///     the program's files (docs/08 §8.7): the rules of §8.5 and the
+    ///     generators' names. The compiler's own errors are the editor's
+    ///     analysis's to report.
+    /// </summary>
+    public static IReadOnlyList<(Diagnostic Diagnostic, SyntaxTree Tree)> Check(GeneratorSet set) {
+        var diagnostics = new List<(Diagnostic, SyntaxTree)>();
+        Visible([set], diagnostics);
+        diagnostics.AddRange(Compile(set).Diagnostics.Where(static d => d.Diagnostic.Code == ErrorCode.ERR_GeneratorRule));
+        return diagnostics;
     }
 
     /// <summary>
@@ -247,7 +182,9 @@ public static class SourceGenerators {
         foreach (var set in visible) {
             foreach (var generator in set.Generators) {
                 if (generator.Name.Length == 0) {
-                    diagnostics.Add((Rule(generator.Attribute.Span, "a generator is named by a string: '@generator(\"name\")' runs for types marked '@name', and 'members: [\"a\", \"b\"]' names the attributes it reads on their fields and cases"), generator.Tree));
+                    diagnostics.Add((Rule(generator.Attribute.Span,
+                        "a generator is named by a string: '@generator(\"name\")' runs for declarations marked '@name'; it may also say 'members: [\"a\", \"b\"]', the attributes it reads on fields, cases and parameters, and 'always: true'"),
+                        generator.Tree));
                 } else if (BuiltInAttributes.Contains(generator.Name)) {
                     diagnostics.Add((Rule(generator.Attribute.Span, $"'@{generator.Name}' is the compiler's own attribute; a generator cannot answer to it"), generator.Tree));
                 } else if (byName.TryGetValue(generator.Name, out var other)) {
@@ -262,116 +199,61 @@ public static class SourceGenerators {
         return byName;
     }
 
-    /// <summary>The top-level types in the file that carry a generator's attribute, one request for each such attribute.</summary>
-    static IEnumerable<Request> RequestsIn(SyntaxTree tree, CompilationUnitSyntax unit, Dictionary<string, (GeneratorSet Set, GeneratorFunction Generator)> byName) {
-        foreach (var member in unit.Members) {
-            if (TypeParts(member) is not { } parts) {
+    /// <summary>
+    ///     The runs to make: one per declaration for a declaration generator,
+    ///     and one per package for a package generator that has declarations,
+    ///     or says <c>always: true</c>.
+    /// </summary>
+    static List<Request> Requests(GenerationInput input, Dictionary<string, (GeneratorSet Set, GeneratorFunction Generator)> byName) {
+        var describer = new GeneratorRequests(input.Files, input.References);
+        var names = byName.Keys.ToHashSet(StringComparer.Ordinal);
+        var found = new List<(string Name, SyntaxTree Tree, CompilationUnitSyntax Unit, SyntaxNode Node, AttributeSyntax Attribute, string Container)>();
+        foreach (var tree in input.Files) {
+            if (tree.Root is CompilationUnitSyntax unit) {
+                found.AddRange(GeneratorRequests.Find(unit, names).Select(f => (f.Name, tree, unit, f.Node, f.Attribute, f.Container)));
+            }
+        }
+
+        var requests = new List<Request>();
+        foreach (var (name, (set, generator)) in byName.OrderBy(static g => g.Key, StringComparer.Ordinal)) {
+            var mine = found.Where(f => f.Name == name).ToList();
+            if (generator.Kind == GeneratorKind.Declaration) {
+                foreach (var f in mine) {
+                    var (lines, item) = describer.Describe(0, f.Tree, f.Unit, f.Node, f.Attribute, f.Container);
+                    requests.Add(new(set, generator, [item], Header(generator, "d", input.Package, []) + lines + "Z\n"));
+                }
+
                 continue;
             }
 
-            foreach (var attribute in parts.Attributes) {
-                if (byName.TryGetValue(attribute.Name.ToString().Trim(), out var found)) {
-                    yield return new(found.Set, found.Generator, tree, unit, attribute, Describe(tree, unit, member, parts));
-                }
+            if (mine.Count == 0 && !generator.Always) {
+                continue;
             }
+
+            var text = new StringBuilder(Header(generator, "p", input.Package, input.Inputs));
+            var items = new List<GeneratorItem>();
+            for (var i = 0; i < mine.Count; i++) {
+                var (lines, item) = describer.Describe(i, mine[i].Tree, mine[i].Unit, mine[i].Node, mine[i].Attribute, mine[i].Container);
+                text.Append(lines);
+                items.Add(item);
+            }
+
+            requests.Add(new(set, generator, items, text.Append("Z\n").ToString()));
         }
+
+        return requests;
     }
 
-    /// <summary>What every kind of type declaration has.</summary>
-    sealed record TypeDeclarationParts(
-        string Keyword,
-        SyntaxToken Identifier,
-        SyntaxList<AttributeSyntax> Attributes,
-        SyntaxTokenList Modifiers,
-        GenericParameterListSyntax? TypeParameters,
-        BaseTypeListSyntax? BaseTypes,
-        SyntaxList<SyntaxNode> Members);
-
-    static TypeDeclarationParts? TypeParts(SyntaxNode member) => member switch {
-        StructDeclarationSyntax s => new("struct", s.Identifier, s.Attributes, s.Modifiers, s.TypeParameters, s.BaseTypes, s.Members),
-        ClassDeclarationSyntax c => new("class", c.Identifier, c.Attributes, c.Modifiers, c.TypeParameters, c.BaseTypes, c.Members),
-        ActorDeclarationSyntax a => new("actor", a.Identifier, a.Attributes, a.Modifiers, a.TypeParameters, a.BaseTypes, a.Members),
-        UnionDeclarationSyntax u => new("union", u.Identifier, u.Attributes, u.Modifiers, u.TypeParameters, u.BaseTypes, u.Members),
-        EnumDeclarationSyntax e => new("enum", e.Identifier, e.Attributes, e.Modifiers, null, e.BaseTypes, e.Members),
-        _ => null,
-    };
-
-    /// <summary>The declaration as the generator is given it: the lines <c>readGeneratorRequest</c> reads, but the first.</summary>
-    static string Describe(SyntaxTree tree, CompilationUnitSyntax unit, SyntaxNode declaration, TypeDeclarationParts parts) {
-        var lines = new StringBuilder();
-
-        void Line(params string[] fields) => lines.Append(string.Join(FieldSeparator, fields.Select(Encoded))).Append('\n');
-
-        var module = unit.Module is { } m ? m.Name.ToString().Trim() : "";
-        Line("D", parts.Keyword, parts.Identifier.Text, module, Flag(IsPublic(parts.Modifiers)), tree.Text.FileName);
-        foreach (var import in unit.Imports) {
-            Line("I", import.Name.ToString().Trim());
+    /// <summary>A request's lines before its declarations, but its <c>R</c> line, which carries its index in a run.</summary>
+    static string Header(GeneratorFunction generator, string kind, string package, IReadOnlyList<GeneratorInputFile> inputs) {
+        var text = new StringBuilder();
+        text.Append(string.Join(FieldSeparator, kind, GeneratorRequests.Encoded(package))).Append('\n');
+        foreach (var file in inputs) {
+            text.Append(string.Join(FieldSeparator, "N", GeneratorRequests.Encoded(file.Path), GeneratorRequests.Encoded(file.Text))).Append('\n');
         }
 
-        foreach (var parameter in parts.TypeParameters?.Parameters ?? default) {
-            Line("T", parameter.Identifier.Text);
-        }
-
-        foreach (var conformance in parts.BaseTypes?.Types ?? default) {
-            Line("C", conformance.ToString().Trim());
-        }
-
-        Attributes(parts.Attributes, "d");
-        foreach (var member in parts.Members) {
-            switch (member) {
-                case FieldDeclarationSyntax field when IsStored(field):
-                    Line("F", NameOf(field), field.Declarator.TypeAnnotation?.Type.ToString().Trim() ?? "", Flag(field.LetOrVarKeyword.Kind == SyntaxKind.VarKeyword),
-                        Flag(field.Declarator.Initializer is not null), Flag(IsPublic(field.Modifiers)));
-                    Attributes(field.Attributes, "f");
-                    break;
-                case UnionCaseDeclarationSyntax unionCase:
-                    Line("K", unionCase.Identifier.Text, "0", "");
-                    Attributes(unionCase.Attributes, "c");
-                    foreach (var payload in unionCase.Payload?.Fields ?? default) {
-                        Line("P", payload.NameToken.IsNone ? "" : payload.NameToken.Text, payload.Type.ToString().Trim());
-                    }
-
-                    break;
-                case EnumCaseDeclarationSyntax enumCase:
-                    Line("K", enumCase.Identifier.Text, Flag(enumCase.Value is not null), enumCase.Value?.ToString().Trim() ?? "");
-                    Attributes(enumCase.Attributes, "c");
-                    break;
-            }
-        }
-
-        Line("E");
-        return lines.ToString();
-
-        void Attributes(SyntaxList<AttributeSyntax> attributes, string target) {
-            foreach (var attribute in attributes) {
-                Line("A", target, attribute.Name.ToString().Trim());
-                foreach (var argument in attribute.ArgumentList?.Arguments ?? default) {
-                    var text = argument.Expression.ToString().Trim();
-                    var value = argument.Expression is LiteralExpressionSyntax { Token: { Kind: SyntaxKind.StringLiteralToken, Value: string literal } } ? literal : null;
-                    Line("G", argument.NameToken.IsNone ? "" : argument.NameToken.Text, text, Flag(value is not null), value ?? "");
-                }
-            }
-        }
+        return text.ToString();
     }
-
-    /// <summary>A field with storage: not static, and with no accessors of its own.</summary>
-    static bool IsStored(FieldDeclarationSyntax field) =>
-        field.Accessors is null
-        && field.Declarator.Pattern is BindingPatternSyntax
-        && !field.Modifiers.Any(static m => m.Kind == SyntaxKind.StaticKeyword);
-
-    static string NameOf(FieldDeclarationSyntax field) => ((BindingPatternSyntax)field.Declarator.Pattern).Identifier.Text;
-
-    static bool IsPublic(SyntaxTokenList modifiers) => modifiers.Any(static m => m.Kind == SyntaxKind.PublicKeyword);
-
-    static string Flag(bool value) => value ? "1" : "0";
-
-    /// <summary>A value as one field of one line: line breaks as U+001D, and the separators the protocol uses taken out.</summary>
-    static string Encoded(string value) =>
-        value.Replace("\r\n", "\n", StringComparison.Ordinal)
-            .Replace(FieldSeparator, ' ')
-            .Replace(RecordStart, ' ')
-            .Replace('\n', LineBreak);
 
     // ---- Compiling ----------------------------------------------------------
 
@@ -466,9 +348,10 @@ public static class SourceGenerators {
             foreach (var generator in module) {
                 var name = $"sableGenerator{index++}";
                 names.Add(name);
-                thunk.Append(CultureInfo.InvariantCulture, $"public fn {name}(_ declaration: Declaration, _ output: inout Output) {{\n    {generator.Function}(declaration, into: &output)\n}}\n");
+                var (type, given) = generator.Kind == GeneratorKind.Package ? ("Package", "request.pkg") : ("Declaration", "request.declaration");
+                thunk.Append(CultureInfo.InvariantCulture, $"public fn {name}(_ given: {type}, _ output: inout Output) {{\n    {generator.Function}(given, into: &output)\n}}\n");
                 var branch = calls.Length == 0 ? "if" : "} else if";
-                calls.Append(CultureInfo.InvariantCulture, $"        {branch} request.generator == {Quote(generator.Name)} {{\n            {name}(request.declaration, &output)\n");
+                calls.Append(CultureInfo.InvariantCulture, $"        {branch} request.generator == {Quote(generator.Name)} {{\n            {name}({given}, &output)\n");
             }
 
             thunks.Add(SyntaxTree.Parse(new SourceText(thunk.ToString(), $"<generators:{module.Key}>")));
@@ -523,9 +406,16 @@ public static class SourceGenerators {
         }
     }
 
-    /// <summary>Why the generator's signature is not <c>(_: Declaration, into: inout Output)</c> returning nothing, or null.</summary>
+    /// <summary>
+    ///     Why the generator's signature is not <c>(_: Declaration, into: inout Output)</c>
+    ///     or <c>(_: Package, into: inout Output)</c> returning nothing, or null.
+    /// </summary>
     static string? SignatureProblem(Compilation compilation, GeneratorFunction generator) {
-        const string expected = "a generator is declared 'fn name(_ declaration: Declaration, into output: inout Output)'";
+        const string expected = "a generator is declared 'fn name(_ declaration: Declaration, into output: inout Output)', or, to be given the whole package, 'fn name(_ pkg: Package, into output: inout Output)'";
+        if (generator.Always && generator.Kind != GeneratorKind.Package) {
+            return "'always: true' is for a generator given the whole package, 'fn name(_ pkg: Package, into output: inout Output)': a generator given one declaration runs only when there is one";
+        }
+
         if (compilation.GetSemanticModel(generator.Tree).GetSymbolOf(generator.Declaration) is not FunctionSymbol function) {
             return expected;
         }
@@ -537,7 +427,7 @@ public static class SourceGenerators {
         var (declaration, output) = (function.Parameters[0], function.Parameters[1]);
         var ok = declaration.Label is null or "_"
             && declaration.Modifier is ParameterModifier.None or ParameterModifier.Borrowing
-            && IsLibraryType(declaration.Type, "Declaration")
+            && IsLibraryType(declaration.Type, generator.Kind == GeneratorKind.Package ? "Package" : "Declaration")
             && output.Label == "into"
             && output.Modifier == ParameterModifier.InOut
             && IsLibraryType(output.Type, "Output")
@@ -587,15 +477,17 @@ public static class SourceGenerators {
 
         while (pending.Count > 0) {
             var input = new StringBuilder();
+            long steps = 0;
             for (var i = 0; i < pending.Count; i++) {
-                input.Append(string.Join(FieldSeparator, "R", pending[i].Generator.Name, i.ToString(CultureInfo.InvariantCulture))).Append('\n').Append(pending[i].Input);
+                input.Append(string.Join(FieldSeparator, "R", pending[i].Generator.Name, i.ToString(CultureInfo.InvariantCulture))).Append(FieldSeparator).Append(pending[i].Input);
+                steps += (long)stepLimit * Math.Max(1, pending[i].Items.Count);
             }
 
             string? trap = null;
             string text;
             lock (compiled.Gate) {
                 Interlocked.Increment(ref _executions);
-                var interpreter = new SilInterpreter(module, checked(stepLimit * pending.Count)) { Input = new StringReader(input.ToString()) };
+                var interpreter = new SilInterpreter(module, (int)Math.Min(steps, int.MaxValue)) { Input = new StringReader(input.ToString()) };
                 try {
                     interpreter.Run(module.EntryPoint!);
                 } catch (SilTrap failure) {
@@ -621,29 +513,44 @@ public static class SourceGenerators {
             var failed = Enumerable.Range(0, pending.Count).FirstOrDefault(i => !read.ContainsKey(i));
             var request = pending[failed];
             var reason = trap.Contains("step limit", StringComparison.Ordinal)
-                ? $"the generator '{request.Generator.Name}' took more than {stepLimit:N0} steps for '{TypeName(request)}': does it loop forever?"
-                : $"the generator '{request.Generator.Name}' trapped on '{TypeName(request)}': {trap}";
-            diagnostics.Add((Diagnostic.Error(ErrorCode.ERR_GeneratorFailed, request.Attribute.Span, reason), request.Tree));
+                ? $"the generator '{request.Generator.Name}' took more than {stepLimit:N0} steps for {request.Subject}: does it loop forever?"
+                : $"the generator '{request.Generator.Name}' trapped on {request.Subject}: {trap}";
+            var (tree, span) = DefaultPlace(request);
+            diagnostics.Add((Diagnostic.Error(ErrorCode.ERR_GeneratorFailed, span, reason), tree));
             pending = pending.Skip(failed + 1).ToList();
         }
 
         return outputs;
     }
 
-    static string TypeName(Request request) => request.Attribute.Parent is { } declaration && TypeParts(declaration) is { } parts ? parts.Identifier.Text : "?";
+    /// <summary>Where a message about a run goes when it says nothing else: its first declaration's attribute, or the generator's own.</summary>
+    static (SyntaxTree Tree, TextSpan Span) DefaultPlace(Request request) =>
+        request.Items.Count > 0 ? (request.Items[0].Tree, request.Items[0].Attribute.Span) : (request.Generator.Tree, request.Generator.Attribute.Span);
+
+    /// <summary>Where a location's id points: <c>declaration:part</c> within the request.</summary>
+    static (SyntaxTree Tree, TextSpan Span) Place(Request request, string location) {
+        var parts = location.Split(':');
+        if (parts.Length == 2
+            && int.TryParse(parts[0], NumberStyles.None, CultureInfo.InvariantCulture, out var item) && item < request.Items.Count
+            && int.TryParse(parts[1], NumberStyles.None, CultureInfo.InvariantCulture, out var part) && part < request.Items[item].Spans.Count) {
+            return (request.Items[item].Tree, request.Items[item].Spans[part]);
+        }
+
+        return DefaultPlace(request);
+    }
 
     /// <summary>The program's output, by the index of the request each run was for.</summary>
     static Dictionary<int, RunOutput> Parse(string text) {
         var runs = new Dictionary<int, RunOutput>();
-        List<string>? errors = null, warnings = null;
-        List<(string, string)>? files = null;
-        string? file = null;
+        List<RunMessage>? messages = null;
+        List<(string, string, string)>? files = null;
+        (string Name, string Module)? file = null;
         var body = new StringBuilder();
         var index = -1;
 
         void EndFile() {
-            if (file is not null) {
-                files!.Add((file, body.ToString()));
+            if (file is { } open) {
+                files!.Add((open.Name, open.Module, body.ToString()));
                 file = null;
                 body.Clear();
             }
@@ -652,7 +559,7 @@ public static class SourceGenerators {
         void EndRun() {
             EndFile();
             if (index >= 0) {
-                runs[index] = new(errors!, warnings!, files!);
+                runs[index] = new(messages!, files!);
             }
         }
 
@@ -662,25 +569,21 @@ public static class SourceGenerators {
         for (var i = 0; i < count; i++) {
             var line = lines[i];
             if (line.Length > 0 && line[0] == RecordStart) {
-                var parts = line[1..].Split(FieldSeparator, 2);
-                var value = parts.Length > 1 ? parts[1] : "";
+                var parts = line[1..].Split(FieldSeparator, 3);
+                string At(int n) => parts.Length > n ? parts[n] : "";
                 switch (parts[0]) {
                     case "run":
                         EndRun();
-                        index = int.Parse(value, CultureInfo.InvariantCulture);
-                        (errors, warnings, files) = ([], [], []);
+                        index = int.Parse(At(1), CultureInfo.InvariantCulture);
+                        (messages, files) = ([], []);
                         continue;
-                    case "error":
+                    case "error" or "warning":
                         EndFile();
-                        errors?.Add(value);
-                        continue;
-                    case "warning":
-                        EndFile();
-                        warnings?.Add(value);
+                        messages?.Add(new(parts[0] == "error" ? DiagnosticSeverity.Error : DiagnosticSeverity.Warning, At(1), At(2)));
                         continue;
                     case "file":
                         EndFile();
-                        file = value;
+                        file = (At(1), At(2));
                         continue;
                 }
             }
@@ -696,46 +599,76 @@ public static class SourceGenerators {
 
     // ---- What comes back ----------------------------------------------------
 
-    /// <summary>A run's files, checked and made ready to compile, and its messages reported at the attribute.</summary>
+    /// <summary>A run's files, checked and made ready to compile, and its messages reported where they point.</summary>
     static IEnumerable<GeneratedFile> Collect(
-        string package,
+        GenerationInput input,
         Request request,
         RunOutput output,
         Dictionary<(string Generator, string Name), Request> names,
+        HashSet<string> modules,
         List<(Diagnostic, SyntaxTree)> diagnostics
     ) {
-        var at = request.Attribute.Span;
         var generator = request.Generator.Name;
-        foreach (var error in output.Errors) {
-            diagnostics.Add((Diagnostic.Error(ErrorCode.ERR_GeneratorReported, at, $"{generator}: {error}"), request.Tree));
+        foreach (var message in output.Messages) {
+            var (tree, span) = Place(request, message.Location);
+            diagnostics.Add((message.Severity == DiagnosticSeverity.Error
+                ? Diagnostic.Error(ErrorCode.ERR_GeneratorReported, span, $"{generator}: {message.Text}")
+                : Diagnostic.Warning(ErrorCode.WRN_GeneratorReported, span, $"{generator}: {message.Text}"), tree));
         }
 
-        foreach (var warning in output.Warnings) {
-            diagnostics.Add((Diagnostic.Warning(ErrorCode.WRN_GeneratorReported, at, $"{generator}: {warning}"), request.Tree));
-        }
+        var (atTree, at) = DefaultPlace(request);
+        var home = Home(input, request);
+        foreach (var (name, module, text) in output.Files) {
+            void Invalid(string why) =>
+                diagnostics.Add((Diagnostic.Error(ErrorCode.ERR_GeneratedFileInvalid, at, $"the generator '{generator}' wrote {why}"), atTree));
 
-        foreach (var (name, text) in output.Files) {
             if (FileNameProblem(name) is { } problem) {
-                diagnostics.Add((Diagnostic.Error(ErrorCode.ERR_GeneratedFileInvalid, at, $"the generator '{generator}' wrote a file called '{name}': {problem}"), request.Tree));
+                Invalid($"a file called '{name}': {problem}");
                 continue;
             }
 
             if (names.TryGetValue((generator, name), out var first)) {
-                diagnostics.Add((Diagnostic.Error(ErrorCode.ERR_GeneratedFileInvalid, at,
-                    $"the generator '{generator}' wrote '{name}' for '{TypeName(first)}' already, in package '{package}': each file it writes needs a name of its own, such as one with the type's name in it"), request.Tree));
+                Invalid($"'{name}' for {first.Subject} already, in package '{input.Package}': each file it writes needs a name of its own, such as one with the type's name in it");
+                continue;
+            }
+
+            if (home.Tree is null) {
+                Invalid($"'{name}' for a package with no file that declares a module: there is no module to put it in");
                 continue;
             }
 
             var parsed = SyntaxTree.Parse(new SourceText(text, name));
             if (parsed.Root is CompilationUnitSyntax { Module: not null }) {
-                diagnostics.Add((Diagnostic.Error(ErrorCode.ERR_GeneratedFileInvalid, at,
-                    $"the generator '{generator}' wrote a 'module' line in '{name}': the compiler puts the file in the module of '{TypeName(request)}' itself"), request.Tree));
+                Invalid($"a 'module' line in '{name}': the compiler puts the file in a module itself; to choose it, say 'inModule:'");
+                continue;
+            }
+
+            if (module.Length > 0 && !modules.Contains(module)) {
+                Invalid($"'{name}' in module '{module}', which package '{input.Package}' does not declare: a generated file goes in one of the package's own modules");
                 continue;
             }
 
             names[(generator, name)] = request;
-            yield return new(request.Tree, generator, name, WithHeader(request, generator, text, parsed));
+            yield return new(home.Tree, generator, name, WithHeader(request, home.Unit!, module, generator, text, parsed));
         }
+    }
+
+    /// <summary>
+    ///     The file a run's output goes beside: its first declaration's, or,
+    ///     with none, the package's first file that declares a module.
+    /// </summary>
+    static (SyntaxTree? Tree, CompilationUnitSyntax? Unit) Home(GenerationInput input, Request request) {
+        if (request.Items.Count > 0) {
+            return (request.Items[0].Tree, request.Items[0].Unit);
+        }
+
+        foreach (var file in input.Files) {
+            if (file.Root is CompilationUnitSyntax { Module: not null } unit) {
+                return (file, unit);
+            }
+        }
+
+        return (null, null);
     }
 
     static string? FileNameProblem(string name) =>
@@ -746,21 +679,27 @@ public static class SourceGenerators {
         : null;
 
     /// <summary>
-    ///     The file as it is compiled: in the module of the declaration it is
-    ///     for, with that declaration's file's imports but those it makes itself.
+    ///     The file as it is compiled: in the module asked for, or the one of
+    ///     the file it goes beside, with that file's imports when it is in its
+    ///     module, but those it makes itself.
     /// </summary>
-    static string WithHeader(Request request, string generator, string text, SyntaxTree parsed) {
+    static string WithHeader(Request request, CompilationUnitSyntax home, string module, string generator, string text, SyntaxTree parsed) {
+        var homeModule = home.Module?.Name.ToString().Trim() ?? "";
+        var target = module.Length > 0 ? module : homeModule;
         var header = new StringBuilder();
-        header.Append(CultureInfo.InvariantCulture, $"// Written by the generator '{generator}' for '{TypeName(request)}' in {request.Tree.Text.FileName}. Do not edit: it is written again on every build.\n");
-        if (request.Unit.Module is { } module) {
-            header.Append(CultureInfo.InvariantCulture, $"module {module.Name.ToString().Trim()}\n");
+        var about = request.Items.Count == 1 ? $"for '{request.Items[0].Name}' in {request.Items[0].Tree.Text.FileName}" : $"for {request.Subject}";
+        header.Append(CultureInfo.InvariantCulture, $"// Written by the generator '{generator}' {about}. Do not edit: it is written again on every build.\n");
+        if (target.Length > 0) {
+            header.Append(CultureInfo.InvariantCulture, $"module {target}\n");
         }
 
-        var own = parsed.Root is CompilationUnitSyntax unit
-            ? unit.Imports.Select(static i => i.Name.ToString().Trim()).ToHashSet(StringComparer.Ordinal)
-            : [];
-        foreach (var import in request.Unit.Imports.Where(i => !own.Contains(i.Name.ToString().Trim()))) {
-            header.Append(import.ToString().Trim()).Append('\n');
+        if (target == homeModule) {
+            var own = parsed.Root is CompilationUnitSyntax unit
+                ? unit.Imports.Select(static i => i.Name.ToString().Trim()).ToHashSet(StringComparer.Ordinal)
+                : [];
+            foreach (var import in home.Imports.Where(i => !own.Contains(i.Name.ToString().Trim()))) {
+                header.Append(import.ToString().Trim()).Append('\n');
+            }
         }
 
         return header.Append('\n').Append(text).ToString();

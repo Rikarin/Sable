@@ -54,7 +54,6 @@ public static class LanguageProjects {
         var graph = PackageGraph.ResolveCached(workspace, environment, new());
         foreach (var member in workspace.Members) {
             var own = graph.Packages[member.Name];
-            var generated = PackageGenerators.Run(graph, member.Name, dev: true, optimise: false);
             var attributes = PackageGenerators.AttributesFor(graph, own);
             yield return new(
                 member.Name,
@@ -62,21 +61,37 @@ public static class LanguageProjects {
                 [..own.Features.Order(StringComparer.Ordinal)],
                 [
                     ..Dependencies(graph, member.Name).SelectMany(p => p.Package.LibrarySources()
-                        .SelectMany(f => (IEnumerable<string>)[f, ..generated.For(f)])
                         .Select(f => new LanguageProjectFile(f, [..p.Features.Order(StringComparer.Ordinal)]) {
                             GeneratorAttributes = PackageGenerators.AttributesFor(graph, p).Types,
                             GeneratorMemberAttributes = PackageGenerators.AttributesFor(graph, p).Members,
                         })),
                 ]) {
                 Lints = member.Manifest.Lints,
-                Generate = trees => PackageGenerators.ForEditor(graph, member.Name, trees),
+                Generate = (trees, dependencies) => PackageGenerators.ForEditor(graph, member.Name, trees, dependencies),
                 GeneratorAttributes = attributes.Types,
                 GeneratorMemberAttributes = attributes.Members,
             };
 
             var generators = Path.Combine(member.Directory, Generators.SourceGenerators.DirectoryName);
             if (Directory.Exists(generators)) {
-                yield return new($"{member.Name} generators", generators, [], []);
+                // The generator program, checked against docs/08 §8.5 as it is edited.
+                var name = member.Name;
+                yield return new($"{name} generators", generators, [], []) {
+                    Generate = (documents, _) => new([], Generators.SourceGenerators.Check(Generators.GeneratorSet.FromTrees(name, documents))),
+                };
+
+                // Each snapshot case, compiled with what the package's generators write for it (§8.8).
+                var tests = Generators.GeneratorSet.TestsDirectory(member.Directory);
+                var set = Directory.Exists(tests) ? Generators.GeneratorSet.Load(name, member.Directory, static f => f) : null;
+                IEnumerable<string> cases = Directory.Exists(tests) ? Directory.GetDirectories(tests).Order(StringComparer.Ordinal) : [];
+                foreach (var test in cases) {
+                    var caseName = Path.GetFileName(test);
+                    yield return new($"{name} generator test {caseName}", test, [], []) {
+                        Generate = (documents, _) => PackageGenerators.ForTestCase(set, name, caseName, documents, workspace),
+                        GeneratorAttributes = set?.Attributes.Types ?? [],
+                        GeneratorMemberAttributes = set?.Attributes.Members ?? [],
+                    };
+                }
             }
         }
     }

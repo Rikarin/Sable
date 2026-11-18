@@ -55,6 +55,11 @@ public sealed class CoreTypes {
         Module.AddMember(Error);
         AnyError = new ExistentialTypeSymbol(Error);
 
+        // What may cross an isolation boundary (SYNTAX.md §19, docs/02 §2.7):
+        // a marker, which a type meets by what it is made of, not by saying so.
+        Sendable = new("Sendable", TypeKind.Protocol, Module, accessibility: Accessibility.Public);
+        Module.AddMember(Sendable);
+
         // 'extension AppError: From<IoError>' lets a 'try' in a function that
         // throws AppError propagate an IoError, converted (docs/03 §3.6).
         From = DeclareGeneric("From", TypeKind.Protocol, "Source");
@@ -111,6 +116,7 @@ public sealed class CoreTypes {
     public NamedTypeSymbol Void { get; }
     public NamedTypeSymbol Never { get; }
     public NamedTypeSymbol Error { get; }
+    public NamedTypeSymbol Sendable { get; }
 
     /// <summary>What a bare <c>throws</c> means.</summary>
     public TypeSymbol AnyError { get; }
@@ -186,6 +192,20 @@ public sealed class CoreTypes {
 
     public bool IsNumeric(TypeSymbol type) => Numerics.Any(n => n.Equals(type));
     public bool IsInteger(TypeSymbol type) => Integers.Any(n => n.Equals(type));
+
+    /// <summary>The values an integer type holds, least and greatest; null for a type that is not one.</summary>
+    public (System.Numerics.BigInteger Low, System.Numerics.BigInteger High)? IntegerRange(TypeSymbol type) {
+        var index = type is NamedTypeSymbol named ? Integers.IndexOf(named) : -1;
+        if (index < 0) {
+            return null;
+        }
+
+        // I8 … I128, Int; then U8 … U128, UInt: 'Int' and 'UInt' are 64 bits.
+        int[] bits = [8, 16, 32, 64, 128, 64];
+        var width = bits[index % 6];
+        var one = System.Numerics.BigInteger.One;
+        return index < 6 ? (-(one << (width - 1)), (one << (width - 1)) - 1) : (0, (one << width) - 1);
+    }
 
     NamedTypeSymbol Primitive(string name) {
         var type = new NamedTypeSymbol(name, TypeKind.Builtin, Module, accessibility: Accessibility.Public);

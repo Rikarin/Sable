@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using Sable.Syntax;
 
 namespace Sable.Symbols;
@@ -153,9 +154,11 @@ internal static class ConformanceChecker {
                 continue;
             }
 
-            var requirements = conformed.Members.OfType<FunctionSymbol>()
+            // A generic protocol's requirements are read with its arguments.
+            var arguments = TypeSubstitution.For(conformed);
+            var requirements = conformed.OriginalDefinition.Members.OfType<FunctionSymbol>()
                 .Where(r => r.IsAbstract && r.Name == function.Name);
-            if (!requirements.Any(r => Matches(r, function, conformed, type))) {
+            if (!requirements.Any(r => Matches(r, function, conformed.OriginalDefinition, arguments, type))) {
                 Report(
                     diagnostics,
                     ErrorCode.ERR_RequirementSignatureMismatch,
@@ -427,6 +430,24 @@ internal static class ConformanceChecker {
     }
 
     /// <summary>
+    ///     The member a method of a class finally overrides: the one a
+    ///     vtable gives its slot. Null for a method that overrides nothing.
+    /// </summary>
+    public static FunctionSymbol? RootOverridden(FunctionSymbol function) {
+        if (!function.IsOverride || function.ContainingSymbol is not NamedTypeSymbol { TypeKind: TypeKind.Class } type) {
+            return null;
+        }
+
+        FunctionSymbol? root = null;
+        for (var current = FindOverridden(type, function)?.Method; current is not null;) {
+            root = current;
+            current = current.IsOverride && current.ContainingSymbol is NamedTypeSymbol owner ? FindOverridden(owner, current)?.Method : null;
+        }
+
+        return root;
+    }
+
+    /// <summary>
     ///     The base-class member a function replaces, if any, and what the
     ///     base's type parameters are where this type inherits it:
     ///     <c>class Ints: Box&lt;Int&gt;</c> sees <c>Box.get() -&gt; T</c> as returning Int.
@@ -454,7 +475,9 @@ internal static class ConformanceChecker {
 
                 var matches = true;
                 for (var i = 0; i < other.Parameters.Length; i++) {
-                    if (other.Parameters[i].Type.Equals(function.Parameters[i].Type)) {
+                    // In the base's terms as this class names it: 'GDer: GBase<Int>'
+                    // overrides 'take(_ x: T)' with 'take(_ x: Int)'.
+                    if (seen.Apply(other.Parameters[i].Type).Equals(function.Parameters[i].Type)) {
                         continue;
                     }
 
@@ -480,8 +503,10 @@ internal static class ConformanceChecker {
     /// </summary>
     /// <remarks>
     ///     A conformer names them: <c>alias Element = Int</c>, or a nested type
-    ///     called Element. Failing that the declaration's own default applies, and
-    ///     failing that the conformance is not met.
+    ///     called Element. Failing that its witnesses say: <c>fn get() -&gt; Int</c>
+    ///     meeting <c>fn get() -&gt; Item</c> makes Item an Int. Failing that the
+    ///     declaration's own default applies, and failing that the conformance
+    ///     is not met.
     /// </remarks>
     public static TypeSymbol? ResolveAssociated(
         NamedTypeSymbol conformer,
@@ -501,7 +526,62 @@ internal static class ConformanceChecker {
             }
         }
 
-        return associated.DefaultType;
+        return InferAssociated(conformer, associated) ?? associated.DefaultType;
+    }
+
+    /// <summary>The (conformer, associated type) pairs being inferred, so inference never asks itself.</summary>
+    [ThreadStatic]
+    static HashSet<(NamedTypeSymbol, TypeParameterSymbol)>? s_inferring;
+
+    /// <summary>
+    ///     An associated type read off the conformer's witnesses: the first
+    ///     requirement that mentions it, matched against the conformer's own
+    ///     member of that name and shape.
+    /// </summary>
+    static TypeSymbol? InferAssociated(NamedTypeSymbol conformer, TypeParameterSymbol associated) {
+        if (associated.ContainingSymbol is not NamedTypeSymbol { TypeKind: TypeKind.Protocol } protocol) {
+            return null;
+        }
+
+        conformer = conformer.OriginalDefinition;
+        s_inferring ??= [];
+        if (!s_inferring.Add((conformer, associated))) {
+            return null;
+        }
+
+        try {
+            ImmutableArray<TypeParameterSymbol> inferrable = [associated];
+            foreach (var requirement in protocol.Members) {
+                foreach (var witness in FindMembers(conformer, requirement.Name)) {
+                    // A protocol's default speaks of the associated type
+                    // itself, so it says nothing about what it is.
+                    if (witness.ContainingSymbol is NamedTypeSymbol { TypeKind: TypeKind.Protocol }
+                        or ExtensionSymbol { ExtendedType.TypeKind: TypeKind.Protocol }) {
+                        continue;
+                    }
+
+                    var map = new Dictionary<TypeParameterSymbol, TypeSymbol>();
+                    var fits = (requirement, witness) switch {
+                        (FunctionSymbol { IsAbstract: true } wanted, FunctionSymbol given) =>
+                            wanted.IsStatic == given.IsStatic
+                            && wanted.Parameters.Length == given.Parameters.Length
+                            && wanted.Parameters.Zip(given.Parameters).All(p => TypeSubstitution.Unify(p.First.Type, p.Second.Type, inferrable, map))
+                            && TypeSubstitution.Unify(wanted.ReturnType, given.ReturnType, inferrable, map),
+                        (FieldSymbol { IsAbstract: true } wanted, FieldSymbol given) =>
+                            TypeSubstitution.Unify(wanted.Type, given.Type, inferrable, map),
+                        _ => false,
+                    };
+
+                    if (fits && map.TryGetValue(associated, out var inferred) && !inferred.IsError) {
+                        return inferred;
+                    }
+                }
+            }
+
+            return null;
+        } finally {
+            s_inferring.Remove((conformer, associated));
+        }
     }
 
     static void CheckProtocol(
@@ -516,8 +596,13 @@ internal static class ConformanceChecker {
             return;
         }
 
+        // 'struct Ones: Source<Int>' conforms to Source with T as Int: its
+        // requirements are the definition's, read with the arguments.
+        var arguments = TypeSubstitution.For(protocol);
+        protocol = protocol.OriginalDefinition;
+
         foreach (var refined in protocol.BaseTypes) {
-            if (refined is NamedTypeSymbol { TypeKind: TypeKind.Protocol } parent) {
+            if (arguments.Apply(refined) is NamedTypeSymbol { TypeKind: TypeKind.Protocol } parent) {
                 CheckProtocol(type, parent, diagnostics, seen);
             }
         }
@@ -539,11 +624,11 @@ internal static class ConformanceChecker {
         foreach (var requirement in protocol.Members) {
             switch (requirement) {
                 case FunctionSymbol { IsAbstract: true } function:
-                    CheckFunction(type, protocol, function, diagnostics);
+                    CheckFunction(type, protocol, arguments, function, diagnostics);
                     break;
 
                 case FieldSymbol { IsAbstract: true } field:
-                    CheckProperty(type, protocol, field, diagnostics);
+                    CheckProperty(type, protocol, arguments, field, diagnostics);
                     break;
             }
         }
@@ -552,6 +637,7 @@ internal static class ConformanceChecker {
     static void CheckFunction(
         NamedTypeSymbol type,
         NamedTypeSymbol protocol,
+        TypeSubstitution arguments,
         FunctionSymbol requirement,
         DiagnosticBag diagnostics
     ) {
@@ -572,7 +658,7 @@ internal static class ConformanceChecker {
         }
 
         foreach (var candidate in candidates) {
-            if (!Matches(requirement, candidate, protocol, type)) {
+            if (!Matches(requirement, candidate, protocol, arguments, type)) {
                 continue;
             }
 
@@ -621,6 +707,7 @@ internal static class ConformanceChecker {
     static void CheckProperty(
         NamedTypeSymbol type,
         NamedTypeSymbol protocol,
+        TypeSubstitution arguments,
         FieldSymbol requirement,
         DiagnosticBag diagnostics
     ) {
@@ -653,7 +740,7 @@ internal static class ConformanceChecker {
             return;
         }
 
-        var expected = SubstituteSelf(requirement.Type, protocol, type);
+        var expected = arguments.Apply(SubstituteSelf(requirement.Type, protocol, type));
         if (candidate.Type.Equals(expected) || candidate.Type.IsError || expected.IsError) {
             return;
         }
@@ -672,6 +759,7 @@ internal static class ConformanceChecker {
         FunctionSymbol requirement,
         FunctionSymbol candidate,
         NamedTypeSymbol protocol,
+        TypeSubstitution arguments,
         NamedTypeSymbol conformer
     ) {
         if (candidate.IsStatic != requirement.IsStatic) {
@@ -700,7 +788,7 @@ internal static class ConformanceChecker {
 
         var rename = new TypeSubstitution(renamed);
 
-        TypeSymbol Expected(TypeSymbol type) => rename.Apply(SubstituteSelf(type, protocol, conformer));
+        TypeSymbol Expected(TypeSymbol type) => rename.Apply(arguments.Apply(SubstituteSelf(type, protocol, conformer)));
 
         for (var i = 0; i < requirement.Parameters.Length; i++) {
             var expected = Expected(requirement.Parameters[i].Type);
@@ -851,7 +939,9 @@ internal static class ConformanceChecker {
             function.Parameters.Select(static p => $"{p.Name}: {p.Type.ToDisplayString()}")
         );
 
-        return $"fn {function.Name}({parameters}) -> {function.ReturnType.ToDisplayString()}";
+        return function.FunctionKind == FunctionKind.Initializer
+            ? $"init({parameters})"
+            : $"fn {function.Name}({parameters}) -> {function.ReturnType.ToDisplayString()}";
     }
 
     static void Report(

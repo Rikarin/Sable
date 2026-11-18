@@ -67,7 +67,8 @@ public static class Pipeline {
         List<string> warnings;
         using (BuildTimings.Of(timings, "bind")) {
             compilation = CompilationOf(program);
-            errors = Errors(compilation, program);
+            // The SIL checks run as the program is lowered, below.
+            errors = Formatted(compilation.GetAllDiagnosticsByFile(), program);
             warnings = Warnings(compilation, program);
         }
 
@@ -90,13 +91,13 @@ public static class Pipeline {
         }
 
         SilModule module;
-        IReadOnlyList<Diagnostic> lowering;
+        IReadOnlyList<(Diagnostic Diagnostic, SyntaxTree? Tree)> lowering;
         using (BuildTimings.Of(timings, "sil")) {
-            (module, lowering) = SilGen.Lower(compilation);
+            (module, lowering) = SilGen.LowerByFile(compilation);
         }
 
         module.CheckExclusivity = checkExclusivity;
-        errors.AddRange(lowering.Select(d => program.Count == 1 ? Format(d, program[0].Text) : $"error[{d.Id}]: {d.Message}"));
+        errors.AddRange(Formatted(lowering, program));
         if (errors.Count > 0) {
             return new(module, null, errors);
         }
@@ -142,7 +143,26 @@ public static class Pipeline {
     /// <summary>Type-checks a program: its errors, and the warnings about its own files.</summary>
     public static (IReadOnlyList<string> Errors, IReadOnlyList<string> Warnings) Diagnose(IReadOnlyList<SyntaxTree> program) {
         var compilation = CompilationOf(program);
-        return (Errors(compilation, program), Warnings(compilation, program));
+        var errors = Errors(compilation, program);
+        return (errors.Count > 0 ? errors : ConstantErrors(compilation, program), Warnings(compilation, program));
+    }
+
+    /// <summary>
+    ///     What computing the constants and running the comptime blocks
+    ///     reports (SYNTAX.md §21): part of type-checking, since a program
+    ///     whose constant divides by zero is not a program.
+    /// </summary>
+    static List<string> ConstantErrors(Compilation compilation, IReadOnlyList<SyntaxTree> program) {
+        var order = program.Select(static (tree, index) => (tree, index)).ToDictionary(static p => p.tree, static p => p.index);
+        return [
+            ..SilGen.EvaluateConstants(compilation)
+                .Where(static d => d.Diagnostic.Severity == DiagnosticSeverity.Error)
+                .OrderBy(d => order.TryGetValue(d.Tree, out var index) ? index : int.MaxValue)
+                .ThenBy(static d => d.Diagnostic.Span.Start)
+                .Select(d => order.ContainsKey(d.Tree) && d.Diagnostic.Span.End <= d.Tree.Text.Length
+                    ? d.Diagnostic.Format(d.Tree.Text)
+                    : $"error[{d.Diagnostic.Id}] in the standard library: {d.Diagnostic.Message}"),
+        ];
     }
 
     /// <summary>
@@ -159,6 +179,10 @@ public static class Pipeline {
     ) {
         var compilation = CompilationOf(program);
         var errors = Errors(compilation, program);
+        if (errors.Count == 0) {
+            errors = ConstantErrors(compilation, program);
+        }
+
         var warnings = Warnings(compilation, program);
         if (errors.Count > 0) {
             return (errors, warnings);
@@ -171,10 +195,33 @@ public static class Pipeline {
         return (errors, warnings);
     }
 
+    /// <summary>
+    ///     The type errors; and for a program without any, what the checks
+    ///     that run on SIL say — use after move, overlapping accesses, a
+    ///     reference that outlives its root — so that <c>sable check</c>, like
+    ///     a build, reports them.
+    /// </summary>
     static List<string> Errors(Compilation compilation, IReadOnlyList<SyntaxTree> program) {
+        var errors = Formatted(compilation.GetAllDiagnosticsByFile(), program);
+        if (errors.Count > 0) {
+            return errors;
+        }
+
+        IReadOnlyList<(Diagnostic, SyntaxTree?)> checks;
+        try {
+            checks = SilGen.Check(compilation);
+        } catch (Exception e) when (e is not OutOfMemoryException) {
+            // Lowering's own failure is the build's to report, as an internal error.
+            return errors;
+        }
+
+        return Formatted(checks, program);
+    }
+
+    static List<string> Formatted(IEnumerable<(Diagnostic Diagnostic, SyntaxTree? Tree)> diagnostics, IReadOnlyList<SyntaxTree> program) {
         var order = program.Select(static (tree, index) => (tree, index)).ToDictionary(static p => p.tree, static p => p.index);
         return [
-            ..compilation.GetAllDiagnosticsByFile()
+            ..diagnostics
                 .Where(static d => d.Diagnostic.Severity == DiagnosticSeverity.Error)
                 .OrderBy(d => d.Tree is { } t && order.TryGetValue(t, out var index) ? index : int.MaxValue)
                 .ThenBy(static d => d.Diagnostic.Span.Start)

@@ -1101,6 +1101,22 @@ public sealed class SilModule {
     /// </summary>
     public List<(string Name, SilType Type)> Globals { get; } = [];
 
+    /// <summary>
+    ///     The C functions the module calls (<c>@extern</c>, SYNTAX.md §24),
+    ///     by the name the module calls each by, with its C symbol and its
+    ///     signature: <c>sil_extern @M.c_abs : $(I32) -> I32 = "abs"</c>. A
+    ///     call is an ordinary <c>apply</c>; the code generator makes it with
+    ///     C's calling convention.
+    /// </summary>
+    public SortedDictionary<string, (string Symbol, FunctionType Type)> Foreign { get; } = new(StringComparer.Ordinal);
+
+    /// <summary>
+    ///     The module's functions C calls (<c>@export</c>), by name, with the
+    ///     C symbol each is called by: <c>sil_export @M.entry = "sable_entry"</c>.
+    ///     They are kept however little the program itself calls them.
+    /// </summary>
+    public SortedDictionary<string, string> Exports { get; } = new(StringComparer.Ordinal);
+
     public NominalType? FindType(string name) => _types.GetValueOrDefault(name);
 
     public T AddType<T>(T type) where T : NominalType {
@@ -1225,6 +1241,11 @@ public static class SilBuiltins {
         // Strings joined end to end in one allocation: an interpolation, or 'a + b + c'.
         if (name == "string_concat_many") {
             return operands.Count >= 2 && operands.All(static o => o == SilType.String) ? new([..operands], SilType.String) : null;
+        }
+
+        // 'a === b': whether two references are to the one object.
+        if (name == "ref_identical") {
+            return operands is [ClassType, ClassType] ? new([operands[0], operands[1]], SilType.Bool) : null;
         }
 
         // 'x is Dog': whether the object is of the class named, or a subclass of it.

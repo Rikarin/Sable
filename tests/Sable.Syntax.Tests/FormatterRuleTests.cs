@@ -17,6 +17,19 @@ public sealed class FormatterRuleTests {
             "fn f() {\n    if a {\n        x()\n    } else if b {\n        y()\n    }\n}\n",
             "fn f() {\n    if a {\n        x()\n    } else if b {\n        y()\n    }\n}\n");
 
+    [Theory]
+    [InlineData("let s = if x > 3 { \"big\" } else { \"small\" }")]
+    [InlineData("let p = f(if a { 1 } else if b { 2 } else { 3 })")]
+    [InlineData("let n = both { 1 } onFail: { 2 }")]
+    [InlineData("let a = match o {\n    case let v? => v\n    default     => 0\n}")]
+    public void AnIfThatGivesAValueStaysWhereTheValueGoes(string statement) => AssertFormats(statement, statement + "\n");
+
+    [Fact]
+    public void AnIfValueWrittenOnSeveralLinesKeepsThem() =>
+        AssertFormats(
+            "let s = if x > 3 {\n    let y = x\n    y\n} else {\n    0\n}\n",
+            "let s = if x > 3 {\n    let y = x\n    y\n} else {\n    0\n}\n");
+
     [Fact]
     public void ALabelStaysWithItsLoop() =>
         AssertFormats("fn f() {\n    outer: for r in rows {\n        break outer\n    }\n}\n",
@@ -28,6 +41,12 @@ public sealed class FormatterRuleTests {
     [InlineData("let a = f(x)?.y")]
     [InlineData("let a = xs[0]?.y")]
     public void QuestionMarksSpaceAsTheyRead(string statement) => AssertFormats(statement, statement + "\n");
+
+    [Theory]
+    [InlineData("struct Box<T: ~Copyable> { }\n")]
+    [InlineData("fn f<T>(_ x: T) where T: Named & ~Copyable { }\n")]
+    [InlineData("struct Buf<T, N> where N > 0, N % 2 == 0 { }\n")]
+    public void ConstraintsKeepTheirShape(string source) => AssertFormats(source, source);
 
     [Fact]
     public void ANegativeLiteralPatternKeepsItsSign() =>

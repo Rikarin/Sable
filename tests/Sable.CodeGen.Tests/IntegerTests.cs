@@ -182,7 +182,8 @@ public sealed class IntegerTests {
                         print(y as F64)
                         print(x.max(other: 2))
                         print(low < I128(y))
-                        print(U128(18446744073709551615) + 1)
+                        let pastU64: U128 = 18446744073709551615
+                        print(pastU64 + 1)
                         let all: U128 = 0xFFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF
                         print(all)
                     """

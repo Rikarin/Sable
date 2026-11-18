@@ -196,20 +196,125 @@ public sealed class ExhaustivenessTests {
     // ---- Infinite types -----------------------------------------------------
 
     [Fact]
-    public void IntegerLiteralsNeedAWildcard() =>
+    public void IntegerLiteralsLeaveTheValuesAroundThem() {
+        var error = NotExhaustive(
+            """
+            fn f(_ n: Int) -> Int {
+                return match n {
+                    case 0 => 0
+                    case 1 => 1
+                }
+            }
+            """
+        );
+        Assert.Contains("'...-1'", error.Message, StringComparison.Ordinal);
+        Assert.Contains("'2...'", error.Message, StringComparison.Ordinal);
+    }
+
+    // ---- Integer ranges -----------------------------------------------------
+
+    [Fact]
+    public void RangesThatMeetCoverAByte() =>
+        AssertExhaustive(
+            """
+            fn f(_ b: U8) -> Int {
+                return match b {
+                    case 0..<10 => 1
+                    case 10...255 => 2
+                }
+            }
+            """
+        );
+
+    [Fact]
+    public void OpenRangesCoverAnInt() =>
+        AssertExhaustive(
+            """
+            fn f(_ n: Int) -> Int {
+                return match n {
+                    case ...0 => 0
+                    case 1... => 1
+                }
+            }
+            """
+        );
+
+    [Fact]
+    public void LiteralsAndRangesTogetherCoverAType() =>
+        AssertExhaustive(
+            """
+            fn f(_ n: I8) -> Int {
+                return match n {
+                    case ..<0 => 0
+                    case 0 => 1
+                    case 1, 2 => 2
+                    case 3...127 => 3
+                }
+            }
+            """
+        );
+
+    [Fact]
+    public void AGapBetweenRangesIsNamed() {
+        var error = NotExhaustive(
+            """
+            fn f(_ b: U8) -> Int {
+                return match b {
+                    case 0..<10 => 1
+                    case 20...255 => 2
+                }
+            }
+            """
+        );
+        Assert.Contains("'10...19'", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AHalfOpenRangeLeavesItsUpperBoundOut() {
+        var error = NotExhaustive(
+            """
+            fn f(_ b: U8) -> Int {
+                return match b {
+                    case 0..<10 => 1
+                    case 11...255 => 2
+                }
+            }
+            """
+        );
+        Assert.Contains("'10'", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ARangeInsideTwoEarlierOnesIsCovered() =>
+        // '3...8' overlaps both and is inside neither, but together they cover it.
         Assert.Contains(
-            "'_'",
-            NotExhaustive(
+            DiagnosticsIn(
                 """
                 fn f(_ n: Int) -> Int {
                     return match n {
-                        case 0 => 0
-                        case 1 => 1
+                        case 0...5 => 1
+                        case 6...10 => 2
+                        case 3...8 => 3
+                        default => 4
                     }
                 }
                 """
-            ).Message,
-            StringComparison.Ordinal
+            ),
+            static d => d.Code == ErrorCode.WRN_PatternAlreadyCovered
+        );
+
+    [Fact]
+    public void ARangeInATupleIsCoveredElementByElement() =>
+        AssertExhaustive(
+            """
+            fn f(_ b: U8, _ flag: Bool) -> Int {
+                return match (b, flag) {
+                    case (0...127, true) => 1
+                    case (128..., true) => 2
+                    case (_, false) => 3
+                }
+            }
+            """
         );
 
     // ---- Redundancy ---------------------------------------------------------

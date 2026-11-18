@@ -21,6 +21,20 @@ public abstract class TypeSymbol : Symbol, IEquatable<TypeSymbol> {
     /// <summary>The type as it would be written in source.</summary>
     public abstract string ToDisplayString();
 
+    /// <summary>
+    ///     The type as written before a suffix such as <c>?</c> or <c>[]</c>:
+    ///     a union, a function or a composition takes parentheses, since
+    ///     <c>Int | String?</c> reads as a union with an optional in it.
+    /// </summary>
+    public string ToSuffixedDisplayString() =>
+        this is StructuralUnionTypeSymbol or FunctionTypeSymbol or CompositionTypeSymbol
+            or ExistentialTypeSymbol or OpaqueTypeSymbol
+            ? $"({ToDisplayString()})"
+            : ToDisplayString();
+
+    /// <summary>True when this type meets a constraint: conforms to a protocol, or is or inherits from a class.</summary>
+    public bool Satisfies(TypeSymbol constraint) => Conversions.Satisfies(this, constraint);
+
     public override string ToString() => ToDisplayString();
 
     public virtual bool Equals(TypeSymbol? other) => ReferenceEquals(this, other);
@@ -136,6 +150,13 @@ public sealed class NamedTypeSymbol : TypeSymbol {
     /// </summary>
     public ImmutableArray<NamedTypeSymbol> DerivedConformances { get; internal set; } = [];
 
+    /// <summary>
+    ///     The extensions that conform this type to a protocol. A constrained
+    ///     one's conformance holds of a construction only where its
+    ///     requirements do; see <see cref="Conversions.Satisfies" />.
+    /// </summary>
+    public ImmutableArray<ExtensionSymbol> Extensions { get; internal set; } = [];
+
     /// <summary>Inheritance control, per spec/SYNTAX.md §2.</summary>
     public bool IsOpen { get; internal set; }
 
@@ -156,6 +177,12 @@ public sealed class NamedTypeSymbol : TypeSymbol {
     ///     <c>Reflectable</c>, so <c>TypeInfo.of</c> describes it.
     /// </summary>
     public bool IsReflectable { get; internal set; }
+
+    /// <summary>
+    ///     True for a <c>@flags</c> enum: its values are sets of its cases,
+    ///     as the integer each is, combined with <c>|</c>.
+    /// </summary>
+    public bool IsFlags { get; internal set; }
 
     /// <summary>True for <c>sealed class</c>: it may not be subclassed.</summary>
     public bool IsSealed { get; internal set; }
@@ -299,6 +326,12 @@ public sealed class TypeParameterSymbol(
     public VarianceKind Variance { get; internal set; } = VarianceKind.None;
 
     /// <summary>
+    ///     True for <c>T: ~Copyable</c>, which may stand for a <c>@noncopy</c>
+    ///     type; any other parameter is implicitly <c>Copyable</c> (docs/03 §3.3).
+    /// </summary>
+    public bool AllowsNoncopyable { get; internal set; }
+
+    /// <summary>
     ///     What an <c>associatedtype</c> falls back to when a conformer does not
     ///     name it, as in <c>associatedtype Index: Comparable = Int</c>.
     /// </summary>
@@ -383,11 +416,11 @@ public sealed class ArrayTypeSymbol(TypeSymbol elementType, ArrayKind arrayKind,
 
     public override string ToDisplayString() =>
         ArrayKind switch {
-            ArrayKind.Fixed => $"{ElementType.ToDisplayString()}[{Capacity}]",
-            ArrayKind.Inline => $"{ElementType.ToDisplayString()}[..{Capacity}]",
-            ArrayKind.Grow => $"{ElementType.ToDisplayString()}[>..]",
-            ArrayKind.GrowShrink => $"{ElementType.ToDisplayString()}[>..<]",
-            _ => $"{ElementType.ToDisplayString()}[:]",
+            ArrayKind.Fixed => $"{ElementType.ToSuffixedDisplayString()}[{Capacity}]",
+            ArrayKind.Inline => $"{ElementType.ToSuffixedDisplayString()}[..{Capacity}]",
+            ArrayKind.Grow => $"{ElementType.ToSuffixedDisplayString()}[>..]",
+            ArrayKind.GrowShrink => $"{ElementType.ToSuffixedDisplayString()}[>..<]",
+            _ => $"{ElementType.ToSuffixedDisplayString()}[:]",
         };
 
     public override bool Equals(TypeSymbol? other) =>
@@ -399,14 +432,22 @@ public sealed class ArrayTypeSymbol(TypeSymbol elementType, ArrayKind arrayKind,
     public override int GetHashCode() => HashCode.Combine(ElementType, ArrayKind, Capacity);
 }
 
-public sealed class OptionalTypeSymbol(TypeSymbol underlyingType) : TypeSymbol {
+public sealed class OptionalTypeSymbol(TypeSymbol underlyingType, bool isImplicitlyUnwrapped = false) : TypeSymbol {
     public override SymbolKind Kind => SymbolKind.OptionalType;
     public override string Name => string.Empty;
     public override TypeKind TypeKind => TypeKind.Union;
 
     public TypeSymbol UnderlyingType { get; } = underlyingType;
 
-    public override string ToDisplayString() => $"{UnderlyingType.ToDisplayString()}?";
+    /// <summary>
+    ///     <c>T!</c>: an optional that is used as the <c>T</c> it holds
+    ///     wherever a <c>T</c> is wanted, trapping when it holds none
+    ///     (SYNTAX.md §4, for interop). It is the same type as <c>T?</c> —
+    ///     equal to it, and stored the same — only read differently.
+    /// </summary>
+    public bool IsImplicitlyUnwrapped { get; } = isImplicitlyUnwrapped;
+
+    public override string ToDisplayString() => $"{UnderlyingType.ToSuffixedDisplayString()}{(IsImplicitlyUnwrapped ? "!" : "?")}";
 
     public override bool Equals(TypeSymbol? other) =>
         other is OptionalTypeSymbol optional && optional.UnderlyingType.Equals(UnderlyingType);
@@ -446,6 +487,34 @@ public sealed class ReferenceTypeSymbol(
         && reference.Pool == Pool;
 
     public override int GetHashCode() => HashCode.Combine(ReferencedType, RelativeWidth, Pool);
+}
+
+/// <summary>Which types are move-only, for the implicit <c>Copyable</c> constraint on a generic parameter.</summary>
+internal static class Copyability {
+    /// <summary>
+    ///     True for a <c>@noncopy</c> type, something that holds one inline,
+    ///     or a parameter that may stand for one (<c>T: ~Copyable</c>).
+    /// </summary>
+    public static bool IsNoncopyable(TypeSymbol type) =>
+        type switch {
+            NamedTypeSymbol named => named.IsNoncopyable || named.OriginalDefinition.IsNoncopyable,
+            TypeParameterSymbol parameter => parameter.AllowsNoncopyable,
+            OptionalTypeSymbol optional => IsNoncopyable(optional.UnderlyingType),
+            TupleTypeSymbol tuple => tuple.ElementTypes.Any(IsNoncopyable),
+            _ => false,
+        };
+
+    /// <summary>
+    ///     The message for a move-only type given to a parameter that copies,
+    ///     or null when it may have it. The compiler's own generics — the
+    ///     'Wrapped' of 'T?' — are declared nowhere, and say for themselves.
+    /// </summary>
+    public static string? Refusal(TypeParameterSymbol parameter, TypeSymbol argument, string owner) =>
+        parameter.AllowsNoncopyable || parameter.DeclaringSyntax.IsEmpty || !IsNoncopyable(argument)
+            ? null
+            : $"'{argument.ToDisplayString()}' {(argument is TypeParameterSymbol ? "may be @noncopy ('~Copyable')" : "is @noncopy")}, "
+              + $"so it cannot be '{parameter.Name}' of '{owner}', which is implicitly Copyable; "
+              + $"declare it '{parameter.Name}: ~Copyable' to take a move-only type";
 }
 
 public sealed class TupleTypeSymbol(
@@ -591,13 +660,49 @@ public sealed class FunctionTypeSymbol(
 /// </remarks>
 public sealed class StructuralUnionTypeSymbol : TypeSymbol {
     /// <summary>
-    ///     Builds the union of these cases, which is one of them when, after
-    ///     flattening and removing duplicates, only one is left.
+    ///     Builds the union of these cases, normalised as docs/03 §3.1 says:
+    ///     flattened, without duplicates, and with what another case subsumes
+    ///     collapsed — so it is one of them when only one is left.
     /// </summary>
+    /// <remarks>
+    ///     <c>Never</c> has no values, so it adds no case: <c>Int | Never</c>
+    ///     is <c>Int</c>. An optional case makes the whole union optional,
+    ///     since an optional is itself a union with none: <c>T | T?</c> is
+    ///     <c>T?</c>, and <c>Int | String?</c> is <c>(Int | String)?</c> — one
+    ///     none, outside, rather than one hidden in a case.
+    /// </remarks>
     public static TypeSymbol Create(IEnumerable<TypeSymbol> cases) {
-        var union = new StructuralUnionTypeSymbol(cases);
+        var flattened = new List<TypeSymbol>();
+        Flatten(cases, flattened);
+
+        var live = flattened.Where(static t => !IsNever(t)).ToList();
+        if (live.Count == 0) {
+            return flattened[0];
+        }
+
+        if (live.Exists(static t => t is OptionalTypeSymbol)) {
+            return new OptionalTypeSymbol(
+                Create(live.Select(static t => t is OptionalTypeSymbol optional ? optional.UnderlyingType : t))
+            );
+        }
+
+        var union = new StructuralUnionTypeSymbol(live);
         return union.Cases.Length == 1 ? union.Cases[0] : union;
     }
+
+    /// <summary>
+    ///     The union a type is, seeing through an alias that defines one in
+    ///     terms of itself; null when it is not a structural union.
+    /// </summary>
+    public static StructuralUnionTypeSymbol? Of(TypeSymbol? type) =>
+        type switch {
+            StructuralUnionTypeSymbol union => union,
+            RecursiveUnionTypeSymbol recursive => recursive.Union,
+            _ => null,
+        };
+
+    static bool IsNever(TypeSymbol type) =>
+        type is NamedTypeSymbol { TypeKind: TypeKind.Builtin, Name: "Never", TypeArguments.IsEmpty: true };
 
     public StructuralUnionTypeSymbol(IEnumerable<TypeSymbol> cases) {
         var flattened = new List<TypeSymbol>();
@@ -663,6 +768,38 @@ public sealed class StructuralUnionTypeSymbol : TypeSymbol {
     }
 }
 
+/// <summary>
+///     A structural union defined in terms of itself, through an alias:
+///     <c>alias Json = Bool | String | Json[] | [String: Json]</c>.
+/// </summary>
+/// <remarks>
+///     The type is infinite when written out, so it is known by its alias,
+///     as a nominal type is by its declaration: each mention of <c>Json</c>,
+///     inside the union or out, is this one symbol, and it is equal only to
+///     itself. What it holds is <see cref="Union" />, whose cases mention it
+///     again — so walking a type's parts stops here rather than going round.
+///     Everything that asks a union for its cases asks
+///     <see cref="StructuralUnionTypeSymbol.Of" />, which sees through it.
+/// </remarks>
+public sealed class RecursiveUnionTypeSymbol : TypeSymbol {
+    internal RecursiveUnionTypeSymbol(AliasSymbol alias) => Alias = alias;
+
+    public AliasSymbol Alias { get; }
+
+    /// <summary>The union the alias stands for; null while it is being bound.</summary>
+    public StructuralUnionTypeSymbol? Union { get; internal set; }
+
+    public override SymbolKind Kind => SymbolKind.StructuralUnionType;
+    public override string Name => Alias.Name;
+    public override TypeKind TypeKind => TypeKind.Union;
+
+    public override string ToDisplayString() => Alias.Name;
+
+    public override bool Equals(TypeSymbol? other) => ReferenceEquals(this, other);
+
+    public override int GetHashCode() => System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(this);
+}
+
 /// <summary><c>any P</c>: a boxed value dispatched through a witness table.</summary>
 public sealed class ExistentialTypeSymbol(TypeSymbol constraint) : TypeSymbol {
     public override SymbolKind Kind => SymbolKind.ExistentialType;
@@ -681,19 +818,52 @@ public sealed class ExistentialTypeSymbol(TypeSymbol constraint) : TypeSymbol {
 }
 
 /// <summary><c>some P</c>: one concrete type, hidden from the caller.</summary>
-public sealed class OpaqueTypeSymbol(TypeSymbol constraint) : TypeSymbol {
+/// <remarks>
+///     A <c>some P</c> parameter has no <see cref="Origin" />: it is an
+///     anonymous generic parameter, and the caller chooses its type. A result
+///     or a local's has one — the function or local whose definition chooses
+///     the type — and is a type of its own: two functions returning
+///     <c>some Shape</c> return two types, which may not mix, while two calls
+///     of one function return the same. A generic origin's hidden type may
+///     mention its type parameters, so the opaque type carries what they stand
+///     for where it is used, in <see cref="Context" />.
+/// </remarks>
+public sealed class OpaqueTypeSymbol(TypeSymbol constraint, Symbol? origin = null, TypeSubstitution? context = null) : TypeSymbol {
     public override SymbolKind Kind => SymbolKind.OpaqueType;
     public override string Name => string.Empty;
     public override TypeKind TypeKind => TypeKind.Struct;
 
     public TypeSymbol Constraint { get; } = constraint;
 
+    /// <summary>The function whose result, or the local whose value, this is the type of; null for a parameter.</summary>
+    public Symbol? Origin { get; } = origin;
+
+    /// <summary>What the origin's type parameters stand for where this type is used.</summary>
+    public TypeSubstitution Context { get; } = context ?? TypeSubstitution.Empty;
+
+    /// <summary>
+    ///     The concrete type behind it, which only code generation may look at;
+    ///     null for a parameter, or before the origin's body is bound.
+    /// </summary>
+    public TypeSymbol? HiddenType =>
+        (Origin switch {
+            FunctionSymbol function => function.HiddenResultType,
+            LocalSymbol local => local.HiddenType,
+            _ => null,
+        }) is { } hidden
+            ? Context.Apply(hidden)
+            : null;
+
     public override string ToDisplayString() => $"some {Constraint.ToDisplayString()}";
 
     public override bool Equals(TypeSymbol? other) =>
-        other is OpaqueTypeSymbol opaque && opaque.Constraint.Equals(Constraint);
+        other is OpaqueTypeSymbol opaque
+        && ReferenceEquals(opaque.Origin, Origin)
+        && opaque.Constraint.Equals(Constraint)
+        && opaque.Context.SameAs(Context);
 
-    public override int GetHashCode() => HashCode.Combine(Constraint, 0x50E);
+    public override int GetHashCode() =>
+        HashCode.Combine(Constraint, Origin is null ? 0 : System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(Origin), 0x50E);
 }
 
 /// <summary>
@@ -747,6 +917,13 @@ public sealed class CompositionTypeSymbol : TypeSymbol {
     public override TypeKind TypeKind => TypeKind.Protocol;
 
     public ImmutableArray<TypeSymbol> Parts { get; }
+
+    /// <summary>
+    ///     The separate constraints a constraint stands for: <c>T: P &amp; Q</c>
+    ///     says what <c>T: P, T: Q</c> says, so a parameter keeps the parts.
+    /// </summary>
+    public static ImmutableArray<TypeSymbol> PartsOf(TypeSymbol constraint) =>
+        constraint is CompositionTypeSymbol composition ? composition.Parts : [constraint];
 
     public override string ToDisplayString() => string.Join(" & ", Parts.Select(static p => p.ToDisplayString()));
 

@@ -29,6 +29,30 @@ public sealed class LanguageTests {
                           """;
 
     [Fact]
+    public void AMemberwiseInitializerLeavesOutFieldsWithInitialValues() =>
+        Prints(
+            "1 5 1 2\n3 9 z q\n0 4 30 x\n",
+            """
+            struct D { var a: Int = 1; var b: Int = 5 }
+            struct E { var x: Int; var y: Int = 9; var z: String = "z" }
+            struct G<T> { var items: T[] = []; var n: Int = 2 }
+            struct L { var k: Int; lazy var big: Int = k * 10 }
+            struct F { var name: String = "x" { set { field = newValue + "!" } get => field } }
+            """,
+            """
+                let d = D()
+                let e = D(b: 2)
+                print("\(d.a) \(d.b) \(e.a) \(e.b)")
+                let f = E(x: 3)
+                let g = E(x: 3, z: "q")
+                print("\(f.x) \(f.y) \(f.z) \(g.z)")
+                let h = G<String>(n: 4)
+                var l = L(k: 3)
+                let p = F()
+                print("\(h.items.count) \(h.n) \(l.big) \(p.name)")
+            """);
+
+    [Fact]
     public void StructsFieldsAndMethods() =>
         Prints(
             "11.0\n6.0\n3.0\n9.0\n",
@@ -737,5 +761,59 @@ public sealed class LanguageTests {
                 print(Sable.Math.gcd(12, 18))
                 let d: C.Deque<Int> = Sable.Collections.Deque<Int>()
                 print(d.count)
+            """);
+
+    [Fact]
+    public void AnEnumIsANamedIntegerAndAFlagsEnumASetOfThem() =>
+        Prints(
+            "East North\n9 1 Active Closed\n11 16\ntrue false true\ntrue All 3 3 Execute\nNone true\nread only everything 3\n1 2 4\nfalse true Color.Blue 2\n",
+            """
+            enum Direction { North, South, East, West }
+
+            enum Status: U8 {
+                Pending = 0
+                Active = 1
+                Closed = 9
+            }
+
+            enum Level { Low = 10, Mid, High = Mid + 5 }
+
+            @flags
+            enum Permissions: U32 {
+                None = 0
+                Read = 1
+                Write = 2
+                Execute = 4
+                All = Read | Write | Execute
+            }
+
+            @flags
+            enum Style { Bold, Italic, Underline }
+
+            @derive(Equatable, Hashable, Comparable, Debug)
+            enum Color { Red, Green, Blue }
+
+            fn describe(_ p: Permissions) -> String {
+                return match p {
+                    case .Read => "read only"
+                    case .All => "everything"
+                    default => "\(p)"
+                }
+            }
+            """,
+            """
+                let d = Direction.East
+                print("\(d) \(Direction.North)")
+                print("\(Status.Closed as U8) \(Status.Active as Int) \(1 as Status) \(9 as Status)")
+                print("\(Level.Mid as Int) \(Level.High as Int)")
+                let p: Permissions = [.Read, .Write]
+                print("\(p.contains(.Write)) \(p.contains(.Execute)) \(p.contains([.Read, .Write]))")
+                let q = p | .Execute
+                print("\(q == .All) \(q) \(p) \(p as U32) \(~p & .All)")
+                let empty: Permissions = []
+                print("\(empty) \(empty == Permissions.None)")
+                print("\(describe(.Read)) \(describe(q)) \(describe(p))")
+                print("\(Style.Bold as Int) \(Style.Italic as Int) \(Style.Underline as Int)")
+                print("\(Color.Red == Color.Green) \(Color.Red < Color.Blue) \(Color.Blue.debugDescription()) \(Color.Green.hash())")
             """);
 }

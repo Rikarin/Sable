@@ -93,6 +93,8 @@ public sealed partial class LlvmEmitter {
         output.Append(Declarations);
         output.Append('\n');
         output.Append(functions);
+        output.Append(ForeignFunctions(module));
+        output.Append(ExportedFunctions(module));
         output.Append(_helpers);
         if (module.Unit is { } unit) {
             output.Append(ExternalDeclarations(unit, output));
@@ -1930,6 +1932,10 @@ public sealed partial class LlvmEmitter {
 
                 case "string_concat":
                     Line($"{Result()} = call ptr @sable_string_concat(ptr {operands[0]}, ptr {operands[1]})");
+                    return;
+
+                case "ref_identical":
+                    Line($"{Result()} = icmp eq ptr {operands[0]}, {operands[1]}");
                     return;
 
                 // The pieces in an array in the frame, joined by one call.

@@ -621,6 +621,62 @@ internal sealed class ExistentialTypeGreen : GreenNode
         new ExistentialTypeSyntax(this, parent, position);
 }
 
+/// <summary>Green node for <see cref="SuppressedTypeSyntax"/>.</summary>
+internal sealed class SuppressedTypeGreen : GreenNode
+{
+    private readonly GreenToken? _tildeToken;
+    private readonly GreenNode? _constraintType;
+
+    public SuppressedTypeGreen(GreenToken? tildeToken, GreenNode? constraintType)
+        : base(SyntaxKind.SuppressedType, 0)
+    {
+        _tildeToken = tildeToken;
+        _constraintType = constraintType;
+        FullWidth = (tildeToken?.FullWidth ?? 0)
+                    + (constraintType?.FullWidth ?? 0);
+    }
+
+    public override int SlotCount => 2;
+
+    public override GreenNode? GetSlot(int index) => index switch
+    {
+        0 => _tildeToken,
+        1 => _constraintType,
+        _ => null,
+    };
+
+    public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
+        new SuppressedTypeSyntax(this, parent, position);
+}
+
+/// <summary>Green node for <see cref="AttributedTypeSyntax"/>.</summary>
+internal sealed class AttributedTypeGreen : GreenNode
+{
+    private readonly GreenList? _attributes;
+    private readonly GreenNode? _type;
+
+    public AttributedTypeGreen(GreenList? attributes, GreenNode? type)
+        : base(SyntaxKind.AttributedType, 0)
+    {
+        _attributes = attributes;
+        _type = type;
+        FullWidth = (attributes?.FullWidth ?? 0)
+                    + (type?.FullWidth ?? 0);
+    }
+
+    public override int SlotCount => 2;
+
+    public override GreenNode? GetSlot(int index) => index switch
+    {
+        0 => _attributes,
+        1 => _type,
+        _ => null,
+    };
+
+    public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
+        new AttributedTypeSyntax(this, parent, position);
+}
+
 /// <summary>Green node for <see cref="RefTypeSyntax"/>.</summary>
 internal sealed class RefTypeGreen : GreenNode
 {
@@ -960,21 +1016,24 @@ internal sealed class InvocationExpressionGreen : GreenNode
     private readonly GreenToken? _questionToken;
     private readonly GreenNode? _argumentList;
     private readonly GreenNode? _trailingClosure;
+    private readonly GreenList? _labeledClosures;
 
-    public InvocationExpressionGreen(GreenNode? expression, GreenToken? questionToken, GreenNode? argumentList, GreenNode? trailingClosure)
+    public InvocationExpressionGreen(GreenNode? expression, GreenToken? questionToken, GreenNode? argumentList, GreenNode? trailingClosure, GreenList? labeledClosures)
         : base(SyntaxKind.InvocationExpression, 0)
     {
         _expression = expression;
         _questionToken = questionToken;
         _argumentList = argumentList;
         _trailingClosure = trailingClosure;
+        _labeledClosures = labeledClosures;
         FullWidth = (expression?.FullWidth ?? 0)
                     + (questionToken?.FullWidth ?? 0)
                     + (argumentList?.FullWidth ?? 0)
-                    + (trailingClosure?.FullWidth ?? 0);
+                    + (trailingClosure?.FullWidth ?? 0)
+                    + (labeledClosures?.FullWidth ?? 0);
     }
 
-    public override int SlotCount => 4;
+    public override int SlotCount => 5;
 
     public override GreenNode? GetSlot(int index) => index switch
     {
@@ -982,11 +1041,68 @@ internal sealed class InvocationExpressionGreen : GreenNode
         1 => _questionToken,
         2 => _argumentList,
         3 => _trailingClosure,
+        4 => _labeledClosures,
         _ => null,
     };
 
     public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
         new InvocationExpressionSyntax(this, parent, position);
+}
+
+/// <summary>Green node for <see cref="IfExpressionSyntax"/>.</summary>
+internal sealed class IfExpressionGreen : GreenNode
+{
+    private readonly GreenNode? _statement;
+
+    public IfExpressionGreen(GreenNode? statement)
+        : base(SyntaxKind.IfExpression, 0)
+    {
+        _statement = statement;
+        FullWidth = (statement?.FullWidth ?? 0);
+    }
+
+    public override int SlotCount => 1;
+
+    public override GreenNode? GetSlot(int index) => index switch
+    {
+        0 => _statement,
+        _ => null,
+    };
+
+    public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
+        new IfExpressionSyntax(this, parent, position);
+}
+
+/// <summary>Green node for <see cref="LabeledClosureSyntax"/>.</summary>
+internal sealed class LabeledClosureGreen : GreenNode
+{
+    private readonly GreenToken? _nameToken;
+    private readonly GreenToken? _colonToken;
+    private readonly GreenNode? _closure;
+
+    public LabeledClosureGreen(GreenToken? nameToken, GreenToken? colonToken, GreenNode? closure)
+        : base(SyntaxKind.LabeledClosure, 0)
+    {
+        _nameToken = nameToken;
+        _colonToken = colonToken;
+        _closure = closure;
+        FullWidth = (nameToken?.FullWidth ?? 0)
+                    + (colonToken?.FullWidth ?? 0)
+                    + (closure?.FullWidth ?? 0);
+    }
+
+    public override int SlotCount => 3;
+
+    public override GreenNode? GetSlot(int index) => index switch
+    {
+        0 => _nameToken,
+        1 => _colonToken,
+        2 => _closure,
+        _ => null,
+    };
+
+    public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
+        new LabeledClosureSyntax(this, parent, position);
 }
 
 /// <summary>Green node for <see cref="ArgumentListSyntax"/>.</summary>
@@ -2705,6 +2821,34 @@ internal sealed class BindingTypeTestPatternGreen : GreenNode
         new BindingTypeTestPatternSyntax(this, parent, position);
 }
 
+/// <summary>Green node for <see cref="OptionalPatternSyntax"/>.</summary>
+internal sealed class OptionalPatternGreen : GreenNode
+{
+    private readonly GreenNode? _pattern;
+    private readonly GreenToken? _questionToken;
+
+    public OptionalPatternGreen(GreenNode? pattern, GreenToken? questionToken)
+        : base(SyntaxKind.OptionalPattern, 0)
+    {
+        _pattern = pattern;
+        _questionToken = questionToken;
+        FullWidth = (pattern?.FullWidth ?? 0)
+                    + (questionToken?.FullWidth ?? 0);
+    }
+
+    public override int SlotCount => 2;
+
+    public override GreenNode? GetSlot(int index) => index switch
+    {
+        0 => _pattern,
+        1 => _questionToken,
+        _ => null,
+    };
+
+    public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
+        new OptionalPatternSyntax(this, parent, position);
+}
+
 /// <summary>Green node for <see cref="OrPatternSyntax"/>.</summary>
 internal sealed class OrPatternGreen : GreenNode
 {
@@ -4233,6 +4377,30 @@ internal sealed class WhereConstraintGreen : GreenNode
         new WhereConstraintSyntax(this, parent, position);
 }
 
+/// <summary>Green node for <see cref="WherePredicateSyntax"/>.</summary>
+internal sealed class WherePredicateGreen : GreenNode
+{
+    private readonly GreenNode? _expression;
+
+    public WherePredicateGreen(GreenNode? expression)
+        : base(SyntaxKind.WherePredicate, 0)
+    {
+        _expression = expression;
+        FullWidth = (expression?.FullWidth ?? 0);
+    }
+
+    public override int SlotCount => 1;
+
+    public override GreenNode? GetSlot(int index) => index switch
+    {
+        0 => _expression,
+        _ => null,
+    };
+
+    public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
+        new WherePredicateSyntax(this, parent, position);
+}
+
 /// <summary>Green node for <see cref="BaseTypeListSyntax"/>.</summary>
 internal sealed class BaseTypeListGreen : GreenNode
 {
@@ -5147,6 +5315,42 @@ internal sealed class ConstDeclarationGreen : GreenNode
 
     public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
         new ConstDeclarationSyntax(this, parent, position);
+}
+
+/// <summary>Green node for <see cref="ComptimeDeclarationSyntax"/>.</summary>
+internal sealed class ComptimeDeclarationGreen : GreenNode
+{
+    private readonly GreenList? _attributes;
+    private readonly GreenList? _modifiers;
+    private readonly GreenToken? _comptimeKeyword;
+    private readonly GreenNode? _body;
+
+    public ComptimeDeclarationGreen(GreenList? attributes, GreenList? modifiers, GreenToken? comptimeKeyword, GreenNode? body)
+        : base(SyntaxKind.ComptimeDeclaration, 0)
+    {
+        _attributes = attributes;
+        _modifiers = modifiers;
+        _comptimeKeyword = comptimeKeyword;
+        _body = body;
+        FullWidth = (attributes?.FullWidth ?? 0)
+                    + (modifiers?.FullWidth ?? 0)
+                    + (comptimeKeyword?.FullWidth ?? 0)
+                    + (body?.FullWidth ?? 0);
+    }
+
+    public override int SlotCount => 4;
+
+    public override GreenNode? GetSlot(int index) => index switch
+    {
+        0 => _attributes,
+        1 => _modifiers,
+        2 => _comptimeKeyword,
+        3 => _body,
+        _ => null,
+    };
+
+    public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
+        new ComptimeDeclarationSyntax(this, parent, position);
 }
 
 /// <summary>Green node for <see cref="AliasDeclarationSyntax"/>.</summary>

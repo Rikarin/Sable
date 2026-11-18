@@ -41,10 +41,19 @@ internal static class DefiniteAssignment {
         InitializedSelf? self = null,
         TextSpan initializer = default
     ) {
-        // Locals, and an initialiser's fields: a parameter always has a value.
+        // Locals, an initialiser's fields, and 'out' parameters, which come
+        // in with no value and must go out with one. Any other parameter has
+        // a value.
         var index = new Dictionary<Symbol, int>();
         foreach (var field in self?.Fields ?? []) {
             index[field] = index.Count;
+        }
+
+        var outs = owner is FunctionSymbol function
+            ? function.Parameters.Where(static p => p.Modifier == ParameterModifier.Out).ToList()
+            : [];
+        foreach (var parameter in outs) {
+            index[parameter] = index.Count;
         }
 
         foreach (var (_, _, op) in graph.AllOps()) {
@@ -101,6 +110,21 @@ internal static class DefiniteAssignment {
 
         if (self is not null) {
             ReportUnset(graph, assignedOut, index, self, reachable, diagnostics, initializer);
+        }
+
+        // Every way back to the caller — a 'return', or falling off the end —
+        // gives each 'out' parameter a value. A throw need not.
+        foreach (var parameter in outs) {
+            var unassigned = new[] { graph.Return, graph.End }
+                .Where(reachable.Contains)
+                .Any(exit => !In(exit, graph, assignedOut, index.Count, reachable)[index[parameter]]);
+            if (unassigned && parameter.Location is { } at) {
+                diagnostics.Error(
+                    ErrorCode.ERR_OutNotAssigned,
+                    at,
+                    $"'out' parameter '{parameter.Name}' is not assigned on every path that returns; the caller reads it afterwards"
+                );
+            }
         }
     }
 

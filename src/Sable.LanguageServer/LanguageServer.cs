@@ -407,6 +407,7 @@ public sealed partial class LanguageServer {
 
     async Task PublishDiagnosticsAsync(CancellationToken cancellation) {
         var snapshot = _workspace.Current;
+        var published = new List<(Document Document, Analysis Analysis)>();
         foreach (var document in snapshot.Documents.Values.Where(static d => d.IsOpen).OrderBy(snapshot.KeyOf, StringComparer.Ordinal)) {
             cancellation.ThrowIfCancellationRequested();
             var analysis = await _analyses.GetAsync(snapshot, snapshot.KeyOf(document));
@@ -418,6 +419,23 @@ public sealed partial class LanguageServer {
 
             var diagnostics = analysis.DiagnosticsOf(document.Tree, cancellation);
             _published[document.Uri] = true;
+            published.Add((document, analysis));
+            await PublishAsync(document.Uri, document.Version, [..diagnostics.Select(d => DiagnosticNode(document, d))]);
+        }
+
+        // Use after move, overlapping accesses and dangling references are
+        // found on SIL, by lowering each package's compilation — slower than
+        // binding, so the type errors above go out first, and these follow,
+        // with them. Documents are in package order, so each is lowered once.
+        foreach (var (document, analysis) in published) {
+            cancellation.ThrowIfCancellationRequested();
+            var checks = await RootSummariesAsync(analysis);
+            var found = checks.ChecksOf(document.Tree);
+            if (found.Count == 0 || !ReferenceEquals(_workspace.Current.Find(document.Uri)?.Tree, document.Tree)) {
+                continue;
+            }
+
+            var diagnostics = analysis.DiagnosticsOf(document.Tree, cancellation).Concat(found).OrderBy(static d => d.Span.Start);
             await PublishAsync(document.Uri, document.Version, [..diagnostics.Select(d => DiagnosticNode(document, d))]);
         }
     }

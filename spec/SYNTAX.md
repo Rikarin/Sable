@@ -344,7 +344,15 @@ public open class Document: Serializable, Equatable {
 
 - Single inheritance, multiple protocol conformance.
 - `required init` must be implemented by subclasses.
-- `convenience init` must delegate to a designated `init`.
+- `convenience init` must delegate to a designated `init`, `self.init(…)`
+  (S3141); a struct's initialiser may delegate the same way. One that
+  delegates leaves the fields' initial values to the one it calls.
+- A class that declares no `init`, whose own stored fields all have initial
+  values, is made with `init()` — or, a subclass, inherits its superclass's
+  initialisers, each of which sets the subclass's fields and then calls the
+  one it inherits.
+- In an expression, `Self` is the enclosing type: `Self(x: 3)` makes one,
+  `Self.zero` reads a static member.
 - Members are non-virtual unless declared `open` or `abstract`; `override` is
   mandatory when overriding.
 - `final` seals a single member.
@@ -501,6 +509,24 @@ let p: Permissions = [.Read, .Write]
 if p.contains(.Write) { }
 ```
 
+A case's value is the integer it writes — a literal, an earlier case, or
+those combined with `| & ^ + - * << >> ~` — or else the one after the
+previous case's, starting from 0; in a `@flags` enum, the next bit up,
+starting from 1. The type is the integer the base list names, or `Int`.
+Outside `@flags` no two cases share a value (S3142).
+
+- `Status.Closed as U8` is the integer a case is; `9 as Status` is the case
+  an integer is, and traps when no case is it.
+- `"\(direction)"` is the case's name, `East`.
+- A `@flags` enum's value is any set of its cases: `[.Read, .Write]` is the
+  two together, `[]` none of them; `|`, `&`, `^` and `~` combine values,
+  `==` compares them, and `p.contains(.Write)` is true when every flag of the
+  argument is set. Interpolated, a value is the name of the case it is
+  exactly, or else its integer. A `match` on one needs a `default`.
+- `@derive(Equatable, Hashable, Comparable, Debug)` on an enum compares cases,
+  orders them as they are declared, and describes one as `Direction.East`.
+  A `@flags` enum derives nothing: its values are compared as integers.
+
 `enum` is a distinct declaration from `union` deliberately: an enum is a named
 integer, a union is a tagged sum. Conflating them (as Rust and Swift do) makes
 the C ABI story and the "just give me a bitfield" story both worse.
@@ -635,6 +661,16 @@ class Temperature {
 }
 ```
 
+`willSet` and `didSet` observe a stored property: a store to it calls
+`willSet` with the new value (`newValue`, or the name it gives in
+`willSet(name)`), stores it, then calls `didSet` with the old one
+(`oldValue`); compound assignment stores through them too. In its own
+observers, and in its type's initialisers, the property names its storage,
+so the observers do not run for the changes they make themselves, nor while
+the value is being made; a record literal or memberwise initialiser sets it
+without observing either. An observed property is a `var`, declares no `get`
+or `set`, and belongs to a struct, class or actor (S3140).
+
 A property with a getter alone may write it without the braces or the
 keyword: `=>` and the value, as a function written `=> e` does.
 
@@ -734,6 +770,10 @@ if let user = findUser(id) { use(user) }            // optional binding
 if let a = p, let b = q, a.id == b.id { }           // multiple + condition
 if case .Circle(let r) = shape { }                  // pattern condition
 
+// Where a value is wanted, an 'if' with an 'else' gives one: each
+// branch's last line, all of one type
+let size = if n > 3 { "big" } else { "small" }
+
 guard let user = findUser(id) else { return .notFound }
 guard x > 0 else { throw .invalid("x must be positive") }
 
@@ -817,6 +857,7 @@ case Point { x: 0, y: let y }  // record pattern
 case let s as String           // type test with binding
 case is Drawable               // type test
 case .Some(.Ok(let v))         // nested
+case let v?                    // an optional holding a value: .Some(let v)
 case [first, _, last]          // array pattern, fixed length
 case [let head, ...let tail]   // array pattern with rest
 case "a" | "b" | "c"           // string alternatives
@@ -852,6 +893,11 @@ switch code {
     default: fail()
 }
 ```
+
+The values are compared with the subject in order, and `default`, wherever it
+is written, runs when none is equal. A case ends where the next begins:
+`fallthrough` goes on into the case written after it, `break` leaves the
+`switch` early, and `continue` goes on with the loop around it.
 
 ---
 
@@ -965,6 +1011,14 @@ fn withLock<T>(_ l: Lock, _ body: () throws -> T) rethrows -> T { }
 withLock(mutex) {
     counter += 1
 }
+
+// After the first trailing closure, more, each with its parameter's label,
+// starting on the line the one before ends on
+attempt {
+    try fetch()
+} onFail: {
+    cached()
+}
 ```
 
 ### Braces: record literal, trailing closure, or body
@@ -996,6 +1050,14 @@ let c = [weak self, count = localCount] (x: Int) => {
     return self.total + count + x
 }
 ```
+
+`[weak x]` and `[unowned x]` capture a class instance without keeping it
+alive, under a name of the closure's own — `self` included. A weak capture is
+optional, and reads as `none` once the object is gone, so the body unwraps
+it (`guard let self`, `if let s = self`, `self?.total`); a member reached
+implicitly through a weak `self` is an error until it is unwrapped. An
+unowned capture is the object itself, and reading it once the object is gone
+traps. `[weak x = expression]` captures what the expression gives.
 
 An escaping closure must be declared `@escaping` on the parameter; non-escaping
 closures are stack-allocated and cost nothing.
@@ -1143,6 +1205,19 @@ inside a function body, where they are ordinary statements.
 `const fn` bodies run in the compiler's interpreter. They may allocate, loop,
 and call other `const fn`s; they may not do I/O or touch `unsafe`.
 
+A `const` is computed while the program is compiled and written, as a
+literal, wherever it is read; its type may be left out when its value is a
+literal, another constant, a call, or arithmetic on those. What a constant's
+value, a `const fn` or a `comptime` block calls must be a `const fn`,
+something the compiler wrote (a memberwise initialiser), or a member of
+`Sable.Core` that neither reads, writes nor waits (S3220). A trap while
+computing one — overflow, division by zero, a loop past the step limit — is
+an error at compile time (S3201 for arithmetic, S3221 otherwise), and so is reaching `compileError("...")`
+(S3222). A `comptime` block, at the top level or in a body, runs once, while
+compiling, and leaves no code; one in a body cannot see the function's
+parameters or locals. `Platform.os`, `Platform.arch` and
+`Platform.pointerWidth` are the target's, as constants.
+
 `DEBUG` is defined in an unoptimised build (and by `sable check`), `RELEASE` in
 an optimised one; never both.
 
@@ -1218,6 +1293,14 @@ fn sqlite3_open(_ path: CString, _ db: out RawPtr<Opaque>) -> I32
 @export("c", "sable_entry")
 public fn entry(argc: I32, argv: RawPtr<CString>) -> I32 { }
 ```
+
+`@extern("c")` alone takes the C name to be the function's, and
+`@export("name")` alone takes the language to be C. Either is a function of
+the module, not generic, not `async`, not throwing; an `@extern` one has no
+body (S3223). What crosses is passed by value and must be something C has the
+same way — an integer type, `F32`, `F64`, `Bool`, or a struct of those, which
+is passed as the platform's C passes the struct of the same fields (S3224).
+Pointers, C strings, variadic calls and callbacks are `Sable.Interop`'s.
 
 Header import (`sable bindgen`) generates `.sbi` interface files from C headers
 and is the recommended path for anything larger than a few functions.

@@ -214,4 +214,20 @@ public sealed class DeriveTests {
             fn probe(_ c: Chain<Int>) -> Bool { return same(c, c) }
             """
         );
+
+    [Fact]
+    public void AnEnumDerivesByCase() =>
+        AssertClean(
+            """
+            @derive(Equatable, Hashable, Comparable, Debug)
+            enum Color { Red, Green, Blue }
+            fn probe() -> Bool { return Color.Red < Color.Blue && Color.Red != Color.Green && Color.Red.hash() > 0 }
+            """
+        );
+
+    [Fact]
+    public void AFlagsEnumCannotDerive() {
+        var error = Single("@derive(Equatable) @flags enum Mode { Read, Write }", ErrorCode.ERR_CannotDerive);
+        Assert.Contains("@flags", error.Message);
+    }
 }

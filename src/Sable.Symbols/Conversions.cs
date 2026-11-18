@@ -44,6 +44,22 @@ internal sealed class Conversions(CoreTypes core) {
             return ConversionKind.Identity;
         }
 
+        // A 'T!' is the T it holds wherever a T, or what a T converts to, is
+        // wanted: unwrapped, as 'x!' would be, and the binder takes the step
+        // from the T after.
+        if (source is OptionalTypeSymbol { IsImplicitlyUnwrapped: true } unwrapped
+            && target is not OptionalTypeSymbol
+            && Classify(unwrapped.UnderlyingType, target, false) is not null) {
+            return ConversionKind.Explicit;
+        }
+
+        // Every kind of array can be viewed as a slice of its elements.
+        if (source is ArrayTypeSymbol { ArrayKind: not ArrayKind.Slice } array
+            && target is ArrayTypeSymbol { ArrayKind: ArrayKind.Slice } slice
+            && array.ElementType.Equals(slice.ElementType)) {
+            return ConversionKind.ArrayView;
+        }
+
         // 'Never' is the bottom type: an expression that does not return fits
         // anywhere.
         if (source.Equals(core.Never)) {
@@ -80,9 +96,19 @@ internal sealed class Conversions(CoreTypes core) {
             if (sourceIsLiteral && IsLiteralCompatible(source, optional.UnderlyingType)) {
                 return ConversionKind.OptionalWrap;
             }
+
+            // Promotion composes with what gets a value to the underlying
+            // type: '[9]' for an 'Int[>..]?' takes its kind and then wraps,
+            // '"x"' for an '(Int | String)?' joins the union and then wraps.
+            // The binder builds the two steps; an optional is never wrapped
+            // again, so 'T?' does not drift into 'T??'.
+            if (source is not OptionalTypeSymbol
+                && Classify(source, optional.UnderlyingType, sourceIsLiteral) is not null) {
+                return ConversionKind.OptionalWrap;
+            }
         }
 
-        if (target is StructuralUnionTypeSymbol union) {
+        if (StructuralUnionTypeSymbol.Of(target) is { } union) {
             foreach (var unionCase in union.Cases) {
                 if (source.Equals(unionCase)) {
                     return ConversionKind.UnionInjection;
@@ -120,9 +146,16 @@ internal sealed class Conversions(CoreTypes core) {
 
         // 'any P' and 'some P' accept whatever conforms to P.
         if (target is ExistentialTypeSymbol existential) {
-            return Satisfies(source, existential.Constraint, Equivalence)
+            return Satisfies(source, existential.Constraint, Equivalence) || ConformsVariantly(source, existential.Constraint)
                 ? ConversionKind.Existential
                 : null;
+        }
+
+        // A result's or a local's 'some P' is a type of its own, which only
+        // the origin's own definition gives values of: the binder converts
+        // those itself. Nothing else converts to it, not even the type it hides.
+        if (target is OpaqueTypeSymbol { Origin: not null }) {
+            return null;
         }
 
         if (target is OpaqueTypeSymbol opaque) {
@@ -170,6 +203,11 @@ internal sealed class Conversions(CoreTypes core) {
             return true;
         }
 
+        // Sendable is met by what a type is made of, not by declaring it.
+        if (Sendability.IsSendableProtocol(constraint)) {
+            return Sendability.IsSendable(source);
+        }
+
         // A type parameter satisfies only what it was constrained to: an
         // unconstrained one conforms to nothing.
         if (source is TypeParameterSymbol or DependentMemberTypeSymbol) {
@@ -191,7 +229,35 @@ internal sealed class Conversions(CoreTypes core) {
             return DerivedConformance.Holds(derived, protocol, context);
         }
 
+        // 'extension Box: P where T: P' conforms a Box<T> only where its T
+        // does; inside the extension, its own requirements say so.
+        if (source is NamedTypeSymbol named
+            && ConditionalConformance(named, constraint) is { } extension) {
+            return extension.Unmet(TypeSubstitution.For(named), context) is null;
+        }
+
         return IsDerivedFrom(source, constraint);
+    }
+
+    /// <summary>
+    ///     The constrained extension a type's conformance to a protocol comes
+    ///     from, directly or through a protocol that refines it; null when the
+    ///     conformance, if there is one, holds unconditionally.
+    /// </summary>
+    static ExtensionSymbol? ConditionalConformance(NamedTypeSymbol type, TypeSymbol protocol) {
+        foreach (var extension in type.OriginalDefinition.Extensions) {
+            if (!extension.IsConstrained) {
+                continue;
+            }
+
+            foreach (var conformance in extension.Conformances) {
+                if (conformance.Equals(protocol) || IsDerivedFrom(conformance, protocol)) {
+                    return extension;
+                }
+            }
+        }
+
+        return null;
     }
 
     public bool HasImplicitConversion(
@@ -206,6 +272,7 @@ internal sealed class Conversions(CoreTypes core) {
         kind switch {
             ConversionKind.Identity => 0,
             ConversionKind.LiteralTyping => 1,
+            ConversionKind.ArrayView => 1,
             ConversionKind.Upcast => 2,
             ConversionKind.OptionalWrap => 3,
             ConversionKind.UnionInjection => 4,
@@ -230,9 +297,18 @@ internal sealed class Conversions(CoreTypes core) {
         return false;
     }
 
-    static bool IsDerivedFrom(TypeSymbol source, TypeSymbol target) {
+    static bool IsDerivedFrom(TypeSymbol source, TypeSymbol target) =>
+        Supertypes(source).Any(target.Equals);
+
+    /// <summary>
+    ///     Everything a type inherits from or conforms to, through every
+    ///     level, with a construction's arguments read into them: a
+    ///     <c>Rep&lt;Int&gt;</c> declared <c>Rep&lt;E&gt;: Source&lt;E&gt;</c> is a
+    ///     <c>Source&lt;Int&gt;</c>.
+    /// </summary>
+    static IEnumerable<TypeSymbol> Supertypes(TypeSymbol source) {
         if (source is not NamedTypeSymbol named) {
-            return false;
+            yield break;
         }
 
         var visited = new HashSet<NamedTypeSymbol>();
@@ -245,7 +321,10 @@ internal sealed class Conversions(CoreTypes core) {
                 continue;
             }
 
-            foreach (var baseType in current.BaseTypes) {
+            var arguments = TypeSubstitution.For(current);
+            foreach (var written in current.OriginalDefinition.BaseTypes) {
+                var baseType = arguments.Apply(written);
+
                 // An enum's base list names its underlying representation as
                 // well as its protocols, and that is not a supertype: going
                 // between an enum and its representation is written out.
@@ -254,13 +333,52 @@ internal sealed class Conversions(CoreTypes core) {
                     continue;
                 }
 
-                if (baseType.Equals(target)) {
-                    return true;
-                }
+                yield return baseType;
 
                 if (baseType is NamedTypeSymbol baseNamed) {
                     queue.Enqueue(baseNamed);
                 }
+            }
+        }
+    }
+
+    /// <summary>
+    ///     True when a type conforms to a protocol its existential may be used
+    ///     variantly for (docs/03 §3.4): a DogProducer, a
+    ///     <c>Producer&lt;Dog&gt;</c>, is an <c>any Producer&lt;Animal&gt;</c>
+    ///     when T is declared <c>out</c>, and an AnimalConsumer an
+    ///     <c>any Consumer&lt;Dog&gt;</c> when it is <c>in</c>.
+    /// </summary>
+    /// <remarks>
+    ///     Only an existential is variant: a generic parameter constrained to
+    ///     <c>Producer&lt;Animal&gt;</c> is invariant, as every generic type is.
+    /// </remarks>
+    static bool ConformsVariantly(TypeSymbol source, TypeSymbol constraint) {
+        if (constraint is not NamedTypeSymbol { TypeKind: TypeKind.Protocol, IsConstructed: true } wanted
+            || !wanted.OriginalDefinition.TypeParameters.Any(static p => p.Variance != VarianceKind.None)) {
+            return false;
+        }
+
+        foreach (var supertype in Supertypes(source)) {
+            if (supertype is not NamedTypeSymbol { IsConstructed: true } candidate
+                || !ReferenceEquals(candidate.OriginalDefinition, wanted.OriginalDefinition)) {
+                continue;
+            }
+
+            var parameters = wanted.OriginalDefinition.TypeParameters;
+            var fits = true;
+            for (var i = 0; i < parameters.Length && fits; i++) {
+                var had = candidate.TypeArguments[i];
+                var asked = wanted.TypeArguments[i];
+                fits = had.Equals(asked) || parameters[i].Variance switch {
+                    VarianceKind.Out => IsDerivedFrom(had, asked),
+                    VarianceKind.In => IsDerivedFrom(asked, had),
+                    _ => false,
+                };
+            }
+
+            if (fits) {
+                return true;
             }
         }
 

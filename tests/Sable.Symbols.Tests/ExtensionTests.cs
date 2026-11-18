@@ -223,6 +223,137 @@ public sealed class ExtensionTests {
             """
         );
 
+    // ---- Constrained extensions -------------------------------------------
+
+    const string Describable = """
+                               protocol Describable { fn describe() -> String }
+                               struct Cat: Describable { fn describe() -> String => "cat" }
+                               struct Box<T> { var v: T }
+                               """;
+
+    [Fact]
+    public void AConstrainedExtensionsBodySeesItsConformanceRequirement() =>
+        AssertClean(
+            $$"""
+              {{Describable}}
+              extension Box where T: Describable {
+                  fn describe() -> String => "box of " + v.describe()
+              }
+              fn probe(_ b: Box<Cat>) -> String => b.describe()
+              """
+        );
+
+    [Fact]
+    public void AConstrainedExtensionsBodySeesItsSameTypeRequirement() =>
+        AssertClean(
+            """
+            struct Wrapper<T> { var v: T }
+            extension Wrapper where T == Int {
+                fn doubled() -> Int => v * 2
+                fn quadrupled() -> Int => doubled() * 2
+            }
+            fn probe(_ w: Wrapper<Int>) -> Int => w.doubled()
+            """
+        );
+
+    [Fact]
+    public void ARenamedParameterCarriesTheRequirement() =>
+        AssertClean(
+            $$"""
+              {{Describable}}
+              extension Box<U> where U: Describable {
+                  fn describe() -> String => v.describe()
+              }
+              """
+        );
+
+    [Fact]
+    public void AConstrainedExtensionsRequirementDoesNotLeakIntoTheType() {
+        var errors = ErrorsIn(
+            $$"""
+              {{Describable}}
+              extension Box where T: Describable { fn describe() -> String => v.describe() }
+              extension Box { fn other() -> String => v.describe() }
+              """
+        );
+        Assert.Contains(errors, static e => e.Code == ErrorCode.ERR_NameNotFound && e.Message.Contains("'describe'"));
+    }
+
+    [Fact]
+    public void AConstrainedMemberIsNotThereWhereTheRequirementFails() {
+        var errors = ErrorsIn(
+            """
+            struct Wrapper<T> { var v: T }
+            extension Wrapper where T == Int { fn doubled() -> Int => v * 2 }
+            fn probe(_ w: Wrapper<String>) -> Int => w.doubled()
+            """
+        );
+        var error = Assert.Single(errors);
+        Assert.Equal(ErrorCode.ERR_DoesNotConform, error.Code);
+        Assert.Contains("'Wrapper<String>' has 'doubled' only where 'T == Int'", error.Message);
+    }
+
+    [Fact]
+    public void AConstrainedMemberIsNotThereThroughSelfOutsideTheExtension() {
+        var errors = ErrorsIn(
+            """
+            struct Wrapper<T> {
+                var v: T
+                fn tryIt() -> Int => doubled()
+            }
+            extension Wrapper where T == Int { fn doubled() -> Int => v * 2 }
+            """
+        );
+        var error = Assert.Single(errors);
+        Assert.Equal(ErrorCode.ERR_DoesNotConform, error.Code);
+        Assert.Contains("only where 'T == Int'", error.Message);
+    }
+
+    [Fact]
+    public void AConditionalConformanceHoldsWhereItsRequirementDoes() =>
+        AssertClean(
+            $$"""
+              {{Describable}}
+              extension Box: Describable where T: Describable {
+                  fn describe() -> String => "box of " + v.describe()
+              }
+              fn show<D: Describable>(_ d: D) -> String => d.describe()
+              fn probe() -> String => show(Box(v: Box(v: Cat())))
+              """
+        );
+
+    [Fact]
+    public void AConditionalConformanceFailsWhereItsRequirementDoes() {
+        var errors = ErrorsIn(
+            $$"""
+              {{Describable}}
+              extension Box: Describable where T: Describable {
+                  fn describe() -> String => "box of " + v.describe()
+              }
+              fn show<D: Describable>(_ d: D) -> String => d.describe()
+              fn probe() -> String => show(Box(v: 3))
+              """
+        );
+        Assert.Contains(errors, static e => e.Code == ErrorCode.ERR_NoMatchingOverload && e.Message.Contains("'Box<Int>', which is not 'Describable'"));
+    }
+
+    [Fact]
+    public void AConditionalConformanceThroughAGenericParameterNeedsItsRequirement() {
+        var errors = ErrorsIn(
+            $$"""
+              {{Describable}}
+              extension Box: Describable where T: Describable {
+                  fn describe() -> String => v.describe()
+              }
+              fn show<D: Describable>(_ d: D) -> String => d.describe()
+              fn good<T: Describable>(_ t: T) -> String => show(Box(v: t))
+              fn bad<T>(_ t: T) -> String => show(Box(v: t))
+              """
+        );
+        var error = Assert.Single(errors);
+        Assert.Equal(ErrorCode.ERR_NoMatchingOverload, error.Code);
+    }
+
     // ---- Memberwise initialisers ------------------------------------------
 
     [Fact]
@@ -259,6 +390,132 @@ public sealed class ExtensionTests {
         );
         Assert.NotEmpty(errors);
     }
+
+    [Fact]
+    public void AMemberwiseInitializerMayLeaveOutDefaultedFields() =>
+        AssertClean(
+            """
+            struct D { var a: Int = 1; var b: Int = 5 }
+            struct E { var x: Int; var y: Int = 9; var z: String = "z" }
+            fn probe() -> Int {
+                let d = D()
+                let e = D(b: 2)
+                let f = E(x: 3, z: "q")
+                return d.a + e.b + f.y
+            }
+            """
+        );
+
+    [Fact]
+    public void AMemberwiseInitializerStillNeedsTheFieldsWithoutDefaults() {
+        var errors = ErrorsIn(
+            """
+            struct E { var x: Int; var y: Int = 9 }
+            fn probe() -> E { return E(y: 2) }
+            """
+        );
+        Assert.NotEmpty(errors);
+    }
+
+    // ---- Initialisers a class has without declaring them -------------------
+
+    [Fact]
+    public void ASubclassInheritsItsSuperclasssInitialisers() =>
+        AssertClean(
+            """
+            open class A { var a: Int = 1 }
+            open class B: A { var b: Int = 2 }
+            class C: B { }
+            open class Shape {
+                var name: String
+                init(name: String, sides: Int = 0) { self.name = name }
+            }
+            class Square: Shape { var side: Int = 4 }
+            open class Box<T> {
+                var item: T
+                init(item: T) { self.item = item }
+            }
+            class IntBox: Box<Int> { }
+            fn probe() -> Int {
+                let b = B()
+                let c = C()
+                let s = Square(name: "s")
+                let t = Square(name: "t", sides: 4)
+                let i = IntBox(item: 3)
+                return b.a + c.b + s.side + t.side + i.item
+            }
+            """
+        );
+
+    [Fact]
+    public void AnInheritedOrImplicitInitialiserMeetsAProtocolsRequirement() =>
+        AssertClean(
+            """
+            protocol Makeable { init() }
+            class K: Makeable { var x: Int = 3 }
+            class L: K { }
+            """
+        );
+
+    [Fact]
+    public void ASubclassWithAFieldWithoutAValueInheritsNoInitialiser() {
+        var errors = ErrorsIn(
+            """
+            open class A { var a: Int = 1 }
+            class B: A { var b: Int }
+            fn probe() -> B { return B() }
+            """
+        );
+        Assert.Contains(errors, static e => e.Code == ErrorCode.ERR_NotAValue);
+    }
+
+    [Fact]
+    public void AnInitialiserMayHandItsWorkToAnother() =>
+        AssertClean(
+            """
+            class P {
+                var x: Int
+                init(x: Int) { self.x = x }
+                convenience init() { self.init(x: 7) }
+            }
+            struct Q {
+                var n: Int
+                init(n: Int) { self.n = n }
+                init() { self.init(n: 9) }
+            }
+            """
+        );
+
+    [Fact]
+    public void AConvenienceInitialiserMustDelegate() {
+        var errors = ErrorsIn(
+            """
+            class Node {
+                var name: String
+                init(name: String) { self.name = name }
+                convenience init() { self.name = "root" }
+            }
+            """
+        );
+        Assert.Contains(errors, static e => e.Code == ErrorCode.ERR_ConvenienceMustDelegate);
+    }
+
+    [Fact]
+    public void SelfInAnExpressionIsTheType() =>
+        AssertClean(
+            """
+            class P {
+                var x: Int
+                init(x: Int) { self.x = x }
+                static fn make() -> Self => Self(x: 3)
+            }
+            struct Q {
+                var n: Int
+                static let zero: Int = 0
+                static fn make() -> Self { return Self(n: Self.zero) }
+            }
+            """
+        );
 
     // ---- Lookup through what stands in for a type -------------------------
 

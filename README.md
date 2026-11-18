@@ -149,8 +149,8 @@ phase as built, with its measurements, and the exit criteria still open:
 
 | Phase | Open exit criteria |
 |---|---|
-| 0 — Syntax | every construct of `SYNTAX.md` parsing, a 2,000-file round-trip corpus, a < 2 ms incremental edit, a 24-hour fuzz run (a nightly run starts from a new seed each night) |
-| 1 — Symbols and type checking | the go/no-go: 10,000 lines of real Sable written against the checker (`tests/corpus/`, `tests/programs/`, `examples/ssg` and `lib/` so far) |
+| 0 — Syntax | every construct of `SYNTAX.md` parsing, a 2,000-file round-trip corpus, a 24-hour fuzz run (a nightly run starts from a new seed each night) |
+| 1 — Symbols and type checking | none: the go/no-go's 10,000 lines of real Sable are ~12,900 that type-check (`lib/` 6,600, `tests/corpus/` 2,900, `tests/programs/` 2,100, `examples/` 1,300) |
 | 2 — SIL and native code | none |
 | 3 — The memory model | none |
 | 4 — Runtime, reflection, core library | daily use of a real program (`examples/ssg` is written) |
@@ -191,8 +191,9 @@ statements on one line need a `;`.
 `SyntaxTree.Parse` reads a whole file; `ParseExpression`, `ParseType` and
 `ParseStatement` read a single construct, which is what most of the tests use.
 `SyntaxTree.WithChange` applies an edit, reusing everything it did not touch:
-a one-character edit in a 10,000-line file reparses in about 4 ms (Release),
-against about 55 ms for a full parse — short of the plan's 2 ms. The contract
+a one-character edit in a 10,000-line file reparses in about 1 ms (Release:
+0.9 ms at best, 1.2-1.5 ms median on a heavily loaded machine), against
+about 20-35 ms for a full parse — inside the plan's 2 ms. The contract
 is that the result is exactly the tree a full parse would have produced, token
 flags and diagnostics included, and every incremental test asserts it — among
 them chains of edits applied one after another, to files that already have

@@ -607,7 +607,7 @@ internal sealed class Parser {
                 case SyntaxKind.OpenParenToken: {
                     var arguments = ParseArgumentList(SyntaxKind.OpenParenToken, SyntaxKind.CloseParenToken);
                     var trailing = TryParseTrailingClosure();
-                    expression = new InvocationExpressionGreen(expression, null, arguments, trailing);
+                    expression = new InvocationExpressionGreen(expression, null, arguments, trailing, ParseLabeledClosures(trailing));
                     continue;
                 }
 
@@ -615,7 +615,7 @@ internal sealed class Parser {
                 // closure; it has no parenthesised argument list.
                 case SyntaxKind.OpenBraceToken when CanTakeTrailingClosure(): {
                     var closure = ParseBraceClosure(null);
-                    expression = new InvocationExpressionGreen(expression, null, null, closure);
+                    expression = new InvocationExpressionGreen(expression, null, null, closure, ParseLabeledClosures(closure));
                     continue;
                 }
 
@@ -631,11 +631,13 @@ internal sealed class Parser {
                 case SyntaxKind.QuestionToken when Peek(1).Kind == SyntaxKind.OpenParenToken && !HasSpaceBeforeCurrent: {
                     var question = EatToken();
                     var arguments = ParseArgumentList(SyntaxKind.OpenParenToken, SyntaxKind.CloseParenToken);
+                    var trailing = TryParseTrailingClosure();
                     expression = new InvocationExpressionGreen(
                         expression,
                         question,
                         arguments,
-                        TryParseTrailingClosure()
+                        trailing,
+                        ParseLabeledClosures(trailing)
                     );
                     continue;
                 }
@@ -955,6 +957,12 @@ internal sealed class Parser {
 
             case SyntaxKind.MatchKeyword:
                 return ParseMatchExpression();
+
+            // 'let s = if x > 3 { "big" } else { "small" }': where a value is
+            // wanted, an 'if' gives one. At the start of a statement it is
+            // the statement, which the statement parser sees first.
+            case SyntaxKind.IfKeyword:
+                return new IfExpressionGreen(ParseIfStatement());
 
             // Where a '{' opens the body — after 'if p.x ==' with its right
             // operand missing — it is the body, not a closure for an operand;
@@ -1318,7 +1326,7 @@ internal sealed class Parser {
                 or SyntaxKind.TildeToken
                 or SyntaxKind.AmpersandToken => true,
             SyntaxKind.AwaitKeyword or SyntaxKind.MoveKeyword or SyntaxKind.TryKeyword => true,
-            SyntaxKind.MatchKeyword or SyntaxKind.CapitalSelfKeyword => true,
+            SyntaxKind.MatchKeyword or SyntaxKind.IfKeyword or SyntaxKind.CapitalSelfKeyword => true,
             SyntaxKind.OpenBraceToken or SyntaxKind.DollarToken => true,
             _ => false,
         };
@@ -1552,6 +1560,10 @@ internal sealed class Parser {
             case SyntaxKind.RefKeyword:
                 return new RefTypeGreen(EatToken(), ParsePostfixType());
 
+            // '~Copyable': parsed wherever a type is, and bound only as a constraint.
+            case SyntaxKind.TildeToken:
+                return new SuppressedTypeGreen(EatToken(), ParsePostfixType());
+
             // 'region' names the region type too: 'fn f(in r: region)' (docs/02 §2.8).
             case SyntaxKind.RegionKeyword:
                 return new SimpleNameTypeGreen(EatToken(), null);
@@ -1745,6 +1757,7 @@ internal sealed class Parser {
             SyntaxKind.IdentifierToken or SyntaxKind.CapitalSelfKeyword => true,
             SyntaxKind.SomeKeyword or SyntaxKind.AnyKeyword => true,
             SyntaxKind.OpenParenToken => true,
+            SyntaxKind.TildeToken => true,
             _ => false,
         };
 
@@ -1860,6 +1873,27 @@ internal sealed class Parser {
 
     /// <summary>A brace right after an argument list is the call's last argument.</summary>
     GreenNode? TryParseTrailingClosure() => CanTakeTrailingClosure() ? ParseBraceClosure(null) : null;
+
+    /// <summary>
+    ///     <c>both { 1 } onFail: { 2 }</c>: after a trailing closure, more of
+    ///     them, each labelled for the parameter it is — on the line the one
+    ///     before ends on, as a new line starts a new statement.
+    /// </summary>
+    GreenList ParseLabeledClosures(GreenNode? trailing) {
+        if (trailing is null) {
+            return GreenList.Empty;
+        }
+
+        var closures = ImmutableArray.CreateBuilder<GreenNode>();
+        while (At(SyntaxKind.IdentifierToken) && Peek(1).Kind == SyntaxKind.ColonToken && Peek(2).Kind == SyntaxKind.OpenBraceToken
+               && !_noBrace && !AtStatementStart) {
+            var name = EatToken();
+            var colon = EatToken();
+            closures.Add(new LabeledClosureGreen(name, colon, ParseBraceClosure(null)));
+        }
+
+        return GreenList.Create(closures.ToImmutable());
+    }
 
     /// <remarks>
     ///     A brace on a new line is never a trailing closure: the line before
@@ -2208,6 +2242,17 @@ internal sealed class Parser {
 
         var op = EatToken();
         var right = CanStartPattern(Current.Kind) ? ParsePrimaryPattern() : null;
+
+        // '5...' runs to the end of the type; '5..<' would leave out a bound
+        // it never names.
+        if (right is null && op.Kind == SyntaxKind.DotDotLessToken) {
+            _diagnostics.Error(
+                ErrorCode.ERR_ExpectedPattern,
+                CurrentSpan,
+                "a half-open range needs an upper bound: write '5...' for one that runs to the end"
+            );
+        }
+
         return new RangePatternGreen(pattern, op, right);
     }
 
@@ -2218,7 +2263,14 @@ internal sealed class Parser {
 
         _nesting++;
         try {
-            return ParsePrimaryPatternCore();
+            // 'let v?' is '.Some(let v)': the pattern, matched against what
+            // an optional holds.
+            var pattern = ParsePrimaryPatternCore();
+            while (At(SyntaxKind.QuestionToken)) {
+                pattern = new OptionalPatternGreen(pattern, EatToken());
+            }
+
+            return pattern;
         } finally {
             _nesting--;
         }
@@ -2819,6 +2871,16 @@ internal sealed class Parser {
                     ? new BindingPatternGreen(null, EatToken())
                     : ParseBindingTarget();
 
+                // 'if let v? = o' is the pattern 'v?' where 'let' already
+                // unwraps: said once, rather than as everything after it.
+                if (At(SyntaxKind.QuestionToken)) {
+                    ReportUnexpected(
+                        ErrorCode.ERR_ExpectedToken,
+                        "'if let' unwraps the optional already: write 'if let v = o', or 'if case let v? = o'"
+                    );
+                    SkipCurrentToken();
+                }
+
                 GreenNode? annotation = null;
                 if (At(SyntaxKind.ColonToken)) {
                     var colon = EatToken();
@@ -3011,7 +3073,11 @@ internal sealed class Parser {
         return new ImportItemGreen(name, asKeyword, alias);
     }
 
-    GreenList ParseAttributes() {
+    /// <param name="onType">
+    ///     Attributes written on a type, '@escaping () -> Int', take no
+    ///     arguments: the parenthesis after one is the type's.
+    /// </param>
+    GreenList ParseAttributes(bool onType = false) {
         if (!At(SyntaxKind.AtToken)) {
             return GreenList.Empty;
         }
@@ -3020,7 +3086,7 @@ internal sealed class Parser {
         while (At(SyntaxKind.AtToken)) {
             var at = EatToken();
             var name = ParseTypeName();
-            var arguments = At(SyntaxKind.OpenParenToken)
+            var arguments = At(SyntaxKind.OpenParenToken) && !onType
                 ? ParseArgumentList(SyntaxKind.OpenParenToken, SyntaxKind.CloseParenToken)
                 : null;
             items.Add(new AttributeGreen(at, name, arguments));
@@ -3187,6 +3253,10 @@ internal sealed class Parser {
                     defaultType
                 );
             }
+
+            // 'comptime { ... }' among declarations: run as the program is compiled.
+            case SyntaxKind.ComptimeKeyword:
+                return new ComptimeDeclarationGreen(attributes, modifiers, EatToken(), ParseBlock());
 
             case SyntaxKind.ConstKeyword: {
                 var keyword = EatToken();
@@ -3388,7 +3458,8 @@ internal sealed class Parser {
         // the form that reads well once a parameter has an external label.
         var typeModifier = IsParameterModifier(Current.Kind) ? EatToken() : null;
 
-        var type = ParseType();
+        // 'f: @escaping () -> Int' says of the type what '@escaping f: …' does.
+        var type = At(SyntaxKind.AtToken) ? new AttributedTypeGreen(ParseAttributes(onType: true), ParseType()) : ParseType();
         var ellipsis = TryEatToken(SyntaxKind.DotDotDotToken);
 
         GreenNode? defaultValue = null;
@@ -3467,7 +3538,7 @@ internal sealed class Parser {
 
         var items = ImmutableArray.CreateBuilder<GreenNode>();
         while (true) {
-            items.Add(ParseWhereConstraint());
+            items.Add(ParseWhereItem());
             var comma = TryEatToken(SyntaxKind.CommaToken);
             if (comma is null) {
                 break;
@@ -3480,6 +3551,43 @@ internal sealed class Parser {
         }
 
         return new WhereClauseGreen(whereKeyword, GreenList.Create(items.ToImmutable()));
+    }
+
+    /// <summary>
+    ///     Parses one item of a <c>where</c> clause: <c>T: P</c>,
+    ///     <c>S.Element == T</c>, or a const-generic predicate such as
+    ///     <c>N &gt; 0</c>.
+    /// </summary>
+    /// <remarks>
+    ///     The two shapes share a first token, so a speculative parse of a type
+    ///     decides: a type followed by <c>:</c> or <c>==</c> is a constraint, and
+    ///     anything else is an expression.
+    /// </remarks>
+    GreenNode ParseWhereItem() {
+        var index = _index;
+        var tokenPosition = _tokenPosition;
+        var split = _split is null ? null : new Dictionary<int, GreenToken>(_split);
+        var skipped = _skipped.ToArray();
+        var endOfFileEaten = _endOfFileEaten;
+
+        bool isConstraint;
+        using (_diagnostics.Suppress()) {
+            try {
+                WithBracesSuppressed(() => ParsePostfixType());
+                isConstraint = Current.Kind is SyntaxKind.ColonToken or SyntaxKind.EqualsEqualsToken;
+            } finally {
+                _index = index;
+                _tokenPosition = tokenPosition;
+                _split = split;
+                _skipped.Clear();
+                _skipped.AddRange(skipped);
+                _endOfFileEaten = endOfFileEaten;
+            }
+        }
+
+        return isConstraint
+            ? ParseWhereConstraint()
+            : new WherePredicateGreen(WithBracesSuppressed(ParseExpression));
     }
 
     GreenNode ParseWhereConstraint() {

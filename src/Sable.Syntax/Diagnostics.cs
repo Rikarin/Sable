@@ -173,6 +173,33 @@ public enum ErrorCode {
     ERR_BackedPropertyNeedsInitializer = 3111,
     ERR_MissingBody = 3112,
     ERR_LazyProperty = 3113,
+    ERR_IfValueNeedsElse = 3130,
+    ERR_PropertyObservers = 3140,
+    ERR_ConvenienceMustDelegate = 3141,
+    ERR_EnumCaseValue = 3142,
+    ERR_OpenExistentialInUnion = 3150,
+    ERR_ConstGenericPredicate = 3160,
+    ERR_SelfRequirementOnExistential = 3161,
+
+    // Ownership, escape and isolation checks (S3200-S3207).
+    ERR_IntegerDoesNotFit = 3200,
+    ERR_ConstantOverflow = 3201,
+    ERR_OutNotAssigned = 3202,
+    ERR_MisplacedSuppression = 3203,
+    ERR_NoncopyableTypeArgument = 3204,
+    ERR_Escapes = 3205,
+    ERR_ActorStateFromOutside = 3206,
+    ERR_NotSendable = 3207,
+
+    // ---- Compile-time evaluation (S3220-S3222): 'const', 'const fn' and
+    // 'comptime' (SYNTAX.md §21).
+    ERR_NotConstant = 3220,
+    ERR_ConstantEvaluationFailed = 3221,
+    ERR_CompileError = 3222,
+
+    // ---- C interop (S3223-S3229): '@extern' and '@export' (SYNTAX.md §24).
+    ERR_MalformedForeign = 3223,
+    ERR_NotACType = 3224,
 
     // ---- Lints (S3300-S3399): reported by Sable.Symbols' Lints, which
     // 'sable check' runs, never by compiling. Their severity is configured.
@@ -195,6 +222,7 @@ public enum ErrorCode {
     ERR_MatchArmTypesDiffer = 6007,
     ERR_UseBeforeAssignment = 6008,
     ERR_RefutablePatternInDeclaration = 6009,
+    ERR_FallthroughOutOfPlace = 6020,
 
     // ---- Code generation (S7000-S7999) ---------------------------------
     ERR_NotLoweredYet = 7000,

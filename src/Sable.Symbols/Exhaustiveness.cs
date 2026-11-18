@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Numerics;
 
 namespace Sable.Symbols;
 
@@ -22,8 +23,11 @@ namespace Sable.Symbols;
 ///         finite set of constructors — booleans, enums, unions, optionals,
 ///         structural unions, tuples and records (one constructor), arrays (one
 ///         per length that matters, plus "longer") — can be covered without a
-///         wildcard. Literals, ranges and open type tests have infinitely many
-///         constructors and never are.
+///         wildcard. An integer is split into intervals: every literal and
+///         range a column names cuts the type's domain, and the pieces are its
+///         constructors, so <c>0..&lt;10</c> and <c>10...255</c> cover a
+///         <c>U8</c>. Other literals, ranges and open type tests have
+///         infinitely many constructors and never are.
 ///     </para>
 /// </remarks>
 internal sealed class Exhaustiveness(CoreTypes core) {
@@ -70,6 +74,7 @@ internal sealed class Exhaustiveness(CoreTypes core) {
         Record,
         TypeCase,
         Literal,
+        Interval,
         Length,
         LengthAtLeast,
         Opaque,
@@ -86,6 +91,12 @@ internal sealed class Exhaustiveness(CoreTypes core) {
 
         /// <summary>For an array length constructor, the length.</summary>
         public int Length { get; init; }
+
+        /// <summary>For an integer interval, its least and greatest values.</summary>
+        public BigInteger Low { get; init; }
+
+        /// <inheritdoc cref="Low" />
+        public BigInteger High { get; init; }
 
         /// <summary>For a record, the field names in argument order.</summary>
         public ImmutableArray<string> FieldNames { get; init; } = [];
@@ -128,7 +139,26 @@ internal sealed class Exhaustiveness(CoreTypes core) {
             case BoundLiteralPattern { Value: null } when pattern.InputType is OptionalTypeSymbol:
                 return Leaf(NoneCtor());
 
-            case BoundLiteralPattern literal when pattern.InputType is not StructuralUnionTypeSymbol: {
+            // An integer literal is the interval of one value; a range, of all
+            // it spans. Each splits the type's domain where it begins and ends.
+            case BoundLiteralPattern { Value: long or int or ulong } literal when Domain(pattern.InputType) is (var min, var max): {
+                var value = Integer(literal);
+                return value < min || value > max ? Opaque() : Leaf(IntervalCtor(value, value, min, max));
+            }
+
+            case BoundRangePattern range when Domain(pattern.InputType) is (var min, var max)
+                                              && range.Lower is null or BoundLiteralPattern { Value: long or int or ulong }
+                                              && range.Upper is null or BoundLiteralPattern { Value: long or int or ulong }: {
+                var low = range.Lower is BoundLiteralPattern lower ? Integer(lower) : min;
+                var high = range.Upper is BoundLiteralPattern upper ? Integer(upper) - (range.IsHalfOpen ? 1 : 0) : max;
+                low = BigInteger.Max(low, min);
+                high = BigInteger.Min(high, max);
+
+                // An empty range matches nothing, so it covers nothing either.
+                return low > high ? Opaque() : Leaf(IntervalCtor(low, high, min, max));
+            }
+
+            case BoundLiteralPattern literal when StructuralUnionTypeSymbol.Of(pattern.InputType) is null: {
                 var text = $"{(literal.IsNegative ? "-" : "")}{literal.Value}";
                 var key = $"lit:{literal.Value?.GetType().Name}:{text}";
                 return Leaf(new Ctor(CtorKind.Literal, key, Quote(literal.Value, text), []));
@@ -136,6 +166,9 @@ internal sealed class Exhaustiveness(CoreTypes core) {
 
             case BoundEnumCasePattern enumCase:
                 return Leaf(EnumCtor(enumCase.EnumCase));
+
+            case BoundSomePattern some when some.InputType is OptionalTypeSymbol optional:
+                return new CtorPat(SomeCtor(optional), [Lower(some.Payload)]);
 
             case BoundUnionCasePattern unionCase: {
                 var ctor = UnionCtor(unionCase.UnionCase, pattern.InputType);
@@ -175,7 +208,7 @@ internal sealed class Exhaustiveness(CoreTypes core) {
                     return Wild.Instance;
                 }
 
-                if (pattern.InputType is StructuralUnionTypeSymbol union
+                if (StructuralUnionTypeSymbol.Of(pattern.InputType) is { } union
                     && union.Cases.Any(c => c.Equals(test.TestedType))) {
                     return Leaf(TypeCaseCtor(test.TestedType));
                 }
@@ -191,6 +224,33 @@ internal sealed class Exhaustiveness(CoreTypes core) {
     }
 
     static CtorPat Leaf(Ctor ctor) => new(ctor, []);
+
+    static BigInteger Integer(BoundLiteralPattern literal) {
+        var value = literal.Value switch {
+            ulong u => (BigInteger)u,
+            long l => l,
+            int i => i,
+            _ => BigInteger.Zero,
+        };
+
+        return literal.IsNegative ? -value : value;
+    }
+
+    /// <summary>The least and greatest values of an integer type, or null for any other type.</summary>
+    (BigInteger Min, BigInteger Max)? Domain(TypeSymbol type) {
+        if (!core.IsInteger(type)) {
+            return null;
+        }
+
+        var name = ((NamedTypeSymbol)type).Name;
+
+        // Int and UInt are the platform word, 64 bits on every target.
+        var signed = name[0] == 'I';
+        var bits = name is "Int" or "UInt" ? 64 : int.Parse(name.AsSpan(1), System.Globalization.CultureInfo.InvariantCulture);
+        return signed
+            ? (-(BigInteger.One << (bits - 1)), (BigInteger.One << (bits - 1)) - 1)
+            : (BigInteger.Zero, (BigInteger.One << bits) - 1);
+    }
 
     CtorPat Opaque() => Leaf(new Ctor(CtorKind.Opaque, $"opaque:{_opaque++}", "_", []));
 
@@ -229,6 +289,44 @@ internal sealed class Exhaustiveness(CoreTypes core) {
             unionCase.Name,
             [..unionCase.Payload.Select(p => substitution.Apply(p.Type))]
         );
+    }
+
+    /// <summary>The integers from <paramref name="low" /> to <paramref name="high" />, both included, of a type whose values run from <paramref name="min" /> to <paramref name="max" />.</summary>
+    static Ctor IntervalCtor(BigInteger low, BigInteger high, BigInteger min, BigInteger max) {
+        var name = low == high ? $"{low}"
+            : low == min ? $"...{high}"
+            : high == max ? $"{low}..."
+            : $"{low}...{high}";
+        return new(CtorKind.Interval, $"int:{low}:{high}", name, []) { Low = low, High = high };
+    }
+
+    /// <summary>
+    ///     Cuts <paramref name="low" />...<paramref name="high" /> wherever an
+    ///     interval in the column begins or ends, so each piece is inside every
+    ///     interval it touches.
+    /// </summary>
+    static List<Ctor> Split(BigInteger low, BigInteger high, IEnumerable<Pat> column, BigInteger min, BigInteger max) {
+        var cuts = new SortedSet<BigInteger> { low, high + 1 };
+        foreach (var pattern in column) {
+            if (pattern is CtorPat { Ctor: { Kind: CtorKind.Interval } interval }) {
+                if (interval.Low > low && interval.Low <= high) {
+                    cuts.Add(interval.Low);
+                }
+
+                if (interval.High >= low && interval.High < high) {
+                    cuts.Add(interval.High + 1);
+                }
+            }
+        }
+
+        var pieces = new List<Ctor>();
+        var start = low;
+        foreach (var cut in cuts.Skip(1)) {
+            pieces.Add(IntervalCtor(start, cut - 1, min, max));
+            start = cut;
+        }
+
+        return pieces;
     }
 
     static Ctor TupleCtor(TupleTypeSymbol tuple) => new(CtorKind.Tuple, "tuple", "", tuple.ElementTypes);
@@ -271,7 +369,7 @@ internal sealed class Exhaustiveness(CoreTypes core) {
             case TupleTypeSymbol tuple:
                 return [TupleCtor(tuple)];
 
-            case StructuralUnionTypeSymbol union:
+            case StructuralUnionTypeSymbol or RecursiveUnionTypeSymbol when StructuralUnionTypeSymbol.Of(type) is { } union:
                 return [..union.Cases.Select(TypeCaseCtor)];
 
             case NamedTypeSymbol { TypeKind: TypeKind.Union } named:
@@ -279,8 +377,16 @@ internal sealed class Exhaustiveness(CoreTypes core) {
                     ? [..named.Members.OfType<UnionCaseSymbol>().Select(c => UnionCtor(c, named)), new(CtorKind.Later, "later", LaterCase, [])]
                     : [..named.Members.OfType<UnionCaseSymbol>().Select(c => UnionCtor(c, named))];
 
-            case NamedTypeSymbol { TypeKind: TypeKind.Enum } named:
+            // A '@flags' enum's values are any set of its cases, which its
+            // cases alone do not cover: it splits no more than an integer does.
+            case NamedTypeSymbol { TypeKind: TypeKind.Enum, IsFlags: false } named:
                 return [..named.Members.OfType<EnumCaseSymbol>().Select(EnumCtor)];
+
+            // An integer named by literals and ranges: its whole domain, cut
+            // where each of them begins and ends.
+            case NamedTypeSymbol when Domain(type) is (var min, var max)
+                                      && column.Any(static p => p is CtorPat { Ctor.Kind: CtorKind.Interval }):
+                return Split(min, max, column, min, max);
 
             // A record has one constructor, so a pattern that names its fields
             // can cover it; without one there is nothing to split on.
@@ -388,6 +494,18 @@ internal sealed class Exhaustiveness(CoreTypes core) {
 
                 return null;
 
+            // An interval the rows cut is the or of its pieces: '3...8' after
+            // '0...5' and '6...10' is useful only if one of the pieces is.
+            case CtorPat { Ctor: { Kind: CtorKind.Interval } interval } when Domain(types[0]) is (var min, var max): {
+                foreach (var piece in Split(interval.Low, interval.High, ExpandColumn(rows), min, max)) {
+                    if (UsefulThrough(rows, piece, rest, types) is { } witness) {
+                        return witness;
+                    }
+                }
+
+                return null;
+            }
+
             case CtorPat constructed:
                 return UsefulThrough(rows, constructed.Ctor, [..constructed.Args, ..rest], types);
 
@@ -475,7 +593,17 @@ internal sealed class Exhaustiveness(CoreTypes core) {
         return [head, ..witness.Skip(ctor.Arity)];
     }
 
-    static bool Covers(Pat pattern, Ctor ctor) => pattern is CtorPat constructed && constructed.Ctor.Equals(ctor);
+    static bool Covers(Pat pattern, Ctor ctor) => pattern is CtorPat constructed && Includes(constructed.Ctor, ctor);
+
+    /// <summary>
+    ///     Whether every value <paramref name="ctor" /> builds is one
+    ///     <paramref name="pattern" /> matches: the same constructor, or for
+    ///     intervals, one inside the other.
+    /// </summary>
+    static bool Includes(Ctor pattern, Ctor ctor) =>
+        pattern.Kind == CtorKind.Interval && ctor.Kind == CtorKind.Interval
+            ? pattern.Low <= ctor.Low && ctor.High <= pattern.High
+            : pattern.Equals(ctor);
 
     /// <summary>Rows with an or-pattern at their head, split into one row per alternative.</summary>
     static IEnumerable<IReadOnlyList<Pat>> ExpandRow(IReadOnlyList<Pat> row) {
@@ -500,7 +628,7 @@ internal sealed class Exhaustiveness(CoreTypes core) {
             case Wild:
                 return [..Enumerable.Repeat<Pat>(Wild.Instance, ctor.Arity)];
 
-            case CtorPat constructed when constructed.Ctor.Equals(ctor):
+            case CtorPat constructed when Includes(constructed.Ctor, ctor):
                 return constructed.Args;
 
             case SlicePat slice when ctor.Kind is CtorKind.Length or CtorKind.LengthAtLeast

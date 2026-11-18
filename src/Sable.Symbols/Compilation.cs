@@ -624,7 +624,8 @@ public sealed partial class Compilation {
                 && attributes.Any(static a => a.Name.ToString().Trim() == "noncopy"),
             IsInlineLayout = typeKind is TypeKind.Struct
                 && attributes.Any(static a => a.Name.ToString().Trim() == "inline_layout"),
-            IsReflectable = attributes.Any(static a => a.Name.ToString().Trim() == "reflectable")
+            IsReflectable = attributes.Any(static a => a.Name.ToString().Trim() == "reflectable"),
+            IsFlags = typeKind is TypeKind.Enum && attributes.Any(static a => a.Name.ToString().Trim() == "flags"),
         };
 
         // A protocol has no values to look at, and so nothing to describe.
@@ -676,6 +677,10 @@ public sealed partial class Compilation {
             SynthesizeMemberwiseInitializer(type);
         }
 
+        if (type.IsFlags) {
+            DeclareFlagsMembers(type);
+        }
+
         // '@derive(…)': the members are made once every type is declared.
         foreach (var attribute in attributes) {
             if (attribute.Name.ToString().Trim() == "derive") {
@@ -684,14 +689,10 @@ public sealed partial class Compilation {
         }
 
         // A class or actor with no initialiser of its own, whose fields all
-        // start with a value, is made with 'init()'.
-        if (typeKind is TypeKind.Class or TypeKind.Actor && !type.GetMembers("init").Any()
-            && type.Members.OfType<FieldSymbol>().Where(static f => f is { IsStatic: false, IsComputed: false }).All(static f => f.HasInitializer)) {
-            var implicitInit = new FunctionSymbol("init", type, null, type.DeclaredAccessibility, FunctionKind.Initializer) {
-                ReturnTypeResolver = () => type,
-            };
-            implicitInit.Parameters = [];
-            type.AddMember(implicitInit);
+        // start with a value, is made with 'init()' — or, a subclass, with
+        // its superclass's initialisers (Compilation.Initializers.cs).
+        if (typeKind is TypeKind.Class or TypeKind.Actor) {
+            DeclareImplicitInitializers(type, declaration);
         }
     }
 
@@ -720,7 +721,10 @@ public sealed partial class Compilation {
 
         function.Parameters = [
             ..fields.Select((field, i) => {
-                    var parameter = new ParameterSymbol(field.Name, field.Name, function, null, i) {
+                    // An observed property's storage is passed under the
+                    // property's name: 'Tracked(count: 1)'.
+                    var label = field.BackedProperty is { } property && _observed.ContainsKey(property) ? property.Name : field.Name;
+                    var parameter = new ParameterSymbol(field.Name, label, function, null, i) {
                         HasDefaultValue = field.HasInitializer
                     };
                     parameter.TypeResolver = () => field.Type;
@@ -754,6 +758,7 @@ public sealed partial class Compilation {
             IsMutating = declaration.Modifiers.Any(SyntaxKind.MutatingKeyword),
             IsOverride = declaration.Modifiers.Any(SyntaxKind.OverrideKeyword),
             IsOpen = declaration.Modifiers.Any(SyntaxKind.OpenKeyword),
+            IsConst = declaration.Modifiers.Any(SyntaxKind.ConstKeyword),
             IsFinal = declaration.Modifiers.Any(SyntaxKind.FinalKeyword),
             IsAbstract = declaration.Body is null && declaration.ExpressionBody is null,
             Builtin = BuiltinOf(declaration)
@@ -762,6 +767,12 @@ public sealed partial class Compilation {
         // A builtin's body is the builtin: the function is as concrete as one
         // written in Sable, and witnesses a requirement as one would.
         if (function.Builtin is not null) {
+            function.IsAbstract = false;
+        }
+
+        // C's, or seen by C (Compilation.Interop.cs).
+        DeclareForeign(function, declaration, container);
+        if (function.ForeignName is not null) {
             function.IsAbstract = false;
         }
 
@@ -947,7 +958,8 @@ public sealed partial class Compilation {
             FunctionKind.Ordinary
         ) {
             IsAsync = !declaration.AsyncKeyword.IsNone
-                || declaration.Modifiers.Any(SyntaxKind.AsyncKeyword)
+                || declaration.Modifiers.Any(SyntaxKind.AsyncKeyword),
+            IsConst = declaration.Modifiers.Any(SyntaxKind.ConstKeyword)
         };
 
         if (declaration.TypeParameters is { } typeParameters) {
@@ -978,7 +990,7 @@ public sealed partial class Compilation {
         ];
 
         function.ReturnTypeResolver = () => declaration.ReturnClause is { } clause
-            ? TypeBinder.BindType(clause.Type, function, scope)
+            ? TypeBinder.BindReturnType(clause.Type, function, scope)
             : Core.Void;
 
         function.IsRethrows =
@@ -1012,7 +1024,9 @@ public sealed partial class Compilation {
         var parameter = new ParameterSymbol(syntax.Identifier.Text, label, container, syntax, ordinal) {
             HasDefaultValue = syntax.DefaultValue is not null,
             IsVariadic = !syntax.EllipsisToken.IsNone,
-            Modifier = ModifierOf(syntax)
+            Modifier = ModifierOf(syntax),
+            IsEscaping = syntax.Attributes.Concat((syntax.Type as AttributedTypeSyntax)?.Attributes ?? [])
+                .Any(static a => a.Name.ToString().Trim() == "escaping"),
         };
 
         TypeBinder.BindParameterType(parameter, syntax);
@@ -1124,6 +1138,12 @@ public sealed partial class Compilation {
             }
         }
 
+        // 'var tracked: Int = 0 { willSet { … } didSet { … } }': stored,
+        // with stores that run its observers.
+        if (declaration.Accessors is { } observed && observed.Accessors.Any(static a => IsObserver(a))) {
+            DeclareObserved(declaration, field, container, binding.Identifier);
+        }
+
         // Each accessor has a body, unless the property is a requirement or
         // something supplies one: a builtin, the compiler, or 'field'.
         foreach (var accessor in declaration.Accessors?.Accessors ?? []) {
@@ -1215,17 +1235,84 @@ public sealed partial class Compilation {
         AddTo(container, backing);
     }
 
-    /// <summary>A lazy property's accessors, which the compiler writes, and the file it is declared in.</summary>
+    /// <summary>
+    ///     <c>var tracked: Int = 0 { willSet { … } didSet { … } }</c>: a stored
+    ///     property, whose value is kept in storage of its own, as one kept in
+    ///     <c>field</c> is, and whose getter and setter the compiler writes —
+    ///     the setter calls <c>willSet</c> with the new value, stores it, then
+    ///     calls <c>didSet</c> with the old one. The bodies are bound with the
+    ///     rest of the file (<see cref="SemanticModel" />). Within the
+    ///     observers and the type's own initialisers, the property names its
+    ///     storage, so neither runs the observers (<see cref="Binder" />).
+    /// </summary>
+    void DeclareObserved(FieldDeclarationSyntax declaration, FieldSymbol field, Symbol container, SyntaxToken name) {
+        string? wrong = null;
+        if (declaration.Accessors!.Accessors.Any(static a => !IsObserver(a))) {
+            wrong = "is stored, with observers, so it cannot also have a 'get' or 'set'";
+        } else if (!field.IsMutable) {
+            wrong = "has observers, which run when it is written, so it is a 'var'";
+        } else if (field.IsLazy) {
+            wrong = "is lazy, and a lazy property cannot have observers";
+        } else if (container is not NamedTypeSymbol { TypeKind: TypeKind.Struct or TypeKind.Class or TypeKind.Actor }) {
+            wrong = container is ExtensionSymbol
+                ? "has observers, which need storage, and an extension cannot add stored properties"
+                : "has observers, which are for a property of a struct, class or actor";
+        }
+
+        if (wrong is not null) {
+            ReportDeclaration(ErrorCode.ERR_PropertyObservers, name.Span, $"'{name.Text}' {wrong}");
+            return;
+        }
+
+        var backing = new FieldSymbol(BackingFieldName(field.Name), container, declaration, Accessibility.Private, true) {
+            IsStatic = field.IsStatic,
+            HasInitializer = declaration.Declarator.Initializer is not null,
+            BackedProperty = field,
+            TypeResolver = () => field.Type,
+        };
+
+        var getter = new FunctionSymbol("get", field, declaration, field.DeclaredAccessibility, FunctionKind.Accessor) {
+            IsStatic = field.IsStatic,
+        };
+        getter.ReturnTypeResolver = () => field.Type;
+
+        var setter = new FunctionSymbol("set", field, declaration, field.SetterAccessibility ?? field.DeclaredAccessibility, FunctionKind.Accessor) {
+            IsMutating = true,
+            IsStatic = field.IsStatic,
+        };
+        var newValue = new ParameterSymbol("newValue", null, setter, declaration, 0) { TypeResolver = () => field.Type };
+        setter.Parameters = [newValue];
+        setter.ReturnTypeResolver = () => Core.Void;
+
+        field.HasSetter = true;
+        field.IsAbstract = false;
+        field.BackingField = backing;
+        _observed[field] = new(getter, setter, CurrentScope!.Tree);
+        AddTo(container, backing);
+    }
+
+    /// <summary><c>willSet</c> or <c>didSet</c>.</summary>
+    static bool IsObserver(AccessorSyntax accessor) =>
+        accessor.Keyword.Kind is SyntaxKind.WillSetKeyword or SyntaxKind.DidSetKeyword;
+
+    /// <summary>
+    ///     A property's accessors, which the compiler writes — a lazy
+    ///     property's, or one with observers — and the file it is declared in.
+    /// </summary>
     public sealed record LazyAccessors(FunctionSymbol Getter, FunctionSymbol Setter, SyntaxTree Tree);
 
     readonly Dictionary<FieldSymbol, LazyAccessors> _lazy = [];
+    readonly Dictionary<FieldSymbol, LazyAccessors> _observed = [];
 
     /// <summary>Every lazy property, with its accessors.</summary>
     public IReadOnlyDictionary<FieldSymbol, LazyAccessors> LazyProperties => _lazy;
 
-    /// <summary>The body the compiler wrote for a lazy property's accessor, or null for any other function.</summary>
+    /// <summary>Every property with <c>willSet</c> or <c>didSet</c>, with the getter and setter written for it.</summary>
+    public IReadOnlyDictionary<FieldSymbol, LazyAccessors> ObservedProperties => _observed;
+
+    /// <summary>The body the compiler wrote for a lazy or observed property's accessor, or null for any other function.</summary>
     public BoundBlock? GetLazyBody(FunctionSymbol function) =>
-        function.ContainingSymbol is FieldSymbol field && _lazy.TryGetValue(field, out var accessors)
+        function.ContainingSymbol is FieldSymbol field && (_lazy.TryGetValue(field, out var accessors) || _observed.TryGetValue(field, out accessors))
             ? GetSemanticModel(accessors.Tree).GetLazyBody(function)
             : null;
 
@@ -1332,8 +1419,10 @@ public sealed partial class Compilation {
             return;
         }
 
+        var value = EnumCaseValue(declaration, enumType);
+        CheckDistinctValue(declaration, enumType, value);
         enumType.AddMember(
-            new EnumCaseSymbol(name, enumType, declaration) { HasExplicitValue = declaration.Value is not null }
+            new EnumCaseSymbol(name, enumType, declaration) { HasExplicitValue = declaration.Value is not null, RawValue = value }
         );
     }
 
@@ -1352,7 +1441,16 @@ public sealed partial class Compilation {
             )
         ];
 
-        function.ReturnTypeResolver = () => type;
+        // A protocol's 'init(seed: Int)' is a requirement, met by the
+        // conformer's own initialiser, and it makes a Self: through a T it
+        // makes a T.
+        if (type.TypeKind == TypeKind.Protocol) {
+            function.IsAbstract = declaration.Body is null;
+            function.ReturnTypeResolver = () => type.SelfTypeParameter ?? (TypeSymbol)type;
+        } else {
+            function.ReturnTypeResolver = () => type;
+        }
+
         RecordDeclaration(declaration, function);
         type.AddMember(function);
     }
@@ -1456,7 +1554,7 @@ public sealed partial class Compilation {
         // file's deferred work runs; the deferral only makes sure they do.
         if (declaration.BaseTypes is { } constraints) {
             parameter.ConstraintsResolver = () => [
-                ..constraints.Types.Select(syntax => TypeBinder.BindType(syntax, protocol, scope))
+                ..constraints.Types.SelectMany(syntax => CompositionTypeSymbol.PartsOf(TypeBinder.BindType(syntax, protocol, scope)))
             ];
         }
 
@@ -1518,16 +1616,11 @@ public sealed partial class Compilation {
             var extension = new ExtensionSymbol(extended, declaration) { DeclaringModule = scope?.Module };
             extension.TypeParameterAliases = AliasTypeParameters(declaration, extension, extended);
             RecordDeclaration(declaration, extension);
+            TypeBinder.BindExtensionWhereClause(extension, declaration, scope);
 
-            // 'where Bound == Int': the members are the type's only where its
-            // arguments meet it. Bound when first asked for, and in any case.
-            if (declaration.WhereClause is { } where) {
-                var written = scope;
-                extension.PendingWhereClause = () => TypeBinder.BindExtensionWhereClause(where, extension, written);
-                TypeBinder.Defer(() => _ = extension.SameTypeRequirements);
-            }
-
-            // ': P' on an extension is retroactive conformance.
+            // ': P' on an extension is retroactive conformance. With a 'where'
+            // clause it is conditional: 'extension Box: P where T: P' makes a
+            // Box<T> a P only where T is one, which the extension remembers.
             if (declaration.BaseTypes is { } baseTypes) {
                 var written = scope;
                 TypeBinder.Defer(() => {
@@ -1535,9 +1628,12 @@ public sealed partial class Compilation {
                             var bound = TypeBinder.BindType(baseType, extension, written);
                             CheckCoherence(extended, bound, written, baseType.Span);
                             extended.BaseTypes = extended.BaseTypes.Add(bound);
+                            extension.Conformances = extension.Conformances.Add(bound);
                         }
                     }
                 );
+
+                extended.Extensions = extended.Extensions.Add(extension);
             }
 
             foreach (var member in declaration.Members) {

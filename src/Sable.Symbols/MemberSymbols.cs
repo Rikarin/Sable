@@ -119,10 +119,37 @@ public sealed class FunctionSymbol : Symbol {
     public bool IsAsync { get; internal set; }
     public bool IsMutating { get; internal set; }
     public bool IsOverride { get; internal set; }
+
+    /// <summary>
+    ///     For an <c>override</c>, the member it finally overrides, in the
+    ///     class at the top of the chain; null for any other function.
+    /// </summary>
+    public FunctionSymbol? RootOverridden => ConformanceChecker.RootOverridden(this);
     public bool IsOpen { get; internal set; }
 
     /// <summary><c>final</c>: no subclass may override it (spec/SYNTAX.md §7).</summary>
     public bool IsFinal { get; internal set; }
+
+    /// <summary>
+    ///     Declared <c>const fn</c>: it may run in the compiler, so a
+    ///     <c>const</c> initialiser or a <c>comptime</c> block can call it. Its
+    ///     body is held to what can (SYNTAX.md §21): no I/O, no <c>unsafe</c>,
+    ///     and calls only to what is itself const.
+    /// </summary>
+    public bool IsConst { get; internal set; }
+
+    /// <summary>
+    ///     <c>@extern("c", "name")</c>: the C function this declares, which a
+    ///     call calls by that name, with C's calling convention. Null for a
+    ///     function written in Sable.
+    /// </summary>
+    public string? ForeignName { get; internal set; }
+
+    /// <summary>
+    ///     <c>@export("c", "name")</c>: the name C calls this function by,
+    ///     with C's calling convention. Null when C does not see it.
+    /// </summary>
+    public string? ExportName { get; internal set; }
 
     /// <summary>
     ///     Declared <c>rethrows</c>: it throws exactly when one of the closures
@@ -194,6 +221,13 @@ public sealed class FunctionSymbol : Symbol {
 
     public TypeSymbol ReturnType => _returnType ??= ReturnTypeResolver?.Invoke() ?? ErrorTypeSymbol.Instance;
 
+    /// <summary>
+    ///     The concrete type a <c>some P</c> result hides: what the body's
+    ///     returns give, recorded as they are bound. Null until then, and for
+    ///     a function whose result is not opaque.
+    /// </summary>
+    public TypeSymbol? HiddenResultType { get; internal set; }
+
     TypeSymbol? _thrownType;
     internal Func<TypeSymbol?>? ThrownTypeResolver { get; set; }
     bool _thrownResolved;
@@ -260,6 +294,14 @@ public sealed class ParameterSymbol(
     public bool HasDefaultValue { get; internal set; }
     public bool IsVariadic { get; internal set; }
     public ParameterModifier Modifier { get; internal set; } = ParameterModifier.None;
+
+    /// <summary>
+    ///     <c>@escaping</c>: a closure passed here may outlive the call — be
+    ///     stored, returned, or captured by a closure that does. Without it, a
+    ///     closure parameter may only be called, or passed on to another that
+    ///     does not escape (SYNTAX.md §17).
+    /// </summary>
+    public bool IsEscaping { get; internal set; }
 }
 
 public enum ParameterModifier {
@@ -412,6 +454,9 @@ public sealed class EnumCaseSymbol(
 
     /// <summary>True when the case declared an explicit value.</summary>
     public bool HasExplicitValue { get; internal set; }
+
+    /// <summary>The integer the case is: the one it writes, or the one it follows on to.</summary>
+    public long RawValue { get; internal set; }
 }
 
 /// <summary>A local binding introduced by a statement.</summary>
@@ -431,4 +476,10 @@ public sealed class LocalSymbol(
     public bool IsAsyncLet { get; internal set; }
 
     public bool IsMutable { get; } = isMutable;
+
+    /// <summary>
+    ///     The concrete type a <c>let s: some P = …</c> hides: its
+    ///     initialiser's. Null for a local whose type is not opaque.
+    /// </summary>
+    public TypeSymbol? HiddenType { get; internal set; }
 }

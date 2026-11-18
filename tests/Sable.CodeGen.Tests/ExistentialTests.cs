@@ -86,6 +86,36 @@ public sealed class ExistentialTests {
             """
         );
 
+    [Fact]
+    public void AValueBecomesAnExistentialThroughAsAndInsideAnOptional() =>
+        Prints(
+            "4\n9\nnone\n",
+            """
+            protocol Shape {
+                fn area() -> Int
+            }
+
+            struct Square: Shape {
+                var side: Int
+                fn area() -> Int { return side * side }
+            }
+
+            fn areaOf(_ shape: (any Shape)?) -> String {
+                if let s = shape {
+                    return "\(s.area())"
+                }
+                return "none"
+            }
+            """,
+            """
+                let shape = Square { side: 2 } as any Shape
+                print(shape.area())
+                let maybe: (any Shape)? = Square { side: 3 }
+                print(areaOf(maybe))
+                print(areaOf(none))
+            """
+        );
+
     /// <summary>
     ///     docs/03 §3.2: a protocol extension's member that is not a
     ///     requirement is chosen by the static type. Through 'any P' and

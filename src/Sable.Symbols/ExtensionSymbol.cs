@@ -43,41 +43,45 @@ public sealed class ExtensionSymbol(
     public ImmutableArray<AliasSymbol> TypeParameterAliases { get; internal set; } = [];
 
     /// <summary>
-    ///     What <c>extension Range where Bound == Int</c> asks of the extended
-    ///     type's arguments: in force in its members' bodies, and met by a
-    ///     type before those members are found on it.
+    ///     The <c>where T == Int</c> requirements of a constrained extension
+    ///     (SYNTAX.md §11): in force inside its members, and met wherever one
+    ///     of them is used.
     /// </summary>
-    public ImmutableArray<SameTypeRequirement> SameTypeRequirements {
-        get {
-            BindWhereClause();
-            return _sameType;
+    public ImmutableArray<SameTypeRequirement> SameTypeRequirements { get; internal set; } = [];
+
+    /// <summary>
+    ///     Its <c>where T: P</c> requirements. Unlike a type's own, these do not
+    ///     go in T's constraint list: they hold only inside this extension.
+    /// </summary>
+    public ImmutableArray<ConformanceRequirement> ConformanceRequirements { get; internal set; } = [];
+
+    /// <summary>The protocols this extension conforms the type to, if any (<c>extension Box: P where …</c>).</summary>
+    public ImmutableArray<TypeSymbol> Conformances { get; internal set; } = [];
+
+    /// <summary>True when the extension has requirements, so its members and conformances are conditional.</summary>
+    public bool IsConstrained => !SameTypeRequirements.IsEmpty || !ConformanceRequirements.IsEmpty;
+
+    /// <summary>
+    ///     The first requirement the extended type, read through
+    ///     <paramref name="substitution" />, does not meet, said as the
+    ///     extension says it; null when it meets them all.
+    /// </summary>
+    internal string? Unmet(TypeSubstitution substitution, TypeEquivalence? context) {
+        context ??= TypeEquivalence.Empty;
+
+        foreach (var (left, right) in SameTypeRequirements) {
+            if (!context.AreSame(substitution.Apply(left), substitution.Apply(right))) {
+                return $"'{left.ToDisplayString()} == {right.ToDisplayString()}'";
+            }
         }
-        internal set => _sameType = value;
-    }
 
-    /// <inheritdoc cref="SameTypeRequirements" />
-    public ImmutableArray<ConformanceRequirement> ConformanceRequirements {
-        get {
-            BindWhereClause();
-            return _conformances;
+        foreach (var (subject, constraint) in ConformanceRequirements) {
+            if (!Conversions.Satisfies(substitution.Apply(subject), substitution.Apply(constraint), context)) {
+                return $"'{subject.ToDisplayString()}: {constraint.ToDisplayString()}'";
+            }
         }
-        internal set => _conformances = value;
-    }
 
-    /// <summary>True when the extension's members are there only for some of the type's arguments.</summary>
-    public bool IsConditional => !SameTypeRequirements.IsEmpty || !ConformanceRequirements.IsEmpty;
-
-    ImmutableArray<SameTypeRequirement> _sameType = [];
-    ImmutableArray<ConformanceRequirement> _conformances = [];
-
-    /// <summary>Binds the <c>where</c> clause, the first time either list is asked for; null once it has.</summary>
-    internal Action? PendingWhereClause { get; set; }
-
-    void BindWhereClause() {
-        if (PendingWhereClause is { } bind) {
-            PendingWhereClause = null;
-            bind();
-        }
+        return null;
     }
 
     public override string QualifiedName => ExtendedType.QualifiedName;

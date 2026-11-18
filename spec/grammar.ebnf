@@ -211,7 +211,8 @@ WhereItem         = Type ":" TypeList            (* conformance / inheritance *)
                   | Type "==" Type               (* same-type constraint      *)
                   | Expression ;                 (* const generic predicate   *)
 
-TypeList          = Type { "&" Type } ;          (* composition in constraints *)
+TypeList          = ConstraintType { "&" ConstraintType } ;   (* composition in constraints *)
+ConstraintType    = [ "~" ] Type ;               (* "~Copyable" lifts the implicit constraint *)
 
 
 (* -------------------------------------------------------------------------- *)
@@ -246,6 +247,7 @@ PrimaryType       = QualifiedName [ GenericArgs ]
                   | "some" Type
                   | "any" Type
                   | "ref" Type
+                  | "~" Type                (* "~Copyable", as a constraint only *)
                   | TupleType
                   | FunctionType
                   | "(" Type ")"
@@ -363,7 +365,11 @@ CompileCondition  = Expression ;   (* restricted: identifiers, os(), arch(),
 
 Pattern           = OrPattern ;
 
-OrPattern         = PrimaryPattern { "|" PrimaryPattern } ;
+OrPattern         = OptionalPattern { "|" OptionalPattern } ;
+
+(* 'let v?' is '.Some(let v)': the pattern, matched against what an
+   optional holds. *)
+OptionalPattern   = PrimaryPattern { "?" } ;
 
 PrimaryPattern    = WildcardPattern
                   | BindingPattern

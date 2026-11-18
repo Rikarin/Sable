@@ -247,6 +247,7 @@ public static class SilVerifier {
             case FunctionRefInst reference when module is not null: {
                 // One unit of several may name what another unit defines.
                 var calleeType = module.Find(reference.Function)?.Type
+                    ?? (module.Foreign.TryGetValue(reference.Function, out var foreign) ? foreign.Type : null)
                     ?? (module.Unit?.External.TryGetValue(reference.Function, out var external) == true ? external : null);
                 if (calleeType is null) {
                     return $"function_ref names @{reference.Function}, which the module does not define";

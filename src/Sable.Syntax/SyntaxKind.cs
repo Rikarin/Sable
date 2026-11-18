@@ -239,6 +239,8 @@ public enum SyntaxKind : ushort {
     UnionType = 1020,
     SelfType = 1021,
     ParenthesizedType = 1022,
+    SuppressedType = 1023,
+    AttributedType = 1024,
 
     // ---- Expression nodes (1100-1199) -------------------------------------
     LiteralExpression = 1100,
@@ -286,6 +288,8 @@ public enum SyntaxKind : ushort {
     InterpolatedText = 1142,
     Interpolation = 1143,
     TypeExpression = 1144,
+    LabeledClosure = 1160,
+    IfExpression = 1161,
 
     // ---- Pattern nodes (1200-1299) ----------------------------------------
     WildcardPattern = 1200,
@@ -304,6 +308,7 @@ public enum SyntaxKind : ushort {
     BindingTypeTestPattern = 1213,
     OrPattern = 1214,
     ParenthesizedPattern = 1215,
+    OptionalPattern = 1216,
 
     // ---- Statement nodes (1300-1399) --------------------------------------
     Block = 1300,
@@ -377,5 +382,7 @@ public enum SyntaxKind : ushort {
     UnionCasePayloadList = 1434,
     UnionCaseField = 1435,
     EnumCaseDeclaration = 1436,
-    IncompleteDeclaration = 1437
+    IncompleteDeclaration = 1437,
+    ComptimeDeclaration = 1438,
+    WherePredicate = 1439
 }

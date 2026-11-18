@@ -97,6 +97,14 @@ public sealed class BoundFieldAccess(
     public FieldSymbol Field { get; } = field;
 
     /// <summary>
+    ///     '?.' to a field that is optional itself: the chain's result is the
+    ///     field's value, not that value wrapped again — 'user?.address' of
+    ///     an 'Address?' field is an 'Address?', as 'Address??' would be
+    ///     another '?.' away from its members.
+    /// </summary>
+    public bool FlattensChain { get; init; }
+
+    /// <summary>
     ///     Assignable when the field is mutable, the member has a setter if it is
     ///     computed, and the value it belongs to can be written through.
     /// </summary>
@@ -220,8 +228,26 @@ public sealed class BoundBinaryOperator(
     /// <summary>The <c>operator</c> member, when the operator was overloaded.</summary>
     public FunctionSymbol? Method { get; } = method;
 
+    /// <summary>
+    ///     <c>==</c> or <c>!=</c> that compares its operands part by part:
+    ///     two tuples element by element, two optionals by what they hold.
+    /// </summary>
+    public StructuralComparison? Structural { get; init; }
+
     public override IEnumerable<BoundNode> Children => Nodes(Left, Right);
 }
+
+/// <summary>
+///     How two values compare part by part: <see cref="Equal" /> is the
+///     comparison written over two stand-ins, which lowering gives the parts
+///     — the tuples themselves, or the values two optionals hold.
+/// </summary>
+/// <remarks>
+///     The comparison is bound as source would be, so each part compares
+///     with its own '==' — a built-in, a type's own operator, or another
+///     tuple's — and a part with none is reported as the operator would be.
+/// </remarks>
+public sealed record StructuralComparison(LocalSymbol Left, LocalSymbol Right, BoundExpression Equal);
 
 public enum UnaryOperatorKind {
     Negate,
@@ -259,6 +285,18 @@ public sealed class BoundConditional(
     public BoundExpression WhenTrue { get; } = whenTrue;
     public BoundExpression WhenFalse { get; } = whenFalse;
     public override IEnumerable<BoundNode> Children => Nodes(Condition, WhenTrue, WhenFalse);
+}
+
+/// <summary>
+///     <c>if c { a } else { b }</c> as a value. <see cref="Body" /> is the
+///     <c>if</c>, with an <c>else</c> all the way down; each branch's block
+///     ends with an expression statement holding the branch's value, already
+///     of <see cref="BoundExpression.Type" />, unless the branch always leaves.
+/// </summary>
+public sealed class BoundIfExpression(SyntaxNode syntax, TypeSymbol type, BoundIf body)
+    : BoundExpression(syntax, type) {
+    public BoundIf Body { get; } = body;
+    public override IEnumerable<BoundNode> Children => [Body];
 }
 
 public sealed class BoundAssignment(
@@ -303,6 +341,13 @@ public enum ConversionKind {
     ///     is wanted — a <c>ref</c> result, a reference parameter.
     /// </summary>
     Reference,
+
+    /// <summary>
+    ///     An array of any kind as a slice, <c>T[:]</c>: the same elements
+    ///     (SYNTAX.md §11). It ranks overloads; the bound tree records it as
+    ///     <see cref="Identity" />, since every kind is stored alike.
+    /// </summary>
+    ArrayView,
 }
 
 public sealed class BoundConversion(
@@ -405,6 +450,10 @@ public sealed class BoundTupleElementAccess(
     : BoundExpression(syntax, type) {
     public BoundExpression Receiver { get; } = receiver;
     public int Index { get; } = index;
+
+    /// <summary>An element of a tuple that can be written can be written: <c>pair.0 = 9</c>.</summary>
+    public override bool IsAssignable => Receiver.IsAssignable;
+
     public override IEnumerable<BoundNode> Children => Nodes(Receiver);
 }
 
@@ -894,6 +943,10 @@ public sealed class BoundRangePattern(
     : BoundPattern(syntax, inputType) {
     public BoundPattern? Lower { get; } = lower;
     public BoundPattern? Upper { get; } = upper;
+
+    /// <summary>True for <c>..&lt;</c>, which leaves its upper bound out.</summary>
+    public bool IsHalfOpen => Syntax is RangePatternSyntax { OperatorToken.Kind: SyntaxKind.DotDotLessToken };
+
     public override IEnumerable<BoundNode> Children => Nodes(Lower, Upper);
 }
 
@@ -916,6 +969,19 @@ public sealed class BoundUnionCasePattern(
     public UnionCaseSymbol UnionCase { get; } = unionCase;
     public ImmutableArray<BoundPattern> Payload { get; } = payload;
     public override IEnumerable<BoundNode> Children => Payload;
+}
+
+/// <summary>
+///     <c>.Some(p)</c>, or <c>p?</c>: an optional that holds a value, which
+///     <see cref="Payload" /> matches. (<c>.None</c> is the <c>none</c> literal.)
+/// </summary>
+public sealed class BoundSomePattern(
+    SyntaxNode syntax,
+    OptionalTypeSymbol inputType,
+    BoundPattern payload)
+    : BoundPattern(syntax, inputType) {
+    public BoundPattern Payload { get; } = payload;
+    public override IEnumerable<BoundNode> Children => [Payload];
 }
 
 public sealed class BoundEnumCasePattern(

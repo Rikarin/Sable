@@ -308,6 +308,7 @@ public sealed partial class SemanticModel {
 
             case InitDeclarationSyntax declaration:
                 BindBody(declaration, declaration.Body, null, scope);
+                CheckConvenience(declaration);
                 return;
 
             case DeinitDeclarationSyntax declaration:
@@ -328,6 +329,10 @@ public sealed partial class SemanticModel {
 
             case ConstDeclarationSyntax declaration:
                 BindConstant(declaration, scope);
+                return;
+
+            case ComptimeDeclarationSyntax declaration:
+                BindComptime(declaration, scope);
                 return;
 
             case StructDeclarationSyntax type:
@@ -376,17 +381,73 @@ public sealed partial class SemanticModel {
 
         BindParameterDefaults(function, scope);
 
+        if (declaration is FunctionDeclarationSyntax { Attributes.Count: > 0 } written) {
+            _diagnostics.AddRange(_compilation.CheckForeignSignature(function, written));
+        }
+
         if (body is null && expressionBody is null) {
             return;
         }
 
         var binder = NewBinder(scope, function);
 
-        _bound[declaration] = body is not null
+        var bound = _bound[declaration] = body is not null
             ? binder.BindFunctionBody(function, body)
             : binder.BindExpressionBody(function, expressionBody!);
 
         Collect(binder);
+
+        // What runs in the compiler: a const fn's body, a comptime block.
+        if (function.IsConst || CompileTimeRules.MightNeedChecking(SyntaxTree, (SyntaxNode?)body ?? expressionBody!)) {
+            CompileTimeRules.CheckBody(bound, function, _diagnostics);
+            RecordComptime(bound, function);
+        }
+    }
+
+    /// <summary>
+    ///     Each <c>comptime</c> block in a body, as a function of its own: it
+    ///     runs as the program is compiled, apart from the function it is
+    ///     written in.
+    /// </summary>
+    void RecordComptime(BoundNode node, FunctionSymbol function) {
+        if (node is BoundScopedBlock { ScopeKind: ScopeKind.Comptime } comptime) {
+            _comptime[comptime.Syntax] = (ComptimeFunction(comptime.Syntax, function.ContainingSymbol!), comptime.Body);
+            return;
+        }
+
+        foreach (var child in node.Children) {
+            RecordComptime(child, function);
+        }
+    }
+
+    FunctionSymbol ComptimeFunction(SyntaxNode syntax, Symbol owner) =>
+        new("comptime", owner, syntax, Accessibility.Private, FunctionKind.Ordinary) {
+            IsStatic = owner is NamedTypeSymbol,
+            IsConst = true,
+            ReturnTypeResolver = () => _compilation.Core.Void,
+        };
+
+    /// <summary>
+    ///     A <c>convenience init</c> hands the work to another initialiser of
+    ///     its type, <c>self.init(…)</c>, which initialises the fields: one
+    ///     that does not is an ordinary initialiser, so it says so.
+    /// </summary>
+    void CheckConvenience(InitDeclarationSyntax declaration) {
+        if (!declaration.Modifiers.Any(SyntaxKind.ConvenienceKeyword) || _bound.GetValueOrDefault(declaration) is not BoundBlock body) {
+            return;
+        }
+
+        if (!Delegates(body)) {
+            _diagnostics.Add(Diagnostic.Error(
+                ErrorCode.ERR_ConvenienceMustDelegate,
+                declaration.InitKeyword.Span,
+                "a 'convenience init' hands the work to another initialiser, 'self.init(…)'; without one, drop 'convenience'"
+            ));
+        }
+
+        static bool Delegates(BoundNode node) =>
+            node is BoundCall { Function.FunctionKind: FunctionKind.Initializer, Receiver: BoundSelfAccess }
+            || node.Children.Any(Delegates);
     }
 
     /// <summary>
@@ -440,18 +501,83 @@ public sealed partial class SemanticModel {
             return;
         }
 
-        // A property kept in 'field' starts with its initial value there.
+        // A property kept in 'field', or observed, starts with its initial
+        // value in its storage.
         if (declaration.Declarator.Initializer is { } initializer) {
             BindInitializer(initializer.Value, field.BackingField ?? field, field.Type, scope);
         }
 
         BindAccessors(declaration.Accessors, field, field.Type, scope);
         CheckReferenceKind(declaration, field);
+
+        if (_compilation.ObservedProperties.TryGetValue(field, out var observed)) {
+            BindObserved(declaration, field, observed);
+        }
+    }
+
+    /// <summary>
+    ///     An observed property's getter, <c>return self.storage</c>, and its
+    ///     setter, written here:
+    ///     <code>
+    ///     self.willSet(newValue)
+    ///     let oldValue = self.storage
+    ///     self.storage = newValue
+    ///     self.didSet(oldValue)
+    ///     </code>
+    ///     with only the observers it has. The observers are the accessors
+    ///     written in source, bound with the others.
+    /// </summary>
+    void BindObserved(FieldDeclarationSyntax declaration, FieldSymbol field, Compilation.LazyAccessors accessors) {
+        var backing = field.BackingField!;
+        var at = declaration.Declarator;
+        var type = field.ContainingSymbol as NamedTypeSymbol;
+
+        BoundSelfAccess? Self(bool mutable) => field.IsStatic || type is null ? null : new BoundSelfAccess(at, type, mutable);
+        BoundFieldAccess Storage(bool mutable) => new(at, Self(mutable), backing);
+
+        _lazyBodies[accessors.Getter] = new BoundBlock(at, [], [new BoundReturn(at, Storage(false))]);
+
+        AccessorSyntax? willSet = null, didSet = null;
+        foreach (var accessor in declaration.Accessors!.Accessors) {
+            if (accessor.Keyword.Kind == SyntaxKind.WillSetKeyword) {
+                willSet = accessor;
+            } else if (accessor.Keyword.Kind == SyntaxKind.DidSetKeyword) {
+                didSet = accessor;
+            }
+        }
+
+        BoundStatement Observe(AccessorSyntax observer, BoundExpression value) {
+            var function = AccessorFunction(observer, field, field.Type);
+            return new BoundExpressionStatement(at, new BoundCall(at, Self(true), function, [value], _compilation.Core.Void));
+        }
+
+        var setter = accessors.Setter;
+        BoundExpression NewValue() => new BoundParameterAccess(at, setter.Parameters[0]);
+
+        var locals = new List<LocalSymbol>();
+        var statements = new List<BoundStatement>();
+        if (willSet is not null) {
+            statements.Add(Observe(willSet, NewValue()));
+        }
+
+        LocalSymbol? oldValue = null;
+        if (didSet is not null) {
+            oldValue = new LocalSymbol("oldValue", setter, at, false) { TypeResolver = () => field.Type };
+            locals.Add(oldValue);
+            statements.Add(new BoundLocalDeclaration(at, oldValue, Storage(false)));
+        }
+
+        statements.Add(new BoundExpressionStatement(at, new BoundAssignment(at, Storage(true), NewValue())));
+        if (didSet is not null) {
+            statements.Add(Observe(didSet, new BoundLocalAccess(at, oldValue!)));
+        }
+
+        _lazyBodies[setter] = new BoundBlock(at, [..locals], [..statements]);
     }
 
     readonly Dictionary<FunctionSymbol, BoundBlock> _lazyBodies = [];
 
-    /// <summary>The body the compiler wrote for a lazy property's getter or setter.</summary>
+    /// <summary>The body the compiler wrote for a lazy or observed property's getter or setter.</summary>
     public BoundBlock? GetLazyBody(FunctionSymbol accessor) {
         EnsureBound();
         return _lazyBodies.GetValueOrDefault(accessor);
@@ -526,12 +652,65 @@ public sealed partial class SemanticModel {
         }
     }
 
+    readonly Dictionary<SyntaxNode, (FunctionSymbol Function, BoundBlock Body)> _comptime = [];
+    readonly Dictionary<FieldSymbol, FunctionSymbol> _constantFunctions = [];
+
+    /// <summary>
+    ///     The file's <c>comptime</c> blocks, among its declarations and in
+    ///     its bodies: each a function of no parameters, with its body, that
+    ///     lowering runs while the program is compiled.
+    /// </summary>
+    public IReadOnlyList<(SyntaxNode Syntax, FunctionSymbol Function, BoundBlock Body)> GetComptimeBlocks() {
+        EnsureBound();
+        return [.._comptime.OrderBy(static c => c.Key.Span.Start).Select(static c => (c.Key, c.Value.Function, c.Value.Body))];
+    }
+
+    /// <summary>
+    ///     A constant's value as a function of no parameters, for lowering to
+    ///     compute it with while the program is compiled.
+    /// </summary>
+    public FunctionSymbol? GetConstantFunction(FieldSymbol constant) {
+        EnsureBound();
+        return _constantFunctions.GetValueOrDefault(constant);
+    }
+
+    void BindComptime(ComptimeDeclarationSyntax declaration, FileScope scope) {
+        // In a type, it sees the type's static members, as a static method would.
+        var owner = declaration.Parent is { } parent && DeclaredSymbol(parent) is NamedTypeSymbol type ? (Symbol)type : scope.Module;
+        var function = ComptimeFunction(declaration, owner);
+        var binder = NewBinder(scope, function);
+        var body = binder.BindFunctionBody(function, declaration.Body);
+        _bound[declaration] = body;
+        _comptime[declaration] = (function, body);
+        Collect(binder);
+        CompileTimeRules.CheckComptime(body, _diagnostics);
+    }
+
     void BindConstant(ConstDeclarationSyntax declaration, FileScope scope) {
         if (DeclaredSymbol(declaration) is not FieldSymbol constant) {
             return;
         }
 
         BindInitializer(declaration.Initializer.Value, constant, constant.Type, scope);
+        if (_initializers.GetValueOrDefault(constant) is { } value) {
+            CompileTimeRules.CheckConstant(value, constant, _diagnostics);
+
+            // Plain integer arithmetic is checked as it is bound, so that the
+            // editor reports its overflow (S3201); the value itself, and
+            // anything that calls, is computed by lowering, in the
+            // interpreter (SilGen.Constants.cs), which reports the same way.
+            if (!value.HasError) {
+                var folding = new DiagnosticBag();
+                ConstantFolding.Fold(value, _compilation.Core, folding);
+                _diagnostics.AddRange(folding);
+            }
+        }
+
+        _constantFunctions[constant] = new(constant.Name, constant.ContainingSymbol!, declaration, Accessibility.Private, FunctionKind.Ordinary) {
+            IsStatic = true,
+            IsConst = true,
+            ReturnTypeResolver = () => _compilation.Core.Void,
+        };
     }
 
     /// <summary>

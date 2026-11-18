@@ -214,6 +214,172 @@ public sealed class GenericsAndConformanceTests {
             static e => e.Code == ErrorCode.ERR_CannotInferTypeArgument
         );
 
+    [Fact]
+    public void InfersFromANamedFunctionPassedAsAClosure() =>
+        Assert.Equal(
+            "String[>..]",
+            TypeOfLast(
+                """
+                fn map<T, U>(_ xs: T[>..], _ f: (T) -> U) -> U[>..]
+                fn show(_ x: Int) -> String => "\(x)"
+                fn probe(_ xs: Int[>..]) {
+                    let v = map(xs, show)
+                }
+                """
+            )
+        );
+
+    [Fact]
+    public void AClosureThatCannotThrowMakesATypedErrorNever() =>
+        Assert.Equal(
+            "Int",
+            TypeOfLast(
+                """
+                fn apply<T, E>(_ f: () throws(E) -> T) throws(E) -> T
+                fn probe() {
+                    let v = apply { 7 }
+                }
+                """
+            )
+        );
+
+    [Fact]
+    public void AClosureThatThrowsGivesATypedErrorItsType() {
+        var errors = Errors(
+            """
+            union IoError { Denied }
+            fn apply<T, E>(_ f: () throws(E) -> T) throws(E) -> T
+            fn risky() throws(IoError) -> Int
+            fn bare() -> Int => apply { try risky() }
+            fn caught() throws(IoError) -> Int => try apply { try risky() }
+            """
+        ).Where(static e => e.Code != ErrorCode.ERR_MissingBody).ToList();
+        var error = Assert.Single(errors);
+        Assert.Equal(ErrorCode.ERR_MustUseTry, error.Code);
+    }
+
+    [Fact]
+    public void AFloatLiteralWinsOverAnIntegerOne() =>
+        Assert.Equal(
+            "F64",
+            TypeOfLast(
+                """
+                fn pick<T>(_ a: T, _ b: T) -> T
+                fn probe() {
+                    let v = pick(1, 2.5)
+                }
+                """
+            )
+        );
+
+    [Fact]
+    public void AnotherArgumentWinsOverALiteral() =>
+        Assert.Equal(
+            "I8",
+            TypeOfLast(
+                """
+                fn pick<T>(_ a: T, _ b: T) -> T
+                fn probe(_ small: I8) {
+                    let v = pick(1, small)
+                }
+                """
+            )
+        );
+
+    [Fact]
+    public void AnIntegerAndAFloatLiteralAddAsFloats() =>
+        Assert.Equal(
+            "F64",
+            TypeOfLast(
+                """
+                fn probe() {
+                    let v = 1 + 2.0
+                }
+                """
+            )
+        );
+
+    [Fact]
+    public void TheContextWinsOverALiteral() =>
+        AssertClean(
+            """
+            fn wrap<T>(_ x: T) -> T[>..] => [x]
+            fn pick<T>(_ a: T, _ b: T) -> T => a
+            fn probe() -> Int {
+                let r: I8[>..] = wrap(3)
+                let n: Int? = pick(1, none)
+                return r.count + (n ?? 0)
+            }
+            """
+        );
+
+    [Fact]
+    public void TheContextIsIgnoredWhereItBreaksAConstraint() =>
+        Assert.Equal(
+            "Int",
+            TypeOfLast(
+                """
+                protocol Numeric { }
+                extension Int: Numeric { }
+                fn twice<T: Numeric>(_ x: T) -> T
+                fn probe() {
+                    let n: Int? = twice(3)
+                    let v = twice(3)
+                }
+                """
+            )
+        );
+
+    [Fact]
+    public void AStaticMemberOfABareGenericTypeInfersItsParameters() =>
+        Assert.Equal(
+            "Box<Int>",
+            TypeOfLast(
+                """
+                struct Box<T> {
+                    var v: T
+                    static fn make(_ x: T) -> Box<T> => Box(v: x)
+                }
+                fn probe() {
+                    let v = Box.make(4)
+                }
+                """
+            )
+        );
+
+    [Fact]
+    public void AnAssociatedTypeIsInferredFromAWitness() =>
+        Assert.Equal(
+            "Int",
+            TypeOfLast(
+                """
+                protocol Bag {
+                    associatedtype Item
+                    fn get() -> Item
+                }
+                struct IntBag: Bag { fn get() -> Int => 3 }
+                fn takesBag<B: Bag>(_ b: B) -> B.Item => b.get()
+                fn probe() {
+                    let v = takesBag(IntBag())
+                }
+                """
+            )
+        );
+
+    [Fact]
+    public void AnAssociatedTypeIsInferredFromAPropertyWitness() =>
+        AssertClean(
+            """
+            protocol Holder {
+                associatedtype Value
+                var value: Value { get }
+            }
+            struct Named: Holder { var value: String }
+            fn read<H: Holder>(_ h: H) -> H.Value => h.value
+            fn probe() -> String => read(Named(value: "n"))
+            """
+        );
+
     // ---- Conformance -------------------------------------------------------
 
     [Fact]
@@ -362,6 +528,238 @@ public sealed class GenericsAndConformanceTests {
                 take(d)
             }
             """
+        );
+
+    // ---- Composed constraints ----------------------------------------------
+
+    [Fact]
+    public void AnOperatorRequirementIsFoundThroughAComposition() =>
+        AssertClean(
+            """
+            protocol Addable { operator + (a: Self, b: Self) -> Self }
+            protocol Zero { static fn zero() -> Self }
+            fn two<T: Addable & Zero>(_ a: T) -> T => a + T.zero()
+            """
+        );
+
+    [Fact]
+    public void ACompositionInAWhereClauseIsTwoConstraints() =>
+        AssertClean(
+            """
+            protocol Addable { operator + (a: Self, b: Self) -> Self }
+            protocol Zero { static fn zero() -> Self }
+            fn two<T>(_ a: T) -> T where T: Addable & Zero => a + T.zero()
+            """
+        );
+
+    [Fact]
+    public void AnAssociatedTypesCompositionIsTwoConstraints() =>
+        AssertClean(
+            """
+            protocol Addable { operator + (a: Self, b: Self) -> Self }
+            protocol Zero { static fn zero() -> Self }
+            protocol Holder {
+                associatedtype Item: Addable & Zero
+                fn item() -> Item
+            }
+            fn twice<H: Holder>(_ h: H) -> H.Item => h.item() + h.item()
+            """
+        );
+
+    // ---- Initialiser requirements ------------------------------------------
+
+    [Fact]
+    public void AnInitialiserRequirementIsCalledThroughAParameter() =>
+        Assert.Equal(
+            "T",
+            TypeOfLast(
+                """
+                protocol Makeable { init(seed: Int) }
+                fn probe<T: Makeable>(_ witness: T) {
+                    let v = T(seed: 4)
+                }
+                """
+            )
+        );
+
+    [Fact]
+    public void AnInitialiserRequirementChecksItsArguments() =>
+        Assert.Contains(
+            Errors(
+                """
+                protocol Makeable { init(seed: Int) }
+                fn make<T: Makeable>() -> T => T(seed: "four")
+                """
+            ),
+            static e => e.Code == ErrorCode.ERR_NoMatchingOverload
+        );
+
+    [Fact]
+    public void AParameterWithoutAnInitialiserRequirementIsNotCallable() =>
+        Assert.Contains(
+            Errors(
+                """
+                protocol Plain { fn f() -> Int }
+                fn make<T: Plain>() -> T => T(seed: 4)
+                """
+            ),
+            static e => e.Code == ErrorCode.ERR_NotCallable && e.Message.Contains("requires an initialiser")
+        );
+
+    [Fact]
+    public void AProtocolCannotBeInitialised() =>
+        Assert.Contains(
+            Errors(
+                """
+                protocol Makeable { init(seed: Int) }
+                fn make() => Makeable(seed: 4)
+                """
+            ),
+            static e => e.Code == ErrorCode.ERR_CannotInstantiate
+        );
+
+    [Fact]
+    public void AnInitialiserRequirementIsMetByTheMemberwiseInitialiser() =>
+        AssertClean(
+            """
+            protocol Makeable { init(seed: Int) }
+            struct Thing: Makeable { var seed: Int }
+            """
+        );
+
+    [Fact]
+    public void AMissingInitialiserRequirementIsReported() =>
+        Assert.Contains(
+            Errors(
+                """
+                protocol Makeable { init(seed: Int) }
+                struct Thing: Makeable { var name: String }
+                """
+            ),
+            static e => e.Code == ErrorCode.ERR_RequirementSignatureMismatch && e.Message.Contains("'init(seed: Int)'")
+        );
+
+    // ---- Generic protocols and variance -------------------------------------
+
+    const string Animals = """
+                           class Animal { }
+                           class Dog: Animal { }
+                           protocol Producer<out T> { fn next() -> T? }
+                           protocol Consumer<in T> { fn accept(_ x: T) }
+                           protocol Source<T> { fn next() -> T? }
+                           struct DogProducer: Producer<Dog> { fn next() -> Dog? => none }
+                           struct AnimalConsumer: Consumer<Animal> { fn accept(_ x: Animal) { } }
+                           struct DogSource: Source<Dog> { fn next() -> Dog? => none }
+                           """;
+
+    [Fact]
+    public void AConformanceToAGenericProtocolReadsItsArguments() =>
+        AssertClean(
+            """
+            protocol Source<T> { fn next() -> T? }
+            struct Ones: Source<Int> { fn next() -> Int? => 1 }
+            fn first<S: Source<Int>>(_ s: S) -> Int => s.next() ?? 0
+            fn probe() -> Int => first(Ones())
+            """
+        );
+
+    [Fact]
+    public void AWrongWitnessForAGenericProtocolIsReported() =>
+        Assert.Contains(
+            Errors(
+                """
+                protocol Source<T> { fn next() -> T? }
+                struct Ones: Source<Int> { fn next() -> String? => none }
+                """
+            ),
+            static e => e.Code == ErrorCode.ERR_RequirementSignatureMismatch
+        );
+
+    [Fact]
+    public void AGenericConformerConformsWithItsOwnArguments() =>
+        AssertClean(
+            """
+            protocol Source<T> { fn next() -> T? }
+            protocol Counted<U>: Source<U> { fn count() -> Int }
+            struct Rep<E>: Counted<E> {
+                var value: E
+                fn next() -> E? => value
+                fn count() -> Int => 1
+            }
+            fn first<S: Source<Int>>(_ s: S) -> Int => s.next() ?? 0
+            fn probe() -> Int => first(Rep(value: 5))
+            fn firstOf(_ s: any Counted<String>) -> String => s.next() ?? ""
+            """
+        );
+
+    [Fact]
+    public void AGenericConformerWithOtherArgumentsDoesNotConform() =>
+        Assert.Contains(
+            Errors(
+                """
+                protocol Source<T> { fn next() -> T? }
+                struct Rep<E>: Source<E> { var value: E; fn next() -> E? => value }
+                fn first<S: Source<Int>>(_ s: S) -> Int => s.next() ?? 0
+                fn probe() -> Int => first(Rep(value: "five"))
+                """
+            ),
+            static e => e.Code == ErrorCode.ERR_NoMatchingOverload
+        );
+
+    [Fact]
+    public void AnOutParametersExistentialIsCovariant() =>
+        AssertClean(
+            $$"""
+              {{Animals}}
+              fn probe() {
+                  let p: any Producer<Animal> = DogProducer()
+              }
+              """
+        );
+
+    [Fact]
+    public void AnInParametersExistentialIsContravariant() =>
+        AssertClean(
+            $$"""
+              {{Animals}}
+              fn probe() {
+                  let c: any Consumer<Dog> = AnimalConsumer()
+              }
+              """
+        );
+
+    [Theory]
+    [InlineData("let p: any Producer<Dog> = AnimalProducer()")]
+    [InlineData("let c: any Consumer<Animal> = DogConsumer()")]
+    [InlineData("let s: any Source<Animal> = DogSource()")]
+    public void VarianceGoesOnlyTheWayItIsDeclared(string declaration) =>
+        Assert.Contains(
+            Errors(
+                $$"""
+                  {{Animals}}
+                  struct AnimalProducer: Producer<Animal> { fn next() -> Animal? => none }
+                  struct DogConsumer: Consumer<Dog> { fn accept(_ x: Dog) { } }
+                  fn probe() {
+                      {{declaration}}
+                  }
+                  """
+            ),
+            static e => e.Code == ErrorCode.ERR_TypeMismatch
+        );
+
+    [Fact]
+    public void AGenericConstraintIsInvariantEvenForAnOutParameter() =>
+        Assert.Contains(
+            Errors(
+                $$"""
+                  {{Animals}}
+                  fn take<P: Producer<Animal>>(_ p: P) { }
+                  fn probe() {
+                      take(DogProducer())
+                  }
+                  """
+            ),
+            static e => e.Code == ErrorCode.ERR_NoMatchingOverload
         );
 
     // ---- Explicit protocol implementation (SYNTAX.md §7) -------------------
@@ -515,6 +913,23 @@ public sealed class GenericsAndConformanceTests {
             .Where(static d => d.Severity == DiagnosticSeverity.Error)
             .ToList();
 
+        Assert.True(errors.Count == 0, string.Join("\n", errors.Select(static e => $"{e.Id}: {e.Message}")));
+    }
+
+    [Fact]
+    public void AGenericSubclassOverridesInItsBasesTermsAndIsItsBase() {
+        var source = """
+                     module M
+                     open class GBase<T> { open fn take(_ x: T) -> Int { return 1 } }
+                     class GDer: GBase<Int> { override fn take(_ x: Int) -> Int { return x } }
+                     class GDer2<U>: GBase<U> { override fn take(_ x: U) -> Int { return 5 } }
+                     fn probe() -> Int {
+                         let g: GBase<Int> = GDer()
+                         let h: GBase<String> = GDer2<String>()
+                         return g.take(1) + h.take("a")
+                     }
+                     """;
+        var errors = Compilation.Create(source).GetAllDiagnostics().Where(static d => d.Severity == DiagnosticSeverity.Error).ToList();
         Assert.True(errors.Count == 0, string.Join("\n", errors.Select(static e => $"{e.Id}: {e.Message}")));
     }
 }

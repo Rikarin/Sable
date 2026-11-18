@@ -66,6 +66,16 @@ internal sealed class TypeBinder(Compilation compilation) {
 
     internal void Defer(Action force) => _forcers.Add(force);
 
+    /// <summary>
+    ///     A generic type as its own declaration sees it: given its own
+    ///     parameters, <c>Nest&lt;T&gt;</c>, which is what its members write. Any
+    ///     other type is itself.
+    /// </summary>
+    internal static NamedTypeSymbol OwnConstruction(NamedTypeSymbol type) =>
+        type is { TypeArguments.IsEmpty: true, TypeParameters.IsEmpty: false }
+            ? type.Construct([..type.TypeParameters])
+            : type;
+
     /// <summary>Defers work that must see every signature, not just this one's.</summary>
     internal void DeferLate(Action force) => _late.Add(force);
 
@@ -105,6 +115,17 @@ internal sealed class TypeBinder(Compilation compilation) {
         return thrown;
     }
 
+    /// <summary>
+    ///     A function's result type, where a <c>some P</c> is the function's
+    ///     own: the type its body returns, hidden.
+    /// </summary>
+    public TypeSymbol BindReturnType(TypeSyntax syntax, FunctionSymbol function, FileScope? scope) {
+        var type = BindType(syntax, function, scope);
+        return type is OpaqueTypeSymbol { Origin: null } opaque
+            ? new OpaqueTypeSymbol(opaque.Constraint, function)
+            : type;
+    }
+
     public void BindFunctionSignature(
         FunctionSymbol function,
         FunctionDeclarationSyntax declaration
@@ -112,7 +133,7 @@ internal sealed class TypeBinder(Compilation compilation) {
         var scope = compilation.CurrentScope;
 
         function.ReturnTypeResolver = () => declaration.ReturnClause is { } clause
-            ? BindType(clause.Type, function, scope)
+            ? BindReturnType(clause.Type, function, scope)
             : compilation.Core.Void;
 
         if (declaration.ExplicitProtocol is { } explicitProtocol) {
@@ -389,13 +410,133 @@ internal sealed class TypeBinder(Compilation compilation) {
     public void BindConstantType(FieldSymbol field, ConstDeclarationSyntax declaration) {
         var scope = compilation.CurrentScope;
 
-        field.TypeResolver = () => declaration.TypeAnnotation is { } annotation
-            ? BindType(annotation.Type, field, scope)
-            : ErrorTypeSymbol.Instance;
+        field.TypeResolver = () => {
+            if (declaration.TypeAnnotation is { } annotation) {
+                return BindType(annotation.Type, field, scope);
+            }
 
-        if (declaration.TypeAnnotation is not null) {
-            Defer(() => _ = field.Type);
+            // 'const Pi = 3.14', 'const Table = factorial(5)': the type is read
+            // off the value's form, as a stored property's is, with what a
+            // constant is usually written as besides — a call, another
+            // constant, arithmetic on them. A ring of constants, each the
+            // next's, has no type to find.
+            if (!_inferringConstants.Add(field)) {
+                return Error(
+                    ErrorCode.ERR_TypeNotFound,
+                    declaration.Identifier.Span,
+                    $"'{field.Name}' is defined in terms of itself, so its type cannot be inferred; write it"
+                );
+            }
+
+            try {
+                return InferConstant(declaration.Initializer.Value, field, scope) is { IsError: false } inferred
+                    ? inferred
+                    : Error(
+                        ErrorCode.ERR_TypeNotFound,
+                        declaration.Identifier.Span,
+                        $"'{field.Name}' needs a type annotation: its type can be left out only when its value is a literal, "
+                        + "another constant, a call to a function or a type's initialiser, or arithmetic on those"
+                    );
+            } finally {
+                _inferringConstants.Remove(field);
+            }
+        };
+
+        Defer(() => _ = field.Type);
+    }
+
+    readonly HashSet<FieldSymbol> _inferringConstants = [];
+
+    /// <summary>
+    ///     A constant's type, from the form of its value: what
+    ///     <see cref="InferFromSyntax" /> reads, and calls, names and
+    ///     operators over them.
+    /// </summary>
+    TypeSymbol? InferConstant(ExpressionSyntax value, Symbol context, FileScope? scope) {
+        var core = compilation.Core;
+        switch (value) {
+            case ParenthesizedExpressionSyntax parenthesized:
+                return InferConstant(parenthesized.Expression, context, scope);
+
+            case PrefixUnaryExpressionSyntax { OperatorToken.Kind: SyntaxKind.MinusToken or SyntaxKind.TildeToken } negated:
+                return InferConstant(negated.Operand, context, scope) is { } number && core.IsNumeric(number) ? number : null;
+
+            case PrefixUnaryExpressionSyntax { OperatorToken.Kind: SyntaxKind.BangToken }:
+                return core.Bool;
+
+            case BinaryExpressionSyntax binary:
+                switch (binary.OperatorToken.Kind) {
+                    case SyntaxKind.EqualsEqualsToken or SyntaxKind.BangEqualsToken or SyntaxKind.LessToken
+                        or SyntaxKind.LessEqualsToken or SyntaxKind.GreaterToken or SyntaxKind.GreaterEqualsToken
+                        or SyntaxKind.AmpersandAmpersandToken or SyntaxKind.PipePipeToken:
+                        return core.Bool;
+                    case SyntaxKind.PlusToken or SyntaxKind.MinusToken or SyntaxKind.StarToken or SyntaxKind.SlashToken
+                        or SyntaxKind.PercentToken or SyntaxKind.AmpersandToken or SyntaxKind.PipeToken or SyntaxKind.CaretToken
+                        or SyntaxKind.LessLessToken or SyntaxKind.GreaterGreaterToken: {
+                        // A literal takes the other side's type: 'Width * 2' is what Width is.
+                        var left = InferConstant(binary.Left, context, scope);
+                        var right = InferConstant(binary.Right, context, scope);
+                        return (left, right) switch {
+                            ({ } l, { } r) when ReferenceEquals(l, r) => l,
+                            ({ } l, _) when binary.Right is LiteralExpressionSyntax => l,
+                            (_, { } r) when binary.Left is LiteralExpressionSyntax => r,
+                            _ => null,
+                        };
+                    }
+                    default:
+                        return null;
+                }
+
+            case ConditionalExpressionSyntax conditional:
+                return InferConstant(conditional.WhenTrue, context, scope) ?? InferConstant(conditional.WhenFalse, context, scope);
+
+            case IdentifierNameSyntax name when LookupValue(name.Identifier.Text, context, scope) is FieldSymbol other:
+                return other.Type is { IsError: false } type ? type : null;
+
+            // 'Platform.pointerWidth': a type's static member.
+            case MemberAccessExpressionSyntax { Expression: IdentifierNameSyntax owner, Name: IdentifierNameSyntax memberName }
+                when Lookup(owner.Identifier.Text, context, scope, owner.Span) is NamedTypeSymbol ownerType
+                && ownerType.GetMembers(memberName.Identifier.Text).OfType<FieldSymbol>().FirstOrDefault(static f => f.IsStatic) is { } member:
+                return member.Type is { IsError: false } memberType ? memberType : null;
+
+            // 'factorial(5)': what the function it calls returns.
+            case InvocationExpressionSyntax { Expression: IdentifierNameSyntax callee }
+                when LookupValue(callee.Identifier.Text, context, scope) is FunctionSymbol { TypeParameters.IsEmpty: true } function:
+                return function.ReturnType is { IsError: false } returned ? returned : null;
+
+            default:
+                return InferFromSyntax(value, context, scope);
         }
+    }
+
+    /// <summary>
+    ///     The function or stored value a name means where a constant's value
+    ///     is written: a member of an enclosing type, the module's, an
+    ///     import's, the core's.
+    /// </summary>
+    Symbol? LookupValue(string name, Symbol context, FileScope? scope) {
+        static Symbol? Value(IEnumerable<Symbol> members, bool publicOnly) =>
+            members.FirstOrDefault(m => m is FunctionSymbol or FieldSymbol && (!publicOnly || m.DeclaredAccessibility == Accessibility.Public));
+
+        for (var symbol = context.ContainingSymbol; symbol is not null; symbol = symbol.ContainingSymbol) {
+            if (symbol is NamedTypeSymbol type && Value(type.GetMembers(name), false) is { } member) {
+                return member;
+            }
+        }
+
+        if (scope is not null) {
+            if (Value(scope.Module.GetMembers(name), false) is { } own) {
+                return own;
+            }
+
+            foreach (var module in scope.Imports) {
+                if (Value(module.GetMembers(name), true) is { } imported) {
+                    return imported;
+                }
+            }
+        }
+
+        return Value(compilation.Core.Module.GetMembers(name), true);
     }
 
     /// <summary>Aliases being resolved right now, to catch a cycle.</summary>
@@ -404,9 +545,18 @@ internal sealed class TypeBinder(Compilation compilation) {
     public void BindAliasTarget(AliasSymbol alias, TypeSyntax target) {
         var scope = compilation.CurrentScope;
 
+        // A union may mention itself inside its cases — 'Json[]' in
+        // 'alias Json = … | Json[]' — and is then known by its name
+        // (RecursiveUnionTypeSymbol). Made on the first mention of itself.
+        RecursiveUnionTypeSymbol? recursive = null;
+
         alias.TypeResolver = () => {
-            // 'alias A = A', or a longer ring, would otherwise resolve forever.
             if (!_resolvingAliases.Add(alias)) {
+                if (target is UnionTypeSyntax && alias.TypeParameters.IsEmpty) {
+                    return recursive ??= new RecursiveUnionTypeSymbol(alias);
+                }
+
+                // 'alias A = A', or a longer ring, would otherwise resolve forever.
                 return Error(
                     ErrorCode.ERR_CircularAlias,
                     target.Span,
@@ -415,7 +565,24 @@ internal sealed class TypeBinder(Compilation compilation) {
             }
 
             try {
-                return BindType(target, alias, scope);
+                var type = BindType(target, alias, scope);
+                if (recursive is null) {
+                    return type;
+                }
+
+                // Itself as one of its own cases, or behind '?', would be a
+                // value that holds itself: nothing to stop at, and no size.
+                if (type is not StructuralUnionTypeSymbol union || union.Cases.Contains(recursive)) {
+                    return Error(
+                        ErrorCode.ERR_CircularAlias,
+                        target.Span,
+                        $"'{alias.Name}' is defined in terms of itself: a union can mention itself only "
+                        + "inside one of its cases, as in an array or a dictionary of it"
+                    );
+                }
+
+                recursive.Union = union;
+                return recursive;
             } finally {
                 _resolvingAliases.Remove(alias);
             }
@@ -468,6 +635,10 @@ internal sealed class TypeBinder(Compilation compilation) {
             }
         );
 
+    /// <summary>A named type's extension's <c>where</c> clause, kept on the extension.</summary>
+    public void BindExtensionWhereClause(ExtensionSymbol extension, ExtensionDeclarationSyntax declaration, FileScope? scope) =>
+        Defer(() => BindWhereClause(declaration.WhereClause, extension, scope));
+
     static BaseTypeListSyntax? BaseTypeListOf(SyntaxNode declaration) =>
         declaration switch {
             StructDeclarationSyntax s => s.BaseTypes,
@@ -509,8 +680,32 @@ internal sealed class TypeBinder(Compilation compilation) {
                 continue;
             }
 
-            parameter.Constraints = [BindType(syntax.Constraint, context, scope)];
+            // 'T: P & Q' is kept as two constraints, as 'where T: P, T: Q' is,
+            // so everything that walks a parameter's protocols sees both.
+            var constraints = Constraints(syntax.Constraint, parameter);
+            parameter.Constraints = [..constraints.SelectMany(c => CompositionTypeSymbol.PartsOf(BindType(c, context, scope)))];
         }
+    }
+
+    /// <summary>
+    ///     A constraint's parts, without the <c>~Copyable</c> among them, which
+    ///     instead lets the parameter stand for a move-only type (docs/03 §3.3).
+    /// </summary>
+    static List<TypeSyntax> Constraints(TypeSyntax constraint, TypeParameterSymbol parameter) {
+        switch (constraint) {
+            case SuppressedTypeSyntax { ConstraintType: SimpleNameTypeSyntax { Identifier.Text: "Copyable", TypeArgumentList: null } }:
+                parameter.AllowsNoncopyable = true;
+                return [];
+
+            case CompositionTypeSyntax composition when ContainsSuppression(composition):
+                return [..Constraints(composition.Left, parameter), ..Constraints(composition.Right, parameter)];
+
+            default:
+                return [constraint];
+        }
+
+        static bool ContainsSuppression(TypeSyntax type) =>
+            type is SuppressedTypeSyntax || type is CompositionTypeSyntax composition && (ContainsSuppression(composition.Left) || ContainsSuppression(composition.Right));
     }
 
     /// <summary>
@@ -521,21 +716,36 @@ internal sealed class TypeBinder(Compilation compilation) {
     ///     <c>fn f&lt;T: Named&gt;(x: T)</c> say the same thing, so they end in
     ///     the same place: the parameter's constraint list.
     /// </remarks>
-    /// <summary>
-    ///     A named type's extension's <c>where</c> clause: requirements on the
-    ///     type's arguments that the extension's members need, which constrain
-    ///     the type's parameters only inside it — never the type itself.
-    /// </summary>
-    internal void BindExtensionWhereClause(WhereClauseSyntax clause, ExtensionSymbol extension, FileScope? scope) =>
-        BindWhereClause(clause, extension, scope);
-
     void BindWhereClause(WhereClauseSyntax? clause, Symbol context, FileScope? scope) {
         if (clause is null) {
             return;
         }
 
-        foreach (var constraint in clause.Constraints) {
+        foreach (var item in clause.Constraints) {
+            // A const-generic predicate tests a value parameter, and generic
+            // parameters are types only so far: there is nothing for 'N > 0'
+            // to be about.
+            if (item is not WhereConstraintSyntax constraint) {
+                _diagnostics.Error(
+                    ErrorCode.ERR_ConstGenericPredicate,
+                    item.Span,
+                    "a const-generic predicate needs a value generic parameter, and generic parameters are types only so far"
+                );
+                continue;
+            }
+
             var left = BindType(constraint.Left, context, scope);
+
+            // 'where T: ~Copyable' says what 'T: ~Copyable' does.
+            if (left is TypeParameterSymbol lifted && constraint.OperatorToken.Kind != SyntaxKind.EqualsEqualsToken
+                && constraint.Right is SuppressedTypeSyntax or CompositionTypeSyntax) {
+                var parts = Constraints(constraint.Right, lifted);
+                if (parts is not [var whole] || !ReferenceEquals(whole, constraint.Right)) {
+                    lifted.Constraints = lifted.Constraints.AddRange(parts.Select(p => BindType(p, context, scope)).Where(static t => !t.IsError));
+                    continue;
+                }
+            }
+
             var right = BindType(constraint.Right, context, scope);
 
             if (left.IsError || right.IsError) {
@@ -562,15 +772,17 @@ internal sealed class TypeBinder(Compilation compilation) {
                 continue;
             }
 
-            // An extension's 'where Bound: Hashable' holds inside it, not on
-            // the type's parameter everywhere.
-            if (context is ExtensionSymbol conditional) {
-                conditional.ConformanceRequirements = conditional.ConformanceRequirements.Add(new(left, right));
+            // An extension's 'where T: P' is the extension's alone: T is the
+            // type's parameter, and the type itself asks nothing of it.
+            if (context is ExtensionSymbol constrained) {
+                constrained.ConformanceRequirements = constrained.ConformanceRequirements.AddRange(
+                    CompositionTypeSymbol.PartsOf(right).Select(part => new ConformanceRequirement(left, part))
+                );
                 continue;
             }
 
             if (left is TypeParameterSymbol parameter) {
-                parameter.Constraints = parameter.Constraints.Add(right);
+                parameter.Constraints = parameter.Constraints.AddRange(CompositionTypeSymbol.PartsOf(right));
                 continue;
             }
 
@@ -623,6 +835,10 @@ internal sealed class TypeBinder(Compilation compilation) {
         var equivalence = TypeEquivalence.ForSymbol(context);
 
         for (var i = 0; i < arguments.Length && i < definition.TypeParameters.Length; i++) {
+            if (Copyability.Refusal(definition.TypeParameters[i], arguments[i], definition.Name) is { } refusal) {
+                _diagnostics.Error(ErrorCode.ERR_NoncopyableTypeArgument, span, refusal);
+            }
+
             foreach (var constraint in definition.TypeParameters[i].Constraints) {
                 if (Conversions.Satisfies(arguments[i], substitution.Apply(constraint), equivalence)) {
                     continue;
@@ -685,7 +901,7 @@ internal sealed class TypeBinder(Compilation compilation) {
                 return new OptionalTypeSymbol(BindType(optional.ElementType, context, scope));
 
             case ImplicitlyUnwrappedTypeSyntax unwrapped:
-                return new OptionalTypeSymbol(BindType(unwrapped.ElementType, context, scope));
+                return new OptionalTypeSymbol(BindType(unwrapped.ElementType, context, scope), isImplicitlyUnwrapped: true);
 
             case ReferenceTypeSyntax reference: {
                 var referenced = BindType(reference.ElementType, context, scope);
@@ -789,6 +1005,18 @@ internal sealed class TypeBinder(Compilation compilation) {
                     : ErrorTypeSymbol.Instance;
             }
 
+            // '@escaping': the parameter's, read where it is declared.
+            case AttributedTypeSyntax attributed:
+                return BindType(attributed.Type, context, scope);
+
+            // Anywhere but a generic parameter's constraint, which takes it apart first.
+            case SuppressedTypeSyntax suppressed:
+                return Error(
+                    ErrorCode.ERR_MisplacedSuppression,
+                    suppressed.Span,
+                    $"'{suppressed.ToString().Trim()}' is not a type: '~Copyable' is written only as a generic parameter's constraint, to let it stand for a @noncopy type"
+                );
+
             case CompositionTypeSyntax composition:
                 return new CompositionTypeSymbol(
                     [
@@ -798,12 +1026,7 @@ internal sealed class TypeBinder(Compilation compilation) {
                 );
 
             case UnionTypeSyntax union:
-                return StructuralUnionTypeSymbol.Create(
-                    [
-                        BindType(union.Left, context, scope),
-                        BindType(union.Right, context, scope)
-                    ]
-                );
+                return BindUnion(union, context, scope);
 
             case SelfTypeSyntax self: {
                 if (EnclosingType(context) is not { } enclosing) {
@@ -816,7 +1039,7 @@ internal sealed class TypeBinder(Compilation compilation) {
 
                 // Inside a protocol 'Self' is the conforming type, which is
                 // not known yet; everywhere else it is the type itself.
-                return enclosing.SelfTypeParameter ?? (TypeSymbol)enclosing;
+                return enclosing.SelfTypeParameter ?? (TypeSymbol)OwnConstruction(enclosing);
             }
 
             default:
@@ -1262,6 +1485,62 @@ internal sealed class TypeBinder(Compilation compilation) {
             $"'{keyword}' takes a protocol, and '{constraint.ToDisplayString()}' is not one"
         );
         return false;
+    }
+
+    /// <summary>
+    ///     <c>A | B | C</c>: the union of its members, normalised
+    ///     (<see cref="StructuralUnionTypeSymbol.Create" />).
+    /// </summary>
+    /// <remarks>
+    ///     <c>None</c> as a member is the absence of a value, as
+    ///     <c>Optional</c>'s case of that name is: <c>Int | String | None</c>
+    ///     is <c>(Int | String)?</c> (docs/03 §3.5), unless a type of that
+    ///     name is in scope. A union is closed, so it may not hold
+    ///     <c>any P</c>, whose conformers anyone can add to (docs/03 §3.1);
+    ///     <c>any Error</c> is the exception, as what a throw of several
+    ///     error types widens to.
+    /// </remarks>
+    TypeSymbol BindUnion(UnionTypeSyntax union, Symbol context, FileScope? scope) {
+        var members = new List<TypeSyntax>();
+        Collect(union);
+
+        var cases = new List<TypeSymbol>();
+        var hasNone = false;
+        foreach (var member in members) {
+            if (member is SimpleNameTypeSyntax { Identifier.Text: "None", TypeArgumentList: null } none
+                && Lookup("None", context, scope, none.Span) is null) {
+                hasNone = true;
+                continue;
+            }
+
+            var type = BindType(member, context, scope);
+            if (type is ExistentialTypeSymbol { Constraint: var constraint } && !constraint.Equals(compilation.Core.Error)) {
+                type = Error(
+                    ErrorCode.ERR_OpenExistentialInUnion,
+                    member.Span,
+                    $"a union's cases are closed, and '{type.ToDisplayString()}' is not: anything can conform to "
+                    + $"'{constraint.ToDisplayString()}'; name the conforming types instead"
+                );
+            }
+
+            cases.Add(type);
+        }
+
+        if (cases.Count == 0) {
+            return Error(ErrorCode.ERR_NotAType, union.Span, "a union of only 'None' has no values to hold");
+        }
+
+        var result = StructuralUnionTypeSymbol.Create(cases);
+        return hasNone && result is not OptionalTypeSymbol ? new OptionalTypeSymbol(result) : result;
+
+        void Collect(TypeSyntax syntax) {
+            if (syntax is UnionTypeSyntax pair) {
+                Collect(pair.Left);
+                Collect(pair.Right);
+            } else {
+                members.Add(syntax);
+            }
+        }
     }
 
     ErrorTypeSymbol Error(ErrorCode code, TextSpan span, string message) {

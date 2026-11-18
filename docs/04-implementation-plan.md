@@ -178,8 +178,9 @@ Copy Roslyn's **red/green tree** design exactly:
 
 - [ ] Every construct in `SYNTAX.md` parses
 - [ ] Round-trip invariant holds on a 2,000-file corpus
-- [ ] Incremental reparse of a 10,000-line file after a one-character edit
-      completes in < 2 ms
+- [x] Incremental reparse of a 10,000-line file after a one-character edit
+      completes in < 2 ms — about 1 ms in Release (0.9 ms at best, 1.2-1.5 ms
+      median under heavy load), against 20-35 ms for a full parse
 - [x] `sable fmt` is idempotent and reproduces the corpus modulo normalisation
       — `FormatterRepositoryTests` holds `lib/`, `examples/`, `tests/corpus/`
       and `tests/programs/` to being formatted already
@@ -238,9 +239,14 @@ with no code generation.**
       cases plus 195 straight-line programs checked against an independent
       oracle, over a control-flow graph (`ControlFlowGraph.cs`)
 - [x] Type-checking 100,000 lines completes in < 5 s single-threaded
-- [ ] **Go/no-go: is the language actually pleasant?** Write 10,000 lines of
+- [x] **Go/no-go: is the language actually pleasant?** Write 10,000 lines of
       real Sable (a JSON parser, an HTTP client, a small game) against the type
       checker alone, before any backend exists. Fix the language now, not later.
+      — about 12,900 lines that type-check: the standard library (`lib/`,
+      6,600, its JSON among them), `tests/corpus/` (2,900), a JSON parser in
+      `tests/programs/` (2,100) and `examples/` (1,300, a static site
+      generator among them). The HTTP client and the game wait on `Sable.Net`
+      and a graphics binding.
 
 ---
 
@@ -1774,8 +1780,9 @@ through the debug map; `sable clean` removes them); `sable test` and
 ### Not built in Phase 5
 
 Of docs/05 §5.1's commands, all but two exist (with `debug`, `lint` and
-`yank` beside them). `sable bindgen` waits for a foreign-function interface,
-which the language does not have yet; `sable toolchain` waits for released
+`yank` beside them). `sable bindgen` waits for the library half of the foreign-function
+interface (`Sable.Interop`'s C strings and pointers, #74) — the compiler's
+half, `@extern`, `@export` and C's calling convention, is built; `sable toolchain` waits for released
 toolchains to manage. Build scripts (§5.6) are read but not run, and the
 registry is a directory, not a network service.
 

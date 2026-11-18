@@ -145,6 +145,109 @@ public sealed class LoweringGapTests {
             """
         );
 
+    // ---- 'some P' results and locals --------------------------------------------
+
+    [Fact]
+    public void ASomeResultIsTheTypeItsBodyReturns() =>
+        // A function's, an '=>' body's, a method's, a generic function's, one
+        // passed on as another's, one in an array, and a local's.
+        Prints(
+            "circle 12.0\nsquare 9.0\ncircle 12.0\nlabel 0.0\n2 12.0\nsquare 25.0\ncircle 3.0\nsquare 16.0\nsquare 4.0\n",
+            """
+            protocol Shape {
+                fn area() -> F64
+                fn name() -> String
+            }
+
+            struct Circle: Shape {
+                var r: F64
+                fn area() -> F64 { return 3.0 * r * r }
+                fn name() -> String { return "circle" }
+            }
+
+            struct Square: Shape {
+                var s: F64
+                fn area() -> F64 { return s * s }
+                fn name() -> String { return "square" }
+            }
+
+            class Label: Shape {
+                var text: String
+                init(_ text: String) {
+                    self.text = text
+                }
+                fn area() -> F64 { return 0.0 }
+                fn name() -> String { return text }
+            }
+
+            fn circle() -> some Shape {
+                return Circle { r: 2.0 }
+            }
+
+            fn square() -> some Shape => Square { s: 3.0 }
+
+            fn passedOn() -> some Shape {
+                return circle()
+            }
+
+            fn label() -> some Shape {
+                return Label("label")
+            }
+
+            fn same<T: Shape>(_ x: T) -> some Shape {
+                return x
+            }
+
+            struct Factory {
+                var side: F64
+                fn make() -> some Shape {
+                    return Square { s: side }
+                }
+            }
+
+            fn describe(_ s: some Shape) -> String {
+                return s.name() + " \(s.area())"
+            }
+            """,
+            """
+                print(describe(circle()))
+                print(describe(square()))
+                print(describe(passedOn()))
+                print(describe(label()))
+                let shapes = [circle(), circle()]
+                print("\(shapes.count) \(shapes[1].area())")
+                print(describe(same(Square { s: 5.0 })))
+                print(describe(same(Circle { r: 1.0 })))
+                print(describe(Factory { side: 4.0 }.make()))
+                let local: some Shape = Square { s: 2.0 }
+                print(describe(local))
+            """
+        );
+
+    [Fact]
+    public void ASomeResultMayReturnItself() =>
+        Prints(
+            "9\n",
+            """
+            protocol Shape {
+                fn area() -> Int
+            }
+
+            struct Square: Shape {
+                var side: Int
+                fn area() -> Int { return side * side }
+            }
+
+            fn down(_ n: Int) -> some Shape {
+                if n == 0 {
+                    return Square { side: 3 }
+                }
+                return down(n - 1)
+            }
+            """,
+            "    print(down(3).area())"
+        );
+
     // ---- Untyped and union throws ----------------------------------------------
 
     const string Errors = """

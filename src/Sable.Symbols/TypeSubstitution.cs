@@ -112,6 +112,11 @@ public sealed class TypeSubstitution {
             case ExistentialTypeSymbol existential:
                 return new ExistentialTypeSymbol(Apply(existential.Constraint));
 
+            case MetatypeTypeSymbol metatype: {
+                var instance = Apply(metatype.InstanceType);
+                return instance.Equals(metatype.InstanceType) ? metatype : new MetatypeTypeSymbol(instance);
+            }
+
             // A result's opaque type keeps its origin, and learns what the
             // origin's type parameters are here.
             case OpaqueTypeSymbol opaque:
@@ -217,6 +222,10 @@ public sealed class TypeSubstitution {
             case OptionalTypeSymbol optional when argument is OptionalTypeSymbol otherOptional:
                 return Unify(optional.UnderlyingType, otherOptional.UnderlyingType, inferrable, into);
 
+            // 'TypeInfo.of(Point.self)': T.Type against Point.Type makes T Point.
+            case MetatypeTypeSymbol metatype when argument is MetatypeTypeSymbol otherMetatype:
+                return Unify(metatype.InstanceType, otherMetatype.InstanceType, inferrable, into);
+
             case ReferenceTypeSymbol reference when argument is ReferenceTypeSymbol otherReference:
                 return Unify(reference.ReferencedType, otherReference.ReferencedType, inferrable, into);
 
@@ -278,6 +287,7 @@ public sealed class TypeSubstitution {
             NamedTypeSymbol named => named.TypeArguments.Any(ContainsError),
             ArrayTypeSymbol array => ContainsError(array.ElementType),
             OptionalTypeSymbol optional => ContainsError(optional.UnderlyingType),
+            MetatypeTypeSymbol metatype => ContainsError(metatype.InstanceType),
             ReferenceTypeSymbol reference => ContainsError(reference.ReferencedType),
             TupleTypeSymbol tuple => tuple.ElementTypes.Any(ContainsError),
             FunctionTypeSymbol function => function.ParameterTypes.Any(ContainsError) || ContainsError(function.ReturnType),

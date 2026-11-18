@@ -362,6 +362,28 @@ public static class NativeBuild {
     }
 
     /// <summary>
+    ///     Compiles the program's IR as an optimised build does, to an object
+    ///     that is thrown away, for what LLVM says about it: the output of
+    ///     clang run with <paramref name="flags" />, such as the
+    ///     <c>-Rpass</c> remarks <see cref="VectorizationReport" /> reads.
+    /// </summary>
+    public static NativeBuildResult Remarks(string llvmIr, NativeOptions options, IReadOnlyList<string> flags) {
+        var target = options.TargetOrHost;
+        var directory = Directory.CreateTempSubdirectory("sable-remarks-");
+        try {
+            var irPath = Path.Combine(directory.FullName, "program.ll");
+            File.WriteAllText(irPath, ForTarget(llvmIr, target));
+            var (exitCode, output) = Run(
+                CompilerPath,
+                [..target.ClangFlags, ..SysrootFlags(options), $"-O{options.OptLevel}", "-fno-color-diagnostics", ..flags, "-Wno-override-module", "-c", irPath, "-o", Path.Combine(directory.FullName, "program.o")]
+            );
+            return new(exitCode == 0, output);
+        } finally {
+            directory.Delete(true);
+        }
+    }
+
+    /// <summary>
     ///     What makes a static library of <paramref name="objects" />: <c>$AR</c>
     ///     when it is set; for Windows, LLVM's <c>llvm-lib</c>, which writes the
     ///     archives Microsoft's linker reads; elsewhere the system's <c>ar</c>.

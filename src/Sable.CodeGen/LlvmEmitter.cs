@@ -121,10 +121,12 @@ public sealed partial class LlvmEmitter {
         output.Append("%SableArrayHeader = type { %SableObjectHeader, i64, i64, ptr }\n\n");
         // Globals: zero until the entry point's start initialises them.
         // Separately compiled, every unit has the globals, and the linker keeps one of each.
+        // One C sees ('@export var') is named for C, and visible to it.
         foreach (var (globalName, globalType) in module.Globals) {
-            var linkage = module.Unit is null ? "internal" : "linkonce_odr";
-            output.Append('@').Append(Global("global." + globalName)).Append($" = {linkage} global ")
-                .Append(Type(globalType)).Append(" zeroinitializer").Append(Comdat("@" + Global("global." + globalName), linkage));
+            var exported = IsExportedGlobal(globalName);
+            var linkage = module.Unit is not null ? "linkonce_odr" : exported ? "dso_local" : "internal";
+            output.Append(GlobalStorage(globalName)).Append($" = {linkage} global ")
+                .Append(Type(globalType)).Append(" zeroinitializer").Append(Comdat(GlobalStorage(globalName), linkage));
             if (_debug?.GlobalVariable(globalName, globalType, local: module.Unit is null) is { } variable) {
                 output.Append(", !dbg ").Append(variable);
             }
@@ -138,6 +140,8 @@ public sealed partial class LlvmEmitter {
         }
 
         output.Append(Declarations);
+        output.Append('\n');
+        output.Append(Counting);
         output.Append('\n');
         output.Append(functions);
         output.Append(ForeignFunctions(module));
@@ -166,6 +170,72 @@ public sealed partial class LlvmEmitter {
 
         return output.ToString();
     }
+
+    /// <summary>
+    ///     Retain and release, inline: the runtime's <c>sable_retain</c> and
+    ///     <c>sable_release</c>, which only a link-time optimised build could
+    ///     otherwise inline — a call for every count, on Linux and Windows
+    ///     without lld, or with LTO off. The object header is { metadata,
+    ///     strong count, flags }; an immortal object (a string literal) is not
+    ///     counted, nor is null. Only a last release calls the runtime, to run
+    ///     the deinit and free the memory. The runtime's counts of retains and
+    ///     releases, which SABLE_STATS reports, are kept here as there.
+    /// </summary>
+    const string Counting = """
+                            @sable_retains = external global i64
+                            @sable_releases = external global i64
+                            declare void @sable_release_last(ptr) cold
+
+                            define internal void @sable.retain(ptr %object) alwaysinline nounwind {
+                            entry:
+                              %none = icmp eq ptr %object, null
+                              br i1 %none, label %done, label %present
+                            present:
+                              %flagsField = getelementptr inbounds { ptr, i32, i32 }, ptr %object, i32 0, i32 2
+                              %flags = load i32, ptr %flagsField
+                              %immortalBit = and i32 %flags, 1
+                              %immortal = icmp ne i32 %immortalBit, 0
+                              br i1 %immortal, label %done, label %count
+                            count:
+                              %strongField = getelementptr inbounds { ptr, i32, i32 }, ptr %object, i32 0, i32 1
+                              %strong = load i32, ptr %strongField
+                              %more = add i32 %strong, 1
+                              store i32 %more, ptr %strongField
+                              %retains = load i64, ptr @sable_retains
+                              %retainsMore = add i64 %retains, 1
+                              store i64 %retainsMore, ptr @sable_retains
+                              br label %done
+                            done:
+                              ret void
+                            }
+
+                            define internal void @sable.release(ptr %object) alwaysinline nounwind {
+                            entry:
+                              %none = icmp eq ptr %object, null
+                              br i1 %none, label %done, label %present
+                            present:
+                              %flagsField = getelementptr inbounds { ptr, i32, i32 }, ptr %object, i32 0, i32 2
+                              %flags = load i32, ptr %flagsField
+                              %immortalBit = and i32 %flags, 1
+                              %immortal = icmp ne i32 %immortalBit, 0
+                              br i1 %immortal, label %done, label %count
+                            count:
+                              %releases = load i64, ptr @sable_releases
+                              %releasesMore = add i64 %releases, 1
+                              store i64 %releasesMore, ptr @sable_releases
+                              %strongField = getelementptr inbounds { ptr, i32, i32 }, ptr %object, i32 0, i32 1
+                              %strong = load i32, ptr %strongField
+                              %less = sub i32 %strong, 1
+                              store i32 %less, ptr %strongField
+                              %gone = icmp eq i32 %less, 0
+                              br i1 %gone, label %last, label %done, !prof !{!"branch_weights", i32 1, i32 1000}
+                            last:
+                              call void @sable_release_last(ptr %object)
+                              br label %done
+                            done:
+                              ret void
+                            }
+                            """;
 
     const string Declarations = """
                                 @sable_string_metadata = external constant %SableMetadata
@@ -227,6 +297,7 @@ public sealed partial class LlvmEmitter {
                                 declare i64 @sable_string_hash(ptr)
                                 declare ptr @sable_string_join(ptr, ptr)
                                 declare i64 @sable_string_compare(ptr, ptr)
+                                declare i64 @sable_string_find(ptr, ptr, i64)
                                 declare ptr @sable_string_from_char(i32)
                                 declare ptr @sable_string_from_int(i64)
                                 declare ptr @sable_string_from_f64(double)
@@ -255,6 +326,7 @@ public sealed partial class LlvmEmitter {
                                 declare { i64, i1 } @llvm.sadd.with.overflow.i64(i64, i64)
                                 declare { i64, i1 } @llvm.ssub.with.overflow.i64(i64, i64)
                                 declare { i64, i1 } @llvm.smul.with.overflow.i64(i64, i64)
+                                declare i64 @llvm.smin.i64(i64, i64)
                                 declare { i8, i1 } @llvm.sadd.with.overflow.i8(i8, i8)
                                 declare { i8, i1 } @llvm.ssub.with.overflow.i8(i8, i8)
                                 declare { i8, i1 } @llvm.smul.with.overflow.i8(i8, i8)
@@ -403,6 +475,12 @@ public sealed partial class LlvmEmitter {
     ///     read that as a Swift symbol and try to demangle it.
     /// </summary>
     static string Global(string name) => $"\"{SymbolPrefix}{name}\"";
+
+    /// <summary>An <c>@export</c> variable: in the module's exports, and no function.</summary>
+    bool IsExportedGlobal(string name) => _module!.Exports.ContainsKey(name) && _module.Find(name) is null;
+
+    /// <summary>A global's storage, as an LLVM value: by its C name when C sees it.</summary>
+    string GlobalStorage(string name) => IsExportedGlobal(name) ? $"@\"{_module!.Exports[name]}\"" : "@" + Global("global." + name);
 
     public const string SymbolPrefix = "sable.";
 
@@ -656,8 +734,8 @@ public sealed partial class LlvmEmitter {
         var copy = what == Witnessing.Copy;
         if (type is ScalarType or ClassType or ArrayType or StructType { IsInline: true } || type is EnumType nullable && IsNullable(nullable)) {
             var call = what switch {
-                Witnessing.Copy => "sable_retain",
-                Witnessing.Destroy => "sable_release",
+                Witnessing.Copy => "sable.retain",
+                Witnessing.Destroy => "sable.release",
                 _ => "sable_heap_visit",
             };
             output.Append(indent).Append($"call void @{call}(ptr {value}){dbg}\n");
@@ -1798,7 +1876,7 @@ public sealed partial class LlvmEmitter {
                     return;
 
                 case GlobalAddrInst global:
-                    _names[global] = "@" + Global("global." + global.Global);
+                    _names[global] = module.GlobalStorage(global.Global);
                     return;
 
                 case PartialApplyInst partial: {
@@ -2290,6 +2368,43 @@ public sealed partial class LlvmEmitter {
                     Overflowing("ssub", "0", operands[0], Result());
                     return;
 
+                case "wrapping_add_Int" or "wrapping_sub_Int" or "wrapping_mul_Int":
+                    Line($"{Result()} = {builtin.Name[9..12]} i64 {operands[0]}, {operands[1]}");
+                    return;
+
+                // The iteration, when this one overflowed and it is the first:
+                // a select and a min, which vectorise. The overflow is worked
+                // out in plain arithmetic, as the vectoriser takes no
+                // with.overflow intrinsic: a sum overflowed when it has the
+                // sign of neither operand, a difference when the operands'
+                // signs differ and it has the second's; a product is made in
+                // 128 bits and must fit back in 64.
+                case "overflow_at_add_Int" or "overflow_at_sub_Int" or "overflow_at_mul_Int": {
+                    var overflowed = Fresh();
+                    var at = Fresh();
+                    if (builtin.Name[12..15] == "mul") {
+                        var (left, right, wide, narrow, back) = (Fresh(), Fresh(), Fresh(), Fresh(), Fresh());
+                        Line($"{left} = sext i64 {operands[0]} to i128");
+                        Line($"{right} = sext i64 {operands[1]} to i128");
+                        Line($"{wide} = mul i128 {left}, {right}");
+                        Line($"{narrow} = trunc i128 {wide} to i64");
+                        Line($"{back} = sext i64 {narrow} to i128");
+                        Line($"{overflowed} = icmp ne i128 {back}, {wide}");
+                    } else {
+                        var add = builtin.Name[12..15] == "add";
+                        var (result, first, second, both) = (Fresh(), Fresh(), Fresh(), Fresh());
+                        Line($"{result} = {(add ? "add" : "sub")} i64 {operands[0]}, {operands[1]}");
+                        Line($"{first} = xor i64 {operands[0]}, {result}");
+                        Line($"{second} = xor i64 {(add ? operands[1] : operands[0])}, {(add ? result : operands[1])}");
+                        Line($"{both} = and i64 {first}, {second}");
+                        Line($"{overflowed} = icmp slt i64 {both}, 0");
+                    }
+
+                    Line($"{at} = select i1 {overflowed}, i64 {operands[2]}, i64 9223372036854775807");
+                    Line($"{Result()} = call i64 @llvm.smin.i64(i64 {operands[3]}, i64 {at})");
+                    return;
+                }
+
                 case "div_Int" or "rem_Int": {
                     var zero = Fresh();
                     Line($"{zero} = icmp eq i64 {operands[1]}, 0");
@@ -2412,6 +2527,10 @@ public sealed partial class LlvmEmitter {
 
                 case "string_hash":
                     Line($"{Result()} = call i64 @sable_string_hash(ptr {operands[0]})");
+                    return;
+
+                case "string_find":
+                    Line($"{Result()} = call i64 @sable_string_find(ptr {operands[0]}, ptr {operands[1]}, i64 {operands[2]})");
                     return;
 
                 case "string_compare":
@@ -2594,7 +2713,7 @@ public sealed partial class LlvmEmitter {
                     return;
 
                 case "array_get" or "array_get_borrowed": {
-                    var element = InlineElement(operands[0], operands[1], ((ArrayType)builtin.Operands[0].Type).Element);
+                    var element = InlineElement(operands[0], operands[1], ((ArrayType)builtin.Operands[0].Type).Element, check: !builtin.InBounds);
                     var value = Result();
                     Line($"{value} = load {Type(builtin.Type)}, ptr {element}, !tbaa {TbaaElement}");
                     if (builtin.Name == "array_get") {
@@ -2623,7 +2742,7 @@ public sealed partial class LlvmEmitter {
                     var elementType = Type(arrayType.Element);
                     var array = Fresh();
                     Line($"{array} = load ptr, ptr {operands[0]}");
-                    var element = InlineElement(array, operands[1], arrayType.Element);
+                    var element = InlineElement(array, operands[1], arrayType.Element, check: !builtin.InBounds);
                     var old = Fresh();
                     Line($"{old} = load {elementType}, ptr {element}, !tbaa {TbaaElement}");
                     Line($"store {elementType} {operands[2]}, ptr {element}, !tbaa {TbaaElement}");
@@ -2680,7 +2799,7 @@ public sealed partial class LlvmEmitter {
                     var old = Fresh();
                     Line($"{old} = load ptr, ptr {operands[0]}");
                     Line($"store ptr null, ptr {operands[0]}");
-                    Line($"call void @sable_release(ptr {old})");
+                    Line($"call void @sable.release(ptr {old})");
                     return;
                 }
 
@@ -2998,6 +3117,30 @@ public sealed partial class LlvmEmitter {
 
             if (name.StartsWith("wrap_", StringComparison.Ordinal)) {
                 Wrap(builtin.Operands[0].Type, builtin.Type, operands[0], Result());
+                return true;
+            }
+
+            // overflow-checks = false: LLVM's own arithmetic, which wraps.
+            if (name.StartsWith(SilBuiltins.WrappingPrefix, StringComparison.Ordinal)) {
+                var wt = Type(builtin.Type);
+                var wresult = Result();
+                switch (name[SilBuiltins.WrappingPrefix.Length..name.LastIndexOf('_')]) {
+                    case "neg":
+                        Line($"{wresult} = sub {wt} 0, {operands[0]}");
+                        break;
+                    case "abs": {
+                        var negated = Fresh();
+                        var negative = Fresh();
+                        Line($"{negated} = sub {wt} 0, {operands[0]}");
+                        Line($"{negative} = icmp slt {wt} {operands[0]}, 0");
+                        Line($"{wresult} = select i1 {negative}, {wt} {negated}, {wt} {operands[0]}");
+                        break;
+                    }
+                    case var arithmetic:
+                        Line($"{wresult} = {arithmetic} {wt} {operands[0]}, {operands[1]}");
+                        break;
+                }
+
                 return true;
             }
 
@@ -3431,11 +3574,16 @@ public sealed partial class LlvmEmitter {
         }
 
         /// <summary>An element's address, its index checked against the count — inline, with no call.</summary>
-        string InlineElement(string array, string index, SilType elementType) {
-            var count = Count(array);
-            var outside = Fresh();
-            Line($"{outside} = icmp uge i64 {index}, {count}");
-            TrapIf(outside, "array index out of range");
+        string InlineElement(string array, string index, SilType elementType, bool check = true) {
+            // An index proved in range is not checked again: an array with an
+            // element in range is not the empty one, null.
+            if (check) {
+                var count = Count(array);
+                var outside = Fresh();
+                Line($"{outside} = icmp uge i64 {index}, {count}");
+                TrapIf(outside, "array index out of range");
+            }
+
             var elementsField = Fresh();
             var elements = Fresh();
             var element = Fresh();

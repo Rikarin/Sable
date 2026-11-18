@@ -239,4 +239,55 @@ public sealed class TextLibraryTests {
 
         Assert.Equal($"1000002\ntrue\n{expected}\ntrue\n", run.Stdout);
     }
+
+    /// <summary>
+    ///     The runtime's vectorised search finds what a scalar-by-scalar one
+    ///     does — the interpreter's, and the expectation worked out here — on
+    ///     random texts of 0 to 130 scalars, ASCII and not, from every kind of
+    ///     start: lengths around the sixteen-byte blocks, and parts that match
+    ///     at their first and last scalar but not between.
+    /// </summary>
+    [Fact]
+    public void SearchFindsWhatAScalarSearchFinds() {
+        var random = new Random(229);
+        string[] alphabet = ["a", "b", "c", "ab", "é", "漢", "😀", "x"];
+        var body = new System.Text.StringBuilder();
+        var expected = new System.Text.StringBuilder();
+        for (var n = 0; n < 60; n++) {
+            var length = n < 20 ? n * 7 % 131 : random.Next(0, 131);
+            var scalars = Enumerable.Range(0, length).Select(_ => random.Next(10) < 7 ? "ab"[random.Next(2)].ToString() : alphabet[random.Next(alphabet.Length)]).ToList();
+            var text = string.Concat(scalars);
+            var runes = text.EnumerateRunes().ToList();
+            var partRunes = random.Next(3) switch {
+                0 when runes.Count > 0 => runes.Skip(random.Next(runes.Count)).Take(random.Next(1, 6)).ToList(),
+                1 => [new System.Text.Rune('a'), new System.Text.Rune('c'), new System.Text.Rune('b')],
+                _ => Enumerable.Range(0, random.Next(0, 4)).Select(_ => new System.Text.Rune("ab"[random.Next(2)])).ToList(),
+            };
+            var part = string.Concat(partRunes);
+            var from = random.Next(-2, runes.Count + 3);
+
+            body.Append($"    print(\"\\(find(\"{text}\", \"{part}\", from: {from}) ?? -1) \\(occurrences(of: \"{part}\", within: \"{text}\")) \\(splitting(\"{text}\", by: \"{part}\").count)\")\n");
+
+            int Find(int start) {
+                for (var i = Math.Max(0, start); i + partRunes.Count <= runes.Count; i++) {
+                    if (runes.Skip(i).Take(partRunes.Count).SequenceEqual(partRunes)) {
+                        return i;
+                    }
+                }
+
+                return -1;
+            }
+
+            var count = 0;
+            if (partRunes.Count > 0) {
+                for (var at = Find(0); at >= 0; at = Find(at + partRunes.Count)) {
+                    count++;
+                }
+            }
+
+            expected.Append($"{Find(from)} {count} {(partRunes.Count == 0 ? 1 : count + 1)}\n");
+        }
+
+        Assert.Equal(expected.ToString(), Run(body.ToString()));
+    }
 }

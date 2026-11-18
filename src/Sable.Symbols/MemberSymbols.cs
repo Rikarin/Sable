@@ -371,6 +371,12 @@ public sealed class FieldSymbol(
     /// <summary>How a field of a class type holds its object (docs/02 §2.2): strongly, unless declared otherwise.</summary>
     public ReferenceKind ReferenceKind { get; internal set; }
 
+    /// <summary>
+    ///     <c>@export("name")</c> on a module's variable: the C name its
+    ///     storage is seen by. Null when C does not see it.
+    /// </summary>
+    public string? ExportName { get; internal set; }
+
     /// <summary>True when the member has accessors rather than storage.</summary>
     public bool IsComputed { get; internal set; }
 

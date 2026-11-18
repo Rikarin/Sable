@@ -820,11 +820,6 @@ public sealed partial class Manifest {
                 }
             }
 
-            // Arithmetic is always checked, so overflow-checks = false is recorded but has no effect yet.
-            if (!profile.OverflowChecks) {
-                Warn(table, "overflow-checks", $"profile.{defaults.Name}.overflow-checks", "integer overflow is always checked; 'false' has no effect yet");
-            }
-
             return profile with { Recorded = recorded };
         }
 

@@ -1,0 +1,21 @@
+module Negative.ExportedVariables
+
+// '@export' on a variable: one of the module's, stored, of a type C has
+// (SYNTAX.md §24, #176).
+
+@export("sable_count")
+var count: Int = 0
+
+@export("sable_name")
+var name: String = ""                   //! S3224 'name' cannot be seen by C
+
+struct Settings {
+    @export("sable_level")              //! S3223 an '@export' variable is one of the module's
+    static var level: Int = 1
+}
+
+@export("sable_twice")                  //! S3223 an '@export' variable is stored
+var twice: Int { get { return count * 2 } }
+
+@export("2bad")                         //! S3223 is not a name C can give
+var bad: Int = 0

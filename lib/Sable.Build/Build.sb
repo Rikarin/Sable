@@ -193,26 +193,45 @@ public struct Profile {
     var exclusivity: Exclusivity?
     var overflowChecks: Bool?
     var leakCheck: Bool?
+    var optSize: OptSize?
+    var strip: Strip?
+    var rpath: Bool?
 
-    /// `sable build --release`.
+    /// `sable build --release`. `optSize` optimises for size, in place of
+    /// `optLevel`'s speed.
     public static fn release(optLevel: Int? = none, debug: Bool? = none, lto: Lto? = none, codegenUnits: Int? = none, panic: Panic? = none,
         arcChecks: Bool? = none, exclusivity: Exclusivity? = none, overflowChecks: Bool? = none,
-        leakCheck: Bool? = none) -> Profile {
+        leakCheck: Bool? = none, optSize: OptSize? = none, strip: Strip? = none, rpath: Bool? = none) -> Profile {
         return Profile {
             name: "release", optLevel: optLevel, debug: debug, lto: lto, codegenUnits: codegenUnits, panic: panic,
             arcChecks: arcChecks, exclusivity: exclusivity, overflowChecks: overflowChecks, leakCheck: leakCheck,
+            optSize: optSize, strip: strip, rpath: rpath,
         }
     }
 
     /// Every other build.
     public static fn dev(optLevel: Int? = none, debug: Bool? = none, lto: Lto? = none, codegenUnits: Int? = none, panic: Panic? = none,
         arcChecks: Bool? = none, exclusivity: Exclusivity? = none, overflowChecks: Bool? = none,
-        leakCheck: Bool? = none) -> Profile {
+        leakCheck: Bool? = none, optSize: OptSize? = none, strip: Strip? = none, rpath: Bool? = none) -> Profile {
         return Profile {
             name: "dev", optLevel: optLevel, debug: debug, lto: lto, codegenUnits: codegenUnits, panic: panic,
             arcChecks: arcChecks, exclusivity: exclusivity, overflowChecks: overflowChecks, leakCheck: leakCheck,
+            optSize: optSize, strip: strip, rpath: rpath,
         }
     }
+}
+
+/// Optimising for size rather than speed: clang's `-Os`, or `-Oz`, which
+/// gives up more speed for less code.
+public enum OptSize {
+    size,
+    minSize
+}
+
+/// What the link leaves out of the executable; with none, nothing.
+public enum Strip {
+    debuginfo,
+    symbols
 }
 
 public enum Lto {
@@ -455,7 +474,12 @@ struct TomlWriter {
 
     mutating fn profile(_ profile: Profile) {
         table("profile.\(profile.name)")
-        if let level = profile.optLevel {
+        if let size = profile.optSize {
+            match size {
+                case .size    => string("opt-level", "s")
+                case .minSize => string("opt-level", "z")
+            }
+        } else if let level = profile.optLevel {
             raw("opt-level", "\(level)")
         }
         if let debug = profile.debug {
@@ -491,6 +515,15 @@ struct TomlWriter {
         }
         if let check = profile.leakCheck {
             raw("leak-check", check ? "true" : "false")
+        }
+        if let strip = profile.strip {
+            match strip {
+                case .debuginfo => string("strip", "debuginfo")
+                case .symbols   => string("strip", "symbols")
+            }
+        }
+        if let rpath = profile.rpath {
+            raw("rpath", rpath ? "true" : "false")
         }
     }
 

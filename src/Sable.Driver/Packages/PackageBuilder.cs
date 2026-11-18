@@ -405,6 +405,7 @@ public static class PackageBuilder {
                         LinkInputs = graph.LinkInputs(member.Name),
                     },
                     Whole = profile.CodegenUnits == 1,
+                    OverflowChecks = profile.OverflowChecks,
                     DenyReflection = DeniesReflection(workspace, request),
                 };
                 var outcome = IncrementalBuild.Build(Units(graph, member.Name, bin, generated), buildSettings, executable, Path.Combine(output, "cache"), timings, environment.Error);
@@ -439,7 +440,7 @@ public static class PackageBuilder {
     ///     <c>target/&lt;profile&gt;/</c>, named for the package with
     ///     <c>-</c> made <c>_</c>, as C's linkers take names: the library and its
     ///     dependencies compiled whole, with no entry point
-    ///     (<see cref="Pipeline.Compile(IReadOnlyList{SyntaxTree}, string?, bool, BuildTimings?, bool, NativeTarget?, bool)" />),
+    ///     (<see cref="Pipeline.Compile(IReadOnlyList{SyntaxTree}, string?, bool, BuildTimings?, bool, NativeTarget?, bool, bool, bool)" />),
     ///     and linked with the runtime. Not cached between builds, as a
     ///     binary's units are.
     /// </summary>
@@ -464,6 +465,7 @@ public static class PackageBuilder {
             profile.Exclusivity,
             optimised: profile.Optimise && !profile.Debug,
             target: request.Target,
+            checkOverflow: profile.OverflowChecks,
             library: true,
             denyReflection: DeniesReflection(graph.Workspace, request));
         Report(environment, result.Warnings);

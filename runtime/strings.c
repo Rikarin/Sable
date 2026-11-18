@@ -15,6 +15,23 @@ typedef struct SableString {
 
 const SableMetadata sable_string_metadata = { NULL, "String", 0, NULL, NULL, 0, _Alignof(SableObject), NULL, NULL };
 
+// Sixteen bytes as one value, with clang's portable vector types: each
+// machine compiles them to its own SIMD (SSE2, NEON). See Searching, below.
+typedef uint8_t sable_bytes16 __attribute__((vector_size(16)));
+typedef int8_t sable_mask16 __attribute__((vector_size(16)));
+
+static inline sable_bytes16 load16(const char *p) {
+    sable_bytes16 v;
+    memcpy(&v, p, sizeof v);
+    return v;
+}
+
+static inline bool any16(sable_mask16 mask) {
+    uint64_t words[2];
+    memcpy(words, &mask, sizeof words);
+    return (words[0] | words[1]) != 0;
+}
+
 static int64_t count_scalars(const char *bytes, int64_t length) {
     int64_t count = 0;
     for (int64_t i = 0; i < length; i++) {
@@ -83,6 +100,14 @@ static SableString *make_text(const char *text, int64_t length) {
     const uint8_t *bytes = (const uint8_t *)text;
     int64_t count = 0, size = 0;
     for (int64_t i = 0; i < length;) {
+        // Sixteen ASCII bytes at once, the usual run: each its own scalar.
+        if (i + 16 <= length && !any16((sable_mask16)(load16(text + i) & (uint8_t)0x80))) {
+            i += 16;
+            count += 16;
+            size += 16;
+            continue;
+        }
+
         int width = utf8_sequence(bytes, i, length);
         size += width == 0 ? 3 : width;
         i += width == 0 ? 1 : width;
@@ -351,6 +376,77 @@ int64_t sable_string_compare(const SableString *a, const SableString *b) {
     }
 
     return a->length < b->length ? -1 : a->length > b->length ? 1 : 0;
+}
+
+// ---- Searching
+//
+// Sixteen bytes at a time (sable_bytes16, above), a scalar loop after for
+// what is left. A UTF-8 needle found byte for byte starts at a
+// scalar's first byte, and matches scalar for scalar, so a byte search is a
+// scalar search; the interpreter searches by scalar and finds the same place.
+
+// Where the needle first occurs in the haystack, or null. Each block of
+// sixteen candidate starts is tested at once on the needle's first and last
+// bytes, which rarely both match by chance; only a candidate that passes is
+// compared whole (Muła's "generic SIMD" search).
+static const char *find_bytes(const char *haystack, int64_t length, const char *needle, int64_t size) {
+    if (size > length) {
+        return NULL;
+    }
+
+    if (size == 1) {
+        return memchr(haystack, needle[0], (size_t)length);
+    }
+
+    int64_t i = 0;
+    sable_bytes16 first = (sable_bytes16){ 0 } + (uint8_t)needle[0];
+    sable_bytes16 last = (sable_bytes16){ 0 } + (uint8_t)needle[size - 1];
+    for (; i + size - 1 + 16 <= length; i += 16) {
+        sable_mask16 both = (sable_mask16)((load16(haystack + i) == first) & (load16(haystack + i + size - 1) == last));
+        if (!any16(both)) {
+            continue;
+        }
+
+        for (int k = 0; k < 16; k++) {
+            if (both[k] && memcmp(haystack + i + k + 1, needle + 1, (size_t)(size - 2)) == 0) {
+                return haystack + i + k;
+            }
+        }
+    }
+
+    for (; i + size <= length; i++) {
+        if (haystack[i] == needle[0] && memcmp(haystack + i, needle, (size_t)size) == 0) {
+            return haystack + i;
+        }
+    }
+
+    return NULL;
+}
+
+// Where 'part' next occurs in 'text' at or after scalar 'from' (taken as 0
+// when negative): its scalar index, or -1. Sable.Text's find, contains,
+// replacing, splitting and occurrences are written over it.
+int64_t sable_string_find(const SableString *text, const SableString *part, int64_t from) {
+    if (from < 0) {
+        from = 0;
+    }
+
+    if (from > text->count) {
+        return -1;
+    }
+
+    if (part->length == 0) {
+        return from;
+    }
+
+    int64_t start = offset_of(text, from);
+    const char *found = find_bytes(text->bytes + start, text->length - start, part->bytes, part->length);
+    if (found == NULL) {
+        return -1;
+    }
+
+    int64_t offset = found - text->bytes;
+    return text->count == text->length ? offset : from + count_scalars(text->bytes + start, offset - start);
 }
 
 SableString *sable_string_concat(const SableString *a, const SableString *b) {

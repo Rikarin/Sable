@@ -1205,7 +1205,16 @@ public sealed partial class Compilation {
             )
         ];
 
-        function.ReturnTypeResolver = () => type;
+        // A protocol's 'init(seed: Int)' is a requirement, met by the
+        // conformer's own initialiser, and it makes a Self: through a T it
+        // makes a T.
+        if (type.TypeKind == TypeKind.Protocol) {
+            function.IsAbstract = declaration.Body is null;
+            function.ReturnTypeResolver = () => type.SelfTypeParameter ?? (TypeSymbol)type;
+        } else {
+            function.ReturnTypeResolver = () => type;
+        }
+
         RecordDeclaration(declaration, function);
         type.AddMember(function);
     }

@@ -615,7 +615,9 @@ internal static class ConformanceChecker {
             function.Parameters.Select(static p => $"{p.Name}: {p.Type.ToDisplayString()}")
         );
 
-        return $"fn {function.Name}({parameters}) -> {function.ReturnType.ToDisplayString()}";
+        return function.FunctionKind == FunctionKind.Initializer
+            ? $"init({parameters})"
+            : $"fn {function.Name}({parameters}) -> {function.ReturnType.ToDisplayString()}";
     }
 
     static void Report(

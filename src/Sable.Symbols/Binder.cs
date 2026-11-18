@@ -2821,6 +2821,29 @@ public sealed partial class Binder {
                     );
             }
 
+            // 'T(seed: 4)' for T: Makeable: the protocol's initialiser
+            // requirement, met by whatever T turns out to be.
+            case BoundTypeExpression typeExpression
+                when AssociatedTypes.IsAbstract(typeExpression.ReferencedType): {
+                var found = LookupMember(typeExpression.ReferencedType, "init");
+                var requirements = found is { } lookup
+                    ? lookup.Members.OfType<FunctionSymbol>().Where(static f => f.FunctionKind == FunctionKind.Initializer).ToImmutableArray()
+                    : [];
+
+                if (found is null || requirements.IsEmpty) {
+                    _diagnostics.Error(
+                        ErrorCode.ERR_NotCallable,
+                        syntax.Expression.Span,
+                        $"'{typeExpression.ReferencedType.ToDisplayString()}' is not callable: "
+                        + "nothing it is constrained to requires an initialiser"
+                    );
+                    return new BoundError(syntax, arguments.ToArray());
+                }
+
+                var group = new BoundFunctionGroup(syntax, typeExpression, requirements) { Substitution = found.Value.Substitution };
+                return BindCallToGroup(syntax, group, arguments, labels, syntaxes, expectedType);
+            }
+
             case BoundTypeExpression typeExpression
                 when typeExpression.ReferencedType is NamedTypeSymbol namedType: {
                 // 'U64(x)': a numeric conversion, as 'x as U64'; 'U64(1)': a literal of that type.
@@ -2862,6 +2885,17 @@ public sealed partial class Binder {
                         ErrorCode.ERR_CannotInstantiate,
                         syntax.Expression.Span,
                         $"'{namedType.Name}' is abstract, so it has no values of its own"
+                    );
+                    return new BoundError(syntax, arguments.ToArray());
+                }
+
+                // Its initialiser is a requirement, made by a conformer's.
+                if (namedType.TypeKind == TypeKind.Protocol) {
+                    _diagnostics.Error(
+                        ErrorCode.ERR_CannotInstantiate,
+                        syntax.Expression.Span,
+                        $"'{namedType.Name}' is a protocol, so it has no values of its own; "
+                        + "a type that conforms to it makes them"
                     );
                     return new BoundError(syntax, arguments.ToArray());
                 }

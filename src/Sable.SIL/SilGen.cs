@@ -4150,9 +4150,21 @@ public sealed partial class SilGen {
                 return ElementPartAssignment(assignment, element);
             }
 
+            // 'x.name = v' for x: T, T: Named: the property of the type T
+            // stands for, now that it is known — stored or with a setter.
+            if (assignment.Target is BoundFieldAccess { Receiver: { } holder } requirement
+                && PropertyWitness(requirement.Field, holder) is { } own) {
+                return Assignment(new BoundAssignment(
+                    assignment.Syntax,
+                    new BoundFieldAccess(requirement.Syntax, holder, own, requirement.Type),
+                    assignment.Value
+                ));
+            }
+
             // 'grid[x, y] = v': a call to the subscript's setter, which takes
             // the receiver where it is, as any mutating method does.
             if (assignment.Target is BoundIndexAccess { Subscript: { } subscript } subscripted) {
+                subscript = SubscriptWitness(subscript, subscripted.Receiver);
                 if (generator.SubscriptSetter(subscript) is not { } setter) {
                     return Missing(assignment, $"storing through the subscript of '{subscripted.Receiver.Type.ToDisplayString()}'");
                 }
@@ -5062,9 +5074,30 @@ public sealed partial class SilGen {
             return Emit(new LoadInst(slot, LoadKind.Take));
         }
 
+        /// <summary>
+        ///     A protocol's subscript, used on a T that stands for a known type
+        ///     now: that type's own. Any other subscript is itself.
+        /// </summary>
+        FunctionSymbol SubscriptWitness(FunctionSymbol subscript, BoundExpression receiver) =>
+            OwnerOf(subscript) is { TypeKind: TypeKind.Protocol } && Sub(receiver.Type) is NamedTypeSymbol concrete
+                && Implementation(concrete, subscript) is { FunctionKind: FunctionKind.Subscript } own
+                ? own
+                : subscript;
+
+        /// <summary>
+        ///     A protocol's property, used on a T that stands for a known type
+        ///     now: that type's own field. Null for any other property.
+        /// </summary>
+        FieldSymbol? PropertyWitness(FieldSymbol property, BoundExpression receiver) =>
+            property is { IsStatic: false, ContainingSymbol: NamedTypeSymbol { TypeKind: TypeKind.Protocol } }
+            && Sub(receiver.Type) is NamedTypeSymbol { TypeKind: not TypeKind.Protocol } concrete
+                ? FindField(concrete, property.Name)
+                : null;
+
         SilValue? IndexRead(BoundIndexAccess index) {
             // A type's own subscript: a call to its getter.
             if (index.Subscript is { } subscript) {
+                subscript = SubscriptWitness(subscript, index.Receiver);
                 return generator.SubscriptGetter(subscript) is { } getter
                     ? Expression(new BoundCall(index.Syntax, index.Receiver, getter, index.Indices, index.Type) { Substitution = index.Substitution })
                     : Missing(index, $"indexing '{index.Receiver.Type.ToDisplayString()}'");

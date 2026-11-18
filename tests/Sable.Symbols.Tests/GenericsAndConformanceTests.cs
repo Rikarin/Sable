@@ -399,4 +399,77 @@ public sealed class GenericsAndConformanceTests {
             fn twice<H: Holder>(_ h: H) -> H.Item => h.item() + h.item()
             """
         );
+
+    // ---- Initialiser requirements ------------------------------------------
+
+    [Fact]
+    public void AnInitialiserRequirementIsCalledThroughAParameter() =>
+        Assert.Equal(
+            "T",
+            TypeOfLast(
+                """
+                protocol Makeable { init(seed: Int) }
+                fn probe<T: Makeable>(_ witness: T) {
+                    let v = T(seed: 4)
+                }
+                """
+            )
+        );
+
+    [Fact]
+    public void AnInitialiserRequirementChecksItsArguments() =>
+        Assert.Contains(
+            Errors(
+                """
+                protocol Makeable { init(seed: Int) }
+                fn make<T: Makeable>() -> T => T(seed: "four")
+                """
+            ),
+            static e => e.Code == ErrorCode.ERR_NoMatchingOverload
+        );
+
+    [Fact]
+    public void AParameterWithoutAnInitialiserRequirementIsNotCallable() =>
+        Assert.Contains(
+            Errors(
+                """
+                protocol Plain { fn f() -> Int }
+                fn make<T: Plain>() -> T => T(seed: 4)
+                """
+            ),
+            static e => e.Code == ErrorCode.ERR_NotCallable && e.Message.Contains("requires an initialiser")
+        );
+
+    [Fact]
+    public void AProtocolCannotBeInitialised() =>
+        Assert.Contains(
+            Errors(
+                """
+                protocol Makeable { init(seed: Int) }
+                fn make() => Makeable(seed: 4)
+                """
+            ),
+            static e => e.Code == ErrorCode.ERR_CannotInstantiate
+        );
+
+    [Fact]
+    public void AnInitialiserRequirementIsMetByTheMemberwiseInitialiser() =>
+        AssertClean(
+            """
+            protocol Makeable { init(seed: Int) }
+            struct Thing: Makeable { var seed: Int }
+            """
+        );
+
+    [Fact]
+    public void AMissingInitialiserRequirementIsReported() =>
+        Assert.Contains(
+            Errors(
+                """
+                protocol Makeable { init(seed: Int) }
+                struct Thing: Makeable { var name: String }
+                """
+            ),
+            static e => e.Code == ErrorCode.ERR_RequirementSignatureMismatch && e.Message.Contains("'init(seed: Int)'")
+        );
 }

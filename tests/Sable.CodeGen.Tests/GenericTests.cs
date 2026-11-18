@@ -155,4 +155,67 @@ public sealed class GenericTests {
                 )
             ).Stdout
         );
+
+    [Fact]
+    public void InitialiserSubscriptAndSettablePropertyRequirementsThroughAParameter() =>
+        Assert.Equal(
+            "s3 cell4 renamed+ renamed!+! 12\n",
+            AssertAgree(
+                Program(
+                    """
+                    protocol Makeable { init(seed: Int) }
+                    protocol Named { var name: String { get set } }
+                    protocol Grid { subscript(i: Int) -> Int { get set } }
+
+                    struct Stored: Named, Makeable {
+                        var name: String
+                        init(seed: Int) { self.name = "s\(seed)" }
+                    }
+
+                    struct Computed: Named {
+                        var inner: String
+                        var name: String {
+                            get => inner
+                            set { inner = newValue + "!" }
+                        }
+                    }
+
+                    class Cell: Makeable, Named {
+                        var name: String
+                        init(seed: Int) { self.name = "cell\(seed)" }
+                    }
+
+                    struct Cells: Grid {
+                        var items: Int[>..]
+                        subscript(i: Int) -> Int {
+                            get => items[i]
+                            set { items[i] = newValue }
+                        }
+                    }
+
+                    fn mk<T: Makeable>(_ seed: Int) -> T => T(seed: seed)
+
+                    fn rename<T: Named>(_ x: inout T) {
+                        x.name = "renamed"
+                        x.name += "+"
+                    }
+
+                    fn bump<G: Grid>(_ g: inout G) {
+                        g[1] = g[1] + 10
+                    }
+                    """,
+                    """
+                        let a: Stored = mk(3)
+                        let c: Cell = mk(4)
+                        var s = a
+                        rename(&s)
+                        var k = Computed(inner: "x")
+                        rename(&k)
+                        var cs = Cells(items: [1, 2, 3])
+                        bump(&cs)
+                        print("\(a.name) \(c.name) \(s.name) \(k.name) \(cs[1])")
+                    """
+                )
+            ).Stdout
+        );
 }

@@ -493,6 +493,100 @@ and an optimised build with debug information, compile the program whole.
 The runtime is compiled once per set of options and kept, in the build cache
 (or `$SABLE_HOME/cache/runtime` for a single file).
 
+**Measured** (#182) on `tools/incremental/genworkspace.py`'s workspace (100
+packages, 110k lines, 102 units), `sable` built Release, on a machine under
+a load average of about 130 — so the times are rough; the unit counts are
+exact. Before is keying by the whole program's interface, after is keying by
+dependencies and binding kept units from their `.sbi`:
+
+| Edit (dev profile)                          | Units before | Units after | Before  | After   |
+|---------------------------------------------|-------------:|------------:|--------:|--------:|
+| A function body (pkg50 / pkg0 / pkg99)      | 1            | 1           | 4.8 / 8.9 / 5.4 s | 3.5 / 2.5 / 3.4 s |
+| A new public function in a leaf (pkg99)     | 102          | 2           | 19.3 s  | 2.7 s   |
+| … in a package half the others use (pkg50)  | 102          | 51          | 20.1 s  | 10.9 s  |
+| … in the package every other uses (pkg0)    | 102          | 101         | 18.0 s  | 14.7 s  |
+
+Of a body edit, parsing fell from 0.37–0.59 s to 0.15–0.30 s (496 of the
+501 files are parsed from interfaces) and binding from 1.1–2.3 s to
+0.5–0.9 s. `IncrementalTests` counts the units each kind of edit compiles.
+
+### The query engine: design (not built)
+
+The cache above is a query engine with its memo tables on disk and its
+dependency edges hashed into keys: each cached thing's key is the
+fingerprint of exactly the fingerprints it was computed from. What a query
+engine adds is a long-lived process (the language server, or a build daemon)
+keeping its values in memory between revisions, and red-green marking over
+recorded edges in place of recomputing every key. It is specified here
+against the code that exists, so that it can be built one query at a time.
+
+**Inputs** (re-read at each revision, compared by content hash): `text(file)`,
+`options(file)` (features, target, generator attributes), `units(program)`
+(the plans: which files each unit has), `settings`.
+
+**Queries**, each a pure function of the queries it reads:
+
+| Query | Value | Reads | Today |
+|---|---|---|---|
+| `parse(file)` | syntax tree | `text`, `options` | `SyntaxTree.Parse` |
+| `declared_types(file)` | concrete and other type names | `parse` | part of `ConcreteTypeNames` |
+| `concrete(program)` | the concrete type names | `declared_types` of every file | `ConcreteTypeNames` |
+| `file_interface(file)` | `FileInterface` | `parse`, `concrete` ∩ the file's `ExtendedNames` | `InterfaceFingerprint.Interface`, `.sbi` |
+| `unit_facts(unit)` | modules, imports, dotted names | `parse` heads, `file_interface.References` | `UnitFacts` |
+| `unit_graph(program)` | each unit's dependencies | `unit_facts` of every unit | `UnitGraph.Dependencies` |
+| `unit_interface(unit)` | hash of its files' fingerprints | `file_interface` | `unitInterfaces` |
+| `extensions(program)` | hash of every extension fingerprint | `file_interface` | `extensions` |
+| `declarations(program)` | bound declarations (a `Compilation`) | the compiled units' `parse`, the others' interface trees | `Compilation.Create` |
+| `check(unit)` | diagnostics | `declarations`, the unit's trees | `Diagnostics` |
+| `lower(unit)` | SIL, IR and ABI records | `declarations`, `unit_graph`, `unit_interface` of its dependencies, `extensions` | `SilGen.LowerUnit` |
+| `object(unit)` | `.o` | `lower` | `NativeObjects.CompileIr` |
+| `link(program)` | executable | every `object`, every ABI record | `NativeObjects.Link` |
+
+**Memo entries.** Each holds the value, the fingerprint of the value, the
+revision at which it was last verified, and the list of queries it read in
+the order it read them, each with the fingerprint it had then.
+
+**Red-green marking.** At a new revision an input whose hash changed is red,
+the rest of the inputs green. To use a memoised query, `try_mark_green(q)`
+walks q's recorded reads in order: a green read is passed over; a read not
+yet verified at this revision is verified first by `try_mark_green` itself,
+and if that fails it is executed again, and the new value's fingerprint is
+compared with the one recorded — equal, and the read counts as green (this
+is early cut-off); different, and q is red. When every read is green, q is
+green and its value is reused without running it; when one is red, q runs
+again, recording its reads afresh. Reads are walked in order because a later
+read may only exist because of an earlier one's value (which modules a unit
+imports decides which interfaces it reads).
+
+Early cut-off is where the gain is. An edit to an ordinary body makes
+`parse(file)` red, `file_interface(file)` runs again and its fingerprint is
+unchanged, so `unit_interface`, `unit_graph` and `extensions` are green, and
+of `lower` and `object` only the edited unit's are red (its trees are read).
+A new public function changes one `unit_interface`, and `lower` is red for
+exactly the units whose `unit_graph` entry lists that unit — what the keys
+above already compute, but without hashing every file's interface again.
+
+**On disk.** `file_interface` is persisted as the `.sbi`, `object` as the `.o`
+and its `.abi`, keyed as they are today; a cold process starts with every
+entry unverified and marks them green against what is on disk, which is
+exactly today's build. The in-memory engine is the same algorithm with the
+values kept.
+
+**What blocks it.** `declarations` is all or nothing: a `Compilation` cannot
+replace one tree, so any red tree rebinds every declaration (~0.2 s on the
+110k-line workspace, most of a warm build). The engine pays off once
+binding is per module — `module_declarations(module)` reading the
+`parse` of that module's files and the `module_declarations` of what they
+import, with a `Compilation` assembled from them — so that a body edit
+rebinds nothing but the edited file's bodies. The language server needs the
+same: it builds a package's `Analysis` from every tree of the package and
+its dependencies on each snapshot (`AnalysisCache` keeps only the latest),
+and would read `parse`, `declarations` and `check` from the engine, sharing
+them with `sable build` in one process. Until binding is incremental, the
+server would gain only `parse` (already reused per document) and the
+interface trees of dependencies, which it cannot use while it navigates
+into their bodies.
+
 ---
 
 ## 5.5 The registry

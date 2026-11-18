@@ -98,6 +98,24 @@ public sealed class LoweringTests {
     }
 
     [Fact]
+    public void CoalescingAssignmentStoresAnOptional() {
+        // 'x ??= 5' computes 'x ?? 5', an Int, and stores it back as an Int?.
+        var module = Lower(
+            """
+            fn fill(_ start: Int, _ empty: Bool) -> Int {
+                var x: Int? = start
+                if empty { x = none }
+                x ??= 5
+                return x ?? 0
+            }
+            """
+        );
+
+        Assert.Equal(5L, Run(module, "fill", 3L, true));
+        Assert.Equal(3L, Run(module, "fill", 3L, false));
+    }
+
+    [Fact]
     public void IntegerOverflowTraps() {
         var module = Lower(
             """

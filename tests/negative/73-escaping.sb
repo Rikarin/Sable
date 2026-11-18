@@ -11,19 +11,19 @@ fn keep(_ f: @escaping () -> Int) -> Keeper { return Keeper(run: f) }
 fn keepToo(@escaping _ f: () -> Int) -> () -> Int { return f }
 
 fn returned(_ f: () -> Int) -> () -> Int {
-    return f                            //! S3068 'f' is a closure that is not @escaping
+    return f                            //! S3205 'f' is a closure that is not @escaping
 }
 
 fn stored(_ f: () -> Int) -> Keeper {
-    return Keeper(run: f)               //! S3068 so it can only be called
+    return Keeper(run: f)               //! S3205 so it can only be called
 }
 
 fn passedToEscaping(_ f: () -> Int) -> Keeper {
-    return keep(f)                      //! S3068 so it can only be called
+    return keep(f)                      //! S3205 so it can only be called
 }
 
 fn capturedByAnEscapingClosure(_ f: () -> Int) -> () -> Int {
-    return () => f() + 1                //! S3068 a closure that may outlive the call cannot capture it
+    return () => f() + 1                //! S3205 a closure that may outlive the call cannot capture it
 }
 
 fn calledAndPassedOn(_ f: () -> Int) -> Int {
@@ -33,14 +33,14 @@ fn calledAndPassedOn(_ f: () -> Int) -> Int {
 
 fn aLetNamingOneDoesNotEscapeEither(_ f: () -> Int) -> () -> Int {
     let g = f
-    return g                            //! S3068 'g' is a closure that is not @escaping
+    return g                            //! S3205 'g' is a closure that is not @escaping
 }
 
 fn inoutIsNotCaptured(_ x: inout Int) -> Int {
-    return call(() => x + 1)            //! S3068 'x' is inout, the caller's storage
+    return call(() => x + 1)            //! S3205 'x' is inout, the caller's storage
 }
 
 fn outIsNotCaptured(out x: Int) {
     x = 1
-    let read = () => x                  //! S3068 'x' is out, the caller's storage
+    let read = () => x                  //! S3205 'x' is out, the caller's storage
 }

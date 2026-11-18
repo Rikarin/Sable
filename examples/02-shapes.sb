@@ -44,7 +44,7 @@ public union Geometry {
 extension Geometry: Shape {
     public var area: F64 {
         get => match self {
-            case .Circle(let r) => F64.pi * r * r
+            case .Circle(let r)      => F64.pi * r * r
             case .Rect(let w, let h) => w * h
             case .Triangle(let a, let b, let c) =>
                 ((b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y)).abs() / 2
@@ -54,7 +54,7 @@ extension Geometry: Shape {
 
     public var perimeter: F64 {
         get => match self {
-            case .Circle(let r) => 2 * F64.pi * r
+            case .Circle(let r)      => 2 * F64.pi * r
             case .Rect(let w, let h) => 2 * (w + h)
             case .Triangle(let a, let b, let c) =>
                 a.distance(to: b) + b.distance(to: c) + c.distance(to: a)

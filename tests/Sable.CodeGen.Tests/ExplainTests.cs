@@ -9,23 +9,12 @@ namespace Sable.CodeGen.Tests;
 /// </summary>
 public sealed class ExplainTests {
     /// <summary>
-    ///     Codes without a page, each for a reason: the compiler never reports
-    ///     it to a user, or no short program can provoke it.
+    ///     Codes without a page. Every code the compiler has gets one, even
+    ///     those a user rarely meets (S1005 from the single-construct parsers,
+    ///     the builtins' S3082, S7001 and S7002, the binder's fallback S3099):
+    ///     their pages explain without an example.
     /// </summary>
-    static readonly HashSet<ErrorCode> Undocumented = [
-        ErrorCode.None,
-
-        // Only SyntaxTree.ParseExpression/ParseType/ParseStatement report it; compiling a file never does.
-        ErrorCode.ERR_UnexpectedTrailingTokens,
-
-        // Builtins are Sable.Core's alone: elsewhere S3081 comes first and stops the compile.
-        ErrorCode.ERR_MalformedBuiltin,
-        ErrorCode.ERR_UnknownBuiltin,
-        ErrorCode.ERR_BuiltinSignatureMismatch,
-
-        // The binder's fallback for a syntax kind it has no case for; every kind has one.
-        ErrorCode.ERR_NotSupportedYet,
-    ];
+    static readonly HashSet<ErrorCode> Undocumented = [ErrorCode.None];
 
     static string RepositoryRoot {
         get {
@@ -128,6 +117,23 @@ public sealed class ExplainTests {
         foreach (var code in Undocumented.Where(static c => c != ErrorCode.None)) {
             Assert.Null(DiagnosticDocs.Page($"S{(int)code:D4}"));
         }
+    }
+
+    [Fact]
+    public void ReportsPointAtSableExplain() {
+        const string one = "error[S3004]: type mismatch\n --> a.sb:1:1";
+        Assert.Equal("note: 'sable explain S3004' says more about this diagnostic", DiagnosticDocs.Hint([one]));
+        Assert.Equal("note: 'sable explain <code>' says more about S2002, S3004",
+            DiagnosticDocs.Hint([one, "warning[S3004]: again", "error[S2002]: no symbol named 'x'"]));
+        Assert.Null(DiagnosticDocs.Hint(["internal error: SIL verification failed"]));
+    }
+
+    [Fact]
+    public void ACheckThatFailsSaysWhereToReadMore() {
+        using var fixture = new PackageFixture();
+        fixture.Package("app", "app", "1.0.0", "", ("src/main.sb", "module App\n\nfn main() {\n    let x: Int = true\n}\n"));
+        Assert.Equal(1, Sable.Driver.Packages.PackageBuilder.Check(fixture.Load("app"), fixture.Environment, new()));
+        Assert.Contains("note: 'sable explain S3004'", fixture.Errors.ToString(), StringComparison.Ordinal);
     }
 
     [Theory]

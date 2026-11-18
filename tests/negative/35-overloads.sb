@@ -60,3 +60,15 @@ fn aGenericAndAConcreteOverload(_ p: Point) -> String {
 
 fn both<T>(_ value: T) -> String { return "generic" }
 fn both(_ p: Point) -> String { return "concrete" }
+
+// Overloads differ in their parameter types or labels; a second declaration
+// with the same ones is not an overload, whatever it returns.
+fn twice(_ n: Int) -> Int { return n * 2 }
+fn twice(_ m: Int) -> Int { return m + m }      //! S2000 already declared
+fn twice(_ n: Int) -> String { return "two" }   //! S2000 not in their result type alone
+
+struct Counter {
+    fn step(by n: Int) -> Int { return n }
+    fn step(by m: Int) -> Int { return m }      //! S2000 already declared
+    static fn step(by n: Int) -> Int { return n }
+}

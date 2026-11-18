@@ -11,6 +11,9 @@ public sealed record CompileResult(
     string? LlvmIr,
     IReadOnlyList<string> Errors) {
     public bool Succeeded => Errors.Count == 0 && LlvmIr is not null;
+
+    /// <summary>The front end's warnings about the program's own files, whether or not it compiled.</summary>
+    public IReadOnlyList<string> Warnings { get; init; } = [];
 }
 
 /// <summary>
@@ -31,19 +34,58 @@ public static class Pipeline {
         Compile([SyntaxTree.Parse(source)], debugDirectory, checkExclusivity);
 
     /// <summary>
+    ///     What a program's files are parsed with: <c>DEBUG</c> defined for an
+    ///     unoptimised build, <c>RELEASE</c> for an optimised one (SYNTAX.md
+    ///     §21), and the package's features.
+    /// </summary>
+    public static ParseOptions ParseOptionsFor(bool optimise, IEnumerable<string>? features = null) =>
+        ParseOptionsFor(optimise, ParseOptions.Default with { Features = [..features ?? []] });
+
+    /// <summary>The options a file already has — its features and workspace — with <c>DEBUG</c> or <c>RELEASE</c> defined.</summary>
+    public static ParseOptions ParseOptionsFor(bool optimise, ParseOptions options) =>
+        options with { Symbols = [optimise ? "RELEASE" : "DEBUG"] };
+
+    /// <summary>
     ///     A program of many files — a package and its dependencies — compiled
     ///     together. The first tree is the one that should hold the entry
     ///     point: '@main', or a function called main, is looked for there first.
     /// </summary>
-    public static CompileResult Compile(IReadOnlyList<SyntaxTree> program, string? debugDirectory = null, bool checkExclusivity = true, BuildTimings? timings = null) {
+    /// <param name="optimised">
+    ///     An optimised build with debug information: the SIL passes run
+    ///     anyway, and the debugger sees what they leave. Without it, a build
+    ///     with debug information keeps every local in its slot.
+    /// </param>
+    public static CompileResult Compile(
+        IReadOnlyList<SyntaxTree> program,
+        string? debugDirectory = null,
+        bool checkExclusivity = true,
+        BuildTimings? timings = null,
+        bool optimised = false
+    ) {
         Compilation compilation;
         List<string> errors;
+        List<string> warnings;
         using (BuildTimings.Of(timings, "bind")) {
             compilation = CompilationOf(program);
             // The SIL checks run as the program is lowered, below.
             errors = Formatted(compilation.GetAllDiagnosticsByFile(), program);
+            warnings = Warnings(compilation, program);
         }
 
+        // The warnings go with whatever comes back, an error or the IR.
+        return CompileChecked(compilation, program, errors, debugDirectory, checkExclusivity, timings, optimised) with { Warnings = warnings };
+    }
+
+    /// <summary>The rest of <see cref="Compile(IReadOnlyList{SyntaxTree}, string?, bool, BuildTimings?, bool)" />, from a checked program.</summary>
+    static CompileResult CompileChecked(
+        Compilation compilation,
+        IReadOnlyList<SyntaxTree> program,
+        List<string> errors,
+        string? debugDirectory,
+        bool checkExclusivity,
+        BuildTimings? timings,
+        bool optimised
+    ) {
         if (errors.Count > 0) {
             return new(null, null, errors);
         }
@@ -71,9 +113,10 @@ public static class Pipeline {
             return new(module, null, ["error: no entry point: mark a function '@main' or name one 'main'"]);
         }
 
-        // The SIL passes, each followed by the verifier. A debug build keeps
-        // every local in its slot, where the debug information says it is.
-        if (debugDirectory is null) {
+        // The SIL passes, each followed by the verifier. An unoptimised debug
+        // build keeps every local in its slot, where the debug information
+        // says it is.
+        if (debugDirectory is null || optimised) {
             try {
                 using var _ = BuildTimings.Of(timings, "passes");
                 SilPassManager.Run(module, SilPassManager.Default);
@@ -95,13 +138,20 @@ public static class Pipeline {
     ///     the errors, each formatted against the file it is in, the program's
     ///     own files first.
     /// </summary>
-    public static IReadOnlyList<string> Check(IReadOnlyList<SyntaxTree> program) => Errors(CompilationOf(program), program);
+    public static IReadOnlyList<string> Check(IReadOnlyList<SyntaxTree> program) => Diagnose(program).Errors;
+
+    /// <summary>Type-checks a program: its errors, and the warnings about its own files.</summary>
+    public static (IReadOnlyList<string> Errors, IReadOnlyList<string> Warnings) Diagnose(IReadOnlyList<SyntaxTree> program) {
+        var compilation = CompilationOf(program);
+        return (Errors(compilation, program), Warnings(compilation, program));
+    }
 
     /// <summary>
-    ///     <c>sable check</c> with the lint set (docs/05 §5.7): the errors, and
-    ///     what the lints report over <paramref name="linted" /> — a lint at
-    ///     the error level among the errors, the rest as warnings. The lints run
-    ///     only on a program that type-checks.
+    ///     <c>sable check</c> with the lint set (docs/05 §5.7): the errors, the
+    ///     compiler's warnings, and what the lints report over
+    ///     <paramref name="linted" /> — a lint at the error level among the
+    ///     errors, the rest as warnings. The lints run only on a program that
+    ///     type-checks; the compiler's warnings are reported either way.
     /// </summary>
     public static (IReadOnlyList<string> Errors, IReadOnlyList<string> Warnings) CheckAndLint(
         IReadOnlyList<SyntaxTree> program,
@@ -110,11 +160,11 @@ public static class Pipeline {
     ) {
         var compilation = CompilationOf(program);
         var errors = Errors(compilation, program);
+        var warnings = Warnings(compilation, program);
         if (errors.Count > 0) {
-            return (errors, []);
+            return (errors, warnings);
         }
 
-        var warnings = new List<string>();
         foreach (var (diagnostic, tree) in Lints.RunByFile(compilation, configuration, linted)) {
             (diagnostic.Severity == DiagnosticSeverity.Error ? errors : warnings).Add(diagnostic.Format(tree.Text));
         }
@@ -155,6 +205,23 @@ public static class Pipeline {
                 .Select(d => d.Tree is { } file ? d.Diagnostic.Format(file.Text)
                     : program.Count == 1 ? Format(d.Diagnostic, program[0].Text)
                     : $"error[{d.Diagnostic.Id}]: {d.Diagnostic.Message}"),
+        ];
+    }
+
+    /// <summary>
+    ///     The warnings — unreachable code, a 'try' on nothing that throws,
+    ///     '#warning' — in the program's own files, each formatted against its
+    ///     file. The standard library's are not the program's to act on.
+    /// </summary>
+    public static List<string> Warnings(Compilation compilation, IReadOnlyList<SyntaxTree> program) {
+        var order = program.Select(static (tree, index) => (tree, index)).ToDictionary(static p => p.tree, static p => p.index);
+        return [
+            ..compilation.GetAllDiagnosticsByFile()
+                .Where(static d => d.Diagnostic.Severity == DiagnosticSeverity.Warning)
+                .Where(d => d.Tree is { } t && order.ContainsKey(t))
+                .OrderBy(d => order[d.Tree!])
+                .ThenBy(static d => d.Diagnostic.Span.Start)
+                .Select(static d => d.Diagnostic.Format(d.Tree!.Text)),
         ];
     }
 

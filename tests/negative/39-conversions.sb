@@ -52,3 +52,37 @@ fn anAsyncFunctionIsNotSync(_ f: @escaping async () -> Int) -> () -> Int { retur
 fn arraysAreInvariant(_ xs: Derived[]) -> Base[] { return xs }   //! S3004
 
 fn tuplesAreElementwise(_ p: (Derived, Int)) -> (Base, Int) { return p }   //! S3004
+
+public class Unrelated { public init() { } }
+public protocol Shaped { fn sides() -> Int }
+
+fn castingAStringToANumber(_ s: String) -> Int {
+    return s as Int                     //! S3066 'String' cannot be cast to 'Int'
+}
+
+fn castingANumberToABool(_ n: Int) -> Bool {
+    return n as Bool                    //! S3066 'Int' cannot be cast to 'Bool'
+}
+
+fn castingBetweenUnrelatedClasses(_ b: Base) -> Unrelated? {
+    return b as? Unrelated              //! S3066 are unrelated classes
+}
+
+fn uncheckedNeedsNumbers(_ s: String) -> String {
+    return s unchecked as String        //! S3066 'unchecked as' converts one numeric type to another
+}
+
+fn aNumberIsAlwaysANumber(_ n: Int) -> U8? {
+    return n as? U8                     //! S3066 is always a number
+}
+
+fn castingThatIsFine(_ n: Int, _ d: Derived, _ b: Base, _ s: any Shaped) -> F64 {
+    let narrow = n as U8
+    let wrapped = n unchecked as I8
+    let up = d as Base
+    let down = b as? Derived
+    let forced = b as! Derived
+    let same = n as Int
+    let float = n as F64
+    return float
+}

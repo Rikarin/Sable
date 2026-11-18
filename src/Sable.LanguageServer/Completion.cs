@@ -30,7 +30,8 @@ public sealed partial class LanguageServer {
         var tree = document.Tree;
         var member = SemanticModel.FindMember(tree.Root, offset);
 
-        var latest = _analyses.Latest;
+        var key = snapshot.KeyOf(document);
+        var latest = _analyses.Latest(key);
         if (latest is not null && member is not null && !latest.Contains(tree)
             && latest.Snapshot.Find(document.Uri) is { } older
             && latest.Contains(older.Tree)
@@ -40,7 +41,7 @@ public sealed partial class LanguageServer {
             }
         }
 
-        var analysis = latest is not null && latest.Contains(tree) ? latest : await _analyses.GetAsync(snapshot);
+        var analysis = latest is not null && latest.Contains(tree) ? latest : await _analyses.GetAsync(snapshot, key);
         lock (analysis.Gate) {
             var model = analysis.Model(tree);
             return new(analysis, member is null ? model : model.GetMemberModel(member), false);
@@ -221,7 +222,7 @@ public sealed partial class LanguageServer {
 
     async Task<JsonNode?> ModuleCompletionAsync(WorkspaceSnapshot snapshot, Document document, int offset, string typed) {
         var names = new SortedSet<string>(_options.LibraryModules, StringComparer.Ordinal) { Symbols.CoreLibrary.ModuleName };
-        var analysis = _analyses.Latest ?? await _analyses.GetAsync(snapshot);
+        var analysis = _analyses.Latest(snapshot.KeyOf(document)) ?? await _analyses.GetAsync(snapshot, snapshot.KeyOf(document));
         lock (analysis.Gate) {
             foreach (var module in analysis.Compilation.Modules) {
                 if (module.Name.Length > 0) {

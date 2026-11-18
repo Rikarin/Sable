@@ -49,6 +49,36 @@ public sealed class ErrorLoweringTests {
                           """;
 
     [Fact]
+    public void AnErrorNoCatchMatchesLeavesTheDo() {
+        var module = Lower(
+            Errors + """
+
+            fn partial(_ n: Int) throws(IoError) -> Int {
+                do {
+                    return try read(n)
+                } catch .Denied {
+                    return -1
+                }
+            }
+
+            fn outer(_ n: Int) -> Int {
+                do {
+                    return try partial(n)
+                } catch .NotFound(let p) {
+                    return p * 100
+                } catch .Denied {
+                    return -2
+                }
+            }
+            """
+        );
+
+        Assert.Equal(5L, Run(module, "outer", 5L));
+        Assert.Equal(-1L, Run(module, "outer", 0L));
+        Assert.Equal(-300L, Run(module, "outer", -3L));
+    }
+
+    [Fact]
     public void BareThrowsBoxesTheErrorAndACatchUnboxesIt() {
         var module = Lower(
             Errors + """
@@ -130,6 +160,35 @@ public sealed class ErrorLoweringTests {
         Assert.Equal(42L, Run(module, "quiet"));
         Assert.Equal(6L, Run(module, "loud", 3L));
         Assert.Equal(-1L, Run(module, "loud", 0L));
+    }
+
+    [Fact]
+    public void AnInlineCatchBlockRunsEveryStatementBeforeItsValue() {
+        // The block's statements run, its locals are released and its defer
+        // runs after the value is computed: 15, with 'steps' at 11.
+        var module = Lower(
+            Errors + """
+
+            class Box {
+                var n: Int
+                init(_ n: Int) { self.n = n }
+            }
+
+            fn recover(_ n: Int) -> Int {
+                var steps = 0
+                let v = try read(n) catch {
+                    steps += 10
+                    let b = Box(steps)
+                    defer { steps += 1 }
+                    b.n + 5
+                }
+                return v * 100 + steps
+            }
+            """
+        );
+
+        Assert.Equal(300L, Run(module, "recover", 3L));
+        Assert.Equal(1511L, Run(module, "recover", 0L));
     }
 
     [Fact]

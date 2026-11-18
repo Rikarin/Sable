@@ -1,3 +1,5 @@
+using static Sable.CodeGen.Tests.Programs;
+
 namespace Sable.CodeGen.Tests;
 
 /// <summary>Where the pipeline stops, and what it says, when it cannot go on.</summary>
@@ -65,6 +67,53 @@ public sealed class PipelineTests {
         Assert.Contains("define i32 @main(i32 %argc, ptr %argv)", result.LlvmIr, StringComparison.Ordinal);
         Assert.Contains("call void @\"sable.M.start\"()", result.LlvmIr, StringComparison.Ordinal);
     }
+
+    /// <summary>
+    ///     The front end's warnings come back with the result — with or
+    ///     without errors — each against its file, and none of the standard
+    ///     library's.
+    /// </summary>
+    [Fact]
+    public void WarningsComeBackWithTheResult() {
+        const string program = "module M\nfn f() -> Int {\n    return 1\n    print(2)\n}\nfn main() {\n#warning(\"look here\")\n    let x = try? f()\n    print(f() + (x ?? 0))\n}\n";
+        var result = Compile(program);
+        Assert.True(result.Succeeded, string.Join("\n", result.Errors));
+        Assert.Collection(
+            result.Warnings,
+            static w => Assert.StartsWith("warning[S6005]: this statement can never be reached\n --> test.sb:4:", w, StringComparison.Ordinal),
+            static w => Assert.StartsWith("warning[S0030]: look here\n --> test.sb:7:", w, StringComparison.Ordinal),
+            static w => Assert.StartsWith("warning[S3036]:", w, StringComparison.Ordinal)
+        );
+
+        var failed = Compile(program.Replace("print(2)", "print(true + 1)", StringComparison.Ordinal));
+        Assert.False(failed.Succeeded);
+        Assert.Contains(failed.Warnings, static w => w.StartsWith("warning[S0030]", StringComparison.Ordinal));
+    }
+
+    /// <summary>'#if DEBUG' holds in an unoptimised build, '#if RELEASE' in an optimised one.</summary>
+    [Theory]
+    [InlineData(false, "in debug")]
+    [InlineData(true, "in release")]
+    public void DebugOrReleaseIsDefined(bool optimise, string expected) {
+        const string source = "module M\nfn main() {\n#if DEBUG\n    print(\"in debug\")\n#elseif RELEASE\n    print(\"in release\")\n#else\n    print(\"in neither\")\n#endif\n}\n";
+        var result = Pipeline.Compile([SyntaxTree.Parse(new SourceText(source, "test.sb"), Pipeline.ParseOptionsFor(optimise))]);
+        Assert.True(result.Succeeded, string.Join("\n", result.Errors));
+
+        var strings = SilPrinter.Print(result.Sil!);
+        Assert.Contains($"\"{expected}\"", strings, StringComparison.Ordinal);
+        Assert.DoesNotContain("in neither", strings, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    ///     'try' on what cannot throw is warned about (S3036) and then does
+    ///     what it says: 'try?' gives the value wrapped, 'try!' the value.
+    /// </summary>
+    [Fact]
+    public void TryOnWhatCannotThrowIsTheValue() =>
+        Assert.Equal(
+            "1\n2\nsome\n",
+            AssertAgree("module M\nfn quiet() { }\nfn main() {\n    let a = try? 1\n    let b = try! 2\n    print(a ?? 0)\n    print(b)\n    let c = try? quiet()\n    print(c == none ? \"none\" : \"some\")\n}\n").Stdout
+        );
 
     [Fact]
     public void StringsAreEscapedAsUtf8Bytes() {

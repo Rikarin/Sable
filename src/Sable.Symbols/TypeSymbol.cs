@@ -160,6 +160,9 @@ public sealed class NamedTypeSymbol : TypeSymbol {
     /// <summary>True for <c>sealed class</c>: it may not be subclassed.</summary>
     public bool IsSealed { get; internal set; }
 
+    /// <summary>True for <c>final class</c>: as with <c>sealed</c>, it may not be subclassed.</summary>
+    public bool IsFinal { get; internal set; }
+
     /// <summary>True for <c>abstract class</c>: it cannot be instantiated.</summary>
     public bool IsAbstract { get; internal set; }
 

@@ -30,6 +30,13 @@ public sealed class ExtensionSymbol(
     public NamedTypeSymbol ExtendedType { get; } = extendedType;
 
     /// <summary>
+    ///     The module the extension is written in, which may not be the
+    ///     extended type's: who may see its internal and private members is
+    ///     decided here, not where the type was declared.
+    /// </summary>
+    public ModuleSymbol? DeclaringModule { get; init; }
+
+    /// <summary>
     ///     The extended type's parameters under the names this extension wrote,
     ///     which may differ from the ones the declaration used.
     /// </summary>

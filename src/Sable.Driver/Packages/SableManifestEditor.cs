@@ -96,7 +96,25 @@ public static class SableManifestEditor {
         return null;
     }
 
-    static (SyntaxTree Tree, RecordExpressionSyntax Record) Record(string text, string file, string element) {
+    /// <summary>
+    ///     Adds a member directory to the <c>members</c> list of a
+    ///     <c>workspace.sb</c>, at the end, laid out as the list is.
+    /// </summary>
+    /// <exception cref="PackageException">The list is computed, or the file is not written in a shape that can be edited safely.</exception>
+    public static string AddWorkspaceMember(string text, string file, string member) {
+        var element = Quote(member);
+        var (tree, record) = Record(text, file, element, "workspace", "Workspace");
+        if (Field(record, "members") is not { } field) {
+            return AddField(text, record, "members", element);
+        }
+
+        var array = Array(tree, field, "members", element);
+        return array.Elements.Count == 0
+            ? Replace(text, array.Span, $"[{element}]")
+            : Append(text, array.Elements[^1].Span, array.Elements.SeparatorCount == array.Elements.Count, LinesOf(array), element);
+    }
+
+    static (SyntaxTree Tree, RecordExpressionSyntax Record) Record(string text, string file, string element, string value = "manifest", string type = "Package") {
         var tree = SyntaxTree.Parse(new SourceText(text, file));
         if (tree.Diagnostics.Any(static d => d.Severity == DiagnosticSeverity.Error)) {
             throw new PackageException($"{file} does not parse, so it cannot be edited; fix it, or add {element} by hand");
@@ -104,9 +122,9 @@ public static class SableManifestEditor {
 
         var unit = (CompilationUnitSyntax)tree.Root;
         var declaration = unit.Members.OfType<FieldDeclarationSyntax>()
-            .FirstOrDefault(static f => f.Declarator.Pattern is BindingPatternSyntax { Identifier.Text: "manifest" });
+            .FirstOrDefault(f => f.Declarator.Pattern is BindingPatternSyntax binding && binding.Identifier.Text == value);
         if (declaration?.Declarator.Initializer?.Value is not RecordExpressionSyntax record) {
-            throw new PackageException($"{file}: `let manifest` is not written as `Package {{ ... }}`, so it cannot be edited safely; add {element} by hand");
+            throw new PackageException($"{file}: `let {value}` is not written as `{type} {{ ... }}`, so it cannot be edited safely; add {element} by hand");
         }
 
         return (tree, record);
@@ -146,8 +164,15 @@ public static class SableManifestEditor {
         }
 
         var indent = IndentationAt(text, last.Start);
+        // After the line's end, so a comment after the last element stays with it.
+        var after = CommaEnd(text, last.End);
+        var lineEnd = text.IndexOf('\n', after);
+        if (lineEnd >= 0 && text[after..lineEnd].Trim() is var rest && (rest.Length == 0 || rest.StartsWith("//", StringComparison.Ordinal))) {
+            after = lineEnd;
+        }
+
         return trailingComma
-            ? text[..CommaEnd(text, last.End)] + $"\n{indent}{element}," + text[CommaEnd(text, last.End)..]
+            ? text[..after] + $"\n{indent}{element}," + text[after..]
             : text[..last.End] + $",\n{indent}{element}" + text[last.End..];
     }
 

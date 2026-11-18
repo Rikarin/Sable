@@ -39,8 +39,8 @@ async fn readsWithoutAwait(_ c: Counter) -> Int {
 }
 
 async fn writesFromOutside(_ c: Counter) {
-    c.value = 5                         //! S3069 'value' is the state of the actor 'Counter'
-    c.value += 1                        //! S3069 'value' is the state of the actor 'Counter'
+    c.value = 5                         //! S3206 'value' is the state of the actor 'Counter'
+    c.value += 1                        //! S3206 'value' is the state of the actor 'Counter'
 }
 
 fn freelyReadable(_ c: Counter) -> String {
@@ -56,12 +56,12 @@ async fn sendables(_ c: Counter) -> Int {
 }
 
 async fn notSendables(_ c: Counter) {
-    await c.take(Box())                 //! S3073 'Box' is a class, whose state is shared
-    let b = await c.give()              //! S3073 the result of 'give'
-    let r = await c.box                 //! S3073 'box' crosses the boundary of the actor 'Counter'
-    await c.holder(Holder(box: Box()))  //! S3073 'Holder' holds 'box'
-    await c.closure(() => 1)            //! S3073 a closure may capture state
-    await c.generic(Wrapped(item: Box())) //! S3073 'Wrapped<Box>' holds 'item'
+    await c.take(Box())                 //! S3207 'Box' is a class, whose state is shared
+    let b = await c.give()              //! S3207 the result of 'give'
+    let r = await c.box                 //! S3207 'box' crosses the boundary of the actor 'Counter'
+    await c.holder(Holder(box: Box()))  //! S3207 'Holder' holds 'box'
+    await c.closure(() => 1)            //! S3207 a closure may capture state
+    await c.generic(Wrapped(item: Box())) //! S3207 'Wrapped<Box>' holds 'item'
 }
 
 @MainActor

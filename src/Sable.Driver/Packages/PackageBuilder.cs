@@ -359,6 +359,18 @@ public static class PackageBuilder {
                 return null;
             }
 
+            // '[lib] kind': the library, as one C links, beside the binaries.
+            if (request.Bin is null && member.Manifest.LibKind is { } libraryKind && member.LibraryFile is not null) {
+                if (!BuildNativeLibrary(graph, member, libraryKind, profile, request, generated, output, environment)) {
+                    environment.Error.WriteLine($"error: could not compile {member.Name}");
+                    return null;
+                }
+
+                if (bins.Count == 0) {
+                    continue;
+                }
+            }
+
             if (bins.Count == 0) {
                 var (errors, warnings) = Pipeline.Diagnose(Program(graph, member.Name, null, profile.Optimise, generated: generated, target: request.Target));
                 Report(environment, warnings);
@@ -416,6 +428,63 @@ public static class PackageBuilder {
         environment.Status.WriteLine($"    Finished `{profile.Name}` profile [{settings}] target(s) in {clock.Elapsed.TotalSeconds:0.00}s");
         timings?.Write(environment.Error);
         return built;
+    }
+
+    /// <summary>
+    ///     A member's library built as a native one (<c>[lib] kind</c>), to
+    ///     <c>target/&lt;profile&gt;/</c>, named for the package with
+    ///     <c>-</c> made <c>_</c>, as C's linkers take names: the library and its
+    ///     dependencies compiled whole, with no entry point
+    ///     (<see cref="Pipeline.Compile(IReadOnlyList{SyntaxTree}, string?, bool, BuildTimings?, bool, NativeTarget?, bool)" />),
+    ///     and linked with the runtime. Not cached between builds, as a
+    ///     binary's units are.
+    /// </summary>
+    static bool BuildNativeLibrary(
+        PackageGraph graph,
+        LocalPackage member,
+        LibraryKind kind,
+        Profile profile,
+        BuildRequest request,
+        GeneratedSources generated,
+        string output,
+        PackageEnvironment environment
+    ) {
+        if (!NativeObjects.CompilerAvailable) {
+            environment.Error.WriteLine($"error: cannot run '{NativeBuild.CompilerPath}'; set CC to a clang that can link for this platform");
+            return false;
+        }
+
+        var result = Pipeline.Compile(
+            Program(graph, member.Name, null, profile.Optimise, generated: generated, target: request.Target),
+            profile.Debug ? member.Directory : null,
+            profile.Exclusivity,
+            optimised: profile.Optimise && !profile.Debug,
+            target: request.Target,
+            library: true);
+        Report(environment, result.Warnings);
+        if (!result.Succeeded) {
+            Report(environment, result.Errors);
+            DiagnosticDocs.WriteHint(environment.Error, result.Errors);
+            return false;
+        }
+
+        Directory.CreateDirectory(output);
+        var path = Path.Combine(output, NativeBuild.LibraryFileName(member.Name.Replace('-', '_'), kind, request.Target ?? NativeTarget.Host));
+        var native = profile.Native with {
+            Target = request.Target,
+            Sysroot = request.Sysroot,
+            LinkArguments = graph.LinkArguments(member.Name),
+            LinkInputs = graph.LinkInputs(member.Name),
+        };
+        var built = NativeBuild.BuildLibrary(result.LlvmIr!, path, kind, native, Path.Combine(output, "cache", "runtime"));
+        if (!built.Succeeded) {
+            environment.Error.WriteLine("internal error: the native build failed:");
+            environment.Error.Write(built.Output);
+            return false;
+        }
+
+        environment.Status.WriteLine($"       Built {Path.GetFileName(path)}");
+        return true;
     }
 
     /// <summary><c>sable run</c>: builds the one binary there is (or the one asked for), runs it, and returns its exit code.</summary>

@@ -114,7 +114,7 @@ static void *watch_stack(void) {
     return alternate.ss_sp;
 }
 
-__attribute__((constructor)) static void sable_watch_main_stack(void) {
+static void platform_start(void) {
     watch_stack();
     struct sigaction action = { 0 };
     action.sa_sigaction = on_fault;

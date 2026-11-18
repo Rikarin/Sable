@@ -15,7 +15,7 @@ public class BuildCommand : Command {
 
     public override string Usage => """
         usage: sable build [--release] [--features <a,b>] [-p <package>] [--bin <name>]
-               sable build <file.sb> [-o <output>] [--emit sil|llvm-ir|obj] [-O0] [-g] [--exclusivity=checked|unchecked]
+               sable build <file.sb> [-o <output>] [--emit sil|llvm-ir|obj|staticlib|dylib] [-O0] [-g] [--exclusivity=checked|unchecked]
                                      [--target <triple>] [--sysroot <dir>]
 
         Without a file, builds the package in this directory or the nearest above it (sable.toml).
@@ -28,6 +28,9 @@ public class BuildCommand : Command {
           --emit sil         print the verified SIL instead of building
           --emit llvm-ir     print the LLVM IR instead of building
           --emit obj         write the program's object file (<output>.o), without the runtime or a link
+          --emit staticlib   build a static library C links (libname.a, name.lib on Windows): no entry
+                             point; C calls the @export functions, and the globals are set up as it loads
+          --emit dylib       the same as a shared library (libname.dylib, libname.so, name.dll)
           -O0                build without LLVM's optimiser
           -g                 build with debug information, for lldb
           --exclusivity=...  keep the dynamic exclusivity checks, or drop them; by default
@@ -86,7 +89,7 @@ public class BuildCommand : Command {
             }
         }
 
-        if (input is null || emit is not (null or "sil" or "llvm-ir" or "obj")) {
+        if (input is null || emit is not (null or "sil" or "llvm-ir" or "obj" or "staticlib" or "dylib")) {
             return null;
         }
 
@@ -108,9 +111,20 @@ public class BuildCommand : Command {
             return BadUsage();
         }
 
-        var suffix = options.Emit == "obj" ? ".o" : (options.Target ?? NativeTarget.Host).ExecutableSuffix;
-        return Build(options, options.Output ?? Path.GetFileNameWithoutExtension(options.Input) + suffix) is { } failure ? Math.Max(failure, 0) : 0;
+        var target = options.Target ?? NativeTarget.Host;
+        var name = Path.GetFileNameWithoutExtension(options.Input);
+        var output = options.Output ?? (LibraryKindOf(options.Emit) is { } kind
+            ? NativeBuild.LibraryFileName(name, kind, target)
+            : name + (options.Emit == "obj" ? ".o" : target.ExecutableSuffix));
+        return Build(options, output) is { } failure ? Math.Max(failure, 0) : 0;
     }
+
+    /// <summary>The library <c>--emit</c> asks for, if it asks for one.</summary>
+    static LibraryKind? LibraryKindOf(string? emit) => emit switch {
+        "staticlib" => LibraryKind.Static,
+        "dylib" => LibraryKind.Dynamic,
+        _ => null,
+    };
 
     /// <summary>Builds <paramref name="executable" />; null when built, -1 when --emit printed a stage instead, else the exit code to fail with.</summary>
     protected static int? Build(Options options, string executable) {
@@ -128,7 +142,8 @@ public class BuildCommand : Command {
             options.Debug ? Path.GetDirectoryName(Path.GetFullPath(options.Input)) : null,
             options.Exclusivity ?? (options.Debug || !options.Optimise),
             target: target,
-            optimised: options.Optimise && !options.Debug
+            optimised: options.Optimise && !options.Debug,
+            library: LibraryKindOf(options.Emit) is not null
         );
         Report(result.Warnings);
 
@@ -173,7 +188,9 @@ public class BuildCommand : Command {
             return 1;
         }
 
-        var build = NativeBuild.Build(result.LlvmIr!, executable, options.Native);
+        var build = LibraryKindOf(options.Emit) is { } library
+            ? NativeBuild.BuildLibrary(result.LlvmIr!, executable, library, options.Native)
+            : NativeBuild.Build(result.LlvmIr!, executable, options.Native);
         if (!build.Succeeded) {
             Console.Error.WriteLine("internal error: the native build failed:");
             Console.Error.Write(build.Output);

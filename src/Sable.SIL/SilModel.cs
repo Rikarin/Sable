@@ -1227,6 +1227,13 @@ public sealed class SilModule {
     /// <summary>The function a program starts in: the one marked <c>@main</c>, or else <c>main</c>.</summary>
     public string? EntryPoint { get; set; }
 
+    /// <summary>
+    ///     A library's module: it has no entry point, and what C calls — its
+    ///     exports — and its globals' initialiser and deinitialiser are where
+    ///     it is entered (docs/05 §5.2).
+    /// </summary>
+    public bool IsLibrary { get; set; }
+
     /// <summary>Set when the module is one unit of a program compiled separately (<see cref="SilUnit" />).</summary>
     public SilUnitInfo? Unit { get; set; }
 

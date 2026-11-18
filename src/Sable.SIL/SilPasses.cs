@@ -57,15 +57,22 @@ public static class SilPassManager {
         }
     }
 
-    /// <summary>The functions the entry point can reach, by name; null for a module with no entry point.</summary>
+    /// <summary>
+    ///     The functions the entry point can reach, by name — or, in a
+    ///     library, its exports; null for any other module with no entry point.
+    /// </summary>
     public static HashSet<string>? Reachable(SilModule module) {
-        if (module.EntryPoint is not { } entry) {
+        if (module.EntryPoint is null && !module.IsLibrary) {
             return null;
         }
 
         var reached = new HashSet<string>(StringComparer.Ordinal);
         // What C calls is reached from outside.
-        var pending = new Stack<string>([entry, "$globals.init", "$globals.deinit", ..module.Exports.Keys]);
+        var pending = new Stack<string>(["$globals.init", "$globals.deinit", ..module.Exports.Keys]);
+        if (module.EntryPoint is { } entry) {
+            pending.Push(entry);
+        }
+
         foreach (var type in module.Types) {
             switch (type) {
                 case StructType { Deinit: { } deinit }:

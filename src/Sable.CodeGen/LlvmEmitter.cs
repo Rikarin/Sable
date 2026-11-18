@@ -40,16 +40,19 @@ public sealed partial class LlvmEmitter {
 
     /// <param name="target">What the program is built for, whose C calling convention it follows; the host when null.</param>
     public static string Emit(SilModule module, NativeTarget? target = null) =>
-        new LlvmEmitter { _arch = (target ?? NativeTarget.Host).Arch, _windows = (target ?? NativeTarget.Host).Platform == NativePlatform.Windows }.EmitModule(module);
+        new LlvmEmitter { _target = target ?? NativeTarget.Host, _arch = (target ?? NativeTarget.Host).Arch, _windows = (target ?? NativeTarget.Host).Platform == NativePlatform.Windows }.EmitModule(module);
 
     /// <summary>The same, with DWARF debug information, so that lldb can show frames, locals and types.</summary>
     /// <param name="directory">The directory the source file names are relative to.</param>
     public static string EmitWithDebugInfo(SilModule module, string directory, NativeTarget? target = null) =>
         new LlvmEmitter {
-            _debug = new DebugInfo(directory), _arch = (target ?? NativeTarget.Host).Arch, _windows = (target ?? NativeTarget.Host).Platform == NativePlatform.Windows,
+            _debug = new DebugInfo(directory), _target = target ?? NativeTarget.Host, _arch = (target ?? NativeTarget.Host).Arch, _windows = (target ?? NativeTarget.Host).Platform == NativePlatform.Windows,
         }.EmitModule(module);
 
     DebugInfo? _debug;
+
+    /// <summary>What the program is built for.</summary>
+    NativeTarget _target = NativeTarget.Host;
 
     /// <summary>The target's architecture, as <see cref="NativeTarget.Arch" /> names it.</summary>
     string _arch = "arm64";
@@ -100,6 +103,10 @@ public sealed partial class LlvmEmitter {
 
         if (module.EntryPoint is { } entry && module.Find(entry) is { } main) {
             functions.Append(MainShim(main, keepEntry: _debug is not null));
+        }
+
+        if (module.IsLibrary) {
+            functions.Append(LibraryLifetime(module));
         }
 
         var output = new StringBuilder();
@@ -344,6 +351,47 @@ public sealed partial class LlvmEmitter {
         return entry.Type.Result == SilType.Int
             ? $"define i32 @main(i32 %argc, ptr %argv) {{\n  call void @sable_set_arguments(i32 %argc, ptr %argv)\n  %r = call i64 {call}\n  %c = trunc i64 %r to i32\n  ret i32 %c\n}}\n"
             : $"define i32 @main(i32 %argc, ptr %argv) {{\n  call void @sable_set_arguments(i32 %argc, ptr %argv)\n  call void {call}\n  ret i32 0\n}}\n";
+    }
+
+    /// <summary>
+    ///     What a library does where a program's <c>main</c> would: as it is
+    ///     loaded — before the program that links it calls into it — it takes
+    ///     the process's arguments and gives its globals their initial values;
+    ///     as the process exits, it destroys them. It is a constructor of the
+    ///     object file (<c>llvm.global_ctors</c>), as the runtime's own
+    ///     start-up is, so a static library starts as a dynamic one does.
+    ///     Which of one image's constructors and destructors runs first is the
+    ///     linker's choice, so the library starts the runtime itself
+    ///     (<c>sable_runtime_start</c>, which runs once) before its globals are
+    ///     made, and has the runtime destroy them as the process exits
+    ///     (<c>sable_runtime_at_exit</c>), before the leak check counts what
+    ///     is left.
+    /// </summary>
+    /// <remarks>
+    ///     Apple's dyld and glibc call a constructor with <c>main</c>'s
+    ///     <c>argc</c> and <c>argv</c>; Windows' runtime calls it with nothing,
+    ///     and the runtime asks Windows for the command line itself; any other
+    ///     C library may not pass them, so there the library sees none.
+    /// </remarks>
+    string LibraryLifetime(SilModule module) {
+        const string init = "$globals.init", deinit = "$globals.deinit";
+        var takesArguments = _target.Platform == NativePlatform.MacOS
+            || _target.Platform == NativePlatform.Linux && !_target.Triple.Contains("musl", StringComparison.Ordinal);
+        var text = new StringBuilder();
+        text.Append("declare void @sable_runtime_start()\ndeclare void @sable_runtime_at_exit(ptr)\n\n")
+            .Append("define internal void @\"sable.library.start\"(i32 %argc, ptr %argv) {\nentry:\n  call void @sable_runtime_start()\n")
+            .Append(takesArguments ? "  call void @sable_set_arguments(i32 %argc, ptr %argv)\n" : "  call void @sable_set_arguments(i32 0, ptr null)\n");
+        if (module.Find(init) is not null && (_reachable?.Contains(init) ?? true)) {
+            text.Append($"  call void @{Global(init)}()\n");
+        }
+
+        if (module.Find(deinit) is not null && (_reachable?.Contains(deinit) ?? true)) {
+            text.Append($"  call void @sable_runtime_at_exit(ptr @{Global(deinit)})\n");
+        }
+
+        text.Append("  ret void\n}\n\n")
+            .Append("@llvm.global_ctors = appending global [1 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 65535, ptr @\"sable.library.start\", ptr null }]\n");
+        return text.Append('\n').ToString();
     }
 
     /// <summary>

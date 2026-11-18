@@ -75,7 +75,7 @@ static void track_remove(SableObject *object) {
     }
 }
 
-__attribute__((constructor)) static void sable_leaks_start(void) {
+static void leaks_start(void) {
     tracking = getenv("SABLE_CHECK_LEAKS") != NULL;
 }
 

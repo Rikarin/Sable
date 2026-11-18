@@ -140,6 +140,22 @@ public sealed partial class SilGen {
     FunctionSymbol? _entryOverride;
 
     /// <summary>
+    ///     Lowers a library (docs/05 §5.2): a program with no entry point,
+    ///     which C calls into through its <c>@export</c> functions. Its globals
+    ///     are still given their initial values before anything runs — by
+    ///     the initialiser the module then has, which the code generator
+    ///     makes a constructor of the library (<see cref="SilModule.IsLibrary" />).
+    /// </summary>
+    public static (SilModule Module, IReadOnlyList<(Diagnostic Diagnostic, SyntaxTree? Tree)> Diagnostics) LowerLibraryByFile(Compilation compilation) {
+        var generator = new SilGen(compilation) { _library = true };
+        generator._module.IsLibrary = true;
+        generator.LowerAll();
+        return (generator._module, generator.PlacedDiagnostics);
+    }
+
+    bool _library;
+
+    /// <summary>
     ///     Lowers one unit of a program compiled separately: the functions of
     ///     the files it owns, and whatever instances of generic functions they
     ///     use; the program's other functions are only declared. The module's
@@ -289,8 +305,9 @@ public sealed partial class SilGen {
         }
 
         // '@main' marks where a program starts; failing that, a function
-        // called main does.
-        var entry = _entryOverride ?? functions.FirstOrDefault(static f =>
+        // called main does. A library starts nowhere: a 'main' in it is an
+        // ordinary function.
+        var entry = _library ? null : _entryOverride ?? functions.FirstOrDefault(static f =>
                 f.Syntax is FunctionDeclarationSyntax declaration
                 && declaration.Attributes.Any(static a => a.Name.ToString().Trim() == "main")
             ).Symbol
@@ -568,7 +585,12 @@ public sealed partial class SilGen {
     ///     one that destroys them, last first, as the program returns.
     /// </summary>
     void LowerGlobalLifetimes() {
-        if (_globalFields.Count == 0 || _entrySymbol is not { } initSymbol) {
+        // A library has no entry point: its globals' initialiser is lowered
+        // as a function of its own, which nothing in the library calls.
+        var initSymbol = _entrySymbol ?? (_library && _globalFields.Count > 0
+            ? FunctionSymbol.Synthesized(GlobalsInit, _globalFields[0].Field.ContainingSymbol!)
+            : null);
+        if (_globalFields.Count == 0 || initSymbol is null) {
             return;
         }
 

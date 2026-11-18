@@ -361,7 +361,10 @@ Order matters; each of these is a self-contained lowering:
   core library is parsed per target), a dependency's `when:` and the C ABI's
   classification follow the target. Every target compiles to an object
   (`--emit obj`); an executable links where the runtime has a platform layer —
-  macOS and Linux. Not yet: the runtime's Windows and WASI layers (it needs
+  macOS and Linux. A program can also be a library C links (`--emit
+  staticlib|dylib`, `[lib] kind`; docs/05 §5.2.2): no entry point, its
+  globals set up by a constructor and destroyed by the runtime at exit.
+  Not yet: the runtime's Windows and WASI layers (it needs
   pthread, dlfcn, execinfo, posix_spawn, dirent and poll), WebAssembly's C ABI
   for `@extern` structs, and CI beyond Linux x64 and macOS arm64.
 

@@ -67,13 +67,19 @@ public static class Pipeline {
     ///     <c>@extern</c> calls follow; the host when null. (What its files'
     ///     <c>#if os(...)</c> says is the parse's: <see cref="ParseOptionsFor(bool, NativeTarget)" />.)
     /// </param>
+    /// <param name="library">
+    ///     Compile a library, which C calls through its <c>@export</c>
+    ///     functions: no entry point is looked for, and its globals are set up
+    ///     as it is loaded (<see cref="SilGen.LowerLibraryByFile" />).
+    /// </param>
     public static CompileResult Compile(
         IReadOnlyList<SyntaxTree> program,
         string? debugDirectory = null,
         bool checkExclusivity = true,
         BuildTimings? timings = null,
         bool optimised = false,
-        NativeTarget? target = null
+        NativeTarget? target = null,
+        bool library = false
     ) {
         Compilation compilation;
         List<string> errors;
@@ -86,7 +92,7 @@ public static class Pipeline {
         }
 
         // The warnings go with whatever comes back, an error or the IR.
-        return CompileChecked(compilation, program, errors, debugDirectory, checkExclusivity, timings, optimised, target) with { Warnings = warnings };
+        return CompileChecked(compilation, program, errors, debugDirectory, checkExclusivity, timings, optimised, target, library) with { Warnings = warnings };
     }
 
     /// <summary>The rest of <see cref="Compile(IReadOnlyList{SyntaxTree}, string?, bool, BuildTimings?, bool)" />, from a checked program.</summary>
@@ -98,7 +104,8 @@ public static class Pipeline {
         bool checkExclusivity,
         BuildTimings? timings,
         bool optimised,
-        NativeTarget? target
+        NativeTarget? target,
+        bool library
     ) {
         if (errors.Count > 0) {
             return new(null, null, errors);
@@ -107,7 +114,7 @@ public static class Pipeline {
         SilModule module;
         IReadOnlyList<(Diagnostic Diagnostic, SyntaxTree? Tree)> lowering;
         using (BuildTimings.Of(timings, "sil")) {
-            (module, lowering) = SilGen.LowerByFile(compilation);
+            (module, lowering) = library ? SilGen.LowerLibraryByFile(compilation) : SilGen.LowerByFile(compilation);
         }
 
         module.CheckExclusivity = checkExclusivity;
@@ -123,7 +130,7 @@ public static class Pipeline {
             return new(module, null, [..problems.Select(static p => $"internal error: SIL verification failed: {p}")]);
         }
 
-        if (module.EntryPoint is null) {
+        if (module.EntryPoint is null && !library) {
             return new(module, null, ["error: no entry point: mark a function '@main' or name one 'main'"]);
         }
 

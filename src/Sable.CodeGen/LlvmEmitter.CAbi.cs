@@ -263,7 +263,9 @@ public sealed partial class LlvmEmitter {
 
             cParameters.AddRange(arguments.Select(static (a, i) => $"{a.Coerced}{(a.Attributes.Length > 0 ? " " + a.Attributes : "")} %c{i}"));
             var cResult = result is null ? "void" : $"{(result.Attributes.Length > 0 ? result.Attributes + " " : "")}{result.Coerced}";
-            text.Append($"define {cResult} @\"{symbol}\"({string.Join(", ", cParameters)}) {{\nentry:\n");
+            // A Windows DLL exports only what is marked so.
+            var export = _windows && module.IsLibrary ? "dllexport " : "";
+            text.Append($"define {export}{cResult} @\"{symbol}\"({string.Join(", ", cParameters)}) {{\nentry:\n");
 
             var passed = new List<string>();
             for (var i = 0; i < arguments.Count; i++) {

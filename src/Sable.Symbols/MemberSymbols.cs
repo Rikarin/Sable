@@ -104,6 +104,14 @@ public sealed class FunctionSymbol : Symbol {
         FunctionKind = functionKind;
     }
 
+    /// <summary>
+    ///     A static function of no parameters that no source declares: what
+    ///     lowering gives code the compiler writes on its own — a library's
+    ///     initialiser of its globals, which has no entry point to run in.
+    /// </summary>
+    public static FunctionSymbol Synthesized(string name, Symbol container) =>
+        new(name, container, null, Accessibility.Private, FunctionKind.Ordinary) { IsStatic = true };
+
     public override SymbolKind Kind => SymbolKind.Function;
     public override string Name { get; }
     public override Symbol? ContainingSymbol { get; }

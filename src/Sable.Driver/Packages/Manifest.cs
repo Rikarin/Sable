@@ -146,6 +146,12 @@ public sealed partial class Manifest {
     /// <summary><c>[lib] path</c>, when given.</summary>
     public string? LibPath { get; init; }
 
+    /// <summary>
+    ///     <c>[lib] kind</c>: <c>"static"</c> or <c>"dynamic"</c> builds the
+    ///     library as a native one C links, as well as Sable's; null for Sable's only.
+    /// </summary>
+    public LibraryKind? LibKind { get; init; }
+
     public IReadOnlyList<BinTarget> Bins { get; init; } = [];
     public IReadOnlyList<DependencySpec> Dependencies { get; init; } = [];
     public IReadOnlyList<DependencySpec> DevDependencies { get; init; } = [];
@@ -185,6 +191,7 @@ public sealed partial class Manifest {
         File = file,
         Package = Package,
         LibPath = LibPath,
+        LibKind = LibKind,
         Bins = Bins,
         Dependencies = Dependencies,
         DevDependencies = DevDependencies,
@@ -274,9 +281,24 @@ public sealed partial class Manifest {
             }
 
             string? libPath = null;
+            LibraryKind? libKind = null;
             if (Table(root, "lib", "lib") is { } lib) {
                 libPath = String(lib, "path", "lib.path");
-                foreach (var key in lib.Keys.Where(static k => k != "path")) {
+                switch (String(lib, "kind", "lib.kind")) {
+                    case null:
+                        break;
+                    case "static":
+                        libKind = LibraryKind.Static;
+                        break;
+                    case "dynamic":
+                        libKind = LibraryKind.Dynamic;
+                        break;
+                    default:
+                        Error(lib, "kind", "lib.kind", "must be \"static\" or \"dynamic\"");
+                        break;
+                }
+
+                foreach (var key in lib.Keys.Where(static k => k is not ("path" or "kind"))) {
                     Warn(lib, key, $"lib.{key}", "unknown key, ignored");
                 }
             }
@@ -353,6 +375,7 @@ public sealed partial class Manifest {
                 File = file,
                 Package = package,
                 LibPath = libPath,
+                LibKind = libKind,
                 Bins = bins,
                 Dependencies = dependencies,
                 DevDependencies = devDependencies,

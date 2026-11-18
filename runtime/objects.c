@@ -77,10 +77,27 @@ static bool tracking;
 // not null, not immortal.
 static int64_t allocations, retains, releases;
 
+// What a library does as the process exits — destroy its globals — given by
+// its start-up (LlvmEmitter's LibraryLifetime). Run here, before the report,
+// rather than as destructors of their own: the order of one image's
+// destructors is the linker's, and the report must come after them.
+static void (*exit_hooks[8])(void);
+static int exit_hook_count;
+
+void sable_runtime_at_exit(void (*hook)(void)) {
+    if (exit_hook_count < (int)(sizeof exit_hooks / sizeof exit_hooks[0])) {
+        exit_hooks[exit_hook_count++] = hook;
+    }
+}
+
 // With SABLE_CHECK_LEAKS set, a program that ends with objects still alive
 // says how many: tests run every program this way. With SABLE_STATS set, it
 // says what ARC did. Run as the program exits (platform.h).
 SABLE_AT_EXIT(sable_report) {
+    while (exit_hook_count > 0) {
+        exit_hooks[--exit_hook_count]();
+    }
+
     if (live_objects != 0 && getenv("SABLE_CHECK_LEAKS") != NULL) {
         fflush(stdout);
         fprintf(stderr, "sable: %lld object(s) leaked\n", (long long)live_objects);

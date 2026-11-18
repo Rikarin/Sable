@@ -15,6 +15,13 @@
 #ifndef SABLE_RUNTIME_PLATFORM_H
 #define SABLE_RUNTIME_PLATFORM_H
 
+// ---- Start-up --------------------------------------------------------------
+
+// What the system needs set up before any Sable code runs: the main
+// thread's stack watched, the standard streams' modes. Called once, by
+// sable_runtime_start.
+static void platform_start(void);
+
 // ---- Traps ---------------------------------------------------------------
 
 // With SABLE_BACKTRACE set, the frames of the calls that led to a trap, on

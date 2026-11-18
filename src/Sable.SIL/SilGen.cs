@@ -2474,6 +2474,10 @@ public sealed partial class SilGen {
                     ForRange(loop, range);
                     return;
 
+                case BoundForEach loop when Core.IsRange(Sub(loop.Sequence.Type)):
+                    ForRangeValue(loop);
+                    return;
+
                 case BoundForEach { Sequence.Type: ArrayTypeSymbol } loop when IsInlineArray(loop.Sequence):
                     ForInline(loop);
                     return;
@@ -2616,7 +2620,33 @@ public sealed partial class SilGen {
                 return;
             }
 
-            if (lower.Type != SilType.Int || SlotFor(loop.Element, loop.Syntax) is null) {
+            CountingLoop(loop, lower, upper, range.IsInclusive);
+        }
+
+        /// <summary>
+        ///     <c>for i in r</c>, a range held in a variable or given by a call:
+        ///     the same counting loop, over the bounds taken out of it.
+        /// </summary>
+        void ForRangeValue(BoundForEach loop) {
+            if (loop.Element is null) {
+                Fail(loop.Syntax, "a 'for' over a range");
+                return;
+            }
+
+            if (Expression(loop.Sequence) is not { Type: StructType structType } range) {
+                return;
+            }
+
+            var lower = Emit(new StructExtractInst(range, structType.FieldIndex("lowerBound")));
+            var upper = Emit(new StructExtractInst(range, structType.FieldIndex("upperBound")));
+            Destroy(range);
+            var isInclusive = Sub(loop.Sequence.Type) is NamedTypeSymbol named
+                && named.OriginalDefinition.Equals(Core.ClosedRange);
+            CountingLoop(loop, lower, upper, isInclusive);
+        }
+
+        void CountingLoop(BoundForEach loop, SilValue lower, SilValue upper, bool isInclusive) {
+            if (lower.Type != SilType.Int || SlotFor(loop.Element!, loop.Syntax) is null) {
                 Fail(loop.Syntax, "a 'for' over a range that is not of Int");
                 return;
             }
@@ -2632,12 +2662,12 @@ public sealed partial class SilGen {
 
             _current = header;
             var current = Emit(new LoadInst(counter));
-            var compare = range.IsInclusive ? "cmp_le_Int" : "cmp_lt_Int";
+            var compare = isInclusive ? "cmp_le_Int" : "cmp_lt_Int";
             var inside = Emit(new BuiltinInst(compare, SilType.Bool, current, upper));
             Jump(new CondBranchInst(inside, body, [], after, []));
 
             _current = body;
-            BindLocal(loop.Element, Emit(new LoadInst(counter)), loop.Syntax);
+            BindLocal(loop.Element!, Emit(new LoadInst(counter)), loop.Syntax);
             if (loop.Filter is { } filter) {
                 var filtered = function.AddBlock();
                 Condition(filter, filtered, step);
@@ -2655,7 +2685,7 @@ public sealed partial class SilGen {
             _current = step;
             var last = Emit(new LoadInst(counter));
             var more = function.AddBlock();
-            if (range.IsInclusive) {
+            if (isInclusive) {
                 var atEnd = Emit(new BuiltinInst("cmp_eq_Int", SilType.Bool, last, upper));
                 Jump(new CondBranchInst(atEnd, after, [], more, []));
             } else {
@@ -3241,6 +3271,9 @@ public sealed partial class SilGen {
 
                 case BoundRecordExpression record:
                     return Record(record);
+
+                case BoundRange range:
+                    return RangeValue(range);
 
                 case BoundUnionCaseConstruction construction:
                     return UnionCase(construction.Type, construction.UnionCase.Name, construction.Arguments, expression);
@@ -4044,6 +4077,29 @@ public sealed partial class SilGen {
             return SilBuiltins.Find(name) is not null
                 ? Emit(new BuiltinInst(name, target, value))
                 : Missing(conversion, $"the conversion from {value.Type} to {target}");
+        }
+
+        /// <summary>
+        ///     <c>a..&lt;b</c> or <c>a...b</c> as a value: the Sable.Core struct,
+        ///     built from its two bounds.
+        /// </summary>
+        SilValue? RangeValue(BoundRange range) {
+            if (range.Lower is null || range.Upper is null) {
+                return Missing(range, "a range open at one end");
+            }
+
+            if (LowerType(range.Type) is not StructType structType) {
+                return Missing(range, $"a range of type '{Sub(range.Type).ToDisplayString()}'");
+            }
+
+            if (Evaluate([range.Lower, range.Upper]) is not { } bounds) {
+                return null;
+            }
+
+            var fields = new SilValue[structType.Fields.Count];
+            fields[structType.FieldIndex("lowerBound")] = bounds[0];
+            fields[structType.FieldIndex("upperBound")] = bounds[1];
+            return Emit(new StructInst(structType, fields));
         }
 
         SilValue? Record(BoundRecordExpression record) {

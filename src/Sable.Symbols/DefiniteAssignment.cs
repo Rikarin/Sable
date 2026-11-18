@@ -29,8 +29,16 @@ internal static class DefiniteAssignment {
     ///     declared; here only its own are.
     /// </param>
     public static void Analyze(ControlFlowGraph graph, DiagnosticBag diagnostics, Symbol? owner = null) {
-        // Only locals are tracked: a parameter always has a value.
-        var index = new Dictionary<LocalSymbol, int>();
+        // Locals are tracked, and 'out' parameters: they come in with no
+        // value, and must go out with one. Any other parameter has a value.
+        var index = new Dictionary<Symbol, int>();
+        var outs = owner is FunctionSymbol function
+            ? function.Parameters.Where(static p => p.Modifier == ParameterModifier.Out).ToList()
+            : [];
+        foreach (var parameter in outs) {
+            index[parameter] = index.Count;
+        }
+
         foreach (var (_, _, op) in graph.AllOps()) {
             if (op.Symbol is LocalSymbol local && !index.ContainsKey(local) && (owner is null || IsWithin(local, owner))) {
                 index[local] = index.Count;
@@ -70,7 +78,7 @@ internal static class DefiniteAssignment {
         }
 
         // Then once more, reporting the first read of each unassigned local.
-        var first = new Dictionary<LocalSymbol, BoundNode>();
+        var first = new Dictionary<Symbol, BoundNode>();
         foreach (var block in blocks) {
             if (!reachable.Contains(block)) {
                 continue;
@@ -85,6 +93,21 @@ internal static class DefiniteAssignment {
                 node.Syntax.Span,
                 $"'{local.Name}' is read here before anything assigns to it"
             );
+        }
+
+        // Every way back to the caller — a 'return', or falling off the end —
+        // gives each 'out' parameter a value. A throw need not.
+        foreach (var parameter in outs) {
+            var unassigned = new[] { graph.Return, graph.End }
+                .Where(reachable.Contains)
+                .Any(exit => !In(exit, graph, assignedOut, index.Count, reachable)[index[parameter]]);
+            if (unassigned && parameter.Location is { } at) {
+                diagnostics.Error(
+                    ErrorCode.ERR_OutNotAssigned,
+                    at,
+                    $"'out' parameter '{parameter.Name}' is not assigned on every path that returns; the caller reads it afterwards"
+                );
+            }
         }
     }
 
@@ -132,11 +155,11 @@ internal static class DefiniteAssignment {
     static void Transfer(
         BasicBlock block,
         BitArray state,
-        Dictionary<LocalSymbol, int> index,
-        Dictionary<LocalSymbol, BoundNode>? report
+        Dictionary<Symbol, int> index,
+        Dictionary<Symbol, BoundNode>? report
     ) {
         foreach (var op in block.Ops) {
-            if (op.Symbol is not LocalSymbol local) {
+            if (op.Symbol is not { } local || !index.ContainsKey(local)) {
                 continue;
             }
 

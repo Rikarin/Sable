@@ -648,6 +648,29 @@ internal sealed class ControlFlowGraph {
                     return;
                 }
 
+                // 'parse(s, out n)': the call writes n, without reading it.
+                case BoundCall call when call.Function.Parameters.Any(static p => p.Modifier == ParameterModifier.Out): {
+                    if (call.Receiver is { } receiver) {
+                        Expression(receiver);
+                    }
+
+                    var written = new List<BoundExpression>();
+                    for (var i = 0; i < call.Arguments.Length; i++) {
+                        if (i < call.Function.Parameters.Length && call.Function.Parameters[i].Modifier == ParameterModifier.Out
+                            && Unconverted(call.Arguments[i]) is BoundLocalAccess or BoundParameterAccess) {
+                            written.Add(Unconverted(call.Arguments[i]));
+                        } else {
+                            Expression(call.Arguments[i]);
+                        }
+                    }
+
+                    foreach (var target in written) {
+                        Op(FlowOpKind.Write, target is BoundLocalAccess local ? local.Local : ((BoundParameterAccess)target).Parameter, target);
+                    }
+
+                    return;
+                }
+
                 case BoundTry tryExpression:
                     Try(tryExpression);
                     return;
@@ -674,6 +697,11 @@ internal sealed class ControlFlowGraph {
                     return;
             }
         }
+
+        static BoundExpression Unconverted(BoundExpression expression) =>
+            expression is BoundConversion { ConversionKind: ConversionKind.Identity or ConversionKind.Reference } conversion
+                ? Unconverted(conversion.Operand)
+                : expression;
 
         void Try(BoundTry tryExpression) {
             Expression(tryExpression.Expression);

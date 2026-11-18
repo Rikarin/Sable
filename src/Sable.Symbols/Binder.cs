@@ -164,7 +164,8 @@ public sealed partial class Binder {
         var bound = BindBlock(body);
 
         // One graph serves all three flow checks.
-        var graph = ControlFlowGraph.Build(bound, function.Parameters);
+        // An 'out' parameter comes in with no value: the body gives it one.
+        var graph = ControlFlowGraph.Build(bound, function.Parameters.Where(static p => p.Modifier != ParameterModifier.Out));
         CheckFlow(function, body, graph);
         DefiniteAssignment.Analyze(graph, _diagnostics, function);
 
@@ -3215,6 +3216,19 @@ public sealed partial class Binder {
                     syntax.Span,
                     $"cannot infer '{typeParameter.Name}' from these arguments"
                 );
+            }
+        }
+
+        // A type parameter is Copyable unless it says '~Copyable': a move-only
+        // argument is refused here, at the call, not later inside the body
+        // that copies it. An initialiser's are its type's.
+        var parametersOfCall = resolved.FunctionKind == FunctionKind.Initializer && resolved.ContainingSymbol is NamedTypeSymbol { TypeArguments.IsEmpty: true } constructedType
+            ? [..resolved.TypeParameters, ..constructedType.TypeParameters]
+            : resolved.TypeParameters;
+        foreach (var typeParameter in parametersOfCall) {
+            if (substitution.Lookup(typeParameter) is { } argument
+                && Copyability.Refusal(typeParameter, argument, resolved.FunctionKind == FunctionKind.Initializer ? resolved.ContainingSymbol!.Name : resolved.Name) is { } refusal) {
+                _diagnostics.Error(ErrorCode.ERR_NoncopyableTypeArgument, syntax.Span, refusal);
             }
         }
 

@@ -244,6 +244,7 @@ PrimaryType       = QualifiedName [ GenericArgs ]
                   | "some" Type
                   | "any" Type
                   | "ref" Type
+                  | "~" Type                (* "~Copyable", as a constraint only *)
                   | TupleType
                   | FunctionType
                   | "(" Type ")"

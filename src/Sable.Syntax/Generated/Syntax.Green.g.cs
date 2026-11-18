@@ -621,6 +621,34 @@ internal sealed class ExistentialTypeGreen : GreenNode
         new ExistentialTypeSyntax(this, parent, position);
 }
 
+/// <summary>Green node for <see cref="SuppressedTypeSyntax"/>.</summary>
+internal sealed class SuppressedTypeGreen : GreenNode
+{
+    private readonly GreenToken? _tildeToken;
+    private readonly GreenNode? _constraintType;
+
+    public SuppressedTypeGreen(GreenToken? tildeToken, GreenNode? constraintType)
+        : base(SyntaxKind.SuppressedType, 0)
+    {
+        _tildeToken = tildeToken;
+        _constraintType = constraintType;
+        FullWidth = (tildeToken?.FullWidth ?? 0)
+                    + (constraintType?.FullWidth ?? 0);
+    }
+
+    public override int SlotCount => 2;
+
+    public override GreenNode? GetSlot(int index) => index switch
+    {
+        0 => _tildeToken,
+        1 => _constraintType,
+        _ => null,
+    };
+
+    public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
+        new SuppressedTypeSyntax(this, parent, position);
+}
+
 /// <summary>Green node for <see cref="RefTypeSyntax"/>.</summary>
 internal sealed class RefTypeGreen : GreenNode
 {

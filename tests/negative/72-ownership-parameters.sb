@@ -1,0 +1,56 @@
+module Negative.OwnershipParameters
+
+// 'out' parameters: they come in with no value and must go out with one
+// (#132); and generic parameters are Copyable unless they say '~Copyable'.
+
+fn half(_ n: Int, out value: Int) -> Bool { //! S3065 'value' is not assigned on every path
+    if n > 0 {
+        value = n / 2
+        return true
+    }
+    return false
+}
+
+fn readsFirst(out value: Int) -> Int {  //! S3065 'value' is not assigned
+    return value                        //! S6008 'value' is read here before
+}
+
+fn assignsOnEveryPath(_ n: Int, out value: Int) -> Bool {
+    if n > 0 {
+        value = n
+        return true
+    }
+    value = 0
+    return false
+}
+
+fn callerNeedNotInitialise() -> Int {
+    var n: Int
+    if assignsOnEveryPath(3, out n) {
+        return n
+    }
+    return n
+}
+
+@noncopy struct Handle { var id: Int }
+
+struct Holder<T> { var item: T }
+struct MoveHolder<T: ~Copyable> { var item: T }
+
+fn two<T>(_ x: T) -> Holder<T> { return Holder(item: x) }
+fn keep<T: ~Copyable>(_ x: consuming T) -> MoveHolder<T> { return MoveHolder(item: x) }
+fn alsoKeep<T>(_ x: consuming T) -> MoveHolder<T> where T: ~Copyable { return MoveHolder(item: x) }
+
+fn passesItOn<T: ~Copyable>(_ x: consuming T) -> Holder<T> { //! S3067 'T' may be @noncopy
+    return two(x)                       //! S3067 'T' may be @noncopy
+}
+
+fn callers(_ h: consuming Handle) {
+    let a = two(h)                      //! S3067 'Handle' is @noncopy, so it cannot be 'T' of 'two'
+    let b: Holder<Handle>? = none       //! S3067 'Handle' is @noncopy, so it cannot be 'T' of 'Holder'
+    let c = keep(Handle(id: 1))
+    let d = alsoKeep(Handle(id: 2))
+    let e = two(1)
+}
+
+fn misplaced(_ x: ~Copyable) {}         //! S3066 '~Copyable' is written only as a generic parameter's constraint

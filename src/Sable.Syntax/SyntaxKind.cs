@@ -239,6 +239,7 @@ public enum SyntaxKind : ushort {
     UnionType = 1020,
     SelfType = 1021,
     ParenthesizedType = 1022,
+    SuppressedType = 1023,
 
     // ---- Expression nodes (1100-1199) -------------------------------------
     LiteralExpression = 1100,

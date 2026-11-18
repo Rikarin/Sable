@@ -93,14 +93,16 @@ public sealed partial class SilGen {
 
             for (var i = 0; i < call.Arguments.Length && i < callee.Parameters.Length; i++) {
                 var modifier = callee.Parameters[i].Modifier;
-                if (modifier is not (ParameterModifier.InOut or ParameterModifier.Ref) || PathOf(call.Arguments[i]) is not { } path) {
+                if (modifier is not (ParameterModifier.InOut or ParameterModifier.Out or ParameterModifier.Ref) || PathOf(call.Arguments[i]) is not { } path) {
                     continue;
                 }
 
-                var what = modifier == ParameterModifier.InOut
-                    ? $"argument {i + 1} ('{callee.Parameters[i].Name}') is inout"
-                    : $"argument {i + 1} ('{callee.Parameters[i].Name}') reads it by reference";
-                accesses.Add((path, modifier == ParameterModifier.InOut, what));
+                var what = modifier switch {
+                    ParameterModifier.InOut => $"argument {i + 1} ('{callee.Parameters[i].Name}') is inout",
+                    ParameterModifier.Out => $"argument {i + 1} ('{callee.Parameters[i].Name}') is out",
+                    _ => $"argument {i + 1} ('{callee.Parameters[i].Name}') reads it by reference",
+                };
+                accesses.Add((path, modifier != ParameterModifier.Ref, what));
             }
 
             for (var j = 1; j < accesses.Count; j++) {

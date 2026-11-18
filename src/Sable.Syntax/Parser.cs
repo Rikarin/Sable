@@ -1520,6 +1520,10 @@ internal sealed class Parser {
             case SyntaxKind.RefKeyword:
                 return new RefTypeGreen(EatToken(), ParsePostfixType());
 
+            // '~Copyable': parsed wherever a type is, and bound only as a constraint.
+            case SyntaxKind.TildeToken:
+                return new SuppressedTypeGreen(EatToken(), ParsePostfixType());
+
             // 'region' names the region type too: 'fn f(in r: region)' (docs/02 §2.8).
             case SyntaxKind.RegionKeyword:
                 return new SimpleNameTypeGreen(EatToken(), null);

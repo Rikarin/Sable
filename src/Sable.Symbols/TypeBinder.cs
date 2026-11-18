@@ -357,8 +357,32 @@ internal sealed class TypeBinder(Compilation compilation) {
                 continue;
             }
 
-            parameter.Constraints = [BindType(syntax.Constraint, context, scope)];
+            var constraints = Constraints(syntax.Constraint, parameter);
+            parameter.Constraints = constraints is [var only] && ReferenceEquals(only, syntax.Constraint)
+                ? [BindType(only, context, scope)]
+                : [..constraints.Select(c => BindType(c, context, scope))];
         }
+    }
+
+    /// <summary>
+    ///     A constraint's parts, without the <c>~Copyable</c> among them, which
+    ///     instead lets the parameter stand for a move-only type (docs/03 §3.3).
+    /// </summary>
+    static List<TypeSyntax> Constraints(TypeSyntax constraint, TypeParameterSymbol parameter) {
+        switch (constraint) {
+            case SuppressedTypeSyntax { ConstraintType: SimpleNameTypeSyntax { Identifier.Text: "Copyable", TypeArgumentList: null } }:
+                parameter.AllowsNoncopyable = true;
+                return [];
+
+            case CompositionTypeSyntax composition when ContainsSuppression(composition):
+                return [..Constraints(composition.Left, parameter), ..Constraints(composition.Right, parameter)];
+
+            default:
+                return [constraint];
+        }
+
+        static bool ContainsSuppression(TypeSyntax type) =>
+            type is SuppressedTypeSyntax || type is CompositionTypeSyntax composition && (ContainsSuppression(composition.Left) || ContainsSuppression(composition.Right));
     }
 
     /// <summary>
@@ -376,6 +400,17 @@ internal sealed class TypeBinder(Compilation compilation) {
 
         foreach (var constraint in clause.Constraints) {
             var left = BindType(constraint.Left, context, scope);
+
+            // 'where T: ~Copyable' says what 'T: ~Copyable' does.
+            if (left is TypeParameterSymbol lifted && constraint.OperatorToken.Kind != SyntaxKind.EqualsEqualsToken
+                && constraint.Right is SuppressedTypeSyntax or CompositionTypeSyntax) {
+                var parts = Constraints(constraint.Right, lifted);
+                if (parts is not [var whole] || !ReferenceEquals(whole, constraint.Right)) {
+                    lifted.Constraints = lifted.Constraints.AddRange(parts.Select(p => BindType(p, context, scope)).Where(static t => !t.IsError));
+                    continue;
+                }
+            }
+
             var right = BindType(constraint.Right, context, scope);
 
             if (left.IsError || right.IsError) {
@@ -429,6 +464,10 @@ internal sealed class TypeBinder(Compilation compilation) {
         TextSpan span
     ) {
         for (var i = 0; i < arguments.Length && i < definition.TypeParameters.Length; i++) {
+            if (Copyability.Refusal(definition.TypeParameters[i], arguments[i], definition.Name) is { } refusal) {
+                _diagnostics.Error(ErrorCode.ERR_NoncopyableTypeArgument, span, refusal);
+            }
+
             foreach (var constraint in definition.TypeParameters[i].Constraints) {
                 if (Conversions.Satisfies(arguments[i], constraint)) {
                     continue;
@@ -565,6 +604,14 @@ internal sealed class TypeBinder(Compilation compilation) {
                     ? new ExistentialTypeSymbol(constraint)
                     : ErrorTypeSymbol.Instance;
             }
+
+            // Anywhere but a generic parameter's constraint, which takes it apart first.
+            case SuppressedTypeSyntax suppressed:
+                return Error(
+                    ErrorCode.ERR_MisplacedSuppression,
+                    suppressed.Span,
+                    $"'{suppressed.ToString().Trim()}' is not a type: '~Copyable' is written only as a generic parameter's constraint, to let it stand for a @noncopy type"
+                );
 
             case CompositionTypeSyntax composition:
                 return new CompositionTypeSymbol(

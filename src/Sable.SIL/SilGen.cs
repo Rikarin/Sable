@@ -920,9 +920,10 @@ public sealed partial class SilGen {
         }
 
         foreach (var parameter in symbol.Parameters) {
-            // 'in r: region' borrows the region, as any parameter is borrowed.
+            // 'in r: region' borrows the region, as any parameter is borrowed; so
+            // does a 'borrowing' one, which only says so (and may not let it escape).
             if (parameter.Modifier is not (ParameterModifier.None or ParameterModifier.InOut or ParameterModifier.Consuming
-                or ParameterModifier.Ref or ParameterModifier.In)) {
+                or ParameterModifier.Ref or ParameterModifier.In or ParameterModifier.Out or ParameterModifier.Borrowing)) {
                 return Unsupported<FunctionType>(at, $"the '{parameter.Modifier}' parameter '{parameter.Name}'");
             }
 
@@ -930,8 +931,9 @@ public sealed partial class SilGen {
                 return Unsupported<FunctionType>(at, $"a parameter of type '{parameter.Type.ToDisplayString()}'");
             }
 
-            // An inout or ref parameter is the address of the caller's storage.
-            parameters.Add(parameter.Modifier is ParameterModifier.InOut or ParameterModifier.Ref ? SilType.Address(type) : type);
+            // An inout, out or ref parameter is the address of the caller's storage:
+            // an out one is written there before the callee returns.
+            parameters.Add(parameter.Modifier is ParameterModifier.InOut or ParameterModifier.Out or ParameterModifier.Ref ? SilType.Address(type) : type);
         }
 
         var resultSymbol = symbol.FunctionKind == FunctionKind.Initializer ? SelfType(symbol, substitution) : symbol.ReturnType;
@@ -2649,6 +2651,19 @@ public sealed partial class SilGen {
                 return Hold(Emit(new LoadBorrowInst(place)));
             }
 
+            // So is one a closure captures, in its box. The box is held by the
+            // variable's slot, or by the closure's context, for longer than this.
+            if (CapturedMoveOnly(expression) is { } captured) {
+                var boxes = new List<SilValue>();
+                if (LocalAddress(captured.Local, captured.Syntax, boxes) is not { } boxed) {
+                    return null;
+                }
+
+                var borrowedInBox = Emit(new LoadBorrowInst(boxed));
+                EndAll(boxes);
+                return Hold(borrowedInBox);
+            }
+
             // A narrowed read is the payload, taken out: a value of its own.
             if (NarrowedUnion(expression) is not null) {
                 return Expression(expression) is { } payload ? Hold(payload) : null;
@@ -2688,11 +2703,11 @@ public sealed partial class SilGen {
         }
 
         /// <summary>
-        ///     True for a parameter passed by address — inout or ref — whose
+        ///     True for a parameter passed by address — inout, out or ref — whose
         ///     address stands for its value; a parameter of reference type is
         ///     an address that is the value.
         /// </summary>
-        static bool IsByAddress(ParameterSymbol parameter) => parameter.Modifier is ParameterModifier.InOut or ParameterModifier.Ref;
+        static bool IsByAddress(ParameterSymbol parameter) => parameter.Modifier is ParameterModifier.InOut or ParameterModifier.Out or ParameterModifier.Ref;
 
         /// <summary>The slot of a move-only local or parameter, or null.</summary>
         AllocStackInst? MoveOnlyPlace(BoundExpression expression) =>
@@ -2701,6 +2716,15 @@ public sealed partial class SilGen {
                     && slot.ElementType is NominalType { IsNoncopyable: true } => slot,
                 BoundParameterAccess parameter when _spilled.TryGetValue(parameter.Parameter, out var spilled) => spilled,
                 BoundConversion { ConversionKind: ConversionKind.Identity } conversion => MoveOnlyPlace(conversion.Operand),
+                _ => null,
+            };
+
+        /// <summary>A move-only local kept in a box, because a closure captures it — here or in the closure — or null.</summary>
+        BoundLocalAccess? CapturedMoveOnly(BoundExpression expression) =>
+            expression switch {
+                BoundLocalAccess local when LowerType(local.Type) is NominalType { IsNoncopyable: true }
+                    && (_boxed.Contains(local.Local) || closure?.Captures.TryGetValue(local.Local, out var capture) == true && capture.Boxed) => local,
+                BoundConversion { ConversionKind: ConversionKind.Identity } conversion => CapturedMoveOnly(conversion.Operand),
                 _ => null,
             };
 
@@ -5930,8 +5954,8 @@ public sealed partial class SilGen {
                     continue;
                 }
 
-                // An inout argument passes where it is; the rest are borrowed.
-                if (i < callee.Parameters.Length && callee.Parameters[i].Modifier == ParameterModifier.InOut) {
+                // An inout or out argument passes where it is; the rest are borrowed.
+                if (i < callee.Parameters.Length && callee.Parameters[i].Modifier is ParameterModifier.InOut or ParameterModifier.Out) {
                     if (Address(call.Arguments[i], borrows) is not { } address) {
                         return null;
                     }
@@ -6257,6 +6281,10 @@ public sealed partial class SilGen {
             new FunctionLowering(generator, codeSymbol, code, source, substitution, info).Lower(body);
             code.RemoveUnreachableBlocks();
             generator._module.Add(code);
+
+            // A closure's body is checked as a function's is: what it does with
+            // a move-only value it captures, or makes, is held to the same rules.
+            MoveChecker.Check(code, source, generator._diagnostics);
 
             // The context.
             Locate(closureExpression.Syntax);

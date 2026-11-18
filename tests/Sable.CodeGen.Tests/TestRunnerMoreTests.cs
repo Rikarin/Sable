@@ -86,7 +86,7 @@ public sealed class TestRunnerMoreTests {
 
         // What the test threw is in its report.
         Assert.Contains("---- Suite.awaitsAndThrows (test.sb:16) ----\n    assertion failed: the test threw an error: worse\n", output, StringComparison.Ordinal);
-        Assert.Contains("    fatal error: array index out of range\n    the test trapped, but not with 'overflow'\n    (exit status 134)\n", output, StringComparison.Ordinal);
+        Assert.Contains("    fatal error: array index out of range\n      at test.sb:38:11\n    the test trapped, but not with 'overflow'\n    (exit status 134)\n", output, StringComparison.Ordinal);
         Assert.Contains("---- Suite.returns (test.sb:42) ----\n    the test was to trap, and it returned\n    (exit status 0)\n", output, StringComparison.Ordinal);
         Assert.Contains("---- Suite.anAssertionIsNotTheTrap (test.sb:47) ----\n    assertion failed: the values differ\n", output, StringComparison.Ordinal);
     }

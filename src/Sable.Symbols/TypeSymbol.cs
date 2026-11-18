@@ -21,6 +21,17 @@ public abstract class TypeSymbol : Symbol, IEquatable<TypeSymbol> {
     /// <summary>The type as it would be written in source.</summary>
     public abstract string ToDisplayString();
 
+    /// <summary>
+    ///     The type as written before a suffix such as <c>?</c> or <c>[]</c>:
+    ///     a union, a function or a composition takes parentheses, since
+    ///     <c>Int | String?</c> reads as a union with an optional in it.
+    /// </summary>
+    public string ToSuffixedDisplayString() =>
+        this is StructuralUnionTypeSymbol or FunctionTypeSymbol or CompositionTypeSymbol
+            or ExistentialTypeSymbol or OpaqueTypeSymbol
+            ? $"({ToDisplayString()})"
+            : ToDisplayString();
+
     public override string ToString() => ToDisplayString();
 
     public virtual bool Equals(TypeSymbol? other) => ReferenceEquals(this, other);
@@ -340,11 +351,11 @@ public sealed class ArrayTypeSymbol(TypeSymbol elementType, ArrayKind arrayKind,
 
     public override string ToDisplayString() =>
         ArrayKind switch {
-            ArrayKind.Fixed => $"{ElementType.ToDisplayString()}[{Capacity}]",
-            ArrayKind.Inline => $"{ElementType.ToDisplayString()}[..{Capacity}]",
-            ArrayKind.Grow => $"{ElementType.ToDisplayString()}[>..]",
-            ArrayKind.GrowShrink => $"{ElementType.ToDisplayString()}[>..<]",
-            _ => $"{ElementType.ToDisplayString()}[:]",
+            ArrayKind.Fixed => $"{ElementType.ToSuffixedDisplayString()}[{Capacity}]",
+            ArrayKind.Inline => $"{ElementType.ToSuffixedDisplayString()}[..{Capacity}]",
+            ArrayKind.Grow => $"{ElementType.ToSuffixedDisplayString()}[>..]",
+            ArrayKind.GrowShrink => $"{ElementType.ToSuffixedDisplayString()}[>..<]",
+            _ => $"{ElementType.ToSuffixedDisplayString()}[:]",
         };
 
     public override bool Equals(TypeSymbol? other) =>
@@ -363,7 +374,7 @@ public sealed class OptionalTypeSymbol(TypeSymbol underlyingType) : TypeSymbol {
 
     public TypeSymbol UnderlyingType { get; } = underlyingType;
 
-    public override string ToDisplayString() => $"{UnderlyingType.ToDisplayString()}?";
+    public override string ToDisplayString() => $"{UnderlyingType.ToSuffixedDisplayString()}?";
 
     public override bool Equals(TypeSymbol? other) =>
         other is OptionalTypeSymbol optional && optional.UnderlyingType.Equals(UnderlyingType);

@@ -4397,8 +4397,22 @@ public sealed partial class Binder {
     }
 
     BoundExpression BindCast(CastExpressionSyntax syntax) {
-        var operand = BindExpression(syntax.Expression);
         var target = _compilation.TypeBinder.BindType(syntax.Type, _containingSymbol, _scope);
+
+        // A plain 'as' says what type a value is to have, so the operand is
+        // bound expecting it: 'none as Int?' is that type's none, and
+        // '[1] as Int[>..]?' an array of that kind.
+        var isPlain = syntax.QuestionOrBangToken.IsNone;
+        var operand = BindExpression(syntax.Expression, isPlain ? target : null);
+
+        // Where the value already converts — promotion, joining a union,
+        // an upcast — 'as' is that conversion. Between numbers it stays the
+        // checked conversion it is written as, even for a literal.
+        if (isPlain
+            && !(IsNumber(operand.Type) && IsNumber(target))
+            && _conversions.HasImplicitConversion(operand.Type, target, IsLiteral(operand))) {
+            return Convert(operand, target, syntax);
+        }
 
         // 'as?' yields an optional; 'as' and 'as!' yield the type itself.
         var isOptional = syntax.QuestionOrBangToken.Kind == SyntaxKind.QuestionToken;
@@ -4406,6 +4420,8 @@ public sealed partial class Binder {
 
         return new BoundConversion(syntax, type, operand, ConversionKind.Explicit);
     }
+
+    bool IsNumber(TypeSymbol type) => Core.IsInteger(type) || Core.Floats.Contains(type);
 
     /// <summary>
     ///     Binds <c>a..&lt;b</c> to a <c>Range&lt;T&gt;</c> and <c>a...b</c> to a
@@ -5131,6 +5147,15 @@ public sealed partial class Binder {
 
         if (conversion == ConversionKind.Identity) {
             return expression;
+        }
+
+        // A promotion that needs a step first — an array literal taking a
+        // kind, a value joining a union — takes that step, then wraps.
+        if (conversion == ConversionKind.OptionalWrap
+            && target is OptionalTypeSymbol promoted
+            && _conversions.Classify(expression.Type, promoted.UnderlyingType, IsLiteral(expression))
+                is not (null or ConversionKind.Identity)) {
+            expression = Convert(expression, promoted.UnderlyingType, syntax);
         }
 
         // 'c ? a : b' refers to whichever place it picks: each arm becomes a reference.

@@ -74,6 +74,16 @@ internal sealed class Conversions(CoreTypes core) {
             if (sourceIsLiteral && IsLiteralCompatible(source, optional.UnderlyingType)) {
                 return ConversionKind.OptionalWrap;
             }
+
+            // Promotion composes with what gets a value to the underlying
+            // type: '[9]' for an 'Int[>..]?' takes its kind and then wraps,
+            // '"x"' for an '(Int | String)?' joins the union and then wraps.
+            // The binder builds the two steps; an optional is never wrapped
+            // again, so 'T?' does not drift into 'T??'.
+            if (source is not OptionalTypeSymbol
+                && Classify(source, optional.UnderlyingType, sourceIsLiteral) is not null) {
+                return ConversionKind.OptionalWrap;
+            }
         }
 
         if (target is StructuralUnionTypeSymbol union) {

@@ -605,6 +605,10 @@ internal sealed class TypeBinder(Compilation compilation) {
                     : ErrorTypeSymbol.Instance;
             }
 
+            // '@escaping': the parameter's, read where it is declared.
+            case AttributedTypeSyntax attributed:
+                return BindType(attributed.Type, context, scope);
+
             // Anywhere but a generic parameter's constraint, which takes it apart first.
             case SuppressedTypeSyntax suppressed:
                 return Error(

@@ -72,6 +72,21 @@ public sealed class DeclarationParserTests {
         Assert.False(parameters[2].EllipsisToken.IsNone);
     }
 
+    // Before the parameter or on its type (#125); on a type, the parenthesis
+    // after an attribute is the function type's, not the attribute's.
+    [Theory]
+    [InlineData("fn keep(_ f: @escaping () -> Int) -> () -> Int { }")]
+    [InlineData("fn keep(@escaping _ f: () -> Int) -> () -> Int { }")]
+    public void ParsesEscapingOnAParameterOrItsType(string source) {
+        var tree = SyntaxTree.Parse(new SourceText(source, "test.sb"));
+        Assert.Empty(tree.Diagnostics);
+        var parameter = Assert.Single(Assert.IsType<FunctionDeclarationSyntax>(Assert.Single(((CompilationUnitSyntax)tree.Root).Members)).Parameters.Parameters);
+        var attributes = parameter.Type is AttributedTypeSyntax attributed ? attributed.Attributes : parameter.Attributes;
+        Assert.Equal("escaping", Assert.Single(attributes).Name.ToString().Trim());
+        Assert.IsType<FunctionTypeSyntax>(parameter.Type is AttributedTypeSyntax { Type: var inner } ? inner : parameter.Type);
+        Assert.Equal(source, tree.Root.ToFullString());
+    }
+
     [Fact]
     public void ParsesAKeywordParameterLabel() {
         var fn = ParseMember<FunctionDeclarationSyntax>("fn first(where p: (Element) -> Bool) -> Element? { }");

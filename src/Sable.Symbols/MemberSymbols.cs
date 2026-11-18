@@ -237,6 +237,14 @@ public sealed class ParameterSymbol(
     public bool HasDefaultValue { get; internal set; }
     public bool IsVariadic { get; internal set; }
     public ParameterModifier Modifier { get; internal set; } = ParameterModifier.None;
+
+    /// <summary>
+    ///     <c>@escaping</c>: a closure passed here may outlive the call — be
+    ///     stored, returned, or captured by a closure that does. Without it, a
+    ///     closure parameter may only be called, or passed on to another that
+    ///     does not escape (SYNTAX.md §17).
+    /// </summary>
+    public bool IsEscaping { get; internal set; }
 }
 
 public enum ParameterModifier {

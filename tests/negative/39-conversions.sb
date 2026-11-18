@@ -44,10 +44,10 @@ fn neverFitsAnywhere() -> Int {
 
 fn abort() -> Never { return abort() }
 
-fn aFunctionThatThrowsLess(_ f: () -> Int) -> () throws -> Int { return f }
-fn aFunctionThatThrowsMore(_ f: () throws -> Int) -> () -> Int { return f }   //! S3004
+fn aFunctionThatThrowsLess(_ f: @escaping () -> Int) -> () throws -> Int { return f }
+fn aFunctionThatThrowsMore(_ f: @escaping () throws -> Int) -> () -> Int { return f }   //! S3004
 
-fn anAsyncFunctionIsNotSync(_ f: async () -> Int) -> () -> Int { return f }   //! S3004
+fn anAsyncFunctionIsNotSync(_ f: @escaping async () -> Int) -> () -> Int { return f }   //! S3004
 
 fn arraysAreInvariant(_ xs: Derived[]) -> Base[] { return xs }   //! S3004
 

@@ -143,6 +143,7 @@ public enum ErrorCode {
     ERR_OutNotAssigned = 3065,
     ERR_MisplacedSuppression = 3066,
     ERR_NoncopyableTypeArgument = 3067,
+    ERR_Escapes = 3068,
     ERR_UnknownDerivation = 3070,
     ERR_CannotDerive = 3071,
     ERR_DerivedFieldDoesNotConform = 3072,

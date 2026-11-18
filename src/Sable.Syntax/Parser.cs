@@ -2941,7 +2941,11 @@ internal sealed class Parser {
         return new ImportItemGreen(name, asKeyword, alias);
     }
 
-    GreenList ParseAttributes() {
+    /// <param name="onType">
+    ///     Attributes written on a type, '@escaping () -> Int', take no
+    ///     arguments: the parenthesis after one is the type's.
+    /// </param>
+    GreenList ParseAttributes(bool onType = false) {
         if (!At(SyntaxKind.AtToken)) {
             return GreenList.Empty;
         }
@@ -2950,7 +2954,7 @@ internal sealed class Parser {
         while (At(SyntaxKind.AtToken)) {
             var at = EatToken();
             var name = ParseTypeName();
-            var arguments = At(SyntaxKind.OpenParenToken)
+            var arguments = At(SyntaxKind.OpenParenToken) && !onType
                 ? ParseArgumentList(SyntaxKind.OpenParenToken, SyntaxKind.CloseParenToken)
                 : null;
             items.Add(new AttributeGreen(at, name, arguments));
@@ -3312,7 +3316,8 @@ internal sealed class Parser {
         // the form that reads well once a parameter has an external label.
         var typeModifier = IsParameterModifier(Current.Kind) ? EatToken() : null;
 
-        var type = ParseType();
+        // 'f: @escaping () -> Int' says of the type what '@escaping f: …' does.
+        var type = At(SyntaxKind.AtToken) ? new AttributedTypeGreen(ParseAttributes(onType: true), ParseType()) : ParseType();
         var ellipsis = TryEatToken(SyntaxKind.DotDotDotToken);
 
         GreenNode? defaultValue = null;

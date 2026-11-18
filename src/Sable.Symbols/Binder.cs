@@ -168,6 +168,7 @@ public sealed partial class Binder {
         var graph = ControlFlowGraph.Build(bound, function.Parameters.Where(static p => p.Modifier != ParameterModifier.Out));
         CheckFlow(function, body, graph);
         DefiniteAssignment.Analyze(graph, _diagnostics, function);
+        CheckEscapes(bound, function);
 
         PopScope();
         RestoreEffects(savedEffects);
@@ -241,7 +242,19 @@ public sealed partial class Binder {
         _containingSymbol = savedSymbol;
         _returnType = savedReturn;
 
-        return new BoundBlock(expression, [], [new BoundReturn(expression, value)]);
+        var block = new BoundBlock(expression, [], [new BoundReturn(expression, value)]);
+        CheckEscapes(block, function);
+        return block;
+    }
+
+    /// <summary>
+    ///     What may not outlive the call, does not. A local function's body is
+    ///     checked with the function around it, which sees what it captures.
+    /// </summary>
+    void CheckEscapes(BoundBlock body, FunctionSymbol function) {
+        if (function.ContainingSymbol is not FunctionSymbol) {
+            EscapeChecker.Check(body, function, _diagnostics);
+        }
     }
 
     /// <summary>Binds a stored member's initialiser against its declared type.</summary>

@@ -867,7 +867,9 @@ public sealed partial class Compilation {
         var parameter = new ParameterSymbol(syntax.Identifier.Text, label, container, syntax, ordinal) {
             HasDefaultValue = syntax.DefaultValue is not null,
             IsVariadic = !syntax.EllipsisToken.IsNone,
-            Modifier = ModifierOf(syntax)
+            Modifier = ModifierOf(syntax),
+            IsEscaping = syntax.Attributes.Concat((syntax.Type as AttributedTypeSyntax)?.Attributes ?? [])
+                .Any(static a => a.Name.ToString().Trim() == "escaping"),
         };
 
         TypeBinder.BindParameterType(parameter, syntax);

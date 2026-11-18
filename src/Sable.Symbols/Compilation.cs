@@ -98,6 +98,25 @@ public sealed partial class Compilation {
 
     public ModuleSymbol? GetModule(string name) => _modules.TryGetValue(name, out var module) ? module : null;
 
+    /// <summary>
+    ///     The module a dotted name written in a file names: in full,
+    ///     <c>Sable.Math</c>, or through an alias the file imported,
+    ///     <c>M</c> for <c>import Sable.Math as M</c> — whose first segment
+    ///     the alias stands for, so <c>S.Math</c> works for an alias of
+    ///     <c>Sable</c>'s module path too.
+    /// </summary>
+    public ModuleSymbol? ResolveModule(string dottedName, FileScope? scope) {
+        if (scope is not null) {
+            var dot = dottedName.IndexOf('.');
+            var first = dot < 0 ? dottedName : dottedName[..dot];
+            if (scope.ImportAliases.TryGetValue(first, out var aliased)) {
+                return dot < 0 ? aliased : GetModule(aliased.Name + dottedName[dot..]);
+            }
+        }
+
+        return GetModule(dottedName);
+    }
+
     public FileScope GetFileScope(SyntaxTree tree) => _fileScopes[tree];
 
     /// <summary>The scope of the file a node was parsed from, if it is one of this compilation's.</summary>

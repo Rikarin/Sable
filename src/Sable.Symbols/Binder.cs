@@ -2354,12 +2354,92 @@ public sealed partial class Binder {
             return new BoundError(syntax);
         }
 
+        // A module is reached through, never held: 'M.gcd(a, b)', not 'M'.
+        if (_compilation.ResolveModule(name, _scope) is { } namedModule) {
+            _diagnostics.Error(
+                ErrorCode.ERR_NotAValue,
+                syntax.Span,
+                $"'{name}' names the module '{namedModule.Name}', which is not a value; reach its members with '.'"
+            );
+            return new BoundError(syntax);
+        }
+
         _diagnostics.Error(
             ErrorCode.ERR_NameNotFound,
             syntax.Span,
             $"no symbol named '{name}' is in scope"
         );
         return new BoundError(syntax);
+    }
+
+    /// <summary>
+    ///     Whether a name means something here other than a module: a local,
+    ///     a member, or a declaration in this module, an import or the core.
+    ///     Such a name hides a module of the same name, as it would hide a
+    ///     declaration further out.
+    /// </summary>
+    bool NamesAValue(string name) {
+        Symbol? hidden = null;
+        return LookupLocal(name) is not null
+            || LocalTypes(name, false).Count > 0
+            || LocalTypes(name, true).Count > 0
+            || EnclosingType() is { } enclosing && LookupMember(SelfTypeOf(enclosing), name) is not null
+            || Visible(_scope.Module.GetMembers(name), ref hidden).Count > 0
+            || _scope.ImportedNames.ContainsKey(name)
+            || _scope.Imports.Any(module => Visible(module.GetMembers(name), ref hidden).Count > 0)
+            || Core.Module.GetMembers(name).Any()
+            || _compilation.TypeBinder.Lookup(name, _containingSymbol, _scope, default, report: false) is TypeParameterSymbol;
+    }
+
+    /// <summary>
+    ///     The module an expression names, when it is a dotted name that does:
+    ///     <c>Sable.Math</c>, or an alias imported for one.
+    /// </summary>
+    ModuleSymbol? ModuleNamedBy(ExpressionSyntax syntax) {
+        var path = new List<string>();
+        var here = syntax;
+        while (here is MemberAccessExpressionSyntax { OperatorToken.Kind: SyntaxKind.DotToken, Name: IdentifierNameSyntax name } member) {
+            path.Insert(0, name.Identifier.Text);
+            here = member.Expression;
+        }
+
+        if (here is not IdentifierNameSyntax first || NamesAValue(first.Identifier.Text)) {
+            return null;
+        }
+
+        path.Insert(0, first.Identifier.Text);
+        return _compilation.ResolveModule(string.Join('.', path), _scope);
+    }
+
+    /// <summary>
+    ///     <c>M.gcd</c> or <c>Sable.Collections.Deque&lt;Int&gt;</c>: a member of
+    ///     a module named in full or through its alias, as it would be found
+    ///     unqualified after importing the module — and only as visible as it is.
+    /// </summary>
+    BoundExpression BindModuleMember(MemberAccessExpressionSyntax syntax, ModuleSymbol module, string name) {
+        Symbol? hidden = null;
+        var members = Visible(module.GetMembers(name), ref hidden);
+        if (members.Count == 0) {
+            if (hidden is not null) {
+                ReportInaccessible(hidden, syntax.Name);
+            } else {
+                _diagnostics.Error(
+                    ErrorCode.ERR_NameNotFound,
+                    syntax.Name.Span,
+                    $"'{module.Name}' has no member named '{name}'"
+                );
+            }
+
+            return new BoundError(syntax);
+        }
+
+        // 'Sable.Collections.Deque<Int>' names the type with its arguments.
+        if (syntax.Name is GenericNameSyntax generic && members[0] is NamedTypeSymbol or AliasSymbol) {
+            var type = _compilation.TypeBinder.BindGenericName(members[0], generic, _containingSymbol, _scope);
+            return type.IsError ? new BoundError(syntax) : new BoundTypeExpression(syntax, type);
+        }
+
+        return BindMemberGroup(syntax, null, members, null);
     }
 
     BoundExpression BindMemberGroup(
@@ -2446,6 +2526,19 @@ public sealed partial class Binder {
         };
 
     BoundExpression BindMemberAccess(MemberAccessExpressionSyntax syntax) {
+        // 'Sable.Math.gcd' and 'M.gcd': the left names a module, not a value.
+        if (syntax.OperatorToken.Kind == SyntaxKind.DotToken && ModuleNamedBy(syntax.Expression) is { } module) {
+            return BindModuleMember(
+                syntax,
+                module,
+                syntax.Name switch {
+                    IdentifierNameSyntax identifier => identifier.Identifier.Text,
+                    GenericNameSyntax generic => generic.Identifier.Text,
+                    _ => string.Empty,
+                }
+            );
+        }
+
         var receiver = BindExpression(syntax.Expression);
 
         // A member of a reference is the member of what it refers to.

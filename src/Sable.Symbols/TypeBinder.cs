@@ -843,8 +843,11 @@ internal sealed class TypeBinder(Compilation compilation) {
         FileScope? scope
     ) {
         // A dotted name may be a module path, so try the longest module first.
+        // An alias the file imported stands for the module it names:
+        // 'M.Vector' after 'import Sable.Math as M'.
         var full = Compilation.NameOf(syntax.Left);
-        if (compilation.GetModule(full) is { } module) {
+        if (compilation.ResolveModule(full, scope) is { } module) {
+            full = module.Name;
             var member = module.GetMembers(syntax.Right.Identifier.Text).FirstOrDefault();
             if (member is null) {
                 return Error(
@@ -920,6 +923,13 @@ internal sealed class TypeBinder(Compilation compilation) {
             ? ErrorTypeSymbol.Instance
             : Resolved(syntax, symbol, ApplyTypeArguments(symbol, syntax.TypeArgumentList, context, scope, syntax.Span));
     }
+
+    /// <summary>
+    ///     A generic name already found, <c>Deque&lt;Int&gt;</c> in
+    ///     <c>Sable.Collections.Deque&lt;Int&gt;()</c>, read as the type it names.
+    /// </summary>
+    internal TypeSymbol BindGenericName(Symbol found, GenericNameSyntax syntax, Symbol context, FileScope? scope) =>
+        Resolved(syntax, found, ApplyTypeArguments(found, syntax.TypeArgumentList, context, scope, syntax.Span));
 
     TypeSymbol ApplyTypeArguments(
         Symbol symbol,

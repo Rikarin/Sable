@@ -162,4 +162,81 @@ public sealed class TextLibraryTests {
                 }
                 """).Stdout
         );
+
+    /// <summary>
+    ///     The helpers that build or search text, over text that is not ASCII:
+    ///     each collects pieces and joins them once, and compares in place.
+    /// </summary>
+    [Fact]
+    public void HelpersThatBuildTextKeepEveryScalar() =>
+        Assert.Equal(
+            "olléh\na--b--c--é\n2 3 3\na|éb||c\nhÉllo world ABCDé\nééé\n\"q\\\"é\\\\\\n\"\nsame\n",
+            Run("""
+                print(reversed("héllo"))
+                print(replacing("a-b-c-é", "-", with: "--"))
+                print("\(find("xxéyy", "éy") ?? -1) \(occurrences(of: "é", within: "éaéaé")) \(findLast("aéaéa", "éa") ?? -1)")
+                print(joined(splitting("a,éb,,c", by: ","), separator: "|"))
+                print(lowercased("HÉLLO World") + " " + uppercased("abcdé"))
+                print(repeating("é", 3))
+                print("q\"é\\\n".debugDescription())
+                let text = "untouched é"
+                print(replacing(text, "z", with: "y") == text && uppercased("ÉÉ") == "ÉÉ" ? "same" : "changed")
+            """)
+        );
+
+    /// <summary>
+    ///     Indexing text that is not ASCII walks from the nearest place the
+    ///     runtime knows: a loop over a string's scalars, forwards or back,
+    ///     is linear. It was quadratic — 131,072 scalars took 11 s — so a
+    ///     million in under five seconds, compilation aside, says it is not.
+    /// </summary>
+    [Fact]
+    public void IndexingTextThatIsNotAsciiIsLinear() {
+        if (!CanBuild) {
+            return;
+        }
+
+        var run = BuildAndRun("""
+            module P
+            import Sable.Text
+            import Sable.Time
+
+            @main
+            fn main() {
+                let text = repeating("aé😀", 333334)
+                let start = Instant.now()
+                var forward = 0
+                var i = 0
+                while i < text.count {
+                    forward = forward + text.at(i).codePoint
+                    i = i + 1
+                }
+                var backward = 0
+                i = text.count - 1
+                while i >= 0 {
+                    backward = backward + text.at(i).codePoint
+                    i = i - 1
+                }
+                // Hopping between two strings, and jumping about in one.
+                let other = repeating("ü", 1000)
+                var mixed = 0
+                i = 0
+                while i < 1000 {
+                    mixed = mixed + text.at(i * 997).codePoint + other.at(999 - i).codePoint
+                    i = i + 1
+                }
+                print(text.count)
+                print(forward == backward && forward == 333334 * (97 + 233 + 128512))
+                print(mixed)
+                print(start.elapsed.totalMilliseconds < 5000)
+            }
+            """);
+        var expected = 0L;
+        var scalars = new[] { 97, 233, 128512 };
+        for (var i = 0; i < 1000; i++) {
+            expected += scalars[i * 997 % 3] + 252;
+        }
+
+        Assert.Equal($"1000002\ntrue\n{expected}\ntrue\n", run.Stdout);
+    }
 }

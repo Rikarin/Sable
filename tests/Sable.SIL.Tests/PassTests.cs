@@ -134,6 +134,141 @@ public sealed class PassTests {
         Assert.Equal(33L, new SilInterpreter(module).Run("M.picked", false, 2L));
     }
 
+    static List<SilInstruction> Instructions(SilFunction function) => [..function.Blocks.SelectMany(static b => b.Instructions)];
+
+    static bool Calls(SilFunction function, string callee) =>
+        Instructions(function).OfType<FunctionRefInst>().Any(r => r.Function == callee);
+
+    [Fact]
+    public void ASmallCalleeIsInlinedAndItsBlocksMerged() {
+        var module = Lowered(
+            """
+            fn square(_ x: Int) -> Int { return x * x }
+            fn sumOfSquares(_ a: Int, _ b: Int) -> Int { return square(a) + square(b) }
+            """
+        );
+
+        SilPassManager.Run(module, SilPassManager.Optimising);
+
+        var sum = module.Find("M.sumOfSquares")!;
+        Assert.Empty(Instructions(sum).OfType<ApplyInst>());
+        Assert.Single(sum.Blocks);
+        Assert.Equal(25L, new SilInterpreter(module).Run("M.sumOfSquares", 3L, 4L));
+    }
+
+    /// <summary>
+    ///     A method no subclass overrides is called directly, and then, small,
+    ///     inlined: its borrowed self is the caller's value, borrowed longer.
+    /// </summary>
+    [Fact]
+    public void AMethodNothingOverridesIsCalledDirectlyAndInlined() {
+        var module = Lowered(
+            """
+            class Shape {
+                var name: String
+                init(_ name: String) { self.name = name }
+                fn label() -> String { return name + "!" }
+                fn area() -> Int { return 0 }
+            }
+            class Square: Shape {
+                var side: Int
+                init(_ side: Int) {
+                    self.side = side
+                    super.init("square")
+                }
+                override fn area() -> Int { return side * side }
+            }
+            fn describe(_ s: Square) -> String { return s.label() }
+            fn measure(_ s: Shape) -> Int { return s.area() }
+            fn run() -> String { return describe(Square(3)) + measure(Square(4)).toString() }
+            """
+        );
+
+        SilPassManager.Run(module, SilPassManager.Optimising);
+
+        // 'label' is Shape's in every class: called directly, then inlined.
+        var describe = module.Find("M.describe")!;
+        Assert.Empty(Instructions(describe).OfType<ClassMethodInst>());
+        Assert.False(Calls(describe, "M.Shape.label"));
+
+        // 'area' is overridden: a Shape could be either, so the vtable decides.
+        Assert.Single(Instructions(module.Find("M.measure")!).OfType<ClassMethodInst>());
+        Assert.Equal("square!16", new SilInterpreter(module).Run("M.run"));
+    }
+
+    [Fact]
+    public void RecursionStaysACallAndMutualRecursionEnds() {
+        var module = Lowered(
+            """
+            fn even(_ n: Int) -> Bool { return n == 0 ? true : odd(n - 1) }
+            fn odd(_ n: Int) -> Bool { return n == 0 ? false : even(n - 1) }
+            fn factorial(_ n: Int) -> Int { return n <= 1 ? 1 : n * factorial(n - 1) }
+            """
+        );
+
+        SilPassManager.Run(module, SilPassManager.Optimising);
+
+        Assert.True(Calls(module.Find("M.factorial")!, "M.factorial"));
+        Assert.Equal(true, new SilInterpreter(module).Run("M.even", 10L));
+        Assert.Equal(true, new SilInterpreter(module).Run("M.odd", 7L));
+        Assert.Equal(120L, new SilInterpreter(module).Run("M.factorial", 5L));
+    }
+
+    [Fact]
+    public void ACallThatCanThrowIsNotInlined() {
+        var module = Lowered(
+            """
+            enum Problem: Error { case negative }
+            fn checked(_ x: Int) throws(Problem) -> Int {
+                if x < 0 {
+                    throw Problem.negative
+                }
+                return x
+            }
+            fn total(_ x: Int) -> Int {
+                return (try? checked(x)) ?? -1
+            }
+            """
+        );
+
+        SilPassManager.Run(module, SilPassManager.Optimising);
+
+        Assert.NotEmpty(Instructions(module.Find("M.total")!).OfType<TryApplyInst>());
+        Assert.Equal(-1L, new SilInterpreter(module).Run("M.total", -5L));
+        Assert.Equal(5L, new SilInterpreter(module).Run("M.total", 5L));
+    }
+
+    /// <summary>Constants fold, and the branches they decide go with what they skip.</summary>
+    [Fact]
+    public void ConstantsFoldAndDecidedBranchesGo() {
+        var module = Lowered(
+            """
+            fn pick() -> Int {
+                let x = 2
+                if x * 3 == 6 {
+                    return 10
+                }
+                return 20
+            }
+            fn overflows() -> Int {
+                let big = 9223372036854775807
+                return big + 1
+            }
+            """
+        );
+
+        SilPassManager.Run(module, SilPassManager.Optimising);
+
+        var pick = module.Find("M.pick")!;
+        Assert.Single(pick.Blocks);
+        Assert.Empty(Instructions(pick).OfType<BuiltinInst>());
+        Assert.Equal(10L, new SilInterpreter(module).Run("M.pick"));
+
+        // Arithmetic that overflows is left to trap as the program runs.
+        Assert.Single(Instructions(module.Find("M.overflows")!).OfType<BuiltinInst>(), static b => b.Name == "add_Int");
+        Assert.Throws<SilTrap>(() => new SilInterpreter(module).Run("M.overflows"));
+    }
+
     sealed class Vandal : ISilPass {
         public string Name => "vandal";
 

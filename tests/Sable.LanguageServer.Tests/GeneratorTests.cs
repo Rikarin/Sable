@@ -39,7 +39,7 @@ public sealed class GeneratorTests : IDisposable {
                                      output.error("only a struct can be greeted")
                                      return
                                  }
-                                 output.add(file: "\(d.name).greet.sb", "extension \(d.name) {\n    fn greeting() -> String => \"hello from \(d.name)\"\n}\n")
+                                 output.add(file: "\(d.name).greet.sb", "extension \(d.name) {\n    public fn greeting() -> String => \"hello from \(d.name)\"\n}\n")
                              }
                              """;
 
@@ -111,5 +111,50 @@ public sealed class GeneratorTests : IDisposable {
         var projects = LanguageProjects.For(Root, PackageEnvironment.At(Path.Combine(_top, "home")));
         Assert.Equal(["app", "app generators"], projects.Select(static p => p.Name).Order());
         Assert.NotNull(projects.Single(static p => p.Name == "app").Generate);
+    }
+
+    [Fact]
+    public async Task AGeneratorFileIsCheckedAgainstTheRulesAsItIsEdited() {
+        WritePackages();
+        var path = Write("root/app/generators/local.sb", "module Local\n\nimport Sable.Generators\n\n@generator(\"local\")\nfn local(_ d: Declaration, into output: inout Output) {\n    print(d.name)\n}\n");
+        var uri = Workspace.UriOf(path);
+        var text = File.ReadAllText(path);
+        await using var client = Client();
+        await client.InitializeAsync(Root);
+        await client.NotifyAsync("initialized", new { });
+        await client.OpenAsync(uri, text);
+
+        var diagnostics = await client.DiagnosticsAsync(uri, static d => d.EnumerateArray().Any(static e => e.GetString("code") == "S3230"));
+        var error = diagnostics.EnumerateArray().First(static e => e.GetString("code") == "S3230");
+        Assert.StartsWith("a generator cannot use 'print'", error.GetString("message"), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ADependencysGeneratedCodeFollowsItsEdits() {
+        WritePackages();
+        // 'model' is in the folder, uses the generator, and 'app' uses what it writes.
+        const string Model = "module Model\n\n@greet\npublic struct Person {\n    public var name: String\n}\n";
+        var model = Write("root/model/src/lib.sb", Model);
+        Write("root/model/sable.toml", "[package]\nname = \"model\"\nversion = \"0.1.0\"\n\n[dependencies]\ngreet = { path = \"../../greet\" }\n");
+        Write("root/app/sable.toml", "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\nmodel = { path = \"../model\" }\n");
+        const string App = "module App\n\nimport Model\n\nfn main() {\n    print(Person(name: \"a\").greeting())\n}\n";
+        var main = Write("root/app/src/main.sb", App);
+        var uri = Workspace.UriOf(main);
+        await using var client = Client();
+        await client.InitializeAsync(Root);
+        await client.NotifyAsync("initialized", new { });
+        await client.OpenAsync(uri, App);
+        var clean = await client.DiagnosticsAsync(uri);
+        Assert.True(clean.GetArrayLength() == 0, clean.ToString());
+
+        // The dependency's type loses its attribute in the editor: 'greeting' goes with it.
+        var modelUri = Workspace.UriOf(model);
+        await client.OpenAsync(modelUri, Model);
+        var at = Model.IndexOf("@greet", StringComparison.Ordinal);
+        await client.ChangeAsync(modelUri, 2, Model, at, at + "@greet".Length, "");
+        var changed = App.Replace("()", "() ", StringComparison.Ordinal);
+        await client.ChangeAsync(uri, 2, App, 0, App.Length, changed);
+        var diagnostics = await client.DiagnosticsAsync(uri, static d => d.GetArrayLength() > 0);
+        Assert.Contains(diagnostics.EnumerateArray(), static d => d.GetString("message")!.Contains("greeting", StringComparison.Ordinal));
     }
 }

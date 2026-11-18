@@ -66,7 +66,7 @@ public sealed class BorrowFields : ISilPass {
     }
 
     /// <summary>A class reference, or an optional one: one pointer, kept alive by whatever holds it.</summary>
-    static bool Referential(SilType type) =>
+    internal static bool Referential(SilType type) =>
         type is ClassType || type is EnumType { IsNoncopyable: false } optional && optional.Cases.All(static c => c.Payload is null or ClassType);
 
     /// <summary>A value borrowed from a field of an object the caller lends: kept alive by it while the field is unchanged.</summary>

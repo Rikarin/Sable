@@ -3,16 +3,21 @@ module Sable.Text
 // Working with text (docs/06): searching, slicing, building, padding —
 // written in Sable over the core String. Positions count Unicode scalars,
 // as String does.
+//
+// Each helper that builds a string collects its pieces and joins them once:
+// a '+' per piece copies everything so far again, which is quadratic. And
+// each that searches compares in place, scalar by scalar, rather than
+// slicing a copy at every position.
 
 /// The string, n times over.
 public fn repeating(_ text: String, _ times: Int) -> String {
-    var result = ""
+    var copies: String[>..] = []
     var i = 0
     while i < times {
-        result = result + text
+        copies.append(text)
         i = i + 1
     }
-    return result
+    return joined(copies, separator: "")
 }
 
 /// The parts, with the separator between each two.
@@ -23,13 +28,28 @@ public fn joined(_ parts: String[>..], separator: String) -> String {
 
 /// The text, its scalars in reverse order.
 public fn reversed(_ text: String) -> String {
-    var result = ""
+    var scalars: String[>..] = []
     var i = text.count - 1
     while i >= 0 {
-        result = result + String.fromChar(text.at(i))
+        scalars.append(String.fromChar(text.at(i)))
         i = i - 1
     }
-    return result
+    return joined(scalars, separator: "")
+}
+
+/// Whether the part occurs in the text starting at the position.
+fn occursAt(_ text: String, _ part: String, _ position: Int) -> Bool {
+    if position < 0 || position + part.count > text.count {
+        return false
+    }
+    var k = 0
+    while k < part.count {
+        if text.at(position + k) != part.at(k) {
+            return false
+        }
+        k = k + 1
+    }
+    return true
 }
 
 /// Whether the text begins with the prefix.
@@ -49,7 +69,7 @@ public fn find(_ text: String, _ part: String) -> Int? {
     }
     var i = 0
     while i + part.count <= text.count {
-        if text.slice(from: i, to: i + part.count) == part {
+        if occursAt(text, part, i) {
             return i
         }
         i = i + 1
@@ -67,18 +87,24 @@ public fn replacing(_ text: String, _ part: String, with replacement: String) ->
     if part.count == 0 {
         return text
     }
-    var result = ""
+    var pieces: String[>..] = []
+    var start = 0
     var i = 0
-    while i < text.count {
-        if i + part.count <= text.count && text.slice(from: i, to: i + part.count) == part {
-            result = result + replacement
+    while i + part.count <= text.count {
+        if occursAt(text, part, i) {
+            pieces.append(text.slice(from: start, to: i))
+            pieces.append(replacement)
             i = i + part.count
+            start = i
         } else {
-            result = result + String.fromChar(text.at(i))
             i = i + 1
         }
     }
-    return result
+    if pieces.count == 0 {
+        return text
+    }
+    pieces.append(text.slice(from: start, to: text.count))
+    return joined(pieces, separator: "")
 }
 
 /// The text split at every occurrence of the separator; empty parts kept.
@@ -91,7 +117,7 @@ public fn splitting(_ text: String, by separator: String) -> String[>..] {
     var start = 0
     var i = 0
     while i + separator.count <= text.count {
-        if text.slice(from: i, to: i + separator.count) == separator {
+        if occursAt(text, separator, i) {
             parts.append(text.slice(from: start, to: i))
             i = i + separator.count
             start = i
@@ -115,34 +141,37 @@ public fn paddedRight(_ text: String, to width: Int, with fill: Char) -> String 
 
 /// ASCII letters in upper case; everything else as it is.
 public fn uppercased(_ text: String) -> String {
-    var result = ""
-    var i = 0
-    while i < text.count {
-        let code = text.at(i).codePoint
-        if code >= 97 && code <= 122 {
-            result = result + String.fromChar(Char.fromCodePoint(code - 32)!)
-        } else {
-            result = result + String.fromChar(text.at(i))
-        }
-        i = i + 1
-    }
-    return result
+    return shiftingAscii(text, from: 97, to: 122, by: -32)
 }
 
 /// ASCII letters in lower case; everything else as it is.
 public fn lowercased(_ text: String) -> String {
-    var result = ""
+    return shiftingAscii(text, from: 65, to: 90, by: 32)
+}
+
+/// The text with each scalar from 'low' to 'high' moved by 'shift': runs
+/// that need no change are kept whole, as slices, and text that needs none
+/// is given back as it is.
+fn shiftingAscii(_ text: String, from low: Int, to high: Int, by shift: Int) -> String {
+    var pieces: String[>..] = []
+    var start = 0
     var i = 0
     while i < text.count {
         let code = text.at(i).codePoint
-        if code >= 65 && code <= 90 {
-            result = result + String.fromChar(Char.fromCodePoint(code + 32)!)
-        } else {
-            result = result + String.fromChar(text.at(i))
+        if code >= low && code <= high {
+            if start < i {
+                pieces.append(text.slice(from: start, to: i))
+            }
+            pieces.append(String.fromChar(Char.fromCodePoint(code + shift)!))
+            start = i + 1
         }
         i = i + 1
     }
-    return result
+    if pieces.count == 0 {
+        return text
+    }
+    pieces.append(text.slice(from: start, to: text.count))
+    return joined(pieces, separator: "")
 }
 
 /// Collects text piece by piece without rebuilding it each time a piece is
@@ -232,7 +261,7 @@ public fn removingSuffix(_ text: String, _ end: String) -> String {
 public fn find(_ text: String, _ part: String, from start: Int) -> Int? {
     var i = start < 0 ? 0 : start
     while i + part.count <= text.count {
-        if text.slice(from: i, to: i + part.count) == part {
+        if occursAt(text, part, i) {
             return i
         }
         i = i + 1
@@ -244,7 +273,7 @@ public fn find(_ text: String, _ part: String, from start: Int) -> Int? {
 public fn findLast(_ text: String, _ part: String) -> Int? {
     var i = text.count - part.count
     while i >= 0 {
-        if text.slice(from: i, to: i + part.count) == part {
+        if occursAt(text, part, i) {
             return i
         }
         i = i - 1
@@ -260,7 +289,7 @@ public fn occurrences(of part: String, within text: String) -> Int {
     var count = 0
     var i = 0
     while i + part.count <= text.count {
-        if text.slice(from: i, to: i + part.count) == part {
+        if occursAt(text, part, i) {
             count = count + 1
             i = i + part.count
         } else {

@@ -138,7 +138,23 @@ public sealed partial class SilGen {
                     continue;
                 }
 
-                Emit(new StoreInst(Owned(value), Emit(new RefElementAddrInst(made, index)), StoreKind.Assign));
+                // A weak or unowned field is given the object without taking the value.
+                var address = Emit(new RefElementAddrInst(made, index));
+                switch (classType.Fields[index].Type) {
+                    case WeakStorageType:
+                        Emit(new StoreWeakInst(value, address));
+                        Destroy(value);
+                        break;
+
+                    case UnownedStorageType:
+                        Emit(new StoreUnownedInst(value, address));
+                        Destroy(value);
+                        break;
+
+                    default:
+                        Emit(new StoreInst(Owned(value), address, StoreKind.Assign));
+                        break;
+                }
             }
 
             return made;

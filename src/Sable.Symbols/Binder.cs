@@ -6667,9 +6667,10 @@ public sealed partial class Binder {
 
     /// <summary>
     ///     <c>==</c> and <c>!=</c> on what has no comparison of its own but
-    ///     is made of parts that do: two tuples, element by element, and two
+    ///     is made of parts that do: two tuples, element by element; two
+    ///     arrays, as long as each other and equal element by element; and two
     ///     optionals — or an optional and a value — of a type whose '==' is
-    ///     not built in, by what they hold. Null when neither applies.
+    ///     not built in, by what they hold. Null when none applies.
     /// </summary>
     BoundExpression? StructuralEquality(
         SyntaxNode syntax,
@@ -6693,6 +6694,14 @@ public sealed partial class Binder {
 
             compared = left.Type;
             right = Convert(right, compared, right.Syntax);
+        } else if (left.Type is ArrayTypeSymbol leftArray && right.Type is ArrayTypeSymbol rightArray) {
+            // The comparison is of one element of each, bound once and
+            // made for each index in turn.
+            if (!leftArray.ElementType.Equals(rightArray.ElementType)) {
+                return null;
+            }
+
+            compared = leftArray.ElementType;
         } else {
             var payload = (left.Type as OptionalTypeSymbol)?.UnderlyingType ?? (right.Type as OptionalTypeSymbol)?.UnderlyingType;
             if (payload is null || IsBuiltinOperand(payload)) {

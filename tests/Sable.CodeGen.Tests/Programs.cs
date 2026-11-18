@@ -18,7 +18,7 @@ internal static class Programs {
         IReadOnlyList<string>? arguments = null,
         IReadOnlyDictionary<string, string>? environment = null
     ) {
-        var result = Pipeline.Compile(new SourceText(source, "test.sb"));
+        var result = Pipeline.Compile(new SourceText(source, "test.sb"), optimised: optimise);
         Assert.True(result.Succeeded, string.Join("\n", result.Errors));
 
         var executable = Path.Combine(Path.GetTempPath(), $"sable-test-{Guid.NewGuid():N}");
@@ -51,15 +51,17 @@ internal static class Programs {
 
     public static (string Output, string? Trap) Interpret(string source, int stepLimit = 10_000_000) {
         var (output, _, trap) = Interpret(source, stepLimit, "", []);
-        return (output, trap);
+        return (output, trap?.Message);
     }
 
     /// <summary>Interpreted only, with arguments, for a program that exits with a failure on purpose.</summary>
-    public static (string Output, string Errors, string? Trap) InterpretWithArguments(string source, IReadOnlyList<string> arguments) =>
-        Interpret(source, 10_000_000, "", arguments);
+    public static (string Output, string Errors, string? Trap) InterpretWithArguments(string source, IReadOnlyList<string> arguments) {
+        var (output, errors, trap) = Interpret(source, 10_000_000, "", arguments);
+        return (output, errors, trap?.Message);
+    }
 
     /// <summary>Interpreted, with standard input and arguments given and standard error kept.</summary>
-    static (string Output, string Errors, string? Trap) Interpret(string source, int stepLimit, string input, IReadOnlyList<string> arguments) {
+    static (string Output, string Errors, SilTrap? Trap) Interpret(string source, int stepLimit, string input, IReadOnlyList<string> arguments) {
         var result = Pipeline.Compile(new SourceText(source, "test.sb"));
         Assert.True(result.Succeeded, string.Join("\n", result.Errors));
         var interpreter = new SilInterpreter(result.Sil!, stepLimit) { Input = new StringReader(input), Arguments = arguments };
@@ -68,7 +70,7 @@ internal static class Programs {
             Assert.True(interpreter.LiveObjects == 0, $"the interpreter found {interpreter.LiveObjects} object(s) leaked");
             return (interpreter.Output.ToString(), interpreter.ErrorOutput.ToString(), null);
         } catch (SilTrap trap) {
-            return (interpreter.Output.ToString(), interpreter.ErrorOutput.ToString(), trap.Message);
+            return (interpreter.Output.ToString(), interpreter.ErrorOutput.ToString(), trap);
         }
     }
 
@@ -89,14 +91,14 @@ internal static class Programs {
         var (output, errors, trap) = Interpret(source, stepLimit, input, arguments ?? []);
         afterEach?.Invoke("interpreter");
         if (!CanBuild) {
-            return new(output, errors + (trap is null ? "" : $"fatal error: {trap}\n"), trap is null ? 0 : 134);
+            return new(output, errors + trap?.Report, trap is null ? 0 : 134);
         }
 
         var native = BuildAndRun(source, input: input, arguments: arguments);
         afterEach?.Invoke("native");
         Assert.True(
             (trap is null) == (native.ExitCode == 0),
-            $"the interpreter {(trap is null ? "ran to the end" : $"trapped: {trap}")}, "
+            $"the interpreter {(trap is null ? "ran to the end" : $"trapped: {trap.Message}")}, "
             + $"but the native program exited with {native.ExitCode}: {native.Stderr}"
         );
         Assert.Equal(output, native.Stdout);
@@ -105,7 +107,7 @@ internal static class Programs {
             Assert.Equal(errors, native.Stderr);
         } else {
             Assert.NotEqual(0, native.ExitCode);
-            Assert.Equal($"{errors}fatal error: {trap}\n", native.Stderr);
+            Assert.Equal($"{errors}{trap.Report}", native.Stderr);
         }
 
         return native;

@@ -256,4 +256,111 @@ public sealed class PropertyTests {
                 var g = G<String>()
                 g.items = ["x", "y"]
             """);
+
+    /// <summary>
+    ///     Part of a computed or observed property changed in place — a
+    ///     field stored, a mutating method, an inout argument, a compound
+    ///     assignment, deeper fields — is read through the getter, changed,
+    ///     and set once through the setter, so the observers run once per
+    ///     change: also when the mutating method throws, and on an object's
+    ///     property (#237).
+    /// </summary>
+    [Fact]
+    public void PartOfAPropertyWithAccessorsIsReadChangedAndSetOnce() =>
+        Prints(
+            """
+            will 1 -> 7
+            did 1 -> 7
+            7
+            will 7 -> 8
+            did 7 -> 8
+            will 8 -> 16
+            did 8 -> 16
+            will 16 -> 17
+            did 16 -> 17
+            17
+            will 17 -> 17
+            did 17 -> 17
+            1
+            get
+            set 9
+            get
+            set 10
+            10
+            inner changed to 6
+            will 17 -> 50
+            did 17 -> 50
+            will 50 -> 150
+            did 50 -> 150
+            caught nope
+            150
+            box did 4
+            box did 5
+            will 1 -> 11
+            did 1 -> 11
+            11
+
+            """,
+            """
+            struct Counter {
+                var n: Int
+                var tags: String[>..] = []
+                mutating fn bump() { n = n + 1 }
+                mutating fn tryBump(_ ok: Bool) throws(String) {
+                    n = n + 100
+                    if !ok { throw "nope" }
+                }
+            }
+            struct Inner { var c: Counter }
+            fn twice(_ c: inout Counter) { c.n = c.n * 2 }
+            struct Holder {
+                var stored: Counter = Counter(n: 0)
+                var c: Counter = Counter(n: 1) {
+                    willSet { print("will \(c.n) -> \(newValue.n)") }
+                    didSet { print("did \(oldValue.n) -> \(c.n)") }
+                }
+                var computed: Counter {
+                    get { print("get"); return stored }
+                    set { print("set \(newValue.n)"); stored = newValue }
+                }
+                var inner: Inner = Inner(c: Counter(n: 5)) {
+                    didSet { print("inner changed to \(inner.c.n)") }
+                }
+                mutating fn local() { c.n = 50 }
+            }
+            class Box {
+                var h: Holder = Holder()
+                var c: Counter = Counter(n: 3) {
+                    didSet { print("box did \(c.n)") }
+                }
+            }
+            """,
+            """
+                var h = Holder()
+                h.c.n = 7
+                print(h.c.n)
+                h.c.bump()
+                twice(&h.c)
+                h.c.n += 1
+                print(h.c.n)
+                h.c.tags.append("x")
+                print(h.c.tags.count)
+                h.computed.n = 9
+                h.computed.bump()
+                print(h.stored.n)
+                h.inner.c.n = 6
+                h.local()
+                do {
+                    try h.c.tryBump(false)
+                } catch {
+                    print("caught \(error)")
+                }
+                print(h.c.n)
+                let b = Box()
+                b.c.n = 4
+                b.c.bump()
+                b.h.c.n = 11
+                print(b.h.c.n)
+            """
+        );
 }

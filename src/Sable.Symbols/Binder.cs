@@ -1831,11 +1831,23 @@ public sealed partial class Binder {
     ) {
         BoundExpression? result = null;
 
+        // A condition is tested only once those before it held, so what
+        // they say about a binding holds in it: 'if x != none, x > 3'.
+        var pushed = 0;
         foreach (var condition in conditions) {
+            if (result is not null) {
+                PushNarrowing(NarrowingsWhen(result, true));
+                pushed++;
+            }
+
             var bound = BindCondition(condition);
             result = result is null
                 ? bound
                 : new BoundBinaryOperator(syntax, Core.Bool, BinaryOperatorKind.LogicalAnd, result, bound);
+        }
+
+        for (; pushed > 0; pushed--) {
+            PopNarrowing();
         }
 
         return result ?? new BoundLiteral(syntax, Core.Bool, true);
@@ -6489,7 +6501,23 @@ public sealed partial class Binder {
             ? (left.Type as OptionalTypeSymbol)?.UnderlyingType
             : left.Type;
 
+        // The right side of 'a && b' is evaluated only when 'a' holds, and
+        // of 'a || b' only when it does not: what that says about a binding
+        // holds there — 'i != none && i > 3' reads 'i' unwrapped.
+        var shortCircuit = syntax.OperatorToken.Kind switch {
+            SyntaxKind.AmpersandAmpersandToken => NarrowingsWhen(left, true),
+            SyntaxKind.PipePipeToken => NarrowingsWhen(left, false),
+            _ => null,
+        };
+
+        if (shortCircuit is not null) {
+            PushNarrowing(shortCircuit);
+        }
+
         var right = BindExpression(syntax.Right, expected);
+        if (shortCircuit is not null) {
+            PopNarrowing();
+        }
 
         var kind = BinaryKindOf(syntax.OperatorToken.Kind);
         if (kind is null) {

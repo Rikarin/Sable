@@ -1328,9 +1328,40 @@ Deferred: diagnostics for files that are not open; completion of argument
 labels, implicit members (`.Case` with no receiver) and snippets; references
 to argument labels; root hints when the workspace does not lower to SIL (a
 program with errors, or constructs the lowering does not take yet); code
-actions, formatting through the server (`sable fmt` is its own command),
-semantic tokens, workspace symbols, and watching files the client does not
-report.
+actions, semantic tokens, workspace symbols, and watching files the client
+does not report. (Formatting through the server came later, with the VS Code
+extension: `textDocument/formatting` is `SyntaxFormatter`'s output as one edit
+over the lines that change, and nothing for a file with a syntax error.)
+
+**The VS Code extension** (`editors/vscode`, plain JavaScript checked by
+`tsc --checkJs`, no bundler) is the client for all of it, and drives the rest of
+the toolchain:
+- The language server through `vscode-languageclient`. Its status is shown in
+  the status bar, and a quick fix on each coded diagnostic opens the code's
+  `sable explain` page.
+- Run and Debug above `main` and in the editor title.
+- Tasks for `build`, `check`, `run`, `test`, `bench`, `fmt` and `clean` in each
+  package, with problem matchers for diagnostics (`$sable`) and test failures
+  (`$sable-test`).
+- The Test Explorer, from `sable test --list`. A run is one `sable test <names>
+  --exact` per package, read as it prints; a failure carries the differing
+  values as expected and actual output.
+- A `sable` debug type. It builds the package (its dev profile has debug
+  information) or a lone file with `-g`. It writes the formatter plugin with
+  the new `sable debug --write-plugin`, and becomes an `lldb-dap` (or
+  CodeLLDB) configuration that imports the plugin.
+- A grammar (raw and multi-line strings, interpolation, directives, doc
+  comments), Sable blocks in Markdown, snippets (each checked to type-check),
+  and a `sable.toml` schema for Even Better TOML.
+
+`npm test` runs the grammar under `vscode-textmate` against 50 expectations
+and over every `.sab` file in the repository, and checks that none ends inside
+a construct. The language server, test-output parsing and the problem matcher
+were checked against the real `sable`. Debugging was checked by driving Xcode's
+`lldb-dap` over DAP with the configuration the extension produces: a
+breakpoint in a package build is verified and hit, frames are named, and a
+`String` local shows its text. Not checked: CodeLLDB, and the extension inside
+VS Code's own test host.
 
 ### Formatting, docs, explain, repl and lints, as implemented
 

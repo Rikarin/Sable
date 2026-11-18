@@ -21,15 +21,27 @@ public sealed class DebugCommand : Command {
 
     public override string Usage => """
         usage: sable debug <file.sab> [--batch] [-o <lldb command>]... [-- <arguments>]
+               sable debug --write-plugin <path.py>
 
           --batch            have lldb run the -o commands and exit, as 'lldb --batch' does
           -o <command>       an lldb command to run once the program is loaded; repeatable
           what follows '--' is passed to the program
+          --write-plugin     write the lldb formatter plugin to <path.py> and exit, for an
+                             editor's debugger to load with 'command script import'
         """;
 
     static string LldbPath => Environment.GetEnvironmentVariable("LLDB") is { Length: > 0 } lldb ? lldb : "lldb";
 
     public override int Run(IReadOnlyList<string> arguments) {
+        if (arguments is ["--write-plugin", var pluginPath]) {
+            if (Path.GetDirectoryName(Path.GetFullPath(pluginPath)) is { } parent) {
+                Directory.CreateDirectory(parent);
+            }
+
+            File.WriteAllText(pluginPath, NativeBuild.LldbPluginSource);
+            return 0;
+        }
+
         string? input = null;
         var batch = false;
         var commands = new List<string>();

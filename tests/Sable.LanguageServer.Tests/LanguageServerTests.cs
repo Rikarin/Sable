@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Sable.Syntax;
 using Xunit;
 
 namespace Sable.LanguageServer.Tests;
@@ -331,6 +332,49 @@ public sealed class LanguageServerTests : IDisposable {
         var signature = help.Get("signatures")!.Value[0];
         Assert.Equal("add(_ a: Int, to b: Int) -> Int", signature.GetString("label"));
         Assert.Equal(1, help.GetInt("activeParameter"));
+    }
+
+    // ---- Formatting ----------------------------------------------------------
+
+    [Fact]
+    public async Task FormattingRewritesOnlyTheLinesThatChange() {
+        await using var client = new TestClient();
+        await client.InitializeAsync();
+        const string uri = "file:///tmp/format.sab";
+        const string text = "module App\n\nfn first() -> Int {\n    return 1\n}\n\nfn second()->Int{\nreturn   2\n}\n\nfn third() -> Int {\n    return 3\n}\n";
+        await client.OpenAsync(uri, text);
+        var edits = await client.RequestAsync("textDocument/formatting", new {
+            textDocument = new { uri },
+            options = new { tabSize = 2, insertSpaces = false }
+        });
+
+        var edit = Assert.Single(edits.EnumerateArray());
+        var range = edit.Get("range")!.Value;
+        Assert.Equal(6, range.Get("start")!.Value.GetInt("line"));
+        Assert.Equal(0, range.Get("start")!.Value.GetInt("character"));
+        Assert.Equal(8, range.Get("end")!.Value.GetInt("line"));
+        Assert.Equal(0, range.Get("end")!.Value.GetInt("character"));
+
+        var lines = LineIndex.Of(text);
+        var start = lines.OffsetOf(new(6, 0));
+        var end = lines.OffsetOf(new(8, 0));
+        var applied = text[..start] + edit.GetString("newText") + text[end..];
+        Assert.Equal(SyntaxFormatter.Format(SyntaxTree.Parse(new SourceText(text, "format.sab"))), applied);
+    }
+
+    [Fact]
+    public async Task FormattingLeavesAFormattedOrBrokenDocumentAlone() {
+        await using var client = new TestClient();
+        await client.InitializeAsync();
+        const string formatted = "file:///tmp/formatted.sab";
+        const string broken = "file:///tmp/broken.sab";
+        var text = SyntaxFormatter.Format(SyntaxTree.Parse(new SourceText(Geometry, "g.sab")));
+        await client.OpenAsync(formatted, text);
+        await client.OpenAsync(broken, "module App\n\nfn f( -> Int {\nreturn   1\n");
+        foreach (var uri in new[] { formatted, broken }) {
+            var edits = await client.RequestAsync("textDocument/formatting", new { textDocument = new { uri }, options = new { tabSize = 4, insertSpaces = true } });
+            Assert.Empty(edits.EnumerateArray());
+        }
     }
 
     // ---- Outline and inlay hints -------------------------------------------

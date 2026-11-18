@@ -204,6 +204,7 @@ public sealed partial class LanguageServer {
             "textDocument/documentSymbol" => DocumentSymbolsAsync,
             "textDocument/signatureHelp" => SignatureHelpAsync,
             "textDocument/inlayHint" => InlayHintsAsync,
+            "textDocument/formatting" => FormattingAsync,
             _ => null,
         };
 
@@ -310,7 +311,8 @@ public sealed partial class LanguageServer {
                     ["triggerCharacters"] = new JsonArray("(", ","),
                     ["retriggerCharacters"] = new JsonArray(",")
                 },
-                ["inlayHintProvider"] = true
+                ["inlayHintProvider"] = true,
+                ["documentFormattingProvider"] = true
             },
             ["serverInfo"] = new JsonObject { ["name"] = "sable-lsp", ["version"] = "0.1" }
         };

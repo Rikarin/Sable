@@ -1,0 +1,415 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://sable-lang.org/schemas/sable.toml.json",
+  "title": "sable.toml",
+  "description": "A Sable package's manifest.",
+  "type": "object",
+  "definitions": {
+    "dependency": {
+      "anyOf": [
+        {
+          "type": "string",
+          "description": "A version requirement, e.g. \"1.2\" or \"^0.3\", from the registry."
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "version": {
+              "type": "string",
+              "description": "A version requirement."
+            },
+            "path": {
+              "type": "string",
+              "description": "A package on disk, relative to this manifest."
+            },
+            "git": {
+              "type": "string",
+              "description": "Not supported yet: use a path or the registry."
+            },
+            "tag": {
+              "type": "string"
+            },
+            "branch": {
+              "type": "string"
+            },
+            "rev": {
+              "type": "string"
+            },
+            "optional": {
+              "type": "boolean",
+              "default": false,
+              "description": "Only built when a feature turns it on ('dep:name')."
+            },
+            "default-features": {
+              "type": "boolean",
+              "default": true
+            },
+            "features": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "uniqueItems": true
+            },
+            "package": {
+              "type": "string",
+              "description": "The package's real name, when it is called something else here."
+            },
+            "registry": {
+              "type": "string"
+            }
+          }
+        }
+      ]
+    },
+    "profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "opt-level": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 3
+            },
+            {
+              "enum": [
+                "s",
+                "z"
+              ]
+            }
+          ]
+        },
+        "debug": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "enum": [
+                "none",
+                "line-tables-only",
+                "limited",
+                "full"
+              ]
+            }
+          ]
+        },
+        "exclusivity": {
+          "enum": [
+            "checked",
+            "unchecked"
+          ],
+          "description": "Keep the dynamic exclusivity checks, or drop them."
+        },
+        "overflow-checks": {
+          "type": "boolean",
+          "description": "Integer overflow is always checked; false has no effect."
+        },
+        "arc-checks": {
+          "type": "boolean"
+        },
+        "leak-check": {
+          "type": "boolean"
+        },
+        "debug-assertions": {
+          "type": "boolean"
+        },
+        "incremental": {
+          "type": "boolean"
+        },
+        "lto": {
+          "type": [
+            "boolean",
+            "string"
+          ]
+        },
+        "codegen-units": {
+          "type": "integer"
+        },
+        "panic": {
+          "type": "string"
+        },
+        "strip": {
+          "type": [
+            "boolean",
+            "string"
+          ]
+        },
+        "rpath": {
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  "properties": {
+    "package": {
+      "type": "object",
+      "required": [
+        "name",
+        "version"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^([a-z][a-z0-9_-]*/)?[a-z][a-z0-9_-]*$",
+          "description": "Lower-case letters, digits, '-' and '_', starting with a letter; 'org/name' allowed."
+        },
+        "version": {
+          "type": "string",
+          "description": "A semantic version, e.g. \"0.1.0\"."
+        },
+        "edition": {
+          "type": "string",
+          "pattern": "^[0-9]{4}$",
+          "default": "2027",
+          "description": "The language edition: a year."
+        },
+        "authors": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "license": {
+          "type": "string",
+          "description": "An SPDX expression."
+        },
+        "description": {
+          "type": "string"
+        },
+        "repository": {
+          "type": "string"
+        },
+        "readme": {
+          "type": "string"
+        },
+        "homepage": {
+          "type": "string"
+        },
+        "documentation": {
+          "type": "string"
+        },
+        "keywords": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "categories": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "include": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "exclude": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "publish": {
+          "type": "boolean"
+        }
+      }
+    },
+    "workspace": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "members": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Member directories; globs allowed."
+        },
+        "exclude": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "resolver": {
+          "type": "string"
+        }
+      }
+    },
+    "lib": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": "string",
+          "default": "src/lib.sab"
+        }
+      }
+    },
+    "bin": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "dependencies": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/definitions/dependency"
+      }
+    },
+    "dev-dependencies": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/definitions/dependency"
+      }
+    },
+    "build-dependencies": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/definitions/dependency"
+      }
+    },
+    "features": {
+      "type": "object",
+      "properties": {
+        "default": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "Features, optional dependencies ('dep:name') or a dependency's feature ('name/feature')."
+      }
+    },
+    "profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "dev": {
+          "$ref": "#/definitions/profile"
+        },
+        "release": {
+          "$ref": "#/definitions/profile"
+        }
+      }
+    },
+    "build": {
+      "type": "object",
+      "required": [
+        "script"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "script": {
+          "type": "string"
+        },
+        "allow-net": {
+          "type": "boolean",
+          "default": false
+        },
+        "allow-exec": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "allow-read": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "allow-write": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "registry": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        }
+      }
+    },
+    "lints": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "unused_local": {
+          "enum": [
+            "allow",
+            "warn",
+            "error",
+            "deny"
+          ]
+        },
+        "unused_parameter": {
+          "enum": [
+            "allow",
+            "warn",
+            "error",
+            "deny"
+          ]
+        },
+        "unused_import": {
+          "enum": [
+            "allow",
+            "warn",
+            "error",
+            "deny"
+          ]
+        },
+        "var_never_mutated": {
+          "enum": [
+            "allow",
+            "warn",
+            "error",
+            "deny"
+          ]
+        },
+        "shadowed_parameter": {
+          "enum": [
+            "allow",
+            "warn",
+            "error",
+            "deny"
+          ]
+        }
+      }
+    },
+    "reflect": {},
+    "targets": {}
+  },
+  "additionalProperties": false
+}

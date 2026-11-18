@@ -1,0 +1,216 @@
+{
+  "main": {
+    "prefix": "main",
+    "description": "The program's entry point",
+    "body": [
+      "fn main() {",
+      "\t$0",
+      "}"
+    ]
+  },
+  "module": {
+    "prefix": "module",
+    "description": "A module declaration",
+    "body": [
+      "module ${1:${TM_FILENAME_BASE/(^|[-_])(\\w)/${2:/upcase}/g}}",
+      "",
+      "$0"
+    ]
+  },
+  "fn": {
+    "prefix": "fn",
+    "description": "A function",
+    "body": [
+      "fn ${1:name}(${2}) -> ${3:Int} {",
+      "\t$0",
+      "}"
+    ]
+  },
+  "pfn": {
+    "prefix": "pfn",
+    "description": "A public function",
+    "body": [
+      "public fn ${1:name}(${2}) -> ${3:Int} {",
+      "\t$0",
+      "}"
+    ]
+  },
+  "struct": {
+    "prefix": "struct",
+    "description": "A struct",
+    "body": [
+      "struct ${1:Name} {",
+      "\tvar ${2:field}: ${3:Int}",
+      "$0",
+      "}"
+    ]
+  },
+  "class": {
+    "prefix": "class",
+    "description": "A class with an initialiser",
+    "body": [
+      "class ${1:Name} {",
+      "\tvar ${2:field}: ${3:Int}",
+      "",
+      "\tinit(${2}: ${3}) {",
+      "\t\tself.${2} = ${2}",
+      "\t}",
+      "$0",
+      "}"
+    ]
+  },
+  "actor": {
+    "prefix": "actor",
+    "description": "An actor: state isolated from other tasks",
+    "body": [
+      "actor ${1:Name} {",
+      "\tprivate var ${2:state}: ${3:Int} = ${4:0}",
+      "$0",
+      "}"
+    ]
+  },
+  "union": {
+    "prefix": "union",
+    "description": "A union: one of several cases, each with its own payload",
+    "body": [
+      "union ${1:Name} {",
+      "\t${2:First}(${3:value}: ${4:Int})",
+      "\t${5:Second}",
+      "}"
+    ]
+  },
+  "enum": {
+    "prefix": "enum",
+    "description": "An enumeration",
+    "body": [
+      "enum ${1:Name} { ${2:First}, ${3:Second} }"
+    ]
+  },
+  "protocol": {
+    "prefix": "protocol",
+    "description": "A protocol",
+    "body": [
+      "protocol ${1:Name} {",
+      "\tfn ${2:requirement}() -> ${3:Int}",
+      "}"
+    ]
+  },
+  "extension": {
+    "prefix": "extension",
+    "description": "An extension, optionally conforming to a protocol",
+    "body": [
+      "extension ${1:Type}${2:: ${3:Protocol}} {",
+      "\t$0",
+      "}"
+    ]
+  },
+  "if let": {
+    "prefix": "iflet",
+    "description": "Unwrap an optional",
+    "body": [
+      "if let ${1:value} = ${2:optional} {",
+      "\t$0",
+      "}"
+    ]
+  },
+  "guard let": {
+    "prefix": "guardlet",
+    "description": "Unwrap an optional or leave",
+    "body": [
+      "guard let ${1:value} = ${2:optional} else {",
+      "\treturn${3}",
+      "}",
+      "$0"
+    ]
+  },
+  "match": {
+    "prefix": "match",
+    "description": "A match over a value's cases",
+    "body": [
+      "match ${1:value} {",
+      "\tcase .${2:First}(let ${3:x}) => ${4:x}",
+      "\tcase _ => ${0}",
+      "}"
+    ]
+  },
+  "for": {
+    "prefix": "for",
+    "description": "A loop over a sequence",
+    "body": [
+      "for ${1:item} in ${2:items} {",
+      "\t$0",
+      "}"
+    ]
+  },
+  "for range": {
+    "prefix": "forr",
+    "description": "A loop over a half-open range",
+    "body": [
+      "for ${1:i} in ${2:0}..<${3:count} {",
+      "\t$0",
+      "}"
+    ]
+  },
+  "while": {
+    "prefix": "while",
+    "description": "A while loop",
+    "body": [
+      "while ${1:condition} {",
+      "\t$0",
+      "}"
+    ]
+  },
+  "do catch": {
+    "prefix": "docatch",
+    "description": "Call something that throws, and handle the error",
+    "body": [
+      "do {",
+      "\ttry ${1:call()}",
+      "} catch ${2:error} {",
+      "\t$0",
+      "}"
+    ]
+  },
+  "test": {
+    "prefix": "test",
+    "description": "A test, run by 'sable test'",
+    "body": [
+      "@test",
+      "fn ${1:name}() {",
+      "\tassertEqual(${2:actual}, ${3:expected})",
+      "}"
+    ]
+  },
+  "bench": {
+    "prefix": "bench",
+    "description": "A benchmark, run by 'sable bench'",
+    "body": [
+      "@bench",
+      "fn ${1:name}(_ b: Bencher) {",
+      "\tb.iterate(() => {",
+      "\t\t$0",
+      "\t})",
+      "}"
+    ]
+  },
+  "doc": {
+    "prefix": "///",
+    "description": "A documentation comment with an example",
+    "body": [
+      "/// ${1:Summary.}",
+      "///",
+      "/// ```sable",
+      "/// ${2:example}",
+      "/// ```"
+    ]
+  },
+  "if feature": {
+    "prefix": "#if",
+    "description": "Code compiled only with a feature on",
+    "body": [
+      "#if feature(${1:name})",
+      "$0",
+      "#endif"
+    ]
+  }
+}

@@ -3,76 +3,248 @@
   "name": "Sable",
   "scopeName": "source.sable",
   "patterns": [
-    { "include": "#comments" },
-    { "include": "#strings" },
-    { "include": "#attributes" },
-    { "include": "#keywords" },
-    { "include": "#numbers" },
-    { "include": "#declarations" },
-    { "include": "#types" }
+    { "include": "#shebang" },
+    { "include": "#statements" }
   ],
   "repository": {
+    "statements": {
+      "patterns": [
+        { "include": "#comments" },
+        { "include": "#directives" },
+        { "include": "#strings" },
+        { "include": "#attributes" },
+        { "include": "#module" },
+        { "include": "#declarations" },
+        { "include": "#keywords" },
+        { "include": "#numbers" },
+        { "include": "#calls" },
+        { "include": "#types" },
+        { "include": "#operators" },
+        { "include": "#punctuation" }
+      ]
+    },
+    "shebang": {
+      "name": "comment.line.shebang.sable",
+      "match": "\\A#!.*$"
+    },
     "comments": {
       "patterns": [
-        { "name": "comment.line.documentation.sable", "match": "///.*$" },
+        {
+          "name": "comment.line.documentation.sable",
+          "begin": "///",
+          "end": "$",
+          "patterns": [
+            { "name": "markup.inline.raw.sable", "match": "`[^`]*`" },
+            { "name": "keyword.other.documentation.sable", "match": "(?<=///)\\s*-\\s*(Parameter|Parameters|Returns|Throws|Note|Warning|Precondition|Complexity)\\b" }
+          ]
+        },
         { "name": "comment.line.double-slash.sable", "match": "//.*$" },
-        { "name": "comment.block.sable", "begin": "/\\*", "end": "\\*/", "patterns": [{ "include": "#comments" }] }
+        { "include": "#block-comment" }
+      ]
+    },
+    "block-comment": {
+      "name": "comment.block.sable",
+      "begin": "/\\*",
+      "end": "\\*/",
+      "patterns": [{ "include": "#block-comment" }]
+    },
+    "directives": {
+      "patterns": [
+        {
+          "match": "^\\s*(#(?:if|elseif))\\b(.*)$",
+          "captures": {
+            "1": { "name": "keyword.control.directive.conditional.sable" },
+            "2": {
+              "patterns": [
+                { "name": "keyword.operator.logical.sable", "match": "&&|\\|\\||!" },
+                { "name": "support.function.directive.sable", "match": "\\b(feature|os|arch|target)\\b(?=\\s*\\()" },
+                { "name": "constant.language.boolean.sable", "match": "\\b(true|false)\\b" },
+                { "include": "#strings" },
+                { "name": "entity.name.function.preprocessor.sable", "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b" }
+              ]
+            }
+          }
+        },
+        { "name": "keyword.control.directive.conditional.sable", "match": "^\\s*#(else|endif)\\b" },
+        {
+          "match": "^\\s*(#error)\\b(.*)$",
+          "captures": {
+            "1": { "name": "keyword.control.directive.diagnostic.sable" },
+            "2": { "patterns": [{ "include": "#strings" }] }
+          }
+        }
       ]
     },
     "strings": {
       "patterns": [
         {
+          "name": "string.quoted.triple.raw.sable",
+          "begin": "(#+)\"\"\"",
+          "end": "\"\"\"\\1",
+          "beginCaptures": { "0": { "name": "punctuation.definition.string.begin.sable" } },
+          "endCaptures": { "0": { "name": "punctuation.definition.string.end.sable" } }
+        },
+        {
+          "name": "string.quoted.double.raw.sable",
+          "begin": "(#+)\"",
+          "end": "\"\\1",
+          "beginCaptures": { "0": { "name": "punctuation.definition.string.begin.sable" } },
+          "endCaptures": { "0": { "name": "punctuation.definition.string.end.sable" } }
+        },
+        {
+          "name": "string.quoted.triple.sable",
+          "begin": "\"\"\"",
+          "end": "\"\"\"",
+          "beginCaptures": { "0": { "name": "punctuation.definition.string.begin.sable" } },
+          "endCaptures": { "0": { "name": "punctuation.definition.string.end.sable" } },
+          "patterns": [{ "include": "#string-content" }]
+        },
+        {
           "name": "string.quoted.double.sable",
           "begin": "\"",
-          "end": "\"",
-          "patterns": [
-            { "name": "constant.character.escape.sable", "match": "\\\\[nrt0\\\\\"']|\\\\u\\{[0-9A-Fa-f]+\\}" },
-            {
-              "name": "meta.interpolation.sable",
-              "begin": "\\\\\\(",
-              "end": "\\)",
-              "beginCaptures": { "0": { "name": "punctuation.section.interpolation.begin.sable" } },
-              "endCaptures": { "0": { "name": "punctuation.section.interpolation.end.sable" } },
-              "patterns": [{ "include": "$self" }]
-            }
-          ]
+          "end": "\"|$",
+          "beginCaptures": { "0": { "name": "punctuation.definition.string.begin.sable" } },
+          "endCaptures": { "0": { "name": "punctuation.definition.string.end.sable" } },
+          "patterns": [{ "include": "#string-content" }]
         },
-        { "name": "string.quoted.single.sable", "match": "'(\\\\.|[^'\\\\])'" }
+        {
+          "name": "string.quoted.single.sable",
+          "match": "'(\\\\(?:u\\{[0-9A-Fa-f]+\\}|.)|[^'\\\\\\n])'",
+          "captures": {
+            "1": { "patterns": [{ "name": "constant.character.escape.sable", "match": "\\\\.*" }] }
+          }
+        }
+      ]
+    },
+    "string-content": {
+      "patterns": [
+        { "name": "constant.character.escape.sable", "match": "\\\\(?:[nrt0\\\\\"']|u\\{[0-9A-Fa-f]+\\})" },
+        {
+          "name": "meta.embedded.interpolation.sable",
+          "contentName": "source.sable",
+          "begin": "\\\\\\(",
+          "end": "\\)",
+          "beginCaptures": { "0": { "name": "punctuation.section.embedded.begin.sable" } },
+          "endCaptures": { "0": { "name": "punctuation.section.embedded.end.sable" } },
+          "patterns": [{ "include": "#interpolated" }]
+        },
+        { "name": "invalid.illegal.escape.sable", "match": "\\\\[^(]" }
+      ]
+    },
+    "interpolated": {
+      "patterns": [
+        {
+          "begin": "\\(",
+          "end": "\\)",
+          "patterns": [{ "include": "#interpolated" }]
+        },
+        { "include": "#statements" }
       ]
     },
     "attributes": {
-      "name": "entity.other.attribute-name.sable",
-      "match": "@[A-Za-z_][A-Za-z0-9_]*"
+      "match": "(@)([A-Za-z_][A-Za-z0-9_]*)",
+      "name": "meta.attribute.sable",
+      "captures": {
+        "1": { "name": "punctuation.definition.attribute.sable" },
+        "2": { "name": "entity.other.attribute-name.sable" }
+      }
     },
-    "keywords": {
-      "patterns": [
-        { "name": "keyword.control.sable", "match": "\\b(if|else|guard|while|repeat|for|in|match|case|switch|default|fallthrough|return|throw|try|await|break|continue|defer|do|catch|where)\\b" },
-        { "name": "keyword.declaration.sable", "match": "\\b(module|import|fn|let|var|const|struct|class|actor|union|enum|protocol|extension|alias|typealias|associatedtype|init|deinit|subscript|operator|region)\\b" },
-        { "name": "storage.modifier.sable", "match": "\\b(public|private|internal|package|static|mutating|nonmutating|override|open|final|sealed|abstract|required|lazy|weak|unowned|async|throws|rethrows|inout|out|ref|consuming|borrowing|move|unsafe|comptime|some|any|nonisolated|prefix|postfix|using)\\b" },
-        { "name": "constant.language.sable", "match": "\\b(true|false|none)\\b" },
-        { "name": "variable.language.sable", "match": "\\b(self|Self|super)\\b" },
-        { "name": "keyword.operator.type.sable", "match": "\\b(is|as)\\b[?!]?" }
-      ]
-    },
-    "numbers": {
-      "name": "constant.numeric.sable",
-      "match": "\\b(0x[0-9A-Fa-f_]+|0b[01_]+|0o[0-7_]+|[0-9][0-9_]*(\\.[0-9][0-9_]*)?([eE][+-]?[0-9_]+)?)([iIuUfF][0-9]+)?\\b"
+    "module": {
+      "match": "\\b(module|import)\\s+([A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*)",
+      "captures": {
+        "1": { "name": "keyword.other.import.sable" },
+        "2": { "name": "entity.name.namespace.sable" }
+      }
     },
     "declarations": {
       "patterns": [
         {
-          "match": "\\b(fn)\\s+([A-Za-z_][A-Za-z0-9_]*)",
-          "captures": { "1": { "name": "keyword.declaration.sable" }, "2": { "name": "entity.name.function.sable" } }
+          "match": "\\b(fn)\\s+(`?[A-Za-z_][A-Za-z0-9_]*`?|[-+*/%<>=!&|^~?.]+)",
+          "captures": {
+            "1": { "name": "storage.type.function.sable" },
+            "2": { "name": "entity.name.function.sable" }
+          }
         },
         {
-          "match": "\\b(struct|class|actor|union|enum|protocol|alias)\\s+([A-Za-z_][A-Za-z0-9_]*)",
-          "captures": { "1": { "name": "keyword.declaration.sable" }, "2": { "name": "entity.name.type.sable" } }
+          "match": "\\b(struct|class|actor|union|enum|protocol|alias|typealias|associatedtype)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "storage.type.sable" },
+            "2": { "name": "entity.name.type.sable" }
+          }
+        },
+        {
+          "match": "\\b(extension)\\s+([A-Za-z_][A-Za-z0-9_.]*)",
+          "captures": {
+            "1": { "name": "storage.type.extension.sable" },
+            "2": { "name": "entity.name.type.sable" }
+          }
+        },
+        {
+          "match": "\\b(let|var|const)\\s+([a-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "storage.type.sable" },
+            "2": { "name": "variable.other.declaration.sable" }
+          }
+        },
+        {
+          "match": "\\b(get|set|willSet|didSet)\\b(?=\\s*(?:\\{|\\(|=>))",
+          "name": "storage.type.accessor.sable"
         }
       ]
     },
+    "keywords": {
+      "patterns": [
+        { "name": "keyword.control.conditional.sable", "match": "\\b(if|else|guard|match|switch|case|default|fallthrough)\\b" },
+        { "name": "keyword.control.loop.sable", "match": "\\b(while|repeat|for|in|break|continue)\\b" },
+        { "name": "keyword.control.flow.sable", "match": "\\b(return|throw|try|catch|await|defer|do|where)\\b(?:[?!])?" },
+        { "name": "storage.type.sable", "match": "\\b(fn|let|var|const|struct|class|actor|union|enum|protocol|extension|alias|typealias|associatedtype|init|deinit|subscript|operator|region|module|import)\\b" },
+        { "name": "storage.modifier.sable", "match": "\\b(public|private|internal|package|static|mutating|nonmutating|override|open|final|sealed|required|convenience|lazy|weak|unowned|async|throws|rethrows|inout|out|ref|consuming|borrowing|move|unsafe|unchecked|comptime|some|any|nonisolated|prefix|postfix|using)\\b" },
+        { "name": "constant.language.boolean.sable", "match": "\\b(true|false)\\b" },
+        { "name": "constant.language.none.sable", "match": "\\bnone\\b" },
+        { "name": "variable.language.sable", "match": "\\b(self|Self|super)\\b" },
+        { "name": "keyword.operator.type.sable", "match": "\\b(is|as)\\b[?!]?" },
+        { "name": "invalid.illegal.reserved.sable", "match": "\\b(macro|yield|trait|impl|become|effect|handler)\\b" }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        { "name": "constant.numeric.hex.sable", "match": "\\b0x[0-9A-Fa-f][0-9A-Fa-f_]*\\b" },
+        { "name": "constant.numeric.binary.sable", "match": "\\b0b[01][01_]*\\b" },
+        { "name": "constant.numeric.octal.sable", "match": "\\b0o[0-7][0-7_]*\\b" },
+        { "name": "constant.numeric.decimal.sable", "match": "\\b[0-9][0-9_]*(?:\\.[0-9][0-9_]*)?(?:[eE][+-]?[0-9][0-9_]*)?\\b" }
+      ]
+    },
+    "calls": {
+      "match": "\\b([a-z_][A-Za-z0-9_]*)\\s*(?=\\()",
+      "captures": { "1": { "name": "entity.name.function.call.sable" } }
+    },
     "types": {
-      "name": "entity.name.type.sable",
-      "match": "\\b[A-Z][A-Za-z0-9_]*\\b"
+      "patterns": [
+        { "name": "support.type.builtin.sable", "match": "\\b(Int|UInt|I8|I16|I32|I64|U8|U16|U32|U64|F32|F64|Bool|Char|String|Never|Void)\\b" },
+        { "name": "entity.name.type.sable", "match": "\\b[A-Z][A-Za-z0-9_]*\\b" }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        { "name": "keyword.operator.arrow.sable", "match": "->|=>" },
+        { "name": "keyword.operator.range.sable", "match": "\\.\\.<|\\.\\.\\.|\\.\\." },
+        { "name": "keyword.operator.optional.sable", "match": "\\?\\.|\\?\\?" },
+        { "name": "keyword.operator.comparison.sable", "match": "===|!==|==|!=|<=|>=" },
+        { "name": "keyword.operator.logical.sable", "match": "&&|\\|\\||!(?!=)" },
+        { "name": "keyword.operator.assignment.compound.sable", "match": "(?:\\+|-|\\*|/|%|&|\\||\\^|<<|>>)=" },
+        { "name": "keyword.operator.assignment.sable", "match": "=" },
+        { "name": "keyword.operator.arithmetic.sable", "match": "&[+\\-*]|[+\\-*/%]" },
+        { "name": "keyword.operator.bitwise.sable", "match": "<<|>>|[&|^~]" },
+        { "name": "keyword.operator.comparison.sable", "match": "[<>]" }
+      ]
+    },
+    "punctuation": {
+      "patterns": [
+        { "name": "punctuation.separator.comma.sable", "match": "," },
+        { "name": "punctuation.separator.key-value.sable", "match": ":" },
+        { "name": "punctuation.accessor.sable", "match": "\\." },
+        { "name": "punctuation.terminator.statement.sable", "match": ";" }
+      ]
     }
   }
 }

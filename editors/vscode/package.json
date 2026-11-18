@@ -1,25 +1,52 @@
 {
   "name": "sable",
   "displayName": "Sable",
-  "description": "Sable language support: the sable language server, and syntax highlighting",
-  "version": "0.1.0",
+  "description": "Sable language support: diagnostics, completion, navigation, rename, formatting, the Test Explorer, tasks and debugging, from the sable toolchain.",
+  "version": "0.2.0",
   "publisher": "sable-lang",
   "license": "MIT OR Apache-2.0",
+  "icon": "images/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sable-lang/sable",
+    "directory": "editors/vscode"
+  },
   "engines": {
     "vscode": "^1.85.0"
   },
   "categories": [
-    "Programming Languages"
+    "Programming Languages",
+    "Debuggers",
+    "Formatters",
+    "Snippets",
+    "Testing"
   ],
-  "main": "./extension.js",
-  "activationEvents": [],
+  "keywords": [
+    "sable",
+    "lsp",
+    "language server"
+  ],
+  "main": "./src/extension.js",
+  "activationEvents": [
+    "workspaceContains:**/sable.toml"
+  ],
   "contributes": {
     "languages": [
       {
         "id": "sable",
-        "aliases": ["Sable", "sable"],
-        "extensions": [".sab"],
-        "configuration": "./language-configuration.json"
+        "aliases": [
+          "Sable",
+          "sable"
+        ],
+        "extensions": [
+          ".sab"
+        ],
+        "firstLine": "^#!.*\\bsable\\b",
+        "configuration": "./language-configuration.json",
+        "icon": {
+          "light": "./images/file.svg",
+          "dark": "./images/file.svg"
+        }
       }
     ],
     "grammars": [
@@ -27,6 +54,28 @@
         "language": "sable",
         "scopeName": "source.sable",
         "path": "./syntaxes/sable.tmLanguage.json"
+      },
+      {
+        "scopeName": "markdown.sable.codeblock",
+        "path": "./syntaxes/sable.markdown.tmLanguage.json",
+        "injectTo": [
+          "text.html.markdown"
+        ],
+        "embeddedLanguages": {
+          "meta.embedded.block.sable": "sable"
+        }
+      }
+    ],
+    "snippets": [
+      {
+        "language": "sable",
+        "path": "./snippets/sable.json"
+      }
+    ],
+    "tomlValidation": [
+      {
+        "fileMatch": "sable.toml",
+        "url": "./schemas/sable.toml.schema.json"
       }
     ],
     "configuration": {
@@ -35,12 +84,368 @@
         "sable.path": {
           "type": "string",
           "default": "sable",
-          "description": "The sable binary that serves the editor: `sable lsp`."
+          "scope": "machine-overridable",
+          "markdownDescription": "The `sable` binary: it serves the editor (`sable lsp`), builds, runs, tests and debugs. `${workspaceFolder}` and `~` are expanded."
+        },
+        "sable.server.enable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Run the language server: diagnostics, completion, hover, navigation, rename, formatting and inlay hints."
+        },
+        "sable.codeLens.enable": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Show **Run** and **Debug** above a program's `main`."
+        },
+        "sable.trace.server": {
+          "type": "string",
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
+          "default": "off",
+          "description": "Log the messages between the editor and the language server to the Sable output."
         }
       }
-    }
+    },
+    "configurationDefaults": {
+      "[sable]": {
+        "editor.defaultFormatter": "sable-lang.sable",
+        "editor.tabSize": 4,
+        "editor.insertSpaces": true,
+        "editor.detectIndentation": false
+      },
+      "files.associations": {
+        "sable.lock": "toml"
+      }
+    },
+    "commands": [
+      {
+        "command": "sable.run",
+        "title": "Run",
+        "category": "Sable",
+        "icon": "$(play)"
+      },
+      {
+        "command": "sable.debug",
+        "title": "Debug",
+        "category": "Sable",
+        "icon": "$(debug-alt)"
+      },
+      {
+        "command": "sable.build",
+        "title": "Build",
+        "category": "Sable"
+      },
+      {
+        "command": "sable.check",
+        "title": "Check",
+        "category": "Sable"
+      },
+      {
+        "command": "sable.test",
+        "title": "Test",
+        "category": "Sable"
+      },
+      {
+        "command": "sable.bench",
+        "title": "Benchmark",
+        "category": "Sable"
+      },
+      {
+        "command": "sable.explain",
+        "title": "Explain a Diagnostic…",
+        "category": "Sable"
+      },
+      {
+        "command": "sable.newPackage",
+        "title": "New Package…",
+        "category": "Sable"
+      },
+      {
+        "command": "sable.restartServer",
+        "title": "Restart Language Server",
+        "category": "Sable"
+      },
+      {
+        "command": "sable.showOutput",
+        "title": "Show Output",
+        "category": "Sable"
+      }
+    ],
+    "menus": {
+      "editor/title/run": [
+        {
+          "command": "sable.run",
+          "when": "resourceLangId == sable",
+          "group": "navigation@0"
+        },
+        {
+          "command": "sable.debug",
+          "when": "resourceLangId == sable",
+          "group": "navigation@1"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "sable.run",
+          "when": "resourceLangId == sable",
+          "group": "sable@1"
+        },
+        {
+          "command": "sable.test",
+          "when": "resourceLangId == sable",
+          "group": "sable@2"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "sable.run",
+          "when": "editorLangId == sable"
+        },
+        {
+          "command": "sable.debug",
+          "when": "editorLangId == sable"
+        },
+        {
+          "command": "sable.build",
+          "when": "editorLangId == sable"
+        },
+        {
+          "command": "sable.check",
+          "when": "editorLangId == sable"
+        },
+        {
+          "command": "sable.test",
+          "when": "editorLangId == sable"
+        },
+        {
+          "command": "sable.bench",
+          "when": "editorLangId == sable"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "sable.run",
+        "key": "ctrl+f5",
+        "mac": "cmd+f5",
+        "when": "editorLangId == sable && !inDebugMode"
+      }
+    ],
+    "taskDefinitions": [
+      {
+        "type": "sable",
+        "required": [
+          "command"
+        ],
+        "properties": {
+          "command": {
+            "type": "string",
+            "description": "The sable command to run.",
+            "enum": [
+              "build",
+              "check",
+              "run",
+              "test",
+              "bench",
+              "fmt",
+              "clean",
+              "doc",
+              "lint"
+            ]
+          },
+          "args": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Arguments after the command."
+          },
+          "cwd": {
+            "type": "string",
+            "description": "The directory to run in: the package's. Defaults to the workspace folder."
+          }
+        }
+      }
+    ],
+    "problemMatchers": [
+      {
+        "name": "sable",
+        "label": "Sable diagnostics",
+        "owner": "sable",
+        "source": "sable",
+        "fileLocation": [
+          "search",
+          {
+            "include": [
+              "${workspaceFolder}"
+            ]
+          }
+        ],
+        "pattern": [
+          {
+            "regexp": "^(error|warning|info|hint)\\[(S\\d+)\\]: (.*)$",
+            "severity": 1,
+            "code": 2,
+            "message": 3
+          },
+          {
+            "regexp": "^\\s*--> (.+):(\\d+):(\\d+)$",
+            "file": 1,
+            "line": 2,
+            "column": 3
+          }
+        ]
+      },
+      {
+        "name": "sable-test",
+        "label": "Sable test failures",
+        "owner": "sable-test",
+        "source": "sable test",
+        "severity": "error",
+        "fileLocation": [
+          "search",
+          {
+            "include": [
+              "${workspaceFolder}"
+            ]
+          }
+        ],
+        "pattern": [
+          {
+            "regexp": "^---- (\\S+) \\((.+):(\\d+)\\) ----$",
+            "code": 1,
+            "file": 2,
+            "line": 3
+          },
+          {
+            "regexp": "^\\s+(.+)$",
+            "message": 1
+          }
+        ]
+      }
+    ],
+    "breakpoints": [
+      {
+        "language": "sable"
+      }
+    ],
+    "debuggers": [
+      {
+        "type": "sable",
+        "label": "Sable",
+        "languages": [
+          "sable"
+        ],
+        "configurationAttributes": {
+          "launch": {
+            "properties": {
+              "program": {
+                "type": "string",
+                "description": "A .sab file to build with debug information and debug; or an executable already built. Leave out to debug the package."
+              },
+              "package": {
+                "type": "string",
+                "description": "The package directory (with sable.toml) to build and debug. Defaults to the workspace folder.",
+                "default": "${workspaceFolder}"
+              },
+              "bin": {
+                "type": "string",
+                "description": "The package's binary to debug, when it has several."
+              },
+              "buildArgs": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "More arguments for 'sable build', such as [\"--features\", \"extra\"]."
+              },
+              "args": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "The program's arguments.",
+                "default": []
+              },
+              "cwd": {
+                "type": "string",
+                "description": "The program's working directory.",
+                "default": "${workspaceFolder}"
+              },
+              "env": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Environment variables for the program."
+              },
+              "stopOnEntry": {
+                "type": "boolean",
+                "default": false
+              },
+              "initCommands": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "lldb commands to run first, after Sable's formatters are loaded."
+              }
+            }
+          }
+        },
+        "initialConfigurations": [
+          {
+            "type": "sable",
+            "request": "launch",
+            "name": "Debug the package",
+            "args": [],
+            "cwd": "${workspaceFolder}"
+          }
+        ],
+        "configurationSnippets": [
+          {
+            "label": "Sable: Debug the package",
+            "description": "Build the package in this folder with debug information, and debug it.",
+            "body": {
+              "type": "sable",
+              "request": "launch",
+              "name": "Debug the package",
+              "args": [],
+              "cwd": "^\"\\${workspaceFolder}\""
+            }
+          },
+          {
+            "label": "Sable: Debug the current file",
+            "description": "Build the open .sab file on its own, and debug it.",
+            "body": {
+              "type": "sable",
+              "request": "launch",
+              "name": "Debug the current file",
+              "program": "^\"\\${file}\"",
+              "args": []
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "scripts": {
+    "check": "tsc -p .",
+    "test": "node test/grammar.test.js",
+    "package": "vsce package --out sable.vsix"
   },
   "dependencies": {
     "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "~1.85.0",
+    "@vscode/vsce": "^3.2.0",
+    "typescript": "^5.6.0",
+    "vscode-oniguruma": "^2.0.1",
+    "vscode-textmate": "^9.1.0"
   }
 }

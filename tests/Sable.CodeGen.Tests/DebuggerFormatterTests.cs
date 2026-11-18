@@ -422,6 +422,19 @@ public sealed class DebuggerFormatterTests {
         Assert.Contains("sable debug <file.sab>", command.Usage, StringComparison.Ordinal);
     }
 
+    /// <summary>What an editor's debugger loads: the plugin <c>sable debug</c> itself would.</summary>
+    [Fact]
+    public void TheDebugCommandWritesThePluginForAnEditor() {
+        var directory = Directory.CreateTempSubdirectory("sable-plugin-");
+        try {
+            var path = Path.Combine(directory.FullName, "nested", "sable_lldb.py");
+            Assert.Equal(0, Command.Find("debug")!.Run(["--write-plugin", path]));
+            Assert.Equal(NativeBuild.LldbPluginSource, File.ReadAllText(path));
+        } finally {
+            directory.Delete(true);
+        }
+    }
+
     /// <summary>The DWARF itself is well formed, as the platform's verifier sees it.</summary>
     [Fact]
     public async Task DwarfVerifies() {

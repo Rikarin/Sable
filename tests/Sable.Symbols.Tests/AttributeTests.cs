@@ -88,12 +88,17 @@ public sealed class AttributeTests {
 
     [Fact]
     public void ADeclarationIsAvailableOnlyOnThePlatformsItNames() {
-        var error = Assert.Single(Errors("module M\n@available(windows)\nfn f() { }\nfn g() { f() }"));
-        Assert.Equal(ErrorCode.ERR_NotAvailable, error.Code);
-        Assert.Contains("available only on windows", error.Message, StringComparison.Ordinal);
+        // A compilation builds for the machine running it unless told
+        // otherwise: one platform it is, and one it is not.
+        var here = ParseOptions.Default.TargetOs;
+        var elsewhere = here == "windows" ? "linux" : "windows";
 
-        AssertClean("module M\n@available(macos)\nfn f() { }\nfn g() { f() }");
-        AssertClean("module M\n@available(windows)\nfn f() { }\n@available(windows)\nfn g() { f() }");
+        var error = Assert.Single(Errors($"module M\n@available({elsewhere})\nfn f() {{ }}\nfn g() {{ f() }}"));
+        Assert.Equal(ErrorCode.ERR_NotAvailable, error.Code);
+        Assert.Contains($"available only on {elsewhere}", error.Message, StringComparison.Ordinal);
+
+        AssertClean($"module M\n@available({here})\nfn f() {{ }}\nfn g() {{ f() }}");
+        AssertClean($"module M\n@available({elsewhere})\nfn f() {{ }}\n@available({elsewhere})\nfn g() {{ f() }}");
     }
 
     const string Library = """

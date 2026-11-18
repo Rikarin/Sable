@@ -110,11 +110,14 @@ public sealed class TargetTests {
     [InlineData("x86_64-pc-windows-msvc")]
     [InlineData("wasm32-wasi")]
     public void AProgramCompilesToAnObjectForEachTarget(string triple) {
-        if (!CanBuild) {
+        var target = NativeTarget.Of(triple);
+
+        // Which targets clang has is how it was built: Apple's has no
+        // WebAssembly, LLVM's own has them all.
+        if (!CanBuild || target.Describe() is null) {
             return;
         }
 
-        var target = NativeTarget.Of(triple);
         var directory = Directory.CreateTempSubdirectory("sable-target-");
         try {
             var path = Path.Combine(directory.FullName, "program.o");

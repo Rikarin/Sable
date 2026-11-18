@@ -117,7 +117,7 @@ public sealed class SableManifestTests {
 
     [Theory]
     [InlineData("import Sable.Build\nimport Sable.IO\nlet manifest = Package { name: \"a\", version: \"1.0.0\" }", 2, "cannot import 'Sable.IO'")]
-    [InlineData("import Sable.Build\n#if os(macos)\nlet x = 1\n#endif\nlet manifest = Package { name: \"a\", version: \"1.0.0\" }", 3, "no conditional compilation")]
+    [InlineData("import Sable.Build\n#if os(macos)\nlet x = 1\n#endif\nlet manifest = Package { name: \"a\", version: \"1.0.0\" }", 2, "no conditional compilation")]
     [InlineData("import Sable.Build\nlet manifest = Package { name: Runtime.environment(name: \"USER\") ?? \"a\", version: \"1.0.0\" }", 2, "cannot use 'Runtime'")]
     [InlineData("import Sable.Build\nfn noisy() -> String {\n    print(\"hi\")\n    return \"a\"\n}\nlet manifest = Package { name: noisy(), version: \"1.0.0\" }", 3, "cannot use 'print'")]
     [InlineData("module Pkg\nimport Sable.Build\nlet manifest = Package { name: \"a\", version: \"1.0.0\" }", 1, "no module declaration")]

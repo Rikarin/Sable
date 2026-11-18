@@ -177,7 +177,9 @@ public static class ManifestEvaluator {
         foreach (var token in tree.Root.DescendantTokens()) {
             foreach (var trivia in token.LeadingTrivia.Concat(token.TrailingTrivia)) {
                 if (trivia.Kind is SyntaxKind.DirectiveTrivia or SyntaxKind.DisabledTextTrivia) {
-                    report(token.Span.Start, "#if",
+                    // At the directive, not the token it is trivia of: where
+                    // the branch is not taken, that is past its '#endif'.
+                    report(trivia.Span.Start, "#if",
                         "a manifest has no conditional compilation: what depends on the platform is data the build applies, such as `when: .os(.linux)` on a dependency (docs/05 §5.2.4)");
                     return;
                 }

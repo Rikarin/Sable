@@ -3,6 +3,13 @@
     <RootNamespace>Sable.Syntax.Tests</RootNamespace>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
+    <!--
+      Dynamic PGO recompiles a method for what the calls it happened to
+      profile did. In the test host, the incremental parser's profile was
+      the full parse's, and an edit measured three times what it costs
+      (IncrementalTimingTests): what is measured is not to depend on it.
+    -->
+    <TieredPGO>false</TieredPGO>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />

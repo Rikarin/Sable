@@ -13,7 +13,7 @@ public sealed partial class SilInterpreter {
         public SilFunction? Function => function;
         public object? Context => context;
         public SemaphoreSlim Wake { get; } = new(0);
-        public bool Started, Done;
+        public bool Started, Done, Cancelled;
         public long Deadline;
         public List<InterpretedTask> Waiters { get; } = [];
     }
@@ -194,9 +194,26 @@ public sealed partial class SilInterpreter {
 
                 return null;
 
+            // Marked, and woken now if it sleeps, as a sleeper whose time has come would be.
+            case "task_cancel": {
+                var task = _tasks[(long)operands[0]!];
+                if (!task.Done && !task.Cancelled) {
+                    task.Cancelled = true;
+                    if (_sleepers.Remove(task)) {
+                        _runQueue.Enqueue(task);
+                    }
+                }
+
+                return null;
+            }
+
+            case "task_is_cancelled":
+                return Current.Cancelled;
+
+            // A cancelled task does not sleep.
             case "task_sleep": {
                 var nanoseconds = (long)operands[0]!;
-                if (nanoseconds <= 0) {
+                if (nanoseconds <= 0 || Current.Cancelled) {
                     return Task("task_yield", []);
                 }
 

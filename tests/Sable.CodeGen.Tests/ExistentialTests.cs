@@ -86,6 +86,49 @@ public sealed class ExistentialTests {
             """
         );
 
+    /// <summary>
+    ///     A value of a generic type, boxed: the slots call the methods'
+    ///     instances for its type arguments — a struct's, a generic class's,
+    ///     and one inherited by a subclass that fixes them (#232).
+    /// </summary>
+    [Fact]
+    public void ExistentialsOfGenericTypes() =>
+        Prints(
+            "1\nG of s 2\nbase 3 10\nbase d 20\nG of 1 5\nbase true 10\n",
+            """
+            protocol P {
+                fn get() -> Int
+                fn name() -> String
+            }
+            struct G<T>: P {
+                var item: T
+                var n: Int
+                fn get() -> Int { return n }
+                fn name() -> String { return "G of \(item)" }
+            }
+            class Base<T>: P {
+                var v: T
+                init(v: T) { self.v = v }
+                open fn get() -> Int { return 10 }
+                fn name() -> String { return "base \(v)" }
+            }
+            class Derived: Base<String> {
+                init() { super.init(v: "d") }
+                override fn get() -> Int { return 20 }
+            }
+            fn show(_ p: any P) { print("\(p.name()) \(p.get())") }
+            """,
+            """
+                let x: any P = G<Int>(item: 4, n: 1)
+                print(x.get())
+                show(G<String>(item: "s", n: 2))
+                show(Base<Int>(v: 3))
+                show(Derived())
+                let xs: (any P)[>..] = [G<Int>(item: 1, n: 5), Base<Bool>(v: true)]
+                for p in xs { show(p) }
+            """
+        );
+
     [Fact]
     public void AValueBecomesAnExistentialThroughAsAndInsideAnOptional() =>
         Prints(

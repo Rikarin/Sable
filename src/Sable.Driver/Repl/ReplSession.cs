@@ -14,22 +14,27 @@ public sealed record ReplResult(string Output, bool Failed = false, bool Quit = 
 /// <remarks>
 ///     <para>
 ///         Each entry is a declaration, a statement or an expression, run by
-///         the SIL interpreter. State persists by replay: the session keeps
-///         the imports, the declarations and every statement that ran, and an
-///         entry becomes the next statement of a <c>main</c> that runs them
-///         all again. What the earlier statements print is dropped, up to a
-///         mark printed just before the new entry. An expression's value is
-///         bound to <c>resN</c>, which later entries can use, and shown with
-///         its type.
+///         the SIL interpreter. An entry's statements become the body of a
+///         function of their own, and each binding at its top level —
+///         <c>let x = …</c> — a global of the session's program, set up where
+///         the binding stood. The session keeps the imports, the declarations,
+///         those globals and the entries' functions, and compiles each new
+///         entry with them. An expression's value is bound to <c>resN</c>,
+///         which later entries can use, and shown with its type.
 ///     </para>
 ///     <para>
-///         Replay is exact because what the program does to the world goes
-///         through an <see cref="EffectJournal" />: a statement's effects —
-///         a file written, a line read, the clock — are carried out when it
-///         first runs, and on every replay it is given what they gave then
-///         instead, so nothing happens twice and the clock reads as it did.
-///         An entry that fails leaves nothing behind in the journal, as it
-///         leaves nothing in the session.
+///         What earlier entries computed is not computed again: the
+///         interpreter's heap and globals are carried from one entry's program
+///         to the next (<see cref="SilInterpreter.Session" />), and a global
+///         set up once keeps its value. So an entry's effects — a line
+///         printed, a file written, the clock read — happen once. The earlier
+///         entries' functions are compiled with each new one, so that a
+///         closure an entry made, kept in a global, still has its code.
+///     </para>
+///     <para>
+///         An entry that fails leaves nothing behind in the session: not its
+///         statements, nor the globals it bound. What it changed in globals
+///         it found stays changed, as it would in a running program.
 ///     </para>
 ///     <para>
 ///         Natively a program has the whole stack and as long as it likes;
@@ -39,8 +44,6 @@ public sealed record ReplResult(string Output, bool Failed = false, bool Quit = 
 ///     </para>
 /// </remarks>
 public sealed class ReplSession(IReadOnlyList<SyntaxTree>? package = null) {
-    const string Mark = "\u0001repl-mark\u0001";
-
     /// <summary>
     ///     The package the session was started in, with its dependencies
     ///     (<c>sable repl</c> in a package): compiled with every entry, so that
@@ -54,9 +57,19 @@ public sealed class ReplSession(IReadOnlyList<SyntaxTree>? package = null) {
 
     readonly List<string> _imports = [];
     readonly List<(HashSet<string> Names, string Text)> _declarations = [];
-    readonly List<string> _statements = [];
-    readonly EffectJournal _journal = new();
+    /// <summary>The session's bindings, as the globals they became: <c>let x: Int = 1</c>, in the order bound.</summary>
+    readonly List<(string Name, string Text)> _bindings = [];
+
+    /// <summary>The entries that ran, each a function: <c>fn __repl0() { … }</c>.</summary>
+    readonly List<string> _entries = [];
+
+    /// <summary>What the entries' programs have made and set up, carried from one to the next.</summary>
+    SilInterpreter.Session _session = new();
+
     int _results;
+
+    /// <summary>The name of the function the next entry runs as.</summary>
+    string EntryName => $"__repl{_entries.Count}";
 
     /// <summary>
     ///     How deep calls nest before an entry traps: about what a native
@@ -67,6 +80,9 @@ public sealed class ReplSession(IReadOnlyList<SyntaxTree>? package = null) {
 
     /// <summary>The entry running now, to interrupt; null between entries.</summary>
     CancellationTokenSource? _running;
+
+    /// <summary>How many instructions the last entry's program carried out: what running it cost.</summary>
+    public long LastSteps { get; private set; }
 
     /// <summary>Stops the entry that is running, if one is, with a trap: what Ctrl-C does.</summary>
     /// <returns>Whether an entry was running.</returns>
@@ -79,8 +95,8 @@ public sealed class ReplSession(IReadOnlyList<SyntaxTree>? package = null) {
         return true;
     }
 
-    /// <summary>Statements and declarations kept so far, for <c>:history</c>-like inspection in tests.</summary>
-    public int StatementCount => _statements.Count;
+    /// <summary>Entries kept so far, for <c>:history</c>-like inspection in tests.</summary>
+    public int StatementCount => _entries.Count;
 
     public static string Help => """
         Enter a declaration, a statement or an expression; an expression's value
@@ -109,7 +125,7 @@ public sealed class ReplSession(IReadOnlyList<SyntaxTree>? package = null) {
         var names = new List<string>(SyntaxFacts.KeywordTexts) { "Int", "String", "Bool", "F64", "Char", "print", "Runtime", "Reflect" };
         names.AddRange(_imports);
         names.AddRange(_declarations.SelectMany(static d => d.Names));
-        names.AddRange(_statements.SelectMany(static s => System.Text.RegularExpressions.Regex.Matches(s, @"\b(?:let|var)\s+([A-Za-z_][A-Za-z0-9_]*)").Select(static m => m.Groups[1].Value)));
+        names.AddRange(_bindings.Select(static b => b.Name));
         return [..names.Where(n => n.StartsWith(prefix, StringComparison.Ordinal)).Distinct(StringComparer.Ordinal)];
     }
 
@@ -181,8 +197,9 @@ public sealed class ReplSession(IReadOnlyList<SyntaxTree>? package = null) {
             case ":reset":
                 _imports.Clear();
                 _declarations.Clear();
-                _statements.Clear();
-                _journal.Clear();
+                _bindings.Clear();
+                _entries.Clear();
+                _session = new();
                 _results = 0;
                 return new("forgot everything");
             case ":type" or ":t" when argument.Length > 0:
@@ -214,7 +231,7 @@ public sealed class ReplSession(IReadOnlyList<SyntaxTree>? package = null) {
 
         // Declaring a name again replaces what it named.
         var kept = _declarations.Where(d => !d.Names.Overlaps(names)).ToList();
-        var program = Program(kept.Select(static d => d.Text).Append(entry), _statements, null, out var entryStart);
+        var program = Program(kept.Select(static d => d.Text).Append(entry), _bindings.Select(static b => b.Text), null, out var entryStart);
         var (_, _, errors) = Check(program, entryStart, entry.Length);
         if (errors is not null) {
             return errors;
@@ -239,7 +256,7 @@ public sealed class ReplSession(IReadOnlyList<SyntaxTree>? package = null) {
     ReplResult Evaluate(string entry, bool run) {
         var result = $"res{_results}";
         var binding = $"let {result} = (\n{entry}\n)";
-        var program = Program(_declarations.Select(static d => d.Text), _statements, binding, out var start);
+        var program = Program(_declarations.Select(static d => d.Text), _bindings.Select(static b => b.Text), binding, out var start);
         var (compilation, tree, errors) = Check(program, start, binding.Length);
         if (errors is null && TypeOfResult(compilation!, tree!) is { } type && type != compilation!.Core.Void) {
             var display = type.ToDisplayString();
@@ -247,13 +264,11 @@ public sealed class ReplSession(IReadOnlyList<SyntaxTree>? package = null) {
                 return new(display);
             }
 
-            var withValue = Program(_declarations.Select(static d => d.Text), _statements, $"{binding}\nprint(Reflect.describe({result}))", out _);
-            var outcome = Run(withValue);
+            var outcome = Execute($"{binding}\nprint(Reflect.describe({result}))");
             if (outcome.Failed) {
                 return outcome;
             }
 
-            _statements.Add(binding);
             _results++;
             var lines = outcome.Output.TrimEnd('\n').Split('\n');
             var printed = string.Join("", lines[..^1].Select(static l => l + "\n"));
@@ -264,38 +279,92 @@ public sealed class ReplSession(IReadOnlyList<SyntaxTree>? package = null) {
             return errors ?? new("Void");
         }
 
-        program = Program(_declarations.Select(static d => d.Text), _statements, entry, out start);
-        (_, _, errors) = Check(program, start, entry.Length);
-        if (errors is not null) {
-            return errors;
-        }
-
-        var ran = Run(program);
-        if (!ran.Failed) {
-            _statements.Add(entry);
-        }
-
+        var ran = Execute(entry);
         return ran with { Output = ran.Output.TrimEnd('\n') };
     }
 
-    /// <summary>The type the entry's <c>let resN = (…)</c>, the last statement of main, bound to.</summary>
-    static TypeSymbol? TypeOfResult(Compilation compilation, SyntaxTree tree) {
-        var main = tree.Root.DescendantNodes().OfType<FunctionDeclarationSyntax>().LastOrDefault(static f => f.Identifier.Text == "main");
-        if (main?.Body?.Statements.LastOrDefault() is not LocalDeclarationStatementSyntax { Declarator.Initializer: { } initializer }) {
+    /// <summary>The type the entry's <c>let resN = (…)</c>, the first statement of its function, bound to.</summary>
+    TypeSymbol? TypeOfResult(Compilation compilation, SyntaxTree tree) {
+        if (EntryBody(tree)?.Statements.FirstOrDefault() is not LocalDeclarationStatementSyntax { Declarator.Initializer: { } initializer }) {
             return null;
         }
 
         return compilation.GetSemanticModel(tree).GetTypeOf(initializer.Value);
     }
 
+    /// <summary>The body of the function the new entry runs as.</summary>
+    BlockSyntax? EntryBody(SyntaxTree tree) =>
+        tree.Root.DescendantNodes().OfType<FunctionDeclarationSyntax>().LastOrDefault(f => f.Identifier.Text == EntryName)?.Body;
+
+    /// <summary>
+    ///     Type-checks an entry's statements, makes the bindings at their top
+    ///     level globals, and runs them: kept in the session if they run to
+    ///     the end.
+    /// </summary>
+    ReplResult Execute(string entry) {
+        var program = Program(_declarations.Select(static d => d.Text), _bindings.Select(static b => b.Text), entry, out var start);
+        var (compilation, tree, errors) = Check(program, start, entry.Length);
+        if (errors is not null) {
+            return errors;
+        }
+
+        // Each binding at the top level becomes a global, its type written
+        // out (a global's is not inferred from a call), set up where the
+        // binding was: 'let _ = x' reaches it, and reaching it sets it up.
+        var model = compilation!.GetSemanticModel(tree!);
+        var globals = new List<(string Name, string Text)>();
+        var body = new StringBuilder();
+        var copied = start;
+        foreach (var statement in EntryBody(tree!)!.Statements) {
+            if (statement is not LocalDeclarationStatementSyntax {
+                    AsyncKeyword.IsNone: true, UsingKeyword.IsNone: true,
+                    Declarator: { Pattern: BindingPatternSyntax { Identifier: var identifier }, Initializer: { } initializer } declarator,
+                } local
+                || model.GetSymbolOfToken(identifier) is not LocalSymbol symbol) {
+                continue;
+            }
+
+            var name = identifier.Text;
+            if (_bindings.Any(b => b.Name == name)) {
+                var line = tree!.Text.GetLinePosition(local.Span.Start);
+                return new($"error[S2000]: '{name}' is already declared in this session\n  {tree.Text.GetLineText(line.Line)}\n  {new string(' ', Math.Max(0, line.Column - 1))}^", Failed: true);
+            }
+
+            var typeText = declarator.TypeAnnotation is { } annotation ? annotation.Type.ToString().Trim() : symbol.Type.ToDisplayString();
+            globals.Add((name, $"{local.LetOrVarKeyword.Text} {name}: {typeText} = {initializer.Value.ToString().Trim()}"));
+            body.Append(program, copied, local.Span.Start - copied).Append("let _ = ").Append(name);
+            copied = local.Span.End;
+        }
+
+        body.Append(program, copied, start + entry.Length - copied);
+        var rewritten = body.ToString();
+        var withGlobals = Program(_declarations.Select(static d => d.Text), _bindings.Concat(globals).Select(static b => b.Text), rewritten, out _);
+        if (globals.Count > 0 && Check(withGlobals, -1, 0).Errors is not null) {
+            // What a binding's value needs may not be had outside the entry
+            // — a name the entry bound in a 'guard', say: the entry runs as
+            // written, and its bindings last only while it does.
+            globals.Clear();
+            rewritten = entry;
+            withGlobals = program;
+        }
+
+        var ran = Run(withGlobals);
+        if (!ran.Failed) {
+            _bindings.AddRange(globals);
+            _entries.Add($"fn {EntryName}() {{\n{rewritten}\n}}");
+        }
+
+        return ran;
+    }
+
     // ---- Programs ------------------------------------------------------------
 
     /// <summary>
-    ///     The program an entry runs as, and where the entry starts in it:
-    ///     the imports and declarations, then a main replaying the statements,
-    ///     printing the mark, and running the entry.
+    ///     The program an entry runs as, and where the entry starts in it: the
+    ///     imports, declarations and bindings, the earlier entries' functions,
+    ///     the entry's own, and a main that calls it.
     /// </summary>
-    string Program(IEnumerable<string> declarations, IEnumerable<string> statements, string? entry, out int entryStart) {
+    string Program(IEnumerable<string> declarations, IEnumerable<string> bindings, string? entry, out int entryStart) {
         var text = new StringBuilder("module Repl\n");
         foreach (var import in _imports) {
             text.Append("import ").Append(import).Append('\n');
@@ -308,18 +377,21 @@ public sealed class ReplSession(IReadOnlyList<SyntaxTree>? package = null) {
             text.Append(declaration).Append("\n\n");
         }
 
-        text.Append("@main\nfn main() {\n");
-        foreach (var statement in statements) {
-            text.Append(statement).Append('\n');
+        foreach (var binding in bindings) {
+            text.Append(binding).Append("\n\n");
         }
 
-        text.Append("print(\"").Append(Mark).Append("\")\n");
+        foreach (var earlier in _entries) {
+            text.Append(earlier).Append("\n\n");
+        }
+
+        text.Append("fn ").Append(EntryName).Append("() {\n");
         if (entry is not null) {
             entryStart = text.Length;
             text.Append(entry).Append('\n');
         }
 
-        text.Append("}\n");
+        text.Append("}\n\n@main\nfn main() {\n    ").Append(EntryName).Append("()\n}\n");
         return text.ToString();
     }
 
@@ -360,22 +432,25 @@ public sealed class ReplSession(IReadOnlyList<SyntaxTree>? package = null) {
     /// <summary>The session's program with the package it is in, and the library modules either imports.</summary>
     Compilation Compile(SyntaxTree tree) => Compilation.Create([tree, .._package, ..Library.For([tree, .._package])]);
 
-    /// <summary>Lowers and interprets a program that type-checks; its output after the mark.</summary>
+    /// <summary>
+    ///     Lowers and interprets a program that type-checks, going on from
+    ///     what the session's earlier programs left; its output.
+    /// </summary>
     ReplResult Run(string program) {
-        // Its effects are kept only if it succeeds, as its statement is.
-        var journaled = _journal.Count;
-        var result = RunJournaled(program);
+        // The globals it sets up are kept only if it succeeds, as its bindings are.
+        var before = _session.GlobalNames.ToHashSet(StringComparer.Ordinal);
+        var result = RunInSession(program);
         if (result.Failed) {
-            _journal.Truncate(journaled);
+            _session.Forget(before);
         }
 
         return result;
     }
 
-    ReplResult RunJournaled(string program) {
+    ReplResult RunInSession(string program) {
         var tree = SyntaxTree.Parse(new SourceText(program, "repl"));
         var compilation = Compile(tree);
-        var (module, lowering) = SilGen.Lower(compilation);
+        var (module, lowering) = SilGen.LowerForSession(compilation);
         if (lowering.Any(static d => d.Severity == DiagnosticSeverity.Error)) {
             return new(string.Join("\n", lowering.Select(static d => $"error[{d.Id}]: {d.Message}")), Failed: true);
         }
@@ -391,21 +466,17 @@ public sealed class ReplSession(IReadOnlyList<SyntaxTree>? package = null) {
         }
 
         using var running = new CancellationTokenSource();
-        var interpreter = new SilInterpreter(module, long.MaxValue, DepthLimit) { Journal = _journal, Interrupt = running.Token };
+        var interpreter = new SilInterpreter(module, long.MaxValue, DepthLimit) { Carried = _session, Interrupt = running.Token };
         Volatile.Write(ref _running, running);
         try {
             interpreter.Run(module.EntryPoint!);
         } catch (SilTrap trap) {
-            return new(After(interpreter.Output.ToString()) + $"trap: {trap.Message}", Failed: true);
+            return new($"{interpreter.Output}trap: {trap.Message}", Failed: true);
         } finally {
             Volatile.Write(ref _running, null);
+            LastSteps = interpreter.Steps;
         }
 
-        return new(After(interpreter.Output.ToString()));
-    }
-
-    static string After(string output) {
-        var mark = output.IndexOf(Mark + "\n", StringComparison.Ordinal);
-        return mark < 0 ? output : output[(mark + Mark.Length + 1)..];
+        return new(interpreter.Output.ToString());
     }
 }

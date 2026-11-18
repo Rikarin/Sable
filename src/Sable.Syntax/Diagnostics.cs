@@ -192,6 +192,12 @@ public enum ErrorCode {
     ERR_ActorStateFromOutside = 3206,
     ERR_NotSendable = 3207,
 
+    // A type declared ': Sendable' that holds something that is not (S3410).
+    ERR_DeclaredSendableIsNot = 3410,
+
+    // Globals and statics whose initial values need each other (S3411).
+    ERR_GlobalInitializationCycle = 3411,
+
     // ---- Compile-time evaluation (S3220-S3222): 'const', 'const fn' and
     // 'comptime' (SYNTAX.md §21).
     ERR_NotConstant = 3220,
@@ -226,6 +232,9 @@ public enum ErrorCode {
     LNT_PluginLint = 3397,
     LNT_PluginFailed = 3398,
     LNT_UnknownLint = 3399,
+
+    // ---- Memory (S3460-S3469): what ARC cannot free.
+    WRN_StrongReferenceCycle = 3460,
 
     // ---- Patterns and flow (S6000-S6999) ---------------------------------
     ERR_PatternTypeMismatch = 6000,

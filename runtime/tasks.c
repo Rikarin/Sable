@@ -29,6 +29,8 @@ typedef struct SableTask {
     bool started;  // given a thread: it has begun, and waits on 'wake' to go on
     bool done;
     bool released; // the program no longer holds it
+    bool cancelled; // asked to stop: it asks Task.isCancelled(), and sleeps end at once
+    bool sleeping;  // among the sleepers
     int64_t deadline;           // asleep until this monotonic time
     struct SableTask *next;     // in the run queue, or among the sleepers
     struct SableTask *waiters;  // tasks waiting for this one, through 'next_waiter'
@@ -88,6 +90,7 @@ static void wake_sleepers(void) {
     while (sleepers != NULL && sleepers->deadline <= now) {
         SableTask *task = sleepers;
         sleepers = task->next;
+        task->sleeping = false;
         enqueue(task);
     }
 }
@@ -249,9 +252,9 @@ void sable_task_yield(void) {
 }
 
 // 'await Task.sleep(nanoseconds:)': off the run queue for at least this
-// long, while the other tasks run.
+// long, while the other tasks run. A cancelled task does not sleep.
 void sable_task_sleep(int64_t nanoseconds) {
-    if (nanoseconds <= 0) {
+    if (nanoseconds <= 0 || current_task->cancelled) {
         sable_task_yield();
         return;
     }
@@ -265,7 +268,34 @@ void sable_task_sleep(int64_t nanoseconds) {
 
     self->next = *at;
     *at = self;
+    self->sleeping = true;
     switch_away();
+}
+
+// 'task.cancel()': marked, and woken now if it sleeps — queued as a sleeper
+// whose time has come would be.
+void sable_task_cancel(void *handle) {
+    SableTask *task = handle;
+    if (task == NULL || task->done || task->cancelled) {
+        return;
+    }
+
+    task->cancelled = true;
+    if (task->sleeping) {
+        SableTask **at = &sleepers;
+        while (*at != task) {
+            at = &(*at)->next;
+        }
+
+        *at = task->next;
+        task->sleeping = false;
+        enqueue(task);
+    }
+}
+
+// 'Task.isCancelled()': whether the running task has been cancelled.
+bool sable_task_is_cancelled(void) {
+    return current_task->cancelled;
 }
 
 void sable_task_release(void *handle) {

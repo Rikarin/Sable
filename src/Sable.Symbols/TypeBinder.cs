@@ -625,6 +625,7 @@ internal sealed class TypeBinder(Compilation compilation) {
         DeferLate(() => ConformanceChecker.Check(type, _diagnostics, compilation.Core));
         DeferLate(() => VarianceChecker.Check(type, _diagnostics));
         DeferLate(() => LayoutChecker.Check(type, _diagnostics));
+        DeferLate(() => CycleChecker.Check(type, _diagnostics));
     }
 
     /// <summary>An array extension's constraints: on its parameters, and in its <c>where</c> clause.</summary>

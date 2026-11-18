@@ -1388,13 +1388,16 @@ public static class SilBuiltins {
         switch (name) {
             case "task_spawn" when operands is [FunctionType, ClassType]:
                 return new([operands[0], operands[1]], SilType.Int) { Consumed = [1] };
-            case "task_wait" or "task_release" when operands is [var handle] && handle == SilType.Int:
+            case "task_wait" or "task_release" or "task_cancel" when operands is [var handle] && handle == SilType.Int:
                 return new([SilType.Int], SilType.Unit);
             // Off the run queue for at least this many nanoseconds, while the other tasks run.
             case "task_sleep" when operands is [var nanoseconds] && nanoseconds == SilType.Int:
                 return new([SilType.Int], SilType.Unit);
             case "task_yield" or "task_drain" when operands.Count == 0:
                 return new([], SilType.Unit);
+            // Whether the running task has been cancelled.
+            case "task_is_cancelled" when operands.Count == 0:
+                return new([], SilType.Bool);
         }
 
         // Strings joined end to end in one allocation: an interpolation, or 'a + b + c'.
@@ -1474,7 +1477,7 @@ public static class SilBuiltins {
     }
 
     public static IEnumerable<string> Names =>
-        Table.Keys.Concat(ArrayOperations).Concat(["access_begin_read", "access_begin_modify", "access_end", "access_check_read", "access_check_modify", "task_spawn", "task_wait", "task_release", "task_yield", "task_sleep", "task_drain"]);
+        Table.Keys.Concat(ArrayOperations).Concat(["access_begin_read", "access_begin_modify", "access_end", "access_check_read", "access_check_modify", "task_spawn", "task_wait", "task_release", "task_cancel", "task_is_cancelled", "task_yield", "task_sleep", "task_drain"]);
 
     static SilType? Pointee(SilType? type) => (type as InlinePointerType)?.Pointee;
 

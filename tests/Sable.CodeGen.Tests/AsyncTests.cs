@@ -126,6 +126,44 @@ public sealed class AsyncTests {
         );
 
     /// <summary>
+    ///     Cancelling is cooperative: the task sees it through
+    ///     Task.isCancelled(), and a sleep it is in, or starts, ends at once —
+    ///     two ten-second sleeps take no time (#185).
+    /// </summary>
+    [Fact]
+    public void ACancelledTaskSeesItAndStopsSleeping() =>
+        Assert.Equal(
+            "false\nstarted\nwoke true\n1\ntrue\n2\nfalse\n",
+            AssertAgree(AsyncProgram("import Sable.Time\nimport Sable.Concurrency", """
+                    let start = Instant.now()
+                    print(Task.isCancelled())
+                    let sleeper = Task.spawn {
+                        print("started")
+                        await Task.sleep(nanoseconds: 10_000_000_000)
+                        print("woke \(Task.isCancelled())")
+                        return 1
+                    }
+                    await Task.yield()
+                    sleeper.cancel()
+                    sleeper.cancel()
+                    print(await sleeper.value)
+
+                    // Cancelled before it starts: it sees it from the start, and does not sleep.
+                    let group = TaskGroup<Bool>()
+                    group.add(Task.spawn {
+                        await Task.sleep(nanoseconds: 10_000_000_000)
+                        return Task.isCancelled()
+                    })
+                    group.add(Task.spawn { Task.isCancelled() })
+                    group.cancelAll()
+                    let results = await group.waitForAll()
+                    print(results[0] && results[1])
+                    print(results.count)
+                    print(start.elapsed > Duration.seconds(5))
+                """)).Stdout
+        );
+
+    /// <summary>
     ///     A task is given a thread only when it first runs, and a finished
     ///     task's thread runs the next: twenty thousand tasks, which would be
     ///     twenty thousand threads, run on a few (#185).

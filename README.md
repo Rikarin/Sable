@@ -129,8 +129,8 @@ strings, classes, closures, generics — is reported as `S7000` by construct.
 ## Status
 
 **Phase 0's syntax layer works, but three of its exit criteria are open: a
-2,000-file round-trip corpus, a 24-hour fuzz run, and a < 2 ms incremental
-edit. Phase 1 is nearly done** — see
+2,000-file round-trip corpus, a 24-hour fuzz run, and a few constructs of
+SYNTAX.md that do not parse yet. Phase 1 is nearly done** — see
 [docs/04-implementation-plan.md](docs/04-implementation-plan.md).
 
 | Component | State |
@@ -188,7 +188,7 @@ Phase 1's exit criteria, as docs/04 §1.4 states them:
 | ≥ 600 negative programs, each asserting code, span and message | 631, over 99 diagnostics |
 | `AnalyzeDataFlow` correct on a 300-case corpus | 300: 105 written by hand, 195 generated against an independent oracle |
 | Type-checking 100,000 lines in under 5 s | 0.98 s |
-| Go/no-go: 10,000 lines of real Sable | ~2,900 in `tests/corpus/` |
+| Go/no-go: 10,000 lines of real Sable | ~12,900 that type-check: `lib/` 6,600, `tests/corpus/` 2,900, `tests/programs/` (a JSON parser) 2,100, `examples/` 1,300 |
 
 **1,713 tests green**, and every file in [examples/](examples/) parses as a
 complete compilation unit with no diagnostics and an exact round-trip.
@@ -222,8 +222,9 @@ statements on one line need a `;`.
 `SyntaxTree.Parse` reads a whole file; `ParseExpression`, `ParseType` and
 `ParseStatement` read a single construct, which is what most of the tests use.
 `SyntaxTree.WithChange` applies an edit, reusing everything it did not touch:
-a one-character edit in a 10,000-line file reparses in about 4 ms (Release),
-against about 55 ms for a full parse — short of the plan's 2 ms. The contract
+a one-character edit in a 10,000-line file reparses in about 1 ms (Release:
+0.9 ms at best, 1.2-1.5 ms median on a heavily loaded machine), against
+about 20-35 ms for a full parse — inside the plan's 2 ms. The contract
 is that the result is exactly the tree a full parse would have produced, token
 flags and diagnostics included, and every incremental test asserts it — among
 them chains of edits applied one after another, to files that already have

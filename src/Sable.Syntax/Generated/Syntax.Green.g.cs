@@ -2705,6 +2705,34 @@ internal sealed class BindingTypeTestPatternGreen : GreenNode
         new BindingTypeTestPatternSyntax(this, parent, position);
 }
 
+/// <summary>Green node for <see cref="OptionalPatternSyntax"/>.</summary>
+internal sealed class OptionalPatternGreen : GreenNode
+{
+    private readonly GreenNode? _pattern;
+    private readonly GreenToken? _questionToken;
+
+    public OptionalPatternGreen(GreenNode? pattern, GreenToken? questionToken)
+        : base(SyntaxKind.OptionalPattern, 0)
+    {
+        _pattern = pattern;
+        _questionToken = questionToken;
+        FullWidth = (pattern?.FullWidth ?? 0)
+                    + (questionToken?.FullWidth ?? 0);
+    }
+
+    public override int SlotCount => 2;
+
+    public override GreenNode? GetSlot(int index) => index switch
+    {
+        0 => _pattern,
+        1 => _questionToken,
+        _ => null,
+    };
+
+    public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
+        new OptionalPatternSyntax(this, parent, position);
+}
+
 /// <summary>Green node for <see cref="OrPatternSyntax"/>.</summary>
 internal sealed class OrPatternGreen : GreenNode
 {

@@ -658,6 +658,7 @@ public static class SyntaxFormatter {
                 SyntaxKind.ColonToken => parentKind != SyntaxKind.ConditionalExpression,
 
                 SyntaxKind.QuestionToken => parentKind is SyntaxKind.OptionalType
+                    or SyntaxKind.OptionalPattern
                     or SyntaxKind.ReferenceType
                     or SyntaxKind.CastExpression
                     or SyntaxKind.TryExpression

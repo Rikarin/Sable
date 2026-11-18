@@ -2727,6 +2727,12 @@ public sealed partial class Binder {
             ? optional.UnderlyingType
             : expectedType;
 
+        // ... unless what it wraps has no such case: then '.None' is 'none'.
+        // ('.Some(x)' is a call, bound by BindOptionalSome.)
+        if (expectedType is OptionalTypeSymbol noneOf && name == "None" && !HasMember(wanted, name)) {
+            return new BoundLiteral(syntax, noneOf, null);
+        }
+
         if (wanted is NamedTypeSymbol named) {
             var members = named.GetMembers(name).ToList();
             if (members.Count > 0) {
@@ -2750,10 +2756,41 @@ public sealed partial class Binder {
         return new BoundError(syntax);
     }
 
+    static bool HasMember(TypeSymbol? type, string name) =>
+        type is NamedTypeSymbol named && named.GetMembers(name).Any();
+
+    /// <summary>
+    ///     <c>.Some(x)</c> where an optional is wanted, and what it wraps has no
+    ///     <c>Some</c> of its own: <c>x</c>, wrapped. Null for any other call.
+    /// </summary>
+    BoundExpression? BindOptionalSome(InvocationExpressionSyntax syntax, TypeSymbol? expectedType) {
+        if (syntax.Expression is not ImplicitMemberAccessExpressionSyntax { Name: IdentifierNameSyntax { Identifier.Text: "Some" } }
+            || expectedType is not OptionalTypeSymbol optional
+            || HasMember(optional.UnderlyingType, "Some")) {
+            return null;
+        }
+
+        if (syntax.ArgumentList is not { Arguments: [{ NameToken.IsNone: true } argument] } || syntax.TrailingClosure is not null) {
+            _diagnostics.Error(
+                ErrorCode.ERR_NoMatchingOverload,
+                syntax.Span,
+                "'.Some' takes one value, the one the optional holds, with no label"
+            );
+            return new BoundError(syntax);
+        }
+
+        var value = BindExpression(argument.Expression, optional.UnderlyingType);
+        return Convert(Convert(value, optional.UnderlyingType, argument.Expression), optional, syntax);
+    }
+
     BoundExpression BindInvocation(
         InvocationExpressionSyntax syntax,
         TypeSymbol? expectedType = null
     ) {
+        if (BindOptionalSome(syntax, expectedType) is { } wrapped) {
+            return wrapped;
+        }
+
         // A closure argument is left unbound: its parameter types come from
         // the signature that is chosen, which is not known yet.
         var argumentSyntax = ImmutableArray.CreateBuilder<ExpressionSyntax>();
@@ -5340,6 +5377,22 @@ public sealed partial class Binder {
             case RestPatternSyntax rest:
                 return new BoundWildcardPattern(rest, inputType);
 
+            case OptionalPatternSyntax optional:
+                if (inputType is OptionalTypeSymbol optionalType) {
+                    return new BoundSomePattern(optional, optionalType, BindPattern(optional.Pattern, optionalType.UnderlyingType));
+                }
+
+                if (!inputType.IsError) {
+                    _diagnostics.Error(
+                        ErrorCode.ERR_PatternTypeMismatch,
+                        optional.QuestionToken.Span,
+                        $"'{inputType.ToDisplayString()}' is not optional, so '?' has nothing to unwrap"
+                    );
+                }
+
+                BindPattern(optional.Pattern, inputType);
+                return new BoundErrorPattern(optional);
+
             default:
                 return new BoundErrorPattern(pattern);
         }
@@ -5419,6 +5472,12 @@ public sealed partial class Binder {
             ? _compilation.TypeBinder.BindType(qualifier, _containingSymbol, _scope)
             : inputType;
 
+        // An optional is 'union { Some(T), None }' (SYNTAX.md §4), so its two
+        // cases can be spelled out as well as written 'let v?' and 'none'.
+        if (owner is OptionalTypeSymbol optional) {
+            return BindOptionalCasePattern(pattern, optional);
+        }
+
         if (owner is not NamedTypeSymbol named) {
             if (!owner.IsError) {
                 _diagnostics.Error(
@@ -5484,6 +5543,49 @@ public sealed partial class Binder {
         }
 
         return new BoundUnionCasePattern(pattern, inputType, unionCase, payload.ToImmutable());
+    }
+
+    /// <summary><c>.Some(p)</c> and <c>.None</c>, against an optional.</summary>
+    BoundPattern BindOptionalCasePattern(UnionCasePatternSyntax pattern, OptionalTypeSymbol optional) {
+        var name = pattern.Identifier.Text;
+        var arguments = pattern.ArgumentList?.Arguments;
+        switch (name) {
+            case "None":
+                if (arguments is { } extra) {
+                    _diagnostics.Error(
+                        ErrorCode.ERR_WrongPayloadCount,
+                        pattern.Span,
+                        $"'None' carries no values, but the pattern names {extra.Count}"
+                    );
+                }
+
+                return new BoundLiteralPattern(pattern, optional, null, false);
+
+            case "Some":
+                if (arguments is not { Count: 1 } one) {
+                    _diagnostics.Error(
+                        ErrorCode.ERR_WrongPayloadCount,
+                        pattern.Span,
+                        $"'Some' carries 1 value, but the pattern names {arguments?.Count ?? 0}"
+                    );
+
+                    foreach (var argument in arguments ?? default) {
+                        BindPattern(argument.Pattern, ErrorTypeSymbol.Instance);
+                    }
+
+                    return new BoundErrorPattern(pattern);
+                }
+
+                return new BoundSomePattern(pattern, optional, BindPattern(one[0].Pattern, optional.UnderlyingType));
+
+            default:
+                _diagnostics.Error(
+                    ErrorCode.ERR_UnknownUnionCase,
+                    pattern.Identifier.Span,
+                    $"'{optional.ToDisplayString()}' has no case named '{name}': an optional is '.Some' or '.None'"
+                );
+                return new BoundErrorPattern(pattern);
+        }
     }
 
     BoundPattern BindRecordPattern(RecordPatternSyntax pattern, TypeSymbol inputType) {
@@ -5592,6 +5694,10 @@ public sealed partial class Binder {
         TypeSymbol? resultType = expectedType;
         var sawValue = false;
 
+        // What the arms so far have left of the subject: a bare binding
+        // binds that, so 'case let v' after 'case none' is the value.
+        var remaining = subject.Type;
+
         foreach (var armSyntax in syntax.Arms) {
             PushScope();
 
@@ -5602,7 +5708,7 @@ public sealed partial class Binder {
             switch (armSyntax) {
                 case MatchArmSyntax arm: {
                     foreach (var pattern in arm.Patterns) {
-                        patterns.Add(BindPattern(pattern, subject.Type));
+                        patterns.Add(BindArmPattern(pattern, subject.Type, remaining));
                     }
 
                     if (arm.WhereClause is { } where) {
@@ -5645,7 +5751,7 @@ public sealed partial class Binder {
 
                 case MatchCaseBlockSyntax caseBlock: {
                     foreach (var pattern in caseBlock.Patterns) {
-                        patterns.Add(BindPattern(pattern, subject.Type));
+                        patterns.Add(BindArmPattern(pattern, subject.Type, remaining));
                     }
 
                     if (caseBlock.WhereClause is { } where) {
@@ -5668,6 +5774,10 @@ public sealed partial class Binder {
             }
 
             PopScope();
+
+            if (guard is null) {
+                remaining = Remaining(remaining, patterns);
+            }
         }
 
         var type = sawValue ? resultType ?? Core.Void : Core.Void;
@@ -5696,6 +5806,50 @@ public sealed partial class Binder {
 
         CheckExhaustive(bound);
         return bound;
+    }
+
+    /// <summary>
+    ///     One of an arm's patterns. A bare <c>let v</c>, after arms that took
+    ///     some of the subject's values, binds what is left: the value after
+    ///     <c>none</c>, as <c>.Some(let v)</c> would; the last case of a union
+    ///     after the others, as <c>let v as T</c> would.
+    /// </summary>
+    BoundPattern BindArmPattern(PatternSyntax pattern, TypeSymbol subject, TypeSymbol remaining) {
+        // Only a single type is narrowed to: a binding of it reads it
+        // straight out of the subject, where several left would be a union
+        // of their own, which the subject would have to be converted to.
+        if (pattern is not BindingPatternSyntax || remaining.Equals(subject) || remaining.IsError
+            || remaining is StructuralUnionTypeSymbol) {
+            return BindPattern(pattern, subject);
+        }
+
+        var binding = (BoundBindingPattern)BindPattern(pattern, remaining);
+        return subject switch {
+            OptionalTypeSymbol optional when remaining.Equals(optional.UnderlyingType) =>
+                new BoundSomePattern(pattern, optional, binding),
+            _ => new BoundTypeTestPattern(pattern, subject, remaining, binding.Local),
+        };
+    }
+
+    /// <summary>
+    ///     What of <paramref name="type" /> an unguarded arm leaves for the
+    ///     arms after it: an optional without <c>none</c>, a union without
+    ///     the cases it tested for.
+    /// </summary>
+    static TypeSymbol Remaining(TypeSymbol type, IEnumerable<BoundPattern> patterns) {
+        foreach (var pattern in patterns.SelectMany(Alternatives)) {
+            type = (type, pattern) switch {
+                (OptionalTypeSymbol optional, BoundLiteralPattern { Value: null }) => optional.UnderlyingType,
+                (StructuralUnionTypeSymbol union, BoundTypeTestPattern test) when union.Cases.Any(c => c.Equals(test.TestedType)) =>
+                    StructuralUnionTypeSymbol.Create(union.Cases.Where(c => !c.Equals(test.TestedType))),
+                _ => type,
+            };
+        }
+
+        return type;
+
+        static IEnumerable<BoundPattern> Alternatives(BoundPattern pattern) =>
+            pattern is BoundOrPattern or ? [..Alternatives(or.Left), ..Alternatives(or.Right)] : [pattern];
     }
 
     /// <summary>

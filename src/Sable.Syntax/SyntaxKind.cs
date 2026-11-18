@@ -304,6 +304,7 @@ public enum SyntaxKind : ushort {
     BindingTypeTestPattern = 1213,
     OrPattern = 1214,
     ParenthesizedPattern = 1215,
+    OptionalPattern = 1216,
 
     // ---- Statement nodes (1300-1399) --------------------------------------
     Block = 1300,

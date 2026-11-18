@@ -313,4 +313,93 @@ public sealed class PatternTests {
                 }
             """
         );
+
+    // ---- Optional patterns ----------------------------------------------------
+
+    [Fact]
+    public void SomeAndNoneMatchAnOptional() =>
+        Prints(
+            "30\n4\n0\n7\n-1\n0\n",
+            """
+            union Outcome { Ok(Int), Failed(String) }
+
+            fn plain(_ o: Int?) -> Int {
+                return match o {
+                    case .Some(3) => 30
+                    case .Some(let v) => v
+                    case .None => 0
+                }
+            }
+
+            fn nested(_ o: Outcome?) -> Int {
+                return match o {
+                    case .Some(.Ok(let v)) => v
+                    case .Some(.Failed(_)) => -1
+                    case .None => 0
+                }
+            }
+            """,
+            """
+                let three: Int? = .Some(3)
+                print(plain(three))
+                print(plain(.Some(4)))
+                print(plain(.None))
+                print(nested(.Some(.Ok(7))))
+                print(nested(.Some(.Failed("no"))))
+                print(nested(none))
+            """
+        );
+
+    [Fact]
+    public void AQuestionMarkPatternUnwrapsAnObject() =>
+        Prints(
+            "hi\nnothing\nhi there\n",
+            """
+            fn say(_ o: String?) -> String {
+                if case let text? = o {
+                    return text
+                }
+                return "nothing"
+            }
+
+            fn both(_ a: String?, _ b: String?) -> String {
+                return match (a, b) {
+                    case (let x?, let y?) => x + " " + y
+                    default => "not both"
+                }
+            }
+            """,
+            """
+                print(say("hi"))
+                print(say(none))
+                print(both("hi", "there"))
+            """
+        );
+
+    [Fact]
+    public void ABindingAfterEarlierArmsBindsWhatIsLeft() =>
+        Prints(
+            "0\n7\n1\n5\n",
+            """
+            fn next(_ o: Int?) -> Int {
+                return match o {
+                    case none => 0
+                    case let v => v + 1
+                }
+            }
+
+            fn size(_ o: Int | String) -> Int {
+                return match o {
+                    case let s as String => 1
+                    case let rest => rest
+                }
+            }
+            """,
+            """
+                print(next(none))
+                print(next(6))
+                print(size("a"))
+                print(size(5))
+            """
+        );
 }

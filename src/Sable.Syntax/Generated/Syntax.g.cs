@@ -1784,6 +1784,26 @@ public sealed class BindingTypeTestPatternSyntax : PatternSyntax
     public override void Accept(SyntaxVisitor visitor) => visitor.VisitBindingTypeTestPattern(this);
 }
 
+/// <summary>`let v?`: an optional that holds a value, which the pattern matches; `.Some(let v)`.</summary>
+public sealed class OptionalPatternSyntax : PatternSyntax
+{
+    private PatternSyntax? _pattern;
+
+    internal OptionalPatternSyntax(GreenNode green, SyntaxNode? parent, int position)
+        : base(green, parent, position) { }
+
+    public PatternSyntax Pattern => GetRed(ref _pattern, 0);
+    public SyntaxToken QuestionToken => GetToken(1);
+
+    internal override SyntaxNode? GetNodeSlot(int index) => index switch
+    {
+        0 => Pattern,
+        _ => null,
+    };
+
+    public override void Accept(SyntaxVisitor visitor) => visitor.VisitOptionalPattern(this);
+}
+
 /// <summary>`a | b`.</summary>
 public sealed class OrPatternSyntax : PatternSyntax
 {
@@ -3484,6 +3504,7 @@ public abstract class SyntaxVisitor
     public virtual void VisitRestPattern(RestPatternSyntax node) => DefaultVisit(node);
     public virtual void VisitTypeTestPattern(TypeTestPatternSyntax node) => DefaultVisit(node);
     public virtual void VisitBindingTypeTestPattern(BindingTypeTestPatternSyntax node) => DefaultVisit(node);
+    public virtual void VisitOptionalPattern(OptionalPatternSyntax node) => DefaultVisit(node);
     public virtual void VisitOrPattern(OrPatternSyntax node) => DefaultVisit(node);
     public virtual void VisitBlock(BlockSyntax node) => DefaultVisit(node);
     public virtual void VisitExpressionStatement(ExpressionStatementSyntax node) => DefaultVisit(node);

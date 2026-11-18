@@ -2197,7 +2197,14 @@ internal sealed class Parser {
 
         _nesting++;
         try {
-            return ParsePrimaryPatternCore();
+            // 'let v?' is '.Some(let v)': the pattern, matched against what
+            // an optional holds.
+            var pattern = ParsePrimaryPatternCore();
+            while (At(SyntaxKind.QuestionToken)) {
+                pattern = new OptionalPatternGreen(pattern, EatToken());
+            }
+
+            return pattern;
         } finally {
             _nesting--;
         }
@@ -2755,6 +2762,16 @@ internal sealed class Parser {
                 var pattern = At(SyntaxKind.SelfKeyword)
                     ? new BindingPatternGreen(null, EatToken())
                     : ParseBindingTarget();
+
+                // 'if let v? = o' is the pattern 'v?' where 'let' already
+                // unwraps: said once, rather than as everything after it.
+                if (At(SyntaxKind.QuestionToken)) {
+                    ReportUnexpected(
+                        ErrorCode.ERR_ExpectedToken,
+                        "'if let' unwraps the optional already: write 'if let v = o', or 'if case let v? = o'"
+                    );
+                    SkipCurrentToken();
+                }
 
                 GreenNode? annotation = null;
                 if (At(SyntaxKind.ColonToken)) {

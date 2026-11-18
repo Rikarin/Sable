@@ -237,6 +237,11 @@ public sealed class StatementParserTests {
     [InlineData("\"a\"", """(LiteralPattern "a")""")]
     [InlineData("none", "(LiteralPattern none)")]
     [InlineData("let v", "(BindingPattern let v)")]
+    [InlineData("let v?", "(OptionalPattern (BindingPattern let v) ?)")]
+    [InlineData(
+        ".Ok(let v)?",
+        "(OptionalPattern (UnionCasePattern . Ok (PatternArgumentList (SubPattern (BindingPattern let v)))) ?)"
+    )]
     [InlineData("1...9", "(RangePattern (LiteralPattern 1) ... (LiteralPattern 9))")]
     [InlineData("..<10", "(RangePattern ..< (LiteralPattern 10))")]
     [InlineData("5...", "(RangePattern (LiteralPattern 5) ...)")]
@@ -282,6 +287,14 @@ public sealed class StatementParserTests {
         + "(PatternArgumentList (SubPattern (BindingPattern let v)))))))"
     )]
     public void ParsesPatternForms(string pattern, string expected) => Assert.Equal(expected, ParsePattern(pattern));
+
+    [Fact]
+    public void AnIfLetWithAnOptionalPatternIsOneError() {
+        // 'if let' unwraps already; the '?' is said once, not as a cascade.
+        var tree = SyntaxTree.ParseStatement("if let x? = o { use(x) }");
+        Assert.Single(tree.Diagnostics);
+        Assert.Equal("if let x? = o { use(x) }", tree.ToFullString());
+    }
 
     [Fact]
     public void AHalfOpenRangeNeedsAnUpperBound() {

@@ -361,7 +361,11 @@ CompileCondition  = Expression ;   (* restricted: identifiers, os(), arch(),
 
 Pattern           = OrPattern ;
 
-OrPattern         = PrimaryPattern { "|" PrimaryPattern } ;
+OrPattern         = OptionalPattern { "|" OptionalPattern } ;
+
+(* 'let v?' is '.Some(let v)': the pattern, matched against what an
+   optional holds. *)
+OptionalPattern   = PrimaryPattern { "?" } ;
 
 PrimaryPattern    = WildcardPattern
                   | BindingPattern

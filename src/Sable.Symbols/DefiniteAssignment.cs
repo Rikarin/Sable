@@ -136,11 +136,12 @@ internal static class DefiniteAssignment {
         Dictionary<LocalSymbol, BoundNode>? report
     ) {
         foreach (var op in block.Ops) {
-            if (op.Symbol is not LocalSymbol local) {
+            // A local left out of the index is another function's, which
+            // its own analysis checks.
+            if (op.Symbol is not LocalSymbol local || !index.TryGetValue(local, out var bit)) {
                 continue;
             }
 
-            var bit = index[local];
             switch (op.Kind) {
                 case FlowOpKind.Declare:
                     state[bit] = false;

@@ -3755,6 +3755,16 @@ public sealed partial class SilGen {
                     return;
                 }
 
+                // '.Some(p)' and 'p?': the payload, if there is one, against p.
+                case BoundSomePattern some when value.Type is EnumType optional && optional.CaseIndex("Some") is var index and >= 0: {
+                    var target = function.AddBlock();
+                    var payload = Payload(target, optional.Cases[index].Payload!);
+                    Jump(new SwitchEnumInst(value, [(index, target)], failed));
+                    _current = target;
+                    Pattern(some.Payload, payload, matched, failed);
+                    return;
+                }
+
                 case BoundEnumCasePattern enumCase when value.Type is EnumType enumType:
                     Jump(new SwitchEnumInst(value, [(enumType.CaseIndex(enumCase.EnumCase.Name), matched)], failed));
                     return;

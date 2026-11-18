@@ -631,6 +631,12 @@
     <Field Name="Type" Type="TypeSyntax" />
   </Node>
 
+  <Node Name="OptionalPatternSyntax" Base="PatternSyntax" Kind="OptionalPattern"
+        Doc="`let v?`: an optional that holds a value, which the pattern matches; `.Some(let v)`.">
+    <Field Name="Pattern" Type="PatternSyntax" />
+    <Field Name="QuestionToken" Type="Token" />
+  </Node>
+
   <Node Name="OrPatternSyntax" Base="PatternSyntax" Kind="OrPattern" Doc="`a | b`.">
     <Field Name="Left" Type="PatternSyntax" />
     <Field Name="PipeToken" Type="Token" />

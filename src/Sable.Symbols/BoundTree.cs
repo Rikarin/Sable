@@ -912,6 +912,19 @@ public sealed class BoundUnionCasePattern(
     public override IEnumerable<BoundNode> Children => Payload;
 }
 
+/// <summary>
+///     <c>.Some(p)</c>, or <c>p?</c>: an optional that holds a value, which
+///     <see cref="Payload" /> matches. (<c>.None</c> is the <c>none</c> literal.)
+/// </summary>
+public sealed class BoundSomePattern(
+    SyntaxNode syntax,
+    OptionalTypeSymbol inputType,
+    BoundPattern payload)
+    : BoundPattern(syntax, inputType) {
+    public BoundPattern Payload { get; } = payload;
+    public override IEnumerable<BoundNode> Children => [Payload];
+}
+
 public sealed class BoundEnumCasePattern(
     SyntaxNode syntax,
     TypeSymbol inputType,

@@ -157,6 +157,9 @@ internal sealed class Exhaustiveness(CoreTypes core) {
             case BoundEnumCasePattern enumCase:
                 return Leaf(EnumCtor(enumCase.EnumCase));
 
+            case BoundSomePattern some when some.InputType is OptionalTypeSymbol optional:
+                return new CtorPat(SomeCtor(optional), [Lower(some.Payload)]);
+
             case BoundUnionCasePattern unionCase: {
                 var ctor = UnionCtor(unionCase.UnionCase, pattern.InputType);
                 return new CtorPat(ctor, Fit(unionCase.Payload.Select(Lower), ctor.Arity));

@@ -817,6 +817,7 @@ case Point { x: 0, y: let y }  // record pattern
 case let s as String           // type test with binding
 case is Drawable               // type test
 case .Some(.Ok(let v))         // nested
+case let v?                    // an optional holding a value: .Some(let v)
 case [first, _, last]          // array pattern, fixed length
 case [let head, ...let tail]   // array pattern with rest
 case "a" | "b" | "c"           // string alternatives

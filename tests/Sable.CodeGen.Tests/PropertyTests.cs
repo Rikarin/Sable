@@ -161,4 +161,55 @@ public sealed class PropertyTests {
                 let info = TypeInfo.of(a)
                 print("\(info.fields[0].name) \(info.fields[0].isMutable)")
             """);
+
+    [Fact]
+    public void ALazyPropertyIsComputedOnItsFirstReadAndKept() =>
+        Prints(
+            "before: 0\n42 42\nafter: 1\n7 report 21 1\nabc: [a, c] 2\n1\nbox: x\n",
+            """
+            var computed = 0
+
+            fn expensive(_ n: Int) -> Int {
+                computed = computed + 1
+                return n * 2
+            }
+
+            class Box {
+                var name: String
+                init(_ name: String) { self.name = name }
+            }
+
+            class Report {
+                var base: Int = 21
+                lazy var total: Int = expensive(self.base)
+                lazy var label: String = "report \(base)"
+                lazy var box: Box = Box("x")
+                init() { }
+            }
+
+            struct Doc {
+                var name: String
+                lazy var letters: String[>..] = name.split(separator: 'b')
+
+                mutating fn describe() -> String {
+                    return "\(name): [\(Runtime.joinStrings(letters, ", "))]"
+                }
+            }
+            """,
+            """
+                let r = Report()
+                print("before: \(computed)")
+                let first = r.total
+                print("\(first) \(r.total)")
+                print("after: \(computed)")
+                r.total = 7
+                print("\(r.total) \(r.label) \(computed)")
+                var d = Doc { name: "abc" }
+                print("\(d.describe()) \(d.letters.count)")
+                var copy = d
+                copy.letters = ["x"]
+                print(d.letters.count - copy.letters.count)
+                print("box: \(r.box.name)")
+            """);
 }
+

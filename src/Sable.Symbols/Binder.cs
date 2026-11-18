@@ -2189,6 +2189,16 @@ public sealed partial class Binder {
                     receiver = new BoundSelfAccess(syntax, self, SelfIsMutable(containingType));
                 }
 
+                // A lazy property of a value is computed by its first read,
+                // which writes it: the value must be one that can change.
+                if (field.IsLazy && receiver is { IsAssignable: false } held && !held.Type.IsReferenceType) {
+                    _diagnostics.Error(
+                        ErrorCode.ERR_NotMutable,
+                        syntax.Span,
+                        $"lazy '{field.Name}' is computed the first time it is read, which changes the value, so it needs one that can change"
+                    );
+                }
+
                 // 'task.value' waits for the task.
                 if (field.IsAsyncGetter) {
                     MarkAsync(syntax.Span, $"reading '{field.Name}'");

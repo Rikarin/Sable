@@ -160,6 +160,7 @@ public enum ErrorCode {
     ERR_BenchThrows = 3110,
     ERR_BackedPropertyNeedsInitializer = 3111,
     ERR_MissingBody = 3112,
+    ERR_LazyProperty = 3113,
 
     // ---- Lints (S3300-S3399): reported by Sable.Symbols' Lints, which
     // 'sable check' runs, never by compiling. Their severity is configured.

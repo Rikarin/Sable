@@ -169,6 +169,7 @@ public sealed partial class SilGen {
         }
 
         AddDerived(functions);
+        AddLazy(functions);
         CheckBuiltins();
 
         // Overloads: functions of one name in one container (counted once per
@@ -305,7 +306,7 @@ public sealed partial class SilGen {
             AccessorSyntax a => a.Body is not null || a.ExpressionBody is not null,
             _ => false,
         };
-        if (!hasBody && _compilation.GetDerivedBody(symbol) is null) {
+        if (!hasBody && _compilation.GetDerivedBody(symbol) is null && _compilation.GetLazyBody(symbol) is null) {
             return;
         }
 
@@ -479,7 +480,7 @@ public sealed partial class SilGen {
     readonly Queue<(FunctionSymbol Symbol, string Name, FunctionType Type, TypeSubstitution Substitution)> _pending = new();
 
     void LowerBody(FunctionSymbol symbol, SyntaxNode syntax, SemanticModel model, string name, FunctionType type, TypeSubstitution substitution) {
-        if ((_compilation.GetDerivedBody(symbol) ?? model.GetBoundNode(syntax)) is not BoundBlock body) {
+        if ((_compilation.GetDerivedBody(symbol) ?? _compilation.GetLazyBody(symbol) ?? model.GetBoundNode(syntax)) is not BoundBlock body) {
             return;
         }
 

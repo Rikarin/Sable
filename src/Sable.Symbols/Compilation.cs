@@ -935,6 +935,10 @@ public sealed partial class Compilation {
         // 'var name: String = "" { set { field = newValue.trimmed() } }':
         // accessors that say 'field' have storage, laid out where the
         // property is, which the property's initial value fills.
+        if (field.IsLazy) {
+            DeclareLazy(declaration, field, container, binding.Identifier);
+        }
+
         var keptInField = field.IsComputed && declaration.Accessors is { } accessorList && accessorList.Accessors.Any(SaysField);
         if (keptInField && container is ExtensionSymbol) {
             ReportDeclaration(
@@ -999,6 +1003,73 @@ public sealed partial class Compilation {
             $"{what} needs a body: only a protocol's requirements, 'abstract' methods and '@builtin', '@intrinsic' or '@extern' declarations go without"
         );
     }
+
+    /// <summary>
+    ///     <c>lazy var report: Report = build()</c>: storage of <c>Report?</c>,
+    ///     none until the property is first read, and accessors the compiler
+    ///     writes — a getter that fills it from the initialiser the first time,
+    ///     with <c>self</c> in scope, and a setter. The bodies are bound with
+    ///     the rest of the file (<see cref="SemanticModel" />).
+    /// </summary>
+    void DeclareLazy(FieldDeclarationSyntax declaration, FieldSymbol field, Symbol container, SyntaxToken name) {
+        string? wrong = null;
+        if (!field.IsMutable) {
+            wrong = "is computed the first time it is read, which writes it, so it is a 'var'";
+        } else if (declaration.Declarator.Initializer is null) {
+            wrong = "needs the value to compute the first time it is read: give it '= ...'";
+        } else if (declaration.Accessors is not null) {
+            wrong = "has the accessors the compiler writes for it, so it cannot declare its own";
+        } else if (field.IsStatic || container is not NamedTypeSymbol { TypeKind: TypeKind.Struct or TypeKind.Class or TypeKind.Actor }) {
+            wrong = "is for a property of a struct, class or actor value, not a static or global one";
+        }
+
+        if (wrong is not null) {
+            ReportDeclaration(ErrorCode.ERR_LazyProperty, name.Span, $"lazy '{name.Text}' {wrong}");
+            field.IsLazy = false;
+            return;
+        }
+
+        var type = (NamedTypeSymbol)container;
+        var backing = new FieldSymbol(BackingFieldName(field.Name), container, declaration, Accessibility.Private, true) {
+            HasInitializer = true,
+            BackedProperty = field,
+            TypeResolver = () => new OptionalTypeSymbol(field.Type),
+        };
+
+        // Reading it the first time writes it: a value's getter mutates.
+        var getter = new FunctionSymbol("get", field, declaration, field.DeclaredAccessibility, FunctionKind.Accessor) {
+            IsMutating = !type.IsReferenceType,
+        };
+        getter.ReturnTypeResolver = () => field.Type;
+
+        var setter = new FunctionSymbol("set", field, declaration, field.SetterAccessibility ?? field.DeclaredAccessibility, FunctionKind.Accessor) {
+            IsMutating = true,
+        };
+        var newValue = new ParameterSymbol("newValue", null, setter, declaration, 0) { TypeResolver = () => field.Type };
+        setter.Parameters = [newValue];
+        setter.ReturnTypeResolver = () => Core.Void;
+
+        field.IsComputed = true;
+        field.HasSetter = true;
+        field.HasInitializer = false;
+        field.BackingField = backing;
+        _lazy[field] = new(getter, setter, CurrentScope!.Tree);
+        AddTo(container, backing);
+    }
+
+    /// <summary>A lazy property's accessors, which the compiler writes, and the file it is declared in.</summary>
+    public sealed record LazyAccessors(FunctionSymbol Getter, FunctionSymbol Setter, SyntaxTree Tree);
+
+    readonly Dictionary<FieldSymbol, LazyAccessors> _lazy = [];
+
+    /// <summary>Every lazy property, with its accessors.</summary>
+    public IReadOnlyDictionary<FieldSymbol, LazyAccessors> LazyProperties => _lazy;
+
+    /// <summary>The body the compiler wrote for a lazy property's accessor, or null for any other function.</summary>
+    public BoundBlock? GetLazyBody(FunctionSymbol function) =>
+        function.ContainingSymbol is FieldSymbol field && _lazy.TryGetValue(field, out var accessors)
+            ? GetSemanticModel(accessors.Tree).GetLazyBody(function)
+            : null;
 
     /// <summary>What a property's backing field is called: a name no source can write.</summary>
     public static string BackingFieldName(string property) => property + "$field";

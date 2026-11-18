@@ -96,5 +96,47 @@ public sealed class PropertyTests {
     [InlineData("struct S { var n: Int = 0 { get\n    set => field = newValue } }")]
     public void ARequirementOrSuppliedBodyIsNot(string source) =>
         Assert.DoesNotContain(ErrorsIn(source), static e => e.Code == ErrorCode.ERR_MissingBody);
+
+    [Theory]
+    [InlineData("struct S { lazy let a: Int = 1 }")]
+    [InlineData("struct S { lazy var b: Int }")]
+    [InlineData("struct S { lazy var c: Int = 1 { get => 2 } }")]
+    [InlineData("struct S { static lazy var d: Int = 1 }")]
+    [InlineData("lazy var global: Int = 1")]
+    public void ALazyPropertyThatCannotBeOneIsReported(string source) =>
+        Assert.Contains(ErrorsIn(source), static e => e.Code == ErrorCode.ERR_LazyProperty);
+
+    [Fact]
+    public void ALazyPropertyIsStorageOfAnOptionalAndAccessors() {
+        const string source = "class Report { var base: Int = 21\n    lazy var total: Int = self.base * 2\n    init() { } }";
+        AssertClean(source);
+        var compilation = Compile(source);
+        var total = Field(compilation, "Report", "total");
+        Assert.True(total is { IsLazy: true, IsComputed: true, HasSetter: true });
+        Assert.Equal("Int?", total.BackingField!.Type.ToDisplayString());
+        Assert.True(compilation.LazyProperties.ContainsKey(total));
+    }
+
+    [Theory]
+    [InlineData("fn f() -> Int { let d = Doc { n: 1 }\n    return d.words }")]
+    [InlineData("extension Doc { fn peek() -> Int { return words } }")]
+    public void ALazyPropertyOfAValueIsReadOnlyWhereItCanChange(string use) =>
+        Assert.Contains(
+            ErrorsIn("struct Doc { var n: Int\n    lazy var words: Int = n * 2 }\n" + use),
+            static e => e.Code == ErrorCode.ERR_NotMutable && e.Message.Contains("lazy", StringComparison.Ordinal));
+
+    [Fact]
+    public void ALazyPropertyOfAValueIsReadFromAVarOrAMutatingMethod() =>
+        AssertClean("""
+                    struct Doc {
+                        var n: Int
+                        lazy var words: Int = n * 2
+                        mutating fn peek() -> Int { return words }
+                    }
+                    fn f() -> Int {
+                        var d = Doc { n: 1 }
+                        return d.words + d.peek()
+                    }
+                    """);
 }
 

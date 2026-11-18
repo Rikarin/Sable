@@ -17,4 +17,19 @@ public sealed partial class SilGen {
             }
         }
     }
+
+    /// <summary>A lazy property's getter and setter, which the compilation wrote: lowered where the property is declared.</summary>
+    void AddLazy(List<(FunctionSymbol Symbol, SyntaxNode Syntax, SemanticModel Model)> functions) {
+        foreach (var (field, lazy) in _compilation.LazyProperties) {
+            if (!IsLowerable(lazy.Getter) || field.DeclaringSyntax is not [var declaration, ..]) {
+                continue;
+            }
+
+            var model = _compilation.GetSemanticModel(lazy.Tree);
+            _getters[field] = lazy.Getter;
+            _setters[field] = lazy.Setter;
+            functions.Add((lazy.Getter, declaration, model));
+            functions.Add((lazy.Setter, declaration, model));
+        }
+    }
 }

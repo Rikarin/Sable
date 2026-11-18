@@ -671,6 +671,20 @@ struct Account {
 }
 ```
 
+A `lazy var` is computed from its initialiser the first time it is read, and
+kept; the initialiser may use `self`, as a method does. Assigning it replaces
+the value. It is a `var`, has an initialiser and no accessors of its own, and
+belongs to a struct, class or actor value (S3113). Since the first read of a
+struct's lazy property writes it, it is read only where the struct can change:
+from a `var`, or in a `mutating` method.
+
+```sable
+struct Document {
+    var text: String
+    lazy var words: String[>..] = text.split(separator: ' ')   // split on the first read
+}
+```
+
 A brace directly after a field's initialiser opens an accessor block, not a
 trailing closure, when its first token is `get`, `set`, `willSet` or `didSet`:
 

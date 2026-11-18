@@ -434,6 +434,12 @@ public sealed partial class SemanticModel {
             return;
         }
 
+        if (field.IsLazy && _compilation.LazyProperties.TryGetValue(field, out var lazy) && declaration.Declarator.Initializer is { } computed) {
+            BindLazy(declaration, field, lazy, computed.Value, scope);
+            CheckReferenceKind(declaration, field);
+            return;
+        }
+
         // A property kept in 'field' starts with its initial value there.
         if (declaration.Declarator.Initializer is { } initializer) {
             BindInitializer(initializer.Value, field.BackingField ?? field, field.Type, scope);
@@ -441,6 +447,56 @@ public sealed partial class SemanticModel {
 
         BindAccessors(declaration.Accessors, field, field.Type, scope);
         CheckReferenceKind(declaration, field);
+    }
+
+    readonly Dictionary<FunctionSymbol, BoundBlock> _lazyBodies = [];
+
+    /// <summary>The body the compiler wrote for a lazy property's getter or setter.</summary>
+    public BoundBlock? GetLazyBody(FunctionSymbol accessor) {
+        EnsureBound();
+        return _lazyBodies.GetValueOrDefault(accessor);
+    }
+
+    /// <summary>
+    ///     A lazy property's accessors, written here: the getter
+    ///     <code>
+    ///     if let stored = self.storage { return stored }
+    ///     let made = initialiser
+    ///     self.storage = made
+    ///     return made
+    ///     </code>
+    ///     the initialiser bound in it, so that it sees <c>self</c>; and the
+    ///     setter, <c>self.storage = newValue</c>. The storage starts as none.
+    /// </summary>
+    void BindLazy(FieldDeclarationSyntax declaration, FieldSymbol field, Compilation.LazyAccessors lazy, ExpressionSyntax initializer, FileScope scope) {
+        var backing = field.BackingField!;
+        var type = (NamedTypeSymbol)field.ContainingSymbol!;
+        var at = declaration.Declarator;
+
+        var binder = NewBinder(scope, lazy.Getter);
+        var value = binder.BindInitializer(initializer, field.Type);
+        Collect(binder);
+
+        _initializers[backing] = new BoundLiteral(at, backing.Type, null);
+
+        BoundFieldAccess Storage(bool mutable) => new(at, new BoundSelfAccess(at, type, mutable), backing);
+        BoundExpression Wrapped(BoundExpression made) => new BoundConversion(at, backing.Type, made, ConversionKind.OptionalWrap);
+
+        var stored = new LocalSymbol("stored", lazy.Getter, at, false) { TypeResolver = () => field.Type };
+        var made = new LocalSymbol("made", lazy.Getter, at, false) { TypeResolver = () => field.Type };
+        _lazyBodies[lazy.Getter] = new BoundBlock(at, [stored, made], [
+            new BoundIf(at,
+                new BoundConditionBinding(at, _compilation.Core.Bool, Storage(false), null, stored),
+                new BoundBlock(at, [], [new BoundReturn(at, new BoundLocalAccess(at, stored))]),
+                null),
+            new BoundLocalDeclaration(at, made, value),
+            new BoundExpressionStatement(at, new BoundAssignment(at, Storage(true), Wrapped(new BoundLocalAccess(at, made)))),
+            new BoundReturn(at, new BoundLocalAccess(at, made)),
+        ]);
+
+        _lazyBodies[lazy.Setter] = new BoundBlock(at, [], [
+            new BoundExpressionStatement(at, new BoundAssignment(at, Storage(true), Wrapped(new BoundParameterAccess(at, lazy.Setter.Parameters[0])))),
+        ]);
     }
 
     /// <summary>

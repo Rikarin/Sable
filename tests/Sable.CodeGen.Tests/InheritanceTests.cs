@@ -211,4 +211,33 @@ public sealed class InheritanceTests {
                 print("\(q.n) \(Q.zero().n) \(q.tag)")
             """
         );
+
+    [Fact]
+    public void AGenericClassIsInheritedAndItsMethodsOverridden() =>
+        Prints(
+            "1\n5\n5\n9\n",
+            """
+            open class GBase<T> {
+                open fn take(_ x: T) -> Int { return 1 }
+                fn name() -> Int { return 9 }
+            }
+
+            class GDer: GBase<Int> {
+                override fn take(_ x: Int) -> Int { return x + 1 }
+            }
+
+            class GDer2<T>: GBase<T> {
+                override fn take(_ x: T) -> Int { return 5 }
+            }
+            """,
+            """
+                let plain = GBase<Int>()
+                print(plain.take(1))
+                let g: GBase<Int> = GDer()
+                print(g.take(4))
+                let g2: GBase<String> = GDer2<String>()
+                print(g2.take("a"))
+                print(g2.name())
+            """
+        );
 }

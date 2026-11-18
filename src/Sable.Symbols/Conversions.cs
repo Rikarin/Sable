@@ -239,7 +239,12 @@ internal sealed class Conversions(CoreTypes core) {
                 continue;
             }
 
-            foreach (var baseType in current.BaseTypes) {
+            // A generic class's base names its parameters: 'GDer2<T>: GBase2<T>'
+            // makes GDer2<String> a GBase2<String>.
+            var arguments = TypeSubstitution.For(current);
+            foreach (var declared in current.BaseTypes) {
+                var baseType = arguments.Apply(declared);
+
                 // An enum's base list names its underlying representation as
                 // well as its protocols, and that is not a supertype: going
                 // between an enum and its representation is written out.

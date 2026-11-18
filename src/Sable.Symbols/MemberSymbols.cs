@@ -119,6 +119,12 @@ public sealed class FunctionSymbol : Symbol {
     public bool IsAsync { get; internal set; }
     public bool IsMutating { get; internal set; }
     public bool IsOverride { get; internal set; }
+
+    /// <summary>
+    ///     For an <c>override</c>, the member it finally overrides, in the
+    ///     class at the top of the chain; null for any other function.
+    /// </summary>
+    public FunctionSymbol? RootOverridden => ConformanceChecker.RootOverridden(this);
     public bool IsOpen { get; internal set; }
 
     /// <summary>

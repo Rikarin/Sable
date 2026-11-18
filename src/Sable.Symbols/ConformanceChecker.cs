@@ -200,16 +200,40 @@ internal static class ConformanceChecker {
         }
     }
 
-    /// <summary>The base-class member a function replaces, if any.</summary>
+    /// <summary>
+    ///     The member a method of a class finally overrides: the one a
+    ///     vtable gives its slot. Null for a method that overrides nothing.
+    /// </summary>
+    public static FunctionSymbol? RootOverridden(FunctionSymbol function) {
+        if (!function.IsOverride || function.ContainingSymbol is not NamedTypeSymbol { TypeKind: TypeKind.Class } type) {
+            return null;
+        }
+
+        FunctionSymbol? root = null;
+        for (var current = FindOverridden(type, function); current is not null;) {
+            root = current;
+            current = current.IsOverride && current.ContainingSymbol is NamedTypeSymbol owner ? FindOverridden(owner, current) : null;
+        }
+
+        return root;
+    }
+
+    /// <summary>
+    ///     The base-class member a function replaces, if any — compared in
+    ///     the base's terms as this class names it: 'GDer: GBase&lt;Int&gt;'
+    ///     overrides 'take(_ x: T)' with 'take(_ x: Int)'.
+    /// </summary>
     static FunctionSymbol? FindOverridden(
         NamedTypeSymbol type,
         FunctionSymbol function
     ) {
-        foreach (var baseType in type.BaseTypes) {
-            if (baseType is not NamedTypeSymbol { TypeKind: TypeKind.Class } baseClass) {
+        var arguments = TypeSubstitution.For(type);
+        foreach (var declared in type.BaseTypes) {
+            if (arguments.Apply(declared) is not NamedTypeSymbol { TypeKind: TypeKind.Class } baseClass) {
                 continue;
             }
 
+            var members = TypeSubstitution.For(baseClass);
             foreach (var candidate in baseClass.GetMembers(function.Name)) {
                 if (candidate is not FunctionSymbol other) {
                     continue;
@@ -221,7 +245,7 @@ internal static class ConformanceChecker {
 
                 var matches = true;
                 for (var i = 0; i < other.Parameters.Length; i++) {
-                    if (other.Parameters[i].Type.Equals(function.Parameters[i].Type)) {
+                    if (members.Apply(other.Parameters[i].Type).Equals(function.Parameters[i].Type)) {
                         continue;
                     }
 

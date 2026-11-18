@@ -260,11 +260,17 @@ public sealed partial class SilGen {
             }
         }
 
-        while (_pending.Count > 0) {
-            var (symbol, name, type, substitution) = _pending.Dequeue();
-            var (syntax, model) = _declarations[symbol];
-            LowerBody(symbol, syntax, model, name, type, substitution);
-        }
+        // A generic class's vtable names instances of its methods, which
+        // are lowered in their turn — and may make more classes.
+        do {
+            while (_pending.Count > 0) {
+                var (symbol, name, type, substitution) = _pending.Dequeue();
+                var (syntax, model) = _declarations[symbol];
+                LowerBody(symbol, syntax, model, name, type, substitution);
+            }
+
+            BuildVTables();
+        } while (_pending.Count > 0);
 
         // Separately, the globals are set up by the unit the program starts in.
         if (_unit is null || _module.EntryPoint is not null) {
@@ -727,18 +733,29 @@ public sealed partial class SilGen {
     internal static string SlotName(FunctionSymbol method) =>
         method.Parameters.IsEmpty ? method.Name : method.Name + string.Concat(method.Parameters.Select(static p => "$" + Sanitise(p.Type.ToDisplayString())));
 
+    /// <summary>
+    ///     The slot a method takes in a vtable: an override takes the slot of
+    ///     what it overrides, whatever its own parameter types say —
+    ///     'take(_ x: Int)' overriding 'take(_ x: T)' is 'take$T'.
+    /// </summary>
+    internal static string VTableSlot(FunctionSymbol method) => SlotName(method.RootOverridden ?? method);
+
     /// <summary>True for a method a call must find through the vtable: one a subclass may override.</summary>
     internal bool IsDynamic(FunctionSymbol method) =>
-        method.FunctionKind == FunctionKind.Ordinary && !method.IsStatic
-        && method.ContainingSymbol is NamedTypeSymbol { TypeKind: TypeKind.Class or TypeKind.Actor } owner
-        && _inherited.Contains(owner.OriginalDefinition);
+        IsVirtual(method) && _inherited.Contains(Owner(method)!.OriginalDefinition);
+
+    /// <summary>True for a member of a class that takes a slot in its vtable.</summary>
+    static bool IsVirtual(FunctionSymbol method) =>
+        !method.IsStatic
+        && method.FunctionKind == FunctionKind.Ordinary && method.ContainingSymbol is NamedTypeSymbol
+        && Owner(method) is { TypeKind: TypeKind.Class or TypeKind.Actor };
 
     /// <summary>
     ///     Fills each class's vtable: its superclass's slots, each override in
     ///     its base's slot, then the methods it adds.
     /// </summary>
     void BuildVTables() {
-        var built = new HashSet<ClassType>();
+        var built = _builtVTables;
         void Build(ClassType type) {
             if (!built.Add(type) || !_classes.TryGetValue(type, out var symbol)) {
                 return;
@@ -753,17 +770,30 @@ public sealed partial class SilGen {
                 return;
             }
 
+            // A generic class's methods, for this class's type arguments:
+            // instances, lowered once the vtables are built.
+            var arguments = TypeSubstitution.For(symbol);
             foreach (var method in symbol.OriginalDefinition.Members.OfType<FunctionSymbol>()) {
-                if (method is { FunctionKind: FunctionKind.Ordinary, IsStatic: false, IsAbstract: true } && method.ContainingSymbol is NamedTypeSymbol) {
+                if (method is { FunctionKind: FunctionKind.Ordinary, IsStatic: false, IsAbstract: true } && method.ContainingSymbol is NamedTypeSymbol && !IsGeneric(method)) {
                     AbstractStub(method);
                 }
 
-                if (method is not { FunctionKind: FunctionKind.Ordinary, IsStatic: false } || method.ContainingSymbol is not NamedTypeSymbol
-                    || !_names.TryGetValue(method, out var name) || _module.Find(name) is null && (_unit is null || External(name) is null)) {
+                if (!IsVirtual(method) || !_names.TryGetValue(method, out var name)) {
                     continue;
                 }
 
-                var slot = SlotName(method);
+                if (IsGeneric(method)) {
+                    if (!method.TypeParameters.IsEmpty || method.DeclaringSyntax.FirstOrDefault() is not { } at
+                        || Instance(method, arguments, at) is not { } instance) {
+                        continue;
+                    }
+
+                    name = instance.Name;
+                } else if (_module.Find(name) is null && (_unit is null || External(name) is null)) {
+                    continue;
+                }
+
+                var slot = VTableSlot(method);
                 var index = type.MethodIndex(slot);
                 if (index >= 0) {
                     type.VTable[index] = (slot, name);
@@ -777,6 +807,9 @@ public sealed partial class SilGen {
             Build(type);
         }
     }
+
+    /// <summary>The classes whose vtables are built: building one may lower more code, which may lower more classes.</summary>
+    readonly HashSet<ClassType> _builtVTables = [];
 
     /// <summary>
     ///     An abstract method's slot: code that traps, never reached — the
@@ -5939,7 +5972,7 @@ public sealed partial class SilGen {
             // A method a subclass may override is found through the vtable;
             // 'super.m()' calls the superclass's own.
             SilValue code = HasSelf(callee) && call.Receiver is not BoundSuperAccess && generator.IsDynamic(callee)
-                ? Emit(new ClassMethodInst(arguments[0], SlotName(callee), type))
+                ? Emit(new ClassMethodInst(arguments[0], VTableSlot(callee), type))
                 : Emit(new FunctionRefInst(name, type));
             // A 'rethrows' callee given functions that throw nothing throws
             // nothing: the binder asked for no 'try', and nothing handles it.

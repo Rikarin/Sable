@@ -62,20 +62,20 @@ public struct Expr {
 /// A recursive-descent parser for sums of products of digits, building its
 /// tree in the region it is given. Every node's root is inferred as 'r'.
 fn parseSum(_ text: String, _ at: inout Int, in r: region) -> ref Expr {
-    var left = parseProduct(text, &at, r)
+    var left = parseProduct(text, &at, in: r)
     while at < text.count && text.at(index: at) == '+' {
         at += 1
-        let right = parseProduct(text, &at, r)
+        let right = parseProduct(text, &at, in: r)
         left = r.alloc(Expr { op: '+', value: 0, left: left, right: right })
     }
     return left
 }
 
 fn parseProduct(_ text: String, _ at: inout Int, in r: region) -> ref Expr {
-    var left = parseNumber(text, &at, r)
+    var left = parseNumber(text, &at, in: r)
     while at < text.count && text.at(index: at) == '*' {
         at += 1
-        let right = parseNumber(text, &at, r)
+        let right = parseNumber(text, &at, in: r)
         left = r.alloc(Expr { op: '*', value: 0, left: left, right: right })
     }
     return left
@@ -103,7 +103,7 @@ fn evaluate(_ e: ref Expr) -> F64 {
 fn calculate(_ source: String) -> F64 {
     region arena {
         var at = 0
-        let root = parseSum(source, &at, arena) // root inferred as 'arena'
+        let root = parseSum(source, &at, in: arena) // root inferred as 'arena'
         return evaluate(root) // an owned F64 leaves
     } // entire arena freed: one store
 }
@@ -114,7 +114,7 @@ fn calculate(_ source: String) -> F64 {
 //   fn bad(_ source: String) -> ref Expr {
 //       region r {
 //           var at = 0
-//           return parseSum(source, &at, r)
+//           return parseSum(source, &at, in: r)
 //       }
 //   }
 //

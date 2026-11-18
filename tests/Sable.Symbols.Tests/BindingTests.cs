@@ -229,6 +229,18 @@ public sealed class BindingTests {
         );
     }
 
+    /// <summary>The spec's 'fn build(in r: region)' is called 'build(in: a)'.</summary>
+    [Fact]
+    public void InIsAnArgumentLabel() {
+        const string extra = "fn build(in r: region, _ n: Int) -> Int { return n }";
+        AssertClean("region a {\n    let n = build(in: a, 1)\n}", extra);
+
+        Assert.Contains(
+            ErrorsIn("region a {\n    let n = build(r: a, 1)\n}", extra),
+            static e => e.Code == ErrorCode.ERR_NoMatchingOverload
+        );
+    }
+
     [Fact]
     public void DefaultedParametersMayBeOmitted() {
         const string extra = "fn connect(host: String, port: Int = 443) { }";

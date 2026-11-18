@@ -105,7 +105,8 @@ public abstract class HarnessCommand : Command {
                 return null;
             }
 
-            return ([..options.Files.Select(static f => SyntaxTree.Parse(new SourceText(File.ReadAllText(f), Path.GetFileName(f))))],
+            var parseOptions = Pipeline.ParseOptionsFor(options.Optimise);
+            return ([..options.Files.Select(f => SyntaxTree.Parse(new SourceText(File.ReadAllText(f), Path.GetFileName(f)), parseOptions))],
                 Path.GetDirectoryName(Path.GetFullPath(options.Files[0]))!);
         }
 
@@ -114,7 +115,7 @@ public abstract class HarnessCommand : Command {
             var environment = PackageEnvironment.FromProcess();
             var member = workspace.Current ?? workspace.Members[0];
             var graph = PackageBuilder.Resolve(workspace, environment, new BuildRequest(Package: member.Name));
-            var trees = PackageBuilder.TestProgram(graph, member.Name);
+            var trees = PackageBuilder.TestProgram(graph, member.Name, options.Optimise);
             if (trees.Count == 0) {
                 Console.Error.WriteLine($"sable: package '{member.Name}' has no source files");
                 return null;
@@ -137,6 +138,11 @@ public abstract class HarnessCommand : Command {
             options.Debug ? directory : null,
             options.Exclusivity ?? (options.Debug || !options.Optimise)
         );
+        foreach (var warning in result.Warnings) {
+            Console.Error.WriteLine(warning);
+            Console.Error.WriteLine();
+        }
+
         if (!result.Succeeded) {
             foreach (var error in result.Errors) {
                 Console.Error.WriteLine(error);

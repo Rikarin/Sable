@@ -37,18 +37,19 @@ public static class PackageBuilder {
     /// <summary>
     ///     The trees of one target: the binary's entry file first (where the
     ///     entry point is looked for), then the package's library files, then
-    ///     its dependencies' — each parsed with its own package's features.
+    ///     its dependencies' — each parsed with its own package's features, and
+    ///     <c>DEBUG</c> or <c>RELEASE</c> as <paramref name="optimise" /> says.
     /// </summary>
-    public static IReadOnlyList<SyntaxTree> Program(PackageGraph graph, string member, BinTarget? bin, BuildTimings? timings = null) {
+    public static IReadOnlyList<SyntaxTree> Program(PackageGraph graph, string member, BinTarget? bin, bool optimise = false, BuildTimings? timings = null) {
         using var _ = BuildTimings.Of(timings, "parse");
         var trees = new List<SyntaxTree>();
         var own = graph.Packages[member];
         if (bin is not null) {
-            trees.Add(Parse(graph, own, bin.Path));
+            trees.Add(Parse(graph, own, bin.Path, optimise));
         }
 
         foreach (var package in graph.Closure(member)) {
-            trees.AddRange(package.Package.LibrarySources().Select(file => Parse(graph, package, file)));
+            trees.AddRange(package.Package.LibrarySources().Select(file => Parse(graph, package, file, optimise)));
         }
 
         return trees;
@@ -61,7 +62,7 @@ public static class PackageBuilder {
     ///     its dev-dependencies' among them.
     ///     The harness supplies the entry point, so no binary's entry file is in it.
     /// </summary>
-    public static IReadOnlyList<SyntaxTree> TestProgram(PackageGraph graph, string member) {
+    public static IReadOnlyList<SyntaxTree> TestProgram(PackageGraph graph, string member, bool optimise = false) {
         var own = graph.Packages[member];
         var extra = new[] { "tests", "benches" }
             .Select(d => Path.Combine(own.Package.Directory, d))
@@ -69,19 +70,18 @@ public static class PackageBuilder {
             .SelectMany(static d => Directory.GetFiles(d, "*.sb", SearchOption.AllDirectories))
             .Select(Path.GetFullPath)
             .Order(StringComparer.Ordinal)
-            .Select(file => Parse(graph, own, file))
+            .Select(file => Parse(graph, own, file, optimise))
             .ToList();
         return [
-            ..own.Package.LibrarySources().Select(file => Parse(graph, own, file)),
+            ..own.Package.LibrarySources().Select(file => Parse(graph, own, file, optimise)),
             ..extra,
-            ..graph.Closure(member, dev: true).Where(p => p.Name != member).SelectMany(p => p.Package.LibrarySources().Select(file => Parse(graph, p, file))),
+            ..graph.Closure(member, dev: true).Where(p => p.Name != member).SelectMany(p => p.Package.LibrarySources().Select(file => Parse(graph, p, file, optimise))),
         ];
     }
 
-    static SyntaxTree Parse(PackageGraph graph, ResolvedPackage package, string file) {
+    static SyntaxTree Parse(PackageGraph graph, ResolvedPackage package, string file, bool optimise) {
         var source = SourceOf(graph, package, file);
-        var options = ParseOptions.Default with { Features = [..source.Features] };
-        return SyntaxTree.Parse(new SourceText(File.ReadAllText(file), source.Name), options);
+        return SyntaxTree.Parse(new SourceText(File.ReadAllText(file), source.Name), Pipeline.ParseOptionsFor(optimise, source.Features));
     }
 
     /// <summary>A file of a package, with the name its diagnostics give it and the features it is parsed with.</summary>
@@ -201,7 +201,8 @@ public static class PackageBuilder {
 
             environment.Error.WriteLine($"   Compiling {Describe(graph.Packages[member.Name], workspace)}");
             if (bins.Count == 0) {
-                var errors = Pipeline.Check(Program(graph, member.Name, null));
+                var (errors, warnings) = Pipeline.Diagnose(Program(graph, member.Name, null, profile.Optimise));
+                Report(environment, warnings);
                 if (errors.Count > 0) {
                     Report(environment, errors);
                     environment.Error.WriteLine($"error: could not compile {member.Name}");
@@ -225,6 +226,7 @@ public static class PackageBuilder {
                     Whole = profile.CodegenUnits == 1,
                 };
                 var outcome = IncrementalBuild.Build(Units(graph, member.Name, bin), buildSettings, executable, Path.Combine(output, "cache"), timings, environment.Error);
+                Report(environment, outcome.Warnings);
                 if (!outcome.Succeeded) {
                     Report(environment, outcome.Errors);
                     environment.Error.WriteLine($"error: could not compile {member.Name}");

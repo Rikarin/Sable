@@ -74,7 +74,12 @@ public sealed class DebugCommand : Command {
         }
 
         var source = new SourceText(File.ReadAllText(input), Path.GetFileName(input));
-        var result = Pipeline.Compile(source, Path.GetDirectoryName(Path.GetFullPath(input)));
+        var result = Pipeline.Compile([SyntaxTree.Parse(source, Pipeline.ParseOptionsFor(optimise: false))], Path.GetDirectoryName(Path.GetFullPath(input)));
+        foreach (var warning in result.Warnings) {
+            Console.Error.WriteLine(warning);
+            Console.Error.WriteLine();
+        }
+
         if (!result.Succeeded) {
             foreach (var error in result.Errors) {
                 Console.Error.WriteLine(error);

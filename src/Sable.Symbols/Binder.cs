@@ -4916,7 +4916,10 @@ public sealed partial class Binder {
                 or BinaryOperatorKind.LessThanOrEqual
                 or BinaryOperatorKind.GreaterThan
                 or BinaryOperatorKind.GreaterThanOrEqual =>
-                left.Equals(right) && (Core.IsNumeric(left) || left.Equals(Core.String))
+                // Characters order by scalar value, an instruction like the
+                // integers'; without it Sable.Core's 'operator <' on Char,
+                // written 'lhs < rhs', would bind to itself and never return.
+                left.Equals(right) && (Core.IsNumeric(left) || left.Equals(Core.String) || left.Equals(Core.Char))
                     ? Core.Bool
                     : null,
 

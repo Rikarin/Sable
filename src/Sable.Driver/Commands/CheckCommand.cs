@@ -21,7 +21,8 @@ public sealed class CheckCommand : PackageCommand {
                 return 1;
             }
 
-            var tree = SyntaxTree.Parse(new SourceText(File.ReadAllText(file), Path.GetFileName(file)));
+            // Checked as a debug build is: 'DEBUG' is defined.
+            var tree = SyntaxTree.Parse(new SourceText(File.ReadAllText(file), Path.GetFileName(file)), Pipeline.ParseOptionsFor(optimise: false));
             var (errors, warnings) = Pipeline.CheckAndLint([tree], LintConfiguration.Default, [tree]);
             foreach (var diagnostic in errors.Concat(warnings)) {
                 Console.Error.WriteLine(diagnostic);

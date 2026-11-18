@@ -23,6 +23,7 @@ internal sealed partial class Analysis {
     readonly HashSet<SyntaxTree> _library = new(ReferenceEqualityComparer.Instance);
     readonly HashSet<SyntaxTree> _dependencies = new(ReferenceEqualityComparer.Instance);
     readonly Dictionary<SyntaxTree, IReadOnlyList<Diagnostic>> _diagnostics = new(ReferenceEqualityComparer.Instance);
+    readonly Dictionary<SyntaxTree, List<Diagnostic>> _generatorDiagnostics = new(ReferenceEqualityComparer.Instance);
     IReadOnlyList<Diagnostic>? _unplaced;
 
     public object Gate { get; } = new();
@@ -69,12 +70,25 @@ internal sealed partial class Analysis {
     ///     comes after — a member's body — is all that is left to bind.
     /// </summary>
     public static Analysis Build(
-        WorkspaceSnapshot snapshot, string key, IReadOnlyList<SyntaxTree> dependencies, Func<SyntaxTree, IReadOnlyList<SyntaxTree>> libraryFor) {
+        WorkspaceSnapshot snapshot,
+        string key,
+        IReadOnlyList<SyntaxTree> dependencies,
+        Func<SyntaxTree, IReadOnlyList<SyntaxTree>> libraryFor,
+        Func<IReadOnlyList<SyntaxTree>, GeneratedTrees>? generate = null
+    ) {
         var trees = snapshot.Documents.Values
             .Where(d => snapshot.KeyOf(d) == key)
             .Select(static d => d.Tree)
             .OrderBy(static t => t.Text.FileName, StringComparer.Ordinal)
             .ToList();
+
+        // What the package's generators write for its documents, as they are
+        // now (docs/08 §8.7): compiled with them, as a dependency's files are.
+        var generated = generate?.Invoke(trees) ?? GeneratedTrees.None;
+        if (generated.Trees.Count > 0) {
+            dependencies = [..generated.Trees, ..dependencies];
+        }
+
         var own = trees.ToHashSet(ReferenceEqualityComparer.Instance);
         trees.AddRange(dependencies.Where(t => own.Add(t)));
 
@@ -98,6 +112,14 @@ internal sealed partial class Analysis {
 
         var compilation = Compilation.Create([..trees, ..library]);
         var analysis = new Analysis(snapshot, key, compilation, library, dependencies);
+        foreach (var (diagnostic, tree) in generated.Diagnostics) {
+            if (!analysis._generatorDiagnostics.TryGetValue(tree, out var list)) {
+                analysis._generatorDiagnostics[tree] = list = [];
+            }
+
+            list.Add(diagnostic);
+        }
+
         lock (analysis.Gate) {
             // Binding every signature reports the declarations' problems too.
             analysis._unplaced = [..compilation.GetDiagnostics().Except(trees.SelectMany(static t => t.Diagnostics))];
@@ -175,6 +197,10 @@ internal sealed partial class Analysis {
         }
 
         var all = new List<Diagnostic>(tree.Diagnostics);
+        if (_generatorDiagnostics.TryGetValue(tree, out var generated)) {
+            all.AddRange(generated);
+        }
+
         foreach (var member in MembersOf(tree.Root)) {
             cancellation.ThrowIfCancellationRequested();
             lock (Gate) {

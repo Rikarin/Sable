@@ -222,11 +222,20 @@ public sealed partial class SilInterpreter {
 
     static object LoadScalar(SilType type, List<byte> bytes, int at) {
         var width = InlineLayout.Scalar(type)!.Value.Width;
-        ulong raw = 0;
+        UInt128 wideRaw = 0;
         for (var i = 0; i < width; i++) {
-            raw |= (ulong)bytes[at + i] << (8 * i);
+            wideRaw |= (UInt128)bytes[at + i] << (8 * i);
         }
 
+        if (type == SilType.U128) {
+            return wideRaw;
+        }
+
+        if (type == SilType.I128) {
+            return (Int128)wideRaw;
+        }
+
+        var raw = (ulong)wideRaw;
         if (type == SilType.Bool) {
             return raw != 0;
         }
@@ -243,6 +252,10 @@ public sealed partial class SilInterpreter {
             return BitConverter.Int32BitsToSingle((int)raw);
         }
 
+        if (type == SilType.F16) {
+            return BitConverter.Int16BitsToHalf((short)raw);
+        }
+
         var (bits, signed) = SilType.IntegerInfo(type)!.Value;
         if (!signed) {
             return type == SilType.U64 || type == SilType.UInt ? raw : (object)(long)raw;
@@ -254,13 +267,16 @@ public sealed partial class SilInterpreter {
 
     static byte[] ScalarBytes(SilType type, object? value) {
         var width = InlineLayout.Scalar(type)!.Value.Width;
-        ulong raw = value switch {
+        UInt128 raw = value switch {
             bool b => b ? 1UL : 0UL,
             Rune r => (ulong)r.Value,
             double d => (ulong)BitConverter.DoubleToInt64Bits(d),
             float f => (uint)BitConverter.SingleToInt32Bits(f),
+            Half h => (ushort)BitConverter.HalfToInt16Bits(h),
             long l => unchecked((ulong)l),
             ulong u => u,
+            Int128 i => unchecked((UInt128)i),
+            UInt128 u => u,
             _ => throw new SilTrap($"not a scalar: {value}"),
         };
 

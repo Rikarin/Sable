@@ -52,7 +52,8 @@ public sealed record ResolvedPackage(
     string? Checksum,
     IReadOnlySet<string> Features,
     IReadOnlyList<string> Dependencies,
-    IReadOnlyList<string> DevDependencies) {
+    IReadOnlyList<string> DevDependencies,
+    GitCheckout? Git = null) {
     public string Name => Package.Name;
     public SemVersion Version => Package.Version;
 }
@@ -94,11 +95,12 @@ public sealed partial class PackageGraph {
     /// <exception cref="PackageException">Something else is in the way.</exception>
     public static PackageGraph Resolve(Workspace workspace, PackageEnvironment environment, ResolveOptions? options = null) {
         options ??= new();
-        var locals = workspace.LocalPackages();
-        var registry = environment.RegistryFor(workspace);
         var previous = LockFile.Load(workspace.LockPath);
+        var git = new GitSource(environment.CacheDirectory,environment.Out, previous, options.Update);
+        var locals = workspace.LocalPackages(git);
+        var registry = environment.RegistryFor(workspace);
         var store = new SourceStore(workspace, environment, registry, previous);
-        var source = new GraphSource(workspace, locals, registry, previous, store);
+        var source = new GraphSource(workspace, locals, registry, previous, store, git.Checkouts);
 
         // The lock file holds what every feature of every member could need.
         var preferred = new Dictionary<string, SemVersion>(StringComparer.Ordinal);
@@ -277,7 +279,13 @@ sealed class SourceStore(Workspace workspace, PackageEnvironment environment, Re
 ///     its package at the same version and on whatever the feature turns on:
 ///     so features are resolved, and unified, by PubGrub like anything else.
 /// </summary>
-sealed class GraphSource(Workspace workspace, IReadOnlyDictionary<string, LocalPackage> locals, Registry registry, LockFile? previous, SourceStore store) : IPackageSource {
+sealed class GraphSource(
+    Workspace workspace,
+    IReadOnlyDictionary<string, LocalPackage> locals,
+    Registry registry,
+    LockFile? previous,
+    SourceStore store,
+    IReadOnlyDictionary<string, GitCheckout> git) : IPackageSource {
     /// <summary>A version's dependencies and features, from whichever place knows them.</summary>
     sealed record Spec(IReadOnlyList<DependencySpec> Normal, IReadOnlyList<DependencySpec> Dev, IReadOnlyDictionary<string, IReadOnlyList<string>> Features);
 
@@ -492,8 +500,8 @@ sealed class GraphSource(Workspace workspace, IReadOnlyDictionary<string, LocalP
             ?? throw new PackageException($"nothing is known of {name} {version}");
         var manifest = ManifestFiles.Load(directory);
         return new(
-            [..manifest.Dependencies.Select(static d => d with { Path = null })],
-            [..manifest.DevDependencies.Select(static d => d with { Path = null })],
+            [..manifest.Dependencies.Select(static d => d with { Path = null, Git = null, Reference = null })],
+            [..manifest.DevDependencies.Select(static d => d with { Path = null, Git = null, Reference = null })],
             manifest.Features);
     }
 
@@ -504,7 +512,9 @@ sealed class GraphSource(Workspace workspace, IReadOnlyDictionary<string, LocalP
             var dependencies = EnabledDependencies(name, version, decisions, true)
                 .Select(d => $"{d} {decisions[d]}")
                 .ToList();
-            if (locals.TryGetValue(name, out var local)) {
+            if (git.TryGetValue(name, out var checkout)) {
+                packages.Add(new(name, version, checkout.Source, null, dependencies));
+            } else if (locals.TryGetValue(name, out var local)) {
                 packages.Add(new(name, version, $"path+{workspace.Relative(local.Directory)}", null, dependencies));
             } else {
                 var lockedChecksum = Locked(name) is { } held && held.Version == version ? held.Checksum : null;
@@ -560,7 +570,9 @@ sealed class GraphSource(Workspace workspace, IReadOnlyDictionary<string, LocalP
             var dev = EnabledDependencies(name, version, decisions, true, target).Except(normal).ToList();
             var features = FeaturesOf(name, decisions);
             if (locals.TryGetValue(name, out var local)) {
-                result[name] = new(local, true, null, features, normal, dev);
+                // A package from git is, like a registry package, a workspace of its own.
+                var checkout = git.GetValueOrDefault(name);
+                result[name] = new(local, checkout is null, null, features, normal, dev, checkout);
                 continue;
             }
 

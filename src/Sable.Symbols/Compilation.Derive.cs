@@ -138,11 +138,26 @@ public sealed partial class Compilation {
         var asked = new Dictionary<string, ArgumentSyntax?>(StringComparer.Ordinal);
         foreach (var argument in arguments.Arguments) {
             var name = argument.Expression.ToString().Trim();
+
+            // A struct or union is copied unless it is '@noncopy', so 'Copy'
+            // makes nothing: it says the type is copied, and that is checked.
+            if (name == "Copy") {
+                if (type.IsNoncopyable) {
+                    ReportDeclaration(
+                        ErrorCode.ERR_CannotDerive,
+                        argument.Span,
+                        $"'{type.Name}' is '@noncopy', so it is moved, never copied: '@derive(Copy)' cannot hold of it"
+                    );
+                }
+
+                continue;
+            }
+
             if (!Derivable.Any(d => d.Protocol == name)) {
                 ReportDeclaration(
                     ErrorCode.ERR_UnknownDerivation,
                     argument.Span,
-                    $"'{name}' cannot be derived; '@derive' knows Equatable, Hashable, Comparable and Debug"
+                    $"'{name}' cannot be derived; '@derive' knows Equatable, Hashable, Comparable, Debug and Copy"
                 );
                 continue;
             }

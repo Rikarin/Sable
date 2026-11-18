@@ -3,7 +3,10 @@ using System.Text;
 namespace Sable.Driver.Packages;
 
 /// <summary>One package a lock file pins.</summary>
-/// <param name="Source">"registry", or "path+&lt;dir&gt;" relative to the workspace root.</param>
+/// <param name="Source">
+///     "registry"; "path+&lt;dir&gt;" relative to the workspace root; or
+///     "git+&lt;url&gt;[?tag=…|?branch=…|?rev=…]#&lt;commit&gt;" (<see cref="GitCheckout.Source" />).
+/// </param>
 /// <param name="Checksum">For a registry package, the sha256 of its archive.</param>
 /// <param name="Dependencies">The packages it depends on, as "name version".</param>
 public sealed record LockedPackage(string Name, SemVersion Version, string Source, string? Checksum, IReadOnlyList<string> Dependencies) {

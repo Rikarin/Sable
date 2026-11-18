@@ -33,6 +33,7 @@ tests, formats, documents and resolves packages.
 | [docs/05-toolchain.md](docs/05-toolchain.md) | `sable` CLI, manifest format, resolver, build graph |
 | [docs/06-runtime-and-stdlib.md](docs/06-runtime-and-stdlib.md) | Runtime ABI, reflection, metadata, framework layout |
 | [docs/07-references.md](docs/07-references.md) | Annotated reading list — papers, compilers, and prior art worth stealing from |
+| [docs/08-source-generators.md](docs/08-source-generators.md) | Source generators: Sable functions that write code while a package compiles, and why Sable has no macros |
 | [spec/SYNTAX.md](spec/SYNTAX.md) | **The full syntax reference**, with examples for every construct |
 | [spec/grammar.ebnf](spec/grammar.ebnf) | The complete formal grammar |
 | [spec/lexical.md](spec/lexical.md) | Tokens, literals, trivia, and the newline rules |

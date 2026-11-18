@@ -24,7 +24,8 @@ public sealed record DependencySpec(
     bool DefaultFeatures,
     IReadOnlyList<string> Features,
     int Line,
-    string? When = null) {
+    string? When = null,
+    GitReference? Reference = null) {
     /// <summary>What a resolver holds it to: the version written, or any version of a path dependency.</summary>
     public VersionReq Requirement => Version ?? VersionReq.Any;
 
@@ -37,6 +38,16 @@ public sealed record DependencySpec(
 
     /// <summary>Whether it applies to a build for the target, its operating system and architecture as <c>#if</c> names them.</summary>
     public bool AppliesTo(string os, string arch) => When is null || DependencyCondition.Holds(When, os, arch);
+}
+
+/// <summary>
+///     Which commit of a git dependency to use: a <c>tag</c>, a
+///     <c>branch</c>'s tip, or a <c>rev</c> (a commit, or anything
+///     <c>git rev-parse</c> takes); with none, the repository's default branch.
+/// </summary>
+public sealed record GitReference(string Kind, string Value) {
+    /// <summary>As the lock file writes it after a git URL: <c>tag=v1.0</c>.</summary>
+    public override string ToString() => $"{Kind}={Value}";
 }
 
 /// <summary>
@@ -485,8 +496,27 @@ public sealed partial class Manifest {
                             Error(table, name, path, "a dependency needs a version, a path or a git repository");
                         }
 
-                        if (git is not null) {
-                            Error(detail, "git", $"{path}.git", "git dependencies are not supported yet: use a path or the registry");
+                        GitReference? reference = null;
+                        foreach (var kind in new[] { "tag", "branch", "rev" }) {
+                            if (String(detail, kind, $"{path}.{kind}") is not { } referenced) {
+                                continue;
+                            }
+
+                            if (git is null) {
+                                Error(detail, kind, $"{path}.{kind}", $"'{kind}' says which commit of a git dependency to use, and this one has no 'git'");
+                            } else if (reference is not null) {
+                                Error(detail, kind, $"{path}.{kind}", $"a git dependency takes one of 'tag', 'branch' and 'rev', and this one already has '{reference.Kind}'");
+                            } else if (referenced.Length == 0) {
+                                Error(detail, kind, $"{path}.{kind}", $"'{kind}' cannot be empty");
+                            } else {
+                                reference = new(kind, referenced);
+                            }
+                        }
+
+                        if (git is not null && dependencyPath is not null) {
+                            Error(detail, "git", $"{path}.git", "a dependency comes from a path or from git, not both");
+                        } else if (git is not null && !GitSource.IsUrl(git)) {
+                            Error(detail, "git", $"{path}.git", $"'{git}' is not a git repository: a URL (https://, ssh://, git://, file://) or user@host:path");
                         }
 
                         var when = String(detail, "when", $"{path}.when");
@@ -503,7 +533,8 @@ public sealed partial class Manifest {
                             Bool(detail, "default-features", $"{path}.default-features") ?? true,
                             Strings(detail, "features", $"{path}.features") ?? [],
                             line,
-                            when));
+                            when,
+                            reference));
                         break;
                     default:
                         Error(table, name, path, $"must be a version requirement or a table, not {value.Kind}");

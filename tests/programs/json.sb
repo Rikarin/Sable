@@ -446,6 +446,7 @@ public class Parser {
         return peek() == c
     }
 
+    @discardable
     fn advance() -> Char {
         let c = chars[offset]
         offset = offset + 1

@@ -1,0 +1,116 @@
+# Fuzzes every night, from a new seed each time:
+#
+# - fromBytes: tools/fuzz/run.sh, mutated inline-layout records under
+#   AddressSanitizer and UndefinedBehaviorSanitizer (docs/04 §3.8);
+# - the parser: the random-input round-trip tests, many times over.
+#
+# Steps run under 'shell: bash', which GitHub runs with pipefail, so a
+# failure piped through 'tee' still fails the job. Each job prints its seed
+# in the run's summary; to reproduce a failure, run the same job with that
+# seed, from the Actions tab ("Run workflow") or locally with
+# SABLE_FUZZ_SEED (and SABLE_FUZZ_CASES / SABLE_FUZZ_SCALE) set.
+name: Nightly fuzz
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      seed:
+        description: Seed (empty for a new one)
+        required: false
+        default: ""
+      cases:
+        description: fromBytes cases
+        required: false
+        default: "200000000"
+      scale:
+        description: Parser iterations, times the tests' usual count
+        required: false
+        default: "2000"
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  DOTNET_NOLOGO: "1"
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+
+jobs:
+  from-bytes:
+    name: fromBytes under sanitizers
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "11.0.x"
+
+      - name: Install clang
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang
+
+      - name: Choose the seed
+        id: seed
+        env:
+          GIVEN: ${{ inputs.seed }}
+        run: |
+          seed="${GIVEN:-$(( ( $(date +%s) * 7919 + ${{ github.run_id }} ) % 2147483647 ))}"
+          echo "seed=$seed" >> "$GITHUB_OUTPUT"
+          echo "fromBytes seed: \`$seed\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Fuzz
+        env:
+          SABLE_FUZZ_SEED: ${{ steps.seed.outputs.seed }}
+          SABLE_FUZZ_CASES: ${{ inputs.cases || '200000000' }}
+        run: tools/fuzz/run.sh 2>&1 | tee fuzz.log
+
+      - name: Keep the log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: from-bytes-${{ steps.seed.outputs.seed }}
+          path: fuzz.log
+
+  parser:
+    name: Parser round trips
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "11.0.x"
+
+      - name: Choose the seed
+        id: seed
+        env:
+          GIVEN: ${{ inputs.seed }}
+        run: |
+          seed="${GIVEN:-$(( ( $(date +%s) * 104729 + ${{ github.run_id }} ) % 2147483647 ))}"
+          echo "seed=$seed" >> "$GITHUB_OUTPUT"
+          echo "parser seed: \`$seed\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Fuzz
+        env:
+          SABLE_FUZZ_SEED: ${{ steps.seed.outputs.seed }}
+          SABLE_FUZZ_SCALE: ${{ inputs.scale || '2000' }}
+        run: |
+          dotnet test tests/Sable.Syntax.Tests -c Release \
+            --filter "FullyQualifiedName~Soup" \
+            --logger "console;verbosity=normal" 2>&1 | tee fuzz.log
+
+      - name: Keep the log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: parser-${{ steps.seed.outputs.seed }}
+          path: fuzz.log

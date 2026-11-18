@@ -6,6 +6,9 @@
 # that does not write back as it was read stops it with a message.
 #
 #     tools/fuzz/run.sh
+#
+# SABLE_FUZZ_SEED and SABLE_FUZZ_CASES change where the mutations start and
+# how many there are; a failure reproduces with the seed it printed.
 set -eu
 
 root=$(cd "$(dirname "$0")/../.." && pwd)

@@ -291,8 +291,9 @@ public sealed class InlineLayoutTests {
         }
 
         var source = File.ReadAllText(Path.Combine(directory.FullName, "tools", "fuzz", "inline_layout.sb"))
-            .Replace("let cases = 10000000", "let cases = 3000", StringComparison.Ordinal);
-        Assert.StartsWith("cases 3000, accepted ", AssertAgree(source, stepLimit: 100_000_000).Stdout, StringComparison.Ordinal);
+            .Replace("setting(\"SABLE_FUZZ_CASES\", 10000000)", "3000", StringComparison.Ordinal);
+        Assert.Contains("let cases = 3000", source, StringComparison.Ordinal);
+        Assert.StartsWith("seed 20261117\ncases 3000, accepted ", AssertAgree(source, stepLimit: 100_000_000).Stdout, StringComparison.Ordinal);
     }
 
     [Theory]

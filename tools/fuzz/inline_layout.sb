@@ -95,7 +95,7 @@ fn seedOrder(_ n: Int) -> U8[>..] {
         order.lines.append(OrderLine { sku: "SKU", qty: U16(i + 1), price: U32(n * 13 + i), gift: i % 2 == 0 })
     }
     if n % 2 == 0 {
-        order.parent = &order
+        order.parent =&order
     }
     return Bytes.of(order)
 }
@@ -106,11 +106,11 @@ fn seedTree(_ n: Int) -> U8[>..] {
         tree.nodes.append(Node { value: I32(i * 3 - 4), parent: none, tag: U8(i) })
     }
     for i in 1..<tree.nodes.count {
-        tree.nodes[i].parent = &tree.nodes[(i - 1) / 2]
+        tree.nodes[i].parent =&tree.nodes[(i - 1) / 2]
     }
-    tree.root = &tree.nodes[0]
+    tree.root =&tree.nodes[0]
     if n % 3 == 0 {
-        tree.nodes[0].parent = &tree.nodes[tree.nodes.count - 1]
+        tree.nodes[0].parent =&tree.nodes[tree.nodes.count - 1]
     }
     return Bytes.of(tree)
 }
@@ -159,10 +159,24 @@ fn mutate(_ bytes: U8[>..], _ state: Int) -> U8[>..] {
     return result
 }
 
+/// A whole number from the environment, or the default when it is unset or not one.
+fn setting(_ name: String, _ fallback: Int) -> Int {
+    if let text = Runtime.environment(name: name) {
+        if let value = text.toInt() {
+            return value
+        }
+    }
+    return fallback
+}
+
 @main
-fn main() {
-    let cases = 10000000
-    var state = 20261117
+fn main() -> Int {
+    // SABLE_FUZZ_CASES and SABLE_FUZZ_SEED let a nightly run go further,
+    // from somewhere new each night; unset, it is the run docs/04 §3.8 names.
+    let cases = setting("SABLE_FUZZ_CASES", 10000000)
+    let given = setting("SABLE_FUZZ_SEED", 20261117)
+    var state = (given < 0 ? -given : given) % 2147483648
+    print("seed \(given)")
     var accepted = 0
     var rejected = 0
     var walked = 0
@@ -189,7 +203,7 @@ fn main() {
                     walked = walked + walkOrder(order) % 3
                     if !same(Bytes.of(order), bytes) {
                         print("an order did not write back as it was read")
-                        return
+                        return 1
                     }
                 }
                 case .Invalid(let why) => {
@@ -203,7 +217,7 @@ fn main() {
                     walked = walked + walkTree(tree) % 3
                     if !same(Bytes.of(tree), bytes) {
                         print("a tree did not write back as it was read")
-                        return
+                        return 1
                     }
                 }
                 case .Invalid(let why) => {
@@ -214,4 +228,5 @@ fn main() {
     }
 
     print("cases \(cases), accepted \(accepted), rejected \(rejected), walked \(walked)")
+    return 0
 }

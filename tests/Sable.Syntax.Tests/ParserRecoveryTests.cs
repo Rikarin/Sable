@@ -11,7 +11,7 @@ public sealed class ParserRecoveryTests {
     static void AssertRoundTrips(SyntaxTree tree, string source) =>
         Assert.True(
             source == tree.ToFullString(),
-            $"round-trip failed\n  source: {source,-40}\n  tree:   {tree.ToFullString()}"
+            $"round-trip failed\n  source: {source,-40}\n  tree:   {tree.ToFullString()}\n  {Fuzzing.Reproduce(source)}"
         );
 
     [Theory]
@@ -110,8 +110,8 @@ public sealed class ParserRecoveryTests {
             "where", "is", "as", "...", "|", "self", "try", "using", "switch"
         ];
 
-        var random = new Random(20261118);
-        for (var iteration = 0; iteration < 500; iteration++) {
+        var random = Fuzzing.Random(20261118);
+        for (var iteration = 0; iteration < Fuzzing.Iterations(500); iteration++) {
             var builder = new StringBuilder();
             var length = random.Next(1, 16);
             for (var i = 0; i < length; i++) {
@@ -133,8 +133,8 @@ public sealed class ParserRecoveryTests {
             "operator", "+", "A", "B", "1", "\"s\"", "inout", "throws", "async", "..."
         ];
 
-        var random = new Random(20261119);
-        for (var iteration = 0; iteration < 500; iteration++) {
+        var random = Fuzzing.Random(20261119);
+        for (var iteration = 0; iteration < Fuzzing.Iterations(500); iteration++) {
             var builder = new StringBuilder();
             var length = random.Next(1, 20);
             for (var i = 0; i < length; i++) {
@@ -360,8 +360,8 @@ public sealed class ParserRecoveryTests {
             "..<", "...", "!", "#", "@", "some", "any", "ref", "self"
         ];
 
-        var random = new Random(20261117);
-        for (var iteration = 0; iteration < 400; iteration++) {
+        var random = Fuzzing.Random(20261117);
+        for (var iteration = 0; iteration < Fuzzing.Iterations(400); iteration++) {
             var builder = new StringBuilder();
             var length = random.Next(1, 14);
             for (var i = 0; i < length; i++) {
@@ -392,8 +392,8 @@ public sealed class ParserRecoveryTests {
             "\n", "\n", " ", "try", "await", "some", "any", "is", "as", "$0", "in",
         ];
 
-        var random = new Random(20261120);
-        for (var iteration = 0; iteration < 3000; iteration++) {
+        var random = Fuzzing.Random(20261120);
+        for (var iteration = 0; iteration < Fuzzing.Iterations(3000); iteration++) {
             var builder = new StringBuilder();
             var length = random.Next(1, 30);
             for (var i = 0; i < length; i++) {

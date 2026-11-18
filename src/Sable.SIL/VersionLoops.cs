@@ -330,7 +330,7 @@ public sealed class VersionLoops : ISilPass {
                     sites.Add(site);
                     break;
                 // An exclusivity check is left out too: it can trap, and must not after an overflow.
-                case BuiltinInst { InBounds: true, Name: "array_set_unique" } write when ((ArrayType)((AddressType)write.Operands[0].Type).Pointee).Element.IsTrivial:
+                case BuiltinInst { InBounds: true, Name: "array_set_unique" } write when ArrayType.ElementOf(((AddressType)write.Operands[0].Type).Pointee)!.IsTrivial:
                     writes = true;
                     break;
                 case BuiltinInst { InBounds: true, Name: "array_get" or "array_get_borrowed" } read when read.Type.IsTrivial:

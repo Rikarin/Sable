@@ -63,7 +63,7 @@ public sealed partial class SilGen {
             (_, ScalarType) => Shape.Scalar,
             (OptionalTypeSymbol, EnumType) => Shape.Optional,
             (TupleTypeSymbol, TupleType) => Shape.Tuple,
-            (ArrayTypeSymbol, ArrayType) => Shape.Array,
+            (ArrayTypeSymbol, ArrayType or SliceType) => Shape.Array,
             (NamedTypeSymbol named, ArrayType) when named.OriginalDefinition.Equals(Core.Dictionary) => Shape.Dictionary,
             (NamedTypeSymbol { TypeKind: TypeKind.Struct }, StructType { IsInline: false }) => Shape.Struct,
             (NamedTypeSymbol { TypeKind: TypeKind.Class or TypeKind.Actor } named, ClassType) when !named.OriginalDefinition.Equals(Core.Task) => Shape.Class,
@@ -301,7 +301,7 @@ public sealed partial class SilGen {
             Block = header;
             Emit(new CondBranchInst(Emit(new BuiltinInst("cmp_lt_Int", SilType.Bool, index, count)), each, [], exit, []));
             Block = each;
-            var element = Emit(new BuiltinInst("array_get_borrowed", ((ArrayType)array.Type).Element, array, index));
+            var element = Emit(new BuiltinInst("array_get_borrowed", ArrayType.ElementOf(array.Type)!, array, index));
             body(index, element);
             Emit(new BranchInst(header, Emit(new BuiltinInst("add_Int", SilType.Int, index, Int(1)))));
             Block = exit;
@@ -671,7 +671,7 @@ public sealed partial class SilGen {
     /// <summary>A field the compiler has nothing for: false, zero, empty.</summary>
     static SilValue Zero(Synthesis s, SilType type) =>
         type == SilType.String ? s.Text("")
-        : type is ArrayType ? s.Emit(new BuiltinInst("array_empty", type))
+        : type is ArrayType or SliceType ? s.Emit(new BuiltinInst("array_empty", type))
         : s.Emit(new IntegerLiteralInst(type, 0));
 
     /// <summary>A member as it would be declared: 'static fn origin() -> Point', 'init(x: Int, y: Int)'.</summary>

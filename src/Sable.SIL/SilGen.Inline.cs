@@ -39,8 +39,10 @@ public sealed partial class SilGen {
             Unwrapped(expression) is BoundFieldAccess { Receiver: { } receiver, Field: { IsComputed: false, IsStatic: false } }
             && IsInlineType(receiver.Type);
 
-        static BoundExpression Unwrapped(BoundExpression expression) =>
+        /// <remarks>An inline array viewed as a slice is not the array: it is copied out (SilGen.Slices.cs).</remarks>
+        BoundExpression Unwrapped(BoundExpression expression) =>
             expression is BoundConversion { ConversionKind: ConversionKind.Dereference or ConversionKind.Identity or ConversionKind.Reference } conversion
+            && !IsArrayView(conversion)
                 ? Unwrapped(conversion.Operand)
                 : expression;
 

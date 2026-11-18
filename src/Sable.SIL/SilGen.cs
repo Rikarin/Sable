@@ -329,7 +329,8 @@ public sealed partial class SilGen {
             }
         }
 
-        // Which classes something inherits from: their methods dispatch.
+        // Which classes something inherits from: their methods dispatch
+        // (and, compiled separately, those anything may: IsInherited).
         foreach (var tree in _compilation.SyntaxTrees) {
             foreach (var declaration in Declarations(tree).OfType<ClassDeclarationSyntax>()) {
                 if (_compilation.GetDeclaredSymbol(declaration) is NamedTypeSymbol type && SuperclassOf(type) is { } superclass) {
@@ -353,7 +354,10 @@ public sealed partial class SilGen {
             _declarations[symbol] = (syntax, model);
         }
 
-        DeclareGlobals();
+        // Separately, the unit the program starts in sets up every global;
+        // another makes storage only for those its code names.
+        DeclareGlobals(all: _unit is null || _evaluation is not null
+            || entry is not null && _declarations.TryGetValue(entry, out var start) && _unit.Owns(start.Model.SyntaxTree));
         _entrySymbol = entry;
 
         // Compile-time evaluation lowers what it runs, as it needs it.
@@ -562,41 +566,76 @@ public sealed partial class SilGen {
     internal static bool IsGlobal(FieldSymbol field) =>
         !field.IsComputed && (field.IsStatic || field.ContainingSymbol is ModuleSymbol);
 
-    void DeclareGlobals() {
+    /// <summary>
+    ///     The globals of other units' files that this unit has not yet named,
+    ///     each declared when its code first does (<see cref="GlobalOf" />).
+    /// </summary>
+    /// <remarks>
+    ///     Each unit has the storage of every global it uses, and the linker
+    ///     keeps one; one that made storage for every global of the program
+    ///     would depend on the units that depend on it — a global they add or
+    ///     retype would leave its object with storage of the wrong size, and
+    ///     their types' layouts in its records (docs/05 §5.4).
+    /// </remarks>
+    readonly Dictionary<FieldSymbol, SyntaxNode> _otherGlobals = [];
+
+    /// <param name="all">
+    ///     Declare every global of the program, as the whole program and the
+    ///     unit the program starts in, which sets them all up, do; otherwise
+    ///     only the unit's own, and the rest when named.
+    /// </param>
+    void DeclareGlobals(bool all) {
         foreach (var tree in _compilation.SyntaxTrees) {
             var model = _compilation.GetSemanticModel(tree);
             foreach (var declaration in Declarations(tree).Where(static d => d is FieldDeclarationSyntax or ConstDeclarationSyntax)) {
                 if (_compilation.GetDeclaredSymbol(declaration) is not FieldSymbol field || !IsGlobal(field)
-                    || field.ContainingSymbol is NamedTypeSymbol { IsGenericDefinition: true } || Lower(field.Type) is not { } type) {
+                    || field.ContainingSymbol is NamedTypeSymbol { IsGenericDefinition: true }) {
                     continue;
                 }
 
-                // A constant written where it is read needs no storage, unless C reads it.
-                if (_evaluation is null && field.ExportName is null && ConstantRead(field) is not null) {
+                if (!all && !_unit!.Owns(tree)) {
+                    _otherGlobals[field] = declaration;
                     continue;
                 }
 
-                // Separately, the unit the program starts in sets up every
-                // global, and sees no other unit's bodies: a static of a type
-                // declared in one is the whole program's to compile.
-                if (_unit is not null && InsideBody(declaration)) {
-                    Unsupported<object>(declaration, "a static stored property of a type declared in a function, compiled separately");
-                    continue;
-                }
-
-                var owner = field.ContainingSymbol is NamedTypeSymbol named ? $"{named.ContainingSymbol?.Name}.{named.Name}" : field.ContainingSymbol?.Name;
-                var name = $"{owner}.{field.Name}";
-                _globalFields.Add((field, name, model));
-                _globalsByField[field] = (name, type);
-                _module.Globals.Add((name, type));
-
-                // '@export var': C reads and writes the storage by its name,
-                // which every unit, having the global, calls it by.
-                if (field.ExportName is { } export) {
-                    _module.Exports[name] = export;
+                if (DeclareGlobal(field, declaration) is { } name) {
+                    _globalFields.Add((field, name, model));
                 }
             }
         }
+    }
+
+    /// <summary>A global's storage, named for its owner; null for one that needs none, or cannot have it here.</summary>
+    string? DeclareGlobal(FieldSymbol field, SyntaxNode declaration) {
+        if (Lower(field.Type) is not { } type) {
+            return null;
+        }
+
+        // A constant written where it is read needs no storage, unless C reads it.
+        if (_evaluation is null && field.ExportName is null && ConstantRead(field) is not null) {
+            return null;
+        }
+
+        // Separately, the unit the program starts in sets up every
+        // global, and sees no other unit's bodies: a static of a type
+        // declared in one is the whole program's to compile.
+        if (_unit is not null && InsideBody(declaration)) {
+            Unsupported<object>(declaration, "a static stored property of a type declared in a function, compiled separately");
+            return null;
+        }
+
+        var owner = field.ContainingSymbol is NamedTypeSymbol named ? $"{named.ContainingSymbol?.Name}.{named.Name}" : field.ContainingSymbol?.Name;
+        var name = $"{owner}.{field.Name}";
+        _globalsByField[field] = (name, type);
+        _module.Globals.Add((name, type));
+
+        // '@export var': C reads and writes the storage by its name, which
+        // every unit having the global (its own unit always) calls it by.
+        if (field.ExportName is { } export) {
+            _module.Exports[name] = export;
+        }
+
+        return name;
     }
 
     /// <summary>
@@ -633,7 +672,14 @@ public sealed partial class SilGen {
         return false;
     }
 
-    internal (string Name, SilType Type)? GlobalOf(FieldSymbol field) => _globalsByField.TryGetValue(field, out var global) ? global : null;
+    internal (string Name, SilType Type)? GlobalOf(FieldSymbol field) {
+        if (!_globalsByField.TryGetValue(field, out var global) && _otherGlobals.Remove(field, out var declaration)) {
+            DeclareGlobal(field, declaration);
+            _globalsByField.TryGetValue(field, out global);
+        }
+
+        return global.Name is null ? null : global;
+    }
 
     /// <summary>
     ///     Two functions the entry point calls: one that stores each global's
@@ -1179,8 +1225,30 @@ public sealed partial class SilGen {
     static NamedTypeSymbol? SuperclassOf(NamedTypeSymbol type) =>
         type.BaseTypes.OfType<NamedTypeSymbol>().FirstOrDefault(static b => b.TypeKind == TypeKind.Class);
 
-    /// <summary>The classes some other class inherits from: their methods are called through the vtable.</summary>
+    /// <summary>
+    ///     The classes some class this lowering can see inherits from: every
+    ///     class declared outside a body, and those in the bodies it lowers.
+    /// </summary>
     readonly HashSet<NamedTypeSymbol> _inherited = [];
+
+    /// <summary>
+    ///     Whether a class's methods are called through its vtable: whether
+    ///     anything may inherit from it.
+    /// </summary>
+    /// <remarks>
+    ///     Compiled whole, that is exactly whether something does. A unit
+    ///     must not depend on what the units that depend on it declare —
+    ///     each unit's object is kept until the units it depends on change
+    ///     (docs/05 §5.4) — so separately, an <c>open</c> class is taken to
+    ///     be inherited from: any module may subclass it, and another unit's
+    ///     subclass, added or removed, then leaves this unit's code as it
+    ///     was. A class that is not open can be subclassed only in its own
+    ///     module, which is the unit's own or one it shares with the units it
+    ///     is keyed by, so what is seen of it is all there is.
+    /// </remarks>
+    bool IsInherited(NamedTypeSymbol type) =>
+        _inherited.Contains(type.OriginalDefinition)
+        || _unit is not null && type.OriginalDefinition is { IsOpen: true, IsFinal: false, IsSealed: false };
 
     /// <summary>The language class each SIL class was lowered from, for building its vtable.</summary>
     readonly Dictionary<ClassType, NamedTypeSymbol> _classes = [];
@@ -1206,7 +1274,7 @@ public sealed partial class SilGen {
     ///     subclass may override — a property's getter and setter among them.
     /// </summary>
     internal bool IsDynamic(FunctionSymbol method) =>
-        IsVirtual(method) && _inherited.Contains(Owner(method)!.OriginalDefinition);
+        IsVirtual(method) && IsInherited(Owner(method)!);
 
     /// <summary>True for a member of a class that takes a slot in its vtable.</summary>
     static bool IsVirtual(FunctionSymbol method) =>
@@ -1231,7 +1299,7 @@ public sealed partial class SilGen {
                 type.VTable.AddRange(superclass.VTable);
             }
 
-            if (!_inherited.Contains(symbol.OriginalDefinition) && type.Superclass is null) {
+            if (!IsInherited(symbol) && type.Superclass is null) {
                 return;
             }
 
@@ -1538,16 +1606,16 @@ public sealed partial class SilGen {
                 return SilType.Tuple(elements.ToImmutable());
             }
 
-            // The growable kinds, the fixed one and slices share a counted
-            // buffer; a slice is a copy, for now, rather than a view. So
-            // does a bounded array outside an @inline_layout struct — 'T[..k]'
-            // as a local, a parameter or a field of a plain struct — with its
-            // bound checked where it grows; inside one it is bytes in the
-            // block (InlineField).
+            // The growable kinds and the fixed one share a counted buffer.
+            // So does a bounded array outside an @inline_layout struct —
+            // 'T[..k]' as a local, a parameter or a field of a plain struct —
+            // with its bound checked where it grows; inside one it is bytes in
+            // the block (InlineField). A slice is a view of a run of such a
+            // buffer's elements, sharing it ('[T:]').
             // An array copies its elements on write, so a move-only element has no array yet.
             case ArrayTypeSymbol { ArrayKind: ArrayKind.Grow or ArrayKind.GrowShrink or ArrayKind.Fixed or ArrayKind.Slice or ArrayKind.Inline } array:
                 return Lower(array.ElementType) is { } elementType && elementType is not NominalType { IsNoncopyable: true }
-                    ? new ArrayType(elementType)
+                    ? array.ArrayKind == ArrayKind.Slice ? new SliceType(elementType) : new ArrayType(elementType)
                     : null;
 
             // A dictionary, until Sable.Core writes one: its entries, in an
@@ -4091,7 +4159,7 @@ public sealed partial class SilGen {
                 case BoundSuperAccess super when _selfValue is not null && LowerType(super.Type) is ClassType superclass:
                     return Emit(new UpcastInst(_selfValue, superclass));
 
-                case BoundConversion { ConversionKind: ConversionKind.Identity } conversion:
+                case BoundConversion { ConversionKind: ConversionKind.Identity } conversion when !IsArrayView(conversion):
                     return Borrow(conversion.Operand);
 
                 case BoundConversion { ConversionKind: ConversionKind.Existential, Type: OpaqueTypeSymbol } opened:
@@ -4193,7 +4261,7 @@ public sealed partial class SilGen {
             expression switch {
                 BoundParameterAccess access => _parameters.TryGetValue(access.Parameter, out var parameter) && parameter.Type is not AddressType,
                 BoundSelfAccess => _selfValue is not null,
-                BoundConversion { ConversionKind: ConversionKind.Identity } conversion => IsBorrowable(conversion.Operand),
+                BoundConversion { ConversionKind: ConversionKind.Identity } conversion => !IsArrayView(conversion) && IsBorrowable(conversion.Operand),
                 BoundFieldAccess { Receiver: { } receiver, Field: { IsComputed: false, IsStatic: false } }
                     => Sub(receiver.Type).TypeKind == TypeKind.Struct && IsBorrowable(receiver),
                 _ => false,
@@ -4932,18 +5000,19 @@ public sealed partial class SilGen {
         }
 
         /// <summary>
-        ///     <c>for x in array</c>: a counting loop over the array, which is
-        ///     kept in a slot of its own so that every way out of the loop
-        ///     releases it with the rest.
+        ///     <c>for x in array</c>: a counting loop over the array, or the
+        ///     slice, which is kept in a slot of its own so that every way out
+        ///     of the loop releases it with the rest.
         /// </summary>
         void ForArray(BoundForEach loop) {
-            if (loop.Element is null || Expression(loop.Sequence) is not { Type: ArrayType arrayType } sequence
+            if (loop.Element is null || Expression(loop.Sequence) is not { } sequence || ArrayType.ElementOf(sequence.Type) is not { } elementType
                 || SlotFor(loop.Element, loop.Syntax) is null) {
                 Fail(loop.Syntax, "this 'for' over an array");
                 return;
             }
 
-            var array = NewSlot(arrayType);
+            var sequenceType = sequence.Type;
+            var array = NewSlot(sequenceType);
             Emit(new StoreInst(sequence, array, StoreKind.Assign));
             var counter = NewSlot(SilType.Int);
             Emit(new StoreInst(Emit(new IntegerLiteralInst(SilType.Int, 0)), counter, StoreKind.Init));
@@ -4966,16 +5035,16 @@ public sealed partial class SilGen {
             // The loop walks a copy of the array that nothing else can change,
             // so each element stays alive and as it is while it is the loop's:
             // the variable holds it unretained, read in place.
-            if (!arrayType.Element.IsTrivial && !_boxed.Contains(loop.Element) && closure is null && !Moves(loop.Body, loop.Element)
-                && arrayType.Element is not NominalType { IsNoncopyable: true } && SlotFor(loop.Element, loop.Syntax) is { } elementSlot) {
+            if (!elementType.IsTrivial && !_boxed.Contains(loop.Element) && closure is null && !Moves(loop.Body, loop.Element)
+                && elementType is not NominalType { IsNoncopyable: true } && SlotFor(loop.Element, loop.Syntax) is { } elementSlot) {
                 elementSlot.Unmanaged = true;
                 var lent = Emit(new LoadBorrowInst(array));
-                var borrowed = Emit(new BuiltinInst("array_get_borrowed", arrayType.Element, lent, Emit(new LoadInst(counter))));
+                var borrowed = Emit(new BuiltinInst("array_get_borrowed", elementType, lent, Emit(new LoadInst(counter))));
                 Emit(new StoreInst(borrowed, elementSlot, StoreKind.Assign));
                 Emit(new EndBorrowInst(lent));
             } else {
                 var again = Emit(new LoadInst(array));
-                var value = Emit(new BuiltinInst("array_get", arrayType.Element, again, Emit(new LoadInst(counter))));
+                var value = Emit(new BuiltinInst("array_get", elementType, again, Emit(new LoadInst(counter))));
                 Destroy(again);
                 BindLocal(loop.Element, value, loop.Syntax);
             }
@@ -4999,7 +5068,7 @@ public sealed partial class SilGen {
             // next written, a loop run again later held the last run's array
             // — all of its buffer — alive through everything in between.
             _current = after;
-            Emit(new StoreInst(Emit(new BuiltinInst("array_empty", arrayType)), array, StoreKind.Assign));
+            Emit(new StoreInst(Emit(new BuiltinInst("array_empty", sequenceType)), array, StoreKind.Assign));
         }
 
         /// <summary>True when the code moves the local's value out: 'move x'.</summary>
@@ -5373,8 +5442,8 @@ public sealed partial class SilGen {
                     );
                     return;
 
-                case BoundArrayPattern array when value.Type is ArrayType arrayType:
-                    ArrayPattern(array, value, arrayType, matched, failed);
+                case BoundArrayPattern array when ArrayType.ElementOf(value.Type) is { } elementType:
+                    ArrayPattern(array, value, elementType, matched, failed);
                     return;
 
                 case BoundRecordPattern { TestsType: false } record when value.Type is StructType structType:
@@ -5518,12 +5587,13 @@ public sealed partial class SilGen {
         /// <summary>
         ///     <c>[a, b]</c> matches an array of exactly two elements;
         ///     <c>[first, ...rest, last]</c> one of at least two, whose middle
-        ///     <c>rest</c> is a copy of. The elements are borrowed where they
+        ///     <c>rest</c> is a slice of, sharing its buffer. The array may be a
+        ///     slice itself. The elements are borrowed where they
         ///     are, as the array is held for as long as the patterns look; the
         ///     middle is taken last, once every element has matched, so a
         ///     failed match has nothing to give back.
         /// </summary>
-        void ArrayPattern(BoundArrayPattern array, SilValue value, ArrayType arrayType, SilBlock matched, SilBlock failed) {
+        void ArrayPattern(BoundArrayPattern array, SilValue value, SilType elementType, SilBlock matched, SilBlock failed) {
             var restIndex = array.RestIndex;
             var prefix = restIndex < 0 ? array.Elements.Length : restIndex;
             var suffix = restIndex < 0 ? 0 : array.Elements.Length - restIndex - 1;
@@ -5536,7 +5606,7 @@ public sealed partial class SilGen {
             _current = sized;
 
             SilValue Element(Func<SilValue> index) =>
-                Emit(new BuiltinInst("array_get_borrowed", arrayType.Element, value, index()));
+                Emit(new BuiltinInst("array_get_borrowed", elementType, value, index()));
 
             SilValue FromStart(int i) => Emit(new IntegerLiteralInst(SilType.Int, i));
 
@@ -5556,7 +5626,7 @@ public sealed partial class SilGen {
 
             if (restIndex >= 0 && array.Elements[restIndex] is not BoundWildcardPattern) {
                 parts.Add((array.Elements[restIndex],
-                    () => Emit(new BuiltinInst("array_slice", arrayType, value, FromStart(prefix), FromEnd(suffix)))));
+                    () => Emit(new BuiltinInst("array_slice", new SliceType(elementType), value, FromStart(prefix), FromEnd(suffix)))));
             }
 
             Sequence(parts, matched, failed);
@@ -5636,6 +5706,10 @@ public sealed partial class SilGen {
 
                 case BoundInterpolatedString interpolated:
                     return Interpolation(interpolated);
+
+                // An array where a slice of it is wanted: a view of it (SilGen.Slices.cs).
+                case BoundConversion { ConversionKind: ConversionKind.Identity } view when IsArrayView(view):
+                    return ArrayView(view);
 
                 case BoundConversion { ConversionKind: ConversionKind.Identity } conversion:
                     return Expression(conversion.Operand);
@@ -6323,16 +6397,17 @@ public sealed partial class SilGen {
         /// </summary>
         SilValue? ElementPartAssignment(BoundAssignment assignment, BoundIndexAccess element) {
             var ends = new List<SilValue>();
-            if (Address(element.Receiver, ends) is not { Type: AddressType { Pointee: ArrayType arrayType } } arrayAddress
+            if (Address(element.Receiver, ends) is not { Type: AddressType { Pointee: var arrayType } } arrayAddress
+                || ArrayType.ElementOf(arrayType) is not { } elementType
                 || Expression(element.Indices[0]) is not { } position) {
                 return null;
             }
 
             var array = Emit(new LoadBorrowInst(arrayAddress));
-            var current = Emit(new BuiltinInst("array_get", arrayType.Element, array, position));
+            var current = Emit(new BuiltinInst("array_get", elementType, array, position));
             Emit(new EndBorrowInst(array));
 
-            var slot = NewSlot(arrayType.Element, "$element");
+            var slot = NewSlot(elementType, "$element");
             Emit(new StoreInst(current, slot, StoreKind.Init));
             var temporary = new LocalSymbol("$element", Core.Module, null, true);
             _slots[temporary] = slot;
@@ -6720,12 +6795,13 @@ public sealed partial class SilGen {
                 // An element of an array, where it is: 'bump(&values[0])'.
                 case BoundIndexAccess { Subscript: null, Indices: [var indexExpression] } element
                     when Sub(element.Receiver.Type) is ArrayTypeSymbol && !IsInlineArray(element.Receiver): {
-                    if (Address(element.Receiver, borrows) is not { Type: AddressType { Pointee: ArrayType } } array
+                    if (Address(element.Receiver, borrows) is not { Type: AddressType { Pointee: var arrayType } } array
+                        || ArrayType.ElementOf(arrayType) is not { } elementType
                         || Expression(indexExpression) is not { } index) {
                         return null;
                     }
 
-                    return Emit(new BuiltinInst("array_element_addr", SilType.Address(((ArrayType)((AddressType)array.Type).Pointee).Element), array, index));
+                    return Emit(new BuiltinInst("array_element_addr", SilType.Address(elementType), array, index));
                 }
 
                 default:
@@ -7438,7 +7514,17 @@ public sealed partial class SilGen {
         }
 
         /// <summary>Expressions gathered into a new array: what a variadic parameter receives.</summary>
-        SilValue? Gather(ArrayType arrayType, IEnumerable<BoundExpression> elements) {
+        SilValue? Gather(SilType type, IEnumerable<BoundExpression> elements) {
+            // A variadic parameter is a slice: the arguments, gathered into an
+            // array, are the whole of it.
+            if (type is SliceType slice) {
+                return Gather(new ArrayType(slice.Element), elements) is { } gathered ? WholeSlice(gathered) : null;
+            }
+
+            if (type is not ArrayType arrayType) {
+                return null;
+            }
+
             var empty = Emit(new BuiltinInst("array_empty", arrayType));
             var list = elements.ToList();
             if (list.Count == 0) {
@@ -7460,6 +7546,13 @@ public sealed partial class SilGen {
 
         /// <summary><c>[a, b]</c>: an empty array in a slot of its own, each element appended, then taken out.</summary>
         SilValue? ArrayLiteral(BoundArray array, TypeSymbol type) {
+            // '[1, 2, 3]' where a slice is wanted: the array, and the whole of it viewed.
+            if (LowerType(type) is SliceType) {
+                return ArrayLiteral(array, new ArrayTypeSymbol(((ArrayTypeSymbol)Sub(type)).ElementType, ArrayKind.Grow)) is { } literal
+                    ? WholeSlice(literal)
+                    : null;
+            }
+
             if (LowerType(type) is not ArrayType arrayType) {
                 return Missing(array, $"an array of type '{type.ToDisplayString()}'");
             }
@@ -7541,7 +7634,9 @@ public sealed partial class SilGen {
                 return Missing(index, $"indexing '{index.Receiver.Type.ToDisplayString()}'");
             }
 
-            if (Borrow(index.Receiver) is not { Type: ArrayType arrayType } array) {
+            // An array's element, or a slice's: the index is checked against
+            // the slice's own count, not its buffer's.
+            if (Borrow(index.Receiver) is not { } array || ArrayType.ElementOf(array.Type) is not { } elementType) {
                 return null;
             }
 
@@ -7549,19 +7644,26 @@ public sealed partial class SilGen {
                 return null;
             }
 
-            var element = Emit(new BuiltinInst("array_get", arrayType.Element, array, position));
+            var element = Emit(new BuiltinInst("array_get", elementType, array, position));
             End(array);
             return element;
         }
 
         /// <summary>
-        ///     'xs[1..<3]': the elements in the range, as a slice — copied,
-        ///     for now, as 'slice(from:to:)' does, trapping where the range
-        ///     is not within the array. A range written in place may leave out
-        ///     a bound: the start, or the array's count.
+        ///     'xs[1..<3]': the elements in the range, as a slice — a view that
+        ///     shares the array's buffer, as 'slice(from:to:)' is, trapping
+        ///     where the range is not within the array. A range written in place
+        ///     may leave out a bound: the start, or the array's count. A slice
+        ///     of a slice is a view of the same buffer, its range within the
+        ///     slice's.
         /// </summary>
         SilValue? RangeRead(BoundIndexAccess index, BoundExpression rangeIndex) {
-            if (Borrow(index.Receiver) is not { Type: ArrayType arrayType } array) {
+            if (Borrow(index.Receiver) is not { } array) {
+                return null;
+            }
+
+            if (ArrayType.ElementOf(array.Type) is not { } elementType) {
+                End(array);
                 return null;
             }
 
@@ -7600,7 +7702,7 @@ public sealed partial class SilGen {
                 to = Emit(new BuiltinInst("add_Int", SilType.Int, to, Emit(new IntegerLiteralInst(SilType.Int, 1))));
             }
 
-            var slice = Emit(new BuiltinInst("array_slice", arrayType, array, from, to));
+            var slice = Emit(new BuiltinInst("array_slice", new SliceType(elementType), array, from, to));
             End(array);
             return slice;
         }
@@ -8083,7 +8185,7 @@ public sealed partial class SilGen {
         ///     locals, until one pair differs.
         /// </summary>
         SilValue? ArrayEquals(SilValue left, SilValue right, StructuralComparison byIndex, BoundNode at) {
-            if (left.Type is not ArrayType { Element: var element }) {
+            if (ArrayType.ElementOf(left.Type) is not { } element) {
                 return Missing(at, "comparing arrays");
             }
 
@@ -8760,6 +8862,7 @@ public sealed partial class SilGen {
                     self = Borrow(call.Receiver);
                     if (self is not null) {
                         borrows.Add(self);
+                        self = AsSliceReceiver(self, type.Parameters[0], borrows);
                     }
                 }
 
@@ -8838,7 +8941,7 @@ public sealed partial class SilGen {
             }
 
             if (variadicAt >= 0) {
-                if (type.Parameters[^1] is not ArrayType variadicType || Gather(variadicType, call.Arguments.Skip(variadicAt)) is not { } gathered) {
+                if (Gather(type.Parameters[^1], call.Arguments.Skip(variadicAt)) is not { } gathered) {
                     return Missing(call, "the variadic arguments of this call");
                 }
 

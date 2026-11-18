@@ -115,4 +115,36 @@ public sealed class SliceLoweringTests {
         Assert.Equal("b", Run(module, "strings"));
         Assert.Equal("array slice out of range", Assert.Throws<SilTrap>(() => new SilInterpreter(module).Run("M.halfOpen", 3L, 9L)).Message);
     }
+
+    /// <summary>
+    ///     A slice is a type of its own, <c>[T:]</c> — a view of an array's
+    ///     buffer — that prints and parses back; an array passed where one is
+    ///     wanted is viewed with <c>slice_of</c>, and a range is taken with
+    ///     <c>array_slice</c>, of an array or of a slice, with no copy.
+    /// </summary>
+    [Fact]
+    public void ASliceIsAViewOfItsOwnType() {
+        var module = Lower(
+            Sum + """
+
+                  fn views() -> Int {
+                      let xs: Int[>..] = [1, 2, 3, 4, 5]
+                      let s = xs[1..<4]
+                      return sum(xs) * 100 + sum(s[1...])
+                  }
+                  """
+        );
+
+        var text = SilPrinter.Print(module);
+        Assert.Contains("sil @M.sum : $([Int:]) -> Int", text, StringComparison.Ordinal);
+        Assert.Contains("builtin \"slice_of\"", text, StringComparison.Ordinal);
+        Assert.Contains("builtin \"array_slice\"(", text, StringComparison.Ordinal);
+        Assert.Contains(") : $[Int:]", text, StringComparison.Ordinal);
+
+        // The array is the one allocation: the slices share its buffer.
+        var interpreter = new SilInterpreter(module);
+        Assert.Equal(1507L, interpreter.Run("M.views"));
+        Assert.Equal(1, interpreter.Allocations);
+        Assert.Equal(0, interpreter.LiveObjects);
+    }
 }

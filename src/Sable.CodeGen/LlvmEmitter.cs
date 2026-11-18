@@ -257,6 +257,22 @@ public sealed partial class LlvmEmitter {
                                 declare void @sable_print_f32(float)
                                 declare ptr @sable_string_from_uint(i64)
                                 declare ptr @sable_string_from_f32(float)
+                                declare { i128, i1 } @llvm.sadd.with.overflow.i128(i128, i128)
+                                declare { i128, i1 } @llvm.ssub.with.overflow.i128(i128, i128)
+                                declare { i128, i1 } @llvm.smul.with.overflow.i128(i128, i128)
+                                declare { i128, i1 } @llvm.uadd.with.overflow.i128(i128, i128)
+                                declare { i128, i1 } @llvm.usub.with.overflow.i128(i128, i128)
+                                declare { i128, i1 } @llvm.umul.with.overflow.i128(i128, i128)
+                                declare half @llvm.fabs.f16(half)
+                                declare half @llvm.minnum.f16(half, half)
+                                declare half @llvm.maxnum.f16(half, half)
+                                declare void @sable_print_i128(i64, i64)
+                                declare void @sable_print_u128(i64, i64)
+                                declare void @sable_print_f16(float)
+                                declare void @sable_print_char(i32)
+                                declare ptr @sable_string_from_i128(i64, i64)
+                                declare ptr @sable_string_from_u128(i64, i64)
+                                declare ptr @sable_string_from_f16(float)
                                 declare void @llvm.dbg.declare(metadata, metadata, metadata)
                                 declare void @llvm.dbg.value(metadata, metadata, metadata)
 
@@ -291,6 +307,7 @@ public sealed partial class LlvmEmitter {
             _ when type == SilType.Bool => "i1",
             _ when type == SilType.F64 => "double",
             _ when type == SilType.F32 => "float",
+            _ when type == SilType.F16 => "half",
             _ when SilType.IntegerInfo(type) is var (bits, _) => $"i{bits}",
             _ when type == SilType.Char => "i32",
             _ when type == SilType.String => "ptr",
@@ -350,6 +367,7 @@ public sealed partial class LlvmEmitter {
             _ when type == SilType.Bool => 1,
             _ when type == SilType.Int || type == SilType.F64 => 8,
             _ when type == SilType.F32 => 4,
+            _ when type == SilType.F16 => 2,
             _ when SilType.IntegerInfo(type) is var (bits, _) => bits / 8,
             _ when type == SilType.Char => 4,
             _ when type == SilType.String => 8,
@@ -383,6 +401,7 @@ public sealed partial class LlvmEmitter {
             _ when type == SilType.Bool => 1,
             _ when type == SilType.Char => 4,
             _ when type == SilType.F32 => 4,
+            _ when type == SilType.F16 => 2,
             _ when SilType.IntegerInfo(type) is var (bits, _) => bits / 8,
             StructType { IsInline: true } => 8,
             StructType structType => StructParts(structType).Select(Align).DefaultIfEmpty(1).Max(),
@@ -1162,13 +1181,15 @@ public sealed partial class LlvmEmitter {
                 case IntegerLiteralInst literal:
                     _names[literal] = literal.Type == SilType.Bool
                         ? literal.Value != 0 ? "true" : "false"
-                        : literal.Value.ToString(CultureInfo.InvariantCulture);
+                        : literal.WideValue.ToString(CultureInfo.InvariantCulture);
                     return;
 
                 case FloatLiteralInst literal:
                     // The bit pattern: exact, whatever the value.
-                    // An F32 one is written as the double of the float it rounds to, as LLVM wants.
-                    var exact = literal.Type == SilType.F32 ? (double)(float)literal.Value : literal.Value;
+                    // An F32 or F16 one is written as the double of the value it rounds to, as LLVM wants.
+                    var exact = literal.Type == SilType.F32 ? (double)(float)literal.Value
+                        : literal.Type == SilType.F16 ? (double)(Half)literal.Value
+                        : literal.Value;
                     _names[literal] = "0x" + BitConverter.DoubleToInt64Bits(exact).ToString("X16", CultureInfo.InvariantCulture);
                     return;
 
@@ -2211,6 +2232,10 @@ public sealed partial class LlvmEmitter {
                 case "print_Bool":
                     Line($"call void @sable_print_bool(i1 zeroext {operands[0]})");
                     return;
+
+                case "print_Char":
+                    Line($"call void @sable_print_char(i32 {operands[0]})");
+                    return;
             }
 
             if (builtin.Name.StartsWith("cmp_", StringComparison.Ordinal)) {
@@ -2501,31 +2526,41 @@ public sealed partial class LlvmEmitter {
 
             var t = Type(type);
             var result = Result();
-            if (type == SilType.F32) {
+            if (SilType.FloatBits(type) is { } floatBits) {
+                var suffix = $"f{floatBits}";
                 switch (op) {
                     case "add" or "sub" or "mul" or "div" or "rem":
-                        Line($"{result} = f{op} float {operands[0]}, {operands[1]}");
+                        Line($"{result} = f{op} {t} {operands[0]}, {operands[1]}");
                         return true;
                     case "neg":
-                        Line($"{result} = fneg float {operands[0]}");
+                        Line($"{result} = fneg {t} {operands[0]}");
                         return true;
                     case "abs":
-                        Line($"{result} = call float @llvm.fabs.f32(float {operands[0]})");
+                        Line($"{result} = call {t} @llvm.fabs.{suffix}({t} {operands[0]})");
                         return true;
                     case "min" or "max":
-                        Line($"{result} = call float @llvm.{(op == "min" ? "minnum" : "maxnum")}.f32(float {operands[0]}, float {operands[1]})");
+                        Line($"{result} = call {t} @llvm.{(op == "min" ? "minnum" : "maxnum")}.{suffix}({t} {operands[0]}, {t} {operands[1]})");
                         return true;
-                    case "print":
-                        Line($"call void @sable_print_f32(float {operands[0]})");
+
+                    // The runtime takes an F16 as the float it widens to
+                    // exactly, and writes the digits an F16 needs.
+                    case "print" or "string_from": {
+                        var value = operands[0];
+                        if (type == SilType.F16) {
+                            value = Fresh();
+                            Line($"{value} = fpext half {operands[0]} to float");
+                        }
+
+                        Line(op == "print"
+                            ? $"call void @sable_print_{suffix}(float {value})"
+                            : $"{result} = call ptr @sable_string_from_{suffix}(float {value})");
                         return true;
-                    case "string_from":
-                        Line($"{result} = call ptr @sable_string_from_f32(float {operands[0]})");
-                        return true;
+                    }
                 }
 
                 if (op.StartsWith("cmp_", StringComparison.Ordinal)) {
                     var predicate = op[4..] switch { "eq" => "oeq", "ne" => "une", "lt" => "olt", "le" => "ole", "gt" => "ogt", _ => "oge" };
-                    Line($"{result} = fcmp {predicate} float {operands[0]}, {operands[1]}");
+                    Line($"{result} = fcmp {predicate} {t} {operands[0]}, {operands[1]}");
                     return true;
                 }
 
@@ -2599,6 +2634,21 @@ public sealed partial class LlvmEmitter {
                     return true;
                 }
 
+                // 128 bits go to the runtime as two halves, low first.
+                case "print" or "string_from" when bits == 128: {
+                    var low = Fresh();
+                    var shifted = Fresh();
+                    var high = Fresh();
+                    Line($"{low} = trunc i128 {operands[0]} to i64");
+                    Line($"{shifted} = lshr i128 {operands[0]}, 64");
+                    Line($"{high} = trunc i128 {shifted} to i64");
+                    var function = $"{(op == "print" ? "sable_print" : "sable_string_from")}_{(signed ? "i128" : "u128")}";
+                    Line(op == "print"
+                        ? $"call void @{function}(i64 {low}, i64 {high})"
+                        : $"{result} = call ptr @{function}(i64 {low}, i64 {high})");
+                    return true;
+                }
+
                 case "print" or "string_from": {
                     var wide = Widen(t, bits, signed, operands[0]);
                     var unsignedWide = !signed && bits == 64;
@@ -2650,18 +2700,19 @@ public sealed partial class LlvmEmitter {
             var toInteger = SilType.IntegerInfo(to);
 
             if (fromInteger is var (fromBits, fromSigned) && toInteger is var (toBits, toSigned)) {
-                // Through i128, which holds every value of every type here.
+                // Through i129, which holds every value of every type here,
+                // a U128's as well as an I128's.
                 var wide = Fresh();
-                Line($"{wide} = {(fromSigned ? "sext" : "zext")} {fromType} {value} to i128");
+                Line($"{wide} = {(fromSigned ? "sext" : "zext")} {fromType} {value} to i129");
                 var (low, high) = Bounds(toBits, toSigned);
                 var under = Fresh();
                 var over = Fresh();
                 var outside = Fresh();
-                Line($"{under} = icmp slt i128 {wide}, {low}");
-                Line($"{over} = icmp sgt i128 {wide}, {high}");
+                Line($"{under} = icmp slt i129 {wide}, {low}");
+                Line($"{over} = icmp sgt i129 {wide}, {high}");
                 Line($"{outside} = or i1 {under}, {over}");
                 TrapIf(outside, $"{from} does not fit in {to}");
-                Line($"{result} = trunc i128 {wide} to {toType}");
+                Line($"{result} = trunc i129 {wide} to {toType}");
                 return;
             }
 
@@ -2673,8 +2724,8 @@ public sealed partial class LlvmEmitter {
             if (fromInteger is null && toInteger is var (bits, signed)) {
                 // Out of range, or NaN, has no integer; fptosi would give poison.
                 var (low, high) = Bounds(bits, signed);
-                var lowFloat = Hex((double)low);
-                var highFloat = Hex((double)(high + 1));
+                var lowFloat = FloatBound(low, from);
+                var highFloat = FloatBound(high + 1, from);
                 var aboveLow = Fresh();
                 var belowHigh = Fresh();
                 var inside = Fresh();
@@ -2688,7 +2739,7 @@ public sealed partial class LlvmEmitter {
                 return;
             }
 
-            Line($"{result} = {(from == SilType.F32 ? "fpext" : "fptrunc")} {fromType} {value} to {toType}");
+            Line($"{result} = {(SilType.FloatBits(from) < SilType.FloatBits(to) ? "fpext" : "fptrunc")} {fromType} {value} to {toType}");
         }
 
         /// <summary>
@@ -2714,8 +2765,8 @@ public sealed partial class LlvmEmitter {
                 // passes on only the operand it picks. The bounds compared
                 // are powers of two, which a float holds exactly.
                 var (low, high) = Bounds(bits, signed);
-                var lowFloat = Hex((double)low);
-                var pastHighFloat = Hex((double)(high + 1));
+                var lowFloat = FloatBound(low, from);
+                var pastHighFloat = FloatBound(high + 1, from);
 
                 // As an LLVM constant: the bits, read as signed.
                 var highBits = high >= BigInteger.One << (bits - 1) ? high - (BigInteger.One << bits) : high;
@@ -2744,6 +2795,18 @@ public sealed partial class LlvmEmitter {
                 : (BigInteger.Zero, (BigInteger.One << bits) - 1);
 
         static string Hex(double value) => $"0x{BitConverter.DoubleToInt64Bits(value):X16}";
+
+        /// <summary>
+        ///     An integer bound, a power of two, as a constant of the float
+        ///     type compared with it: an infinity of its sign where the type
+        ///     cannot reach it (an F16 past 65504, an F32 at 2^128), which
+        ///     compares with every finite value of the type as the bound would.
+        /// </summary>
+        static string FloatBound(BigInteger bound, SilType type) {
+            var value = (double)bound;
+            var largest = type == SilType.F16 ? (double)Half.MaxValue : type == SilType.F32 ? float.MaxValue : double.MaxValue;
+            return Hex(Math.Abs(value) > largest ? value < 0 ? double.NegativeInfinity : double.PositiveInfinity : value);
+        }
 
         /// <summary>An array's count: none for the empty array, which is null; else read from its header.</summary>
         string Count(string array) {

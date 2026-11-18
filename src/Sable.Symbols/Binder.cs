@@ -4789,6 +4789,32 @@ public sealed partial class Binder {
             return new BoundConversion(syntax, type, operand, ConversionKind.Explicit) { IsUnchecked = isUnchecked };
         }
 
+        // A character and an integer convert through its code point: 'c as
+        // U32', and 'n as Char', which traps on a number that is no Unicode
+        // scalar. Nothing wraps to a character, so 'unchecked' goes only the
+        // other way, keeping the code point's low bits: 'c unchecked as U8'.
+        if (source.Equals(Core.Char) && Core.IsInteger(target) || Core.IsInteger(source) && target.Equals(Core.Char)) {
+            if (!isPlain) {
+                return InvalidCast(
+                    syntax,
+                    operand,
+                    $"'{syntax.AsKeyword.Text}{syntax.QuestionOrBangToken.Text}' tests what a value is, and "
+                    + $"'{source.ToDisplayString()}' is always one: convert it with 'as'"
+                );
+            }
+
+            if (isUnchecked && target.Equals(Core.Char)) {
+                return InvalidCast(
+                    syntax,
+                    operand,
+                    "a number that is not a Unicode scalar has no character to wrap to: "
+                    + "convert it with 'as', which traps on one, or 'Char.fromCodePoint', which gives none"
+                );
+            }
+
+            return new BoundConversion(syntax, type, operand, ConversionKind.Explicit) { IsUnchecked = isUnchecked };
+        }
+
         if (isUnchecked) {
             return InvalidCast(
                 syntax,
@@ -5170,6 +5196,8 @@ public sealed partial class Binder {
                 long l => -l,
                 int i => -(long)i,
                 ulong u when u <= 1UL << 63 => unchecked(-(long)u),
+                ulong u => -(Int128)u,
+                UInt128 u when u <= UInt128.One << 127 => unchecked(-(Int128)u),
                 double d => -d,
                 _ => null,
             };

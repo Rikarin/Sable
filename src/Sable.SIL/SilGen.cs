@@ -1086,7 +1086,7 @@ public sealed partial class SilGen {
         }
 
         if (type is NamedTypeSymbol { TypeArguments.IsEmpty: true } primitive
-            && (Core.Integers.Contains(primitive) || primitive.Equals(Core.F32))
+            && (Core.Integers.Contains(primitive) || Core.Floats.Contains(primitive))
             && SilType.Numbers.FirstOrDefault(n => n.ToString() == primitive.Name) is { } number) {
             return number;
         }
@@ -4814,13 +4814,9 @@ public sealed partial class SilGen {
                 return Emit(new IntegerLiteralInst(SilType.Char, scalar.Value));
             }
 
-            if (type == SilType.Int && value is long or int or ulong) {
-                var number = System.Convert.ToDecimal(value);
-                if (negative) {
-                    number = -number;
-                }
-
-                if (number is > long.MaxValue or < long.MinValue) {
+            if (type == SilType.Int && IntegerOf(value) is { } whole) {
+                var number = negative ? -whole : whole;
+                if (number > long.MaxValue || number < long.MinValue) {
                     Fail(at, $"the integer '{value}', which does not fit in Int");
                     return null;
                 }
@@ -4828,12 +4824,8 @@ public sealed partial class SilGen {
                 return Emit(new IntegerLiteralInst(SilType.Int, (long)number));
             }
 
-            if (SilType.IntegerInfo(type) is var (bits, signed) && value is long or int or ulong) {
-                var number = (System.Numerics.BigInteger)System.Convert.ToDecimal(value);
-                if (negative) {
-                    number = -number;
-                }
-
+            if (SilType.IntegerInfo(type) is var (bits, signed) && IntegerOf(value) is { } integer) {
+                var number = negative ? -integer : integer;
                 var low = signed ? -(System.Numerics.BigInteger.One << (bits - 1)) : 0;
                 var high = signed ? (System.Numerics.BigInteger.One << (bits - 1)) - 1 : (System.Numerics.BigInteger.One << bits) - 1;
                 if (number < low || number > high) {
@@ -4841,17 +4833,30 @@ public sealed partial class SilGen {
                     return null;
                 }
 
-                return Emit(new IntegerLiteralInst(type, number > long.MaxValue ? unchecked((long)(ulong)number) : (long)number));
+                // The bits, read as signed: an unsigned value past the signed
+                // range is kept as the negative number with the same bits.
+                var bitsValue = number > (System.Numerics.BigInteger)Int128.MaxValue ? number - (System.Numerics.BigInteger.One << 128) : number;
+                return Emit(new IntegerLiteralInst(type, (Int128)bitsValue));
             }
 
-            if (SilType.IsFloat(type) && value is double or long or int or ulong) {
-                var number = System.Convert.ToDouble(value);
-                return Emit(new FloatLiteralInst(negative ? -number : number, type));
+            if (SilType.IsFloat(type) && (value is double ? System.Convert.ToDouble(value) : IntegerOf(value) is { } exact ? (double)exact : (double?)null) is { } real) {
+                return Emit(new FloatLiteralInst(negative ? -real : real, type));
             }
 
             Fail(at, $"the literal '{Describe(at)}' of type {type}");
             return null;
         }
+
+        /// <summary>An integer literal's value, of whichever width the lexer and binder gave it; null for anything else.</summary>
+        static System.Numerics.BigInteger? IntegerOf(object? value) =>
+            value switch {
+                int i => i,
+                long l => l,
+                ulong u => u,
+                Int128 i => (System.Numerics.BigInteger)i,
+                UInt128 u => (System.Numerics.BigInteger)u,
+                _ => null,
+            };
 
         /// <summary>
         ///     <c>"x = \(x)"</c>: the text and the holes, each as a string,
@@ -5087,6 +5092,22 @@ public sealed partial class SilGen {
 
             if (value.Type == target) {
                 return value;
+            }
+
+            // A character converts through its code point, an Int: to an
+            // integer as an Int converts, and from one only when the number
+            // is a Unicode scalar, which 'as' checks and traps on.
+            if (value.Type == SilType.Char && SilType.IsInteger(target)) {
+                var code = Emit(new BuiltinInst("char_to_Int", SilType.Int, value));
+                return target == SilType.Int ? code : Emit(new BuiltinInst($"{(conversion.IsUnchecked ? "wrap" : "convert")}_Int_{target}", target, code));
+            }
+
+            if (target == SilType.Char && SilType.IsInteger(value.Type)) {
+                var number = value.Type == SilType.Int ? value : Emit(new BuiltinInst($"convert_{value.Type}_Int", SilType.Int, value));
+                var scalar = Emit(new BuiltinInst("char_from_Int", SilType.Tuple([SilType.Bool, SilType.Char]), number));
+                var valid = Emit(new TupleExtractInst(scalar, 0));
+                Emit(new CondFailInst(Emit(new BuiltinInst("not_Bool", SilType.Bool, valid)), $"{value.Type} is not a Unicode scalar, so it is no Char"));
+                return Emit(new TupleExtractInst(scalar, 1));
             }
 
             // 'unchecked as' wraps where 'as' would trap.

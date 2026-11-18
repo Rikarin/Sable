@@ -350,7 +350,8 @@ public sealed class LoweringTests {
         var compilation = Compilation.Create(
             """
             module M
-            struct Point { var x: U128 }
+            @noncopy struct Token { var id: Int }
+            struct Point { var x: Token[] }
             fn origin(_ p: Point) -> Int { return 0 }
             """
         );

@@ -1292,6 +1292,66 @@ SableString *sable_string_from_f32(float value) {
     return make_cstring(text);
 }
 
+// F16 the same way, against a half: 0.1, not 0.0999755859375. It comes as
+// the float it widens to exactly; the digits are the fewest that round back
+// to it as a half, and five always do.
+static void format_f16(float value, char *text, size_t size) {
+    if (format_special(value, text, size)) {
+        return;
+    }
+
+    char scientific[40];
+    for (int precision = 1; precision <= 5; precision++) {
+        snprintf(scientific, sizeof scientific, "%.*e", precision - 1, (double)value);
+        if (precision == 5 || (float)(_Float16)strtof(scientific, NULL) == value) {
+            break;
+        }
+    }
+
+    layout_float(scientific, text, size);
+}
+
+SableString *sable_string_from_f16(float value) {
+    char text[40];
+    format_f16(value, text, sizeof text);
+    return make_cstring(text);
+}
+
+// A 128-bit integer arrives as its two halves, low first, and is written in
+// decimal from the magnitude up.
+static void format_128(uint64_t low, uint64_t high, bool is_signed, char *text, size_t size) {
+    unsigned __int128 magnitude = ((unsigned __int128)high << 64) | low;
+    bool negative = is_signed && (int64_t)high < 0;
+    if (negative) {
+        magnitude = 0 - magnitude;
+    }
+
+    char digits[48];
+    char *end = digits + sizeof digits, *start = end;
+    do {
+        *--start = (char)('0' + (int)(magnitude % 10));
+        magnitude /= 10;
+    } while (magnitude != 0);
+
+    if (negative) {
+        *--start = '-';
+    }
+
+    snprintf(text, size, "%.*s", (int)(end - start), start);
+}
+
+SableString *sable_string_from_i128(uint64_t low, uint64_t high) {
+    char text[48];
+    format_128(low, high, true, text, sizeof text);
+    return make_cstring(text);
+}
+
+SableString *sable_string_from_u128(uint64_t low, uint64_t high) {
+    char text[48];
+    format_128(low, high, false, text, sizeof text);
+    return make_cstring(text);
+}
+
 SableString *sable_string_from_uint(uint64_t value) {
     char text[32];
     snprintf(text, sizeof text, "%llu", (unsigned long long)value);
@@ -1424,6 +1484,31 @@ void sable_print_int(int64_t value) {
 
 void sable_print_uint(uint64_t value) {
     printf("%llu\n", (unsigned long long)value);
+}
+
+void sable_print_i128(uint64_t low, uint64_t high) {
+    char text[48];
+    format_128(low, high, true, text, sizeof text);
+    puts(text);
+}
+
+void sable_print_u128(uint64_t low, uint64_t high) {
+    char text[48];
+    format_128(low, high, false, text, sizeof text);
+    puts(text);
+}
+
+void sable_print_f16(float value) {
+    char text[40];
+    format_f16(value, text, sizeof text);
+    puts(text);
+}
+
+void sable_print_char(int32_t scalar) {
+    char bytes[5];
+    int length = encode(scalar, bytes);
+    bytes[length] = '\n';
+    fwrite(bytes, 1, (size_t)length + 1, stdout);
 }
 
 void sable_print_f32(float value) {

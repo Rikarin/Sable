@@ -1176,9 +1176,9 @@ to the state machine where tasks are many.
       while a `for` over a range written in the loop still builds none.
       Nothing else is declared in C# (`CoreTypes`): only the types the
       compiler knows by sight, and the shells the binder desugars to
-      (`Error`, `From`, `Optional`, `Dictionary`). The I128, U128 and F16 types no
-      longer declare `toString`, `abs`, `min` and `max`: nothing could lower
-      them, and SIL has no such types yet. The built-in `[Key: Value]`
+      (`Error`, `From`, `Optional`, `Dictionary`). I128, U128 and F16 are SIL
+      types (`i128` and `half` in LLVM), with literals up to 128 bits and the
+      same members, printing and conversions as the other numbers. The built-in `[Key: Value]`
       dictionary is compiler-known as the arrays are — its entries an array
       of key and value pairs, its indexing and `for (key, value) in d` lowered
       directly — and its members are Sable (`lib/Sable.Core/Dictionary.sb`:

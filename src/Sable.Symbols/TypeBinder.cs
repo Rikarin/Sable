@@ -308,6 +308,14 @@ internal sealed class TypeBinder(Compilation compilation) {
         DeferLate(() => LayoutChecker.Check(type, _diagnostics));
     }
 
+    /// <summary>An array extension's constraints: on its parameters, and in its <c>where</c> clause.</summary>
+    public void BindArrayExtension(NamedTypeSymbol carrier, ExtensionDeclarationSyntax declaration, FileScope? scope) =>
+        Defer(() => {
+                BindTypeParameterConstraints(carrier.TypeParameters, carrier, scope);
+                BindWhereClause(declaration.WhereClause, carrier, scope);
+            }
+        );
+
     static BaseTypeListSyntax? BaseTypeListOf(SyntaxNode declaration) =>
         declaration switch {
             StructDeclarationSyntax s => s.BaseTypes,

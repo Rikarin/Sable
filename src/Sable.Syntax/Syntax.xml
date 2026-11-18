@@ -1044,6 +1044,7 @@
     <Field Name="Attributes" Type="List:AttributeSyntax" />
     <Field Name="Modifiers" Type="TokenList" />
     <Field Name="Keyword" Type="Token" />
+    <Field Name="TypeParameters" Type="GenericParameterListSyntax" Optional="true" />
     <Field Name="Type" Type="TypeSyntax" />
     <Field Name="BaseTypes" Type="BaseTypeListSyntax" Optional="true" />
     <Field Name="WhereClause" Type="WhereClauseSyntax" Optional="true" />

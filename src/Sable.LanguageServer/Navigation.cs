@@ -71,6 +71,10 @@ public sealed partial class LanguageServer {
             _ => symbol.ContainingSymbol switch {
                 ModuleSymbol { Name.Length: > 0 } module => module.Name,
                 NamedTypeSymbol type => type.QualifiedName,
+
+                // An array extension's member: the array, which has no name of its own.
+                ExtensionSymbol { ExtendedType: { ExtendedArray: { } array } extended } =>
+                    $"{extended.ContainingSymbol?.Name}.{array.ToDisplayString()}",
                 ExtensionSymbol extension => extension.ExtendedType.QualifiedName,
                 _ => null,
             },

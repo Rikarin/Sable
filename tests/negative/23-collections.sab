@@ -81,5 +81,28 @@ fn containsChecksTheElement(_ xs: Int[>..]) -> Bool {
 }
 
 fn removeLastGivesAnElement(_ xs: Int[>..]) -> String {
-    return xs.removeLast()              //! S3004 expected 'String'
+    var ys = xs
+    return ys.removeLast()              //! S3004 expected 'String'
+}
+
+// The growing members are mutating (lib/Sable.Core/Array.sab): an array is a
+// value, so one that cannot change cannot grow.
+fn appendingToALet() {
+    let xs: Int[>..] = []
+    xs.append(1)                        //! S3041 is mutating
+}
+
+fn removingFromAParameter(_ xs: Int[>..]) -> Int {
+    return xs.removeLast()              //! S3041 is mutating
+}
+
+// 'contains' is an array's where its element is Equatable.
+fn containsNeedsAnEquatableElement(_ points: Point[>..], _ p: Point) -> Bool {
+    return points.contains(p)           //! S3023 only where 'Element: Equatable'
+}
+
+// A grow-only array's members are not a fixed array's.
+fn aFixedArrayDoesNotGrow(_ xs: Int[]) {
+    var ys = xs
+    ys.append(1)                        //! S2002 has no member named 'append'
 }

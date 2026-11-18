@@ -146,7 +146,7 @@ public struct Dense {
         if index < 0 || index >= values.count {
             throw MatrixError.OutOfRange(index: index)
         }
-        return values.removeLast()
+        return values[index]
     }
 
     public fn times(_ other: Dense) throws(MatrixError) -> Dense {

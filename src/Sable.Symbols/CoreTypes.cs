@@ -10,8 +10,11 @@ namespace Sable.Symbols;
 ///     The types are the compiler's, because the binder, SIL lowering and code
 ///     generation all know them by sight: a literal's type, an integer's width,
 ///     a string's representation. Their members are not: those are Sable, in
-///     <c>lib/Sable.Core</c> (<see cref="CoreLibrary" />), apart from the few
-///     <see cref="DeclarePrimitiveMembers" /> explains.
+///     <c>lib/Sable.Core</c> (<see cref="CoreLibrary" />): every one of them,
+///     the array family's included (<c>Array.sab</c>, through array
+///     extensions), with <c>@builtin</c> and <c>@intrinsic</c> bodies where
+///     only the compiler can write one. What is declared here is the types
+///     themselves, and the shells the binder desugars to.
 /// </remarks>
 public sealed class CoreTypes {
     internal CoreTypes(ModuleSymbol module) {
@@ -63,109 +66,6 @@ public sealed class CoreTypes {
         Integers = [I8, I16, I32, I64, I128, Int, U8, U16, U32, U64, U128, UInt];
         Floats = [F16, F32, F64];
         Numerics = [..Integers, ..Floats];
-
-        DeclarePrimitiveMembers();
-    }
-
-    // -----------------------------------------------------------------------
-    // The members a program cannot do without
-    // -----------------------------------------------------------------------
-
-    /// <summary>
-    ///     The members of the core types that Sable cannot yet declare.
-    /// </summary>
-    /// <remarks>
-    ///     Everything a primitive does that Sable can say is in
-    ///     <c>lib/Sable.Core</c> — String's, Char's and the numbers' members,
-    ///     <c>print</c>, <c>Runtime</c> — written in Sable, the floor of it as
-    ///     <c>@builtin</c>s (Compilation.Builtins.cs). What is left here is
-    ///     generic in a way a declaration cannot write: the array members,
-    ///     built per element type in <see cref="GetArrayMembers" />.
-    ///     <c>Range</c> and <c>ClosedRange</c>, a region's <c>alloc</c>,
-    ///     <c>Task</c>, <c>Decoded</c>, <c>Bytes.of</c> and the
-    ///     <c>InlineLayout</c> protocol are Sable too, their bodies the
-    ///     compiler's where they must be (<c>@intrinsic</c>, and
-    ///     <c>fromBytes</c> synthesised per type).
-    /// </remarks>
-    void DeclarePrimitiveMembers() {
-    }
-
-    /// <summary>The members every array has, built for one element type.</summary>
-    /// <remarks>
-    ///     An array is not a named type, so its members cannot live in a member
-    ///     list; they are built on demand and cached per array type.
-    /// </remarks>
-    public IReadOnlyList<Symbol> GetArrayMembers(ArrayTypeSymbol array) {
-        if (_arrayMembers.TryGetValue(array, out var cached)) {
-            return cached;
-        }
-
-        var owner = new NamedTypeSymbol(
-            array.ToDisplayString(),
-            TypeKind.Struct,
-            Module,
-            accessibility: Accessibility.Public
-        );
-
-        Property(owner, "count", Int);
-        Property(owner, "isEmpty", Bool);
-        Method(owner, "contains", [("element", array.ElementType)], Bool);
-        Method(
-            owner,
-            "slice",
-            [("from", Int), ("to", Int)],
-            new ArrayTypeSymbol(array.ElementType, ArrayKind.Slice)
-        );
-
-        // Bytes read as text: UTF-8, decoded.
-        if (array.ElementType.Equals(U8)) {
-            Method(owner, "toString", [], String);
-        }
-
-        // A bounded inline array grows within its bound.
-        if (array.ArrayKind is ArrayKind.Grow or ArrayKind.GrowShrink or ArrayKind.Inline) {
-            Method(owner, "append", [("element", array.ElementType)], Void);
-            Method(owner, "removeLast", [], array.ElementType);
-            Method(owner, "clear", [], Void);
-        }
-
-        var members = owner.Members;
-        _arrayMembers[array] = members;
-        return members;
-    }
-
-    readonly Dictionary<ArrayTypeSymbol, IReadOnlyList<Symbol>> _arrayMembers = [];
-
-    static void Property(NamedTypeSymbol owner, string name, TypeSymbol type) {
-        var field = new FieldSymbol(name, owner, null, Accessibility.Public, false) {
-            IsComputed = true, TypeResolver = () => type
-        };
-        owner.AddMember(field);
-    }
-
-    static void Method(
-        NamedTypeSymbol owner,
-        string name,
-        (string Name, TypeSymbol Type)[] parameters,
-        TypeSymbol returnType,
-        bool isStatic = false
-    ) {
-        var function = new FunctionSymbol(name, owner, null, Accessibility.Public, FunctionKind.Ordinary) {
-            IsStatic = isStatic
-        };
-
-        function.Parameters = [
-            ..parameters.Select((parameter, i) => {
-                    // No declared label, so the name may be written or left out.
-                    var symbol = new ParameterSymbol(parameter.Name, null, function, null, i);
-                    symbol.TypeResolver = () => parameter.Type;
-                    return symbol;
-                }
-            )
-        ];
-
-        function.ReturnTypeResolver = () => returnType;
-        owner.AddMember(function);
     }
 
     public ModuleSymbol Module { get; }

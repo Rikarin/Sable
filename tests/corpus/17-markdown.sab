@@ -32,7 +32,7 @@ public struct Scanner {
         if atEnd() {
             return none
         }
-        return lines.removeLast()
+        return lines[index]
     }
 
     public mutating fn advance() {

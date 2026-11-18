@@ -938,6 +938,30 @@ binding three lines sees the same `String` a program does. Deleted from C#:
 and `SilGen`'s `CoreMethod`, `RuntimeCall`, the string and character cases
 of `ComputedProperty`, the `print` special case and `MakeOptional`.
 
+The array family followed, once a declaration could range over every
+array: `extension<Element> Element[>..] { … }` (SYNTAX.md §11) declares its
+parameters after the keyword, since an array has no name to write them
+after. Each kind is extended on its own (`T[]`, `T[..]`, `T[>..]`,
+`T[>..<]`), and what `T[:]` declares every kind has, as every array can be
+viewed as a slice. The members belong to an unnamed type made for the
+extension, generic over its parameters and holding the array it extends;
+inside, `self` is that array, and looking a member up on an array matches it
+against each extension's array and substitutes what it finds, constraints
+checked (`Compilation.ArrayExtensions.cs`). So a member is an ordinary
+generic, monomorphised per element type. `lib/Sable.Core/Array.sab` declares
+`count`, `slice`, `append`, `removeLast` and `clear` as `@builtin`s —
+`mutating` ones pass the array where it is, and an array builtin's
+declaration is checked as if its element were `Int`, as the array builtins
+take any — and `isEmpty`, `contains` (where `Element: Equatable`) and bytes'
+`toString` (UTF-8, in Sable) as Sable. The growing members being `mutating`,
+growing an array that cannot change is now an error the binder reports
+(S3041) rather than a store lowering could not make. Deleted from C#:
+`CoreTypes.GetArrayMembers`, and `SilGen`'s array cases of `CoreMember` and
+`ComputedProperty`. `count`, `append` and indexing lower exactly as before:
+every benchmark in `benchmarks` and `benchmarks/versus-dotnet` compiles to
+identical LLVM IR, and `list` measured 1.13 against .NET before and 1.10
+after (processor time, fastest of five, on a busy machine).
+
 ### The first real program
 
 `examples/ssg/ssg.sab` is a static site generator, some 640 lines of Sable: it
@@ -1103,20 +1127,24 @@ to the state machine where tasks are many.
       `Char`, the numbers, `Bool`, `print`, `Runtime` and `Region.reset`
       are declared in `lib/Sable.Core`, over `@builtin`s (see "Sable.Core
       in Sable"). The primitive types themselves stay compiler-known, as
-      the plan allows. `Region.alloc`, `Task` (`spawn`, the async getter
+      the plan allows. The array family's members (`count`, `isEmpty`,
+      `contains`, `slice`, `append`, `removeLast`, `clear`, and bytes'
+      `toString`) are Sable too, in `lib/Sable.Core/Array.sab`, by array extensions,
+      `extension<Element> Element[>..] { … }` (SYNTAX.md §11), which range
+      over every element type. So are `Region.alloc`, `Task` (`spawn`, the async getter
       `value`, `yield`), `Decoded`, `Bytes.of` and the `InlineLayout`
-      protocol `fromBytes` comes from are Sable too, in `Runtime.sab`,
+      protocol `fromBytes` comes from, in `Runtime.sab`,
       `Task.sab` and `InlineLayout.sab`, their bodies the compiler's
       (`@intrinsic`, and `fromBytes` synthesised per `@inline_layout`
       struct as `@derive` synthesises `==`; see "Sable.Core in Sable").
-      What is still declared in C# (`CoreTypes`), and why:
-      the array family's members (`count`, `append`, `slice`, …), built per
-      element type, since a declaration cannot yet range over every array
-      type. `Range` and `ClosedRange` — what the binder
-      makes of `a..<b` and `a...b` — are Sable now (`lib/Sable.Core/Range.sab`:
+      And `Range` and `ClosedRange` — what the binder
+      makes of `a..<b` and `a...b` — are Sable (`lib/Sable.Core/Range.sab`:
       `lowerBound`, `upperBound`, `isEmpty`, `contains`, over a `Comparable`
       bound), and lower as values: stored, passed, returned and iterated,
-      while a `for` over a range written in the loop still builds none. The I128, U128 and F16 types no
+      while a `for` over a range written in the loop still builds none.
+      Nothing else is declared in C# (`CoreTypes`): only the types the
+      compiler knows by sight, and the shells the binder desugars to
+      (`Error`, `From`, `Optional`, `Dictionary`). The I128, U128 and F16 types no
       longer declare `toString`, `abs`, `min` and `max`: nothing could lower
       them, and SIL has no such types yet
 - [x] Reflection: hello-world binary grows < 50 KB with reflection off —

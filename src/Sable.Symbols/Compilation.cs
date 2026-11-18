@@ -1169,6 +1169,21 @@ public sealed partial class Compilation {
         foreach (var (declaration, container, scope) in Extensions) {
             CurrentScope = scope;
 
+            if (IsArrayExtension(declaration)) {
+                AttachArrayExtension(declaration, scope);
+                continue;
+            }
+
+            // Parameters after the keyword are for an array, which has no name to write them after.
+            if (declaration.TypeParameters is { } typeParameters
+                && Unparenthesised(declaration.Type) is SimpleNameTypeSyntax or QualifiedNameSyntax) {
+                ReportDeclaration(
+                    ErrorCode.ERR_MalformedArrayExtension,
+                    typeParameters.Span,
+                    $"parameters after 'extension' are an array extension's; a named type's are written after its name: 'extension {WrittenName(Unparenthesised(declaration.Type))}{typeParameters.ToString().Trim()}'"
+                );
+            }
+
             var extended = ResolveExtendedType(declaration, container, scope);
             if (extended is null) {
                 continue;
@@ -1275,7 +1290,7 @@ public sealed partial class Compilation {
         ReportDeclaration(
             ErrorCode.ERR_CannotExtend,
             declaration.Type.Span,
-            "only a named type can be extended"
+            "only a named type or an array type can be extended"
         );
         return null;
     }

@@ -54,9 +54,10 @@ public sealed partial class Compilation {
             return Malformed(attribute, "a '@builtin' function cannot be generic: a builtin works on the types its signature names");
         }
 
-        if (!declaration.AsyncKeyword.IsNone || declaration.Modifiers.Any(SyntaxKind.AsyncKeyword)
-            || declaration.Modifiers.Any(SyntaxKind.MutatingKeyword)) {
-            return Malformed(attribute, "a '@builtin' function is neither async nor mutating: a builtin reads its operands and gives a value");
+        // 'mutating' passes the receiver where it is, for the builtins that
+        // change an array in place: SIL lowering checks the builtin takes an address.
+        if (!declaration.AsyncKeyword.IsNone || declaration.Modifiers.Any(SyntaxKind.AsyncKeyword)) {
+            return Malformed(attribute, "a '@builtin' function is not async: a builtin runs to completion where it is applied");
         }
 
         return NameOf(attribute);

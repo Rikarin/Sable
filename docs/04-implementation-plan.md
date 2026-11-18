@@ -1596,13 +1596,11 @@ against a stand-in for the `vscode` module and the language client
 against the manifest, the server's command and settings, tasks, Run and
 Debug, lenses, quick fixes, debug configurations (the lldb-dap one included;
 CodeLLDB's only as far as being chosen), and the Test Explorer against a
-`sable` that prints what the real one does. The server reads every folder of
-a multi-root workspace and follows folders added and removed, each folder's
-loose files a program of their own; it reports `sable check`'s lints as you
-type (at the package's `[lints]` levels, in a file without errors); and it
-takes `inlayHints.enable` and `lints.enable` as initialization options or
+`sable` that prints what the real one does. The server takes
+`inlayHints.enable` and `lints.enable` as initialization options or
 configuration, which the extension sets from `sable.inlayHints.enable` and
-`sable.lints.enable`. Beyond VS Code, `editors/` has Vim and Neovim (syntax,
+`sable.lints.enable`; `sable.path` and `${workspaceFolder}` are those of the
+folder a file, task or test is in. Beyond VS Code, `editors/` has Vim and Neovim (syntax,
 filetype, indentation, and `lsp/sable.lua` for Neovim 0.11), Helix
 (`languages.toml`), Emacs (`sable-mode` with Eglot) and Sublime Text (the
 TextMate grammar, generated from VS Code's), checked by

@@ -66,6 +66,7 @@ starts the debug adapter with the plugin imported.
 | `sable.server.enable` | `true` | Run the language server. |
 | `sable.inlayHints.enable` | `true` | Inlay hints: inferred types, and the roots a returned reference may point into. |
 | `sable.lints.enable` | `true` | Report `sable check`'s lints as you type, at the package's `[lints]` levels. |
+| `sable.diagnostics.workspace` | `true` | Report the problems of every file in the workspace, not only of the open ones. |
 | `sable.codeLens.enable` | `true` | Run and Debug above `main`. |
 | `sable.trace.server` | `off` | Log the language server's messages to the Sable output. |
 

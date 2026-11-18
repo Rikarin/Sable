@@ -2,9 +2,8 @@
 
 ## Unreleased
 
-- Every folder of a multi-root workspace: the language server reads them all, the loose files
-  of each are a program of their own, and `sable.path` and `${workspaceFolder}` are the folder's.
-- `sable.inlayHints.enable` and `sable.lints.enable`; the lints of `sable check` show as you type.
+- Every folder of a multi-root workspace: `sable.path` and `${workspaceFolder}` are the folder's.
+- `sable.inlayHints.enable` and `sable.lints.enable`, to turn off the server's inlay hints and lints.
 - Tests of the extension's own code, run under node against a stand-in for VS Code.
 
 ## 0.2.0

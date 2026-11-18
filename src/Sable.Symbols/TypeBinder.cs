@@ -684,7 +684,15 @@ internal sealed class TypeBinder(Compilation compilation) {
             // 'T: P & Q' is kept as two constraints, as 'where T: P, T: Q' is,
             // so everything that walks a parameter's protocols sees both.
             var constraints = Constraints(syntax.Constraint, parameter);
-            parameter.Constraints = [..constraints.SelectMany(c => CompositionTypeSymbol.PartsOf(BindType(c, context, scope)))];
+            var bound = constraints.SelectMany(c => CompositionTypeSymbol.PartsOf(BindType(c, context, scope))).ToList();
+
+            // 'N: Int': a value generic parameter, which stands for a number of that type.
+            if (bound is [var valueType] && compilation.Core.IsInteger(valueType)) {
+                parameter.ValueType = valueType;
+                continue;
+            }
+
+            parameter.Constraints = [..bound];
         }
     }
 
@@ -723,15 +731,31 @@ internal sealed class TypeBinder(Compilation compilation) {
         }
 
         foreach (var item in clause.Constraints) {
-            // A const-generic predicate tests a value parameter, and generic
-            // parameters are types only so far: there is nothing for 'N > 0'
-            // to be about.
+            // 'where N > 0': a predicate over a type's value generic
+            // parameters, evaluated for each set of arguments it is given.
+            if (item is WherePredicateSyntax predicate) {
+                var valueParameters = context is NamedTypeSymbol owner ? owner.TypeParameters.Where(IsValueParameter).Select(static p => p.Name).ToHashSet() : [];
+                if (context is not NamedTypeSymbol declaring || valueParameters.Count == 0) {
+                    _diagnostics.Error(
+                        ErrorCode.ERR_ConstGenericPredicate,
+                        item.Span,
+                        "a const-generic predicate is about a type's value generic parameters, such as the 'N' of 'struct Buf<T, N: Int>', and here there are none"
+                    );
+                } else if (UnevaluablePart(predicate.Expression, valueParameters) is { } part) {
+                    _diagnostics.Error(
+                        ErrorCode.ERR_ConstGenericPredicate,
+                        part.Span,
+                        $"a const-generic predicate is made of the value generic parameters ({string.Join(", ", valueParameters.Order(StringComparer.Ordinal))}), "
+                        + $"whole numbers, 'true', 'false' and operators, and '{part.ToString().Trim()}' is none of those"
+                    );
+                } else {
+                    declaring.ValuePredicates = declaring.ValuePredicates.Add(predicate.Expression);
+                }
+
+                continue;
+            }
+
             if (item is not WhereConstraintSyntax constraint) {
-                _diagnostics.Error(
-                    ErrorCode.ERR_ConstGenericPredicate,
-                    item.Span,
-                    "a const-generic predicate needs a value generic parameter, and generic parameters are types only so far"
-                );
                 continue;
             }
 
@@ -836,6 +860,24 @@ internal sealed class TypeBinder(Compilation compilation) {
         var equivalence = TypeEquivalence.ForSymbol(context);
 
         for (var i = 0; i < arguments.Length && i < definition.TypeParameters.Length; i++) {
+            // A value parameter is given a number, or a value parameter of
+            // the declaration around; a type parameter, a type.
+            var isValue = IsValueParameter(definition.TypeParameters[i]);
+            if (isValue != (arguments[i] is ValueTypeArgumentSymbol || arguments[i] is TypeParameterSymbol { IsValue: true })) {
+                _diagnostics.Error(
+                    ErrorCode.ERR_ValueGenericArgument,
+                    span,
+                    isValue
+                        ? $"'{definition.Name}' takes a whole number for '{definition.TypeParameters[i].Name}', and '{arguments[i].ToDisplayString()}' is a type"
+                        : $"'{definition.Name}' takes a type for '{definition.TypeParameters[i].Name}', and '{arguments[i].ToDisplayString()}' is a value"
+                );
+                return;
+            }
+
+            if (isValue) {
+                continue;
+            }
+
             if (Copyability.Refusal(definition.TypeParameters[i], arguments[i], definition.Name) is { } refusal) {
                 _diagnostics.Error(ErrorCode.ERR_NoncopyableTypeArgument, span, refusal);
             }
@@ -853,6 +895,37 @@ internal sealed class TypeBinder(Compilation compilation) {
                     + $"'{definition.Name}' requires of "
                     + $"'{definition.TypeParameters[i].Name}'"
                 );
+            }
+        }
+
+        // 'Buf<Int, 0>' where 'N > 0': each predicate, with the numbers given.
+        // Inside a generic declaration that passes its own value parameter
+        // on, the numbers are not known yet; each instance is checked where
+        // it is written with them.
+        if (!definition.ValuePredicates.IsEmpty) {
+            var values = new Dictionary<string, long>(StringComparer.Ordinal);
+            for (var i = 0; i < arguments.Length && i < definition.TypeParameters.Length; i++) {
+                if (arguments[i] is ValueTypeArgumentSymbol value) {
+                    values[definition.TypeParameters[i].Name] = value.Value;
+                }
+            }
+
+            if (values.Count == definition.TypeParameters.Count(IsValueParameter)) {
+                foreach (var predicate in definition.ValuePredicates) {
+                    var holds = EvaluatePredicate(predicate, values);
+                    if (holds is true) {
+                        continue;
+                    }
+
+                    var given = string.Join(", ", values.Select(static v => $"{v.Key} = {v.Value}"));
+                    _diagnostics.Error(
+                        ErrorCode.ERR_ConstGenericPredicateFails,
+                        span,
+                        holds is false
+                            ? $"'{definition.Name}' requires '{predicate.ToString().Trim()}', which is false for {given}"
+                            : $"'{definition.Name}' requires '{predicate.ToString().Trim()}', which has no value for {given}: it divides by zero, overflows, or is not true or false"
+                    );
+                }
             }
         }
 
@@ -922,10 +995,16 @@ internal sealed class TypeBinder(Compilation compilation) {
                 return new ReferenceTypeSymbol(BindType(borrowed.ElementType, context, scope));
 
             case FixedSizeArrayTypeSyntax array:
-                return new ArrayTypeSymbol(BindType(array.ElementType, context, scope), ArrayKind.Fixed, CapacityOf(array.Size));
+                return new ArrayTypeSymbol(BindType(array.ElementType, context, scope), ArrayKind.Fixed, CapacityOf(array.Size), CapacityParameterOf(array.Size, context, scope));
 
             case InlineArrayTypeSyntax array:
-                return new ArrayTypeSymbol(BindType(array.ElementType, context, scope), ArrayKind.Inline, CapacityOf(array.Capacity));
+                return new ArrayTypeSymbol(BindType(array.ElementType, context, scope), ArrayKind.Inline, CapacityOf(array.Capacity), CapacityParameterOf(array.Capacity, context, scope));
+
+            // 'Buf<Int, 4>': a value for a value generic parameter.
+            case LiteralTypeSyntax literal:
+                return long.TryParse(literal.Token.Text.Replace("_", ""), System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var value)
+                    ? new ValueTypeArgumentSymbol(value)
+                    : Error(ErrorCode.ERR_ValueGenericArgument, literal.Span, $"'{literal.Token.Text}' is not a whole number a value generic parameter can be given");
 
             case GrowArrayTypeSyntax array:
                 return new ArrayTypeSymbol(
@@ -1558,6 +1637,92 @@ internal sealed class TypeBinder(Compilation compilation) {
         _diagnostics.Error(code, span, message);
         return ErrorTypeSymbol.Instance;
     }
+
+    /// <summary>A generic parameter that stands for a number, <c>N: Int</c>.</summary>
+    static bool IsValueParameter(TypeParameterSymbol parameter) => parameter.IsValue;
+
+    /// <summary>
+    ///     The first part of a const-generic predicate that cannot be
+    ///     evaluated from the value parameters' numbers alone, or null.
+    /// </summary>
+    static ExpressionSyntax? UnevaluablePart(ExpressionSyntax expression, HashSet<string> parameters) =>
+        expression switch {
+            LiteralExpressionSyntax { Token.Kind: SyntaxKind.IntegerLiteralToken or SyntaxKind.TrueKeyword or SyntaxKind.FalseKeyword } => null,
+            IdentifierNameSyntax name => parameters.Contains(name.Identifier.Text) ? null : name,
+            ParenthesizedExpressionSyntax parenthesized => UnevaluablePart(parenthesized.Expression, parameters),
+            PrefixUnaryExpressionSyntax { OperatorToken.Kind: SyntaxKind.MinusToken or SyntaxKind.BangToken } unary => UnevaluablePart(unary.Operand, parameters),
+            BinaryExpressionSyntax binary when BinaryOperators.Contains(binary.OperatorToken.Kind) =>
+                UnevaluablePart(binary.Left, parameters) ?? UnevaluablePart(binary.Right, parameters),
+            _ => expression,
+        };
+
+    static readonly HashSet<SyntaxKind> BinaryOperators = [
+        SyntaxKind.PlusToken, SyntaxKind.MinusToken, SyntaxKind.StarToken, SyntaxKind.SlashToken, SyntaxKind.PercentToken,
+        SyntaxKind.EqualsEqualsToken, SyntaxKind.BangEqualsToken, SyntaxKind.LessToken, SyntaxKind.LessEqualsToken,
+        SyntaxKind.GreaterToken, SyntaxKind.GreaterEqualsToken, SyntaxKind.AmpersandAmpersandToken, SyntaxKind.PipePipeToken,
+    ];
+
+    /// <summary>
+    ///     A const-generic predicate's value for the numbers its value
+    ///     parameters are given: true or false, or null when it has none —
+    ///     a division by zero, an overflow, or a number where a truth is wanted.
+    /// </summary>
+    internal static bool? EvaluatePredicate(ExpressionSyntax predicate, IReadOnlyDictionary<string, long> values) =>
+        Evaluate(predicate, values) as bool?;
+
+    static object? Evaluate(ExpressionSyntax expression, IReadOnlyDictionary<string, long> values) {
+        try {
+            checked {
+                switch (expression) {
+                    case LiteralExpressionSyntax { Token.Kind: SyntaxKind.TrueKeyword }:
+                        return true;
+                    case LiteralExpressionSyntax { Token.Kind: SyntaxKind.FalseKeyword }:
+                        return false;
+                    case LiteralExpressionSyntax literal:
+                        return long.TryParse(literal.Token.Text.Replace("_", ""), System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var number) ? number : null;
+                    case IdentifierNameSyntax name:
+                        return values.TryGetValue(name.Identifier.Text, out var value) ? value : null;
+                    case ParenthesizedExpressionSyntax parenthesized:
+                        return Evaluate(parenthesized.Expression, values);
+                    case PrefixUnaryExpressionSyntax unary:
+                        return (unary.OperatorToken.Kind, Evaluate(unary.Operand, values)) switch {
+                            (SyntaxKind.MinusToken, long operand) => -operand,
+                            (SyntaxKind.BangToken, bool operand) => !operand,
+                            _ => null,
+                        };
+                    case BinaryExpressionSyntax binary:
+                        return (binary.OperatorToken.Kind, Evaluate(binary.Left, values), Evaluate(binary.Right, values)) switch {
+                            (SyntaxKind.PlusToken, long l, long r) => l + r,
+                            (SyntaxKind.MinusToken, long l, long r) => l - r,
+                            (SyntaxKind.StarToken, long l, long r) => l * r,
+                            (SyntaxKind.SlashToken, long l, long r) when r != 0 => l / r,
+                            (SyntaxKind.PercentToken, long l, long r) when r != 0 => l % r,
+                            (SyntaxKind.EqualsEqualsToken, long l, long r) => l == r,
+                            (SyntaxKind.EqualsEqualsToken, bool l, bool r) => l == r,
+                            (SyntaxKind.BangEqualsToken, long l, long r) => l != r,
+                            (SyntaxKind.BangEqualsToken, bool l, bool r) => l != r,
+                            (SyntaxKind.LessToken, long l, long r) => l < r,
+                            (SyntaxKind.LessEqualsToken, long l, long r) => l <= r,
+                            (SyntaxKind.GreaterToken, long l, long r) => l > r,
+                            (SyntaxKind.GreaterEqualsToken, long l, long r) => l >= r,
+                            (SyntaxKind.AmpersandAmpersandToken, bool l, bool r) => l && r,
+                            (SyntaxKind.PipePipeToken, bool l, bool r) => l || r,
+                            _ => null,
+                        };
+                    default:
+                        return null;
+                }
+            }
+        } catch (OverflowException) {
+            return null;
+        }
+    }
+
+    /// <summary>The <c>N</c> of <c>T[N]</c>: a generic parameter of the declaration, which stands for a value.</summary>
+    TypeParameterSymbol? CapacityParameterOf(ExpressionSyntax? size, Symbol context, FileScope? scope) =>
+        size is IdentifierNameSyntax name && Lookup(name.Identifier.Text, context, scope, name.Span, report: false) is TypeParameterSymbol parameter
+            ? parameter
+            : null;
 
     /// <summary>The <c>k</c> of <c>T[..k]</c>: a literal count, or none.</summary>
     static int? CapacityOf(ExpressionSyntax? size) =>

@@ -63,7 +63,7 @@ static char *from_wide(const wchar_t *wide) {
 
 // Standard streams pass bytes through as they are, as on POSIX: no '\n'
 // written as "\r\n", none read back. A console shows them as UTF-8.
-__attribute__((constructor)) static void sable_streams_start(void) {
+static void streams_start(void) {
     _setmode(_fileno(stdin), _O_BINARY);
     _setmode(_fileno(stdout), _O_BINARY);
     _setmode(_fileno(stderr), _O_BINARY);
@@ -141,7 +141,8 @@ static void *watch_stack(void) {
     return NULL;
 }
 
-__attribute__((constructor)) static void sable_watch_main_stack(void) {
+static void platform_start(void) {
+    streams_start();
     watch_stack();
     AddVectoredExceptionHandler(1, on_exception);
 }

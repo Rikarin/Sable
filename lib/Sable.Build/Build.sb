@@ -37,6 +37,9 @@ public struct Package {
     /// Types reachable only through reflection, which the linker must keep.
     public var reflect: String[>..] = []
 
+    /// What a build for a given target is, beyond what `--target` says.
+    public var targetSettings: TargetSettings[>..] = []
+
     /// Each lint's level: "allow", "warn" or "deny".
     public var lints: [String: String] = [:]
 
@@ -56,10 +59,12 @@ public struct Target {
     var kind: TargetKind
     var name: String
     var path: String
+    var native: NativeLibrary? = none
 
-    /// The package's library, rooted at the file.
-    public static fn library(path: String) -> Target {
-        return Target { kind: .library, name: "", path: path }
+    /// The package's library, rooted at the file; with `native`, also built
+    /// as a library C links, which calls its `@export` functions.
+    public static fn library(path: String, native: NativeLibrary? = none) -> Target {
+        return Target { kind: .library, name: "", path: path, native: native }
     }
 
     /// An executable called `name`, whose `main` is in the file.
@@ -71,6 +76,14 @@ public struct Target {
 enum TargetKind {
     library,
     executable
+}
+
+/// A library C links: `sable build` writes it to `target/<profile>/`.
+public enum NativeLibrary {
+    /// An archive, `libname.a` (`name.lib` on Windows), linked in whole.
+    staticLibrary,
+    /// A shared library, `libname.so`, `libname.dylib` or `name.dll`.
+    dynamicLibrary
 }
 
 // ---- Dependencies -------------------------------------------------------
@@ -238,6 +251,21 @@ public enum Exclusivity {
     off
 }
 
+// ---- Targets --------------------------------------------------------------
+
+/// A build for one target, named by its triple as `--target` takes it:
+/// `[targets."wasm32-wasi"]` in TOML.
+public struct TargetSettings {
+    var triple: String
+    var reflection: Bool
+
+    /// With `reflection: false`, the build carries no reflection, as
+    /// `--deny-reflection` asks: `Mirror` and `TypeInfo` are errors.
+    public static fn target(_ triple: String, reflection: Bool = true) -> TargetSettings {
+        return TargetSettings { triple: triple, reflection: reflection }
+    }
+}
+
 // ---- Build scripts ------------------------------------------------------
 
 /// A program run before the package compiles, sandboxed to what it declares.
@@ -287,6 +315,12 @@ public fn renderManifest(_ p: Package) -> String {
             case .library => {
                 w.table("lib")
                 w.string("path", target.path)
+                if let native = target.native {
+                    w.string("kind", match native {
+                        case .staticLibrary  => "static"
+                        case .dynamicLibrary => "dynamic"
+                    })
+                }
             }
             case .executable => {
                 w.arrayTable("bin")
@@ -314,6 +348,11 @@ public fn renderManifest(_ p: Package) -> String {
     if !p.reflect.isEmpty {
         w.table("reflect")
         w.strings("include", p.reflect)
+    }
+
+    for settings in p.targetSettings {
+        w.table("targets." + quoteKey(settings.triple))
+        w.raw("reflection", settings.reflection ? "true" : "false")
     }
 
     if !p.generatorInputs.isEmpty {

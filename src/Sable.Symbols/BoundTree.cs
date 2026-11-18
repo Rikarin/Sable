@@ -156,6 +156,16 @@ public sealed class BoundTypeExpression(SyntaxNode syntax, TypeSymbol referenced
 }
 
 /// <summary>
+///     <c>N</c> in the body of <c>struct Buf&lt;T, N: Int&gt;</c>: the number a
+///     value generic parameter stands for, which each instance knows.
+/// </summary>
+public sealed class BoundValueParameter(SyntaxNode syntax, TypeParameterSymbol parameter, TypeSymbol type)
+    : BoundExpression(syntax, type) {
+    public TypeParameterSymbol Parameter { get; } = parameter;
+    public override IEnumerable<BoundNode> Children => [];
+}
+
+/// <summary>
 ///     <c>Int.self</c>: a type as a value, of type <c>Int.Type</c>
 ///     (<see cref="MetatypeTypeSymbol" />).
 /// </summary>

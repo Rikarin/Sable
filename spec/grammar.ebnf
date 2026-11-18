@@ -205,6 +205,7 @@ OperatorSymbol    = "+" | "-" | "*" | "/" | "%" | "&" | "|" | "^"
 GenericParams     = "<" GenericParam { "," GenericParam } ">" ;
 GenericParam      = { Attribute } [ "out" | "in" ] Identifier
                     [ ":" TypeList ] [ "=" Type ] ;
+                                                 (* "N: Int", an integer type: a value parameter *)
 
 WhereClause       = "where" WhereItem { "," WhereItem } ;
 WhereItem         = Type ":" TypeList            (* conformance / inheritance *)
@@ -258,7 +259,9 @@ TupleTypeElem     = [ Identifier ":" ] Type ;
 
 FunctionType      = [ "async" ] TupleType [ ThrowsSpec ] "->" Type ;
 
-GenericArgs       = "<" Type { "," Type } ">" ;
+GenericArgs       = "<" GenericArg { "," GenericArg } ">" ;
+GenericArg        = Type
+                  | IntegerLiteral ;             (* for a value parameter: Buf<Int, 4> *)
                     (* parser-directed: on '<' after a type name, scan for a
                        balanced '>' not interrupted by a statement terminator *)
 

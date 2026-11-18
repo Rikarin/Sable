@@ -2911,7 +2911,10 @@ public sealed partial class Binder {
         // what it is constrained to: 'T.decode(from: reader)'.
         if (_compilation.TypeBinder.Lookup(name, _containingSymbol, _scope, syntax.Span, report: false)
             is TypeParameterSymbol named) {
-            return new BoundTypeExpression(syntax, named);
+            // A value generic parameter, 'N: Int', is the number it stands for.
+            return named.ValueType is { } valueType
+                ? new BoundValueParameter(syntax, named, valueType)
+                : new BoundTypeExpression(syntax, named);
         }
 
         if (unmetOnSelf is not null) {

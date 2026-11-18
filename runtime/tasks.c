@@ -50,7 +50,7 @@ static SableTask *queue_head, *queue_tail;
 static SableTask *sleepers; // by deadline, the earliest first
 static SableWorker *idle_workers;
 
-__attribute__((constructor)) static void sable_tasks_start(void) {
+static void tasks_start(void) {
     lock_tasks();
     condition_init(&main_task.wake);
     main_task.started = true;

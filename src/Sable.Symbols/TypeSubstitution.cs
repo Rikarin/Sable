@@ -63,9 +63,18 @@ public sealed class TypeSubstitution {
 
             case ArrayTypeSymbol array: {
                 var element = Apply(array.ElementType);
-                return element.Equals(array.ElementType)
+
+                // 'T[N]': the count an instance gives N, or the parameter it passes on.
+                var capacity = array.Capacity;
+                var capacityParameter = array.CapacityParameter;
+                if (capacityParameter is not null && _map.TryGetValue(capacityParameter, out var count)) {
+                    capacity = count is ValueTypeArgumentSymbol value ? (int)value.Value : null;
+                    capacityParameter = count as TypeParameterSymbol;
+                }
+
+                return element.Equals(array.ElementType) && capacity == array.Capacity && ReferenceEquals(capacityParameter, array.CapacityParameter)
                     ? array
-                    : new ArrayTypeSymbol(element, array.ArrayKind);
+                    : new ArrayTypeSymbol(element, array.ArrayKind, capacity, capacityParameter);
             }
 
             case OptionalTypeSymbol optional: {

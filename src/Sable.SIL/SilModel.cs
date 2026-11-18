@@ -213,6 +213,13 @@ public sealed class TupleType(ImmutableArray<SilType> elements) : SilType {
 public abstract class NominalType(string name) : SilType {
     public string Name { get; } = name;
 
+    /// <summary>
+    ///     A generic type's instance as Sable writes it — <c>M.Box&lt;Int&gt;</c>,
+    ///     where <see cref="Name" /> is <c>M.Box$of$Int</c> — for a debugger to
+    ///     show; null for any other type, whose name is already the one written.
+    /// </summary>
+    public string? DisplayName { get; set; }
+
     /// <summary>A move-only struct or enum: a value of it is never copied, so it has ownership even when its parts are trivial.</summary>
     public bool IsNoncopyable { get; set; }
 
@@ -454,6 +461,14 @@ public sealed class ClassType(string name) : NominalType(name) {
     public int FieldIndex(string field) => Fields.FindIndex(f => f.Name == field);
 
     public ClassType? Superclass { get; set; }
+
+    /// <summary>
+    ///     The protocols the class conforms to by its own declaration or its
+    ///     extensions', each by its qualified name, with those they refine: its
+    ///     metadata's conformance records (docs/06 §6.2). Its superclass's are
+    ///     its superclass's.
+    /// </summary>
+    public List<string> Conformances { get; } = [];
 
     /// <summary>The methods called through the vtable: each slot's name, and the function in it for this class.</summary>
     public List<(string Method, string Function)> VTable { get; } = [];
@@ -1236,6 +1251,20 @@ public sealed class SilModule {
     /// <summary>The function a program starts in: the one marked <c>@main</c>, or else <c>main</c>.</summary>
     public string? EntryPoint { get; set; }
 
+    /// <summary>
+    ///     A library's module: it has no entry point, and what C calls — its
+    ///     exports — and its globals' initialiser and deinitialiser are where
+    ///     it is entered (docs/05 §5.2).
+    /// </summary>
+    public bool IsLibrary { get; set; }
+
+    /// <summary>
+    ///     Built with <c>--deny-reflection</c> (docs/06 §6.1): the types'
+    ///     field descriptors carry no names, and <c>Mirror</c> and
+    ///     <c>TypeInfo</c> were refused (S3450).
+    /// </summary>
+    public bool DenyReflection { get; set; }
+
     /// <summary>Set when the module is one unit of a program compiled separately (<see cref="SilUnit" />).</summary>
     public SilUnitInfo? Unit { get; set; }
 
@@ -1412,6 +1441,13 @@ public static class SilBuiltins {
         // Strings joined end to end in one allocation: an interpolation, or 'a + b + c'.
         if (name == "string_concat_many") {
             return operands.Count >= 2 && operands.All(static o => o == SilType.String) ? new([..operands], SilType.String) : null;
+        }
+
+        // Whether the object the address holds is referred to from there
+        // alone, and may be changed in place: an existential's box, before
+        // a write through it (copy on write).
+        if (name == "ref_is_unique") {
+            return operands is [AddressType { Pointee: ClassType }] ? new([operands[0]], SilType.Bool) : null;
         }
 
         // 'a === b': whether two references are to the one object.

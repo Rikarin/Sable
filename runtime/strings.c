@@ -13,7 +13,7 @@ typedef struct SableString {
     char bytes[];
 } SableString;
 
-const SableMetadata sable_string_metadata = { NULL, "String", 0, NULL, NULL, 0, _Alignof(SableObject), NULL };
+const SableMetadata sable_string_metadata = { NULL, "String", 0, NULL, NULL, 0, _Alignof(SableObject), NULL, NULL };
 
 // Sixteen bytes as one value, with clang's portable vector types: each
 // machine compiles them to its own SIMD (SSE2, NEON). See Searching, below.

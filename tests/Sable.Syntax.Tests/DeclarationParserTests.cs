@@ -159,6 +159,22 @@ public sealed class DeclarationParserTests {
     }
 
     [Fact]
+    public void ParsesANumberAsATypeArgument() {
+        // A value generic parameter's argument, in a type and in an expression.
+        var field = ParseMember<StructDeclarationSyntax>("struct P { var b: Buf<Int, 4> }");
+        var literal = Assert.Single(field.DescendantNodes().OfType<LiteralTypeSyntax>());
+        Assert.Equal("4", literal.Token.Text);
+
+        var fn = ParseMember<FunctionDeclarationSyntax>("fn f() { let b = Buf<Int, 4> { items: [1, 2, 3, 4] } }");
+        Assert.Single(fn.DescendantNodes().OfType<LiteralTypeSyntax>());
+
+        // Still a comparison where no type argument list could be.
+        var compare = ParseMember<FunctionDeclarationSyntax>("fn g(_ a: Int) -> Bool { return a < 4 && a > 1 }");
+        Assert.Empty(compare.DescendantNodes().OfType<LiteralTypeSyntax>());
+        Assert.Equal(2, compare.DescendantNodes().OfType<BinaryExpressionSyntax>().Count(static b => b.OperatorToken.Kind is SyntaxKind.LessToken or SyntaxKind.GreaterToken));
+    }
+
+    [Fact]
     public void ParsesSuppressedCopyable() {
         var type = ParseMember<StructDeclarationSyntax>("struct Box<T: ~Copyable> { }");
         var constraint = Assert.IsType<SuppressedTypeSyntax>(Assert.Single(type.TypeParameters!.Parameters).Constraint);

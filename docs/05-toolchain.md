@@ -179,6 +179,18 @@ let manifest = Package {
   another reference. A pinned commit already checked out builds offline.
   A package from git is, like a registry package, a workspace of its own,
   and a published package cannot depend on git alone.
+- `.library(path:, native: .staticLibrary)` (or `.dynamicLibrary`; in TOML,
+  `[lib] kind = "static"` or `"dynamic"`) also builds the library as one C
+  links: `sable build` writes `libname.a` or `libname.so`/`.dylib`
+  (`name.lib`, `name.dll` on Windows) to `target/<profile>/`, named for the
+  package with `-` made `_`. It holds the library, its dependencies and the
+  runtime, compiled whole with no entry point; C calls its `@export`
+  functions. As it is loaded, a constructor starts the runtime, takes the
+  process's arguments (where the C library passes them to constructors:
+  Apple's and glibc) and gives its globals their initial values; the runtime
+  destroys them as the process exits, before its leak check. A single file
+  is built so by `sable build file.sb --emit staticlib` (or `dylib`). Not
+  yet cached between builds as a binary's units are.
 - Field names are the TOML keys in Sable's spelling (`defaultFeatures`,
   `optLevel`); every table of the TOML format has a field. Enumerated
   settings are enum cases (`.fat`, `.abort`), so a misspelling is a type
@@ -329,8 +341,13 @@ with both kinds is an error, so there is never a question which one applies.
 ### 5.2.10 Not built yet
 
 - Workspace inheritance: `shared` and `.workspace` (§5.2.3).
-- Per-target settings (`[targets.*]`: runtime profile, reflection); `when:`
-  covers `os()` and `arch()` only. `sable build --target <triple>` builds for
+- Runtime profiles: `[targets.<triple>] runtime = "minimal"` or `"standard"`
+  is accepted with a warning, and the full runtime is linked. The other
+  per-target setting is built: `reflection = false`
+  (`targetSettings: [.target("wasm32-wasi", reflection: false)]` in
+  package.sb) builds for that target as `--deny-reflection` does, the
+  triple matched by its operating system and architecture. `when:` covers
+  `os()` and `arch()` only. `sable build --target <triple>` builds for
   another machine, and `when:` is tested against that target.
 - The language server showing a manifest's evaluation errors (the effect
   rules, a trap) in the editor; it type-checks manifests, and logs the rest.

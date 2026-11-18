@@ -180,6 +180,8 @@ public enum ErrorCode {
     ERR_EnumCaseValue = 3142,
     ERR_OpenExistentialInUnion = 3150,
     ERR_ConstGenericPredicate = 3160,
+    ERR_ValueGenericArgument = 3420,
+    ERR_ConstGenericPredicateFails = 3421,
     ERR_SelfRequirementOnExistential = 3161,
 
     // Ownership, escape and isolation checks (S3200-S3207).
@@ -232,6 +234,9 @@ public enum ErrorCode {
     LNT_PluginLint = 3397,
     LNT_PluginFailed = 3398,
     LNT_UnknownLint = 3399,
+
+    // ---- Reflection and the runtime's profiles (S3450-S3459) ---------------
+    ERR_ReflectionDenied = 3450,
 
     // ---- Memory (S3460-S3469): what ARC cannot free.
     WRN_StrongReferenceCycle = 3460,

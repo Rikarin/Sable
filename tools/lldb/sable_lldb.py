@@ -19,7 +19,7 @@ in a suffix saying what kind of thing it is:
     union U         -> U$union                $tag (an enumeration of the cases), $payload (a C union)
     T?              -> T?$optional            the same; an optional class is the reference, null for none
     (A) -> R        -> (A) -> R$closure       $function, $context
-    any P           -> any P$existential      a closure per requirement, sharing the box with the value
+    any P           -> any P$existential      box (the value, in an any$box$of$T), then a witness per requirement
 
 The formatters match those names by regular expression, so they work with
 any lldb that runs Python (no recognizer functions needed), and they read
@@ -445,11 +445,15 @@ def object_summary(valobj, internal_dict):
         return "none" if (raw.GetType().GetName() or "").endswith("?") else "<null>"
     process = valobj.GetProcess()
     name = _metadata_name(process, address) or raw.GetType().GetName()
+    # The metadata names a generic class's instance as its symbols do,
+    # HashMap$of$String$Int; its type is named as Sable writes it.
+    sbtype = _find_type(valobj.GetTarget(), name)
+    shown = sbtype.GetName() if sbtype is not None and sbtype.GetName() else name
     if name.startswith(HASH_MAP):
         body = _object_body(raw)
         used = body.GetChildMemberWithName("used").GetValueAsSigned(0)
-        return "%s count = %d" % (name, used)
-    return name
+        return "%s count = %d" % (shown, used)
+    return shown
 
 
 # ---------------------------------------------------------------------------
@@ -517,22 +521,23 @@ def closure_summary(valobj, internal_dict):
 
 
 def _existential_value(valobj):
-    """The dynamic type of what an existential holds, and the value: read from the box its closures share."""
+    """The dynamic type of what an existential holds, and the value: read from its box."""
     raw = _raw(valobj)
     if raw.GetNumChildren() == 0:
         return None, None
-    context = _raw(raw.GetChildAtIndex(0)).GetChildMemberWithName("$context").GetValueAsUnsigned(0)
-    if context == 0:
+    held = _object_address(raw.GetChildMemberWithName("box"))
+    if held == 0:
         return None, None
     process = raw.GetProcess()
-    box = _metadata_name(process, context)
-    if not box or not box.startswith("Box$of$"):
+    box = _metadata_name(process, held)
+    prefix = "any$box$of$"
+    if not box or not box.startswith(prefix):
         return box, None
-    reference = _reference_of_type(raw, "box", context)
+    reference = _reference_of_type(raw, "box", held)
     if reference is None:
-        return box[len("Box$of$"):], None
+        return box[len(prefix):], None
     value = _object_body(reference).GetChildMemberWithName("value")
-    dynamic = box[len("Box$of$"):]
+    dynamic = box[len(prefix):]
     # A class held in it may be a subclass: its own metadata says.
     if _canonical_name(value).endswith("$ref"):
         inner = _metadata_name(process, _object_address(value))

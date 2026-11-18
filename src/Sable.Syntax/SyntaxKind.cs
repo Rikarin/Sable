@@ -240,6 +240,7 @@ public enum SyntaxKind : ushort {
     SelfType = 1021,
     ParenthesizedType = 1022,
     SuppressedType = 1023,
+    LiteralType = 1024,
     AttributedType = 1024,
 
     // ---- Expression nodes (1100-1199) -------------------------------------

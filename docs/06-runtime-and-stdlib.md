@@ -65,10 +65,53 @@ references — to `sable_heap_visit`. A class's vtable follows. The visitor is
 what the leak check walks (docs/02 §2.2): with `SABLE_CHECK_LEAKS` set every
 live object is kept in a set, and a program that ends with objects alive
 lists them by type and prints the reference cycles among them, each as the
-types along it. Not yet: a kind, a stride, a value-witness table for
-non-class types, field descriptors with names and offsets, conformance
-records — so no registry and no dynamic cast to a protocol — and the
-profiles and `--deny-reflection`. The allocator's size classes reach 1 KB;
+types along it, each step naming the field that holds the next object
+(`Test.Pet.toy -> Test.Toy.pet -> Test.Pet`).
+
+A class's metadata has one more field before its vtable (which is field 9):
+its type information, `SableTypeInfo`, which arrays and the runtime's own
+objects leave null. This is the format code casting to a protocol builds
+on; it only grows, at the end of each record.
+
+```c
+typedef struct { const char *name; const char *type_name;
+                 int64_t offset; int64_t kind; } SableField;      // kind: 0 data, 1 strong, 2 aggregate, 3 weak/unowned
+typedef struct { const char *name; } SableProtocol;               // "Module.Protocol"
+typedef struct { const SableProtocol *protocol;
+                 const void *witnesses; } SableConformance;       // witnesses: null for now
+typedef struct { int64_t kind;                                    // 1: a class
+                 int64_t field_count; const SableField *fields;   // the superclass's first
+                 int64_t conformance_count;
+                 const SableConformance *conformances; } SableTypeInfo;
+```
+
+- **Field descriptors**: every stored field — the superclass's first, at
+  the same offsets — with its name, its type's name as Sable writes it
+  (`Zoo.Animal?`, `Sable.Collections.HashMap<String, Int>`), its offset from
+  the start of the object, and what it holds. The leak report reads them.
+- **Conformance records**: one per protocol the class declares — where it
+  is declared, in an extension that holds for every instance, and every
+  protocol those refine — by a protocol descriptor, `@"sable.protocol.M.P"`,
+  which each unit makes and the linker keeps one of. A superclass's
+  conformances are in the superclass's records. `witnesses` is reserved for
+  what a cast to `any P` builds the existential from; the compiler leaves it
+  null until such casts lower through the registry.
+- **The registry** is the records themselves, found from an object's
+  metadata, with nothing built as the program starts:
+  `sable_conformance(metadata, protocol)` returns the record of the class's
+  or a superclass's conformance, or null; `sable_conforms(object, protocol)`
+  answers `x is P`. A protocol is matched by its descriptor's address or,
+  across images (a Sable shared library and the program), by its name.
+- **`--deny-reflection`** (`sable build`/`run`, for a file or a package; or
+  `[targets.<triple>] reflection = false` in a manifest): the field descriptors carry
+  no names, and `Mirror`, `TypeInfo` and the `Reflect` questions are refused
+  (S3450). Printing values is not reflection and still works.
+
+Not yet: a kind and type information for structs, unions and other
+non-class types (their value witnesses are functions the compiler calls
+directly, with no table the runtime can reach); the witness tables
+conformance records will point at; and the profiles (`minimal`, `standard`, `full`), which need the runtime split
+into parts a link can leave out. The allocator's size classes reach 1 KB;
 each class has 64 KiB slabs of its own, mapped from the system aligned to
 their size, which count the blocks they have out and are unmapped when that
 reaches zero (but for one each class keeps): memory a program once held in
@@ -76,6 +119,29 @@ small objects goes back to the system. `SABLE_STATS` reports the slabs held,
 the most held, and those given back. The compiler warns (S3460) of classes
 that hold one another strongly: the type-level strong-reference graph's
 cycles through two or more classes, broken by a `weak` or `unowned` field.
+
+An existential, `any P`, is its box — an object of a class for the value's
+type, `any$box$of$T`, each a subclass of one root class — and P's witness
+table for that type, laid out inline after it: a function per requirement
+that takes the box. Copying an existential shares the box; a witness that
+changes the value (a setter, a mutating method) is given the box where the
+existential keeps it and first copies it if another existential shares it.
+A dynamic cast or test, `e as? Square`, `e is any Named`, asks the box's class:
+to a concrete type, whether it is that type's box; to another protocol,
+whether it is the box of any type of the program that conforms to it, in a
+table the compiler writes out for each protocol cast to — the conformance
+lookup, done without the registry above. The two answer different
+questions and are kept apart for now: the registry's records hang off a
+class's metadata, so it answers for objects alone, while an existential's
+box is an object of the compiler's own class whatever the value's type,
+struct or union as much as class, and has no records of its own. A cast of
+an existential to a protocol therefore asks which box class it is, and
+builds the existential from witnesses the compiler emitted for each
+conforming type. Once conformance records carry their witness tables (the
+`witnesses` field above) and non-class types have type information, a box
+can point at its value's metadata and the cast can become a registry lookup
+— a cast table for a library's types that the program does not see whole
+would need that.
 
 `FieldDescriptor` (name, type, offset) is **always** emitted, for every type.
 It costs a few bytes per field and it buys: debugger formatters, `Mirror`,

@@ -1253,7 +1253,9 @@ public sealed class SilModule {
     /// <summary>
     ///     The module's functions C calls (<c>@export</c>), by name, with the
     ///     C symbol each is called by: <c>sil_export @M.entry = "sable_entry"</c>.
-    ///     They are kept however little the program itself calls them.
+    ///     They are kept however little the program itself calls them. A
+    ///     global may be here too (<c>@export var</c>): its storage is then
+    ///     named by the C symbol.
     /// </summary>
     public SortedDictionary<string, string> Exports { get; } = new(StringComparer.Ordinal);
 

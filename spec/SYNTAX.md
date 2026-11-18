@@ -1312,6 +1312,9 @@ the module, not generic, not `async`, not throwing; an `@extern` one has no
 body (S3223). What crosses is passed by value and must be something C has the
 same way — an integer type, `F32`, `F64`, `Bool`, or a struct of those, which
 is passed as the platform's C passes the struct of the same fields (S3224).
+`@export("name") var count: Int = 0` names a stored variable of the module for
+C, which reads and writes its storage by that name; it holds its initial value
+once the program has started.
 Pointers, C strings, variadic calls and callbacks are `Sable.Interop`'s.
 
 Header import (`sable bindgen`) generates `.sbi` interface files from C headers

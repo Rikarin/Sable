@@ -308,6 +308,56 @@ public sealed class InteropTests {
         Assert.Contains(declaration + "\n", result.LlvmIr!, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    ///     '@export var': C reads and writes the variable's storage by its C
+    ///     name, and sees what Sable wrote, the initial value among it.
+    /// </summary>
+    [Fact]
+    public void CReadsAndWritesAnExportedVariable() {
+        if (!Programs.CanBuild) {
+            return;
+        }
+
+        const string c = """
+                         #include <stdint.h>
+                         #include <stdbool.h>
+                         extern int64_t sable_counter;
+                         extern double sable_scale;
+                         extern bool sable_ready;
+                         extern const int32_t sable_limit;
+                         int64_t c_bump(void) { sable_counter += 10; sable_ready = !sable_ready; return sable_counter * (int64_t)sable_scale + sable_limit; }
+                         """;
+
+        const string source = """
+                              module Main
+
+                              @export("sable_counter")
+                              var counter: Int = 5
+
+                              @export("c", "sable_scale")
+                              var scale: F64 = 2.0
+
+                              @export("sable_ready")
+                              var ready = false
+
+                              @export("sable_limit")
+                              let limit: I32 = 7
+
+                              @extern("c")
+                              fn c_bump() -> Int
+
+                              fn main() {
+                                  counter = counter + 1
+                                  print(c_bump())
+                                  print("\(counter) \(ready)")
+                                  scale = 3.0
+                                  print(c_bump())
+                              }
+                              """;
+
+        Assert.Equal("39\n16 true\n85\n", BuildWithC(source, c));
+    }
+
     static bool Rosetta() {
         try {
             using var process = Process.Start(new ProcessStartInfo("/usr/bin/arch", ["-x86_64", "/usr/bin/true"]) { RedirectStandardError = true })!;

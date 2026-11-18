@@ -528,8 +528,8 @@ public sealed partial class SilGen {
                     continue;
                 }
 
-                // A constant written where it is read needs no storage.
-                if (_evaluation is null && ConstantRead(field) is not null) {
+                // A constant written where it is read needs no storage, unless C reads it.
+                if (_evaluation is null && field.ExportName is null && ConstantRead(field) is not null) {
                     continue;
                 }
 
@@ -546,6 +546,12 @@ public sealed partial class SilGen {
                 _globalFields.Add((field, name, model));
                 _globalsByField[field] = (name, type);
                 _module.Globals.Add((name, type));
+
+                // '@export var': C reads and writes the storage by its name,
+                // which every unit, having the global, calls it by.
+                if (field.ExportName is { } export) {
+                    _module.Exports[name] = export;
+                }
             }
         }
     }

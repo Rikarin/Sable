@@ -68,6 +68,37 @@ public sealed partial class Compilation {
     }
 
     /// <summary>
+    ///     Reads a variable's <c>@export</c>: a variable of the module, stored
+    ///     rather than computed, whose storage C reads and writes by the name
+    ///     (S3223). Its type is checked with the body (<see cref="CheckForeignVariable" />).
+    /// </summary>
+    void DeclareExportedVariable(FieldSymbol field, FieldDeclarationSyntax declaration, Symbol container) {
+        foreach (var attribute in declaration.Attributes) {
+            if (attribute.Name.ToString().Trim() != "export" || ForeignNameOf(attribute, exporting: true, field.Name) is not { } foreignName) {
+                continue;
+            }
+
+            var wrong = field.ExportName is not null ? "a variable has one '@export'"
+                : container is not ModuleSymbol || field.IsStatic ? "an '@export' variable is one of the module's: C has no types with members"
+                : field.IsComputed || field.IsLazy ? "an '@export' variable is stored: C reads and writes its memory"
+                : null;
+            if (wrong is not null) {
+                ReportDeclaration(ErrorCode.ERR_MalformedForeign, attribute.Span, wrong);
+                continue;
+            }
+
+            field.ExportName = foreignName;
+        }
+    }
+
+    /// <summary>An <c>@export</c> variable whose type C does not have (S3224).</summary>
+    internal IEnumerable<Diagnostic> CheckForeignVariable(FieldSymbol field, FieldDeclarationSyntax declaration) {
+        if (field.ExportName is not null && WhyNotC(field.Type, []) is { } why) {
+            yield return Diagnostic.Error(ErrorCode.ERR_NotACType, declaration.Declarator.Span, $"'{field.Name}' cannot be seen by C: {why}");
+        }
+    }
+
+    /// <summary>
     ///     The C name an <c>@extern</c> or <c>@export</c> gives — written, or
     ///     else the function's own — or null, having reported why not.
     /// </summary>
@@ -103,7 +134,7 @@ public sealed partial class Compilation {
 
         name ??= functionName;
         if (!IsCIdentifier(name)) {
-            ReportDeclaration(ErrorCode.ERR_MalformedForeign, attribute.Span, $"'{name}' is not a name C can give a function");
+            ReportDeclaration(ErrorCode.ERR_MalformedForeign, attribute.Span, $"'{name}' is not a name C can give a function or a variable");
             return null;
         }
 

@@ -52,6 +52,7 @@ public sealed partial class PackageGraph {
         var features = options.Features ?? FeatureRequest.Default;
         text.Append($"features={string.Join(",", features.Features)} none={features.NoDefaultFeatures} all={features.AllFeatures} locked={options.Locked}\n");
         text.Append($"packages={string.Join(",", options.Packages ?? [])}\n");
+        text.Append($"target={options.Target?.Os ?? Sable.Syntax.ParseOptions.HostOs}/{options.Target?.Arch ?? Sable.Syntax.ParseOptions.HostArch}\n");
         return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(text.ToString())));
     }
 

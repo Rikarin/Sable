@@ -76,6 +76,25 @@ fn aNumberIsAlwaysANumber(_ n: Int) -> U8? {
     return n as? U8                     //! S3066 is always a number
 }
 
+fn nothingWrapsToACharacter(_ n: U32) -> Char {
+    return n unchecked as Char          //! S3066 has no character to wrap to
+}
+
+fn aCharacterIsAlwaysOne(_ c: Char) -> U32? {
+    return c as? U32                    //! S3066 is always one
+}
+
+fn castingACharacterToAFloat(_ c: Char) -> F64 {
+    return c as F64                     //! S3066 'Char' cannot be cast to 'F64'
+}
+
+fn characterCastsThatAreFine(_ c: Char, _ n: U32) -> Char {
+    let code = c as U32
+    let low = c unchecked as U8
+    let wide = c as I128
+    return n as Char
+}
+
 fn castingThatIsFine(_ n: Int, _ d: Derived, _ b: Base, _ s: any Shaped) -> F64 {
     let narrow = n as U8
     let wrapped = n unchecked as I8

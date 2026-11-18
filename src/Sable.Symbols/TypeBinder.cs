@@ -594,25 +594,30 @@ internal sealed class TypeBinder(Compilation compilation) {
     public void BindTypeDeclaration(NamedTypeSymbol type, SyntaxNode declaration) {
         var scope = compilation.CurrentScope;
 
-        Defer(() => {
-                BindTypeParameterConstraints(type.TypeParameters, type, scope);
+        // Bound when the base types are first asked for — whether the type
+        // conforms to something may be asked before this deferred work runs —
+        // and in any case with the rest of the signatures. What an extension
+        // adds is added to what this binds, never replaced by it.
+        type.PendingBaseTypes = () => {
+            BindTypeParameterConstraints(type.TypeParameters, type, scope);
 
-                var baseTypes = BaseTypeListOf(declaration);
-                if (baseTypes is not null) {
-                    type.BaseTypes =
-                        [..baseTypes.Types.Select(syntax => BindType(syntax, type, scope))];
-                }
-
-                // '@reflectable' is a conformance to Sable.Core's Reflectable,
-                // which 'TypeInfo.of' asks of its argument.
-                if (type.IsReflectable && compilation.Core.Module.GetType("Reflectable") is { TypeKind: TypeKind.Protocol } reflectable
-                    && !type.BaseTypes.Contains(reflectable)) {
-                    type.BaseTypes = type.BaseTypes.Add(reflectable);
-                }
-
-                BindWhereClause(WhereClauseOf(declaration), type, scope);
+            var baseTypes = BaseTypeListOf(declaration);
+            if (baseTypes is not null) {
+                type.BaseTypes =
+                    [..baseTypes.Types.Select(syntax => BindType(syntax, type, scope)), ..type.BaseTypes];
             }
-        );
+
+            // '@reflectable' is a conformance to Sable.Core's Reflectable,
+            // which 'TypeInfo.of' asks of its argument.
+            if (type.IsReflectable && compilation.Core.Module.GetType("Reflectable") is { TypeKind: TypeKind.Protocol } reflectable
+                && !type.BaseTypes.Contains(reflectable)) {
+                type.BaseTypes = type.BaseTypes.Add(reflectable);
+            }
+
+            BindWhereClause(WhereClauseOf(declaration), type, scope);
+        };
+
+        Defer(() => _ = type.BaseTypes);
 
         // Conformance is checked after every signature is bound, so that the
         // comparison sees real types rather than unresolved ones — and so that
@@ -1076,6 +1081,8 @@ internal sealed class TypeBinder(Compilation compilation) {
             );
         }
 
+        compilation.ReportUse(_diagnostics, found, syntax.Identifier.Span, context, scope);
+
         return Resolved(syntax, found, ApplyTypeArguments(found, syntax.TypeArgumentList, context, scope, syntax.Span));
     }
 
@@ -1085,8 +1092,11 @@ internal sealed class TypeBinder(Compilation compilation) {
         FileScope? scope
     ) {
         // A dotted name may be a module path, so try the longest module first.
+        // An alias the file imported stands for the module it names:
+        // 'M.Vector' after 'import Sable.Math as M'.
         var full = Compilation.NameOf(syntax.Left);
-        if (compilation.GetModule(full) is { } module) {
+        if (compilation.ResolveModule(full, scope) is { } module) {
+            full = module.Name;
             var member = module.GetMembers(syntax.Right.Identifier.Text).FirstOrDefault();
             if (member is null) {
                 return Error(
@@ -1100,6 +1110,8 @@ internal sealed class TypeBinder(Compilation compilation) {
             if (!Visibility.IsVisible(member, scope, compilation)) {
                 ReportHidden(member, syntax.Right.Span);
             }
+
+            compilation.ReportUse(_diagnostics, member, syntax.Right.Span, context, scope);
 
             return Resolved(syntax.Right, member, ApplyTypeArguments(member, syntax.Right.TypeArgumentList, context, scope, syntax.Span));
         }
@@ -1162,6 +1174,13 @@ internal sealed class TypeBinder(Compilation compilation) {
             ? ErrorTypeSymbol.Instance
             : Resolved(syntax, symbol, ApplyTypeArguments(symbol, syntax.TypeArgumentList, context, scope, syntax.Span));
     }
+
+    /// <summary>
+    ///     A generic name already found, <c>Deque&lt;Int&gt;</c> in
+    ///     <c>Sable.Collections.Deque&lt;Int&gt;()</c>, read as the type it names.
+    /// </summary>
+    internal TypeSymbol BindGenericName(Symbol found, GenericNameSyntax syntax, Symbol context, FileScope? scope) =>
+        Resolved(syntax, found, ApplyTypeArguments(found, syntax.TypeArgumentList, context, scope, syntax.Span));
 
     TypeSymbol ApplyTypeArguments(
         Symbol symbol,

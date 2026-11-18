@@ -35,6 +35,14 @@ public fn print(_ value: U64)
 public fn print(_ value: UInt)
 @builtin("print_F32")
 public fn print(_ value: F32)
+@builtin("print_I128")
+public fn print(_ value: I128)
+@builtin("print_U128")
+public fn print(_ value: U128)
+@builtin("print_F16")
+public fn print(_ value: F16)
+@builtin("print_Char")
+public fn print(_ value: Char)
 
 /// The runtime's own calls, all static: standard streams, files,
 /// directories, the environment, clocks and processes.

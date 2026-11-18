@@ -3,11 +3,13 @@ using System.Reflection;
 
 namespace Sable.CodeGen;
 
-/// <summary>The platform a program is built for, which decides some of clang's flags: today always the host.</summary>
+/// <summary>The operating system a program is built for (<see cref="NativeTarget" />), which decides some of clang's flags.</summary>
 public enum NativePlatform {
     MacOS,
     Linux,
     Other,
+    Windows,
+    Wasi,
 }
 
 /// <summary>Link-time optimisation: none, ThinLTO, or the whole program as one module.</summary>
@@ -59,9 +61,20 @@ public sealed record NativeOptions {
     public string LinkInputs { get; init; } = "";
 
     /// <summary>The settings as text, every one of them: what a cache of builds made with them is keyed by.</summary>
-    public string Key => $"{OptLevel}|{DebugInfo}|{Lto}|{Strip}|{Rpath}|{string.Join(' ', LinkArguments)}|{LinkInputs}";
+    public string Key => $"{OptLevel}|{DebugInfo}|{Lto}|{Strip}|{Rpath}|{Target?.Triple}|{Sysroot}|{string.Join(' ', LinkArguments)}|{LinkInputs}";
+    /// <summary>What the program is built for: null for the machine building it.</summary>
+    public NativeTarget? Target { get; init; }
+
+    /// <summary>
+    ///     Where the target's C library and headers are, for a target that is
+    ///     not this machine: clang's <c>--sysroot</c>. Null for clang's own idea.
+    /// </summary>
+    public string? Sysroot { get; init; }
 
     public bool Optimise => OptLevel != "0";
+
+    /// <summary>The target, the host when none is given.</summary>
+    public NativeTarget TargetOrHost => Target ?? NativeTarget.Host;
 
     /// <summary>
     ///     The two builds a single file's <c>sable build</c> knows: <c>-O2</c>
@@ -109,11 +122,35 @@ public static class NativeBuild {
         }
     }
 
-    /// <summary>The platform this process runs on, which is the one built for.</summary>
-    public static NativePlatform Host =>
-        OperatingSystem.IsMacOS() ? NativePlatform.MacOS : OperatingSystem.IsLinux() ? NativePlatform.Linux : NativePlatform.Other;
+    /// <summary>The platform this process runs on, which is the one built for unless a target says otherwise.</summary>
+    public static NativePlatform Host => NativeTarget.Host.Platform;
 
     public static string CompilerPath => Environment.GetEnvironmentVariable("CC") is { Length: > 0 } cc ? cc : "clang";
+
+    /// <summary>
+    ///     The C compiler's LLVM major version, and whether it is Apple's
+    ///     (whose numbers are its own); null when there is none, or it does
+    ///     not say. Debug information leans on it where LLVMs lay out a line
+    ///     table differently.
+    /// </summary>
+    public static (int Major, bool Apple)? CompilerVersion => Version.Value;
+
+    static readonly Lazy<(int Major, bool Apple)?> Version = new(static () => {
+        try {
+            var (exitCode, output) = Run(CompilerPath, ["--version"]);
+            return exitCode == 0 ? ParseVersion(output) : null;
+        } catch (System.ComponentModel.Win32Exception) {
+            return null;
+        }
+    });
+
+    /// <summary>From <c>clang --version</c>: "Ubuntu clang version 18.1.3 (1ubuntu1)", "Apple clang version 16.0.0 (…)".</summary>
+    public static (int Major, bool Apple)? ParseVersion(string output) {
+        var match = System.Text.RegularExpressions.Regex.Match(output, @"(Apple )?clang version (\d+)\.");
+        return match.Success
+            ? (int.Parse(match.Groups[2].Value, System.Globalization.CultureInfo.InvariantCulture), match.Groups[1].Success)
+            : null;
+    }
 
     /// <summary>True when a C compiler can be run here.</summary>
     public static bool IsAvailable() {
@@ -139,60 +176,48 @@ public static class NativeBuild {
     /// <summary>
     ///     Builds with a profile's settings: any optimisation level, with or
     ///     without debug information, link-time optimisation where the
-    ///     platform's linker can do it, and what the link strips.
+    ///     platform's linker can do it, and what the link strips — for the
+    ///     machine building it, or the target the options name.
     /// </summary>
-    public static NativeBuildResult Build(string llvmIr, string outputPath, NativeOptions options) {
+    /// <param name="runtimeCache">
+    ///     Where the compiled runtime is kept between builds
+    ///     (<see cref="RuntimeObject" />); the user's cache when not given.
+    /// </param>
+    public static NativeBuildResult Build(string llvmIr, string outputPath, NativeOptions options, string? runtimeCache = null) {
+        var target = options.TargetOrHost;
+        if (!target.HasRuntime) {
+            return new(false, NoRuntime(target));
+        }
+
+        // The runtime is the same for every program built with these
+        // options: compiled once and kept, it no longer costs most of a
+        // small program's build.
+        var lto = LtoFlags(options, target.Platform, LinksBitcodeFor(target));
+        var (runtime, compiled) = RuntimeObject(options, lto, runtimeCache ?? DefaultRuntimeCache);
+        if (!compiled.Succeeded) {
+            return compiled;
+        }
+
         var directory = Directory.CreateTempSubdirectory("sable-build-");
         try {
             var irPath = Path.Combine(directory.FullName, "program.ll");
-            var runtimePath = Path.Combine(directory.FullName, "sable_runtime.c");
-            File.WriteAllText(irPath, llvmIr);
-            File.WriteAllText(runtimePath, RuntimeSource);
+            File.WriteAllText(irPath, ForTarget(llvmIr, target, lto.Count > 0));
 
-            var lto = LtoFlags(options, Host, LinksBitcode);
-            List<string> arguments = [..CompileFlags(options), ..lto];
+            List<string> arguments = [..target.ClangFlags, ..SysrootFlags(options), ..CompileFlags(options), ..lto];
 
-            // LLVM inlines the runtime's small functions into the program only
-            // into functions built for at least the runtime's CPU features.
-            var attributes = new List<string>();
-            if (lto.Count > 0 && HostAttributes.Value is { } host) {
-                attributes.Add(host);
-            }
-
-            if (PlatformAttributes is { } platform) {
-                attributes.Add(platform);
-            }
-
-            if (attributes.Count > 0) {
-                File.WriteAllText(irPath, WithHostAttributes(llvmIr, string.Join(' ', attributes)));
-            }
-
-            // With debug information the runtime is compiled apart, without
-            // it — and, optimised, as bitcode, so link-time optimisation still
-            // inlines it.
-            var runtime = runtimePath;
-            if (options.DebugInfo) {
-                runtime = Path.Combine(directory.FullName, "sable_runtime.o");
-                var bitcode = lto.Where(static f => f.StartsWith("-flto", StringComparison.Ordinal));
-                var (runtimeExit, runtimeOutput) = Run(CompilerPath, ["-c", options.Optimise ? $"-O{options.OptLevel}" : "-O2", ..bitcode, runtimePath, "-o", runtime]);
-                if (runtimeExit != 0) {
-                    return new(false, runtimeOutput);
+            // Apple's linker deletes the object link-time optimisation makes,
+            // and dsymutil, which clang runs next, reads the debug information
+            // from it: keep it until the build is done.
+            if (options.DebugInfo && lto.Count > 0 && target.Platform == NativePlatform.MacOS) {
+                var kept = Path.Combine(directory.FullName, "lto");
+                if (options.Lto == LtoMode.Thin) {
+                    Directory.CreateDirectory(kept);
                 }
 
-                // Apple's linker deletes the object link-time optimisation
-                // makes, and dsymutil, which clang runs next, reads the debug
-                // information from it: keep it until the build is done.
-                if (lto.Count > 0 && Host == NativePlatform.MacOS) {
-                    var kept = Path.Combine(directory.FullName, "lto");
-                    if (options.Lto == LtoMode.Thin) {
-                        Directory.CreateDirectory(kept);
-                    }
-
-                    arguments.Add("-Wl,-object_path_lto," + kept);
-                }
+                arguments.Add("-Wl,-object_path_lto," + kept);
             }
 
-            arguments.AddRange(["-Wno-override-module", irPath, runtime, "-o", outputPath, ..LinkFlags(options, Host)]);
+            arguments.AddRange(["-Wno-override-module", irPath, runtime, "-o", outputPath, ..LinkFlags(options, target.Platform), ..CrossLinkFlags(target)]);
 
             var (exitCode, output) = Run(CompilerPath, arguments);
             if (exitCode == 0 && options.DebugInfo) {
@@ -202,6 +227,128 @@ public static class NativeBuild {
             return new(exitCode == 0, output);
         } finally {
             directory.Delete(true);
+        }
+    }
+
+    /// <summary>Why an executable cannot be linked for <paramref name="target" />.</summary>
+    public static string NoRuntime(NativeTarget target) =>
+        $"the runtime has no platform layer for {target.Triple} yet: it is built for macOS and Linux only (docs/06); "
+        + "the program can still be compiled to an object file (--emit obj) or to LLVM IR (--emit llvm-ir)";
+
+    /// <summary>
+    ///     The program's IR as clang is given it for <paramref name="target" />:
+    ///     with the target's data layout and triple — the ones clang compiles
+    ///     the runtime with, so that both agree on every size and offset — and
+    ///     the attributes every function needs there.
+    /// </summary>
+    /// <param name="inlinesRuntime">
+    ///     Link-time optimisation is on: LLVM inlines the runtime's small
+    ///     functions into the program only into functions built for at least
+    ///     the runtime's CPU features, so the program's get them too. (The
+    ///     IR, written by hand, said nothing, so under LTO the runtime's
+    ///     retain and release were never inlined into it.)
+    /// </param>
+    public static string ForTarget(string llvmIr, NativeTarget target, bool inlinesRuntime = false) {
+        var attributes = new List<string>();
+        if (inlinesRuntime && target.Describe()?.FunctionAttributes is { } features) {
+            attributes.Add(features);
+        }
+
+        if (PlatformAttributesFor(target) is { } platform) {
+            attributes.Add(platform);
+        }
+
+        var ir = attributes.Count > 0 ? WithHostAttributes(llvmIr, string.Join(' ', attributes)) : llvmIr;
+        return WithTargetHeader(ir, target);
+    }
+
+    /// <summary>
+    ///     The IR with <c>target datalayout</c> and <c>target triple</c> at its
+    ///     top, as clang describes <paramref name="target" />; unchanged when
+    ///     it has them already, or clang cannot say.
+    /// </summary>
+    public static string WithTargetHeader(string llvmIr, NativeTarget target) =>
+        llvmIr.StartsWith("target ", StringComparison.Ordinal) || llvmIr.Contains("\ntarget triple = ", StringComparison.Ordinal) || target.Describe() is not { } description
+            ? llvmIr
+            : description.Header + llvmIr;
+
+    /// <summary>clang's <c>--sysroot</c>, when the options give one.</summary>
+    public static IReadOnlyList<string> SysrootFlags(NativeOptions options) =>
+        options.Sysroot is { } sysroot ? ["--sysroot=" + sysroot] : [];
+
+    /// <summary>
+    ///     What linking for another machine's Linux needs: lld, since the
+    ///     system's own linker links only for the system (Apple's takes no
+    ///     ELF, GNU ld one architecture).
+    /// </summary>
+    public static IReadOnlyList<string> CrossLinkFlags(NativeTarget target) =>
+        !target.IsHost && target.Platform == NativePlatform.Linux ? ["-fuse-ld=lld"] : [];
+
+    /// <summary>Whether the link for <paramref name="target" /> takes LLVM bitcode: this machine's answer, or lld's for another's Linux.</summary>
+    public static bool LinksBitcodeFor(NativeTarget target) =>
+        target.IsHost ? LinksBitcode : target.Platform is NativePlatform.MacOS or NativePlatform.Linux;
+
+    // =======================================================================
+    // The runtime, compiled once
+    // =======================================================================
+
+    /// <summary>
+    ///     Where a compiled runtime is kept when the build names no cache:
+    ///     <c>$SABLE_HOME/cache/runtime</c>, by default under <c>~/.sable</c>.
+    ///     Where it is kept never changes what is built: the object is keyed
+    ///     by everything that goes into it.
+    /// </summary>
+    public static string DefaultRuntimeCache =>
+        Path.Combine(
+            Environment.GetEnvironmentVariable("SABLE_HOME") is { Length: > 0 } home ? home : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".sable"),
+            "cache",
+            "runtime");
+
+    /// <summary>
+    ///     The runtime compiled as <paramref name="options" /> ask, from
+    ///     <paramref name="cacheDirectory" /> when it was compiled before. The
+    ///     object's name is a hash of all that makes it — the compiler, the
+    ///     runtime's source, the flags and the target — so a cached one is
+    ///     only ever the one this build would make. Written whole or not at all.
+    /// </summary>
+    /// <param name="lto">
+    ///     Link-time optimisation's flags: with them the runtime is LLVM
+    ///     bitcode, which the link optimises with the program, inlining the
+    ///     runtime's small functions into it.
+    /// </param>
+    public static (string Path, NativeBuildResult Result) RuntimeObject(NativeOptions options, IReadOnlyList<string> lto, string cacheDirectory) {
+        var target = options.TargetOrHost;
+        var bitcode = lto.Where(static f => f.StartsWith("-flto", StringComparison.Ordinal));
+
+        // Without debug information the runtime is compiled as the program
+        // is; with it, optimised and without debug information — it is not
+        // the program's code, and stepping goes over it as over a system
+        // library.
+        var level = options.DebugInfo && !options.Optimise ? "-O2" : $"-O{options.OptLevel}";
+        List<string> flags = [..target.ClangFlags, ..SysrootFlags(options), "-c", level, ..bitcode];
+
+        var key = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(
+            $"sable-runtime-1\n{NativeObjects.CompilerIdentity}\n{string.Join(' ', flags)}\n{target.Triple}\n{RuntimeSource}")));
+        var path = Path.Combine(cacheDirectory, $"runtime-{key[..32]}.o");
+        if (File.Exists(path)) {
+            return (path, new(true, ""));
+        }
+
+        Directory.CreateDirectory(cacheDirectory);
+        var temporary = path + $".{Environment.ProcessId}.{Guid.NewGuid():N}.tmp";
+        var source = temporary + ".c";
+        try {
+            File.WriteAllText(source, RuntimeSource);
+            var (exitCode, output) = Run(CompilerPath, [..flags, source, "-o", temporary]);
+            if (exitCode != 0) {
+                return (path, new(false, output));
+            }
+
+            File.Move(temporary, path, overwrite: true);
+            return (path, new(true, output));
+        } finally {
+            File.Delete(source);
+            File.Delete(temporary);
         }
     }
 
@@ -310,45 +457,14 @@ public static class NativeBuild {
     }
 
     /// <summary>
-    ///     The <c>target-cpu</c> and <c>target-features</c> clang gives a C
-    ///     function on this machine, or null when they cannot be had.
+    ///     What every function needs on the target's platform, whatever the
+    ///     build. macOS's backtrace(), which a trap's backtrace and the
+    ///     system's crash reports use, walks the frame-pointer chain: keep it
+    ///     in every function that calls, as clang does for C there. (Without
+    ///     it an unoptimised build's trap showed the innermost frame only.)
     /// </summary>
-    /// <remarks>
-    ///     LLVM inlines a function only into one built for at least its CPU
-    ///     features. The runtime is compiled by clang, which says what they
-    ///     are; the program's IR, written by hand, said nothing, so under LTO
-    ///     the runtime's retain and release were never inlined into it. Asked
-    ///     once per process, from a function compiled the way the runtime is.
-    /// </remarks>
-    static readonly Lazy<string?> HostAttributes = new(() => {
-        var directory = Directory.CreateTempSubdirectory("sable-probe-");
-        try {
-            var probe = Path.Combine(directory.FullName, "probe.c");
-            var output = Path.Combine(directory.FullName, "probe.ll");
-            File.WriteAllText(probe, "int sable_probe(int x) { return x + 1; }\n");
-            if (Run(CompilerPath, ["-O2", "-S", "-emit-llvm", probe, "-o", output]).ExitCode != 0) {
-                return null;
-            }
-
-            var text = File.ReadAllText(output);
-            var cpu = System.Text.RegularExpressions.Regex.Match(text, "\"target-cpu\"=\"[^\"]*\"");
-            var features = System.Text.RegularExpressions.Regex.Match(text, "\"target-features\"=\"[^\"]*\"");
-            return cpu.Success ? cpu.Value + (features.Success ? " " + features.Value : "") : null;
-        } catch (Exception e) when (e is IOException or System.ComponentModel.Win32Exception) {
-            return null;
-        } finally {
-            directory.Delete(true);
-        }
-    });
-
-    /// <summary>
-    ///     What every function needs on this platform, whatever the build.
-    ///     macOS's backtrace(), which a trap's backtrace and the system's crash
-    ///     reports use, walks the frame-pointer chain: keep it in every
-    ///     function that calls, as clang does for C there. (Without it an
-    ///     unoptimised build's trap showed the innermost frame only.)
-    /// </summary>
-    public static string? PlatformAttributes => OperatingSystem.IsMacOS() ? "\"frame-pointer\"=\"non-leaf\"" : null;
+    public static string? PlatformAttributesFor(NativeTarget target) =>
+        target.Platform == NativePlatform.MacOS ? "\"frame-pointer\"=\"non-leaf\"" : null;
 
     /// <summary>Every function the IR defines, given the host's attributes through one attribute group.</summary>
     public static string WithHostAttributes(string llvmIr, string attributes) {

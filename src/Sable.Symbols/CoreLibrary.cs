@@ -25,27 +25,37 @@ namespace Sable.Symbols;
 public static class CoreLibrary {
     public const string ModuleName = "Sable.Core";
 
-    static readonly Lazy<IReadOnlyList<SyntaxTree>> Parsed = new(Load);
+    static readonly System.Collections.Concurrent.ConcurrentDictionary<(string Os, string Arch), Lazy<IReadOnlyList<SyntaxTree>>> Parsed = new();
 
-    /// <summary>The core's files, parsed, in name order.</summary>
-    public static IReadOnlyList<SyntaxTree> Trees => Parsed.Value;
+    /// <summary>The core's files, parsed for the machine running the compiler, in name order.</summary>
+    public static IReadOnlyList<SyntaxTree> Trees => TreesFor(ParseOptions.Default);
 
-    static IReadOnlyList<SyntaxTree> Load() {
+    /// <summary>
+    ///     The core's files parsed for the target <paramref name="options" />
+    ///     name — what their <c>#if os(...)</c> and <c>#if arch(...)</c> test,
+    ///     such as <c>Platform.os</c> — once per target.
+    /// </summary>
+    public static IReadOnlyList<SyntaxTree> TreesFor(ParseOptions options) =>
+        Parsed.GetOrAdd((options.TargetOs, options.TargetArch), static target => new(() => Load(target.Os, target.Arch))).Value;
+
+    static IReadOnlyList<SyntaxTree> Load(string os, string arch) {
         var assembly = typeof(CoreLibrary).Assembly;
         var trees = new List<SyntaxTree>();
+        var options = ParseOptions.Default.ForTarget(os, arch);
         foreach (var resource in assembly.GetManifestResourceNames()
                      .Where(static n => n.StartsWith("lib/Sable.Core/", StringComparison.Ordinal))
                      .Order(StringComparer.Ordinal)) {
             using var stream = assembly.GetManifestResourceStream(resource)!;
             using var reader = new StreamReader(stream);
-            trees.Add(SyntaxTree.Parse(new SourceText(reader.ReadToEnd(), resource)));
+            trees.Add(SyntaxTree.Parse(new SourceText(reader.ReadToEnd(), resource), options));
         }
 
         return trees;
     }
 
-    /// <summary>True for one of the core's own trees.</summary>
-    public static bool Contains(SyntaxTree tree) => Trees.Contains(tree);
+    /// <summary>True for one of the core's own trees, parsed for any target.</summary>
+    public static bool Contains(SyntaxTree tree) =>
+        tree.Text.FileName.StartsWith("lib/Sable.Core/", StringComparison.Ordinal) && TreesFor(tree.Options).Contains(tree);
 
     /// <summary>The module a file declares (<c>module A.B</c>), or null when it declares none.</summary>
     public static string? ModuleOf(SyntaxTree tree) =>

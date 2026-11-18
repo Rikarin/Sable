@@ -80,7 +80,7 @@ public sealed class PackageTests : IDisposable {
 
         // A workspace whose two members declare the same module and function.
         Write("root/ws/sable.toml", "[workspace]\nmembers = [\"a\", \"b\"]\n");
-        Write("root/ws/a/sable.toml", "[package]\nname = \"a\"\nversion = \"0.1.0\"\n");
+        Write("root/ws/a/sable.toml", "[package]\nname = \"a\"\nversion = \"0.1.0\"\n\n[lints]\nunused_local = \"allow\"\n");
         Write("root/ws/a/src/lib.sb", Shared);
         Write("root/ws/b/sable.toml", "[package]\nname = \"b\"\nversion = \"0.1.0\"\n");
         Write("root/ws/b/src/lib.sb", Shared);
@@ -96,6 +96,11 @@ public sealed class PackageTests : IDisposable {
         Assert.Equal(["default", "fancy"], app.Features);
         Assert.Equal([Path.Combine(_top, "util", "src", "lib.sb")], app.Dependencies.Select(static d => d.Path));
         Assert.Empty(projects.Single(static p => p.Name == "a").Dependencies);
+
+        // Each with its [lints], which the editor reports at.
+        var unusedLocal = Sable.Symbols.Lints.Find("unused_local")!;
+        Assert.Equal(Sable.Symbols.LintLevel.Allow, projects.Single(static p => p.Name == "a").Lints.LevelOf(unusedLocal));
+        Assert.Equal(Sable.Symbols.LintLevel.Warn, app.Lints.LevelOf(unusedLocal));
     }
 
     [Fact]

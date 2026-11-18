@@ -206,7 +206,7 @@ public static class SilPrinter {
                 switch (instruction) {
                     case IntegerLiteralInst literal:
                         builder.Append(" $").Append(literal.Type).Append(", ")
-                            .Append(literal.Value.ToString(CultureInfo.InvariantCulture));
+                            .Append(literal.WideValue.ToString(CultureInfo.InvariantCulture));
                         break;
 
                     case StringLiteralInst literal:

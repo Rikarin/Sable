@@ -109,4 +109,67 @@ public sealed class ReplTests {
     [InlineData("let s = \"{\"", true)]
     [InlineData("foo(1,", false)]
     public void KnowsWhenAnEntryIsComplete(string text, bool complete) => Assert.Equal(complete, ReplSession.IsComplete(text));
+
+    /// <summary>An earlier statement's effects are replayed from the journal, not carried out again.</summary>
+    [Fact]
+    public void AStatementsEffectsHappenOnce() {
+        var path = Path.Combine(Directory.CreateTempSubdirectory("sable-repl-").FullName, "log.txt");
+        try {
+            var session = new ReplSession();
+            Out(session, $"let wrote = Runtime.writeFile(path: \"{path}\", text: \"x\", append: true)");
+            Out(session, "1");
+            Out(session, "2");
+            Assert.Equal("x", File.ReadAllText(path));
+
+            // The clock reads as it did, though it has moved on.
+            Out(session, "let then = Runtime.monotonicNanoseconds()");
+            var first = Out(session, "then");
+            Out(session, "Runtime.sleep(nanoseconds: 1000000)");
+            Assert.Equal(first.Replace("res2", "res3", StringComparison.Ordinal), Out(session, "then"));
+        } finally {
+            Directory.Delete(Path.GetDirectoryName(path)!, true);
+        }
+    }
+
+    /// <summary>A failed entry's effects happened, but are not replayed into the next one's.</summary>
+    [Fact]
+    public void AFailedEntrysEffectsAreNotReplayed() {
+        var path = Path.Combine(Directory.CreateTempSubdirectory("sable-repl-").FullName, "log.txt");
+        try {
+            var session = new ReplSession();
+            var result = session.Submit($"Runtime.writeFile(path: \"{path}\", text: \"a\", append: true)\nlet list = [1]\nprint(list[5])");
+            Assert.True(result.Failed, result.Output);
+            Out(session, $"let wrote = Runtime.writeFile(path: \"{path}\", text: \"b\", append: true)");
+            Out(session, "1");
+            Assert.Equal("ab", File.ReadAllText(path));
+        } finally {
+            Directory.Delete(Path.GetDirectoryName(path)!, true);
+        }
+    }
+
+    /// <summary>What runs natively runs here: deep calls and long loops, past the interpreter's usual limits.</summary>
+    [Fact]
+    public void DeepRecursionAndLongLoopsRun() {
+        var session = new ReplSession();
+        Out(session, "fn down(_ n: Int) -> Int {\n    if n == 0 { return 0 }\n    return down(n - 1) + 1\n}");
+        Assert.Equal("res0: Int = 5000", Out(session, "down(5000)"));
+        // Over ten million steps, the interpreter's usual limit.
+        Assert.Equal("2000000", Out(session, "var i = 0\nwhile i < 2_000_000 { i += 1 }\nprint(i)"));
+    }
+
+    /// <summary>An entry that never ends is stopped by Ctrl-C, and the session goes on.</summary>
+    [Fact]
+    public async Task ARunawayEntryCanBeInterrupted() {
+        var session = new ReplSession();
+        Assert.False(session.Interrupt());
+        var running = Task.Run(() => session.Submit("var n = 0\nwhile true { n += 1 }"));
+        while (!session.Interrupt()) {
+            await Task.Delay(10);
+        }
+
+        var result = await running.WaitAsync(TimeSpan.FromSeconds(60));
+        Assert.True(result.Failed);
+        Assert.Contains("trap: interrupted", result.Output, StringComparison.Ordinal);
+        Assert.Equal("res0: Int = 1", Out(session, "1"));
+    }
 }

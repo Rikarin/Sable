@@ -1,3 +1,4 @@
+using Sable.CodeGen;
 using Sable.Driver.Packages;
 
 namespace Sable.Driver.Commands;
@@ -113,6 +114,25 @@ public abstract class PackageCommand : Command {
 
                     request = request with { Bin = bin };
                     break;
+                case "--target":
+                    if (Value() is not { } triple) {
+                        return null;
+                    }
+
+                    if (NativeTarget.Parse(triple, out var error) is not { } target) {
+                        Console.Error.WriteLine($"sable: {error}");
+                        return null;
+                    }
+
+                    request = request with { Target = target };
+                    break;
+                case "--sysroot":
+                    if (Value() is not { } sysroot) {
+                        return null;
+                    }
+
+                    request = request with { Sysroot = sysroot };
+                    break;
                 default:
                     if (argument.StartsWith("--features=", StringComparison.Ordinal)) {
                         features.AddRange(argument["--features=".Length..].Split([',', ' '], StringSplitOptions.RemoveEmptyEntries));
@@ -163,5 +183,8 @@ public abstract class PackageCommand : Command {
           --bin <name>             only this binary
           --locked                 fail rather than change sable.lock
           --timings                print the time each phase of the build took
+          --target <triple>        build for another machine (aarch64-unknown-linux-gnu, x86_64-apple-darwin,
+                                   ...); output in target/<triple>/<profile>/
+          --sysroot <dir>          where the target's C library is, for clang's link
         """;
 }

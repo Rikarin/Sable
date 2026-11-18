@@ -215,7 +215,7 @@ public static class ManifestEvaluator {
         }
     }
 
-    static string? Effect(Symbol symbol) {
+    internal static string? Effect(Symbol symbol) {
         for (var current = symbol; current is not null; current = current.ContainingSymbol) {
             var inCore = current.ContainingSymbol is ModuleSymbol { Name: CoreLibrary.ModuleName };
             switch (current) {

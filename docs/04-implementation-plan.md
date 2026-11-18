@@ -180,7 +180,9 @@ Copy Roslyn's **red/green tree** design exactly:
 - [ ] Round-trip invariant holds on a 2,000-file corpus
 - [ ] Incremental reparse of a 10,000-line file after a one-character edit
       completes in < 2 ms
-- [ ] `sable fmt` is idempotent and reproduces the corpus modulo normalisation
+- [x] `sable fmt` is idempotent and reproduces the corpus modulo normalisation
+      — `FormatterRepositoryTests` holds `lib/`, `examples/`, `tests/corpus/`
+      and `tests/programs/` to being formatted already
 - [x] A syntax-tree visualiser exists (Roslyn's Syntax Visualiser equivalent)
       — `tools/Sable.Visualiser`
 - [ ] Fuzzer runs for 24h without a crash or an assertion failure
@@ -1488,9 +1490,15 @@ VS Code's own test host.
   off the brace's line. Rules added: the author's line breaks inside
   expressions are kept, with one continuation indent (gofmt's rule, since
   there is no line width); a declaration's, an expression's or a guard's
-  one-statement body written on one line stays there; `operator == (`.
-  `lib/` is not reformatted yet (others were editing it): once it is, a test
-  that `sable fmt --check lib` is clean should follow.
+  one-statement body written on one line stays there, and so do an
+  `if`/`else` chain of such bodies, a closure with a header around one
+  expression, and a type's body of members without bodies of their own
+  (`struct P { var x: Int }`, `enum Dir { north, south }`, `;` between
+  members); `operator == (`; a run of match arms whose `=>` the author lined
+  up stays lined up (kept, as a line break is, not imposed). `lib/`,
+  `examples/`, `tests/corpus/` and `tests/programs/` are formatted, and a
+  test keeps them so; `tests/negative/` is not, since its expectation
+  comments sit in a column of their own.
 - **`sable explain <code>`** prints `docs/diagnostics/S####.md`, embedded in
   the driver; `--list` lists them. There is a page for every code but five no
   user can meet (S1005, S3082, S3099, S7001, S7002). `ExplainTests` compiles

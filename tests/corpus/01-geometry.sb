@@ -38,9 +38,9 @@ public protocol Measurable {
 
 public fn areaOf(_ shape: Shape) -> F64 {
     return match shape {
-        case .Circle(let r) => 3.14159 * r * r
+        case .Circle(let r)      => 3.14159 * r * r
         case .Rect(let w, let h) => w * h
-        case .Empty => 0.0
+        case .Empty              => 0.0
     }
 }
 

@@ -164,18 +164,18 @@ public struct Router {
 
 public fn describe(_ error: RouteError) -> Response {
     return match error {
-        case .NotFound(let path) => Response.error(404, path)
+        case .NotFound(let path)   => Response.error(404, path)
         case .BadMethod(let found) => Response.error(405, name(found))
-        case .BadBody(let reason) => Response.error(400, reason)
-        case .Unauthorised => Response.error(401, "unauthorised")
+        case .BadBody(let reason)  => Response.error(400, reason)
+        case .Unauthorised         => Response.error(401, "unauthorised")
     }
 }
 
 public fn name(_ method: Method) -> String {
     return match method {
-        case .Get => "GET"
-        case .Post => "POST"
-        case .Put => "PUT"
+        case .Get    => "GET"
+        case .Post   => "POST"
+        case .Put    => "PUT"
         case .Delete => "DELETE"
     }
 }

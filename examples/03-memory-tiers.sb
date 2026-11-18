@@ -41,7 +41,7 @@ fn load(_ bytes: U8[>..]) -> Order? {
     // fromBytes validates framing, tags, lengths and every relative link
     // before returning. Corrupt input yields .Invalid, never a bad reference.
     match Order.fromBytes(bytes) {
-        case .Ok(let o) => { return o }
+        case .Ok(let o)        => { return o }
         case .Invalid(let why) => { print("rejected order: \(why)") }
     }
     return none

@@ -254,7 +254,7 @@ public sealed class LexerTests {
     /// </summary>
     [Fact]
     public void AByteOrderMarkIsKeptInTheTree() {
-        const string text = "﻿module M\n\nfn one() -> Int { return 1 }\n";
+        const string text = "\uFEFFmodule M\n\nfn one() -> Int { return 1 }\n";
         var tree = SyntaxTree.Parse(new SourceText(text));
         Assert.Equal(text, tree.ToFullString());
         Assert.Single(tree.Diagnostics, static d => d.Code == ErrorCode.ERR_ByteOrderMarkNotAllowed);

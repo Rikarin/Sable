@@ -288,7 +288,7 @@ public sealed class Lexer {
             // A byte order mark is an error, reported once for the file; it is
             // kept as skipped text on the first token, so that the tree still
             // gives back every character of the file.
-            if (_position == 0 && Current == '﻿') {
+            if (_position == 0 && Current == '\uFEFF') {
                 _position = 1;
                 builder.Add(Trivia(SyntaxKind.SkippedTokensTrivia, start));
                 continue;

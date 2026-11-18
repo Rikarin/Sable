@@ -43,7 +43,9 @@ public sealed class ExplainTests {
 
     /// <remarks>A lint's page (S3300-S3399) is checked with the lints run too, at their default levels.</remarks>
     static List<string> Diagnose(string source, bool lints = false) {
-        var tree = SyntaxTree.Parse(new SourceText(source, "example.sb"));
+        // For one platform, whichever runs the tests: a page's example may
+        // be about a platform (S3096's is a declaration only for Windows).
+        var tree = SyntaxTree.Parse(new SourceText(source, "example.sb"), ParseOptions.Default.ForTarget("linux", "x86_64"));
         var compilation = Compilation.Create([tree, ..Library.For(tree)]);
         var found = compilation.GetAllDiagnosticsByFile()
             .Where(d => d.Tree is null || d.Tree == tree)

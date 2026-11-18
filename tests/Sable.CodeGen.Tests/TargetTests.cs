@@ -53,7 +53,7 @@ public sealed class TargetTests {
         Assert.Equal(os, target.Os);
         Assert.Equal(pointerBits, target.PointerBits);
         Assert.Equal(suffix, target.ExecutableSuffix);
-        Assert.Equal(target.Platform is NativePlatform.MacOS or NativePlatform.Linux, target.HasRuntime);
+        Assert.Equal(target.Platform is not NativePlatform.Wasi, target.HasRuntime);
     }
 
     [Theory]
@@ -110,18 +110,22 @@ public sealed class TargetTests {
     [InlineData("x86_64-pc-windows-msvc")]
     [InlineData("wasm32-wasi")]
     public void AProgramCompilesToAnObjectForEachTarget(string triple) {
-        var target = NativeTarget.Of(triple);
-
-        // Which targets clang has is how it was built: Apple's has no
-        // WebAssembly, LLVM's own has them all.
-        if (!CanBuild || target.Describe() is null) {
+        if (!CanBuild) {
             return;
         }
 
+        var target = NativeTarget.Of(triple);
         var directory = Directory.CreateTempSubdirectory("sable-target-");
         try {
             var path = Path.Combine(directory.FullName, "program.o");
             var compiled = NativeObjects.CompileIr(Compile(target).LlvmIr!, path, NativeOptions.Of(true, false) with { Target = target, Lto = LtoMode.Off });
+
+            // Which targets clang can write code for is how it was built:
+            // Apple's has no WebAssembly, LLVM's own has them all.
+            if (compiled.Output.Contains("No available targets are compatible", StringComparison.Ordinal)) {
+                return;
+            }
+
             Assert.True(compiled.Succeeded, compiled.Output);
             Assert.Equal(Machine(target), MachineOf(File.ReadAllBytes(path)));
         } finally {
@@ -129,9 +133,8 @@ public sealed class TargetTests {
         }
     }
 
-    /// <summary>The runtime is POSIX: an executable for Windows or WebAssembly is refused with why, not left to clang's errors.</summary>
+    /// <summary>The runtime has no WebAssembly layer: an executable for it is refused with why, not left to clang's errors.</summary>
     [Theory]
-    [InlineData("x86_64-pc-windows-msvc")]
     [InlineData("wasm32-wasi")]
     public void AnExecutableNeedsTheRuntimesPlatformLayer(string triple) {
         var target = NativeTarget.Of(triple);

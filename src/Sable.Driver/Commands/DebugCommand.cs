@@ -97,7 +97,7 @@ public sealed class DebugCommand : Command {
 
         var directory = Directory.CreateTempSubdirectory("sable-debug-");
         try {
-            var executable = Path.Combine(directory.FullName, Path.GetFileNameWithoutExtension(input));
+            var executable = Path.Combine(directory.FullName, Path.GetFileNameWithoutExtension(input) + NativeTarget.Host.ExecutableSuffix);
             var build = NativeBuild.Build(result.LlvmIr!, executable, optimise: false, debug: true);
             if (!build.Succeeded) {
                 Console.Error.WriteLine("internal error: the native build failed:");

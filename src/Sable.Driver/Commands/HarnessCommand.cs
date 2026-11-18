@@ -85,7 +85,7 @@ public abstract class HarnessCommand : Command {
             return 1;
         }
 
-        var executable = Path.Combine(Path.GetTempPath(), $"sable-{Name}-{Guid.NewGuid():N}");
+        var executable = Path.Combine(Path.GetTempPath(), $"sable-{Name}-{Guid.NewGuid():N}{NativeTarget.Host.ExecutableSuffix}");
         try {
             return Build(program.Trees, program.Directory, options, executable, program.Cache) ?? Execute(executable, options.HarnessArguments);
         } finally {

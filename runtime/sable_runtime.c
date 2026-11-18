@@ -11,12 +11,31 @@
 
 #include <errno.h>
 #include <math.h>
-#include <pthread.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+// The platform layer — threads, a trap's backtrace, files, the clock,
+// processes — is POSIX (macOS, Linux) or Win32 (Windows, with the MSVC C
+// runtime). On Windows every name the system takes or gives is UTF-16, and
+// the runtime's strings are UTF-8: they are converted at the boundary.
+#ifdef _WIN32
+#define _CRT_SECURE_NO_WARNINGS
+#define _CRT_NONSTDC_NO_DEPRECATE
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#include <dbghelp.h>
+#include <fcntl.h>
+#include <io.h>
+#include <shellapi.h>
+#pragma comment(lib, "dbghelp")
+#pragma comment(lib, "shell32")
+#else
+#include <pthread.h>
+#endif
 
 // ---- Objects -----------------------------------------------------------
 
@@ -83,8 +102,19 @@ static int64_t allocations, retains, releases;
 
 // With SABLE_CHECK_LEAKS set, a program that ends with objects still alive
 // says how many: tests run every program this way. With SABLE_STATS set, it
-// says what ARC did.
+// says what ARC did. Run as the program exits: a destructor on POSIX, and on
+// Windows a function given to atexit as the program starts.
+#ifdef _WIN32
+static void sable_report(void);
+
+__attribute__((constructor)) static void sable_report_at_exit(void) {
+    atexit(sable_report);
+}
+
+static void sable_report(void) {
+#else
 __attribute__((destructor)) static void sable_report(void) {
+#endif
     if (live_objects != 0 && getenv("SABLE_CHECK_LEAKS") != NULL) {
         fflush(stdout);
         fprintf(stderr, "sable: %lld object(s) leaked\n", (long long)live_objects);
@@ -740,8 +770,10 @@ static void sable_weak_object_died(SableObject *object) {
 
 // Overflow, division by zero, an unreachable point reached: not catchable,
 // not unwound. Say why, then stop (docs/06 §6.6).
+#ifndef _WIN32
 #include <dlfcn.h>
 #include <execinfo.h>
+#endif
 
 // With SABLE_BACKTRACE set, a trap says where it happened: a frame per line,
 // as 'sable.Module.function + offset' where the symbol is known. Off by
@@ -754,17 +786,42 @@ __attribute__((noinline)) static void print_backtrace(void) {
     }
 
     void *frames[64];
-    int count = backtrace(frames, 64);
     fprintf(stderr, "backtrace:\n");
+#ifdef _WIN32
+    // Windows walks the stack by the unwind tables every function has, and
+    // names a frame from the program's PDB, which the link always writes:
+    // with the program's symbols at least, as -rdynamic gives them on Linux.
+    int count = (int)CaptureStackBackTrace(0, 64, frames, NULL);
+    HANDLE process = GetCurrentProcess();
+    SymSetOptions(SYMOPT_DEFERRED_LOADS);
+    bool symbols = SymInitialize(process, NULL, TRUE) != FALSE;
+    union {
+        SYMBOL_INFO info;
+        char space[sizeof(SYMBOL_INFO) + 512];
+    } symbol;
+#else
+    int count = backtrace(frames, 64);
+#endif
     // The first two frames are this function and sable_trap.
     for (int i = 2; i < count; i++) {
         const char *at = (const char *)frames[i] - 1;
+#ifdef _WIN32
+        memset(&symbol, 0, sizeof symbol);
+        symbol.info.SizeOfStruct = sizeof(SYMBOL_INFO);
+        symbol.info.MaxNameLen = 512;
+        DWORD64 offset = 0;
+        if (symbols && SymFromAddr(process, (DWORD64)(uintptr_t)at, &offset, &symbol.info)) {
+            fprintf(stderr, "  %2d  %s + %lld\n", i - 2, symbol.info.Name, (long long)offset + 1);
+            continue;
+        }
+#else
         Dl_info info;
         if (dladdr(at, &info) != 0 && info.dli_sname != NULL) {
             fprintf(stderr, "  %2d  %s + %ld\n", i - 2, info.dli_sname, (long)(at + 1 - (const char *)info.dli_saddr));
-        } else {
-            fprintf(stderr, "  %2d  %p\n", i - 2, frames[i]);
+            continue;
         }
+#endif
+        fprintf(stderr, "  %2d  %p\n", i - 2, frames[i]);
     }
 }
 
@@ -772,7 +829,15 @@ _Noreturn void sable_trap(const char *message) {
     fflush(stdout);
     fprintf(stderr, "fatal error: %s\n", message);
     print_backtrace();
+#ifdef _WIN32
+    // abort() ends a Windows program with status 3, after offering it to
+    // Windows Error Reporting; a trap ends it as POSIX reports an abort,
+    // 128 + SIGABRT, the same status on every platform.
+    fflush(stderr);
+    _exit(134);
+#else
     abort();
+#endif
 }
 
 // ---- Strings -----------------------------------------------------------
@@ -2172,8 +2237,8 @@ void sable_inline_assign_bytes(SableBlock **slot, const SableInlineLayout *root,
     int width = s->kind == INLINE_BOUNDED ? s->width : varint_size(count);
 
     // Short text, the usual case, is encoded on the stack.
-    uint8_t small[256];
-    uint8_t *encoded = width + count <= (int64_t)sizeof small ? small : malloc((size_t)(width + count));
+    uint8_t on_stack[256];
+    uint8_t *encoded = width + count <= (int64_t)sizeof on_stack ? on_stack : malloc((size_t)(width + count));
     if (s->kind == INLINE_BOUNDED) {
         write_unsigned(encoded, width, (uint32_t)count);
     } else {
@@ -2182,7 +2247,7 @@ void sable_inline_assign_bytes(SableBlock **slot, const SableInlineLayout *root,
 
     memcpy(encoded + width, bytes, (size_t)count);
     splice(slot, root, at, old_size, encoded, width + count);
-    if (encoded != small) {
+    if (encoded != on_stack) {
         free(encoded);
     }
 }
@@ -2494,10 +2559,68 @@ SableString *sable_inline_invalid(const SableInlineLayout *layout, const SableBl
 // the running one next waits. The program's entry is a task too, and the
 // program ends once every task has.
 
+// The lock and the condition each task waits on: POSIX's, or Windows' slim
+// reader-writer lock and condition variable.
+#ifdef _WIN32
+typedef CONDITION_VARIABLE TaskCondition;
+static SRWLOCK task_lock = SRWLOCK_INIT;
+
+static void lock_tasks(void) {
+    AcquireSRWLockExclusive(&task_lock);
+}
+
+static void unlock_tasks(void) {
+    ReleaseSRWLockExclusive(&task_lock);
+}
+
+static void condition_init(TaskCondition *condition) {
+    InitializeConditionVariable(condition);
+}
+
+static void condition_destroy(TaskCondition *condition) {
+    (void)condition;
+}
+
+static void condition_signal(TaskCondition *condition) {
+    WakeConditionVariable(condition);
+}
+
+static void condition_wait(TaskCondition *condition) {
+    SleepConditionVariableSRW(condition, &task_lock, INFINITE, 0);
+}
+#else
+typedef pthread_cond_t TaskCondition;
+static pthread_mutex_t task_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static void lock_tasks(void) {
+    pthread_mutex_lock(&task_lock);
+}
+
+static void unlock_tasks(void) {
+    pthread_mutex_unlock(&task_lock);
+}
+
+static void condition_init(TaskCondition *condition) {
+    pthread_cond_init(condition, NULL);
+}
+
+static void condition_destroy(TaskCondition *condition) {
+    pthread_cond_destroy(condition);
+}
+
+static void condition_signal(TaskCondition *condition) {
+    pthread_cond_signal(condition);
+}
+
+static void condition_wait(TaskCondition *condition) {
+    pthread_cond_wait(condition, &task_lock);
+}
+#endif
+
 typedef struct SableTask {
     void (*body)(void *context);
     void *context;
-    pthread_cond_t wake;
+    TaskCondition wake;
     bool done;
     bool released; // the program no longer holds it
     struct SableTask *next;     // in the run queue
@@ -2505,14 +2628,13 @@ typedef struct SableTask {
     struct SableTask *next_waiter;
 } SableTask;
 
-static pthread_mutex_t task_lock = PTHREAD_MUTEX_INITIALIZER;
 static SableTask main_task;
 static SableTask *current_task;
 static SableTask *queue_head, *queue_tail;
 
 __attribute__((constructor)) static void sable_tasks_start(void) {
-    pthread_mutex_lock(&task_lock);
-    pthread_cond_init(&main_task.wake, NULL);
+    lock_tasks();
+    condition_init(&main_task.wake);
     current_task = &main_task;
 }
 
@@ -2548,22 +2670,21 @@ static void switch_away(void) {
     }
 
     current_task = next;
-    pthread_cond_signal(&next->wake);
+    condition_signal(&next->wake);
     while (current_task != self) {
-        pthread_cond_wait(&self->wake, &task_lock);
+        condition_wait(&self->wake);
     }
 }
 
 static void free_task(SableTask *task) {
-    pthread_cond_destroy(&task->wake);
+    condition_destroy(&task->wake);
     free(task);
 }
 
-static void *task_thread(void *argument) {
-    SableTask *self = argument;
-    pthread_mutex_lock(&task_lock);
+static void task_thread(SableTask *self) {
+    lock_tasks();
     while (current_task != self) {
-        pthread_cond_wait(&self->wake, &task_lock);
+        condition_wait(&self->wake);
     }
 
     self->body(self->context);
@@ -2583,14 +2704,47 @@ static void *task_thread(void *argument) {
     }
 
     current_task = next;
-    pthread_cond_signal(&next->wake);
+    condition_signal(&next->wake);
     if (self->released) {
         free_task(self);
     }
 
-    pthread_mutex_unlock(&task_lock);
+    unlock_tasks();
+}
+
+// A task's thread, with the stack a POSIX main thread has, 8 MiB.
+#ifdef _WIN32
+static DWORD WINAPI task_thread_entry(void *argument) {
+    task_thread(argument);
+    return 0;
+}
+
+static bool start_task_thread(SableTask *task) {
+    HANDLE thread = CreateThread(NULL, 8u << 20, task_thread_entry, task, STACK_SIZE_PARAM_IS_A_RESERVATION, NULL);
+    if (thread == NULL) {
+        return false;
+    }
+
+    CloseHandle(thread);
+    return true;
+}
+#else
+static void *task_thread_entry(void *argument) {
+    task_thread(argument);
     return NULL;
 }
+
+static bool start_task_thread(SableTask *task) {
+    pthread_attr_t attributes;
+    pthread_attr_init(&attributes);
+    pthread_attr_setstacksize(&attributes, 8u << 20);
+    pthread_attr_setdetachstate(&attributes, PTHREAD_CREATE_DETACHED);
+    pthread_t thread;
+    bool started = pthread_create(&thread, &attributes, task_thread_entry, task) == 0;
+    pthread_attr_destroy(&attributes);
+    return started;
+}
+#endif
 
 // A new task, queued to run 'body(context)'; the program holds the handle until it releases it.
 void *sable_task_spawn(void (*body)(void *), void *context) {
@@ -2601,18 +2755,11 @@ void *sable_task_spawn(void (*body)(void *), void *context) {
 
     task->body = body;
     task->context = context;
-    pthread_cond_init(&task->wake, NULL);
-
-    pthread_attr_t attributes;
-    pthread_attr_init(&attributes);
-    pthread_attr_setstacksize(&attributes, 8u << 20);
-    pthread_attr_setdetachstate(&attributes, PTHREAD_CREATE_DETACHED);
-    pthread_t thread;
-    if (pthread_create(&thread, &attributes, task_thread, task) != 0) {
+    condition_init(&task->wake);
+    if (!start_task_thread(task)) {
         sable_trap("cannot start a task");
     }
 
-    pthread_attr_destroy(&attributes);
     enqueue(task);
     return task;
 }
@@ -2672,9 +2819,81 @@ bool sable_io_succeeded(void) {
 static int saved_argc;
 static char **saved_argv;
 
+#ifdef _WIN32
+// UTF-8 to UTF-16 and back, for every name and string that crosses to
+// Windows; in memory the caller frees.
+static wchar_t *to_wide(const char *bytes, int64_t length) {
+    int units = length == 0 ? 0 : MultiByteToWideChar(CP_UTF8, 0, bytes, (int)length, NULL, 0);
+    wchar_t *wide = malloc(((size_t)units + 1) * sizeof(wchar_t));
+    if (wide == NULL) {
+        sable_trap("out of memory");
+    }
+
+    if (units > 0) {
+        MultiByteToWideChar(CP_UTF8, 0, bytes, (int)length, wide, units);
+    }
+
+    wide[units] = L'\0';
+    return wide;
+}
+
+static char *from_wide(const wchar_t *wide) {
+    int length = WideCharToMultiByte(CP_UTF8, 0, wide, -1, NULL, 0, NULL, NULL);
+    char *bytes = malloc(length > 0 ? (size_t)length : 1);
+    if (bytes == NULL) {
+        sable_trap("out of memory");
+    }
+
+    if (length <= 0) {
+        bytes[0] = '\0';
+    } else {
+        WideCharToMultiByte(CP_UTF8, 0, wide, -1, bytes, length, NULL, NULL);
+    }
+
+    return bytes;
+}
+
+static wchar_t *wide_string(const SableString *s) {
+    return to_wide(s->bytes, s->length);
+}
+
+static SableString *make_wide_text(const wchar_t *wide) {
+    char *bytes = from_wide(wide);
+    SableString *text = make_ctext(bytes);
+    free(bytes);
+    return text;
+}
+
+// Standard streams pass bytes through as they are, as on POSIX: no '\n'
+// written as "\r\n". A console shows them as UTF-8.
+__attribute__((constructor)) static void sable_streams_start(void) {
+    _setmode(_fileno(stdin), _O_BINARY);
+    _setmode(_fileno(stdout), _O_BINARY);
+    _setmode(_fileno(stderr), _O_BINARY);
+    SetConsoleOutputCP(CP_UTF8);
+}
+#endif
+
+// The program's arguments. Windows gives main() them in the ANSI code page,
+// which cannot hold every name: there they are the command line's own, as
+// UTF-16, made UTF-8 once.
 void sable_set_arguments(int32_t argc, char **argv) {
+#ifdef _WIN32
+    (void)argc;
+    (void)argv;
+    int count = 0;
+    wchar_t **wide = CommandLineToArgvW(GetCommandLineW(), &count);
+    saved_argc = wide == NULL ? 0 : count;
+    saved_argv = calloc((size_t)saved_argc + 1, sizeof(char *));
+    for (int i = 0; i < saved_argc; i++) {
+        saved_argv[i] = from_wide(wide[i]);
+    }
+
+    LocalFree(wide);
+#else
     saved_argc = argc;
     saved_argv = argv;
+#endif
 }
 
 // The arguments after the program's own name.
@@ -2753,10 +2972,28 @@ SableString *sable_io_read_line(void) {
     return result;
 }
 
-SableString *sable_io_read_file(const SableString *path) {
+// A file opened by its UTF-8 name: on Windows through its UTF-16 one.
+static FILE *open_file(const SableString *path, const char *mode) {
+#ifdef _WIN32
+    wchar_t *name = wide_string(path);
+    wchar_t wide_mode[8];
+    size_t i = 0;
+    for (; mode[i] != '\0' && i < 7; i++) {
+        wide_mode[i] = (wchar_t)mode[i];
+    }
+
+    wide_mode[i] = L'\0';
+    FILE *file = _wfopen(name, wide_mode);
+#else
     char *name = c_string(path);
-    FILE *file = fopen(name, "rb");
+    FILE *file = fopen(name, mode);
+#endif
     free(name);
+    return file;
+}
+
+SableString *sable_io_read_file(const SableString *path) {
+    FILE *file = open_file(path, "rb");
     if (file == NULL) {
         io_last_failed = true;
         return make_string("", 0);
@@ -2792,9 +3029,7 @@ SableString *sable_io_read_file(const SableString *path) {
 }
 
 bool sable_io_write_file(const SableString *path, const SableString *text, bool append) {
-    char *name = c_string(path);
-    FILE *file = fopen(name, append ? "ab" : "wb");
-    free(name);
+    FILE *file = open_file(path, append ? "ab" : "wb");
     if (file == NULL) {
         return false;
     }
@@ -2803,6 +3038,115 @@ bool sable_io_write_file(const SableString *path, const SableString *text, bool 
     return fclose(file) == 0 && written;
 }
 
+#ifdef _WIN32
+bool sable_io_file_exists(const SableString *path) {
+    wchar_t *name = wide_string(path);
+    bool exists = GetFileAttributesW(name) != INVALID_FILE_ATTRIBUTES;
+    free(name);
+    return exists;
+}
+
+bool sable_io_is_directory(const SableString *path) {
+    wchar_t *name = wide_string(path);
+    DWORD attributes = GetFileAttributesW(name);
+    free(name);
+    return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+}
+
+// A file, or an empty directory.
+bool sable_io_remove_file(const SableString *path) {
+    wchar_t *name = wide_string(path);
+    bool removed = DeleteFileW(name) || RemoveDirectoryW(name);
+    free(name);
+    return removed;
+}
+
+bool sable_io_make_directory(const SableString *path) {
+    wchar_t *name = wide_string(path);
+    bool made = CreateDirectoryW(name, NULL) != FALSE;
+    free(name);
+    return made;
+}
+
+static int compare_names(const void *a, const void *b) {
+    return strcmp(*(char *const *)a, *(char *const *)b);
+}
+
+// The entries' names, sorted byte by byte so that every platform agrees;
+// '.' and '..' left out.
+SableArray *sable_io_list_directory(const SableString *path) {
+    SableArray *entries = NULL;
+    size_t length = (size_t)path->length;
+    char *pattern = malloc(length + 3);
+    if (pattern == NULL) {
+        sable_trap("out of memory");
+    }
+
+    memcpy(pattern, path->bytes, length);
+    if (length > 0 && pattern[length - 1] != '/' && pattern[length - 1] != '\\') {
+        pattern[length++] = '\\';
+    }
+
+    pattern[length++] = '*';
+    wchar_t *wide = to_wide(pattern, (int64_t)length);
+    free(pattern);
+    WIN32_FIND_DATAW found;
+    HANDLE search = FindFirstFileW(wide, &found);
+    free(wide);
+    if (search == INVALID_HANDLE_VALUE) {
+        // An empty directory has '.' at least; none at all is no directory.
+        io_last_failed = true;
+        return entries;
+    }
+
+    size_t count = 0;
+    size_t capacity = 16;
+    char **names = malloc(capacity * sizeof(char *));
+    do {
+        if (wcscmp(found.cFileName, L".") == 0 || wcscmp(found.cFileName, L"..") == 0) {
+            continue;
+        }
+
+        if (count == capacity) {
+            capacity *= 2;
+            names = realloc(names, capacity * sizeof(char *));
+        }
+
+        names[count++] = from_wide(found.cFileName);
+    } while (FindNextFileW(search, &found));
+
+    FindClose(search);
+    qsort(names, count, sizeof(char *), compare_names);
+    for (size_t i = 0; i < count; i++) {
+        *(SableString **)sable_array_append_slot(&entries, &string_array_metadata) = make_ctext(names[i]);
+        free(names[i]);
+    }
+
+    free(names);
+    io_last_failed = false;
+    return entries;
+}
+
+SableString *sable_io_environment(const SableString *variable) {
+    wchar_t *name = wide_string(variable);
+    DWORD size = GetEnvironmentVariableW(name, NULL, 0);
+    wchar_t *value = size == 0 ? NULL : malloc((size_t)size * sizeof(wchar_t));
+    if (value != NULL && GetEnvironmentVariableW(name, value, size) >= size) {
+        free(value);
+        value = NULL;
+    }
+
+    free(name);
+    io_last_failed = value == NULL;
+    if (value == NULL) {
+        return make_string("", 0);
+    }
+
+    SableString *result = make_wide_text(value);
+    free(value);
+    return result;
+}
+#else
 #include <dirent.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -2891,8 +3235,42 @@ SableString *sable_io_environment(const SableString *variable) {
     return value == NULL ? make_string("", 0) : make_ctext(value);
 }
 
+#endif
+
 // ---- Time (Sable.Time's floor) ------------------------------------------
 
+#ifdef _WIN32
+int64_t sable_time_monotonic(void) {
+    LARGE_INTEGER counter, frequency;
+    QueryPerformanceCounter(&counter);
+    QueryPerformanceFrequency(&frequency);
+    // In two parts, so that the product cannot overflow.
+    int64_t seconds = counter.QuadPart / frequency.QuadPart;
+    int64_t rest = counter.QuadPart % frequency.QuadPart;
+    return seconds * 1000000000 + rest * 1000000000 / frequency.QuadPart;
+}
+
+// Windows counts 100 ns intervals from 1601; Unix time is from 1970.
+int64_t sable_time_wall_clock(void) {
+    FILETIME now;
+    GetSystemTimePreciseAsFileTime(&now);
+    int64_t ticks = (int64_t)(((uint64_t)now.dwHighDateTime << 32) | now.dwLowDateTime);
+    return (ticks - 116444736000000000LL) * 100;
+}
+
+// At least as long as asked: Sleep counts in milliseconds, and may wake a
+// little early, so it sleeps again until the clock says the time is up.
+void sable_time_sleep(int64_t nanoseconds) {
+    if (nanoseconds <= 0) {
+        return;
+    }
+
+    int64_t until = sable_time_monotonic() + nanoseconds;
+    for (int64_t left = nanoseconds; left > 0; left = until - sable_time_monotonic()) {
+        Sleep((DWORD)((left + 999999) / 1000000));
+    }
+}
+#else
 #include <time.h>
 
 int64_t sable_time_monotonic(void) {
@@ -2917,14 +3295,17 @@ void sable_time_sleep(int64_t nanoseconds) {
     while (nanosleep(&wait, &wait) != 0 && errno == EINTR) {
     }
 }
+#endif
 
 // ---- Processes (Sable.Process's floor) ----------------------------------
 
+#ifndef _WIN32
 #include <poll.h>
 #include <spawn.h>
 #include <sys/wait.h>
 
 extern char **environ;
+#endif
 
 static int64_t process_last_status;
 
@@ -2967,6 +3348,320 @@ static void buffer_add(Buffer *buffer, const char *bytes, size_t length) {
     buffer->length += length;
 }
 
+#ifdef _WIN32
+// Whether a file, not a directory, is there.
+static bool is_file(const wchar_t *name) {
+    DWORD attributes = GetFileAttributesW(name);
+    return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0;
+}
+
+// 'name' as it is, or with '.exe' or '.com' after it: the first that is a file.
+static wchar_t *find_with_extension(const wchar_t *name) {
+    static const wchar_t *const extensions[] = { L"", L".exe", L".com" };
+    size_t length = wcslen(name);
+    for (size_t i = 0; i < sizeof extensions / sizeof *extensions; i++) {
+        size_t extra = wcslen(extensions[i]);
+        wchar_t *candidate = malloc((length + extra + 1) * sizeof(wchar_t));
+        memcpy(candidate, name, length * sizeof(wchar_t));
+        memcpy(candidate + length, extensions[i], (extra + 1) * sizeof(wchar_t));
+        if (is_file(candidate)) {
+            return candidate;
+        }
+
+        free(candidate);
+    }
+
+    return NULL;
+}
+
+// The program's path: the name itself when it holds a path separator, else
+// the first program of that name on PATH — as POSIX finds one, but with the
+// extension Windows gives a program, which the name may leave out. NULL
+// when there is none.
+static wchar_t *find_program(const char *name) {
+    wchar_t *wide = to_wide(name, (int64_t)strlen(name));
+    if (strchr(name, '/') != NULL || strchr(name, '\\') != NULL || strchr(name, ':') != NULL) {
+        wchar_t *found = find_with_extension(wide);
+        free(wide);
+        return found;
+    }
+
+    DWORD size = GetEnvironmentVariableW(L"PATH", NULL, 0);
+    if (size == 0 || *name == '\0') {
+        free(wide);
+        return NULL;
+    }
+
+    wchar_t *path = malloc((size_t)size * sizeof(wchar_t));
+    GetEnvironmentVariableW(L"PATH", path, size);
+    size_t name_length = wcslen(wide);
+    wchar_t *found = NULL;
+    for (wchar_t *entry = path; found == NULL && *entry != L'\0';) {
+        wchar_t *end = wcschr(entry, L';');
+        size_t length = end == NULL ? wcslen(entry) : (size_t)(end - entry);
+        if (length > 0) {
+            wchar_t *candidate = malloc((length + name_length + 2) * sizeof(wchar_t));
+            memcpy(candidate, entry, length * sizeof(wchar_t));
+            candidate[length] = L'\\';
+            memcpy(candidate + length + 1, wide, (name_length + 1) * sizeof(wchar_t));
+            found = find_with_extension(candidate);
+            free(candidate);
+        }
+
+        if (end == NULL) {
+            break;
+        }
+
+        entry = end + 1;
+    }
+
+    free(path);
+    free(wide);
+    return found;
+}
+
+// One argument on a Windows command line, quoted as the C runtime's parser
+// (and CommandLineToArgvW) reads it back: backslashes are literal except
+// before a quote, where they are doubled.
+static void add_argument(Buffer *line, const char *argument) {
+    if (line->length > 0) {
+        buffer_add(line, " ", 1);
+    }
+
+    if (*argument != '\0' && strpbrk(argument, " \t\n\v\"") == NULL) {
+        buffer_add(line, argument, strlen(argument));
+        return;
+    }
+
+    buffer_add(line, "\"", 1);
+    for (const char *p = argument;; p++) {
+        size_t backslashes = 0;
+        while (*p == '\\') {
+            backslashes++;
+            p++;
+        }
+
+        if (*p == '\0') {
+            for (size_t i = 0; i < backslashes * 2; i++) {
+                buffer_add(line, "\\", 1);
+            }
+
+            break;
+        }
+
+        for (size_t i = 0; i < (*p == '"' ? backslashes * 2 + 1 : backslashes); i++) {
+            buffer_add(line, "\\", 1);
+        }
+
+        buffer_add(line, p, 1);
+    }
+
+    buffer_add(line, "\"", 1);
+}
+
+// What a reading thread reads a pipe into, to its end.
+typedef struct {
+    HANDLE pipe;
+    Buffer buffer;
+} PipeReader;
+
+static DWORD WINAPI read_pipe(void *argument) {
+    PipeReader *reader = argument;
+    char chunk[4096];
+    DWORD got;
+    while (ReadFile(reader->pipe, chunk, sizeof chunk, &got, NULL) && got > 0) {
+        buffer_add(&reader->buffer, chunk, got);
+    }
+
+    return 0;
+}
+
+// What a writing thread writes, all of it or until the program stops reading.
+typedef struct {
+    HANDLE pipe;
+    const char *bytes;
+    int64_t length;
+} PipeWriter;
+
+static DWORD WINAPI write_pipe(void *argument) {
+    PipeWriter *writer = argument;
+    int64_t written = 0;
+    while (written < writer->length) {
+        DWORD chunk = writer->length - written > (1 << 20) ? (1 << 20) : (DWORD)(writer->length - written);
+        DWORD sent;
+        if (!WriteFile(writer->pipe, writer->bytes + written, chunk, &sent, NULL)) {
+            break;
+        }
+
+        written += sent;
+    }
+
+    CloseHandle(writer->pipe);
+    return 0;
+}
+
+// A pipe whose one end the program started inherits, and the other not.
+static bool make_pipe(HANDLE *read, HANDLE *write, bool child_reads) {
+    SECURITY_ATTRIBUTES inherited = { sizeof inherited, NULL, TRUE };
+    if (!CreatePipe(read, write, &inherited, 0)) {
+        return false;
+    }
+
+    SetHandleInformation(child_reads ? *write : *read, HANDLE_FLAG_INHERIT, 0);
+    return true;
+}
+
+// Runs the program, found on PATH, to its end: the input written to it and
+// its output and errors read as they come, each by a thread of its own, so
+// that neither side waits on a full pipe. Gives what it wrote to standard
+// output; how it ended and its errors are kept for the calls above.
+SableString *sable_process_run(const SableString *program, const SableArray *arguments, const SableString *input) {
+    char *name = c_string(program);
+    wchar_t *found = find_program(name);
+    if (found == NULL) {
+        free(name);
+        io_last_failed = true;
+        return make_string("", 0);
+    }
+
+    Buffer line = { 0 };
+    add_argument(&line, name);
+    free(name);
+    int64_t count = arguments == NULL ? 0 : arguments->count;
+    for (int64_t i = 0; i < count; i++) {
+        char *argument = c_string(((SableString **)arguments->elements)[i]);
+        add_argument(&line, argument);
+        free(argument);
+    }
+
+    wchar_t *command = to_wide(line.bytes, (int64_t)line.length);
+    free(line.bytes);
+
+    HANDLE in_read = NULL, in_write = NULL, out_read = NULL, out_write = NULL, err_read = NULL, err_write = NULL;
+    bool piped = make_pipe(&in_read, &in_write, true);
+    piped = piped && make_pipe(&out_read, &out_write, false);
+    piped = piped && make_pipe(&err_read, &err_write, false);
+
+    PROCESS_INFORMATION child = { 0 };
+    bool spawned = false;
+    if (piped) {
+        STARTUPINFOW startup = { 0 };
+        startup.cb = sizeof startup;
+        startup.dwFlags = STARTF_USESTDHANDLES;
+        startup.hStdInput = in_read;
+        startup.hStdOutput = out_write;
+        startup.hStdError = err_write;
+        fflush(stdout);
+        fflush(stderr);
+        spawned = CreateProcessW(found, command, NULL, NULL, TRUE, 0, NULL, NULL, &startup, &child) != FALSE;
+    }
+
+    free(command);
+    free(found);
+    HANDLE child_ends[] = { in_read, out_write, err_write };
+    for (int i = 0; i < 3; i++) {
+        if (child_ends[i] != NULL) {
+            CloseHandle(child_ends[i]);
+        }
+    }
+
+    if (!spawned) {
+        HANDLE own_ends[] = { in_write, out_read, err_read };
+        for (int i = 0; i < 3; i++) {
+            if (own_ends[i] != NULL) {
+                CloseHandle(own_ends[i]);
+            }
+        }
+
+        io_last_failed = true;
+        return make_string("", 0);
+    }
+
+    PipeWriter writer = { in_write, input->bytes, input->length };
+    PipeReader errors = { err_read, { 0 } };
+    PipeReader output = { out_read, { 0 } };
+    HANDLE threads[2];
+    threads[0] = CreateThread(NULL, 0, write_pipe, &writer, 0, NULL);
+    threads[1] = CreateThread(NULL, 0, read_pipe, &errors, 0, NULL);
+    if (threads[0] == NULL) {
+        write_pipe(&writer);
+    }
+
+    read_pipe(&output);
+    if (threads[1] == NULL) {
+        read_pipe(&errors);
+    }
+
+    for (int i = 0; i < 2; i++) {
+        if (threads[i] != NULL) {
+            WaitForSingleObject(threads[i], INFINITE);
+            CloseHandle(threads[i]);
+        }
+    }
+
+    CloseHandle(out_read);
+    CloseHandle(err_read);
+    WaitForSingleObject(child.hProcess, INFINITE);
+    DWORD status = 0;
+    GetExitCodeProcess(child.hProcess, &status);
+    CloseHandle(child.hProcess);
+    CloseHandle(child.hThread);
+
+    process_last_status = (int64_t)status;
+    free(process_last_errors);
+    process_last_errors = errors.buffer.bytes;
+    process_last_errors_length = errors.buffer.length;
+    SableString *result = make_text(output.buffer.bytes == NULL ? "" : output.buffer.bytes, (int64_t)output.buffer.length);
+    free(output.buffer.bytes);
+    io_last_failed = false;
+    return result;
+}
+
+SableString *sable_process_current_directory(void) {
+    DWORD size = GetCurrentDirectoryW(0, NULL);
+    wchar_t *path = size == 0 ? NULL : malloc((size_t)size * sizeof(wchar_t));
+    if (path == NULL || GetCurrentDirectoryW(size, path) == 0) {
+        free(path);
+        return make_string("", 0);
+    }
+
+    SableString *result = make_wide_text(path);
+    free(path);
+    return result;
+}
+
+bool sable_process_change_directory(const SableString *path) {
+    wchar_t *name = wide_string(path);
+    bool changed = SetCurrentDirectoryW(name) != FALSE;
+    free(name);
+    return changed;
+}
+
+int64_t sable_process_id(void) {
+    return (int64_t)GetCurrentProcessId();
+}
+
+// The path of this program's executable, so that the program can start
+// itself again (the test harness does, a process per test).
+SableString *sable_process_executable_path(void) {
+    for (DWORD size = MAX_PATH;; size *= 2) {
+        wchar_t *path = malloc((size_t)size * sizeof(wchar_t));
+        DWORD length = GetModuleFileNameW(NULL, path, size);
+        if (length == 0) {
+            free(path);
+            return make_string("", 0);
+        }
+
+        if (length < size) {
+            SableString *result = make_wide_text(path);
+            free(path);
+            return result;
+        }
+
+        free(path);
+    }
+}
+#else
 // The program's path: the name itself when it holds a '/', else the first
 // executable of that name on PATH; NULL when there is none. Looked up here
 // rather than left to posix_spawnp, which does not report a failed exec
@@ -3208,6 +3903,8 @@ SableString *sable_process_executable_path(void) {
 
     return make_ctext(saved_argv[0]);
 }
+
+#endif
 
 // ---- Joining (Sable.Text's floor) ------------------------------------
 

@@ -53,6 +53,11 @@ jobs:
       - name: Show the C compiler
         run: clang --version
 
+      # On its own first, so that a platform layer that does not compile
+      # says so once, not in every test that builds a program.
+      - name: Runtime compiles
+        run: clang -c -O2 -Wall -Wextra runtime/sable_runtime.c -o "$RUNNER_TEMP/sable_runtime.o"
+
       - name: Build
         run: dotnet build Sable.slnx -c Release
 

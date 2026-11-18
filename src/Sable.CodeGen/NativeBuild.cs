@@ -218,7 +218,7 @@ public static class NativeBuild {
 
     /// <summary>Why an executable cannot be linked for <paramref name="target" />.</summary>
     public static string NoRuntime(NativeTarget target) =>
-        $"the runtime has no platform layer for {target.Triple} yet: it is built for macOS and Linux only (docs/06); "
+        $"the runtime has no platform layer for {target.Triple} yet: it is built for macOS, Linux and Windows only (docs/06); "
         + "the program can still be compiled to an object file (--emit obj) or to LLVM IR (--emit llvm-ir)";
 
     /// <summary>
@@ -346,11 +346,12 @@ public static class NativeBuild {
     ///     Link-time optimisation's flags, which let LLVM inline the runtime's
     ///     small functions into the program: in an optimised build that asks
     ///     for it, where the linker takes LLVM bitcode — Apple's does; on Linux
-    ///     it is lld, as the GNU linkers need a plugin few installations have.
+    ///     and Windows it is lld, as the GNU linkers need a plugin few
+    ///     installations have, and Microsoft's takes none.
     /// </summary>
     public static IReadOnlyList<string> LtoFlags(NativeOptions options, NativePlatform platform, bool linksBitcode) =>
         !options.Optimise || options.Lto == LtoMode.Off || !linksBitcode ? []
-        : [options.Lto == LtoMode.Thin ? "-flto=thin" : "-flto", ..platform == NativePlatform.Linux ? new[] { "-fuse-ld=lld" } : []];
+        : [options.Lto == LtoMode.Thin ? "-flto=thin" : "-flto", ..platform is NativePlatform.Linux or NativePlatform.Windows ? new[] { "-fuse-ld=lld" } : []];
 
     /// <summary>
     ///     What the link takes after the objects: what the platform needs, then
@@ -381,11 +382,12 @@ public static class NativeBuild {
     }
 
     /// <summary>
-    ///     Whether this machine's link takes LLVM bitcode: always on macOS; on
-    ///     Linux when clang can link through lld, which is asked once per process.
+    ///     Whether this machine's link takes LLVM bitcode: always on macOS, and
+    ///     on Windows, where the link is always lld's; on Linux when clang can
+    ///     link through lld, which is asked once per process.
     /// </summary>
     public static bool LinksBitcode => Host switch {
-        NativePlatform.MacOS => true,
+        NativePlatform.MacOS or NativePlatform.Windows => true,
         NativePlatform.Linux => LldLinks.Value,
         _ => false,
     };
@@ -409,14 +411,20 @@ public static class NativeBuild {
     ///     compilation's link both take them from here, so that the two cannot
     ///     drift apart.
     /// </summary>
-    public static IReadOnlyList<string> PlatformLinkFlags(NativePlatform platform) =>
-        platform == NativePlatform.Linux
-            // A trap's backtrace names frames through dladdr, which on Linux
-            // sees only the dynamic symbol table: the program's functions go
-            // there too. And 'frem' becomes a call to fmod, which glibc keeps
-            // in libm, not libc.
-            ? ["-rdynamic", "-lm"]
-            : [];
+    public static IReadOnlyList<string> PlatformLinkFlags(NativePlatform platform) => platform switch {
+        // A trap's backtrace names frames through dladdr, which on Linux
+        // sees only the dynamic symbol table: the program's functions go
+        // there too. And 'frem' becomes a call to fmod, which glibc keeps
+        // in libm, not libc.
+        NativePlatform.Linux => ["-rdynamic", "-lm"],
+
+        // lld, which takes LLVM bitcode as Microsoft's linker does not; the
+        // main thread's stack the size a POSIX one's is, 8 MiB, not 1; and
+        // a PDB, with the program's symbols at least, from which a trap's
+        // backtrace names frames.
+        NativePlatform.Windows => ["-fuse-ld=lld", "-Wl,/STACK:8388608", "-Wl,/DEBUG"],
+        _ => [],
+    };
 
     /// <summary>
     ///     Puts the formatter plugin where lldb looks for a program's scripts:

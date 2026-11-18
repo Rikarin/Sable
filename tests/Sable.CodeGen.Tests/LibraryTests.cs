@@ -204,7 +204,7 @@ fn main() {
 
                 @main
                 fn main() {
-                    let dir = Path.join("{{root}}", "work")
+                    let dir = Path.join("{{Platform.Literal(root)}}", "work")
                     if Directory.exists(dir) {
                         for name in try! Directory.list(dir) {
                             try! File.remove(Path.join(dir, name))
@@ -277,7 +277,7 @@ fn main() {
 
                 @main
                 fn main() {
-                    let text = try! File.read("{{path}}")
+                    let text = try! File.read("{{Platform.Literal(path)}}")
                     print(text.count)
                     var i = 0
                     while i < text.count {
@@ -301,7 +301,7 @@ fn main() {
     ///     The same for a line, an argument and an environment variable, which
     ///     only a shell can hand a program as raw bytes.
     /// </summary>
-    [Fact]
+    [PosixFact("a Windows program's arguments and environment are UTF-16, and its input is read by a shell this test does not have: nothing can hand it ill-formed UTF-8 there")]
     public void IllFormedUtf8FromOutsideReadsAsReplacementCharacters() {
         if (!CanBuild) {
             return;
@@ -331,7 +331,7 @@ fn main() {
             "test.sb"
         ));
         Assert.True(result.Succeeded, string.Join("\n", result.Errors));
-        var executable = Path.Combine(Path.GetTempPath(), $"sable-test-{Guid.NewGuid():N}");
+        var executable = Platform.Executable(Path.Combine(Path.GetTempPath(), $"sable-test-{Guid.NewGuid():N}"));
         try {
             Assert.True(NativeBuild.Build(result.LlvmIr!, executable, optimise: true).Succeeded);
             var start = new ProcessStartInfo("/bin/sh") { RedirectStandardOutput = true };
@@ -344,7 +344,7 @@ fn main() {
             Assert.Equal(0, process.ExitCode);
             Assert.Equal("120 65533 65533 65 \n97 65533 65533 98 \n65533 65533 65533 122 \n", stdout);
         } finally {
-            File.Delete(executable);
+            Platform.DeleteExecutable(executable);
         }
     }
 
@@ -451,22 +451,35 @@ fn main() {
     ///     Sable.Process: a program run to its end with its input given and its
     ///     output, errors and status kept; a name that is nothing; the directory.
     /// </summary>
+    /// <remarks>
+    ///     The programs are the system's own: a POSIX shell's tools, and on
+    ///     Windows cmd's and find's, where the root a program can change to is
+    ///     the current drive's.
+    /// </remarks>
     [Fact]
-    public void ProcessIsWrittenInSable() =>
+    public void ProcessIsWrittenInSable() {
+        // By their paths on Windows: a POSIX 'find' may come first on PATH.
+        var cmd = Platform.Literal(Path.Combine(Environment.SystemDirectory, "cmd.exe"));
+        var find = Platform.Literal(Path.Combine(Environment.SystemDirectory, "find.exe"));
+        var (echo, count, fail, root) = OperatingSystem.IsWindows()
+            ? ($$"""Process.run("{{cmd}}", ["/c", "echo hello world"])""", $$"""Process.run("{{find}}", ["/c", "/v", ""], input: "a\nb\nc\n")""",
+                $$"""Process.run("{{cmd}}", ["/c", "echo oops 1>&2 & exit 3"])""", Path.GetPathRoot(Environment.CurrentDirectory)!)
+            : ("""Process.run("echo", ["hello", "world"])""", """Process.run("wc", ["-l"], input: "a\nb\nc\n")""",
+                """Process.run("sh", ["-c", "echo oops >&2; exit 3"])""", "/");
         Assert.Equal(
-            "hello world\ntrue\n3\n3\noops\n0\nnot found: surely-not-a-program-here\ntrue\n/\nfalse\ntrue\ntrue\n",
-            AssertAgree("""
+            $"hello world\ntrue\n3\n3\noops\n0\nnot found: surely-not-a-program-here\ntrue\n{root}\nfalse\ntrue\ntrue\n",
+            AssertAgree($$"""
                 module P
                 import Sable.Process
 
                 @main
                 fn main() {
-                    let echoed = try! Process.run("echo", ["hello", "world"])
+                    let echoed = try! {{echo}}
                     print(echoed.output.trimmed())
                     print(echoed.succeeded)
-                    let counted = try! Process.run("wc", ["-l"], input: "a\nb\nc\n")
+                    let counted = try! {{count}}
                     print(counted.output.trimmed())
-                    let failing = try! Process.run("sh", ["-c", "echo oops >&2; exit 3"])
+                    let failing = try! {{fail}}
                     print(failing.status)
                     print(failing.errors.trimmed())
                     print(failing.output.count)
@@ -485,6 +498,7 @@ fn main() {
                 }
                 """).Stdout
         );
+    }
 
     /// <summary>'[]' as an argument takes its type from the parameter, overloaded or not.</summary>
     [Fact]

@@ -197,7 +197,7 @@ public sealed class PackageTests {
 
         if (CanBuild) {
             var binary = Assert.Single(PackageBuilder.Build(root, fixture.Environment, new())!);
-            Assert.Equal(Path.Combine(fixture.Root, "ws", "target", "dev", "app"), binary.Path);
+            Assert.Equal(Platform.Executable(Path.Combine(fixture.Root, "ws", "target", "dev", "app")), binary.Path);
         }
     }
 

@@ -229,7 +229,7 @@ public sealed class RunCommand : BuildCommand {
             return BadUsage();
         }
 
-        var executable = Path.Combine(Path.GetTempPath(), $"sable-run-{Guid.NewGuid():N}");
+        var executable = Path.Combine(Path.GetTempPath(), $"sable-run-{Guid.NewGuid():N}{NativeTarget.Host.ExecutableSuffix}");
         try {
             return Build(options, executable) is { } failure ? Math.Max(failure, 0) : Execute(executable, options.ProgramArguments);
         } finally {

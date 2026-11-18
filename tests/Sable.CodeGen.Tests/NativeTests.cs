@@ -20,7 +20,7 @@ public sealed class NativeTests {
         var result = Pipeline.Compile(new SourceText(source, "test.sb"));
         Assert.True(result.Succeeded, string.Join("\n", result.Errors));
 
-        var executable = Path.Combine(Path.GetTempPath(), $"sable-test-{Guid.NewGuid():N}");
+        var executable = Platform.Executable(Path.Combine(Path.GetTempPath(), $"sable-test-{Guid.NewGuid():N}"));
         try {
             var build = NativeBuild.Build(result.LlvmIr!, executable, optimise);
             Assert.True(build.Succeeded, build.Output + "\n\n" + result.LlvmIr);
@@ -32,7 +32,7 @@ public sealed class NativeTests {
             process.WaitForExit();
             return new(stdout.Result, stderr, process.ExitCode);
         } finally {
-            File.Delete(executable);
+            Platform.DeleteExecutable(executable);
         }
     }
 
@@ -368,7 +368,7 @@ public sealed class NativeTests {
         interpreter.Run("main");
         Assert.Equal("5050\n", interpreter.Output.ToString());
 
-        var executable = Path.Combine(Path.GetTempPath(), $"sable-test-{Guid.NewGuid():N}");
+        var executable = Platform.Executable(Path.Combine(Path.GetTempPath(), $"sable-test-{Guid.NewGuid():N}"));
         try {
             var build = NativeBuild.Build(LlvmEmitter.Emit(module), executable);
             Assert.True(build.Succeeded, build.Output);
@@ -377,7 +377,7 @@ public sealed class NativeTests {
             Assert.Equal("5050\n", process.StandardOutput.ReadToEnd());
             process.WaitForExit();
         } finally {
-            File.Delete(executable);
+            Platform.DeleteExecutable(executable);
         }
     }
 
@@ -389,12 +389,12 @@ public sealed class NativeTests {
 
         // docs/04 §2.5: under 400 KB stripped.
         var result = Pipeline.Compile(new SourceText("module H\n@main\nfn main() { print(\"hi\") }\n", "h.sb"));
-        var executable = Path.Combine(Path.GetTempPath(), $"sable-test-{Guid.NewGuid():N}");
+        var executable = Platform.Executable(Path.Combine(Path.GetTempPath(), $"sable-test-{Guid.NewGuid():N}"));
         try {
             Assert.True(NativeBuild.Build(result.LlvmIr!, executable).Succeeded);
             Assert.True(new FileInfo(executable).Length < 400 * 1024, $"{new FileInfo(executable).Length:N0} bytes");
         } finally {
-            File.Delete(executable);
+            Platform.DeleteExecutable(executable);
         }
     }
 
@@ -481,7 +481,7 @@ public sealed class NativeTests {
         }
 
         var cache = Directory.CreateTempSubdirectory("sable-runtime-cache-");
-        var executable = Path.Combine(cache.FullName, "program");
+        var executable = Platform.Executable(Path.Combine(cache.FullName, "program"));
         try {
             var compiled = Pipeline.Compile(new SourceText("module Kept\n\n@main\nfn main() {\n    print(\"kept\")\n}\n", "test.sb"));
             Assert.True(compiled.Succeeded, string.Join("\n", compiled.Errors));
@@ -491,7 +491,7 @@ public sealed class NativeTests {
             var runtime = Assert.Single(Directory.GetFiles(cache.FullName, "runtime-*.o"));
             var written = File.GetLastWriteTimeUtc(runtime);
 
-            File.Delete(executable);
+            Platform.DeleteExecutable(executable);
             Assert.True(NativeBuild.Build(ir, executable, options, cache.FullName).Succeeded);
             Assert.Equal(written, File.GetLastWriteTimeUtc(Assert.Single(Directory.GetFiles(cache.FullName, "runtime-*.o"))));
             Assert.Equal(("kept\n", 0), PackageFixture.Execute(executable));

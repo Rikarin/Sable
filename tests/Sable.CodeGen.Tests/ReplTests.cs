@@ -116,7 +116,7 @@ public sealed class ReplTests {
         var path = Path.Combine(Directory.CreateTempSubdirectory("sable-repl-").FullName, "log.txt");
         try {
             var session = new ReplSession();
-            Out(session, $"let wrote = Runtime.writeFile(path: \"{path}\", text: \"x\", append: true)");
+            Out(session, $"let wrote = Runtime.writeFile(path: \"{Platform.Literal(path)}\", text: \"x\", append: true)");
             Out(session, "1");
             Out(session, "2");
             Assert.Equal("x", File.ReadAllText(path));
@@ -137,9 +137,9 @@ public sealed class ReplTests {
         var path = Path.Combine(Directory.CreateTempSubdirectory("sable-repl-").FullName, "log.txt");
         try {
             var session = new ReplSession();
-            var result = session.Submit($"Runtime.writeFile(path: \"{path}\", text: \"a\", append: true)\nlet list = [1]\nprint(list[5])");
+            var result = session.Submit($"Runtime.writeFile(path: \"{Platform.Literal(path)}\", text: \"a\", append: true)\nlet list = [1]\nprint(list[5])");
             Assert.True(result.Failed, result.Output);
-            Out(session, $"let wrote = Runtime.writeFile(path: \"{path}\", text: \"b\", append: true)");
+            Out(session, $"let wrote = Runtime.writeFile(path: \"{Platform.Literal(path)}\", text: \"b\", append: true)");
             Out(session, "1");
             Assert.Equal("ab", File.ReadAllText(path));
         } finally {

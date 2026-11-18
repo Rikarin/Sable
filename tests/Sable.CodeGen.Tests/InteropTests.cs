@@ -184,8 +184,9 @@ public sealed class InteropTests {
             Assert.True(built.Succeeded, built.Output);
             var runtime = Path.Combine(directory.FullName, "runtime.o");
             Assert.True(NativeObjects.CompileRuntime(runtime, true, false).Succeeded);
-            var executable = Path.Combine(directory.FullName, "program");
-            var linked = NativeObjects.Link([program, runtime, cObject, "-lm"], executable);
+            var executable = Platform.Executable(Path.Combine(directory.FullName, "program"));
+            // C's maths is in libm on POSIX, in the C runtime itself on Windows.
+            var linked = NativeObjects.Link([program, runtime, cObject, ..OperatingSystem.IsWindows() ? [] : new[] { "-lm" }], executable);
             Assert.True(linked.Succeeded, linked.Output);
 
             var run = Process.Start(new ProcessStartInfo(executable) { RedirectStandardOutput = true })!;

@@ -213,6 +213,13 @@ public sealed class TupleType(ImmutableArray<SilType> elements) : SilType {
 public abstract class NominalType(string name) : SilType {
     public string Name { get; } = name;
 
+    /// <summary>
+    ///     A generic type's instance as Sable writes it — <c>M.Box&lt;Int&gt;</c>,
+    ///     where <see cref="Name" /> is <c>M.Box$of$Int</c> — for a debugger to
+    ///     show; null for any other type, whose name is already the one written.
+    /// </summary>
+    public string? DisplayName { get; set; }
+
     /// <summary>A move-only struct or enum: a value of it is never copied, so it has ownership even when its parts are trivial.</summary>
     public bool IsNoncopyable { get; set; }
 
@@ -455,6 +462,14 @@ public sealed class ClassType(string name) : NominalType(name) {
 
     public ClassType? Superclass { get; set; }
 
+    /// <summary>
+    ///     The protocols the class conforms to by its own declaration or its
+    ///     extensions', each by its qualified name, with those they refine: its
+    ///     metadata's conformance records (docs/06 §6.2). Its superclass's are
+    ///     its superclass's.
+    /// </summary>
+    public List<string> Conformances { get; } = [];
+
     /// <summary>The methods called through the vtable: each slot's name, and the function in it for this class.</summary>
     public List<(string Method, string Function)> VTable { get; } = [];
 
@@ -650,6 +665,15 @@ public sealed class BuiltinInst(string name, SilType type, params SilValue[] ope
 
     /// <summary>The same operation, differently made: <c>inline_new</c> on the stack.</summary>
     public void Rename(string name) => Name = name;
+
+    /// <summary>
+    ///     <c>builtin [in_bounds]</c>: an element access whose index a pass has
+    ///     proved in range — once, before a loop (<see cref="VersionLoops" />)
+    ///     — so that it is not checked again: no compare, no trap, nothing to
+    ///     stop LLVM vectorising the loop.
+    /// </summary>
+    public bool InBounds { get; set; }
+
     public override SilType Type { get; } = type;
     public override bool HasResult => Type != SilType.Unit;
     public override string Opcode => "builtin";
@@ -1227,6 +1251,20 @@ public sealed class SilModule {
     /// <summary>The function a program starts in: the one marked <c>@main</c>, or else <c>main</c>.</summary>
     public string? EntryPoint { get; set; }
 
+    /// <summary>
+    ///     A library's module: it has no entry point, and what C calls — its
+    ///     exports — and its globals' initialiser and deinitialiser are where
+    ///     it is entered (docs/05 §5.2).
+    /// </summary>
+    public bool IsLibrary { get; set; }
+
+    /// <summary>
+    ///     Built with <c>--deny-reflection</c> (docs/06 §6.1): the types'
+    ///     field descriptors carry no names, and <c>Mirror</c> and
+    ///     <c>TypeInfo</c> were refused (S3450).
+    /// </summary>
+    public bool DenyReflection { get; set; }
+
     /// <summary>Set when the module is one unit of a program compiled separately (<see cref="SilUnit" />).</summary>
     public SilUnitInfo? Unit { get; set; }
 
@@ -1251,9 +1289,19 @@ public sealed class SilModule {
     public SortedDictionary<string, (string Symbol, FunctionType Type)> Foreign { get; } = new(StringComparer.Ordinal);
 
     /// <summary>
+    ///     The C functions of <see cref="Foreign" /> that are variadic, with
+    ///     how many of their parameters are fixed: a call to C's '...' is
+    ///     declared once for the types it passes after them,
+    ///     <c>sil_extern @M.f$va$Int : $(I32, Int) -> F64 = "f" variadic 1</c>.
+    /// </summary>
+    public SortedDictionary<string, int> ForeignVariadic { get; } = new(StringComparer.Ordinal);
+
+    /// <summary>
     ///     The module's functions C calls (<c>@export</c>), by name, with the
     ///     C symbol each is called by: <c>sil_export @M.entry = "sable_entry"</c>.
-    ///     They are kept however little the program itself calls them.
+    ///     They are kept however little the program itself calls them. A
+    ///     global may be here too (<c>@export var</c>): its storage is then
+    ///     named by the C symbol.
     /// </summary>
     public SortedDictionary<string, string> Exports { get; } = new(StringComparer.Ordinal);
 
@@ -1346,6 +1394,12 @@ public static class SilBuiltins {
     /// <summary>The names whose signature depends on the element type of the array they work on.</summary>
     public static readonly ImmutableArray<string> ArrayOperations =
         ["array_empty", "array_count", "array_get", "array_get_borrowed", "array_append", "array_set_unique", "array_element_addr", "array_make_unique", "array_set", "array_remove_last", "array_clear", "array_slice", "region_alloc"];
+
+    /// <summary>
+    ///     The prefix of the wrapping forms of integer arithmetic
+    ///     (<c>wrapping_add_Int</c>), which never trap: see <see cref="WrappingArithmetic" />.
+    /// </summary>
+    public const string WrappingPrefix = "wrapping_";
 
     /// <summary>A builtin with fixed operand types, by name.</summary>
     public static Signature? Find(string name) => Table.GetValueOrDefault(name);
@@ -1570,6 +1624,17 @@ public static class SilBuiltins {
             if (SilType.IntegerInfo(integer)!.Value.Signed) {
                 Unary("abs", integer);
             }
+
+            // What overflow-checks = false makes of the operations that trap
+            // on overflow: each keeps the low bits of the exact result.
+            foreach (var op in new[] { "add", "sub", "mul" }) {
+                Binary(WrappingPrefix + op, integer, integer);
+            }
+
+            Unary(WrappingPrefix + "neg", integer);
+            if (SilType.IntegerInfo(integer)!.Value.Signed) {
+                Unary(WrappingPrefix + "abs", integer);
+            }
         }
 
         foreach (var real in SilType.Floats) {
@@ -1584,6 +1649,14 @@ public static class SilBuiltins {
 
         foreach (var op in new[] { "and", "or", "xor" }) {
             Binary(op, SilType.Bool, SilType.Bool);
+        }
+
+        // Int arithmetic whose overflow is checked later (VersionLoops): the
+        // result, wrapped; and, given the iteration and the first iteration
+        // that overflowed so far (Int.max for none), that first iteration.
+        foreach (var op in new[] { "add", "sub", "mul" }) {
+            Add($"wrapping_{op}_Int", SilType.Int, SilType.Int, SilType.Int);
+            Add($"overflow_at_{op}_Int", SilType.Int, SilType.Int, SilType.Int, SilType.Int, SilType.Int);
         }
 
         foreach (var type in SilType.Numbers.Concat([SilType.Bool, SilType.Char, SilType.String])) {
@@ -1634,6 +1707,8 @@ public static class SilBuiltins {
         Add("string_hash", SilType.Int, SilType.String);
         Add("string_join", SilType.String, new ArrayType(SilType.String), SilType.String);
         Add("string_compare", SilType.Int, SilType.String, SilType.String);
+        // Where a part next occurs in a text, at or after a scalar position: a scalar index, or -1.
+        Add("string_find", SilType.Int, SilType.String, SilType.String, SilType.Int);
         Add("string_from_Char", SilType.String, SilType.Char);
         foreach (var number in SilType.Numbers) {
             Add($"string_from_{number}", SilType.String, number);

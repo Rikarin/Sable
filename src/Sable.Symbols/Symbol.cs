@@ -26,6 +26,7 @@ public enum SymbolKind {
     ErrorType,
     Extension,
     DependentMemberType,
+    MetatypeType,
 
     /// <summary><c>4</c> in <c>Buf&lt;Int, 4&gt;</c>.</summary>
     ValueTypeArgument

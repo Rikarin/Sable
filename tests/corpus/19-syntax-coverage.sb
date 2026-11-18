@@ -62,5 +62,9 @@ fn main() {
     let size = if small > 10 { "big" } else { "small" }
     let total = both { 1 } onFail: { 2 }
     let forced: Int! = 3
+    let kind: Int.Type = Int.self
+    let list = Int[>..].self
+    let optional = Int?.self
     print("\(size) \(total) \(classify(2)) \(describe(1)) \(first(4)) \(forced + 1) \(sign(-3))")
+    print("\(Reflection.typeName(kind)) \(Reflection.typeName(list)) \(Reflection.typeName(optional))")
 }

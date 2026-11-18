@@ -311,7 +311,7 @@ public sealed class DebuggerFormatterTests {
     public void DictionariesAndHashMapsShowTheirEntries() =>
         Shows(
             "([(String, Int)]) ages = count = 1 {\n  [0] = (\"ann\", 31)\n}",
-            "(Sable.Collections.HashMap$of$String$Int) map = Sable.Collections.HashMap$of$String$Int count = 2 {\n  [\"one\"] = 1\n  [\"two\"] = 2\n"
+            "(Sable.Collections.HashMap<String, Int>) map = Sable.Collections.HashMap<String, Int> count = 2 {\n  [\"one\"] = 1\n  [\"two\"] = 2\n"
         );
 
     [PosixFact(NeedsLldb)]

@@ -37,6 +37,9 @@ public struct Package {
     /// Types reachable only through reflection, which the linker must keep.
     public var reflect: String[>..] = []
 
+    /// What a build for a given target is, beyond what `--target` says.
+    public var targetSettings: TargetSettings[>..] = []
+
     /// Each lint's level: "allow", "warn" or "deny".
     public var lints: [String: String] = [:]
 
@@ -56,10 +59,12 @@ public struct Target {
     var kind: TargetKind
     var name: String
     var path: String
+    var native: NativeLibrary? = none
 
-    /// The package's library, rooted at the file.
-    public static fn library(path: String) -> Target {
-        return Target { kind: .library, name: "", path: path }
+    /// The package's library, rooted at the file; with `native`, also built
+    /// as a library C links, which calls its `@export` functions.
+    public static fn library(path: String, native: NativeLibrary? = none) -> Target {
+        return Target { kind: .library, name: "", path: path, native: native }
     }
 
     /// An executable called `name`, whose `main` is in the file.
@@ -71,6 +76,14 @@ public struct Target {
 enum TargetKind {
     library,
     executable
+}
+
+/// A library C links: `sable build` writes it to `target/<profile>/`.
+public enum NativeLibrary {
+    /// An archive, `libname.a` (`name.lib` on Windows), linked in whole.
+    staticLibrary,
+    /// A shared library, `libname.so`, `libname.dylib` or `name.dll`.
+    dynamicLibrary
 }
 
 // ---- Dependencies -------------------------------------------------------
@@ -180,26 +193,45 @@ public struct Profile {
     var exclusivity: Exclusivity?
     var overflowChecks: Bool?
     var leakCheck: Bool?
+    var optSize: OptSize?
+    var strip: Strip?
+    var rpath: Bool?
 
-    /// `sable build --release`.
+    /// `sable build --release`. `optSize` optimises for size, in place of
+    /// `optLevel`'s speed.
     public static fn release(optLevel: Int? = none, debug: Bool? = none, lto: Lto? = none, codegenUnits: Int? = none, panic: Panic? = none,
         arcChecks: Bool? = none, exclusivity: Exclusivity? = none, overflowChecks: Bool? = none,
-        leakCheck: Bool? = none) -> Profile {
+        leakCheck: Bool? = none, optSize: OptSize? = none, strip: Strip? = none, rpath: Bool? = none) -> Profile {
         return Profile {
             name: "release", optLevel: optLevel, debug: debug, lto: lto, codegenUnits: codegenUnits, panic: panic,
             arcChecks: arcChecks, exclusivity: exclusivity, overflowChecks: overflowChecks, leakCheck: leakCheck,
+            optSize: optSize, strip: strip, rpath: rpath,
         }
     }
 
     /// Every other build.
     public static fn dev(optLevel: Int? = none, debug: Bool? = none, lto: Lto? = none, codegenUnits: Int? = none, panic: Panic? = none,
         arcChecks: Bool? = none, exclusivity: Exclusivity? = none, overflowChecks: Bool? = none,
-        leakCheck: Bool? = none) -> Profile {
+        leakCheck: Bool? = none, optSize: OptSize? = none, strip: Strip? = none, rpath: Bool? = none) -> Profile {
         return Profile {
             name: "dev", optLevel: optLevel, debug: debug, lto: lto, codegenUnits: codegenUnits, panic: panic,
             arcChecks: arcChecks, exclusivity: exclusivity, overflowChecks: overflowChecks, leakCheck: leakCheck,
+            optSize: optSize, strip: strip, rpath: rpath,
         }
     }
+}
+
+/// Optimising for size rather than speed: clang's `-Os`, or `-Oz`, which
+/// gives up more speed for less code.
+public enum OptSize {
+    size,
+    minSize
+}
+
+/// What the link leaves out of the executable; with none, nothing.
+public enum Strip {
+    debuginfo,
+    symbols
 }
 
 public enum Lto {
@@ -217,6 +249,21 @@ public enum Panic {
 public enum Exclusivity {
     checked,
     off
+}
+
+// ---- Targets --------------------------------------------------------------
+
+/// A build for one target, named by its triple as `--target` takes it:
+/// `[targets."wasm32-wasi"]` in TOML.
+public struct TargetSettings {
+    var triple: String
+    var reflection: Bool
+
+    /// With `reflection: false`, the build carries no reflection, as
+    /// `--deny-reflection` asks: `Mirror` and `TypeInfo` are errors.
+    public static fn target(_ triple: String, reflection: Bool = true) -> TargetSettings {
+        return TargetSettings { triple: triple, reflection: reflection }
+    }
 }
 
 // ---- Build scripts ------------------------------------------------------
@@ -268,6 +315,12 @@ public fn renderManifest(_ p: Package) -> String {
             case .library => {
                 w.table("lib")
                 w.string("path", target.path)
+                if let native = target.native {
+                    w.string("kind", match native {
+                        case .staticLibrary  => "static"
+                        case .dynamicLibrary => "dynamic"
+                    })
+                }
             }
             case .executable => {
                 w.arrayTable("bin")
@@ -295,6 +348,11 @@ public fn renderManifest(_ p: Package) -> String {
     if !p.reflect.isEmpty {
         w.table("reflect")
         w.strings("include", p.reflect)
+    }
+
+    for settings in p.targetSettings {
+        w.table("targets." + quoteKey(settings.triple))
+        w.raw("reflection", settings.reflection ? "true" : "false")
     }
 
     if !p.generatorInputs.isEmpty {
@@ -416,7 +474,12 @@ struct TomlWriter {
 
     mutating fn profile(_ profile: Profile) {
         table("profile.\(profile.name)")
-        if let level = profile.optLevel {
+        if let size = profile.optSize {
+            match size {
+                case .size    => string("opt-level", "s")
+                case .minSize => string("opt-level", "z")
+            }
+        } else if let level = profile.optLevel {
             raw("opt-level", "\(level)")
         }
         if let debug = profile.debug {
@@ -452,6 +515,15 @@ struct TomlWriter {
         }
         if let check = profile.leakCheck {
             raw("leak-check", check ? "true" : "false")
+        }
+        if let strip = profile.strip {
+            match strip {
+                case .debuginfo => string("strip", "debuginfo")
+                case .symbols   => string("strip", "symbols")
+            }
+        }
+        if let rpath = profile.rpath {
+            raw("rpath", rpath ? "true" : "false")
         }
     }
 

@@ -101,8 +101,10 @@ public sealed partial class SilGen {
     ///     in — null for one lowering cannot place — so that a program of many
     ///     files can say where.
     /// </summary>
-    public static (SilModule Module, IReadOnlyList<(Diagnostic Diagnostic, SyntaxTree? Tree)> Diagnostics) LowerByFile(Compilation compilation) {
-        var generator = new SilGen(compilation);
+    /// <param name="denyReflection">Built with <c>--deny-reflection</c>: <c>Mirror</c> and <c>TypeInfo</c> are refused (S3450).</param>
+    public static (SilModule Module, IReadOnlyList<(Diagnostic Diagnostic, SyntaxTree? Tree)> Diagnostics) LowerByFile(Compilation compilation, bool denyReflection = false) {
+        var generator = new SilGen(compilation) { _denyReflection = denyReflection };
+        generator._module.DenyReflection = denyReflection;
         generator.LowerAll();
         return (generator._module, generator.PlacedDiagnostics);
     }
@@ -140,6 +142,25 @@ public sealed partial class SilGen {
     FunctionSymbol? _entryOverride;
 
     /// <summary>
+    ///     Lowers a library (docs/05 §5.2): a program with no entry point,
+    ///     which C calls into through its <c>@export</c> functions. Its globals
+    ///     are still given their initial values before anything runs — by
+    ///     the initialiser the module then has, which the code generator
+    ///     makes a constructor of the library (<see cref="SilModule.IsLibrary" />).
+    /// </summary>
+    public static (SilModule Module, IReadOnlyList<(Diagnostic Diagnostic, SyntaxTree? Tree)> Diagnostics) LowerLibraryByFile(Compilation compilation, bool denyReflection = false) {
+        var generator = new SilGen(compilation) { _library = true, _denyReflection = denyReflection };
+        generator._module.IsLibrary = true;
+        generator._module.DenyReflection = denyReflection;
+        generator.LowerAll();
+        return (generator._module, generator.PlacedDiagnostics);
+    }
+
+    bool _library;
+
+    bool _denyReflection;
+
+    /// <summary>
     ///     Lowers a program for a session that outlives it, as a REPL's
     ///     entries do: each global gets an initialiser of its own,
     ///     <c>$global.init.&lt;name&gt;</c>, which the interpreter runs when the
@@ -169,9 +190,16 @@ public sealed partial class SilGen {
     ///     <see cref="SilModule.Unit" /> says which is which.
     /// </summary>
     /// <param name="program">The program's declarations, gathered once for all its units; gathered here when not given.</param>
-    public static (SilModule Module, IReadOnlyList<Diagnostic> Diagnostics) LowerUnit(Compilation compilation, SilUnit unit, SilProgram? program = null, FunctionSymbol? entryPoint = null) {
-        var generator = new SilGen(compilation) { _entryOverride = entryPoint, _unit = unit, _program = program };
+    public static (SilModule Module, IReadOnlyList<Diagnostic> Diagnostics) LowerUnit(
+        Compilation compilation,
+        SilUnit unit,
+        SilProgram? program = null,
+        FunctionSymbol? entryPoint = null,
+        bool denyReflection = false
+    ) {
+        var generator = new SilGen(compilation) { _entryOverride = entryPoint, _unit = unit, _program = program, _denyReflection = denyReflection };
         generator._module.Unit = new();
+        generator._module.DenyReflection = denyReflection;
         generator.LowerAll();
         return (generator._module, generator.Diagnostics);
     }
@@ -312,8 +340,9 @@ public sealed partial class SilGen {
         }
 
         // '@main' marks where a program starts; failing that, a function
-        // called main does.
-        var entry = _entryOverride ?? functions.FirstOrDefault(static f =>
+        // called main does. A library starts nowhere: a 'main' in it is an
+        // ordinary function.
+        var entry = _library ? null : _entryOverride ?? functions.FirstOrDefault(static f =>
                 f.Syntax is FunctionDeclarationSyntax declaration
                 && declaration.Attributes.Any(static a => a.Name.ToString().Trim() == "main")
             ).Symbol
@@ -339,8 +368,13 @@ public sealed partial class SilGen {
                 continue;
             }
 
-            // '@extern': C's function, declared in every unit that may call it.
+            // '@extern': C's function, declared in every unit that may call it;
+            // a variadic one for each call's types, where it is called.
             if (symbol.ForeignName is { } foreign) {
+                if (symbol.Parameters is [.., { IsVariadic: true }]) {
+                    continue;
+                }
+
                 if (SignatureOf(symbol, syntax, TypeSubstitution.Empty) is { } signature) {
                     _module.Foreign[_names[symbol]] = (foreign, signature);
                 }
@@ -536,8 +570,8 @@ public sealed partial class SilGen {
                     continue;
                 }
 
-                // A constant written where it is read needs no storage.
-                if (_evaluation is null && ConstantRead(field) is not null) {
+                // A constant written where it is read needs no storage, unless C reads it.
+                if (_evaluation is null && field.ExportName is null && ConstantRead(field) is not null) {
                     continue;
                 }
 
@@ -554,6 +588,12 @@ public sealed partial class SilGen {
                 _globalFields.Add((field, name, model));
                 _globalsByField[field] = (name, type);
                 _module.Globals.Add((name, type));
+
+                // '@export var': C reads and writes the storage by its name,
+                // which every unit, having the global, calls it by.
+                if (field.ExportName is { } export) {
+                    _module.Exports[name] = export;
+                }
             }
         }
     }
@@ -601,7 +641,12 @@ public sealed partial class SilGen {
     ///     program returns.
     /// </summary>
     void LowerGlobalLifetimes() {
-        if (_globalFields.Count == 0 || _entrySymbol is not { } initSymbol) {
+        // A library has no entry point: its globals' initialiser is lowered
+        // as a function of its own, which nothing in the library calls.
+        var initSymbol = _entrySymbol ?? (_library && _globalFields.Count > 0
+            ? FunctionSymbol.Synthesized(GlobalsInit, _globalFields[0].Field.ContainingSymbol!)
+            : null);
+        if (_globalFields.Count == 0 || initSymbol is null) {
             return;
         }
 
@@ -1100,6 +1145,7 @@ public sealed partial class SilGen {
             NamedTypeSymbol named => named.TypeArguments.Any(a => Occurs(part, a)),
             ArrayTypeSymbol array => Occurs(part, array.ElementType),
             OptionalTypeSymbol optional => Occurs(part, optional.UnderlyingType),
+            MetatypeTypeSymbol metatype => Occurs(part, metatype.InstanceType),
             ReferenceTypeSymbol reference => Occurs(part, reference.ReferencedType),
             TupleTypeSymbol tuple => tuple.ElementTypes.Any(e => Occurs(part, e)),
             FunctionTypeSymbol function =>
@@ -1427,6 +1473,10 @@ public sealed partial class SilGen {
 
     /// <summary>Enters a named type before its members, so that they may refer to it.</summary>
     T Begin<T>(TypeSymbol symbol, T type) where T : NominalType {
+        if (symbol is NamedTypeSymbol { IsConstructed: true } constructed) {
+            type.DisplayName = $"{constructed.OriginalDefinition.ContainingSymbol?.Name}.{constructed.Name}<{string.Join(", ", constructed.TypeArguments.Select(static a => a.ToDisplayString()))}>";
+        }
+
         _types[symbol] = type;
         _lowered.Add(symbol);
         return _module.AddType(type);
@@ -1532,6 +1582,13 @@ public sealed partial class SilGen {
             case ExistentialTypeSymbol { Constraint: var constraint } when ExistentialProtocols(constraint) is { } protocols:
                 return ExistentialLayout(protocols);
 
+            // 'T.Type': its one value is the type, which each instance of the
+            // code is generated for, so it holds nothing. SIL has no value of
+            // type (), so it is a Bool that is always false: a byte, and free
+            // to copy.
+            case MetatypeTypeSymbol:
+                return SilType.Bool;
+
             // A reference to an inline value, absolute or relative: a view of its bytes.
             case ReferenceTypeSymbol reference when Lower(reference.ReferencedType) is StructType { IsInline: true } inline:
                 return new InlinePointerType(inline);
@@ -1626,6 +1683,8 @@ public sealed partial class SilGen {
                     classType.Superclass = superType;
                     classType.Fields.AddRange(superType.Fields);
                 }
+
+                classType.Conformances.AddRange(DeclaredProtocols(named.OriginalDefinition));
 
                 var members = TypeSubstitution.For(named);
                 foreach (var field in StoredFields(named.OriginalDefinition)) {
@@ -2037,7 +2096,7 @@ public sealed partial class SilGen {
         var box = entry.Append(new UncheckedRefCastInst(context, BoxType(type.Parameters[0])));
         var self = entry.Append(new LoadInst(entry.Append(new RefElementAddrInst(box, 0))));
         SilValue callee = dynamic
-            ? entry.Append(new ClassMethodInst(self, SlotName(method), type))
+            ? entry.Append(new ClassMethodInst(self, VTableSlot(method), type))
             : entry.Append(new FunctionRefInst(name, type));
         SilValue[] all = [self, ..arguments];
 
@@ -3370,6 +3429,37 @@ public sealed partial class SilGen {
 
         var arguments = type.TypeArguments.Select(a => Lower(a)?.ToString() ?? a.ToDisplayString());
         return $"{name}$of${string.Join("$", arguments.Select(Sanitise))}";
+    }
+
+    /// <summary>
+    ///     The protocols a type declares it conforms to — where it is declared
+    ///     and in its extensions that hold for every instance — with those
+    ///     they refine, by qualified name: <c>M.Named</c>.
+    /// </summary>
+    static IEnumerable<string> DeclaredProtocols(NamedTypeSymbol type) {
+        var pending = new Queue<TypeSymbol>(type.BaseTypes);
+        foreach (var extension in type.Extensions.Where(static e => !e.IsConstrained)) {
+            foreach (var conformance in extension.Conformances) {
+                pending.Enqueue(conformance);
+            }
+        }
+
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        while (pending.Count > 0) {
+            if (pending.Dequeue() is not NamedTypeSymbol { TypeKind: TypeKind.Protocol } protocol) {
+                continue;
+            }
+
+            var name = $"{protocol.OriginalDefinition.ContainingSymbol?.Name}.{protocol.Name}";
+            if (!seen.Add(name)) {
+                continue;
+            }
+
+            yield return name;
+            foreach (var refined in protocol.BaseTypes) {
+                pending.Enqueue(refined);
+            }
+        }
     }
 
     internal static IEnumerable<FieldSymbol> StoredFields(NamedTypeSymbol type) =>
@@ -5708,6 +5798,10 @@ public sealed partial class SilGen {
 
                 case BoundFunctionReference reference:
                     return FunctionValue(reference);
+
+                // 'Int.self': the type is known here, so the value holds nothing.
+                case BoundMetatype:
+                    return Emit(new IntegerLiteralInst(SilType.Bool, 0));
 
                 case BoundIndirectCall indirect:
                     return IndirectCall(indirect);
@@ -8536,6 +8630,11 @@ public sealed partial class SilGen {
                 callee = witness;
             }
 
+            // C's '...': declared for the types this call passes.
+            if (callee is { ForeignName: { } cName, Parameters: [.., { IsVariadic: true }] }) {
+                return VariadicForeignCall(call, callee, cName);
+            }
+
             string name;
             FunctionType? type;
             if (IsGeneric(callee)) {
@@ -9180,6 +9279,46 @@ public sealed partial class SilGen {
             }
         }
 
+        /// <summary>
+        ///     A call to a variadic C function: the fixed arguments as any C
+        ///     call passes them, then each of the rest as the value it is —
+        ///     not the CVarArg the binder saw it as — through a declaration of
+        ///     the function for exactly these types, which the emitter calls
+        ///     with C's '...' (and its default promotions).
+        /// </summary>
+        SilValue? VariadicForeignCall(BoundCall call, FunctionSymbol callee, string cName) {
+            var fixedCount = callee.Parameters.Length - 1;
+            var arguments = new List<SilValue>();
+            for (var i = 0; i < call.Arguments.Length; i++) {
+                var argument = call.Arguments[i];
+                while (i >= fixedCount && argument is BoundConversion { Type: NamedTypeSymbol { TypeKind: TypeKind.Protocol } } toProtocol) {
+                    argument = toProtocol.Operand;
+                }
+
+                if (Borrow(argument) is not { } value) {
+                    arguments.ForEach(End);
+                    return null;
+                }
+
+                arguments.Add(value);
+            }
+
+            var result = ReferenceEquals(callee.ReturnType, Core.Void) ? SilType.Unit : LowerType(callee.ReturnType);
+            if (result is null) {
+                arguments.ForEach(End);
+                return Missing(call, $"the result of '{callee.Name}'");
+            }
+
+            var type = new FunctionType([..arguments.Select(static a => a.Type)], result);
+            var name = $"{generator._names[callee]}$va${string.Join("$", type.Parameters.Skip(fixedCount).Select(static t => Sanitise(t.ToString())))}";
+            generator._module.Foreign[name] = (cName, type);
+            generator._module.ForeignVariadic[name] = fixedCount;
+            Locate(call.Syntax);
+            var made = Emit(new ApplyInst(Emit(new FunctionRefInst(name, type)), result, [..arguments]));
+            arguments.ForEach(End);
+            return result == SilType.Unit ? UnitValue.Instance : made;
+        }
+
         /// <summary>A named function as a value: a closure over a thunk, with no context.</summary>
         SilValue? FunctionValue(BoundFunctionReference reference) {
             var callee = reference.Function;
@@ -9194,18 +9333,60 @@ public sealed partial class SilGen {
                 return BoundMethodValue(reference, receiver);
             }
 
-            if (reference.Receiver is not null || IsGeneric(callee) || !generator._names.TryGetValue(callee, out var name)
-                || LowerType(reference.Type) is not ThickFunctionType thick) {
+            if (reference.Receiver is not null || LowerType(reference.Type) is not ThickFunctionType thick) {
                 return Missing(reference, $"'{callee.Name}' as a value");
             }
 
-            var type = generator._module.Find(name)?.Type ?? generator.SignatureOf(callee, reference.Syntax, TypeSubstitution.Empty);
-            if (type is null || type != thick.Signature || !type.Owned.IsEmpty) {
+            if (ReferencedFunction(reference, callee) is not var (name, type)) {
+                return null;
+            }
+
+            if (type != thick.Signature || !type.Owned.IsEmpty) {
                 return Missing(reference, $"'{callee.Name}' as a value");
             }
 
             var thunk = generator.Thunk(name, type);
             return Emit(new PartialApplyInst(Emit(new FunctionRefInst(thunk, thick.Implementation)), null, thick));
+        }
+
+        /// <summary>
+        ///     The function a reference names, and its signature: for a generic
+        ///     one, the instance for the type arguments the reference settled
+        ///     and its receiver's type gives. Null, with the error reported,
+        ///     when there is none.
+        /// </summary>
+        (string Name, FunctionType Type)? ReferencedFunction(BoundFunctionReference reference, FunctionSymbol callee) {
+            if (IsGeneric(callee)) {
+                var receiver = reference.Receiver is { } r ? TypeSubstitution.For(Sub(r.Type)) : TypeSubstitution.Empty;
+                var map = new Dictionary<TypeParameterSymbol, TypeSymbol>();
+                foreach (var parameter in TypeParametersOf(callee)) {
+                    var bound = reference.Substitution.Lookup(parameter) is { } settled
+                        ? Sub(settled)
+                        : receiver.Lookup(parameter) ?? substitution.Lookup(parameter);
+                    if (bound is not null) {
+                        map[parameter] = bound;
+                    }
+                }
+
+                if (generator.Instance(callee, new TypeSubstitution(map), reference.Syntax) is not { } instance) {
+                    _failed = true;
+                    return null;
+                }
+
+                return instance;
+            }
+
+            if (!generator._names.TryGetValue(callee, out var name)) {
+                Missing(reference, $"'{callee.Name}' as a value");
+                return null;
+            }
+
+            if ((generator._module.Find(name)?.Type ?? generator.SignatureOf(callee, reference.Syntax, TypeSubstitution.Empty)) is not { } type) {
+                _failed = true;
+                return null;
+            }
+
+            return (name, type);
         }
 
         /// <summary>
@@ -9215,10 +9396,24 @@ public sealed partial class SilGen {
         /// </summary>
         SilValue? BoundMethodValue(BoundFunctionReference reference, BoundExpression receiver) {
             var callee = reference.Function;
-            if (IsGeneric(callee) || !generator._names.TryGetValue(callee, out var name)
-                || generator.SignatureOf(callee, reference.Syntax, TypeSubstitution.Empty) is not { } type
-                || LowerType(reference.Type) is not ThickFunctionType thick) {
+            if (LowerType(reference.Type) is not ThickFunctionType thick) {
                 return Missing(reference, $"'{callee.Name}' as a value");
+            }
+
+            // A protocol's requirement, named on a type parameter: the
+            // concrete type's own member, now that the type is known. An
+            // existential's would need its witness at run time.
+            if (OwnerOf(callee) is { TypeKind: TypeKind.Protocol }) {
+                if (Sub(receiver.Type) is not NamedTypeSymbol { TypeKind: not TypeKind.Protocol } concrete
+                    || Implementation(concrete, callee) is not { Builtin: null } witness) {
+                    return Missing(reference, $"the requirement '{callee.Name}' of '{Sub(receiver.Type).ToDisplayString()}' as a value");
+                }
+
+                callee = witness;
+            }
+
+            if (ReferencedFunction(reference, callee) is not var (name, type)) {
+                return null;
             }
 
             // A mutating method changes the value it is called on, which the

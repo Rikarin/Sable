@@ -104,6 +104,14 @@ public sealed class FunctionSymbol : Symbol {
         FunctionKind = functionKind;
     }
 
+    /// <summary>
+    ///     A static function of no parameters that no source declares: what
+    ///     lowering gives code the compiler writes on its own — a library's
+    ///     initialiser of its globals, which has no entry point to run in.
+    /// </summary>
+    public static FunctionSymbol Synthesized(string name, Symbol container) =>
+        new(name, container, null, Accessibility.Private, FunctionKind.Ordinary) { IsStatic = true };
+
     public override SymbolKind Kind => SymbolKind.Function;
     public override string Name { get; }
     public override Symbol? ContainingSymbol { get; }
@@ -362,6 +370,12 @@ public sealed class FieldSymbol(
 
     /// <summary>How a field of a class type holds its object (docs/02 §2.2): strongly, unless declared otherwise.</summary>
     public ReferenceKind ReferenceKind { get; internal set; }
+
+    /// <summary>
+    ///     <c>@export("name")</c> on a module's variable: the C name its
+    ///     storage is seen by. Null when C does not see it.
+    /// </summary>
+    public string? ExportName { get; internal set; }
 
     /// <summary>True when the member has accessors rather than storage.</summary>
     public bool IsComputed { get; internal set; }

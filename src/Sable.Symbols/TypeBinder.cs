@@ -1175,7 +1175,10 @@ internal sealed class TypeBinder(Compilation compilation) {
         // An alias the file imported stands for the module it names:
         // 'M.Vector' after 'import Sable.Math as M'.
         var full = Compilation.NameOf(syntax.Left);
-        if (compilation.ResolveModule(full, scope) is { } module) {
+        // 'T.Type' where a module is also called T, and declares no 'Type':
+        // the metatype of the type, below.
+        if (compilation.ResolveModule(full, scope) is { } module
+            && !(syntax.Right is { Identifier.Text: "Type", TypeArgumentList: null } && !module.GetMembers("Type").Any())) {
             full = module.Name;
             var member = module.GetMembers(syntax.Right.Identifier.Text).FirstOrDefault();
             if (member is null) {
@@ -1200,6 +1203,13 @@ internal sealed class TypeBinder(Compilation compilation) {
         var left = BindType(syntax.Left, context, scope);
         if (left.IsError) {
             return left;
+        }
+
+        // 'T.Type': the type of 'T.self' — unless the type has a nested type
+        // of that name, which its own name reaches first.
+        if (syntax.Right is { Identifier.Text: "Type", TypeArgumentList: null }
+            && (left is not NamedTypeSymbol owner || !owner.GetMembers("Type").Any())) {
+            return new MetatypeTypeSymbol(left);
         }
 
         // 'C.Item' where C is constrained: the associated type of whatever

@@ -235,6 +235,9 @@ public enum ErrorCode {
     LNT_PluginFailed = 3398,
     LNT_UnknownLint = 3399,
 
+    // ---- Reflection and the runtime's profiles (S3450-S3459) ---------------
+    ERR_ReflectionDenied = 3450,
+
     // ---- Memory (S3460-S3469): what ARC cannot free.
     WRN_StrongReferenceCycle = 3460,
 

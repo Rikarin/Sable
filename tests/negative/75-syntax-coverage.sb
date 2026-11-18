@@ -2,14 +2,8 @@ module Negative.SyntaxCoverage
 
 // Syntax the other programs don't use, so that the compiler fuzzer, which
 // mutates the repository's programs, has every node kind to work from: a
-// type written as a value (which lowering does not handle yet, #175), and a
 // const-generic predicate (there are no value generic parameters yet).
 
 struct Buffer<T> where T > 0 { //! S3160
     var item: Int
-}
-
-fn main() {
-    let kind = Int?.self
-    let list = Int[>..].self
 }

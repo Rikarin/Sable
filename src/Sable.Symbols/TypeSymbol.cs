@@ -887,6 +887,30 @@ public sealed class OpaqueTypeSymbol(TypeSymbol constraint, Symbol? origin = nul
 }
 
 /// <summary>
+///     <c>T.Type</c>: the type of <c>T.self</c>, a type used as a value
+///     (SYNTAX.md §16). It has one value, the type itself, so it holds nothing
+///     at run time: code is generated for each type it is used with, and the
+///     value says nothing the type does not.
+/// </summary>
+public sealed class MetatypeTypeSymbol(TypeSymbol instanceType) : TypeSymbol {
+    public override SymbolKind Kind => SymbolKind.MetatypeType;
+    public override string Name => string.Empty;
+    public override TypeKind TypeKind => TypeKind.Struct;
+
+    /// <summary>The type this is the type of: <c>Int</c> for <c>Int.Type</c>.</summary>
+    public TypeSymbol InstanceType { get; } = instanceType;
+
+    public override bool IsError => InstanceType.IsError;
+
+    public override string ToDisplayString() => $"{InstanceType.ToSuffixedDisplayString()}.Type";
+
+    public override bool Equals(TypeSymbol? other) =>
+        other is MetatypeTypeSymbol metatype && metatype.InstanceType.Equals(InstanceType);
+
+    public override int GetHashCode() => HashCode.Combine(InstanceType, 0x7E7A);
+}
+
+/// <summary>
 ///     Stands in for a type that could not be resolved, so that binding continues
 ///     and one mistake does not cascade into a page of diagnostics.
 /// </summary>

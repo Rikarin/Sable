@@ -143,7 +143,7 @@ static void destroy_string_element(void *element) {
 
 static const SableMetadata string_array_metadata = {
     sable_array_destroy, "[String]", sizeof(void *), copy_string_element, destroy_string_element,
-    sizeof(SableArray), _Alignof(SableArray), NULL,
+    sizeof(SableArray), _Alignof(SableArray), NULL, NULL,
 };
 
 SableArray *sable_string_split(const SableString *s, int32_t separator) {

@@ -164,6 +164,11 @@ internal sealed class Conversions(CoreTypes core) {
             return true;
         }
 
+        // Sendable is met by what a type is made of, not by declaring it.
+        if (Sendability.IsSendableProtocol(constraint)) {
+            return Sendability.IsSendable(source);
+        }
+
         // A type parameter satisfies only what it was constrained to: an
         // unconstrained one conforms to nothing.
         if (source is TypeParameterSymbol or DependentMemberTypeSymbol) {

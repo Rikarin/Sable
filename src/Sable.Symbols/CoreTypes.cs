@@ -55,6 +55,11 @@ public sealed class CoreTypes {
         Module.AddMember(Error);
         AnyError = new ExistentialTypeSymbol(Error);
 
+        // What may cross an isolation boundary (SYNTAX.md §19, docs/02 §2.7):
+        // a marker, which a type meets by what it is made of, not by saying so.
+        Sendable = new("Sendable", TypeKind.Protocol, Module, accessibility: Accessibility.Public);
+        Module.AddMember(Sendable);
+
         // 'extension AppError: From<IoError>' lets a 'try' in a function that
         // throws AppError propagate an IoError, converted (docs/03 §3.6).
         From = DeclareGeneric("From", TypeKind.Protocol, "Source");
@@ -111,6 +116,7 @@ public sealed class CoreTypes {
     public NamedTypeSymbol Void { get; }
     public NamedTypeSymbol Never { get; }
     public NamedTypeSymbol Error { get; }
+    public NamedTypeSymbol Sendable { get; }
 
     /// <summary>What a bare <c>throws</c> means.</summary>
     public TypeSymbol AnyError { get; }

@@ -1,0 +1,82 @@
+module Negative.ActorIsolation
+
+// An actor's stored properties are isolated as its methods are, and what
+// crosses its boundary is Sendable (#123).
+
+class Box { var n: Int = 0 }
+@immutable class Config { let name: String = "c" }
+struct Point { var x: Int, var y: Int }
+struct Holder { var box: Box }
+struct Wrapped<T> { var item: T }
+
+actor Counter {
+    var value: Int = 0
+    let id: Int = 7
+    nonisolated var label: String => "counter"
+    var box: Box = Box()
+
+    fn bump() -> Int {
+        value = value + 1
+        return value
+    }
+
+    fn take(_ b: Box) {}
+    fn point(_ p: Point) -> Point { return p }
+    fn config(_ c: Config) {}
+    fn holder(_ h: Holder) {}
+    fn closure(_ f: () -> Int) {}
+    fn give() -> Box { return box }
+    fn generic<T>(_ x: T) {}
+    fn sendableGeneric<T: Sendable>(_ x: T) {}
+}
+
+fn readsWithoutWaiting(_ c: Counter) -> Int {
+    return c.value                      //! S3035 reading 'value', isolated to the actor 'Counter', is async
+}
+
+async fn readsWithoutAwait(_ c: Counter) -> Int {
+    return c.value                      //! S3034 needs 'await'
+}
+
+async fn writesFromOutside(_ c: Counter) {
+    c.value = 5                         //! S3069 'value' is the state of the actor 'Counter'
+    c.value += 1                        //! S3069 'value' is the state of the actor 'Counter'
+}
+
+fn freelyReadable(_ c: Counter) -> String {
+    return "\(c.id) \(c.label)"
+}
+
+async fn sendables(_ c: Counter) -> Int {
+    let v = await c.value
+    let p = await c.point(Point(x: 1, y: 2))
+    await c.config(Config())
+    await c.sendableGeneric(3)
+    return v + p.x
+}
+
+async fn notSendables(_ c: Counter) {
+    await c.take(Box())                 //! S3073 'Box' is a class, whose state is shared
+    let b = await c.give()              //! S3073 the result of 'give'
+    let r = await c.box                 //! S3073 'box' crosses the boundary of the actor 'Counter'
+    await c.holder(Holder(box: Box()))  //! S3073 'Holder' holds 'box'
+    await c.closure(() => 1)            //! S3073 a closure may capture state
+    await c.generic(Wrapped(item: Box())) //! S3073 'Wrapped<Box>' holds 'item'
+}
+
+@MainActor
+class Window {
+    var title: String = ""
+    fn show() -> String { return title }
+}
+
+@MainActor
+fn render(_ w: Window) -> String { return w.show() }
+
+fn offTheMainActor(_ w: Window) -> String {
+    return w.show()                     //! S3035 'show', isolated to the main actor
+}
+
+async fn waitsForTheMainActor(_ w: Window) -> String {
+    return await render(w)
+}

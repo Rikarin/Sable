@@ -2116,9 +2116,25 @@ public sealed partial class Binder {
     ///     A call into an actor from outside it: the actor runs one call at a
     ///     time, so its caller may have to wait its turn (docs/02 §2.7).
     /// </summary>
-    bool CrossesIntoActor(FunctionSymbol callee) {
-        if (callee is not { IsStatic: false, FunctionKind: FunctionKind.Ordinary }
-            || (callee.ContainingSymbol is ExtensionSymbol extension ? extension.ExtendedType : callee.ContainingSymbol) is not NamedTypeSymbol { TypeKind: TypeKind.Actor } actor) {
+    bool CrossesIntoActor(FunctionSymbol callee) =>
+        callee is { IsStatic: false, FunctionKind: FunctionKind.Ordinary } && IsolatedFromHere(callee);
+
+    /// <summary>
+    ///     A member of an actor reached from outside it: anything but what is
+    ///     static or declared 'nonisolated'.
+    /// </summary>
+    bool IsolatedFromHere(Symbol member) {
+        if (IsNonisolated(member)) {
+            return false;
+        }
+
+        // '@MainActor' pins a declaration, or everything in a type, to the
+        // main executor: code elsewhere reaches it as it reaches an actor.
+        if (OnMainActor(member)) {
+            return _containingSymbol is not { } here || !OnMainActor(here) && !IsEntryPoint(here);
+        }
+
+        if ((member.ContainingSymbol is ExtensionSymbol extension ? extension.ExtendedType : member.ContainingSymbol) is not NamedTypeSymbol { TypeKind: TypeKind.Actor } actor) {
             return false;
         }
 
@@ -2129,6 +2145,112 @@ public sealed partial class Binder {
         }
 
         return true;
+    }
+
+    /// <summary>
+    ///     Declared '@MainActor', or inside a declaration that is — a member
+    ///     of such a type, a closure in such a function.
+    /// </summary>
+    static bool OnMainActor(Symbol symbol) {
+        for (var at = symbol; at is not null and not ModuleSymbol; at = at.ContainingSymbol) {
+            foreach (var syntax in at.DeclaringSyntax) {
+                for (SyntaxNode? node = syntax; node is not null; node = node.Parent) {
+                    if (node is DeclarationSyntax && node.ChildNodes().OfType<AttributeSyntax>().Any(static a => a.Name.ToString().Trim() == "MainActor")) {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>What a member is isolated to, as a diagnostic says it.</summary>
+    static string Isolation(Symbol member) =>
+        OnMainActor(member)
+            ? "the main actor"
+            : $"the actor '{(member.ContainingSymbol is ExtensionSymbol extension ? extension.ExtendedType : member.ContainingSymbol)?.Name}'";
+
+    /// <summary>The program's entry point, or code inside it: it runs on the main executor.</summary>
+    static bool IsEntryPoint(Symbol symbol) {
+        for (var at = symbol; at is not null and not ModuleSymbol; at = at.ContainingSymbol) {
+            if (at is FunctionSymbol { ContainingSymbol: ModuleSymbol } function
+                && (function.Name == "main" || function.DeclaringSyntax.Any(static s => s is FunctionDeclarationSyntax declaration
+                    && declaration.Attributes.Any(static a => a.Name.ToString().Trim() == "main")))) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    static bool IsNonisolated(Symbol member) =>
+        member.DeclaringSyntax.Any(static syntax => {
+            for (SyntaxNode? node = syntax; node is not null; node = node.Parent) {
+                switch (node) {
+                    case FunctionDeclarationSyntax function:
+                        return function.Modifiers.Any(static m => m.Kind == SyntaxKind.NonisolatedKeyword);
+                    case FieldDeclarationSyntax field:
+                        return field.Modifiers.Any(static m => m.Kind == SyntaxKind.NonisolatedKeyword);
+                }
+            }
+
+            return false;
+        });
+
+    /// <summary>
+    ///     An actor's stored property reached from outside it (SYNTAX.md §19):
+    ///     read only by waiting for the actor, as a call is; never changed
+    ///     but by the actor itself. A 'let' cannot change, so reading one does
+    ///     not wait.
+    /// </summary>
+    void CheckIsolatedField(SyntaxNode syntax, FieldSymbol field) {
+        if (field.IsStatic || !IsolatedFromHere(field)) {
+            return;
+        }
+
+        if (_assignedSpine.Contains(syntax)) {
+            _diagnostics.Error(
+                ErrorCode.ERR_ActorStateFromOutside,
+                syntax.Span,
+                $"'{field.Name}' is the state of {Isolation(field)}, which only it changes; give it a method that changes it, and call that"
+            );
+            return;
+        }
+
+        if (field is { IsMutable: false, IsComputed: false }) {
+            return;
+        }
+
+        MarkAsync(syntax.Span, $"reading '{field.Name}', isolated to {Isolation(field)},");
+        CheckSendable(field.Type, syntax.Span, $"'{field.Name}'", field);
+    }
+
+    /// <summary>The expressions an assignment being bound writes through: its target, and what that is a part of.</summary>
+    readonly HashSet<SyntaxNode> _assignedSpine = new(ReferenceEqualityComparer.Instance);
+
+    static IEnumerable<SyntaxNode> Spine(ExpressionSyntax target) {
+        for (SyntaxNode? node = target; node is not null;) {
+            yield return node;
+            node = node switch {
+                MemberAccessExpressionSyntax member => member.Expression,
+                ElementAccessExpressionSyntax element => element.Expression,
+                ParenthesizedExpressionSyntax parenthesized => parenthesized.Expression,
+                _ => null,
+            };
+        }
+    }
+
+    /// <summary>Reports a value crossing into or out of an actor whose type is not Sendable.</summary>
+    void CheckSendable(TypeSymbol type, TextSpan span, string what, Symbol member) {
+        if (Sendability.Why(type, []) is { } reason) {
+            _diagnostics.Error(
+                ErrorCode.ERR_NotSendable,
+                span,
+                $"{what} crosses the boundary of {Isolation(member)}, "
+                + $"so it must be Sendable, and '{type.ToDisplayString()}' is not: {reason}"
+            );
+        }
     }
 
     BoundExpression BindNameAsValue(string name, SyntaxNode syntax) {
@@ -2250,6 +2372,8 @@ public sealed partial class Binder {
                 if (field.IsAsyncGetter) {
                     MarkAsync(syntax.Span, $"reading '{field.Name}'");
                 }
+
+                CheckIsolatedField(syntax, field);
 
                 return new BoundFieldAccess(syntax, receiver, field, substitution.Apply(field.Type));
 
@@ -3274,7 +3398,16 @@ public sealed partial class Binder {
         if (resolved.IsAsync) {
             MarkAsync(syntax.Span, $"'{resolved.Name}'");
         } else if (CrossesIntoActor(resolved)) {
-            MarkAsync(syntax.Span, $"'{resolved.Name}', isolated to its actor,");
+            MarkAsync(syntax.Span, $"'{resolved.Name}', isolated to {(OnMainActor(resolved) ? "the main actor" : "its actor")},");
+        }
+
+        // What goes into the actor, and what comes back out, crosses.
+        if (CrossesIntoActor(resolved)) {
+            for (var i = 0; i < converted.Count; i++) {
+                CheckSendable(converted[i].Type, converted[i].Syntax.Span, $"argument {i + 1} of '{resolved.Name}'", resolved);
+            }
+
+            CheckSendable(substitution.Apply(resolved.ReturnType), syntax.Span, $"the result of '{resolved.Name}'", resolved);
         }
 
         var result = substitution.Apply(resolved.ReturnType);
@@ -4551,7 +4684,10 @@ public sealed partial class Binder {
         && ReferenceEquals(field.ContainingSymbol, owner.OriginalDefinition);
 
     BoundExpression BindAssignment(AssignmentExpressionSyntax syntax) {
+        var spine = Spine(syntax.Left).ToList();
+        _assignedSpine.UnionWith(spine);
         var target = BindExpression(syntax.Left);
+        _assignedSpine.ExceptWith(spine);
 
         // A plain store replaces the value, so it may store anything the
         // binding's declared type holds: inside 'if p != none', 'p = none' is

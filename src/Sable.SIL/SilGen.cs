@@ -659,17 +659,24 @@ public sealed partial class SilGen {
             return null;
         }
 
-        var arguments = new List<SilType>();
+        var arguments = new List<string>();
         foreach (var parameter in TypeParametersOf(symbol)) {
+            // Never has no values to lower, and is still an argument: the
+            // error type of 'apply { 7 }', whose closure cannot throw.
+            if (substitution.Lookup(parameter) is { } never && never.Equals(Core.Never)) {
+                arguments.Add("Never");
+                continue;
+            }
+
             if (substitution.Lookup(parameter) is not { } argument || Lower(argument) is not { } lowered) {
                 Unsupported<object>(at, $"'{symbol.Name}' with its type arguments unknown here");
                 return null;
             }
 
-            arguments.Add(lowered);
+            arguments.Add(Sanitise(lowered.ToString()));
         }
 
-        var name = $"{baseName}$of${string.Join("$", arguments.Select(static a => Sanitise(a.ToString())))}";
+        var name = $"{baseName}$of${string.Join("$", arguments)}";
         if (_instances.TryGetValue(name, out var existing)) {
             return (name, existing);
         }
@@ -877,8 +884,9 @@ public sealed partial class SilGen {
             return Unsupported<FunctionType>(at, $"a result of type '{resultSymbol.ToDisplayString()}'");
         }
 
+        // 'throws(E)' with E as Never cannot throw: it is an ordinary function.
         SilType? thrown = null;
-        if (symbol.ThrownType is { } thrownSymbol) {
+        if (symbol.ThrownType is { } thrownSymbol && !Substitute(substitution, thrownSymbol).Equals(Core.Never)) {
             if (Lower(thrownSymbol) is not { } thrownType) {
                 return Unsupported<FunctionType>(at, $"'{symbol.Name}', which throws '{thrownSymbol.ToDisplayString()}'");
             }
@@ -1077,7 +1085,7 @@ public sealed partial class SilGen {
                 }
 
                 SilType? thrown = null;
-                if (functionType.ThrownType is { } thrownSymbol && (thrown = Lower(thrownSymbol)) is null) {
+                if (functionType.ThrownType is { } thrownSymbol && !thrownSymbol.Equals(Core.Never) && (thrown = Lower(thrownSymbol)) is null) {
                     return null;
                 }
 
@@ -5745,6 +5753,9 @@ public sealed partial class SilGen {
                     into.Add(Sub(indirectThrown));
                     break;
             }
+
+            // What throws Never throws nothing.
+            into.RemoveAll(t => t.Equals(Core.Never));
 
             foreach (var child in node.Children) {
                 if (child is not BoundClosure) {

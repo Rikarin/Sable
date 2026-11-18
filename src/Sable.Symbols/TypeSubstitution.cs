@@ -231,6 +231,12 @@ public sealed class TypeSubstitution {
                     }
                 }
 
+                // 'throws(E)' against a closure that throws IoError: E is IoError.
+                if (function.ThrownType is { } thrown && otherFunction.ThrownType is { } otherThrown
+                    && !Unify(thrown, otherThrown, inferrable, into)) {
+                    return false;
+                }
+
                 return Unify(function.ReturnType, otherFunction.ReturnType, inferrable, into);
             }
 

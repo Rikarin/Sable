@@ -214,6 +214,172 @@ public sealed class GenericsAndConformanceTests {
             static e => e.Code == ErrorCode.ERR_CannotInferTypeArgument
         );
 
+    [Fact]
+    public void InfersFromANamedFunctionPassedAsAClosure() =>
+        Assert.Equal(
+            "String[>..]",
+            TypeOfLast(
+                """
+                fn map<T, U>(_ xs: T[>..], _ f: (T) -> U) -> U[>..]
+                fn show(_ x: Int) -> String => "\(x)"
+                fn probe(_ xs: Int[>..]) {
+                    let v = map(xs, show)
+                }
+                """
+            )
+        );
+
+    [Fact]
+    public void AClosureThatCannotThrowMakesATypedErrorNever() =>
+        Assert.Equal(
+            "Int",
+            TypeOfLast(
+                """
+                fn apply<T, E>(_ f: () throws(E) -> T) throws(E) -> T
+                fn probe() {
+                    let v = apply { 7 }
+                }
+                """
+            )
+        );
+
+    [Fact]
+    public void AClosureThatThrowsGivesATypedErrorItsType() {
+        var errors = Errors(
+            """
+            union IoError { Denied }
+            fn apply<T, E>(_ f: () throws(E) -> T) throws(E) -> T
+            fn risky() throws(IoError) -> Int
+            fn bare() -> Int => apply { try risky() }
+            fn caught() throws(IoError) -> Int => try apply { try risky() }
+            """
+        ).Where(static e => e.Code != ErrorCode.ERR_MissingBody).ToList();
+        var error = Assert.Single(errors);
+        Assert.Equal(ErrorCode.ERR_MustUseTry, error.Code);
+    }
+
+    [Fact]
+    public void AFloatLiteralWinsOverAnIntegerOne() =>
+        Assert.Equal(
+            "F64",
+            TypeOfLast(
+                """
+                fn pick<T>(_ a: T, _ b: T) -> T
+                fn probe() {
+                    let v = pick(1, 2.5)
+                }
+                """
+            )
+        );
+
+    [Fact]
+    public void AnotherArgumentWinsOverALiteral() =>
+        Assert.Equal(
+            "I8",
+            TypeOfLast(
+                """
+                fn pick<T>(_ a: T, _ b: T) -> T
+                fn probe(_ small: I8) {
+                    let v = pick(1, small)
+                }
+                """
+            )
+        );
+
+    [Fact]
+    public void AnIntegerAndAFloatLiteralAddAsFloats() =>
+        Assert.Equal(
+            "F64",
+            TypeOfLast(
+                """
+                fn probe() {
+                    let v = 1 + 2.0
+                }
+                """
+            )
+        );
+
+    [Fact]
+    public void TheContextWinsOverALiteral() =>
+        AssertClean(
+            """
+            fn wrap<T>(_ x: T) -> T[>..] => [x]
+            fn pick<T>(_ a: T, _ b: T) -> T => a
+            fn probe() -> Int {
+                let r: I8[>..] = wrap(3)
+                let n: Int? = pick(1, none)
+                return r.count + (n ?? 0)
+            }
+            """
+        );
+
+    [Fact]
+    public void TheContextIsIgnoredWhereItBreaksAConstraint() =>
+        Assert.Equal(
+            "Int",
+            TypeOfLast(
+                """
+                protocol Numeric { }
+                extension Int: Numeric { }
+                fn twice<T: Numeric>(_ x: T) -> T
+                fn probe() {
+                    let n: Int? = twice(3)
+                    let v = twice(3)
+                }
+                """
+            )
+        );
+
+    [Fact]
+    public void AStaticMemberOfABareGenericTypeInfersItsParameters() =>
+        Assert.Equal(
+            "Box<Int>",
+            TypeOfLast(
+                """
+                struct Box<T> {
+                    var v: T
+                    static fn make(_ x: T) -> Box<T> => Box(v: x)
+                }
+                fn probe() {
+                    let v = Box.make(4)
+                }
+                """
+            )
+        );
+
+    [Fact]
+    public void AnAssociatedTypeIsInferredFromAWitness() =>
+        Assert.Equal(
+            "Int",
+            TypeOfLast(
+                """
+                protocol Bag {
+                    associatedtype Item
+                    fn get() -> Item
+                }
+                struct IntBag: Bag { fn get() -> Int => 3 }
+                fn takesBag<B: Bag>(_ b: B) -> B.Item => b.get()
+                fn probe() {
+                    let v = takesBag(IntBag())
+                }
+                """
+            )
+        );
+
+    [Fact]
+    public void AnAssociatedTypeIsInferredFromAPropertyWitness() =>
+        AssertClean(
+            """
+            protocol Holder {
+                associatedtype Value
+                var value: Value { get }
+            }
+            struct Named: Holder { var value: String }
+            fn read<H: Holder>(_ h: H) -> H.Value => h.value
+            fn probe() -> String => read(Named(value: "n"))
+            """
+        );
+
     // ---- Conformance -------------------------------------------------------
 
     [Fact]

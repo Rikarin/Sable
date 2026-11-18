@@ -279,4 +279,53 @@ public sealed class GenericTests {
                 )
             ).Stdout
         );
+
+    [Fact]
+    public void InferenceFromFunctionsLiteralsContextStaticsAndWitnesses() =>
+        Assert.Equal(
+            "2 7 1.5 3.5 1 4 3 3\n",
+            AssertAgree(
+                Program(
+                    """
+                    fn map<T, U>(_ xs: T[>..], _ f: (T) -> U) -> U[>..] {
+                        var result: U[>..] = []
+                        for x in xs {
+                            result.append(f(x))
+                        }
+                        return result
+                    }
+
+                    fn dbl(_ x: Int) -> Int => x * 2
+
+                    fn apply<T, E>(_ f: () throws(E) -> T) throws(E) -> T => try f()
+
+                    fn pick<T>(_ a: T, _ b: T) -> T => b
+
+                    fn wrap<T>(_ x: T) -> T[>..] => [x]
+
+                    struct Box<T> {
+                        var v: T
+                        static fn make(_ x: T) -> Box<T> => Box(v: x)
+                    }
+
+                    protocol Bag {
+                        associatedtype Item
+                        fn get() -> Item
+                    }
+
+                    struct IntBag: Bag {
+                        fn get() -> Int => 3
+                    }
+
+                    fn takesBag<B: Bag>(_ b: B) -> B.Item => b.get()
+                    """,
+                    """
+                        let xs: Int[>..] = [1, 2]
+                        let small: I8[>..] = wrap(1)
+                        let n: Int? = pick(5, none)
+                        print("\(map(xs, dbl)[0]) \(apply { 7 }) \(pick(1, 1.5)) \(1 + 2.5) \(small[0]) \(Box.make(4).v) \(takesBag(IntBag())) \(n == none ? 3 : 0)")
+                    """
+                )
+            ).Stdout
+        );
 }

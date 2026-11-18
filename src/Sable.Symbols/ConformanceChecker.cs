@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using Sable.Syntax;
 
 namespace Sable.Symbols;
@@ -247,8 +248,10 @@ internal static class ConformanceChecker {
     /// </summary>
     /// <remarks>
     ///     A conformer names them: <c>alias Element = Int</c>, or a nested type
-    ///     called Element. Failing that the declaration's own default applies, and
-    ///     failing that the conformance is not met.
+    ///     called Element. Failing that its witnesses say: <c>fn get() -&gt; Int</c>
+    ///     meeting <c>fn get() -&gt; Item</c> makes Item an Int. Failing that the
+    ///     declaration's own default applies, and failing that the conformance
+    ///     is not met.
     /// </remarks>
     public static TypeSymbol? ResolveAssociated(
         NamedTypeSymbol conformer,
@@ -268,7 +271,62 @@ internal static class ConformanceChecker {
             }
         }
 
-        return associated.DefaultType;
+        return InferAssociated(conformer, associated) ?? associated.DefaultType;
+    }
+
+    /// <summary>The (conformer, associated type) pairs being inferred, so inference never asks itself.</summary>
+    [ThreadStatic]
+    static HashSet<(NamedTypeSymbol, TypeParameterSymbol)>? s_inferring;
+
+    /// <summary>
+    ///     An associated type read off the conformer's witnesses: the first
+    ///     requirement that mentions it, matched against the conformer's own
+    ///     member of that name and shape.
+    /// </summary>
+    static TypeSymbol? InferAssociated(NamedTypeSymbol conformer, TypeParameterSymbol associated) {
+        if (associated.ContainingSymbol is not NamedTypeSymbol { TypeKind: TypeKind.Protocol } protocol) {
+            return null;
+        }
+
+        conformer = conformer.OriginalDefinition;
+        s_inferring ??= [];
+        if (!s_inferring.Add((conformer, associated))) {
+            return null;
+        }
+
+        try {
+            ImmutableArray<TypeParameterSymbol> inferrable = [associated];
+            foreach (var requirement in protocol.Members) {
+                foreach (var witness in FindMembers(conformer, requirement.Name)) {
+                    // A protocol's default speaks of the associated type
+                    // itself, so it says nothing about what it is.
+                    if (witness.ContainingSymbol is NamedTypeSymbol { TypeKind: TypeKind.Protocol }
+                        or ExtensionSymbol { ExtendedType.TypeKind: TypeKind.Protocol }) {
+                        continue;
+                    }
+
+                    var map = new Dictionary<TypeParameterSymbol, TypeSymbol>();
+                    var fits = (requirement, witness) switch {
+                        (FunctionSymbol { IsAbstract: true } wanted, FunctionSymbol given) =>
+                            wanted.IsStatic == given.IsStatic
+                            && wanted.Parameters.Length == given.Parameters.Length
+                            && wanted.Parameters.Zip(given.Parameters).All(p => TypeSubstitution.Unify(p.First.Type, p.Second.Type, inferrable, map))
+                            && TypeSubstitution.Unify(wanted.ReturnType, given.ReturnType, inferrable, map),
+                        (FieldSymbol { IsAbstract: true } wanted, FieldSymbol given) =>
+                            TypeSubstitution.Unify(wanted.Type, given.Type, inferrable, map),
+                        _ => false,
+                    };
+
+                    if (fits && map.TryGetValue(associated, out var inferred) && !inferred.IsError) {
+                        return inferred;
+                    }
+                }
+            }
+
+            return null;
+        } finally {
+            s_inferring.Remove((conformer, associated));
+        }
     }
 
     static void CheckProtocol(

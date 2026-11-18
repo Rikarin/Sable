@@ -3134,6 +3134,35 @@ public sealed partial class Binder {
         TypeSymbol? expectedType = null
     ) {
         var outer = group.Substitution ?? TypeSubstitution.Empty;
+
+        // 'Box.make(4)': a static member through the type named bare, whose
+        // parameters the call infers. Inside Box, T is Box's own, and
+        // inferring it from a T gives it back unchanged.
+        var savedOwner = _ownerTypeParameters;
+        _ownerTypeParameters = syntax.Expression is MemberAccessExpressionSyntax { Expression: var typeSyntax }
+                               && _bound.TryGetValue(typeSyntax, out var named)
+                               && named is BoundTypeExpression { ReferencedType: NamedTypeSymbol { IsConstructed: false, TypeParameters.IsEmpty: false } bare }
+                               && outer.IsEmpty
+                               && group.Candidates.All(c => c.IsStatic && ReferenceEquals(c.ContainingSymbol is ExtensionSymbol e ? e.ExtendedType : c.ContainingSymbol, bare))
+            ? bare.TypeParameters
+            : [];
+
+        try {
+            return BindResolvedCall(syntax, group, arguments, labels, syntaxes, expectedType, outer);
+        } finally {
+            _ownerTypeParameters = savedOwner;
+        }
+    }
+
+    BoundExpression BindResolvedCall(
+        InvocationExpressionSyntax syntax,
+        BoundFunctionGroup group,
+        ImmutableArray<BoundExpression> arguments,
+        ImmutableArray<string?> labels,
+        ImmutableArray<ExpressionSyntax> syntaxes,
+        TypeSymbol? expectedType,
+        TypeSubstitution outer
+    ) {
         var resolved = ResolveOverload(group.Candidates, arguments, labels, syntax, outer);
 
         if (resolved is null) {
@@ -3150,14 +3179,15 @@ public sealed partial class Binder {
 
         // The receiver's substitution, plus whatever the arguments imply for
         // the function's own type parameters.
-        var substitution = Combine(outer, Infer(resolved, arguments, labels, outer));
+        var substitution = Combine(outer, Infer(resolved, arguments, labels, outer, expectedType));
+        var inferrable = resolved.TypeParameters.AddRange(_ownerTypeParameters);
         var slots = Align(resolved, labels, arguments.Length);
 
         // Now that a signature is chosen, the closures have parameter types.
         if (arguments.Any(static a => a is BoundUnboundClosure)) {
             var saved = _openTypeParameters;
             _openTypeParameters = [
-                ..resolved.TypeParameters.Where(p => substitution.Lookup(p) is null)
+                ..inferrable.Where(p => substitution.Lookup(p) is null)
             ];
 
             var rebound = arguments.ToBuilder();
@@ -3177,7 +3207,7 @@ public sealed partial class Binder {
 
             // A closure's return type can settle a type parameter nothing else
             // mentions, so inference runs again with them bound.
-            substitution = Combine(outer, Infer(resolved, arguments, labels, outer));
+            substitution = Combine(outer, Infer(resolved, arguments, labels, outer, expectedType));
         }
 
         var converted = ImmutableArray.CreateBuilder<BoundExpression>(arguments.Length);
@@ -3228,19 +3258,21 @@ public sealed partial class Binder {
         // A parameter that appears only in the result is settled by what the
         // context asked for: 'let p: Point? = decodeOne(bytes)'.
         if (expectedType is not null
-            && resolved.TypeParameters.Any(p => substitution.Lookup(p) is null)) {
+            && inferrable.Any(p => substitution.Lookup(p) is null)) {
             var map = new Dictionary<TypeParameterSymbol, TypeSymbol>();
-            foreach (var parameter in resolved.TypeParameters) {
+            foreach (var parameter in inferrable) {
                 if (substitution.Lookup(parameter) is { } bound) {
                     map[parameter] = bound;
                 }
             }
 
-            TypeSubstitution.Unify(resolved.ReturnType, expectedType, resolved.TypeParameters, map);
+            TypeSubstitution.Unify(resolved.ReturnType, expectedType, inferrable, map);
 
             substitution = Combine(outer, new(map));
         }
 
+        // A bare generic type's parameter nothing mentions stays open:
+        // 'Task.yield()' says nothing of Task's Success, and needs nothing.
         if (!resolved.TypeParameters.IsEmpty) {
             foreach (var typeParameter in resolved.TypeParameters) {
                 if (substitution.Lookup(typeParameter) is not null) {
@@ -3277,7 +3309,9 @@ public sealed partial class Binder {
                     PassesOwnParameter(arguments)
                 );
             }
-        } else if (resolved.ThrownType is { } thrown) {
+        } else if (resolved.ThrownType is { } thrown && !substitution.Apply(thrown).Equals(Core.Never)) {
+            // 'throws(E)' with E inferred as Never, from a closure that
+            // cannot throw, cannot throw either.
             MarkThrows(syntax.Span, $"'{resolved.Name}'", substitution.Apply(thrown));
         }
 
@@ -3324,45 +3358,141 @@ public sealed partial class Binder {
         return new Binder(_compilation, scope, container).BindInitializer(clause.Value, substitution.Apply(parameter.Type));
     }
 
+    /// <summary>
+    ///     The parameters of the generic type a static member is called
+    ///     through, when the call names the type bare: in <c>Box.make(4)</c> the
+    ///     call infers Box's T, as it does a generic function's own.
+    /// </summary>
+    ImmutableArray<TypeParameterSymbol> _ownerTypeParameters = [];
+
     /// <summary>Works out a generic function's type arguments from the call.</summary>
-    static TypeSubstitution Infer(
+    /// <remarks>
+    ///     What a numeric literal says is weakest: it fits many types, so it
+    ///     only decides a parameter nothing else did. First the other
+    ///     arguments, then the type the context wants back —
+    ///     <c>let r: I8[&gt;..] = wrap(3)</c> makes T an I8 — and only then the
+    ///     literals, where a float among them wins over an integer:
+    ///     <c>pick(1, 2.5)</c> is a pick of F64s.
+    /// </remarks>
+    TypeSubstitution Infer(
         FunctionSymbol function,
         ImmutableArray<BoundExpression> arguments,
         ImmutableArray<string?> labels,
-        TypeSubstitution outer
+        TypeSubstitution outer,
+        TypeSymbol? expectedType = null
     ) {
-        if (function.TypeParameters.IsEmpty) {
+        var inferrable = function.TypeParameters.AddRange(_ownerTypeParameters);
+        if (inferrable.IsEmpty) {
             return TypeSubstitution.Empty;
         }
 
         var map = new Dictionary<TypeParameterSymbol, TypeSymbol>();
         var slots = Align(function, labels, arguments.Length);
+        var literals = new List<(TypeSymbol Wanted, BoundExpression Argument)>();
         for (var i = 0; i < arguments.Length; i++) {
             if (slots[i] >= function.Parameters.Length) {
                 break;
             }
 
             var wanted = outer.Apply(function.Parameters[slots[i]].Type);
+            if (IsNumericLiteral(arguments[i])) {
+                literals.Add((wanted, arguments[i]));
+                continue;
+            }
 
-            TypeSubstitution.Unify(wanted, AdaptForInference(wanted, arguments[i]), function.TypeParameters, map);
+            TypeSubstitution.Unify(wanted, AdaptForInference(wanted, arguments[i]), inferrable, map);
+        }
+
+        if (expectedType is not null && inferrable.Any(p => !map.ContainsKey(p))) {
+            InferFromContext(outer.Apply(function.ReturnType), expectedType, inferrable, map);
+        }
+
+        foreach (var (wanted, argument) in literals) {
+            // A float literal where an integer one decided: both are floats.
+            if (wanted is TypeParameterSymbol parameter && map.TryGetValue(parameter, out var earlier)
+                && earlier.Equals(Core.Int) && argument.Type.Equals(Core.F64)
+                && literals.Any(l => ReferenceEquals(l.Wanted, wanted) && !ReferenceEquals(l.Argument, argument))) {
+                map[parameter] = Core.F64;
+                continue;
+            }
+
+            TypeSubstitution.Unify(wanted, argument.Type, inferrable, map);
+        }
+
+        // 'apply { 7 }' for 'apply<T, E>(_ f: () throws(E) -> T)': a closure
+        // that cannot throw throws nothing, so E is Never.
+        for (var i = 0; i < arguments.Length && i < slots.Length; i++) {
+            if (slots[i] < function.Parameters.Length
+                && outer.Apply(function.Parameters[slots[i]].Type) is FunctionTypeSymbol { ThrownType: TypeParameterSymbol thrown }
+                && inferrable.Contains(thrown)
+                && !map.ContainsKey(thrown)
+                && AdaptForInference(function.Parameters[slots[i]].Type, arguments[i]) is FunctionTypeSymbol { ThrownType: null }) {
+                map[thrown] = Core.Never;
+            }
         }
 
         return new(map);
     }
 
     /// <summary>
+    ///     What the type the context wants back says of the parameters the
+    ///     arguments left open — kept only where it meets their constraints,
+    ///     since a context that converts, as an optional does, may ask for a
+    ///     type the parameter could never be.
+    /// </summary>
+    void InferFromContext(
+        TypeSymbol returnType,
+        TypeSymbol expectedType,
+        ImmutableArray<TypeParameterSymbol> inferrable,
+        Dictionary<TypeParameterSymbol, TypeSymbol> map
+    ) {
+        var fromContext = new Dictionary<TypeParameterSymbol, TypeSymbol>(map);
+        if (!TypeSubstitution.Unify(returnType, expectedType, inferrable, fromContext)) {
+            return;
+        }
+
+        foreach (var (parameter, type) in fromContext) {
+            if (map.ContainsKey(parameter)
+                || type.IsError
+                || !parameter.Constraints.All(c => Conversions.Satisfies(type, c, _conversions.Equivalence))) {
+                continue;
+            }
+
+            map[parameter] = type;
+        }
+    }
+
+    /// <summary>An integer or float literal: a value that could be several types.</summary>
+    bool IsNumericLiteral(BoundExpression expression) =>
+        expression is BoundLiteral { Type: var type } && (type.Equals(Core.Int) || type.Equals(Core.F64));
+
+    /// <summary>
     ///     An argument's type as inference should see it.
     /// </summary>
     /// <remarks>
     ///     An array literal's storage kind comes from the context, so it must not
-    ///     be the thing that stops a parameter being inferred.
+    ///     be the thing that stops a parameter being inferred. A named function
+    ///     passed where a function is wanted, <c>map(xs, dbl)</c>, is the one
+    ///     overload of that shape, as a function type.
     /// </remarks>
-    static TypeSymbol AdaptForInference(TypeSymbol parameter, BoundExpression argument) =>
-        parameter is ArrayTypeSymbol wanted
-        && argument is BoundArray { Type: ArrayTypeSymbol actual }
-        && actual.ArrayKind != wanted.ArrayKind
-            ? new ArrayTypeSymbol(actual.ElementType, wanted.ArrayKind)
-            : argument.Type;
+    static TypeSymbol AdaptForInference(TypeSymbol parameter, BoundExpression argument) {
+        if (parameter is ArrayTypeSymbol wanted
+            && argument is BoundArray { Type: ArrayTypeSymbol actual }
+            && actual.ArrayKind != wanted.ArrayKind) {
+            return new ArrayTypeSymbol(actual.ElementType, wanted.ArrayKind);
+        }
+
+        if (parameter is FunctionTypeSymbol function && argument is BoundFunctionGroup group) {
+            var fitting = group.Candidates
+                .Where(c => c.TypeParameters.IsEmpty && c.Parameters.Length == function.ParameterTypes.Length)
+                .ToList();
+            if (fitting.Count == 1) {
+                return Apply(fitting[0].FunctionType, group.Substitution ?? TypeSubstitution.Empty);
+            }
+        }
+
+        return argument.Type;
+    }
 
     static TypeSubstitution Combine(TypeSubstitution outer, TypeSubstitution inner) {
         if (outer.IsEmpty) {
@@ -3942,8 +4072,10 @@ public sealed partial class Binder {
             FunctionKind.Ordinary
         ) { IsAsync = expected?.IsAsync ?? false };
 
-        // A closure passed where '() throws -> T' is wanted may throw.
-        var thrown = expected?.ThrownType;
+        // A closure passed where '() throws -> T' is wanted may throw. Where
+        // the error type is the call's to infer, '() throws(E) -> T', it may
+        // throw anything, and what it does throw is what E becomes.
+        var thrown = expected?.ThrownType is { } open && IsOpen(open) ? Core.AnyError : expected?.ThrownType;
         symbol.ThrownTypeResolver = () => thrown;
 
         // Captures are bound in the enclosing scope, before the closure's own
@@ -4883,6 +5015,13 @@ public sealed partial class Binder {
                    && _conversions.Classify(right.Type, left.Type, true)
                        is ConversionKind.LiteralTyping) {
             right = Convert(right, left.Type, right.Syntax);
+        } else if (IsNumericLiteral(left) && IsNumericLiteral(right) && !left.Type.Equals(right.Type)) {
+            // '1 + 2.0': two literals, one a float, are two floats.
+            if (left.Type.Equals(Core.Int)) {
+                left = Convert(left, Core.F64, left.Syntax);
+            } else {
+                right = Convert(right, Core.F64, right.Syntax);
+            }
         }
 
         // A type of the program's own, or a type parameter, uses the operators

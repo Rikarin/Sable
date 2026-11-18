@@ -167,7 +167,20 @@ public static class PackageBuilder {
                 // library with the library target, a binary's entry file with it.
                 var ownLibrary = member.LibrarySources().Count;
                 IReadOnlyList<SyntaxTree> linted = target is null ? [..program.Skip(program.Count - ownLibrary)] : [program[0]];
-                var (errors, warnings) = Pipeline.CheckAndLint(program, member.Manifest.Lints, linted);
+
+                // Unchanged sources, the same lints: the same answer, read
+                // rather than worked out again.
+                var lints = string.Join(",", Sable.Symbols.Lints.All.Select(l => $"{l.Name}={member.Manifest.Lints.LevelOf(l)}"));
+                var key = ResultCache.Key(program, $"check|{lints}|{string.Join(",", linted.Select(static t => t.Text.FileName))}");
+                var cached = Path.Combine(workspace.TargetDirectory, "check", ResultCache.FileName($"{member.Name}-{target?.Name ?? "lib"}") + ".json");
+                IReadOnlyList<string> errors, warnings;
+                if (ResultCache.Read(cached, key) is { } hit) {
+                    (errors, warnings) = hit;
+                } else {
+                    (errors, warnings) = Pipeline.CheckAndLint(program, member.Manifest.Lints, linted);
+                    ResultCache.Write(cached, key, errors, warnings);
+                }
+
                 Report(environment, errors);
                 Report(environment, warnings);
                 reported.AddRange(errors.Concat(warnings));

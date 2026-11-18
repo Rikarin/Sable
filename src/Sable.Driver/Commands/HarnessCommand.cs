@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Sable.CodeGen;
+using Sable.Driver.Build;
 using Sable.Driver.Packages;
 using Sable.Symbols;
 using Sable.Syntax;
@@ -86,7 +87,7 @@ public abstract class HarnessCommand : Command {
 
         var executable = Path.Combine(Path.GetTempPath(), $"sable-{Name}-{Guid.NewGuid():N}");
         try {
-            return Build(program.Trees, program.Directory, options, executable) ?? Execute(executable, options.HarnessArguments);
+            return Build(program.Trees, program.Directory, options, executable, program.Cache) ?? Execute(executable, options.HarnessArguments);
         } finally {
             File.Delete(executable);
         }
@@ -98,7 +99,8 @@ public abstract class HarnessCommand : Command {
     ///     library with its <c>tests/</c> and <c>benches/</c> files, and its
     ///     dependencies'. Null, having said why, when there is nothing to build.
     /// </summary>
-    static (IReadOnlyList<SyntaxTree> Trees, string Directory)? Program(Options options) {
+    /// <remarks>A package's harness is kept in <c>target/harness/</c> (<see cref="Build" />); files named on the command line have no cache.</remarks>
+    static (IReadOnlyList<SyntaxTree> Trees, string Directory, string? Cache)? Program(Options options) {
         if (options.Files.Count > 0) {
             foreach (var file in options.Files.Where(static f => !File.Exists(f))) {
                 Console.Error.WriteLine($"sable: no such file '{file}'");
@@ -107,7 +109,7 @@ public abstract class HarnessCommand : Command {
 
             var parseOptions = Pipeline.ParseOptionsFor(options.Optimise);
             return ([..options.Files.Select(f => SyntaxTree.Parse(new SourceText(File.ReadAllText(f), Path.GetFileName(f)), parseOptions))],
-                Path.GetDirectoryName(Path.GetFullPath(options.Files[0]))!);
+                Path.GetDirectoryName(Path.GetFullPath(options.Files[0]))!, null);
         }
 
         try {
@@ -121,7 +123,7 @@ public abstract class HarnessCommand : Command {
                 return null;
             }
 
-            return (trees, workspace.Root);
+            return (trees, workspace.Root, Path.Combine(workspace.TargetDirectory, "harness", ResultCache.FileName(member.Name)));
         } catch (PackageException failure) {
             Console.Error.WriteLine($"error: {failure.Message}");
             return null;
@@ -129,7 +131,29 @@ public abstract class HarnessCommand : Command {
     }
 
     /// <summary>Builds the harness; null when built, else the exit code to fail with.</summary>
-    protected int? Build(IReadOnlyList<SyntaxTree> trees, string directory, Options options, string executable) {
+    /// <param name="cache">
+    ///     Where the harness built last is kept, with the key of what it was
+    ///     built from: run again on unchanged sources with the same options,
+    ///     it is copied from there rather than compiled again. (Not with
+    ///     debug information, which names the executable's own path.)
+    /// </param>
+    protected int? Build(IReadOnlyList<SyntaxTree> trees, string directory, Options options, string executable, string? cache = null) {
+        string? kept = null, record = null, key = null;
+        if (cache is not null && !options.Debug) {
+            kept = Path.Combine(cache, Name);
+            record = kept + ".json";
+            key = ResultCache.Key(trees, $"{Name}|{Kind}|doc={options.DocExamples}|opt={options.Optimise}|exclusivity={options.Exclusivity}");
+            if (File.Exists(kept) && ResultCache.Read(record, key) is { } hit) {
+                foreach (var warning in hit.Warnings) {
+                    Console.Error.WriteLine(warning);
+                    Console.Error.WriteLine();
+                }
+
+                File.Copy(kept, executable, overwrite: true);
+                return null;
+            }
+        }
+
         var result = TestHarness.Compile(
             trees,
             Kind,
@@ -163,6 +187,16 @@ public abstract class HarnessCommand : Command {
             Console.Error.WriteLine("internal error: the native build failed:");
             Console.Error.Write(build.Output);
             return 1;
+        }
+
+        if (kept is not null) {
+            try {
+                Directory.CreateDirectory(Path.GetDirectoryName(kept)!);
+                File.Copy(executable, kept, overwrite: true);
+                ResultCache.Write(record!, key!, [], result.Warnings);
+            } catch (Exception e) when (e is IOException or UnauthorizedAccessException) {
+                // A cache that cannot be written is only slower next time.
+            }
         }
 
         return null;

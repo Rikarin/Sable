@@ -25,6 +25,20 @@ public sealed class RegistryTests {
         Assert.Equal(files.Keys.Order(StringComparer.Ordinal), Registry.Unpack(first).Keys);
     }
 
+    /// <summary>
+    ///     An index that names a key twice is damaged like any other: it is
+    ///     refused with a <see cref="RegistryException" />, not an
+    ///     <see cref="ArgumentException" /> from deep in the JSON reader.
+    ///     Found by the coverage-guided fuzzer (tools/fuzz/coverage.sh).
+    /// </summary>
+    [Theory]
+    [InlineData("""{"owners":["a"],"owners":["b"],"versions":[]}""")]
+    [InlineData("""{"versions":[{"dependencies":[],"dependencies":[]}]}""")]
+    public void AnIndexWithAKeyTwiceIsDamaged(string json) {
+        var refused = Assert.Throws<RegistryException>(() => PackageIndex.Parse("p", json));
+        Assert.Contains("is damaged", refused.Message, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void PublishThenDependAndBuild() {
         using var fixture = new PackageFixture();

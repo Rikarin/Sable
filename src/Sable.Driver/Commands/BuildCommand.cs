@@ -15,8 +15,8 @@ public class BuildCommand : Command {
 
     public override string Usage => """
         usage: sable build [--release] [--features <a,b>] [-p <package>] [--bin <name>]
-               sable build <file.sb> [-o <output>] [--emit sil|llvm-ir|obj] [-O0] [-g] [--exclusivity=checked|unchecked]
-                                     [--target <triple>] [--sysroot <dir>]
+               sable build <file.sb> [-o <output>] [--emit sil|llvm-ir|obj|staticlib|dylib] [-O0] [-g] [--exclusivity=checked|unchecked]
+                                     [--target <triple>] [--sysroot <dir>] [--deny-reflection] [--vectorize-report]
 
         Without a file, builds the package in this directory or the nearest above it (sable.toml).
 
@@ -28,6 +28,11 @@ public class BuildCommand : Command {
           --emit sil         print the verified SIL instead of building
           --emit llvm-ir     print the LLVM IR instead of building
           --emit obj         write the program's object file (<output>.o), without the runtime or a link
+          --emit staticlib   build a static library C links (libname.a, name.lib on Windows): no entry
+                             point; C calls the @export functions, and the globals are set up as it loads
+          --emit dylib       the same as a shared library (libname.dylib, libname.so, name.dll)
+          --vectorize-report say, for each loop by its place in the source, whether LLVM's loop
+                             vectoriser vectorised it in an optimised build, and if not, why not
           -O0                build without LLVM's optimiser
           -g                 build with debug information, for lldb
           --exclusivity=...  keep the dynamic exclusivity checks, or drop them; by default
@@ -35,6 +40,8 @@ public class BuildCommand : Command {
           --target <triple>  build for another machine: aarch64-unknown-linux-gnu, x86_64-apple-darwin,
                              x86_64-pc-windows-msvc, wasm32-wasi, ... (default: this one)
           --sysroot <dir>    where the target's C library is, for clang's link
+          --deny-reflection  carry no reflection: Mirror and TypeInfo are errors (S3450), and the
+                             runtime's field descriptors have no names
         """;
 
     /// <summary>What the command line asked for.</summary>
@@ -43,6 +50,9 @@ public class BuildCommand : Command {
         public NativeTarget? Target { get; init; }
 
         public string? Sysroot { get; init; }
+
+        /// <summary><c>--deny-reflection</c> (docs/06 §6.1).</summary>
+        public bool DenyReflection { get; init; }
 
         /// <summary>What clang is asked for.</summary>
         public NativeOptions Native => NativeOptions.Of(Optimise, Debug) with { Target = Target, Sysroot = Sysroot };
@@ -59,6 +69,7 @@ public class BuildCommand : Command {
         bool? exclusivity = null;
         string? triple = null;
         string? sysroot = null;
+        var denyReflection = false;
         var arguments = new List<string>();
 
         for (var i = 0; i < args.Count; i++) {
@@ -72,8 +83,10 @@ public class BuildCommand : Command {
                 case "--emit" when i + 1 < args.Count && !TakesProgramArguments: emit = args[++i]; break;
                 case "--target" when i + 1 < args.Count: triple = args[++i]; break;
                 case "--sysroot" when i + 1 < args.Count: sysroot = args[++i]; break;
+                case "--deny-reflection": denyReflection = true; break;
                 case "-O0": optimise = false; break;
                 case "-g": debug = true; break;
+                case "--vectorize-report" when !TakesProgramArguments: emit = "vectorize-report"; break;
                 case "--exclusivity=checked": exclusivity = true; break;
                 case "--exclusivity=unchecked": exclusivity = false; break;
                 default:
@@ -86,7 +99,7 @@ public class BuildCommand : Command {
             }
         }
 
-        if (input is null || emit is not (null or "sil" or "llvm-ir" or "obj")) {
+        if (input is null || emit is not (null or "sil" or "llvm-ir" or "obj" or "vectorize-report" or "staticlib" or "dylib")) {
             return null;
         }
 
@@ -96,7 +109,7 @@ public class BuildCommand : Command {
             return null;
         }
 
-        return new(input, output, emit, optimise, debug, exclusivity, arguments) { Target = target, Sysroot = sysroot };
+        return new(input, output, emit, optimise, debug, exclusivity, arguments) { Target = target, Sysroot = sysroot, DenyReflection = denyReflection };
     }
 
     public override int Run(IReadOnlyList<string> arguments) {
@@ -108,9 +121,20 @@ public class BuildCommand : Command {
             return BadUsage();
         }
 
-        var suffix = options.Emit == "obj" ? ".o" : (options.Target ?? NativeTarget.Host).ExecutableSuffix;
-        return Build(options, options.Output ?? Path.GetFileNameWithoutExtension(options.Input) + suffix) is { } failure ? Math.Max(failure, 0) : 0;
+        var target = options.Target ?? NativeTarget.Host;
+        var name = Path.GetFileNameWithoutExtension(options.Input);
+        var output = options.Output ?? (LibraryKindOf(options.Emit) is { } kind
+            ? NativeBuild.LibraryFileName(name, kind, target)
+            : name + (options.Emit == "obj" ? ".o" : target.ExecutableSuffix));
+        return Build(options, output) is { } failure ? Math.Max(failure, 0) : 0;
     }
+
+    /// <summary>The library <c>--emit</c> asks for, if it asks for one.</summary>
+    static LibraryKind? LibraryKindOf(string? emit) => emit switch {
+        "staticlib" => LibraryKind.Static,
+        "dylib" => LibraryKind.Dynamic,
+        _ => null,
+    };
 
     /// <summary>Builds <paramref name="executable" />; null when built, -1 when --emit printed a stage instead, else the exit code to fail with.</summary>
     protected static int? Build(Options options, string executable) {
@@ -123,12 +147,17 @@ public class BuildCommand : Command {
         var target = options.Target ?? NativeTarget.Host;
         // Dynamic exclusivity checks: on in a debug build, off in a release one,
         // unless asked for (docs/02 §2.3).
+        // A vectorisation report is of the optimised build, with the debug
+        // information that gives LLVM's remarks their places in the source.
+        var report = options.Emit == "vectorize-report";
         var result = Pipeline.Compile(
             [SyntaxTree.Parse(source, Pipeline.ParseOptionsFor(options.Optimise, target))],
-            options.Debug ? Path.GetDirectoryName(Path.GetFullPath(options.Input)) : null,
-            options.Exclusivity ?? (options.Debug || !options.Optimise),
+            options.Debug || report ? Path.GetDirectoryName(Path.GetFullPath(options.Input)) : null,
+            options.Exclusivity ?? ((options.Debug && !report) || !options.Optimise),
             target: target,
-            optimised: options.Optimise && !options.Debug
+            optimised: options.Optimise && (!options.Debug || report),
+            library: LibraryKindOf(options.Emit) is not null,
+            denyReflection: options.DenyReflection
         );
         Report(result.Warnings);
 
@@ -155,6 +184,18 @@ public class BuildCommand : Command {
             return 1;
         }
 
+        if (report) {
+            var remarks = NativeBuild.Remarks(result.LlvmIr!, options.Native with { OptLevel = options.Optimise ? "2" : "0", DebugInfo = false }, VectorizationReport.Flags);
+            if (!remarks.Succeeded) {
+                Console.Error.WriteLine($"internal error: compiling for {target.Triple} failed:");
+                Console.Error.Write(remarks.Output);
+                return 1;
+            }
+
+            Console.Write(VectorizationReport.Format(VectorizationReport.Parse(remarks.Output)));
+            return -1;
+        }
+
         // An object file needs no runtime: it is what another machine's link,
         // or a target the runtime is not built for yet, starts from.
         if (options.Emit == "obj") {
@@ -173,7 +214,9 @@ public class BuildCommand : Command {
             return 1;
         }
 
-        var build = NativeBuild.Build(result.LlvmIr!, executable, options.Native);
+        var build = LibraryKindOf(options.Emit) is { } library
+            ? NativeBuild.BuildLibrary(result.LlvmIr!, executable, library, options.Native)
+            : NativeBuild.Build(result.LlvmIr!, executable, options.Native);
         if (!build.Succeeded) {
             Console.Error.WriteLine("internal error: the native build failed:");
             Console.Error.Write(build.Output);

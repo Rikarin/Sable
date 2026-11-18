@@ -30,6 +30,25 @@ public sealed class FormatterRuleTests {
             "let s = if x > 3 {\n    let y = x\n    y\n} else {\n    0\n}\n",
             "let s = if x > 3 {\n    let y = x\n    y\n} else {\n    0\n}\n");
 
+    // A colon-form case's statements are indented from its 'case', as a
+    // block's are from its '{'; they were left at the case's own level.
+    [Theory]
+    [InlineData("match")]
+    [InlineData("switch")]
+    public void AColonCaseIndentsItsStatements(string keyword) =>
+        AssertFormats(
+            $"fn f(_ n: Int) -> Int {{\n    {keyword} n {{\n        case 0:\n        return 0\n        case 1: // one\n        let m = n\n"
+            + $"        return m\n        // the rest\n        default:\n        if n < 0 {{\n        return -1\n        }}\n        return 2\n    }}\n}}\n",
+            $"fn f(_ n: Int) -> Int {{\n    {keyword} n {{\n        case 0:\n            return 0\n        case 1: // one\n            let m = n\n"
+            + $"            return m\n        // the rest\n        default:\n            if n < 0 {{\n                return -1\n            }}\n"
+            + $"            return 2\n    }}\n}}\n");
+
+    [Fact]
+    public void AOneStatementCaseWrittenOnItsLineStaysThere() =>
+        AssertFormats(
+            "fn f(_ s: Int) {\n    switch s {\n        case 200, 201: handleOk()\n        case 404:\n        missing()\n        default: break\n    }\n}\n",
+            "fn f(_ s: Int) {\n    switch s {\n        case 200, 201: handleOk()\n        case 404:\n            missing()\n        default: break\n    }\n}\n");
+
     [Fact]
     public void ALabelStaysWithItsLoop() =>
         AssertFormats("fn f() {\n    outer: for r in rows {\n        break outer\n    }\n}\n",

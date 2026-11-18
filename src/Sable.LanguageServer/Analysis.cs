@@ -30,7 +30,24 @@ internal sealed partial class Analysis {
     /// <summary>Whether its package's generators wrote some of its trees, from programs the snapshot does not show.</summary>
     bool _generated;
 
+    /// <summary>Whether generators wrote some of its trees: an edit anywhere may change what they write.</summary>
+    public bool HasGeneratedTrees => _generated;
+
     public object Gate { get; } = new();
+
+    readonly HashSet<SyntaxTree> _boundTrees = new(ReferenceEqualityComparer.Instance);
+
+    /// <summary>How many of its files have had their members bound, by their diagnostics or a search of them.</summary>
+    public int BoundTrees {
+        get {
+            lock (Gate) {
+                return _boundTrees.Count;
+            }
+        }
+    }
+
+    /// <summary>Says a file's members have been bound, as a search of it binds them. Hold <see cref="Gate" />.</summary>
+    public void MarkBound(SyntaxTree tree) => _boundTrees.Add(tree);
     public WorkspaceSnapshot Snapshot { get; }
     public Compilation Compilation { get; }
 
@@ -273,6 +290,7 @@ internal sealed partial class Analysis {
             all.AddRange(unplaced.Where(d => Compilation.FileOf(d) is { } file ? ReferenceEquals(file, tree) : BelongsTo(d, tree)));
             IReadOnlyList<Diagnostic> result = [..all.Distinct().OrderBy(static d => d.Span.Start)];
             _diagnostics[tree] = result;
+            _boundTrees.Add(tree);
             return result;
         }
     }
@@ -350,12 +368,47 @@ internal sealed partial class Analysis {
 internal sealed class AnalysisCache(Func<WorkspaceSnapshot, string, Analysis> build) {
     readonly object _lock = new();
     readonly Dictionary<string, Analysis> _latest = new(StringComparer.Ordinal);
+    readonly Dictionary<string, Analysis> _warm = new(StringComparer.Ordinal);
     readonly Dictionary<string, (long Generation, Task<Analysis> Task)> _building = new(StringComparer.Ordinal);
 
     /// <summary>The newest analysis of a package built, of whatever snapshot: what a completion binds its edit against.</summary>
     public Analysis? Latest(string key) {
         lock (_lock) {
             return _latest.GetValueOrDefault(key);
+        }
+    }
+
+    /// <summary>
+    ///     The analysis of a package with the most of its files bound, of
+    ///     whatever snapshot: what a search of every file is quickest over,
+    ///     since binding them is most of a search's work.
+    /// </summary>
+    public Analysis? Warm(string key) {
+        lock (_lock) {
+            return _warm.GetValueOrDefault(key);
+        }
+    }
+
+    /// <summary>
+    ///     Says an analysis has more of its files bound: it becomes the warm
+    ///     one if it has as many bound as that, or is newer and has more.
+    /// </summary>
+    public void Bound(Analysis analysis) {
+        lock (_lock) {
+            if (!_warm.TryGetValue(analysis.Key, out var known)
+                || ReferenceEquals(known, analysis)
+                || analysis.BoundTrees >= known.BoundTrees) {
+                _warm[analysis.Key] = analysis;
+            }
+        }
+    }
+
+    /// <summary>Lets go of a warm analysis that no longer answers for the workspace, keeping it from being collected.</summary>
+    public void Cold(Analysis analysis) {
+        lock (_lock) {
+            if (_warm.TryGetValue(analysis.Key, out var known) && ReferenceEquals(known, analysis)) {
+                _warm.Remove(analysis.Key);
+            }
         }
     }
 

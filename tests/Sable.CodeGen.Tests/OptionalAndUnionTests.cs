@@ -250,6 +250,44 @@ public sealed class OptionalAndUnionTests {
         );
 
     /// <summary>
+    ///     The right side of '&amp;&amp;' sees what the left says when it holds,
+    ///     and of '||' what it says when it fails; a condition in a list
+    ///     sees what those before it say — in 'if' and 'guard' alike.
+    /// </summary>
+    [Fact]
+    public void AShortCircuitNarrowsItsRightSide() =>
+        Prints(
+            "big 6\nsmall\nnone or negative\nnone or negative\n3\n-1\n-1\ntrue\nfalse\ncond list 9\ntrue\n",
+            """
+            fn check(_ i: Int?) -> String {
+                if i != none && i > 3 { return "big \(i + 1)" }
+                if i == none || i < 0 { return "none or negative" }
+                return "small"
+            }
+            fn first(_ s: String?, _ n: Int?) -> Int {
+                guard s != none, n != none, s.count > n else { return -1 }
+                return s.count - n
+            }
+            fn word(_ v: Int | String) -> Bool { return v is String && v.count > 2 }
+            """,
+            """
+                print(check(5))
+                print(check(2))
+                print(check(none))
+                print(check(-4))
+                print(first("hello", 2))
+                print(first(none, 2))
+                print(first("hi", 5))
+                print(word("abc"))
+                print(word(7))
+                let o: Int? = 9
+                if o != none, o > 3 { print("cond list \(o)") }
+                let b = o != none && o % 2 == 1
+                print(b)
+            """
+        );
+
+    /// <summary>
     ///     What the layouts are: 'Bool?' a byte, 'Char?' four, 'String?' the
     ///     pointer, an enum of cases alone its byte's tag, and a payload area
     ///     in units of the most aligned payload — where every enum was once

@@ -4,30 +4,55 @@
 // ---- Memory ------------------------------------------------------------
 
 // Small blocks — most objects, and the elements of most arrays — come from
-// size classes kept here rather than from malloc: a free list per class,
-// refilled by carving slabs in order. Programs that make and drop many
-// small strings and arrays otherwise spend most of their time in malloc and
-// free, where a .NET program bumps a pointer (docs/04 §4.1 names a
-// size-class allocator; this is its first, smallest form). One task runs at
-// a time (see Concurrency), so the lists need no locks. A freed block goes
-// back on its class's list and stays there: the memory is the program's
-// until it ends, as a garbage-collected heap's is.
+// size classes kept here rather than from malloc. Programs that make and
+// drop many small strings and arrays otherwise spend most of their time in
+// malloc and free, where a .NET program bumps a pointer (docs/04 §4.1 names
+// a size-class allocator). One task runs at a time (see Concurrency), so
+// nothing here needs a lock.
 //
-// An object records its class in its flags, so freeing one needs no lookup;
-// an array's elements are freed with their size, which the array knows.
+// Each class has slabs of its own, taken from the system aligned to their
+// size, so a block's slab is its address with the low bits cleared. A slab
+// carves blocks in order, keeps those given back on a list of its own, and
+// counts the blocks it has out: when that reaches zero the slab is given
+// back to the system, unless it is the only one its class has room in — a
+// program that makes and drops one object at a time would otherwise map
+// and unmap a slab each time. A program that once held a million small
+// objects and dropped them holds their memory no longer.
+//
+// An object records its class in its flags, and an array's elements are
+// freed with their size, which the array knows.
 
 // Classes up to a kilobyte: an array of a hundred numbers is as common as a
 // small object. Each step is at most half again the one before, so no more
 // than a third of a block is ever wasted.
-enum { SMALL_CLASSES = 12, SMALL_TABLED = 256, SMALL_LARGEST = 1024, SLAB_SIZE = 256 * 1024 };
+enum { SMALL_CLASSES = 12, SMALL_TABLED = 256, SMALL_LARGEST = 1024 };
 
 static const int64_t small_sizes[SMALL_CLASSES] = { 0, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024 };
 
 // The class for a size up to 256, by sixteenths: the smallest that holds it.
 static const uint8_t small_class_of[SMALL_TABLED / 16 + 1] = { 1, 1, 1, 2, 3, 4, 4, 5, 5, 6, 6, 6, 6, 7, 7, 7, 7 };
 
-static void *small_free[SMALL_CLASSES];
-static char *slab_next, *slab_end;
+// 64 KiB: sixty-three of the largest blocks, and Windows' allocation
+// granularity, so a slab is aligned as the system gives it there. The
+// header takes the first 64 bytes, which keeps the blocks 16-aligned.
+enum { SLAB_SIZE = 64 * 1024, SLAB_HEADER = 64 };
+
+typedef struct Slab {
+    // Among its class's slabs with room, while it has some.
+    struct Slab *next, *previous;
+    // Blocks given back, to hand out again before carving more.
+    void *free;
+    // The first block never handed out.
+    char *carved;
+    // Blocks handed out and not given back.
+    uint32_t live;
+    bool listed;
+} Slab;
+
+_Static_assert(sizeof(Slab) <= SLAB_HEADER, "a slab's header fits before its first block");
+
+// Each class's slabs with room, the one handing out blocks first.
+static Slab *slabs_with_room[SMALL_CLASSES];
 
 _Noreturn void sable_trap(const char *message);
 
@@ -44,32 +69,89 @@ static inline unsigned small_class(int64_t size) {
     return size <= 384 ? 8 : size <= 512 ? 9 : size <= 768 ? 10 : 11;
 }
 
+static inline Slab *slab_of(void *block) {
+    return (Slab *)((uintptr_t)block & ~(uintptr_t)(SLAB_SIZE - 1));
+}
+
+static void slab_list(Slab *slab, unsigned class) {
+    slab->previous = NULL;
+    slab->next = slabs_with_room[class];
+    if (slab->next != NULL) {
+        slab->next->previous = slab;
+    }
+
+    slabs_with_room[class] = slab;
+    slab->listed = true;
+}
+
+static void slab_unlist(Slab *slab, unsigned class) {
+    if (slab->previous != NULL) {
+        slab->previous->next = slab->next;
+    } else {
+        slabs_with_room[class] = slab->next;
+    }
+
+    if (slab->next != NULL) {
+        slab->next->previous = slab->previous;
+    }
+
+    slab->listed = false;
+}
+
+static Slab *slab_new(unsigned class) {
+    Slab *slab = map_slab(SLAB_SIZE);
+    if (slab == NULL) {
+        sable_trap("out of memory");
+    }
+
+    slab->free = NULL;
+    slab->carved = (char *)slab + SLAB_HEADER;
+    slab->live = 0;
+    slab_list(slab, class);
+    if (++slabs_held > slabs_most) {
+        slabs_most = slabs_held;
+    }
+
+    return slab;
+}
+
 static void *small_alloc(unsigned class) {
-    void *block = small_free[class];
-    if (block != NULL) {
-        small_free[class] = *(void **)block;
-        return block;
+    Slab *slab = slabs_with_room[class];
+    if (slab == NULL) {
+        slab = slab_new(class);
     }
 
-    // What is left of the slab, too little for this class, is let go.
     int64_t size = small_sizes[class];
-    if (slab_end - slab_next < size) {
-        slab_next = malloc(SLAB_SIZE);
-        if (slab_next == NULL) {
-            sable_trap("out of memory");
-        }
-
-        slab_end = slab_next + SLAB_SIZE;
+    void *block = slab->free;
+    if (block != NULL) {
+        slab->free = *(void **)block;
+    } else {
+        block = slab->carved;
+        slab->carved += size;
     }
 
-    block = slab_next;
-    slab_next += size;
+    slab->live++;
+    if (slab->free == NULL && (char *)slab + SLAB_SIZE - slab->carved < size) {
+        slab_unlist(slab, class);
+    }
+
     return block;
 }
 
 static inline void small_release(void *block, unsigned class) {
-    *(void **)block = small_free[class];
-    small_free[class] = block;
+    Slab *slab = slab_of(block);
+    *(void **)block = slab->free;
+    slab->free = block;
+    slab->live--;
+    if (!slab->listed) {
+        slab_list(slab, class);
+    } else if (slab->live == 0 && (slab->next != NULL || slab->previous != NULL)) {
+        // Empty, and its class has room elsewhere: back to the system.
+        slab_unlist(slab, class);
+        unmap_slab(slab, SLAB_SIZE);
+        slabs_held--;
+        slabs_returned++;
+    }
 }
 
 // The large buffer freed last, kept rather than given back to the system: a
@@ -229,13 +311,18 @@ void *sable_stack_object(void *memory, const SableMetadata *type, int64_t size) 
     return object;
 }
 
+// Compiled code does what these two do inline (LlvmEmitter's sable.retain
+// and sable.release), so that a build without link-time optimisation keeps
+// its retains and releases out of calls; the runtime's own code calls them.
 void sable_retain(void *pointer) {
     SableObject *object = pointer;
     if (object != NULL && !(object->flags & SABLE_IMMORTAL)) {
         object->strong++;
-        retains++;
+        sable_retains++;
     }
 }
+
+void sable_release_last(void *pointer);
 
 void sable_release(void *pointer) {
     SableObject *object = pointer;
@@ -243,10 +330,19 @@ void sable_release(void *pointer) {
         return;
     }
 
-    releases++;
+    sable_releases++;
     if (--object->strong > 0) {
         return;
     }
+
+    sable_release_last(object);
+}
+
+// The last strong reference gone: its count is zero, and it is counted.
+// The deinit runs, the fields are destroyed, and the memory goes when no
+// unowned reference holds it.
+void sable_release_last(void *pointer) {
+    SableObject *object = pointer;
 
     // The deinit, and the destruction of the fields, see the object alive.
     object->strong = 1;

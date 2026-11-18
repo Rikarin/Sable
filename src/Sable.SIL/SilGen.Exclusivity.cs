@@ -142,9 +142,9 @@ public sealed partial class SilGen {
 
         /// <summary>Reports a call whose accesses overlap, one of them a change.</summary>
         void CheckExclusivity(BoundCall call, FunctionSymbol callee, bool mutatingReceiver) {
-            var accesses = new List<(AccessPath Path, bool Modify, string What, bool InClosure)>();
+            var accesses = new List<(AccessPath Path, bool Modify, string What, bool InClosure, SyntaxNode? Syntax)>();
             if (mutatingReceiver && call.Receiver is { } receiver && PathOf(receiver) is { } self) {
-                accesses.Add((self, true, $"the call to the mutating '{callee.Name}' changes it", false));
+                accesses.Add((self, true, $"the call to the mutating '{callee.Name}' changes it", false, receiver.Syntax));
             }
 
             for (var i = 0; i < call.Arguments.Length && i < callee.Parameters.Length; i++) {
@@ -158,7 +158,7 @@ public sealed partial class SilGen {
                     ParameterModifier.Out => $"argument {i + 1} ('{callee.Parameters[i].Name}') is out",
                     _ => $"argument {i + 1} ('{callee.Parameters[i].Name}') reads it by reference",
                 };
-                accesses.Add((path, modifier != ParameterModifier.Ref, what, false));
+                accesses.Add((path, modifier != ParameterModifier.Ref, what, false, call.Arguments[i].Syntax));
             }
 
             // A closure written into the call may run during it, and reach a
@@ -173,7 +173,8 @@ public sealed partial class SilGen {
                         new AccessPath(variable, [], variable.Name),
                         changes,
                         $"argument {i + 1} is a closure that {(changes ? "changes" : "reads")} it",
-                        true
+                        true,
+                        closure.Syntax
                     ));
                 }
             }
@@ -183,13 +184,16 @@ public sealed partial class SilGen {
                     var (first, second) = (accesses[i], accesses[j]);
                     if ((first.Modify || second.Modify) && !(first.InClosure && second.InClosure) && first.Path.Overlaps(second.Path)) {
                         var shorter = first.Path.Steps.Length <= second.Path.Steps.Length ? first.Path : second.Path;
-                        generator.Report(
-                            ErrorCode.ERR_OverlappingAccess,
-                            call.Syntax.Span,
-                            $"overlapping accesses to '{shorter.Text}' for the length of the call: {first.What}, and {second.What}; "
-                            + $"to fix it, copy one into a local first ('var copy = {second.Path.Text}' … then write it back), "
-                            + "or pass storage that does not overlap"
-                        );
+                        // Each access, where it is written, beside the call.
+                        generator.Report(Diagnostic.Error(
+                                ErrorCode.ERR_OverlappingAccess,
+                                call.Syntax.Span,
+                                $"overlapping accesses to '{shorter.Text}' for the length of the call: {first.What}, and {second.What}; "
+                                + $"to fix it, copy one into a local first ('var copy = {second.Path.Text}' … then write it back), "
+                                + "or pass storage that does not overlap"
+                            )
+                            .WithRelated(DiagnosticLocation.At(first.Syntax, first.What))
+                            .WithRelated(DiagnosticLocation.At(second.Syntax, second.What)));
                         return;
                     }
                 }

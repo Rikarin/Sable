@@ -27,6 +27,7 @@ _Noreturn void sable_trap_at(const char *message, const char *site) {
     }
 
     print_backtrace();
+    coverage_write();
     stop_trapped();
 }
 

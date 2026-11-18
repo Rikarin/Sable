@@ -189,6 +189,11 @@
         "command": "sable.showOutput",
         "title": "Show Output",
         "category": "Sable"
+      },
+      {
+        "command": "sable.showReferences",
+        "title": "Show References",
+        "category": "Sable"
       }
     ],
     "menus": {
@@ -240,6 +245,10 @@
         {
           "command": "sable.bench",
           "when": "editorLangId == sable"
+        },
+        {
+          "command": "sable.showReferences",
+          "when": "false"
         }
       ]
     },

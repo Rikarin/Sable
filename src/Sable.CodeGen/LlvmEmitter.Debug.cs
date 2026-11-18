@@ -45,7 +45,13 @@ public sealed partial class LlvmEmitter {
     ///         <c>0</c>, <c>1</c>, …; a struct is a struct.
     ///     </para>
     /// </remarks>
-    sealed class DebugInfo(string directory) {
+    /// <param name="codeView">
+    ///     Describe the program in CodeView rather than DWARF: on Windows,
+    ///     where the linker gathers CodeView into the PDB its debuggers
+    ///     (Visual Studio, WinDbg, lldb) read, and ignores DWARF. The nodes are
+    ///     the same; LLVM writes them as the module's flag asks.
+    /// </param>
+    sealed class DebugInfo(string directory, bool codeView = false) {
         readonly List<string> _nodes = [];
         readonly Dictionary<string, string> _unique = new(StringComparer.Ordinal);
         readonly Dictionary<string, string> _files = new(StringComparer.Ordinal);
@@ -247,18 +253,19 @@ public sealed partial class LlvmEmitter {
         }
 
         /// <summary>The name Sable gives the type, for a debugger to show.</summary>
-        static string DisplayName(SilType type) =>
+        public static string DisplayName(SilType type) =>
             type switch {
                 ArrayType array => $"[{DisplayName(array.Element)}]",
                 SliceType slice => $"[{DisplayName(slice.Element)}:]",
                 EnumType enumType when OptionalPayload(enumType) is { } payload => DisplayName(payload) + "?",
-                StructType { Name: var name } when name.StartsWith("any$", StringComparison.Ordinal) => "any " + name[4..],
+                StructType { Name: var name } when name.StartsWith("any$", StringComparison.Ordinal) => "any " + name[4..].Replace("$and$", " & ", StringComparison.Ordinal),
                 TupleType tuple => $"({string.Join(", ", tuple.Elements.Select(DisplayName))})",
                 ThickFunctionType thick => FunctionName(thick.Signature),
                 FunctionType function => FunctionName(function),
                 AddressType address => "inout " + DisplayName(address.Pointee),
                 WeakStorageType weak => "weak " + DisplayName(weak.Optional),
                 UnownedStorageType unowned => "unowned " + DisplayName(unowned.Referent),
+                NominalType { DisplayName: { } written } => written,
                 _ => type.ToString(),
             };
 
@@ -282,7 +289,7 @@ public sealed partial class LlvmEmitter {
                 _types[type] = reference;
                 var objectType = ClassObject(classType);
                 var handle = Structure(classType.Name + "$ref", 8, [Member("$object", Pointer(objectType), 8, 0)]);
-                Define(reference, $"!DIDerivedType(tag: DW_TAG_typedef, name: {Quote(classType.Name)}, baseType: {handle})");
+                Define(reference, $"!DIDerivedType(tag: DW_TAG_typedef, name: {Quote(DisplayName(classType))}, baseType: {handle})");
                 return reference;
             }
 
@@ -408,7 +415,7 @@ public sealed partial class LlvmEmitter {
                     return Typedef(DisplayName(structType), Aggregate(DisplayName(structType) + "$existential", structType.Fields, Size(structType), live: false));
 
                 case StructType structType:
-                    return Aggregate(structType.Name, structType.Fields, Size(structType), live: structType.Deinit is not null);
+                    return Aggregate(DisplayName(structType), structType.Fields, Size(structType), live: structType.Deinit is not null);
 
                 case EnumType enumType when IsNullable(enumType):
                     return Typedef(DisplayName(enumType), Type(enumType.Cases[SomeCase(enumType)].Payload!));
@@ -516,7 +523,7 @@ public sealed partial class LlvmEmitter {
         /// </summary>
         public string Metadata() {
             var output = new StringBuilder();
-            var dwarf = Node("!{i32 7, !\"Dwarf Version\", i32 5}");
+            var dwarf = Node(codeView ? "!{i32 2, !\"CodeView\", i32 1}" : "!{i32 7, !\"Dwarf Version\", i32 5}");
             var version = Node("!{i32 2, !\"Debug Info Version\", i32 3}");
             var globals = new List<string>(_globals);
             if (_classes.Count > 0) {

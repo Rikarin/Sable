@@ -4,7 +4,7 @@ namespace Sable.Symbols;
 
 /// <summary>
 ///     What may not outlive a call, does not (SYNTAX.md §17, docs/02 §2.3):
-///     a closure parameter not marked <c>@escaping</c>, and an <c>inout</c>,
+///     a closure parameter not marked <c>@escaping</c>, and an
 ///     <c>out</c> or <c>ref</c> parameter, which is the caller's storage.
 /// </summary>
 /// <remarks>
@@ -20,8 +20,10 @@ namespace Sable.Symbols;
 ///         argument of a closure parameter that does not escape; one that
 ///         escapes may not capture a closure parameter that does not. A local
 ///         function is taken to escape, since it can be called from anywhere
-///         in the body. No closure may capture an <c>inout</c>, <c>out</c> or
-///         <c>ref</c> parameter: its captures are kept in an object.
+///         in the body. No closure may capture an <c>out</c> or <c>ref</c>
+///         parameter: its captures are kept in an object. An <c>inout</c> one
+///         is captured by copy-in, copy-out: the closures share a box holding
+///         its value, written back to the caller's storage as the call ends.
 ///     </para>
 /// </remarks>
 internal static class EscapeChecker {
@@ -102,7 +104,11 @@ internal static class EscapeChecker {
                     Nested(local, local.Symbol, true);
                     return;
 
-                case BoundParameterAccess { Parameter: var parameter } access when IsByAddress(parameter):
+                // An inout parameter may be captured: it is copied in to a box
+                // the closures share, and back out when the call ends. An
+                // 'out' parameter has nothing to copy in, and a 'ref' one is
+                // the caller's storage itself, which a copy would not be.
+                case BoundParameterAccess { Parameter: { Modifier: not ParameterModifier.InOut } parameter } access when IsByAddress(parameter):
                     Captured(access, parameter);
                     break;
 

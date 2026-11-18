@@ -94,6 +94,21 @@ test("activation registers every command the manifest declares, and nothing else
   assert.ok(recorded.controllers[0].profiles.some((p) => p.kind === 1 && p.isDefault), "a default Run profile");
 });
 
+test("the server's references lens opens VS Code's references view", async () => {
+  const { modules, recorded } = load({ folders: [tree({})] });
+  await modules.extension.activate(context(os.tmpdir()));
+
+  const range = { start: { line: 3, character: 4 }, end: { line: 3, character: 9 } };
+  await recorded.commands.get("sable.showReferences")("file:///w/a.sb", { line: 1, character: 2 }, [{ uri: "file:///w/b.sb", range }]);
+  const shown = recorded.executed.find((e) => e.id === "editor.action.showReferences");
+  assert.ok(shown, "editor.action.showReferences was run");
+  const [uri, position, locations] = shown.args;
+  assert.equal(uri.fsPath, "/w/a.sb");
+  assert.deepEqual([position.line, position.character], [1, 2]);
+  assert.equal(locations[0].uri.fsPath, "/w/b.sb");
+  assert.deepEqual([locations[0].range.start.line, locations[0].range.end.character], [3, 9]);
+});
+
 test("the manifest's types and settings are the ones the code uses", () => {
   assert.ok(manifest.contributes.taskDefinitions.some((t) => t.type === "sable"));
   assert.ok(manifest.contributes.debuggers.some((d) => d.type === "sable"));

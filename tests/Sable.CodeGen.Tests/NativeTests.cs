@@ -25,7 +25,7 @@ public sealed class NativeTests {
             var build = NativeBuild.Build(result.LlvmIr!, executable, optimise);
             Assert.True(build.Succeeded, build.Output + "\n\n" + result.LlvmIr);
 
-            var start = new ProcessStartInfo(executable) { RedirectStandardOutput = true, RedirectStandardError = true };
+            var start = new ProcessStartInfo(executable) { RedirectStandardOutput = true, RedirectStandardError = true }.Utf8();
             using var process = Process.Start(start)!;
             var stdout = process.StandardOutput.ReadToEndAsync();
             var stderr = process.StandardError.ReadToEnd();
@@ -372,7 +372,7 @@ public sealed class NativeTests {
         try {
             var build = NativeBuild.Build(LlvmEmitter.Emit(module), executable);
             Assert.True(build.Succeeded, build.Output);
-            var start = new ProcessStartInfo(executable) { RedirectStandardOutput = true };
+            var start = new ProcessStartInfo(executable) { RedirectStandardOutput = true }.Utf8();
             using var process = Process.Start(start)!;
             Assert.Equal("5050\n", process.StandardOutput.ReadToEnd());
             process.WaitForExit();

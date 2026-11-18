@@ -223,6 +223,13 @@ public static class PackageOperations {
     ///     and never run Sable to learn what a package depends on.
     /// </summary>
     public static IReadOnlyDictionary<string, byte[]> Published(string directory) {
+        // What a member takes from its workspace is not in its file, and a
+        // consumer of the package has no workspace to take it from.
+        if (ManifestFiles.Load(directory).InheritsFromWorkspace) {
+            throw new PackageException(
+                $"{ManifestFiles.PathIn(directory)} takes settings from its workspace ('workspace = true'), which a published package cannot: write them out in it before publishing");
+        }
+
         var files = new SortedDictionary<string, byte[]>(StringComparer.Ordinal);
         foreach (var (path, bytes) in Files(directory)) {
             files[path] = bytes;
@@ -398,7 +405,10 @@ public static class PackageOperations {
             }
 
             environment.Status.WriteLine($"     Testing {package.Name} v{package.Version}: {tests.Count} test(s)");
-            var start = new ProcessStartInfo(executable) { RedirectStandardOutput = true, RedirectStandardError = true };
+            // A Sable program writes UTF-8, whatever the console's code page.
+            var start = new ProcessStartInfo(executable) {
+                RedirectStandardOutput = true, RedirectStandardError = true, StandardOutputEncoding = Encoding.UTF8, StandardErrorEncoding = Encoding.UTF8,
+            };
             using var process = Process.Start(start) ?? throw new PackageException($"could not run the tests of {package.Name}");
             var output = process.StandardOutput.ReadToEndAsync();
             var errors = process.StandardError.ReadToEnd();

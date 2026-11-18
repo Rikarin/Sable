@@ -287,4 +287,56 @@ public sealed class PassTests {
         Assert.Contains("'vandal'", failure.Message, StringComparison.Ordinal);
         Assert.Contains("does not end in a terminator", failure.Message, StringComparison.Ordinal);
     }
+
+    /// <summary>
+    ///     A counted loop over arrays is versioned: before it, one check that
+    ///     every index it will use is in range picks a copy whose accesses are
+    ///     not checked again; the loop as written runs otherwise.
+    /// </summary>
+    [Fact]
+    public void ACountedLoopChecksItsIndicesOnceBeforeIt() {
+        var module = Lowered(
+            """
+            fn dot(_ a: Int[:], _ b: Int[:]) -> Int {
+                var total = 0
+                var i = 0
+                while i < a.count {
+                    total = total + a[i] * b[i]
+                    i = i + 1
+                }
+                return total
+            }
+            fn run(_ n: Int) -> Int {
+                var a: Int[>..] = []
+                var b: Int[>..] = []
+                var i = 0
+                while i < 10 {
+                    a.append(i)
+                    i = i + 1
+                }
+                i = 0
+                while i < n {
+                    b.append(2)
+                    i = i + 1
+                }
+                return dot(a, b)
+            }
+            """
+        );
+
+        SilPassManager.Run(module, SilPassManager.Optimising);
+
+        var dot = module.Find("M.dot")!;
+        var reads = Instructions(dot).OfType<BuiltinInst>().Where(static b => b.Name == "array_get").ToList();
+        Assert.Equal(4, reads.Count);
+        Assert.Equal(2, reads.Count(static r => r.InBounds));
+
+        // The flag is printed, and read back.
+        var text = SilPrinter.Print(module);
+        Assert.Contains("builtin [in_bounds] \"array_get\"", text, StringComparison.Ordinal);
+        Assert.Equal(text, SilPrinter.Print(SilParser.Parse(text)));
+
+        Assert.Equal(90L, new SilInterpreter(module).Run("M.run", 10L));
+        Assert.Equal("array index out of range", Assert.Throws<SilTrap>(() => new SilInterpreter(module).Run("M.run", 9L)).Message);
+    }
 }

@@ -272,6 +272,24 @@ public static class ManifestFiles {
         return text.ToString();
     }
 
+    /// <summary>
+    ///     The workspace a member's settings come from: the nearest manifest
+    ///     above whose [workspace] lists the directory as a member, or none.
+    /// </summary>
+    static WorkspaceInheritance? WorkspaceAbove(string directory) {
+        for (var parent = Directory.GetParent(directory); parent is not null; parent = parent.Parent) {
+            if (!Exists(parent.FullName)) {
+                continue;
+            }
+
+            if (Load(parent.FullName).Workspace is { } workspace && Workspace.MemberDirectories(parent.FullName, workspace).Contains(directory)) {
+                return new(parent.FullName, PathIn(parent.FullName), workspace);
+            }
+        }
+
+        return null;
+    }
+
     /// <summary>The manifest of the package or workspace in <paramref name="directory" />.</summary>
     /// <exception cref="ManifestException">It is not valid, or the directory has both kinds.</exception>
     public static Manifest Load(string directory) {
@@ -289,7 +307,8 @@ public static class ManifestFiles {
         }
 
         if (!hasSable) {
-            return Manifest.Load(toml);
+            var written = File.ReadAllText(toml);
+            return Manifest.Parse(written, toml, Manifest.UsesInheritance(written) ? WorkspaceAbove(directory) : null);
         }
 
         // A package and its workspace in one directory: one manifest of both.

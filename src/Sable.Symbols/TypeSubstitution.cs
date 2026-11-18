@@ -63,9 +63,18 @@ public sealed class TypeSubstitution {
 
             case ArrayTypeSymbol array: {
                 var element = Apply(array.ElementType);
-                return element.Equals(array.ElementType)
+
+                // 'T[N]': the count an instance gives N, or the parameter it passes on.
+                var capacity = array.Capacity;
+                var capacityParameter = array.CapacityParameter;
+                if (capacityParameter is not null && _map.TryGetValue(capacityParameter, out var count)) {
+                    capacity = count is ValueTypeArgumentSymbol value ? (int)value.Value : null;
+                    capacityParameter = count as TypeParameterSymbol;
+                }
+
+                return element.Equals(array.ElementType) && capacity == array.Capacity && ReferenceEquals(capacityParameter, array.CapacityParameter)
                     ? array
-                    : new ArrayTypeSymbol(element, array.ArrayKind);
+                    : new ArrayTypeSymbol(element, array.ArrayKind, capacity, capacityParameter);
             }
 
             case OptionalTypeSymbol optional: {
@@ -111,6 +120,11 @@ public sealed class TypeSubstitution {
 
             case ExistentialTypeSymbol existential:
                 return new ExistentialTypeSymbol(Apply(existential.Constraint));
+
+            case MetatypeTypeSymbol metatype: {
+                var instance = Apply(metatype.InstanceType);
+                return instance.Equals(metatype.InstanceType) ? metatype : new MetatypeTypeSymbol(instance);
+            }
 
             // A result's opaque type keeps its origin, and learns what the
             // origin's type parameters are here.
@@ -217,6 +231,10 @@ public sealed class TypeSubstitution {
             case OptionalTypeSymbol optional when argument is OptionalTypeSymbol otherOptional:
                 return Unify(optional.UnderlyingType, otherOptional.UnderlyingType, inferrable, into);
 
+            // 'TypeInfo.of(Point.self)': T.Type against Point.Type makes T Point.
+            case MetatypeTypeSymbol metatype when argument is MetatypeTypeSymbol otherMetatype:
+                return Unify(metatype.InstanceType, otherMetatype.InstanceType, inferrable, into);
+
             case ReferenceTypeSymbol reference when argument is ReferenceTypeSymbol otherReference:
                 return Unify(reference.ReferencedType, otherReference.ReferencedType, inferrable, into);
 
@@ -278,6 +296,7 @@ public sealed class TypeSubstitution {
             NamedTypeSymbol named => named.TypeArguments.Any(ContainsError),
             ArrayTypeSymbol array => ContainsError(array.ElementType),
             OptionalTypeSymbol optional => ContainsError(optional.UnderlyingType),
+            MetatypeTypeSymbol metatype => ContainsError(metatype.InstanceType),
             ReferenceTypeSymbol reference => ContainsError(reference.ReferencedType),
             TupleTypeSymbol tuple => tuple.ElementTypes.Any(ContainsError),
             FunctionTypeSymbol function => function.ParameterTypes.Any(ContainsError) || ContainsError(function.ReturnType),

@@ -164,6 +164,35 @@ public sealed class SliceTests {
         );
 
     /// <summary>
+    ///     Loops indexing a slice up to its count, reading and writing: the
+    ///     optimiser's versioned loops take a slice's count for the bound, as
+    ///     they take an array's.
+    /// </summary>
+    [Fact]
+    public void IndexedLoopsOverASlice() =>
+        Prints(
+            "9\n[1, 2, 3, 4, 5] [4, 6, 8]\n",
+            "",
+            """
+                let xs: Int[>..] = [1, 2, 3, 4, 5]
+                var s = xs[1..<4]
+                var total = 0
+                var i = 0
+                while i < s.count {
+                    total = total + s[i]
+                    i = i + 1
+                }
+                print(total)
+                var j = 0
+                while j < s.count {
+                    s[j] = s[j] * 2
+                    j = j + 1
+                }
+                print("\(xs) \(s)")
+            """
+        );
+
+    /// <summary>
     ///     An index into a slice is checked against the slice's own count,
     ///     not its buffer's: element 3 of a slice of three traps, though the
     ///     array it views has a fifth.

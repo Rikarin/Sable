@@ -63,7 +63,7 @@ public static class NativeObjects {
         var irPath = temporary + ".ll";
         try {
             File.WriteAllText(irPath, NativeBuild.ForTarget(llvmIr, target, Bitcode(options).Count > 0));
-            var (exitCode, output) = Run(NativeBuild.CompilerPath, [..target.ClangFlags, ..Flags(options), "-Wno-override-module", "-c", "-x", "ir", irPath, "-o", temporary]);
+            var (exitCode, output) = Run(NativeBuild.CompilerPath, [..target.ClangFlags, ..Flags(options), ..NativeBuild.PositionIndependentFlags(options), "-Wno-override-module", "-c", "-x", "ir", irPath, "-o", temporary]);
             if (exitCode != 0) {
                 return new(false, output);
             }

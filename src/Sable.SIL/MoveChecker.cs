@@ -36,10 +36,11 @@ public static class MoveChecker {
             return;
         }
 
-        void Report(ErrorCode code, SilInstruction at, string message) {
-            var position = at.Location is { } location ? source.GetPosition(new LinePosition(location.Line, location.Column)) : 0;
-            diagnostics.Error(code, new TextSpan(position, 0), message);
-        }
+        int PositionOf(SilInstruction at) =>
+            at.Location is { } location ? source.GetPosition(new LinePosition(location.Line, location.Column)) : 0;
+
+        void Report(ErrorCode code, SilInstruction at, string message, DiagnosticLocation? related = null) =>
+            diagnostics.Add(Diagnostic.Error(code, new TextSpan(PositionOf(at), 0), message).WithRelated(related));
 
         string Where(SilInstruction at) => at.Location is { } location ? $"line {location.Line}" : "earlier";
 
@@ -66,7 +67,8 @@ public static class MoveChecker {
                     ErrorCode.ERR_UsedAfterMove,
                     use,
                     $"'{variable.VariableName}' is used after its value was moved out of it, at {Where(move)}"
-                    + (IsMoveOnly(variable.ElementType) ? $"; '{variable.ElementType}' is @noncopy, so using it moves it" : "")
+                    + (IsMoveOnly(variable.ElementType) ? $"; '{variable.ElementType}' is @noncopy, so using it moves it" : ""),
+                    move.Location is null ? null : new DiagnosticLocation(null, new TextSpan(PositionOf(move), 0), $"'{variable.VariableName}' is moved here")
                 );
             }
         }

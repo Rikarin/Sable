@@ -1,0 +1,16 @@
+{
+  "grammars": [
+    {
+      "name": "sable",
+      "camelcase": "Sable",
+      "scope": "source.sable",
+      "path": ".",
+      "file-types": ["sb"],
+      "highlights": "queries/highlights.scm"
+    }
+  ],
+  "metadata": {
+    "version": "0.1.0",
+    "description": "Sable for tree-sitter: highlighting, folding and selection in Helix, Zed and Neovim"
+  }
+}

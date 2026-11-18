@@ -6,6 +6,7 @@
 - `sable.inlayHints.enable` and `sable.lints.enable`, to turn off the server's inlay hints and lints.
 - Tests of the extension's own code, run under node against a stand-in for VS Code.
 - A Debug profile in the Test Explorer: a test runs under the debugger, in a harness built with `-g`.
+- `sable.showReferences`, which the language server's references lenses run to open the references view.
 
 ## 0.2.0
 

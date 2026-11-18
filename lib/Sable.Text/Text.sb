@@ -6,8 +6,9 @@ module Sable.Text
 //
 // Each helper that builds a string collects its pieces and joins them once:
 // a '+' per piece copies everything so far again, which is quadratic. And
-// each that searches compares in place, scalar by scalar, rather than
-// slicing a copy at every position.
+// each that searches forwards asks the runtime (Runtime.findString), which
+// compares sixteen bytes at a time; findLast compares in place, scalar by
+// scalar, rather than slicing a copy at every position.
 
 /// The string, n times over.
 public fn repeating(_ text: String, _ times: Int) -> String {
@@ -64,17 +65,7 @@ public fn hasSuffix(_ text: String, _ end: String) -> Bool {
 
 /// Where the first occurrence of the part starts, or none.
 public fn find(_ text: String, _ part: String) -> Int? {
-    if part.count == 0 {
-        return 0
-    }
-    var i = 0
-    while i + part.count <= text.count {
-        if occursAt(text, part, i) {
-            return i
-        }
-        i = i + 1
-    }
-    return none
+    return find(text, part, from: 0)
 }
 
 /// Whether the part occurs in the text.
@@ -89,16 +80,12 @@ public fn replacing(_ text: String, _ part: String, with replacement: String) ->
     }
     var pieces: String[>..] = []
     var start = 0
-    var i = 0
-    while i + part.count <= text.count {
-        if occursAt(text, part, i) {
-            pieces.append(text.slice(from: start, to: i))
-            pieces.append(replacement)
-            i = i + part.count
-            start = i
-        } else {
-            i = i + 1
-        }
+    var at = Runtime.findString(text, part, 0)
+    while at >= 0 {
+        pieces.append(text.slice(from: start, to: at))
+        pieces.append(replacement)
+        start = at + part.count
+        at = Runtime.findString(text, part, start)
     }
     if pieces.count == 0 {
         return text
@@ -115,15 +102,11 @@ public fn splitting(_ text: String, by separator: String) -> String[>..] {
         return parts
     }
     var start = 0
-    var i = 0
-    while i + separator.count <= text.count {
-        if occursAt(text, separator, i) {
-            parts.append(text.slice(from: start, to: i))
-            i = i + separator.count
-            start = i
-        } else {
-            i = i + 1
-        }
+    var at = Runtime.findString(text, separator, 0)
+    while at >= 0 {
+        parts.append(text.slice(from: start, to: at))
+        start = at + separator.count
+        at = Runtime.findString(text, separator, start)
     }
     parts.append(text.slice(from: start, to: text.count))
     return parts
@@ -259,14 +242,12 @@ public fn removingSuffix(_ text: String, _ end: String) -> String {
 
 /// Where the part next occurs at or after the position, or none.
 public fn find(_ text: String, _ part: String, from start: Int) -> Int? {
-    var i = start < 0 ? 0 : start
-    while i + part.count <= text.count {
-        if occursAt(text, part, i) {
-            return i
-        }
-        i = i + 1
+    // In the runtime, sixteen bytes at a time.
+    let at = Runtime.findString(text, part, start)
+    if at < 0 {
+        return none
     }
-    return none
+    return at
 }
 
 /// Where the last occurrence of the part starts, or none.
@@ -287,14 +268,10 @@ public fn occurrences(of part: String, within text: String) -> Int {
         return 0
     }
     var count = 0
-    var i = 0
-    while i + part.count <= text.count {
-        if occursAt(text, part, i) {
-            count = count + 1
-            i = i + part.count
-        } else {
-            i = i + 1
-        }
+    var at = Runtime.findString(text, part, 0)
+    while at >= 0 {
+        count = count + 1
+        at = Runtime.findString(text, part, at + part.count)
     }
     return count
 }

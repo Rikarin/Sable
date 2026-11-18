@@ -134,6 +134,61 @@ public sealed class TargetTests {
         }
     }
 
+    /// <summary>
+    ///     Debug information for Windows is CodeView, which its linker gathers
+    ///     into the PDB its debuggers read; for everything else, DWARF.
+    /// </summary>
+    [Theory]
+    [InlineData("x86_64-pc-windows-msvc", true)]
+    [InlineData("x86_64-unknown-linux-gnu", false)]
+    public void DebugInformationIsCodeViewForWindows(string triple, bool codeView) {
+        if (!CanBuild) {
+            return;
+        }
+
+        var target = NativeTarget.Of(triple);
+        var directory = Directory.CreateTempSubdirectory("sable-target-");
+        try {
+            var tree = SyntaxTree.Parse(new SourceText(Program, "main.sb"), Pipeline.ParseOptionsFor(false, target));
+            var result = Pipeline.Compile([tree], directory.FullName, target: target);
+            Assert.True(result.Succeeded, string.Join("\n", result.Errors));
+            Assert.Equal(codeView, result.LlvmIr!.Contains("!\"CodeView\", i32 1", StringComparison.Ordinal));
+
+            var path = Path.Combine(directory.FullName, "program.o");
+            var compiled = NativeObjects.CompileIr(result.LlvmIr!, path, NativeOptions.Of(false, true) with { Target = target, Lto = LtoMode.Off });
+            Assert.True(compiled.Succeeded, compiled.Output);
+            var text = System.Text.Encoding.Latin1.GetString(File.ReadAllBytes(path));
+            Assert.Equal(codeView, text.Contains(".debug$S", StringComparison.Ordinal));
+            Assert.Equal(!codeView, text.Contains(".debug_info", StringComparison.Ordinal));
+        } finally {
+            directory.Delete(true);
+        }
+    }
+
+    /// <summary>
+    ///     On Windows a debug build's PDB holds the program's CodeView: its
+    ///     source file and its functions, by their Sable names.
+    /// </summary>
+    [Fact]
+    public void AWindowsDebugBuildsPdbDescribesTheProgram() {
+        if (!CanBuild || !OperatingSystem.IsWindows()) {
+            return;
+        }
+
+        var directory = Directory.CreateTempSubdirectory("sable-pdb-");
+        try {
+            var result = Pipeline.Compile(new SourceText(Program, "main.sb"), directory.FullName);
+            Assert.True(result.Succeeded, string.Join("\n", result.Errors));
+            var executable = Path.Combine(directory.FullName, "program.exe");
+            var built = NativeBuild.Build(result.LlvmIr!, executable, optimise: false, debug: true);
+            Assert.True(built.Succeeded, built.Output);
+            var pdb = System.Text.Encoding.Latin1.GetString(File.ReadAllBytes(Path.ChangeExtension(executable, ".pdb")));
+            Assert.Contains("main.sb", pdb, StringComparison.Ordinal);
+        } finally {
+            directory.Delete(true);
+        }
+    }
+
     /// <summary>The runtime has no WebAssembly layer: an executable for it is refused with why, not left to clang's errors.</summary>
     [Theory]
     [InlineData("wasm32-wasi")]

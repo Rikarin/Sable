@@ -60,7 +60,7 @@ internal sealed class PackageFixture : IDisposable {
 
     /// <summary>Runs an executable, returning what it printed and its exit code.</summary>
     public static (string Output, int ExitCode) Execute(string executable, params string[] arguments) {
-        var start = new ProcessStartInfo(executable) { RedirectStandardOutput = true, RedirectStandardError = true };
+        var start = new ProcessStartInfo(executable) { RedirectStandardOutput = true, RedirectStandardError = true }.Utf8();
         foreach (var argument in arguments) {
             start.ArgumentList.Add(argument);
         }

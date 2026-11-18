@@ -288,6 +288,106 @@ public sealed class SubscriptAndLocalTests {
             """
         );
 
+    [Fact]
+    public void AGenericLocalFunctionThatCapturesIsGivenItsContext() =>
+        // Its captures are built once, where it is declared, and every
+        // instance shares them: a local it changes is changed for all; a
+        // closure, a recursive call and another instance of the function
+        // around it each reach their own.
+        Prints(
+            "12\n13\n1;s;\n13\n1/true/7/1 s/true/7/2 2.5/true/7/3 3\n1/u/8/1 s/u/8/2 2.5/u/8/3 3\n",
+            """
+            fn outer<U>(_ u: U, _ k: Int) -> String {
+                var hits = 0
+                fn tag<T>(_ x: T) -> String {
+                    hits += 1
+                    return "\(x)/\(u)/\(k)/\(hits)"
+                }
+                let a = tag(1)
+                let b = tag("s")
+                let c = { () -> String in tag(2.5) }
+                return "\(a) \(b) \(c()) \(hits)"
+            }
+            """,
+            """
+                let k = 10
+                var log = ""
+                fn add<T>(_ x: T, _ y: Int) -> Int {
+                    log = log + "\(x);"
+                    return y + k
+                }
+                fn count<T>(_ n: Int, _ x: T) -> Int {
+                    if n == 0 {
+                        return k
+                    }
+                    return 1 + count(n - 1, x)
+                }
+                print(add(1, 2))
+                print(add("s", 3))
+                print(log)
+                print(count(3, true))
+                print(outer(true, 7))
+                print(outer("u", 8))
+            """
+        );
+
+    [Fact]
+    public void AClosureCapturesAnInoutParameterByCopyInCopyOut() =>
+        // The closures share a box holding the parameter's value; it is
+        // written back to the caller's storage when the call ends, by a
+        // return or a throw. A closure run after that changes only the box.
+        Prints(
+            "13\n13\nxabc\nxabcabc\n5\n105\n5\n",
+            """
+            union Oops: Error { Bad }
+
+            fn bump(_ x: inout Int) {
+                let f = () => { x += 1 }
+                f()
+                f()
+                x += 10
+                print(x)
+            }
+
+            fn names(_ s: inout String, _ fail: Bool) throws {
+                let add = (t: String) => { s = s + t }
+                add("a")
+                fn more() {
+                    add("b")
+                    s = s + "c"
+                }
+                more()
+                if fail {
+                    throw Oops.Bad
+                }
+            }
+
+            fn later(_ x: inout Int) -> () -> Int {
+                let g = () => {
+                    x += 100
+                    return x
+                }
+                x = 5
+                return g
+            }
+            """,
+            """
+                var a = 1
+                bump(&a)
+                print(a)
+                var s = "x"
+                try? names(&s, false)
+                print(s)
+                try? names(&s, true)
+                print(s)
+                var b = 0
+                let g = later(&b)
+                print(b)
+                print(g())
+                print(b)
+            """
+        );
+
     // ---- Bounded arrays outside an inline struct --------------------------------
 
     [Fact]

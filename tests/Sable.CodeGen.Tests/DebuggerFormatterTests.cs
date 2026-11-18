@@ -311,7 +311,7 @@ public sealed class DebuggerFormatterTests {
     public void DictionariesAndHashMapsShowTheirEntries() =>
         Shows(
             "([(String, Int)]) ages = count = 1 {\n  [0] = (\"ann\", 31)\n}",
-            "(Sable.Collections.HashMap$of$String$Int) map = Sable.Collections.HashMap$of$String$Int count = 2 {\n  [\"one\"] = 1\n  [\"two\"] = 2\n"
+            "(Sable.Collections.HashMap<String, Int>) map = Sable.Collections.HashMap<String, Int> count = 2 {\n  [\"one\"] = 1\n  [\"two\"] = 2\n"
         );
 
     [PosixFact(NeedsLldb)]
@@ -498,7 +498,11 @@ public sealed class DebuggerFormatterTests {
             var result = Pipeline.Compile(new SourceText(Scopes, "scopes.sb"), directory.FullName);
             Assert.True(result.Succeeded, string.Join("\n", result.Errors));
             var ir = result.LlvmIr!;
-            Assert.Contains("!\"Dwarf Version\", i32 5}", ir, StringComparison.Ordinal);
+            // Windows' linker reads CodeView, not DWARF; the nodes below are the same either way.
+            Assert.Contains(
+                NativeTarget.Host.Platform == NativePlatform.Windows ? "!\"CodeView\", i32 1}" : "!\"Dwarf Version\", i32 5}",
+                ir,
+                StringComparison.Ordinal);
 
             // The inner 'x' is in the loop body's block, inside the loop's own.
             var innerX = System.Text.RegularExpressions.Regex.Match(ir, @"!DILocalVariable\(name: ""x"", scope: (![0-9]+), file: ![0-9]+, line: 11,");

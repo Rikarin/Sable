@@ -135,6 +135,19 @@ public sealed class StatementParserTests {
             Parse("if case .Circle(let r) = shape { }")
         );
 
+    // An array of names before the body's brace looked like a closure's
+    // capture list, and the body went with it as the closure.
+    [Theory]
+    [InlineData("if case [let first, ...] = [bob, ann] { print(first) }")]
+    [InlineData("while case [let a, ...] = [x] { }")]
+    [InlineData("match [a, b] { case _ => 0 }")]
+    public void ArrayOfNamesBeforeBodyBraceIsAnArray(string source) {
+        var tree = SyntaxTree.ParseStatement(source);
+        Assert.Empty(tree.Diagnostics);
+        Assert.DoesNotContain(tree.Root.DescendantNodes(), n => n.Kind == SyntaxKind.ClosureExpression);
+        Assert.Contains(tree.Root.DescendantNodes(), n => n.Kind == SyntaxKind.ArrayExpression);
+    }
+
     [Fact]
     public void ParsesGuardWithSelfShorthand() {
         var root = ParseRoot("guard let self else { return 0 }");

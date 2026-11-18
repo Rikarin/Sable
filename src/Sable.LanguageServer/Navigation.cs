@@ -140,12 +140,27 @@ public sealed partial class LanguageServer {
 
     /// <summary>Where a symbol is declared: its name in its declaration, in a workspace file or a library one.</summary>
     JsonNode? LocationOf(Analysis analysis, Symbol symbol) {
-        var declaration = symbol.DeclaringSyntax[0];
+        if (DeclarationOf(analysis, symbol) is not var (uri, lines, declaration)) {
+            return null;
+        }
+
         var name = SemanticModel.NameTokenOf(symbol, declaration);
         var span = name.IsNone ? declaration.Span : name.Span;
+        return new JsonObject { ["uri"] = uri, ["range"] = RangeNode(lines.RangeOf(span)) };
+    }
 
+    /// <summary>
+    ///     A symbol's declaration, and the file the editor can open it in: a
+    ///     document, a dependency's file on disk, or a copy of the library's.
+    /// </summary>
+    (string Uri, LineIndex Lines, SyntaxNode Declaration)? DeclarationOf(Analysis analysis, Symbol symbol) {
+        if (symbol.DeclaringSyntax.IsEmpty) {
+            return null;
+        }
+
+        var declaration = symbol.DeclaringSyntax[0];
         if (analysis.DocumentOf(declaration) is { } owner) {
-            return new JsonObject { ["uri"] = owner.Uri, ["range"] = RangeNode(owner.Lines.RangeOf(span)) };
+            return (owner.Uri, owner.Lines, declaration);
         }
 
         if (analysis.TreeOf(declaration) is not { } tree) {
@@ -154,7 +169,7 @@ public sealed partial class LanguageServer {
 
         // A dependency's file is on disk, where the editor can open it.
         if (analysis.IsDependencyFile(tree)) {
-            return new JsonObject { ["uri"] = Workspace.UriOf(tree.Text.FileName), ["range"] = RangeNode(LineIndex.Of(tree.Text).RangeOf(span)) };
+            return (Workspace.UriOf(tree.Text.FileName), LineIndex.Of(tree.Text), declaration);
         }
 
         // A library file lives in the compiler; the editor is shown a copy.
@@ -169,7 +184,7 @@ public sealed partial class LanguageServer {
             return null;
         }
 
-        return new JsonObject { ["uri"] = Workspace.UriOf(path), ["range"] = RangeNode(LineIndex.Of(tree.Text).RangeOf(span)) };
+        return (Workspace.UriOf(path), LineIndex.Of(tree.Text), declaration);
     }
 
     // -----------------------------------------------------------------------
@@ -315,27 +330,7 @@ public sealed partial class LanguageServer {
     static JsonArray Outline(Document document, IEnumerable<SyntaxNode> members) {
         var symbols = new JsonArray();
         foreach (var member in members) {
-            var (name, children) = member switch {
-                StructDeclarationSyntax type => (type.Identifier.Text, (IEnumerable<SyntaxNode>)type.Members),
-                ClassDeclarationSyntax type => (type.Identifier.Text, type.Members),
-                ActorDeclarationSyntax type => (type.Identifier.Text, type.Members),
-                ProtocolDeclarationSyntax type => (type.Identifier.Text, type.Members),
-                UnionDeclarationSyntax type => (type.Identifier.Text, type.Members),
-                EnumDeclarationSyntax type => (type.Identifier.Text, type.Members),
-                ExtensionDeclarationSyntax extension => ("extension " + extension.Type.ToString().Trim(), extension.Members),
-                FunctionDeclarationSyntax function => (function.Identifier.Text, []),
-                InitDeclarationSyntax => ("init", []),
-                DeinitDeclarationSyntax => ("deinit", []),
-                SubscriptDeclarationSyntax => ("subscript", []),
-                OperatorDeclarationSyntax op => ("operator " + op.OperatorToken.Text, []),
-                FieldDeclarationSyntax field => (NameOf(field.Declarator), []),
-                ConstDeclarationSyntax constant => (constant.Identifier.Text, []),
-                AliasDeclarationSyntax alias => (alias.Identifier.Text, []),
-                UnionCaseDeclarationSyntax unionCase => (unionCase.Identifier.Text, []),
-                EnumCaseDeclarationSyntax enumCase => (enumCase.Identifier.Text, []),
-                _ => ("", Array.Empty<SyntaxNode>()),
-            };
-
+            var (name, children) = OutlineOf(member);
             if (name.Length == 0) {
                 continue;
             }
@@ -359,6 +354,29 @@ public sealed partial class LanguageServer {
 
         return symbols;
     }
+
+    /// <summary>What a declaration is called in an outline, and the declarations inside it; no name for what is not one.</summary>
+    static (string Name, IEnumerable<SyntaxNode> Children) OutlineOf(SyntaxNode member) =>
+        member switch {
+            StructDeclarationSyntax type => (type.Identifier.Text, (IEnumerable<SyntaxNode>)type.Members),
+            ClassDeclarationSyntax type => (type.Identifier.Text, type.Members),
+            ActorDeclarationSyntax type => (type.Identifier.Text, type.Members),
+            ProtocolDeclarationSyntax type => (type.Identifier.Text, type.Members),
+            UnionDeclarationSyntax type => (type.Identifier.Text, type.Members),
+            EnumDeclarationSyntax type => (type.Identifier.Text, type.Members),
+            ExtensionDeclarationSyntax extension => ("extension " + extension.Type.ToString().Trim(), extension.Members),
+            FunctionDeclarationSyntax function => (function.Identifier.Text, []),
+            InitDeclarationSyntax => ("init", []),
+            DeinitDeclarationSyntax => ("deinit", []),
+            SubscriptDeclarationSyntax => ("subscript", []),
+            OperatorDeclarationSyntax op => ("operator " + op.OperatorToken.Text, []),
+            FieldDeclarationSyntax field => (NameOf(field.Declarator), []),
+            ConstDeclarationSyntax constant => (constant.Identifier.Text, []),
+            AliasDeclarationSyntax alias => (alias.Identifier.Text, []),
+            UnionCaseDeclarationSyntax unionCase => (unionCase.Identifier.Text, []),
+            EnumCaseDeclarationSyntax enumCase => (enumCase.Identifier.Text, []),
+            _ => ("", Array.Empty<SyntaxNode>()),
+        };
 
     static string Detail(SyntaxNode member) =>
         member switch {

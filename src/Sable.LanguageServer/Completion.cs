@@ -17,6 +17,9 @@ namespace Sable.LanguageServer;
 /// </param>
 internal sealed record EditContext(Analysis Analysis, SemanticModel Model, bool Speculative);
 
+/// <summary>The symbols of the latest completion list, by index, which <c>completionItem/resolve</c> documents.</summary>
+internal sealed record CompletionMemory(int Id, Analysis Analysis, IReadOnlyList<Symbol> Symbols);
+
 public sealed partial class LanguageServer {
     /// <summary>
     ///     A model for a position in the document as it is, as cheaply as
@@ -102,6 +105,9 @@ public sealed partial class LanguageServer {
 
     const int MaximumItems = 400;
 
+    CompletionMemory? _lastCompletion;
+    int _completions;
+
     static readonly string[] Keywords = [
         "let", "var", "fn", "if", "else", "guard", "while", "repeat", "for", "in", "match", "case", "return",
         "throw", "try", "await", "break", "continue", "defer", "do", "catch", "struct", "class", "actor",
@@ -149,8 +155,33 @@ public sealed partial class LanguageServer {
                 }
             }
 
-            return CompletionList(document, start, offset, prefix, items, keywords);
+            var id = Interlocked.Increment(ref _completions);
+            Volatile.Write(ref _lastCompletion, new CompletionMemory(id, context.Analysis, [..items.Select(static i => i.Symbol)]));
+            return CompletionList(document, start, offset, prefix, items, keywords, id);
         }
+    }
+
+    /// <summary>
+    ///     <c>completionItem/resolve</c>: the item, with the documentation of
+    ///     the symbol it offers — read only for the item the editor shows, not
+    ///     for each of hundreds offered.
+    /// </summary>
+    Task<JsonNode?> CompletionResolveAsync(WorkspaceSnapshot snapshot, JsonElement parameters, CancellationToken cancellation) {
+        var item = JsonNode.Parse(parameters.GetRawText())!.AsObject();
+        if (parameters.Get("data") is { } data
+            && data.GetInt("completion") is { } id
+            && data.GetInt("index") is { } index
+            && Volatile.Read(ref _lastCompletion) is { } last
+            && last.Id == id
+            && index >= 0 && index < last.Symbols.Count) {
+            lock (last.Analysis.Gate) {
+                if (SymbolDisplay.Documentation(last.Symbols[index]) is { } documentation) {
+                    item["documentation"] = new JsonObject { ["kind"] = "markdown", ["value"] = documentation };
+                }
+            }
+        }
+
+        return Task.FromResult<JsonNode?>(item);
     }
 
     static void AddMembers(SemanticModel model, MemberAccessExpressionSyntax access, bool optionalChain, List<(Symbol, int)> items) {
@@ -180,12 +211,13 @@ public sealed partial class LanguageServer {
         }
     }
 
-    static JsonNode CompletionList(Document document, int start, int offset, string prefix, List<(Symbol Symbol, int Rank)> symbols, bool keywords) {
+    static JsonNode CompletionList(Document document, int start, int offset, string prefix, List<(Symbol Symbol, int Rank)> symbols, bool keywords, int id) {
         var range = RangeNode(document.Lines.RangeOf(new TextSpan(start, offset - start)));
         var items = new JsonArray();
         var incomplete = false;
 
-        foreach (var (symbol, rank) in symbols) {
+        for (var index = 0; index < symbols.Count; index++) {
+            var (symbol, rank) = symbols[index];
             if (!Matches(prefix, symbol.Name) || !IsIdentifier(symbol.Name)) {
                 continue;
             }
@@ -200,7 +232,8 @@ public sealed partial class LanguageServer {
                 ["kind"] = SymbolDisplay.CompletionKind(symbol),
                 ["detail"] = SymbolDisplay.Signature(symbol),
                 ["sortText"] = rank.ToString("D6", System.Globalization.CultureInfo.InvariantCulture),
-                ["textEdit"] = new JsonObject { ["range"] = range.DeepClone(), ["newText"] = symbol.Name }
+                ["textEdit"] = new JsonObject { ["range"] = range.DeepClone(), ["newText"] = symbol.Name },
+                ["data"] = new JsonObject { ["completion"] = id, ["index"] = index }
             });
         }
 

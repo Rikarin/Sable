@@ -1439,6 +1439,22 @@ member at a time.
   (into a copy of the library file when it lands there), references, rename
   with `prepareRename` (refused for anything the library or the compiler
   declares, and for keywords), document symbols, signature help.
+- Declaration (the definition), type definition (through optionals,
+  references and arrays), implementation (the workspace's types conforming to a
+  protocol or inheriting from a class, however indirectly, and their members
+  of a requirement's name), document highlights (the declaration as a write),
+  workspace symbols (syntax alone, by the query's letters in order), folding
+  ranges (brackets over several lines, runs of imports and of comments),
+  selection ranges (the token, then each node around it), semantic tokens
+  (full and range: types by kind, parameters, locals, fields, cases,
+  functions and methods; declaration, readonly, static and library
+  modifiers), call hierarchy (callers by the references' enclosing members,
+  callees by the bound calls) and type hierarchy (supertypes from the
+  declaration, conforming extensions and `@derive`; subtypes in the
+  workspace). Quick fixes for the lints: what each message suggests (`_` before
+  an unused name, a parameter renamed keeping its label, the import removed,
+  `let` for `var`) and `@allow(lint)` on the declaration. `completionItem/resolve`
+  adds a symbol's doc comment to the item shown.
 - Completion: members after `.` and `?.` (statics after a type name), the
   names in scope — locals declared before the caret, parameters, the enclosing
   types' members, the module, imports, `Sable.Core` — and keywords; module

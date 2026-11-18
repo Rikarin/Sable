@@ -364,7 +364,7 @@ public sealed partial class SilGen {
             while (_pending.Count > 0) {
                 var (symbol, name, type, substitution) = _pending.Dequeue();
                 if (_localGenerics.TryGetValue(symbol, out var local)) {
-                    LowerLocalFunction(symbol, local.Body, name, type, local.Source, substitution);
+                    LowerLocalFunction(symbol, local.Body, name, type, local.Source, substitution, _localGenericClosures.GetValueOrDefault(name));
                     continue;
                 }
 
@@ -863,6 +863,12 @@ public sealed partial class SilGen {
 
         if (SignatureOf(symbol, at, substitution) is not { } type) {
             return null;
+        }
+
+        // A generic local function that captures takes its context last.
+        if (_localGenerics.TryGetValue(symbol, out var local) && local.Closure is { Context: { } context } closure) {
+            type = new FunctionType([..type.Parameters, context], type.Result, type.Thrown, type.Owned.IsEmpty ? default : [..type.Owned, false]);
+            _localGenericClosures[name] = closure;
         }
 
         _instances[name] = type;
@@ -1945,19 +1951,32 @@ public sealed partial class SilGen {
     ///     body is lowered — a call to it, its own among them, finds it there.
     /// </summary>
     /// <summary>The bodies of the generic local functions declared so far, which each call instantiates.</summary>
-    readonly Dictionary<FunctionSymbol, (BoundBlock Body, SourceText Source)> _localGenerics = [];
+    readonly Dictionary<FunctionSymbol, (BoundBlock Body, SourceText Source, ClosureInfo? Closure)> _localGenerics = [];
+
+    /// <summary>
+    ///     The context each instance of a generic local function that
+    ///     captures is given, by the instance's name: what the instance of
+    ///     the function around it that asked for it captured for it.
+    /// </summary>
+    readonly Dictionary<string, ClosureInfo> _localGenericClosures = new(StringComparer.Ordinal);
 
     /// <summary>
     ///     A generic local function, met in the body of an instance of the
     ///     function around it: its name is for that instance, so the
-    ///     instances its calls ask for are that instance's own.
+    ///     instances its calls ask for are that instance's own. One that
+    ///     captures has its captures built into a context there, once, which
+    ///     every instance takes as a last argument, as a closure's code does.
     /// </summary>
-    internal void DeclareLocalGeneric(FunctionSymbol symbol, BoundBlock body, string name, SourceText source) {
+    internal void DeclareLocalGeneric(FunctionSymbol symbol, BoundBlock body, string name, SourceText source, ClosureInfo? closure = null) {
         _names[symbol] = name;
-        _localGenerics[symbol] = (body, source);
+        _localGenerics[symbol] = (body, source, closure);
     }
 
-    internal void LowerLocalFunction(FunctionSymbol symbol, BoundBlock body, string name, FunctionType type, SourceText source, TypeSubstitution substitution) {
+    /// <summary>The context class of a generic local function that captures, as the instance of the function around it being lowered made it.</summary>
+    internal ClassType? LocalGenericContext(FunctionSymbol symbol) =>
+        _localGenerics.TryGetValue(symbol, out var local) ? local.Closure?.Context : null;
+
+    internal void LowerLocalFunction(FunctionSymbol symbol, BoundBlock body, string name, FunctionType type, SourceText source, TypeSubstitution substitution, ClosureInfo? closure = null) {
         var syntax = symbol.DeclaringSyntax.FirstOrDefault();
         var function = new SilFunction(name, type) {
             SourceFile = source.FileName,
@@ -1976,7 +1995,7 @@ public sealed partial class SilGen {
         _module.Add(function);
 
         var reported = _diagnostics.Count;
-        new FunctionLowering(this, symbol, function, source, substitution).Lower(body);
+        new FunctionLowering(this, symbol, function, source, substitution, closure).Lower(body);
         function.RemoveUnreachableBlocks();
         MoveChecker.Check(function, source, _diagnostics);
         _sources[function] = source;
@@ -2072,8 +2091,12 @@ public sealed partial class SilGen {
 
                     break;
 
+                // An inout parameter is captured as a local is, by its box:
+                // the function it belongs to keeps the parameter's value in
+                // one for the length of the call, and writes it back to the
+                // caller's storage on the way out.
                 case BoundParameterAccess access when !inner.Contains(access.Parameter.ContainingSymbol!):
-                    Add(access.Parameter, access.Parameter.Type, false, null);
+                    Add(access.Parameter, access.Parameter.Type, access.Parameter.Modifier == ParameterModifier.InOut, null);
                     break;
 
                 case BoundSelfAccess self:
@@ -2083,6 +2106,29 @@ public sealed partial class SilGen {
         }
 
         return captures;
+    }
+
+    /// <summary>
+    ///     The inout parameters of a function that some closure inside it
+    ///     captures: each is copied into a box when the call begins, and
+    ///     the box's value back into the caller's storage at every exit.
+    /// </summary>
+    internal List<ParameterSymbol> BoxedInoutParameters(FunctionSymbol function, BoundNode body) {
+        var boxed = new List<ParameterSymbol>();
+        foreach (var node in Descendants(body)) {
+            var captures = node switch {
+                BoundClosure closure => CapturesOf(closure),
+                BoundLocalFunction local when local.Body is not null && Captures(local.Symbol) => CapturesOf(local.Symbol, local.Body, []),
+                _ => [],
+            };
+            foreach (var capture in captures) {
+                if (capture is { Boxed: true, Key: ParameterSymbol parameter } && ReferenceEquals(parameter.ContainingSymbol, function) && !boxed.Contains(parameter)) {
+                    boxed.Add(parameter);
+                }
+            }
+        }
+
+        return boxed;
     }
 
     /// <summary>The locals of a function that some closure inside it captures by reference: they live in boxes.</summary>
@@ -2772,7 +2818,7 @@ public sealed partial class SilGen {
     // =======================================================================
 
     /// <summary>What a closure's code knows of its context: its class, and where each capture is in it.</summary>
-    sealed record ClosureInfo(ClassType? Context, Dictionary<object, Capture> Captures);
+    internal sealed record ClosureInfo(ClassType? Context, Dictionary<object, Capture> Captures);
 
     sealed partial class FunctionLowering(
         SilGen generator,
@@ -2911,11 +2957,27 @@ public sealed partial class SilGen {
             _current = _entry;
             _boxed = generator.BoxedLocals(symbol, body);
 
-            // A closure's code takes its context last.
+            // An inout parameter a closure captures is copied in to a box the
+            // closures share, and is that box's value for the rest of the
+            // call; the exits copy it back out to the caller's storage.
+            foreach (var parameter in generator.BoxedInoutParameters(symbol, body)) {
+                if (!_parameters.TryGetValue(parameter, out var original) || LowerType(parameter.Type) is not { } boxedType) {
+                    continue;
+                }
+
+                var box = Emit(new AllocRefInst(generator.BoxType(boxedType)));
+                Emit(new StoreInst(Emit(new LoadInst(original)), Emit(new RefElementAddrInst(box, 0)), StoreKind.Assign));
+                _parameterBoxes[parameter] = (box, original);
+                _parameters[parameter] = Emit(new RefElementAddrInst(box, 0));
+            }
+
+            // A closure's code takes its context last: as any object, or, for
+            // an instance of a generic local function, which is called
+            // directly, as the class it is.
             if (closure is not null) {
-                var context = _entry.AddArgument(SilType.Object);
+                var context = _entry.AddArgument(next < parameterTypes.Length ? parameterTypes[next] : SilType.Object);
                 if (closure.Context is { } contextType) {
-                    _context = Emit(new UncheckedRefCastInst(context, contextType));
+                    _context = context.Type == contextType ? context : Emit(new UncheckedRefCastInst(context, contextType));
                 }
             }
 
@@ -2969,6 +3031,7 @@ public sealed partial class SilGen {
             if (_returnBlock is { } returnBlock) {
                 _current = returnBlock;
                 _location = null;
+                WriteBackInoutParameters();
                 DestroyOwnedParameters();
                 Deallocate();
                 // The program ends once every task has, and then its globals go.
@@ -2986,6 +3049,7 @@ public sealed partial class SilGen {
 
             if (_throwBlock is { } throwBlock) {
                 _current = throwBlock;
+                WriteBackInoutParameters();
                 DestroyOwnedParameters();
                 Deallocate();
                 Jump(new ThrowInst(throwBlock.Arguments[0]));
@@ -3118,6 +3182,22 @@ public sealed partial class SilGen {
             return Emit(new RefElementAddrInst(box, 0));
         }
 
+        /// <summary>
+        ///     Where a parameter a closure captured is: its place in the
+        ///     context, or, for an inout one, its box's field. A box is
+        ///     borrowed until the caller ends <paramref name="borrows" />.
+        /// </summary>
+        SilValue CapturedParameterAddress(Capture captured, List<SilValue> borrows) {
+            var field = Emit(new RefElementAddrInst(_context!, captured.Field));
+            if (!captured.Boxed) {
+                return field;
+            }
+
+            var box = Hold(Emit(new LoadInst(field)));
+            borrows.Add(box);
+            return Emit(new RefElementAddrInst(box, 0));
+        }
+
         SilValue? LoadLocal(BoundLocalAccess access) {
             var borrows = new List<SilValue>();
             if (LocalAddress(access.Local, access.Syntax, borrows) is not { } address) {
@@ -3136,6 +3216,17 @@ public sealed partial class SilGen {
 
         /// <summary>The arguments that went into those slots: consumed there, not destroyed on the way out.</summary>
         readonly HashSet<SilArgument> _spilledArguments = [];
+
+        /// <summary>The inout parameters closures capture: the box each lives in for the call, and the caller's storage.</summary>
+        readonly Dictionary<ParameterSymbol, (SilValue Box, SilValue Original)> _parameterBoxes = [];
+
+        /// <summary>Copies each boxed inout parameter's value back out to the caller's storage, and lets go of the box.</summary>
+        void WriteBackInoutParameters() {
+            foreach (var (box, original) in _parameterBoxes.Values) {
+                Emit(new StoreInst(Emit(new LoadInst(Emit(new RefElementAddrInst(box, 0)))), original, StoreKind.Assign));
+                Emit(new DestroyValueInst(box));
+            }
+        }
 
         void DestroyOwnedParameters() {
             for (var i = 0; i < _entry.Arguments.Count; i++) {
@@ -4887,8 +4978,12 @@ public sealed partial class SilGen {
                 case BoundLocalAccess access:
                     return LoadLocal(access);
 
-                case BoundParameterAccess access when closure?.Captures.TryGetValue(access.Parameter, out var captured) == true:
-                    return Emit(new LoadInst(Emit(new RefElementAddrInst(_context!, captured.Field))));
+                case BoundParameterAccess access when closure?.Captures.TryGetValue(access.Parameter, out var captured) == true: {
+                    var borrows = new List<SilValue>();
+                    var value = Emit(new LoadInst(CapturedParameterAddress(captured, borrows)));
+                    EndAll(borrows);
+                    return value;
+                }
 
                 case BoundClosure closureExpression:
                     return Closure(closureExpression);
@@ -5073,18 +5168,31 @@ public sealed partial class SilGen {
             }
 
             if (!callee.TypeParameters.IsEmpty) {
-                // A closure is one value, and a generic function is code for
-                // each set of type arguments: one that captures has no one
-                // value to be.
-                if (generator.Captures(callee)) {
-                    Fail(local.Syntax, $"the generic local function '{callee.Name}', which captures");
+                // It is instantiated for each call's type arguments, as a
+                // generic function of the module is — with this instance's
+                // for the type parameters around it.
+                var genericName = generator.LocalFunctionName(function.Name, callee.Name);
+                if (!generator.Captures(callee)) {
+                    generator.DeclareLocalGeneric(callee, local.Body, genericName, source);
                     return;
                 }
 
-                // One that does not is instantiated for each call's type
-                // arguments, as a generic function of the module is — with
-                // this instance's for the type parameters around it.
-                generator.DeclareLocalGeneric(callee, local.Body, generator.LocalFunctionName(function.Name, callee.Name), source);
+                // A closure is one value, and a generic function is code for
+                // each set of type arguments; so one that captures is not a
+                // closure but a context alone, built here, once, and kept for
+                // the rest of the scope. Each instance's code takes it last,
+                // as a closure's does, and each call passes it.
+                Locate(local.Syntax);
+                var captures = generator.CapturesOf(callee, local.Body, []);
+                if (ContextType(local, captures, genericName) is not { } contextType || Context(local, contextType, captures) is not { } context) {
+                    return;
+                }
+
+                var contextHolder = new LocalSymbol("$" + callee.Name, Core.Module, null, false);
+                _slots[contextHolder] = NewSlot(contextType, callee.Name);
+                BindLocal(contextHolder, Unhold(context), local.Syntax, declaration: true);
+                _localFunctions[callee] = contextHolder;
+                generator.DeclareLocalGeneric(callee, local.Body, genericName, source, new ClosureInfo(contextType, captures.ToDictionary(static c => c.Key, static c => c)));
                 return;
             }
 
@@ -5145,6 +5253,11 @@ public sealed partial class SilGen {
         SilValue? LocalFunctionValue(FunctionSymbol local, BoundNode at) {
             if (closure is not null && closure.Captures.TryGetValue(local, out var captured)) {
                 return Emit(new LoadInst(Emit(new RefElementAddrInst(_context!, captured.Field))));
+            }
+
+            // A generic one calling itself: its own context.
+            if (ReferenceEquals(local, symbol) && _context is { } own && !local.TypeParameters.IsEmpty) {
+                return Emit(new CopyValueInst(own));
             }
 
             if (ReferenceEquals(local, symbol) && _context is { } context && LocalFunctionType(local) is { } thick) {
@@ -5654,6 +5767,9 @@ public sealed partial class SilGen {
 
                 case BoundParameterAccess access when _parameters.TryGetValue(access.Parameter, out var inout) && IsByAddress(access.Parameter):
                     return inout;
+
+                case BoundParameterAccess access when closure?.Captures.TryGetValue(access.Parameter, out var captured) == true && captured.Boxed:
+                    return CapturedParameterAddress(captured, borrows);
 
                 case BoundParameterAccess access when _spilled.TryGetValue(access.Parameter, out var spilled):
                     return spilled;
@@ -7346,7 +7462,8 @@ public sealed partial class SilGen {
                 return BuiltinCall(call, callee);
             }
 
-            if (IsLocalFunction(callee) && generator.Captures(callee)) {
+            // A generic one is called as a generic function is, given its context.
+            if (IsLocalFunction(callee) && generator.Captures(callee) && callee.TypeParameters.IsEmpty) {
                 return LocalFunctionCall(call);
             }
 
@@ -7613,6 +7730,17 @@ public sealed partial class SilGen {
                 }
             }
 
+            // A generic local function that captures: its context, last.
+            if (IsLocalFunction(callee) && !callee.TypeParameters.IsEmpty && generator.Captures(callee)) {
+                if (LocalFunctionValue(callee, call) is not { } context) {
+                    return null;
+                }
+
+                Hold(context);
+                arguments.Add(context);
+                borrows.Add(context);
+            }
+
             // A method a subclass may override is found through the vtable;
             // 'super.m()' calls the superclass's own.
             SilValue code = HasSelf(callee) && call.Receiver is not BoundSuperAccess && generator.IsDynamic(callee)
@@ -7865,32 +7993,9 @@ public sealed partial class SilGen {
         SilValue? ClosureOf(BoundNode closureExpression, FunctionSymbol codeSymbol, BoundBlock body, ThickFunctionType thick, List<Capture> captures, string name) {
             ClassType? contextType = null;
             if (captures.Count > 0) {
-                contextType = generator._module.AddType(new ClassType($"{name}$context"));
-                foreach (var capture in captures) {
-                    // A local function captured is its closure, typed as its own calls see it.
-                    if ((capture.Key is FunctionSymbol capturedFunction && IsLocalFunction(capturedFunction) ? LocalFunctionType(capturedFunction) : LowerType(capture.Type)) is not { } fieldType) {
-                        return Missing(closureExpression, $"capturing a value of type '{capture.Type.ToDisplayString()}'");
-                    }
-
-                    // Each field is named for what it captured, so that a
-                    // debugger shows it by that name inside the closure.
-                    var fieldName = capture.Key switch {
-                        Symbol { Name: { Length: > 0 } captured } => captured,
-                        string key => key,
-                        _ => $"c{capture.Field}",
-                    };
-                    if (contextType.FieldIndex(fieldName) >= 0) {
-                        fieldName = $"{fieldName}${capture.Field}";
-                    }
-
-                    // A weak or unowned capture is held as a weak or unowned field is.
-                    SilType stored = (capture.Kind, fieldType) switch {
-                        _ when capture.Boxed => generator.BoxType(fieldType),
-                        (CaptureKind.Weak, EnumType optional) => new WeakStorageType(optional),
-                        (CaptureKind.Unowned, ClassType referent) => new UnownedStorageType(referent),
-                        _ => fieldType,
-                    };
-                    contextType.Fields.Add((fieldName, stored));
+                contextType = ContextType(closureExpression, captures, name);
+                if (contextType is null) {
+                    return null;
                 }
             }
 
@@ -7916,6 +8021,51 @@ public sealed partial class SilGen {
                 return Emit(new PartialApplyInst(reference, null, thick));
             }
 
+            return Context(closureExpression, contextType, captures) is { } context
+                ? Emit(new PartialApplyInst(reference, Unhold(context), thick))
+                : null;
+        }
+
+        /// <summary>The class of a closure's context: a field for each thing it captures.</summary>
+        ClassType? ContextType(BoundNode closureExpression, List<Capture> captures, string name) {
+            var contextType = generator._module.AddType(new ClassType($"{name}$context"));
+            foreach (var capture in captures) {
+                // A local function captured is its closure, typed as its own
+                // calls see it; a generic one is its context alone.
+                var fieldType = capture.Key is FunctionSymbol capturedFunction && IsLocalFunction(capturedFunction)
+                    ? capturedFunction.TypeParameters.IsEmpty ? LocalFunctionType(capturedFunction) : generator.LocalGenericContext(capturedFunction)
+                    : LowerType(capture.Type);
+                if (fieldType is null) {
+                    Missing(closureExpression, $"capturing a value of type '{capture.Type.ToDisplayString()}'");
+                    return null;
+                }
+
+                // Each field is named for what it captured, so that a
+                // debugger shows it by that name inside the closure.
+                var fieldName = capture.Key switch {
+                    Symbol { Name: { Length: > 0 } captured } => captured,
+                    string key => key,
+                    _ => $"c{capture.Field}",
+                };
+                if (contextType.FieldIndex(fieldName) >= 0) {
+                    fieldName = $"{fieldName}${capture.Field}";
+                }
+
+                // A weak or unowned capture is held as a weak or unowned field is.
+                SilType stored = (capture.Kind, fieldType) switch {
+                    _ when capture.Boxed => generator.BoxType(fieldType),
+                    (CaptureKind.Weak, EnumType optional) => new WeakStorageType(optional),
+                    (CaptureKind.Unowned, ClassType referent) => new UnownedStorageType(referent),
+                    _ => fieldType,
+                };
+                contextType.Fields.Add((fieldName, stored));
+            }
+
+            return contextType;
+        }
+
+        /// <summary>A closure's context, made and filled with what it captures here; held, for the caller to take.</summary>
+        SilValue? Context(BoundNode closureExpression, ClassType contextType, List<Capture> captures) {
             var context = Hold(Emit(new AllocRefInst(contextType)));
             foreach (var capture in captures) {
                 if (CapturedValue(capture, closureExpression) is not { } value) {
@@ -7941,7 +8091,7 @@ public sealed partial class SilGen {
                 }
             }
 
-            return Emit(new PartialApplyInst(reference, Unhold(context), thick));
+            return context;
         }
 
         /// <summary>What goes into a closure's context for one capture: a box, or a value.</summary>
@@ -7961,6 +8111,10 @@ public sealed partial class SilGen {
 
                 case LocalSymbol when capture.Initializer is { } initializer:
                     return Expression(initializer);
+
+                // An inout parameter's box, shared with the frame.
+                case ParameterSymbol parameter when _parameterBoxes.TryGetValue(parameter, out var boxed):
+                    return Emit(new CopyValueInst(boxed.Box));
 
                 case ParameterSymbol parameter when _parameters.TryGetValue(parameter, out var value):
                     return Owned(value);
@@ -7985,8 +8139,9 @@ public sealed partial class SilGen {
         SilValue? FunctionValue(BoundFunctionReference reference) {
             var callee = reference.Function;
 
-            // A local function that captures already is a closure.
-            if (IsLocalFunction(callee) && generator.Captures(callee)) {
+            // A local function that captures already is a closure; a generic
+            // one is not, and is not a value until its type arguments are.
+            if (IsLocalFunction(callee) && generator.Captures(callee) && callee.TypeParameters.IsEmpty) {
                 return LocalFunctionValue(callee, reference);
             }
 

@@ -351,4 +351,50 @@ public sealed class GenericTests {
                 )
             ).Stdout
         );
+
+    /// <summary>
+    ///     Polymorphic recursion, which no set of copies can compile: the
+    ///     copy that would ask for an endless series calls the one instance
+    ///     that serves every type instead, boxing its arguments and unboxing
+    ///     its result (#105).
+    /// </summary>
+    [Fact]
+    public void PolymorphicRecursionRunsThroughOneInstanceForEveryType() =>
+        Assert.Equal(
+            "3\n5\n1\n2\n3\nw\n4\n",
+            AssertAgree(
+                Program(
+                    """
+                    fn deep<T>(_ x: T, _ n: Int) -> Int {
+                        if n == 0 {
+                            return 0
+                        }
+                        return 1 + deep((x, x), n - 1)
+                    }
+
+                    fn wrap<T>(_ x: T, _ n: Int) -> T {
+                        if n == 0 {
+                            return x
+                        }
+                        let y = wrap((x, n), n - 1)
+                        print(y.1)
+                        return y.0
+                    }
+
+                    fn count<T>(_ xs: T, _ n: Int) -> Int {
+                        if n == 0 {
+                            return 0
+                        }
+                        return 1 + count([xs, xs], n - 1)
+                    }
+                    """,
+                    """
+                        print(deep(1, 3))
+                        print(deep("s", 5))
+                        print(wrap("w", 3))
+                        print(count(1, 4))
+                    """
+                )
+            ).Stdout
+        );
 }

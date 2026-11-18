@@ -830,7 +830,13 @@ public sealed partial class SilGen {
     ///     name, and its signature — lowered later, once, however many calls
     ///     ask for it. Null when the arguments are not all known types.
     /// </summary>
-    internal (string Name, FunctionType Type)? Instance(FunctionSymbol symbol, TypeSubstitution substitution, SyntaxNode at) {
+    /// <remarks>
+    ///     A call, <paramref name="polymorphic" />, may be given the one
+    ///     instance that serves every type instead, when the one it asks for
+    ///     would be one of an endless series (<see cref="PolymorphicInstance" />);
+    ///     it then passes its arguments as that instance takes them.
+    /// </remarks>
+    internal (string Name, FunctionType Type)? Instance(FunctionSymbol symbol, TypeSubstitution substitution, SyntaxNode at, bool polymorphic = false) {
         if (!_names.TryGetValue(symbol, out var baseName) || !(_declarations.ContainsKey(symbol) || _localGenerics.ContainsKey(symbol))) {
             return null;
         }
@@ -857,7 +863,12 @@ public sealed partial class SilGen {
             return (name, existing);
         }
 
-        if (EndlessInstances(symbol, substitution, at)) {
+        if (EndlessInstances(symbol, substitution) is var (endless, grows)) {
+            if (polymorphic && grows && PolymorphicInstance(symbol, at) is { } shared) {
+                return shared;
+            }
+
+            _diagnostics.Error(ErrorCode.ERR_EndlessInstantiation, at.Span, endless);
             return null;
         }
 
@@ -878,26 +889,22 @@ public sealed partial class SilGen {
     }
 
     /// <summary>
-    ///     True, with an error reported, when a new instance would be one of
-    ///     an endless series: a generic function that calls itself, directly
-    ///     or through others, with a type argument built from its own, as
-    ///     <c>deep((x, x), n - 1)</c> in <c>deep&lt;T&gt;</c> does. Each copy
-    ///     would ask for a larger one, and monomorphisation would never end.
+    ///     Why a new instance would be one of an endless series, or null: a
+    ///     generic function that calls itself, directly or through others,
+    ///     with a type argument built from its own, as <c>deep((x, x), n - 1)</c>
+    ///     in <c>deep&lt;T&gt;</c> does (<c>Grows</c>), or a chain of instances
+    ///     too long to be anything else. Each copy would ask for a larger one,
+    ///     and monomorphisation would never end.
     /// </summary>
-    bool EndlessInstances(FunctionSymbol symbol, TypeSubstitution substitution, SyntaxNode at) {
+    (string Message, bool Grows)? EndlessInstances(FunctionSymbol symbol, TypeSubstitution substitution) {
         var depth = 0;
         for (var requester = _loweringInstance;
              requester is not null && _instanceOrigins.TryGetValue(requester, out var origin);
              requester = origin.Requester) {
             if (++depth >= MaxInstanceDepth) {
-                _diagnostics.Error(
-                    ErrorCode.ERR_EndlessInstantiation,
-                    at.Span,
-                    $"'{symbol.Name}' is reached through more than {MaxInstanceDepth} generic calls, each needing a copy "
-                    + "of a generic function for new types: a generic function is compiled once for each type it is used with, "
-                    + "so this would not finish compiling"
-                );
-                return true;
+                return ($"'{symbol.Name}' is reached through more than {MaxInstanceDepth} generic calls, each needing a copy "
+                        + "of a generic function for new types: a generic function is compiled once for each type it is used with, "
+                        + "so this would not finish compiling", false);
             }
 
             if (!ReferenceEquals(origin.Symbol, symbol)) {
@@ -908,19 +915,77 @@ public sealed partial class SilGen {
                 if (origin.Substitution.Lookup(parameter) is { } before
                     && substitution.Lookup(parameter) is { } after
                     && Grows(before, after)) {
-                    _diagnostics.Error(
-                        ErrorCode.ERR_EndlessInstantiation,
-                        at.Span,
-                        $"'{symbol.Name}' with {parameter.Name} = '{before.ToDisplayString()}' leads to a call of it with "
-                        + $"{parameter.Name} = '{after.ToDisplayString()}', which leads to a larger type again, without end: "
-                        + "a generic function is compiled once for each type it is used with, so this would not finish compiling"
-                    );
-                    return true;
+                    return ($"'{symbol.Name}' with {parameter.Name} = '{before.ToDisplayString()}' leads to a call of it with "
+                            + $"{parameter.Name} = '{after.ToDisplayString()}', which leads to a larger type again, without end: "
+                            + "a generic function is compiled once for each type it is used with, so this would not finish compiling; "
+                            + "it can be compiled once for every type only when each of its parameters and its result is a type "
+                            + "parameter or mentions none, and each type parameter is constrained to protocols alone", true);
                 }
             }
         }
 
-        return false;
+        return null;
+    }
+
+    /// <summary>The instances that serve every type: for each, the function, and the existentials its type parameters stand for.</summary>
+    readonly Dictionary<string, (FunctionSymbol Symbol, TypeSubstitution Substitution)> _polymorphic = new(StringComparer.Ordinal);
+
+    /// <summary>The function and the existentials of an instance that serves every type, or null for any other.</summary>
+    internal (FunctionSymbol Symbol, TypeSubstitution Substitution)? PolymorphicOf(string instance) =>
+        _polymorphic.TryGetValue(instance, out var polymorphic) ? polymorphic : null;
+
+    /// <summary>
+    ///     The one instance of a generic function that serves every type,
+    ///     for polymorphic recursion, which no set of copies can: each type
+    ///     parameter stands for <c>any C</c> of its constraints, so a value
+    ///     comes boxed with the witnesses of its type's conformances — the
+    ///     dictionary passed at run time — and the instance's own calls of
+    ///     the function, with whatever types they build, are calls of it
+    ///     again. Null when the function's signature cannot be passed that
+    ///     way: a parameter or result that mentions a type parameter without
+    ///     being one (a 'T[]' would need each element boxed), or a type
+    ///     parameter constrained by more than protocols, or one of a type
+    ///     around the function.
+    /// </summary>
+    (string Name, FunctionType Type)? PolymorphicInstance(FunctionSymbol symbol, SyntaxNode at) {
+        var name = $"{_names[symbol]}$polymorphic";
+        if (_instances.TryGetValue(name, out var existing)) {
+            return (name, existing);
+        }
+
+        if (!TypeParametersOf(symbol).SequenceEqual(symbol.TypeParameters) || _localGenerics.ContainsKey(symbol)) {
+            return null;
+        }
+
+        var map = new Dictionary<TypeParameterSymbol, TypeSymbol>();
+        foreach (var parameter in symbol.TypeParameters) {
+            var constraint = parameter.Constraints.Length == 1 ? parameter.Constraints[0] : new CompositionTypeSymbol(parameter.Constraints);
+            if (ExistentialProtocols(constraint) is null) {
+                return null;
+            }
+
+            map[parameter] = new ExistentialTypeSymbol(constraint);
+        }
+
+        bool Passable(TypeSymbol type) =>
+            type is TypeParameterSymbol parameter && map.ContainsKey(parameter)
+            || !symbol.TypeParameters.Any(p => Occurs(p, type));
+
+        if (!symbol.Parameters.All(p => Passable(p.Type)) || !Passable(symbol.ReturnType)
+            || symbol.ThrownType is { } thrown && symbol.TypeParameters.Any(p => Occurs(p, thrown))) {
+            return null;
+        }
+
+        var substitution = new TypeSubstitution(map);
+        if (SignatureOf(symbol, at, substitution) is not { } type) {
+            return null;
+        }
+
+        _instances[name] = type;
+        _instanceOrigins[name] = (symbol, substitution, _loweringInstance);
+        _polymorphic[name] = (symbol, substitution);
+        _pending.Enqueue((symbol, name, type, substitution));
+        return (name, type);
     }
 
     /// <summary>True when <paramref name="after" /> is built from <paramref name="before" />, and is larger.</summary>
@@ -2385,7 +2450,7 @@ public sealed partial class SilGen {
             protocols.Add(protocol);
         }
 
-        return protocols.Count == 0 ? null : protocols;
+        return protocols;
     }
 
     /// <summary>
@@ -2401,7 +2466,7 @@ public sealed partial class SilGen {
     ///     called on an existential and have no slot.
     /// </summary>
     StructType? ExistentialLayout(List<NamedTypeSymbol> protocols) {
-        var name = "any$" + string.Join("$and$", protocols.Select(TypeName));
+        var name = protocols.Count == 0 ? "any$Any" : "any$" + string.Join("$and$", protocols.Select(TypeName));
         if (_module.FindType(name) is StructType existing) {
             return existing;
         }
@@ -2932,10 +2997,10 @@ public sealed partial class SilGen {
         var none = optional.CaseIndex("None");
 
         var layout = target is ExistentialTypeSymbol ? wanted as StructType : null;
-        List<NamedTypeSymbol> candidates = target switch {
-            ExistentialTypeSymbol existential when layout is not null => ConformingTypes(existential.Constraint),
-            NamedTypeSymbol concrete => [concrete],
-            _ => [],
+        List<TypeSymbol> candidates = target switch {
+            ExistentialTypeSymbol existential when layout is not null => [..ConformingTypes(existential.Constraint)],
+            ExistentialTypeSymbol => [],
+            var concrete => [concrete],
         };
 
         var block = entry;
@@ -2953,7 +3018,7 @@ public sealed partial class SilGen {
                 using (_diagnostics.Suppress()) {
                     for (var i = 0; i < slots.Count; i++) {
                         var thick = (ThickFunctionType)layout.Fields[i + 1].Type;
-                        if (WitnessThunk(candidate, value, candidateBox, slots[i].Slot, slots[i].Member, thick, at) is not { } thunk) {
+                        if (WitnessThunk((NamedTypeSymbol)candidate, value, candidateBox, slots[i].Slot, slots[i].Member, thick, at) is not { } thunk) {
                             break;
                         }
 
@@ -2968,9 +3033,9 @@ public sealed partial class SilGen {
 
             // Where a box may hold it: its own; and an object, the box of
             // any class it derives from, holding it as that class.
-            var holders = new List<NamedTypeSymbol> { candidate };
-            if (value is ClassType) {
-                for (var ancestor = SuperclassOf(candidate); ancestor is not null; ancestor = SuperclassOf(ancestor)) {
+            var holders = new List<TypeSymbol> { candidate };
+            if (value is ClassType && candidate is NamedTypeSymbol named) {
+                for (var ancestor = SuperclassOf(named); ancestor is not null; ancestor = SuperclassOf(ancestor)) {
                     holders.Add(ancestor);
                 }
             }
@@ -6597,6 +6662,70 @@ public sealed partial class SilGen {
             return value;
         }
 
+        /// <summary>
+        ///     A call of the instance of a generic function that serves every
+        ///     type (<see cref="SilGen.PolymorphicInstance" />): each argument
+        ///     for a type parameter boxed as the existential it stands for
+        ///     there, unless it is one already, and a result of a type
+        ///     parameter's taken back out of its box as the type this call
+        ///     gives it. Not handled when nothing needs either.
+        /// </summary>
+        (bool Handled, SilValue? Result) PolymorphicCall(BoundCall call, FunctionSymbol callee, TypeSubstitution polymorphic) {
+            var arguments = call.Arguments.ToArray();
+            var boxed = false;
+            for (var i = 0; i < arguments.Length && i < callee.Parameters.Length; i++) {
+                if (callee.Parameters[i].Type is not TypeParameterSymbol parameter || polymorphic.Lookup(parameter) is not { } wanted
+                    || Sub(arguments[i].Type).Equals(wanted)) {
+                    continue;
+                }
+
+                if (callee.Parameters[i].Modifier is not (ParameterModifier.None or ParameterModifier.In)) {
+                    return (true, Missing(arguments[i], $"passing '{arguments[i].Type.ToDisplayString()}' to '{callee.Name}', which serves every type, as '{callee.Parameters[i].Modifier}'"));
+                }
+
+                arguments[i] = new BoundConversion(arguments[i].Syntax, wanted, arguments[i], ConversionKind.Existential);
+                boxed = true;
+            }
+
+            var resultType = callee.ReturnType is TypeParameterSymbol returned ? polymorphic.Lookup(returned) : null;
+            var unbox = resultType is not null && !Sub(call.Type).Equals(resultType);
+            if (!boxed && !unbox) {
+                return (false, null);
+            }
+
+            var passed = new BoundCall(call.Syntax, call.Receiver, callee, [..arguments], unbox ? resultType : call.Type) { Substitution = call.Substitution };
+            if (Call(passed) is not { } result) {
+                return (true, null);
+            }
+
+            return (true, unbox ? Unbox(result, Sub(call.Type), call) : result);
+        }
+
+        /// <summary>The value an owned existential holds, as the type it must be; a trap should it be another.</summary>
+        SilValue? Unbox(SilValue existential, TypeSymbol target, BoundNode at) {
+            if (generator.ExistentialCast(target, at.Syntax) is not var (name, type) || type.Result is not EnumType result) {
+                Destroy(existential);
+                return Missing(at, $"the result of '{Describe(at.Syntax)}' as '{target.ToDisplayString()}'");
+            }
+
+            var cast = Emit(new ApplyInst(Emit(new FunctionRefInst(name, type)), result, [Emit(new StructExtractInst(existential, 0))]));
+            Destroy(existential);
+            var some = result.CaseIndex("Some");
+            var present = function.AddBlock();
+            var payload = Payload(present, result.Cases[some].Payload!);
+            var absent = function.AddBlock();
+            Jump(new SwitchEnumInst(cast, [(some, present)], absent));
+
+            _current = absent;
+            Emit(new CondFailInst(Emit(new IntegerLiteralInst(SilType.Bool, 1)), $"a result that is not '{target.ToDisplayString()}'"));
+            Jump(new UnreachableInst());
+
+            _current = present;
+            var value = Owned(payload);
+            Destroy(cast);
+            return value;
+        }
+
         /// <summary>'shape is Square', 'shape is Named': whether the existential's box holds one.</summary>
         SilValue? ExistentialTest(BoundTypeTest test) {
             if (CastBox(test.Operand, CastTarget(test.TestedType), test) is not { Type: EnumType result } cast) {
@@ -8113,9 +8242,15 @@ public sealed partial class SilGen {
             string name;
             FunctionType? type;
             if (IsGeneric(callee)) {
-                if (generator.Instance(callee, CallSubstitution(call, callee), call.Syntax) is not { } instance) {
+                if (generator.Instance(callee, CallSubstitution(call, callee), call.Syntax, polymorphic: true) is not { } instance) {
                     _failed = true;
                     return null;
+                }
+
+                // The instance that serves every type: its arguments boxed
+                // as the existentials it takes, and its result unboxed.
+                if (generator.PolymorphicOf(instance.Name) is { } polymorphic && PolymorphicCall(call, callee, polymorphic.Substitution) is (true, var result)) {
+                    return result;
                 }
 
                 (name, type) = instance;
@@ -8439,7 +8574,10 @@ public sealed partial class SilGen {
                 return Reexistential(conversion, layout);
             }
 
-            if (Sub(conversion.Operand.Type) is not NamedTypeSymbol concrete) {
+            // A value of any type goes into an existential with no
+            // requirements; one with some needs a type with witnesses.
+            var concrete = Sub(conversion.Operand.Type);
+            if (concrete is not NamedTypeSymbol && generator.ExistentialSlots(layout).Count > 0) {
                 return Missing(conversion, $"the conversion to '{conversion.Type.ToDisplayString()}'");
             }
 
@@ -8460,12 +8598,12 @@ public sealed partial class SilGen {
         ///     the box, and P's witnesses for the type, which capture nothing.
         ///     Takes <paramref name="held" />.
         /// </summary>
-        SilValue? Existential(StructType layout, NamedTypeSymbol concrete, SilType value, ClassType box, SilValue held, BoundNode at) {
+        SilValue? Existential(StructType layout, TypeSymbol concrete, SilType value, ClassType box, SilValue held, BoundNode at) {
             var slots = generator.ExistentialSlots(layout);
             var fields = new List<SilValue> { held };
             for (var i = 0; i < slots.Count; i++) {
                 var thick = (ThickFunctionType)layout.Fields[i + 1].Type;
-                if (generator.WitnessThunk(concrete, value, box, slots[i].Slot, slots[i].Member, thick, at.Syntax) is not { } thunk) {
+                if (generator.WitnessThunk((NamedTypeSymbol)concrete, value, box, slots[i].Slot, slots[i].Member, thick, at.Syntax) is not { } thunk) {
                     Emit(new DestroyValueInst(held));
                     _failed = true;
                     return null;

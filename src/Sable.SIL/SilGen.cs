@@ -2770,7 +2770,7 @@ public sealed partial class SilGen {
                             Statement(deferred);
                             break;
 
-                        case AllocStackInst slot:
+                        case AllocStackInst slot when !slot.ElementType.IsTrivial || _referred.Contains(slot):
                             Emit(new DestroyAddrInst(slot));
                             break;
 
@@ -2814,15 +2814,37 @@ public sealed partial class SilGen {
             return true;
         }
 
-        /// <summary>Gives a local's slot to the innermost scope, to be destroyed as it closes.</summary>
+        /// <summary>
+        ///     Gives a local's slot to the innermost scope, to be destroyed as it
+        ///     closes. A trivial one has nothing to destroy, but a reference
+        ///     taken to it must still not outlive the scope: its end is marked
+        ///     for root checking (docs/02 §2.4) when a reference was taken.
+        /// </summary>
         void EndsWithScope(AllocStackInst slot) {
-            if (slot.ElementType.IsTrivial || _scopes.Count == 0 || _scopes.Any(s => s.Contains(slot))) {
+            if (_scopes.Count == 0 || _scopes.Any(s => s.Contains(slot))) {
                 return;
             }
 
             _scopes[^1].Add(slot);
-            _scoped.Add(slot);
+            if (!slot.ElementType.IsTrivial) {
+                _scoped.Add(slot);
+            }
         }
+
+        /// <summary>
+        ///     Trivial slots a reference has been taken to, so far: those whose
+        ///     scope's end is written down as a <c>destroy_addr</c>. The rest
+        ///     need none, and stay promotable to SSA values.
+        /// </summary>
+        readonly HashSet<AllocStackInst> _referred = [];
+
+        static AllocStackInst? SlotUnder(SilValue address) =>
+            address switch {
+                AllocStackInst slot => slot,
+                StructElementAddrInst element => SlotUnder(element.Address),
+                TupleElementAddrInst element => SlotUnder(element.Address),
+                _ => null,
+            };
 
         /// <summary>
         ///     Slots a scope destroys: on every way out of it they are destroyed
@@ -4470,6 +4492,10 @@ public sealed partial class SilGen {
             }
 
             if (Place(expression) is { } place) {
+                if (SlotUnder(place) is { ElementType.IsTrivial: true } referred) {
+                    _referred.Add(referred);
+                }
+
                 return place;
             }
 

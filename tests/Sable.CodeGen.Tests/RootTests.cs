@@ -130,6 +130,64 @@ public sealed class RootTests {
             "this reference refers to local 'inner', which is gone — its scope ended at line"
         );
 
+    // A trivial local has nothing to destroy where its scope ends, but its
+    // scope ends all the same (#128); and the use is reported once.
+    [Theory]
+    [InlineData("Int", "1", "9", "r")]
+    [InlineData("Node", "Node(v: 1)", "Node(v: 9)", "r.v")]
+    public void AReferenceCannotOutliveTheScopeOfATrivialRoot(string type, string outer, string inner, string read) {
+        var result = Pipeline.Compile(new SourceText(Program(
+            "struct Node { var v: Int }",
+            $$"""
+                var outer: {{type}} = {{outer}}
+                var r = &outer
+                if {{read}} > 0 {
+                    var inner: {{type}} = {{inner}}
+                    r = &inner
+                }
+                print({{read}})
+            """), "test.sb"));
+        Assert.False(result.Succeeded, "expected the program to be rejected");
+        var error = Assert.Single(result.Errors);
+        Assert.Contains("this reference refers to local 'inner', which is gone — its scope ended at line", error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ACopyOfATrivialLocalOutlivesItsScope() =>
+        Assert.Equal(
+            "9\n",
+            AssertAgree(Program(
+                "struct Node { var v: Int }",
+                """
+                    var outer = Node(v: 1)
+                    if outer.v == 1 {
+                        var inner = Node(v: 9)
+                        inner.v = inner.v + 0
+                        outer = inner
+                    }
+                    print(outer.v)
+                """
+            )).Stdout
+        );
+
+    [Fact]
+    public void AReferenceToATrivialLocalWithinItsScopeIsFine() =>
+        Assert.Equal(
+            "2\n",
+            AssertAgree(Program(
+                "struct Node { var v: Int }",
+                """
+                    var total = 0
+                    for i in 0..<2 {
+                        var n = Node(v: i)
+                        let r = &n
+                        total = total + r.v
+                    }
+                    print(total + 1)
+                """
+            )).Stdout
+        );
+
     [Fact]
     public void AReferenceCannotOutliveAMoveOutOfItsRoot() =>
         Rejects(

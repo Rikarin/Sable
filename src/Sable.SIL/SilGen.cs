@@ -3262,6 +3262,11 @@ public sealed partial class SilGen {
 
         /// <summary>The end of a borrow: a temporary is taken off the temporaries and destroyed, a load_borrow ended.</summary>
         void End(SilValue value) {
+            if (value is WriteBack writeBack) {
+                writeBack.Run();
+                return;
+            }
+
             if (value is AccessMarker marker) {
                 if (marker.Begun) {
                     Emit(new BuiltinInst("access_end", SilType.Unit, marker.Address));
@@ -5309,9 +5314,7 @@ public sealed partial class SilGen {
                     return Missing(assignment, $"storing to the property '{property.Field.Name}'");
                 }
 
-                var receiver = property.Receiver
-                    ?? (setter.IsStatic ? null : new BoundSelfAccess(assignment.Syntax, Owner(setter) is { } owner ? SelfOf(owner) : property.Field.Type));
-                var stored = Expression(new BoundCall(assignment.Syntax, receiver, setter, [assignment.Value]));
+                var stored = Expression(SetterCall(property, setter, assignment.Value, assignment.Syntax));
                 return stored is null ? null : UnitValue.Instance;
             }
 
@@ -5703,6 +5706,46 @@ public sealed partial class SilGen {
         }
 
         /// <summary>
+        ///     A property with accessors has no address to change part of it
+        ///     at. Its value is read, by the getter, into a slot of its own,
+        ///     which is changed instead; once the change is done — when the
+        ///     caller ends <paramref name="borrows" /> — the slot's value is
+        ///     handed to the setter, so 'willSet' and 'didSet' run once, for
+        ///     the whole change.
+        /// </summary>
+        SilValue? ReadForWriteBack(BoundFieldAccess property, FunctionSymbol setter, List<SilValue> borrows) {
+            if (Expression(property) is not { } current) {
+                return null;
+            }
+
+            var slot = NewSlot(current.Type, $"${property.Field.Name}");
+            Emit(new StoreInst(Owned(current), slot, StoreKind.Init));
+            var temporary = new LocalSymbol($"${property.Field.Name}", Core.Module, null, true);
+            _slots[temporary] = slot;
+
+            var taken = new BoundUnaryOperator(property.Syntax, property.Type, UnaryOperatorKind.Move, new BoundLocalAccess(property.Syntax, temporary, property.Type));
+            var setterCall = SetterCall(property, setter, taken, property.Syntax);
+            borrows.Add(new WriteBack(() => Expression(setterCall)));
+            return slot;
+        }
+
+        /// <summary>A call to a property's setter, on its receiver — <c>self</c> when it is written bare.</summary>
+        BoundCall SetterCall(BoundFieldAccess property, FunctionSymbol setter, BoundExpression value, SyntaxNode syntax) {
+            var receiver = property.Receiver
+                ?? (setter.IsStatic ? null : new BoundSelfAccess(syntax, Owner(setter) is { } owner ? SelfOf(owner) : property.Field.Type));
+            return new BoundCall(syntax, receiver, setter, [value]);
+        }
+
+        /// <summary>
+        ///     Among an address's borrows: the setter call that writes a
+        ///     property's changed value back, made when the borrows end.
+        /// </summary>
+        sealed class WriteBack(Action run) : SilValue {
+            public void Run() => run();
+            public override SilType Type => SilType.Unit;
+        }
+
+        /// <summary>
         ///     Where an assignment stores: a local, <c>self</c>, or a field or
         ///     element inside one, or a field of an object. An object reached
         ///     on the way is borrowed until the caller ends <paramref name="borrows" />.
@@ -5749,6 +5792,13 @@ public sealed partial class SilGen {
                         ? Missing(target, $"storing to '{field.Name}'")
                         : Emit(new StructElementAddrInst(address, index));
                 }
+
+                // Part of a computed or observed property: 'h.c.n = 7',
+                // 'h.c.bump()', '&h.c'.
+                case BoundFieldAccess { Field: { IsComputed: true, IsStatic: false } property } computed
+                    when (computed.Receiver is null || Sub(computed.Receiver.Type) is not ExistentialTypeSymbol)
+                         && generator.SetterOf(property) is { } setter:
+                    return ReadForWriteBack(computed, setter, borrows);
 
                 case BoundTupleElementAccess element:
                     return Address(element.Receiver, borrows) is { } tuple
@@ -7717,6 +7767,11 @@ public sealed partial class SilGen {
                 switch (borrow) {
                     case AccessMarker marker:
                         Emit(new BuiltinInst("access_end", SilType.Unit, marker.Address));
+                        break;
+                    // A property changed in place is set again whichever way
+                    // the call leaves.
+                    case WriteBack writeBack:
+                        writeBack.Run();
                         break;
                     case LoadBorrowInst borrowed:
                         Emit(new EndBorrowInst(borrowed));

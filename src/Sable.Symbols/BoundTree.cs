@@ -884,6 +884,10 @@ public sealed class BoundRangePattern(
     : BoundPattern(syntax, inputType) {
     public BoundPattern? Lower { get; } = lower;
     public BoundPattern? Upper { get; } = upper;
+
+    /// <summary>True for <c>..&lt;</c>, which leaves its upper bound out.</summary>
+    public bool IsHalfOpen => Syntax is RangePatternSyntax { OperatorToken.Kind: SyntaxKind.DotDotLessToken };
+
     public override IEnumerable<BoundNode> Children => Nodes(Lower, Upper);
 }
 

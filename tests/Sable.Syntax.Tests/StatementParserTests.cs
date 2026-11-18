@@ -239,6 +239,7 @@ public sealed class StatementParserTests {
     [InlineData("let v", "(BindingPattern let v)")]
     [InlineData("1...9", "(RangePattern (LiteralPattern 1) ... (LiteralPattern 9))")]
     [InlineData("..<10", "(RangePattern ..< (LiteralPattern 10))")]
+    [InlineData("5...", "(RangePattern (LiteralPattern 5) ...)")]
     [InlineData("is Drawable", "(TypeTestPattern is (SimpleNameType Drawable))")]
     [InlineData(
         "let s as String",
@@ -281,6 +282,12 @@ public sealed class StatementParserTests {
         + "(PatternArgumentList (SubPattern (BindingPattern let v)))))))"
     )]
     public void ParsesPatternForms(string pattern, string expected) => Assert.Equal(expected, ParsePattern(pattern));
+
+    [Fact]
+    public void AHalfOpenRangeNeedsAnUpperBound() {
+        var tree = SyntaxTree.ParseStatement("match n { case 5..< => true }");
+        Assert.Contains(tree.Diagnostics, static d => d.Code == ErrorCode.ERR_ExpectedPattern);
+    }
 
     [Fact]
     public void ParsesOrPatterns() =>

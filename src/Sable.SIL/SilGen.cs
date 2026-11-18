@@ -3561,18 +3561,31 @@ public sealed partial class SilGen {
                     return;
                 }
 
-                case BoundRangePattern { Lower: BoundLiteralPattern lower, Upper: BoundLiteralPattern upper } range: {
-                    if (LiteralValue(lower.Value, lower.IsNegative, value.Type, range.Syntax) is not { } low
-                        || LiteralValue(upper.Value, upper.IsNegative, value.Type, range.Syntax) is not { } high) {
+                // '1...9', '0..<10', '...0', '5...': a bound left out is no
+                // test at all, and '..<' leaves its upper bound out.
+                case BoundRangePattern { Lower: null or BoundLiteralPattern, Upper: null or BoundLiteralPattern } range: {
+                    if (range.Lower is BoundLiteralPattern lower) {
+                        if (LiteralValue(lower.Value, lower.IsNegative, value.Type, range.Syntax) is not { } low) {
+                            return;
+                        }
+
+                        var aboveLow = function.AddBlock();
+                        var atLeast = Emit(new BuiltinInst($"cmp_ge_{value.Type}", SilType.Bool, value, low));
+                        Jump(new CondBranchInst(atLeast, aboveLow, [], failed, []));
+                        _current = aboveLow;
+                    }
+
+                    if (range.Upper is BoundLiteralPattern upper) {
+                        if (LiteralValue(upper.Value, upper.IsNegative, value.Type, range.Syntax) is not { } high) {
+                            return;
+                        }
+
+                        var below = Emit(new BuiltinInst($"{(range.IsHalfOpen ? "cmp_lt" : "cmp_le")}_{value.Type}", SilType.Bool, value, high));
+                        Jump(new CondBranchInst(below, matched, [], failed, []));
                         return;
                     }
 
-                    var aboveLow = function.AddBlock();
-                    var atLeast = Emit(new BuiltinInst($"cmp_ge_{value.Type}", SilType.Bool, value, low));
-                    Jump(new CondBranchInst(atLeast, aboveLow, [], failed, []));
-                    _current = aboveLow;
-                    var atMost = Emit(new BuiltinInst($"cmp_le_{value.Type}", SilType.Bool, value, high));
-                    Jump(new CondBranchInst(atMost, matched, [], failed, []));
+                    Branch(matched);
                     return;
                 }
 

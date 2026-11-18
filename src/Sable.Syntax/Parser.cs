@@ -2176,6 +2176,17 @@ internal sealed class Parser {
 
         var op = EatToken();
         var right = CanStartPattern(Current.Kind) ? ParsePrimaryPattern() : null;
+
+        // '5...' runs to the end of the type; '5..<' would leave out a bound
+        // it never names.
+        if (right is null && op.Kind == SyntaxKind.DotDotLessToken) {
+            _diagnostics.Error(
+                ErrorCode.ERR_ExpectedPattern,
+                CurrentSpan,
+                "a half-open range needs an upper bound: write '5...' for one that runs to the end"
+            );
+        }
+
         return new RangePatternGreen(pattern, op, right);
     }
 

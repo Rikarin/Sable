@@ -737,6 +737,34 @@ internal sealed class SelfTypeGreen : GreenNode
         new SelfTypeSyntax(this, parent, position);
 }
 
+/// <summary>Green node for <see cref="SuppressedTypeSyntax"/>.</summary>
+internal sealed class SuppressedTypeGreen : GreenNode
+{
+    private readonly GreenToken? _tildeToken;
+    private readonly GreenNode? _type;
+
+    public SuppressedTypeGreen(GreenToken? tildeToken, GreenNode? type)
+        : base(SyntaxKind.SuppressedType, 0)
+    {
+        _tildeToken = tildeToken;
+        _type = type;
+        FullWidth = (tildeToken?.FullWidth ?? 0)
+                    + (type?.FullWidth ?? 0);
+    }
+
+    public override int SlotCount => 2;
+
+    public override GreenNode? GetSlot(int index) => index switch
+    {
+        0 => _tildeToken,
+        1 => _type,
+        _ => null,
+    };
+
+    public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
+        new SuppressedTypeSyntax(this, parent, position);
+}
+
 /// <summary>Green node for <see cref="ParenthesizedTypeSyntax"/>.</summary>
 internal sealed class ParenthesizedTypeGreen : GreenNode
 {
@@ -4231,6 +4259,30 @@ internal sealed class WhereConstraintGreen : GreenNode
 
     public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
         new WhereConstraintSyntax(this, parent, position);
+}
+
+/// <summary>Green node for <see cref="WherePredicateSyntax"/>.</summary>
+internal sealed class WherePredicateGreen : GreenNode
+{
+    private readonly GreenNode? _expression;
+
+    public WherePredicateGreen(GreenNode? expression)
+        : base(SyntaxKind.WherePredicate, 0)
+    {
+        _expression = expression;
+        FullWidth = (expression?.FullWidth ?? 0);
+    }
+
+    public override int SlotCount => 1;
+
+    public override GreenNode? GetSlot(int index) => index switch
+    {
+        0 => _expression,
+        _ => null,
+    };
+
+    public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
+        new WherePredicateSyntax(this, parent, position);
 }
 
 /// <summary>Green node for <see cref="BaseTypeListSyntax"/>.</summary>

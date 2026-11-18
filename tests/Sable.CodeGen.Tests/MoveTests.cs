@@ -64,6 +64,58 @@ public sealed class MoveTests {
         );
 
     [Fact]
+    public void ANoncopyableGenericHoldsAResource() =>
+        Assert.Equal(
+            "opened 1\n1\nopened 2\nreceived\nclosed 2\nend\nclosed 1\n",
+            AssertAgree(
+                Program(
+                    Handle + """
+
+                             struct Box<T: ~Copyable> {
+                                 var value: T
+                             }
+
+                             fn receive<T>(consuming _ box: Box<T>) where T: ~Copyable {
+                                 print("received")
+                             }
+                             """,
+                    """
+                        let box = Box<Handle> { value: acquire(1) }
+                        print(box.value.id)
+                        let other = Box<Handle> { value: acquire(2) }
+                        receive(other)
+                        print("end")
+                    """
+                )
+            ).Stdout
+        );
+
+    [Fact]
+    public void AStructHoldingAResourceIsMovedAndClosedOnce() =>
+        Assert.Equal(
+            "opened 1\nreceived\nclosed 1\nend\n",
+            AssertAgree(
+                Program(
+                    Handle + """
+
+                             struct Holder {
+                                 var handle: Handle
+                             }
+
+                             fn receive(consuming _ holder: Holder) {
+                                 print("received")
+                             }
+                             """,
+                    """
+                        let holder = Holder { handle: acquire(1) }
+                        receive(holder)
+                        print("end")
+                    """
+                )
+            ).Stdout
+        );
+
+    [Fact]
     public void ExplicitMoveOfACopyableValue() =>
         Assert.Equal(
             "moved text\n",

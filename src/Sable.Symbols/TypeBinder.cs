@@ -357,8 +357,79 @@ internal sealed class TypeBinder(Compilation compilation) {
                 continue;
             }
 
-            parameter.Constraints = [BindType(syntax.Constraint, context, scope)];
+            parameter.Constraints = BindConstraint(parameter, syntax.Constraint, context, scope);
         }
+    }
+
+    static bool ContainsSuppression(TypeSyntax type) =>
+        type switch {
+            SuppressedTypeSyntax => true,
+            CompositionTypeSyntax composition => ContainsSuppression(composition.Left) || ContainsSuppression(composition.Right),
+            _ => false,
+        };
+
+    /// <summary>
+    ///     Binds what a parameter is constrained to, taking out the
+    ///     <c>~Copyable</c> that is not a constraint but the lifting of one.
+    /// </summary>
+    /// <remarks>
+    ///     Every generic parameter is implicitly <c>Copyable</c> (docs/03 §3.4),
+    ///     so <c>T: ~Copyable</c> adds nothing to the list: it records that a
+    ///     move-only type may stand for <c>T</c>. In <c>T: P &amp; ~Copyable</c>
+    ///     the rest of the composition is constrained to as usual.
+    /// </remarks>
+    ImmutableArray<TypeSymbol> BindConstraint(TypeParameterSymbol? parameter, TypeSyntax syntax, Symbol context, FileScope? scope) {
+        if (!ContainsSuppression(syntax)) {
+            return [BindType(syntax, context, scope)];
+        }
+
+        var constraints = ImmutableArray.CreateBuilder<TypeSymbol>();
+        Collect(syntax);
+        return constraints.ToImmutable();
+
+        void Collect(TypeSyntax part) {
+            switch (part) {
+                case CompositionTypeSyntax composition:
+                    Collect(composition.Left);
+                    Collect(composition.Right);
+                    return;
+
+                case SuppressedTypeSyntax suppressed:
+                    if (!IsCopyable(suppressed.Type)) {
+                        _diagnostics.Error(
+                            ErrorCode.ERR_CannotSuppressConstraint,
+                            suppressed.Span,
+                            $"only 'Copyable' can be opted out of, and '{suppressed.Type.ToString().Trim()}' is not it"
+                        );
+                        return;
+                    }
+
+                    if (parameter is null) {
+                        _diagnostics.Error(
+                            ErrorCode.ERR_CannotSuppressConstraint,
+                            suppressed.Span,
+                            "'~Copyable' lifts a generic parameter's implicit constraint, and this is not a generic parameter"
+                        );
+                        return;
+                    }
+
+                    parameter.AllowsNoncopyable = true;
+                    return;
+
+                default:
+                    var bound = BindType(part, context, scope);
+                    if (!bound.IsError) {
+                        constraints.Add(bound);
+                    }
+
+                    return;
+            }
+        }
+
+        // 'Copyable' is not a declared protocol but the name of the implicit
+        // constraint, so it is recognised by name.
+        static bool IsCopyable(TypeSyntax type) =>
+            type is SimpleNameTypeSyntax { TypeArgumentList: null } name && name.Identifier.Text == "Copyable";
     }
 
     /// <summary>
@@ -374,8 +445,35 @@ internal sealed class TypeBinder(Compilation compilation) {
             return;
         }
 
-        foreach (var constraint in clause.Constraints) {
+        foreach (var item in clause.Constraints) {
+            // A const-generic predicate tests a value parameter, and generic
+            // parameters are types only so far: there is nothing for 'N > 0'
+            // to be about.
+            if (item is not WhereConstraintSyntax constraint) {
+                _diagnostics.Error(
+                    ErrorCode.ERR_ConstGenericPredicate,
+                    item.Span,
+                    "a const-generic predicate needs a value generic parameter, and generic parameters are types only so far"
+                );
+                continue;
+            }
+
             var left = BindType(constraint.Left, context, scope);
+
+            // 'where T: ~Copyable' lifts the implicit constraint as
+            // 'T: ~Copyable' in the parameter list does.
+            if (constraint.OperatorToken.Kind == SyntaxKind.ColonToken && ContainsSuppression(constraint.Right)) {
+                if (!left.IsError) {
+                    var subject = left as TypeParameterSymbol;
+                    var lifted = BindConstraint(subject, constraint.Right, context, scope);
+                    if (subject is not null) {
+                        subject.Constraints = subject.Constraints.AddRange(lifted);
+                    }
+                }
+
+                continue;
+            }
+
             var right = BindType(constraint.Right, context, scope);
 
             if (left.IsError || right.IsError) {
@@ -429,6 +527,15 @@ internal sealed class TypeBinder(Compilation compilation) {
         TextSpan span
     ) {
         for (var i = 0; i < arguments.Length && i < definition.TypeParameters.Length; i++) {
+            if (!definition.TypeParameters[i].AdmitsCopyability(arguments[i])) {
+                _diagnostics.Error(
+                    ErrorCode.ERR_NoncopyableTypeArgument,
+                    span,
+                    $"'{arguments[i].ToDisplayString()}' is move-only, and '{definition.Name}' would copy its "
+                    + $"'{definition.TypeParameters[i].Name}': write '{definition.TypeParameters[i].Name}: ~Copyable' to allow it"
+                );
+            }
+
             foreach (var constraint in definition.TypeParameters[i].Constraints) {
                 if (Conversions.Satisfies(arguments[i], constraint)) {
                     continue;
@@ -565,6 +672,15 @@ internal sealed class TypeBinder(Compilation compilation) {
                     ? new ExistentialTypeSymbol(constraint)
                     : ErrorTypeSymbol.Instance;
             }
+
+            // A constraint takes '~Copyable' out before it binds, so one that
+            // reaches here is somewhere a constraint is not.
+            case SuppressedTypeSyntax suppressed:
+                return Error(
+                    ErrorCode.ERR_CannotSuppressConstraint,
+                    suppressed.Span,
+                    $"'~{suppressed.Type.ToString().Trim()}' lifts a generic parameter's implicit constraint, and is written only in one, as in 'T: ~Copyable'"
+                );
 
             case CompositionTypeSyntax composition:
                 return new CompositionTypeSymbol(

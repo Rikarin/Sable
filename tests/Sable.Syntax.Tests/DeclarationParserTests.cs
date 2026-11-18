@@ -102,7 +102,33 @@ public sealed class DeclarationParserTests {
     [Fact]
     public void ParsesSameTypeConstraint() {
         var fn = ParseMember<FunctionDeclarationSyntax>("fn f<S, T>(_ s: S) where S.Element == T { }");
-        Assert.Equal("==", fn.WhereClause!.Constraints[0].OperatorToken.Text);
+        Assert.Equal("==", Assert.IsType<WhereConstraintSyntax>(fn.WhereClause!.Constraints[0]).OperatorToken.Text);
+    }
+
+    [Fact]
+    public void ParsesConstGenericPredicates() {
+        var type = ParseMember<StructDeclarationSyntax>("struct Buf<T, N> where N > 0, T: Named, N % 2 == 0 { }");
+        var items = type.WhereClause!.Constraints;
+        Assert.Equal(3, items.Count);
+        Assert.Equal("N > 0", Assert.IsType<WherePredicateSyntax>(items[0]).Expression.ToString().Trim());
+        Assert.IsType<WhereConstraintSyntax>(items[1]);
+        Assert.Equal("N % 2 == 0", Assert.IsType<WherePredicateSyntax>(items[2]).Expression.ToString().Trim());
+
+        var fn = ParseMember<FunctionDeclarationSyntax>("fn f<N>() -> Int where N > 0 { }");
+        Assert.IsType<WherePredicateSyntax>(Assert.Single(fn.WhereClause!.Constraints));
+        Assert.NotNull(fn.Body);
+    }
+
+    [Fact]
+    public void ParsesSuppressedCopyable() {
+        var type = ParseMember<StructDeclarationSyntax>("struct Box<T: ~Copyable> { }");
+        var constraint = Assert.IsType<SuppressedTypeSyntax>(Assert.Single(type.TypeParameters!.Parameters).Constraint);
+        Assert.Equal("Copyable", constraint.Type.ToString().Trim());
+
+        var composed = ParseMember<FunctionDeclarationSyntax>("fn f<T>(_ x: T) where T: Named & ~Copyable { }");
+        var where = Assert.IsType<WhereConstraintSyntax>(Assert.Single(composed.WhereClause!.Constraints));
+        var composition = Assert.IsType<CompositionTypeSyntax>(where.Right);
+        Assert.IsType<SuppressedTypeSyntax>(composition.Right);
     }
 
     [Fact]

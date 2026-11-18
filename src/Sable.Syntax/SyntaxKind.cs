@@ -239,6 +239,7 @@ public enum SyntaxKind : ushort {
     UnionType = 1020,
     SelfType = 1021,
     ParenthesizedType = 1022,
+    SuppressedType = 1023,
 
     // ---- Expression nodes (1100-1199) -------------------------------------
     LiteralExpression = 1100,
@@ -377,5 +378,6 @@ public enum SyntaxKind : ushort {
     UnionCasePayloadList = 1434,
     UnionCaseField = 1435,
     EnumCaseDeclaration = 1436,
-    IncompleteDeclaration = 1437
+    IncompleteDeclaration = 1437,
+    WherePredicate = 1438
 }

@@ -60,6 +60,13 @@ public abstract class DeclarationSyntax : SyntaxNode
         : base(green, parent, position) { }
 }
 
+/// <summary>One item of a `where` clause.</summary>
+public abstract class WhereItemSyntax : SyntaxNode
+{
+    private protected WhereItemSyntax(GreenNode green, SyntaxNode? parent, int position)
+        : base(green, parent, position) { }
+}
+
 /// <summary>A type name, optionally with type arguments: `Int`, `List&lt;T&gt;`.</summary>
 public sealed class SimpleNameTypeSyntax : TypeSyntax
 {
@@ -532,6 +539,26 @@ public sealed class SelfTypeSyntax : TypeSyntax
     };
 
     public override void Accept(SyntaxVisitor visitor) => visitor.VisitSelfType(this);
+}
+
+/// <summary>`~Copyable`: a constraint opted out of, written only in a constraint.</summary>
+public sealed class SuppressedTypeSyntax : TypeSyntax
+{
+    private TypeSyntax? _type;
+
+    internal SuppressedTypeSyntax(GreenNode green, SyntaxNode? parent, int position)
+        : base(green, parent, position) { }
+
+    public SyntaxToken TildeToken => GetToken(0);
+    public TypeSyntax Type => GetRed(ref _type, 1);
+
+    internal override SyntaxNode? GetNodeSlot(int index) => index switch
+    {
+        1 => Type,
+        _ => null,
+    };
+
+    public override void Accept(SyntaxVisitor visitor) => visitor.VisitSuppressedType(this);
 }
 
 /// <summary>`(T)`.</summary>
@@ -2705,7 +2732,7 @@ public sealed class WhereClauseSyntax : SyntaxNode
         : base(green, parent, position) { }
 
     public SyntaxToken WhereKeyword => GetToken(0);
-    public SeparatedSyntaxList<WhereConstraintSyntax> Constraints => GetSeparatedList<WhereConstraintSyntax>(1);
+    public SeparatedSyntaxList<WhereItemSyntax> Constraints => GetSeparatedList<WhereItemSyntax>(1);
 
     internal override SyntaxNode? GetNodeSlot(int index) => index switch
     {
@@ -2716,7 +2743,7 @@ public sealed class WhereClauseSyntax : SyntaxNode
 }
 
 /// <summary>`T: P` or `S.Element == T`.</summary>
-public sealed class WhereConstraintSyntax : SyntaxNode
+public sealed class WhereConstraintSyntax : WhereItemSyntax
 {
     private TypeSyntax? _left;
     private TypeSyntax? _right;
@@ -2736,6 +2763,25 @@ public sealed class WhereConstraintSyntax : SyntaxNode
     };
 
     public override void Accept(SyntaxVisitor visitor) => visitor.VisitWhereConstraint(this);
+}
+
+/// <summary>`N &gt; 0`: a const-generic predicate.</summary>
+public sealed class WherePredicateSyntax : WhereItemSyntax
+{
+    private ExpressionSyntax? _expression;
+
+    internal WherePredicateSyntax(GreenNode green, SyntaxNode? parent, int position)
+        : base(green, parent, position) { }
+
+    public ExpressionSyntax Expression => GetRed(ref _expression, 0);
+
+    internal override SyntaxNode? GetNodeSlot(int index) => index switch
+    {
+        0 => Expression,
+        _ => null,
+    };
+
+    public override void Accept(SyntaxVisitor visitor) => visitor.VisitWherePredicate(this);
 }
 
 /// <summary>`: Base, Protocol1, Protocol2`.</summary>
@@ -3423,6 +3469,7 @@ public abstract class SyntaxVisitor
     public virtual void VisitCompositionType(CompositionTypeSyntax node) => DefaultVisit(node);
     public virtual void VisitUnionType(UnionTypeSyntax node) => DefaultVisit(node);
     public virtual void VisitSelfType(SelfTypeSyntax node) => DefaultVisit(node);
+    public virtual void VisitSuppressedType(SuppressedTypeSyntax node) => DefaultVisit(node);
     public virtual void VisitParenthesizedType(ParenthesizedTypeSyntax node) => DefaultVisit(node);
     public virtual void VisitLiteralExpression(LiteralExpressionSyntax node) => DefaultVisit(node);
     public virtual void VisitIdentifierName(IdentifierNameSyntax node) => DefaultVisit(node);
@@ -3530,6 +3577,7 @@ public abstract class SyntaxVisitor
     public virtual void VisitGenericParameter(GenericParameterSyntax node) => DefaultVisit(node);
     public virtual void VisitWhereClause(WhereClauseSyntax node) => DefaultVisit(node);
     public virtual void VisitWhereConstraint(WhereConstraintSyntax node) => DefaultVisit(node);
+    public virtual void VisitWherePredicate(WherePredicateSyntax node) => DefaultVisit(node);
     public virtual void VisitBaseTypeList(BaseTypeListSyntax node) => DefaultVisit(node);
     public virtual void VisitStructDeclaration(StructDeclarationSyntax node) => DefaultVisit(node);
     public virtual void VisitClassDeclaration(ClassDeclarationSyntax node) => DefaultVisit(node);

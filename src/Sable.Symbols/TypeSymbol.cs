@@ -256,6 +256,26 @@ public sealed class TypeParameterSymbol(
     public VarianceKind Variance { get; internal set; } = VarianceKind.None;
 
     /// <summary>
+    ///     <c>T: ~Copyable</c>: a <c>@noncopy</c> type may stand for this
+    ///     parameter. Without it the parameter is implicitly <c>Copyable</c>
+    ///     (docs/03 §3.4), and a move-only argument is an error.
+    /// </summary>
+    public bool AllowsNoncopyable { get; internal set; }
+
+    /// <summary>
+    ///     Whether <paramref name="argument" /> may stand for this parameter as
+    ///     far as copying goes: a move-only type, or a parameter that may be
+    ///     one, only where <c>~Copyable</c> was written.
+    /// </summary>
+    public bool AdmitsCopyability(TypeSymbol argument) =>
+        AllowsNoncopyable
+        || argument switch {
+            NamedTypeSymbol named => !named.OriginalDefinition.IsNoncopyable,
+            TypeParameterSymbol parameter => !parameter.AllowsNoncopyable,
+            _ => true,
+        };
+
+    /// <summary>
     ///     What an <c>associatedtype</c> falls back to when a conformer does not
     ///     name it, as in <c>associatedtype Index: Comparable = Int</c>.
     /// </summary>

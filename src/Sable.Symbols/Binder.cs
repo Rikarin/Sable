@@ -3502,6 +3502,13 @@ public sealed partial class Binder {
                 continue;
             }
 
+            if (!typeParameter.AdmitsCopyability(argument)) {
+                return Reject(
+                    $"'{typeParameter.Name}' would be '{argument.ToDisplayString()}', which is move-only, "
+                    + $"and '{typeParameter.Name}' is not '~Copyable'"
+                );
+            }
+
             foreach (var constraint in typeParameter.Constraints) {
                 if (!Conversions.Satisfies(argument, substitution.Apply(constraint), _conversions.Equivalence)) {
                     return Reject(

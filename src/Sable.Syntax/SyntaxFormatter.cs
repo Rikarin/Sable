@@ -728,9 +728,13 @@ public static class SyntaxFormatter {
                 SyntaxKind.AmpersandToken
                     or SyntaxKind.MinusToken
                     or SyntaxKind.PlusToken
-                    or SyntaxKind.BangToken
-                    or SyntaxKind.TildeToken =>
+                    or SyntaxKind.BangToken =>
                     parentKind is SyntaxKind.PrefixUnaryExpression or SyntaxKind.Argument or SyntaxKind.LiteralPattern,
+
+                // '~x' and '~Copyable'.
+                SyntaxKind.TildeToken =>
+                    parentKind is SyntaxKind.PrefixUnaryExpression or SyntaxKind.Argument or SyntaxKind.LiteralPattern
+                        or SyntaxKind.SuppressedType,
 
                 // 'f()?.x' and 'xs[0]?.y'; but 'try? f()' and 'x as? T' take a space.
                 SyntaxKind.QuestionToken => parentKind is SyntaxKind.InvocationExpression

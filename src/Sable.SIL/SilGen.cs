@@ -1120,6 +1120,11 @@ public sealed partial class SilGen {
                     structType.Fields.Add((field.Name, fieldType));
                 }
 
+                // A struct that holds a move-only value is move-only itself:
+                // copying it would copy the value, and run its deinit twice.
+                // This is how 'Box<T: ~Copyable>' holding a '@noncopy' type
+                // is moved, never copied.
+                structType.IsNoncopyable |= structType.Fields.Exists(static f => IsMoveOnly(f.Type));
                 return HoldsItself(structType) ? null : structType;
             }
 
@@ -1181,6 +1186,9 @@ public sealed partial class SilGen {
 
                     enumType.Cases.Add((unionCase.Name, payload));
                 }
+
+                // As for a struct: a union with a move-only payload is move-only.
+                enumType.IsNoncopyable |= enumType.Cases.Exists(static c => c.Payload is { } payload && IsMoveOnly(payload));
 
                 // A case that holds the union by value — 'Node(left: Tree<T>, …)'
                 // — would make it infinitely large: its payload goes in a box,
@@ -2065,6 +2073,14 @@ public sealed partial class SilGen {
     }
 
     /// <summary>True when a type contains itself by value — through no reference — and so has no size.</summary>
+    /// <summary>A value of this type cannot be copied: it is, or holds inline, a move-only one.</summary>
+    static bool IsMoveOnly(SilType type) =>
+        type switch {
+            NominalType { IsNoncopyable: true } => true,
+            TupleType tuple => tuple.Elements.Any(IsMoveOnly),
+            _ => false,
+        };
+
     static bool HoldsItself(NominalType type) {
         var seen = new HashSet<SilType>();
         bool Reaches(SilType part) {

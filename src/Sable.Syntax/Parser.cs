@@ -1520,6 +1520,12 @@ internal sealed class Parser {
             case SyntaxKind.RefKeyword:
                 return new RefTypeGreen(EatToken(), ParsePostfixType());
 
+            // '~Copyable' opts a generic parameter out of an implicit
+            // constraint. It parses wherever a type does, so that the binder,
+            // not the parser, says it means nothing outside a constraint.
+            case SyntaxKind.TildeToken:
+                return new SuppressedTypeGreen(EatToken(), ParsePostfixType());
+
             // 'region' names the region type too: 'fn f(in r: region)' (docs/02 §2.8).
             case SyntaxKind.RegionKeyword:
                 return new SimpleNameTypeGreen(EatToken(), null);
@@ -1713,6 +1719,7 @@ internal sealed class Parser {
             SyntaxKind.IdentifierToken or SyntaxKind.CapitalSelfKeyword => true,
             SyntaxKind.SomeKeyword or SyntaxKind.AnyKeyword => true,
             SyntaxKind.OpenParenToken => true,
+            SyntaxKind.TildeToken => true,
             _ => false,
         };
 
@@ -3381,7 +3388,7 @@ internal sealed class Parser {
 
         var items = ImmutableArray.CreateBuilder<GreenNode>();
         while (true) {
-            items.Add(ParseWhereConstraint());
+            items.Add(ParseWhereItem());
             var comma = TryEatToken(SyntaxKind.CommaToken);
             if (comma is null) {
                 break;
@@ -3394,6 +3401,43 @@ internal sealed class Parser {
         }
 
         return new WhereClauseGreen(whereKeyword, GreenList.Create(items.ToImmutable()));
+    }
+
+    /// <summary>
+    ///     Parses one item of a <c>where</c> clause: <c>T: P</c>,
+    ///     <c>S.Element == T</c>, or a const-generic predicate such as
+    ///     <c>N &gt; 0</c>.
+    /// </summary>
+    /// <remarks>
+    ///     The two shapes share a first token, so a speculative parse of a type
+    ///     decides: a type followed by <c>:</c> or <c>==</c> is a constraint, and
+    ///     anything else is an expression.
+    /// </remarks>
+    GreenNode ParseWhereItem() {
+        var index = _index;
+        var tokenPosition = _tokenPosition;
+        var split = _split is null ? null : new Dictionary<int, GreenToken>(_split);
+        var skipped = _skipped.ToArray();
+        var endOfFileEaten = _endOfFileEaten;
+
+        bool isConstraint;
+        using (_diagnostics.Suppress()) {
+            try {
+                WithBracesSuppressed(() => ParsePostfixType());
+                isConstraint = Current.Kind is SyntaxKind.ColonToken or SyntaxKind.EqualsEqualsToken;
+            } finally {
+                _index = index;
+                _tokenPosition = tokenPosition;
+                _split = split;
+                _skipped.Clear();
+                _skipped.AddRange(skipped);
+                _endOfFileEaten = endOfFileEaten;
+            }
+        }
+
+        return isConstraint
+            ? ParseWhereConstraint()
+            : new WherePredicateGreen(WithBracesSuppressed(ParseExpression));
     }
 
     GreenNode ParseWhereConstraint() {

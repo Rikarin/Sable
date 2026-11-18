@@ -209,7 +209,8 @@ WhereItem         = Type ":" TypeList            (* conformance / inheritance *)
                   | Type "==" Type               (* same-type constraint      *)
                   | Expression ;                 (* const generic predicate   *)
 
-TypeList          = Type { "&" Type } ;          (* composition in constraints *)
+TypeList          = ConstraintType { "&" ConstraintType } ;   (* composition in constraints *)
+ConstraintType    = [ "~" ] Type ;               (* "~Copyable" lifts the implicit constraint *)
 
 
 (* -------------------------------------------------------------------------- *)

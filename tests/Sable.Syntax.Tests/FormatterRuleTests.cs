@@ -29,6 +29,12 @@ public sealed class FormatterRuleTests {
     [InlineData("let a = xs[0]?.y")]
     public void QuestionMarksSpaceAsTheyRead(string statement) => AssertFormats(statement, statement + "\n");
 
+    [Theory]
+    [InlineData("struct Box<T: ~Copyable> { }\n")]
+    [InlineData("fn f<T>(_ x: T) where T: Named & ~Copyable { }\n")]
+    [InlineData("struct Buf<T, N> where N > 0, N % 2 == 0 { }\n")]
+    public void ConstraintsKeepTheirShape(string source) => AssertFormats(source, source);
+
     [Fact]
     public void ANegativeLiteralPatternKeepsItsSign() =>
         AssertFormats("fn f(_ n: Int) -> Int {\n    return match n {\n        case -1 => 0\n        default => n\n    }\n}\n",

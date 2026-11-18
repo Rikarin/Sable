@@ -1367,8 +1367,11 @@ public sealed partial class Compilation {
             var extension = new ExtensionSymbol(extended, declaration);
             extension.TypeParameterAliases = AliasTypeParameters(declaration, extension, extended);
             RecordDeclaration(declaration, extension);
+            TypeBinder.BindExtensionWhereClause(extension, declaration, scope);
 
-            // ': P' on an extension is retroactive conformance.
+            // ': P' on an extension is retroactive conformance. With a 'where'
+            // clause it is conditional: 'extension Box: P where T: P' makes a
+            // Box<T> a P only where T is one, which the extension remembers.
             if (declaration.BaseTypes is { } baseTypes) {
                 var written = scope;
                 TypeBinder.Defer(() => {
@@ -1376,9 +1379,12 @@ public sealed partial class Compilation {
                             var bound = TypeBinder.BindType(baseType, extension, written);
                             CheckCoherence(extended, bound, written, baseType.Span);
                             extended.BaseTypes = extended.BaseTypes.Add(bound);
+                            extension.Conformances = extension.Conformances.Add(bound);
                         }
                     }
                 );
+
+                extended.Extensions = extended.Extensions.Add(extension);
             }
 
             foreach (var member in declaration.Members) {

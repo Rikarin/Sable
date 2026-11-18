@@ -2118,10 +2118,16 @@ public sealed partial class Binder {
         // Members of the enclosing type, reached implicitly through self —
         // including the ones it inherits, which is the whole point of a base
         // class.
+        _unmetRequirement = null;
         if (EnclosingType() is { } enclosing
             && LookupMember(SelfTypeOf(enclosing), name) is { } inherited) {
             return BindMemberGroup(syntax, null, inherited.Members, inherited.Owner, inherited.Substitution);
         }
+
+        // One a constrained extension declares, where its requirements do not hold.
+        var unmetOnSelf = EnclosingType() is { } outer && _unmetRequirement is { } unmet
+            ? $"'{SelfTypeOf(outer).ToDisplayString()}' has '{name}' only where {unmet}"
+            : null;
 
         // Then the bodies the enclosing type itself was declared in.
         if (LocalTypes(name, true) is { Count: > 0 } farther) {
@@ -2156,6 +2162,11 @@ public sealed partial class Binder {
         if (_compilation.TypeBinder.Lookup(name, _containingSymbol, _scope, syntax.Span)
             is TypeParameterSymbol named) {
             return new BoundTypeExpression(syntax, named);
+        }
+
+        if (unmetOnSelf is not null) {
+            _diagnostics.Error(ErrorCode.ERR_DoesNotConform, syntax.Span, unmetOnSelf);
+            return new BoundError(syntax);
         }
 
         _diagnostics.Error(
@@ -2345,9 +2356,9 @@ public sealed partial class Binder {
             return BindTupleElementAccess(syntax, receiver, tuple, name);
         }
 
-        _unmetArrayRequirement = null;
+        _unmetRequirement = null;
         if (LookupMember(receiverType, name) is not { } found) {
-            if (_unmetArrayRequirement is { } unmet) {
+            if (_unmetRequirement is { } unmet) {
                 _diagnostics.Error(
                     ErrorCode.ERR_DoesNotConform,
                     syntax.Name.Span,
@@ -2522,10 +2533,12 @@ public sealed partial class Binder {
         };
 
     /// <summary>
-    ///     Set when an array member was not found only because the element
-    ///     does not meet its extension's constraint: what the constraint is.
+    ///     Set when a member was not found only because the type does not meet
+    ///     the requirements of the extension that declares it — an array's
+    ///     element its constraint, or a type's arguments a <c>where</c>
+    ///     clause: what the requirement is.
     /// </summary>
-    string? _unmetArrayRequirement;
+    string? _unmetRequirement;
 
     /// <summary>What a member lookup found, and what it has to be read through.</summary>
     private readonly record struct MemberLookup(
@@ -2598,7 +2611,27 @@ public sealed partial class Binder {
 
                 var members = named.GetMembers(name).ToList();
                 if (members.Count > 0) {
-                    return new MemberLookup(members, named, substitution);
+                    // A constrained extension's member is there only where its
+                    // requirements hold: Wrapper<T>'s 'doubled', from 'extension
+                    // Wrapper where T == Int', is a Wrapper<Int>'s alone.
+                    string? unmet = null;
+                    var available = new List<Symbol>(members.Count);
+                    foreach (var member in members) {
+                        if (member.ContainingSymbol is ExtensionSymbol { IsConstrained: true } extension
+                            && extension.Unmet(substitution, _conversions.Equivalence) is { } missing) {
+                            unmet ??= missing;
+                            continue;
+                        }
+
+                        available.Add(member);
+                    }
+
+                    if (available.Count > 0) {
+                        return new MemberLookup(available, named, substitution);
+                    }
+
+                    _unmetRequirement = unmet;
+                    return null;
                 }
 
                 foreach (var baseType in named.BaseTypes) {
@@ -2618,7 +2651,7 @@ public sealed partial class Binder {
                 }
 
                 if (found.Owner is null) {
-                    _unmetArrayRequirement = found.Unmet;
+                    _unmetRequirement = found.Unmet;
                     return null;
                 }
 

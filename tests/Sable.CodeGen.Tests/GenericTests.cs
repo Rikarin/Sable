@@ -123,4 +123,36 @@ public sealed class GenericTests {
                 )
             ).Stdout
         );
+
+    [Fact]
+    public void AConstrainedExtensionAndAConditionalConformance() =>
+        Assert.Equal(
+            "box of box of cat\n42\n",
+            AssertAgree(
+                Program(
+                    """
+                    protocol Describable { fn describe() -> String }
+                    struct Cat: Describable { fn describe() -> String => "cat" }
+
+                    struct Box<T> { var v: T }
+
+                    extension Box: Describable where T: Describable {
+                        fn describe() -> String => "box of " + v.describe()
+                    }
+
+                    struct Wrapper<T> { var v: T }
+
+                    extension Wrapper where T == Int {
+                        fn doubled() -> Int => v * 2
+                    }
+
+                    fn show<D: Describable>(_ d: D) -> String => d.describe()
+                    """,
+                    """
+                        print(show(Box(v: Box(v: Cat()))))
+                        print("\(Wrapper(v: 21).doubled())")
+                    """
+                )
+            ).Stdout
+        );
 }

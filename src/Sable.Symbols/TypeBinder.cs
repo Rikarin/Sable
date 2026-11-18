@@ -316,6 +316,10 @@ internal sealed class TypeBinder(Compilation compilation) {
             }
         );
 
+    /// <summary>A named type's extension's <c>where</c> clause, kept on the extension.</summary>
+    public void BindExtensionWhereClause(ExtensionSymbol extension, ExtensionDeclarationSyntax declaration, FileScope? scope) =>
+        Defer(() => BindWhereClause(declaration.WhereClause, extension, scope));
+
     static BaseTypeListSyntax? BaseTypeListOf(SyntaxNode declaration) =>
         declaration switch {
             StructDeclarationSyntax s => s.BaseTypes,
@@ -395,8 +399,21 @@ internal sealed class TypeBinder(Compilation compilation) {
                     case NamedTypeSymbol type:
                         type.SameTypeRequirements = type.SameTypeRequirements.Add(requirement);
                         break;
+
+                    case ExtensionSymbol extension:
+                        extension.SameTypeRequirements = extension.SameTypeRequirements.Add(requirement);
+                        break;
                 }
 
+                continue;
+            }
+
+            // An extension's 'where T: P' is the extension's alone: T is the
+            // type's parameter, and the type itself asks nothing of it.
+            if (context is ExtensionSymbol constrained) {
+                constrained.ConformanceRequirements = constrained.ConformanceRequirements.AddRange(
+                    CompositionTypeSymbol.PartsOf(right).Select(part => new ConformanceRequirement(left, part))
+                );
                 continue;
             }
 

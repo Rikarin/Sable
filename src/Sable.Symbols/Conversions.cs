@@ -185,7 +185,35 @@ internal sealed class Conversions(CoreTypes core) {
             return DerivedConformance.Holds(derived, protocol, context);
         }
 
+        // 'extension Box: P where T: P' conforms a Box<T> only where its T
+        // does; inside the extension, its own requirements say so.
+        if (source is NamedTypeSymbol named
+            && ConditionalConformance(named, constraint) is { } extension) {
+            return extension.Unmet(TypeSubstitution.For(named), context) is null;
+        }
+
         return IsDerivedFrom(source, constraint);
+    }
+
+    /// <summary>
+    ///     The constrained extension a type's conformance to a protocol comes
+    ///     from, directly or through a protocol that refines it; null when the
+    ///     conformance, if there is one, holds unconditionally.
+    /// </summary>
+    static ExtensionSymbol? ConditionalConformance(NamedTypeSymbol type, TypeSymbol protocol) {
+        foreach (var extension in type.OriginalDefinition.Extensions) {
+            if (!extension.IsConstrained) {
+                continue;
+            }
+
+            foreach (var conformance in extension.Conformances) {
+                if (conformance.Equals(protocol) || IsDerivedFrom(conformance, protocol)) {
+                    return extension;
+                }
+            }
+        }
+
+        return null;
     }
 
     public bool HasImplicitConversion(

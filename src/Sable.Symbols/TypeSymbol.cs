@@ -136,6 +136,13 @@ public sealed class NamedTypeSymbol : TypeSymbol {
     /// </summary>
     public ImmutableArray<NamedTypeSymbol> DerivedConformances { get; internal set; } = [];
 
+    /// <summary>
+    ///     The extensions that conform this type to a protocol. A constrained
+    ///     one's conformance holds of a construction only where its
+    ///     requirements do; see <see cref="Conversions.Satisfies" />.
+    /// </summary>
+    public ImmutableArray<ExtensionSymbol> Extensions { get; internal set; } = [];
+
     /// <summary>Inheritance control, per spec/SYNTAX.md §2.</summary>
     public bool IsOpen { get; internal set; }
 

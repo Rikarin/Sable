@@ -1005,6 +1005,13 @@ public sealed class SilFunction(string name, FunctionType type) {
 
     public int Line { get; set; }
 
+    /// <summary>
+    ///     For a thunk that only forwards to another function — an
+    ///     existential's witness — that function's name: a debugger steps
+    ///     through the thunk into it, rather than over the call.
+    /// </summary>
+    public string? TrampolineTarget { get; set; }
+
     /// <summary>The name of each parameter, <c>self</c> included, for a debugger.</summary>
     public List<string> ParameterNames { get; } = [];
 

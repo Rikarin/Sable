@@ -1999,6 +1999,7 @@ public sealed partial class SilGen {
             receiver = entry.Append(new UpcastInst(selfValue, parameterClass));
         }
 
+        thunk.TrampolineTarget = target;
         SilValue callee = implementation is not null && IsDynamic(implementation)
             ? entry.Append(new ClassMethodInst(receiver, SlotName(implementation), targetType))
             : entry.Append(new FunctionRefInst(target, targetType));

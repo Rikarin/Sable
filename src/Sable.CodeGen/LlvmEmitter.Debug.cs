@@ -117,9 +117,14 @@ public sealed partial class LlvmEmitter {
             var artificial = function.SourceFile is null;
             var file = FileOf(function);
             var line = artificial ? 0 : function.Line;
+
+            // A forwarding thunk names what it forwards to: DW_AT_trampoline,
+            // which lldb steps through ('step' into a witness lands in the
+            // method, not back at the call).
+            var trampoline = function.TrampolineTarget is { } target ? $"targetFuncName: {Quote(target)}, " : "";
             return Node(
                 $"!DISubprogram(name: {Quote(function.Name)}, scope: {file}, file: {file}, "
-                + $"line: {line}, type: {Subroutine(function.Type)}, scopeLine: {line}, {(artificial ? "flags: DIFlagArtificial, " : "")}spFlags: DISPFlagDefinition, unit: {Unit})",
+                + $"line: {line}, type: {Subroutine(function.Type)}, scopeLine: {line}, {(artificial ? "flags: DIFlagArtificial, " : "")}spFlags: DISPFlagDefinition, unit: {Unit}, {trampoline})".Replace(", )", ")", StringComparison.Ordinal),
                 distinct: true
             );
         }

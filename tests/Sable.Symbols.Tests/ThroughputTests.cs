@@ -74,10 +74,14 @@ public sealed class ThroughputTests {
         );
 
         // The criterion is five seconds; this measures about one on a
-        // development machine, of which two thirds is the parse.
+        // development machine, of which two thirds is the parse. A shared CI
+        // runner (CI is set) measures five times that on a bad day, so it is
+        // given three times the budget: enough to stay quiet, not enough to
+        // miss a real slowdown.
+        var budget = string.IsNullOrEmpty(Environment.GetEnvironmentVariable("CI")) ? 5.0 : 15.0;
         Assert.True(
-            watch.Elapsed.TotalSeconds < 5.0,
-            $"type-checking {lines:N0} lines took {watch.Elapsed.TotalSeconds:F2} s"
+            watch.Elapsed.TotalSeconds < budget,
+            $"type-checking {lines:N0} lines took {watch.Elapsed.TotalSeconds:F2} s, over {budget} s"
         );
 
         // Printed so a run says what it measured, not just that it passed.

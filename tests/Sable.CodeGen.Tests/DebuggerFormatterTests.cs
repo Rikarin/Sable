@@ -330,6 +330,10 @@ public sealed class DebuggerFormatterTests {
         Assert.Contains("(Int) total = 4", output, StringComparison.Ordinal);
     }
 
+    /// <summary>That the session shows the text, and the whole session when it does not: a debugger's output says why.</summary>
+    static void Expect(string output, string expected) =>
+        Assert.True(output.Contains(expected, StringComparison.Ordinal), $"lldb did not show: {expected}\n--- the session ---\n{output}");
+
     [Fact]
     public async Task StepGoesThroughAnExistentialIntoTheMethod() {
         if (Lldb.Value is not { } lldb) {
@@ -339,9 +343,9 @@ public sealed class DebuggerFormatterTests {
         var output = await Run(lldb, Calls, "calls.sb", ["b calls.sb:23", "run", "step", "bt", "finish", "kill"]);
 
         // The compiler's thunk between them is in the backtrace, but is not stopped in.
-        Assert.Contains("Calls.Dog.name(self=(breed = \"collie\")) at calls.sb:10", output, StringComparison.Ordinal);
-        Assert.Contains("$witness$Calls.Dog$name", output, StringComparison.Ordinal);
-        Assert.Contains("Return value: (String) $0 = \"collie\"", output, StringComparison.Ordinal);
+        Expect(output, "Calls.Dog.name(self=(breed = \"collie\")) at calls.sb:10");
+        Expect(output, "$witness$Calls.Dog$name");
+        Expect(output, "Return value: (String) $0 = \"collie\"");
     }
 
     [Fact]

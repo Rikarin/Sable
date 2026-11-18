@@ -164,6 +164,30 @@ public sealed class LanguageServerTests : IDisposable {
     }
 
     [Fact]
+    public async Task ADeclarationProblemIsPublishedInItsFileAlone() {
+        // A declaration diagnostic carries a span but not its file. One
+        // whose span starts where a token of another file does was published
+        // in that file too, so this other file lines a token up with it.
+        const string extension = "module App\n\nextension Int {\n    init(_ n: Int) { }\n}\n";
+        var at = extension.IndexOf("init", StringComparison.Ordinal);
+        var innocent = "module App\n" + new string(' ', at - "module App\n".Length) + "fn g() -> Int { return 1 }\n";
+        Assert.Equal("fn", innocent.Substring(at, 2));
+
+        var extensionUri = Write("extension.sb", extension);
+        var innocentUri = Write("innocent.sb", innocent);
+        await using var client = new TestClient();
+        await client.InitializeAsync(_root);
+        await client.NotifyAsync("initialized", new { });
+        await client.OpenAsync(extensionUri, extension);
+        await client.OpenAsync(innocentUri, innocent);
+
+        var placed = await client.DiagnosticsAsync(extensionUri, static d => d.GetArrayLength() > 0);
+        Assert.Contains(placed.EnumerateArray(), static d => d.GetString("message")!.Contains("initialiser", StringComparison.Ordinal));
+        var elsewhere = await client.DiagnosticsAsync(innocentUri);
+        Assert.DoesNotContain(elsewhere.EnumerateArray(), static d => d.GetString("message")!.Contains("initialiser", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task AParseErrorIsPublished() {
         await using var client = new TestClient();
         await client.InitializeAsync();

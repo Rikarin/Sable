@@ -165,7 +165,9 @@ internal sealed partial class Analysis {
                 _unplaced = unplaced = now;
             }
 
-            all.AddRange(unplaced.Where(d => BelongsTo(d, tree)));
+            // Where the compilation knows the file, that is the answer; only
+            // the rest is placed by looking.
+            all.AddRange(unplaced.Where(d => Compilation.FileOf(d) is { } file ? ReferenceEquals(file, tree) : BelongsTo(d, tree)));
             IReadOnlyList<Diagnostic> result = [..all.Distinct().OrderBy(static d => d.Span.Start)];
             _diagnostics[tree] = result;
             return result;
@@ -173,7 +175,8 @@ internal sealed partial class Analysis {
     }
 
     /// <summary>
-    ///     Whether a diagnostic that came without a file is this file's.
+    ///     Whether a diagnostic that came without a file is this file's: a
+    ///     guess, for those the compilation could not place itself.
     /// </summary>
     /// <remarks>
     ///     Declaration and signature diagnostics carry a span but not the file

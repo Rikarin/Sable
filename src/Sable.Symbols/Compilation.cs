@@ -239,8 +239,9 @@ public sealed partial class Compilation {
     /// <summary>
     ///     Every diagnostic with the file it is in, where that is known: a
     ///     span is an offset into one file, and several files' offsets overlap.
-    ///     Parse and body diagnostics know their file; those from declaring
-    ///     and from lazily bound signatures do not yet, and come without one.
+    ///     Parse and body diagnostics know their file, and so do most from
+    ///     declaring (<see cref="FileOf" />); those from lazily bound
+    ///     signatures and late checks do not yet, and come without one.
     /// </summary>
     public IReadOnlyList<(Diagnostic Diagnostic, SyntaxTree? Tree)> GetAllDiagnosticsByFile() {
         var all = new List<(Diagnostic, SyntaxTree?)>();
@@ -255,13 +256,37 @@ public sealed partial class Compilation {
         }
 
         TypeBinder.ForceAll();
-        all.AddRange(_declarationDiagnostics.Select(static d => (d, (SyntaxTree?)null)));
+        all.AddRange(_declarationDiagnostics.Select(d => (d, FileOf(d))));
         all.AddRange(TypeBinder.Diagnostics.Select(static d => (d, (SyntaxTree?)null)));
         return all;
     }
 
-    internal void ReportDeclaration(ErrorCode code, TextSpan span, string message) =>
-        _declarationDiagnostics.Error(code, span, message);
+    internal void ReportDeclaration(ErrorCode code, TextSpan span, string message) {
+        var diagnostic = Diagnostic.Error(code, span, message);
+        _declarationDiagnostics.Add(diagnostic);
+
+        // The file being declared is the one the span is in. A check run
+        // later, with none being declared, leaves its diagnostic unplaced.
+        if (CurrentScope is { Tree: var tree } && span.End <= tree.Text.Length) {
+            lock (_files) {
+                _files[diagnostic] = tree;
+            }
+        }
+    }
+
+    /// <summary>The declaration diagnostics whose file is known, by the diagnostic itself rather than its value.</summary>
+    readonly Dictionary<Diagnostic, SyntaxTree> _files = new(ReferenceEqualityComparer.Instance);
+
+    /// <summary>
+    ///     The file a diagnostic of this compilation's is in, when it is
+    ///     known: a body's or a parse's always is, and a declaration's when it
+    ///     was reported while its file was being declared. Null otherwise.
+    /// </summary>
+    public SyntaxTree? FileOf(Diagnostic diagnostic) {
+        lock (_files) {
+            return _files.GetValueOrDefault(diagnostic);
+        }
+    }
 
     // -----------------------------------------------------------------------
     // Declaration gathering

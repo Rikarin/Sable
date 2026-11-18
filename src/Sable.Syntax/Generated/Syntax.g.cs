@@ -707,6 +707,25 @@ public sealed class InvocationExpressionSyntax : ExpressionSyntax
     public override void Accept(SyntaxVisitor visitor) => visitor.VisitInvocationExpression(this);
 }
 
+/// <summary>`if c { a } else { b }` where a value is wanted: each branch's last line is its value.</summary>
+public sealed class IfExpressionSyntax : ExpressionSyntax
+{
+    private IfStatementSyntax? _statement;
+
+    internal IfExpressionSyntax(GreenNode green, SyntaxNode? parent, int position)
+        : base(green, parent, position) { }
+
+    public IfStatementSyntax Statement => GetRed(ref _statement, 0);
+
+    internal override SyntaxNode? GetNodeSlot(int index) => index switch
+    {
+        0 => Statement,
+        _ => null,
+    };
+
+    public override void Accept(SyntaxVisitor visitor) => visitor.VisitIfExpression(this);
+}
+
 /// <summary>`onFail: { ... }`: a trailing closure after the first, labelled for its parameter.</summary>
 public sealed class LabeledClosureSyntax : SyntaxNode
 {
@@ -3474,6 +3493,7 @@ public abstract class SyntaxVisitor
     public virtual void VisitMemberAccessExpression(MemberAccessExpressionSyntax node) => DefaultVisit(node);
     public virtual void VisitImplicitMemberAccessExpression(ImplicitMemberAccessExpressionSyntax node) => DefaultVisit(node);
     public virtual void VisitInvocationExpression(InvocationExpressionSyntax node) => DefaultVisit(node);
+    public virtual void VisitIfExpression(IfExpressionSyntax node) => DefaultVisit(node);
     public virtual void VisitLabeledClosure(LabeledClosureSyntax node) => DefaultVisit(node);
     public virtual void VisitArgumentList(ArgumentListSyntax node) => DefaultVisit(node);
     public virtual void VisitArgument(ArgumentSyntax node) => DefaultVisit(node);

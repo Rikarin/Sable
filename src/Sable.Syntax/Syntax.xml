@@ -248,6 +248,11 @@
     <Field Name="LabeledClosures" Type="List:LabeledClosureSyntax" />
   </Node>
 
+  <Node Name="IfExpressionSyntax" Base="ExpressionSyntax" Kind="IfExpression"
+        Doc="`if c { a } else { b }` where a value is wanted: each branch's last line is its value.">
+    <Field Name="Statement" Type="IfStatementSyntax" />
+  </Node>
+
   <Node Name="LabeledClosureSyntax" Base="SyntaxNode" Kind="LabeledClosure"
         Doc="`onFail: { ... }`: a trailing closure after the first, labelled for its parameter.">
     <Field Name="NameToken" Type="Token" />

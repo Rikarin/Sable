@@ -52,4 +52,54 @@ public sealed class ExpressionFormTests {
                 print(n)
             """
         );
+
+    [Fact]
+    public void AnIfGivesTheValueOfTheBranchItTakes() =>
+        Prints(
+            "A\nB+\nC\nann!\nnobody\nleaving\n1\n2\n8\n-1\n10\n",
+            """
+            fn grade(_ n: Int) -> String {
+                return if n >= 90 {
+                    "A"
+                } else if n >= 80 {
+                    let letter = "B"
+                    letter + "+"
+                } else {
+                    "C"
+                }
+            }
+
+            fn name(_ o: String?) -> String {
+                let s = if let v = o { v + "!" } else { "nobody" }
+                return s
+            }
+
+            fn noisy(_ flag: Bool) -> Int {
+                let n = if flag {
+                    defer { print("leaving") }
+                    1
+                } else {
+                    2
+                }
+                return n
+            }
+
+            fn checked(_ n: Int) -> Int {
+                let m = if n > 0 { n } else { return -1 }
+                return m * 2
+            }
+            """,
+            """
+                print(grade(95))
+                print(grade(85))
+                print(grade(10))
+                print(name("ann"))
+                print(name(none))
+                print(noisy(true))
+                print(noisy(false))
+                print(checked(4))
+                print(checked(-4))
+                print(if 1 < 2 { 10 } else { 20 })
+            """
+        );
 }

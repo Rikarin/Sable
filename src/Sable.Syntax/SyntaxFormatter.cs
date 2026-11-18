@@ -504,7 +504,9 @@ public static class SyntaxFormatter {
 
         static bool StartsOnItsOwnLine(SyntaxNode node, SyntaxKind parentKind) =>
             // 'else if' is one line: the 'if' continues the 'else'.
-            (node is StatementSyntax && node.Kind != SyntaxKind.Block && parentKind is not (SyntaxKind.ElseClause or SyntaxKind.LabeledStatement))
+            // An 'if' that gives a value stays where the value goes: 'let s = if c {'.
+            (node is StatementSyntax && node.Kind != SyntaxKind.Block
+                                     && parentKind is not (SyntaxKind.ElseClause or SyntaxKind.LabeledStatement or SyntaxKind.IfExpression))
             || IsMember(node)
             || (node.Kind == SyntaxKind.Accessor && !IsPropertyArrow(node))
             || node.Kind is SyntaxKind.ImportDeclaration
@@ -572,7 +574,7 @@ public static class SyntaxFormatter {
         ///     blocks — 'if', 'for', 'while' — always take their own lines.
         /// </summary>
         static bool IsOneLineBody(BlockSyntax block) =>
-            block.Parent is FunctionDeclarationSyntax
+            (block.Parent is FunctionDeclarationSyntax
                 or InitDeclarationSyntax
                 or DeinitDeclarationSyntax
                 or OperatorDeclarationSyntax
@@ -580,10 +582,22 @@ public static class SyntaxFormatter {
                 or ExpressionSyntax
                 or MatchArmSyntax
                 or GuardStatementSyntax
+             || IsIfValueBranch(block))
             && block.Statements.Count == 1
             && block.Statements[0] is not DeclarationStatementSyntax
             && !block.Statements[0].DescendantNodes().Any(static n => n is BlockSyntax or BraceClosureExpressionSyntax or MatchExpressionSyntax)
             && WrittenOnOneLine(block);
+
+        /// <summary>A branch of an 'if' that gives a value, which reads as a conditional does: 'if c { a } else { b }'.</summary>
+        static bool IsIfValueBranch(BlockSyntax block) {
+            for (var node = block.Parent; node is IfStatementSyntax or ElseClauseSyntax; node = node.Parent) {
+                if (node.Parent is IfExpressionSyntax) {
+                    return true;
+                }
+            }
+
+            return false;
+        }
 
         /// <summary>No line break or comment anywhere inside the node, up to its last token.</summary>
         static bool WrittenOnOneLine(SyntaxNode node) {

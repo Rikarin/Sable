@@ -734,6 +734,10 @@ if let user = findUser(id) { use(user) }            // optional binding
 if let a = p, let b = q, a.id == b.id { }           // multiple + condition
 if case .Circle(let r) = shape { }                  // pattern condition
 
+// Where a value is wanted, an 'if' with an 'else' gives one: each
+// branch's last line, all of one type
+let size = if n > 3 { "big" } else { "small" }
+
 guard let user = findUser(id) else { return .notFound }
 guard x > 0 else { throw .invalid("x must be positive") }
 

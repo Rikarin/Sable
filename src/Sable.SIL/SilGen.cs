@@ -4201,6 +4201,9 @@ public sealed partial class SilGen {
                 case BoundMatch match:
                     return Match(match);
 
+                case BoundIfExpression ifExpression:
+                    return IfValue(ifExpression);
+
                 case BoundTry tryExpression:
                     return Try(tryExpression);
 
@@ -5687,6 +5690,85 @@ public sealed partial class SilGen {
             Jump(new UnreachableInst());
             _current = after;
             return result ?? (SilValue)UnitValue.Instance;
+        }
+
+        /// <summary>
+        ///     <c>if c { a } else { b }</c> as a value: the condition branches, as
+        ///     for the statement, and each branch's last line goes to the join
+        ///     as its value, after the branch's defers have run.
+        /// </summary>
+        SilValue? IfValue(BoundIfExpression ifExpression) {
+            if (LowerType(ifExpression.Type) is not { } resultType) {
+                return Missing(ifExpression, $"an 'if' of type '{ifExpression.Type.ToDisplayString()}'");
+            }
+
+            var producesValue = resultType != SilType.Unit && !ifExpression.Type.Equals(Core.Never);
+            var after = function.AddBlock();
+            var result = producesValue ? after.AddArgument(resultType) : null;
+
+            Branches(ifExpression.Body);
+            _current = after;
+            return result ?? (SilValue)UnitValue.Instance;
+
+            void Branches(BoundIf branch) {
+                var consequence = function.AddBlock();
+                var alternative = function.AddBlock();
+                Condition(branch.Condition, consequence, alternative);
+
+                _current = consequence;
+                Arm(branch.Consequence);
+
+                _current = alternative;
+                if (branch.Alternative is BoundIf elseIf) {
+                    Branches(elseIf);
+                } else if (branch.Alternative is { } otherwise) {
+                    Arm(otherwise);
+                }
+            }
+
+            void Arm(BoundStatement body) {
+                if (_current is null || body is not BoundBlock block) {
+                    return;
+                }
+
+                _scopes.Add([]);
+                foreach (var statement in block.Statements) {
+                    if (_current is null) {
+                        break;
+                    }
+
+                    if (statement != block.Statements[^1] || statement is not BoundExpressionStatement last) {
+                        Statement(statement);
+                        continue;
+                    }
+
+                    var value = Expression(last.Expression);
+                    if (_current is null || value is null) {
+                        break;
+                    }
+
+                    RunDefers(_scopes.Count - 1);
+                    if (producesValue && value is not UnitValue && value.Type == resultType) {
+                        Branch(after, value);
+                    } else {
+                        Destroy(value);
+                        if (producesValue) {
+                            Jump(new UnreachableInst());
+                        } else {
+                            Branch(after);
+                        }
+                    }
+                }
+
+                // A branch that ends some other way leaves: by 'return' or
+                // 'throw', where it has run its defers already.
+                if (_current is not null) {
+                    RunDefers(_scopes.Count - 1);
+                    Jump(new UnreachableInst());
+                }
+
+                _scopes.RemoveAt(_scopes.Count - 1);
+            }
         }
 
         /// <summary>

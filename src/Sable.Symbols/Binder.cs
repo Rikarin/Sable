@@ -1353,6 +1353,115 @@ public sealed partial class Binder {
         return Record(statement, new BoundIf(statement, condition, consequence, alternative));
     }
 
+    /// <summary>
+    ///     <c>if c { a } else { b }</c> where a value is wanted: each branch's
+    ///     last line is its value, and they all have one type — the one the
+    ///     context asks for, or else the first branch's.
+    /// </summary>
+    BoundExpression BindIfExpression(IfExpressionSyntax syntax, TypeSymbol? expectedType) {
+        var type = expectedType;
+        var body = BindIfValue(syntax.Statement, ref type);
+        return new BoundIfExpression(syntax, type ?? Core.Never, body);
+    }
+
+    BoundIf BindIfValue(IfStatementSyntax statement, ref TypeSymbol? type) {
+        PushScope();
+        var condition = BindConditionList(statement.Conditions, statement);
+
+        PushNarrowing(NarrowingsWhen(condition, true));
+        var consequence = BindValueBlock(statement.Body, ref type);
+        PopNarrowing();
+
+        PopScope();
+
+        BoundStatement alternative;
+        PushNarrowing(NarrowingsWhen(condition, false));
+        switch (statement.ElseClause?.Body) {
+            case IfStatementSyntax elseIf:
+                alternative = BindIfValue(elseIf, ref type);
+                break;
+
+            case BlockSyntax block:
+                alternative = BindValueBlock(block, ref type);
+                break;
+
+            default:
+                // Without an 'else' there is no value when the condition fails.
+                _diagnostics.Error(
+                    ErrorCode.ERR_IfValueNeedsElse,
+                    statement.IfKeyword.Span,
+                    "an 'if' that gives a value needs an 'else', for when its condition is false"
+                );
+                alternative = new BoundBlock(statement, [], []);
+                break;
+        }
+
+        PopNarrowing();
+        return Record(statement, new BoundIf(statement, condition, consequence, alternative));
+    }
+
+    /// <summary>
+    ///     A branch of an <c>if</c> that gives a value: its statements, the last
+    ///     of which is the value, converted to <paramref name="type" /> — or, if
+    ///     no type is known yet, setting it.
+    /// </summary>
+    BoundBlock BindValueBlock(BlockSyntax block, ref TypeSymbol? type) {
+        PushScope();
+
+        var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+        var gapStart = block.OpenBraceToken.Span.End;
+        for (var i = 0; i < block.Statements.Count; i++) {
+            var statement = block.Statements[i];
+            CaptureScopeInGap(block, gapStart, statement.Span.Start);
+            gapStart = statement.Span.End;
+
+            if (i < block.Statements.Count - 1 || statement is not ExpressionStatementSyntax last) {
+                statements.Add(BindStatement(statement));
+                continue;
+            }
+
+            // A branch that never comes back, 'fatal("…")', gives no type.
+            var value = BindExpression(last.Expression, type);
+            if (value.Type.Equals(Core.Never)) {
+                statements.Add(Record(last, new BoundExpressionStatement(last, value)));
+                continue;
+            }
+
+            if (type is null) {
+                type = value.Type;
+            } else if (!value.Type.Equals(type) && !value.HasError && !type.IsError) {
+                if (_conversions.HasImplicitConversion(value.Type, type, IsLiteral(value))) {
+                    value = Convert(value, type, last.Expression);
+                } else {
+                    _diagnostics.Error(
+                        ErrorCode.ERR_BranchTypesDiffer,
+                        last.Expression.Span,
+                        $"this branch gives '{value.Type.ToDisplayString()}' but the one before gave '{type.ToDisplayString()}'"
+                    );
+                    type = ErrorTypeSymbol.Instance;
+                }
+            }
+
+            statements.Add(Record(last, new BoundExpressionStatement(last, value)));
+        }
+
+        CaptureScopeInGap(block, gapStart, block.CloseBraceToken.IsMissing ? block.Span.End : block.CloseBraceToken.Span.Start);
+
+        var locals = _locals[^1].Values.OfType<LocalSymbol>().ToImmutableArray();
+        PopScope();
+
+        var bound = Record(block, new BoundBlock(block, locals, statements.ToImmutable()));
+        if (statements is not [.., BoundExpressionStatement] && !FlowAnalysis.AlwaysExits(bound)) {
+            _diagnostics.Error(
+                ErrorCode.ERR_BranchTypesDiffer,
+                block.Statements.Count > 0 ? block.Statements[^1].Span : block.Span,
+                "this branch gives no value: an 'if' that gives one ends each branch with it"
+            );
+        }
+
+        return bound;
+    }
+
     BoundStatement BindGuard(GuardStatementSyntax statement) {
         // 'guard c else { ... }' is an 'if' whose bindings outlive it; the
         // else branch must not fall through, which the flow pass will check.
@@ -1906,6 +2015,7 @@ public sealed partial class Binder {
             CastExpressionSyntax cast => BindCast(cast),
             TypeTestExpressionSyntax test => BindTypeTest(test),
             MatchExpressionSyntax match => BindMatch(match, expectedType),
+            IfExpressionSyntax ifExpression => BindIfExpression(ifExpression, expectedType),
             RangeExpressionSyntax range => BindRange(range, expectedType),
             DictionaryExpressionSyntax dictionary => BindDictionary(dictionary, expectedType),
             BuiltinExpressionSyntax builtin => BindBuiltin(builtin),

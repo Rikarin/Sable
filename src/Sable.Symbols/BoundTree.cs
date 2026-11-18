@@ -261,6 +261,18 @@ public sealed class BoundConditional(
     public override IEnumerable<BoundNode> Children => Nodes(Condition, WhenTrue, WhenFalse);
 }
 
+/// <summary>
+///     <c>if c { a } else { b }</c> as a value. <see cref="Body" /> is the
+///     <c>if</c>, with an <c>else</c> all the way down; each branch's block
+///     ends with an expression statement holding the branch's value, already
+///     of <see cref="BoundExpression.Type" />, unless the branch always leaves.
+/// </summary>
+public sealed class BoundIfExpression(SyntaxNode syntax, TypeSymbol type, BoundIf body)
+    : BoundExpression(syntax, type) {
+    public BoundIf Body { get; } = body;
+    public override IEnumerable<BoundNode> Children => [Body];
+}
+
 public sealed class BoundAssignment(
     SyntaxNode syntax,
     BoundExpression target,

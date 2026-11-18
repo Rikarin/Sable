@@ -929,6 +929,12 @@ internal sealed class Parser {
             case SyntaxKind.MatchKeyword:
                 return ParseMatchExpression();
 
+            // 'let s = if x > 3 { "big" } else { "small" }': where a value is
+            // wanted, an 'if' gives one. At the start of a statement it is
+            // the statement, which the statement parser sees first.
+            case SyntaxKind.IfKeyword:
+                return new IfExpressionGreen(ParseIfStatement());
+
             case SyntaxKind.OpenBraceToken:
                 return ParseBraceClosure(null);
 
@@ -1288,7 +1294,7 @@ internal sealed class Parser {
                 or SyntaxKind.TildeToken
                 or SyntaxKind.AmpersandToken => true,
             SyntaxKind.AwaitKeyword or SyntaxKind.MoveKeyword or SyntaxKind.TryKeyword => true,
-            SyntaxKind.MatchKeyword or SyntaxKind.CapitalSelfKeyword => true,
+            SyntaxKind.MatchKeyword or SyntaxKind.IfKeyword or SyntaxKind.CapitalSelfKeyword => true,
             SyntaxKind.OpenBraceToken or SyntaxKind.DollarToken => true,
             _ => false,
         };

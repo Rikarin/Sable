@@ -379,6 +379,18 @@ public sealed class StatementParserTests {
     }
 
     [Fact]
+    public void AnIfWhereAValueIsWantedIsAnExpression() {
+        var root = ParseRoot("let s = if x > 3 { \"big\" } else if x > 1 { \"some\" } else { \"small\" }");
+        var declaration = Assert.IsType<LocalDeclarationStatementSyntax>(root);
+        var ifExpression = Assert.IsType<IfExpressionSyntax>(declaration.Declarator.Initializer!.Value);
+        Assert.IsType<IfStatementSyntax>(ifExpression.Statement.ElseClause!.Body);
+    }
+
+    [Fact]
+    public void AnIfAtTheStartOfAStatementIsTheStatement() =>
+        Assert.IsType<IfStatementSyntax>(ParseRoot("if x > 3 { f() } else { g() }"));
+
+    [Fact]
     public void ParsesLabelledTrailingClosuresAfterTheFirst() {
         var root = ParseRoot("both { 1 } onFail: { 2 } onDone: { 3 }");
         var invocation = Assert.IsType<InvocationExpressionSyntax>(

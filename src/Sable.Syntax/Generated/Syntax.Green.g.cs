@@ -993,6 +993,30 @@ internal sealed class InvocationExpressionGreen : GreenNode
         new InvocationExpressionSyntax(this, parent, position);
 }
 
+/// <summary>Green node for <see cref="IfExpressionSyntax"/>.</summary>
+internal sealed class IfExpressionGreen : GreenNode
+{
+    private readonly GreenNode? _statement;
+
+    public IfExpressionGreen(GreenNode? statement)
+        : base(SyntaxKind.IfExpression, 0)
+    {
+        _statement = statement;
+        FullWidth = (statement?.FullWidth ?? 0);
+    }
+
+    public override int SlotCount => 1;
+
+    public override GreenNode? GetSlot(int index) => index switch
+    {
+        0 => _statement,
+        _ => null,
+    };
+
+    public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
+        new IfExpressionSyntax(this, parent, position);
+}
+
 /// <summary>Green node for <see cref="LabeledClosureSyntax"/>.</summary>
 internal sealed class LabeledClosureGreen : GreenNode
 {

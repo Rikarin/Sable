@@ -30,14 +30,35 @@ public sealed partial class LanguageServer {
     // Hover
     // -----------------------------------------------------------------------
 
+    /// <summary>
+    ///     <c>textDocument/hover</c>. Like a completion, it does not wait for
+    ///     a compilation of the text as it is now: the member under the
+    ///     cursor is bound as it is, against the newest compilation there is.
+    ///     Only what that cannot answer — a name declared since, say — waits
+    ///     for this snapshot's compilation.
+    /// </summary>
     async Task<JsonNode?> HoverAsync(WorkspaceSnapshot snapshot, JsonElement parameters, CancellationToken cancellation) {
         var (document, offset) = Locate(snapshot, parameters);
-        var analysis = await AnalysisOfAsync(snapshot, document);
-        document = analysis.Snapshot.Find(document.Uri) ?? document;
+        var context = await EditContextAsync(snapshot, document, offset);
         cancellation.ThrowIfCancellationRequested();
+        var quick = Hover(context.Analysis, context.Speculative ? context.Model : null, document, offset);
+        if (quick is not null || !context.Speculative) {
+            return quick;
+        }
 
+        var analysis = await AnalysisOfAsync(snapshot, document);
+        cancellation.ThrowIfCancellationRequested();
+        return Hover(analysis, null, document, offset);
+    }
+
+    /// <summary>
+    ///     What to show over a position: the symbol a name there names, or
+    ///     an expression's type: by the speculative model of the member
+    ///     there, if there is one, else by the analysis's own model.
+    /// </summary>
+    static JsonNode? Hover(Analysis analysis, SemanticModel? speculative, Document document, int offset) {
         lock (analysis.Gate) {
-            var model = analysis.Model(document.Tree);
+            var model = speculative ?? analysis.Model(document.Tree);
             var token = SemanticModel.FindToken(document.Tree.Root, offset);
             if (token.IsNone) {
                 return null;
@@ -54,8 +75,8 @@ public sealed partial class LanguageServer {
                     markdown.Append("\n\n---\n\n").Append(documentation);
                 }
             } else if (ExpressionAt(token) is { } expression
-                       && SemanticModel.FindMember(document.Tree.Root, offset) is { } member
-                       && model.GetMemberModel(member).GetTypeOf(expression) is { IsError: false } type) {
+                       && (speculative is not null ? model : SemanticModel.FindMember(document.Tree.Root, offset) is { } member ? model.GetMemberModel(member) : null) is { } memberModel
+                       && memberModel.GetTypeOf(expression) is { IsError: false } type) {
                 markdown.Append("```sable\n").Append(SymbolDisplay.Type(type)).Append("\n```");
             } else {
                 return null;

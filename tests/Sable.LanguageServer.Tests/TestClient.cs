@@ -57,6 +57,16 @@ internal sealed class TestClient : IAsyncDisposable {
                 _notifications.Add(message);
             }
 
+            // A request of the server's — to make a progress token, to watch
+            // files, to pull again — is agreed to, as an editor would.
+            if (message.Get("id") is { } request && message.GetString("method") is not null) {
+                await _channel.WriteAsync(new JsonObject {
+                    ["jsonrpc"] = "2.0",
+                    ["id"] = JsonNode.Parse(request.GetRawText()),
+                    ["result"] = null
+                });
+            }
+
             _notified.Release();
         }
     }
@@ -97,6 +107,14 @@ internal sealed class TestClient : IAsyncDisposable {
         RequestAsync("initialize", new {
             processId = (int?)null,
             rootUri = root is null ? null : Workspace.UriOf(root),
+            capabilities = capabilities ?? new { }
+        });
+
+    /// <summary>Initialises with several workspace folders.</summary>
+    public Task<JsonElement> InitializeAsync(IEnumerable<string> folders, object? capabilities = null) =>
+        RequestAsync("initialize", new {
+            processId = (int?)null,
+            workspaceFolders = folders.Select(static f => new { uri = Workspace.UriOf(f), name = Path.GetFileName(f) }).ToArray(),
             capabilities = capabilities ?? new { }
         });
 

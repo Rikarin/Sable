@@ -133,7 +133,7 @@ public sealed class DiagnosticsTests : IDisposable {
     [Fact]
     public async Task AClientThatPullsIsAnsweredAndNotPushed() {
         await using var client = new TestClient();
-        var capabilities = (await client.InitializeAsync(null, Pulling(false))).Get("capabilities")!.Value;
+        var capabilities = (await client.InitializeAsync((string?)null, Pulling(false))).Get("capabilities")!.Value;
         var provider = capabilities.Get("diagnosticProvider")!.Value;
         Assert.True(provider.GetBool("interFileDependencies"));
         Assert.True(provider.GetBool("workspaceDiagnostics"));

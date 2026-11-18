@@ -37,6 +37,14 @@ async function start(context) {
         // (package.sb, or sable.toml) or the lock file changing makes the
         // server read the packages again.
         fileEvents: vscode.workspace.createFileSystemWatcher("**/{*.sb,sable.toml,sable.lock}"),
+        // The server's settings ('sable.diagnostics.*'), sent again whenever
+        // they change.
+        configurationSection: "sable",
+      },
+      initializationOptions: {
+        diagnostics: {
+          workspace: vscode.workspace.getConfiguration("sable").get("diagnostics.workspace", true),
+        },
       },
       outputChannel: sable.channel(),
       markdown: { isTrusted: false, supportHtml: false },

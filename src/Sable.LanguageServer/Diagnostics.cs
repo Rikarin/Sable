@@ -87,6 +87,7 @@ public sealed partial class LanguageServer {
     async Task DiagnoseAsync(CancellationToken cancellation) {
         var snapshot = _workspace.Current;
         var documents = snapshot.Documents.Values
+            .Where(d => d.IsOpen || _diagnoseClosed)
             .OrderBy(static d => d.IsOpen ? 0 : 1)
             .ThenBy(snapshot.KeyOf, StringComparer.Ordinal)
             .ThenBy(static d => d.Uri, StringComparer.Ordinal)
@@ -179,10 +180,17 @@ public sealed partial class LanguageServer {
     /// <summary>What a report is known by: its content, so a pull of what the client has is answered "unchanged".</summary>
     static string ResultIdOf(JsonArray items) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(items.ToJsonString())), 0, 12);
 
-    /// <summary>A document gone from the workspace — closed, deleted, its folder removed — has its diagnostics cleared.</summary>
+    /// <summary>
+    ///     A document gone from the workspace — closed, deleted, its folder
+    ///     removed — has its diagnostics cleared; so has one nobody opened,
+    ///     when those are not diagnosed.
+    /// </summary>
     async Task ForgetRemovedAsync(WorkspaceSnapshot snapshot) {
         foreach (var (key, report) in _reports) {
-            if (snapshot.Documents.ContainsKey(key) || _workspace.Current.Documents.ContainsKey(key)) {
+            // Still there, and diagnosed: a file nobody opened is not, when
+            // the workspace's files are not to be.
+            var document = _workspace.Current.Documents.GetValueOrDefault(key) ?? snapshot.Documents.GetValueOrDefault(key);
+            if (document is not null && (document.IsOpen || _diagnoseClosed)) {
                 continue;
             }
 
@@ -227,16 +235,11 @@ public sealed partial class LanguageServer {
         });
     }
 
-    /// <summary>Asks a client that pulls to pull again; its answer, like any to a request of ours, is not waited for.</summary>
-    Task RefreshAsync() => SendRequestAsync("workspace/diagnostic/refresh", null);
-
-    Task SendRequestAsync(string method, JsonNode? parameters) =>
-        _channel.WriteAsync(new JsonObject {
-            ["jsonrpc"] = "2.0",
-            ["id"] = $"sable-{Interlocked.Increment(ref _requests)}",
-            ["method"] = method,
-            ["params"] = parameters
-        });
+    /// <summary>Asks a client that pulls to pull again; its answer is not waited for.</summary>
+    Task RefreshAsync() {
+        _ = SendRequestAsync("workspace/diagnostic/refresh", null);
+        return Task.CompletedTask;
+    }
 
     // -----------------------------------------------------------------------
     // Pulled diagnostics

@@ -1422,7 +1422,20 @@ member at a time.
   files not open) is not pushed to; it is sent `workspace/diagnostic/refresh`
   when a round changes something. A package's analysis is reused while none of
   its files change, so an edit elsewhere does not rebind or relower it.
-- Hover (signature, container, doc comment; an expression's type), definition
+- The workspace is every folder the editor has open, kept as folders are added
+  and removed (`didChangeWorkspaceFolders`); a manifest saved, changed on disk
+  or the lock file changing reads the packages again. A client that allows it
+  is asked to watch `*.sb`, `sable.toml` and `sable.lock`; one that shows
+  progress is shown the loading. The setting `sable.diagnostics.workspace`
+  (initialisation options or `didChangeConfiguration`) turns off the files
+  nobody opened.
+- Formatting the document, a range (its lines, and any the formatter joins to
+  them) and on typing `}` (what it closes); a file with a syntax error has its
+  whole top-level declarations without one formatted. A place in the text is
+  matched to one in the formatted text by the non-whitespace characters before
+  it, which formatting keeps.
+- Hover (signature, container, doc comment; an expression's type; like a
+  completion, bound speculatively against the newest compilation), definition
   (into a copy of the library file when it lands there), references, rename
   with `prepareRename` (refused for anything the library or the compiler
   declares, and for keywords), document symbols, signature help.

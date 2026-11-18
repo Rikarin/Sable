@@ -78,7 +78,6 @@ public sealed partial class LanguageServer {
     readonly SemaphoreSlim _changed = new(0);
 
     Task _loading = Task.CompletedTask;
-    string? _root;
     bool _initialized;
     bool _shutdown;
 
@@ -92,24 +91,6 @@ public sealed partial class LanguageServer {
         var project = snapshot.Layout.Projects.FirstOrDefault(p => p.Directory == key);
         var dependencies = project is null ? [] : _dependencies.For(project, snapshot, Log);
         return Analysis.Build(snapshot, key, dependencies, _options.LibraryFor, project?.Lints);
-    }
-
-    /// <summary>
-    ///     The packages under the folder, as the driver reads them. A failure
-    ///     is logged, and leaves every file loose.
-    /// </summary>
-    ProjectLayout ReadProjects(string folder) {
-        try {
-            var projects = _options.ProjectsFor(folder);
-            foreach (var project in projects) {
-                Log($"package {project.Name} in {project.Directory}: features [{string.Join(", ", project.Features)}], {project.Dependencies.Count} dependency file(s)");
-            }
-
-            return new(projects);
-        } catch (Exception e) when (e is not OutOfMemoryException) {
-            Log($"cannot read the packages under {folder}: {e.Message}");
-            return ProjectLayout.None;
-        }
     }
 
     /// <summary>A file whose change can change the packages: a manifest, or the lock file.</summary>
@@ -163,7 +144,8 @@ public sealed partial class LanguageServer {
         var parameters = message.Get("params") ?? default;
 
         if (method is null) {
-            // A response to a request of ours; the server sends none it waits on.
+            // A response to a request of ours.
+            Answered(id, message);
             return true;
         }
 
@@ -248,6 +230,8 @@ public sealed partial class LanguageServer {
             "textDocument/signatureHelp" => SignatureHelpAsync,
             "textDocument/inlayHint" => InlayHintsAsync,
             "textDocument/formatting" => FormattingAsync,
+            "textDocument/rangeFormatting" => RangeFormattingAsync,
+            "textDocument/onTypeFormatting" => OnTypeFormattingAsync,
             "textDocument/diagnostic" => DocumentDiagnosticsAsync,
             "workspace/diagnostic" => WorkspaceDiagnosticsAsync,
             _ => null,
@@ -256,6 +240,7 @@ public sealed partial class LanguageServer {
     void HandleNotification(string method, JsonElement parameters) {
         switch (method) {
             case "initialized":
+                ClientInitialized();
                 return;
 
             case "$/cancelRequest":
@@ -293,7 +278,7 @@ public sealed partial class LanguageServer {
                 // A file of the workspace goes back to what is on disk, and
                 // keeps being diagnosed; any other is gone, and the next round
                 // clears its diagnostics.
-                _workspace.Close(uri, _root);
+                _workspace.Close(uri, _folders);
                 Changed();
                 return;
             }
@@ -313,18 +298,35 @@ public sealed partial class LanguageServer {
                 }
 
                 // A manifest or the lock changed: the packages may have too.
-                if (packages && _root is { } folder && Directory.Exists(folder)) {
-                    var previous = _loading;
-                    _loading = Task.Run(async () => {
-                        await previous;
-                        _workspace.SetLayout(ReadProjects(folder));
-                        Changed();
-                    });
+                if (packages) {
+                    Load([]);
                 }
 
                 Changed();
                 return;
             }
+
+            case "textDocument/didSave": {
+                // The editor has the text already; but a client that watches
+                // no files says this much about a manifest saved.
+                if (parameters.Get("textDocument")?.GetString("uri") is { } uri && IsPackageFile(uri)) {
+                    Load([]);
+                }
+
+                return;
+            }
+
+            case "workspace/didChangeWorkspaceFolders":
+                ChangeFolders(parameters);
+                return;
+
+            case "workspace/didChangeConfiguration":
+                if (parameters.Get("settings")?.Get("sable") is { } settings) {
+                    ReadSettings(settings);
+                    Changed();
+                }
+
+                return;
 
             default:
                 return;
@@ -333,33 +335,21 @@ public sealed partial class LanguageServer {
 
     JsonNode Initialize(JsonElement parameters) {
         _initialized = true;
-        var client = parameters.Get("capabilities");
-        _pull = client?.Get("textDocument")?.Get("diagnostic") is { ValueKind: JsonValueKind.Object };
-        _refresh = client?.Get("workspace")?.Get("diagnostics")?.GetBool("refreshSupport") ?? false;
-
-        var root = parameters.Get("workspaceFolders") is { ValueKind: JsonValueKind.Array } folders && folders.GetArrayLength() > 0
-            ? folders[0].GetString("uri")
-            : parameters.GetString("rootUri");
-        _root = root is null ? parameters.GetString("rootPath") : Workspace.PathOf(root);
-
-        if (_root is { } folder && Directory.Exists(folder)) {
-            _loading = Task.Run(() => {
-                // The packages first: each file is parsed with its package's features.
-                _workspace.SetLayout(ReadProjects(folder));
-                var files = Workspace.SourceFilesUnder(folder)
-                    .AsParallel()
-                    .Select(path => (path, _workspace.Parse(path, File.ReadAllText(path))))
-                    .ToList();
-                _workspace.AddFromDisk(files);
-                Changed();
-            });
+        ReadClient(parameters);
+        _folders = [..FoldersOf(parameters).Distinct(StringComparer.Ordinal)];
+        if (_folders.Length > 0) {
+            Load(_folders);
         }
 
         var capabilities = new JsonObject {
             ["positionEncoding"] = "utf-16",
             ["textDocumentSync"] = new JsonObject {
                 ["openClose"] = true,
-                ["change"] = 2
+                ["change"] = 2,
+                ["save"] = new JsonObject { ["includeText"] = false }
+            },
+            ["workspace"] = new JsonObject {
+                ["workspaceFolders"] = new JsonObject { ["supported"] = true, ["changeNotifications"] = true }
             },
             ["completionProvider"] = new JsonObject {
                 ["triggerCharacters"] = new JsonArray("."),
@@ -375,7 +365,9 @@ public sealed partial class LanguageServer {
                 ["retriggerCharacters"] = new JsonArray(",")
             },
             ["inlayHintProvider"] = true,
-            ["documentFormattingProvider"] = true
+            ["documentFormattingProvider"] = true,
+            ["documentRangeFormattingProvider"] = true,
+            ["documentOnTypeFormattingProvider"] = new JsonObject { ["firstTriggerCharacter"] = "}" }
         };
 
         // A client that can pull diagnostics is not also sent them: it would

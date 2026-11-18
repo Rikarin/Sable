@@ -1107,6 +1107,9 @@ public sealed partial class Compilation {
         TypeBinder.BindFieldType(field, declaration);
         RecordDeclaration(declaration, field);
 
+        // Seen by C (Compilation.Interop.cs).
+        DeclareExportedVariable(field, declaration, container);
+
         // 'var name: String = "" { set { field = newValue.trimmed() } }':
         // accessors that say 'field' have storage, laid out where the
         // property is, which the property's initial value fills.

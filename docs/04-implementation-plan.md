@@ -368,7 +368,10 @@ Order matters; each of these is a self-contained lowering:
   core library is parsed per target), a dependency's `when:` and the C ABI's
   classification follow the target. Every target compiles to an object
   (`--emit obj`); an executable links where the runtime has a platform layer —
-  macOS and Linux. Not yet: the runtime's Windows and WASI layers (it needs
+  macOS and Linux. A program can also be a library C links (`--emit
+  staticlib|dylib`, `[lib] kind`; docs/05 §5.2.2): no entry point, its
+  globals set up by a constructor and destroyed by the runtime at exit.
+  Not yet: the runtime's Windows and WASI layers (it needs
   pthread, dlfcn, execinfo, posix_spawn, dirent and poll), WebAssembly's C ABI
   for `@extern` structs, and CI beyond Linux x64 and macOS arm64.
 
@@ -952,7 +955,7 @@ Written so far (`tests/Sable.CodeGen.Tests/LibraryTests.cs`):
   (unbounded, closable, `receive` awaits), `TaskGroup` (results in the order
   the tasks were added), and a `sleep` that yields so that other tasks run
   meanwhile. Tasks switch only where they await, so none of it needs a lock.
-  Not yet: bounded channels, cancellation, `Mutex` and `Atomic` (useless
+  `TaskGroup.cancelAll()` cancels its tasks. Not yet: bounded channels, `Mutex` and `Atomic` (useless
   until tasks run in parallel), and deadlock detection: a task waiting on
   nothing yields for ever.
 
@@ -1222,7 +1225,9 @@ tasks sleeping a second take a second. `Sable.Concurrency`'s `sleep` is
 `Task.sleep`; `Clock.sleep` does not await, so it still holds every task. An async function is an ordinary function,
 and `await` is its operand; `Task.spawn { … }` queues a task (a class holding
 the runtime's handle, the body and the result), `await task.value` waits for
-it, and the program ends once every task has. Actors lower as classes: with
+it, and the program ends once every task has. `task.cancel()` cancels
+cooperatively: the task sees `Task.isCancelled()`, and a sleep it is in, or
+starts, ends at once (it is taken off the sleepers and queued). Actors lower as classes: with
 one task running at a time a call into one runs alone, and the binder makes
 a call from outside it `await`. `async let` binds; reading it needs `await`.
 A class or actor whose fields all have initial values is made with `init()`.
@@ -1232,7 +1237,7 @@ per task — far less compiler for the same semantics, at the cost of a
 thread (8 MB of address space) for each task waiting at once. Not yet:
 `async let` runs its child to completion at the declaration rather than
 alongside; actors have no executor or mailbox of their own; no task groups
-as scopes, cancellation, `for await` or async sequences, priorities, I/O to
+as scopes, priorities, I/O to
 wait on (an I/O reactor), and no parallelism (a work-stealing pool, and
 with it atomic counts) — all `Sable.Concurrency`'s, along with the switch
 to the state machine where many tasks wait at once.
@@ -1424,11 +1429,17 @@ In `src/Sable.Driver/Packages/`, with a command per file under `Commands/`.
   keeps the entry point out of the C `main`, so the program's functions keep
   theirs), `lto` (`fat`, `thin` or off; on Linux through lld, used when clang
   can link with it), `codegen-units = 1` (compile whole even in an
-  unoptimised debug build), `strip`, `rpath`, `exclusivity` and `leak-check`
-  (`sable run` sets `SABLE_CHECK_LEAKS`). A build prints the warnings of the
-  profile it uses: `panic = "unwind"` (a trap always aborts), `arc-checks`
-  (there are no optional ARC checks) and `overflow-checks = false`
-  (arithmetic is always checked) have no effect.
+  unoptimised debug build), `strip`, `rpath`, `exclusivity`, `leak-check`
+  (`sable run` sets `SABLE_CHECK_LEAKS`) and `overflow-checks = false`
+  (integer `+`, `-`, `*`, negation, `abs` and `as` wrap rather than trap:
+  SIL has `wrapping_` forms of them, which the interpreter, the emitter and
+  constant folding read as written; division by zero, shifts out of range
+  and an overflowing `const` are still errors). `package.sb` sets all of
+  them, `optSize: .size` or `.minSize` for `-Os` and `-Oz`. A build prints
+  the warnings of the profile it uses: `panic = "unwind"` (a trap always
+  aborts) and `arc-checks` (there are no optional ARC checks: the one
+  reference-count check, an object outliving its deinit, guards memory
+  safety and stays) have no effect.
 - **Packages of many files.** A package is every `.sb` under `src/`:
   `src/main.sb` (or `[[bin]]`, or `src/bin/*.sb`) is a binary's entry, the
   rest is the library. A binary is compiled with its package's library and
@@ -1490,8 +1501,9 @@ In `src/Sable.Driver/Packages/`, with a command per file under `Commands/`.
 Deferred: workspace inheritance
 (`version.workspace = true` and `{ workspace = true }` are refused,
 `[workspace.package]` and `[workspace.dependencies]` warned about); `[reflect]`
-and `[targets]` (accepted with a warning: nothing looks a type up by name
-yet, and there is no cross-compilation). A dependency's `package =` and
+(accepted with a warning: nothing looks a type up by name yet); `[targets]`'s
+`runtime` (warned about: there are no runtime profiles yet — its
+`reflection = false` is built). A dependency's `package =` and
 `registry =` are refused: code imports a package's modules, so a rename means
 nothing, and every dependency comes from the workspace's one registry. Cargo's
 `[target.'cfg(...)'.dependencies]` is refused in favour of `when`. Every
@@ -1722,19 +1734,23 @@ loaded in any test.
   `$BROWSER` or the system's browser. Not yet: doc tests, search beyond the
   index.
 - **`sable repl`**: `ReplSession` (separate from the console) keeps imports,
-  declarations and the statements that ran, and runs each entry as the next
-  statement of a `main` that replays them, under the SIL interpreter; an
-  expression is bound to `resN` and shown with its type; `:type`, `:reset`,
-  `:help`, `:quit`. What a statement does to the world (files, input, the
-  environment, processes, the clock, sleeping) goes through an
-  `EffectJournal`: carried out the first time, replayed from the journal
-  after, so nothing happens twice and the clock reads as it did; a failed
-  entry's effects are dropped from it. The interpreter runs without a step
-  limit (Ctrl-C interrupts an entry) and 100,000 calls deep. On a terminal,
-  `LineEditor` gives readline's editing keys, ↑/↓ history (kept in
-  `~/.sable/repl_history`) and Tab completion of keywords and the session's
-  names. Not yet: replay still repeats the earlier statements' computation
-  (snapshotting the interpreter would not). In a package the session is
+  declarations, bindings and the entries that ran, under the SIL
+  interpreter. An entry runs as a function of its own; each binding at its
+  top level becomes a global of the session (its type written out), set up
+  where the binding stood. The program is lowered with
+  `SilGen.LowerForSession` — each global has its own initialiser, run when
+  the global is first reached, and nothing destroys them at the end — and
+  run with the heap and globals the earlier entries' programs left
+  (`SilInterpreter.Session`), so nothing earlier is computed or done again.
+  Earlier entries' functions are compiled with each new one, so a closure
+  one made still has its code. A failed entry's bindings are forgotten; a
+  binding that cannot be a global (its value needs a name bound inside the
+  entry) lasts only for the entry. An expression is bound to `resN` and
+  shown with its type; `:type`, `:reset`, `:help`, `:quit`. The interpreter
+  runs without a step limit (Ctrl-C interrupts an entry) and 100,000 calls
+  deep. On a terminal, `LineEditor` gives readline's editing keys, ↑/↓
+  history (kept in `~/.sable/repl_history`) and Tab completion of keywords
+  and the session's names. In a package the session is
   compiled with the package's library and its dependencies, so `import`
   takes their modules (`--no-package` for a session without).
 - **Lints** (`src/Sable.Symbols/Lints/`): `Lint` over a file's
@@ -1825,7 +1841,7 @@ object's metadata.
 (Int?) absent = none
 (any Values.Named) bird = Values.Bird { [value] = Values.Bird { legs = 2  [strong] = 1 } }
 (Values.Node) node = Values.Node { value = 7  label = "seven"  next = none  [strong] = 2 }
-(Sable.Collections.HashMap$of$String$Int) map = … count = 2 { ["one"] = 1  ["two"] = 2 }
+(Sable.Collections.HashMap<String, Int>) map = … count = 2 { ["one"] = 1  ["two"] = 2 }
 ((Int) -> Int) times = Values.main$closure0
 ```
 
@@ -1851,13 +1867,21 @@ A union case whose payload fields are named (`EnumType.PayloadLabels`) has a
 payload described as a struct of them, `U.Case$case`, laid out as the tuple
 is, which the plugin shows as the case's fields.
 
-Not yet: readable names for generic instances (`HashMap$of$String$Int`);
-`@inline_layout` values, which show as a pointer to their bytes; the standard
+A generic type's instance is named as Sable writes it (`NominalType.DisplayName`):
+`HashMap<String, Int>`, where its symbols and its metadata say
+`HashMap$of$String$Int`; the plugin finds the class by the metadata's name
+and shows the type's. For Windows the same nodes are written as CodeView (the
+`"CodeView"` module flag), which lld gathers into the PDB beside the
+executable, and which Windows' debuggers read; the debugger tests still drive
+lldb with the plugin's DWARF-shaped names, and are run on macOS and Linux only.
+
+Not yet: `@inline_layout` values, which show as a pointer to their bytes; the standard
 library's own source lines (its functions name a file the debugger cannot
 find); expression evaluation in Sable syntax (`expression` is lldb's C); a
 language code of Sable's own (the unit says `DW_LANG_C`, which is what lets
 lldb evaluate expressions at all); `inlinedAt` (a debug build inlines
-nothing); CodeView for Windows; and gdb.
+nothing); generic functions' readable names (`describe$of$Int`); debugger
+tests against a PDB on Windows; and gdb.
 
 ### Incremental builds, as implemented
 

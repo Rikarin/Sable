@@ -82,6 +82,17 @@ public sealed partial class SilGen {
             return made;
         }
 
+        /// <summary>'task.cancel()': the runtime told, through the task's handle.</summary>
+        SilValue? CancelTask(BoundCall call) {
+            if (call.Receiver is null || Borrow(call.Receiver) is not { Type: ClassType } receiver) {
+                return Missing(call, $"'{Describe(call.Syntax)}'");
+            }
+
+            Emit(new BuiltinInst("task_cancel", SilType.Unit, Emit(new LoadInst(Emit(new RefElementAddrInst(receiver, TaskHandle))))));
+            End(receiver);
+            return UnitValue.Instance;
+        }
+
         /// <summary>'await task.value': the task waited for, then its result, copied.</summary>
         SilValue? TaskValue(BoundFieldAccess access) {
             if (access.Receiver is null || Borrow(access.Receiver) is not { Type: ClassType task } receiver) {

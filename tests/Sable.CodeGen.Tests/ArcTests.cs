@@ -201,11 +201,78 @@ public sealed class ArcTests {
 
         if (CanBuild) {
             // Building the list retains each node but the last for the node
-            // made before it; each walk retains the first node for 'p = list'
-            // and every other for 'p = n.next' — none for 'n'.
+            // made before it; a walk retains nothing — not 'n', which borrows
+            // 'p', nor 'p', which only holds nodes the list keeps.
             var stats = BuildAndRun(source, environment: new Dictionary<string, string> { ["SABLE_STATS"] = "1" }).Stderr;
-            Assert.Contains("retains " + (99 + 10 * 100) + ",", stats, StringComparison.Ordinal);
+            Assert.Contains("retains 99,", stats, StringComparison.Ordinal);
         }
+    }
+
+    /// <summary>
+    ///     Retains and releases are inline in the program, not calls into the
+    ///     runtime that only link-time optimisation could inline: only a last
+    ///     release calls it, to run the deinit and free the memory.
+    /// </summary>
+    [Fact]
+    public void RetainAndReleaseAreInline() {
+        var ir = Pipeline.Compile(new SourceText(Program(Walk, "    print(total(Node(1, Node(2, none))))"), "test.sb"), optimised: true).LlvmIr!;
+        Assert.Contains("define internal void @sable.retain(ptr %object) alwaysinline", ir, StringComparison.Ordinal);
+        Assert.Contains("call void @sable_release_last(ptr %object)", ir, StringComparison.Ordinal);
+        Assert.DoesNotContain("call void @sable_retain(", ir, StringComparison.Ordinal);
+        Assert.DoesNotContain("call void @sable_release(", ir, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    ///     The walking local of a read-only walk holds its nodes unretained:
+    ///     each is kept by the field of the one before, back to the borrowed
+    ///     parameter.
+    /// </summary>
+    [Fact]
+    public void AReadOnlyWalkHoldsItsNodesUnretained() {
+        var sil = SilPrinter.Print(Pipeline.Compile(new SourceText(Program(Walk, "    print(total(Node(1, Node(2, none))))"), "test.sb")).Sil!);
+        Assert.Contains("alloc_stack [unmanaged] $Optional$Test.Node, var \"p\"", sil, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    ///     A walk that writes a field — here the one it steps along — keeps its
+    ///     own count of the node it is on: the write could drop the node's
+    ///     last other reference.
+    /// </summary>
+    [Fact]
+    public void AWalkThatWritesKeepsItsNodesRetained() {
+        var source = Program(
+            """
+            class Node {
+                var value: Int
+                var next: Node?
+                init(_ value: Int, _ next: Node?) {
+                    self.value = value
+                    self.next = next
+                }
+                deinit {
+                    print("free \(value)")
+                }
+            }
+
+            fn cut(_ list: Node?) -> Int {
+                var sum = 0
+                var p = list
+                while let n = p {
+                    sum = sum + n.value
+                    p = n.next
+                    n.next = none
+                }
+                return sum
+            }
+            """,
+            """
+                let list = Node(1, Node(2, Node(3, none)))
+                print(cut(list))
+                print("end")
+            """
+        );
+        Assert.Equal("free 2\nfree 3\n6\nend\nfree 1\n", AssertAgree(source).Stdout);
+        Assert.DoesNotContain("[unmanaged] $Optional$Test.Node, var \"p\"", SilPrinter.Print(Pipeline.Compile(new SourceText(source, "test.sb")).Sil!), StringComparison.Ordinal);
     }
 
     /// <summary>A binding read after its local changes keeps its own count.</summary>

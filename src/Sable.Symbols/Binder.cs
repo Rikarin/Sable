@@ -1831,11 +1831,23 @@ public sealed partial class Binder {
     ) {
         BoundExpression? result = null;
 
+        // A condition is tested only once those before it held, so what
+        // they say about a binding holds in it: 'if x != none, x > 3'.
+        var pushed = 0;
         foreach (var condition in conditions) {
+            if (result is not null) {
+                PushNarrowing(NarrowingsWhen(result, true));
+                pushed++;
+            }
+
             var bound = BindCondition(condition);
             result = result is null
                 ? bound
                 : new BoundBinaryOperator(syntax, Core.Bool, BinaryOperatorKind.LogicalAnd, result, bound);
+        }
+
+        for (; pushed > 0; pushed--) {
+            PopNarrowing();
         }
 
         return result ?? new BoundLiteral(syntax, Core.Bool, true);
@@ -2899,7 +2911,10 @@ public sealed partial class Binder {
         // what it is constrained to: 'T.decode(from: reader)'.
         if (_compilation.TypeBinder.Lookup(name, _containingSymbol, _scope, syntax.Span, report: false)
             is TypeParameterSymbol named) {
-            return new BoundTypeExpression(syntax, named);
+            // A value generic parameter, 'N: Int', is the number it stands for.
+            return named.ValueType is { } valueType
+                ? new BoundValueParameter(syntax, named, valueType)
+                : new BoundTypeExpression(syntax, named);
         }
 
         if (unmetOnSelf is not null) {
@@ -3148,10 +3163,19 @@ public sealed partial class Binder {
             return new BoundError(syntax, receiver);
         }
 
-        // 'T.self' names the type itself.
+        // A metatype value reaches its type's static members, as the type
+        // does: 't.zero()' with 't: T.Type'. Its one value is the type, so
+        // reading it has nothing to keep but what evaluating it does, which
+        // a name or 'X.self' does not.
+        if (receiver is BoundMetatype or BoundLocalAccess or BoundParameterAccess
+            && receiver.Type is MetatypeTypeSymbol { InstanceType: var instanceType } && name != "self") {
+            receiver = new BoundTypeExpression(syntax.Expression, instanceType);
+        }
+
+        // 'T.self' is the type itself, as a value of type 'T.Type'.
         if (receiver is BoundTypeExpression typeExpression) {
             if (name == "self") {
-                return new BoundTypeExpression(syntax, typeExpression.Type);
+                return new BoundMetatype(syntax, typeExpression.ReferencedType);
             }
 
             // A type parameter reaches the static members of its constraints,
@@ -3494,6 +3518,7 @@ public sealed partial class Binder {
                 NamedTypeSymbol named => named.TypeArguments.Any(Mentions),
                 ArrayTypeSymbol array => Mentions(array.ElementType),
                 OptionalTypeSymbol optional => Mentions(optional.UnderlyingType),
+                MetatypeTypeSymbol metatype => Mentions(metatype.InstanceType),
                 TupleTypeSymbol tuple => tuple.ElementTypes.Any(Mentions),
                 FunctionTypeSymbol function => function.ParameterTypes.Any(Mentions) || Mentions(function.ReturnType),
                 ReferenceTypeSymbol reference => Mentions(reference.ReferencedType),
@@ -4917,6 +4942,7 @@ public sealed partial class Binder {
             DependentMemberTypeSymbol member => ContainsUninferred(member.BaseType, candidate),
             NamedTypeSymbol named => named.TypeArguments.Any(a => ContainsUninferred(a, candidate)),
             OptionalTypeSymbol optional => ContainsUninferred(optional.UnderlyingType, candidate),
+            MetatypeTypeSymbol metatype => ContainsUninferred(metatype.InstanceType, candidate),
             ArrayTypeSymbol array => ContainsUninferred(array.ElementType, candidate),
             TupleTypeSymbol tuple => tuple.ElementTypes.Any(e => ContainsUninferred(e, candidate)),
             FunctionTypeSymbol function =>
@@ -4933,6 +4959,48 @@ public sealed partial class Binder {
     ///     array literal has no storage kind; both bend to fit.
     /// </remarks>
     static bool IsLiteral(BoundExpression expression) => expression is BoundLiteral or BoundArray or BoundDictionary;
+
+    /// <summary>The message for a value of one type where another is wanted.</summary>
+    /// <remarks>
+    ///     Two functions' <c>some Shape</c> results are two types that print
+    ///     alike, so naming them alone reads "expected 'some Shape' but found
+    ///     'some Shape'". Each is told apart by what chose its hidden type.
+    /// </remarks>
+    static string DescribeMismatch(TypeSymbol target, TypeSymbol found) {
+        var wanted = target.ToDisplayString();
+        var actual = found.ToDisplayString();
+        if (wanted != actual) {
+            return $"expected '{wanted}' but found '{actual}'";
+        }
+
+        if (target is OpaqueTypeSymbol wantedOpaque && found is OpaqueTypeSymbol foundOpaque) {
+            var why = ReferenceEquals(wantedOpaque.Origin, foundOpaque.Origin)
+                ? "each choice of its type parameters gives a type of its own"
+                : $"each function's or variable's '{wanted}' is a type of its own";
+            return $"expected the '{wanted}' {DescribeOpaqueOrigin(wantedOpaque)} but found the one "
+                   + $"{DescribeOpaqueOrigin(foundOpaque)}; {why}";
+        }
+
+        return $"expected '{wanted}' but found a different type also written '{actual}'";
+    }
+
+    static string DescribeOpaqueOrigin(OpaqueTypeSymbol opaque) {
+        // 'make(1)' and 'make("x")' return two types from one function.
+        var context = opaque.Context.IsEmpty
+            ? ""
+            : " with "
+              + string.Join(
+                  ", ",
+                  opaque.Context.Parameters.Select(p => $"{p.Name} = {opaque.Context.Lookup(p)!.ToDisplayString()}")
+              );
+        return opaque.Origin switch {
+            FunctionSymbol { ContainingSymbol: TypeSymbol owner } method =>
+                $"returned by '{owner.Name}.{method.Name}()'{context}",
+            FunctionSymbol function => $"returned by '{function.Name}()'{context}",
+            LocalSymbol local => $"of '{local.Name}'",
+            _ => "of a parameter",
+        };
+    }
 
     BoundExpression BindElementAccess(ElementAccessExpressionSyntax syntax) {
         var receiver = BindExpression(syntax.Expression);
@@ -6489,7 +6557,23 @@ public sealed partial class Binder {
             ? (left.Type as OptionalTypeSymbol)?.UnderlyingType
             : left.Type;
 
+        // The right side of 'a && b' is evaluated only when 'a' holds, and
+        // of 'a || b' only when it does not: what that says about a binding
+        // holds there — 'i != none && i > 3' reads 'i' unwrapped.
+        var shortCircuit = syntax.OperatorToken.Kind switch {
+            SyntaxKind.AmpersandAmpersandToken => NarrowingsWhen(left, true),
+            SyntaxKind.PipePipeToken => NarrowingsWhen(left, false),
+            _ => null,
+        };
+
+        if (shortCircuit is not null) {
+            PushNarrowing(shortCircuit);
+        }
+
         var right = BindExpression(syntax.Right, expected);
+        if (shortCircuit is not null) {
+            PopNarrowing();
+        }
 
         var kind = BinaryKindOf(syntax.OperatorToken.Kind);
         if (kind is null) {
@@ -7014,12 +7098,7 @@ public sealed partial class Binder {
 
         if (conversion is null) {
             if (!expression.HasError && !target.IsError) {
-                _diagnostics.Error(
-                    ErrorCode.ERR_TypeMismatch,
-                    syntax.Span,
-                    $"expected '{target.ToDisplayString()}' but found "
-                    + $"'{expression.Type.ToDisplayString()}'"
-                );
+                _diagnostics.Error(ErrorCode.ERR_TypeMismatch, syntax.Span, DescribeMismatch(target, expression.Type));
             }
 
             return new BoundError(syntax, expression);
@@ -7127,16 +7206,35 @@ public sealed partial class Binder {
 
         if (Expand(expected) is FunctionTypeSymbol wanted) {
             foreach (var candidate in group.Candidates) {
-                var type = Apply(candidate.FunctionType, substitution);
+                // A generic function's own type parameters are what the type
+                // wanted makes them: 'let f: (Int) -> Int = id' is id<Int>.
+                var inferred = InferFromFunctionType(candidate, substitution, wanted);
+                if (inferred is null) {
+                    continue;
+                }
+
+                var type = Apply(candidate.FunctionType, inferred);
                 if (!_conversions.HasImplicitConversion(type, wanted)) {
                     continue;
                 }
 
                 chosen = candidate;
+                substitution = inferred;
                 break;
             }
         } else if (group.Candidates.Length == 1) {
             chosen = group.Candidates[0];
+
+            // Nothing says what a generic function's own type parameters are.
+            if (!chosen.TypeParameters.IsEmpty) {
+                _diagnostics.Error(
+                    ErrorCode.ERR_CannotInferTypeArgument,
+                    group.Syntax.Span,
+                    $"cannot infer '{chosen.TypeParameters[0].Name}' of '{chosen.Name}' taken as a value; "
+                    + "say which function type is wanted, as in 'let f: (Int) -> Int = ...'"
+                );
+                return new BoundError(group.Syntax);
+            }
         }
 
         if (chosen is null) {
@@ -7169,7 +7267,34 @@ public sealed partial class Binder {
             Apply(chosen.FunctionType, substitution),
             group.Receiver,
             chosen
-        );
+        ) { Substitution = substitution };
+    }
+
+    /// <summary>
+    ///     What a function's own type parameters are when it is taken as a
+    ///     value of the function type wanted, added to what the group already
+    ///     knows (its receiver's type arguments); null when the type cannot
+    ///     settle them all, or settles one to a type its constraints refuse.
+    /// </summary>
+    TypeSubstitution? InferFromFunctionType(FunctionSymbol candidate, TypeSubstitution known, FunctionTypeSymbol wanted) {
+        if (candidate.TypeParameters.IsEmpty) {
+            return known;
+        }
+
+        var map = new Dictionary<TypeParameterSymbol, TypeSymbol>();
+        if (!TypeSubstitution.Unify(Apply(candidate.FunctionType, known), wanted, candidate.TypeParameters, map)
+            || candidate.TypeParameters.Any(p => !map.ContainsKey(p))) {
+            return null;
+        }
+
+        var inferred = Combine(known, new(map));
+        foreach (var typeParameter in candidate.TypeParameters) {
+            if (typeParameter.Constraints.Any(c => !Conversions.Satisfies(map[typeParameter], inferred.Apply(c), _conversions.Equivalence))) {
+                return null;
+            }
+        }
+
+        return inferred;
     }
 
     static FunctionTypeSymbol Apply(

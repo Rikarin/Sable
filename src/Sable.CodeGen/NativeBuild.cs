@@ -12,6 +12,15 @@ public enum NativePlatform {
     Wasi,
 }
 
+/// <summary>
+///     What a library is built as (docs/05 §5.2): an archive of objects that
+///     another program's link takes in whole, or a shared library it loads.
+/// </summary>
+public enum LibraryKind {
+    Static,
+    Dynamic,
+}
+
 /// <summary>Link-time optimisation: none, ThinLTO, or the whole program as one module.</summary>
 public enum LtoMode {
     Off,
@@ -61,7 +70,15 @@ public sealed record NativeOptions {
     public string LinkInputs { get; init; } = "";
 
     /// <summary>The settings as text, every one of them: what a cache of builds made with them is keyed by.</summary>
-    public string Key => $"{OptLevel}|{DebugInfo}|{Lto}|{Strip}|{Rpath}|{Target?.Triple}|{Sysroot}|{string.Join(' ', LinkArguments)}|{LinkInputs}";
+    public string Key => $"{OptLevel}|{DebugInfo}|{Lto}|{Strip}|{Rpath}|{Target?.Triple}|{Sysroot}|{string.Join(' ', LinkArguments)}|{LinkInputs}|{PositionIndependent}";
+
+    /// <summary>
+    ///     Compile the program and the runtime as position-independent code,
+    ///     which a shared library — or a static one linked into one — must be.
+    ///     Only ELF needs asking: Mach-O and COFF code is so already.
+    /// </summary>
+    public bool PositionIndependent { get; init; }
+
     /// <summary>What the program is built for: null for the machine building it.</summary>
     public NativeTarget? Target { get; init; }
 
@@ -216,7 +233,11 @@ public static class NativeBuild {
     ///     Where the compiled runtime is kept between builds
     ///     (<see cref="RuntimeObject" />); the user's cache when not given.
     /// </param>
-    public static NativeBuildResult Build(string llvmIr, string outputPath, NativeOptions options, string? runtimeCache = null) {
+    public static NativeBuildResult Build(string llvmIr, string outputPath, NativeOptions options, string? runtimeCache = null) =>
+        Build(llvmIr, outputPath, options, runtimeCache, []);
+
+    /// <param name="linkKind">What the link is asked to make other than an executable: <c>-shared</c>, with its name.</param>
+    static NativeBuildResult Build(string llvmIr, string outputPath, NativeOptions options, string? runtimeCache, IReadOnlyList<string> linkKind) {
         var target = options.TargetOrHost;
         if (!target.HasRuntime) {
             return new(false, NoRuntime(target));
@@ -236,7 +257,7 @@ public static class NativeBuild {
             var irPath = Path.Combine(directory.FullName, "program.ll");
             File.WriteAllText(irPath, ForTarget(llvmIr, target, lto.Count > 0, namesFrames: !options.Optimise));
 
-            List<string> arguments = [..target.ClangFlags, ..SysrootFlags(options), ..CompileFlags(options), ..lto];
+            List<string> arguments = [..target.ClangFlags, ..SysrootFlags(options), ..CompileFlags(options), ..PositionIndependentFlags(options), ..lto, ..linkKind];
 
             // Apple's linker deletes the object link-time optimisation makes,
             // and dsymutil, which clang runs next, reads the debug information
@@ -261,6 +282,120 @@ public static class NativeBuild {
         } finally {
             directory.Delete(true);
         }
+    }
+
+    /// <summary>
+    ///     The file a library called <paramref name="name" /> is, as the
+    ///     target's linkers look for it: <c>libname.a</c> and <c>libname.so</c>
+    ///     (<c>.dylib</c> on macOS) for <c>-lname</c>; <c>name.lib</c> and
+    ///     <c>name.dll</c> on Windows.
+    /// </summary>
+    public static string LibraryFileName(string name, LibraryKind kind, NativeTarget target) => (kind, target.Platform) switch {
+        (LibraryKind.Static, NativePlatform.Windows) => name + ".lib",
+        (LibraryKind.Static, _) => $"lib{name}.a",
+        (LibraryKind.Dynamic, NativePlatform.Windows) => name + ".dll",
+        (LibraryKind.Dynamic, NativePlatform.MacOS) => $"lib{name}.dylib",
+        _ => $"lib{name}.so",
+    };
+
+    /// <summary>
+    ///     Builds a library: the program's IR — compiled with no entry point
+    ///     (<c>Pipeline.Compile(library: true)</c>), its <c>@export</c>
+    ///     functions what C calls — with the runtime, so that the library is
+    ///     all a C program needs beside its own objects.
+    /// </summary>
+    /// <remarks>
+    ///     A static library is an archive of two native objects, the
+    ///     program's and the runtime's: not LLVM bitcode, which only a linker
+    ///     doing link-time optimisation reads. A shared library is linked as
+    ///     an executable is, with link-time optimisation where the profile
+    ///     asks for it; on macOS it is found through the rpath, and on Linux
+    ///     it is named by its file.
+    /// </remarks>
+    public static NativeBuildResult BuildLibrary(string llvmIr, string outputPath, LibraryKind kind, NativeOptions options, string? runtimeCache = null) {
+        var target = options.TargetOrHost;
+        if (!target.HasRuntime) {
+            return new(false, NoRuntime(target));
+        }
+
+        options = options with { PositionIndependent = true };
+        if (kind == LibraryKind.Dynamic) {
+            var name = Path.GetFileName(outputPath);
+            List<string> shared = target.Platform switch {
+                NativePlatform.MacOS => ["-shared", "-Wl,-install_name,@rpath/" + name],
+                NativePlatform.Linux => ["-shared", "-Wl,-soname," + name],
+                _ => ["-shared"],
+            };
+            return Build(llvmIr, outputPath, options, runtimeCache, shared);
+        }
+
+        options = options with { Lto = LtoMode.Off };
+        var (runtime, compiled) = RuntimeObject(options, [], runtimeCache ?? DefaultRuntimeCache);
+        if (!compiled.Succeeded) {
+            return compiled;
+        }
+
+        var directory = Directory.CreateTempSubdirectory("sable-library-");
+        try {
+            var program = Path.Combine(directory.FullName, "program" + (target.Platform == NativePlatform.Windows ? ".obj" : ".o"));
+            var built = NativeObjects.CompileIr(llvmIr, program, options);
+            if (!built.Succeeded) {
+                return built;
+            }
+
+            // The archive is made beside the library and moved over it: an
+            // archiver adds to an archive that is there.
+            var temporary = Path.Combine(directory.FullName, Path.GetFileName(outputPath));
+            var (archiver, arguments) = Archiver(target, temporary, [program, runtime]);
+            var (exitCode, output) = Run(archiver, arguments);
+            if (exitCode != 0) {
+                return new(false, output);
+            }
+
+            File.Move(temporary, outputPath, overwrite: true);
+            return new(true, output);
+        } catch (System.ComponentModel.Win32Exception failure) {
+            return new(false, $"could not run the archiver: {failure.Message}; set AR to one that can write archives for {target.Triple}");
+        } finally {
+            directory.Delete(true);
+        }
+    }
+
+    /// <summary>
+    ///     Compiles the program's IR as an optimised build does, to an object
+    ///     that is thrown away, for what LLVM says about it: the output of
+    ///     clang run with <paramref name="flags" />, such as the
+    ///     <c>-Rpass</c> remarks <see cref="VectorizationReport" /> reads.
+    /// </summary>
+    public static NativeBuildResult Remarks(string llvmIr, NativeOptions options, IReadOnlyList<string> flags) {
+        var target = options.TargetOrHost;
+        var directory = Directory.CreateTempSubdirectory("sable-remarks-");
+        try {
+            var irPath = Path.Combine(directory.FullName, "program.ll");
+            File.WriteAllText(irPath, ForTarget(llvmIr, target));
+            var (exitCode, output) = Run(
+                CompilerPath,
+                [..target.ClangFlags, ..SysrootFlags(options), $"-O{options.OptLevel}", "-fno-color-diagnostics", ..flags, "-Wno-override-module", "-c", irPath, "-o", Path.Combine(directory.FullName, "program.o")]
+            );
+            return new(exitCode == 0, output);
+        } finally {
+            directory.Delete(true);
+        }
+    }
+
+    /// <summary>
+    ///     What makes a static library of <paramref name="objects" />: <c>$AR</c>
+    ///     when it is set; for Windows, LLVM's <c>llvm-lib</c>, which writes the
+    ///     archives Microsoft's linker reads; elsewhere the system's <c>ar</c>.
+    /// </summary>
+    static (string Program, IReadOnlyList<string> Arguments) Archiver(NativeTarget target, string output, IReadOnlyList<string> objects) {
+        if (Environment.GetEnvironmentVariable("AR") is { Length: > 0 } ar) {
+            return (ar, ["rcs", output, ..objects]);
+        }
+
+        return target.Platform == NativePlatform.Windows
+            ? ("llvm-lib", ["/out:" + output, ..objects])
+            : ("ar", ["rcs", output, ..objects]);
     }
 
     /// <summary>Why an executable cannot be linked for <paramref name="target" />.</summary>
@@ -369,7 +504,7 @@ public static class NativeBuild {
         // the program's code, and stepping goes over it as over a system
         // library.
         var level = options.DebugInfo && !options.Optimise ? "-O2" : $"-O{options.OptLevel}";
-        List<string> flags = [..target.ClangFlags, ..SysrootFlags(options), "-c", level, ..bitcode];
+        List<string> flags = [..target.ClangFlags, ..SysrootFlags(options), "-c", level, ..PositionIndependentFlags(options), ..bitcode];
 
         var key = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(
             $"sable-runtime-1\n{NativeObjects.CompilerIdentity}\n{string.Join(' ', flags)}\n{target.Triple}\n{RuntimeSource}")));
@@ -398,6 +533,13 @@ public static class NativeBuild {
             File.Delete(temporary);
         }
     }
+
+    /// <summary>
+    ///     <c>-fPIC</c>, for a library on a target whose code is not
+    ///     position-independent unless asked: ELF's (<see cref="NativeOptions.PositionIndependent" />).
+    /// </summary>
+    public static IReadOnlyList<string> PositionIndependentFlags(NativeOptions options) =>
+        options.PositionIndependent && options.TargetOrHost.Platform is NativePlatform.Linux ? ["-fPIC"] : [];
 
     /// <summary>The flags the program's IR is compiled with: its optimisation level, and <c>-g</c> for debug information.</summary>
     public static IReadOnlyList<string> CompileFlags(NativeOptions options) =>

@@ -1,0 +1,73 @@
+module Negative.DeclaredSendable
+
+// A type that declares ': Sendable' is checked where it is declared: what
+// it holds, through fields, payloads and type arguments, must be Sendable.
+
+class Ref {
+    var n: Int = 0
+}
+
+@immutable
+class Frozen {
+    let n: Int = 0
+}
+
+protocol Message: Sendable { }
+
+struct Holds: Sendable { //! S3410 'Holds' cannot be Sendable: its field 'r' has type 'Ref', which is not Sendable: 'Ref' is a class, whose state is shared; make it '@immutable', '@MainActor', or an actor
+    var r: Ref
+}
+
+struct Inner {
+    var r: Ref
+}
+
+struct Outer: Sendable { //! S3410 'Outer' cannot be Sendable: its field 'inner' has type 'Inner', which is not Sendable: 'Inner' holds 'r', and 'Ref' is a class, whose state is shared; make it '@immutable', '@MainActor', or an actor
+    var inner: Inner
+}
+
+struct Many: Message { //! S3410 'Many' cannot be Sendable: its field 'refs' has type 'Ref[]', which is not Sendable: 'Ref' is a class, whose state is shared; make it '@immutable', '@MainActor', or an actor
+    var refs: Ref[]
+}
+
+struct Box<T> {
+    var item: T
+}
+
+struct Boxed: Sendable { //! S3410 'Boxed' cannot be Sendable: its field 'box' has type 'Box<Ref>', which is not Sendable: 'Box<Ref>' holds 'item', and 'Ref' is a class, whose state is shared; make it '@immutable', '@MainActor', or an actor
+    var box: Box<Ref>
+}
+
+struct Generic<T>: Sendable { //! S3410 'Generic' cannot be Sendable: its field 'item' has type 'T', which is not Sendable: 'T' is not constrained to be Sendable
+    var item: T
+}
+
+union Event: Sendable { //! S3410 'Event' cannot be Sendable: its case 'Changed' carries 'Ref', which is not Sendable: 'Ref' is a class, whose state is shared; make it '@immutable', '@MainActor', or an actor
+    Started
+    Changed(Ref)
+}
+
+class Shared: Sendable { //! S3410 'Shared' cannot be Sendable: 'Shared' is a class, whose state is shared; make it '@immutable', '@MainActor', or an actor
+    var n: Int = 0
+}
+
+// These are what they say.
+struct Fine: Sendable {
+    var n: Int
+    var name: String
+    var frozen: Frozen
+    var box: Box<Int>
+}
+
+struct Constrained<T: Sendable>: Sendable {
+    var item: T
+}
+
+union Tree: Sendable {
+    Leaf
+    Node(value: Int, left: Tree, right: Tree)
+}
+
+actor Counter: Sendable {
+    var n: Int = 0
+}

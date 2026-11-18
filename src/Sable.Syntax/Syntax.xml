@@ -202,6 +202,11 @@
     <Field Name="SelfKeyword" Type="Token" />
   </Node>
 
+  <Node Name="LiteralTypeSyntax" Base="TypeSyntax" Kind="LiteralType"
+        Doc="`4` in `Buf&lt;Int, 4&gt;`: a value given to a value generic parameter.">
+    <Field Name="Token" Type="Token" />
+  </Node>
+
   <Node Name="ParenthesizedTypeSyntax" Base="TypeSyntax" Kind="ParenthesizedType"
         Doc="`(T)`.">
     <Field Name="OpenParenToken" Type="Token" />

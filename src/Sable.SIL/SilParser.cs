@@ -270,6 +270,10 @@ public sealed class SilParser {
 
                 Expect("=");
                 module.Foreign[name] = (Expect(TokenKind.String, "a C symbol").Text, type);
+                if (Accept("variadic")) {
+                    module.ForeignVariadic[name] = int.Parse(Expect(TokenKind.Number, "the count of fixed parameters").Text, CultureInfo.InvariantCulture);
+                }
+
                 continue;
             }
 
@@ -695,10 +699,16 @@ public sealed class SilParser {
                 break;
 
             case "builtin": {
+                var inBounds = Accept("[");
+                if (inBounds) {
+                    Expect("in_bounds");
+                    Expect("]");
+                }
+
                 var name = Expect(TokenKind.String, "a builtin name").Text;
                 var arguments = OperandList(0);
                 Expect(":");
-                instruction = new BuiltinInst(name, ParseType(), [..arguments]);
+                instruction = new BuiltinInst(name, ParseType(), [..arguments]) { InBounds = inBounds };
                 break;
             }
 

@@ -1,0 +1,67 @@
+module Negative.ReferenceCycles
+
+// A parent holding its children, and each child its parent, strongly.
+class Parent {
+    var children: Child[>..] = []   //! S3460 Child.parent → Parent
+}
+
+class Child {
+    var parent: Parent?
+}
+
+// A weak way back breaks it.
+class Folder {
+    var files: File[>..] = []
+}
+
+class File {
+    weak var folder: Folder?
+}
+
+// Unowned too.
+class Account {
+    var card: Card?
+}
+
+class Card {
+    unowned let owner: Account
+
+    init(owner: Account) {
+        self.owner = owner
+    }
+}
+
+// A class holding its own kind is a list or a tree, not a cycle.
+class Node {
+    var next: Node?
+    var children: Node[>..] = []
+}
+
+// Three classes round, through a struct, a tuple and an optional; reported
+// once, at the first.
+struct Slot {
+    var held: (Int, Gamma?)
+}
+
+class Alpha {
+    var beta: Beta?                 //! S3460 Alpha.beta → Beta.slot → Gamma.alpha → Alpha
+}
+
+class Beta {
+    var slot: Slot = Slot { held: (0, none) }
+}
+
+class Gamma {
+    var alpha: Alpha?
+}
+
+// A subclass inherits its superclass's fields, and with them the cycle.
+class Base {
+    var owner: Owner?
+}
+
+class Derived: Base { }             //! S3460 Derived.owner → Owner.part → Derived
+
+class Owner {
+    var part: Derived?
+}

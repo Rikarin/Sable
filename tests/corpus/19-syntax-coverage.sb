@@ -13,22 +13,22 @@ fn both(_ ok: () -> Int, onFail: () -> Int) -> Int => ok() + onFail()
 fn classify(_ n: Int) -> String {
     switch n {
         case 0:
-        return "zero"
+            return "zero"
         case 1, 2:
-        return "small"
+            return "small"
         default:
-        return "large"
+            return "large"
     }
 }
 
 fn sign(_ n: Int) -> Int {
     match n {
         case 0:
-        return 0
+            return 0
         case let m where m > 0:
-        return 1
+            return 1
         default:
-        return -1
+            return -1
     }
 }
 
@@ -46,10 +46,25 @@ fn first(_ values: Int?) -> Int {
     }
 }
 
+// A value generic parameter, given a number as a type argument.
+struct Ring<T, N: Int> where N > 0 {
+    var slots: T[N]
+}
+
+fn ringSize<T, N: Int>(_ ring: Ring<T, N>) -> Int {
+    return N
+}
+
 fn main() {
+    let ring = Ring<Int, 2> { slots: [1, 2] }
+    print(ringSize(ring))
     let small = Platform.pointerWidth / 4 + Reflection.typeName(1).count
     let size = if small > 10 { "big" } else { "small" }
     let total = both { 1 } onFail: { 2 }
     let forced: Int! = 3
+    let kind: Int.Type = Int.self
+    let list = Int[>..].self
+    let optional = Int?.self
     print("\(size) \(total) \(classify(2)) \(describe(1)) \(first(4)) \(forced + 1) \(sign(-3))")
+    print("\(Reflection.typeName(kind)) \(Reflection.typeName(list)) \(Reflection.typeName(optional))")
 }

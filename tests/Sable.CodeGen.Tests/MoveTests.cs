@@ -148,6 +148,70 @@ public sealed class MoveTests {
             ).Stdout
         );
 
+    /// <summary>
+    ///     A move-only field of an object is borrowed where it is too —
+    ///     through a temporary object, a variable, a parameter, value fields
+    ///     inside the object and another object — and the object lives until
+    ///     the borrow ends. An initialiser that stores a consumed parameter
+    ///     moves it in, so each resource is closed once.
+    /// </summary>
+    [Fact]
+    public void AMethodOnAMoveOnlyFieldOfAnObjectBorrowsItInPlace() =>
+        Assert.Equal(
+            "opened 3\nclosed 4\nclosed 3\nhandle 3\nopened 1\nopened 2\nhandle 1\nhandle 2\nhandle 1handle 2\n1\nfailed 2\nhandle 1\nend\nclosed 2\nclosed 1\n",
+            AssertAgree(
+                Program(
+                    Handle + """
+
+                             @noncopy struct Box { var value: Handle }
+                             class C {
+                                 var h: Handle
+                                 var box: Box
+                                 init(h: Handle, box: Box) { self.h = h; self.box = box }
+                             }
+                             class Outer {
+                                 var c: C
+                                 init(c: C) { self.c = c }
+                             }
+                             fn both(_ c: C) -> String { return c.h.describe() + c.box.value.describe() }
+                             fn checked(_ h: Handle) throws(String) -> Int {
+                                 if h.id > 1 { throw "failed \(h.id)" }
+                                 return h.id
+                             }
+                             """,
+                    """
+                        let first = C(h: acquire(3), box: Box { value: Handle { id: 4 } }).h.describe()
+                        print(first)
+                        let c = C(h: acquire(1), box: Box { value: acquire(2) })
+                        print(c.h.describe())
+                        print(c.box.value.describe())
+                        print(both(c))
+                        do {
+                            print(try checked(c.h))
+                            print(try checked(c.box.value))
+                        } catch {
+                            print(error)
+                        }
+                        let o = Outer(c: c)
+                        print(o.c.h.describe())
+                        print("end")
+                    """
+                )
+            ).Stdout
+        );
+
+    [Fact]
+    public void AMoveOnlyFieldOfAnObjectStillCannotBeMovedOut() =>
+        Rejects(
+            Handle + "\nclass C {\n    var h: Handle\n    init(h: Handle) { self.h = h }\n}\n",
+            """
+                let c = C(h: acquire(1))
+                let moved = c.h
+                print(moved.id)
+            """,
+            "cannot be moved out of a field or an element; move the whole value"
+        );
+
     [Fact]
     public void AMoveOnlyFieldStillCannotBeMovedOut() =>
         Rejects(

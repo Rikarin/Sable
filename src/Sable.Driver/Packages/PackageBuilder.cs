@@ -227,7 +227,7 @@ public static class PackageBuilder {
 
                 // Unchanged sources, the same lints: the same answer, read
                 // rather than worked out again.
-                var lints = string.Join(",", Sable.Symbols.Lints.All.Select(l => $"{l.Name}={member.Manifest.Lints.LevelOf(l)}"));
+                var lints = member.Manifest.Lints.Fingerprint;
                 var key = ResultCache.Key(program, $"check|{lints}|{string.Join(",", linted.Select(static t => t.Text.FileName))}");
                 var cached = Path.Combine(workspace.TargetDirectory, "check", ResultCache.FileName($"{member.Name}-{target?.Name ?? "lib"}") + ".json");
                 IReadOnlyList<string> errors, warnings;
@@ -253,6 +253,48 @@ public static class PackageBuilder {
 
         environment.Error.WriteLine($"    Finished checking in {clock.Elapsed.TotalSeconds:0.00}s");
         return 0;
+    }
+
+    /// <summary>
+    ///     <c>sable fix</c>: applies what the lints of <c>sable check</c> say
+    ///     how to fix, at the levels of each member's <c>[lints]</c> table,
+    ///     to the member's own files — never a dependency's, nor what the
+    ///     generators wrote. With <paramref name="checkOnly" />, says what it
+    ///     would change instead, and fails if anything. Returns the exit code.
+    /// </summary>
+    public static int Fix(Workspace workspace, PackageEnvironment environment, BuildRequest request, bool checkOnly) {
+        var graph = Resolve(workspace, environment, request);
+        var failed = false;
+        foreach (var member in Selected(workspace, request.Package)) {
+            var resolved = graph.Packages[member.Name];
+            environment.Error.WriteLine($"    Fixing {Describe(resolved, workspace)}");
+            var targets = new List<BinTarget?>();
+            if (member.LibrarySources().Count > 0) {
+                targets.Add(null);
+            }
+
+            targets.AddRange(member.Bins);
+            var reported = new List<string>();
+            if (Generate(graph, member.Name, environment, reported, optimise: false) is not { } generated) {
+                failed = true;
+                continue;
+            }
+
+            var own = member.LibrarySources().ToDictionary(f => SourceOf(graph, resolved, f).Name, Path.GetFullPath, StringComparer.Ordinal);
+            foreach (var target in targets) {
+                var files = target is null ? own : new Dictionary<string, string>(StringComparer.Ordinal) { [SourceOf(graph, resolved, target.Path).Name] = Path.GetFullPath(target.Path) };
+                failed |= LintFixer.Run(
+                    () => Program(graph, member.Name, target, generated: generated),
+                    program => [..program.Where(t => files.ContainsKey(t.Text.FileName))],
+                    tree => files[tree.Text.FileName],
+                    member.Manifest.Lints,
+                    checkOnly,
+                    environment.Error,
+                    environment.Error) != 0;
+            }
+        }
+
+        return failed ? 1 : 0;
     }
 
     /// <summary>

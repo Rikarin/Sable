@@ -15,34 +15,57 @@ public sealed class LintCommand : Command {
     public override string Summary => "run the lints over loose source files ('check' lints a package)";
 
     public override string Usage => $"""
-        usage: sable lint [paths...] [--allow <lint>] [--warn <lint>] [--error <lint>] [--list]
+        usage: sable lint [paths...] [--allow <lint>] [--warn <lint>] [--error <lint>] [--plugin <dll>] [--list]
 
           paths            .sb files, or directories of them (default: the current directory)
           --allow <lint>   turn a lint off
           --warn <lint>    report it as a warning
           --error <lint>   report it as an error, and fail
+          --plugin <dll>   load more lints from a plugin (docs/05 §5.7)
           --list           list the lints with their default levels
+          'sable fix' applies the fixes the lints suggest.
 
           The lints: {string.Join(", ", Lints.All.Select(static l => l.Name))}
         """;
 
-    public override int Run(IReadOnlyList<string> arguments) {
-        var configuration = LintConfiguration.Default;
-        var paths = new List<string>();
+    /// <summary>
+    ///     Reads the options <c>sable lint</c> and <c>sable fix</c> share: the
+    ///     plugins, then the levels (which may name a plugin's lints), and
+    ///     the paths. Null when they are all right; otherwise the exit code,
+    ///     having said what is wrong.
+    /// </summary>
+    internal static int? ReadOptions(IReadOnlyList<string> arguments, string command, out List<string> paths, out LintConfiguration configuration) {
+        paths = [];
+        configuration = LintConfiguration.Default;
         for (var i = 0; i < arguments.Count; i++) {
-            if (arguments[i] == "--list") {
-                foreach (var lint in Lints.All) {
-                    Console.WriteLine($"{lint.Name,-20} {lint.DefaultLevel.ToString().ToLowerInvariant(),-6} S{(int)lint.Code:D4}  {lint.Description}");
-                }
+            if (arguments[i] != "--plugin") {
+                continue;
+            }
 
-                return 0;
+            if (i + 1 >= arguments.Count) {
+                Console.Error.WriteLine($"sable {command}: '--plugin' needs the plugin's path");
+                return 2;
+            }
+
+            try {
+                configuration = configuration.WithPlugin(Lints.LoadPlugin(arguments[++i]));
+            } catch (Exception e) when (e is LintPluginException or ArgumentException) {
+                Console.Error.WriteLine($"sable {command}: {e.Message}");
+                return 1;
+            }
+        }
+
+        for (var i = 0; i < arguments.Count; i++) {
+            if (arguments[i] == "--plugin") {
+                i++;
+                continue;
             }
 
             if (arguments[i] is "--allow" or "--warn" or "--error" && i + 1 < arguments.Count) {
                 var level = LintConfiguration.ParseLevel(arguments[i][2..])!.Value;
                 var name = arguments[++i];
-                if (Lints.Find(name) is null) {
-                    Console.Error.WriteLine($"sable lint: no lint named '{name}'; 'sable lint --list' lists them");
+                if (configuration.Find(name) is null) {
+                    Console.Error.WriteLine($"sable {command}: no lint named '{name}'; 'sable lint --list' lists them");
                     return 2;
                 }
 
@@ -51,10 +74,28 @@ public sealed class LintCommand : Command {
             }
 
             if (arguments[i].StartsWith('-')) {
-                return BadUsage();
+                Console.Error.WriteLine($"sable {command}: unknown option '{arguments[i]}'");
+                return 2;
             }
 
             paths.Add(arguments[i]);
+        }
+
+        return null;
+    }
+
+    public override int Run(IReadOnlyList<string> arguments) {
+        var list = arguments.Contains("--list");
+        if (ReadOptions([..arguments.Where(static a => a != "--list")], "lint", out var paths, out var configuration) is { } failure) {
+            return failure;
+        }
+
+        if (list) {
+            foreach (var lint in configuration.All) {
+                Console.WriteLine($"{lint.Name,-20} {lint.DefaultLevel.ToString().ToLowerInvariant(),-6} S{(int)lint.Code:D4}  {lint.Description}");
+            }
+
+            return 0;
         }
 
         var files = FmtCommand.SourceFiles(paths.Count == 0 ? ["."] : paths).ToList();

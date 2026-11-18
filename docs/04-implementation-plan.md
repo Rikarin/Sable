@@ -1676,8 +1676,32 @@ loaded in any test.
   package's own files (not its dependencies'), at the levels of the
   manifest's `[lints]` table, once the package type-checks; a lint at
   `error` fails the check. `sable lint <paths>` lints loose files with levels
-  given on the command line. Plugin loading of third-party lints is not
-  built.
+  given on the command line.
+  Later (#204): `unused_result` (S3308), and `shadowed_local` (S3390: a
+  `let` in an inner block hiding one from a block around it; rebinding in
+  the same block and `if let x = x` are not), `self_assignment` (S3391),
+  `unused_private` (S3392: a private function or type named nowhere outside
+  its own declaration, every file of the module searched), and
+  `constant_arithmetic` (S3394: arithmetic on numbers written out that
+  overflows, or division by a zero written out, in a body — a `const`'s is
+  already the compiler's S3201). Deprecated use, unknown and misplaced
+  attributes are the compiler's (S3095, S3092, S3093), and a `catch` whose
+  `do` throws nothing has its body reported unreachable (S6005). A lint's
+  report can carry a fix (`Diagnostic.Fixes`, text edits): prefixing `_`,
+  renaming a parameter but keeping its label, removing an import or a
+  self-assignment, `var` to `let`, `let _ =` before a dropped result.
+  **`sable fix`** applies them to the package's own files (or to loose
+  files, with `sable lint`'s options), compiling and linting again after
+  each round until nothing is left, putting the files back if a round ever
+  broke the program; `--check` says what it would do. The language server
+  offers each lint's fix as its preferred quick fix. **Plugins**: a .NET
+  assembly whose public `Lint` subclasses are lints, loaded beside the
+  compiler by `[lints] plugins = ["path.dll"]` or `sable lint --plugin`;
+  their lints report as S3397, take levels and `@allow` like built-in
+  ones, and one that throws is reported (S3398) while the rest run. Not
+  yet: plugins written in Sable (they would need the semantic model exposed
+  to Sable code), and `_ = f()` (SYNTAX.md's discard) does not parse, so
+  the fix writes `let _ =`.
 
 ### Debugging, as implemented
 

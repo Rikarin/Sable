@@ -9,8 +9,9 @@ namespace Sable.LanguageServer;
 /// <summary>
 ///     <c>textDocument/codeAction</c>: quick fixes for what the lints report
 ///     — the fix each one's message suggests, and turning the lint off for
-///     the declaration with <c>@allow</c>. Syntax alone: they need the text,
-///     not a compilation.
+///     the declaration with <c>@allow</c>. Those of the older lints are
+///     worked out from the text alone; any other lint's are the fixes it
+///     carried when it ran over the document's compilation.
 /// </summary>
 public sealed partial class LanguageServer {
     [GeneratedRegex(@"\[([a-z_]+)\]$")]
@@ -19,15 +20,16 @@ public sealed partial class LanguageServer {
     [GeneratedRegex("'([A-Za-z_][A-Za-z0-9_]*)'")]
     private static partial Regex QuotedIdentifier();
 
-    Task<JsonNode?> CodeActionsAsync(WorkspaceSnapshot snapshot, JsonElement parameters, CancellationToken cancellation) {
+    async Task<JsonNode?> CodeActionsAsync(WorkspaceSnapshot snapshot, JsonElement parameters, CancellationToken cancellation) {
         var document = DocumentOf(snapshot, parameters);
         var actions = new JsonArray();
         var context = parameters.Get("context");
         if (context?.Get("only") is { ValueKind: JsonValueKind.Array } only
             && !only.EnumerateArray().Any(static k => k.GetString() is { } kind && ("quickfix".StartsWith(kind, StringComparison.Ordinal) || kind.Length == 0))) {
-            return Task.FromResult<JsonNode?>(actions);
+            return actions;
         }
 
+        IReadOnlyList<Diagnostic>? lints = null;
         foreach (var diagnostic in context?.Get("diagnostics")?.EnumerateArray() ?? default) {
             cancellation.ThrowIfCancellationRequested();
             if (diagnostic.GetString("source") != "sable" || diagnostic.GetString("code") is not { } code || diagnostic.Get("range") is not { } range) {
@@ -44,6 +46,11 @@ public sealed partial class LanguageServer {
             var message = diagnostic.GetString("message") ?? "";
             if (FixOf(document, code, span, message) is var (title, edits) && edits.Count > 0) {
                 actions.Add(Action(document, title, diagnostic, edits, true));
+            } else {
+                lints ??= (await AnalysisOfAsync(snapshot, document)).LintsOf(document.Tree, cancellation);
+                foreach (var fix in lints.Where(d => d.Id == code && d.Span == span && d.Message == message).SelectMany(static d => d.Fixes).Take(1)) {
+                    actions.Add(Action(document, fix.Title, diagnostic, [..fix.Changes.Select(c => TextEdit(document, c.Span, c.NewText))], true));
+                }
             }
 
             if (AllowOf(document, span, lint.Groups[1].Value) is { } allow) {
@@ -51,7 +58,7 @@ public sealed partial class LanguageServer {
             }
         }
 
-        return Task.FromResult<JsonNode?>(actions);
+        return actions;
     }
 
     static JsonObject Action(Document document, string title, JsonElement diagnostic, IReadOnlyList<JsonObject> edits, bool preferred) =>

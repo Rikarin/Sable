@@ -489,3 +489,7 @@ the declarations but cannot read, write or run anything.
 - Third-party lints are packages that implement a `Lint` protocol against the
   `SemanticModel` API, loaded as plugins by `sable check`. This only works
   because the semantic layer was designed as a product in Phase 1.
+  Today a plugin is a .NET assembly of `Sable.Symbols.Lint` subclasses,
+  named by `[lints] plugins = [...]` or `sable lint --plugin`.
+- `sable fix` applies the fixes lints carry (`var` to `let`, an unused import
+  removed, ...), and `sable fix --check` says what it would change.

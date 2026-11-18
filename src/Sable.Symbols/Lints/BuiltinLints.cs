@@ -188,6 +188,17 @@ internal sealed class BodyFacts {
 
     public static bool Ignored(string name) => name.StartsWith('_');
 
+    /// <summary>The identifier that names a binding in its declaration, if it is written there.</summary>
+    public static SyntaxToken? NameToken(SyntaxNode declaration, string name) {
+        foreach (var token in declaration.DescendantTokens()) {
+            if (token.Kind == SyntaxKind.IdentifierToken && token.Text == name) {
+                return token;
+            }
+        }
+
+        return null;
+    }
+
     public static IEnumerable<SyntaxNode> AncestorsAndSelf(SyntaxNode? node) {
         for (; node is not null; node = node.Parent) {
             yield return node;
@@ -215,7 +226,12 @@ internal sealed class UnusedLocalLint : Lint {
                     LocalOrigin.Condition or LocalOrigin.Pattern or LocalOrigin.Destructuring => "binding",
                     _ => local.IsMutable ? "variable" : "constant",
                 };
-                context.Report(local.DeclaringSyntax[0], $"{what} '{local.Name}' is never read; use '_' for a value nobody needs");
+                var message = $"{what} '{local.Name}' is never read; use '_' for a value nobody needs";
+                if (BodyFacts.NameToken(local.DeclaringSyntax[0], local.Name) is { } name) {
+                    context.Report(local.DeclaringSyntax[0], message, LintContext.Fix($"Prefix '{local.Name}' with '_'", TextChange.Insert(name.Span.Start, "_")));
+                } else {
+                    context.Report(local.DeclaringSyntax[0], message);
+                }
             }
         }
     }
@@ -245,7 +261,13 @@ internal sealed class UnusedParameterLint : Lint {
                         continue;
                     }
 
-                    context.Report(syntax, $"parameter '{parameter.Name}' is never read; name it '_{parameter.Name}' if the signature needs it");
+                    // Callers write the label, so it stays: a parameter
+                    // whose name is its label keeps that name as the label.
+                    var renamed = "_" + syntax.Identifier.Text;
+                    var fix = syntax.Label.IsNone || syntax.Label.IsMissing
+                        ? LintContext.Fix($"Name the parameter '{renamed}', keeping its label", TextChange.Replace(syntax.Identifier.Span, $"{syntax.Identifier.Text} {renamed}"))
+                        : LintContext.Fix($"Name the parameter '{renamed}'", TextChange.Replace(syntax.Identifier.Span, renamed));
+                    context.Report(syntax, $"parameter '{parameter.Name}' is never read; name it '_{parameter.Name}' if the signature needs it", fix);
                 }
             }
         }
@@ -256,7 +278,7 @@ internal sealed class UnusedParameterLint : Lint {
     ///     override's, an entry point's, or one that may satisfy a protocol's
     ///     requirement of that name.
     /// </summary>
-    static bool SignatureIsDictated(FunctionSymbol function) {
+    internal static bool SignatureIsDictated(FunctionSymbol function) {
         if (function.FunctionKind is FunctionKind.Accessor or FunctionKind.Deinitializer
             || function.IsOverride || function.IsAbstract || function.Name == "main") {
             return true;
@@ -324,7 +346,18 @@ internal sealed class UnusedImportLint : Lint {
             }
 
             if (!NamesFrom(context.Compilation, module).Overlaps(written)) {
-                context.Report(import, $"nothing from '{module.Name}' is used here");
+                var message = $"nothing from '{module.Name}' is used here";
+                if (context.WholeLinesOf(import) is { } lines) {
+                    // The last import between blank lines takes one of them with it.
+                    var text = context.Tree.Text.Text;
+                    if (lines.End < text.Length && text[lines.End] == '\n' && lines.Start >= 2 && text[lines.Start - 1] == '\n' && text[lines.Start - 2] == '\n') {
+                        lines = TextSpan.FromBounds(lines.Start, lines.End + 1);
+                    }
+
+                    context.Report(import, message, LintContext.Fix("Remove the import", TextChange.Delete(lines)));
+                } else {
+                    context.Report(import, message);
+                }
             }
         }
     }
@@ -377,7 +410,8 @@ internal sealed class VarNeverMutatedLint : Lint {
                     continue;
                 }
 
-                context.Report(statement.LetOrVarKeyword.Parent ?? declarator, $"'{local.Name}' is never changed; declare it with 'let'");
+                context.Report(statement.LetOrVarKeyword.Parent ?? declarator, $"'{local.Name}' is never changed; declare it with 'let'",
+                    LintContext.Fix("Declare it with 'let'", TextChange.Replace(statement.LetOrVarKeyword.Span, "let")));
             }
         }
     }
@@ -418,7 +452,7 @@ internal sealed class UnusedResultLint : Lint {
     public override string Name => "unused_result";
     public override ErrorCode Code => ErrorCode.LNT_UnusedResult;
     public override LintLevel DefaultLevel => LintLevel.Warn;
-    public override string Description => "a call's result left unused, where the function is not '@discardable'; write '_ = f()' if that is meant";
+    public override string Description => "a call's result left unused, where the function is not '@discardable'; write 'let _ = f()' if that is meant";
 
     public override void Check(LintContext context) {
         foreach (var body in context.Bodies) {
@@ -434,7 +468,8 @@ internal sealed class UnusedResultLint : Lint {
             }
 
             if (expression is BoundCall call && Discards(context.Compilation, call)) {
-                context.Report(call.Syntax, $"the result of '{call.Function.Name}' is unused; write '_ = ...' if that is meant, or mark '{call.Function.Name}' '@discardable'");
+                context.Report(call.Syntax, $"the result of '{call.Function.Name}' is unused; write 'let _ = ...' if that is meant, or mark '{call.Function.Name}' '@discardable'",
+                    LintContext.Fix("Drop the result with 'let _ ='", TextChange.Insert(node.Syntax.Span.Start, "let _ = ")));
             }
         }
 

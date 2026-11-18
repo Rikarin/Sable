@@ -18,15 +18,20 @@ public enum LintLevel {
 ///     around it.
 /// </summary>
 /// <remarks>
-///     Third-party lints are meant to implement this against the same API,
-///     loaded by <c>sable check</c> as plugins; that loading is not built yet.
+///     Third-party lints implement this against the same API, in a .NET
+///     assembly that <c>sable check</c> and <c>sable lint</c> load as a
+///     plugin (<see cref="Lints.LoadPlugin" />): each public, concrete
+///     subclass with a constructor that takes nothing is one lint.
 /// </remarks>
 public abstract class Lint {
-    /// <summary>What configuration and attributes call it: <c>unused_local</c>.</summary>
+    /// <summary>What configuration and attributes call it: <c>unused_local</c>. Lower-case letters, digits and '_'.</summary>
     public abstract string Name { get; }
 
-    /// <summary>Its diagnostic code, in S3300-S3399.</summary>
-    public abstract ErrorCode Code { get; }
+    /// <summary>
+    ///     Its diagnostic code, in S3300-S3399. A plugin's lints share
+    ///     S3397, and are told apart by the name each report ends with.
+    /// </summary>
+    public virtual ErrorCode Code => ErrorCode.LNT_PluginLint;
 
     public abstract LintLevel DefaultLevel { get; }
 
@@ -42,7 +47,7 @@ public sealed record LintBody(SyntaxNode Declaration, FunctionSymbol? Function, 
 
 /// <summary>One file, as a lint sees it.</summary>
 public sealed class LintContext {
-    readonly List<(SyntaxNode Node, string Message)> _reports = [];
+    readonly List<(SyntaxNode Node, string Message, DiagnosticFix? Fix)> _reports = [];
     readonly Lazy<IReadOnlyList<LintBody>> _bodies;
 
     internal LintContext(Compilation compilation, SyntaxTree tree) {
@@ -63,9 +68,39 @@ public sealed class LintContext {
     /// </summary>
     public IReadOnlyList<LintBody> Bodies => _bodies.Value;
 
-    public void Report(SyntaxNode node, string message) => _reports.Add((node, message));
+    public void Report(SyntaxNode node, string message) => _reports.Add((node, message, null));
 
-    internal List<(SyntaxNode Node, string Message)> TakeReports() {
+    /// <summary>Reports something with the edits that would fix it, which <c>sable fix</c> applies and an editor offers.</summary>
+    public void Report(SyntaxNode node, string message, DiagnosticFix fix) => _reports.Add((node, message, fix));
+
+    /// <summary>A fix made of some edits.</summary>
+    public static DiagnosticFix Fix(string title, params TextChange[] changes) => new(title, [..changes]);
+
+    /// <summary>
+    ///     The whole lines a node is on, from the start of the first through
+    ///     its line break: what deleting a statement or an import removes, so
+    ///     no blank line is left behind. Null when something else shares them.
+    /// </summary>
+    public TextSpan? WholeLinesOf(SyntaxNode node) {
+        var text = Tree.Text.Text;
+        var start = node.Span.Start;
+        while (start > 0 && text[start - 1] is ' ' or '\t') {
+            start--;
+        }
+
+        var end = node.Span.End;
+        while (end < text.Length && text[end] is ' ' or '\t' or '\r') {
+            end++;
+        }
+
+        if ((start > 0 && text[start - 1] != '\n') || (end < text.Length && text[end] != '\n')) {
+            return null;
+        }
+
+        return TextSpan.FromBounds(start, Math.Min(text.Length, end + 1));
+    }
+
+    internal List<(SyntaxNode Node, string Message, DiagnosticFix? Fix)> TakeReports() {
         var reports = _reports.ToList();
         _reports.Clear();
         return reports;
@@ -97,53 +132,3 @@ public sealed class LintContext {
     }
 }
 
-/// <summary>
-///     Which lints are at which level, by name: what a package's
-///     <c>[lints]</c> table says, over each lint's default.
-/// </summary>
-public sealed class LintConfiguration {
-    readonly ImmutableDictionary<string, LintLevel> _levels;
-
-    LintConfiguration(ImmutableDictionary<string, LintLevel> levels) => _levels = levels;
-
-    /// <summary>Every lint at its default level.</summary>
-    public static LintConfiguration Default { get; } = new(ImmutableDictionary<string, LintLevel>.Empty.WithComparers(StringComparer.Ordinal));
-
-    /// <summary>The same, with one lint at another level.</summary>
-    /// <exception cref="ArgumentException">No lint has that name.</exception>
-    public LintConfiguration With(string name, LintLevel level) =>
-        Lints.Find(name) is null
-            ? throw new ArgumentException($"no lint named '{name}'", nameof(name))
-            : new(_levels.SetItem(name, level));
-
-    public LintLevel LevelOf(Lint lint) => _levels.TryGetValue(lint.Name, out var level) ? level : lint.DefaultLevel;
-
-    /// <summary>
-    ///     Reads a <c>[lints]</c> table: <c>name = "allow" | "warn" | "error"</c>.
-    ///     What it cannot read is in <paramref name="errors" />, and left at its default.
-    /// </summary>
-    public static LintConfiguration FromTable(IEnumerable<KeyValuePair<string, string>> table, out IReadOnlyList<string> errors) {
-        var problems = new List<string>();
-        var configuration = Default;
-        foreach (var (name, value) in table) {
-            if (Lints.Find(name) is null) {
-                problems.Add($"no lint named '{name}'; the lints are {string.Join(", ", Lints.All.Select(static l => l.Name))}");
-            } else if (ParseLevel(value) is not { } level) {
-                problems.Add($"lint '{name}': '{value}' is not a level; use \"allow\", \"warn\" or \"error\"");
-            } else {
-                configuration = configuration.With(name, level);
-            }
-        }
-
-        errors = problems;
-        return configuration;
-    }
-
-    public static LintLevel? ParseLevel(string text) =>
-        text switch {
-            "allow" => LintLevel.Allow,
-            "warn" => LintLevel.Warn,
-            "error" or "deny" => LintLevel.Error,
-            _ => null,
-        };
-}

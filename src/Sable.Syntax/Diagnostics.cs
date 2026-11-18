@@ -1,4 +1,5 @@
 using System.Collections;
+using System.Collections.Immutable;
 using System.Globalization;
 
 namespace Sable.Syntax;
@@ -216,6 +217,14 @@ public enum ErrorCode {
     LNT_VarNeverMutated = 3303,
     LNT_ShadowedParameter = 3304,
     LNT_UnusedResult = 3308,
+    LNT_ShadowedLocal = 3390,
+    LNT_SelfAssignment = 3391,
+    LNT_UnusedPrivate = 3392,
+    LNT_ConstantArithmetic = 3394,
+
+    // A lint a plugin adds (docs/05 §5.7), and one that failed as it ran.
+    LNT_PluginLint = 3397,
+    LNT_PluginFailed = 3398,
     LNT_UnknownLint = 3399,
 
     // ---- Patterns and flow (S6000-S6999) ---------------------------------
@@ -256,6 +265,20 @@ public sealed record Diagnostic(
     string Message) {
     public string Id => "S" + ((int)Code).ToString("D4", CultureInfo.InvariantCulture);
 
+    /// <summary>
+    ///     Edits that would fix it, each complete on its own, in the
+    ///     diagnostic's file: what <c>sable fix</c> applies and an editor
+    ///     offers as a quick fix. Most diagnostics have none.
+    /// </summary>
+    public ImmutableArray<DiagnosticFix> Fixes { get; init; } = [];
+
+    // Two reports of the same thing are equal whatever fixes they carry:
+    // the fixes are advice about the diagnostic, not part of what it says.
+    public bool Equals(Diagnostic? other) =>
+        other is not null && Code == other.Code && Severity == other.Severity && Span == other.Span && Message == other.Message;
+
+    public override int GetHashCode() => HashCode.Combine(Code, Severity, Span, Message);
+
     public static Diagnostic Error(ErrorCode code, TextSpan span, string message) =>
         new(code, DiagnosticSeverity.Error, span, message);
 
@@ -283,6 +306,9 @@ public sealed record Diagnostic(
                 """;
     }
 }
+
+/// <summary>A machine-applicable fix: what it does, in a few words, and the edits that do it.</summary>
+public sealed record DiagnosticFix(string Title, ImmutableArray<TextChange> Changes);
 
 /// <summary>A mutable, ordered collection of diagnostics produced during a compilation step.</summary>
 public sealed class DiagnosticBag : IReadOnlyCollection<Diagnostic> {

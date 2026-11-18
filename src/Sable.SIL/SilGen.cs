@@ -564,18 +564,21 @@ public sealed partial class SilGen {
 
     /// <summary>
     ///     Two functions the entry point calls: one that stores each global's
-    ///     initial value, in the order declared, before anything else runs;
-    ///     one that destroys them, last first, as the program returns.
+    ///     initial value, each after those it reads (SilGen.Globals.cs), before
+    ///     anything else runs; one that destroys them, last first, as the
+    ///     program returns.
     /// </summary>
     void LowerGlobalLifetimes() {
         if (_globalFields.Count == 0 || _entrySymbol is not { } initSymbol) {
             return;
         }
 
+        var ordered = OrderGlobals();
+
         // Lowered in the entry point's context: a function of no parameters.
         var unit = new FunctionType([], SilType.Unit);
         var statements = new List<BoundStatement>();
-        foreach (var (field, _, model) in _globalFields) {
+        foreach (var (field, _, model) in ordered) {
             if (model.GetFieldInitializer(field) is { } initial) {
                 var target = new BoundFieldAccess(initial.Syntax, null, field);
                 statements.Add(new BoundExpressionStatement(initial.Syntax, new BoundAssignment(initial.Syntax, target, initial)));
@@ -591,8 +594,8 @@ public sealed partial class SilGen {
 
         var deinit = new SilFunction(GlobalsDeinit, unit);
         var entry = deinit.AddBlock();
-        for (var i = _globalFields.Count - 1; i >= 0; i--) {
-            var (name, type) = _globalsByField[_globalFields[i].Field];
+        for (var i = ordered.Count - 1; i >= 0; i--) {
+            var (name, type) = _globalsByField[ordered[i].Field];
             if (!type.IsTrivial) {
                 entry.Append(new DestroyAddrInst(entry.Append(new GlobalAddrInst(name, type))));
             }

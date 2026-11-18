@@ -1945,8 +1945,11 @@ internal sealed class Parser {
                     continue;
                 }
 
+                // Where a '{' opens a statement's body — 'if case [let a, ...]
+                // = [x, y] {' — the brackets before it are an array, not the
+                // captures of a closure that brace would start.
                 return Peek(offset + 1).Kind switch {
-                    SyntaxKind.OpenBraceToken => true,
+                    SyntaxKind.OpenBraceToken => !_noBrace,
                     SyntaxKind.OpenParenToken => true,
                     SyntaxKind.IdentifierToken =>
                         Peek(offset + 2).Kind == SyntaxKind.FatArrowToken,

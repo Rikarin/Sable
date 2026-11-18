@@ -4912,7 +4912,8 @@ public sealed partial class SilGen {
                 return value;
             }
 
-            var name = $"convert_{value.Type}_{target}";
+            // 'unchecked as' wraps where 'as' would trap.
+            var name = $"{(conversion.IsUnchecked ? "wrap" : "convert")}_{value.Type}_{target}";
             return SilBuiltins.Find(name) is not null
                 ? Emit(new BuiltinInst(name, target, value))
                 : Missing(conversion, $"the conversion from {value.Type} to {target}");

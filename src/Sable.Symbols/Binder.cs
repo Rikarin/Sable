@@ -4406,9 +4406,96 @@ public sealed partial class Binder {
 
         // 'as?' yields an optional; 'as' and 'as!' yield the type itself.
         var isOptional = syntax.QuestionOrBangToken.Kind == SyntaxKind.QuestionToken;
+        var isPlain = syntax.QuestionOrBangToken.IsNone;
+        var isUnchecked = !syntax.UncheckedKeyword.IsNone;
         var type = isOptional ? new OptionalTypeSymbol(target) : target;
 
-        return new BoundConversion(syntax, type, operand, ConversionKind.Explicit);
+        if (operand.HasError || target.IsError) {
+            return new BoundConversion(syntax, type, operand, ConversionKind.Explicit);
+        }
+
+        var source = operand.Type;
+
+        // Between two numeric types (spec/SYNTAX.md §16): 'as' traps on a
+        // value the target cannot hold, 'unchecked as' wraps or truncates.
+        // Either always gives a number, so neither has a '?' or '!' form.
+        if (Core.IsNumeric(source) && Core.IsNumeric(target)) {
+            if (!isPlain) {
+                return InvalidCast(
+                    syntax,
+                    operand,
+                    $"'{syntax.AsKeyword.Text}{syntax.QuestionOrBangToken.Text}' tests what a value is, and "
+                    + $"'{source.ToDisplayString()}' is always a number: convert it with 'as' or 'unchecked as'"
+                );
+            }
+
+            if (source.Equals(target)) {
+                return new BoundConversion(syntax, type, operand, ConversionKind.Identity);
+            }
+
+            return new BoundConversion(syntax, type, operand, ConversionKind.Explicit) { IsUnchecked = isUnchecked };
+        }
+
+        if (isUnchecked) {
+            return InvalidCast(
+                syntax,
+                operand,
+                $"'unchecked as' converts one numeric type to another, and '{source.ToDisplayString()}' "
+                + $"to '{target.ToDisplayString()}' is not that"
+            );
+        }
+
+        // Between classes, a cast goes up or down one line of inheritance; a
+        // downcast is checked as the program runs. Classes on different lines
+        // have no object in common, so the cast could never succeed.
+        var sourceClass = source is OptionalTypeSymbol optionalSource ? optionalSource.UnderlyingType : source;
+        if (sourceClass is NamedTypeSymbol { TypeKind: TypeKind.Class } && target is NamedTypeSymbol { TypeKind: TypeKind.Class }) {
+            var isUpcast = _conversions.Classify(sourceClass, target, false) is not null;
+            if (!isUpcast && _conversions.Classify(target, sourceClass, false) is null) {
+                return InvalidCast(
+                    syntax,
+                    operand,
+                    $"'{sourceClass.ToDisplayString()}' and '{target.ToDisplayString()}' are unrelated classes, "
+                    + "so no object is both and the cast can never succeed"
+                );
+            }
+
+            // Up the line, nothing needs checking: 'dog as Animal' is an upcast.
+            if (isUpcast && ReferenceEquals(sourceClass, source)) {
+                var upcast = Convert(operand, target, syntax);
+                return isOptional ? new BoundConversion(syntax, type, upcast, ConversionKind.OptionalWrap) : upcast;
+            }
+
+            return new BoundConversion(syntax, type, operand, ConversionKind.Explicit);
+        }
+
+        // A cast that always succeeds is the conversion the context would
+        // make anyway: 'dog as Animal', 'point as any Shape'.
+        if (isPlain && _conversions.Classify(source, target, IsLiteral(operand)) is not null) {
+            return Convert(operand, target, syntax);
+        }
+
+        // What a value is may be known only as the program runs: an
+        // existential, a type parameter, a union of types, an optional.
+        if (IsDynamicallyTyped(source) || IsDynamicallyTyped(target)) {
+            return new BoundConversion(syntax, type, operand, ConversionKind.Explicit);
+        }
+
+        return InvalidCast(
+            syntax,
+            operand,
+            $"'{source.ToDisplayString()}' cannot be cast to '{target.ToDisplayString()}'"
+        );
+    }
+
+    /// <summary>A type whose values may turn out, as the program runs, to be some other type.</summary>
+    static bool IsDynamicallyTyped(TypeSymbol type) =>
+        type is ExistentialTypeSymbol or OpaqueTypeSymbol or CompositionTypeSymbol or StructuralUnionTypeSymbol
+            or TypeParameterSymbol or OptionalTypeSymbol or NamedTypeSymbol { TypeKind: TypeKind.Protocol };
+
+    BoundExpression InvalidCast(CastExpressionSyntax syntax, BoundExpression operand, string message) {
+        _diagnostics.Error(ErrorCode.ERR_InvalidCast, syntax.Span, message);
+        return new BoundError(syntax, operand);
     }
 
     /// <summary>

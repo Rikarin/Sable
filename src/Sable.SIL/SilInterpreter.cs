@@ -1282,6 +1282,11 @@ public sealed partial class SilInterpreter(SilModule module, int stepLimit = 10_
             return ConvertNumber(operands[0], from, to);
         }
 
+        if (name.StartsWith("wrap_", StringComparison.Ordinal)) {
+            var parts = name.Split('_');
+            return Find(parts[1]) is { } from && Find(parts[2]) is { } to ? WrapNumber(operands[0], from, to) : null;
+        }
+
         var separator = name.LastIndexOf('_');
         if (separator < 0 || Find(name[(separator + 1)..]) is not { } type || type == SilType.Int || type == SilType.F64) {
             return null;
@@ -1363,6 +1368,33 @@ public sealed partial class SilInterpreter(SilModule module, int stepLimit = 10_
 
     static object Narrow(Int128 value, SilType type) =>
         type == SilType.U64 || type == SilType.UInt ? (object)(ulong)value : (long)value;
+
+    /// <summary>
+    ///     <c>unchecked as</c>: an integer keeps its low bits, read with the
+    ///     target's sign; a float to an integer goes toward zero and saturates
+    ///     at the target's bounds, NaN giving zero. Nothing here traps.
+    /// </summary>
+    static object WrapNumber(object? value, SilType from, SilType to) {
+        var fromInteger = SilType.IntegerInfo(from);
+        var toInteger = SilType.IntegerInfo(to);
+
+        if (fromInteger is not null && toInteger is var (bits, signed)) {
+            return Narrow(Wrapped(Wide(value), bits, signed), to);
+        }
+
+        if (fromInteger is null && toInteger is var (toBits, toSigned)) {
+            var real = value is float f ? f : (double)value!;
+            var low = toSigned ? -(Int128.One << (toBits - 1)) : Int128.Zero;
+            var high = toSigned ? (Int128.One << (toBits - 1)) - 1 : (Int128.One << toBits) - 1;
+            var clamped = double.IsNaN(real) ? Int128.Zero
+                : real <= (double)low ? low
+                : real >= (double)high ? high
+                : (Int128)Math.Truncate(real);
+            return Narrow(clamped, to);
+        }
+
+        return ConvertNumber(value, from, to);
+    }
 
     static object ConvertNumber(object? value, SilType from, SilType to) {
         var fromInteger = SilType.IntegerInfo(from);

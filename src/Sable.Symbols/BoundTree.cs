@@ -313,6 +313,10 @@ public sealed class BoundConversion(
     : BoundExpression(syntax, type) {
     public BoundExpression Operand { get; } = operand;
     public ConversionKind ConversionKind { get; } = conversionKind;
+
+    /// <summary><c>x unchecked as U8</c>: a numeric conversion that wraps or truncates rather than trapping.</summary>
+    public bool IsUnchecked { get; init; }
+
     public override IEnumerable<BoundNode> Children => Nodes(Operand);
 }
 

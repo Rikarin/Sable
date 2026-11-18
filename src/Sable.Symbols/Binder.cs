@@ -2634,8 +2634,11 @@ public sealed partial class Binder {
                     return null;
                 }
 
+                // A base is read with this type's arguments first: through
+                // 'Counted<String>', 'protocol Counted<U>: Source<U>' is a
+                // Source<String>, whose T is then String.
                 foreach (var baseType in named.BaseTypes) {
-                    if (LookupMemberCore(baseType, name, substitution, visited, selfType)
+                    if (LookupMemberCore(substitution.Apply(baseType), name, substitution, visited, selfType)
                         is { } inherited) {
                         return inherited;
                     }

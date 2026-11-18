@@ -472,4 +472,127 @@ public sealed class GenericsAndConformanceTests {
             ),
             static e => e.Code == ErrorCode.ERR_RequirementSignatureMismatch && e.Message.Contains("'init(seed: Int)'")
         );
+
+    // ---- Generic protocols and variance -------------------------------------
+
+    const string Animals = """
+                           class Animal { }
+                           class Dog: Animal { }
+                           protocol Producer<out T> { fn next() -> T? }
+                           protocol Consumer<in T> { fn accept(_ x: T) }
+                           protocol Source<T> { fn next() -> T? }
+                           struct DogProducer: Producer<Dog> { fn next() -> Dog? => none }
+                           struct AnimalConsumer: Consumer<Animal> { fn accept(_ x: Animal) { } }
+                           struct DogSource: Source<Dog> { fn next() -> Dog? => none }
+                           """;
+
+    [Fact]
+    public void AConformanceToAGenericProtocolReadsItsArguments() =>
+        AssertClean(
+            """
+            protocol Source<T> { fn next() -> T? }
+            struct Ones: Source<Int> { fn next() -> Int? => 1 }
+            fn first<S: Source<Int>>(_ s: S) -> Int => s.next() ?? 0
+            fn probe() -> Int => first(Ones())
+            """
+        );
+
+    [Fact]
+    public void AWrongWitnessForAGenericProtocolIsReported() =>
+        Assert.Contains(
+            Errors(
+                """
+                protocol Source<T> { fn next() -> T? }
+                struct Ones: Source<Int> { fn next() -> String? => none }
+                """
+            ),
+            static e => e.Code == ErrorCode.ERR_RequirementSignatureMismatch
+        );
+
+    [Fact]
+    public void AGenericConformerConformsWithItsOwnArguments() =>
+        AssertClean(
+            """
+            protocol Source<T> { fn next() -> T? }
+            protocol Counted<U>: Source<U> { fn count() -> Int }
+            struct Rep<E>: Counted<E> {
+                var value: E
+                fn next() -> E? => value
+                fn count() -> Int => 1
+            }
+            fn first<S: Source<Int>>(_ s: S) -> Int => s.next() ?? 0
+            fn probe() -> Int => first(Rep(value: 5))
+            fn firstOf(_ s: any Counted<String>) -> String => s.next() ?? ""
+            """
+        );
+
+    [Fact]
+    public void AGenericConformerWithOtherArgumentsDoesNotConform() =>
+        Assert.Contains(
+            Errors(
+                """
+                protocol Source<T> { fn next() -> T? }
+                struct Rep<E>: Source<E> { var value: E; fn next() -> E? => value }
+                fn first<S: Source<Int>>(_ s: S) -> Int => s.next() ?? 0
+                fn probe() -> Int => first(Rep(value: "five"))
+                """
+            ),
+            static e => e.Code == ErrorCode.ERR_NoMatchingOverload
+        );
+
+    [Fact]
+    public void AnOutParametersExistentialIsCovariant() =>
+        AssertClean(
+            $$"""
+              {{Animals}}
+              fn probe() {
+                  let p: any Producer<Animal> = DogProducer()
+              }
+              """
+        );
+
+    [Fact]
+    public void AnInParametersExistentialIsContravariant() =>
+        AssertClean(
+            $$"""
+              {{Animals}}
+              fn probe() {
+                  let c: any Consumer<Dog> = AnimalConsumer()
+              }
+              """
+        );
+
+    [Theory]
+    [InlineData("let p: any Producer<Dog> = AnimalProducer()")]
+    [InlineData("let c: any Consumer<Animal> = DogConsumer()")]
+    [InlineData("let s: any Source<Animal> = DogSource()")]
+    public void VarianceGoesOnlyTheWayItIsDeclared(string declaration) =>
+        Assert.Contains(
+            Errors(
+                $$"""
+                  {{Animals}}
+                  struct AnimalProducer: Producer<Animal> { fn next() -> Animal? => none }
+                  struct DogConsumer: Consumer<Dog> { fn accept(_ x: Dog) { } }
+                  fn probe() {
+                      {{declaration}}
+                  }
+                  """
+            ),
+            static e => e.Code == ErrorCode.ERR_TypeMismatch
+        );
+
+    [Fact]
+    public void AGenericConstraintIsInvariantEvenForAnOutParameter() =>
+        Assert.Contains(
+            Errors(
+                $$"""
+                  {{Animals}}
+                  fn take<P: Producer<Animal>>(_ p: P) { }
+                  fn probe() {
+                      take(DogProducer())
+                  }
+                  """
+            ),
+            static e => e.Code == ErrorCode.ERR_NoMatchingOverload
+        );
 }

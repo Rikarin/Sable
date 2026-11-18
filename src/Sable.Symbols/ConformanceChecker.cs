@@ -283,8 +283,13 @@ internal static class ConformanceChecker {
             return;
         }
 
+        // 'struct Ones: Source<Int>' conforms to Source with T as Int: its
+        // requirements are the definition's, read with the arguments.
+        var arguments = TypeSubstitution.For(protocol);
+        protocol = protocol.OriginalDefinition;
+
         foreach (var refined in protocol.BaseTypes) {
-            if (refined is NamedTypeSymbol { TypeKind: TypeKind.Protocol } parent) {
+            if (arguments.Apply(refined) is NamedTypeSymbol { TypeKind: TypeKind.Protocol } parent) {
                 CheckProtocol(type, parent, diagnostics, seen);
             }
         }
@@ -306,11 +311,11 @@ internal static class ConformanceChecker {
         foreach (var requirement in protocol.Members) {
             switch (requirement) {
                 case FunctionSymbol { IsAbstract: true } function:
-                    CheckFunction(type, protocol, function, diagnostics);
+                    CheckFunction(type, protocol, arguments, function, diagnostics);
                     break;
 
                 case FieldSymbol { IsAbstract: true } field:
-                    CheckProperty(type, protocol, field, diagnostics);
+                    CheckProperty(type, protocol, arguments, field, diagnostics);
                     break;
             }
         }
@@ -319,6 +324,7 @@ internal static class ConformanceChecker {
     static void CheckFunction(
         NamedTypeSymbol type,
         NamedTypeSymbol protocol,
+        TypeSubstitution arguments,
         FunctionSymbol requirement,
         DiagnosticBag diagnostics
     ) {
@@ -336,7 +342,7 @@ internal static class ConformanceChecker {
         }
 
         foreach (var candidate in candidates) {
-            if (!Matches(requirement, candidate, protocol, type)) {
+            if (!Matches(requirement, candidate, protocol, arguments, type)) {
                 continue;
             }
 
@@ -385,6 +391,7 @@ internal static class ConformanceChecker {
     static void CheckProperty(
         NamedTypeSymbol type,
         NamedTypeSymbol protocol,
+        TypeSubstitution arguments,
         FieldSymbol requirement,
         DiagnosticBag diagnostics
     ) {
@@ -417,7 +424,7 @@ internal static class ConformanceChecker {
             return;
         }
 
-        var expected = SubstituteSelf(requirement.Type, protocol, type);
+        var expected = arguments.Apply(SubstituteSelf(requirement.Type, protocol, type));
         if (candidate.Type.Equals(expected) || candidate.Type.IsError || expected.IsError) {
             return;
         }
@@ -436,6 +443,7 @@ internal static class ConformanceChecker {
         FunctionSymbol requirement,
         FunctionSymbol candidate,
         NamedTypeSymbol protocol,
+        TypeSubstitution arguments,
         NamedTypeSymbol conformer
     ) {
         if (candidate.IsStatic != requirement.IsStatic) {
@@ -464,7 +472,7 @@ internal static class ConformanceChecker {
 
         var rename = new TypeSubstitution(renamed);
 
-        TypeSymbol Expected(TypeSymbol type) => rename.Apply(SubstituteSelf(type, protocol, conformer));
+        TypeSymbol Expected(TypeSymbol type) => rename.Apply(arguments.Apply(SubstituteSelf(type, protocol, conformer)));
 
         for (var i = 0; i < requirement.Parameters.Length; i++) {
             var expected = Expected(requirement.Parameters[i].Type);

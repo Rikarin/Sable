@@ -1828,6 +1828,11 @@ public sealed partial class SilGen {
         var layout = new StructType(name);
         var slots = new List<(string, Symbol)>();
         var seen = new HashSet<string>();
+
+        // 'any Producer<Animal>': the definition's requirements, with T read
+        // as Animal — each instance of a generic protocol is a layout of its own.
+        var arguments = TypeSubstitution.For(protocol);
+        protocol = protocol.OriginalDefinition;
         var self = protocol.SelfTypeParameter;
 
         bool MentionsSelf(TypeSymbol type) =>
@@ -1841,7 +1846,7 @@ public sealed partial class SilGen {
                     case FunctionSymbol { IsStatic: false, IsMutating: false, FunctionKind: FunctionKind.Ordinary, TypeParameters.IsEmpty: true } method
                         when seen.Add(SlotName(method)) && !method.Parameters.Any(p => MentionsSelf(p.Type) || p.Modifier != ParameterModifier.None)
                              && !MentionsSelf(method.ReturnType): {
-                        if (Lower(new FunctionTypeSymbol([..method.Parameters.Select(static p => p.Type)], method.ReturnType, false, method.ThrownType)) is ThickFunctionType thick) {
+                        if (Lower(arguments.Apply(new FunctionTypeSymbol([..method.Parameters.Select(static p => p.Type)], method.ReturnType, false, method.ThrownType))) is ThickFunctionType thick) {
                             layout.Fields.Add((SlotName(method), thick));
                             slots.Add((SlotName(method), method));
                         }
@@ -1850,7 +1855,7 @@ public sealed partial class SilGen {
                     }
 
                     case FieldSymbol { IsStatic: false } field when seen.Add(GetterSlot(field)) && !MentionsSelf(field.Type):
-                        if (Lower(new FunctionTypeSymbol([], field.Type)) is ThickFunctionType getter) {
+                        if (Lower(new FunctionTypeSymbol([], arguments.Apply(field.Type))) is ThickFunctionType getter) {
                             layout.Fields.Add((GetterSlot(field), getter));
                             slots.Add((GetterSlot(field), field));
                         }
@@ -1860,7 +1865,17 @@ public sealed partial class SilGen {
             }
 
             foreach (var inherited in current.BaseTypes.OfType<NamedTypeSymbol>().Where(static b => b.TypeKind == TypeKind.Protocol)) {
-                Collect(inherited);
+                // 'protocol Sub<U>: Source<U>' reaches Source's requirements
+                // with U's argument in place of Source's T.
+                if (inherited.IsConstructed) {
+                    var through = TypeSubstitution.For(inherited);
+                    var outer = arguments;
+                    arguments = new TypeSubstitution(inherited.OriginalDefinition.TypeParameters.ToDictionary(static p => p, p => outer.Apply(through.Apply(p))));
+                    Collect(inherited.OriginalDefinition);
+                    arguments = outer;
+                } else {
+                    Collect(inherited);
+                }
             }
         }
 
@@ -1999,6 +2014,14 @@ public sealed partial class SilGen {
             receiver = entry.Append(new UpcastInst(selfValue, parameterClass));
         }
 
+        // An 'in' parameter of a variant existential: the slot takes a Dog
+        // where the witness takes any Animal, which a Dog is.
+        for (var i = 0; i < arguments.Count && i + 1 < targetType.Parameters.Length; i++) {
+            if (arguments[i].Type is ClassType given && targetType.Parameters[i + 1] is ClassType taken && given != taken) {
+                arguments[i] = entry.Append(new UpcastInst(arguments[i], taken));
+            }
+        }
+
         thunk.TrampolineTarget = target;
         SilValue callee = implementation is not null && IsDynamic(implementation)
             ? entry.Append(new ClassMethodInst(receiver, SlotName(implementation), targetType))
@@ -2010,10 +2033,20 @@ public sealed partial class SilGen {
             }
         }
 
+        // An 'out' result of a variant existential: the witness gives a Dog
+        // where the slot promises an Animal.
+        var promised = signature.Signature.Result;
         if (targetType.Thrown is null) {
             var result = entry.Append(new ApplyInst(callee, targetType.Result, [receiver, ..arguments]));
             Release(entry);
-            entry.Append(new ReturnInst(targetType.Result == SilType.Unit ? null : result));
+            var block = entry;
+            SilValue? returned = null;
+            if (targetType.Result != SilType.Unit && (returned = Upcast(thunk, ref block, result, promised)) is null) {
+                Unsupported<object>(at, $"'{method.Name}' of '{concrete.ToDisplayString()}' through an existential, as a '{promised}'");
+                return null;
+            }
+
+            block.Append(new ReturnInst(returned));
         } else {
             var normal = thunk.AddBlock();
             var result = targetType.Result == SilType.Unit ? null : normal.AddArgument(targetType.Result);
@@ -2021,13 +2054,74 @@ public sealed partial class SilGen {
             var error = failed.AddArgument(targetType.Thrown);
             entry.Append(new TryApplyInst(callee, targetType.Result, [receiver, ..arguments], normal, failed));
             Release(normal);
-            normal.Append(new ReturnInst(result));
+            var block = normal;
+            SilValue? returned = null;
+            if (result is not null && (returned = Upcast(thunk, ref block, result, promised)) is null) {
+                Unsupported<object>(at, $"'{method.Name}' of '{concrete.ToDisplayString()}' through an existential, as a '{promised}'");
+                return null;
+            }
+
+            block.Append(new ReturnInst(returned));
+
             Release(failed);
             failed.Append(new ThrowInst(error));
         }
 
         _module.Add(thunk);
         return (name, code);
+    }
+
+    /// <summary>
+    ///     An owned value of a witness's type as the type a variant
+    ///     existential's slot promises (docs/03 §3.4): an object as its
+    ///     superclass, or an optional of one as an optional of the other. The
+    ///     instructions go into <paramref name="block" />, which ends as the
+    ///     block the converted value is in; null when there is no such
+    ///     conversion.
+    /// </summary>
+    static SilValue? Upcast(SilFunction function, ref SilBlock block, SilValue value, SilType to) {
+        if (value.Type == to) {
+            return value;
+        }
+
+        if (value.Type is ClassType && to is ClassType target) {
+            var upcast = block.Append(new CopyValueInst(block.Append(new UpcastInst(value, target))));
+            block.Append(new DestroyValueInst(value));
+            return upcast;
+        }
+
+        if (value.Type is not EnumType { Cases: [("Some", { } wrapped), ("None", null)] } from
+            || to is not EnumType { Cases: [("Some", { } wanted), ("None", null)] } into) {
+            return null;
+        }
+
+        var joined = function.AddBlock();
+        var result = joined.AddArgument(to);
+
+        var some = function.AddBlock();
+        var payload = some.AddArgument(wrapped, !wrapped.IsTrivial);
+        SilValue owned = wrapped.IsTrivial ? payload : some.Append(new CopyValueInst(payload));
+        if (!from.IsTrivial) {
+            some.Append(new DestroyValueInst(value));
+        }
+
+        var current = some;
+        if (Upcast(function, ref current, owned, wanted) is not { } converted) {
+            return null;
+        }
+
+        current.Append(new BranchInst(joined, current.Append(new EnumInst(into, 0, converted))));
+
+        var none = function.AddBlock();
+        if (!from.IsTrivial) {
+            none.Append(new DestroyValueInst(value));
+        }
+
+        none.Append(new BranchInst(joined, none.Append(new EnumInst(into, 1, null))));
+
+        block.Append(new SwitchEnumInst(value, [(0, some), (1, none)], null));
+        block = joined;
+        return result;
     }
 
     /// <summary>The cases of each union whose payload is boxed, by index.</summary>

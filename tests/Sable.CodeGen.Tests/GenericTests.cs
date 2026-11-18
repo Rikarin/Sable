@@ -218,4 +218,65 @@ public sealed class GenericTests {
                 )
             ).Stdout
         );
+
+    [Fact]
+    public void GenericProtocolsAndVariantExistentials() =>
+        Assert.Equal(
+            "5 w2 4 4 none 3\n",
+            AssertAgree(
+                Program(
+                    """
+                    protocol Source<T> { fn next() -> T? }
+                    protocol Counted<U>: Source<U> { fn count() -> Int }
+
+                    struct Rep<E>: Counted<E> {
+                        var value: E
+                        fn next() -> E? => value
+                        fn count() -> Int => 1
+                    }
+
+                    struct Words: Counted<String> {
+                        fn next() -> String? => "w"
+                        fn count() -> Int => 2
+                    }
+
+                    class Animal {
+                        var legs: Int
+                        init(legs: Int) { self.legs = legs }
+                    }
+
+                    class Dog: Animal {
+                        init() { super.init(legs: 4) }
+                    }
+
+                    protocol Producer<out T> { fn next() -> T? }
+                    protocol Consumer<in T> { fn accept(_ x: T) -> Int }
+
+                    struct DogProducer: Producer<Dog> {
+                        var empty: Bool
+                        fn next() -> Dog? => empty ? none : Dog()
+                    }
+
+                    struct AnimalConsumer: Consumer<Animal> {
+                        fn accept(_ x: Animal) -> Int => x.legs - 1
+                    }
+
+                    fn first<S: Source<Int>>(_ s: S) -> Int => s.next() ?? 0
+                    fn firstOf(_ s: any Counted<String>) -> String => (s.next() ?? "") + "\(s.count())"
+
+                    fn legsOf(_ p: any Producer<Animal>) -> String {
+                        if let animal = p.next() {
+                            return "\(animal.legs)"
+                        }
+                        return "none"
+                    }
+                    """,
+                    """
+                        let p: any Producer<Animal> = DogProducer(empty: false)
+                        let c: any Consumer<Dog> = AnimalConsumer()
+                        print("\(first(Rep(value: 5))) \(firstOf(Words())) \(legsOf(p)) \(legsOf(DogProducer(empty: false))) \(legsOf(DogProducer(empty: true))) \(c.accept(Dog()))")
+                    """
+                )
+            ).Stdout
+        );
 }

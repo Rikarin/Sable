@@ -114,7 +114,7 @@ internal sealed class Conversions(CoreTypes core) {
 
         // 'any P' and 'some P' accept whatever conforms to P.
         if (target is ExistentialTypeSymbol existential) {
-            return Satisfies(source, existential.Constraint, Equivalence)
+            return Satisfies(source, existential.Constraint, Equivalence) || ConformsVariantly(source, existential.Constraint)
                 ? ConversionKind.Existential
                 : null;
         }
@@ -252,9 +252,18 @@ internal sealed class Conversions(CoreTypes core) {
         return false;
     }
 
-    static bool IsDerivedFrom(TypeSymbol source, TypeSymbol target) {
+    static bool IsDerivedFrom(TypeSymbol source, TypeSymbol target) =>
+        Supertypes(source).Any(target.Equals);
+
+    /// <summary>
+    ///     Everything a type inherits from or conforms to, through every
+    ///     level, with a construction's arguments read into them: a
+    ///     <c>Rep&lt;Int&gt;</c> declared <c>Rep&lt;E&gt;: Source&lt;E&gt;</c> is a
+    ///     <c>Source&lt;Int&gt;</c>.
+    /// </summary>
+    static IEnumerable<TypeSymbol> Supertypes(TypeSymbol source) {
         if (source is not NamedTypeSymbol named) {
-            return false;
+            yield break;
         }
 
         var visited = new HashSet<NamedTypeSymbol>();
@@ -267,7 +276,10 @@ internal sealed class Conversions(CoreTypes core) {
                 continue;
             }
 
-            foreach (var baseType in current.BaseTypes) {
+            var arguments = TypeSubstitution.For(current);
+            foreach (var written in current.OriginalDefinition.BaseTypes) {
+                var baseType = arguments.Apply(written);
+
                 // An enum's base list names its underlying representation as
                 // well as its protocols, and that is not a supertype: going
                 // between an enum and its representation is written out.
@@ -276,13 +288,52 @@ internal sealed class Conversions(CoreTypes core) {
                     continue;
                 }
 
-                if (baseType.Equals(target)) {
-                    return true;
-                }
+                yield return baseType;
 
                 if (baseType is NamedTypeSymbol baseNamed) {
                     queue.Enqueue(baseNamed);
                 }
+            }
+        }
+    }
+
+    /// <summary>
+    ///     True when a type conforms to a protocol its existential may be used
+    ///     variantly for (docs/03 §3.4): a DogProducer, a
+    ///     <c>Producer&lt;Dog&gt;</c>, is an <c>any Producer&lt;Animal&gt;</c>
+    ///     when T is declared <c>out</c>, and an AnimalConsumer an
+    ///     <c>any Consumer&lt;Dog&gt;</c> when it is <c>in</c>.
+    /// </summary>
+    /// <remarks>
+    ///     Only an existential is variant: a generic parameter constrained to
+    ///     <c>Producer&lt;Animal&gt;</c> is invariant, as every generic type is.
+    /// </remarks>
+    static bool ConformsVariantly(TypeSymbol source, TypeSymbol constraint) {
+        if (constraint is not NamedTypeSymbol { TypeKind: TypeKind.Protocol, IsConstructed: true } wanted
+            || !wanted.OriginalDefinition.TypeParameters.Any(static p => p.Variance != VarianceKind.None)) {
+            return false;
+        }
+
+        foreach (var supertype in Supertypes(source)) {
+            if (supertype is not NamedTypeSymbol { IsConstructed: true } candidate
+                || !ReferenceEquals(candidate.OriginalDefinition, wanted.OriginalDefinition)) {
+                continue;
+            }
+
+            var parameters = wanted.OriginalDefinition.TypeParameters;
+            var fits = true;
+            for (var i = 0; i < parameters.Length && fits; i++) {
+                var had = candidate.TypeArguments[i];
+                var asked = wanted.TypeArguments[i];
+                fits = had.Equals(asked) || parameters[i].Variance switch {
+                    VarianceKind.Out => IsDerivedFrom(had, asked),
+                    VarianceKind.In => IsDerivedFrom(asked, had),
+                    _ => false,
+                };
+            }
+
+            if (fits) {
+                return true;
             }
         }
 

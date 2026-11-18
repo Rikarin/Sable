@@ -979,6 +979,10 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
 
     object? Perform(BuiltinInst builtin, object?[] operands, int depth) {
         switch (builtin.Name) {
+            // Counted by the native runtime only: interpreted, a block runs uncounted.
+            case Coverage.Builtin:
+                return null;
+
             case "array_empty":
                 return null;
 

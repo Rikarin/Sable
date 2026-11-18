@@ -26,6 +26,7 @@
 #include "memory.c"
 #include "exclusivity.c"
 #include "references.c"
+#include "coverage.c"
 #include "traps.c"
 #include "strings.c"
 #include "arrays.c"

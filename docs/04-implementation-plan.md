@@ -1396,13 +1396,23 @@ Full design in [05-toolchain.md](05-toolchain.md).
   `--harness-out <path>` (with `-g`) builds the harness and runs nothing, so
   the VS Code Test Explorer's Debug profile starts `<harness> --run-test
   <name>` under the debugger.
+- `sable test --coverage` counts lines with counters in the code
+  (`Sable.SIL/Coverage.cs`): before any pass, each block of a function from
+  the package's own files (not `tests/`, not dependencies or the library)
+  starts with the builtin `coverage_hit(n)`, which the runtime counts
+  (`runtime/coverage.c`) and appends to the file `SABLE_COVERAGE` names when
+  the program ends, or traps. Every test process appends to one file; the
+  runner adds them up and prints the share of lines run per file with the
+  lines that never ran, and writes `target/coverage/lcov.info`. A line counts
+  as often as the most-run block it is in; code the optimiser removes is
+  still a line, since the counters go in first. The SIL interpreter runs a
+  counter as nothing.
 - **Deferred:** a `blackBox` to keep the optimiser from deleting a
   benchmark's work (it needs a core builtin); async benchmarks; snapshot and
-  property testing (docs/06 lists them under Sable.Testing; #73, #107); a
-  coverage tool (it needs the code generator to count lines, as
-  `-fprofile-instr-generate` does, and the Test Explorer then a Coverage
-  profile); a time limit inside the harness's own runner, which would need a
-  builtin to wait on a child with one.
+  property testing (docs/06 lists them under Sable.Testing; #73, #107); the
+  Test Explorer's Coverage profile reading `lcov.info`; branch coverage; a
+  time limit inside the harness's own runner, which would need a builtin to
+  wait on a child with one.
 
 ### Packages, as implemented
 

@@ -67,9 +67,9 @@ public sealed class CopyableConstraintTests {
         );
 
     [Fact]
-    public void AnOrdinaryGenericFunctionIsNoCandidate() =>
+    public void AnOrdinaryGenericFunctionRefusesIt() =>
         AssertReports(
-            ErrorCode.ERR_NoMatchingOverload,
+            ErrorCode.ERR_NoncopyableTypeArgument,
             """
             fn take<T>(_ x: T) { }
             fn f() {
@@ -124,7 +124,7 @@ public sealed class CopyableConstraintTests {
     [InlineData("struct Box<T> { var value: ~Copyable }")]
     [InlineData("fn f(_ x: ~Copyable) { }")]
     public void OnlyCopyableIsLiftedAndOnlyInAConstraint(string source) =>
-        AssertReports(ErrorCode.ERR_CannotSuppressConstraint, source);
+        AssertReports(ErrorCode.ERR_MisplacedSuppression, source);
 
     [Fact]
     public void AConstGenericPredicateSaysItHasNothingToTest() =>

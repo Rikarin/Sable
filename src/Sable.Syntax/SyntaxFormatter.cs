@@ -87,12 +87,24 @@ public static class SyntaxFormatter {
                 _groups.Push(line);
             }
 
+            if (node is MatchExpressionSyntax) {
+                _matches.Push([]);
+            }
+
             foreach (var child in node.ChildNodesAndTokens()) {
                 if (child.IsToken) {
                     WriteToken(child.AsToken(), node);
                 } else {
                     WriteNode(child.AsNode()!, kind);
                 }
+            }
+
+            if (node is MatchArmSyntax && _matches.Count > 0 && _matches.Peek() is [.., { End: < 0 } arm]) {
+                arm.End = _builder.Length;
+            }
+
+            if (node is MatchExpressionSyntax) {
+                AlignArrows(_matches.Pop());
             }
 
             if (line is not null) {
@@ -106,7 +118,7 @@ public static class SyntaxFormatter {
                 }
             }
 
-            if (EndsItsLine(node, parentKind)) {
+            if (EndsItsLine(node, parentKind) && !InsideInlineBrace) {
                 BreakLine(0);
             }
         }
@@ -167,6 +179,15 @@ public static class SyntaxFormatter {
             Write(token.Text);
             _tokens++;
 
+            if (parent is MatchArmSyntax arm && _matches.Count > 0) {
+                var offset = _builder.Length - token.Text.Length;
+                if (token == arm.CaseOrDefaultKeyword) {
+                    _matches.Peek().Add(new(offset));
+                } else if (token == arm.ArrowToken && _matches.Peek() is [.., var written]) {
+                    written.Arrow = offset;
+                }
+            }
+
             _previousKind = token.Kind;
             _previousParent = parentKind;
 
@@ -178,7 +199,7 @@ public static class SyntaxFormatter {
 
             if (token.Kind == SyntaxKind.OpenBraceToken) {
                 var opensBody = OpensABody(parent);
-                _braces.Push(new(opensBody, mark));
+                _braces.Push(new(opensBody, mark, !opensBody && parent is not null && IsTypeDeclaration(parent)));
                 if (opensBody) {
                     // A body is indented from its line, not from a
                     // continuation of it: 'if a &&\n    b {' closes at 'if'.
@@ -206,10 +227,97 @@ public static class SyntaxFormatter {
 
             _previousEndedLine = token.TrailingTrivia.Any(SyntaxKind.NewLineTrivia);
 
+            // In a type's body written on one line, a ';' separates members
+            // that stay on that line: 'struct Q { var x: Int; var y: Int }'.
             if (token.TerminatesStatement
                 && token.Kind != SyntaxKind.EndOfFile
-                && token.Kind != SyntaxKind.OpenBraceToken) {
+                && token.Kind != SyntaxKind.OpenBraceToken
+                && !(_braces.Count > 0 && _braces.Peek().OneLineMembers)) {
                 BreakLine(0);
+            }
+        }
+
+        // -------------------------------------------------------------------
+        // Alignment
+        // -------------------------------------------------------------------
+
+        /// <summary>Where a match arm, its '=>' and its end were written (-1 until they are).</summary>
+        private sealed class Arm(int start) {
+            public int Start { get; } = start;
+            public int Arrow { get; set; } = -1;
+            public int End { get; set; } = -1;
+        }
+
+        /// <summary>Where the output's line holding <paramref name="offset" /> starts.</summary>
+        int LineStart(int offset) {
+            while (offset > 0 && _builder[offset - 1] != '\n') {
+                offset--;
+            }
+
+            return offset;
+        }
+
+        /// <summary>The arms of each match being written, innermost on top.</summary>
+        readonly Stack<List<Arm>> _matches = new();
+
+        /// <summary>
+        ///     Lines up the '=>' of a match's arms, as gofmt lines up the values
+        ///     of consecutive lines: each run of arms written one to a line,
+        ///     with no blank line or comment between them, has its arrows in
+        ///     one column, the one its longest pattern needs.
+        /// </summary>
+        /// <remarks>
+        ///     Imposed, not kept from the source, so that where the author put
+        ///     spaces never matters. A blank line or a comment ends a run, which
+        ///     is how an author keeps a long pattern from pushing the others
+        ///     out. The arms are already written, so their arrows are moved in
+        ///     place, last first so the earlier offsets still hold; a match
+        ///     nested in an arm was aligned when it ended, before anything
+        ///     after it was recorded.
+        /// </remarks>
+        void AlignArrows(List<Arm> arms) {
+            bool OnOneLine(Arm arm) {
+                if (arm.Arrow < 0 || arm.End < arm.Arrow) {
+                    return false;
+                }
+
+                for (var i = arm.Start; i < arm.End; i++) {
+                    if (_builder[i] == '\n') {
+                        return false;
+                    }
+                }
+
+                return true;
+            }
+
+            var runs = new List<List<Arm>>();
+            List<Arm>? run = null;
+            foreach (var arm in arms) {
+                if (!OnOneLine(arm)) {
+                    run = null;
+                    continue;
+                }
+
+                // The next line of the run starts right where this one ended.
+                var follows = run is not null && run[^1].End + 1 == LineStart(arm.Start) && _builder[run[^1].End] == '\n';
+                if (!follows) {
+                    run = [];
+                    runs.Add(run);
+                }
+
+                run!.Add(arm);
+            }
+
+            var moves = new List<(int Offset, int Spaces)>();
+            foreach (var group in runs.Where(static r => r.Count > 1)) {
+                var column = group.Max(a => a.Arrow - a.Start);
+                moves.AddRange(group.Select(a => (a.Arrow, column - (a.Arrow - a.Start))));
+            }
+
+            foreach (var (offset, spaces) in moves.OrderByDescending(static m => m.Offset)) {
+                if (spaces > 0) {
+                    _builder.Insert(offset, " ", spaces);
+                }
             }
         }
 
@@ -451,7 +559,7 @@ public static class SyntaxFormatter {
         ///     An open brace: whether it introduced an indented body, and how much
         ///     output existed at the time, so an empty body can stay on one line.
         /// </summary>
-        private readonly record struct OpenBrace(bool OpensBody, int Mark);
+        private readonly record struct OpenBrace(bool OpensBody, int Mark, bool OneLineMembers = false);
 
         readonly Stack<OpenBrace> _braces = new();
 
@@ -504,7 +612,9 @@ public static class SyntaxFormatter {
 
         static bool StartsOnItsOwnLine(SyntaxNode node, SyntaxKind parentKind) =>
             // 'else if' is one line: the 'if' continues the 'else'.
-            (node is StatementSyntax && node.Kind != SyntaxKind.Block && parentKind is not (SyntaxKind.ElseClause or SyntaxKind.LabeledStatement))
+            // An 'if' that gives a value stays where the value goes: 'let s = if c {'.
+            (node is StatementSyntax && node.Kind != SyntaxKind.Block
+                                     && parentKind is not (SyntaxKind.ElseClause or SyntaxKind.LabeledStatement or SyntaxKind.IfExpression))
             || IsMember(node)
             || (node.Kind == SyntaxKind.Accessor && !IsPropertyArrow(node))
             || node.Kind is SyntaxKind.ImportDeclaration
@@ -543,23 +653,19 @@ public static class SyntaxFormatter {
         static bool OpensABody(SyntaxNode? parent) =>
             parent switch {
                 BlockSyntax block => !IsOneLineBody(block),
-                StructDeclarationSyntax
-                    or ClassDeclarationSyntax
-                    or ActorDeclarationSyntax
-                    or ProtocolDeclarationSyntax
-                    or UnionDeclarationSyntax
-                    or EnumDeclarationSyntax
-                    or ExtensionDeclarationSyntax => true,
+                not null when IsTypeDeclaration(parent) => !IsOneLineTypeBody(parent),
                 MatchExpressionSyntax or SwitchStatementSyntax => true,
 
                 AccessorListSyntax { OpenBraceToken.IsMissing: true } => false,
                 AccessorListSyntax accessors => accessors.Accessors.Any(static a => a.Body is not null || a.ExpressionBody is not null)
                     && !(WrittenOnOneLine(accessors) && accessors.Accessors.All(static a => a.Body is null || IsOneLineBody(a.Body))),
 
+                // '{ x in x * 2 }' written on one line stays there, as one
+                // without a header does.
                 BraceClosureExpressionSyntax closure =>
-                    closure.Header is not null
-                    || closure.Statements.Count > 1
-                    || closure.Statements.Any(static statement => statement is not ExpressionStatementSyntax),
+                    closure.Statements.Count > 1
+                    || closure.Statements.Any(static statement => statement is not ExpressionStatementSyntax)
+                    || (closure.Header is not null && !(closure.Statements.All(static s => IsSimple(s)) && WrittenOnOneLine(closure))),
 
                 _ => false,
             };
@@ -568,27 +674,143 @@ public static class SyntaxFormatter {
         ///     A function's, initialiser's, operator's or accessor's body, or a
         ///     block inside an expression or a match arm, or a guard's exit, of
         ///     one statement with no block of its own, written on one line:
-        ///     <c>guard let x = y else { return none }</c>. Other statements'
-        ///     blocks — 'if', 'for', 'while' — always take their own lines.
+        ///     <c>guard let x = y else { return none }</c>; and the blocks of an
+        ///     <c>if</c>/<c>else</c> chain written on one line, each of them
+        ///     such a body. A loop's block always takes its own lines.
         /// </summary>
         static bool IsOneLineBody(BlockSyntax block) =>
-            block.Parent is FunctionDeclarationSyntax
-                or InitDeclarationSyntax
-                or DeinitDeclarationSyntax
-                or OperatorDeclarationSyntax
-                or AccessorSyntax
-                or ExpressionSyntax
-                or MatchArmSyntax
-                or GuardStatementSyntax
-            && block.Statements.Count == 1
-            && block.Statements[0] is not DeclarationStatementSyntax
-            && !block.Statements[0].DescendantNodes().Any(static n => n is BlockSyntax or BraceClosureExpressionSyntax or MatchExpressionSyntax)
-            && WrittenOnOneLine(block);
+            block.Parent switch {
+                FunctionDeclarationSyntax
+                    or InitDeclarationSyntax
+                    or DeinitDeclarationSyntax
+                    or OperatorDeclarationSyntax
+                    or AccessorSyntax
+                    or ExpressionSyntax
+                    or MatchArmSyntax
+                    or GuardStatementSyntax => IsSimpleBlock(block) && WrittenOnOneLine(block),
 
-        /// <summary>No line break or comment anywhere inside the node, up to its last token.</summary>
-        static bool WrittenOnOneLine(SyntaxNode node) {
+                // 'if a { return 1 } else { return 2 }': the whole chain on
+                // one line as written, each block of it one simple statement.
+                IfStatementSyntax or ElseClauseSyntax => IsOneLineIf(block)
+                                                         || (IsIfValueBranch(block) && IsSimpleBlock(block) && WrittenOnOneLine(block)),
+                _ => false,
+            };
+
+        /// <summary>A branch of an 'if' that gives a value, which reads as a conditional does: 'if c { a } else { b }'.</summary>
+        static bool IsIfValueBranch(BlockSyntax block) {
+            for (var node = block.Parent; node is IfStatementSyntax or ElseClauseSyntax; node = node.Parent) {
+                if (node.Parent is IfExpressionSyntax) {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        static bool IsSimpleBlock(BlockSyntax block) => block.Statements.Count == 1 && IsSimple(block.Statements[0]);
+
+        /// <summary>A statement with no declaration and no braces of its own.</summary>
+        static bool IsSimple(StatementSyntax statement) =>
+            statement is not DeclarationStatementSyntax
+            && !statement.DescendantNodes().Any(static n => n is BlockSyntax or BraceClosureExpressionSyntax or MatchExpressionSyntax);
+
+        static bool IsOneLineIf(BlockSyntax block) {
+            SyntaxNode top = block.Parent!;
+            while (top.Parent is IfStatementSyntax or ElseClauseSyntax) {
+                top = top.Parent;
+            }
+
+            if (top is not IfStatementSyntax chain || !WrittenOnOneLine(chain, from: SyntaxKind.IfKeyword)) {
+                return false;
+            }
+
+            for (StatementSyntax? link = chain; link is not null;) {
+                switch (link) {
+                    case IfStatementSyntax conditional when IsSimpleBlock(conditional.Body):
+                        link = conditional.ElseClause?.Body;
+                        break;
+                    case BlockSyntax last when IsSimpleBlock(last):
+                        link = null;
+                        break;
+                    default:
+                        return false;
+                }
+            }
+
+            return true;
+        }
+
+        static bool IsTypeDeclaration(SyntaxNode node) =>
+            node is StructDeclarationSyntax
+                or ClassDeclarationSyntax
+                or ActorDeclarationSyntax
+                or ProtocolDeclarationSyntax
+                or UnionDeclarationSyntax
+                or EnumDeclarationSyntax
+                or ExtensionDeclarationSyntax;
+
+        /// <summary>
+        ///     A type's body its author wrote on one line, of members with no
+        ///     body of their own: <c>struct P { var x: Int }</c>,
+        ///     <c>enum Dir { north, south }</c>, <c>protocol Shape { fn area() -&gt; F64 }</c>.
+        ///     It stays on one line, as gofmt keeps a short struct type.
+        /// </summary>
+        static bool IsOneLineTypeBody(SyntaxNode declaration) {
+            var inside = false;
+            var members = 0;
+            foreach (var child in declaration.ChildNodesAndTokens()) {
+                if (child.IsToken) {
+                    var token = child.AsToken();
+                    if (token.Kind == SyntaxKind.OpenBraceToken) {
+                        inside = true;
+                    } else if (token.Kind == SyntaxKind.CloseBraceToken) {
+                        break;
+                    }
+
+                    continue;
+                }
+
+                var member = child.AsNode()!;
+                if (!inside) {
+                    continue;
+                }
+
+                members++;
+                if (member.DescendantNodesAndSelf().Any(static n =>
+                        (n is BlockSyntax block && !IsOneLineBody(block)) || n is BraceClosureExpressionSyntax or MatchExpressionSyntax or AttributeSyntax
+                        || IsTypeDeclaration(n)
+                        || n is AccessorSyntax { ExpressionBody: not null })) {
+                    return false;
+                }
+            }
+
+            // From its '{': what comes before — attributes, a doc comment, a
+            // long header — is the declaration's, not its body's.
+            return members > 0 && WrittenOnOneLine(declaration, from: SyntaxKind.OpenBraceToken);
+        }
+
+        /// <summary>
+        ///     No line break or comment anywhere inside the node, up to its
+        ///     last token; from its first token of kind <paramref name="from" />
+        ///     when one is given, and ignoring what comes before that token.
+        /// </summary>
+        static bool WrittenOnOneLine(SyntaxNode node, SyntaxKind from = SyntaxKind.None) {
             var last = node.GetLastToken();
+            var started = from == SyntaxKind.None;
             foreach (var token in node.DescendantTokens()) {
+                if (!started) {
+                    if (token.Kind != from) {
+                        continue;
+                    }
+
+                    started = true;
+                    if (token.TrailingTrivia.Any(static t => t.Kind == SyntaxKind.NewLineTrivia || t.IsComment)) {
+                        return false;
+                    }
+
+                    continue;
+                }
+
                 if (token.IsMissing) {
                     return false;
                 }
@@ -658,6 +880,7 @@ public static class SyntaxFormatter {
                 SyntaxKind.ColonToken => parentKind != SyntaxKind.ConditionalExpression,
 
                 SyntaxKind.QuestionToken => parentKind is SyntaxKind.OptionalType
+                    or SyntaxKind.OptionalPattern
                     or SyntaxKind.ReferenceType
                     or SyntaxKind.CastExpression
                     or SyntaxKind.TryExpression

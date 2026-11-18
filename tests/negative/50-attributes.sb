@@ -49,6 +49,7 @@ fn aNoncopyStructIsStillAStruct(_ l: Lock) -> Int {
     return l                            //! S3004 expected 'Int'
 }
 
+@MainActor
 fn anActorClassIsStillAClass(_ w: Window) -> String {
     return w.title
 }

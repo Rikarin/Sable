@@ -97,10 +97,11 @@ public class BuildCommand : Command {
         // Dynamic exclusivity checks: on in a debug build, off in a release one,
         // unless asked for (docs/02 §2.3).
         var result = Pipeline.Compile(
-            source,
+            [SyntaxTree.Parse(source, Pipeline.ParseOptionsFor(options.Optimise))],
             options.Debug ? Path.GetDirectoryName(Path.GetFullPath(options.Input)) : null,
             options.Exclusivity ?? (options.Debug || !options.Optimise)
         );
+        Report(result.Warnings);
 
         // --emit shows a stage's output, even when a later stage could not run.
         if (options.Emit == "sil" && result.Sil is { } sil) {
@@ -134,11 +135,13 @@ public class BuildCommand : Command {
         return null;
     }
 
-    protected static void Report(IReadOnlyList<string> errors) {
-        foreach (var error in errors) {
-            Console.Error.WriteLine(error);
+    protected static void Report(IReadOnlyList<string> diagnostics) {
+        foreach (var diagnostic in diagnostics) {
+            Console.Error.WriteLine(diagnostic);
             Console.Error.WriteLine();
         }
+
+        DiagnosticDocs.WriteHint(Console.Error, diagnostics);
     }
 
     /// <summary>Runs <paramref name="executable" /> and returns its exit code.</summary>

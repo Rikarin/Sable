@@ -5,9 +5,12 @@ using Sable.Syntax;
 namespace Sable.LanguageServer;
 
 /// <summary>
-///     One compilation over one workspace snapshot: every document, plus the
-///     library modules they import. Built once per snapshot that something
-///     asks about, and bound lazily, one member at a time.
+///     One compilation over one package of one workspace snapshot: its
+///     documents, its dependencies' files, and the library modules they
+///     import — as <c>sable check</c> compiles it. Built once per snapshot
+///     and package that something asks about, and bound lazily, one member
+///     at a time. Files in no package are compiled together, as one loose
+///     program.
 /// </summary>
 /// <remarks>
 ///     A compilation is not thread-safe — it binds lazily and caches as it
@@ -18,6 +21,7 @@ internal sealed partial class Analysis {
     readonly Dictionary<SyntaxNode, Document> _documentsByRoot = new(ReferenceEqualityComparer.Instance);
     readonly Dictionary<SyntaxNode, SyntaxTree> _treesByRoot = new(ReferenceEqualityComparer.Instance);
     readonly HashSet<SyntaxTree> _library = new(ReferenceEqualityComparer.Instance);
+    readonly HashSet<SyntaxTree> _dependencies = new(ReferenceEqualityComparer.Instance);
     readonly Dictionary<SyntaxTree, IReadOnlyList<Diagnostic>> _diagnostics = new(ReferenceEqualityComparer.Instance);
     IReadOnlyList<Diagnostic>? _unplaced;
 
@@ -25,15 +29,29 @@ internal sealed partial class Analysis {
     public WorkspaceSnapshot Snapshot { get; }
     public Compilation Compilation { get; }
 
-    Analysis(WorkspaceSnapshot snapshot, Compilation compilation, IEnumerable<SyntaxTree> library) {
-        Snapshot = snapshot;
-        Compilation = compilation;
-        foreach (var document in snapshot.Documents.Values) {
-            _documentsByRoot[document.Tree.Root] = document;
-        }
+    /// <summary>The package it compiles (<see cref="ProjectLayout.KeyOf" />).</summary>
+    public string Key { get; }
 
+    /// <summary>The snapshot's documents in this compilation: the package's own, and those of its dependencies the editor has.</summary>
+    public IReadOnlyList<Document> Documents { get; }
+
+    Analysis(WorkspaceSnapshot snapshot, string key, Compilation compilation, IEnumerable<SyntaxTree> library, IEnumerable<SyntaxTree> dependencies) {
+        Snapshot = snapshot;
+        Key = key;
+        Compilation = compilation;
         foreach (var tree in compilation.SyntaxTrees) {
             _treesByRoot[tree.Root] = tree;
+        }
+
+        foreach (var document in snapshot.Documents.Values) {
+            if (_treesByRoot.TryGetValue(document.Tree.Root, out var tree) && ReferenceEquals(tree, document.Tree)) {
+                _documentsByRoot[document.Tree.Root] = document;
+            }
+        }
+
+        Documents = [.._documentsByRoot.Values.OrderBy(static d => d.Uri, StringComparer.Ordinal)];
+        foreach (var tree in dependencies.Where(t => !_documentsByRoot.ContainsKey(t.Root))) {
+            _dependencies.Add(tree);
         }
 
         foreach (var tree in library) {
@@ -46,14 +64,19 @@ internal sealed partial class Analysis {
     }
 
     /// <summary>
-    ///     Builds the compilation and binds every signature, so that what
+    ///     Builds the compilation of one package — its documents, then its
+    ///     dependencies' trees — and binds every signature, so that what
     ///     comes after — a member's body — is all that is left to bind.
     /// </summary>
-    public static Analysis Build(WorkspaceSnapshot snapshot, Func<SyntaxTree, IReadOnlyList<SyntaxTree>> libraryFor) {
+    public static Analysis Build(
+        WorkspaceSnapshot snapshot, string key, IReadOnlyList<SyntaxTree> dependencies, Func<SyntaxTree, IReadOnlyList<SyntaxTree>> libraryFor) {
         var trees = snapshot.Documents.Values
+            .Where(d => snapshot.KeyOf(d) == key)
             .Select(static d => d.Tree)
             .OrderBy(static t => t.Text.FileName, StringComparer.Ordinal)
             .ToList();
+        var own = trees.ToHashSet(ReferenceEqualityComparer.Instance);
+        trees.AddRange(dependencies.Where(t => own.Add(t)));
 
         // A library module the workspace has its own files for — the
         // compiler's repository, its lib/ read from disk — is those files:
@@ -74,7 +97,7 @@ internal sealed partial class Analysis {
         }
 
         var compilation = Compilation.Create([..trees, ..library]);
-        var analysis = new Analysis(snapshot, compilation, library);
+        var analysis = new Analysis(snapshot, key, compilation, library, dependencies);
         lock (analysis.Gate) {
             // Binding every signature reports the declarations' problems too.
             analysis._unplaced = [..compilation.GetDiagnostics().Except(trees.SelectMany(static t => t.Diagnostics))];
@@ -90,6 +113,9 @@ internal sealed partial class Analysis {
     public SyntaxTree? TreeOf(SyntaxNode node) => _treesByRoot.GetValueOrDefault(RootOf(node));
 
     public bool IsLibrary(SyntaxTree tree) => _library.Contains(tree);
+
+    /// <summary>Whether the tree is a dependency's file read from disk, not a document of the snapshot.</summary>
+    public bool IsDependencyFile(SyntaxTree tree) => _dependencies.Contains(tree);
 
     public bool Contains(SyntaxTree tree) => _treesByRoot.TryGetValue(tree.Root, out var known) && ReferenceEquals(known, tree);
 
@@ -211,45 +237,43 @@ internal sealed partial class Analysis {
 }
 
 /// <summary>
-///     The analyses the server has built: the latest, and the one being
-///     built for the newest snapshot something asked about.
+///     The analyses the server has built, for each package: the latest, and
+///     the one being built for the newest snapshot something asked about.
 /// </summary>
-internal sealed class AnalysisCache(Func<SyntaxTree, IReadOnlyList<SyntaxTree>> libraryFor) {
+internal sealed class AnalysisCache(Func<WorkspaceSnapshot, string, Analysis> build) {
     readonly object _lock = new();
-    Analysis? _latest;
-    (long Generation, Task<Analysis> Task)? _building;
+    readonly Dictionary<string, Analysis> _latest = new(StringComparer.Ordinal);
+    readonly Dictionary<string, (long Generation, Task<Analysis> Task)> _building = new(StringComparer.Ordinal);
 
-    /// <summary>The newest analysis built, of whatever snapshot: what a completion binds its edit against.</summary>
-    public Analysis? Latest {
-        get {
-            lock (_lock) {
-                return _latest;
-            }
+    /// <summary>The newest analysis of a package built, of whatever snapshot: what a completion binds its edit against.</summary>
+    public Analysis? Latest(string key) {
+        lock (_lock) {
+            return _latest.GetValueOrDefault(key);
         }
     }
 
-    /// <summary>The analysis of exactly this snapshot, building it if no one has.</summary>
-    public Task<Analysis> GetAsync(WorkspaceSnapshot snapshot) {
+    /// <summary>The analysis of a package in exactly this snapshot, building it if no one has.</summary>
+    public Task<Analysis> GetAsync(WorkspaceSnapshot snapshot, string key) {
         lock (_lock) {
-            if (_latest is { } latest && latest.Snapshot.Generation == snapshot.Generation) {
+            if (_latest.TryGetValue(key, out var latest) && latest.Snapshot.Generation == snapshot.Generation) {
                 return Task.FromResult(latest);
             }
 
-            if (_building is { } building && building.Generation == snapshot.Generation) {
+            if (_building.TryGetValue(key, out var building) && building.Generation == snapshot.Generation) {
                 return building.Task;
             }
 
             var task = Task.Run(() => {
-                var analysis = Analysis.Build(snapshot, libraryFor);
+                var analysis = build(snapshot, key);
                 lock (_lock) {
-                    if (_latest is null || _latest.Snapshot.Generation < snapshot.Generation) {
-                        _latest = analysis;
+                    if (!_latest.TryGetValue(key, out var known) || known.Snapshot.Generation < snapshot.Generation) {
+                        _latest[key] = analysis;
                     }
                 }
 
                 return analysis;
             });
-            _building = (snapshot.Generation, task);
+            _building[key] = (snapshot.Generation, task);
             return task;
         }
     }

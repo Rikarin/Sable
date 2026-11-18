@@ -78,7 +78,12 @@ public static class RootChecker {
         }
     }
 
-    public static void Check(SilModule module, IReadOnlyDictionary<SilFunction, SourceText> sources, DiagnosticBag diagnostics) {
+    /// <param name="reported">
+    ///     Told, after each function is checked, how many diagnostics there
+    ///     were before it and which source it is — so that what it reported
+    ///     can be given that file.
+    /// </param>
+    public static void Check(SilModule module, IReadOnlyDictionary<SilFunction, SourceText> sources, DiagnosticBag diagnostics, Action<int, SourceText>? reported = null) {
         // Summaries to a fixed point: each pass may let a caller see more of its callee.
         var summaries = new Dictionary<string, HashSet<int>>(StringComparer.Ordinal);
         for (var round = 0; round < module.Functions.Count + 2; round++) {
@@ -118,10 +123,12 @@ public static class RootChecker {
                 continue;
             }
 
+            var before = diagnostics.Count;
             var anchors = Anchors(function, summaries);
             CheckReturns(function, anchors, source, diagnostics);
             CheckStores(function, anchors, source, diagnostics);
             CheckLiveness(function, anchors, source, diagnostics);
+            reported?.Invoke(before, source);
         }
     }
 
@@ -501,6 +508,7 @@ public static class RootChecker {
         var exitFresh = new Dictionary<SilBlock, HashSet<SilValue>>();
         var reported = new HashSet<SilValue>();
         var reportedAt = new HashSet<(SilInstruction, int)>();
+        var reportedUses = new HashSet<(AllocStackInst, SilLocation?)>();
         for (var round = 0; round < 2 * blocks.Count + 2; round++) {
             var changed = false;
             foreach (var block in blocks) {
@@ -657,7 +665,10 @@ public static class RootChecker {
                         }
 
                         foreach (var anchor in anchors.GetValueOrDefault(operand) ?? []) {
-                            if (anchor is LocalAnchor { Slot: var slot } && dead.TryGetValue(slot, out var ended) && reported.Add(operand)) {
+                            // 'r.v' reads through 'r' and then through the field's
+                            // address: one use, said once.
+                            if (anchor is LocalAnchor { Slot: var slot } && dead.TryGetValue(slot, out var ended) && reported.Add(operand)
+                                && reportedUses.Add((slot, instruction.Location))) {
                                 var where = ended.Location is { } location ? $"line {location.Line}" : "earlier";
                                 diagnostics.Error(
                                     ErrorCode.ERR_ReferenceOutlivesRoot,

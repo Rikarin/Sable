@@ -101,7 +101,9 @@ ParamList         = Param { "," Param } [ "," ] ;
 Param             = { Attribute } [ ParamModifier ] [ ParamLabel ] Identifier
                     ":" [ ParamModifier ] Type [ "..." ] [ "=" Expression ] ;
                     (* the modifier may precede the name or follow the colon;
-                       the second form composes with an external label *)
+                       the second form composes with an external label.
+                       'in name:' is the label 'in', not the modifier:
+                       'fn build(in r: region)' is called 'build(in: a)' *)
 ParamModifier     = "inout" | "out" | "consuming" | "borrowing" | "ref"
                   | "ref" "mut" | "in" ;
 ParamLabel        = Identifier | Keyword | "_" ;    (* external label *)
@@ -245,6 +247,7 @@ PrimaryType       = QualifiedName [ GenericArgs ]
                   | "some" Type
                   | "any" Type
                   | "ref" Type
+                  | "~" Type                (* "~Copyable", as a constraint only *)
                   | TupleType
                   | FunctionType
                   | "(" Type ")"
@@ -362,7 +365,11 @@ CompileCondition  = Expression ;   (* restricted: identifiers, os(), arch(),
 
 Pattern           = OrPattern ;
 
-OrPattern         = PrimaryPattern { "|" PrimaryPattern } ;
+OrPattern         = OptionalPattern { "|" OptionalPattern } ;
+
+(* 'let v?' is '.Some(let v)': the pattern, matched against what an
+   optional holds. *)
+OptionalPattern   = PrimaryPattern { "?" } ;
 
 PrimaryPattern    = WildcardPattern
                   | BindingPattern

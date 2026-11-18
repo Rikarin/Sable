@@ -424,7 +424,7 @@ public sealed partial class SilInterpreter {
             case "inline_to_string": {
                 var array = View(operands[0]);
                 var (count, elements) = ArrayCount(ArraySlot(builtin.Operands[0]), array.Block.Bytes, array.Offset);
-                return Allocate(new HeapString(DecodeUtf8(array.Block.Bytes.GetRange(elements, (int)count))));
+                return Allocate(new HeapString(DecodeUtf8([..array.Block.Bytes.GetRange(elements, (int)count)])));
             }
 
             case "inline_bytes": {
@@ -460,12 +460,12 @@ public sealed partial class SilInterpreter {
     static InlineLayout.Slot ArraySlot(SilValue array) => InlineLayout.DescribeArray((InlineArrayType)((InlinePointerType)array.Type).Pointee);
 
     /// <summary>UTF-8, as the runtime decodes it: each byte of an ill-formed sequence read as U+FFFD.</summary>
-    static string DecodeUtf8(List<byte> bytes) {
+    internal static string DecodeUtf8(ReadOnlySpan<byte> bytes) {
         var text = new StringBuilder();
-        for (var i = 0; i < bytes.Count;) {
+        for (var i = 0; i < bytes.Length;) {
             var b = bytes[i];
             var need = b < 0x80 ? 0 : b is >= 0xC2 and <= 0xDF ? 1 : b is >= 0xE0 and <= 0xEF ? 2 : b is >= 0xF0 and <= 0xF4 ? 3 : -1;
-            var ok = need >= 0 && i + need < bytes.Count;
+            var ok = need >= 0 && i + need < bytes.Length;
             for (var k = 1; ok && k <= need; k++) {
                 var c = bytes[i + k];
                 var (low, high) = (k, b) switch {
@@ -479,7 +479,7 @@ public sealed partial class SilInterpreter {
             }
 
             if (ok) {
-                text.Append(Encoding.UTF8.GetString([..bytes.GetRange(i, need + 1)]));
+                text.Append(Encoding.UTF8.GetString(bytes.Slice(i, need + 1)));
                 i += need + 1;
             } else {
                 text.Append('�');

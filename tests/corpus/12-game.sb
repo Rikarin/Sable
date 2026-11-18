@@ -193,7 +193,7 @@ public fn render(_ event: Event) -> String {
         case .Struck(let attacker, let defender, let amount) =>
             attacker + " hit " + defender + " for " + amount.toString()
         case .Died(let who) => who + " died"
-        case .Nothing => ""
+        case .Nothing       => ""
     }
 }
 
@@ -211,7 +211,7 @@ public fn deaths(_ events: Event[>..]) -> Int {
     return countBy(events) { event in
         return match event {
             case .Died(let who) => true
-            default => false
+            default             => false
         }
     }
 }

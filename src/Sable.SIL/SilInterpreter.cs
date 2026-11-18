@@ -929,7 +929,9 @@ public sealed partial class SilInterpreter(SilModule module, int stepLimit = 10_
             case "io_read_file": {
                 string? contents = null;
                 try {
-                    contents = File.ReadAllText(Text(operands[0]).Value);
+                    // Bytes, decoded as the runtime decodes them: no byte-order
+                    // mark taken as a request for UTF-16, and ill-formed UTF-8 as U+FFFD.
+                    contents = DecodeUtf8(File.ReadAllBytes(Text(operands[0]).Value));
                 } catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException) {
                 }
 
@@ -1282,6 +1284,11 @@ public sealed partial class SilInterpreter(SilModule module, int stepLimit = 10_
             return ConvertNumber(operands[0], from, to);
         }
 
+        if (name.StartsWith("wrap_", StringComparison.Ordinal)) {
+            var parts = name.Split('_');
+            return Find(parts[1]) is { } from && Find(parts[2]) is { } to ? WrapNumber(operands[0], from, to) : null;
+        }
+
         var separator = name.LastIndexOf('_');
         if (separator < 0 || Find(name[(separator + 1)..]) is not { } type || type == SilType.Int || type == SilType.F64) {
             return null;
@@ -1363,6 +1370,33 @@ public sealed partial class SilInterpreter(SilModule module, int stepLimit = 10_
 
     static object Narrow(Int128 value, SilType type) =>
         type == SilType.U64 || type == SilType.UInt ? (object)(ulong)value : (long)value;
+
+    /// <summary>
+    ///     <c>unchecked as</c>: an integer keeps its low bits, read with the
+    ///     target's sign; a float to an integer goes toward zero and saturates
+    ///     at the target's bounds, NaN giving zero. Nothing here traps.
+    /// </summary>
+    static object WrapNumber(object? value, SilType from, SilType to) {
+        var fromInteger = SilType.IntegerInfo(from);
+        var toInteger = SilType.IntegerInfo(to);
+
+        if (fromInteger is not null && toInteger is var (bits, signed)) {
+            return Narrow(Wrapped(Wide(value), bits, signed), to);
+        }
+
+        if (fromInteger is null && toInteger is var (toBits, toSigned)) {
+            var real = value is float f ? f : (double)value!;
+            var low = toSigned ? -(Int128.One << (toBits - 1)) : Int128.Zero;
+            var high = toSigned ? (Int128.One << (toBits - 1)) - 1 : (Int128.One << toBits) - 1;
+            var clamped = double.IsNaN(real) ? Int128.Zero
+                : real <= (double)low ? low
+                : real >= (double)high ? high
+                : (Int128)Math.Truncate(real);
+            return Narrow(clamped, to);
+        }
+
+        return ConvertNumber(value, from, to);
+    }
 
     static object ConvertNumber(object? value, SilType from, SilType to) {
         var fromInteger = SilType.IntegerInfo(from);
@@ -1565,7 +1599,7 @@ public sealed partial class SilInterpreter(SilModule module, int stepLimit = 10_
 
     /// <summary>
     ///     A printed value, exactly as the native runtime writes it: integers in
-    ///     decimal, Booleans as words, and floating point as C's <c>%.17g</c>.
+    ///     decimal, Booleans as words, and floating point with its point kept.
     /// </summary>
     public static string Format(object? value) =>
         value switch {
@@ -1581,61 +1615,80 @@ public sealed partial class SilInterpreter(SilModule module, int stepLimit = 10_
         };
 
     /// <summary>
-    ///     The shortest of C's <c>%.1g</c> … <c>%.17g</c> that reads back as the
-    ///     same value — <c>0.1</c>, not <c>0.10000000000000001</c> — as the
-    ///     runtime writes it.
+    ///     The shortest digits that read back as the same value — <c>0.1</c>,
+    ///     not <c>0.10000000000000001</c> — laid out as the runtime writes them.
     /// </summary>
     static string FormatFloat(float value) {
-        if (float.IsNaN(value)) {
-            return "nan";
+        if (Special(value) is { } special) {
+            return special;
         }
 
-        if (float.IsInfinity(value)) {
-            return value > 0 ? "inf" : "-inf";
-        }
-
-        for (var precision = 1; precision < 9; precision++) {
-            var candidate = FormatG(value, precision);
-            if (float.Parse(candidate, NumberStyles.Float, CultureInfo.InvariantCulture) == value) {
-                return candidate;
+        var scientific = "";
+        for (var precision = 1; precision <= 9; precision++) {
+            scientific = ((double)value).ToString("E" + (precision - 1), CultureInfo.InvariantCulture);
+            if (float.Parse(scientific, NumberStyles.Float, CultureInfo.InvariantCulture) == value) {
+                break;
             }
         }
 
-        return FormatG(value, 9);
+        return Layout(scientific);
     }
 
     static string FormatDouble(double value) {
-        if (double.IsNaN(value)) {
-            return "nan";
+        if (Special(value) is { } special) {
+            return special;
         }
 
-        if (double.IsInfinity(value)) {
-            return value > 0 ? "inf" : "-inf";
-        }
-
-        for (var precision = 1; precision < 17; precision++) {
-            var candidate = FormatG(value, precision);
-            if (double.Parse(candidate, NumberStyles.Float, CultureInfo.InvariantCulture) == value) {
-                return candidate;
+        var scientific = "";
+        for (var precision = 1; precision <= 17; precision++) {
+            scientific = value.ToString("E" + (precision - 1), CultureInfo.InvariantCulture);
+            if (double.Parse(scientific, NumberStyles.Float, CultureInfo.InvariantCulture) == value) {
+                break;
             }
         }
 
-        return FormatG(value, 17);
+        return Layout(scientific);
     }
 
-    /// <summary>C's <c>%.{precision}g</c>.</summary>
-    static string FormatG(double value, int precision) {
-        // .NET's G is C's %g but for the exponent's case and padding: C
-        // writes at least two exponent digits, 'e+05'.
-        var text = value.ToString("G" + precision, CultureInfo.InvariantCulture).Replace('E', 'e');
-        var e = text.IndexOf('e', StringComparison.Ordinal);
-        if (e >= 0) {
-            var sign = text[e + 1];
-            var digits = text[(e + 2)..];
-            text = text[..(e + 1)] + sign + digits.PadLeft(2, '0');
+    static string? Special(double value) =>
+        double.IsNaN(value) ? "nan"
+        : double.IsInfinity(value) ? value > 0 ? "inf" : "-inf"
+        : null;
+
+    /// <summary>
+    ///     Scientific digits laid out as the runtime's <c>layout_float</c> and
+    ///     Python's <c>repr</c> do: plain decimal with a point for exponents -4
+    ///     through 15 (<c>100.0</c>, <c>-0.0</c>, <c>0.0001</c>), scientific
+    ///     outside them (<c>1e+20</c>, <c>1.5e-07</c>). The point keeps a whole
+    ///     float from reading as an integer.
+    /// </summary>
+    static string Layout(string scientific) {
+        var negative = scientific.StartsWith('-');
+        var e = scientific.IndexOf('E', StringComparison.Ordinal);
+        var digits = scientific[(negative ? 1 : 0)..e].Replace(".", "", StringComparison.Ordinal).TrimEnd('0');
+        if (digits.Length == 0) {
+            digits = "0";
         }
 
-        return text;
+        var exponent = int.Parse(scientific[(e + 1)..], NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture);
+        var text = new StringBuilder(negative ? "-" : "");
+        if (exponent is < -4 or >= 16) {
+            text.Append(digits[0]);
+            if (digits.Length > 1) {
+                text.Append('.').Append(digits, 1, digits.Length - 1);
+            }
+
+            text.Append('e').Append(exponent < 0 ? '-' : '+')
+                .Append(Math.Abs(exponent).ToString("00", CultureInfo.InvariantCulture));
+        } else if (exponent < 0) {
+            text.Append("0.").Append('0', -exponent - 1).Append(digits);
+        } else if (digits.Length > exponent + 1) {
+            text.Append(digits, 0, exponent + 1).Append('.').Append(digits, exponent + 1, digits.Length - exponent - 1);
+        } else {
+            text.Append(digits).Append('0', exponent + 1 - digits.Length).Append(".0");
+        }
+
+        return text.ToString();
     }
 
     static object Wrap(Func<long> operation) {

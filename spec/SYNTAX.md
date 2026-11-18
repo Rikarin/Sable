@@ -734,6 +734,10 @@ if let user = findUser(id) { use(user) }            // optional binding
 if let a = p, let b = q, a.id == b.id { }           // multiple + condition
 if case .Circle(let r) = shape { }                  // pattern condition
 
+// Where a value is wanted, an 'if' with an 'else' gives one: each
+// branch's last line, all of one type
+let size = if n > 3 { "big" } else { "small" }
+
 guard let user = findUser(id) else { return .notFound }
 guard x > 0 else { throw .invalid("x must be positive") }
 
@@ -817,6 +821,7 @@ case Point { x: 0, y: let y }  // record pattern
 case let s as String           // type test with binding
 case is Drawable               // type test
 case .Some(.Ok(let v))         // nested
+case let v?                    // an optional holding a value: .Some(let v)
 case [first, _, last]          // array pattern, fixed length
 case [let head, ...let tail]   // array pattern with rest
 case "a" | "b" | "c"           // string alternatives
@@ -852,6 +857,11 @@ switch code {
     default: fail()
 }
 ```
+
+The values are compared with the subject in order, and `default`, wherever it
+is written, runs when none is equal. A case ends where the next begins:
+`fallthrough` goes on into the case written after it, `break` leaves the
+`switch` early, and `continue` goes on with the loop around it.
 
 ---
 
@@ -913,6 +923,12 @@ x is Drawable         // conformance/type test, narrows in the true branch
 x unchecked as I32    // explicit wrapping/truncating conversion
 ```
 
+`as` and `unchecked as` convert between numeric types. `unchecked as` never
+traps: an integer keeps its low bits, and a float goes toward zero and stops
+at the target's bounds (NaN gives 0). A cast that could never succeed — between
+unrelated types, or classes on different lines of inheritance — is an error
+(S3066).
+
 ### Literals
 
 ```sable
@@ -958,6 +974,14 @@ items.sorted { a, b in a.score > b.score }  // trailing closure, named params
 fn withLock<T>(_ l: Lock, _ body: () throws -> T) rethrows -> T { }
 withLock(mutex) {
     counter += 1
+}
+
+// After the first trailing closure, more, each with its parameter's label,
+// starting on the line the one before ends on
+attempt {
+    try fetch()
+} onFail: {
+    cached()
 }
 ```
 
@@ -1097,7 +1121,8 @@ unowned(unsafe) let fast: Node      // no trap, no check
 
 region arena { }                    // scoped bump allocator
 let node = arena.alloc(Node)
-fn build(in r: region) -> ref Node  // root inferred as 'r'
+fn build(in r: region) -> ref Node  // root inferred as 'r'; 'in' is the label
+let tree = build(in: arena)
 ```
 
 See [../docs/02-memory-model.md](../docs/02-memory-model.md) for the semantics.
@@ -1135,6 +1160,9 @@ inside a function body, where they are ordinary statements.
 
 `const fn` bodies run in the compiler's interpreter. They may allocate, loop,
 and call other `const fn`s; they may not do I/O or touch `unsafe`.
+
+`DEBUG` is defined in an unoptimised build (and by `sable check`), `RELEASE` in
+an optimised one; never both.
 
 ---
 

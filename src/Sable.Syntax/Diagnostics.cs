@@ -138,6 +138,9 @@ public enum ErrorCode {
     ERR_ReferenceNeedsPlace = 3060,
     ERR_ReferenceOutlivesRoot = 3061,
     ERR_OverlappingAccess = 3062,
+    ERR_ExposesHiddenType = 3063,
+    ERR_OverrideSignatureMismatch = 3065,
+    ERR_InvalidCast = 3066,
     ERR_UnknownDerivation = 3070,
     ERR_CannotDerive = 3071,
     ERR_DerivedFieldDoesNotConform = 3072,
@@ -162,10 +165,19 @@ public enum ErrorCode {
     ERR_BackedPropertyNeedsInitializer = 3111,
     ERR_MissingBody = 3112,
     ERR_LazyProperty = 3113,
-    ERR_CannotSuppressConstraint = 3130,
-    ERR_NoncopyableTypeArgument = 3131,
-    ERR_ConstGenericPredicate = 3132,
-    ERR_SelfRequirementOnExistential = 3133,
+    ERR_IfValueNeedsElse = 3130,
+    ERR_ConstGenericPredicate = 3160,
+    ERR_SelfRequirementOnExistential = 3161,
+
+    // Ownership, escape and isolation checks (S3200-S3207).
+    ERR_IntegerDoesNotFit = 3200,
+    ERR_ConstantOverflow = 3201,
+    ERR_OutNotAssigned = 3202,
+    ERR_MisplacedSuppression = 3203,
+    ERR_NoncopyableTypeArgument = 3204,
+    ERR_Escapes = 3205,
+    ERR_ActorStateFromOutside = 3206,
+    ERR_NotSendable = 3207,
 
     // ---- Lints (S3300-S3399): reported by Sable.Symbols' Lints, which
     // 'sable check' runs, never by compiling. Their severity is configured.
@@ -187,11 +199,13 @@ public enum ErrorCode {
     ERR_MatchArmTypesDiffer = 6007,
     ERR_UseBeforeAssignment = 6008,
     ERR_RefutablePatternInDeclaration = 6009,
+    ERR_FallthroughOutOfPlace = 6020,
 
     // ---- Code generation (S7000-S7999) ---------------------------------
     ERR_NotLoweredYet = 7000,
     ERR_UnknownBuiltin = 7001,
     ERR_BuiltinSignatureMismatch = 7002,
+    ERR_EndlessInstantiation = 7003,
 }
 
 public enum DiagnosticSeverity {

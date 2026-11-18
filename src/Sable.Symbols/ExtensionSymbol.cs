@@ -30,10 +30,59 @@ public sealed class ExtensionSymbol(
     public NamedTypeSymbol ExtendedType { get; } = extendedType;
 
     /// <summary>
+    ///     The module the extension is written in, which may not be the
+    ///     extended type's: who may see its internal and private members is
+    ///     decided here, not where the type was declared.
+    /// </summary>
+    public ModuleSymbol? DeclaringModule { get; init; }
+
+    /// <summary>
     ///     The extended type's parameters under the names this extension wrote,
     ///     which may differ from the ones the declaration used.
     /// </summary>
     public ImmutableArray<AliasSymbol> TypeParameterAliases { get; internal set; } = [];
+
+    /// <summary>
+    ///     The <c>where T == Int</c> requirements of a constrained extension
+    ///     (SYNTAX.md §11): in force inside its members, and met wherever one
+    ///     of them is used.
+    /// </summary>
+    public ImmutableArray<SameTypeRequirement> SameTypeRequirements { get; internal set; } = [];
+
+    /// <summary>
+    ///     Its <c>where T: P</c> requirements. Unlike a type's own, these do not
+    ///     go in T's constraint list: they hold only inside this extension.
+    /// </summary>
+    public ImmutableArray<ConformanceRequirement> ConformanceRequirements { get; internal set; } = [];
+
+    /// <summary>The protocols this extension conforms the type to, if any (<c>extension Box: P where …</c>).</summary>
+    public ImmutableArray<TypeSymbol> Conformances { get; internal set; } = [];
+
+    /// <summary>True when the extension has requirements, so its members and conformances are conditional.</summary>
+    public bool IsConstrained => !SameTypeRequirements.IsEmpty || !ConformanceRequirements.IsEmpty;
+
+    /// <summary>
+    ///     The first requirement the extended type, read through
+    ///     <paramref name="substitution" />, does not meet, said as the
+    ///     extension says it; null when it meets them all.
+    /// </summary>
+    internal string? Unmet(TypeSubstitution substitution, TypeEquivalence? context) {
+        context ??= TypeEquivalence.Empty;
+
+        foreach (var (left, right) in SameTypeRequirements) {
+            if (!context.AreSame(substitution.Apply(left), substitution.Apply(right))) {
+                return $"'{left.ToDisplayString()} == {right.ToDisplayString()}'";
+            }
+        }
+
+        foreach (var (subject, constraint) in ConformanceRequirements) {
+            if (!Conversions.Satisfies(substitution.Apply(subject), substitution.Apply(constraint), context)) {
+                return $"'{subject.ToDisplayString()}: {constraint.ToDisplayString()}'";
+            }
+        }
+
+        return null;
+    }
 
     public override string QualifiedName => ExtendedType.QualifiedName;
 }

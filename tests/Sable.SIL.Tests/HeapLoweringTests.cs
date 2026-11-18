@@ -112,7 +112,7 @@ public sealed class HeapLoweringTests {
         );
 
         Assert.Equal(
-            "héllo, world\n12\né\nhéllo\ntrue\n5\n-1\n12\n25\n-7\n2\nhéllo, world!\ntrue\nfalse\ntrue\n26\n",
+            "héllo, world\n12\né\nhéllo\ntrue\n5\n-1\n12\n25.0\n-7\n2\nhéllo, world!\ntrue\nfalse\ntrue\n26\n",
             Run(module, "test").Output
         );
     }

@@ -59,10 +59,7 @@ public sealed class AssociatedTypeTests {
     public void NotSayingWhatItIsIsAnError() {
         var errors = ErrorsIn(
             """
-            struct Silent: Container {
-                fn first() -> String? { return none }
-                fn holds(_ item: String) -> Bool { return true }
-            }
+            struct Silent: Container { }
             """
         );
         Assert.Contains(
@@ -71,6 +68,32 @@ public sealed class AssociatedTypeTests {
                 e.Code == ErrorCode.ERR_DoesNotConform
                 && e.Message.Contains("Item", StringComparison.Ordinal)
         );
+    }
+
+    [Fact]
+    public void AWitnessSaysWhatItIs() =>
+        AssertClean(
+            """
+            struct Inferred: Container {
+                fn first() -> String? { return none }
+                fn holds(_ item: String) -> Bool { return true }
+            }
+            fn probe<C: Container>(_ c: C) -> C.Item? => c.first()
+            fn use(_ i: Inferred) -> String? => probe(i)
+            """
+        );
+
+    [Fact]
+    public void WitnessesThatDisagreeAreAMismatch() {
+        var errors = ErrorsIn(
+            """
+            struct Torn: Container {
+                fn first() -> String? { return none }
+                fn holds(_ item: Int) -> Bool { return true }
+            }
+            """
+        );
+        Assert.Contains(errors, static e => e.Code == ErrorCode.ERR_RequirementSignatureMismatch);
     }
 
     [Fact]

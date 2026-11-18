@@ -216,6 +216,28 @@ public sealed class ParserRecoveryTests {
         Assert.Contains("1:5", diagnostic.Format(tree.Text), StringComparison.Ordinal);
     }
 
+    /// <summary>
+    ///     One mistake, one error: what follows it is skipped or read the way
+    ///     the line plainly meant, rather than made into more mistakes.
+    /// </summary>
+    [Theory]
+    [InlineData("fn f() {\n    let x?\n}", ErrorCode.ERR_ExpectedStatementEnd)]
+    [InlineData("fn f() {\n    ) ? b : c\n    let b = 2\n}", ErrorCode.ERR_ExpectedExpression)]
+    [InlineData("fn f() {\n    let a = p.\n    let b = 2\n}", ErrorCode.ERR_ExpectedIdentifier)]
+    [InlineData("fn f() {\n    if p.x == { print(1) }\n    let b = 2\n}", ErrorCode.ERR_ExpectedExpression)]
+    public void OneMistakeIsOneError(string source, ErrorCode code) {
+        var tree = SyntaxTree.Parse(source);
+        var diagnostic = Assert.Single(tree.Diagnostics);
+        Assert.Equal(code, diagnostic.Code);
+        AssertRoundTrips(tree, source);
+    }
+
+    [Fact]
+    public void AKeywordAfterADotOnTheSameLineIsAMemberName() {
+        var tree = SyntaxTree.Parse("fn f() {\n    let a = p.self\n    let b = x\n        .let\n}");
+        Assert.False(tree.HasErrors, tree.FormatDiagnostics());
+    }
+
     [Fact]
     public void LexicalDiagnosticsSurviveIntoTheParse() {
         var tree = SyntaxTree.ParseExpression("'ab'");

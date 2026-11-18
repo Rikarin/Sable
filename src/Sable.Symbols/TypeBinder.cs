@@ -126,6 +126,10 @@ internal sealed class TypeBinder(Compilation compilation) {
             ? BindReturnType(clause.Type, function, scope)
             : compilation.Core.Void;
 
+        if (declaration.ExplicitProtocol is { } explicitProtocol) {
+            function.ExplicitProtocolResolver = () => BindType(explicitProtocol, function, scope);
+        }
+
         function.IsRethrows =
             declaration.ThrowsSpec?.ThrowsKeyword.Kind == SyntaxKind.RethrowsKeyword;
 
@@ -150,6 +154,7 @@ internal sealed class TypeBinder(Compilation compilation) {
                 BindWhereClause(declaration.WhereClause, function, scope);
 
                 _ = function.ReturnType;
+                _ = function.ExplicitProtocol;
                 foreach (var parameter in function.Parameters) {
                     _ = parameter.Type;
                 }
@@ -166,6 +171,144 @@ internal sealed class TypeBinder(Compilation compilation) {
                 _ = function.ThrownType;
             }
         );
+
+        // What a signature names, a caller has to be able to name too.
+        DeferLate(() => {
+                if (declaration.ReturnClause is { } clause) {
+                    CheckExposure(function, function.ReturnType, clause.Type.Span, "its result type");
+                }
+
+                for (var i = 0; i < function.Parameters.Length && i < declaration.Parameters.Parameters.Count; i++) {
+                    var parameter = function.Parameters[i];
+                    CheckExposure(function, parameter.Type, declaration.Parameters.Parameters[i].Type.Span, $"its parameter '{parameter.Name}'");
+                }
+
+                if (declaration.ThrowsSpec?.ErrorType is { } errorType && function.ThrownType is { } thrown) {
+                    CheckExposure(function, thrown, errorType.Span, "the error it throws");
+                }
+            }
+        );
+    }
+
+    /// <summary>
+    ///     Reports a declaration whose signature names a type less visible
+    ///     than the declaration itself: a public function returning an
+    ///     internal type could be called from where its result cannot be
+    ///     named, or its members reached.
+    /// </summary>
+    void CheckExposure(Symbol member, TypeSymbol type, TextSpan span, string what) {
+        var access = EffectiveAccessibility(member);
+        if (access <= Accessibility.Internal) {
+            return;
+        }
+
+        if (LeastVisible(type) is not var (hidden, hiddenAccess) || hiddenAccess >= access) {
+            return;
+        }
+
+        _diagnostics.Error(
+            ErrorCode.ERR_ExposesHiddenType,
+            span,
+            $"'{member.Name}' is {Word(access)}, and {what} names '{hidden.Name}', which is {Word(hiddenAccess)}: "
+            + $"make '{hidden.Name}' {Word(access)}, or '{member.Name}' less visible"
+        );
+
+        static string Word(Accessibility accessibility) => accessibility.ToString().ToLowerInvariant();
+    }
+
+    /// <summary>
+    ///     How far a declaration is visible: no farther than what holds it, so
+    ///     a public member of an internal type is internal.
+    /// </summary>
+    static Accessibility EffectiveAccessibility(Symbol symbol) {
+        var access = symbol.DeclaredAccessibility;
+        for (var here = symbol.ContainingSymbol; here is not null and not ModuleSymbol; here = here.ContainingSymbol) {
+            var holder = here is ExtensionSymbol extension ? extension.ExtendedType : here;
+            if (holder is NamedTypeSymbol or FunctionSymbol && holder.DeclaredAccessibility < access) {
+                access = holder.DeclaredAccessibility;
+            }
+
+            // A body's local declarations are its own.
+            if (here is FunctionSymbol) {
+                return Accessibility.Private;
+            }
+        }
+
+        return access;
+    }
+
+    /// <summary>The least visible named type a type is built from, if any.</summary>
+    static (NamedTypeSymbol Type, Accessibility Access)? LeastVisible(TypeSymbol type) {
+        (NamedTypeSymbol, Accessibility)? least = null;
+        Visit(type);
+        return least;
+
+        void Visit(TypeSymbol part) {
+            switch (part) {
+                case NamedTypeSymbol named: {
+                    var definition = named.OriginalDefinition;
+                    var access = EffectiveAccessibility(definition);
+                    if (least is not { Item2: var current } || access < current) {
+                        least = (definition, access);
+                    }
+
+                    foreach (var argument in named.TypeArguments) {
+                        Visit(argument);
+                    }
+
+                    break;
+                }
+
+                case ArrayTypeSymbol array:
+                    Visit(array.ElementType);
+                    break;
+
+                case OptionalTypeSymbol optional:
+                    Visit(optional.UnderlyingType);
+                    break;
+
+                case ReferenceTypeSymbol reference:
+                    Visit(reference.ReferencedType);
+                    break;
+
+                case TupleTypeSymbol tuple:
+                    foreach (var element in tuple.ElementTypes) {
+                        Visit(element);
+                    }
+
+                    break;
+
+                case FunctionTypeSymbol function:
+                    foreach (var parameter in function.ParameterTypes) {
+                        Visit(parameter);
+                    }
+
+                    Visit(function.ReturnType);
+                    break;
+
+                case ExistentialTypeSymbol existential:
+                    Visit(existential.Constraint);
+                    break;
+
+                case OpaqueTypeSymbol opaque:
+                    Visit(opaque.Constraint);
+                    break;
+
+                case CompositionTypeSymbol composition:
+                    foreach (var element in composition.Parts) {
+                        Visit(element);
+                    }
+
+                    break;
+
+                case StructuralUnionTypeSymbol union:
+                    foreach (var element in union.Cases) {
+                        Visit(element);
+                    }
+
+                    break;
+            }
+        }
     }
 
     public void BindParameterType(ParameterSymbol parameter, ParameterSyntax syntax) {
@@ -207,6 +350,10 @@ internal sealed class TypeBinder(Compilation compilation) {
                 );
 
         Defer(() => _ = field.Type);
+
+        if (declaration.Declarator.TypeAnnotation is { } written) {
+            DeferLate(() => CheckExposure(field, field.Type, written.Type.Span, "its type"));
+        }
     }
 
     /// <summary>A stored property's type, from the form of its initial value: '0' is Int, 'Point(…)' a Point.</summary>
@@ -327,6 +474,10 @@ internal sealed class TypeBinder(Compilation compilation) {
             }
         );
 
+    /// <summary>A named type's extension's <c>where</c> clause, kept on the extension.</summary>
+    public void BindExtensionWhereClause(ExtensionSymbol extension, ExtensionDeclarationSyntax declaration, FileScope? scope) =>
+        Defer(() => BindWhereClause(declaration.WhereClause, extension, scope));
+
     static BaseTypeListSyntax? BaseTypeListOf(SyntaxNode declaration) =>
         declaration switch {
             StructDeclarationSyntax s => s.BaseTypes,
@@ -368,79 +519,32 @@ internal sealed class TypeBinder(Compilation compilation) {
                 continue;
             }
 
-            parameter.Constraints = BindConstraint(parameter, syntax.Constraint, context, scope);
+            // 'T: P & Q' is kept as two constraints, as 'where T: P, T: Q' is,
+            // so everything that walks a parameter's protocols sees both.
+            var constraints = Constraints(syntax.Constraint, parameter);
+            parameter.Constraints = [..constraints.SelectMany(c => CompositionTypeSymbol.PartsOf(BindType(c, context, scope)))];
         }
     }
 
-    static bool ContainsSuppression(TypeSyntax type) =>
-        type switch {
-            SuppressedTypeSyntax => true,
-            CompositionTypeSyntax composition => ContainsSuppression(composition.Left) || ContainsSuppression(composition.Right),
-            _ => false,
-        };
-
     /// <summary>
-    ///     Binds what a parameter is constrained to, taking out the
-    ///     <c>~Copyable</c> that is not a constraint but the lifting of one.
+    ///     A constraint's parts, without the <c>~Copyable</c> among them, which
+    ///     instead lets the parameter stand for a move-only type (docs/03 §3.3).
     /// </summary>
-    /// <remarks>
-    ///     Every generic parameter is implicitly <c>Copyable</c> (docs/03 §3.4),
-    ///     so <c>T: ~Copyable</c> adds nothing to the list: it records that a
-    ///     move-only type may stand for <c>T</c>. In <c>T: P &amp; ~Copyable</c>
-    ///     the rest of the composition is constrained to as usual.
-    /// </remarks>
-    ImmutableArray<TypeSymbol> BindConstraint(TypeParameterSymbol? parameter, TypeSyntax syntax, Symbol context, FileScope? scope) {
-        if (!ContainsSuppression(syntax)) {
-            return [BindType(syntax, context, scope)];
+    static List<TypeSyntax> Constraints(TypeSyntax constraint, TypeParameterSymbol parameter) {
+        switch (constraint) {
+            case SuppressedTypeSyntax { ConstraintType: SimpleNameTypeSyntax { Identifier.Text: "Copyable", TypeArgumentList: null } }:
+                parameter.AllowsNoncopyable = true;
+                return [];
+
+            case CompositionTypeSyntax composition when ContainsSuppression(composition):
+                return [..Constraints(composition.Left, parameter), ..Constraints(composition.Right, parameter)];
+
+            default:
+                return [constraint];
         }
 
-        var constraints = ImmutableArray.CreateBuilder<TypeSymbol>();
-        Collect(syntax);
-        return constraints.ToImmutable();
-
-        void Collect(TypeSyntax part) {
-            switch (part) {
-                case CompositionTypeSyntax composition:
-                    Collect(composition.Left);
-                    Collect(composition.Right);
-                    return;
-
-                case SuppressedTypeSyntax suppressed:
-                    if (!IsCopyable(suppressed.Type)) {
-                        _diagnostics.Error(
-                            ErrorCode.ERR_CannotSuppressConstraint,
-                            suppressed.Span,
-                            $"only 'Copyable' can be opted out of, and '{suppressed.Type.ToString().Trim()}' is not it"
-                        );
-                        return;
-                    }
-
-                    if (parameter is null) {
-                        _diagnostics.Error(
-                            ErrorCode.ERR_CannotSuppressConstraint,
-                            suppressed.Span,
-                            "'~Copyable' lifts a generic parameter's implicit constraint, and this is not a generic parameter"
-                        );
-                        return;
-                    }
-
-                    parameter.AllowsNoncopyable = true;
-                    return;
-
-                default:
-                    var bound = BindType(part, context, scope);
-                    if (!bound.IsError) {
-                        constraints.Add(bound);
-                    }
-
-                    return;
-            }
-        }
-
-        // 'Copyable' is not a declared protocol but the name of the implicit
-        // constraint, so it is recognised by name.
-        static bool IsCopyable(TypeSyntax type) =>
-            type is SimpleNameTypeSyntax { TypeArgumentList: null } name && name.Identifier.Text == "Copyable";
+        static bool ContainsSuppression(TypeSyntax type) =>
+            type is SuppressedTypeSyntax || type is CompositionTypeSyntax composition && (ContainsSuppression(composition.Left) || ContainsSuppression(composition.Right));
     }
 
     /// <summary>
@@ -471,18 +575,14 @@ internal sealed class TypeBinder(Compilation compilation) {
 
             var left = BindType(constraint.Left, context, scope);
 
-            // 'where T: ~Copyable' lifts the implicit constraint as
-            // 'T: ~Copyable' in the parameter list does.
-            if (constraint.OperatorToken.Kind == SyntaxKind.ColonToken && ContainsSuppression(constraint.Right)) {
-                if (!left.IsError) {
-                    var subject = left as TypeParameterSymbol;
-                    var lifted = BindConstraint(subject, constraint.Right, context, scope);
-                    if (subject is not null) {
-                        subject.Constraints = subject.Constraints.AddRange(lifted);
-                    }
+            // 'where T: ~Copyable' says what 'T: ~Copyable' does.
+            if (left is TypeParameterSymbol lifted && constraint.OperatorToken.Kind != SyntaxKind.EqualsEqualsToken
+                && constraint.Right is SuppressedTypeSyntax or CompositionTypeSyntax) {
+                var parts = Constraints(constraint.Right, lifted);
+                if (parts is not [var whole] || !ReferenceEquals(whole, constraint.Right)) {
+                    lifted.Constraints = lifted.Constraints.AddRange(parts.Select(p => BindType(p, context, scope)).Where(static t => !t.IsError));
+                    continue;
                 }
-
-                continue;
             }
 
             var right = BindType(constraint.Right, context, scope);
@@ -502,13 +602,26 @@ internal sealed class TypeBinder(Compilation compilation) {
                     case NamedTypeSymbol type:
                         type.SameTypeRequirements = type.SameTypeRequirements.Add(requirement);
                         break;
+
+                    case ExtensionSymbol extension:
+                        extension.SameTypeRequirements = extension.SameTypeRequirements.Add(requirement);
+                        break;
                 }
 
                 continue;
             }
 
+            // An extension's 'where T: P' is the extension's alone: T is the
+            // type's parameter, and the type itself asks nothing of it.
+            if (context is ExtensionSymbol constrained) {
+                constrained.ConformanceRequirements = constrained.ConformanceRequirements.AddRange(
+                    CompositionTypeSymbol.PartsOf(right).Select(part => new ConformanceRequirement(left, part))
+                );
+                continue;
+            }
+
             if (left is TypeParameterSymbol parameter) {
-                parameter.Constraints = parameter.Constraints.Add(right);
+                parameter.Constraints = parameter.Constraints.AddRange(CompositionTypeSymbol.PartsOf(right));
                 continue;
             }
 
@@ -530,25 +643,43 @@ internal sealed class TypeBinder(Compilation compilation) {
 
     /// <summary>
     ///     Checks that a constructed type's arguments meet the declaration's
-    ///     constraints.
+    ///     constraints and its <c>where</c> clause, as understood inside
+    ///     <paramref name="context" />.
     /// </summary>
-    void CheckTypeArguments(
+    /// <remarks>
+    ///     The same check serves arguments written, <c>Box&lt;Circle&gt;</c>,
+    ///     and arguments inferred from an initialiser's, <c>Box(t: circle)</c>.
+    ///     A requirement is read with the arguments in place of the
+    ///     parameters, so <c>where A == B</c> on <c>Pair&lt;Int, String&gt;</c>
+    ///     asks whether Int is String; and as the context's own requirements
+    ///     have it, so <c>Pair&lt;X, Y&gt;</c> is fine inside a function that
+    ///     says <c>where X == Y</c>.
+    /// </remarks>
+    internal void CheckTypeArguments(
         NamedTypeSymbol definition,
         ImmutableArray<TypeSymbol> arguments,
-        TextSpan span
+        TextSpan span,
+        Symbol? context = null
     ) {
+        if (arguments.Any(TypeSubstitution.ContainsError)) {
+            return;
+        }
+
+        var map = new Dictionary<TypeParameterSymbol, TypeSymbol>();
         for (var i = 0; i < arguments.Length && i < definition.TypeParameters.Length; i++) {
-            if (!definition.TypeParameters[i].AdmitsCopyability(arguments[i])) {
-                _diagnostics.Error(
-                    ErrorCode.ERR_NoncopyableTypeArgument,
-                    span,
-                    $"'{arguments[i].ToDisplayString()}' is move-only, and '{definition.Name}' would copy its "
-                    + $"'{definition.TypeParameters[i].Name}': write '{definition.TypeParameters[i].Name}: ~Copyable' to allow it"
-                );
+            map[definition.TypeParameters[i]] = arguments[i];
+        }
+
+        var substitution = new TypeSubstitution(map);
+        var equivalence = TypeEquivalence.ForSymbol(context);
+
+        for (var i = 0; i < arguments.Length && i < definition.TypeParameters.Length; i++) {
+            if (Copyability.Refusal(definition.TypeParameters[i], arguments[i], definition.Name) is { } refusal) {
+                _diagnostics.Error(ErrorCode.ERR_NoncopyableTypeArgument, span, refusal);
             }
 
             foreach (var constraint in definition.TypeParameters[i].Constraints) {
-                if (Conversions.Satisfies(arguments[i], constraint)) {
+                if (Conversions.Satisfies(arguments[i], substitution.Apply(constraint), equivalence)) {
                     continue;
                 }
 
@@ -561,6 +692,35 @@ internal sealed class TypeBinder(Compilation compilation) {
                     + $"'{definition.TypeParameters[i].Name}'"
                 );
             }
+        }
+
+        foreach (var (left, right) in definition.SameTypeRequirements) {
+            var leftType = substitution.Apply(left);
+            var rightType = substitution.Apply(right);
+            if (equivalence.AreSame(leftType, rightType)) {
+                continue;
+            }
+
+            _diagnostics.Error(
+                ErrorCode.ERR_DoesNotConform,
+                span,
+                $"'{definition.Name}' requires '{left.ToDisplayString()} == {right.ToDisplayString()}', "
+                + $"and here they are '{leftType.ToDisplayString()}' and '{rightType.ToDisplayString()}'"
+            );
+        }
+
+        foreach (var (subject, constraint) in definition.ConformanceRequirements) {
+            var subjectType = substitution.Apply(subject);
+            if (Conversions.Satisfies(subjectType, substitution.Apply(constraint), equivalence)) {
+                continue;
+            }
+
+            _diagnostics.Error(
+                ErrorCode.ERR_DoesNotConform,
+                span,
+                $"'{subjectType.ToDisplayString()}' does not conform to '{constraint.ToDisplayString()}', "
+                + $"which '{definition.Name}' requires of '{subject.ToDisplayString()}'"
+            );
         }
     }
 
@@ -684,13 +844,16 @@ internal sealed class TypeBinder(Compilation compilation) {
                     : ErrorTypeSymbol.Instance;
             }
 
-            // A constraint takes '~Copyable' out before it binds, so one that
-            // reaches here is somewhere a constraint is not.
+            // '@escaping': the parameter's, read where it is declared.
+            case AttributedTypeSyntax attributed:
+                return BindType(attributed.Type, context, scope);
+
+            // Anywhere but a generic parameter's constraint, which takes it apart first.
             case SuppressedTypeSyntax suppressed:
                 return Error(
-                    ErrorCode.ERR_CannotSuppressConstraint,
+                    ErrorCode.ERR_MisplacedSuppression,
                     suppressed.Span,
-                    $"'~{suppressed.Type.ToString().Trim()}' lifts a generic parameter's implicit constraint, and is written only in one, as in 'T: ~Copyable'"
+                    $"'{suppressed.ToString().Trim()}' is not a type: '~Copyable' is written only as a generic parameter's constraint, to let it stand for a @noncopy type"
                 );
 
             case CompositionTypeSyntax composition:
@@ -780,6 +943,11 @@ internal sealed class TypeBinder(Compilation compilation) {
                     syntax.Right.Span,
                     $"'{full}' has no type named '{syntax.Right.Identifier.Text}'"
                 );
+            }
+
+            // Naming the module does not get past what it keeps to itself.
+            if (!Visibility.IsVisible(member, scope, compilation)) {
+                ReportHidden(member, syntax.Right.Span);
             }
 
             return Resolved(syntax.Right, member, ApplyTypeArguments(member, syntax.Right.TypeArgumentList, context, scope, syntax.Span));
@@ -928,7 +1096,7 @@ internal sealed class TypeBinder(Compilation compilation) {
                 }
 
                 // Constraints bind later than this, so the check waits.
-                DeferLate(() => CheckTypeArguments(named, arguments, span));
+                DeferLate(() => CheckTypeArguments(named, arguments, span, context));
                 return named.Construct(arguments);
             }
 
@@ -946,7 +1114,14 @@ internal sealed class TypeBinder(Compilation compilation) {
     // -----------------------------------------------------------------------
 
     /// <summary>Finds the symbol a type name refers to, or null.</summary>
-    public Symbol? Lookup(string name, Symbol context, FileScope? scope, TextSpan span) {
+    /// <remarks>
+    ///     A type hidden from the file — private to another file, internal to
+    ///     another module — is not found, but when nothing else answers to the
+    ///     name it is reported as hidden (unless <paramref name="report" /> is
+    ///     false, for a caller only asking) and returned, so that one mistake
+    ///     is one error.
+    /// </remarks>
+    public Symbol? Lookup(string name, Symbol context, FileScope? scope, TextSpan span, bool report = true) {
         // Enclosing declarations: their type parameters, then their members.
         for (var symbol = context; symbol is not null; symbol = symbol.ContainingSymbol) {
             switch (symbol) {
@@ -999,8 +1174,9 @@ internal sealed class TypeBinder(Compilation compilation) {
             }
         }
 
+        Symbol? hidden = null;
         if (scope is not null) {
-            if (FindTypeMember(scope.Module.GetMembers(name)) is { } moduleMember) {
+            if (FindTypeMember(VisibleFrom(scope, scope.Module.GetMembers(name), ref hidden)) is { } moduleMember) {
                 return moduleMember;
             }
 
@@ -1010,7 +1186,7 @@ internal sealed class TypeBinder(Compilation compilation) {
 
             Symbol? fromImports = null;
             foreach (var module in scope.Imports) {
-                var candidate = FindTypeMember(module.GetMembers(name), true);
+                var candidate = FindTypeMember(VisibleFrom(scope, module.GetMembers(name), ref hidden));
                 if (candidate is null) {
                     continue;
                 }
@@ -1034,8 +1210,41 @@ internal sealed class TypeBinder(Compilation compilation) {
         }
 
         // The core module is in scope everywhere.
-        return FindTypeMember(compilation.Core.Module.GetMembers(name), true);
+        if (FindTypeMember(compilation.Core.Module.GetMembers(name), true) is { } core) {
+            return core;
+        }
+
+        if (hidden is not null && report) {
+            ReportHidden(hidden, span);
+        }
+
+        return hidden;
     }
+
+    /// <summary>The types and aliases among <paramref name="members" /> a file can see, noting the first it cannot.</summary>
+    IEnumerable<Symbol> VisibleFrom(FileScope scope, IEnumerable<Symbol> members, ref Symbol? hidden) {
+        var visible = new List<Symbol>();
+        foreach (var member in members) {
+            if (member is not (NamedTypeSymbol or AliasSymbol)) {
+                continue;
+            }
+
+            if (Visibility.IsVisible(member, scope, compilation)) {
+                visible.Add(member);
+            } else {
+                hidden ??= member;
+            }
+        }
+
+        return visible;
+    }
+
+    void ReportHidden(Symbol symbol, TextSpan span) =>
+        _diagnostics.Error(
+            ErrorCode.ERR_NotAccessible,
+            span,
+            $"'{symbol.Name}' is {Visibility.Describe(symbol, symbol.DeclaredAccessibility)}"
+        );
 
     static TypeParameterSymbol? Match(
         ImmutableArray<TypeParameterSymbol> parameters,

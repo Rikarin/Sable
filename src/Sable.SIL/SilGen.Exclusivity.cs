@@ -84,29 +84,91 @@ public sealed partial class SilGen {
             }
         }
 
+        static BoundExpression Unconverted(BoundExpression expression) =>
+            expression is BoundConversion conversion ? Unconverted(conversion.Operand) : expression;
+
+        /// <summary>The variables of the code around a closure that its body uses, and whether it assigns to each.</summary>
+        static Dictionary<Symbol, bool> OuterVariables(BoundClosure closure) {
+            var found = new Dictionary<Symbol, bool>(ReferenceEqualityComparer.Instance);
+
+            bool Inside(Symbol symbol) {
+                for (var container = symbol.ContainingSymbol; container is not null; container = container.ContainingSymbol) {
+                    if (ReferenceEquals(container, closure.Symbol)) {
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+
+            void Visit(BoundNode node) {
+                switch (node) {
+                    case BoundAssignment { Target: var target } when Root(target) is { } assigned && !Inside(assigned):
+                        found[assigned] = true;
+                        break;
+
+                    case BoundLocalAccess local when !Inside(local.Local):
+                        found.TryAdd(local.Local, false);
+                        break;
+
+                    case BoundParameterAccess parameter when !Inside(parameter.Parameter):
+                        found.TryAdd(parameter.Parameter, false);
+                        break;
+                }
+
+                foreach (var child in node.Children) {
+                    Visit(child);
+                }
+            }
+
+            static Symbol? Root(BoundExpression target) => PathOf(target)?.Root;
+
+            Visit(closure.Body);
+            return found;
+        }
+
         /// <summary>Reports a call whose accesses overlap, one of them a change.</summary>
         void CheckExclusivity(BoundCall call, FunctionSymbol callee, bool mutatingReceiver) {
-            var accesses = new List<(AccessPath Path, bool Modify, string What)>();
+            var accesses = new List<(AccessPath Path, bool Modify, string What, bool InClosure)>();
             if (mutatingReceiver && call.Receiver is { } receiver && PathOf(receiver) is { } self) {
-                accesses.Add((self, true, $"the call to the mutating '{callee.Name}' changes it"));
+                accesses.Add((self, true, $"the call to the mutating '{callee.Name}' changes it", false));
             }
 
             for (var i = 0; i < call.Arguments.Length && i < callee.Parameters.Length; i++) {
                 var modifier = callee.Parameters[i].Modifier;
-                if (modifier is not (ParameterModifier.InOut or ParameterModifier.Ref) || PathOf(call.Arguments[i]) is not { } path) {
+                if (modifier is not (ParameterModifier.InOut or ParameterModifier.Out or ParameterModifier.Ref) || PathOf(call.Arguments[i]) is not { } path) {
                     continue;
                 }
 
-                var what = modifier == ParameterModifier.InOut
-                    ? $"argument {i + 1} ('{callee.Parameters[i].Name}') is inout"
-                    : $"argument {i + 1} ('{callee.Parameters[i].Name}') reads it by reference";
-                accesses.Add((path, modifier == ParameterModifier.InOut, what));
+                var what = modifier switch {
+                    ParameterModifier.InOut => $"argument {i + 1} ('{callee.Parameters[i].Name}') is inout",
+                    ParameterModifier.Out => $"argument {i + 1} ('{callee.Parameters[i].Name}') is out",
+                    _ => $"argument {i + 1} ('{callee.Parameters[i].Name}') reads it by reference",
+                };
+                accesses.Add((path, modifier != ParameterModifier.Ref, what, false));
+            }
+
+            // A closure written into the call may run during it, and reach a
+            // variable the call has inout: 'withWrite(&m) { m = 99 }'.
+            for (var i = 0; i < call.Arguments.Length; i++) {
+                if (Unconverted(call.Arguments[i]) is not BoundClosure closure) {
+                    continue;
+                }
+
+                foreach (var (variable, changes) in OuterVariables(closure)) {
+                    accesses.Add((
+                        new AccessPath(variable, [], variable.Name),
+                        changes,
+                        $"argument {i + 1} is a closure that {(changes ? "changes" : "reads")} it",
+                        true
+                    ));
+                }
             }
 
             for (var j = 1; j < accesses.Count; j++) {
                 for (var i = 0; i < j; i++) {
                     var (first, second) = (accesses[i], accesses[j]);
-                    if ((first.Modify || second.Modify) && first.Path.Overlaps(second.Path)) {
+                    if ((first.Modify || second.Modify) && !(first.InClosure && second.InClosure) && first.Path.Overlaps(second.Path)) {
                         var shorter = first.Path.Steps.Length <= second.Path.Steps.Length ? first.Path : second.Path;
                         generator.Report(
                             ErrorCode.ERR_OverlappingAccess,

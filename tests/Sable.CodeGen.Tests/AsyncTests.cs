@@ -57,6 +57,18 @@ public sealed class AsyncTests {
                 """)).Stdout
         );
 
+    // An actor's stored property is read from outside it by waiting, as a call is (#123).
+    [Fact]
+    public void AnActorsPropertyIsReadByWaitingForTheActor() =>
+        Assert.Equal(
+            "1 1\n",
+            AssertAgree(AsyncProgram(Declarations, """
+                    let c = Counter()
+                    let bumped = await c.bump()
+                    print("\(bumped) \(await c.count)")
+                """)).Stdout
+        );
+
     [Fact]
     public void ATaskNobodyAwaitsStillRunsBeforeTheProgramEnds() =>
         Assert.Equal(
@@ -69,6 +81,20 @@ public sealed class AsyncTests {
                         return 0
                     }
                     print("main")
+                """)).Stdout
+        );
+
+    [Fact]
+    public void ATaskWhoseBodyGivesNothingCanBeAwaited() =>
+        // A Task<Void>: its result is a Void?, whose 'Some' carries nothing.
+        Assert.Equal(
+            "spawned\nhi\nafter\nquiet\n",
+            AssertAgree(AsyncProgram("", """
+                    let t = Task.spawn { print("hi") }
+                    print("spawned")
+                    await t.value
+                    print("after")
+                    let unawaited = Task.spawn { print("quiet") }
                 """)).Stdout
         );
 
@@ -90,6 +116,8 @@ public sealed class AsyncTests {
     [InlineData("    let c = Counter()\n    c.bump()", "'bump', isolated to its actor, is async, so the expression needs 'await'")]
     [InlineData("    let t = Task.spawn { 1 }\n    print(t.value)", "reading 'value' is async, so the expression needs 'await'")]
     [InlineData("    async let y = work(1)\n    print(y)", "'y', an 'async let', is async, so the expression needs 'await'")]
+    [InlineData("    let c = Counter()\n    print(c.count)", "reading 'count', isolated to the actor 'Counter', is async, so the expression needs 'await'")]
+    [InlineData("    let c = Counter()\n    c.count = 3", "'count' is the state of the actor 'Counter', which only it changes")]
     public void AwaitIsWrittenWhereATaskMayWait(string body, string message) {
         var result = Pipeline.Compile(new SourceText(AsyncProgram(Declarations, body), "test.sb"));
         Assert.Contains(result.Errors, e => e.Contains(message, StringComparison.Ordinal));

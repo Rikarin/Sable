@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.RegularExpressions;
 using Sable.Syntax;
 
 namespace Sable.Driver;
@@ -10,8 +11,39 @@ namespace Sable.Driver;
 ///     erroneous example and its fix, as <c>```sable</c> blocks under
 ///     <c>## Example</c> and <c>## Fix</c>; a test compiles both.
 /// </summary>
-public static class DiagnosticDocs {
+public static partial class DiagnosticDocs {
     const string Prefix = "diagnostics/";
+
+    [GeneratedRegex(@"^(?:error|warning)\[(S\d{4})\]", RegexOptions.Multiline)]
+    private static partial Regex Heading();
+
+    /// <summary>
+    ///     The line that ends a report of diagnostics, pointing at
+    ///     <c>sable explain</c> for the codes in it that have a page, as rustc
+    ///     points at <c>--explain</c>; null when none has one.
+    /// </summary>
+    /// <param name="reported">The diagnostics as they were printed, each starting <c>error[S1234]</c> or <c>warning[S1234]</c>.</param>
+    public static string? Hint(IEnumerable<string> reported) {
+        var codes = reported
+            .SelectMany(static text => Heading().Matches(text).Select(static m => m.Groups[1].Value))
+            .Distinct()
+            .Where(static code => Page(code) is not null)
+            .Order(StringComparer.Ordinal)
+            .ToList();
+        return codes switch {
+            [] => null,
+            [var one] => $"note: 'sable explain {one}' says more about this diagnostic",
+            _ => $"note: 'sable explain <code>' says more about {string.Join(", ", codes)}",
+        };
+    }
+
+    /// <summary>Writes <see cref="Hint" />'s line, when there is one, and a blank line after it.</summary>
+    public static void WriteHint(TextWriter writer, IEnumerable<string> reported) {
+        if (Hint(reported) is { } hint) {
+            writer.WriteLine(hint);
+            writer.WriteLine();
+        }
+    }
 
     static readonly Lazy<IReadOnlyDictionary<string, string>> Pages = new(Load);
 

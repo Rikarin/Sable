@@ -177,8 +177,10 @@ public sealed class TypeSubstitution {
         switch (parameter) {
             case TypeParameterSymbol typeParameter when inferrable.Contains(typeParameter):
                 // An error says nothing about the parameter, and binding it to
-                // one would turn a single mistake into a cascade.
-                if (argument.IsError) {
+                // one would turn a single mistake into a cascade. Nor does a
+                // type with an error inside: 'none' with nothing to say what
+                // it is optional of is '?', and 'T' is not that.
+                if (ContainsError(argument)) {
                     return true;
                 }
 
@@ -252,6 +254,12 @@ public sealed class TypeSubstitution {
                     }
                 }
 
+                // 'throws(E)' against a closure that throws IoError: E is IoError.
+                if (function.ThrownType is { } thrown && otherFunction.ThrownType is { } otherThrown
+                    && !Unify(thrown, otherThrown, inferrable, into)) {
+                    return false;
+                }
+
                 return Unify(function.ReturnType, otherFunction.ReturnType, inferrable, into);
             }
 
@@ -261,4 +269,17 @@ public sealed class TypeSubstitution {
                 return true;
         }
     }
+
+    /// <summary>True when a type is, or is built from, an error type.</summary>
+    public static bool ContainsError(TypeSymbol type) =>
+        type switch {
+            { IsError: true } => true,
+            NamedTypeSymbol named => named.TypeArguments.Any(ContainsError),
+            ArrayTypeSymbol array => ContainsError(array.ElementType),
+            OptionalTypeSymbol optional => ContainsError(optional.UnderlyingType),
+            ReferenceTypeSymbol reference => ContainsError(reference.ReferencedType),
+            TupleTypeSymbol tuple => tuple.ElementTypes.Any(ContainsError),
+            FunctionTypeSymbol function => function.ParameterTypes.Any(ContainsError) || ContainsError(function.ReturnType),
+            _ => false,
+        };
 }

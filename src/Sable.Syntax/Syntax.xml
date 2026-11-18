@@ -1190,6 +1190,14 @@
     <Field Name="Initializer" Type="EqualsValueClauseSyntax" />
   </Node>
 
+  <Node Name="ComptimeDeclarationSyntax" Base="DeclarationSyntax" Kind="ComptimeDeclaration"
+        Doc="A 'comptime' block among declarations: run while the program is compiled.">
+    <Field Name="Attributes" Type="List:AttributeSyntax" />
+    <Field Name="Modifiers" Type="TokenList" />
+    <Field Name="ComptimeKeyword" Type="Token" />
+    <Field Name="Body" Type="BlockSyntax" />
+  </Node>
+
   <Node Name="AliasDeclarationSyntax" Base="DeclarationSyntax" Kind="AliasDeclaration">
     <Field Name="Attributes" Type="List:AttributeSyntax" />
     <Field Name="Modifiers" Type="TokenList" />

@@ -93,6 +93,8 @@ public sealed partial class LlvmEmitter {
         output.Append(Declarations);
         output.Append('\n');
         output.Append(functions);
+        output.Append(ForeignFunctions(module));
+        output.Append(ExportedFunctions(module));
         output.Append(_helpers);
         if (module.Unit is { } unit) {
             output.Append(ExternalDeclarations(unit, output));

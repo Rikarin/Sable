@@ -1,0 +1,39 @@
+module Sable.Core
+
+// What is known about the target while a program is compiled: the
+// constants a 'comptime' block tests, and 'compileError', which stops the
+// compile (SYNTAX.md §21).
+
+/// The platform the program is compiled for. Each member is a constant, so
+/// a 'comptime' block or a 'const' can read it.
+public struct Platform {
+    /// The operating system, as '#if os(...)' names it.
+    #if os(macos)
+    public const os: String = "macos"
+    #elseif os(linux)
+    public const os: String = "linux"
+    #elseif os(windows)
+    public const os: String = "windows"
+    #else
+    public const os: String = "unknown"
+    #endif
+
+    /// The architecture, as '#if arch(...)' names it.
+    #if arch(arm64)
+    public const arch: String = "arm64"
+    #elseif arch(x86_64)
+    public const arch: String = "x86_64"
+    #else
+    public const arch: String = "unknown"
+    #endif
+
+    /// How many bits a pointer has: what Int and UInt have too.
+    public const pointerWidth: Int = 64
+}
+
+/// Stops the compile with the message, where the call is: a 'comptime'
+/// block or a 'const' that reaches it is an error (S3202). Reached when
+/// the program runs, in a 'const fn' called then, it stops the program.
+/// The compiler writes each call (SilGen.Constants.cs).
+@intrinsic
+public const fn compileError(_ message: String) -> Never

@@ -969,6 +969,7 @@ public static class SyntaxFormatter {
                 SyntaxKind.FunctionDeclaration
                     or SyntaxKind.FieldDeclaration
                     or SyntaxKind.ConstDeclaration
+                    or SyntaxKind.ComptimeDeclaration
                     or SyntaxKind.InitDeclaration
                     or SyntaxKind.DeinitDeclaration
                     or SyntaxKind.SubscriptDeclaration

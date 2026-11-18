@@ -3251,6 +3251,10 @@ internal sealed class Parser {
                 );
             }
 
+            // 'comptime { ... }' among declarations: run as the program is compiled.
+            case SyntaxKind.ComptimeKeyword:
+                return new ComptimeDeclarationGreen(attributes, modifiers, EatToken(), ParseBlock());
+
             case SyntaxKind.ConstKeyword: {
                 var keyword = EatToken();
                 var identifier = EatIdentifier();

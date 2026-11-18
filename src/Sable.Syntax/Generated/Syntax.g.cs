@@ -3340,6 +3340,28 @@ public sealed class ConstDeclarationSyntax : DeclarationSyntax
     public override void Accept(SyntaxVisitor visitor) => visitor.VisitConstDeclaration(this);
 }
 
+/// <summary>A 'comptime' block among declarations: run while the program is compiled.</summary>
+public sealed class ComptimeDeclarationSyntax : DeclarationSyntax
+{
+    private BlockSyntax? _body;
+
+    internal ComptimeDeclarationSyntax(GreenNode green, SyntaxNode? parent, int position)
+        : base(green, parent, position) { }
+
+    public SyntaxList<AttributeSyntax> Attributes => GetList<AttributeSyntax>(0);
+    public SyntaxTokenList Modifiers => GetTokenList(1);
+    public SyntaxToken ComptimeKeyword => GetToken(2);
+    public BlockSyntax Body => GetRed(ref _body, 3);
+
+    internal override SyntaxNode? GetNodeSlot(int index) => index switch
+    {
+        3 => Body,
+        _ => null,
+    };
+
+    public override void Accept(SyntaxVisitor visitor) => visitor.VisitComptimeDeclaration(this);
+}
+
 public sealed class AliasDeclarationSyntax : DeclarationSyntax
 {
     private GenericParameterListSyntax? _typeParameters;
@@ -3653,6 +3675,7 @@ public abstract class SyntaxVisitor
     public virtual void VisitAccessorList(AccessorListSyntax node) => DefaultVisit(node);
     public virtual void VisitAccessor(AccessorSyntax node) => DefaultVisit(node);
     public virtual void VisitConstDeclaration(ConstDeclarationSyntax node) => DefaultVisit(node);
+    public virtual void VisitComptimeDeclaration(ComptimeDeclarationSyntax node) => DefaultVisit(node);
     public virtual void VisitAliasDeclaration(AliasDeclarationSyntax node) => DefaultVisit(node);
     public virtual void VisitAssociatedTypeDeclaration(AssociatedTypeDeclarationSyntax node) => DefaultVisit(node);
     public virtual void VisitUnionCaseDeclaration(UnionCaseDeclarationSyntax node) => DefaultVisit(node);

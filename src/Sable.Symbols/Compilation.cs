@@ -724,6 +724,7 @@ public sealed partial class Compilation {
             IsMutating = declaration.Modifiers.Any(SyntaxKind.MutatingKeyword),
             IsOverride = declaration.Modifiers.Any(SyntaxKind.OverrideKeyword),
             IsOpen = declaration.Modifiers.Any(SyntaxKind.OpenKeyword),
+            IsConst = declaration.Modifiers.Any(SyntaxKind.ConstKeyword),
             IsFinal = declaration.Modifiers.Any(SyntaxKind.FinalKeyword),
             IsAbstract = declaration.Body is null && declaration.ExpressionBody is null,
             Builtin = BuiltinOf(declaration)
@@ -732,6 +733,12 @@ public sealed partial class Compilation {
         // A builtin's body is the builtin: the function is as concrete as one
         // written in Sable, and witnesses a requirement as one would.
         if (function.Builtin is not null) {
+            function.IsAbstract = false;
+        }
+
+        // C's, or seen by C (Compilation.Interop.cs).
+        DeclareForeign(function, declaration, container);
+        if (function.ForeignName is not null) {
             function.IsAbstract = false;
         }
 
@@ -917,7 +924,8 @@ public sealed partial class Compilation {
             FunctionKind.Ordinary
         ) {
             IsAsync = !declaration.AsyncKeyword.IsNone
-                || declaration.Modifiers.Any(SyntaxKind.AsyncKeyword)
+                || declaration.Modifiers.Any(SyntaxKind.AsyncKeyword),
+            IsConst = declaration.Modifiers.Any(SyntaxKind.ConstKeyword)
         };
 
         if (declaration.TypeParameters is { } typeParameters) {

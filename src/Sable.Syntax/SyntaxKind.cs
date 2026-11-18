@@ -382,5 +382,6 @@ public enum SyntaxKind : ushort {
     UnionCasePayloadList = 1434,
     UnionCaseField = 1435,
     EnumCaseDeclaration = 1436,
-    IncompleteDeclaration = 1437
+    IncompleteDeclaration = 1437,
+    ComptimeDeclaration = 1438
 }

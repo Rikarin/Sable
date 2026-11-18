@@ -5293,6 +5293,42 @@ internal sealed class ConstDeclarationGreen : GreenNode
         new ConstDeclarationSyntax(this, parent, position);
 }
 
+/// <summary>Green node for <see cref="ComptimeDeclarationSyntax"/>.</summary>
+internal sealed class ComptimeDeclarationGreen : GreenNode
+{
+    private readonly GreenList? _attributes;
+    private readonly GreenList? _modifiers;
+    private readonly GreenToken? _comptimeKeyword;
+    private readonly GreenNode? _body;
+
+    public ComptimeDeclarationGreen(GreenList? attributes, GreenList? modifiers, GreenToken? comptimeKeyword, GreenNode? body)
+        : base(SyntaxKind.ComptimeDeclaration, 0)
+    {
+        _attributes = attributes;
+        _modifiers = modifiers;
+        _comptimeKeyword = comptimeKeyword;
+        _body = body;
+        FullWidth = (attributes?.FullWidth ?? 0)
+                    + (modifiers?.FullWidth ?? 0)
+                    + (comptimeKeyword?.FullWidth ?? 0)
+                    + (body?.FullWidth ?? 0);
+    }
+
+    public override int SlotCount => 4;
+
+    public override GreenNode? GetSlot(int index) => index switch
+    {
+        0 => _attributes,
+        1 => _modifiers,
+        2 => _comptimeKeyword,
+        3 => _body,
+        _ => null,
+    };
+
+    public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
+        new ComptimeDeclarationSyntax(this, parent, position);
+}
+
 /// <summary>Green node for <see cref="AliasDeclarationSyntax"/>.</summary>
 internal sealed class AliasDeclarationGreen : GreenNode
 {

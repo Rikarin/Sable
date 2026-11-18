@@ -157,6 +157,12 @@ public sealed class NamedTypeSymbol : TypeSymbol {
     /// </summary>
     public bool IsReflectable { get; internal set; }
 
+    /// <summary>
+    ///     True for a <c>@flags</c> enum: its values are sets of its cases,
+    ///     as the integer each is, combined with <c>|</c>.
+    /// </summary>
+    public bool IsFlags { get; internal set; }
+
     /// <summary>True for <c>sealed class</c>: it may not be subclassed.</summary>
     public bool IsSealed { get; internal set; }
 

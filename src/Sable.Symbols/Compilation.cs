@@ -579,7 +579,8 @@ public sealed partial class Compilation {
                 && attributes.Any(static a => a.Name.ToString().Trim() == "noncopy"),
             IsInlineLayout = typeKind is TypeKind.Struct
                 && attributes.Any(static a => a.Name.ToString().Trim() == "inline_layout"),
-            IsReflectable = attributes.Any(static a => a.Name.ToString().Trim() == "reflectable")
+            IsReflectable = attributes.Any(static a => a.Name.ToString().Trim() == "reflectable"),
+            IsFlags = typeKind is TypeKind.Enum && attributes.Any(static a => a.Name.ToString().Trim() == "flags"),
         };
 
         // A protocol has no values to look at, and so nothing to describe.
@@ -629,6 +630,10 @@ public sealed partial class Compilation {
 
         if (typeKind == TypeKind.Struct) {
             SynthesizeMemberwiseInitializer(type);
+        }
+
+        if (type.IsFlags) {
+            DeclareFlagsMembers(type);
         }
 
         // '@derive(…)': the members are made once every type is declared.
@@ -1257,8 +1262,10 @@ public sealed partial class Compilation {
             return;
         }
 
+        var value = EnumCaseValue(declaration, enumType);
+        CheckDistinctValue(declaration, enumType, value);
         enumType.AddMember(
-            new EnumCaseSymbol(name, enumType, declaration) { HasExplicitValue = declaration.Value is not null }
+            new EnumCaseSymbol(name, enumType, declaration) { HasExplicitValue = declaration.Value is not null, RawValue = value }
         );
     }
 

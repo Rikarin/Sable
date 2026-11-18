@@ -3851,6 +3851,11 @@ public sealed partial class Binder {
     }
 
     BoundExpression BindArray(ArrayExpressionSyntax syntax, TypeSymbol? expectedType) {
+        // '[.Read, .Write]' where a '@flags' enum is wanted: the flags, together.
+        if (Expand(expectedType) is NamedTypeSymbol { IsFlags: true } flags) {
+            return BindFlags(syntax, flags);
+        }
+
         var expectedElement = expectedType is ArrayTypeSymbol expectedArray
             ? expectedArray.ElementType
             : null;
@@ -4333,6 +4338,22 @@ public sealed partial class Binder {
         var type = weak ? (TypeSymbol)new OptionalTypeSymbol(objectType) : objectType;
         var local = new LocalSymbol(name, _containingSymbol, item, false) { TypeResolver = () => type };
         return new(item, local, kind, Convert(value, type, item));
+    }
+
+    /// <summary>
+    ///     <c>[.Read, .Write]</c> as a <c>@flags</c> enum: its elements
+    ///     combined with <c>|</c>; <c>[]</c> is none of them, the integer 0.
+    /// </summary>
+    BoundExpression BindFlags(ArrayExpressionSyntax syntax, NamedTypeSymbol flags) {
+        BoundExpression? combined = null;
+        foreach (var element in syntax.Elements) {
+            var value = Convert(BindExpression(element, flags), flags, element);
+            combined = combined is null ? value : new BoundBinaryOperator(syntax, flags, BinaryOperatorKind.Or, combined, value);
+        }
+
+        return combined is null
+            ? new BoundConversion(syntax, flags, new BoundLiteral(syntax, _compilation.EnumRawType(flags), 0L), ConversionKind.Explicit)
+            : combined;
     }
 
     BoundExpression BindImplicitParameter(ImplicitParameterExpressionSyntax syntax) {
@@ -4832,7 +4853,7 @@ public sealed partial class Binder {
             UnaryOperatorKind.Not =>
                 operand.Type.Equals(Core.Bool) ? Core.Bool : null,
             UnaryOperatorKind.Complement =>
-                Core.IsInteger(operand.Type) ? operand.Type : null,
+                Core.IsInteger(operand.Type) || operand.Type is NamedTypeSymbol { IsFlags: true } ? operand.Type : null,
             UnaryOperatorKind.AddressOf => new ReferenceTypeSymbol(operand.Type),
 
 
@@ -5072,7 +5093,7 @@ public sealed partial class Binder {
                 left.Equals(right) && Core.IsNumeric(left) ? left : null,
 
             BinaryOperatorKind.And or BinaryOperatorKind.Or or BinaryOperatorKind.ExclusiveOr =>
-                left.Equals(right) && Core.IsInteger(left) ? left
+                left.Equals(right) && (Core.IsInteger(left) || left is NamedTypeSymbol { IsFlags: true }) ? left
                 : left.Equals(Core.Bool) && right.Equals(Core.Bool) ? Core.Bool
                 : null,
 

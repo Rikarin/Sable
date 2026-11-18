@@ -164,6 +164,7 @@ public enum ErrorCode {
     ERR_LazyProperty = 3113,
     ERR_PropertyObservers = 3140,
     ERR_ConvenienceMustDelegate = 3141,
+    ERR_EnumCaseValue = 3142,
 
     // ---- Lints (S3300-S3399): reported by Sable.Symbols' Lints, which
     // 'sable check' runs, never by compiling. Their severity is configured.

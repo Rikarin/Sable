@@ -134,6 +134,29 @@ public sealed partial class SilGen {
             return made;
         }
 
+        /// <summary>'flags.contains(other)': '(flags & other) == other', on the integers they are.</summary>
+        SilValue? FlagsContains(BoundCall call, NamedTypeSymbol flagsType) {
+            if (call is not { Receiver: { } receiver, Arguments: [var argument] } || LowerType(flagsType) is not { } raw
+                || SilBuiltins.Find($"and_{raw}") is null || SilBuiltins.Find($"cmp_eq_{raw}") is null) {
+                return Missing(call, $"'contains' on '{flagsType.Name}'");
+            }
+
+            if (Borrow(receiver) is not { } flags) {
+                return null;
+            }
+
+            if (Borrow(argument) is not { } other) {
+                End(flags);
+                return null;
+            }
+
+            var common = Emit(new BuiltinInst($"and_{raw}", raw, flags, other));
+            var contains = Emit(new BuiltinInst($"cmp_eq_{raw}", SilType.Bool, common, other));
+            End(other);
+            End(flags);
+            return contains;
+        }
+
         /// <summary>
         ///     'super.init()' to a superclass that declares no initialiser:
         ///     its fields' initial values, stored into this object — and its

@@ -1256,6 +1256,10 @@ public sealed partial class SilGen {
                 return HoldsItself(enumType) ? null : enumType;
             }
 
+            // A '@flags' enum is any set of its cases: the integer it is.
+            case NamedTypeSymbol { TypeKind: TypeKind.Enum, IsFlags: true } flags:
+                return Lower(_compilation.EnumRawType(flags));
+
             case NamedTypeSymbol { TypeKind: TypeKind.Enum } named: {
                 var enumType = Begin(named, new EnumType(TypeName(named)));
                 foreach (var enumCase in named.Members.OfType<EnumCaseSymbol>()) {
@@ -3708,6 +3712,13 @@ public sealed partial class SilGen {
                     Jump(new SwitchEnumInst(value, [(enumType.CaseIndex(enumCase.EnumCase.Name), matched)], failed));
                     return;
 
+                // A '@flags' enum's case, matched: the value is exactly it.
+                case BoundEnumCasePattern flag when SilBuiltins.Find($"cmp_eq_{value.Type}") is not null: {
+                    var same = Emit(new BuiltinInst($"cmp_eq_{value.Type}", SilType.Bool, value, Emit(new IntegerLiteralInst(value.Type, flag.EnumCase.RawValue))));
+                    Jump(new CondBranchInst(same, matched, [], failed, []));
+                    return;
+                }
+
                 case BoundOrPattern or: {
                     var right = function.AddBlock();
                     Pattern(or.Left, value, matched, right);
@@ -4680,7 +4691,14 @@ public sealed partial class SilGen {
                 return Emit(new EnumInst(optional, none, null));
             }
 
-            // A plain enum's case is bound as a literal naming it.
+            // A plain enum's case is bound as a literal naming it; a
+            // '@flags' enum's is the integer it is.
+            if (literal.Value is string flagName && Sub(type) is NamedTypeSymbol { TypeKind: TypeKind.Enum, IsFlags: true } flags) {
+                return LowerType(flags) is { } flagsType && flags.GetMembers(flagName).OfType<EnumCaseSymbol>().FirstOrDefault() is { } flag
+                    ? Emit(new IntegerLiteralInst(flagsType, flag.RawValue))
+                    : Missing(literal, $"the flag '{flagName}'");
+            }
+
             if (literal.Value is string caseName && type is NamedTypeSymbol { TypeKind: TypeKind.Enum }) {
                 return LowerType(type) is EnumType enumType && enumType.CaseIndex(caseName) is var index and >= 0
                     ? Emit(new EnumInst(enumType, index, null))
@@ -4810,6 +4828,12 @@ public sealed partial class SilGen {
         SilValue? Stringify(SilValue value, BoundNode at) {
             if (value.Type == SilType.String) {
                 return value;
+            }
+
+            // An enum's value is its case's name; a '@flags' enum's, the
+            // name of the case it is exactly, or else its integer.
+            if (at is BoundExpression { Type: var enumSymbol } && Sub(enumSymbol) is NamedTypeSymbol { TypeKind: TypeKind.Enum } named) {
+                return value.Type is EnumType enumType ? CaseName(value, enumType) : FlagsName(value, named, at);
             }
 
             var name = $"string_from_{value.Type}";
@@ -4976,6 +5000,34 @@ public sealed partial class SilGen {
         SilValue? NumericConversion(BoundConversion conversion) {
             if (Expression(conversion.Operand) is not { } value || LowerType(conversion.Type) is not { } target) {
                 return null;
+            }
+
+            // 'Status.Closed as U8': the integer the case is; '9 as Status':
+            // the case that integer is, or a trap.
+            if (value.Type is EnumType && Sub(conversion.Operand.Type) is NamedTypeSymbol { TypeKind: TypeKind.Enum } from) {
+                if (LowerType(generator._compilation.EnumRawType(from)) is not { } fromRaw) {
+                    return null;
+                }
+
+                value = RawValue(value, from, fromRaw);
+                if (value.Type == target) {
+                    return value;
+                }
+            } else if (target is EnumType && Sub(conversion.Type) is NamedTypeSymbol { TypeKind: TypeKind.Enum } to) {
+                if (LowerType(generator._compilation.EnumRawType(to)) is not { } toRaw) {
+                    return null;
+                }
+
+                if (value.Type != toRaw) {
+                    var widen = $"convert_{value.Type}_{toRaw}";
+                    if (SilBuiltins.Find(widen) is null) {
+                        return Missing(conversion, $"the conversion from {value.Type} to {toRaw}");
+                    }
+
+                    value = Emit(new BuiltinInst(widen, toRaw, value));
+                }
+
+                return CaseOfValue(value, to, (EnumType)target);
             }
 
             if (value.Type == target) {
@@ -5415,6 +5467,94 @@ public sealed partial class SilGen {
             return Emit(new BuiltinInst(equal ? "cmp_eq_Int" : "cmp_ne_Int", SilType.Bool, first, second));
         }
 
+        /// <summary>A plain enum's value as the integer its case is: one block per case, joined.</summary>
+        SilValue RawValue(SilValue value, NamedTypeSymbol enumSymbol, SilType raw) {
+            var cases = enumSymbol.OriginalDefinition.Members.OfType<EnumCaseSymbol>().ToList();
+            return ByCase(value, (EnumType)value.Type, raw, i => Emit(new IntegerLiteralInst(raw, cases[i].RawValue)));
+        }
+
+        /// <summary>A plain enum's value as its case's name.</summary>
+        SilValue CaseName(SilValue value, EnumType type) =>
+            ByCase(value, type, SilType.String, i => Emit(new StringLiteralInst(type.Cases[i].Name)));
+
+        /// <summary>One value for each case of a payload-free enum: a block per case, joined.</summary>
+        SilValue ByCase(SilValue value, EnumType type, SilType result, Func<int, SilValue> make) {
+            var joined = function.AddBlock();
+            var made = joined.AddArgument(result);
+            var targets = new List<(int, SilBlock)>();
+            for (var i = 0; i < type.Cases.Count; i++) {
+                targets.Add((i, function.AddBlock()));
+            }
+
+            Jump(new SwitchEnumInst(value, targets, null));
+            foreach (var (index, block) in targets) {
+                _current = block;
+                Branch(joined, make(index));
+            }
+
+            _current = joined;
+            return made;
+        }
+
+        /// <summary>
+        ///     The case an integer is, compared with each case's value in
+        ///     turn; one that is no case's traps, as an unwrapped none does.
+        /// </summary>
+        SilValue? CaseOfValue(SilValue raw, NamedTypeSymbol enumSymbol, EnumType type) {
+            var compare = $"cmp_eq_{raw.Type}";
+            if (SilBuiltins.Find(compare) is null) {
+                return null;
+            }
+
+            var cases = enumSymbol.OriginalDefinition.Members.OfType<EnumCaseSymbol>().ToList();
+            var joined = function.AddBlock();
+            var made = joined.AddArgument(type);
+            for (var i = 0; i < cases.Count; i++) {
+                var found = function.AddBlock();
+                var next = function.AddBlock();
+                var same = Emit(new BuiltinInst(compare, SilType.Bool, raw, Emit(new IntegerLiteralInst(raw.Type, cases[i].RawValue))));
+                Jump(new CondBranchInst(same, found, [], next, []));
+                _current = found;
+                Branch(joined, Emit(new EnumInst(type, type.CaseIndex(cases[i].Name), null)));
+                _current = next;
+            }
+
+            Emit(new CondFailInst(Emit(new IntegerLiteralInst(SilType.Bool, 1)), $"no case of '{enumSymbol.Name}' has this value"));
+            Jump(new UnreachableInst());
+            _current = joined;
+            return made;
+        }
+
+        /// <summary>A '@flags' enum's value as the name of the case it is exactly, or else its integer.</summary>
+        SilValue? FlagsName(SilValue raw, NamedTypeSymbol flags, BoundNode at) {
+            var compare = $"cmp_eq_{raw.Type}";
+            var digits = $"string_from_{raw.Type}";
+            if (SilBuiltins.Find(compare) is null || SilBuiltins.Find(digits) is null) {
+                return Missing(at, $"interpolating a value of '{flags.Name}'");
+            }
+
+            var joined = function.AddBlock();
+            var made = joined.AddArgument(SilType.String);
+            var seen = new HashSet<long>();
+            foreach (var flag in flags.OriginalDefinition.Members.OfType<EnumCaseSymbol>()) {
+                if (!seen.Add(flag.RawValue)) {
+                    continue;
+                }
+
+                var found = function.AddBlock();
+                var next = function.AddBlock();
+                var same = Emit(new BuiltinInst(compare, SilType.Bool, raw, Emit(new IntegerLiteralInst(raw.Type, flag.RawValue))));
+                Jump(new CondBranchInst(same, found, [], next, []));
+                _current = found;
+                Branch(joined, Emit(new StringLiteralInst(flag.Name)));
+                _current = next;
+            }
+
+            Branch(joined, Emit(new BuiltinInst(digits, SilType.String, raw)));
+            _current = joined;
+            return made;
+        }
+
         /// <summary>Which case a payload-free enum value is, as an Int: one block per case, joined.</summary>
         SilValue CaseNumber(SilValue value, EnumType type) {
             var joined = function.AddBlock();
@@ -5764,6 +5904,12 @@ public sealed partial class SilGen {
 
                 // Reflection (SilGen.Reflection.cs).
                 return Intrinsic(call);
+            }
+
+            // 'flags.contains(.Write)', on a '@flags' enum: every flag of the
+            // argument set in the receiver.
+            if (callee is { Name: "contains", DeclaringSyntax.IsEmpty: true, ContainingSymbol: NamedTypeSymbol { IsFlags: true } flagsType }) {
+                return FlagsContains(call, flagsType);
             }
 
             // 'self.init(…)' in a value type's initialiser: what the other

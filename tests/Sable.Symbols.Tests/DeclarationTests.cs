@@ -309,4 +309,50 @@ public sealed class DeclarationTests {
 
         Assert.Contains(Errors(compilation), static e => e.Code == ErrorCode.ERR_NameNotFound);
     }
+
+    // ---- Enum cases as integers -------------------------------------------
+
+    static Dictionary<string, long> Values(string source, string type) =>
+        Compilation.Create("module M\n" + source).GetTypeByQualifiedName($"M.{type}")!
+            .Members.OfType<EnumCaseSymbol>().ToDictionary(static c => c.Name, static c => c.RawValue);
+
+    [Fact]
+    public void AnEnumCaseIsTheIntegerItWritesOrTheNextOne() {
+        var values = Values("enum Level { Low = 10, Mid, High = Mid + 5, Top = (High << 1) | 1 }", "Level");
+        Assert.Equal([10L, 11L, 16L, 33L], [values["Low"], values["Mid"], values["High"], values["Top"]]);
+        Assert.Equal(0L, Values("enum D { North, South }", "D")["North"]);
+    }
+
+    [Fact]
+    public void AFlagsCaseLeftToItselfIsTheNextBit() {
+        var values = Values("@flags enum Style { None = 0, Bold, Italic, Both = Bold | Italic, Underline }", "Style");
+        Assert.Equal([0L, 1L, 2L, 3L, 4L], [values["None"], values["Bold"], values["Italic"], values["Both"], values["Underline"]]);
+    }
+
+    [Theory]
+    [InlineData("enum S { A = 1, B = 1 }")]
+    [InlineData("enum S { A = \"x\" }")]
+    [InlineData("enum S { A = Later, Later = 2 }")]
+    public void AnEnumCaseValueThatIsNotOneIsReported(string source) =>
+        Assert.Contains(
+            Compilation.Create("module M\n" + source).GetAllDiagnostics(),
+            static d => d.Code == ErrorCode.ERR_EnumCaseValue);
+
+    [Fact]
+    public void AFlagsEnumIsASetOfItsCases() {
+        var errors = Compilation.Create(
+            """
+            module M
+            @flags
+            enum Permissions: U32 { None = 0, Read = 1, Write = 2, Execute = 4, All = Read | Write | Execute }
+            fn probe() -> Bool {
+                let p: Permissions = [.Read, .Write]
+                let q = p | .Execute
+                let e: Permissions = []
+                return p.contains(.Write) && q == .All && (~p & .All) == .Execute && e == Permissions.None
+            }
+            """
+        ).GetAllDiagnostics().Where(static d => d.Severity == DiagnosticSeverity.Error).ToList();
+        Assert.True(errors.Count == 0, string.Join("\n", errors.Select(static e => $"{e.Id}: {e.Message}")));
+    }
 }

@@ -110,14 +110,16 @@ public sealed partial class Compilation {
     }
 
     void Derive(NamedTypeSymbol type, AttributeSyntax attribute, SyntaxTree tree) {
-        if (type.TypeKind is not (TypeKind.Struct or TypeKind.Union)) {
+        if (type.TypeKind is not (TypeKind.Struct or TypeKind.Union or TypeKind.Enum) || type.IsFlags) {
             ReportDeclaration(
                 ErrorCode.ERR_CannotDerive,
                 attribute.Span,
                 type.TypeKind is TypeKind.Class or TypeKind.Actor
-                    ? $"'@derive' is for structs and unions; '{type.Name}' is a {(type.TypeKind == TypeKind.Class ? "class" : "actor")}, "
+                    ? $"'@derive' is for structs, unions and enums; '{type.Name}' is a {(type.TypeKind == TypeKind.Class ? "class" : "actor")}, "
                       + "whose objects have identity, so equality and hashing by its fields would be wrong — write '==' and 'hash()' for it"
-                    : $"'@derive' is for structs and unions, not '{type.Name}'"
+                    : type.IsFlags
+                        ? $"'{type.Name}' is a '@flags' enum, compared as the integer it is; '@derive' is for structs, unions and other enums"
+                        : $"'@derive' is for structs, unions and enums, not '{type.Name}'"
             );
             return;
         }

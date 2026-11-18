@@ -509,6 +509,24 @@ let p: Permissions = [.Read, .Write]
 if p.contains(.Write) { }
 ```
 
+A case's value is the integer it writes — a literal, an earlier case, or
+those combined with `| & ^ + - * << >> ~` — or else the one after the
+previous case's, starting from 0; in a `@flags` enum, the next bit up,
+starting from 1. The type is the integer the base list names, or `Int`.
+Outside `@flags` no two cases share a value (S3142).
+
+- `Status.Closed as U8` is the integer a case is; `9 as Status` is the case
+  an integer is, and traps when no case is it.
+- `"\(direction)"` is the case's name, `East`.
+- A `@flags` enum's value is any set of its cases: `[.Read, .Write]` is the
+  two together, `[]` none of them; `|`, `&`, `^` and `~` combine values,
+  `==` compares them, and `p.contains(.Write)` is true when every flag of the
+  argument is set. Interpolated, a value is the name of the case it is
+  exactly, or else its integer. A `match` on one needs a `default`.
+- `@derive(Equatable, Hashable, Comparable, Debug)` on an enum compares cases,
+  orders them as they are declared, and describes one as `Direction.East`.
+  A `@flags` enum derives nothing: its values are compared as integers.
+
 `enum` is a distinct declaration from `union` deliberately: an enum is a named
 integer, a union is a tagged sum. Conflating them (as Rust and Swift do) makes
 the C ABI story and the "just give me a bitfield" story both worse.

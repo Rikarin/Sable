@@ -389,6 +389,9 @@ public sealed class EnumCaseSymbol(
 
     /// <summary>True when the case declared an explicit value.</summary>
     public bool HasExplicitValue { get; internal set; }
+
+    /// <summary>The integer the case is: the one it writes, or the one it follows on to.</summary>
+    public long RawValue { get; internal set; }
 }
 
 /// <summary>A local binding introduced by a statement.</summary>

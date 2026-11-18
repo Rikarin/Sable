@@ -120,6 +120,12 @@ public sealed class FormatterTests {
     }
 
     [Fact]
+    public void KeepsAPropertyWrittenWithAnArrowOnItsLine() {
+        const string source = "struct R {\n    var w: F64\n    var area: F64 =>   w * w\n    public var isZero: Bool => w == 0\n}\n";
+        Assert.Equal("struct R {\n    var w: F64\n    var area: F64 => w * w\n    public var isZero: Bool => w == 0\n}\n", Format(source));
+    }
+
+    [Fact]
     public void IndentsBodies() {
         const string source = "fn f() { let x = 1\nlet y = 2 }";
         Assert.Equal("fn f() {\n    let x = 1\n    let y = 2\n}\n", Format(source));

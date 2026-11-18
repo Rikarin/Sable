@@ -433,8 +433,9 @@ public sealed partial class SemanticModel {
             return;
         }
 
+        // A property kept in 'field' starts with its initial value there.
         if (declaration.Declarator.Initializer is { } initializer) {
-            BindInitializer(initializer.Value, field, field.Type, scope);
+            BindInitializer(initializer.Value, field.BackingField ?? field, field.Type, scope);
         }
 
         BindAccessors(declaration.Accessors, field, field.Type, scope);

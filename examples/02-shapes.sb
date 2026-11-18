@@ -27,7 +27,7 @@ public protocol Shape {
     static fn unitShape() -> Self
 
     /// Default implementation — statically dispatched.
-    var describe: String { get => "\(Reflect.typeName(self)): area \(area)" }
+    var describe: String => "\(Reflect.typeName(self)): area \(area)"
 }
 
 // ---------------------------------------------------------------------------
@@ -69,8 +69,8 @@ extension Geometry: Shape {
 public struct Square: Shape {
     public var side: F64
 
-    public var area: F64 { get => side * side }
-    public var perimeter: F64 { get => 4 * side }
+    public var area: F64 => side * side
+    public var perimeter: F64 => 4 * side
 
     public static fn unitShape() -> Square => Square { side: 1 }
 }

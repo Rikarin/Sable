@@ -158,6 +158,7 @@ public enum ErrorCode {
     ERR_TestIsLocal = 3108,
     ERR_TestNotReachable = 3109,
     ERR_BenchThrows = 3110,
+    ERR_BackedPropertyNeedsInitializer = 3111,
 
     // ---- Lints (S3300-S3399): reported by Sable.Symbols' Lints, which
     // 'sable check' runs, never by compiling. Their severity is configured.

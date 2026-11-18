@@ -37,13 +37,13 @@ public struct Duration: Comparable, Hashable {
     }
 
     /// Whole milliseconds, rounded towards zero.
-    public var totalMilliseconds: Int { get { return totalNanoseconds / 1000000 } }
+    public var totalMilliseconds: Int => totalNanoseconds / 1000000
 
     /// Whole seconds, rounded towards zero.
-    public var totalSeconds: Int { get { return totalNanoseconds / 1000000000 } }
+    public var totalSeconds: Int => totalNanoseconds / 1000000000
 
     /// Seconds, with the fraction.
-    public var inSeconds: F64 { get { return F64(totalNanoseconds) / 1000000000.0 } }
+    public var inSeconds: F64 => F64(totalNanoseconds) / 1000000000.0
 
     public fn times(_ factor: Int) -> Duration {
         return Duration { totalNanoseconds: totalNanoseconds * factor }
@@ -205,21 +205,21 @@ public struct DateTime: Comparable, Hashable {
         return DateTime.of(year: year, month: month, day: day, hour: hour, minute: minute, second: second)
     }
 
-    var days: Int { get { return floorDivide(secondsSinceEpoch, 86400) } }
-    var secondOfDay: Int { get { return floorModulo(secondsSinceEpoch, 86400) } }
+    var days: Int => floorDivide(secondsSinceEpoch, 86400)
+    var secondOfDay: Int => floorModulo(secondsSinceEpoch, 86400)
 
-    public var year: Int { get { return civilYear(days) } }
-    public var month: Int { get { return civilMonth(days) } }
-    public var day: Int { get { return civilDay(days) } }
-    public var hour: Int { get { return secondOfDay / 3600 } }
-    public var minute: Int { get { return secondOfDay / 60 % 60 } }
-    public var second: Int { get { return secondOfDay % 60 } }
+    public var year: Int => civilYear(days)
+    public var month: Int => civilMonth(days)
+    public var day: Int => civilDay(days)
+    public var hour: Int => secondOfDay / 3600
+    public var minute: Int => secondOfDay / 60 % 60
+    public var second: Int => secondOfDay % 60
 
     /// ISO 8601's: 1 for Monday through 7 for Sunday.
-    public var weekday: Int { get { return floorModulo(days + 3, 7) + 1 } }
+    public var weekday: Int => floorModulo(days + 3, 7) + 1
 
     /// 1 for the first of January.
-    public var dayOfYear: Int { get { return days - daysFromCivil(year, 1, 1) + 1 } }
+    public var dayOfYear: Int => days - daysFromCivil(year, 1, 1) + 1
 
     public fn adding(_ duration: Duration) -> DateTime {
         let total = nanosecond + floorModulo(duration.totalNanoseconds, 1000000000)

@@ -3189,7 +3189,9 @@ internal sealed class Parser {
         GreenToken? keyword
     ) {
         var declarator = ParseVariableDeclarator();
-        var accessors = At(SyntaxKind.OpenBraceToken) ? ParseAccessorList() : null;
+        var accessors = At(SyntaxKind.OpenBraceToken) ? ParseAccessorList()
+            : At(SyntaxKind.FatArrowToken) ? ParseExpressionBodiedProperty()
+            : null;
 
         // One-line type bodies separate their fields with commas.
         var separator = Current.Kind is SyntaxKind.CommaToken or SyntaxKind.SemicolonToken
@@ -3720,6 +3722,33 @@ internal sealed class Parser {
             body,
             arrow,
             expressionBody
+        );
+    }
+
+    /// <summary>
+    ///     <c>var area: F64 => width * height</c>: a getter alone, written
+    ///     without one. It parses as <c>{ get => width * height }</c> does, its
+    ///     braces and keyword there but empty, so that everything past the
+    ///     parser sees the getter it means.
+    /// </summary>
+    GreenNode ParseExpressionBodiedProperty() {
+        var arrow = EatToken();
+        var expression = ParseExpression();
+        var getter = new AccessorGreen(
+            GreenList.Empty,
+            GreenList.Empty,
+            CreateMissing(SyntaxKind.GetKeyword),
+            null,
+            null,
+            null,
+            null,
+            arrow,
+            expression
+        );
+        return new AccessorListGreen(
+            CreateMissing(SyntaxKind.OpenBraceToken),
+            GreenList.Create([getter]),
+            CreateMissing(SyntaxKind.CloseBraceToken)
         );
     }
 

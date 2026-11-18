@@ -927,8 +927,48 @@ public sealed partial class Compilation {
 
         TypeBinder.BindFieldType(field, declaration);
         RecordDeclaration(declaration, field);
+
+        // 'var name: String = "" { set { field = newValue.trimmed() } }':
+        // accessors that say 'field' have storage, laid out where the
+        // property is, which the property's initial value fills.
+        var keptInField = field.IsComputed && declaration.Accessors is { } accessorList && accessorList.Accessors.Any(SaysField);
+        if (keptInField && container is ExtensionSymbol) {
+            ReportDeclaration(
+                ErrorCode.ERR_ExtensionStoredProperty,
+                binding.Identifier.Span,
+                $"'{name}' keeps its value in 'field', which is storage, and an extension cannot add stored properties, only computed ones"
+            );
+        } else if (keptInField) {
+            var backing = new FieldSymbol(BackingFieldName(name), container, declaration, Accessibility.Private, true) {
+                IsStatic = field.IsStatic,
+                HasInitializer = declaration.Declarator.Initializer is not null,
+                BackedProperty = field,
+                TypeResolver = () => field.Type,
+            };
+            field.BackingField = backing;
+            field.IsAbstract = false;
+            AddTo(container, backing);
+
+            if (!backing.HasInitializer) {
+                ReportDeclaration(
+                    ErrorCode.ERR_BackedPropertyNeedsInitializer,
+                    binding.Identifier.Span,
+                    $"'{name}' keeps its value in 'field', which needs one to start with: give it '= ...'"
+                );
+            }
+        }
+
         AddTo(container, field);
     }
+
+    /// <summary>What a property's backing field is called: a name no source can write.</summary>
+    public static string BackingFieldName(string property) => property + "$field";
+
+    /// <summary>Whether an accessor's body says <c>field</c>, other than as a member's name: <c>other.field</c> is not it.</summary>
+    static bool SaysField(AccessorSyntax accessor) =>
+        ((SyntaxNode?)accessor.Body ?? accessor.ExpressionBody) is { } body
+        && body.DescendantNodesAndSelf().OfType<IdentifierNameSyntax>().Any(static n =>
+            n.Identifier.Text == "field" && !(n.Parent is MemberAccessExpressionSyntax access && access.Name == n));
 
     void DeclareConstant(ConstDeclarationSyntax declaration, Symbol container) {
         var name = declaration.Identifier.Text;

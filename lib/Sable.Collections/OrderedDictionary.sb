@@ -13,8 +13,8 @@ public class OrderedDictionary<Key: Hashable, Value> {
 
     public init() { }
 
-    public var count: Int { get { return orderedKeys.count } }
-    public var isEmpty: Bool { get { return orderedKeys.count == 0 } }
+    public var count: Int => orderedKeys.count
+    public var isEmpty: Bool => orderedKeys.count == 0
 
     /// The value for the key, or none.
     public fn get(_ key: Key) -> Value? {

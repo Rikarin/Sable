@@ -361,6 +361,14 @@ Order matters; each of these is a self-contained lowering:
       - static computed properties, and an initialiser assigning its type's
         `let` fields.
 
+      Two gaps the corpus never reached were closed later: a store to a
+      computed property (`t.fahrenheit = 32`, and `+=` through one) calls
+      its setter, as a subscript's store does; and a record literal that
+      leaves out a field with an initial value takes it. With them came
+      `var area: F64 => w * h` and properties kept in `field` (SYNTAX.md
+      §13): a private stored field of the type, `<name>$field`, that only
+      the property's accessors name, started by the property's initialiser.
+
       Four corpus functions called `removeLast()` in a getter where they
       meant to index. Now that `removeLast` is `mutating`, the binder
       rejects them, and they read the element. The three examples were

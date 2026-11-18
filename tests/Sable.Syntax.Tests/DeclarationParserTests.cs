@@ -392,6 +392,20 @@ public sealed class DeclarationParserTests {
     }
 
     [Fact]
+    public void ParsesAPropertyWrittenWithAnArrowAsItsGetter() {
+        const string source = "struct R { var w: F64, var h: F64\n    var area: F64 => w * h\n    static var one: Int => 1 }";
+        var declaration = ParseMember<StructDeclarationSyntax>(source);
+        var area = Assert.IsType<FieldDeclarationSyntax>(declaration.Members[2]);
+        var getter = Assert.Single(area.Accessors!.Accessors);
+        Assert.Equal(SyntaxKind.GetKeyword, getter.Keyword.Kind);
+        Assert.True(getter.Keyword.IsMissing);
+        Assert.True(area.Accessors.OpenBraceToken.IsMissing);
+        Assert.Equal("w * h", getter.ExpressionBody!.ToString().Trim());
+        Assert.Equal(source, declaration.ToFullString());
+        Assert.IsType<FieldDeclarationSyntax>(declaration.Members[3]);
+    }
+
+    [Fact]
     public void ParsesSetterWithNamedParameter() {
         var declaration = ParseMember<ClassDeclarationSyntax>("class C { var x: Int { get => y  set(v) { y = v } } }");
         var field = Assert.IsType<FieldDeclarationSyntax>(declaration.Members[0]);

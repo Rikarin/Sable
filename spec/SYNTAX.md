@@ -635,6 +635,40 @@ class Temperature {
 }
 ```
 
+A property with a getter alone may write it without the braces or the
+keyword: `=>` and the value, as a function written `=> e` does.
+
+```sable
+struct Rect {
+    var width: F64, var height: F64
+    var area: F64 => width * height             // { get => width * height }
+}
+```
+
+Either accessor may be `=> e` rather than a block; a setter's is an
+assignment, and its incoming value is `newValue` (or the name it gives in
+`set(name)`).
+
+A property's accessors may say `field`: storage of the property's own, which
+only they can name. The property is then stored — laid out with the type's
+other fields, starting from its initialiser, which it must have — but read and
+written through its accessors. An accessor it does not declare, it does not
+have, as for any computed property. An extension cannot add one, since
+`field` is storage.
+
+```sable
+struct Account {
+    var owner: String = "" {
+        get => field
+        set => field = newValue.trimmed()
+    }
+    var limit: Int = 100 {
+        get => field
+        set { field = newValue < 0 ? 0 : newValue }
+    }
+}
+```
+
 A brace directly after a field's initialiser opens an accessor block, not a
 trailing closure, when its first token is `get`, `set`, `willSet` or `didSet`:
 

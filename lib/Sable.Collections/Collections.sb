@@ -8,8 +8,8 @@ public class Stack<Element> {
 
     public init() { }
 
-    public var count: Int { get { return items.count } }
-    public var isEmpty: Bool { get { return items.count == 0 } }
+    public var count: Int => items.count
+    public var isEmpty: Bool => items.count == 0
 
     public fn push(_ item: Element) {
         items.append(item)
@@ -38,8 +38,8 @@ public class Queue<Element> {
 
     public init() { }
 
-    public var count: Int { get { return incoming.count + outgoing.count } }
-    public var isEmpty: Bool { get { return incoming.count + outgoing.count == 0 } }
+    public var count: Int => incoming.count + outgoing.count
+    public var isEmpty: Bool => incoming.count + outgoing.count == 0
 
     public fn enqueue(_ item: Element) {
         incoming.append(item)
@@ -88,9 +88,9 @@ public class HashMap<Key: Hashable, Value> {
     public init() { }
 
     /// How many keys it holds.
-    public var count: Int { get { return used } }
+    public var count: Int => used
 
-    public var isEmpty: Bool { get { return used == 0 } }
+    public var isEmpty: Bool => used == 0
 
     /// The key's hash, mixed — a xorshift, with no multiply to overflow —
     /// so that keys differing only in their high bits, as small integers
@@ -270,9 +270,9 @@ public class HashSet<Element: Hashable> {
 
     public init() { }
 
-    public var count: Int { get { return map.count } }
+    public var count: Int => map.count
 
-    public var isEmpty: Bool { get { return map.count == 0 } }
+    public var isEmpty: Bool => map.count == 0
 
     /// Adds the value; true if it was not there before.
     public fn insert(_ value: Element) -> Bool {

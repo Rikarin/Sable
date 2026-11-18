@@ -1656,6 +1656,17 @@ public sealed partial class Binder {
         return ErrorTypeSymbol.Instance;
     }
 
+    /// <summary>The property whose accessor is being bound, closures within it included; or null.</summary>
+    FieldSymbol? EnclosingProperty() {
+        for (var symbol = _containingSymbol; symbol is not null; symbol = symbol.ContainingSymbol) {
+            if (symbol is FunctionSymbol { FunctionKind: FunctionKind.Accessor, ContainingSymbol: FieldSymbol property }) {
+                return property;
+            }
+        }
+
+        return null;
+    }
+
     /// <summary>The function whose body is being bound, if any.</summary>
     FunctionSymbol? EnclosingFunction() {
         for (var symbol = _containingSymbol; symbol is not null; symbol = symbol.ContainingSymbol) {
@@ -2090,6 +2101,18 @@ public sealed partial class Binder {
         // before the enclosing type's members: the nearer declaration wins.
         if (LocalTypes(name, false) is { Count: > 0 } nearer) {
             return BindMemberGroup(syntax, null, nearer, null);
+        }
+
+        // 'field', in the accessors of a property kept in it: its storage.
+        if (name == "field" && EnclosingProperty() is { } property) {
+            // In an extension it has none, and that has been said.
+            if (property.BackingField is not { } backing) {
+                if (property.ContainingSymbol is ExtensionSymbol) {
+                    return new BoundError(syntax);
+                }
+            } else {
+                name = backing.Name;
+            }
         }
 
         // Members of the enclosing type, reached implicitly through self —

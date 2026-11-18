@@ -16,7 +16,7 @@ public struct Range<Bound: Comparable> {
     public let upperBound: Bound
 
     /// Whether the range has no values.
-    public var isEmpty: Bool { get { return !(lowerBound < upperBound) } }
+    public var isEmpty: Bool => !(lowerBound < upperBound)
 
     /// Whether the value is in the range.
     public fn contains(_ value: Bound) -> Bool {
@@ -34,7 +34,7 @@ public struct ClosedRange<Bound: Comparable> {
     public let upperBound: Bound
 
     /// Whether the range has no values.
-    public var isEmpty: Bool { get { return upperBound < lowerBound } }
+    public var isEmpty: Bool => upperBound < lowerBound
 
     /// Whether the value is in the range.
     public fn contains(_ value: Bound) -> Bool {

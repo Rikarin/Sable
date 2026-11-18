@@ -17,8 +17,8 @@ public class BitSet {
     }
 
     /// How many integers it holds.
-    public var count: Int { get { return members } }
-    public var isEmpty: Bool { get { return members == 0 } }
+    public var count: Int => members
+    public var isEmpty: Bool => members == 0
 
     fn bit(_ value: Int) -> U64 {
         return U64(1) << U64(value & 63)

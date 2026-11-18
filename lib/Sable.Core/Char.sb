@@ -21,7 +21,7 @@ extension Char {
     public var codePoint: Int { get }
 
     /// The scalar's code point, as the 21 bits it needs.
-    public var code: U32 { get { return U32(self.codePoint) } }
+    public var code: U32 => U32(self.codePoint)
 
     /// The scalar with this code point, or none when it is not one: past
     /// U+10FFFF, negative, or a surrogate.

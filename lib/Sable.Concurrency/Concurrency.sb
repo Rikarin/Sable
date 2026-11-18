@@ -28,10 +28,10 @@ public class Channel<Element> {
         closed = true
     }
 
-    public var isClosed: Bool { get { return closed } }
+    public var isClosed: Bool => closed
 
     /// Values sent and not yet received.
-    public var pending: Int { get { return buffer.count - head } }
+    public var pending: Int => buffer.count - head
 
     /// The next value, waiting for one; none once closed and empty.
     public fn receive() async -> Element? {
@@ -75,7 +75,7 @@ public class TaskGroup<Result> {
         tasks.append(task)
     }
 
-    public var count: Int { get { return tasks.count } }
+    public var count: Int => tasks.count
 
     /// Every task's result, in the order added; the group is empty after.
     public fn waitForAll() async -> Result[>..] {

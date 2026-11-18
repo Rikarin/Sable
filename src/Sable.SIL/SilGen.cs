@@ -126,18 +126,18 @@ public sealed partial class SilGen {
                 functions.Add((symbol, declaration, model));
             }
 
-            // A computed property's getter: a method of the type, named for
-            // the property, that reading the property calls.
+            // A computed property's getter and setter: methods of the type,
+            // named for the property, that reading and writing it call.
             foreach (var accessor in Declarations(tree).OfType<AccessorSyntax>()) {
-                if (accessor.Keyword.Kind != SyntaxKind.GetKeyword
+                if (accessor.Keyword.Kind is not (SyntaxKind.GetKeyword or SyntaxKind.SetKeyword)
                     || (_unit is null || _unit.Owns(tree) ? model.GetAccessorSymbol(accessor) : model.GetAccessorDeclaration(accessor))
-                        is not { ContainingSymbol: FieldSymbol field } getter
-                    || !IsLowerable(getter)) {
+                        is not { ContainingSymbol: FieldSymbol field } function
+                    || !IsLowerable(function)) {
                     continue;
                 }
 
-                _getters[field] = getter;
-                functions.Add((getter, accessor, model));
+                (accessor.Keyword.Kind == SyntaxKind.GetKeyword ? _getters : _setters)[field] = function;
+                functions.Add((function, accessor, model));
             }
 
             // A subscript: its getter and setter, methods of the type taking
@@ -564,6 +564,11 @@ public sealed partial class SilGen {
     readonly Dictionary<FieldSymbol, FunctionSymbol> _getters = [];
 
     internal FunctionSymbol? GetterOf(FieldSymbol field) => _getters.GetValueOrDefault(field);
+
+    readonly Dictionary<FieldSymbol, FunctionSymbol> _setters = [];
+
+    /// <summary>A computed property's setter, which a store to the property calls.</summary>
+    internal FunctionSymbol? SetterOf(FieldSymbol field) => _setters.GetValueOrDefault(field);
 
     /// <summary>Each subscript's getter and setter, lowered as methods.</summary>
     readonly Dictionary<FunctionSymbol, FunctionSymbol> _subscriptGetters = [];
@@ -4127,6 +4132,20 @@ public sealed partial class SilGen {
                 return stored is null ? null : UnitValue.Instance;
             }
 
+            // 't.fahrenheit = v': a call to the property's setter, which takes
+            // the receiver where it is, as a subscript's does.
+            if (assignment.Target is BoundFieldAccess { Field.IsComputed: true } property
+                && (property.Receiver is null || Sub(property.Receiver.Type) is not ExistentialTypeSymbol)) {
+                if (generator.SetterOf(property.Field) is not { } setter) {
+                    return Missing(assignment, $"storing to the property '{property.Field.Name}'");
+                }
+
+                var receiver = property.Receiver
+                    ?? (setter.IsStatic ? null : new BoundSelfAccess(assignment.Syntax, Owner(setter) is { } owner ? SelfOf(owner) : property.Field.Type));
+                var stored = Expression(new BoundCall(assignment.Syntax, receiver, setter, [assignment.Value]));
+                return stored is null ? null : UnitValue.Instance;
+            }
+
             if (Expression(assignment.Value) is not { } value) {
                 return null;
             }
@@ -4907,6 +4926,27 @@ public sealed partial class SilGen {
             var fields = new SilValue?[structType.Fields.Count];
             for (var i = 0; i < values.Count; i++) {
                 fields[structType.FieldIndex(record.Fields[i].Field.Name)] = values[i];
+            }
+
+            // A field the record leaves out takes its initial value, evaluated
+            // after the ones written, as the type's initialisers store it.
+            if (fields.Any(static f => f is null) && Sub(record.Type) is NamedTypeSymbol { OriginalDefinition: var definition }) {
+                foreach (var field in definition.Members.OfType<FieldSymbol>()) {
+                    if (field is not { IsStatic: false, IsComputed: false, HasInitializer: true }
+                        || structType.FieldIndex(field.Name) is var index && (index < 0 || fields[index] is not null)) {
+                        continue;
+                    }
+
+                    if (generator.FieldInitializer(field) is not { } initial || Expression(initial) is not { } value) {
+                        foreach (var made in fields.OfType<SilValue>()) {
+                            Destroy(made);
+                        }
+
+                        return null;
+                    }
+
+                    fields[index] = Owned(value);
+                }
             }
 
             if (fields.Any(static f => f is null)) {

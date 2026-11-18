@@ -14,7 +14,7 @@ extension<Element> Element[:] {
     public var count: Int { get }
 
     /// Whether the array holds no elements.
-    public var isEmpty: Bool { get { return self.count == 0 } }
+    public var isEmpty: Bool => self.count == 0
 
     /// The elements from 'from' up to, not including, 'to': a copy, for now,
     /// rather than a view.

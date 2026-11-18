@@ -19,8 +19,8 @@ public class PriorityQueue<Element: Comparable> {
         self.before = before
     }
 
-    public var count: Int { get { return items.count } }
-    public var isEmpty: Bool { get { return items.count == 0 } }
+    public var count: Int => items.count
+    public var isEmpty: Bool => items.count == 0
 
     /// The element that goes first, left where it is; none when empty.
     public fn peek() -> Element? {

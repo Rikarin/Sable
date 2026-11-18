@@ -20,8 +20,8 @@ public class Deque<Element> {
         used = values.count
     }
 
-    public var count: Int { get { return used } }
-    public var isEmpty: Bool { get { return used == 0 } }
+    public var count: Int => used
+    public var isEmpty: Bool => used == 0
 
     /// The slot of the element at 'index' from the front.
     fn slot(_ index: Int) -> Int {

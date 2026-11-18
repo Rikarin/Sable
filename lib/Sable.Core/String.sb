@@ -11,7 +11,7 @@ extension String {
     public var count: Int { get }
 
     /// Whether the string has no scalars.
-    public var isEmpty: Bool { get { return self.count == 0 } }
+    public var isEmpty: Bool => self.count == 0
 
     /// The scalar at the index, counting from 0; out of range traps.
     @builtin("string_at")

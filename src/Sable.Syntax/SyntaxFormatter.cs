@@ -506,13 +506,16 @@ public static class SyntaxFormatter {
             // 'else if' is one line: the 'if' continues the 'else'.
             (node is StatementSyntax && node.Kind != SyntaxKind.Block && parentKind is not (SyntaxKind.ElseClause or SyntaxKind.LabeledStatement))
             || IsMember(node)
+            || (node.Kind == SyntaxKind.Accessor && !IsPropertyArrow(node))
             || node.Kind is SyntaxKind.ImportDeclaration
                 or SyntaxKind.ModuleDeclaration
-                or SyntaxKind.Accessor
                 or SyntaxKind.MatchArm
                 or SyntaxKind.MatchCaseBlock
                 or SyntaxKind.SwitchCase
             || (node.Kind == SyntaxKind.Attribute && IsMemberContext(parentKind));
+
+        /// <summary><c>var area: F64 => w * h</c>: a getter written without its keyword and braces, which stays on its property's line.</summary>
+        static bool IsPropertyArrow(SyntaxNode node) => node is AccessorSyntax { Keyword.IsMissing: true };
 
         static bool EndsItsLine(SyntaxNode node, SyntaxKind parentKind) =>
             IsMember(node)
@@ -549,6 +552,7 @@ public static class SyntaxFormatter {
                     or ExtensionDeclarationSyntax => true,
                 MatchExpressionSyntax or SwitchStatementSyntax => true,
 
+                AccessorListSyntax { OpenBraceToken.IsMissing: true } => false,
                 AccessorListSyntax accessors => accessors.Accessors.Any(static a => a.Body is not null || a.ExpressionBody is not null)
                     && !(WrittenOnOneLine(accessors) && accessors.Accessors.All(static a => a.Body is null || IsOneLineBody(a.Body))),
 

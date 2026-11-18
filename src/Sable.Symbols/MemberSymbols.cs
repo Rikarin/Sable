@@ -295,6 +295,16 @@ public sealed class FieldSymbol(
     /// <summary>True when the member has accessors rather than storage.</summary>
     public bool IsComputed { get; internal set; }
 
+    /// <summary>
+    ///     A property whose accessors say <c>field</c>: the storage they read
+    ///     and write, a private stored field of the type that nothing else
+    ///     can name. Its initial value is the property's.
+    /// </summary>
+    public FieldSymbol? BackingField { get; internal set; }
+
+    /// <summary>For a backing field, the property it is the storage of.</summary>
+    public FieldSymbol? BackedProperty { get; internal set; }
+
     /// <summary>True when a computed member declares a <c>set</c>.</summary>
     public bool HasSetter { get; internal set; }
 

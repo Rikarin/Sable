@@ -86,7 +86,7 @@ public struct Mirror<Subject> {
     }
 
     /// How many parts the value has.
-    public var count: Int { get { return fields.count } }
+    public var count: Int => fields.count
 
     /// The part with this name, or none.
     public fn field(named name: String) -> MirrorField? {

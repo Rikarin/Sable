@@ -10,7 +10,7 @@ public struct Completed {
     public var output: String
     public var errors: String
 
-    public var succeeded: Bool { get { return status == 0 } }
+    public var succeeded: Bool => status == 0
 }
 
 public union ProcessError {

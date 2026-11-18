@@ -288,7 +288,7 @@ public sealed class LanguageTests {
     public void UnwrappingNoneTraps() {
         var run = AssertAgree(Program("fn nothing() -> Int? { return none }", "    print(1)\n    print(nothing()!)"));
         Assert.Equal("1\n", run.Stdout);
-        Assert.Equal("fatal error: unwrapped a none\n", run.Stderr);
+        Assert.Equal("fatal error: unwrapped a none\n  at test.sb:6:11\n", run.Stderr);
     }
 
     [Fact]
@@ -366,7 +366,7 @@ public sealed class LanguageTests {
     public void TryBangTraps() {
         var run = AssertAgree(Program(Parsing, "    print(1)\n    print(try! check(0))"));
         Assert.Equal("1\n", run.Stdout);
-        Assert.Equal("fatal error: 'try!' caught an error\n", run.Stderr);
+        Assert.Equal("fatal error: 'try!' caught an error\n  at test.sb:17:16\n", run.Stderr);
     }
 
     // ---- defer, ranges, loops -------------------------------------------------

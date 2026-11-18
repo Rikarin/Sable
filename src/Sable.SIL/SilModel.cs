@@ -917,6 +917,48 @@ public sealed class ClassMethodInst(SilValue reference, string method, FunctionT
 ///     module-level variable or a type's static stored property, for the
 ///     whole of the program.
 /// </summary>
+/// <summary>
+///     Storage more than one part of a program can reach (docs/02 §2.3): a
+///     global, or a field of an object — a class's, a closure's context, a
+///     captured variable's box — whoever holds a reference to it. An access to
+///     it the compiler cannot prove exclusive is checked as the program runs:
+///     an inout or ref argument's for the length of its call, and a plain
+///     read or write at the moment it happens. Storage on the stack is the
+///     function's alone, and an address passed in is the caller's access.
+/// </summary>
+public static class SharedStorage {
+    public static bool Contains(SilValue address) =>
+        address switch {
+            RefElementAddrInst or GlobalAddrInst => true,
+            StructElementAddrInst element => Contains(element.Address),
+            TupleElementAddrInst element => Contains(element.Address),
+            _ => false,
+        };
+
+    /// <summary>
+    ///     The plain read or write an instruction makes of storage, as it runs:
+    ///     where, and whether it changes it. Null for one that makes none.
+    /// </summary>
+    public static (SilValue Address, bool Modify)? AccessOf(SilInstruction instruction) =>
+        instruction switch {
+            LoadInst load => (load.Address, load.Kind == LoadKind.Take),
+            LoadBorrowInst borrow => (borrow.Address, false),
+            StoreInst store => (store.Address, true),
+            LoadWeakInst weak => (weak.Address, false),
+            StoreWeakInst weak => (weak.Address, true),
+            LoadUnownedInst unowned => (unowned.Address, false),
+            StoreUnownedInst unowned => (unowned.Address, true),
+            // An array changed where it is: its count, its buffer, an element.
+            BuiltinInst { Name: "array_append" or "array_set" or "array_set_unique" or "array_make_unique" or "array_remove_last" or "array_clear" or "array_element_addr" } array
+                => (array.Operands[0], true),
+            _ => null,
+        };
+
+    /// <summary>The plain access an instruction makes of shared storage, which a checked build checks; null for none.</summary>
+    public static (SilValue Address, bool Modify)? CheckedAccessOf(SilInstruction instruction) =>
+        AccessOf(instruction) is { } access && Contains(access.Address) ? access : null;
+}
+
 public sealed class GlobalAddrInst(string global, SilType type) : SilInstruction {
     public string Global { get; } = global;
     public SilType ValueType { get; } = type;
@@ -1255,7 +1297,7 @@ public static class SilBuiltins {
 
     /// <summary>The names whose signature depends on the element type of the array they work on.</summary>
     public static readonly ImmutableArray<string> ArrayOperations =
-        ["array_empty", "array_count", "array_get", "array_get_borrowed", "array_append", "array_set_unique", "array_make_unique", "array_set", "array_remove_last", "array_clear", "array_slice", "region_alloc"];
+        ["array_empty", "array_count", "array_get", "array_get_borrowed", "array_append", "array_set_unique", "array_element_addr", "array_make_unique", "array_set", "array_remove_last", "array_clear", "array_slice", "region_alloc"];
 
     /// <summary>A builtin with fixed operand types, by name.</summary>
     public static Signature? Find(string name) => Table.GetValueOrDefault(name);
@@ -1283,6 +1325,9 @@ public static class SilBuiltins {
             case "task_spawn" when operands is [FunctionType, ClassType]:
                 return new([operands[0], operands[1]], SilType.Int) { Consumed = [1] };
             case "task_wait" or "task_release" when operands is [var handle] && handle == SilType.Int:
+                return new([SilType.Int], SilType.Unit);
+            // Off the run queue for at least this many nanoseconds, while the other tasks run.
+            case "task_sleep" when operands is [var nanoseconds] && nanoseconds == SilType.Int:
                 return new([SilType.Int], SilType.Unit);
             case "task_yield" or "task_drain" when operands.Count == 0:
                 return new([], SilType.Unit);
@@ -1342,6 +1387,13 @@ public static class SilBuiltins {
             case "array_make_unique" when Element(0, true) is not null:
                 return new([operands[0]], SilType.Unit);
 
+            // Where an element is, to pass inout ('bump(&values[0])'): the
+            // array made the only reference to its buffer, the index checked.
+            // Good until the array next changes, which the access to it, for
+            // the length of the call, rules out.
+            case "array_element_addr" when Element(0, true) is { } element:
+                return new([operands[0], SilType.Int], SilType.Address(element));
+
             case "array_remove_last" when Element(0, true) is { } element:
                 return new([operands[0]], element);
 
@@ -1358,7 +1410,7 @@ public static class SilBuiltins {
     }
 
     public static IEnumerable<string> Names =>
-        Table.Keys.Concat(ArrayOperations).Concat(["access_begin_read", "access_begin_modify", "access_end", "task_spawn", "task_wait", "task_release", "task_yield", "task_drain"]);
+        Table.Keys.Concat(ArrayOperations).Concat(["access_begin_read", "access_begin_modify", "access_end", "task_spawn", "task_wait", "task_release", "task_yield", "task_sleep", "task_drain"]);
 
     static SilType? Pointee(SilType? type) => (type as InlinePointerType)?.Pointee;
 

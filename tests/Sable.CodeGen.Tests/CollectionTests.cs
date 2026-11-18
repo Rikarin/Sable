@@ -128,7 +128,7 @@ public sealed class CollectionTests {
             )
         );
         Assert.Equal("2\nbc\n0\n", execution.Stdout);
-        Assert.Equal("fatal error: array slice out of range\n", execution.Stderr);
+        Assert.Equal("fatal error: array slice out of range\n  at test.sb:11:15\n", execution.Stderr);
     }
 
     [Fact]

@@ -328,7 +328,7 @@ public sealed class SubscriptAndLocalTests {
     public void ABoundedArrayTrapsWhenItIsFull() {
         var run = AssertAgree(Program("", "    var pair: Int[..2] = [1, 2]\n    print(pair.count)\n    pair.append(3)\n    print(pair.count)"));
         Assert.Equal("2\n", run.Stdout);
-        Assert.Equal("fatal error: inline array is full\n", run.Stderr);
+        Assert.Equal("fatal error: inline array is full\n  at test.sb:7:5\n", run.Stderr);
     }
 
     // ---- Recursive unions -------------------------------------------------------

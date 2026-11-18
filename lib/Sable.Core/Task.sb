@@ -22,4 +22,9 @@ public class Task<Success> {
     /// Lets every task queued run before this one goes on.
     @intrinsic
     public static async fn `yield`()
+
+    /// Waits at least this many nanoseconds, off the run queue: every other
+    /// task runs meanwhile, and the program waits only when none can.
+    @intrinsic
+    public static async fn sleep(nanoseconds: Int)
 }

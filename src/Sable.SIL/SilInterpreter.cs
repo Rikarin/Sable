@@ -5,7 +5,21 @@ using System.Text;
 namespace Sable.SIL;
 
 /// <summary>A program stopped where the language says it must: overflow, division by zero, unreachable code.</summary>
-public sealed class SilTrap(string message) : Exception(message);
+/// <param name="message">Why, as the native program says it after <c>fatal error: </c>.</param>
+/// <param name="located">
+///     False for a trap with no place in the source — calls nested too
+///     deeply, an object kept alive by its deinit, every task waiting — which
+///     the native program reports without one too.
+/// </param>
+public sealed class SilTrap(string message, bool located = true) : Exception(message) {
+    /// <summary>Where it happened, as <c>file:line:column</c>: the instruction that trapped, when it has a place.</summary>
+    public string? Site { get; internal set; }
+
+    internal bool Located => located;
+
+    /// <summary>What the native program writes to standard error as it stops: the message, and the place on the next line.</summary>
+    public string Report => Site is null ? $"fatal error: {Message}\n" : $"fatal error: {Message}\n  at {Site}\n";
+}
 
 /// <summary>
 ///     Runs SIL directly, so that tests can check what lowered code
@@ -50,6 +64,16 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
 
     /// <summary>The program's arguments, after its own name.</summary>
     public IReadOnlyList<string> Arguments { get; init; } = [];
+
+    /// <summary>
+    ///     What the program may do outside itself — read, write, run, see of
+    ///     the environment — when that is limited, as a build script's is
+    ///     (docs/05 §5.6); null for everything, as a native program may.
+    /// </summary>
+    public SilSandbox? Sandbox { get; init; }
+
+    /// <summary>The path a runtime call is to use, once the sandbox, if there is one, allows it.</summary>
+    string PathFor(object? operand, SilAccess access) => Sandbox is { } sandbox ? sandbox.Check(Text(operand).Value, access) : Text(operand).Value;
 
     /// <summary>The last program <c>Runtime.run</c> ran: how it ended, and what it wrote to standard error.</summary>
     long _lastStatus;
@@ -306,7 +330,7 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                     var function = module.Find(deinit) ?? throw new SilTrap($"call to undefined @{deinit}");
                     Call(function, [instance], depth + 1);
                     if (counted.Strong != 1) {
-                        throw new SilTrap("an object outlived its deinit");
+                        throw new SilTrap("an object outlived its deinit", located: false);
                     }
                 }
 
@@ -394,32 +418,79 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
         }
     }
 
+    /// <summary>An element of an array, passed inout: the array is the only reference to its elements.</summary>
+    sealed class ArrayElement(HeapArray array, int index) : IReference {
+        public object? Get() => Peek() ?? throw new SilTrap("load from uninitialised storage");
+        public object? Peek() => Alive(array).Elements[index];
+        public void Set(object? value) => Alive(array).Elements[index] = value;
+    }
+
     /// <summary>A field of an object.</summary>
     /// <summary>The accesses in progress (docs/02 §2.3): where, and whether each is a change.</summary>
-    readonly List<(object Storage, bool Modify)> _accesses = [];
+    readonly List<(List<object> Storage, bool Modify)> _accesses = [];
 
     void Access(string name, IReference address) {
+        if (!module.CheckExclusivity) {
+            return;
+        }
+
+        if (name.StartsWith("access_check_", StringComparison.Ordinal)) {
+            CheckAccess(address, name == "access_check_modify");
+            return;
+        }
+
         var storage = StorageOf(address);
         if (name == "access_end") {
-            _accesses.RemoveAt(_accesses.FindLastIndex(a => Equals(a.Storage, storage)));
+            _accesses.RemoveAt(_accesses.FindLastIndex(a => a.Storage.SequenceEqual(storage)));
             return;
         }
 
         var modify = name == "access_begin_modify";
-        if (_accesses.Any(a => Equals(a.Storage, storage) && (modify || a.Modify))) {
-            throw new SilTrap("overlapping accesses to the same storage");
-        }
-
+        CheckAccess(storage, modify);
         _accesses.Add((storage, modify));
     }
 
-    /// <summary>What an address is the storage of: an object's field, the same whichever reference reached it.</summary>
-    static object StorageOf(IReference address) =>
-        address switch {
-            Field field => (field.Instance, field.Index),
-            Element element => (StorageOf(element.Parent), element.Index),
-            _ => address,
-        };
+    /// <summary>A plain read or write of shared storage, as it happens: a trap if it overlaps an access in progress.</summary>
+    void CheckAccess(IReference address, bool modify) {
+        if (module.CheckExclusivity && _accesses.Count > 0) {
+            CheckAccess(StorageOf(address), modify);
+        }
+    }
+
+    void CheckAccess(List<object> storage, bool modify) {
+        if (_accesses.Any(a => (modify || a.Modify) && Overlaps(a.Storage, storage))) {
+            throw new SilTrap("overlapping accesses to the same storage");
+        }
+    }
+
+    /// <summary>Two paths overlap when one leads into the other: a struct and a field of it, as the bytes do natively.</summary>
+    static bool Overlaps(List<object> first, List<object> second) {
+        for (var i = 0; i < Math.Min(first.Count, second.Count); i++) {
+            if (!Equals(first[i], second[i])) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    ///     What an address is the storage of, as a path: an object and its
+    ///     field — the same whichever reference reached it — or a global, then
+    ///     the fields and elements inside.
+    /// </summary>
+    static List<object> StorageOf(IReference address) {
+        switch (address) {
+            case Field field:
+                return [field.Instance, field.Index];
+            case Element element:
+                var path = StorageOf(element.Parent);
+                path.Add(element.Index);
+                return path;
+            default:
+                return [address];
+        }
+    }
 
     sealed class Field(HeapObject instance, int index) : IReference {
         public HeapObject Instance => instance;
@@ -514,9 +585,22 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
 
     object? Call(SilFunction function, IReadOnlyList<object?> arguments, int depth) {
         if (depth > depthLimit) {
-            throw new SilTrap("stack overflow: calls nested too deeply");
+            throw new SilTrap("stack overflow: calls nested too deeply", located: false);
         }
 
+        SilInstruction? current = null;
+        try {
+            return Run(function, arguments, depth, ref current);
+        } catch (SilTrap trap) when (trap is { Site: null, Located: true }) {
+            // The innermost call that sees it says where: the instruction
+            // that trapped, as the native program's trap does.
+            trap.Site = current?.TrapSite(function);
+
+            throw;
+        }
+    }
+
+    object? Run(SilFunction function, IReadOnlyList<object?> arguments, int depth, ref SilInstruction? current) {
         var values = new Dictionary<SilValue, object?>();
         var block = function.Entry;
         IReadOnlyList<object?> incoming = arguments;
@@ -528,8 +612,9 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
 
             SilBlock? next = null;
             foreach (var instruction in block.Instructions) {
+                current = instruction;
                 if (++_steps > stepLimit) {
-                    throw new SilTrap("step limit reached");
+                    throw new SilTrap("step limit reached", located: false);
                 }
 
                 // Asked every so many steps, not every one: a REPL's Ctrl-C.
@@ -1028,7 +1113,7 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                 try {
                     // Bytes, decoded as the runtime decodes them: no byte-order
                     // mark taken as a request for UTF-16, and ill-formed UTF-8 as U+FFFD.
-                    contents = DecodeUtf8(File.ReadAllBytes(Text(operands[0]).Value));
+                    contents = DecodeUtf8(File.ReadAllBytes(PathFor(operands[0], SilAccess.Read)));
                 } catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException) {
                 }
 
@@ -1038,7 +1123,7 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
 
             case "io_write_file": {
                 try {
-                    var (path, text) = (Text(operands[0]).Value, Text(operands[1]).Value);
+                    var (path, text) = (PathFor(operands[0], SilAccess.Write), Text(operands[1]).Value);
                     if ((bool)operands[2]!) {
                         File.AppendAllText(path, text);
                     } else {
@@ -1052,15 +1137,15 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             }
 
             case "io_file_exists": {
-                var path = Text(operands[0]).Value;
+                var path = PathFor(operands[0], SilAccess.Read);
                 return File.Exists(path) || Directory.Exists(path);
             }
 
             case "io_is_directory":
-                return Directory.Exists(Text(operands[0]).Value);
+                return Directory.Exists(PathFor(operands[0], SilAccess.Read));
 
             case "io_remove_file": {
-                var path = Text(operands[0]).Value;
+                var path = PathFor(operands[0], SilAccess.Write);
                 try {
                     if (File.Exists(path)) {
                         File.Delete(path);
@@ -1078,7 +1163,7 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             }
 
             case "io_make_directory": {
-                var path = Text(operands[0]).Value;
+                var path = PathFor(operands[0], SilAccess.Write);
                 if (Directory.Exists(path) || File.Exists(path) || Path.GetDirectoryName(Path.GetFullPath(path)) is { } parent && !Directory.Exists(parent)) {
                     return false;
                 }
@@ -1092,7 +1177,7 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             }
 
             case "io_list_directory": {
-                var path = Text(operands[0]).Value;
+                var path = PathFor(operands[0], SilAccess.Read);
                 string[] names;
                 try {
                     names = [..Directory.EnumerateFileSystemEntries(path).Select(Path.GetFileName).Select(static n => n!)];
@@ -1109,15 +1194,23 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             }
 
             case "io_environment": {
-                var value = Environment.GetEnvironmentVariable(Text(operands[0]).Value);
+                var name = Text(operands[0]).Value;
+                var value = Sandbox is { } sandbox ? sandbox.Environment(name) : Environment.GetEnvironmentVariable(name);
                 _ioFailed = value is null;
                 return Allocate(new HeapString(value ?? ""));
             }
 
             case "process_run": {
-                var start = new System.Diagnostics.ProcessStartInfo(Text(operands[0]).Value) {
+                var start = new System.Diagnostics.ProcessStartInfo(Sandbox?.CheckProgram(Text(operands[0]).Value) ?? Text(operands[0]).Value) {
                     RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false,
                 };
+                if (Sandbox is { } confined) {
+                    start.WorkingDirectory = confined.CurrentDirectory;
+                    foreach (var (variable, setting) in confined.ProgramEnvironment) {
+                        start.Environment[variable] = setting;
+                    }
+                }
+
                 if (operands[1] is HeapArray given) {
                     foreach (var argument in Alive(given).Elements) {
                         start.ArgumentList.Add(Text(argument).Value);
@@ -1161,10 +1254,22 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                 return Allocate(new HeapString(_lastErrorOutput));
 
             case "process_current_directory":
-                return Allocate(new HeapString(Directory.GetCurrentDirectory()));
+                return Allocate(new HeapString(Sandbox?.CurrentDirectory ?? Directory.GetCurrentDirectory()));
 
             case "process_change_directory":
                 try {
+                    // A sandboxed program's working directory is its own: the
+                    // process's stays where it is, for the rest of the build.
+                    if (Sandbox is { } within) {
+                        var directory = within.Check(Text(operands[0]).Value, SilAccess.Read);
+                        if (!Directory.Exists(directory)) {
+                            return false;
+                        }
+
+                        within.CurrentDirectory = directory;
+                        return true;
+                    }
+
                     Directory.SetCurrentDirectory(Text(operands[0]).Value);
                     return true;
                 } catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException) {
@@ -1297,6 +1402,16 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                 array.Elements[(int)index] = operands[2];
                 Release(array.Type.Element, old, depth);
                 return null;
+            }
+
+            case "array_element_addr": {
+                var array = Unique(builtin.Operands[0], (IReference)operands[0]!);
+                var index = (long)operands[1]!;
+                if (index < 0 || index >= array.Elements.Count) {
+                    throw new SilTrap("array index out of range");
+                }
+
+                return new ArrayElement(array, (int)index);
             }
 
             case "array_remove_last": {

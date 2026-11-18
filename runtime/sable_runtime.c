@@ -11,43 +11,30 @@
 
 #include <errno.h>
 #include <math.h>
+#include <pthread.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-// The platform layer — threads, a trap's backtrace, files, the clock,
-// processes — is POSIX (macOS, Linux) or Win32 (Windows, with the MSVC C
-// runtime). On Windows every name the system takes or gives is UTF-16, and
-// the runtime's strings are UTF-8: they are converted at the boundary.
-#ifdef _WIN32
-#define _CRT_SECURE_NO_WARNINGS
-#define _CRT_NONSTDC_NO_DEPRECATE
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
-#include <windows.h>
-#include <dbghelp.h>
-#include <fcntl.h>
-#include <io.h>
-#include <shellapi.h>
-#pragma comment(lib, "dbghelp")
-#pragma comment(lib, "shell32")
-#else
-#include <pthread.h>
-#endif
-
 // ---- Objects -----------------------------------------------------------
 
-// What a counted object is: how to destroy what it holds, and, for an
-// array, how its elements are copied and destroyed. The compiler emits one
-// per class and per array element type.
+// What a counted object is (docs/06 §6.2): how to destroy what it holds,
+// and, for an array, how its elements are copied and destroyed; how large
+// and how aligned an instance is; and what it keeps alive. The compiler
+// emits one per class and per array element type; a class's vtable follows.
 typedef struct SableMetadata {
     void (*destroy)(void *object); // destroys the contents; not the memory
     const char *name;
     int64_t element_size;
-    void (*copy_element)(void *destination, const void *source); // null: copy the bits
+    void (*copy_element)(void *destination, const void *source); // null: copy the bits; a class's superclass
     void (*destroy_element)(void *element);                       // null: nothing to do
+    int64_t size;      // an instance's bytes, the header's among them; 0 when it varies (a string)
+    int64_t alignment;
+    // Calls sable_heap_visit with each strong reference an object holds —
+    // for an array, an element holds. Null: none.
+    void (*visit)(void *object);
 } SableMetadata;
 
 // The header of docs/06 §6.2: metadata, the strong count, and a word of
@@ -78,22 +65,29 @@ enum {
     // changes size without walking itself for references to measure again.
     SABLE_LINKED = 16u,
 
-    // Bits 5 to 7: the size class the object's memory came from (see
+    // Bits 5 to 8: the size class the object's memory came from (see
     // Memory, below); zero for memory from malloc.
     SABLE_CLASS_SHIFT = 5,
-    SABLE_CLASS_MASK = 7u << SABLE_CLASS_SHIFT,
+    SABLE_CLASS_MASK = 15u << SABLE_CLASS_SHIFT,
 
-    SABLE_UNOWNED_ONE = 1u << 8,
+    // The unowned count, above the flags.
+    SABLE_UNOWNED_SHIFT = 9,
+    SABLE_UNOWNED_ONE = 1u << SABLE_UNOWNED_SHIFT,
 };
 
 static uint32_t unowned_count(const SableObject *object) {
-    return object->flags >> 8;
+    return object->flags >> SABLE_UNOWNED_SHIFT;
 }
 
 _Noreturn void sable_trap(const char *message);
+_Noreturn static void trap_here(const char *message);
 static void sable_weak_object_died(SableObject *object);
 
 static int64_t live_objects;
+static void object_born(SableObject *object);
+static void object_gone(SableObject *object);
+static void report_leaks(void);
+static bool tracking;
 
 // What ARC did: the counts the benchmarks track, and what the ARC passes are
 // measured by. Retains and releases count only those that touch a count —
@@ -102,22 +96,14 @@ static int64_t allocations, retains, releases;
 
 // With SABLE_CHECK_LEAKS set, a program that ends with objects still alive
 // says how many: tests run every program this way. With SABLE_STATS set, it
-// says what ARC did. Run as the program exits: a destructor on POSIX, and on
-// Windows a function given to atexit as the program starts.
-#ifdef _WIN32
-static void sable_report(void);
-
-__attribute__((constructor)) static void sable_report_at_exit(void) {
-    atexit(sable_report);
-}
-
-static void sable_report(void) {
-#else
+// says what ARC did.
 __attribute__((destructor)) static void sable_report(void) {
-#endif
     if (live_objects != 0 && getenv("SABLE_CHECK_LEAKS") != NULL) {
         fflush(stdout);
         fprintf(stderr, "sable: %lld object(s) leaked\n", (long long)live_objects);
+        if (tracking) {
+            report_leaks();
+        }
     }
 
     if (getenv("SABLE_STATS") != NULL) {
@@ -142,12 +128,15 @@ __attribute__((destructor)) static void sable_report(void) {
 // An object records its class in its flags, so freeing one needs no lookup;
 // an array's elements are freed with their size, which the array knows.
 
-enum { SMALL_CLASSES = 8, SMALL_LARGEST = 256, SLAB_SIZE = 256 * 1024 };
+// Classes up to a kilobyte: an array of a hundred numbers is as common as a
+// small object. Each step is at most half again the one before, so no more
+// than a third of a block is ever wasted.
+enum { SMALL_CLASSES = 12, SMALL_TABLED = 256, SMALL_LARGEST = 1024, SLAB_SIZE = 256 * 1024 };
 
-static const int64_t small_sizes[SMALL_CLASSES] = { 0, 32, 48, 64, 96, 128, 192, 256 };
+static const int64_t small_sizes[SMALL_CLASSES] = { 0, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024 };
 
-// The class for a size, by sixteenths: the smallest that holds it.
-static const uint8_t small_class_of[SMALL_LARGEST / 16 + 1] = { 1, 1, 1, 2, 3, 4, 4, 5, 5, 6, 6, 6, 6, 7, 7, 7, 7 };
+// The class for a size up to 256, by sixteenths: the smallest that holds it.
+static const uint8_t small_class_of[SMALL_TABLED / 16 + 1] = { 1, 1, 1, 2, 3, 4, 4, 5, 5, 6, 6, 6, 6, 7, 7, 7, 7 };
 
 static void *small_free[SMALL_CLASSES];
 static char *slab_next, *slab_end;
@@ -156,7 +145,15 @@ _Noreturn void sable_trap(const char *message);
 
 // The class for 'size' bytes, or zero: too large, or nothing at all.
 static inline unsigned small_class(int64_t size) {
-    return size > 0 && size <= SMALL_LARGEST ? small_class_of[(size + 15) >> 4] : 0;
+    if (size <= 0 || size > SMALL_LARGEST) {
+        return 0;
+    }
+
+    if (size <= SMALL_TABLED) {
+        return small_class_of[(size + 15) >> 4];
+    }
+
+    return size <= 384 ? 8 : size <= 512 ? 9 : size <= 768 ? 10 : 11;
 }
 
 static void *small_alloc(unsigned class) {
@@ -287,8 +284,11 @@ static void *buffer_resize(void *buffer, int64_t old, int64_t size) {
     return grown;
 }
 
+static void forget_string(const SableObject *object);
+
 // An object's memory, given back: to its class, or to malloc.
 static void object_free(SableObject *object) {
+    forget_string(object);
     unsigned class = (object->flags & SABLE_CLASS_MASK) >> SABLE_CLASS_SHIFT;
     if (class != 0) {
         small_release(object, class);
@@ -320,7 +320,7 @@ static void *alloc_object(const SableMetadata *type, int64_t size, bool zero) {
 
     object->type = type;
     object->strong = 1;
-    live_objects++;
+    object_born(object);
     allocations++;
     return object;
 }
@@ -337,7 +337,7 @@ void *sable_stack_object(void *memory, const SableMetadata *type, int64_t size) 
     object->type = type;
     object->strong = 1;
     object->flags = SABLE_STACK;
-    live_objects++;
+    object_born(object);
     return object;
 }
 
@@ -381,7 +381,7 @@ void sable_release(void *pointer) {
         return;
     }
 
-    live_objects--;
+    object_gone(object);
     if (!(object->flags & SABLE_STACK)) {
         object_free(object);
     }
@@ -389,26 +389,47 @@ void sable_release(void *pointer) {
 
 // ---- Exclusivity -----------------------------------------------------------
 
-// The accesses in progress to storage inside objects (docs/02 §2.3): an
-// inout or ref argument's, for the length of its call. One that overlaps
-// an access in progress, either of them a change, is a trap. Kept in
-// checked builds only; the compiler proves what it can without them.
+// The accesses in progress to storage more than one part of the program can
+// reach — a global, a field of an object (docs/02 §2.3): an inout or ref
+// argument's, for the length of its call. Another access to storage that
+// overlaps one in progress, either of them a change, is a trap: one that
+// begins (a second inout argument), or a plain read or write as it happens
+// (a function given '&counter' that reads 'counter'). Storage is a range of
+// bytes, so a struct and a field inside it overlap. Kept in checked builds
+// only; the compiler proves what it can without them.
+//
+// The compiled code checks sable_access_count itself before a plain read
+// or write, and calls in only when an access is in progress: most of the
+// time none is. Accesses nest with calls, so the list stays short.
 typedef struct SableAccess {
-    void *storage;
+    char *storage;
+    int64_t size;
     int32_t modify;
 } SableAccess;
 
 static SableAccess *accesses;
-static int64_t access_count, access_capacity;
+int64_t sable_access_count;
+static int64_t access_capacity;
 
-void sable_access_begin(void *storage, int32_t modify) {
-    for (int64_t i = 0; i < access_count; i++) {
-        if (accesses[i].storage == storage && (modify || accesses[i].modify)) {
-            sable_trap("overlapping accesses to the same storage");
+// A storage of no bytes still has a place: one byte of it.
+static bool overlaps(const SableAccess *access, const char *storage, int64_t size) {
+    const char *end = storage + (size > 0 ? size : 1);
+    const char *access_end = access->storage + (access->size > 0 ? access->size : 1);
+    return storage < access_end && access->storage < end;
+}
+
+// A plain read ('modify' 0) or write of the storage, now.
+void sable_access_check(void *storage, int64_t size, int32_t modify) {
+    for (int64_t i = 0; i < sable_access_count; i++) {
+        if ((modify || accesses[i].modify) && overlaps(&accesses[i], storage, size)) {
+            trap_here("overlapping accesses to the same storage");
         }
     }
+}
 
-    if (access_count == access_capacity) {
+void sable_access_begin(void *storage, int64_t size, int32_t modify) {
+    sable_access_check(storage, size, modify);
+    if (sable_access_count == access_capacity) {
         access_capacity = access_capacity < 16 ? 16 : access_capacity * 2;
         accesses = realloc(accesses, (size_t)access_capacity * sizeof(SableAccess));
         if (accesses == NULL) {
@@ -416,13 +437,13 @@ void sable_access_begin(void *storage, int32_t modify) {
         }
     }
 
-    accesses[access_count++] = (SableAccess){ storage, modify };
+    accesses[sable_access_count++] = (SableAccess){ storage, size, modify };
 }
 
 void sable_access_end(void *storage) {
-    for (int64_t i = access_count - 1; i >= 0; i--) {
+    for (int64_t i = sable_access_count - 1; i >= 0; i--) {
         if (accesses[i].storage == storage) {
-            accesses[i] = accesses[--access_count];
+            accesses[i] = accesses[--sable_access_count];
             return;
         }
     }
@@ -488,7 +509,7 @@ static void sable_region_destroy(void *pointer) {
     }
 }
 
-static const SableMetadata region_metadata = { sable_region_destroy, "Region", 0, NULL, NULL };
+static const SableMetadata region_metadata = { sable_region_destroy, "Region", 0, NULL, NULL, sizeof(SableRegion), _Alignof(SableRegion), NULL };
 
 void *sable_region_create(void) {
     return sable_alloc(&region_metadata, (int64_t)sizeof(SableRegion));
@@ -612,7 +633,7 @@ void sable_unowned_release(void *pointer) {
 
     object->flags -= SABLE_UNOWNED_ONE;
     if (unowned_count(object) == 0 && (object->flags & SABLE_DEINITED)) {
-        live_objects--;
+        object_gone(object);
         object_free(object);
     }
 }
@@ -621,7 +642,7 @@ void sable_unowned_release(void *pointer) {
 void sable_unowned_load(void *pointer) {
     SableObject *object = pointer;
     if (object->flags & SABLE_DEINITED) {
-        sable_trap("read an unowned reference to an object that is gone");
+        trap_here("read an unowned reference to an object that is gone");
     }
 
     sable_retain(object);
@@ -770,10 +791,8 @@ static void sable_weak_object_died(SableObject *object) {
 
 // Overflow, division by zero, an unreachable point reached: not catchable,
 // not unwound. Say why, then stop (docs/06 §6.6).
-#ifndef _WIN32
 #include <dlfcn.h>
 #include <execinfo.h>
-#endif
 
 // With SABLE_BACKTRACE set, a trap says where it happened: a frame per line,
 // as 'sable.Module.function + offset' where the symbol is known. Off by
@@ -786,58 +805,127 @@ __attribute__((noinline)) static void print_backtrace(void) {
     }
 
     void *frames[64];
-    fprintf(stderr, "backtrace:\n");
-#ifdef _WIN32
-    // Windows walks the stack by the unwind tables every function has, and
-    // names a frame from the program's PDB, which the link always writes:
-    // with the program's symbols at least, as -rdynamic gives them on Linux.
-    int count = (int)CaptureStackBackTrace(0, 64, frames, NULL);
-    HANDLE process = GetCurrentProcess();
-    SymSetOptions(SYMOPT_DEFERRED_LOADS);
-    bool symbols = SymInitialize(process, NULL, TRUE) != FALSE;
-    union {
-        SYMBOL_INFO info;
-        char space[sizeof(SYMBOL_INFO) + 512];
-    } symbol;
-#else
     int count = backtrace(frames, 64);
-#endif
+    fprintf(stderr, "backtrace:\n");
     // The first two frames are this function and sable_trap.
     for (int i = 2; i < count; i++) {
         const char *at = (const char *)frames[i] - 1;
-#ifdef _WIN32
-        memset(&symbol, 0, sizeof symbol);
-        symbol.info.SizeOfStruct = sizeof(SYMBOL_INFO);
-        symbol.info.MaxNameLen = 512;
-        DWORD64 offset = 0;
-        if (symbols && SymFromAddr(process, (DWORD64)(uintptr_t)at, &offset, &symbol.info)) {
-            fprintf(stderr, "  %2d  %s + %lld\n", i - 2, symbol.info.Name, (long long)offset + 1);
-            continue;
-        }
-#else
         Dl_info info;
         if (dladdr(at, &info) != 0 && info.dli_sname != NULL) {
             fprintf(stderr, "  %2d  %s + %ld\n", i - 2, info.dli_sname, (long)(at + 1 - (const char *)info.dli_saddr));
-            continue;
+        } else {
+            fprintf(stderr, "  %2d  %p\n", i - 2, frames[i]);
         }
-#endif
-        fprintf(stderr, "  %2d  %p\n", i - 2, frames[i]);
     }
 }
 
-_Noreturn void sable_trap(const char *message) {
+// Where the compiled code is: set just before a call into the runtime that
+// can trap (an index checked here, an unowned reference read), so that the
+// trap can say which line made the call. A trap the compiled code makes
+// itself passes its place to sable_trap_at instead. One task runs at a time,
+// so one variable serves them all.
+const char *sable_trap_site;
+
+// A trap with the place in the source it happened at, as 'file:line:column',
+// or none: the message on one line, and the place on the next.
+_Noreturn void sable_trap_at(const char *message, const char *site) {
     fflush(stdout);
     fprintf(stderr, "fatal error: %s\n", message);
+    if (site != NULL) {
+        fprintf(stderr, "  at %s\n", site);
+    }
+
     print_backtrace();
-#ifdef _WIN32
-    // abort() ends a Windows program with status 3, after offering it to
-    // Windows Error Reporting; a trap ends it as POSIX reports an abort,
-    // 128 + SIGABRT, the same status on every platform.
-    fflush(stderr);
-    _exit(134);
-#else
     abort();
+}
+
+// A trap that has no place in the source: one the whole program reaches —
+// memory run out, an object kept alive by its own deinit, every task waiting.
+_Noreturn void sable_trap(const char *message) {
+    sable_trap_at(message, NULL);
+}
+
+// A trap in a runtime function the compiled code called: at the call.
+_Noreturn static void trap_here(const char *message) {
+    sable_trap_at(message, sable_trap_site);
+}
+
+// ---- Stack overflow ------------------------------------------------------
+
+// Recursion that runs off the end of a thread's stack touches the guard page
+// below it, and the system sends SIGSEGV (SIGBUS on some). A handler can
+// only run on a stack that is still there, so each thread is given a small
+// one of its own (sigaltstack). The handler tells an overflow from any other
+// bad access by where it was: at the low end of the thread's stack, which
+// each thread notes as it starts.
+#include <signal.h>
+#include <unistd.h>
+
+static _Thread_local char *stack_low;
+
+enum { SIGNAL_STACK = 64 * 1024, GUARD_SLACK = 64 * 1024, FRAME_SLACK = 1 << 20 };
+
+// The lowest address of the calling thread's stack.
+static char *thread_stack_low(void) {
+#if defined(__APPLE__)
+    pthread_t self = pthread_self();
+    return (char *)pthread_get_stackaddr_np(self) - pthread_get_stacksize_np(self);
+#else
+    pthread_attr_t attributes;
+    void *low = NULL;
+    size_t size = 0;
+    if (pthread_getattr_np(pthread_self(), &attributes) == 0) {
+        pthread_attr_getstack(&attributes, &low, &size);
+        pthread_attr_destroy(&attributes);
+    }
+
+    return low;
 #endif
+}
+
+static void on_fault(int signal_number, siginfo_t *info, void *context) {
+    (void)context;
+    char *address = info->si_addr;
+
+    // Just below the stack — a frame larger than the guard page reaches
+    // further — or in its last few pages.
+    if (stack_low != NULL && address >= stack_low - FRAME_SLACK && address < stack_low + GUARD_SLACK) {
+        // What the program printed before is its output, as before any trap.
+        fflush(stdout);
+        static const char message[] = "fatal error: stack overflow: calls nested too deeply\n";
+        ssize_t written = write(STDERR_FILENO, message, sizeof message - 1);
+        (void)written;
+        signal(SIGABRT, SIG_DFL);
+        abort();
+    }
+
+    // Not an overflow: what the signal does without a handler, as the
+    // faulting instruction runs again.
+    signal(signal_number, SIG_DFL);
+}
+
+// Gives the calling thread a stack for the handler, and notes where its own
+// stack ends. A thread that runs tasks keeps it for as long as it lives.
+static void *watch_stack(void) {
+    stack_low = thread_stack_low();
+    stack_t alternate = { 0 };
+    alternate.ss_sp = malloc(SIGNAL_STACK);
+    alternate.ss_size = SIGNAL_STACK;
+    if (alternate.ss_sp != NULL) {
+        sigaltstack(&alternate, NULL);
+    }
+
+    return alternate.ss_sp;
+}
+
+__attribute__((constructor)) static void sable_watch_main_stack(void) {
+    watch_stack();
+    struct sigaction action = { 0 };
+    action.sa_sigaction = on_fault;
+    action.sa_flags = SA_SIGINFO | SA_ONSTACK;
+    sigemptyset(&action.sa_mask);
+    sigaction(SIGSEGV, &action, NULL);
+    sigaction(SIGBUS, &action, NULL);
 }
 
 // ---- Strings -----------------------------------------------------------
@@ -851,7 +939,7 @@ typedef struct SableString {
     char bytes[];
 } SableString;
 
-const SableMetadata sable_string_metadata = { NULL, "String", 0, NULL, NULL };
+const SableMetadata sable_string_metadata = { NULL, "String", 0, NULL, NULL, 0, _Alignof(SableObject), NULL };
 
 static int64_t count_scalars(const char *bytes, int64_t length) {
     int64_t count = 0;
@@ -953,20 +1041,89 @@ static SableString *make_ctext(const char *text) {
     return make_text(text, (int64_t)strlen(text));
 }
 
-// The byte offset of scalar 'index'.
+// ---- Scalar positions
+//
+// A String is indexed by scalar, and a UTF-8 scalar is one to four bytes, so
+// the byte offset of scalar i is found by counting. Counting from the start
+// every time makes the usual loop — at(0), at(1), at(2)... over a string
+// that is not ASCII — quadratic. So the runtime remembers where it last
+// was in a few strings, and finds the next position by stepping from the
+// nearest of that, the start and the end. One task runs at a time, so the
+// table needs no lock; a string whose memory is given back is forgotten,
+// since the memory may become another string.
+
+enum { CURSORS = 8 };
+
+static struct {
+    const SableString *string;
+    int64_t index;
+    int64_t offset;
+} cursors[CURSORS];
+
+static unsigned cursor_slot(const void *string) {
+    // Objects are 8-byte aligned at least: the low bits say nothing.
+    return (unsigned)((((uintptr_t)string >> 3) * 0x9E3779B97F4A7C15ull) >> 61);
+}
+
+static void forget_string(const SableObject *object) {
+    unsigned slot = cursor_slot(object);
+    if ((const void *)cursors[slot].string == (const void *)object) {
+        cursors[slot].string = NULL;
+    }
+}
+
+static bool is_continuation(char byte) {
+    return ((unsigned char)byte & 0xC0) == 0x80;
+}
+
+// The byte offset of scalar 'index', from 0 to the scalar count; the count
+// gives the length.
 static int64_t offset_of(const SableString *s, int64_t index) {
     if (s->count == s->length) {
         return index;
     }
 
-    int64_t seen = -1;
-    for (int64_t i = 0; i < s->length; i++) {
-        if (((unsigned char)s->bytes[i] & 0xC0) != 0x80 && ++seen == index) {
-            return i;
+    if (index >= s->count) {
+        return s->length;
+    }
+
+    // The nearest known position: the start, the end, or where this string was last read.
+    int64_t at = 0, offset = 0;
+    if (s->count - index < index) {
+        at = s->count;
+        offset = s->length;
+    }
+
+    unsigned slot = cursor_slot(s);
+    if (cursors[slot].string == s) {
+        int64_t distance = cursors[slot].index > index ? cursors[slot].index - index : index - cursors[slot].index;
+        int64_t best = at > index ? at - index : index - at;
+        if (distance < best) {
+            at = cursors[slot].index;
+            offset = cursors[slot].offset;
         }
     }
 
-    return s->length;
+    while (at < index) {
+        offset++;
+        while (is_continuation(s->bytes[offset])) {
+            offset++;
+        }
+        at++;
+    }
+
+    while (at > index) {
+        offset--;
+        while (is_continuation(s->bytes[offset])) {
+            offset--;
+        }
+        at--;
+    }
+
+    cursors[slot].string = s;
+    cursors[slot].index = index;
+    cursors[slot].offset = offset;
+    return offset;
 }
 
 static int32_t decode(const char *bytes, int64_t *width) {
@@ -1135,7 +1292,7 @@ int64_t sable_string_count(const SableString *s) {
 
 int32_t sable_string_at(const SableString *s, int64_t index) {
     if (index < 0 || index >= s->count) {
-        sable_trap("string index out of range");
+        trap_here("string index out of range");
     }
 
     int64_t width;
@@ -1144,7 +1301,7 @@ int32_t sable_string_at(const SableString *s, int64_t index) {
 
 SableString *sable_string_slice(const SableString *s, int64_t from, int64_t to) {
     if (from < 0 || to > s->count || from > to) {
-        sable_trap("string slice out of range");
+        trap_here("string slice out of range");
     }
 
     // Of an ASCII string, scalars are bytes: nothing to count.
@@ -1639,7 +1796,7 @@ int64_t sable_array_count(const SableArray *array) {
 
 void *sable_array_element(const SableArray *array, int64_t index) {
     if (array == NULL || index < 0 || index >= array->count) {
-        sable_trap("array index out of range");
+        trap_here("array index out of range");
     }
 
     return array->elements + index * array->header.type->element_size;
@@ -1696,7 +1853,7 @@ void *sable_array_append_slot(SableArray **slot, const SableMetadata *type) {
 
 void *sable_array_mutable_element(SableArray **slot, const SableMetadata *type, int64_t index) {
     if (*slot == NULL || index < 0 || index >= (*slot)->count) {
-        sable_trap("array index out of range");
+        trap_here("array index out of range");
     }
 
     SableArray *array = unique(slot, type, 0);
@@ -1706,7 +1863,7 @@ void *sable_array_mutable_element(SableArray **slot, const SableMetadata *type, 
 // The last element, moved out: the caller loads it, and owns it.
 void *sable_array_remove_last(SableArray **slot, const SableMetadata *type) {
     if (*slot == NULL || (*slot)->count == 0) {
-        sable_trap("removeLast of an empty array");
+        trap_here("removeLast of an empty array");
     }
 
     SableArray *array = unique(slot, type, 0);
@@ -1717,7 +1874,7 @@ void *sable_array_remove_last(SableArray **slot, const SableMetadata *type) {
 SableArray *sable_array_slice(const SableArray *array, int64_t from, int64_t to, const SableMetadata *type) {
     int64_t count = sable_array_count(array);
     if (from < 0 || to > count || from > to) {
-        sable_trap("array slice out of range");
+        trap_here("array slice out of range");
     }
 
     if (from == to) {
@@ -1752,6 +1909,7 @@ static void destroy_string_element(void *element) {
 
 static const SableMetadata string_array_metadata = {
     sable_array_destroy, "[String]", sizeof(void *), copy_string_element, destroy_string_element,
+    sizeof(SableArray), _Alignof(SableArray), NULL,
 };
 
 SableArray *sable_string_split(const SableString *s, int32_t separator) {
@@ -1796,6 +1954,436 @@ SableArray *sable_string_split(const SableString *s, int32_t separator) {
     }
 
     return parts;
+}
+
+// ---- Leaks -----------------------------------------------------------------
+
+// With SABLE_CHECK_LEAKS set, every live object is kept in a set, so that a
+// program ending with objects alive can say which (docs/02 §2.2): how many
+// of each type, and the reference cycles among them — under ARC the usual
+// reason an object outlives the program. The walk follows each object's
+// strong references through its metadata's visitor, which the compiler
+// writes per class and per array element type; weak and unowned
+// references keep nothing alive, and are not followed.
+
+// Open addressing, by address; a removed object leaves a tombstone.
+static SableObject **tracked;
+static size_t tracked_capacity, tracked_used;
+#define TRACKED_GONE ((SableObject *)1)
+
+static size_t tracked_slot(const SableObject *object) {
+    uintptr_t h = (uintptr_t)object;
+    h ^= h >> 33;
+    h *= 0xff51afd7ed558ccdULL;
+    h ^= h >> 33;
+    return (size_t)h & (tracked_capacity - 1);
+}
+
+static void track_insert(SableObject *object);
+
+static void tracked_grow(void) {
+    SableObject **old = tracked;
+    size_t old_capacity = tracked_capacity;
+    tracked_capacity = old_capacity < 1024 ? 1024 : old_capacity * 2;
+    tracked = calloc(tracked_capacity, sizeof(SableObject *));
+    if (tracked == NULL) {
+        sable_trap("out of memory");
+    }
+
+    tracked_used = 0;
+    for (size_t i = 0; i < old_capacity; i++) {
+        if (old[i] != NULL && old[i] != TRACKED_GONE) {
+            track_insert(old[i]);
+        }
+    }
+
+    free(old);
+}
+
+static void track_insert(SableObject *object) {
+    if ((tracked_used + 1) * 2 > tracked_capacity) {
+        tracked_grow();
+    }
+
+    size_t i = tracked_slot(object);
+    while (tracked[i] != NULL && tracked[i] != TRACKED_GONE) {
+        i = (i + 1) & (tracked_capacity - 1);
+    }
+
+    if (tracked[i] == NULL) {
+        tracked_used++;
+    }
+
+    tracked[i] = object;
+}
+
+static void track_remove(SableObject *object) {
+    if (tracked_capacity == 0) {
+        return;
+    }
+
+    for (size_t i = tracked_slot(object); tracked[i] != NULL; i = (i + 1) & (tracked_capacity - 1)) {
+        if (tracked[i] == object) {
+            tracked[i] = TRACKED_GONE;
+            return;
+        }
+    }
+}
+
+__attribute__((constructor)) static void sable_leaks_start(void) {
+    tracking = getenv("SABLE_CHECK_LEAKS") != NULL;
+}
+
+// An object is alive: counted, and kept in the set when leaks are checked.
+static void object_born(SableObject *object) {
+    live_objects++;
+    if (tracking) {
+        track_insert(object);
+    }
+}
+
+// An object's memory is no longer the program's.
+static void object_gone(SableObject *object) {
+    live_objects--;
+    if (tracking) {
+        track_remove(object);
+    }
+}
+
+// The walk: the leaked objects sorted by address, and the references found
+// from the one being visited.
+static SableObject **leaked;
+static int64_t leaked_count, visiting;
+static int64_t *edge_from, *edge_to;
+static int64_t edge_count, edge_capacity;
+
+static int compare_addresses(const void *a, const void *b) {
+    uintptr_t x = (uintptr_t)*(SableObject *const *)a, y = (uintptr_t)*(SableObject *const *)b;
+    return x < y ? -1 : x > y;
+}
+
+static int64_t leaked_index(const void *object) {
+    int64_t low = 0, high = leaked_count - 1;
+    while (low <= high) {
+        int64_t middle = low + (high - low) / 2;
+        if ((const void *)leaked[middle] == object) {
+            return middle;
+        }
+
+        if ((uintptr_t)leaked[middle] < (uintptr_t)object) {
+            low = middle + 1;
+        } else {
+            high = middle - 1;
+        }
+    }
+
+    return -1;
+}
+
+// A strong reference the object being visited holds: what its visitor,
+// the compiler's, calls for each. Only references between leaked objects
+// are kept; the rest of the heap is gone by now.
+void sable_heap_visit(void *pointer) {
+    int64_t to = pointer == NULL ? -1 : leaked_index(pointer);
+    if (to < 0) {
+        return;
+    }
+
+    if (edge_count == edge_capacity) {
+        edge_capacity = edge_capacity < 64 ? 64 : edge_capacity * 2;
+        edge_from = realloc(edge_from, (size_t)edge_capacity * sizeof(int64_t));
+        edge_to = realloc(edge_to, (size_t)edge_capacity * sizeof(int64_t));
+        if (edge_from == NULL || edge_to == NULL) {
+            return;
+        }
+    }
+
+    edge_from[edge_count] = visiting;
+    edge_to[edge_count] = to;
+    edge_count++;
+}
+
+void sable_array_destroy(void *pointer);
+
+// Each strong reference the object holds: a class's fields, an array's elements.
+static void visit_object(SableObject *object) {
+    const SableMetadata *type = object->type;
+    if (type == NULL || type->visit == NULL || (object->flags & SABLE_DEINITED)) {
+        return;
+    }
+
+    if (type->destroy == sable_array_destroy) {
+        SableArray *array = (SableArray *)object;
+        for (int64_t i = 0; i < array->count; i++) {
+            type->visit(array->elements + i * type->element_size);
+        }
+    } else {
+        type->visit(object);
+    }
+}
+
+// How many of each type: the name, and the count.
+typedef struct LeakedType {
+    const char *name;
+    int64_t count;
+} LeakedType;
+
+static int compare_leaked_types(const void *a, const void *b) {
+    const LeakedType *x = a, *y = b;
+    if (x->count != y->count) {
+        return x->count > y->count ? -1 : 1;
+    }
+
+    return strcmp(x->name, y->name);
+}
+
+static const char *type_name(const SableObject *object) {
+    return object->type != NULL && object->type->name != NULL ? object->type->name : "?";
+}
+
+// The strongly connected components of the references, by Tarjan's
+// algorithm without recursion: a leak can be a long list.
+static int64_t *component_of;
+
+static void find_components(const int64_t *first_edge, const int64_t *targets) {
+    int64_t n = leaked_count;
+    int64_t *index = malloc((size_t)n * sizeof(int64_t));
+    int64_t *low = malloc((size_t)n * sizeof(int64_t));
+    bool *on_stack = calloc((size_t)n, sizeof(bool));
+    int64_t *stack = malloc((size_t)n * sizeof(int64_t));
+    int64_t *calls = malloc((size_t)n * sizeof(int64_t)); // the node, on the call stack
+    int64_t *next_edge = malloc((size_t)n * sizeof(int64_t));
+    component_of = malloc((size_t)n * sizeof(int64_t));
+    if (index == NULL || low == NULL || on_stack == NULL || stack == NULL || calls == NULL || next_edge == NULL || component_of == NULL) {
+        return;
+    }
+
+    for (int64_t i = 0; i < n; i++) {
+        index[i] = -1;
+    }
+
+    int64_t counter = 0, depth = 0, top = 0, components = 0;
+    for (int64_t root = 0; root < n; root++) {
+        if (index[root] >= 0) {
+            continue;
+        }
+
+        calls[depth++] = root;
+        index[root] = low[root] = counter++;
+        next_edge[root] = first_edge[root];
+        stack[top++] = root;
+        on_stack[root] = true;
+        while (depth > 0) {
+            int64_t v = calls[depth - 1];
+            if (next_edge[v] < first_edge[v + 1]) {
+                int64_t w = targets[next_edge[v]++];
+                if (index[w] < 0) {
+                    index[w] = low[w] = counter++;
+                    next_edge[w] = first_edge[w];
+                    stack[top++] = w;
+                    on_stack[w] = true;
+                    calls[depth++] = w;
+                } else if (on_stack[w] && index[w] < low[v]) {
+                    low[v] = index[w];
+                }
+
+                continue;
+            }
+
+            depth--;
+            if (depth > 0 && low[v] < low[calls[depth - 1]]) {
+                low[calls[depth - 1]] = low[v];
+            }
+
+            if (low[v] == index[v]) {
+                int64_t w;
+                do {
+                    w = stack[--top];
+                    on_stack[w] = false;
+                    component_of[w] = components;
+                } while (w != v);
+                components++;
+            }
+        }
+    }
+
+    free(index);
+    free(low);
+    free(on_stack);
+    free(stack);
+    free(calls);
+    free(next_edge);
+}
+
+enum { CYCLES_SHOWN = 5, CYCLE_LENGTH_SHOWN = 8 };
+
+// One cycle through 'start', inside its component: the shortest way back,
+// found breadth first, written as the types along it.
+static void print_cycle(int64_t start, const int64_t *first_edge, const int64_t *targets) {
+    int64_t n = leaked_count;
+    int64_t *parent = malloc((size_t)n * sizeof(int64_t));
+    int64_t *queue = malloc((size_t)n * sizeof(int64_t));
+    int64_t *path = malloc((size_t)(n + 1) * sizeof(int64_t));
+    if (parent == NULL || queue == NULL || path == NULL) {
+        free(parent);
+        free(queue);
+        free(path);
+        return;
+    }
+
+    for (int64_t i = 0; i < n; i++) {
+        parent[i] = -1;
+    }
+
+    int64_t head = 0, tail = 0, back = -1;
+    queue[tail++] = start;
+    while (head < tail && back < 0) {
+        int64_t v = queue[head++];
+        for (int64_t e = first_edge[v]; e < first_edge[v + 1]; e++) {
+            int64_t w = targets[e];
+            if (component_of[w] != component_of[start]) {
+                continue;
+            }
+
+            if (w == start) {
+                back = v;
+                break;
+            }
+
+            if (parent[w] < 0) {
+                parent[w] = v;
+                queue[tail++] = w;
+            }
+        }
+    }
+
+    // The way back, from its end: start ← … ← back.
+    int64_t length = 0;
+    for (int64_t v = back; v >= 0 && v != start; v = parent[v]) {
+        path[length++] = v;
+    }
+
+    fprintf(stderr, "  a reference cycle: %s", type_name(leaked[start]));
+    for (int64_t i = length - 1, shown = 1; i >= 0; i--, shown++) {
+        if (shown == CYCLE_LENGTH_SHOWN && i > 0) {
+            fprintf(stderr, " -> … (%lld more)", (long long)i);
+            break;
+        }
+
+        fprintf(stderr, " -> %s", type_name(leaked[path[i]]));
+    }
+
+    fprintf(stderr, " -> %s\n", type_name(leaked[start]));
+    free(parent);
+    free(queue);
+    free(path);
+}
+
+// What leaked: each type and how many, then the cycles that keep them.
+static void report_leaks(void) {
+    leaked = malloc((size_t)live_objects * sizeof(SableObject *));
+    if (leaked == NULL) {
+        return;
+    }
+
+    for (size_t i = 0; i < tracked_capacity; i++) {
+        if (tracked[i] != NULL && tracked[i] != TRACKED_GONE && leaked_count < live_objects) {
+            leaked[leaked_count++] = tracked[i];
+        }
+    }
+
+    qsort(leaked, (size_t)leaked_count, sizeof(SableObject *), compare_addresses);
+
+    // By type, the most first.
+    LeakedType *types = calloc((size_t)leaked_count + 1, sizeof(LeakedType));
+    int64_t type_count = 0;
+    for (int64_t i = 0; i < leaked_count && types != NULL; i++) {
+        const char *name = type_name(leaked[i]);
+        int64_t t = 0;
+        while (t < type_count && strcmp(types[t].name, name) != 0) {
+            t++;
+        }
+
+        if (t == type_count) {
+            types[type_count++] = (LeakedType){ name, 0 };
+        }
+
+        types[t].count++;
+    }
+
+    if (types != NULL) {
+        qsort(types, (size_t)type_count, sizeof(LeakedType), compare_leaked_types);
+        for (int64_t t = 0; t < type_count; t++) {
+            fprintf(stderr, "  %lld %s\n", (long long)types[t].count, types[t].name);
+        }
+
+        free(types);
+    }
+
+    // The references among them, grouped by where they start.
+    for (visiting = 0; visiting < leaked_count; visiting++) {
+        visit_object(leaked[visiting]);
+    }
+
+    int64_t *first_edge = calloc((size_t)leaked_count + 1, sizeof(int64_t));
+    int64_t *targets = malloc((size_t)(edge_count > 0 ? edge_count : 1) * sizeof(int64_t));
+    if (first_edge == NULL || targets == NULL) {
+        return;
+    }
+
+    for (int64_t e = 0; e < edge_count; e++) {
+        first_edge[edge_from[e] + 1]++;
+    }
+
+    for (int64_t i = 0; i < leaked_count; i++) {
+        first_edge[i + 1] += first_edge[i];
+    }
+
+    int64_t *filled = calloc((size_t)leaked_count + 1, sizeof(int64_t));
+    if (filled == NULL) {
+        return;
+    }
+
+    for (int64_t e = 0; e < edge_count; e++) {
+        targets[first_edge[edge_from[e]] + filled[edge_from[e]]++] = edge_to[e];
+    }
+
+    free(filled);
+    find_components(first_edge, targets);
+    if (component_of == NULL) {
+        return;
+    }
+
+    // A component of more than one object is a cycle, and so is one object
+    // that refers to itself. Each is shown once, from its first object.
+    bool *shown = calloc((size_t)leaked_count + 1, sizeof(bool));
+    int64_t cycles = 0;
+    for (int64_t i = 0; i < leaked_count && shown != NULL; i++) {
+        int64_t component = component_of[i];
+        if (shown[component]) {
+            continue;
+        }
+
+        bool cyclic = false;
+        for (int64_t e = first_edge[i]; e < first_edge[i + 1] && !cyclic; e++) {
+            cyclic = component_of[targets[e]] == component;
+        }
+
+        if (!cyclic) {
+            continue;
+        }
+
+        shown[component] = true;
+        if (cycles++ < CYCLES_SHOWN) {
+            print_cycle(i, first_edge, targets);
+        }
+    }
+
+    if (cycles > CYCLES_SHOWN) {
+        fprintf(stderr, "  and %lld more reference cycle(s)\n", (long long)(cycles - CYCLES_SHOWN));
+    }
+
+    free(shown);
 }
 
 // ---- Inline layout -------------------------------------------------------
@@ -1843,7 +2431,7 @@ typedef struct SableBlock {
     uint8_t bytes[];
 } SableBlock;
 
-static const SableMetadata sable_block_metadata = { NULL, "inline block", 0, NULL, NULL };
+static const SableMetadata sable_block_metadata = { NULL, "inline block", 0, NULL, NULL, 0, _Alignof(SableObject), NULL };
 
 static uint32_t read_unsigned(const uint8_t *p, int width) {
     uint32_t value = 0;
@@ -1981,7 +2569,7 @@ uint8_t *sable_inline_at(const SableInlineSlot *s, uint8_t *array, int64_t index
     const uint8_t *elements;
     int64_t count = array_count(s, array, &elements);
     if (index < 0 || index >= count) {
-        sable_trap("array index out of range");
+        trap_here("array index out of range");
     }
 
     int64_t size = s->element_kind == INLINE_STRUCT ? s->layout->fixed_size : s->element_width;
@@ -2013,7 +2601,7 @@ SableBlock *sable_inline_new_stack(void *memory, const SableInlineLayout *layout
     block->header.type = &sable_block_metadata;
     block->header.strong = 1;
     block->header.flags = SABLE_STACK;
-    live_objects++;
+    object_born(&block->header);
     block->length = size;
     block->capacity = capacity;
     memset(block->bytes, 0, (size_t)size);
@@ -2140,14 +2728,14 @@ static SableBlock *splice(SableBlock **slot, const SableInlineLayout *layout, in
         }
 
         if (link.target >= at && link.target < at + removed && removed > 0) {
-            sable_trap("a relative reference's target was replaced");
+            trap_here("a relative reference's target was replaced");
         }
 
         int64_t from = link.at >= at + removed ? link.at + delta : link.at;
         int64_t to = link.target >= at + removed ? link.target + delta : link.target;
         int64_t offset = to - from;
         if ((link.width == 2 && (offset < INT16_MIN || offset > INT16_MAX)) || (link.width == 1 && (offset < INT8_MIN || offset > INT8_MAX))) {
-            sable_trap("a relative reference no longer fits its width");
+            trap_here("a relative reference no longer fits its width");
         }
 
         write_unsigned(block->bytes + from, link.width, (uint32_t)offset);
@@ -2179,7 +2767,7 @@ void sable_inline_append_at(SableBlock **slot, const SableInlineLayout *root, co
     const uint8_t *elements;
     int64_t count = array_count(s, array, &elements);
     if (s->kind == INLINE_BOUNDED && count >= s->capacity) {
-        sable_trap("inline array is full");
+        trap_here("inline array is full");
     }
 
     int64_t end = array_end - (*slot)->bytes;
@@ -2229,7 +2817,7 @@ void sable_inline_append_at(SableBlock **slot, const SableInlineLayout *root, co
 void sable_inline_assign_bytes(SableBlock **slot, const SableInlineLayout *root, const SableInlineSlot *s,
     uint8_t *array, const uint8_t *bytes, int64_t count) {
     if (s->kind == INLINE_BOUNDED && count > s->capacity) {
-        sable_trap("too many bytes for the inline array");
+        trap_here("too many bytes for the inline array");
     }
 
     int64_t at = array - (*slot)->bytes;
@@ -2237,8 +2825,8 @@ void sable_inline_assign_bytes(SableBlock **slot, const SableInlineLayout *root,
     int width = s->kind == INLINE_BOUNDED ? s->width : varint_size(count);
 
     // Short text, the usual case, is encoded on the stack.
-    uint8_t on_stack[256];
-    uint8_t *encoded = width + count <= (int64_t)sizeof on_stack ? on_stack : malloc((size_t)(width + count));
+    uint8_t small[256];
+    uint8_t *encoded = width + count <= (int64_t)sizeof small ? small : malloc((size_t)(width + count));
     if (s->kind == INLINE_BOUNDED) {
         write_unsigned(encoded, width, (uint32_t)count);
     } else {
@@ -2247,7 +2835,7 @@ void sable_inline_assign_bytes(SableBlock **slot, const SableInlineLayout *root,
 
     memcpy(encoded + width, bytes, (size_t)count);
     splice(slot, root, at, old_size, encoded, width + count);
-    if (encoded != on_stack) {
+    if (encoded != small) {
         free(encoded);
     }
 }
@@ -2284,16 +2872,16 @@ uint8_t *sable_inline_ref_get(const uint8_t *field, int32_t width) {
 void sable_inline_ref_set(SableBlock **slot, uint8_t *field, int32_t width, const uint8_t *target) {
     SableBlock *block = *slot;
     if (target < block->bytes || target >= block->bytes + block->length) {
-        sable_trap("a relative reference must point into its own block");
+        trap_here("a relative reference must point into its own block");
     }
 
     int64_t offset = target - field;
     if (offset == 0) {
-        sable_trap("a relative reference cannot point at itself");
+        trap_here("a relative reference cannot point at itself");
     }
 
     if ((width == 2 && (offset < INT16_MIN || offset > INT16_MAX)) || (width == 1 && (offset < INT8_MIN || offset > INT8_MAX))) {
-        sable_trap("a relative reference does not fit its width");
+        trap_here("a relative reference does not fit its width");
     }
 
     write_unsigned(field, width, (uint32_t)offset);
@@ -2552,89 +3140,59 @@ SableString *sable_inline_invalid(const SableInlineLayout *layout, const SableBl
 // ---- Tasks -----------------------------------------------------------------
 
 // Concurrency (docs/02 §2.7): tasks scheduled cooperatively. Each runs on a
-// thread of its own, but one lock is held by whichever task is running, so
-// exactly one runs at a time — the order is the scheduler's, and the counts
-// need no atomics. A task gives the lock up only where it waits: on a task
-// not yet finished, or at Task.yield(). Spawning queues a task; it runs when
-// the running one next waits. The program's entry is a task too, and the
-// program ends once every task has.
-
-// The lock and the condition each task waits on: POSIX's, or Windows' slim
-// reader-writer lock and condition variable.
-#ifdef _WIN32
-typedef CONDITION_VARIABLE TaskCondition;
-static SRWLOCK task_lock = SRWLOCK_INIT;
-
-static void lock_tasks(void) {
-    AcquireSRWLockExclusive(&task_lock);
-}
-
-static void unlock_tasks(void) {
-    ReleaseSRWLockExclusive(&task_lock);
-}
-
-static void condition_init(TaskCondition *condition) {
-    InitializeConditionVariable(condition);
-}
-
-static void condition_destroy(TaskCondition *condition) {
-    (void)condition;
-}
-
-static void condition_signal(TaskCondition *condition) {
-    WakeConditionVariable(condition);
-}
-
-static void condition_wait(TaskCondition *condition) {
-    SleepConditionVariableSRW(condition, &task_lock, INFINITE, 0);
-}
-#else
-typedef pthread_cond_t TaskCondition;
-static pthread_mutex_t task_lock = PTHREAD_MUTEX_INITIALIZER;
-
-static void lock_tasks(void) {
-    pthread_mutex_lock(&task_lock);
-}
-
-static void unlock_tasks(void) {
-    pthread_mutex_unlock(&task_lock);
-}
-
-static void condition_init(TaskCondition *condition) {
-    pthread_cond_init(condition, NULL);
-}
-
-static void condition_destroy(TaskCondition *condition) {
-    pthread_cond_destroy(condition);
-}
-
-static void condition_signal(TaskCondition *condition) {
-    pthread_cond_signal(condition);
-}
-
-static void condition_wait(TaskCondition *condition) {
-    pthread_cond_wait(condition, &task_lock);
-}
-#endif
+// thread, but one lock is held by whichever task is running, so exactly one
+// runs at a time — the order is the scheduler's, the counts need no
+// atomics, and @MainActor code, checked at compile time, needs nothing more.
+// A task gives the lock up only where it waits: on a task not yet finished,
+// at Task.yield(), or asleep in Task.sleep. Spawning queues a task; it runs
+// when the running one next waits. The program's entry is a task too, and
+// the program ends once every task has.
+//
+// A task is given a thread only when it first runs, and a thread whose task
+// has finished runs the next task that has not started yet itself, or waits
+// to be given one: threads are kept for tasks that are waiting part-way
+// through, not for every task spawned. Ten thousand tasks that each run to
+// the end take one thread between them.
+//
+// A sleeping task is off the run queue until its time comes. When nothing
+// is queued, the thread switching away waits for the earliest sleeper: two
+// tasks sleeping a second take a second, not two.
 
 typedef struct SableTask {
     void (*body)(void *context);
     void *context;
-    TaskCondition wake;
+    pthread_cond_t wake;
+    bool started;  // given a thread: it has begun, and waits on 'wake' to go on
     bool done;
     bool released; // the program no longer holds it
-    struct SableTask *next;     // in the run queue
+    int64_t deadline;           // asleep until this monotonic time
+    struct SableTask *next;     // in the run queue, or among the sleepers
     struct SableTask *waiters;  // tasks waiting for this one, through 'next_waiter'
     struct SableTask *next_waiter;
 } SableTask;
 
+// A thread that runs tasks: the one it runs, or none while it waits for one.
+typedef struct SableWorker {
+    pthread_cond_t wake;
+    SableTask *task;
+    struct SableWorker *next; // among the idle
+} SableWorker;
+
+static pthread_mutex_t task_lock = PTHREAD_MUTEX_INITIALIZER;
 static SableTask main_task;
 static SableTask *current_task;
 static SableTask *queue_head, *queue_tail;
+static SableTask *sleepers; // by deadline, the earliest first
+static SableWorker *idle_workers;
+
+#include <time.h>
+
+int64_t sable_time_monotonic(void);
 
 __attribute__((constructor)) static void sable_tasks_start(void) {
-    lock_tasks();
-    condition_init(&main_task.wake);
+    pthread_mutex_lock(&task_lock);
+    pthread_cond_init(&main_task.wake, NULL);
+    main_task.started = true;
     current_task = &main_task;
 }
 
@@ -2661,90 +3219,151 @@ static SableTask *dequeue(void) {
     return task;
 }
 
-// Hands the lock to the next task in the queue, and waits until a task hands it back.
-static void switch_away(void) {
-    SableTask *self = current_task;
+// Every sleeper whose time has come, queued in the order of their deadlines.
+static void wake_sleepers(void) {
+    if (sleepers == NULL) {
+        return;
+    }
+
+    int64_t now = sable_time_monotonic();
+    while (sleepers != NULL && sleepers->deadline <= now) {
+        SableTask *task = sleepers;
+        sleepers = task->next;
+        enqueue(task);
+    }
+}
+
+// Nothing is queued: waits for the earliest sleeper. The lock stays held,
+// as no task could run meanwhile anyway.
+static void wait_for_sleeper(void) {
+    int64_t left = sleepers->deadline - sable_time_monotonic();
+    if (left > 0) {
+        struct timespec wait = { (time_t)(left / 1000000000), (long)(left % 1000000000) };
+        while (nanosleep(&wait, &wait) != 0 && errno == EINTR) {
+        }
+    }
+
+    wake_sleepers();
+}
+
+// The task to run next: the first queued, once the sleepers due are.
+static SableTask *next_task(void) {
+    wake_sleepers();
+    while (queue_head == NULL && sleepers != NULL) {
+        wait_for_sleeper();
+    }
+
     SableTask *next = dequeue();
     if (next == NULL) {
         sable_trap("every task is waiting: the program cannot go on");
     }
 
-    current_task = next;
-    condition_signal(&next->wake);
-    while (current_task != self) {
-        condition_wait(&self->wake);
-    }
+    return next;
 }
 
 static void free_task(SableTask *task) {
-    condition_destroy(&task->wake);
+    pthread_cond_destroy(&task->wake);
     free(task);
 }
 
-static void task_thread(SableTask *self) {
-    lock_tasks();
-    while (current_task != self) {
-        condition_wait(&self->wake);
-    }
+static void *worker_thread(void *argument);
 
-    self->body(self->context);
-
-    // Done: whoever waits for it may go on.
-    self->done = true;
-    for (SableTask *waiter = self->waiters; waiter != NULL;) {
-        SableTask *after = waiter->next_waiter;
-        enqueue(waiter);
-        waiter = after;
-    }
-
-    self->waiters = NULL;
-    SableTask *next = dequeue();
-    if (next == NULL) {
-        sable_trap("every task is waiting: the program cannot go on");
-    }
-
+// Makes 'next' the running task: its thread woken, or, for one that has not
+// begun, an idle thread given it, or a new one started for it.
+static void resume(SableTask *next) {
     current_task = next;
-    condition_signal(&next->wake);
-    if (self->released) {
-        free_task(self);
+    if (next->started) {
+        pthread_cond_signal(&next->wake);
+        return;
     }
 
-    unlock_tasks();
-}
-
-// A task's thread, with the stack a POSIX main thread has, 8 MiB.
-#ifdef _WIN32
-static DWORD WINAPI task_thread_entry(void *argument) {
-    task_thread(argument);
-    return 0;
-}
-
-static bool start_task_thread(SableTask *task) {
-    HANDLE thread = CreateThread(NULL, 8u << 20, task_thread_entry, task, STACK_SIZE_PARAM_IS_A_RESERVATION, NULL);
-    if (thread == NULL) {
-        return false;
+    next->started = true;
+    SableWorker *worker = idle_workers;
+    if (worker != NULL) {
+        idle_workers = worker->next;
+        worker->task = next;
+        pthread_cond_signal(&worker->wake);
+        return;
     }
 
-    CloseHandle(thread);
-    return true;
-}
-#else
-static void *task_thread_entry(void *argument) {
-    task_thread(argument);
-    return NULL;
-}
+    worker = calloc(1, sizeof(SableWorker));
+    if (worker == NULL) {
+        sable_trap("out of memory");
+    }
 
-static bool start_task_thread(SableTask *task) {
+    pthread_cond_init(&worker->wake, NULL);
+    worker->task = next;
     pthread_attr_t attributes;
     pthread_attr_init(&attributes);
     pthread_attr_setstacksize(&attributes, 8u << 20);
     pthread_attr_setdetachstate(&attributes, PTHREAD_CREATE_DETACHED);
     pthread_t thread;
-    bool started = pthread_create(&thread, &attributes, task_thread_entry, task) == 0;
+    if (pthread_create(&thread, &attributes, worker_thread, worker) != 0) {
+        sable_trap("cannot start a task");
+    }
+
     pthread_attr_destroy(&attributes);
-    return started;
 }
-#endif
+
+// Hands the lock to the next task, and waits until a task hands it back.
+static void switch_away(void) {
+    SableTask *self = current_task;
+    SableTask *next = next_task();
+    if (next == self) {
+        return;
+    }
+
+    resume(next);
+    while (current_task != self) {
+        pthread_cond_wait(&self->wake, &task_lock);
+    }
+}
+
+// Runs tasks: the one it was started for, then, as each finishes, the next
+// if it has not begun; otherwise it hands over and waits to be given one.
+static void *worker_thread(void *argument) {
+    SableWorker *self = argument;
+    watch_stack();
+    pthread_mutex_lock(&task_lock);
+    SableTask *task = self->task;
+    for (;;) {
+        while (current_task != task) {
+            pthread_cond_wait(&task->wake, &task_lock);
+        }
+
+        task->body(task->context);
+
+        // Done: whoever waits for it may go on.
+        task->done = true;
+        for (SableTask *waiter = task->waiters; waiter != NULL;) {
+            SableTask *after = waiter->next_waiter;
+            enqueue(waiter);
+            waiter = after;
+        }
+
+        task->waiters = NULL;
+        SableTask *next = next_task();
+        if (task->released) {
+            free_task(task);
+        }
+
+        if (!next->started) {
+            next->started = true;
+            current_task = task = next;
+            continue;
+        }
+
+        resume(next);
+        self->task = NULL;
+        self->next = idle_workers;
+        idle_workers = self;
+        while (self->task == NULL) {
+            pthread_cond_wait(&self->wake, &task_lock);
+        }
+
+        task = self->task;
+    }
+}
 
 // A new task, queued to run 'body(context)'; the program holds the handle until it releases it.
 void *sable_task_spawn(void (*body)(void *), void *context) {
@@ -2755,11 +3374,7 @@ void *sable_task_spawn(void (*body)(void *), void *context) {
 
     task->body = body;
     task->context = context;
-    condition_init(&task->wake);
-    if (!start_task_thread(task)) {
-        sable_trap("cannot start a task");
-    }
-
+    pthread_cond_init(&task->wake, NULL);
     enqueue(task);
     return task;
 }
@@ -2777,11 +3392,32 @@ void sable_task_wait(void *handle) {
 
 // 'await Task.yield()': lets every task queued run before this one goes on.
 void sable_task_yield(void) {
+    wake_sleepers();
     if (queue_head == NULL) {
         return;
     }
 
     enqueue(current_task);
+    switch_away();
+}
+
+// 'await Task.sleep(nanoseconds:)': off the run queue for at least this
+// long, while the other tasks run.
+void sable_task_sleep(int64_t nanoseconds) {
+    if (nanoseconds <= 0) {
+        sable_task_yield();
+        return;
+    }
+
+    SableTask *self = current_task;
+    self->deadline = sable_time_monotonic() + nanoseconds;
+    SableTask **at = &sleepers;
+    while (*at != NULL && (*at)->deadline <= self->deadline) {
+        at = &(*at)->next;
+    }
+
+    self->next = *at;
+    *at = self;
     switch_away();
 }
 
@@ -2798,10 +3434,21 @@ void sable_task_release(void *handle) {
     }
 }
 
-// As the entry point returns: every task still to run, run.
+// As the entry point returns: every task still to run, run, the sleepers too.
 void sable_tasks_drain(void) {
-    while (queue_head != NULL) {
-        sable_task_yield();
+    for (;;) {
+        wake_sleepers();
+        if (queue_head == NULL && sleepers == NULL) {
+            return;
+        }
+
+        if (queue_head == NULL) {
+            wait_for_sleeper();
+            continue;
+        }
+
+        enqueue(current_task);
+        switch_away();
     }
 }
 
@@ -2819,81 +3466,9 @@ bool sable_io_succeeded(void) {
 static int saved_argc;
 static char **saved_argv;
 
-#ifdef _WIN32
-// UTF-8 to UTF-16 and back, for every name and string that crosses to
-// Windows; in memory the caller frees.
-static wchar_t *to_wide(const char *bytes, int64_t length) {
-    int units = length == 0 ? 0 : MultiByteToWideChar(CP_UTF8, 0, bytes, (int)length, NULL, 0);
-    wchar_t *wide = malloc(((size_t)units + 1) * sizeof(wchar_t));
-    if (wide == NULL) {
-        sable_trap("out of memory");
-    }
-
-    if (units > 0) {
-        MultiByteToWideChar(CP_UTF8, 0, bytes, (int)length, wide, units);
-    }
-
-    wide[units] = L'\0';
-    return wide;
-}
-
-static char *from_wide(const wchar_t *wide) {
-    int length = WideCharToMultiByte(CP_UTF8, 0, wide, -1, NULL, 0, NULL, NULL);
-    char *bytes = malloc(length > 0 ? (size_t)length : 1);
-    if (bytes == NULL) {
-        sable_trap("out of memory");
-    }
-
-    if (length <= 0) {
-        bytes[0] = '\0';
-    } else {
-        WideCharToMultiByte(CP_UTF8, 0, wide, -1, bytes, length, NULL, NULL);
-    }
-
-    return bytes;
-}
-
-static wchar_t *wide_string(const SableString *s) {
-    return to_wide(s->bytes, s->length);
-}
-
-static SableString *make_wide_text(const wchar_t *wide) {
-    char *bytes = from_wide(wide);
-    SableString *text = make_ctext(bytes);
-    free(bytes);
-    return text;
-}
-
-// Standard streams pass bytes through as they are, as on POSIX: no '\n'
-// written as "\r\n". A console shows them as UTF-8.
-__attribute__((constructor)) static void sable_streams_start(void) {
-    _setmode(_fileno(stdin), _O_BINARY);
-    _setmode(_fileno(stdout), _O_BINARY);
-    _setmode(_fileno(stderr), _O_BINARY);
-    SetConsoleOutputCP(CP_UTF8);
-}
-#endif
-
-// The program's arguments. Windows gives main() them in the ANSI code page,
-// which cannot hold every name: there they are the command line's own, as
-// UTF-16, made UTF-8 once.
 void sable_set_arguments(int32_t argc, char **argv) {
-#ifdef _WIN32
-    (void)argc;
-    (void)argv;
-    int count = 0;
-    wchar_t **wide = CommandLineToArgvW(GetCommandLineW(), &count);
-    saved_argc = wide == NULL ? 0 : count;
-    saved_argv = calloc((size_t)saved_argc + 1, sizeof(char *));
-    for (int i = 0; i < saved_argc; i++) {
-        saved_argv[i] = from_wide(wide[i]);
-    }
-
-    LocalFree(wide);
-#else
     saved_argc = argc;
     saved_argv = argv;
-#endif
 }
 
 // The arguments after the program's own name.
@@ -2903,7 +3478,7 @@ int64_t sable_io_argument_count(void) {
 
 SableString *sable_io_argument(int64_t index) {
     if (index < 0 || index >= sable_io_argument_count()) {
-        sable_trap("argument index out of range");
+        trap_here("argument index out of range");
     }
 
     return make_ctext(saved_argv[index + 1]);
@@ -2972,28 +3547,10 @@ SableString *sable_io_read_line(void) {
     return result;
 }
 
-// A file opened by its UTF-8 name: on Windows through its UTF-16 one.
-static FILE *open_file(const SableString *path, const char *mode) {
-#ifdef _WIN32
-    wchar_t *name = wide_string(path);
-    wchar_t wide_mode[8];
-    size_t i = 0;
-    for (; mode[i] != '\0' && i < 7; i++) {
-        wide_mode[i] = (wchar_t)mode[i];
-    }
-
-    wide_mode[i] = L'\0';
-    FILE *file = _wfopen(name, wide_mode);
-#else
-    char *name = c_string(path);
-    FILE *file = fopen(name, mode);
-#endif
-    free(name);
-    return file;
-}
-
 SableString *sable_io_read_file(const SableString *path) {
-    FILE *file = open_file(path, "rb");
+    char *name = c_string(path);
+    FILE *file = fopen(name, "rb");
+    free(name);
     if (file == NULL) {
         io_last_failed = true;
         return make_string("", 0);
@@ -3029,7 +3586,9 @@ SableString *sable_io_read_file(const SableString *path) {
 }
 
 bool sable_io_write_file(const SableString *path, const SableString *text, bool append) {
-    FILE *file = open_file(path, append ? "ab" : "wb");
+    char *name = c_string(path);
+    FILE *file = fopen(name, append ? "ab" : "wb");
+    free(name);
     if (file == NULL) {
         return false;
     }
@@ -3038,115 +3597,6 @@ bool sable_io_write_file(const SableString *path, const SableString *text, bool 
     return fclose(file) == 0 && written;
 }
 
-#ifdef _WIN32
-bool sable_io_file_exists(const SableString *path) {
-    wchar_t *name = wide_string(path);
-    bool exists = GetFileAttributesW(name) != INVALID_FILE_ATTRIBUTES;
-    free(name);
-    return exists;
-}
-
-bool sable_io_is_directory(const SableString *path) {
-    wchar_t *name = wide_string(path);
-    DWORD attributes = GetFileAttributesW(name);
-    free(name);
-    return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
-}
-
-// A file, or an empty directory.
-bool sable_io_remove_file(const SableString *path) {
-    wchar_t *name = wide_string(path);
-    bool removed = DeleteFileW(name) || RemoveDirectoryW(name);
-    free(name);
-    return removed;
-}
-
-bool sable_io_make_directory(const SableString *path) {
-    wchar_t *name = wide_string(path);
-    bool made = CreateDirectoryW(name, NULL) != FALSE;
-    free(name);
-    return made;
-}
-
-static int compare_names(const void *a, const void *b) {
-    return strcmp(*(char *const *)a, *(char *const *)b);
-}
-
-// The entries' names, sorted byte by byte so that every platform agrees;
-// '.' and '..' left out.
-SableArray *sable_io_list_directory(const SableString *path) {
-    SableArray *entries = NULL;
-    size_t length = (size_t)path->length;
-    char *pattern = malloc(length + 3);
-    if (pattern == NULL) {
-        sable_trap("out of memory");
-    }
-
-    memcpy(pattern, path->bytes, length);
-    if (length > 0 && pattern[length - 1] != '/' && pattern[length - 1] != '\\') {
-        pattern[length++] = '\\';
-    }
-
-    pattern[length++] = '*';
-    wchar_t *wide = to_wide(pattern, (int64_t)length);
-    free(pattern);
-    WIN32_FIND_DATAW found;
-    HANDLE search = FindFirstFileW(wide, &found);
-    free(wide);
-    if (search == INVALID_HANDLE_VALUE) {
-        // An empty directory has '.' at least; none at all is no directory.
-        io_last_failed = true;
-        return entries;
-    }
-
-    size_t count = 0;
-    size_t capacity = 16;
-    char **names = malloc(capacity * sizeof(char *));
-    do {
-        if (wcscmp(found.cFileName, L".") == 0 || wcscmp(found.cFileName, L"..") == 0) {
-            continue;
-        }
-
-        if (count == capacity) {
-            capacity *= 2;
-            names = realloc(names, capacity * sizeof(char *));
-        }
-
-        names[count++] = from_wide(found.cFileName);
-    } while (FindNextFileW(search, &found));
-
-    FindClose(search);
-    qsort(names, count, sizeof(char *), compare_names);
-    for (size_t i = 0; i < count; i++) {
-        *(SableString **)sable_array_append_slot(&entries, &string_array_metadata) = make_ctext(names[i]);
-        free(names[i]);
-    }
-
-    free(names);
-    io_last_failed = false;
-    return entries;
-}
-
-SableString *sable_io_environment(const SableString *variable) {
-    wchar_t *name = wide_string(variable);
-    DWORD size = GetEnvironmentVariableW(name, NULL, 0);
-    wchar_t *value = size == 0 ? NULL : malloc((size_t)size * sizeof(wchar_t));
-    if (value != NULL && GetEnvironmentVariableW(name, value, size) >= size) {
-        free(value);
-        value = NULL;
-    }
-
-    free(name);
-    io_last_failed = value == NULL;
-    if (value == NULL) {
-        return make_string("", 0);
-    }
-
-    SableString *result = make_wide_text(value);
-    free(value);
-    return result;
-}
-#else
 #include <dirent.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -3235,42 +3685,8 @@ SableString *sable_io_environment(const SableString *variable) {
     return value == NULL ? make_string("", 0) : make_ctext(value);
 }
 
-#endif
-
 // ---- Time (Sable.Time's floor) ------------------------------------------
 
-#ifdef _WIN32
-int64_t sable_time_monotonic(void) {
-    LARGE_INTEGER counter, frequency;
-    QueryPerformanceCounter(&counter);
-    QueryPerformanceFrequency(&frequency);
-    // In two parts, so that the product cannot overflow.
-    int64_t seconds = counter.QuadPart / frequency.QuadPart;
-    int64_t rest = counter.QuadPart % frequency.QuadPart;
-    return seconds * 1000000000 + rest * 1000000000 / frequency.QuadPart;
-}
-
-// Windows counts 100 ns intervals from 1601; Unix time is from 1970.
-int64_t sable_time_wall_clock(void) {
-    FILETIME now;
-    GetSystemTimePreciseAsFileTime(&now);
-    int64_t ticks = (int64_t)(((uint64_t)now.dwHighDateTime << 32) | now.dwLowDateTime);
-    return (ticks - 116444736000000000LL) * 100;
-}
-
-// At least as long as asked: Sleep counts in milliseconds, and may wake a
-// little early, so it sleeps again until the clock says the time is up.
-void sable_time_sleep(int64_t nanoseconds) {
-    if (nanoseconds <= 0) {
-        return;
-    }
-
-    int64_t until = sable_time_monotonic() + nanoseconds;
-    for (int64_t left = nanoseconds; left > 0; left = until - sable_time_monotonic()) {
-        Sleep((DWORD)((left + 999999) / 1000000));
-    }
-}
-#else
 #include <time.h>
 
 int64_t sable_time_monotonic(void) {
@@ -3295,17 +3711,14 @@ void sable_time_sleep(int64_t nanoseconds) {
     while (nanosleep(&wait, &wait) != 0 && errno == EINTR) {
     }
 }
-#endif
 
 // ---- Processes (Sable.Process's floor) ----------------------------------
 
-#ifndef _WIN32
 #include <poll.h>
 #include <spawn.h>
 #include <sys/wait.h>
 
 extern char **environ;
-#endif
 
 static int64_t process_last_status;
 
@@ -3348,320 +3761,6 @@ static void buffer_add(Buffer *buffer, const char *bytes, size_t length) {
     buffer->length += length;
 }
 
-#ifdef _WIN32
-// Whether a file, not a directory, is there.
-static bool is_file(const wchar_t *name) {
-    DWORD attributes = GetFileAttributesW(name);
-    return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0;
-}
-
-// 'name' as it is, or with '.exe' or '.com' after it: the first that is a file.
-static wchar_t *find_with_extension(const wchar_t *name) {
-    static const wchar_t *const extensions[] = { L"", L".exe", L".com" };
-    size_t length = wcslen(name);
-    for (size_t i = 0; i < sizeof extensions / sizeof *extensions; i++) {
-        size_t extra = wcslen(extensions[i]);
-        wchar_t *candidate = malloc((length + extra + 1) * sizeof(wchar_t));
-        memcpy(candidate, name, length * sizeof(wchar_t));
-        memcpy(candidate + length, extensions[i], (extra + 1) * sizeof(wchar_t));
-        if (is_file(candidate)) {
-            return candidate;
-        }
-
-        free(candidate);
-    }
-
-    return NULL;
-}
-
-// The program's path: the name itself when it holds a path separator, else
-// the first program of that name on PATH — as POSIX finds one, but with the
-// extension Windows gives a program, which the name may leave out. NULL
-// when there is none.
-static wchar_t *find_program(const char *name) {
-    wchar_t *wide = to_wide(name, (int64_t)strlen(name));
-    if (strchr(name, '/') != NULL || strchr(name, '\\') != NULL || strchr(name, ':') != NULL) {
-        wchar_t *found = find_with_extension(wide);
-        free(wide);
-        return found;
-    }
-
-    DWORD size = GetEnvironmentVariableW(L"PATH", NULL, 0);
-    if (size == 0 || *name == '\0') {
-        free(wide);
-        return NULL;
-    }
-
-    wchar_t *path = malloc((size_t)size * sizeof(wchar_t));
-    GetEnvironmentVariableW(L"PATH", path, size);
-    size_t name_length = wcslen(wide);
-    wchar_t *found = NULL;
-    for (wchar_t *entry = path; found == NULL && *entry != L'\0';) {
-        wchar_t *end = wcschr(entry, L';');
-        size_t length = end == NULL ? wcslen(entry) : (size_t)(end - entry);
-        if (length > 0) {
-            wchar_t *candidate = malloc((length + name_length + 2) * sizeof(wchar_t));
-            memcpy(candidate, entry, length * sizeof(wchar_t));
-            candidate[length] = L'\\';
-            memcpy(candidate + length + 1, wide, (name_length + 1) * sizeof(wchar_t));
-            found = find_with_extension(candidate);
-            free(candidate);
-        }
-
-        if (end == NULL) {
-            break;
-        }
-
-        entry = end + 1;
-    }
-
-    free(path);
-    free(wide);
-    return found;
-}
-
-// One argument on a Windows command line, quoted as the C runtime's parser
-// (and CommandLineToArgvW) reads it back: backslashes are literal except
-// before a quote, where they are doubled.
-static void add_argument(Buffer *line, const char *argument) {
-    if (line->length > 0) {
-        buffer_add(line, " ", 1);
-    }
-
-    if (*argument != '\0' && strpbrk(argument, " \t\n\v\"") == NULL) {
-        buffer_add(line, argument, strlen(argument));
-        return;
-    }
-
-    buffer_add(line, "\"", 1);
-    for (const char *p = argument;; p++) {
-        size_t backslashes = 0;
-        while (*p == '\\') {
-            backslashes++;
-            p++;
-        }
-
-        if (*p == '\0') {
-            for (size_t i = 0; i < backslashes * 2; i++) {
-                buffer_add(line, "\\", 1);
-            }
-
-            break;
-        }
-
-        for (size_t i = 0; i < (*p == '"' ? backslashes * 2 + 1 : backslashes); i++) {
-            buffer_add(line, "\\", 1);
-        }
-
-        buffer_add(line, p, 1);
-    }
-
-    buffer_add(line, "\"", 1);
-}
-
-// What a reading thread reads a pipe into, to its end.
-typedef struct {
-    HANDLE pipe;
-    Buffer buffer;
-} PipeReader;
-
-static DWORD WINAPI read_pipe(void *argument) {
-    PipeReader *reader = argument;
-    char chunk[4096];
-    DWORD got;
-    while (ReadFile(reader->pipe, chunk, sizeof chunk, &got, NULL) && got > 0) {
-        buffer_add(&reader->buffer, chunk, got);
-    }
-
-    return 0;
-}
-
-// What a writing thread writes, all of it or until the program stops reading.
-typedef struct {
-    HANDLE pipe;
-    const char *bytes;
-    int64_t length;
-} PipeWriter;
-
-static DWORD WINAPI write_pipe(void *argument) {
-    PipeWriter *writer = argument;
-    int64_t written = 0;
-    while (written < writer->length) {
-        DWORD chunk = writer->length - written > (1 << 20) ? (1 << 20) : (DWORD)(writer->length - written);
-        DWORD sent;
-        if (!WriteFile(writer->pipe, writer->bytes + written, chunk, &sent, NULL)) {
-            break;
-        }
-
-        written += sent;
-    }
-
-    CloseHandle(writer->pipe);
-    return 0;
-}
-
-// A pipe whose one end the program started inherits, and the other not.
-static bool make_pipe(HANDLE *read, HANDLE *write, bool child_reads) {
-    SECURITY_ATTRIBUTES inherited = { sizeof inherited, NULL, TRUE };
-    if (!CreatePipe(read, write, &inherited, 0)) {
-        return false;
-    }
-
-    SetHandleInformation(child_reads ? *write : *read, HANDLE_FLAG_INHERIT, 0);
-    return true;
-}
-
-// Runs the program, found on PATH, to its end: the input written to it and
-// its output and errors read as they come, each by a thread of its own, so
-// that neither side waits on a full pipe. Gives what it wrote to standard
-// output; how it ended and its errors are kept for the calls above.
-SableString *sable_process_run(const SableString *program, const SableArray *arguments, const SableString *input) {
-    char *name = c_string(program);
-    wchar_t *found = find_program(name);
-    if (found == NULL) {
-        free(name);
-        io_last_failed = true;
-        return make_string("", 0);
-    }
-
-    Buffer line = { 0 };
-    add_argument(&line, name);
-    free(name);
-    int64_t count = arguments == NULL ? 0 : arguments->count;
-    for (int64_t i = 0; i < count; i++) {
-        char *argument = c_string(((SableString **)arguments->elements)[i]);
-        add_argument(&line, argument);
-        free(argument);
-    }
-
-    wchar_t *command = to_wide(line.bytes, (int64_t)line.length);
-    free(line.bytes);
-
-    HANDLE in_read = NULL, in_write = NULL, out_read = NULL, out_write = NULL, err_read = NULL, err_write = NULL;
-    bool piped = make_pipe(&in_read, &in_write, true);
-    piped = piped && make_pipe(&out_read, &out_write, false);
-    piped = piped && make_pipe(&err_read, &err_write, false);
-
-    PROCESS_INFORMATION child = { 0 };
-    bool spawned = false;
-    if (piped) {
-        STARTUPINFOW startup = { 0 };
-        startup.cb = sizeof startup;
-        startup.dwFlags = STARTF_USESTDHANDLES;
-        startup.hStdInput = in_read;
-        startup.hStdOutput = out_write;
-        startup.hStdError = err_write;
-        fflush(stdout);
-        fflush(stderr);
-        spawned = CreateProcessW(found, command, NULL, NULL, TRUE, 0, NULL, NULL, &startup, &child) != FALSE;
-    }
-
-    free(command);
-    free(found);
-    HANDLE child_ends[] = { in_read, out_write, err_write };
-    for (int i = 0; i < 3; i++) {
-        if (child_ends[i] != NULL) {
-            CloseHandle(child_ends[i]);
-        }
-    }
-
-    if (!spawned) {
-        HANDLE own_ends[] = { in_write, out_read, err_read };
-        for (int i = 0; i < 3; i++) {
-            if (own_ends[i] != NULL) {
-                CloseHandle(own_ends[i]);
-            }
-        }
-
-        io_last_failed = true;
-        return make_string("", 0);
-    }
-
-    PipeWriter writer = { in_write, input->bytes, input->length };
-    PipeReader errors = { err_read, { 0 } };
-    PipeReader output = { out_read, { 0 } };
-    HANDLE threads[2];
-    threads[0] = CreateThread(NULL, 0, write_pipe, &writer, 0, NULL);
-    threads[1] = CreateThread(NULL, 0, read_pipe, &errors, 0, NULL);
-    if (threads[0] == NULL) {
-        write_pipe(&writer);
-    }
-
-    read_pipe(&output);
-    if (threads[1] == NULL) {
-        read_pipe(&errors);
-    }
-
-    for (int i = 0; i < 2; i++) {
-        if (threads[i] != NULL) {
-            WaitForSingleObject(threads[i], INFINITE);
-            CloseHandle(threads[i]);
-        }
-    }
-
-    CloseHandle(out_read);
-    CloseHandle(err_read);
-    WaitForSingleObject(child.hProcess, INFINITE);
-    DWORD status = 0;
-    GetExitCodeProcess(child.hProcess, &status);
-    CloseHandle(child.hProcess);
-    CloseHandle(child.hThread);
-
-    process_last_status = (int64_t)status;
-    free(process_last_errors);
-    process_last_errors = errors.buffer.bytes;
-    process_last_errors_length = errors.buffer.length;
-    SableString *result = make_text(output.buffer.bytes == NULL ? "" : output.buffer.bytes, (int64_t)output.buffer.length);
-    free(output.buffer.bytes);
-    io_last_failed = false;
-    return result;
-}
-
-SableString *sable_process_current_directory(void) {
-    DWORD size = GetCurrentDirectoryW(0, NULL);
-    wchar_t *path = size == 0 ? NULL : malloc((size_t)size * sizeof(wchar_t));
-    if (path == NULL || GetCurrentDirectoryW(size, path) == 0) {
-        free(path);
-        return make_string("", 0);
-    }
-
-    SableString *result = make_wide_text(path);
-    free(path);
-    return result;
-}
-
-bool sable_process_change_directory(const SableString *path) {
-    wchar_t *name = wide_string(path);
-    bool changed = SetCurrentDirectoryW(name) != FALSE;
-    free(name);
-    return changed;
-}
-
-int64_t sable_process_id(void) {
-    return (int64_t)GetCurrentProcessId();
-}
-
-// The path of this program's executable, so that the program can start
-// itself again (the test harness does, a process per test).
-SableString *sable_process_executable_path(void) {
-    for (DWORD size = MAX_PATH;; size *= 2) {
-        wchar_t *path = malloc((size_t)size * sizeof(wchar_t));
-        DWORD length = GetModuleFileNameW(NULL, path, size);
-        if (length == 0) {
-            free(path);
-            return make_string("", 0);
-        }
-
-        if (length < size) {
-            SableString *result = make_wide_text(path);
-            free(path);
-            return result;
-        }
-
-        free(path);
-    }
-}
-#else
 // The program's path: the name itself when it holds a '/', else the first
 // executable of that name on PATH; NULL when there is none. Looked up here
 // rather than left to posix_spawnp, which does not report a failed exec
@@ -3903,8 +4002,6 @@ SableString *sable_process_executable_path(void) {
 
     return make_ctext(saved_argv[0]);
 }
-
-#endif
 
 // ---- Joining (Sable.Text's floor) ------------------------------------
 

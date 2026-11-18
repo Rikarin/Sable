@@ -53,7 +53,7 @@ internal static class Harnesses {
     ///     Runs the harness in the interpreter, where there is no executable to
     ///     start again, so the tests run in one process; the trap, if one ended it.
     /// </summary>
-    public static (string Output, string Errors, string? Trap) Interpret(string source, IReadOnlyList<string>? arguments = null) {
+    public static (string Output, string Errors, SilTrap? Trap) Interpret(string source, IReadOnlyList<string>? arguments = null) {
         var result = Compile(source);
         Assert.True(result.Succeeded, string.Join("\n", result.Errors));
         var interpreter = new SilInterpreter(result.Sil!, 50_000_000) { Arguments = arguments ?? [] };
@@ -62,7 +62,7 @@ internal static class Harnesses {
             Assert.True(interpreter.LiveObjects == 0, $"the interpreter found {interpreter.LiveObjects} object(s) leaked");
             return (interpreter.Output.ToString(), interpreter.ErrorOutput.ToString(), null);
         } catch (SilTrap trap) {
-            return (interpreter.Output.ToString(), interpreter.ErrorOutput.ToString(), trap.Message);
+            return (interpreter.Output.ToString(), interpreter.ErrorOutput.ToString(), trap);
         }
     }
 

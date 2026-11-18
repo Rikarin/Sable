@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using Sable.CodeGen;
 using Sable.Driver.Build;
+using Sable.Driver.Generators;
 using Sable.Driver.Packages;
 using Sable.Symbols;
 using Sable.Syntax;
@@ -28,7 +29,8 @@ public abstract class HarnessCommand : Command {
         bool DocExamples,
         bool Optimise,
         bool Debug,
-        bool? Exclusivity);
+        bool? Exclusivity,
+        bool Bless = false);
 
     protected Options? Parse(IReadOnlyList<string> args) {
         var files = new List<string>();
@@ -36,6 +38,7 @@ public abstract class HarnessCommand : Command {
         var doc = false;
         var optimise = OptimiseByDefault;
         var debug = false;
+        var bless = false;
         bool? exclusivity = null;
         for (var i = 0; i < args.Count; i++) {
             var argument = args[i];
@@ -45,6 +48,7 @@ public abstract class HarnessCommand : Command {
                     i = args.Count;
                     break;
                 case "--doc" when Kind == TestKind.Test: doc = true; break;
+                case "--bless" when Kind == TestKind.Test: bless = true; break;
                 case "-O0": optimise = false; break;
                 case "--release": optimise = true; break;
                 case "-g": debug = true; break;
@@ -73,12 +77,19 @@ public abstract class HarnessCommand : Command {
             }
         }
 
-        return new(files, harness, doc, optimise, debug, exclusivity);
+        return new(files, harness, doc, optimise, debug, exclusivity, bless);
     }
 
     public override int Run(IReadOnlyList<string> arguments) {
         if (Parse(arguments) is not { } options) {
             return BadUsage();
+        }
+
+        // A package's generator snapshots run first (docs/08 §8.8); a package
+        // of generators alone has nothing else to test.
+        var snapshots = Kind == TestKind.Test && options.Files.Count == 0 ? Snapshots(options.Bless) : null;
+        if (snapshots is { HasSources: false } only) {
+            return only.Outcome.Failed == 0 ? 0 : 1;
         }
 
         if (Program(options) is not { } program) {
@@ -87,9 +98,30 @@ public abstract class HarnessCommand : Command {
 
         var executable = Path.Combine(Path.GetTempPath(), $"sable-{Name}-{Guid.NewGuid():N}{NativeTarget.Host.ExecutableSuffix}");
         try {
-            return Build(program.Trees, program.Directory, options, executable, program.Cache) ?? Execute(executable, options.HarnessArguments);
+            var code = Build(program.Trees, program.Directory, options, executable, program.Cache, program.Link, program.LinkInputs) ?? Execute(executable, options.HarnessArguments);
+            return snapshots is { Outcome.Failed: > 0 } ? 1 : code;
         } finally {
             File.Delete(executable);
+        }
+    }
+
+    /// <summary>
+    ///     The generator snapshot cases of the package in this directory, run;
+    ///     null when it has none (or there is no package here).
+    /// </summary>
+    static (SnapshotOutcome Outcome, bool HasSources)? Snapshots(bool bless) {
+        try {
+            var workspace = Workspace.Load(Directory.GetCurrentDirectory());
+            var member = workspace.Current ?? workspace.Members[0];
+            if (GeneratorSnapshots.Run(member.Name, member.Directory, bless, Console.Out) is not { } outcome) {
+                return null;
+            }
+
+            var hasSources = member.LibrarySources().Count > 0
+                || new[] { "tests", "benches" }.Any(d => Directory.Exists(Path.Combine(member.Directory, d)));
+            return (outcome, hasSources);
+        } catch (Exception e) when (e is PackageException or ManifestException or IOException) {
+            return null;
         }
     }
 
@@ -100,7 +132,7 @@ public abstract class HarnessCommand : Command {
     ///     dependencies'. Null, having said why, when there is nothing to build.
     /// </summary>
     /// <remarks>A package's harness is kept in <c>target/harness/</c> (<see cref="Build" />); files named on the command line have no cache.</remarks>
-    static (IReadOnlyList<SyntaxTree> Trees, string Directory, string? Cache)? Program(Options options) {
+    static (IReadOnlyList<SyntaxTree> Trees, string Directory, string? Cache, IReadOnlyList<string> Link, string LinkInputs)? Program(Options options) {
         if (options.Files.Count > 0) {
             foreach (var file in options.Files.Where(static f => !File.Exists(f))) {
                 Console.Error.WriteLine($"sable: no such file '{file}'");
@@ -109,7 +141,7 @@ public abstract class HarnessCommand : Command {
 
             var parseOptions = Pipeline.ParseOptionsFor(options.Optimise);
             return ([..options.Files.Select(f => SyntaxTree.Parse(new SourceText(File.ReadAllText(f), Path.GetFileName(f)), parseOptions))],
-                Path.GetDirectoryName(Path.GetFullPath(options.Files[0]))!, null);
+                Path.GetDirectoryName(Path.GetFullPath(options.Files[0]))!, null, [], "");
         }
 
         try {
@@ -135,7 +167,9 @@ public abstract class HarnessCommand : Command {
                 return null;
             }
 
-            return (trees, workspace.Root, Path.Combine(workspace.TargetDirectory, "harness", ResultCache.FileName(member.Name)));
+            // What the package's build scripts found for the link: the harness links it too.
+            return (trees, workspace.Root, Path.Combine(workspace.TargetDirectory, "harness", ResultCache.FileName(member.Name)),
+                graph.LinkArguments(member.Name), graph.LinkInputs(member.Name));
         } catch (PackageException failure) {
             Console.Error.WriteLine($"error: {failure.Message}");
             return null;
@@ -149,12 +183,15 @@ public abstract class HarnessCommand : Command {
     ///     it is copied from there rather than compiled again. (Not with
     ///     debug information, which names the executable's own path.)
     /// </param>
-    protected int? Build(IReadOnlyList<SyntaxTree> trees, string directory, Options options, string executable, string? cache = null) {
+    /// <param name="link">More for the link, from build scripts; <paramref name="linkInputs" /> hashes what it brings in.</param>
+    protected int? Build(IReadOnlyList<SyntaxTree> trees, string directory, Options options, string executable, string? cache = null,
+        IReadOnlyList<string>? link = null, string linkInputs = "") {
+        link ??= [];
         string? kept = null, record = null, key = null;
         if (cache is not null && !options.Debug) {
             kept = Path.Combine(cache, Name);
             record = kept + ".json";
-            key = ResultCache.Key(trees, $"{Name}|{Kind}|doc={options.DocExamples}|opt={options.Optimise}|exclusivity={options.Exclusivity}");
+            key = ResultCache.Key(trees, $"{Name}|{Kind}|doc={options.DocExamples}|opt={options.Optimise}|exclusivity={options.Exclusivity}|link={string.Join(' ', link)}|{linkInputs}");
             if (File.Exists(kept) && ResultCache.Read(record, key) is { } hit) {
                 foreach (var warning in hit.Warnings) {
                     Console.Error.WriteLine(warning);
@@ -194,7 +231,7 @@ public abstract class HarnessCommand : Command {
             return 1;
         }
 
-        var build = NativeBuild.Build(result.LlvmIr!, executable, options.Optimise, options.Debug);
+        var build = NativeBuild.Build(result.LlvmIr!, executable, NativeOptions.Of(options.Optimise, options.Debug) with { LinkArguments = link });
         if (!build.Succeeded) {
             Console.Error.WriteLine("internal error: the native build failed:");
             Console.Error.Write(build.Output);

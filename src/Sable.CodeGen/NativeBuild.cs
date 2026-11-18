@@ -48,6 +48,20 @@ public sealed record NativeOptions {
     /// <summary>Look for shared libraries beside the executable.</summary>
     public bool Rpath { get; init; }
 
+    /// <summary>
+    ///     More for the link, after everything else: the native libraries a
+    ///     package's build script found (<c>-lfoo</c>, <c>-L dir</c>).
+    /// </summary>
+    public IReadOnlyList<string> LinkArguments { get; init; } = [];
+
+    /// <summary>
+    ///     A hash of what <see cref="LinkArguments" /> bring in: a library
+    ///     rebuilt under the same name is a different link.
+    /// </summary>
+    public string LinkInputs { get; init; } = "";
+
+    /// <summary>The settings as text, every one of them: what a cache of builds made with them is keyed by.</summary>
+    public string Key => $"{OptLevel}|{DebugInfo}|{Lto}|{Strip}|{Rpath}|{Target?.Triple}|{Sysroot}|{string.Join(' ', LinkArguments)}|{LinkInputs}";
     /// <summary>What the program is built for: null for the machine building it.</summary>
     public NativeTarget? Target { get; init; }
 
@@ -378,6 +392,7 @@ public static class NativeBuild {
             });
         }
 
+        flags.AddRange(options.LinkArguments);
         return flags;
     }
 
@@ -505,6 +520,23 @@ public static class NativeBuild {
         }
     }
 
+    /// <summary>
+    ///     Where each command run to build is written before it runs, for
+    ///     <c>sable -v</c>; null to write nothing.
+    /// </summary>
+    public static TextWriter? CommandLog { get; set; }
+
+    /// <summary>Writes a command to <see cref="CommandLog" />, quoted as a shell would need it.</summary>
+    public static void LogCommand(string program, IReadOnlyList<string> arguments) {
+        if (CommandLog is { } log) {
+            static string Quote(string text) =>
+                text.Length > 0 && text.All(static c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_' or '.' or '/' or '=' or ',' or ':' or '+')
+                    ? text
+                    : "'" + text.Replace("'", "'\\''", StringComparison.Ordinal) + "'";
+            log.WriteLine($"     Running `{string.Join(' ', new[] { program }.Concat(arguments).Select(Quote))}`");
+        }
+    }
+
     static (int ExitCode, string Output) Run(string program, IEnumerable<string> arguments) {
         var start = new ProcessStartInfo(program) {
             RedirectStandardOutput = true,
@@ -514,6 +546,8 @@ public static class NativeBuild {
         foreach (var argument in arguments) {
             start.ArgumentList.Add(argument);
         }
+
+        LogCommand(program, [..start.ArgumentList]);
 
         using var process = Process.Start(start) ?? throw new InvalidOperationException($"could not start {program}");
         var stdout = process.StandardOutput.ReadToEndAsync();

@@ -109,10 +109,7 @@ public class TaskGroup<Result> {
 
 /// Waits at least this long, letting every other task run meanwhile.
 public fn sleep(_ duration: Duration) async {
-    let deadline = Instant.now().adding(duration)
-    while Instant.now() < deadline {
-        await Task.yield()
-    }
+    await Task.sleep(nanoseconds: duration.totalNanoseconds)
 }
 
 /// Lets every task queued run before this one goes on.

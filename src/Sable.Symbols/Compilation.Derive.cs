@@ -270,7 +270,7 @@ public sealed partial class Compilation {
                 continue;
             }
 
-            if (Conversions.Satisfies(fieldType, protocol)) {
+            if (DerivedConformance.FieldConforms(fieldType, protocol)) {
                 continue;
             }
 
@@ -307,11 +307,26 @@ internal static class DerivedConformance {
 
         try {
             var substitution = TypeSubstitution.For(type);
-            return Fields(type.OriginalDefinition).All(f => Conversions.Satisfies(substitution.Apply(f.Type), protocol, context));
+            return Fields(type.OriginalDefinition).All(f => FieldConforms(substitution.Apply(f.Type), protocol, context));
         } finally {
             _assumed.Remove((type, protocol));
         }
     }
+
+    /// <summary>
+    ///     True when a field of the type can be compared, hashed, ordered or
+    ///     described as the protocol asks. Beyond what conforms, an optional
+    ///     or an array compares where what it holds does: two are equal when
+    ///     both are none or hold equal values, or are as long as each other
+    ///     and equal element by element — '==' on them is the language's own.
+    /// </summary>
+    public static bool FieldConforms(TypeSymbol type, NamedTypeSymbol protocol, TypeEquivalence? context = null) =>
+        Conversions.Satisfies(type, protocol, context)
+        || protocol.Name == "Equatable" && type switch {
+            OptionalTypeSymbol optional => FieldConforms(optional.UnderlyingType, protocol, context),
+            ArrayTypeSymbol array => FieldConforms(array.ElementType, protocol, context),
+            _ => false,
+        };
 
     /// <summary>
     ///     What a derived member reads: a struct's stored fields, or every

@@ -89,6 +89,6 @@ public sealed class RangeTests {
     public void ARangeOfABytePastItsLargestValueTraps() {
         var execution = AssertAgree(Program("", "let b: U8 = 254\nfor x in b... { print(x) }"));
         Assert.Equal("254\n255\n", execution.Stdout);
-        Assert.Equal("fatal error: integer overflow\n", execution.Stderr);
+        Assert.Equal("fatal error: integer overflow\n  at test.sb:6:17\n", execution.Stderr);
     }
 }

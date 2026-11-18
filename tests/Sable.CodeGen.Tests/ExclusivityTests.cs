@@ -100,13 +100,104 @@ public sealed class ExclusivityTests {
     public void TwoReferencesToOneObjectTrapAsTheProgramRuns() {
         var execution = AssertAgree(Program(Declarations, "    let box = Box(1)\n    both(box, Box(2))\n    print(box.value)\n    both(box, box)\n    print(\"unreachable\")"));
         Assert.Equal("2\n", execution.Stdout);
-        Assert.Equal("fatal error: overlapping accesses to the same storage\n", execution.Stderr);
+        Assert.Equal("fatal error: overlapping accesses to the same storage\n  at test.sb:30:5\n", execution.Stderr);
     }
 
     [Fact]
     public void AReleaseBuildDropsTheDynamicChecks() {
-        var source = new SourceText(Program(Declarations, "    let box = Box(1)\n    both(box, box)"), "test.sb");
+        var source = new SourceText(Program(Declarations, "    let box = Box(1)\n    both(box, box)\n    print(box.value)"), "test.sb");
         Assert.Contains("call void @sable_access_begin(", Pipeline.Compile(source).LlvmIr!, StringComparison.Ordinal);
+        Assert.Contains("@sable_access_count", Pipeline.Compile(source).LlvmIr!, StringComparison.Ordinal);
         Assert.DoesNotContain("call void @sable_access_begin(", Pipeline.Compile(source, checkExclusivity: false).LlvmIr!, StringComparison.Ordinal);
+        Assert.DoesNotContain("call void @sable_access_check(", Pipeline.Compile(source, checkExclusivity: false).LlvmIr!, StringComparison.Ordinal);
+    }
+
+    // ---- What the runtime sees (#186) ----------------------------------------
+
+    const string Shared = """
+                          module Test
+
+                          var counter = 0
+
+                          fn bump(_ x: inout Int) {
+                              counter += 1
+                              x += 1
+                          }
+
+                          fn add(_ x: inout Int, _ y: Int) {
+                              x += y
+                          }
+
+                          fn withWrite(_ x: inout Int, _ body: () -> Void) {
+                              body()
+                              x = x + 1
+                          }
+
+                          class Box {
+                              var value = 0
+                              var items: Int[>..] = [1, 2, 3]
+                          }
+
+                          fn grow(_ x: inout Int, _ box: Box) {
+                              box.items.append(x)
+                              x = 0
+                          }
+
+                          """;
+
+    static string SharedProgram(string body) => $"{Shared}@main\nfn main() {{\n{body}\n}}\n";
+
+    /// <summary>A function given '&amp;counter' that changes 'counter' itself is two accesses to one global.</summary>
+    [Fact]
+    public void AGlobalPassedInoutAndTouchedInsideTraps() {
+        var execution = AssertAgree(SharedProgram("    var other = 0\n    bump(&other)\n    print(counter)\n    bump(&counter)\n    print(\"unreachable\")"));
+        Assert.Equal("1\n", execution.Stdout);
+        Assert.Equal("fatal error: overlapping accesses to the same storage\n  at test.sb:6:5\n", execution.Stderr);
+    }
+
+    /// <summary>A plain read of a field during a change to it — through a closure the call cannot see into — traps.</summary>
+    [Fact]
+    public void AReadOfAFieldDuringAChangeToItTraps() {
+        var execution = AssertAgree(SharedProgram("    let box = Box()\n    let peek = { print(box.value) }\n    peek()\n    withWrite(&box.value, peek)\n    print(\"unreachable\")"));
+        Assert.Equal("0\n", execution.Stdout);
+        Assert.Equal("fatal error: overlapping accesses to the same storage\n  at test.sb:31:18\n", execution.Stderr);
+    }
+
+    /// <summary>A captured variable lives in a box: a closure that changes it during an inout access to it traps.</summary>
+    [Fact]
+    public void ACapturedVariableChangedDuringAnAccessTraps() {
+        var execution = AssertAgree(SharedProgram("    var n = 0\n    let inc = { n += 1 }\n    inc()\n    print(n)\n    withWrite(&n, inc)\n    print(\"unreachable\")"));
+        Assert.Equal("1\n", execution.Stdout);
+        Assert.Equal("fatal error: overlapping accesses to the same storage\n  at test.sb:31:17\n", execution.Stderr);
+    }
+
+    /// <summary>
+    ///     An inout access begins once every argument is evaluated, so an
+    ///     argument after it may read the same storage; an element passes
+    ///     inout from an array anywhere — a local, a field.
+    /// </summary>
+    [Fact]
+    public void ArgumentsAreReadBeforeTheAccessAndElementsPassInout() =>
+        Assert.Equal(
+            "1\n6\n11\n4\n",
+            AssertAgree(SharedProgram("""
+                    let box = Box()
+                    add(&box.value, box.value + 1)
+                    print(box.value)
+                    var local = [1, 2]
+                    add(&local[0], 5)
+                    print(local[0])
+                    add(&box.items[0], 10)
+                    print(box.items[0])
+                    add(&box.items[2], box.items.count - 2)
+                    print(box.items[2])
+                """)).Stdout
+        );
+
+    /// <summary>An element lent inout keeps its array from changing: growing it would move the element.</summary>
+    [Fact]
+    public void AnArrayCannotChangeWhileAnElementIsLent() {
+        var execution = AssertAgree(SharedProgram("    let box = Box()\n    grow(&box.items[0], box)\n    print(\"unreachable\")"));
+        Assert.Equal("fatal error: overlapping accesses to the same storage\n  at test.sb:25:5\n", execution.Stderr);
     }
 }

@@ -91,13 +91,13 @@ public sealed partial class LanguageServer {
         var project = snapshot.Layout.Projects.FirstOrDefault(p => p.Directory == key);
         var dependencies = project is null ? [] : _dependencies.For(project, snapshot, Log);
         return Analysis.Build(
-            snapshot, key, dependencies, _options.LibraryFor, project?.Generate is { } generate ? trees => Generated(generate, trees) : null, project?.Lints);
+            snapshot, key, dependencies, _options.LibraryFor, project?.Generate is { } generate ? (trees, others) => Generated(generate, trees, others) : null, project?.Lints);
     }
 
     /// <summary>The generators' output; a generator program that fails outright is logged, and leaves the package without it.</summary>
-    GeneratedTrees Generated(Func<IReadOnlyList<SyntaxTree>, GeneratedTrees> generate, IReadOnlyList<SyntaxTree> trees) {
+    GeneratedTrees Generated(Func<IReadOnlyList<SyntaxTree>, IReadOnlyList<SyntaxTree>, GeneratedTrees> generate, IReadOnlyList<SyntaxTree> trees, IReadOnlyList<SyntaxTree> others) {
         try {
-            return generate(trees);
+            return generate(trees, others);
         } catch (Exception e) when (e is not OutOfMemoryException) {
             Log($"the source generators failed: {e.Message}");
             return GeneratedTrees.None;

@@ -11,10 +11,14 @@ public sealed class TestCommand : HarnessCommand {
     public override string Summary => "run the @test functions (and, with --doc, the doc examples)";
 
     public override string Usage => """
-        usage: sable test <file.sb>... [filter...] [--doc] [--list] [--exact] [--show-output] [--release] [-g] [-- <harness options>]
+        usage: sable test [<file.sb>...] [filter...] [--doc] [--bless] [--list] [--exact] [--show-output] [--release] [-g] [-- <harness options>]
+
+        Without a file, tests the package in this directory or the nearest above it: its
+        library with the files under tests/, and its dependencies.
 
           filter             run the tests whose names (Module.function) contain it
           --doc              also run the ```sable examples in doc comments, as tests
+          --bless            write each generator snapshot case's expected/ from what the generators produce (docs/08 §8.8)
           --list             list the tests instead of running them
           --exact            a filter is a whole name, not part of one
           --show-output      show what passing tests print, too

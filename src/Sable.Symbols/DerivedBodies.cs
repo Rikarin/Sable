@@ -222,11 +222,29 @@ internal sealed class DerivedBodies(CoreTypes core, Func<string, string, Functio
     bool IsPrimitive(TypeSymbol type) => core.IsNumeric(type) || type.Equals(core.Bool) || type.Equals(core.Char);
 
     BoundExpression? Equal(TypeSymbol type, BoundExpression left, BoundExpression right) =>
-        IsPrimitive(type)
-            ? new BoundBinaryOperator(_at, core.Bool, BinaryOperatorKind.Equal, left, right)
-            : requirement("Equatable", "==") is { } equals
-                ? new BoundBinaryOperator(_at, core.Bool, BinaryOperatorKind.UserDefined, left, right, equals)
-                : null;
+        IsPrimitive(type) ? new BoundBinaryOperator(_at, core.Bool, BinaryOperatorKind.Equal, left, right)
+        : type is OptionalTypeSymbol { UnderlyingType: var payload } ? Structural(payload, left, right)
+        : type is ArrayTypeSymbol { ElementType: var element } ? Structural(element, left, right)
+        : requirement("Equatable", "==") is { } equals
+            ? new BoundBinaryOperator(_at, core.Bool, BinaryOperatorKind.UserDefined, left, right, equals)
+            : null;
+
+    /// <summary>
+    ///     Two optionals or two arrays compared by what they hold, as the
+    ///     binder makes '==' of them: a comparison of two of the parts, bound
+    ///     to locals that lowering gives each pair in turn.
+    /// </summary>
+    BoundExpression? Structural(TypeSymbol part, BoundExpression left, BoundExpression right) {
+        var leftPart = new LocalSymbol("$left", _function, null, false) { TypeResolver = () => part };
+        var rightPart = new LocalSymbol("$right", _function, null, false) { TypeResolver = () => part };
+        if (Equal(part, new BoundLocalAccess(_at, leftPart), new BoundLocalAccess(_at, rightPart)) is not { } equal) {
+            return null;
+        }
+
+        return new BoundBinaryOperator(_at, core.Bool, BinaryOperatorKind.Equal, left, right) {
+            Structural = new StructuralComparison(leftPart, rightPart, equal),
+        };
+    }
 
     BoundExpression? Less(TypeSymbol type, BoundExpression left, BoundExpression right) =>
         IsPrimitive(type)

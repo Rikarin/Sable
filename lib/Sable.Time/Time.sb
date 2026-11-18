@@ -136,7 +136,9 @@ public struct Instant: Comparable {
 }
 
 public struct Clock {
-    /// Waits at least this long. Every task waits with it, for now.
+    /// Waits at least this long, and every task with it: it does not await,
+    /// so no other task may run. In a task, 'await sleep(duration)'
+    /// (Sable.Concurrency) waits while the others run.
     public static fn sleep(_ duration: Duration) {
         Runtime.sleep(duration.totalNanoseconds)
     }

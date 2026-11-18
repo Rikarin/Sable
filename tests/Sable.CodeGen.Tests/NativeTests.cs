@@ -37,14 +37,14 @@ public sealed class NativeTests {
     }
 
     /// <summary>What the interpreter prints for the same program, and whether it trapped.</summary>
-    static (string Output, string? Trap) Interpret(string source) {
+    static (string Output, SilTrap? Trap) Interpret(string source) {
         var result = Pipeline.Compile(new SourceText(source, "test.sb"));
         var interpreter = new SilInterpreter(result.Sil!);
         try {
             interpreter.Run(result.Sil!.EntryPoint!);
             return (interpreter.Output.ToString(), null);
         } catch (SilTrap trap) {
-            return (interpreter.Output.ToString(), trap.Message);
+            return (interpreter.Output.ToString(), trap);
         }
     }
 
@@ -58,7 +58,7 @@ public sealed class NativeTests {
             Assert.Equal(0, native.ExitCode);
         } else {
             Assert.NotEqual(0, native.ExitCode);
-            Assert.Equal($"fatal error: {trap}\n", native.Stderr);
+            Assert.Equal(trap.Report, native.Stderr);
         }
 
         return native;
@@ -287,7 +287,7 @@ public sealed class NativeTests {
 
         // What was printed before the trap is not lost; nothing after it runs.
         Assert.Equal("before\n", run.Stdout);
-        Assert.Equal($"fatal error: {reason}\n", run.Stderr);
+        Assert.StartsWith($"fatal error: {reason}\n  at test.sb:", run.Stderr, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -395,6 +395,52 @@ public sealed class NativeTests {
             Assert.True(new FileInfo(executable).Length < 400 * 1024, $"{new FileInfo(executable).Length:N0} bytes");
         } finally {
             Platform.DeleteExecutable(executable);
+        }
+    }
+
+    /// <summary>
+    ///     A trap names the line and column it happened at — one the compiled
+    ///     code checks itself, and one the runtime checks for a call — and the
+    ///     interpreter names the same place (#187).
+    /// </summary>
+    [Theory]
+    [InlineData("    let values = [1, 2]\n    print(values[2])", "array index out of range", "test.sb:5:11")]
+    [InlineData("    let text = \"ab\"\n    let c = text.at(7)", "string index out of range", "test.sb:5:13")]
+    [InlineData("    let n = 9223372036854775807\n    let m = 2\n    print(m + n)", "integer overflow", "test.sb:6:11")]
+    [InlineData("    let o: Int? = none\n    print(o!)", "unwrapped a none", "test.sb:5:11")]
+    public void ATrapSaysWhereItHappened(string body, string reason, string site) {
+        var run = Programs.AssertAgree($"module Traps\n@main\nfn main() {{\n{body}\n}}\n");
+        Assert.Equal($"fatal error: {reason}\n  at {site}\n", run.Stderr);
+    }
+
+    /// <summary>
+    ///     Recursion that runs off the end of the stack is a trap with a
+    ///     message, as the interpreter's is — not a bare SIGSEGV — on the
+    ///     program's own thread and on a task's (#187).
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void RunningOutOfStackIsATrap(bool inATask) {
+        const string recursion = """
+                                 module Deep
+                                 fn down(_ n: Int) -> Int {
+                                     var kept = [n, n]
+                                     if n == 0 {
+                                         return 0
+                                     }
+                                     let below = down(n - 1)
+                                     return below + kept[1] - kept[0]
+                                 }
+                                 """;
+        var body = inATask
+            ? "@main\nasync fn main() {\n    print(\"before\")\n    let t = Task.spawn { down(100000000) }\n    print(await t.value)\n}\n"
+            : "@main\nfn main() {\n    print(\"before\")\n    print(down(100000000))\n}\n";
+        var run = Programs.AssertAgree($"{recursion}\n{body}");
+        Assert.Equal("before\n", run.Stdout);
+        Assert.Equal("fatal error: stack overflow: calls nested too deeply\n", run.Stderr);
+        if (CanBuild) {
+            Assert.Equal(134, run.ExitCode);
         }
     }
 

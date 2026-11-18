@@ -69,6 +69,18 @@ public sealed class PipelineTests {
     }
 
     /// <summary>
+    ///     A whole program's functions are its own, and none unwinds: LLVM may
+    ///     inline one with one caller, and drop one it no longer calls.
+    /// </summary>
+    [Fact]
+    public void AProgramsFunctionsAreInternalAndDoNotUnwind() {
+        var result = Compile("module M\nfn twice(_ x: Int) -> Int { return x * 2 }\n@main\nfn start() { print(twice(4)) }\n");
+        Assert.True(result.Succeeded, string.Join("\n", result.Errors));
+        Assert.Contains("define internal void @\"sable.M.start\"() nounwind", result.LlvmIr, StringComparison.Ordinal);
+        Assert.DoesNotContain("define void @\"sable.", result.LlvmIr, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     ///     The front end's warnings come back with the result — with or
     ///     without errors — each against its file, and none of the standard
     ///     library's.

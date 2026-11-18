@@ -153,7 +153,7 @@ public static class IncrementalBuild {
             _ = Toolchain;
         }
 
-        var settingsKey = $"{CacheVersion}|{Toolchain}|{settings.Profile}|opt={settings.Optimise}|debug={settings.DebugDirectory}|exclusivity={settings.Exclusivity}|whole={settings.Whole}|native={settings.Native}";
+        var settingsKey = $"{CacheVersion}|{Toolchain}|{settings.Profile}|opt={settings.Optimise}|debug={settings.DebugDirectory}|exclusivity={settings.Exclusivity}|whole={settings.Whole}|native={settings.Native.Key}";
 
         // ---- Read and hash every file --------------------------------------
         string[][] texts;
@@ -162,7 +162,7 @@ public static class IncrementalBuild {
             texts = [..units.Select(static u => new string[u.Files.Count])];
             fileHashes = [..units.Select(static u => new string[u.Files.Count])];
             var all = units.SelectMany(static (u, i) => u.Files.Select((f, j) => (i, j, f))).ToList();
-            Parallel.ForEach(all, item => {
+            Parallel.ForEach(all, GlobalOptions.Current.ParallelOptions, item => {
                 var (i, j, file) = item;
                 var text = File.ReadAllText(file.Path);
                 texts[i][j] = text;
@@ -182,7 +182,7 @@ public static class IncrementalBuild {
         using (BuildTimings.Of(timings, "parse")) {
             trees = [..units.Select(static u => new SyntaxTree[u.Files.Count])];
             var all = units.SelectMany(static (u, i) => u.Files.Select((f, j) => (i, j, f))).ToList();
-            Parallel.ForEach(all, item => {
+            Parallel.ForEach(all, GlobalOptions.Current.ParallelOptions, item => {
                 var (i, j, file) = item;
                 // 'DEBUG' or 'RELEASE' follows from the settings, which key the cache.
                 trees[i][j] = SyntaxTree.Parse(new SourceText(texts[i][j], file.Name), Pipeline.ParseOptionsFor(settings.Optimise, file.Options.ForTarget(target.Os, target.Arch)));
@@ -310,7 +310,7 @@ public static class IncrementalBuild {
             var concreteKey = Hash(string.Join(",", concrete.Order(StringComparer.Ordinal)));
             var fingerprints = new ConcurrentDictionary<SyntaxTree, string>();
             var read = 0;
-            Parallel.ForEach(units.Where(u => u != standard), unit => {
+            Parallel.ForEach(units.Where(u => u != standard), GlobalOptions.Current.ParallelOptions, unit => {
                 var path = Path.Combine(interfaces, Hash($"{settingsKey}\ninterface {unit.Name}\n{unit.ContentHash}\n{concreteKey}") + ".sbi");
                 lock (interfaceFiles) {
                     interfaceFiles.Add(path);
@@ -357,7 +357,8 @@ public static class IncrementalBuild {
             : Task.Run(() => NativeObjects.CompileRuntime(runtime, settings.Native));
 
         var compiling = new List<(Unit Unit, Task<NativeBuildResult> Task)>();
-        var throttle = new SemaphoreSlim(Environment.ProcessorCount);
+        // '-j' bounds how many clang processes run at once.
+        var throttle = new SemaphoreSlim(GlobalOptions.Current.Parallelism);
         List<string> warnings = [];
         if (stale.Count > 0) {
             Compilation compilation;

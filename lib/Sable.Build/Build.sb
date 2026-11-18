@@ -45,6 +45,10 @@ public struct Package {
 
     /// A build script, and what it may touch (docs/05 §5.6).
     public var build: BuildScript? = none
+
+    /// The files and directories, relative to the package, whose files its
+    /// package generators are given (docs/08 §8.3).
+    public var generatorInputs: String[>..] = []
 }
 
 /// Something a package builds.
@@ -291,6 +295,11 @@ public fn renderManifest(_ p: Package) -> String {
     if !p.reflect.isEmpty {
         w.table("reflect")
         w.strings("include", p.reflect)
+    }
+
+    if !p.generatorInputs.isEmpty {
+        w.table("generators")
+        w.strings("inputs", p.generatorInputs)
     }
 
     if !p.lints.isEmpty {

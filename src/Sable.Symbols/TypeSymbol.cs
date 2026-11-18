@@ -705,6 +705,13 @@ public sealed class CompositionTypeSymbol : TypeSymbol {
 
     public ImmutableArray<TypeSymbol> Parts { get; }
 
+    /// <summary>
+    ///     The separate constraints a constraint stands for: <c>T: P &amp; Q</c>
+    ///     says what <c>T: P, T: Q</c> says, so a parameter keeps the parts.
+    /// </summary>
+    public static ImmutableArray<TypeSymbol> PartsOf(TypeSymbol constraint) =>
+        constraint is CompositionTypeSymbol composition ? composition.Parts : [constraint];
+
     public override string ToDisplayString() => string.Join(" & ", Parts.Select(static p => p.ToDisplayString()));
 
     public override bool Equals(TypeSymbol? other) {

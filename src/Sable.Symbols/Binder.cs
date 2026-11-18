@@ -4979,10 +4979,18 @@ public sealed partial class Binder {
     static TypeSymbol UserResultType(FunctionSymbol method, TypeSymbol operand) =>
         method.ReturnType is TypeParameterSymbol { ContainingSymbol: NamedTypeSymbol { TypeKind: TypeKind.Protocol } } ? operand : method.ReturnType;
 
-    /// <summary>The protocols a type parameter is constrained to, and those they refine.</summary>
-    static IEnumerable<NamedTypeSymbol> ConstraintProtocols(TypeParameterSymbol parameter) {
+    /// <summary>
+    ///     The protocols a type parameter, or an associated type read through
+    ///     one, is constrained to, and those they refine.
+    /// </summary>
+    IEnumerable<NamedTypeSymbol> ConstraintProtocols(TypeSymbol type) {
         var seen = new HashSet<NamedTypeSymbol>();
-        var pending = new Stack<NamedTypeSymbol>(parameter.Constraints.OfType<NamedTypeSymbol>().Where(static c => c.TypeKind == TypeKind.Protocol));
+        var pending = new Stack<NamedTypeSymbol>(
+            AssociatedTypes.ConstraintsOf(type, _conversions.Equivalence)
+                .SelectMany(static c => CompositionTypeSymbol.PartsOf(c))
+                .OfType<NamedTypeSymbol>()
+                .Where(static c => c.TypeKind == TypeKind.Protocol)
+        );
         while (pending.Count > 0) {
             var protocol = pending.Pop();
             if (!seen.Add(protocol)) {
@@ -4998,9 +5006,10 @@ public sealed partial class Binder {
 
     FunctionSymbol? FindUserOperator(string symbol, TypeSymbol left, TypeSymbol right) {
         // 'a < b' on two T: Comparable — the protocol's requirement, met by
-        // whatever T turns out to be.
-        if (left is TypeParameterSymbol parameter && left.Equals(right)) {
-            foreach (var protocol in ConstraintProtocols(parameter)) {
+        // whatever T turns out to be. 'C.Item' with 'associatedtype Item:
+        // Comparable' is the same: its constraints are as good as T's.
+        if (AssociatedTypes.IsAbstract(left) && left.Equals(right)) {
+            foreach (var protocol in ConstraintProtocols(left)) {
                 if (protocol.Members.OfType<FunctionSymbol>().FirstOrDefault(f =>
                         f is { FunctionKind: FunctionKind.Operator, Fixity: OperatorFixity.Infix, Parameters.Length: 2 }
                         && string.Equals(f.Name, symbol, StringComparison.Ordinal)) is { } requirement) {

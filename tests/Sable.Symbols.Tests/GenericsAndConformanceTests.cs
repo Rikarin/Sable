@@ -363,4 +363,40 @@ public sealed class GenericsAndConformanceTests {
             }
             """
         );
+
+    // ---- Composed constraints ----------------------------------------------
+
+    [Fact]
+    public void AnOperatorRequirementIsFoundThroughAComposition() =>
+        AssertClean(
+            """
+            protocol Addable { operator + (a: Self, b: Self) -> Self }
+            protocol Zero { static fn zero() -> Self }
+            fn two<T: Addable & Zero>(_ a: T) -> T => a + T.zero()
+            """
+        );
+
+    [Fact]
+    public void ACompositionInAWhereClauseIsTwoConstraints() =>
+        AssertClean(
+            """
+            protocol Addable { operator + (a: Self, b: Self) -> Self }
+            protocol Zero { static fn zero() -> Self }
+            fn two<T>(_ a: T) -> T where T: Addable & Zero => a + T.zero()
+            """
+        );
+
+    [Fact]
+    public void AnAssociatedTypesCompositionIsTwoConstraints() =>
+        AssertClean(
+            """
+            protocol Addable { operator + (a: Self, b: Self) -> Self }
+            protocol Zero { static fn zero() -> Self }
+            protocol Holder {
+                associatedtype Item: Addable & Zero
+                fn item() -> Item
+            }
+            fn twice<H: Holder>(_ h: H) -> H.Item => h.item() + h.item()
+            """
+        );
 }

@@ -87,4 +87,40 @@ public sealed class GenericTests {
                 )
             ).Stdout
         );
+
+    [Fact]
+    public void AnOperatorRequirementThroughACompositionAndAnAssociatedType() =>
+        Assert.Equal(
+            "3 10\n",
+            AssertAgree(
+                Program(
+                    """
+                    protocol Addable { operator + (a: Self, b: Self) -> Self }
+                    protocol Zero { static fn zero() -> Self }
+
+                    protocol Holder {
+                        associatedtype Item: Addable & Zero
+                        fn item() -> Item
+                    }
+
+                    struct N: Addable, Zero {
+                        var v: Int
+                        operator + (a: N, b: N) -> N => N(v: a.v + b.v)
+                        static fn zero() -> N => N(v: 0)
+                    }
+
+                    struct H: Holder {
+                        alias Item = N
+                        fn item() -> N => N(v: 5)
+                    }
+
+                    fn two<T: Addable & Zero>(_ a: T) -> T => a + T.zero()
+                    fn twice<C: Holder>(_ h: C) -> C.Item => h.item() + h.item()
+                    """,
+                    """
+                        print("\(two(N(v: 3)).v) \(twice(H()).v)")
+                    """
+                )
+            ).Stdout
+        );
 }

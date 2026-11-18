@@ -357,7 +357,9 @@ internal sealed class TypeBinder(Compilation compilation) {
                 continue;
             }
 
-            parameter.Constraints = [BindType(syntax.Constraint, context, scope)];
+            // 'T: P & Q' is kept as two constraints, as 'where T: P, T: Q' is,
+            // so everything that walks a parameter's protocols sees both.
+            parameter.Constraints = CompositionTypeSymbol.PartsOf(BindType(syntax.Constraint, context, scope));
         }
     }
 
@@ -399,7 +401,7 @@ internal sealed class TypeBinder(Compilation compilation) {
             }
 
             if (left is TypeParameterSymbol parameter) {
-                parameter.Constraints = parameter.Constraints.Add(right);
+                parameter.Constraints = parameter.Constraints.AddRange(CompositionTypeSymbol.PartsOf(right));
                 continue;
             }
 

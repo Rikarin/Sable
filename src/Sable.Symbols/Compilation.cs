@@ -1308,7 +1308,7 @@ public sealed partial class Compilation {
         TypeBinder.Defer(() => {
                 if (declaration.BaseTypes is { } constraints) {
                     parameter.Constraints = [
-                        ..constraints.Types.Select(syntax => TypeBinder.BindType(syntax, protocol, scope))
+                        ..constraints.Types.SelectMany(syntax => CompositionTypeSymbol.PartsOf(TypeBinder.BindType(syntax, protocol, scope)))
                     ];
                 }
 

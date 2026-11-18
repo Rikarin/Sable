@@ -29,6 +29,7 @@ sable repl                         interactive, backed by the const evaluator
 sable lsp                          language server (stdio)
 sable explain <S1234>              print the full documentation for a diagnostic
 sable toolchain <install|list|pin>  manage toolchain versions
+sable migrate                      rewrite sable.toml as package.sb (§5.2.9)
 ```
 
 Design rules:
@@ -41,83 +42,254 @@ Design rules:
 
 ---
 
-## 5.2 The manifest: `sable.toml`
+## 5.2 The manifest: `package.sb`
 
-```toml
-[package]
-name        = "render-engine"
-version     = "0.4.2"
-edition     = "2027"
-authors     = ["..."]
-license     = "MIT OR Apache-2.0"
-description = "A small forward renderer"
-repository  = "https://example.com/render-engine"
+> **Status.** This is the design. The toolchain still reads `sable.toml`
+> (docs/04, Phase 5 as implemented) until compile-time evaluation (#172) and
+> the steps in §5.2.10 land; §5.2.9 says how packages move over.
 
-[lib]
-path = "src/lib.sb"
+A package is described in Sable, in a file named `package.sb` at its root, as
+Swift describes one in `Package.swift` and Gradle in `build.gradle.kts`, and
+not in a second language. The file is a program, but a restricted one: it is
+**evaluated at compile time**, it may not touch the machine it runs on, and
+its result is plain data that the toolchain caches and every other tool
+reads. So it has a language's reach — `if`, loops, functions, shared values,
+completion and type errors in the editor — and a data file's guarantees:
+the same manifest means the same package on every machine, and reading it
+never runs anything that could fail differently tomorrow.
 
-[[bin]]
-name = "render"
-path = "src/main.sb"
+### 5.2.1 Why not TOML, XML, or a build script
 
-[dependencies]
-sable-math  = "1.2"
-image       = { version = "0.6", features = ["png", "jpeg"], default-features = false }
-platform    = { path = "../platform" }
-shader-tool = { git = "https://example.com/st", tag = "v2.1.0" }
+| | Data file (Cargo's TOML) | MSBuild (`.csproj`, `.sln`) | Build script (Gradle `.kts`, `build.zig`) | `package.sb` |
+|---|---|---|---|---|
+| Conditions, reuse, computed values | No: every repetition is written out | Yes, as string-typed conditions and properties evaluated in phases | Yes, the whole language | Yes, the whole language at compile time |
+| Editor help | A JSON schema at best | Some | The language's own | The language server's: completion, hover, go-to-definition, type errors |
+| Same result on every machine | Yes | Only by discipline | Only by discipline | Yes: no I/O, no clock, no environment, no host conditions (§5.2.4) |
+| Readable without running code | Yes | No: evaluation is MSBuild | No: configuration time is a build step | Yes: the evaluated form is cached and published (§5.2.6) |
+| Edited by `sable add` | Yes | Yes | No, in general | Yes, where the list is literal (§5.2.7) |
 
-[dev-dependencies]
-bench-harness = "0.3"
+The flexibility of a `.csproj` is MSBuild's, a full build language written in
+XML, and that is its hard part: properties and targets evaluated in phases,
+conditions as strings, imports changing behaviour at a distance. `.sln` was
+replaced by `.slnx` for being unreadable. A build-script manifest (Gradle,
+Zig) gives the reach but must be *run* to be read: configuration time is the
+cost Gradle is known for, and every tool that wants a dependency list needs
+the compiler. `package.sb` takes the language and leaves the running.
 
-[build-dependencies]
-shader-compiler = "1.0"
+### 5.2.2 The file
 
-[features]
-default   = ["vulkan"]
-vulkan    = ["dep:vulkan-sys"]
-metal     = ["dep:metal-sys"]
-debug-gpu = ["vulkan?/validation"]
+```sable
+// package.sb
+import Sable.Build
 
-[profile.release]
-opt-level        = 3
-lto              = "fat"
-codegen-units    = 1
-panic            = "abort"
-strip            = "debuginfo"
-arc-checks       = false       # unowned(safe) traps
-exclusivity      = "unchecked"
-overflow-checks  = false
+/// A renderer with optional GPU back ends.
+let manifest = Package {
+    name: "render-engine",
+    version: "0.4.2",
+    edition: 2027,
+    authors: ["..."],
+    license: "MIT OR Apache-2.0",
+    repository: "https://example.com/render-engine",
 
-[profile.dev]
-opt-level        = 0
-debug            = true
-arc-checks       = true
-exclusivity      = "checked"
-overflow-checks  = true
-leak-check       = true        # heap walk at exit
+    targets: [
+        .library(path: "src/lib.sb"),
+        .executable("render", path: "src/main.sb"),
+    ],
 
-[reflect]
-# types reachable only through reflection must be named here or marked
-# @reflectable, or the linker will strip their metadata
-include = ["Scene", "Material", "App.Config.*"]
+    dependencies: [
+        .registry("sable-math", "1.2"),
+        .registry("image", "0.6", features: ["png", "jpeg"], defaultFeatures: false),
+        .path("platform", "../platform"),
+        .git("shader-tool", "https://example.com/st", tag: "v2.1.0"),
+        .registry("vulkan-sys", "1.3", optional: true),
+        .registry("metal-sys", "0.9", optional: true, when: .os(.macOS)),
+    ],
+    devDependencies: [.registry("bench-harness", "0.3")],
 
-[workspace]
-members = ["crates/*", "tools/shader-tool"]
-exclude = ["experiments"]
+    features: [
+        "default": ["vulkan"],
+        "vulkan": ["dep:vulkan-sys"],
+        "metal": ["dep:metal-sys"],
+        "debug-gpu": ["vulkan?/validation"],
+    ],
 
-[targets.wasm32-unknown-unknown]
-runtime = "minimal"
-reflect = false
+    profiles: [
+        .release(optLevel: 3, lto: .fat, codegenUnits: 1, panic: .abort,
+                 arcChecks: false, exclusivity: .unchecked, overflowChecks: false),
+        .dev(arcChecks: true, exclusivity: .checked, leakCheck: true),
+    ],
+
+    // Types reachable only through reflection; see "Deliberate departures".
+    reflect: ["Scene", "Material", "App.Config.*"],
+
+    platforms: [
+        .target("wasm32-unknown-unknown", runtime: .minimal, reflect: false),
+    ],
+
+    build: .script("build.sb",
+                   allowExec: ["pkg-config", "glslc"],
+                   allowRead: [.outDir, "shaders/"],
+                   allowWrite: [.outDir]),
+}
 ```
+
+- The file declares exactly one top-level `let manifest: Package`
+  (`package` is a keyword: the workspace access level). Other
+  top-level `let`s and functions are allowed and are the point: a list of
+  backends mapped to features, a version shared between targets.
+- Everything comes from `Sable.Build`, a library module shipped with the
+  toolchain (§5.2.8), and from the pure parts of `Sable.Core`. Nothing else
+  can be imported: not the package's own code, not its dependencies — they
+  are what the manifest decides.
+- Field names are the TOML keys in Sable's spelling (`defaultFeatures`,
+  `optLevel`); every table of the TOML format has a field. Enumerated
+  settings are enum cases (`.fat`, `.abort`), so a misspelling is a type
+  error, not a silently ignored string.
+
+### 5.2.3 Workspaces: `workspace.sb`
+
+The workspace root — .NET's solution, Cargo's `[workspace]` — is
+`workspace.sb`, declaring `let workspace: Workspace`:
+
+```sable
+// workspace.sb
+import Sable.Build
+
+let sableMath = Dependency.registry("sable-math", "1.2")
+
+let workspace = Workspace {
+    members: ["crates/*", "tools/shader-tool"],
+    exclude: ["experiments"],
+    shared: Shared {
+        version: "0.4.2",
+        edition: 2027,
+        dependencies: [sableMath, .registry("image", "0.6")],
+        profiles: [.release(optLevel: 3, lto: .thin)],
+        lints: Lints { deny: ["unused_import"] },
+    },
+}
+```
+
+A member takes a shared setting with `.workspace`: `version: .workspace`,
+`dependencies: [.workspace("image")]`. A `package.sb` cannot import its
+workspace's file. Inheritance goes through these named references, so a
+member stays readable on its own.
+
+### 5.2.4 What the manifest may do
+
+The manifest is checked as ordinary Sable, then evaluated by the SIL
+interpreter (the same one `sable repl` and the compile-time evaluator use)
+under these rules. Each is an error at the line that breaks it, not a
+surprise later:
+
+- **No effects.** No file, network, process, clock, random or environment
+  call. `Sable.Core`'s `Runtime` effects are not in scope, and
+  `Sable.IO`, `Sable.Process`, `Sable.Time`, `Sable.Net` cannot be imported.
+- **No host conditions.** `#if os()` and `#if arch()` are rejected in a
+  manifest, because a manifest that branched on the machine evaluating it
+  would give a different lock file on each one. Platform-specific choices are
+  data that the resolver applies per target: `when: .os(.macOS)`,
+  `when: .target("wasm32-unknown-unknown")`, `when: .feature("metal")`.
+- **Bounded.** A step and memory limit, as the compile-time evaluator has.
+  A manifest that loops forever stops with an error naming the line it was
+  on.
+- **Total.** A trap — an index out of range, a failed `!` — is a manifest
+  error with its location; there is no partial package.
+
+Everything else is allowed: `let`, `var`, `if`, `match`, `for`, local and
+top-level functions, closures, string interpolation, the collections.
+
+### 5.2.5 Errors
+
+A manifest's errors are compiler diagnostics with the file and line, shown by
+every command and by the editor as it is typed:
+
+```
+error[S3204]: a manifest cannot import 'Sable.IO': it may not read or
+              write anything (docs/05 §5.2.4)
+ --> package.sb:2:8
+error[S3205]: '#if os()' in a manifest would make the package depend on the
+              machine reading it; write `when: .os(.linux)` on the dependency
+ --> package.sb:14:5
+```
+
+(The codes are placeholders until they are assigned.)
+
+### 5.2.6 Evaluation, caching and what other tools read
+
+1. `sable` parses and checks `package.sb` against `Sable.Build`, then
+   evaluates it. A typical manifest takes milliseconds; the result is cached
+   in `target/.sable/package.json`, keyed by the manifest's hash, the
+   workspace file's hash and the toolchain version, and re-evaluated only when
+   one changes.
+2. The lock file records each manifest's hash. A changed manifest
+   invalidates the resolution, as an edited `sable.toml` did.
+3. **Published packages carry the evaluated form.** `sable publish` uploads
+   `package.json` (normalised, sorted, the `when:` conditions kept as data)
+   beside the source, and the registry, the resolver and any third-party tool
+   read only that. Nothing outside the toolchain ever needs to run Sable to
+   learn what a package depends on.
+4. The language server evaluates manifests as `sable` does, through the same
+   cache, so the editor's view of features and dependencies is the build's.
+   It does not today (#192).
+
+### 5.2.7 `sable add`, `remove` and `update` edit the source
+
+The syntax tree is lossless, so editing a manifest preserves its comments and
+layout. `sable add image@0.6` finds the `dependencies:` field of the
+`Package { }` record, inserts `.registry("image", "0.6")` into its array
+literal in sorted position, and formats only the lines it touched. When the
+list is not a literal (computed by a function, or concatenated), `sable add`
+does not guess: it prints the entry to add and the line of the expression that
+builds the list.
+
+### 5.2.8 `Sable.Build` and editions
+
+`Sable.Build` is part of the toolchain, not a dependency, and is versioned
+with it. Its API only grows: a field or case is added with a default, never
+removed or changed, except at an edition boundary, where the old spelling
+keeps working for manifests of the old edition. This is what Swift needs
+`// swift-tools-version:` for; here `edition:` serves, and a manifest using a
+field newer than the running toolchain gets an error naming the toolchain
+version that has it.
+
+### 5.2.9 Moving from `sable.toml`
+
+- `sable migrate` rewrites `sable.toml` as `package.sb` (or `workspace.sb`)
+  mechanically, keeps the TOML's comments as Sable comments, and leaves the
+  old file for the author to delete.
+- For one release both are read. A directory with both is an error, so there
+  is never a question which one applies. After that, `sable.toml` is
+  rejected with a message pointing at `sable migrate`.
+- The VS Code TOML schema goes. Completion for manifests comes from the
+  language server like any other Sable file.
+
+### 5.2.10 Prerequisites and order of work
+
+1. Compile-time evaluation (#172): `const` and `comptime` evaluated by the
+   interpreter, with the effect, host-condition and limit checks above. The
+   manifest evaluator is that evaluator with a stricter allowlist.
+2. `Sable.Build` in `lib/`: `Package`, `Workspace`, `Shared`, `Target`,
+   `Dependency`, `Condition`, `Profile`, `Lints`, `BuildScript`; and its
+   serialisation to `package.json`.
+3. The driver reads `package.sb` through the cache; `Manifest` (today parsed
+   from TOML) is built from the evaluated value. The resolver, lock file and
+   registry change only in what they are handed.
+4. `sable add`/`remove`/`update`, `new` and `init` write `package.sb`.
+5. `sable migrate`, then the one release of reading both.
+6. The language server reads manifests (#192, #201).
 
 ### Deliberate departures from Cargo
 
-- **`[reflect]`** is new and necessary: reflection reachability has to be
+- **`reflect:`** is new and necessary: reflection reachability has to be
   declared somewhere, and the manifest is the honest place for it.
-- **Memory-model knobs in profiles** (`arc-checks`, `exclusivity`,
-  `leak-check`) — these are the ones programmers will actually want to toggle.
+- **Memory-model knobs in profiles** (`arcChecks`, `exclusivity`,
+  `leakCheck`) — these are the ones programmers will actually want to toggle.
 - **`edition` is a year, and editions may change syntax** but never ABI. A
   package declares its edition; packages of different editions interoperate.
+- **The manifest is Sable**, evaluated at compile time and published
+  evaluated (§5.2.1).
+
 
 ---
 
@@ -235,16 +407,21 @@ Clang runs on units in parallel; lowering is still one unit at a time.
 ## 5.6 Build scripts
 
 `build.sb` runs before the package compiles, for code generation and native
-library discovery. It is sandboxed by default and declares what it needs:
+library discovery. Unlike the manifest it is an ordinary program — it may
+read files and run tools — so it is sandboxed by default, and the manifest
+declares what it needs:
 
-```toml
-[build]
-script       = "build.sb"
-allow-net    = false
-allow-exec   = ["pkg-config", "glslc"]
-allow-read   = ["$OUT_DIR", "shaders/"]
-allow-write  = ["$OUT_DIR"]
+```sable
+build: .script("build.sb",
+               allowNet: false,
+               allowExec: ["pkg-config", "glslc"],
+               allowRead: [.outDir, "shaders/"],
+               allowWrite: [.outDir]),
 ```
+
+The split is the point of §5.2: what a package *is* stays evaluable data,
+and what it *does* before compiling is a sandboxed program with its powers
+written down.
 
 A build script that wants more than it declared fails rather than being
 silently permitted. `cargo` not having this is a known supply-chain weakness and

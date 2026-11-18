@@ -68,7 +68,7 @@ public import Sable.Math.Vectors    // consumers of this module see it too
 
 ```sable
 public    // visible to every consumer of the package
-package   // visible within the workspace (all packages in sable.toml members)
+package   // visible within the workspace (all packages in workspace.sb members)
 internal  // visible within the module  — DEFAULT
 private   // visible within the enclosing declaration (and its extensions in-module)
 ```

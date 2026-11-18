@@ -255,7 +255,9 @@ public sealed partial class SilGen {
         while (_pending.Count > 0) {
             var (symbol, name, type, substitution) = _pending.Dequeue();
             var (syntax, model) = _declarations[symbol];
+            _loweringInstance = name;
             LowerBody(symbol, syntax, model, name, type, substitution);
+            _loweringInstance = null;
         }
 
         // Separately, the globals are set up by the unit the program starts in.
@@ -479,6 +481,24 @@ public sealed partial class SilGen {
     readonly Dictionary<string, FunctionType> _instances = new(StringComparer.Ordinal);
     readonly Queue<(FunctionSymbol Symbol, string Name, FunctionType Type, TypeSubstitution Substitution)> _pending = new();
 
+    /// <summary>
+    ///     What asked for each instance: the generic function, its type
+    ///     arguments, and the instance whose body asked, null when that body
+    ///     was not generic — the chain that brought each instance about.
+    /// </summary>
+    readonly Dictionary<string, (FunctionSymbol Symbol, TypeSubstitution Substitution, string? Requester)> _instanceOrigins =
+        new(StringComparer.Ordinal);
+
+    /// <summary>The instance whose body is being lowered, or null for a function that is not generic.</summary>
+    string? _loweringInstance;
+
+    /// <summary>
+    ///     How long a chain of instances, each asked for by the one before,
+    ///     may grow. Ordinary generic code comes nowhere near; it is a
+    ///     backstop for growth <see cref="Grows" /> does not see.
+    /// </summary>
+    const int MaxInstanceDepth = 200;
+
     void LowerBody(FunctionSymbol symbol, SyntaxNode syntax, SemanticModel model, string name, FunctionType type, TypeSubstitution substitution) {
         if ((_compilation.GetDerivedBody(symbol) ?? _compilation.GetLazyBody(symbol) ?? model.GetBoundNode(syntax)) is not BoundBlock body) {
             return;
@@ -674,14 +694,84 @@ public sealed partial class SilGen {
             return (name, existing);
         }
 
+        if (EndlessInstances(symbol, substitution, at)) {
+            return null;
+        }
+
         if (SignatureOf(symbol, at, substitution) is not { } type) {
             return null;
         }
 
         _instances[name] = type;
+        _instanceOrigins[name] = (symbol, substitution, _loweringInstance);
         _pending.Enqueue((symbol, name, type, substitution));
         return (name, type);
     }
+
+    /// <summary>
+    ///     True, with an error reported, when a new instance would be one of
+    ///     an endless series: a generic function that calls itself, directly
+    ///     or through others, with a type argument built from its own, as
+    ///     <c>deep((x, x), n - 1)</c> in <c>deep&lt;T&gt;</c> does. Each copy
+    ///     would ask for a larger one, and monomorphisation would never end.
+    /// </summary>
+    bool EndlessInstances(FunctionSymbol symbol, TypeSubstitution substitution, SyntaxNode at) {
+        var depth = 0;
+        for (var requester = _loweringInstance;
+             requester is not null && _instanceOrigins.TryGetValue(requester, out var origin);
+             requester = origin.Requester) {
+            if (++depth >= MaxInstanceDepth) {
+                _diagnostics.Error(
+                    ErrorCode.ERR_EndlessInstantiation,
+                    at.Span,
+                    $"'{symbol.Name}' is reached through more than {MaxInstanceDepth} generic calls, each needing a copy "
+                    + "of a generic function for new types: a generic function is compiled once for each type it is used with, "
+                    + "so this would not finish compiling"
+                );
+                return true;
+            }
+
+            if (!ReferenceEquals(origin.Symbol, symbol)) {
+                continue;
+            }
+
+            foreach (var parameter in TypeParametersOf(symbol)) {
+                if (origin.Substitution.Lookup(parameter) is { } before
+                    && substitution.Lookup(parameter) is { } after
+                    && Grows(before, after)) {
+                    _diagnostics.Error(
+                        ErrorCode.ERR_EndlessInstantiation,
+                        at.Span,
+                        $"'{symbol.Name}' with {parameter.Name} = '{before.ToDisplayString()}' leads to a call of it with "
+                        + $"{parameter.Name} = '{after.ToDisplayString()}', which leads to a larger type again, without end: "
+                        + "a generic function is compiled once for each type it is used with, so this would not finish compiling"
+                    );
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>True when <paramref name="after" /> is built from <paramref name="before" />, and is larger.</summary>
+    static bool Grows(TypeSymbol before, TypeSymbol after) =>
+        !after.Equals(before) && Occurs(before, after);
+
+    /// <summary>True when <paramref name="part" /> is <paramref name="type" />, or one of the types it is made of.</summary>
+    static bool Occurs(TypeSymbol part, TypeSymbol type) =>
+        type.Equals(part)
+        || type switch {
+            NamedTypeSymbol named => named.TypeArguments.Any(a => Occurs(part, a)),
+            ArrayTypeSymbol array => Occurs(part, array.ElementType),
+            OptionalTypeSymbol optional => Occurs(part, optional.UnderlyingType),
+            ReferenceTypeSymbol reference => Occurs(part, reference.ReferencedType),
+            TupleTypeSymbol tuple => tuple.ElementTypes.Any(e => Occurs(part, e)),
+            FunctionTypeSymbol function =>
+                function.ParameterTypes.Any(p => Occurs(part, p)) || Occurs(part, function.ReturnType),
+            StructuralUnionTypeSymbol union => union.Cases.Any(c => Occurs(part, c)),
+            _ => false,
+        };
 
     /// <summary>
     ///     A function of the module, or a member of a struct, union, enum or

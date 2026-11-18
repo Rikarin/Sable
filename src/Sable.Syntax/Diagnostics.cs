@@ -188,6 +188,7 @@ public enum ErrorCode {
     ERR_NotLoweredYet = 7000,
     ERR_UnknownBuiltin = 7001,
     ERR_BuiltinSignatureMismatch = 7002,
+    ERR_EndlessInstantiation = 7003,
 }
 
 public enum DiagnosticSeverity {

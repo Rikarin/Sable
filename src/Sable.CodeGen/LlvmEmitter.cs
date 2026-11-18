@@ -2263,6 +2263,28 @@ public sealed partial class LlvmEmitter {
                     Line($"{Result()} = icmp eq ptr {operands[0]}, {operands[1]}");
                     return;
 
+                // The only reference, and not immortal: free to change in place.
+                case "ref_is_unique": {
+                    var objectPointer = Fresh();
+                    var strongField = Fresh();
+                    var strong = Fresh();
+                    var flagsField = Fresh();
+                    var flags = Fresh();
+                    var immortal = Fresh();
+                    var sole = Fresh();
+                    var mortal = Fresh();
+                    Line($"{objectPointer} = load ptr, ptr {operands[0]}");
+                    Line($"{strongField} = getelementptr inbounds %SableObjectHeader, ptr {objectPointer}, i32 0, i32 1");
+                    Line($"{strong} = load i32, ptr {strongField}");
+                    Line($"{flagsField} = getelementptr inbounds %SableObjectHeader, ptr {objectPointer}, i32 0, i32 2");
+                    Line($"{flags} = load i32, ptr {flagsField}");
+                    Line($"{immortal} = and i32 {flags}, 1");
+                    Line($"{mortal} = icmp eq i32 {immortal}, 0");
+                    Line($"{sole} = icmp eq i32 {strong}, 1");
+                    Line($"{Result()} = and i1 {sole}, {mortal}");
+                    return;
+                }
+
                 // The pieces in an array in the frame, joined by one call.
                 case "string_concat_many": {
                     var pieces = Scratch($"[{operands.Length} x ptr]");

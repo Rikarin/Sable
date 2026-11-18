@@ -1021,6 +1021,9 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             case "ref_identical":
                 return ReferenceEquals(Alive((HeapObject)operands[0]!), Alive((HeapObject)operands[1]!));
 
+            case "ref_is_unique":
+                return ((IReference)operands[0]!).Peek() is Counted { Strong: 1, Immortal: false };
+
             case "string_count":
                 return (long)Text(operands[0]).Scalars.Count;
 

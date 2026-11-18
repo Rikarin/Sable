@@ -251,7 +251,7 @@ public sealed partial class LlvmEmitter {
             type switch {
                 ArrayType array => $"[{DisplayName(array.Element)}]",
                 EnumType enumType when OptionalPayload(enumType) is { } payload => DisplayName(payload) + "?",
-                StructType { Name: var name } when name.StartsWith("any$", StringComparison.Ordinal) => "any " + name[4..],
+                StructType { Name: var name } when name.StartsWith("any$", StringComparison.Ordinal) => "any " + name[4..].Replace("$and$", " & ", StringComparison.Ordinal),
                 TupleType tuple => $"({string.Join(", ", tuple.Elements.Select(DisplayName))})",
                 ThickFunctionType thick => FunctionName(thick.Signature),
                 FunctionType function => FunctionName(function),

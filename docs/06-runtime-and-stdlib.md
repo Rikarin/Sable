@@ -67,8 +67,20 @@ live object is kept in a set, and a program that ends with objects alive
 lists them by type and prints the reference cycles among them, each as the
 types along it. Not yet: a kind, a stride, a value-witness table for
 non-class types, field descriptors with names and offsets, conformance
-records — so no registry and no dynamic cast to a protocol — and the
-profiles and `--deny-reflection`. The allocator's size classes reach 1 KB.
+records in the metadata, and the profiles and `--deny-reflection`. The
+allocator's size classes reach 1 KB.
+
+An existential, `any P`, is its box — an object of a class for the value's
+type, `any$box$of$T`, each a subclass of one root class — and P's witness
+table for that type, laid out inline after it: a function per requirement
+that takes the box. Copying an existential shares the box; a witness that
+changes the value (a setter, a mutating method) is given the box where the
+existential keeps it and first copies it if another existential shares it.
+A dynamic cast or test, `e as? Square`, `e is any Named`, asks the box's class:
+to a concrete type, whether it is that type's box; to another protocol,
+whether it is the box of any type of the program that conforms to it, in a
+table the compiler writes out for each protocol cast to — the conformance
+lookup, without a registry at run time.
 
 `FieldDescriptor` (name, type, offset) is **always** emitted, for every type.
 It costs a few bytes per field and it buys: debugger formatters, `Mirror`,

@@ -3387,7 +3387,7 @@ public sealed partial class SilGen {
             // The catches all see one error type: what the body can throw.
             var errorType = ErrorTypeOf(doStatement);
             if (errorType is null) {
-                Fail(doStatement.Syntax, "a 'do' whose catches take an error type that has no SIL type yet");
+                Fail(doStatement.Syntax, "a 'do' whose catches take an error type that has no SIL type");
                 return;
             }
 
@@ -5533,11 +5533,27 @@ public sealed partial class SilGen {
                 return Expression(tryExpression.Expression);
             }
 
+            // Nothing in 'e' throws (the binder warns, S3036), so there is no
+            // error to handle: 'try? e' is 'e' made optional, and 'try! e' and
+            // 'try e ?? f' are 'e'.
+            if (tryExpression.ErrorLocal is null && !Throws(tryExpression.Expression)) {
+                var plain = Expression(tryExpression.Expression);
+                if (plain is null || _current is null || tryExpression.TryKind != TryKind.Optional) {
+                    return plain;
+                }
+
+                if (LowerType(tryExpression.Type) is not EnumType wrapped) {
+                    return Missing(tryExpression, $"a 'try' of type '{tryExpression.Type.ToDisplayString()}'");
+                }
+
+                return Emit(new EnumInst(wrapped, wrapped.CaseIndex("Some"), plain is UnitValue ? null : plain));
+            }
+
             // What the catch's 'error' is, when it names it; otherwise
             // whatever the expression can throw.
             var errorType = tryExpression.ErrorLocal is { } named ? LowerType(named.Type) : ThrownBy(tryExpression.Expression);
             if (errorType is null) {
-                return Missing(tryExpression, "a 'try' whose error type has no SIL type yet");
+                return Missing(tryExpression, "a 'try' whose error type has no SIL type");
             }
 
             var resultType = LowerType(tryExpression.Type);
@@ -5611,6 +5627,12 @@ public sealed partial class SilGen {
             return thrown.Count == 0 ? null
                 : thrown.Any(t => t.Equals(Core.AnyError)) ? LowerType(Core.AnyError)
                 : LowerType(StructuralUnionTypeSymbol.Create(thrown));
+        }
+
+        bool Throws(BoundNode node) {
+            var thrown = new List<TypeSymbol>();
+            CollectThrown(node, thrown);
+            return thrown.Count > 0;
         }
 
         void CollectThrown(BoundNode node, List<TypeSymbol> into) {

@@ -858,6 +858,8 @@ internal sealed class TypeBinder(Compilation compilation) {
             );
         }
 
+        compilation.ReportUse(_diagnostics, found, syntax.Identifier.Span, context, scope);
+
         return Resolved(syntax, found, ApplyTypeArguments(found, syntax.TypeArgumentList, context, scope, syntax.Span));
     }
 
@@ -885,6 +887,8 @@ internal sealed class TypeBinder(Compilation compilation) {
             if (!Visibility.IsVisible(member, scope, compilation)) {
                 ReportHidden(member, syntax.Right.Span);
             }
+
+            compilation.ReportUse(_diagnostics, member, syntax.Right.Span, context, scope);
 
             return Resolved(syntax.Right, member, ApplyTypeArguments(member, syntax.Right.TypeArgumentList, context, scope, syntax.Span));
         }

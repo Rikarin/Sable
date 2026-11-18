@@ -2590,6 +2590,10 @@ public sealed partial class Binder {
         return BindMemberGroup(syntax, null, members, null);
     }
 
+    /// <summary>A use of a declaration, which '@deprecated' warns of and '@available' may refuse.</summary>
+    void ReportUse(Symbol used, SyntaxNode at) =>
+        _compilation.ReportUse(_diagnostics, used, at.Span, _containingSymbol, _scope);
+
     BoundExpression BindMemberGroup(
         SyntaxNode syntax,
         BoundExpression? receiver,
@@ -2598,6 +2602,11 @@ public sealed partial class Binder {
         TypeSubstitution? substitution = null
     ) {
         substitution ??= TypeSubstitution.Empty;
+
+        // A function is reported once its overload is chosen.
+        if (members is [not FunctionSymbol and var used, ..]) {
+            ReportUse(used, syntax is MemberAccessExpressionSyntax { Name: var name } ? name : syntax);
+        }
 
         var functions = members.OfType<FunctionSymbol>().ToImmutableArray();
         if (!functions.IsEmpty) {
@@ -3753,6 +3762,7 @@ public sealed partial class Binder {
         }
 
         ReportUnmetDerivation(resolved, group.Receiver?.Type, syntax);
+        ReportUse(resolved, group.Syntax is MemberAccessExpressionSyntax { Name: var name } ? name : group.Syntax);
 
         var call = new BoundCall(syntax, group.Receiver, resolved, converted.ToImmutable(), result) {
             Substitution = substitution,
@@ -6421,7 +6431,7 @@ public sealed partial class Binder {
             return;
         }
 
-        var checker = new Exhaustiveness(Core);
+        var checker = new Exhaustiveness(Core) { Module = _scope.Module };
         var rows = new List<Exhaustiveness.Pat>();
 
         foreach (var arm in match.Arms) {
@@ -6440,6 +6450,17 @@ public sealed partial class Binder {
 
         var missing = checker.Missing(rows, subject);
         if (missing.Count == 0 || checker.GaveUp || checker.HasErrors) {
+            return;
+        }
+
+        // Every case named, of a union that may gain more: only 'default' covers those.
+        if (missing is [Exhaustiveness.LaterCase]) {
+            _diagnostics.Error(
+                ErrorCode.ERR_MatchNotExhaustive,
+                match.Syntax.Span,
+                $"match is not exhaustive: '{subject.ToDisplayString()}' is another module's, and not '@frozen', "
+                + "so it may gain cases; add 'default => ...' for them"
+            );
             return;
         }
 

@@ -149,6 +149,12 @@ public enum ErrorCode {
     ERR_MalformedBuiltin = 3082,
     ERR_MalformedArrayExtension = 3083,
     ERR_HalfOpenRangeWithoutEnd = 3091,
+    ERR_UnknownAttribute = 3092,
+    ERR_AttributeDoesNotApply = 3093,
+    ERR_MalformedAttribute = 3094,
+    WRN_Deprecated = 3095,
+    ERR_NotAvailable = 3096,
+    ERR_NotDeeplyImmutable = 3097,
     ERR_NotSupportedYet = 3099,
 
     // '@test' and '@bench' (docs/05 §5.1): what the harness can call.
@@ -174,6 +180,7 @@ public enum ErrorCode {
     LNT_UnusedImport = 3302,
     LNT_VarNeverMutated = 3303,
     LNT_ShadowedParameter = 3304,
+    LNT_UnusedResult = 3308,
     LNT_UnknownLint = 3399,
 
     // ---- Patterns and flow (S6000-S6999) ---------------------------------

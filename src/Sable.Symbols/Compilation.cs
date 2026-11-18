@@ -365,6 +365,7 @@ public sealed partial class Compilation {
             var scope = new FileScope(tree, module);
             _fileScopes[tree] = scope;
             CurrentScope = scope;
+            CheckAttributes(tree);
 
             foreach (var member in unit.Members) {
                 DeclareMember(member, module);

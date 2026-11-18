@@ -5,7 +5,9 @@ module Sable.Core
 // validates them back — framing, every tag, every length and every relative
 // link — before handing out a value.
 
-/// What 'fromBytes' gives: the value, or why the bytes were refused.
+/// What 'fromBytes' gives: the value, or why the bytes were refused. It is
+/// '@frozen': there is nothing else it could be, so a match needs no 'default'.
+@frozen
 public union Decoded<Value> {
     Ok(value: Value),
     Invalid(why: String),

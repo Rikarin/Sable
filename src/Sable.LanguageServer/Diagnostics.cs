@@ -38,13 +38,21 @@ public sealed partial class LanguageServer {
     int _loaded;
 
     /// <summary>The workspace changed: diagnostics are due once it is quiet, and a round under way is out of date.</summary>
+    /// <remarks>
+    ///     The round under way is cancelled before the next is asked for,
+    ///     never after: released first, the loop could wake and start the
+    ///     round for this very change — at once, after loading — and the
+    ///     cancel would then stop that one, whose release was already taken,
+    ///     so no round would follow and the change would go undiagnosed.
+    /// </remarks>
     void Changed() {
-        _changed.Release();
         try {
             Volatile.Read(ref _round)?.Cancel();
         } catch (ObjectDisposedException) {
             // That round is over.
         }
+
+        _changed.Release();
     }
 
     /// <summary>

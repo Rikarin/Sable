@@ -23,6 +23,20 @@ internal sealed class TestClient : IAsyncDisposable {
     readonly Task _reading;
     int _nextId;
 
+    /// <summary>What the server logged, which a test that times out shows: why the message never came.</summary>
+    readonly StringWriter _logged = new();
+    readonly TextWriter _log;
+
+    /// <summary>The server's log so far.</summary>
+    public string Logged {
+        get {
+            // The synchronised writer locks itself while it writes.
+            lock (_log) {
+                return _logged.ToString();
+            }
+        }
+    }
+
     public Task<int> Running { get; }
 
     /// <summary>The server, for what only a test asks of it.</summary>
@@ -30,6 +44,7 @@ internal sealed class TestClient : IAsyncDisposable {
 
     /// <param name="projects">How the server finds the packages under its folder; none, by default.</param>
     public TestClient(TimeSpan? diagnosticsDelay = null, Func<string, IReadOnlyList<LanguageProject>>? projects = null) {
+        _log = TextWriter.Synchronized(_logged);
         _serverInput = new(PipeDirection.In, _toServer.ClientSafePipeHandle);
         _clientInput = new(PipeDirection.In, _toClient.ClientSafePipeHandle);
         var server = Server = new LanguageServer(_serverInput, _toClient, new LanguageServerOptions {
@@ -39,7 +54,7 @@ internal sealed class TestClient : IAsyncDisposable {
             DiagnosticsDelay = diagnosticsDelay ?? TimeSpan.FromMilliseconds(30),
             LibraryCacheDirectory = Path.Combine(Path.GetTempPath(), "sable-lsp-tests", Guid.NewGuid().ToString("N")),
             ExplainLink = DiagnosticDocs.Link,
-            Log = TextWriter.Null
+            Log = _log
         });
         Running = Task.Run(() => server.RunAsync());
         _channel = new(_clientInput, _toServer);
@@ -187,17 +202,32 @@ internal sealed class TestClient : IAsyncDisposable {
         return RequestAsync(method, parameters);
     }
 
+    /// <summary>
+    ///     How many notifications and requests the server has sent so far: a
+    ///     wait from here takes only what comes after. A file not open has
+    ///     no version to tell an old report of it from a new one.
+    /// </summary>
+    public int Received {
+        get {
+            lock (_notifications) {
+                return _notifications.Count;
+            }
+        }
+    }
+
     /// <summary>Waits for diagnostics for a document that satisfy a condition, and returns them.</summary>
-    public async Task<JsonElement> DiagnosticsAsync(string uri, Func<JsonElement, bool>? until = null) {
+    /// <param name="since">A <see cref="Received" /> count: only reports sent after it are taken.</param>
+    public async Task<JsonElement> DiagnosticsAsync(string uri, Func<JsonElement, bool>? until = null, int since = 0) {
         var parameters = await MessageAsync("textDocument/publishDiagnostics",
-            p => p.GetString("uri") == uri && IsCurrent(uri, p) && (until is null || until(p.Get("diagnostics")!.Value)));
+            p => p.GetString("uri") == uri && IsCurrent(uri, p) && (until is null || until(p.Get("diagnostics")!.Value)), since);
         return parameters.Get("diagnostics")!.Value;
     }
 
     /// <summary>Waits for a notification or request from the server, of a method and satisfying a condition; returns its parameters.</summary>
-    public async Task<JsonElement> MessageAsync(string method, Func<JsonElement, bool>? until = null) {
+    /// <param name="since">A <see cref="Received" /> count: only messages sent after it are taken.</param>
+    public async Task<JsonElement> MessageAsync(string method, Func<JsonElement, bool>? until = null, int since = 0) {
         var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(60);
-        var seen = 0;
+        var seen = since;
         while (DateTime.UtcNow < deadline) {
             List<JsonElement> pending;
             lock (_notifications) {
@@ -215,7 +245,7 @@ internal sealed class TestClient : IAsyncDisposable {
             await _notified.WaitAsync(TimeSpan.FromMilliseconds(200));
         }
 
-        throw new TimeoutException($"no {method} as expected");
+        throw new TimeoutException($"no {method} as expected; the server logged:\n{Logged}\nthread pool: {ThreadPool.ThreadCount} threads, {ThreadPool.PendingWorkItemCount} items queued");
     }
 
     /// <summary>Every message of a method the server has sent so far.</summary>

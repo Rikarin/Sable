@@ -3163,7 +3163,10 @@ public sealed partial class SilGen {
         /// <summary>The end of a borrow: a temporary is taken off the temporaries and destroyed, a load_borrow ended.</summary>
         void End(SilValue value) {
             if (value is AccessMarker marker) {
-                Emit(new BuiltinInst("access_end", SilType.Unit, marker.Address));
+                if (marker.Begun) {
+                    Emit(new BuiltinInst("access_end", SilType.Unit, marker.Address));
+                }
+
                 return;
             }
 
@@ -5574,6 +5577,17 @@ public sealed partial class SilGen {
                         ? Emit(new TupleElementAddrInst(tuple, element.Index))
                         : null;
 
+                // An element of an array, where it is: 'bump(&values[0])'.
+                case BoundIndexAccess { Subscript: null, Indices: [var indexExpression] } element
+                    when Sub(element.Receiver.Type) is ArrayTypeSymbol && !IsInlineArray(element.Receiver): {
+                    if (Address(element.Receiver, borrows) is not { Type: AddressType { Pointee: ArrayType } } array
+                        || Expression(indexExpression) is not { } index) {
+                        return null;
+                    }
+
+                    return Emit(new BuiltinInst("array_element_addr", SilType.Address(((ArrayType)((AddressType)array.Type).Pointee).Element), array, index));
+                }
+
                 default:
                     return Missing(target, $"storing to '{Describe(target.Syntax)}'");
             }
@@ -7391,6 +7405,7 @@ public sealed partial class SilGen {
         ///     or <c>try_apply</c> with the borrows ended on both of its edges.
         /// </summary>
         SilValue? Invoke(SilValue reference, FunctionType type, List<SilValue> arguments, List<SilValue> borrows, SyntaxNode at, bool cannotThrow = false) {
+            BeginAccesses(borrows);
             if (type.Thrown is null) {
                 var apply = Emit(new ApplyInst(reference, type.Result, [..arguments]));
                 EndAll(borrows);

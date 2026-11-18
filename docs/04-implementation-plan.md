@@ -537,14 +537,24 @@ receiver, is a path from a variable through fields and elements (an
 element is the whole collection); two that overlap, one of them a change,
 are error S3062, naming both arguments and the fix — `bump(&p.a, &p.a)`,
 `swap(&a[i], &a[j])`, `copy(&n, &n)`, `p.absorb(&p.a)` are rejected, and
-`bump(&p.a, &p.b)` is not. Where the compiler cannot tell — storage inside
-an object, reached through two references — the call is bracketed by
-`access_begin_modify`/`access_begin_read` and `access_end`, and the
-runtime traps on an access that conflicts with one in progress. The
-markers are kept in debug and `-O0` builds and dropped from optimised
-ones unless `--exclusivity=checked` keeps them (docs/02 §2.3); the
-interpreter always checks. Deferred: instrumenting plain reads of object
-fields during an access — only accesses passed to calls are tracked.
+`bump(&p.a, &p.b)` is not. Where the compiler cannot tell — shared
+storage: a global, or a field of an object (a class's, a closure context's,
+a captured variable's box) — the call is bracketed by
+`access_begin_modify`/`access_begin_read` and `access_end`, begun once
+every argument is evaluated (so `add(&box.n, box.n + 1)` reads first), and
+the runtime traps on an access that conflicts with one in progress. Every
+plain read or write of shared storage — a load, a store, an array changed
+in place — is checked against the accesses in progress as it happens, so
+`bump(&counter)` that does `counter += 1` traps; inline, the check is one
+load of `sable_access_count`, and the runtime is called only when an
+access is in progress. Storage is a range of bytes (the interpreter: a path
+of object, field and elements), so a struct overlaps its fields. An array
+element passes inout through `array_element_addr` — `bump(&values[0])`,
+`bump(&box.items[0])` — and the access is to the whole array, which may not
+change while the element is lent. The markers and checks are kept in debug
+and `-O0` builds and dropped from optimised ones unless
+`--exclusivity=checked` keeps them (docs/02 §2.3); the interpreter follows
+the module's setting.
 
 ### 3.5 Regions (~4 weeks)
 

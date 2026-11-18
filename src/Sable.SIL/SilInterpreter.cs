@@ -391,32 +391,74 @@ public sealed partial class SilInterpreter(SilModule module, int stepLimit = 10_
         }
     }
 
+    /// <summary>An element of an array, passed inout: the array is the only reference to its elements.</summary>
+    sealed class ArrayElement(HeapArray array, int index) : IReference {
+        public object? Get() => Peek() ?? throw new SilTrap("load from uninitialised storage");
+        public object? Peek() => Alive(array).Elements[index];
+        public void Set(object? value) => Alive(array).Elements[index] = value;
+    }
+
     /// <summary>A field of an object.</summary>
     /// <summary>The accesses in progress (docs/02 §2.3): where, and whether each is a change.</summary>
-    readonly List<(object Storage, bool Modify)> _accesses = [];
+    readonly List<(List<object> Storage, bool Modify)> _accesses = [];
 
     void Access(string name, IReference address) {
+        if (!module.CheckExclusivity) {
+            return;
+        }
+
         var storage = StorageOf(address);
         if (name == "access_end") {
-            _accesses.RemoveAt(_accesses.FindLastIndex(a => Equals(a.Storage, storage)));
+            _accesses.RemoveAt(_accesses.FindLastIndex(a => a.Storage.SequenceEqual(storage)));
             return;
         }
 
         var modify = name == "access_begin_modify";
-        if (_accesses.Any(a => Equals(a.Storage, storage) && (modify || a.Modify))) {
-            throw new SilTrap("overlapping accesses to the same storage");
-        }
-
+        CheckAccess(storage, modify);
         _accesses.Add((storage, modify));
     }
 
-    /// <summary>What an address is the storage of: an object's field, the same whichever reference reached it.</summary>
-    static object StorageOf(IReference address) =>
-        address switch {
-            Field field => (field.Instance, field.Index),
-            Element element => (StorageOf(element.Parent), element.Index),
-            _ => address,
-        };
+    /// <summary>A plain read or write of shared storage, as it happens: a trap if it overlaps an access in progress.</summary>
+    void CheckAccess(IReference address, bool modify) {
+        if (module.CheckExclusivity && _accesses.Count > 0) {
+            CheckAccess(StorageOf(address), modify);
+        }
+    }
+
+    void CheckAccess(List<object> storage, bool modify) {
+        if (_accesses.Any(a => (modify || a.Modify) && Overlaps(a.Storage, storage))) {
+            throw new SilTrap("overlapping accesses to the same storage");
+        }
+    }
+
+    /// <summary>Two paths overlap when one leads into the other: a struct and a field of it, as the bytes do natively.</summary>
+    static bool Overlaps(List<object> first, List<object> second) {
+        for (var i = 0; i < Math.Min(first.Count, second.Count); i++) {
+            if (!Equals(first[i], second[i])) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    ///     What an address is the storage of, as a path: an object and its
+    ///     field — the same whichever reference reached it — or a global, then
+    ///     the fields and elements inside.
+    /// </summary>
+    static List<object> StorageOf(IReference address) {
+        switch (address) {
+            case Field field:
+                return [field.Instance, field.Index];
+            case Element element:
+                var path = StorageOf(element.Parent);
+                path.Add(element.Index);
+                return path;
+            default:
+                return [address];
+        }
+    }
 
     sealed class Field(HeapObject instance, int index) : IReference {
         public HeapObject Instance => instance;
@@ -541,6 +583,9 @@ public sealed partial class SilInterpreter(SilModule module, int stepLimit = 10_
             SilBlock? next = null;
             foreach (var instruction in block.Instructions) {
                 current = instruction;
+                if (SharedStorage.CheckedAccessOf(instruction) is var (accessed, modify)) {
+                    CheckAccess((IReference)values[accessed]!, modify);
+                }
                 if (++_steps > stepLimit) {
                     throw new SilTrap("step limit reached", located: false);
                 }
@@ -1257,6 +1302,16 @@ public sealed partial class SilInterpreter(SilModule module, int stepLimit = 10_
                 array.Elements[(int)index] = operands[2];
                 Release(array.Type.Element, old, depth);
                 return null;
+            }
+
+            case "array_element_addr": {
+                var array = Unique(builtin.Operands[0], (IReference)operands[0]!);
+                var index = (long)operands[1]!;
+                if (index < 0 || index >= array.Elements.Count) {
+                    throw new SilTrap("array index out of range");
+                }
+
+                return new ArrayElement(array, (int)index);
             }
 
             case "array_remove_last": {

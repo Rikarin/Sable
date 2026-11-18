@@ -233,7 +233,9 @@ public sealed partial class LlvmEmitter {
                                 declare void @sable_tasks_drain()
                                 declare void @sable_array_make_unique(ptr nocapture, ptr)
                                 @sable_empty_array_count = internal constant [3 x i64] zeroinitializer
-                                declare void @sable_access_begin(ptr, i32)
+                                declare void @sable_access_begin(ptr, i64, i32)
+                                declare void @sable_access_check(ptr, i64, i32)
+                                @sable_access_count = external global i64
                                 declare void @sable_access_end(ptr)
                                 declare ptr @sable_inline_new_stack(ptr, ptr, i64)
                                 declare ptr @sable_stack_object(ptr, ptr, i64)
@@ -1169,10 +1171,39 @@ public sealed partial class LlvmEmitter {
         /// </summary>
         void SiteForRuntime() => Line($"store ptr {_site}, ptr @sable_trap_site");
 
+        /// <summary>The size of what an address holds, in bytes, as LLVM lays it out.</summary>
+        string StorageSize(SilValue address) =>
+            $"ptrtoint (ptr getelementptr ({Type(((AddressType)address.Type).Pointee)}, ptr null, i32 1) to i64)";
+
+        /// <summary>
+        ///     A plain read or write of shared storage, in a checked build: a
+        ///     trap if it overlaps an access in progress. Inline, the check is
+        ///     whether any access is in progress at all; the runtime looks
+        ///     further only when one is.
+        /// </summary>
+        void CheckAccess(SilValue address, bool modify) {
+            var count = Fresh();
+            var busy = Fresh();
+            var check = NewLabel("access");
+            var free = NewLabel("unaccessed");
+            Line($"{count} = load i64, ptr @sable_access_count");
+            Line($"{busy} = icmp ne i64 {count}, 0");
+            Line($"br i1 {busy}, label %{check}, label %{free}, !prof !{{!\"branch_weights\", i32 1, i32 2000}}");
+            Continue(check);
+            SiteForRuntime();
+            Line($"call void @sable_access_check(ptr {Name(address)}, i64 {StorageSize(address)}, i32 {(modify ? 1 : 0)})");
+            Line($"br label %{free}");
+            Continue(free);
+        }
+
         void Instruction(SilInstruction instruction) {
             _site = instruction.Location is { } at && function.SourceFile is { } file
                 ? module.TrapMessage($"{file}:{at.Line}:{at.Column}")
                 : "null";
+
+            if (module._checkExclusivity && SharedStorage.CheckedAccessOf(instruction) is var (accessed, modify)) {
+                CheckAccess(accessed, modify);
+            }
             // A slot is made where the function starts, whatever line declared its variable.
             if (_scope is not null && instruction.Location is { } location && instruction is not AllocStackInst) {
                 _dbg = $", !dbg {Debug!.Location(location.Line, location.Column, _scope)}";
@@ -1816,7 +1847,7 @@ public sealed partial class LlvmEmitter {
             if (builtin.Name.StartsWith("access_", StringComparison.Ordinal)) {
                 if (module._checkExclusivity) {
                     var call = builtin.Name == "access_end" ? "sable_access_end" : "sable_access_begin";
-                    var kind = builtin.Name == "access_end" ? "" : $", i32 {(builtin.Name == "access_begin_modify" ? 1 : 0)}";
+                    var kind = builtin.Name == "access_end" ? "" : $", i64 {StorageSize(builtin.Operands[0])}, i32 {(builtin.Name == "access_begin_modify" ? 1 : 0)}";
                     if (builtin.Name != "access_end") {
                         SiteForRuntime();
                     }
@@ -2175,6 +2206,12 @@ public sealed partial class LlvmEmitter {
                     Line($"{old} = load {elementType}, ptr {element}");
                     Line($"store {elementType} {operands[2]}, ptr {element}");
                     Own(false, arrayType.Element, old);
+                    return;
+                }
+
+                case "array_element_addr": {
+                    var arrayType = (ArrayType)((AddressType)builtin.Operands[0].Type).Pointee;
+                    _names[builtin] = MutableElement(operands[0], operands[1], arrayType);
                     return;
                 }
 

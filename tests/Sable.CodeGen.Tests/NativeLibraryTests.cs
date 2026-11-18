@@ -163,10 +163,14 @@ public sealed class NativeLibraryTests {
             // Windows: the C runtime the library's objects were compiled for,
             // and a shared library's import library, which the link wrote
             // beside it under the static one's name. macOS and Linux: the
-            // shared library is found beside the program.
+            // shared library is found beside the program. A static library's
+            // objects call the DLL C runtime too, which clang's driver, linking
+            // the static one (libcmt) by default, would conflict with: so the
+            // program is linked with only the one, as Microsoft's /MD links it.
             List<string> arguments = [..NativeTarget.Host.ClangFlags, host];
             arguments.AddRange((kind, NativeTarget.Host.Platform) switch {
                 (LibraryKind.Dynamic, NativePlatform.Windows) => [Path.Combine(directory.FullName, "counter.lib")],
+                (LibraryKind.Static, NativePlatform.Windows) => [library, "-Wl,/NODEFAULTLIB:libcmt"],
                 (LibraryKind.Dynamic, NativePlatform.MacOS) => [library, "-Wl,-rpath,@executable_path"],
                 (LibraryKind.Dynamic, _) => [library, "-Wl,-rpath,$ORIGIN"],
                 (_, NativePlatform.Linux) => [library, "-lm", "-lpthread"],

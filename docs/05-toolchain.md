@@ -188,7 +188,9 @@ let manifest = Package {
   functions. As it is loaded, a constructor starts the runtime, takes the
   process's arguments (where the C library passes them to constructors:
   Apple's and glibc) and gives its globals their initial values; the runtime
-  destroys them as the process exits, before its leak check. A single file
+  destroys them as the process exits, before its leak check. On Windows it
+  is compiled for the DLL C runtime, as `/MD` is, and a static library also
+  holds compiler-rt's builtins, which Microsoft's toolchain lacks. A single file
   is built so by `sable build file.sb --emit staticlib` (or `dylib`). Not
   yet cached between builds as a binary's units are.
 - Field names are the TOML keys in Sable's spelling (`defaultFeatures`,

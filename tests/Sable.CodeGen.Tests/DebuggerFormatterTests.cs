@@ -322,12 +322,12 @@ public sealed class DebuggerFormatterTests {
         // 'next' goes one statement at a time, 'step' into the call.
         var stops = System.Text.RegularExpressions.Regex.Matches(output, @"frame #0: .*? at steps\.sb:(\d+)").Select(static m => int.Parse(m.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture)).ToList();
         Assert.Equal([11, 12, 13, 4, 5], stops.Take(5));
-        Assert.Contains("Steps.triple(n=1) at steps.sb:4", output, StringComparison.Ordinal);
-        Assert.Contains("(Int) doubled = 2", output, StringComparison.Ordinal);
+        Expect(output, "Steps.triple(n=1) at steps.sb:4");
+        Expect(output, "(Int) doubled = 2");
 
         // 'finish' comes back to the caller with the result.
-        Assert.Contains("Return value: (Int) $0 = 3", output, StringComparison.Ordinal);
-        Assert.Contains("(Int) total = 4", output, StringComparison.Ordinal);
+        Expect(output, "Return value: (Int) $0 = 3");
+        Expect(output, "(Int) total = 4");
     }
 
     /// <summary>That the session shows the text, and the whole session when it does not: a debugger's output says why.</summary>
@@ -357,11 +357,11 @@ public sealed class DebuggerFormatterTests {
         var output = await Run(lldb, Calls, "calls.sb", ["b calls.sb:20", "run", "frame variable", "up", "frame variable add.count add.label", "kill"]);
 
         // Inside, what it captured reads as locals do — by reference or by value.
-        Assert.Contains("Calls.main$closure0(a=3) at calls.sb:20", output, StringComparison.Ordinal);
-        Assert.Contains("(Int) a = 3\n(Int) count = 2", output, StringComparison.Ordinal);
+        Expect(output, "Calls.main$closure0(a=3) at calls.sb:20");
+        Expect(output, "(Int) a = 3\n(Int) count = 2");
 
         // Outside, a closure is its function, and its captures are its children.
-        Assert.Contains("(Int) add.count = 2", output, StringComparison.Ordinal);
+        Expect(output, "(Int) add.count = 2");
     }
 
     [Fact]
@@ -370,9 +370,54 @@ public sealed class DebuggerFormatterTests {
             return;
         }
 
+        // Taken whole, as C takes a name: an lldb that reads it as Swift's
+        // or C++'s would look up only 'triple' (the plugin says C).
         var output = await Run(lldb, Steps, "steps.sb", ["b Steps.triple", "run", "bt", "kill"]);
-        Assert.Contains("Steps.triple(n=1) at steps.sb:4", output, StringComparison.Ordinal);
-        Assert.Contains("Steps.main at steps.sb:13", output, StringComparison.Ordinal);
+        Expect(output, "Steps.triple(n=1) at steps.sb:4");
+        Expect(output, "Steps.main at steps.sb:13");
+    }
+
+    /// <summary>
+    ///     A witness thunk is a trampoline to the method, in a file of its
+    ///     own; and, for an LLVM that would write its whole body as one
+    ///     line-0 row, its prologue has a line — what lldb 18 needs to step
+    ///     on through it rather than out of it.
+    /// </summary>
+    [Fact]
+    public void AWitnessThunkIsSteppedThroughWhateverTheLlvm() {
+        var directory = Directory.CreateTempSubdirectory("sable-thunk-");
+        try {
+            var result = Pipeline.Compile(new SourceText(Calls, "calls.sb"), directory.FullName);
+            Assert.True(result.Succeeded, string.Join("\n", result.Errors));
+            var ir = result.LlvmIr!;
+            var subprogram = ir.Split('\n').Single(static l => l.Contains("!DISubprogram(name: \"$witness$Calls.Dog$name\"", StringComparison.Ordinal));
+            Assert.Contains("targetFuncName: \"Calls.Dog.name\"", subprogram, StringComparison.Ordinal);
+            Assert.Contains("DIFlagArtificial", subprogram, StringComparison.Ordinal);
+            var file = System.Text.RegularExpressions.Regex.Match(subprogram, @"file: (![0-9]+)").Groups[1].Value;
+            Assert.Contains($"{file} = !DIFile(filename: \"<compiler-generated>\"", ir, StringComparison.Ordinal);
+            var scopeLine = LlvmEmitter.ThunkPrologueHasALine(NativeBuild.CompilerVersion) ? 1 : 0;
+            Assert.Contains($"line: 0, type:", subprogram, StringComparison.Ordinal);
+            Assert.Contains($"scopeLine: {scopeLine},", subprogram, StringComparison.Ordinal);
+        } finally {
+            directory.Delete(true);
+        }
+    }
+
+    [Theory]
+    [InlineData("Ubuntu clang version 18.1.3 (1ubuntu1)\nTarget: x86_64-pc-linux-gnu", 18, false, true)]
+    [InlineData("clang version 19.1.7\nTarget: aarch64-unknown-linux-gnu", 19, false, true)]
+    [InlineData("clang version 20.1.0 (Fedora 20.1.0-1.fc42)", 20, false, false)]
+    [InlineData("Apple clang version 16.0.0 (clang-1600.0.26.6)\nTarget: arm64-apple-darwin24.6.0", 16, true, false)]
+    public void TheCompilersVersionDecidesTheThunksPrologue(string versionText, int major, bool apple, bool prologueHasALine) {
+        var version = NativeBuild.ParseVersion(versionText);
+        Assert.Equal((major, apple), version);
+        Assert.Equal(prologueHasALine, LlvmEmitter.ThunkPrologueHasALine(version));
+    }
+
+    [Fact]
+    public void NoCompilerNoThunkPrologueLine() {
+        Assert.Null(NativeBuild.ParseVersion("gcc (GCC) 14.2.0"));
+        Assert.False(LlvmEmitter.ThunkPrologueHasALine(null));
     }
 
     [Fact]
@@ -415,8 +460,8 @@ public sealed class DebuggerFormatterTests {
         }
 
         var output = await Run(lldb, source, "rec.sb", ["b rec.sb:28", "run", "frame variable root n", "kill"]);
-        Assert.Contains("children = count = 1 {\n    [0] = {\n      label = \"leaf\"", output, StringComparison.Ordinal);
-        Assert.Contains("next = Rec.Node {\n    value = 2\n    next = none", output, StringComparison.Ordinal);
+        Expect(output, "children = count = 1 {\n    [0] = {\n      label = \"leaf\"");
+        Expect(output, "next = Rec.Node {\n    value = 2\n    next = none");
     }
 
     [Fact]

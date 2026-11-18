@@ -100,6 +100,31 @@ public static class NativeBuild {
 
     public static string CompilerPath => Environment.GetEnvironmentVariable("CC") is { Length: > 0 } cc ? cc : "clang";
 
+    /// <summary>
+    ///     The C compiler's LLVM major version, and whether it is Apple's
+    ///     (whose numbers are its own); null when there is none, or it does
+    ///     not say. Debug information leans on it where LLVMs lay out a line
+    ///     table differently.
+    /// </summary>
+    public static (int Major, bool Apple)? CompilerVersion => Version.Value;
+
+    static readonly Lazy<(int Major, bool Apple)?> Version = new(static () => {
+        try {
+            var (exitCode, output) = Run(CompilerPath, ["--version"]);
+            return exitCode == 0 ? ParseVersion(output) : null;
+        } catch (System.ComponentModel.Win32Exception) {
+            return null;
+        }
+    });
+
+    /// <summary>From <c>clang --version</c>: "Ubuntu clang version 18.1.3 (1ubuntu1)", "Apple clang version 16.0.0 (…)".</summary>
+    public static (int Major, bool Apple)? ParseVersion(string output) {
+        var match = System.Text.RegularExpressions.Regex.Match(output, @"(Apple )?clang version (\d+)\.");
+        return match.Success
+            ? (int.Parse(match.Groups[2].Value, System.Globalization.CultureInfo.InvariantCulture), match.Groups[1].Success)
+            : null;
+    }
+
     /// <summary>True when a C compiler can be run here.</summary>
     public static bool IsAvailable() {
         try {

@@ -9,6 +9,14 @@ public sealed partial class LlvmEmitter {
     // =======================================================================
 
     /// <summary>
+    ///     Whether a forwarding thunk's prologue is given a line of its own
+    ///     for this compiler: for an LLVM before 20, which ends no prologue
+    ///     on line 0 (see <c>DebugInfo.Subprogram</c>). Apple's lldb steps
+    ///     through the thunk as a trampoline whatever its lines.
+    /// </summary>
+    public static bool ThunkPrologueHasALine((int Major, bool Apple)? compiler) => compiler is { Apple: false, Major: < 20 };
+
+    /// <summary>
     ///     The DWARF metadata: one compile unit, a file per source, a
     ///     subprogram per function, a location per instruction, and a variable
     ///     per local and parameter — what lldb needs for frames, locals and
@@ -99,8 +107,19 @@ public sealed partial class LlvmEmitter {
 
         string Unit => _unit ??= Reserve();
 
-        /// <summary>The function's file; for one the compiler made, the compile unit's.</summary>
-        public string FileOf(SilFunction function) => function.SourceFile is { } file ? File(file) : _firstFile!;
+        /// <summary>
+        ///     The function's file; for one the compiler made, the compile
+        ///     unit's — or, for a forwarding thunk, a file no source is, as
+        ///     Swift's thunks are: it has no line of the program's, and may
+        ///     be given a line of its own (see <see cref="Subprogram"/>).
+        /// </summary>
+        public string FileOf(SilFunction function) =>
+            function.SourceFile is { } file ? File(file)
+            : function.TrampolineTarget is not null ? File(CompilerGenerated)
+            : _firstFile!;
+
+        /// <summary>The file a forwarding thunk's prologue is said to be in: one no breakpoint by line can name.</summary>
+        const string CompilerGenerated = "<compiler-generated>";
 
         /// <summary>
         ///     A function's subprogram, named by the function's full Sable name
@@ -117,14 +136,35 @@ public sealed partial class LlvmEmitter {
             var artificial = function.SourceFile is null;
             var file = FileOf(function);
             var line = artificial ? 0 : function.Line;
+            var scopeLine = line;
 
             // A forwarding thunk names what it forwards to: DW_AT_trampoline,
             // which lldb steps through ('step' into a witness lands in the
             // method, not back at the call).
-            var trampoline = function.TrampolineTarget is { } target ? $"targetFuncName: {Quote(target)}, " : "";
+            //
+            // An lldb that does not (Ubuntu 24.04's lldb 18) still steps on
+            // through code at line 0 — unless the whole function is one
+            // line-0 row: then it steps straight back out, over the call.
+            // An LLVM from before 20 writes just that: the row the scope
+            // line starts, and no second line-0 row where the prologue
+            // ends. For one of those the prologue is given a line of its
+            // own, in a file no source is: stepped into, the prologue is
+            // skipped, the body is line 0 to the end but not from the
+            // start, and lldb steps on through it into the method; a
+            // 'finish' from the method returns to line 0, which it steps
+            // out of to the caller. (A newer LLVM ends the prologue on the
+            // scope line, where lldb would stop; it needs nothing.)
+            var trampoline = "";
+            if (function.TrampolineTarget is { } target) {
+                trampoline = $"targetFuncName: {Quote(target)}, ";
+                if (ThunkPrologueHasALine(NativeBuild.CompilerVersion)) {
+                    scopeLine = 1;
+                }
+            }
+
             return Node(
                 $"!DISubprogram(name: {Quote(function.Name)}, scope: {file}, file: {file}, "
-                + $"line: {line}, type: {Subroutine(function.Type)}, scopeLine: {line}, {(artificial ? "flags: DIFlagArtificial, " : "")}spFlags: DISPFlagDefinition, unit: {Unit}, {trampoline})".Replace(", )", ")", StringComparison.Ordinal),
+                + $"line: {line}, type: {Subroutine(function.Type)}, scopeLine: {scopeLine}, {(artificial ? "flags: DIFlagArtificial, " : "")}spFlags: DISPFlagDefinition, unit: {Unit}, {trampoline})".Replace(", )", ")", StringComparison.Ordinal),
                 distinct: true
             );
         }

@@ -929,7 +929,9 @@ public sealed partial class SilInterpreter(SilModule module, int stepLimit = 10_
             case "io_read_file": {
                 string? contents = null;
                 try {
-                    contents = File.ReadAllText(Text(operands[0]).Value);
+                    // Bytes, decoded as the runtime decodes them: no byte-order
+                    // mark taken as a request for UTF-16, and ill-formed UTF-8 as U+FFFD.
+                    contents = DecodeUtf8(File.ReadAllBytes(Text(operands[0]).Value));
                 } catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException) {
                 }
 

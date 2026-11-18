@@ -945,7 +945,7 @@ Written so far (`tests/Sable.CodeGen.Tests/LibraryTests.cs`):
   (unbounded, closable, `receive` awaits), `TaskGroup` (results in the order
   the tasks were added), and a `sleep` that yields so that other tasks run
   meanwhile. Tasks switch only where they await, so none of it needs a lock.
-  Not yet: bounded channels, cancellation, `Mutex` and `Atomic` (useless
+  `TaskGroup.cancelAll()` cancels its tasks. Not yet: bounded channels, `Mutex` and `Atomic` (useless
   until tasks run in parallel), and deadlock detection: a task waiting on
   nothing yields for ever.
 
@@ -1215,7 +1215,9 @@ tasks sleeping a second take a second. `Sable.Concurrency`'s `sleep` is
 `Task.sleep`; `Clock.sleep` does not await, so it still holds every task. An async function is an ordinary function,
 and `await` is its operand; `Task.spawn { … }` queues a task (a class holding
 the runtime's handle, the body and the result), `await task.value` waits for
-it, and the program ends once every task has. Actors lower as classes: with
+it, and the program ends once every task has. `task.cancel()` cancels
+cooperatively: the task sees `Task.isCancelled()`, and a sleep it is in, or
+starts, ends at once (it is taken off the sleepers and queued). Actors lower as classes: with
 one task running at a time a call into one runs alone, and the binder makes
 a call from outside it `await`. `async let` binds; reading it needs `await`.
 A class or actor whose fields all have initial values is made with `init()`.
@@ -1225,7 +1227,7 @@ per task — far less compiler for the same semantics, at the cost of a
 thread (8 MB of address space) for each task waiting at once. Not yet:
 `async let` runs its child to completion at the declaration rather than
 alongside; actors have no executor or mailbox of their own; no task groups
-as scopes, cancellation, `for await` or async sequences, priorities, I/O to
+as scopes, priorities, I/O to
 wait on (an I/O reactor), and no parallelism (a work-stealing pool, and
 with it atomic counts) — all `Sable.Concurrency`'s, along with the switch
 to the state machine where many tasks wait at once.

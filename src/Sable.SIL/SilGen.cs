@@ -7424,6 +7424,14 @@ public sealed partial class SilGen {
                         return UnitValue.Instance;
                     }
 
+                    if (callee.Name == "cancel") {
+                        return CancelTask(call);
+                    }
+
+                    if (callee.Name == "isCancelled") {
+                        return Emit(new BuiltinInst("task_is_cancelled", SilType.Bool));
+                    }
+
                     Emit(new BuiltinInst("task_yield", SilType.Unit));
                     return UnitValue.Instance;
                 }

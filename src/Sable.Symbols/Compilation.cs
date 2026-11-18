@@ -639,14 +639,10 @@ public sealed partial class Compilation {
         }
 
         // A class or actor with no initialiser of its own, whose fields all
-        // start with a value, is made with 'init()'.
-        if (typeKind is TypeKind.Class or TypeKind.Actor && !type.GetMembers("init").Any()
-            && type.Members.OfType<FieldSymbol>().Where(static f => f is { IsStatic: false, IsComputed: false }).All(static f => f.HasInitializer)) {
-            var implicitInit = new FunctionSymbol("init", type, null, type.DeclaredAccessibility, FunctionKind.Initializer) {
-                ReturnTypeResolver = () => type,
-            };
-            implicitInit.Parameters = [];
-            type.AddMember(implicitInit);
+        // start with a value, is made with 'init()' — or, a subclass, with
+        // its superclass's initialisers (Compilation.Initializers.cs).
+        if (typeKind is TypeKind.Class or TypeKind.Actor) {
+            DeclareImplicitInitializers(type, declaration);
         }
     }
 

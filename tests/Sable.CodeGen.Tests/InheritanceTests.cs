@@ -111,4 +111,104 @@ public sealed class InheritanceTests {
                 all.clear()
             """
         );
+
+    [Fact]
+    public void ASubclassIsMadeWithTheInitialisersItInherits() =>
+        Prints(
+            "1 2 s\n1 2\nsq 4 4\nr 0\nblank 4\n9 1\n6\n",
+            """
+            open class A {
+                var a: Int = 1
+                var s: String = "s"
+            }
+
+            open class B: A {
+                var b: Int = 2
+            }
+
+            class C: B { }
+
+            open class Shape {
+                var name: String
+                var sides: Int
+                init(name: String, sides: Int = 0) {
+                    self.name = name
+                    self.sides = sides
+                }
+                convenience init() { self.init(name: "blank") }
+            }
+
+            class Square: Shape {
+                var side: Int = 4
+            }
+
+            open class Box<T> {
+                var item: T
+                init(item: T) { self.item = item }
+            }
+
+            class IntBox: Box<Int> {
+                var extra: Int = 1
+            }
+
+            class D: A {
+                var d: Int = 5
+                init() {
+                    super.init()
+                    d = d + a
+                }
+            }
+            """,
+            """
+                let b = B()
+                print("\(b.a) \(b.b) \(b.s)")
+                let c = C()
+                print("\(c.a) \(c.b)")
+                let q = Square(name: "sq", sides: 4)
+                print("\(q.name) \(q.sides) \(q.side)")
+                let r = Square(name: "r")
+                print("\(r.name) \(r.sides)")
+                let e = Square()
+                print("\(e.name) \(e.side)")
+                let i = IntBox(item: 9)
+                print("\(i.item) \(i.extra)")
+                let d = D()
+                print(d.d)
+            """
+        );
+
+    [Fact]
+    public void AnInitialiserHandsItsWorkToAnotherAndSelfMakesTheType() =>
+        Prints(
+            "7 2 made\n9 0 q\n",
+            """
+            class Node {
+                var name: String
+                var children: Int = 0
+                init(name: String) { self.name = name }
+                convenience init() {
+                    self.init(name: "7")
+                    children = 2
+                }
+                static fn make() -> Self => Self(name: "made")
+            }
+
+            struct Q {
+                var n: Int
+                var tag: String
+                init(n: Int, tag: String) {
+                    self.n = n
+                    self.tag = tag
+                }
+                init() { self.init(n: 9, tag: "q") }
+                static fn zero() -> Self { return Self(n: 0, tag: "z") }
+            }
+            """,
+            """
+                let n = Node()
+                print("\(n.name) \(n.children) \(Node.make().name)")
+                let q = Q()
+                print("\(q.n) \(Q.zero().n) \(q.tag)")
+            """
+        );
 }

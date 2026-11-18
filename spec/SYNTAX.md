@@ -344,7 +344,15 @@ public open class Document: Serializable, Equatable {
 
 - Single inheritance, multiple protocol conformance.
 - `required init` must be implemented by subclasses.
-- `convenience init` must delegate to a designated `init`.
+- `convenience init` must delegate to a designated `init`, `self.init(…)`
+  (S3141); a struct's initialiser may delegate the same way. One that
+  delegates leaves the fields' initial values to the one it calls.
+- A class that declares no `init`, whose own stored fields all have initial
+  values, is made with `init()` — or, a subclass, inherits its superclass's
+  initialisers, each of which sets the subclass's fields and then calls the
+  one it inherits.
+- In an expression, `Self` is the enclosing type: `Self(x: 3)` makes one,
+  `Self.zero` reads a static member.
 - Members are non-virtual unless declared `open` or `abstract`; `override` is
   mandatory when overriding.
 - `final` seals a single member.

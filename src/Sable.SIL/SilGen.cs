@@ -177,6 +177,7 @@ public sealed partial class SilGen {
 
         AddDerived(functions);
         AddLazy(functions);
+        AddInheritedInitializers(functions);
         CheckBuiltins();
 
         // Overloads: functions of one name in one container (counted once per
@@ -313,7 +314,8 @@ public sealed partial class SilGen {
             AccessorSyntax a => a.Body is not null || a.ExpressionBody is not null,
             _ => false,
         };
-        if (!hasBody && _compilation.GetDerivedBody(symbol) is null && _compilation.GetLazyBody(symbol) is null) {
+        if (!hasBody && _compilation.GetDerivedBody(symbol) is null && _compilation.GetLazyBody(symbol) is null
+            && _compilation.GetInheritedInitializerBody(symbol) is null) {
             return;
         }
 
@@ -487,7 +489,8 @@ public sealed partial class SilGen {
     readonly Queue<(FunctionSymbol Symbol, string Name, FunctionType Type, TypeSubstitution Substitution)> _pending = new();
 
     void LowerBody(FunctionSymbol symbol, SyntaxNode syntax, SemanticModel model, string name, FunctionType type, TypeSubstitution substitution) {
-        if ((_compilation.GetDerivedBody(symbol) ?? _compilation.GetLazyBody(symbol) ?? model.GetBoundNode(syntax)) is not BoundBlock body) {
+        if ((_compilation.GetDerivedBody(symbol) ?? _compilation.GetLazyBody(symbol) ?? _compilation.GetInheritedInitializerBody(symbol)
+                ?? model.GetBoundNode(syntax)) is not BoundBlock body) {
             return;
         }
 
@@ -1563,6 +1566,13 @@ public sealed partial class SilGen {
     /// </summary>
     internal sealed record Capture(object Key, TypeSymbol Type, int Field, bool Boxed, BoundExpression? Initializer, CaptureKind Kind = CaptureKind.Default);
 
+    /// <summary>
+    ///     True for an initialiser that hands its work to another of its
+    ///     type's own, <c>self.init(…)</c>: that one initialises the fields.
+    /// </summary>
+    static bool Delegates(BoundBlock body) =>
+        Descendants(body).Any(static n => n is BoundCall { Function.FunctionKind: FunctionKind.Initializer, Receiver: BoundSelfAccess });
+
     /// <summary>The key a captured <c>self</c> is filed under.</summary>
     internal const string SelfKey = "self";
 
@@ -2288,8 +2298,10 @@ public sealed partial class SilGen {
             }
 
             // 'var name = "x"': every initialiser of the type that declares it
-            // stores the initial value first, before its own body runs.
-            if (symbol.FunctionKind == FunctionKind.Initializer
+            // stores the initial value first, before its own body runs — but
+            // one that hands the work to another, 'self.init(…)', leaves it
+            // to that one.
+            if (symbol.FunctionKind == FunctionKind.Initializer && !Delegates(body)
                 && (symbol.ContainingSymbol is ExtensionSymbol extension ? extension.ExtendedType : symbol.ContainingSymbol) is NamedTypeSymbol owner
                 && SelfType(symbol, substitution) is { } selfType) {
                 foreach (var field in owner.OriginalDefinition.Members.OfType<FieldSymbol>()) {
@@ -5708,8 +5720,33 @@ public sealed partial class SilGen {
                 return Intrinsic(call);
             }
 
-            // A class or actor's implicit 'init()'.
+            // 'self.init(…)' in a value type's initialiser: what the other
+            // initialiser builds is self, stored where self is being built.
+            if (callee.FunctionKind == FunctionKind.Initializer && call.Receiver is BoundSelfAccess
+                && LowerType(call.Type) is not ClassType) {
+                if (_selfAddress is not { } selfSlot) {
+                    return Missing(call, "'self.init' here");
+                }
+
+                var built = Expression(new BoundCall(call.Syntax, null, callee, call.Arguments, call.Type) { Substitution = call.Substitution });
+                if (built is null) {
+                    return null;
+                }
+
+                Emit(new StoreInst(Owned(built), selfSlot, StoreKind.Init));
+                return UnitValue.Instance;
+            }
+
+            // 'super.init()' where the superclass has only the implicit
+            // initialiser: its fields' initial values, stored into this object.
+            var inheritedInit = generator._compilation.InheritedInitializers.ContainsKey(callee);
             if (callee is { FunctionKind: FunctionKind.Initializer, DeclaringSyntax.IsEmpty: true, Parameters.IsEmpty: true }
+                && !inheritedInit && call.Receiver is BoundSuperAccess super) {
+                return SuperImplicitInit(call, super);
+            }
+
+            // A class or actor's implicit 'init()'.
+            if (!inheritedInit && callee is { FunctionKind: FunctionKind.Initializer, DeclaringSyntax.IsEmpty: true, Parameters.IsEmpty: true }
                 && LowerType(call.Type) is ClassType implicitClass) {
                 return ImplicitInit(call, implicitClass);
             }
@@ -5721,7 +5758,7 @@ public sealed partial class SilGen {
             }
 
             // A synthesised memberwise initialiser is the struct, built from its fields.
-            if (callee is { FunctionKind: FunctionKind.Initializer, DeclaringSyntax.IsEmpty: true }) {
+            if (!inheritedInit && callee is { FunctionKind: FunctionKind.Initializer, DeclaringSyntax.IsEmpty: true }) {
                 if (LowerType(call.Type) is not StructType structType) {
                     return Missing(call, $"initialising '{Sub(call.Type).ToDisplayString()}'");
                 }
@@ -5781,8 +5818,10 @@ public sealed partial class SilGen {
                 }
             }
 
-            // 'super.init(...)': the superclass's initialising half, given this object.
-            var superInit = callee.FunctionKind == FunctionKind.Initializer && call.Receiver is BoundSuperAccess;
+            // 'super.init(...)': the superclass's initialising half, given this
+            // object; 'self.init(...)' in a class's initialiser: its own
+            // class's other one, likewise.
+            var superInit = callee.FunctionKind == FunctionKind.Initializer && call.Receiver is BoundSuperAccess or BoundSelfAccess;
             if (superInit) {
                 name = InitializerName(name);
                 type = InitializerType(type);

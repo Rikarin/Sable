@@ -308,6 +308,7 @@ public sealed partial class SemanticModel {
 
             case InitDeclarationSyntax declaration:
                 BindBody(declaration, declaration.Body, null, scope);
+                CheckConvenience(declaration);
                 return;
 
             case DeinitDeclarationSyntax declaration:
@@ -387,6 +388,29 @@ public sealed partial class SemanticModel {
             : binder.BindExpressionBody(function, expressionBody!);
 
         Collect(binder);
+    }
+
+    /// <summary>
+    ///     A <c>convenience init</c> hands the work to another initialiser of
+    ///     its type, <c>self.init(…)</c>, which initialises the fields: one
+    ///     that does not is an ordinary initialiser, so it says so.
+    /// </summary>
+    void CheckConvenience(InitDeclarationSyntax declaration) {
+        if (!declaration.Modifiers.Any(SyntaxKind.ConvenienceKeyword) || _bound.GetValueOrDefault(declaration) is not BoundBlock body) {
+            return;
+        }
+
+        if (!Delegates(body)) {
+            _diagnostics.Add(Diagnostic.Error(
+                ErrorCode.ERR_ConvenienceMustDelegate,
+                declaration.InitKeyword.Span,
+                "a 'convenience init' hands the work to another initialiser, 'self.init(…)'; without one, drop 'convenience'"
+            ));
+        }
+
+        static bool Delegates(BoundNode node) =>
+            node is BoundCall { Function.FunctionKind: FunctionKind.Initializer, Receiver: BoundSelfAccess }
+            || node.Children.Any(Delegates);
     }
 
     /// <summary>

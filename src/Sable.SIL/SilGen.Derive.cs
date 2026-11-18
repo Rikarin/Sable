@@ -18,6 +18,15 @@ public sealed partial class SilGen {
         }
     }
 
+    /// <summary>The initialisers a subclass inherits, which the compilation wrote: lowered where the class is declared.</summary>
+    void AddInheritedInitializers(List<(FunctionSymbol Symbol, SyntaxNode Syntax, SemanticModel Model)> functions) {
+        foreach (var (init, inherited) in _compilation.InheritedInitializers) {
+            if (IsLowerable(init)) {
+                functions.Add((init, inherited.Declaration, _compilation.GetSemanticModel(inherited.Tree)));
+            }
+        }
+    }
+
     /// <summary>A lazy or observed property's getter and setter, which the compilation wrote: lowered where the property is declared.</summary>
     void AddLazy(List<(FunctionSymbol Symbol, SyntaxNode Syntax, SemanticModel Model)> functions) {
         foreach (var (field, lazy) in _compilation.LazyProperties.Concat(_compilation.ObservedProperties)) {

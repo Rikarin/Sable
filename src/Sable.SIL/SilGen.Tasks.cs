@@ -133,5 +133,27 @@ public sealed partial class SilGen {
 
             return made;
         }
+
+        /// <summary>
+        ///     'super.init()' to a superclass that declares no initialiser:
+        ///     its fields' initial values, stored into this object — and its
+        ///     own superclass's, had it one, by the initialiser it inherits.
+        /// </summary>
+        SilValue? SuperImplicitInit(BoundCall call, BoundSuperAccess super) {
+            if (SelfType(symbol, substitution) is not { } selfType) {
+                return Missing(call, "'super.init()' here");
+            }
+
+            foreach (var field in super.BaseType.OriginalDefinition.Members.OfType<FieldSymbol>()) {
+                if (field is not { IsStatic: false, IsComputed: false, HasInitializer: true } || generator.FieldInitializer(field) is not { } initial) {
+                    continue;
+                }
+
+                var self = new BoundSelfAccess(initial.Syntax, selfType, true);
+                Statement(new BoundExpressionStatement(initial.Syntax, new BoundAssignment(initial.Syntax, new BoundFieldAccess(initial.Syntax, self, field), initial)));
+            }
+
+            return UnitValue.Instance;
+        }
     }
 }

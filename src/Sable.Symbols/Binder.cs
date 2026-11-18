@@ -1967,6 +1967,17 @@ public sealed partial class Binder {
     }
 
     BoundExpression BindSelf(SelfExpressionSyntax syntax) {
+        // 'Self' is the type, as it is in a signature: 'Self(x: 3)' makes
+        // one, 'Self.origin' reads a static member.
+        if (syntax.SelfKeyword.Kind == SyntaxKind.CapitalSelfKeyword) {
+            if (EnclosingType() is { } enclosing) {
+                return new BoundTypeExpression(syntax, enclosing.SelfTypeParameter ?? SelfTypeOf(enclosing));
+            }
+
+            _diagnostics.Error(ErrorCode.ERR_SelfOutsideType, syntax.Span, "'Self' is only available inside a type");
+            return new BoundError(syntax);
+        }
+
         // In a closure that captured it '[weak self]' or '[unowned self]',
         // 'self' is the closure's own name for the object — or what
         // 'guard let self' unwrapped it to.
@@ -2349,6 +2360,17 @@ public sealed partial class Binder {
                 $"'{super.BaseType.ToDisplayString()}' has no member named '{name}'"
             );
             return new BoundError(syntax, receiver);
+        }
+
+        // 'self.init(…)', in an initialiser: the work handed to another of
+        // the type's own initialisers, which builds this value in its place.
+        if (name == "init" && receiver is BoundSelfAccess
+            && EnclosingFunction() is { FunctionKind: FunctionKind.Initializer } initializer
+            && initializer.ContainingSymbol is NamedTypeSymbol owner) {
+            var initializers = owner.GetMembers("init").OfType<FunctionSymbol>().Where(i => !ReferenceEquals(i, initializer)).ToList();
+            if (initializers.Count > 0) {
+                return BindMemberGroup(syntax, receiver, initializers, owner, TypeSubstitution.For(receiver.Type));
+            }
         }
 
         var receiverType = receiver.Type;

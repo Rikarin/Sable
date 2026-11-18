@@ -69,8 +69,16 @@ public sealed record NativeTarget {
         _ => "",
     };
 
-    /// <summary>What clang is told so that it builds for this target: nothing for the host.</summary>
-    public IReadOnlyList<string> ClangFlags => IsHost ? [] : ["--target=" + Triple];
+    /// <summary>
+    ///     What clang is told so that it builds for this target: its triple,
+    ///     but for the host. On Windows, the C runtime is the DLL, as
+    ///     Microsoft's compiler links it by default: the Universal C Runtime
+    ///     is the system's, and a program carries none of it.
+    /// </summary>
+    public IReadOnlyList<string> ClangFlags => [
+        ..IsHost ? [] : new[] { "--target=" + Triple },
+        ..Platform == NativePlatform.Windows ? new[] { "-fms-runtime-lib=dll" } : [],
+    ];
 
     public override string ToString() => Triple;
 

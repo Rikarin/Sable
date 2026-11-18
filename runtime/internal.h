@@ -8,6 +8,11 @@
 // glibc declares dladdr (for a trap's backtrace) only for GNU sources.
 #define _GNU_SOURCE
 
+// The Microsoft C runtime calls fopen, strdup and the like deprecated; they
+// are the C library's, and used as such.
+#define _CRT_SECURE_NO_WARNINGS
+#define _CRT_NONSTDC_NO_DEPRECATE
+
 #include <errno.h>
 #include <math.h>
 #include <stdbool.h>

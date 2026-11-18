@@ -100,14 +100,14 @@ public struct Directory {
     }
 }
 
-/// Paths as text, with '/' between their parts.
+/// Paths as text, with '/' between their parts — on Windows, '\' too.
 public struct Path {
     /// The two paths, one inside the other; an absolute second one stands alone.
     public static fn join(_ first: String, _ second: String) -> String {
-        if first.count == 0 || second.count > 0 && second.at(0) == '/' {
+        if first.count == 0 || isAbsolute(second) {
             return second
         }
-        if first.at(first.count - 1) == '/' {
+        if isSeparator(first.at(first.count - 1)) {
             return first + second
         }
         return first + "/" + second
@@ -115,7 +115,7 @@ public struct Path {
 
     /// The last part: what follows the last '/'.
     public static fn fileName(_ path: String) -> String {
-        let slash = lastIndex(path, '/')
+        let slash = lastSeparator(path)
         if slash < 0 {
             return path
         }
@@ -124,7 +124,7 @@ public struct Path {
 
     /// Everything before the last part; "." for a bare name, "/" at the root.
     public static fn directory(_ path: String) -> String {
-        let slash = lastIndex(path, '/')
+        let slash = lastSeparator(path)
         if slash < 0 {
             return "."
         }
@@ -205,6 +205,38 @@ public struct Environment {
         }
         return all
     }
+}
+
+/// What separates a path's parts: '/', and on Windows '\' as well.
+fn isSeparator(_ c: Char) -> Bool {
+    #if os(windows)
+    return c == '/' || c == '\\'
+    #else
+    return c == '/'
+    #endif
+}
+
+/// A path from the root: '/…', and on Windows 'C:…' or '\…' as well.
+fn isAbsolute(_ path: String) -> Bool {
+    if path.count == 0 {
+        return false
+    }
+    #if os(windows)
+    return isSeparator(path.at(0)) || path.count > 1 && path.at(1) == ':'
+    #else
+    return path.at(0) == '/'
+    #endif
+}
+
+fn lastSeparator(_ text: String) -> Int {
+    var i = text.count - 1
+    while i >= 0 {
+        if isSeparator(text.at(i)) {
+            return i
+        }
+        i -= 1
+    }
+    return -1
 }
 
 fn lastIndex(_ text: String, _ wanted: Char) -> Int {

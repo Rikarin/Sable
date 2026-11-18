@@ -40,17 +40,40 @@ public sealed partial class LlvmEmitter {
 
     /// <param name="target">What the program is built for, whose C calling convention it follows; the host when null.</param>
     public static string Emit(SilModule module, NativeTarget? target = null) =>
-        new LlvmEmitter { _arch = (target ?? NativeTarget.Host).Arch }.EmitModule(module);
+        new LlvmEmitter { _arch = (target ?? NativeTarget.Host).Arch, _windows = (target ?? NativeTarget.Host).Platform == NativePlatform.Windows }.EmitModule(module);
 
     /// <summary>The same, with DWARF debug information, so that lldb can show frames, locals and types.</summary>
     /// <param name="directory">The directory the source file names are relative to.</param>
     public static string EmitWithDebugInfo(SilModule module, string directory, NativeTarget? target = null) =>
-        new LlvmEmitter { _debug = new DebugInfo(directory), _arch = (target ?? NativeTarget.Host).Arch }.EmitModule(module);
+        new LlvmEmitter {
+            _debug = new DebugInfo(directory), _arch = (target ?? NativeTarget.Host).Arch, _windows = (target ?? NativeTarget.Host).Platform == NativePlatform.Windows,
+        }.EmitModule(module);
 
     DebugInfo? _debug;
 
     /// <summary>The target's architecture, as <see cref="NativeTarget.Arch" /> names it.</summary>
     string _arch = "arm64";
+
+    /// <summary>
+    ///     The target is Windows: its C calling convention is Microsoft's
+    ///     (LlvmEmitter.CAbi.cs), and a definition the linker keeps one copy
+    ///     of (<c>linkonce_odr</c>) goes in a COMDAT of its own name — COFF's
+    ///     linker keeps one of several only when each is in one, and reports
+    ///     the rest as duplicates. ELF and Mach-O need none.
+    /// </summary>
+    bool _windows;
+
+    readonly List<string> _comdatNames = [];
+
+    /// <summary>What a <c>linkonce_odr</c> definition of <paramref name="name" /> (as <c>@"..."</c>) adds after its value: its COMDAT, where the target needs one.</summary>
+    string Comdat(string name, string linkage) {
+        if (!_windows || !linkage.StartsWith("linkonce_odr", StringComparison.Ordinal)) {
+            return "";
+        }
+
+        _comdatNames.Add(name);
+        return ", comdat";
+    }
 
     bool _checkExclusivity = true;
 
@@ -92,8 +115,9 @@ public sealed partial class LlvmEmitter {
         // Globals: zero until the entry point's start initialises them.
         // Separately compiled, every unit has the globals, and the linker keeps one of each.
         foreach (var (globalName, globalType) in module.Globals) {
-            output.Append('@').Append(Global("global." + globalName)).Append(module.Unit is null ? " = internal global " : " = linkonce_odr global ")
-                .Append(Type(globalType)).Append(" zeroinitializer");
+            var linkage = module.Unit is null ? "internal" : "linkonce_odr";
+            output.Append('@').Append(Global("global." + globalName)).Append($" = {linkage} global ")
+                .Append(Type(globalType)).Append(" zeroinitializer").Append(Comdat("@" + Global("global." + globalName), linkage));
             if (_debug?.GlobalVariable(globalName, globalType, local: module.Unit is null) is { } variable) {
                 output.Append(", !dbg ").Append(variable);
             }
@@ -124,6 +148,10 @@ public sealed partial class LlvmEmitter {
             .Append($"{TbaaElementType} = !{{!\"array element\", {TbaaRoot}, i64 0}}\n")
             .Append($"{TbaaHeader} = !{{{TbaaHeaderType}, {TbaaHeaderType}, i64 0}}\n")
             .Append($"{TbaaElement} = !{{{TbaaElementType}, {TbaaElementType}, i64 0}}\n");
+
+        foreach (var name in _comdatNames.Distinct(StringComparer.Ordinal)) {
+            output.Append('$').Append(name[1..]).Append(" = comdat any\n");
+        }
 
         if (_debug is not null) {
             output.Append(_debug.Metadata());
@@ -747,7 +775,7 @@ public sealed partial class LlvmEmitter {
         // A method no reachable code can call was not built: its slot is empty.
         var vtable = string.Join(", ", type.VTable.Select(m => _reachable?.Contains(m.Function) == false ? "ptr null" : $"ptr @{Global(m.Function)}"));
         _globals.Append($"{name} = {SharedLinkage} constant {MetadataType(type)} {{ ptr {destroy}, ptr {typeName}, i64 0, ptr {superclass}, ptr null, ")
-            .Append($"i64 {SizeOf(objectType)}, i64 {AlignmentOf(objectType)}, ptr {visit}, [{type.VTable.Count} x ptr] [{vtable}] }}\n");
+            .Append($"i64 {SizeOf(objectType)}, i64 {AlignmentOf(objectType)}, ptr {visit}, [{type.VTable.Count} x ptr] [{vtable}] }}{Comdat(name, SharedLinkage)}\n");
         return name;
     }
 
@@ -861,7 +889,7 @@ public sealed partial class LlvmEmitter {
         var typeName = TrapMessage(type.ToString());
         // An array object is the runtime's: its header, count, capacity and buffer.
         _globals.Append($"{name} = {SharedLinkage} constant %SableMetadata {{ ptr @sable_array_destroy, ptr {typeName}, i64 {size}, ptr {copy}, ptr {destroy}, ")
-            .Append($"i64 {SizeOf("%SableArrayHeader")}, i64 {AlignmentOf("%SableArrayHeader")}, ptr {visit} }}\n");
+            .Append($"i64 {SizeOf("%SableArrayHeader")}, i64 {AlignmentOf("%SableArrayHeader")}, ptr {visit} }}{Comdat(name, SharedLinkage)}\n");
         return name;
     }
 
@@ -1206,8 +1234,10 @@ public sealed partial class LlvmEmitter {
             var text = new StringBuilder();
             // Sable has no unwinding: an error is a returned value and a trap
             // ends the program. Said, LLVM needs no unwind paths for calls.
-            text.Append("define ").Append(module.Linkage(function.Name)).Append(ReturnType(function.Type)).Append(" @").Append(Global(function.Name))
-                .Append('(').Append(string.Join(", ", parameters)).Append(") nounwind");
+            var linkage = module.Linkage(function.Name);
+            text.Append("define ").Append(linkage).Append(ReturnType(function.Type)).Append(" @").Append(Global(function.Name))
+                .Append('(').Append(string.Join(", ", parameters)).Append(") nounwind")
+                .Append(module.Comdat("@" + Global(function.Name), linkage) is { Length: > 0 } ? " comdat" : "");
             if (_scope is not null) {
                 text.Append(" !dbg ").Append(_scope);
             }

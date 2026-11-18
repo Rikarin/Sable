@@ -462,7 +462,7 @@ fn main() {
         var cmd = Platform.Literal(Path.Combine(Environment.SystemDirectory, "cmd.exe"));
         var find = Platform.Literal(Path.Combine(Environment.SystemDirectory, "find.exe"));
         var (echo, count, fail, root) = OperatingSystem.IsWindows()
-            ? ($$"""Process.run("{{cmd}}", ["/c", "echo hello world"])""", $$"""Process.run("{{find}}", ["/c", "/v", ""], input: "a\nb\nc\n")""",
+            ? ($$"""Process.run("{{cmd}}", ["/c", "echo hello world"])""", $$"""Process.run("{{find}}", ["/c", "/v", ""], input: "a\r\nb\r\nc\r\n")""",
                 $$"""Process.run("{{cmd}}", ["/c", "echo oops 1>&2 & exit 3"])""", Path.GetPathRoot(Environment.CurrentDirectory)!)
             : ("""Process.run("echo", ["hello", "world"])""", """Process.run("wc", ["-l"], input: "a\nb\nc\n")""",
                 """Process.run("sh", ["-c", "echo oops >&2; exit 3"])""", "/");

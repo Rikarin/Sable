@@ -470,12 +470,24 @@ public static class NativeBuild {
         NativePlatform.Linux => ["-rdynamic", "-lm"],
 
         // lld, which takes LLVM bitcode as Microsoft's linker does not; the
-        // main thread's stack the size a POSIX one's is, 8 MiB, not 1; and
-        // a PDB, with the program's symbols at least, from which a trap's
-        // backtrace names frames.
-        NativePlatform.Windows => ["-fuse-ld=lld", "-Wl,/STACK:8388608", "-Wl,/DEBUG"],
+        // main thread's stack the size a POSIX one's is, 8 MiB, not 1; a
+        // PDB, with the program's symbols at least, from which a trap's
+        // backtrace names frames; and compiler-rt's builtins, which LLVM
+        // calls for what the machine has no instruction for (F16, 128-bit
+        // division) and which Microsoft's C runtime does not have.
+        NativePlatform.Windows => ["-fuse-ld=lld", "-Wl,/STACK:8388608", "-Wl,/DEBUG", ..CompilerRtBuiltins.Value is { } builtins ? [builtins] : Array.Empty<string>()],
         _ => [],
     };
+
+    /// <summary>compiler-rt's builtins library, as clang names it; null when it has none.</summary>
+    static readonly Lazy<string?> CompilerRtBuiltins = new(static () => {
+        try {
+            var (exitCode, output) = Run(CompilerPath, ["--rtlib=compiler-rt", "-print-libgcc-file-name"]);
+            return exitCode == 0 && output.Trim() is { Length: > 0 } path && File.Exists(path) ? path : null;
+        } catch (System.ComponentModel.Win32Exception) {
+            return null;
+        }
+    });
 
     /// <summary>
     ///     Puts the formatter plugin where lldb looks for a program's scripts:

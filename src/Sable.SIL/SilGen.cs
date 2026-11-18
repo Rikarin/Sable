@@ -3205,7 +3205,10 @@ public sealed partial class SilGen {
         /// <summary>The end of a borrow: a temporary is taken off the temporaries and destroyed, a load_borrow ended.</summary>
         void End(SilValue value) {
             if (value is AccessMarker marker) {
-                Emit(new BuiltinInst("access_end", SilType.Unit, marker.Address));
+                if (marker.Begun) {
+                    Emit(new BuiltinInst("access_end", SilType.Unit, marker.Address));
+                }
+
                 return;
             }
 
@@ -4670,6 +4673,24 @@ public sealed partial class SilGen {
 
         /// <summary>Lowers an expression to an owned value — or a trivial one, or <see cref="UnitValue" />.</summary>
         SilValue? Expression(BoundExpression expression) {
+            // An expression that can trap — an index, arithmetic, an unwrap, a cast —
+            // is where its instructions are, so that the trap names its
+            // column; what follows is back where the statement was.
+            if (expression is BoundIndexAccess or BoundBinaryOperator or BoundUnaryOperator or BoundConversion { ConversionKind: ConversionKind.Explicit }
+                && _location is not null) {
+                var around = _location;
+                Locate(expression.Syntax);
+                try {
+                    return ExpressionHere(expression);
+                } finally {
+                    _location = around;
+                }
+            }
+
+            return ExpressionHere(expression);
+        }
+
+        SilValue? ExpressionHere(BoundExpression expression) {
             if (UsesLent(expression)) {
                 return null;
             }
@@ -5664,6 +5685,17 @@ public sealed partial class SilGen {
                     return Address(element.Receiver, borrows) is { } tuple
                         ? Emit(new TupleElementAddrInst(tuple, element.Index))
                         : null;
+
+                // An element of an array, where it is: 'bump(&values[0])'.
+                case BoundIndexAccess { Subscript: null, Indices: [var indexExpression] } element
+                    when Sub(element.Receiver.Type) is ArrayTypeSymbol && !IsInlineArray(element.Receiver): {
+                    if (Address(element.Receiver, borrows) is not { Type: AddressType { Pointee: ArrayType } } array
+                        || Expression(indexExpression) is not { } index) {
+                        return null;
+                    }
+
+                    return Emit(new BuiltinInst("array_element_addr", SilType.Address(((ArrayType)((AddressType)array.Type).Pointee).Element), array, index));
+                }
 
                 default:
                     return Missing(target, $"storing to '{Describe(target.Syntax)}'");
@@ -7321,10 +7353,19 @@ public sealed partial class SilGen {
             if (IsIntrinsic(callee)) {
                 var owner = Owner(callee)?.OriginalDefinition;
 
-                // Tasks: made, and yielded to (SilGen.Tasks.cs).
+                // Tasks: made, slept, and yielded to (SilGen.Tasks.cs).
                 if (owner is not null && ReferenceEquals(owner, Core.Task)) {
                     if (callee.Name == "spawn") {
                         return Spawn(call);
+                    }
+
+                    if (callee.Name == "sleep") {
+                        if (Expression(call.Arguments[0]) is not { } nanoseconds) {
+                            return null;
+                        }
+
+                        Emit(new BuiltinInst("task_sleep", SilType.Unit, nanoseconds));
+                        return UnitValue.Instance;
                     }
 
                     Emit(new BuiltinInst("task_yield", SilType.Unit));
@@ -7582,6 +7623,7 @@ public sealed partial class SilGen {
         ///     or <c>try_apply</c> with the borrows ended on both of its edges.
         /// </summary>
         SilValue? Invoke(SilValue reference, FunctionType type, List<SilValue> arguments, List<SilValue> borrows, SyntaxNode at, bool cannotThrow = false) {
+            BeginAccesses(borrows);
             if (type.Thrown is null) {
                 var apply = Emit(new ApplyInst(reference, type.Result, [..arguments]));
                 EndAll(borrows);

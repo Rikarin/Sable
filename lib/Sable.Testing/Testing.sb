@@ -325,7 +325,7 @@ fn failureReport(_ test: TestCase, _ status: Int, _ output: String, _ errors: St
     // An assertion's own trap says nothing its report has not.
     var shown = errors
     if contains(errors, failureMarker) {
-        shown = replacing(errors, "fatal error: 'try!' caught an error\n", with: "")
+        shown = withoutAssertionTrap(errors)
     }
     if shown.count > 0 {
         report.append("\n" + indented(shown))
@@ -334,6 +334,26 @@ fn failureReport(_ test: TestCase, _ status: Int, _ output: String, _ errors: St
         report.append("\n    (exit status \(status))")
     }
     return report.build()
+}
+
+/// The errors without the trap a failed assertion ends with: its line, and
+/// the line after it that says where it was — inside this harness.
+fn withoutAssertionTrap(_ errors: String) -> String {
+    let kept = TextBuilder()
+    var afterTrap = false
+    for line in lines(errors) {
+        if line == "fatal error: 'try!' caught an error" {
+            afterTrap = true
+            continue
+        }
+        if afterTrap && hasPrefix(line, "  at ") {
+            afterTrap = false
+            continue
+        }
+        afterTrap = false
+        kept.append(line + "\n")
+    }
+    return kept.build()
 }
 
 fn indented(_ text: String) -> String {

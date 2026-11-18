@@ -551,14 +551,24 @@ receiver, is a path from a variable through fields and elements (an
 element is the whole collection); two that overlap, one of them a change,
 are error S3062, naming both arguments and the fix — `bump(&p.a, &p.a)`,
 `swap(&a[i], &a[j])`, `copy(&n, &n)`, `p.absorb(&p.a)` are rejected, and
-`bump(&p.a, &p.b)` is not. Where the compiler cannot tell — storage inside
-an object, reached through two references — the call is bracketed by
-`access_begin_modify`/`access_begin_read` and `access_end`, and the
-runtime traps on an access that conflicts with one in progress. The
-markers are kept in debug and `-O0` builds and dropped from optimised
-ones unless `--exclusivity=checked` keeps them (docs/02 §2.3); the
-interpreter always checks. Deferred: instrumenting plain reads of object
-fields during an access — only accesses passed to calls are tracked.
+`bump(&p.a, &p.b)` is not. Where the compiler cannot tell — shared
+storage: a global, or a field of an object (a class's, a closure context's,
+a captured variable's box) — the call is bracketed by
+`access_begin_modify`/`access_begin_read` and `access_end`, begun once
+every argument is evaluated (so `add(&box.n, box.n + 1)` reads first), and
+the runtime traps on an access that conflicts with one in progress. Every
+plain read or write of shared storage — a load, a store, an array changed
+in place — is checked against the accesses in progress as it happens, so
+`bump(&counter)` that does `counter += 1` traps; inline, the check is one
+load of `sable_access_count`, and the runtime is called only when an
+access is in progress. Storage is a range of bytes (the interpreter: a path
+of object, field and elements), so a struct overlaps its fields. An array
+element passes inout through `array_element_addr` — `bump(&values[0])`,
+`bump(&box.items[0])` — and the access is to the whole array, which may not
+change while the element is lent. The markers and checks are kept in debug
+and `-O0` builds and dropped from optimised ones unless
+`--exclusivity=checked` keeps them (docs/02 §2.3); the interpreter follows
+the module's setting.
 
 ### 3.5 Regions (~4 weeks)
 
@@ -736,6 +746,19 @@ program links with `-rdynamic` so its functions can be named). Each frame is
 looked up one byte before its return address, because a call that never
 returns leaves that address past the end of its caller. Under LTO most of a
 small program is inlined into `main`, so expect few frames.
+
+Every trap says where it happened, on the line after its message:
+`fatal error: array index out of range` then `  at main.sb:12:15`. A trap
+the compiled code makes passes its place to `sable_trap_at`; before a call
+into the runtime that can trap (a string index, an unowned read, an access
+check) the compiled code stores the call's place in `sable_trap_site`, a
+store on the slow path only. The interpreter reports the same place: the
+innermost instruction that trapped. Traps that belong to no line — memory
+run out, every task waiting — have no place. Running off the end of a stack
+is a trap too, not a bare SIGSEGV: every thread has a small signal stack
+(`sigaltstack`), and a fault at the low end of the thread's stack prints
+`fatal error: stack overflow: calls nested too deeply`, as the interpreter's
+depth limit does, and exits as a trap does.
 
 ### 4.2 Reflection
 
@@ -1152,11 +1175,19 @@ it is now one runtime call (`Runtime.joinStrings`) that sizes the result once.
 
 Done ahead of `Sable.Concurrency`, with the core of it in `Sable.Core`
 (`tests/Sable.CodeGen.Tests/AsyncTests.cs`). Tasks are scheduled
-cooperatively: each runs on a thread of its own, but one lock is held by
-whichever task is running, so exactly one runs at a time and switches only
-where a task waits — awaiting a task not yet finished, or `Task.yield()`. The
-interleaving is therefore deterministic, the interpreter reproduces it, and
-reference counts stay non-atomic. An async function is an ordinary function,
+cooperatively: each runs on a thread, but one lock is held by whichever
+task is running, so exactly one runs at a time and switches only where a
+task waits — awaiting a task not yet finished, `Task.yield()`, or
+`Task.sleep(nanoseconds:)`. The interleaving is therefore deterministic
+(sleepers wake in the order of their deadlines), the interpreter reproduces
+it, and reference counts stay non-atomic. A task is given a thread only
+when it first runs, and a thread whose task finished runs the next task
+that has not begun, or waits to be given one: threads are held only by
+tasks waiting part-way through, so twenty thousand tasks that each run to
+the end take one thread between them. A sleeping task is off the run queue;
+when nothing is queued the scheduler waits for the earliest sleeper, so two
+tasks sleeping a second take a second. `Sable.Concurrency`'s `sleep` is
+`Task.sleep`; `Clock.sleep` does not await, so it still holds every task. An async function is an ordinary function,
 and `await` is its operand; `Task.spawn { … }` queues a task (a class holding
 the runtime's handle, the body and the result), `await task.value` waits for
 it, and the program ends once every task has. Actors lower as classes: with
@@ -1165,11 +1196,14 @@ a call from outside it `await`. `async let` binds; reading it needs `await`.
 A class or actor whose fields all have initial values is made with `init()`.
 
 This trades the planned stackless state machine (§2.2, item 4) for a stack
-per task — far less compiler for the same semantics, at the cost of memory
-per task and of thread creation. Not yet: `async let` runs its child to
-completion at the declaration rather than alongside; no task groups,
-cancellation, no sleeping or I/O to wait on, and no parallelism — all `Sable.Concurrency`'s, along with the switch
-to the state machine where tasks are many.
+per task — far less compiler for the same semantics, at the cost of a
+thread (8 MB of address space) for each task waiting at once. Not yet:
+`async let` runs its child to completion at the declaration rather than
+alongside; actors have no executor or mailbox of their own; no task groups
+as scopes, cancellation, `for await` or async sequences, priorities, I/O to
+wait on (an I/O reactor), and no parallelism (a work-stealing pool, and
+with it atomic counts) — all `Sable.Concurrency`'s, along with the switch
+to the state machine where many tasks wait at once.
 
 ### 4.4 Exit criteria
 

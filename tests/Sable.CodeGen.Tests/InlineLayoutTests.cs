@@ -301,7 +301,7 @@ public sealed class InlineLayoutTests {
     [InlineData("var t = Tree { root: none, name: \"t\", nodes: [] }\nprint(t.nodes[0].value)", "array index out of range")]
     public void InlineLimitsTrap(string body, string trap) {
         var execution = AssertAgree(Program(Orders + "\n" + Trees, body));
-        Assert.Equal($"fatal error: {trap}\n", execution.Stderr);
+        Assert.StartsWith($"fatal error: {trap}\n  at test.sb:", execution.Stderr, StringComparison.Ordinal);
     }
 
     const string Views = """

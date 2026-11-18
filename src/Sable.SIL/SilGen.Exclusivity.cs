@@ -20,33 +20,46 @@ namespace Sable.SIL;
 /// </remarks>
 public sealed partial class SilGen {
     sealed partial class FunctionLowering {
-        /// <summary>Marks the end of a dynamic access, among a call's borrows.</summary>
-        sealed class AccessMarker(SilValue address) : SilValue {
+        /// <summary>A dynamic access among a call's borrows: begun just before the call, ended with the rest.</summary>
+        sealed class AccessMarker(SilValue address, bool modify) : SilValue {
             public SilValue Address { get; } = address;
+            public bool Modify { get; } = modify;
+            public bool Begun { get; set; }
             public override SilType Type => SilType.Unit;
         }
 
         /// <summary>
-        ///     Begins a dynamic access to storage the compiler cannot prove
-        ///     unshared — a field of an object, reached through a reference —
-        ///     to be ended with the call's borrows.
+        ///     Notes a dynamic access to storage the compiler cannot prove
+        ///     unshared — a global, or a field of an object reached through a
+        ///     reference — to begin just before the call and end with the
+        ///     call's borrows.
         /// </summary>
         void BeginAccess(SilValue address, bool modify, List<SilValue> borrows) {
-            if (!InsideObject(address)) {
+            // An element is an access to the whole array, which must not
+            // change — grow, be replaced — while the element is lent.
+            if (address is BuiltinInst { Name: "array_element_addr" } element) {
+                BeginAccess(element.Operands[0], modify: true, borrows);
                 return;
             }
 
-            Emit(new BuiltinInst(modify ? "access_begin_modify" : "access_begin_read", SilType.Unit, address));
-            borrows.Add(new AccessMarker(address));
+            if (SharedStorage.Contains(address)) {
+                borrows.Add(new AccessMarker(address, modify));
+            }
         }
 
-        static bool InsideObject(SilValue address) =>
-            address switch {
-                RefElementAddrInst => true,
-                StructElementAddrInst element => InsideObject(element.Address),
-                TupleElementAddrInst element => InsideObject(element.Address),
-                _ => false,
-            };
+        /// <summary>
+        ///     Begins the call's accesses, once every argument is evaluated: an
+        ///     argument after an inout one may read the same storage
+        ///     ('f(&amp;box.n, box.n)'), and that read comes before the call.
+        /// </summary>
+        void BeginAccesses(List<SilValue> borrows) {
+            foreach (var borrow in borrows) {
+                if (borrow is AccessMarker { Begun: false } marker) {
+                    Emit(new BuiltinInst(marker.Modify ? "access_begin_modify" : "access_begin_read", SilType.Unit, marker.Address));
+                    marker.Begun = true;
+                }
+            }
+        }
 
         /// <summary>A storage path: a variable, then the fields and elements inside it.</summary>
         sealed record AccessPath(Symbol Root, ImmutableArray<string> Steps, string Text) {

@@ -79,7 +79,7 @@ public sealed class TestRunnerTests {
         Assert.Contains("test Suite.afterTheTrap ... ok (", run.Stdout, StringComparison.Ordinal);
         Assert.DoesNotContain("the program's own main", run.Stdout, StringComparison.Ordinal);
 
-        Assert.Contains("---- Suite.outOfRange (test.sb:22) ----\n    fatal error: array index out of range\n    (exit status 134)\n", run.Stdout, StringComparison.Ordinal);
+        Assert.Contains("---- Suite.outOfRange (test.sb:22) ----\n    fatal error: array index out of range\n      at test.sb:24:11\n    (exit status 134)\n", run.Stdout, StringComparison.Ordinal);
         Assert.Contains("---- Suite.throwing (test.sb:28) ----\n    assertion failed: the test threw an error\n", run.Stdout, StringComparison.Ordinal);
         Assert.Contains("failed:\n    Suite.wrongAnswer\n    Suite.outOfRange\n    Suite.throwing\n", run.Stdout, StringComparison.Ordinal);
         Assert.Matches(@"\ntest result: FAILED\. 3 passed; 3 failed; 0 filtered out; finished in [0-9.]+ (µs|ms|s)\n$", run.Stdout);
@@ -236,7 +236,7 @@ public sealed class TestRunnerTests {
         // A failure stops a run in one process: there is nothing to isolate it.
         var (failedOutput, failedErrors, failedTrap) = Interpret(Suite, ["doubling", "wrong"]);
         Assert.Equal("running 2 tests\ntest Suite.doubling ... ok\nthis output is shown, as the test failed\n", failedOutput);
-        Assert.Equal("'try!' caught an error", failedTrap);
+        Assert.Equal("'try!' caught an error", failedTrap?.Message);
         Assert.StartsWith("assertion failed: the values differ\n", failedErrors, StringComparison.Ordinal);
 
         if (!CanBuild) {
@@ -250,7 +250,7 @@ public sealed class TestRunnerTests {
         var nativeFailed = Native(Suite, arguments: ["--in-process", "doubling", "wrong"]);
         Assert.Equal(134, nativeFailed.ExitCode);
         Assert.Equal(failedOutput, nativeFailed.Stdout);
-        Assert.Equal($"{failedErrors}fatal error: {failedTrap}\n", nativeFailed.Stderr);
+        Assert.Equal($"{failedErrors}{failedTrap!.Report}", nativeFailed.Stderr);
     }
 
     [Fact]

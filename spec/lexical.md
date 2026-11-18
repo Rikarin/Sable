@@ -111,7 +111,7 @@ set  willSet  comptime  unchecked
 ### Reserved for future use
 
 ```
-macro  yield  trait  impl  where_clause  become  do_notation  effect  handler
+yield  trait  impl  where_clause  become  do_notation  effect  handler
 ```
 
 ## 6. Literals

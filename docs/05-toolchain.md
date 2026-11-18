@@ -139,8 +139,18 @@ let manifest = Package {
   toolchain (§5.2.8), and from the pure parts of `Sable.Core`. Nothing else
   can be imported: not the package's own code, not its dependencies — they
   are what the manifest decides.
-- `.git` dependencies are written and kept, but the resolver refuses them
-  until it fetches from git (#201); everything else above builds today.
+- `.git(name, url)` takes one of `tag:`, `branch:` or `rev:` (a commit),
+  else the repository's default branch, and optionally `version:` for when
+  the package is published. Any URL git fetches from works (`https://`,
+  `ssh://`, `file://`, `git@host:path`); credentials are git's own. The
+  repository is fetched into `$SABLE_HOME/cache/git/`, and the package is
+  looked for at the top of the repository, then in directories below it,
+  so one repository can hold several. `sable.lock` pins the commit
+  (`source = "git+<url>?tag=v2.1.0#<commit>"`); a moving branch stays at
+  that commit until `sable update <name>`, or until the manifest names
+  another reference. A pinned commit already checked out builds offline.
+  A package from git is, like a registry package, a workspace of its own,
+  and a published package cannot depend on git alone.
 - Field names are the TOML keys in Sable's spelling (`defaultFeatures`,
   `optLevel`); every table of the TOML format has a field. Enumerated
   settings are enum cases (`.fat`, `.abort`), so a misspelling is a type
@@ -291,8 +301,9 @@ with both kinds is an error, so there is never a question which one applies.
 ### 5.2.10 Not built yet
 
 - Workspace inheritance: `shared` and `.workspace` (§5.2.3).
-- Per-target settings (`[targets.*]`: runtime profile, reflection), waiting on
-  cross-compilation; `when:` covers `os()` and `arch()` only.
+- Per-target settings (`[targets.*]`: runtime profile, reflection); `when:`
+  covers `os()` and `arch()` only. `sable build --target <triple>` builds for
+  another machine, and `when:` is tested against that target.
 - The language server showing a manifest's evaluation errors (the effect
   rules, a trap) in the editor; it type-checks manifests, and logs the rest.
 - A manifest's `const`s and `comptime` blocks follow the manifest's rules
@@ -406,9 +417,25 @@ from a compilation of the whole program and cached in
 `target/<profile>/cache` under `(toolchain, profile, target, fingerprint)`,
 where the fingerprint is the unit's content and the program's interface. The
 interface is a hash of each file's public surface — declarations,
-signatures and the bodies other units lower — not yet a `.sbi` file, and an
-interface change invalidates every unit rather than only the dependents.
+signatures and the bodies other units lower. Each unit's is written to a
+text `.sbi` in `cache/interfaces/` (`sable-interface 1`: each file's
+fingerprint, then its source with every body other units cannot see written
+`{ … }`), and read back by the next build in place of walking the unchanged
+unit's files. It is not yet the binary interface planned above: no other
+compilation binds against it, and an interface change still invalidates every
+unit rather than only the dependents — a unit's lowering reads facts of the
+whole program (whether any class inherits from one of its classes decides
+how its method calls dispatch), which would first have to become part of the
+interface.
 Clang runs on units in parallel; lowering is still one unit at a time.
+An unoptimised debug build is compiled this way, and so is an optimised one
+whose profile asks for `lto = "thin"` (or `"off"`): each unit's SIL passes
+run on the unit — assuming the worst of what another unit defines — its
+object is LLVM bitcode, and the link optimises across units with ThinLTO,
+keeping ThinLTO's own cache beside the objects. The default `lto = "fat"`,
+and an optimised build with debug information, compile the program whole.
+The runtime is compiled once per set of options and kept, in the build cache
+(or `$SABLE_HOME/cache/runtime` for a single file).
 
 ---
 
@@ -446,6 +473,11 @@ written down.
 A build script that wants more than it declared fails rather than being
 silently permitted. `cargo` not having this is a known supply-chain weakness and
 there is no reason to repeat it.
+
+A build script is for code that comes from outside the program, such as a
+schema file, a C header or a shader. Code that comes from the program's own
+declarations is written by a source generator (docs/08). A generator can read
+the declarations but cannot read, write or run anything.
 
 ## 5.7 Formatting and linting
 

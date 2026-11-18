@@ -153,4 +153,107 @@ public sealed class IntegerTests {
                 )
             ).Stdout
         );
+
+    /// <summary>
+    ///     I128 and U128 (spec/SYNTAX.md §4): literals past 64 bits, arithmetic
+    ///     that traps at their own limits, conversions, members and printing.
+    /// </summary>
+    [Fact]
+    public void TheHundredAndTwentyEightBitIntegersComputeAndPrint() =>
+        Assert.Equal(
+            "340282366920938463463374607431768211455\n-170141183460469231731687303715884105728\n"
+            + "7000000000000000000005\n-1\n-3 and 7\n18446744073709551615\n3\n-3.0\n7\ntrue\n"
+            + "18446744073709551616\n340282366920938463463374607431768211455\n",
+            AssertAgree(
+                Program(
+                    "",
+                    """
+                        let big: U128 = 340282366920938463463374607431768211455
+                        let low: I128 = -170141183460469231731687303715884105728
+                        let x: U128 = 7
+                        let y: I128 = -3
+                        print(big)
+                        print(low)
+                        print(x * 1000000000000000000000 + 5)
+                        print(y / 2)
+                        print("\(y) and \(x.toString())")
+                        print((big >> 64) as U64)
+                        print(y.abs())
+                        print(y as F64)
+                        print(x.max(other: 2))
+                        print(low < I128(y))
+                        let pastU64: U128 = 18446744073709551615
+                        print(pastU64 + 1)
+                        let all: U128 = 0xFFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF
+                        print(all)
+                    """
+                )
+            ).Stdout
+        );
+
+    [Theory]
+    [InlineData("let x: U128 = 340282366920938463463374607431768211455\nprint(x + 1)", "integer overflow")]
+    [InlineData("let x: I128 = -170141183460469231731687303715884105728\nprint(-x)", "integer overflow")]
+    [InlineData("let x: U128 = 18446744073709551616\nprint(x as U64)", "U128 does not fit in U64")]
+    [InlineData("let x: I128 = -1\nprint(x as U128)", "I128 does not fit in U128")]
+    public void TheHundredAndTwentyEightBitIntegersTrapAtTheirLimits(string body, string trap) {
+        var execution = AssertAgree(Program("", body));
+        Assert.StartsWith($"fatal error: {trap}\n  at test.sb:", execution.Stderr, StringComparison.Ordinal);
+    }
+
+    /// <summary>F16: half precision, computed and printed with the fewest digits that read back.</summary>
+    [Fact]
+    public void FSixteenComputesAndPrints() =>
+        Assert.Equal(
+            "1.5\n4.6\n0.1\n65500.0\n1.5\n7.0\n1\n-2.5\ninf\n",
+            AssertAgree(
+                Program(
+                    "",
+                    """
+                        let h: F16 = 1.5
+                        print(h)
+                        print(h * 3.0 + 0.1)
+                        let tenth: F16 = 0.1
+                        print("\(tenth)")
+                        let largest: F16 = 65504.0
+                        print(largest)
+                        print((-h).abs())
+                        let seven: U128 = 7
+                        print(seven as F16)
+                        print(h as I128)
+                        print(F16(-2.5).min(other: h))
+                        print(largest * 2.0)
+                    """
+                )
+            ).Stdout
+        );
+
+    /// <summary>A character converts to and from an integer through its code point, and prints as itself.</summary>
+    [Fact]
+    public void ACharacterConvertsThroughItsCodePoint() =>
+        Assert.Equal(
+            "a\n\u00e9\n65\nB\n233\n233\n",
+            AssertAgree(
+                Program(
+                    "",
+                    """
+                        print('a')
+                        print('\u{E9}')
+                        print('A' as U32)
+                        let u: U32 = 66
+                        print(u as Char)
+                        print('\u{E9}' as U8)
+                        print('\u{E9}' unchecked as U8)
+                    """
+                )
+            ).Stdout
+        );
+
+    [Theory]
+    [InlineData("let n: U32 = 55296\nprint(n as Char)", "U32 is not a Unicode scalar, so it is no Char")]
+    [InlineData("print('\\u{1F600}' as U8)", "Int does not fit in U8")]
+    public void ACharacterConversionTrapsWhereThereIsNoValue(string body, string trap) {
+        var execution = AssertAgree(Program("", body));
+        Assert.StartsWith($"fatal error: {trap}\n  at test.sb:", execution.Stderr, StringComparison.Ordinal);
+    }
 }

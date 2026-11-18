@@ -206,9 +206,13 @@ public sealed class Workspace {
 
     /// <summary>
     ///     Every package on disk the workspace uses: its members and,
-    ///     transitively, their path dependencies — by name.
+    ///     transitively, their path and git dependencies — by name.
     /// </summary>
-    public IReadOnlyDictionary<string, LocalPackage> LocalPackages() {
+    /// <param name="git">
+    ///     Fetches git dependencies, and records where each came from; with
+    ///     none, git dependencies (and what they depend on) are left out.
+    /// </param>
+    public IReadOnlyDictionary<string, LocalPackage> LocalPackages(GitSource? git = null) {
         var locals = new Dictionary<string, LocalPackage>(StringComparer.Ordinal);
         var pending = new Queue<(LocalPackage Package, bool Member)>(Members.Select(static m => (m, true)));
         foreach (var member in Members) {
@@ -220,10 +224,22 @@ public sealed class Workspace {
             IEnumerable<DependencySpec> dependencies = member
                 ? [..package.Manifest.Dependencies, ..package.Manifest.DevDependencies, ..package.Manifest.BuildDependencies]
                 : [..package.Manifest.Dependencies, ..package.Manifest.BuildDependencies];
-            foreach (var dependency in dependencies.Where(static d => d.Path is not null)) {
-                var directory = Path.GetFullPath(Path.Combine(package.Directory, dependency.Path!));
-                if (!ManifestFiles.Exists(directory)) {
-                    throw new PackageException($"{package.ManifestPath}:{dependency.Line}: dependency '{dependency.Name}': there is no {ManifestFiles.PackageFile} in '{directory}'");
+            // A path dependency of a package from git comes from the same commit.
+            var from = git?.Checkouts.GetValueOrDefault(package.Name);
+            foreach (var dependency in dependencies.Where(d => d.Path is not null || (d.Git is not null && git is not null))) {
+                string directory;
+                GitCheckout? checkout = null;
+                if (dependency.Git is { } url) {
+                    checkout = git!.Checkout(dependency.Name, url, dependency.Reference);
+                    directory = GitPackageDirectory(checkout.Directory, dependency.Name)
+                        ?? throw new PackageException($"{package.ManifestPath}:{dependency.Line}: dependency '{dependency.Name}': the git repository {url} at {checkout.ShortCommit} has no package called '{dependency.Name}'");
+                } else {
+                    directory = Path.GetFullPath(Path.Combine(package.Directory, dependency.Path!));
+                    if (!ManifestFiles.Exists(directory)) {
+                        throw new PackageException($"{package.ManifestPath}:{dependency.Line}: dependency '{dependency.Name}': there is no {ManifestFiles.PackageFile} in '{directory}'");
+                    }
+
+                    checkout = from;
                 }
 
                 if (locals.TryGetValue(dependency.Name, out var known)) {
@@ -236,7 +252,11 @@ public sealed class Workspace {
 
                 var local = new LocalPackage(directory, ManifestFiles.Load(directory));
                 if (local.Name != dependency.Name) {
-                    throw new PackageException($"{package.ManifestPath}:{dependency.Line}: dependency '{dependency.Name}': the package at '{dependency.Path}' is called '{local.Name}'");
+                    throw new PackageException($"{package.ManifestPath}:{dependency.Line}: dependency '{dependency.Name}': the package at '{dependency.Path ?? dependency.Git}' is called '{local.Name}'");
+                }
+
+                if (checkout is not null) {
+                    git!.Record(local.Name, checkout with { Directory = directory });
                 }
 
                 locals[local.Name] = local;
@@ -245,6 +265,39 @@ public sealed class Workspace {
         }
 
         return locals;
+    }
+
+    /// <summary>
+    ///     Where in a git checkout the package called <paramref name="name" />
+    ///     is: the top, if its manifest is that package's, else the nearest
+    ///     directory below whose is — so one repository can hold several
+    ///     packages, as a workspace.
+    /// </summary>
+    static string? GitPackageDirectory(string checkout, string name) {
+        var queue = new Queue<(string Directory, int Depth)>([(checkout, 0)]);
+        while (queue.TryDequeue(out var item)) {
+            var (directory, depth) = item;
+            if (ManifestFiles.Exists(directory)) {
+                try {
+                    if (ManifestFiles.Load(directory).Package?.Name == name) {
+                        return directory;
+                    }
+                } catch (ManifestException) when (directory != checkout) {
+                    // A broken manifest elsewhere in the repository is not this package's problem.
+                }
+            }
+
+            if (depth < 4) {
+                foreach (var child in Directory.GetDirectories(directory).Order(StringComparer.Ordinal)) {
+                    var leaf = Path.GetFileName(child);
+                    if (!leaf.StartsWith('.') && leaf is not ("target" or "vendor" or "node_modules")) {
+                        queue.Enqueue((child, depth + 1));
+                    }
+                }
+            }
+        }
+
+        return null;
     }
 
     /// <summary>The member called <paramref name="name" />.</summary>

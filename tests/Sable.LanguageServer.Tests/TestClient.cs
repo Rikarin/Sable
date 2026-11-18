@@ -35,6 +35,7 @@ internal sealed class TestClient : IAsyncDisposable {
             ProjectsFor = projects ?? (static _ => []),
             DiagnosticsDelay = diagnosticsDelay ?? TimeSpan.FromMilliseconds(30),
             LibraryCacheDirectory = Path.Combine(Path.GetTempPath(), "sable-lsp-tests", Guid.NewGuid().ToString("N")),
+            ExplainLink = DiagnosticDocs.Link,
             Log = TextWriter.Null
         });
         Running = Task.Run(() => server.RunAsync());
@@ -54,6 +55,16 @@ internal sealed class TestClient : IAsyncDisposable {
 
             lock (_notifications) {
                 _notifications.Add(message);
+            }
+
+            // A request of the server's — to make a progress token, to watch
+            // files, to pull again — is agreed to, as an editor would.
+            if (message.Get("id") is { } request && message.GetString("method") is not null) {
+                await _channel.WriteAsync(new JsonObject {
+                    ["jsonrpc"] = "2.0",
+                    ["id"] = JsonNode.Parse(request.GetRawText()),
+                    ["result"] = null
+                });
             }
 
             _notified.Release();
@@ -91,11 +102,20 @@ internal sealed class TestClient : IAsyncDisposable {
             ["params"] = Json.ToNode(parameters)
         });
 
-    public Task<JsonElement> InitializeAsync(string? root = null) =>
+    /// <param name="capabilities">What the editor says it can do; nothing, by default.</param>
+    public Task<JsonElement> InitializeAsync(string? root = null, object? capabilities = null) =>
         RequestAsync("initialize", new {
             processId = (int?)null,
             rootUri = root is null ? null : Workspace.UriOf(root),
-            capabilities = new { }
+            capabilities = capabilities ?? new { }
+        });
+
+    /// <summary>Initialises with several workspace folders.</summary>
+    public Task<JsonElement> InitializeAsync(IEnumerable<string> folders, object? capabilities = null) =>
+        RequestAsync("initialize", new {
+            processId = (int?)null,
+            workspaceFolders = folders.Select(static f => new { uri = Workspace.UriOf(f), name = Path.GetFileName(f) }).ToArray(),
+            capabilities = capabilities ?? new { }
         });
 
     public Task OpenAsync(string uri, string text, int version = 1) =>
@@ -138,6 +158,13 @@ internal sealed class TestClient : IAsyncDisposable {
 
     /// <summary>Waits for diagnostics for a document that satisfy a condition, and returns them.</summary>
     public async Task<JsonElement> DiagnosticsAsync(string uri, Func<JsonElement, bool>? until = null) {
+        var parameters = await MessageAsync("textDocument/publishDiagnostics",
+            p => p.GetString("uri") == uri && (until is null || until(p.Get("diagnostics")!.Value)));
+        return parameters.Get("diagnostics")!.Value;
+    }
+
+    /// <summary>Waits for a notification or request from the server, of a method and satisfying a condition; returns its parameters.</summary>
+    public async Task<JsonElement> MessageAsync(string method, Func<JsonElement, bool>? until = null) {
         var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(60);
         var seen = 0;
         while (DateTime.UtcNow < deadline) {
@@ -147,17 +174,24 @@ internal sealed class TestClient : IAsyncDisposable {
                 seen = _notifications.Count;
             }
 
-            foreach (var notification in pending.Where(n => n.GetString("method") == "textDocument/publishDiagnostics")) {
-                var parameters = notification.Get("params")!.Value;
-                if (parameters.GetString("uri") == uri && (until is null || until(parameters.Get("diagnostics")!.Value))) {
-                    return parameters.Get("diagnostics")!.Value;
+            foreach (var notification in pending.Where(n => n.GetString("method") == method)) {
+                var parameters = notification.Get("params") ?? default;
+                if (until is null || until(parameters)) {
+                    return parameters;
                 }
             }
 
             await _notified.WaitAsync(TimeSpan.FromMilliseconds(200));
         }
 
-        throw new TimeoutException($"no diagnostics as expected for {uri}");
+        throw new TimeoutException($"no {method} as expected");
+    }
+
+    /// <summary>Every message of a method the server has sent so far.</summary>
+    public IReadOnlyList<JsonElement> Sent(string method) {
+        lock (_notifications) {
+            return [.._notifications.Where(n => n.GetString("method") == method)];
+        }
     }
 
     /// <summary>Shuts the server down properly, and returns its exit code.</summary>

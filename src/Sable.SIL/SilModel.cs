@@ -20,6 +20,7 @@ public abstract class SilType : IEquatable<SilType> {
     public static readonly SilType Bool = new ScalarType("Bool");
     public static readonly SilType F64 = new ScalarType("F64");
     public static readonly SilType F32 = new ScalarType("F32");
+    public static readonly SilType F16 = new ScalarType("F16");
 
     // The sized integers (docs/03 §3.1): the widths inline layout stores.
     public static readonly SilType I8 = new ScalarType("I8");
@@ -31,12 +32,17 @@ public abstract class SilType : IEquatable<SilType> {
     public static readonly SilType U32 = new ScalarType("U32");
     public static readonly SilType U64 = new ScalarType("U64");
     public static readonly SilType UInt = new ScalarType("UInt");
+    public static readonly SilType I128 = new ScalarType("I128");
+    public static readonly SilType U128 = new ScalarType("U128");
 
     /// <summary>Every integer type, <c>Int</c> first.</summary>
-    public static readonly ImmutableArray<SilType> Integers = [Int, I8, I16, I32, I64, U8, U16, U32, U64, UInt];
+    public static readonly ImmutableArray<SilType> Integers = [Int, I8, I16, I32, I64, U8, U16, U32, U64, UInt, I128, U128];
+
+    /// <summary>The floating-point types, widest first.</summary>
+    public static readonly ImmutableArray<SilType> Floats = [F64, F32, F16];
 
     /// <summary>The integer and floating-point types.</summary>
-    public static readonly ImmutableArray<SilType> Numbers = [..Integers, F64, F32];
+    public static readonly ImmutableArray<SilType> Numbers = [..Integers, ..Floats];
 
     /// <summary>An integer type's width in bits and whether it is signed; null for anything else.</summary>
     public static (int Bits, bool Signed)? IntegerInfo(SilType type) =>
@@ -49,11 +55,17 @@ public abstract class SilType : IEquatable<SilType> {
             "U16" => (16, false),
             "U32" => (32, false),
             "U64" or "UInt" => (64, false),
+            "I128" => (128, true),
+            "U128" => (128, false),
             _ => null,
         };
 
     public static bool IsInteger(SilType type) => IntegerInfo(type) is not null;
-    public static bool IsFloat(SilType type) => type == F64 || type == F32;
+    public static bool IsFloat(SilType type) => type == F64 || type == F32 || type == F16;
+
+    /// <summary>A floating-point type's width in bits; null for anything else.</summary>
+    public static int? FloatBits(SilType type) =>
+        type == F64 ? 64 : type == F32 ? 32 : type == F16 ? 16 : null;
 
     /// <summary>One Unicode scalar value.</summary>
     public static readonly SilType Char = new ScalarType("Char");
@@ -360,6 +372,7 @@ public sealed class InlineLayout {
         : type == SilType.Char ? (CharKind, 4)
         : type == SilType.F64 ? (ScalarKind, 8)
         : type == SilType.F32 ? (ScalarKind, 4)
+        : type == SilType.F16 ? (ScalarKind, 2)
         : SilType.IntegerInfo(type) is var (bits, _) ? (ScalarKind, bits / 8)
         : null;
 
@@ -410,6 +423,13 @@ public sealed class InlineLayout {
 /// </summary>
 public sealed class EnumType(string name) : NominalType(name) {
     public List<(string Name, SilType? Payload)> Cases { get; } = [];
+
+    /// <summary>
+    ///     A union case's payload fields' names, by case, for a debugger to
+    ///     show (<c>Rect(width: 2, height: 3)</c>); only for a case whose
+    ///     fields all have one. The payload itself is the bare value or tuple.
+    /// </summary>
+    public Dictionary<string, ImmutableArray<string>> PayloadLabels { get; } = [];
 
     public int CaseIndex(string @case) => Cases.FindIndex(c => c.Name == @case);
 
@@ -498,10 +518,17 @@ public sealed class SilArgument(SilBlock block, SilType type, bool guaranteed = 
 // Instructions
 // ===========================================================================
 
-/// <summary>Where in the source an instruction came from: one-based line and column.</summary>
-public readonly record struct SilLocation(int Line, int Column) {
+/// <summary>
+///     Where in the source an instruction came from: one-based line and
+///     column, and the lexical scope it is in — 0 for the function's own,
+///     otherwise one of <see cref="SilFunction.Scopes" />, counted from 1.
+/// </summary>
+public readonly record struct SilLocation(int Line, int Column, int Scope = 0) {
     public override string ToString() => $"{Line}:{Column}";
 }
+
+/// <summary>A block of a function's source that its locals can be declared in: the scope it is inside (0 for the function's), and where it starts.</summary>
+public readonly record struct SilScope(int Parent, int Line, int Column);
 
 /// <summary>
 ///     One SIL instruction. An instruction that produces a value is itself the
@@ -536,9 +563,25 @@ public abstract class SilInstruction : SilValue {
 }
 
 /// <summary><c>integer_literal $Int, 42</c>, or <c>$Bool, 1</c> for true.</summary>
-public sealed class IntegerLiteralInst(SilType type, long value) : SilInstruction {
-    public override SilType Type { get; } = type;
-    public long Value { get; } = value;
+/// <remarks>
+///     A 128-bit literal keeps all its bits in <see cref="WideValue" />, read
+///     as signed: a <c>U128</c> past <c>I128</c>'s range is held as the
+///     negative number with the same bits, as a <c>U64</c> is in <see cref="Value" />.
+/// </remarks>
+public sealed class IntegerLiteralInst : SilInstruction {
+    public IntegerLiteralInst(SilType type, long value) : this(type, (Int128)value) { }
+
+    public IntegerLiteralInst(SilType type, Int128 value) {
+        Type = type;
+        WideValue = value;
+    }
+
+    public override SilType Type { get; }
+
+    /// <summary>The value's low 64 bits: all of it for any type narrower than 128 bits.</summary>
+    public long Value => unchecked((long)WideValue);
+
+    public Int128 WideValue { get; }
     public override string Opcode => "integer_literal";
 }
 
@@ -1057,6 +1100,13 @@ public sealed class SilFunction(string name, FunctionType type) {
     /// <summary>The name of each parameter, <c>self</c> included, for a debugger.</summary>
     public List<string> ParameterNames { get; } = [];
 
+    /// <summary>
+    ///     The blocks within the function's body that a debugger tells apart,
+    ///     so that a name shadowed in one shows only there; scope <c>n</c> of
+    ///     a <see cref="SilLocation" /> is the <c>n</c>-th.
+    /// </summary>
+    public List<SilScope> Scopes { get; } = [];
+
     public SilBlock Entry => Blocks[0];
 
     public SilBlock AddBlock() {
@@ -1435,7 +1485,7 @@ public static class SilBuiltins {
             }
         }
 
-        foreach (var real in new[] { SilType.F64, SilType.F32 }) {
+        foreach (var real in SilType.Floats) {
             // 'rem' is C's fmod (LLVM's frem): exact, with the sign of the dividend.
             foreach (var op in new[] { "add", "sub", "mul", "div", "rem", "min", "max" }) {
                 Binary(op, real, real);
@@ -1460,7 +1510,7 @@ public static class SilBuiltins {
             }
         }
 
-        foreach (var printable in SilType.Numbers.Concat([SilType.String, SilType.Bool])) {
+        foreach (var printable in SilType.Numbers.Concat([SilType.String, SilType.Bool, SilType.Char])) {
             table[$"print_{printable}"] = new([printable], SilType.Unit);
         }
 
@@ -1486,6 +1536,12 @@ public static class SilBuiltins {
         Add("string_slice", SilType.String, SilType.String, SilType.Int, SilType.Int);
         Add("string_contains", SilType.Bool, SilType.String, SilType.Char);
         Add("string_index_of", SilType.Int, SilType.String, SilType.Char);
+
+        // Walking a string's scalars from a cursor, which only these read:
+        // a byte offset natively, a scalar index in the interpreter.
+        Add("string_cursor_end", SilType.Int, SilType.String);
+        Add("string_cursor_scalar", SilType.Char, SilType.String, SilType.Int);
+        Add("string_cursor_next", SilType.Int, SilType.String, SilType.Int);
         Add("string_trimmed", SilType.String, SilType.String);
         Add("string_split", new ArrayType(SilType.String), SilType.String, SilType.Char);
         Add("string_hash", SilType.Int, SilType.String);

@@ -13,16 +13,23 @@ namespace Sable.Driver;
 public static class Library {
     public const string Core = CoreLibrary.ModuleName;
 
-    static readonly Lazy<IReadOnlyDictionary<string, IReadOnlyList<SyntaxTree>>> Modules = new(Load);
+    static readonly System.Collections.Concurrent.ConcurrentDictionary<(string Os, string Arch), Lazy<IReadOnlyDictionary<string, IReadOnlyList<SyntaxTree>>>> Parsed = new();
+
+    /// <summary>The modules parsed for the machine running the compiler.</summary>
+    static IReadOnlyDictionary<string, IReadOnlyList<SyntaxTree>> Modules => ModulesFor(ParseOptions.Default);
+
+    /// <summary>The modules parsed for the target the options name, once per target: their <c>#if os(...)</c> follows it.</summary>
+    static IReadOnlyDictionary<string, IReadOnlyList<SyntaxTree>> ModulesFor(ParseOptions options) =>
+        Parsed.GetOrAdd((options.TargetOs, options.TargetArch), static target => new(() => Load(target.Os, target.Arch))).Value;
 
     /// <summary>The library modules there are, by name.</summary>
-    public static IReadOnlyCollection<string> ModuleNames => [..Modules.Value.Keys];
+    public static IReadOnlyCollection<string> ModuleNames => [..Modules.Keys];
 
     /// <summary>A library module's source, every file of it in order: what a cache of anything built from it hashes.</summary>
     public static string Source(string module) =>
-        Modules.Value.TryGetValue(module, out var files) ? string.Join("\n", files.Select(static f => f.Text.Text)) : "";
+        Modules.TryGetValue(module, out var files) ? string.Join("\n", files.Select(static f => f.Text.Text)) : "";
 
-    static IReadOnlyDictionary<string, IReadOnlyList<SyntaxTree>> Load() {
+    static IReadOnlyDictionary<string, IReadOnlyList<SyntaxTree>> Load(string os, string arch) {
         var modules = new Dictionary<string, List<SyntaxTree>>(StringComparer.Ordinal);
         var assembly = typeof(Library).Assembly;
         foreach (var resource in assembly.GetManifestResourceNames().Where(static n => n.StartsWith("lib/", StringComparison.Ordinal)).Order(StringComparer.Ordinal)) {
@@ -30,7 +37,7 @@ public static class Library {
             using var reader = new StreamReader(stream);
             // The standard library is a workspace of its own: what it marks
             // 'package' is shared between its modules, not with programs.
-            var tree = SyntaxTree.Parse(new SourceText(reader.ReadToEnd(), resource), ParseOptions.Default with { Workspace = "sable" });
+            var tree = SyntaxTree.Parse(new SourceText(reader.ReadToEnd(), resource), ParseOptions.Default.ForTarget(os, arch) with { Workspace = "sable" });
             if (tree.Root is not CompilationUnitSyntax { Module: { } declaration }) {
                 continue;
             }
@@ -53,13 +60,14 @@ public static class Library {
     /// </summary>
     public static IReadOnlyList<SyntaxTree> For(SyntaxTree program) => For([program]);
 
-    /// <summary>The library's trees a program of many files needs.</summary>
+    /// <summary>The library's trees a program of many files needs, parsed for the target its files are.</summary>
     public static IReadOnlyList<SyntaxTree> For(IReadOnlyList<SyntaxTree> program) {
+        var modules = program.Count > 0 ? ModulesFor(program[0].Options) : Modules;
         var needed = new List<SyntaxTree>();
         var seen = new HashSet<string>(StringComparer.Ordinal) { Core };
         var pending = new Queue<string>(program.SelectMany(ImportsOf));
         while (pending.TryDequeue(out var module)) {
-            if (!seen.Add(module) || !Modules.Value.TryGetValue(module, out var files)) {
+            if (!seen.Add(module) || !modules.TryGetValue(module, out var files)) {
                 continue;
             }
 

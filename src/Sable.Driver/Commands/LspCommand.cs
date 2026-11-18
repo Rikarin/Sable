@@ -32,6 +32,7 @@ public sealed class LspCommand : Command {
                 // Standard output is the protocol's: whatever resolving prints
                 // (a download, say) goes to standard error with the rest.
                 ProjectsFor = root => LanguageProjects.For(root, PackageEnvironment.FromProcess() with { Out = Console.Error }, Console.Error),
+                ExplainLink = DiagnosticDocs.Link,
                 Log = Console.Error
             }
         );

@@ -184,6 +184,33 @@ public sealed class SableManifestTests {
     }
 
     [Fact]
+    public void AGitDependencyTakesATagABranchOrARev() {
+        using var fixture = new PackageFixture();
+        fixture.Write("app/package.sb", """
+            import Sable.Build
+
+            let manifest = Package {
+                name: "app",
+                version: "0.1.0",
+                dependencies: [
+                    .git("a", "https://example.com/a", tag: "v1.0.0"),
+                    .git("b", "https://example.com/b", branch: "main", version: "0.3"),
+                    .git("c", "https://example.com/c", rev: "0123abcd"),
+                    .git("d", "https://example.com/d"),
+                ],
+            }
+            """);
+
+        var dependencies = fixture.Load("app").Members[0].Manifest.Dependencies.ToDictionary(static d => d.Name);
+        Assert.Equal(new GitReference("tag", "v1.0.0"), dependencies["a"].Reference);
+        Assert.Equal(new GitReference("branch", "main"), dependencies["b"].Reference);
+        Assert.Equal("0.3", dependencies["b"].Version?.Text);
+        Assert.Equal(new GitReference("rev", "0123abcd"), dependencies["c"].Reference);
+        Assert.Equal("https://example.com/d", dependencies["d"].Git);
+        Assert.Null(dependencies["d"].Reference);
+    }
+
+    [Fact]
     public void ADependencyForAnotherPlatformIsLockedButNotBuilt() {
         var other = OperatingSystem.IsMacOS() ? ".linux" : ".macOS";
         using var fixture = new PackageFixture();

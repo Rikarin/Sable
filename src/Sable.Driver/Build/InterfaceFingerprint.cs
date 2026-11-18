@@ -10,8 +10,8 @@ namespace Sable.Driver.Build;
 ///     field, initial value and generic body — and nothing that only its own
 ///     unit's code depends on: the bodies of ordinary functions. A change to
 ///     such a body leaves the fingerprint as it was, so that other units'
-///     objects stay valid (docs/05 §5.4's <c>.sbi</c>, as a hash rather than
-///     a file).
+///     objects stay valid (docs/05 §5.4's <c>.sbi</c>: the hash, and the
+///     source it covers, are what <see cref="InterfaceFile" /> keeps).
 /// </summary>
 /// <remarks>
 ///     <para>
@@ -110,14 +110,33 @@ public static class InterfaceFingerprint {
     static bool Same(SyntaxNode node, SyntaxNode? other) => other is not null && node.Kind == other.Kind && node.Span == other.Span;
 
     /// <summary>The fingerprint of one file's interface, given the program's <see cref="ConcreteTypeNames" />.</summary>
-    public static string Of(SyntaxTree tree, IReadOnlySet<string> concreteTypes) {
+    public static string Of(SyntaxTree tree, IReadOnlySet<string> concreteTypes) => Interface(tree, concreteTypes).Fingerprint;
+
+    /// <summary>
+    ///     One file's interface: its fingerprint, and its source as another
+    ///     unit sees it — the file with each body that is not interface
+    ///     written <c>{ … }</c>, what a <c>.sbi</c> file holds (<see cref="InterfaceFile" />).
+    /// </summary>
+    public static (string Fingerprint, string Source) Interface(SyntaxTree tree, IReadOnlySet<string> concreteTypes) {
         var writer = new Writer(tree, concreteTypes);
         writer.Node(tree.Root, positional: false);
-        return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(writer.Text.ToString())));
+        var source = new StringBuilder();
+        var text = tree.Text.Text;
+        var at = 0;
+        foreach (var body in writer.Elided) {
+            source.Append(text, at, body.Start - at).Append("{ … }");
+            at = body.End;
+        }
+
+        source.Append(text, at, text.Length - at);
+        return (Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(writer.Text.ToString()))), source.ToString());
     }
 
     sealed class Writer(SyntaxTree tree, IReadOnlySet<string> concreteTypes) {
         public StringBuilder Text { get; } = new();
+
+        /// <summary>The spans of the bodies left out, in document order.</summary>
+        public List<TextSpan> Elided { get; } = [];
 
         public void Node(SyntaxNode node, bool positional, bool elide = true) {
             if (elide && !positional && Body(node) is { } body) {
@@ -130,6 +149,7 @@ public static class InterfaceFingerprint {
                     } else if (child.AsNode() is { } inner) {
                         if (Same(inner, body)) {
                             Text.Append("{…}\n");
+                            Elided.Add(body.Span);
                         } else {
                             Node(inner, positional: defaults, elide: false);
                         }

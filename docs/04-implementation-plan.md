@@ -350,6 +350,20 @@ Order matters; each of these is a self-contained lowering:
   Retrofitting debug info is awful; emitting it alongside is easy.
 - Targets in order: `arm64-apple-darwin` → `x86_64-linux-gnu` →
   `aarch64-linux-gnu` → `x86_64-windows-msvc`.
+- **As built.** `sable build --target <triple>` (and `--sysroot <dir>`) for a
+  file or a package; a package's output goes to `target/<triple>/<profile>/`.
+  `NativeTarget` parses the triple (aarch64/arm64, x86_64, wasm32; darwin,
+  linux, windows, wasi) and asks clang, once per triple, for the target's
+  `target datalayout`, normalised triple and CPU features, which head the
+  program's IR — the layout clang compiles the runtime with. The IR reads
+  the runtime's object, string and array headers through typed GEPs, so 32-bit
+  pointers lay them out as C does; `#if os()`/`arch()`, `Platform.*` (the
+  core library is parsed per target), a dependency's `when:` and the C ABI's
+  classification follow the target. Every target compiles to an object
+  (`--emit obj`); an executable links where the runtime has a platform layer —
+  macOS and Linux. Not yet: the runtime's Windows and WASI layers (it needs
+  pthread, dlfcn, execinfo, posix_spawn, dirent and poll), WebAssembly's C ABI
+  for `@extern` structs, and CI beyond Linux x64 and macOS arm64.
 
 ### 2.4 Minimal runtime (C)
 
@@ -1179,8 +1193,7 @@ This trades the planned stackless state machine (§2.2, item 4) for a stack
 per task — far less compiler for the same semantics, at the cost of memory
 per task and of thread creation. Not yet: `async let` runs its child to
 completion at the declaration rather than alongside; no task groups,
-cancellation, `for await` or async sequences, no sleeping or I/O to wait
-on, and no parallelism — all `Sable.Concurrency`'s, along with the switch
+cancellation, no sleeping or I/O to wait on, and no parallelism — all `Sable.Concurrency`'s, along with the switch
 to the state machine where tasks are many.
 
 ### 4.4 Exit criteria
@@ -1203,13 +1216,23 @@ to the state machine where tasks are many.
       And `Range` and `ClosedRange` — what the binder
       makes of `a..<b` and `a...b` — are Sable (`lib/Sable.Core/Range.sb`:
       `lowerBound`, `upperBound`, `isEmpty`, `contains`, over a `Comparable`
-      bound), and lower as values: stored, passed, returned and iterated,
-      while a `for` over a range written in the loop still builds none.
-      Nothing else is declared in C# (`CoreTypes`): only the types the
+      bound, and `count` where the bound is an Int), as are the one-sided
+      `PartialRangeUpTo`, `PartialRangeThrough` and `PartialRangeFrom`
+      (`..<b`, `...b`, `a...`) and `stride(from:to:by:)`. They lower as
+      values: stored, passed, returned and iterated — a range of any integer
+      type or of characters counting in its own type — while a `for` over a
+      range written in the loop still builds none. An extension's `where`
+      clause (`extension Range where Bound == Int`) holds in its members and
+      decides on which constructions they are found.
+      A `for` over anything but an array, a dictionary or a range goes
+      through `Sequence` and `Iterator` (`lib/Sable.Core/Sequence.sb`) —
+      `makeIterator()`, then `next()` until none — which `String` conforms
+      to; `for await` the same through `AsyncSequence`, which
+      `Sable.Concurrency`'s `Channel` conforms to. Nothing else is declared in C# (`CoreTypes`): only the types the
       compiler knows by sight, and the shells the binder desugars to
-      (`Error`, `From`, `Optional`, `Dictionary`). The I128, U128 and F16 types no
-      longer declare `toString`, `abs`, `min` and `max`: nothing could lower
-      them, and SIL has no such types yet. The built-in `[Key: Value]`
+      (`Error`, `From`, `Optional`, `Dictionary`). I128, U128 and F16 are SIL
+      types (`i128` and `half` in LLVM), with literals up to 128 bits and the
+      same members, printing and conversions as the other numbers. The built-in `[Key: Value]`
       dictionary is compiler-known as the arrays are — its entries an array
       of key and value pairs, its indexing and `for (key, value) in d` lowered
       directly — and its members are Sable (`lib/Sable.Core/Dictionary.sb`:
@@ -1399,7 +1422,7 @@ In `src/Sable.Driver/Packages/`, with a command per file under `Commands/`.
 Deferred: build scripts (`[build]` is read and validated, and a build warns
 that it is not run — the capability sandbox needs runtime support), and with
 them `[build-dependencies]` (checked, not resolved or built, and warned
-about); git dependencies (refused with an error); workspace inheritance
+about); workspace inheritance
 (`version.workspace = true` and `{ workspace = true }` are refused,
 `[workspace.package]` and `[workspace.dependencies]` warned about); `[reflect]`
 and `[targets]` (accepted with a warning: nothing looks a type up by name
@@ -1434,20 +1457,68 @@ against the snapshot current when it arrived, and `$/cancelRequest` cancels
 it. A compilation is not thread-safe, so whatever binds holds its gate, one
 member at a time.
 
-- Diagnostics for open documents, debounced (250 ms of quiet), bound member by
+- Diagnostics for every file of the workspace, open ones first, debounced
+  (250 ms of quiet; a change cancels a round under way), bound member by
   member. Declaration and signature diagnostics carry no file
   (`GetAllDiagnosticsByFile` says so); they are placed by span and the name
-  their message quotes.
-- Hover (signature, container, doc comment; an expression's type), definition
-  (into a copy of the library file when it lands there), references, rename
+  their message quotes. The type errors go out first; then the lints (at the
+  package's `[lints]` levels, on a file with no errors of its own) and the
+  checks on SIL (moves, exclusivity, roots: each package lowered once its types
+  are right). Each diagnostic links to its `docs/diagnostics/` page
+  (`codeDescription`) when it has one; unused code is tagged as such. A client
+  that can pull (`textDocument/diagnostic`, `workspace/diagnostic` for the
+  files not open) is not pushed to; it is sent `workspace/diagnostic/refresh`
+  when a round changes something. A package's analysis is reused while none of
+  its files change, so an edit elsewhere does not rebind or relower it.
+- The workspace is every folder the editor has open, kept as folders are added
+  and removed (`didChangeWorkspaceFolders`); a manifest saved, changed on disk
+  or the lock file changing reads the packages again. A client that allows it
+  is asked to watch `*.sb`, `sable.toml` and `sable.lock`; one that shows
+  progress is shown the loading. The setting `sable.diagnostics.workspace`
+  (initialisation options or `didChangeConfiguration`) turns off the files
+  nobody opened.
+- Formatting the document, a range (its lines, and any the formatter joins to
+  them) and on typing `}` (what it closes); a file with a syntax error has its
+  whole top-level declarations without one formatted. A place in the text is
+  matched to one in the formatted text by the non-whitespace characters before
+  it, which formatting keeps.
+- Hover (signature, container, doc comment; an expression's type; like a
+  completion, bound speculatively against the newest compilation), definition
+  (into a copy of the library file when it lands there), references (a
+  parameter whose label is its name is also named by each argument's label, in
+  any file), rename
   with `prepareRename` (refused for anything the library or the compiler
   declares, and for keywords), document symbols, signature help.
+- Declaration (the definition), type definition (through optionals,
+  references and arrays), implementation (the workspace's types conforming to a
+  protocol or inheriting from a class, however indirectly, and their members
+  of a requirement's name), document highlights (the declaration as a write),
+  workspace symbols (syntax alone, by the query's letters in order), folding
+  ranges (brackets over several lines, runs of imports and of comments),
+  selection ranges (the token, then each node around it), semantic tokens
+  (full and range: types by kind, parameters, locals, fields, cases,
+  functions and methods; declaration, readonly, static and library
+  modifiers), call hierarchy (callers by the references' enclosing members,
+  callees by the bound calls) and type hierarchy (supertypes from the
+  declaration, conforming extensions and `@derive`; subtypes in the
+  workspace). Quick fixes for the lints: what each message suggests (`_` before
+  an unused name, a parameter renamed keeping its label, the import removed,
+  `let` for `var`) and `@allow(lint)` on the declaration. `completionItem/resolve`
+  adds a symbol's doc comment to the item shown.
 - Completion: members after `.` and `?.` (statics after a type name), the
   names in scope — locals declared before the caret, parameters, the enclosing
   types' members, the module, imports, `Sable.Core` — and keywords; module
-  names after `import`.
-- Inlay hints: the type of each `let`/`var` written without one, and the
-  inferred roots — after a function's reference result, `roots(a, b)`, the
+  names after `import`. A function is written as a call with a placeholder per
+  argument, under its label, for a client that takes snippets. At the start of
+  an argument, the labels the call's parameters take come first. After a bare
+  `.`, the cases and statics of the type the context wants (a parameter's, an
+  annotated declaration's, an assignment's or comparison's other side, the
+  function's result). A public name of another module of the compilation that
+  the file does not import is offered with the `import` it needs.
+- Inlay hints: the type of each `let`/`var` written without one; the
+  parameter an argument without a label is for, where the call takes more than
+  one and the argument is not already that name; a closure's inferred
+  parameter and result types; and the inferred roots — after a function's reference result, `roots(a, b)`, the
   parameters it may refer into, from root inference's summaries
   (`SilFunction.ResultRoots`, read from a separate lowering so the server's
   compilation is not held); and on a local reference, what it refers into
@@ -1564,8 +1635,17 @@ VS Code's own test host.
   declarations and the statements that ran, and runs each entry as the next
   statement of a `main` that replays them, under the SIL interpreter; an
   expression is bound to `resN` and shown with its type; `:type`, `:reset`,
-  `:help`, `:quit`. Replay re-runs side effects (I/O, clocks); a smarter
-  scheme would snapshot the interpreter's state instead.
+  `:help`, `:quit`. What a statement does to the world (files, input, the
+  environment, processes, the clock, sleeping) goes through an
+  `EffectJournal`: carried out the first time, replayed from the journal
+  after, so nothing happens twice and the clock reads as it did; a failed
+  entry's effects are dropped from it. The interpreter runs without a step
+  limit (Ctrl-C interrupts an entry) and 100,000 calls deep. On a terminal,
+  `LineEditor` gives readline's editing keys, ↑/↓ history (kept in
+  `~/.sable/repl_history`) and Tab completion of keywords and the session's
+  names. Not yet: replay still repeats the earlier statements' computation
+  (snapshotting the interpreter would not), and a package's dependencies
+  cannot be imported — only the standard library's modules.
 - **Lints** (`src/Sable.Symbols/Lints/`): `Lint` over a file's
   `SemanticModel` and bound bodies, `LintConfiguration` (levels by name,
   `FromTable` for a `[lints]` table), `@allow(name)`/`@warn(name)` on any
@@ -1587,8 +1667,18 @@ so every local stays in its slot (`src/Sable.CodeGen/LlvmEmitter.Debug.cs`).
 Every function has a `DISubprogram` named by its full Sable name —
 `Demo.Point.length`, `Demo.main$closure0` — with no linkage name: the symbol
 is the same name behind `sable.`, nothing to demangle, and `b Demo.describe`
-finds it. A compiler-made function (a protocol witness) is artificial, at
-line 0, and `step` goes through it. Parameters are spilled to slots as clang
+finds it (the plugin sets `target.language` to C, so that no lldb reads the
+dots as Swift's or C++'s scopes and looks up only `describe`). A compiler-made
+function (a protocol witness) is artificial, at line 0, and `step` goes
+through it: its subprogram names its target (`DW_AT_trampoline`), it is in a
+`<compiler-generated>` file, and with an LLVM before 20 — which writes a
+line-0 function as one row, out of which lldb 18 steps straight back — its
+prologue is given line 1 there, so the body's line 0 starts a row of its own.
+The DWARF is version 5. Each nested block, and each loop, `if`, `switch` and
+`do` (which bind names for their bodies), is a `DILexicalBlock`, so a local
+shows only where it can be named and a shadowing one hides what it shadows;
+a global is a `DIGlobalVariable` named by its last part (`target variable`,
+`p limit`). Parameters are spilled to slots as clang
 does, so they read correctly anywhere in the function; slots are made in
 the prologue at the function's line, so a line breakpoint and `next` land on
 statements, one line at a time; a local a closure captures by reference is
@@ -1615,7 +1705,7 @@ object's metadata.
 ```
 (String) greeting = "hello, world"
 ([Int]) numbers = count = 3 { [0] = 10  [1] = 20  [2] = 30 }
-(Values.Shape) rect = Rect(2, 3)
+(Values.Shape) rect = Rect(width: 2, height: 3)
 (Int?) absent = none
 (any Values.Named) bird = Values.Bird { [value] = Values.Bird { legs = 2  [strong] = 1 } }
 (Values.Node) node = Values.Node { value = 7  label = "seven"  next = none  [strong] = 2 }
@@ -1639,13 +1729,17 @@ x64 container on an arm64 Mac, where lldb 21 launches the program but it
 stops at once with SIGILL. There only the DWARF check runs, with
 `llvm-dwarfdump-21 --verify`; the formatters are verified on macOS.
 
-Not yet: lexical scopes (every local is in its function's scope, so a
-shadowed name shows twice); union payload field names (SIL keeps a tuple, so
-`Rect(2, 3)` not `Rect(width: 2, height: 3)`); readable names for generic
-instances (`HashMap$of$String$Int`); `@inline_layout` values, which show as a
-pointer to their bytes; the standard library's own source lines (its
-functions name a file the debugger cannot find); expression evaluation in
-Sable syntax (`expression` is lldb's C); and gdb.
+A union case whose payload fields are named (`EnumType.PayloadLabels`) has a
+payload described as a struct of them, `U.Case$case`, laid out as the tuple
+is, which the plugin shows as the case's fields.
+
+Not yet: readable names for generic instances (`HashMap$of$String$Int`);
+`@inline_layout` values, which show as a pointer to their bytes; the standard
+library's own source lines (its functions name a file the debugger cannot
+find); expression evaluation in Sable syntax (`expression` is lldb's C); a
+language code of Sable's own (the unit says `DW_LANG_C`, which is what lets
+lldb evaluate expressions at all); `inlinedAt` (a debug build inlines
+nothing); CodeView for Windows; and gdb.
 
 ### Incremental builds, as implemented
 
@@ -1792,6 +1886,37 @@ program's interface, so each binary has its own objects); a `.dSYM` for
 separately compiled builds (lldb reads DWARF from the cached objects
 through the debug map; `sable clean` removes them); `sable test` and
 `sable bench` still compile whole.
+
+### Source generators, as implemented
+
+docs/08 (`tests/Sable.CodeGen.Tests/SourceGeneratorTests.cs`,
+`tests/Sable.LanguageServer.Tests/GeneratorTests.cs`). The files under a
+package's `generators/` directory are one program, compiled with
+`Sable.Generators` (`lib/Sable.Generators`), a `main` the compiler writes,
+and a public thunk per module that calls each `@generator` function
+(`Generators/SourceGenerators.cs`). Before compiling, the program's
+signatures, imports and effects are checked, using the manifest's effect
+check. The compiled SIL is kept in memory, keyed by the program's text and
+the toolchain.
+
+Each top-level type that carries a generator's attribute becomes a request.
+A request is lines of fields describing the declaration as written, which
+the program reads from standard input in the interpreter. The program
+prints each run's files and messages as records. A run is cached on the
+generator program and the request's text, and the requests the cache does
+not have go through one interpreter run. When a run traps, it is reported at
+its attribute, and the rest go on from the next request.
+
+`PackageGenerators` runs this for every package a target compiles, with the
+generators of the package itself and of its direct dependencies (and its
+dev-dependencies for `sable test`). It writes the output to
+`target/generated/<package>/<generator>/` and removes files that are no
+longer written. `PackageBuilder` puts each generated file right after the
+file it was written for, and into that file's unit in an incremental build.
+The language server runs a member's generators on its documents for each
+analysis, compiles their output as dependency files, and shows their
+messages on the attribute. Dependencies' generated files come from disk,
+and each `generators/` directory is a project of its own.
 
 ### Not built in Phase 5
 

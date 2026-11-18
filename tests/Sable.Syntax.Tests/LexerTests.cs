@@ -79,7 +79,7 @@ public sealed class LexerTests {
 
     [Fact]
     public void FutureReservedWordWarns() {
-        var (_, diagnostics) = TestHelpers.LexWithDiagnostics("let macro = 1");
+        var (_, diagnostics) = TestHelpers.LexWithDiagnostics("let yield = 1");
         Assert.Contains(diagnostics, static d => d.Severity == DiagnosticSeverity.Warning);
     }
 

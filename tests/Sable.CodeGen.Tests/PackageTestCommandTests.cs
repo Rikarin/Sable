@@ -110,4 +110,37 @@ public sealed class PackageTestCommandTests {
         Assert.NotEqual(0, refused.ExitCode);
         Assert.Contains("Helper", refused.Errors, StringComparison.Ordinal);
     }
+
+    /// <summary>
+    ///     A package's harness is kept in <c>target/harness/</c>: running the
+    ///     tests again on unchanged sources runs the harness built last, and
+    ///     an edit builds it again.
+    /// </summary>
+    [Fact]
+    public void AnUnchangedPackagesTestsAreNotCompiledAgain() {
+        if (!CanBuild) {
+            return;
+        }
+
+        using var fixture = new PackageFixture();
+        var app = fixture.Package("app", "app", "0.1.0", "",
+            ("src/lib.sb", "module App\n\nfn twice(_ n: Int) -> Int {\n    return n * 2\n}\n"),
+            ("tests/twice.sb", "module App\n\nimport Sable.Testing\n\n@test\nfn twicesThree() {\n    assertEqual(twice(3), 6)\n}\n"));
+
+        var first = Sable(fixture, app, "test");
+        Assert.True(first.ExitCode == 0, first.Output + first.Errors);
+        var harness = Path.Combine(app, "target", "harness", "app", "test");
+        Assert.True(File.Exists(harness));
+        var built = File.GetLastWriteTimeUtc(harness);
+
+        var again = Sable(fixture, app, "test");
+        Assert.True(again.ExitCode == 0, again.Output + again.Errors);
+        Assert.Contains("twicesThree ... ok", again.Output, StringComparison.Ordinal);
+        Assert.Equal(built, File.GetLastWriteTimeUtc(harness));
+
+        fixture.Write("app/src/lib.sb", "module App\n\nfn twice(_ n: Int) -> Int {\n    return n * 3\n}\n");
+        var edited = Sable(fixture, app, "test");
+        Assert.Equal(1, edited.ExitCode);
+        Assert.NotEqual(built, File.GetLastWriteTimeUtc(harness));
+    }
 }

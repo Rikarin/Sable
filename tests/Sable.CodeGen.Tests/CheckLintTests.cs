@@ -105,4 +105,38 @@ public sealed class CheckLintTests {
         var failure = Assert.Throws<ManifestException>(() => fixture.Load("shapes"));
         Assert.Contains("no lint named 'no_such_lint'", failure.Message, StringComparison.Ordinal);
     }
+
+    /// <summary>
+    ///     <c>sable check</c> keeps what it found under a key over the sources
+    ///     and the lints: run again on the same, it reads the answer back
+    ///     (here, one planted in the cache, to see that it is read); after an
+    ///     edit, or with other lints, it checks again.
+    /// </summary>
+    [Fact]
+    public void CheckingUnchangedSourcesAgainReadsTheAnswer() {
+        using var fixture = new PackageFixture();
+        fixture.Package("shapes", "shapes", "0.1.0", "", ("src/lib.sb", Library));
+        Assert.Equal(0, PackageBuilder.Check(fixture.Load("shapes"), fixture.Environment, new BuildRequest()));
+        var first = fixture.Errors.ToString();
+        Assert.Contains("S3300", first, StringComparison.Ordinal);
+
+        var cached = Path.Combine(fixture.Root, "shapes", "target", "check", "shapes-lib.json");
+        Assert.True(File.Exists(cached));
+        File.WriteAllText(cached, File.ReadAllText(cached).Replace("S3300", "S3300 (from the cache)", StringComparison.Ordinal));
+        fixture.Errors.GetStringBuilder().Clear();
+        Assert.Equal(0, PackageBuilder.Check(fixture.Load("shapes"), fixture.Environment, new BuildRequest()));
+        Assert.Contains("S3300 (from the cache)", fixture.Errors.ToString(), StringComparison.Ordinal);
+
+        // An edit is checked again.
+        fixture.Write("shapes/src/lib.sb", Library.Replace("let unused = 3", "let unused = 4", StringComparison.Ordinal));
+        fixture.Errors.GetStringBuilder().Clear();
+        Assert.Equal(0, PackageBuilder.Check(fixture.Load("shapes"), fixture.Environment, new BuildRequest()));
+        Assert.Contains("S3300", fixture.Errors.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("from the cache", fixture.Errors.ToString(), StringComparison.Ordinal);
+
+        // So are other lints.
+        File.AppendAllText(Path.Combine(fixture.Root, "shapes", "sable.toml"), "[lints]\nunused_local = \"error\"\n");
+        fixture.Errors.GetStringBuilder().Clear();
+        Assert.Equal(1, PackageBuilder.Check(fixture.Load("shapes"), fixture.Environment, new BuildRequest()));
+    }
 }

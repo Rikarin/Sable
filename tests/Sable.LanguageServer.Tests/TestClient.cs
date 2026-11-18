@@ -98,12 +98,40 @@ internal sealed class TestClient : IAsyncDisposable {
         return response.TryGetProperty("result", out var result) ? result : default;
     }
 
-    public Task NotifyAsync(string method, object? parameters) =>
-        _channel.WriteAsync(new JsonObject {
+    public Task NotifyAsync(string method, object? parameters) {
+        var node = Json.ToNode(parameters);
+        Track(method, node);
+        return _channel.WriteAsync(new JsonObject {
             ["jsonrpc"] = "2.0",
             ["method"] = method,
-            ["params"] = Json.ToNode(parameters)
+            ["params"] = node
         });
+    }
+
+    /// <summary>The version of each document this client last opened or changed; a closed one is gone.</summary>
+    readonly System.Collections.Concurrent.ConcurrentDictionary<string, int> _versions = new(StringComparer.Ordinal);
+
+    void Track(string method, JsonNode? parameters) {
+        if (parameters?["textDocument"] is not JsonObject document || document["uri"]?.GetValue<string>() is not { } uri) {
+            return;
+        }
+
+        if (method == "textDocument/didClose") {
+            _versions.TryRemove(uri, out _);
+        } else if (method is "textDocument/didOpen" or "textDocument/didChange" && document["version"] is { } version) {
+            _versions[uri] = version.GetValue<int>();
+        }
+    }
+
+    /// <summary>
+    ///     Whether a report is of the document as this client last sent it.
+    ///     The server reports a version in two rounds, the type errors then
+    ///     the lints and checks, and an older version's second round may come
+    ///     after an edit: a test waiting for the edit's report must not take
+    ///     it. A report without a version is of a file not open.
+    /// </summary>
+    bool IsCurrent(string uri, JsonElement report) =>
+        !_versions.TryGetValue(uri, out var sent) || report.GetInt("version") is not { } version || version >= sent;
 
     /// <param name="capabilities">What the editor says it can do; nothing, by default.</param>
     public Task<JsonElement> InitializeAsync(string? root = null, object? capabilities = null) =>
@@ -162,7 +190,7 @@ internal sealed class TestClient : IAsyncDisposable {
     /// <summary>Waits for diagnostics for a document that satisfy a condition, and returns them.</summary>
     public async Task<JsonElement> DiagnosticsAsync(string uri, Func<JsonElement, bool>? until = null) {
         var parameters = await MessageAsync("textDocument/publishDiagnostics",
-            p => p.GetString("uri") == uri && (until is null || until(p.Get("diagnostics")!.Value)));
+            p => p.GetString("uri") == uri && IsCurrent(uri, p) && (until is null || until(p.Get("diagnostics")!.Value)));
         return parameters.Get("diagnostics")!.Value;
     }
 

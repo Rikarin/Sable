@@ -674,8 +674,8 @@ public sealed class LanguageServerTests : IDisposable {
         // An edit after an emoji lands where the client meant it.
         var at = At(text, "shout()\n}");
         await client.ChangeAsync(uri, 2, text, at, at + "shout".Length, "shout2");
-        var diagnostics = await client.DiagnosticsAsync(uri, static d => d.GetArrayLength() > 0);
-        var start = diagnostics[0].Get("range")!.Value.Get("start")!.Value;
+        var diagnostics = await client.DiagnosticsAsync(uri, static d => d.EnumerateArray().Any(static e => e.GetString("code") == "S2002"));
+        var start = diagnostics.EnumerateArray().First(static e => e.GetString("code") == "S2002").Get("range")!.Value.Get("start")!.Value;
         Assert.True(new { line = 5, character = 28 }.ToString() == Shape(start), diagnostics.ToString());
     }
 }

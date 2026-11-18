@@ -186,3 +186,107 @@ test("Emacs byte-compiles the mode without a warning", { skip: !has("emacs") && 
   const run = cp.spawnSync("emacs", ["-Q", "--batch", "--eval", "(setq byte-compile-error-on-warn t)", "-f", "batch-byte-compile", copy], { encoding: "utf8" });
   assert.equal(run.status, 0, run.stderr);
 });
+
+// ---- The tree-sitter grammar ----------------------------------------------
+
+/**
+ * grammar.js, run against a stand-in for tree-sitter's DSL that records what
+ * each rule is made of: the symbols it names, its fields, the strings it
+ * matches and the names it aliases. No parser is generated: that needs the
+ * tree-sitter CLI, which the last test uses where it is installed.
+ */
+function readTreeSitterGrammar() {
+  const wrap = (rule) =>
+    typeof rule === "string" ? { type: "STRING", value: rule, members: [] } : rule instanceof RegExp ? { type: "PATTERN", members: [] } : rule;
+  const node = (type, members, extra = {}) => ({ type, members: members.map(wrap), ...extra });
+  const prec = (a, b) => node("PREC", [b ?? a]);
+  prec.left = prec.right = prec.dynamic = prec;
+  const token = (rule) => node("TOKEN", [rule]);
+  token.immediate = token;
+  const dsl = {
+    grammar: (definition) => definition,
+    seq: (...members) => node("SEQ", members),
+    choice: (...members) => node("CHOICE", members),
+    repeat: (rule) => node("REPEAT", [rule]),
+    repeat1: (rule) => node("REPEAT", [rule]),
+    optional: (rule) => node("CHOICE", [rule]),
+    blank: () => node("BLANK", []),
+    field: (name, rule) => node("FIELD", [rule], { name }),
+    alias: (rule, value) => node("ALIAS", [rule], { value: typeof value === "string" ? value : value.name, named: typeof value !== "string" }),
+    token,
+    prec,
+  };
+  const source = fs.readFileSync(path.join(editors, "tree-sitter-sable", "grammar.js"), "utf8");
+  const module = { exports: {} };
+  new Function("module", ...Object.keys(dsl), source)(module, ...Object.values(dsl));
+  const definition = module.exports;
+
+  const referenced = new Set();
+  const $ = new Proxy({}, { get: (_, name) => (referenced.add(String(name)), { type: "SYMBOL", name: String(name), members: [] }) });
+  const rules = new Map(Object.entries(definition.rules).map(([name, rule]) => [name, wrap(rule($))]));
+  for (const key of ["word", "extras", "supertypes", "conflicts"]) {
+    definition[key]?.($);
+  }
+
+  const strings = new Set();
+  const fields = new Set();
+  const aliases = new Set();
+  const walk = (rule) => {
+    if (rule.type === "STRING") strings.add(rule.value);
+    if (rule.type === "FIELD") fields.add(rule.name);
+    if (rule.type === "ALIAS") (rule.named ? aliases : strings).add(rule.value);
+    rule.members.forEach(walk);
+  };
+  rules.forEach(walk);
+  const named = new Set([...[...rules.keys()].filter((r) => !r.startsWith("_")), ...aliases]);
+  return { definition, rules, referenced, strings, fields, named };
+}
+
+test("the tree-sitter grammar names only rules it defines", () => {
+  const { rules, referenced, definition } = readTreeSitterGrammar();
+  assert.equal(definition.name, "sable");
+  const { named } = readTreeSitterGrammar();
+  assert.deepEqual([...referenced].filter((name) => !rules.has(name) && !named.has(name)), []);
+  assert.equal([...rules.keys()][0], "source_file", "source_file is the first rule");
+});
+
+test("the tree-sitter grammar has every keyword of the VS Code grammar", () => {
+  const { strings } = readTreeSitterGrammar();
+  const reserved = new Set(["macro", "yield", "trait", "impl", "become", "effect", "handler"]);
+  const builtinTypes = new Set(["Int", "UInt", "I8", "I16", "I32", "I64", "U8", "U16", "U32", "U64", "F32", "F64", "Bool", "Char", "String", "Never", "Void"]);
+  const missing = grammarWords().filter((w) => !reserved.has(w) && !builtinTypes.has(w) && !strings.has(w));
+  assert.deepEqual(missing, []);
+});
+
+test("the highlight queries name only the grammar's nodes, fields and tokens", () => {
+  const { strings, fields, named } = readTreeSitterGrammar();
+  const query = fs
+    .readFileSync(path.join(editors, "tree-sitter-sable", "queries", "highlights.scm"), "utf8")
+    .split("\n")
+    .filter((l) => !l.trimStart().startsWith(";"))
+    .join("\n")
+    .replace(/\(#[a-z?!-]+(?:\s+(?:@[\w.]+|"(?:[^"\\]|\\.)*"))*\s*\)/g, "");
+  const tokens = [...query.matchAll(/"((?:[^"\\]|\\.)*)"/g)].map((m) => m[1].replace(/\\(.)/g, "$1"));
+  const bare = query.replace(/"((?:[^"\\]|\\.)*)"/g, "");
+  const nodes = [...bare.matchAll(/\(([a-z_]+)/g)].map((m) => m[1]);
+  const usedFields = [...bare.matchAll(/([a-z_]+):/g)].map((m) => m[1]);
+  assert.deepEqual(nodes.filter((n) => !named.has(n)), [], "node types");
+  assert.deepEqual(usedFields.filter((f) => !fields.has(f)), [], "fields");
+  assert.deepEqual(tokens.filter((t) => !strings.has(t)), [], "tokens");
+});
+
+test(
+  "tree-sitter generates the parser and parses the corpus",
+  { skip: !has("tree-sitter") && "the tree-sitter CLI is not installed, so the grammar is checked as data only" },
+  () => {
+    const work = fs.mkdtempSync(path.join(os.tmpdir(), "sable-tree-sitter-"));
+    fs.cpSync(path.join(editors, "tree-sitter-sable"), work, { recursive: true });
+    const generate = cp.spawnSync("tree-sitter", ["generate"], { cwd: work, encoding: "utf8" });
+    assert.equal(generate.status, 0, generate.stderr);
+    const corpus = path.join(editors, "..", "tests", "corpus");
+    for (const file of fs.readdirSync(corpus).filter((f) => f.endsWith(".sb"))) {
+      const parse = cp.spawnSync("tree-sitter", ["parse", "--quiet", path.join(corpus, file)], { cwd: work, encoding: "utf8" });
+      assert.equal(parse.status, 0, `${file}: ${parse.stdout}${parse.stderr}`);
+    }
+  },
+);

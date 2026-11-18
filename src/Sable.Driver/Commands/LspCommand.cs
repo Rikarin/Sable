@@ -1,3 +1,4 @@
+using Sable.Driver.Packages;
 using Sable.LanguageServer;
 
 namespace Sable.Driver.Commands;
@@ -28,6 +29,9 @@ public sealed class LspCommand : Command {
             new LanguageServerOptions {
                 LibraryFor = Library.For,
                 LibraryModules = Library.ModuleNames,
+                // Standard output is the protocol's: whatever resolving prints
+                // (a download, say) goes to standard error with the rest.
+                ProjectsFor = root => LanguageProjects.For(root, PackageEnvironment.FromProcess() with { Out = Console.Error }, Console.Error),
                 Log = Console.Error
             }
         );

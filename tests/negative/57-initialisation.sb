@@ -120,3 +120,101 @@ fn aClosureCannotSeeTheFuture() -> Int {
     n = 1
     return f()
 }
+
+public class Named {
+    public var name: String
+    public var count: Int
+
+    public init() {                     //! S3028 'count' is not initialised on every path
+        name = "a"
+    }
+
+    public init(name: String) {
+        self.name = name
+        count = 0
+    }
+
+    public init(flag: Bool) {           //! S3028 'name' is not initialised on every path
+        if flag {
+            name = "yes"
+        }
+        count = 1
+    }
+
+    public init(both: Bool) {
+        if both {
+            name = "yes"
+        } else {
+            name = "no"
+        }
+        count = 1
+    }
+
+    public init(early: Int) {
+        name = "e"
+        count = 0
+        describe()
+    }
+
+    public init(reads: Int) {
+        name = "r"
+        count = count + 1               //! S6008 'count' is read here before the initialiser assigns it
+    }
+
+    public init(calls: Int) {
+        name = "c"
+        describe()                      //! S6008 'self' is used here before 'count' is initialised
+        count = calls
+    }
+
+    public init(passes: Int) {
+        name = "p"
+        keep(self)                      //! S6008 'self' is used here before 'count' is initialised
+        count = passes
+    }
+
+    public fn describe() { }
+}
+
+fn keep(_ n: Named) { }
+
+public class Defaults {
+    public var held: Named
+    public var count: Int = 0
+
+    public init() {                     //! S3028 'held' is not initialised
+        count = 1
+    }
+}
+
+public struct Pair {
+    public var a: Int
+    public var b: Int
+
+    public init(a: Int) {               //! S3028 'b' is not initialised
+        self.a = a
+    }
+
+    public init(copy: Pair) {
+        self = copy
+    }
+
+    public init(a: Int, b: Int) {
+        self.a = a
+        self.b = b + self.a
+    }
+}
+
+public class FieldValues {
+    public var x: Int = y               //! S6008 'y' is used here before the instance exists
+    public var y: Int = 1
+    public var z: Int = FieldValues.start
+    public var w: Int = twice()         //! S6008 'twice' is used here before the instance exists
+    public lazy var v: Int = x + y
+
+    public static let start: Int = 3
+
+    public init() { }
+
+    public fn twice() -> Int { return 2 }
+}

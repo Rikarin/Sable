@@ -32,11 +32,11 @@ public struct Member {
 
 public fn kindOf(_ value: JsonValue) -> String {
     return match value {
-        case .Null => "null"
-        case .Bool(_) => "boolean"
+        case .Null      => "null"
+        case .Bool(_)   => "boolean"
         case .Number(_) => "number"
-        case .Text(_) => "string"
-        case .Array(_) => "array"
+        case .Text(_)   => "string"
+        case .Array(_)  => "array"
         case .Object(_) => "object"
     }
 }
@@ -80,42 +80,42 @@ public fn object(_ members: Member[>..]) -> JsonValue {
 public fn asBool(_ value: JsonValue) -> Bool? {
     return match value {
         case .Bool(let b) => b
-        default => none
+        default           => none
     }
 }
 
 public fn asNumber(_ value: JsonValue) -> F64? {
     return match value {
         case .Number(let n) => n
-        default => none
+        default             => none
     }
 }
 
 public fn asText(_ value: JsonValue) -> String? {
     return match value {
         case .Text(let t) => t
-        default => none
+        default           => none
     }
 }
 
 public fn isNull(_ value: JsonValue) -> Bool {
     return match value {
         case .Null => true
-        default => false
+        default    => false
     }
 }
 
 public fn itemsOf(_ value: JsonValue) -> JsonValue[>..] {
     return match value {
         case .Array(let items) => items
-        default => []
+        default                => []
     }
 }
 
 public fn membersOf(_ value: JsonValue) -> Member[>..] {
     return match value {
         case .Object(let members) => members
-        default => []
+        default                   => []
     }
 }
 
@@ -146,9 +146,9 @@ public fn keysOf(_ value: JsonValue) -> String[>..] {
 
 public fn countOf(_ value: JsonValue) -> Int {
     return match value {
-        case .Array(let items) => items.count
+        case .Array(let items)    => items.count
         case .Object(let members) => members.count
-        default => 0
+        default                   => 0
     }
 }
 
@@ -380,15 +380,15 @@ public fn errorLine(_ error: ParseError) -> Int {
 
 public fn positionOf(_ error: ParseError) -> Position {
     return match error {
-        case .UnexpectedEnd(let at, _) => at
+        case .UnexpectedEnd(let at, _)          => at
         case .UnexpectedCharacter(let at, _, _) => at
-        case .InvalidNumber(let at, _) => at
-        case .InvalidEscape(let at, _) => at
-        case .InvalidUnicode(let at, _) => at
-        case .ControlCharacter(let at, _) => at
-        case .TooDeep(let at, _) => at
-        case .TrailingText(let at) => at
-        case .DuplicateKey(let at, _) => at
+        case .InvalidNumber(let at, _)          => at
+        case .InvalidEscape(let at, _)          => at
+        case .InvalidUnicode(let at, _)         => at
+        case .ControlCharacter(let at, _)       => at
+        case .TooDeep(let at, _)                => at
+        case .TrailingText(let at)              => at
+        case .DuplicateKey(let at, _)           => at
     }
 }
 
@@ -681,15 +681,15 @@ public class Parser {
     fn parseEscape(_ at: Position) throws(ParseError) -> Char {
         let c = try next("an escape")
         return match c {
-            case '"' => '"'
+            case '"'  => '"'
             case '\\' => '\\'
-            case '/' => '/'
-            case 'b' => Char.fromCodePoint(8)!
-            case 'f' => Char.fromCodePoint(12)!
-            case 'n' => '\n'
-            case 'r' => '\r'
-            case 't' => '\t'
-            case 'u' => try parseUnicode(at)
+            case '/'  => '/'
+            case 'b'  => Char.fromCodePoint(8)!
+            case 'f'  => Char.fromCodePoint(12)!
+            case 'n'  => '\n'
+            case 'r'  => '\r'
+            case 't'  => '\t'
+            case 'u'  => try parseUnicode(at)
             default => {
                 throw ParseError.InvalidEscape(at: at, found: c)
             }
@@ -845,11 +845,11 @@ public fn renderWith(_ value: JsonValue, _ options: PrintOptions) -> String {
 
 fn write(_ value: JsonValue, _ options: PrintOptions, _ level: Int, _ sink: inout TextBuilder) {
     match value {
-        case .Null => sink.add("null")
-        case .Bool(let b) => sink.add(b ? "true" : "false")
-        case .Number(let n) => sink.add(formatNumber(n))
-        case .Text(let t) => sink.add(quote(t, options.asciiOnly))
-        case .Array(let items) => writeArray(items, options, level, sink)
+        case .Null                => sink.add("null")
+        case .Bool(let b)         => sink.add(b ? "true" : "false")
+        case .Number(let n)       => sink.add(formatNumber(n))
+        case .Text(let t)         => sink.add(quote(t, options.asciiOnly))
+        case .Array(let items)    => writeArray(items, options, level, sink)
         case .Object(let members) => writeObject(members, options, level, sink)
     }
 }
@@ -1012,7 +1012,7 @@ public union PointerError {
 
 public fn describePointerError(_ error: PointerError) -> String {
     return match error {
-        case .Malformed(let pointer) => "'\(pointer)' is not a JSON pointer"
+        case .Malformed(let pointer)        => "'\(pointer)' is not a JSON pointer"
         case .NotFound(let pointer, let at) => "'\(pointer)' finds nothing at '\(at)'"
     }
 }
@@ -1093,8 +1093,8 @@ public fn resolve(_ document: JsonValue, _ pointer: String) throws(PointerError)
 fn step(_ value: JsonValue, _ token: String) -> JsonValue? {
     return match value {
         case .Object(_) => field(value, token)
-        case .Array(_) => stepIndex(value, token)
-        default => none
+        case .Array(_)  => stepIndex(value, token)
+        default         => none
     }
 }
 
@@ -1184,7 +1184,7 @@ public fn mergePatch(_ target: JsonValue, _ patch: JsonValue) -> JsonValue {
     var result: Member[>..] = []
     let base = match target {
         case .Object(let members) => members
-        default => []
+        default                   => []
     }
 
     for m in base {
@@ -1407,9 +1407,9 @@ fn tally(_ value: JsonValue, _ depth: Int, _ stats: inout Statistics) {
 // leaves first.
 public fn transform(_ value: JsonValue, _ f: (JsonValue) -> JsonValue) -> JsonValue {
     return match value {
-        case .Array(let items) => f(JsonValue.Array(items: mapValues(items, f)))
+        case .Array(let items)    => f(JsonValue.Array(items: mapValues(items, f)))
         case .Object(let members) => f(JsonValue.Object(members: mapMembers(members, f)))
-        default => f(value)
+        default                   => f(value)
     }
 }
 
@@ -1432,9 +1432,9 @@ fn mapMembers(_ members: Member[>..], _ f: (JsonValue) -> JsonValue) -> Member[>
 // Every member whose key passes the test, at every level.
 public fn filterKeys(_ value: JsonValue, _ keep: (String) -> Bool) -> JsonValue {
     return match value {
-        case .Array(let items) => JsonValue.Array(items: filterItems(items, keep))
+        case .Array(let items)    => JsonValue.Array(items: filterItems(items, keep))
         case .Object(let members) => JsonValue.Object(members: filterMembers(members, keep))
-        default => value
+        default                   => value
     }
 }
 

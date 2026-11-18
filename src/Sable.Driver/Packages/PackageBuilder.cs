@@ -31,24 +31,39 @@ public static class PackageBuilder {
         : workspace.Current is { } current ? [current]
         : workspace.Members;
 
-    internal static PackageGraph Resolve(Workspace workspace, PackageEnvironment environment, BuildRequest request) =>
-        PackageGraph.ResolveCached(workspace, environment, new(request.Features, null, request.Locked, [..Selected(workspace, request.Package).Select(static m => m.Name)]));
+    internal static PackageGraph Resolve(Workspace workspace, PackageEnvironment environment, BuildRequest request) {
+        ReportManifestWarnings(workspace, environment);
+        return PackageGraph.ResolveCached(workspace, environment, new(request.Features, null, request.Locked, [..Selected(workspace, request.Package).Select(static m => m.Name)]));
+    }
+
+    /// <summary>
+    ///     What the workspace's manifests say that this toolchain accepts but
+    ///     does not act on — an unknown key, a setting not built yet — so that
+    ///     nothing in a manifest is ignored without a word.
+    /// </summary>
+    static void ReportManifestWarnings(Workspace workspace, PackageEnvironment environment) {
+        IEnumerable<Manifest> manifests = [workspace.RootManifest, ..workspace.LocalPackages().Values.Select(static p => p.Manifest)];
+        foreach (var warning in manifests.DistinctBy(static m => m.File).SelectMany(static m => m.Warnings).Distinct()) {
+            environment.Error.WriteLine($"warning: {warning}");
+        }
+    }
 
     /// <summary>
     ///     The trees of one target: the binary's entry file first (where the
     ///     entry point is looked for), then the package's library files, then
-    ///     its dependencies' — each parsed with its own package's features.
+    ///     its dependencies' — each parsed with its own package's features, and
+    ///     <c>DEBUG</c> or <c>RELEASE</c> as <paramref name="optimise" /> says.
     /// </summary>
-    public static IReadOnlyList<SyntaxTree> Program(PackageGraph graph, string member, BinTarget? bin, BuildTimings? timings = null) {
+    public static IReadOnlyList<SyntaxTree> Program(PackageGraph graph, string member, BinTarget? bin, bool optimise = false, BuildTimings? timings = null) {
         using var _ = BuildTimings.Of(timings, "parse");
         var trees = new List<SyntaxTree>();
         var own = graph.Packages[member];
         if (bin is not null) {
-            trees.Add(Parse(graph, own, bin.Path));
+            trees.Add(Parse(graph, own, bin.Path, optimise));
         }
 
         foreach (var package in graph.Closure(member)) {
-            trees.AddRange(package.Package.LibrarySources().Select(file => Parse(graph, package, file)));
+            trees.AddRange(package.Package.LibrarySources().Select(file => Parse(graph, package, file, optimise)));
         }
 
         return trees;
@@ -57,10 +72,11 @@ public static class PackageBuilder {
     /// <summary>
     ///     What <c>sable test</c> and <c>sable bench</c> build for a member:
     ///     its library, the files under its <c>tests/</c> and <c>benches/</c>
-    ///     (which an ordinary build leaves out), then its dependencies' libraries.
+    ///     (which an ordinary build leaves out), then its dependencies' libraries,
+    ///     its dev-dependencies' among them.
     ///     The harness supplies the entry point, so no binary's entry file is in it.
     /// </summary>
-    public static IReadOnlyList<SyntaxTree> TestProgram(PackageGraph graph, string member) {
+    public static IReadOnlyList<SyntaxTree> TestProgram(PackageGraph graph, string member, bool optimise = false) {
         var own = graph.Packages[member];
         var extra = new[] { "tests", "benches" }
             .Select(d => Path.Combine(own.Package.Directory, d))
@@ -68,19 +84,18 @@ public static class PackageBuilder {
             .SelectMany(static d => Directory.GetFiles(d, "*.sb", SearchOption.AllDirectories))
             .Select(Path.GetFullPath)
             .Order(StringComparer.Ordinal)
-            .Select(file => Parse(graph, own, file))
+            .Select(file => Parse(graph, own, file, optimise))
             .ToList();
         return [
-            ..own.Package.LibrarySources().Select(file => Parse(graph, own, file)),
+            ..own.Package.LibrarySources().Select(file => Parse(graph, own, file, optimise)),
             ..extra,
-            ..graph.Closure(member).Where(p => p.Name != member).SelectMany(p => p.Package.LibrarySources().Select(file => Parse(graph, p, file))),
+            ..graph.Closure(member, dev: true).Where(p => p.Name != member).SelectMany(p => p.Package.LibrarySources().Select(file => Parse(graph, p, file, optimise))),
         ];
     }
 
-    static SyntaxTree Parse(PackageGraph graph, ResolvedPackage package, string file) {
+    static SyntaxTree Parse(PackageGraph graph, ResolvedPackage package, string file, bool optimise) {
         var source = SourceOf(graph, package, file);
-        var options = ParseOptions.Default with { Features = [..source.Features] };
-        return SyntaxTree.Parse(new SourceText(File.ReadAllText(file), source.Name), options);
+        return SyntaxTree.Parse(new SourceText(File.ReadAllText(file), source.Name), Pipeline.ParseOptionsFor(optimise, source.Options));
     }
 
     /// <summary>A file of a package, with the name its diagnostics give it and the features it is parsed with.</summary>
@@ -92,7 +107,9 @@ public static class PackageBuilder {
         var name = package.IsLocal
             ? Path.GetRelativePath(graph.Workspace.Root, file).Replace(Path.DirectorySeparatorChar, '/')
             : $"{package.Name}-{package.Version}/{Path.GetRelativePath(package.Package.Directory, file).Replace(Path.DirectorySeparatorChar, '/')}";
-        return new(file, name, [..package.Features.Order(StringComparer.Ordinal)]);
+        // A workspace's own packages share 'package' members; a registry
+        // dependency is a workspace of its own.
+        return new(file, name, [..package.Features.Order(StringComparer.Ordinal)], package.IsLocal ? null : $"{package.Name}-{package.Version}");
     }
 
     /// <summary>
@@ -125,6 +142,7 @@ public static class PackageBuilder {
         var clock = Stopwatch.StartNew();
         var graph = Resolve(workspace, environment, request);
         var failed = false;
+        var reported = new List<string>();
         foreach (var member in Selected(workspace, request.Package)) {
             var resolved = graph.Packages[member.Name];
             environment.Error.WriteLine($"    Checking {Describe(resolved, workspace)}");
@@ -143,10 +161,12 @@ public static class PackageBuilder {
                 var (errors, warnings) = Pipeline.CheckAndLint(program, member.Manifest.Lints, linted);
                 Report(environment, errors);
                 Report(environment, warnings);
+                reported.AddRange(errors.Concat(warnings));
                 failed |= errors.Count > 0;
             }
         }
 
+        DiagnosticDocs.WriteHint(environment.Error, reported);
         if (failed) {
             environment.Error.WriteLine("error: could not check the package: it has errors");
             return 1;
@@ -178,6 +198,12 @@ public static class PackageBuilder {
         var built = new List<BuiltBinary>();
         var members = Selected(workspace, request.Package);
 
+        // What the profile in use asks for and does not get is said, not
+        // taken silently.
+        foreach (var warning in workspace.RootManifest.Warnings.Where(w => w.Key.StartsWith($"profile.{profile.Name}.", StringComparison.Ordinal))) {
+            environment.Error.WriteLine($"warning: {warning}");
+        }
+
         if (members.Any(static m => m.Manifest.Build is not null)) {
             environment.Error.WriteLine("warning: [build] scripts are not run yet (docs/05 §5.6); building without it");
         }
@@ -194,9 +220,11 @@ public static class PackageBuilder {
 
             environment.Error.WriteLine($"   Compiling {Describe(graph.Packages[member.Name], workspace)}");
             if (bins.Count == 0) {
-                var errors = Pipeline.Check(Program(graph, member.Name, null));
+                var (errors, warnings) = Pipeline.Diagnose(Program(graph, member.Name, null, profile.Optimise));
+                Report(environment, warnings);
                 if (errors.Count > 0) {
                     Report(environment, errors);
+                    DiagnosticDocs.WriteHint(environment.Error, errors);
                     environment.Error.WriteLine($"error: could not compile {member.Name}");
                     return null;
                 }
@@ -213,10 +241,15 @@ public static class PackageBuilder {
                 // Incrementally (docs/05 §5.4): the cache in target/<profile>/cache.
                 Directory.CreateDirectory(output);
                 var executable = Path.Combine(output, bin.Name);
-                var buildSettings = new BuildSettings(profile.Name, profile.Optimise, profile.Debug ? workspace.Root : null, profile.Exclusivity);
+                var buildSettings = new BuildSettings(profile.Name, profile.Optimise, profile.Debug ? workspace.Root : null, profile.Exclusivity) {
+                    Native = profile.Native,
+                    Whole = profile.CodegenUnits == 1,
+                };
                 var outcome = IncrementalBuild.Build(Units(graph, member.Name, bin), buildSettings, executable, Path.Combine(output, "cache"), timings, environment.Error);
+                Report(environment, outcome.Warnings);
                 if (!outcome.Succeeded) {
                     Report(environment, outcome.Errors);
+                    DiagnosticDocs.WriteHint(environment.Error, outcome.Errors);
                     environment.Error.WriteLine($"error: could not compile {member.Name}");
                     return null;
                 }

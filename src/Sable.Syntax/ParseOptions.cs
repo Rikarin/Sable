@@ -29,6 +29,14 @@ public sealed record ParseOptions {
     public ImmutableHashSet<string> Features { get; init; } =
         ImmutableHashSet<string>.Empty.WithComparer(StringComparer.Ordinal);
 
+    /// <summary>
+    ///     The workspace the file belongs to, which is how far <c>package</c>
+    ///     reaches (spec/SYNTAX.md §2): null for the workspace being built,
+    ///     otherwise a name for one outside it — a registry dependency, or the
+    ///     standard library.
+    /// </summary>
+    public string? Workspace { get; init; }
+
     public ParseOptions WithSymbols(params string[] symbols) => this with { Symbols = [..symbols] };
 
     public ParseOptions WithFeatures(params string[] features) => this with { Features = [..features] };

@@ -31,11 +31,11 @@ fn aDictionaryIsNotAnArray(_ d: [String: Int]) -> Int[] {
     return d                            //! S3004
 }
 
-fn aFunctionTypeArityIsChecked(_ f: (Int, Int) -> Int) -> (Int) -> Int {
+fn aFunctionTypeArityIsChecked(_ f: @escaping (Int, Int) -> Int) -> (Int) -> Int {
     return f                            //! S3004
 }
 
-fn aFunctionTypeResultIsChecked(_ f: (Int) -> Int) -> (Int) -> String {
+fn aFunctionTypeResultIsChecked(_ f: @escaping (Int) -> Int) -> (Int) -> String {
     return f                            //! S3004
 }
 

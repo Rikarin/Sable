@@ -1083,6 +1083,12 @@ public sealed class Lexer {
         var closingIndent = 0;
         var rawStart = _position;
 
+        // Where each line of source starts in the value: the part it falls
+        // in and the offset there. Dedenting works from these rather than
+        // from the value's '\n's, which an escape can write and a joined
+        // line has none of.
+        var lineStarts = new List<(int Part, int Offset)> { (0, 0) };
+
         while (!AtEnd) {
             // A closing delimiter is the first non-whitespace text on its line.
             if (Matches("\"\"\"") && IsAtLineStartIgnoringWhitespace(_position, out closingIndent)) {
@@ -1109,6 +1115,9 @@ public sealed class Lexer {
                         _position++;
                     }
 
+                    // The joined line is still a line of the literal: it
+                    // loses the closing delimiter's indentation like the rest.
+                    lineStarts.Add((parts.Count, builder.Length));
                     continue;
                 }
 
@@ -1118,6 +1127,9 @@ public sealed class Lexer {
 
             builder.Append(Current);
             _position++;
+            if (builder[^1] == '\n') {
+                lineStarts.Add((parts.Count, builder.Length));
+            }
         }
 
         if (!terminated) {
@@ -1129,7 +1141,7 @@ public sealed class Lexer {
             FlushLiteral(parts, builder, rawStart);
         }
 
-        var dedented = Dedent(parts, closingIndent, new(start, _position - start));
+        var dedented = Dedent(parts, lineStarts, closingIndent, new(start, _position - start));
         return Finish(SyntaxKind.MultilineStringLiteralToken, dedented);
     }
 
@@ -1152,13 +1164,47 @@ public sealed class Lexer {
     ///     Strips the closing delimiter's indentation from every line, and removes
     ///     the final line break that precedes the closing delimiter.
     /// </summary>
+    /// <param name="lineStarts">Where each line of source starts: a part, and an offset in its text.</param>
     ImmutableArray<StringPart>.Builder Dedent(
         ImmutableArray<StringPart>.Builder parts,
+        List<(int Part, int Offset)> lineStarts,
         int indent,
         TextSpan span
     ) {
         if (parts.Count == 0) {
             return parts;
+        }
+
+        // Last line first, so that cutting one leaves the offsets of the lines
+        // before it where they were. The closing delimiter's own line loses
+        // its indentation here too, leaving only the line break before it.
+        for (var s = lineStarts.Count - 1; s >= 0 && indent > 0; s--) {
+            var (index, offset) = lineStarts[s];
+            if (index >= parts.Count) {
+                continue;
+            }
+
+            var next = s + 1 < lineStarts.Count ? lineStarts[s + 1] : (Part: parts.Count, Offset: 0);
+            var blank = IsBlankLine(parts, (index, offset), next);
+
+            // A line that opens with an interpolation has no indentation.
+            var text = parts[index].Kind == StringPartKind.Literal ? parts[index].Text : "";
+            var removed = 0;
+            while (removed < indent && offset + removed < text.Length && text[offset + removed] is ' ' or '\t') {
+                removed++;
+            }
+
+            if (removed < indent && !blank) {
+                _diagnostics.Error(
+                    ErrorCode.ERR_InsufficientIndentation,
+                    span,
+                    $"line is indented less than the closing delimiter (expected {indent} columns)"
+                );
+            }
+
+            if (removed > 0) {
+                parts[index] = parts[index] with { Text = text.Remove(offset, removed) };
+            }
         }
 
         // Drop the line break and indentation immediately before the delimiter.
@@ -1182,45 +1228,36 @@ public sealed class Lexer {
             parts[^1] = last with { Text = t[..cut] };
         }
 
-        if (indent == 0) {
-            return parts;
-        }
-
-        for (var i = 0; i < parts.Count; i++) {
-            if (parts[i].Kind != StringPartKind.Literal) {
-                continue;
-            }
-
-            var lines = parts[i].Text.Split('\n');
-            var isFirst = i == 0;
-            for (var l = 0; l < lines.Length; l++) {
-                // Only line-initial text is dedented; the first segment of the
-                // first part already begins at a line start.
-                if (l == 0 && !isFirst) {
-                    continue;
-                }
-
-                var line = lines[l];
-                var removed = 0;
-                while (removed < indent && removed < line.Length && line[removed] is ' ' or '\t') {
-                    removed++;
-                }
-
-                if (removed < indent && line.Trim().Length > 0) {
-                    _diagnostics.Error(
-                        ErrorCode.ERR_InsufficientIndentation,
-                        span,
-                        $"line is indented less than the closing delimiter (expected {indent} columns)"
-                    );
-                }
-
-                lines[l] = line[removed..];
-            }
-
-            parts[i] = parts[i] with { Text = string.Join('\n', lines) };
-        }
-
         return parts;
+    }
+
+    /// <summary>
+    ///     Whether the value between two line starts is only whitespace: no
+    ///     interpolation, and nothing else, so it need not be indented as far
+    ///     as the closing delimiter.
+    /// </summary>
+    static bool IsBlankLine(
+        ImmutableArray<StringPart>.Builder parts,
+        (int Part, int Offset) from,
+        (int Part, int Offset) to
+    ) {
+        for (var p = from.Part; p <= to.Part && p < parts.Count; p++) {
+            var start = p == from.Part ? from.Offset : 0;
+            var end = p == to.Part ? to.Offset : parts[p].Text.Length;
+            if (start >= end && p == to.Part) {
+                break;
+            }
+
+            if (parts[p].Kind != StringPartKind.Literal) {
+                return false;
+            }
+
+            if (!string.IsNullOrWhiteSpace(parts[p].Text[start..end])) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     (SyntaxKind, object?, ImmutableArray<StringPart>) ScanRawString() {

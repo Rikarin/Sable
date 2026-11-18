@@ -105,4 +105,121 @@ public sealed class AccessibilityTests {
             string.Join("\n", errors.Select(static e => $"{e.Id}: {e.Message}"))
         );
     }
+
+    // ---- Across files, modules and workspaces ------------------------------
+
+    static IReadOnlyList<Diagnostic> ErrorsAcross(params (string Text, string File, string? Workspace)[] files) => [
+        ..Compilation.Create(
+                files.Select(static f => SyntaxTree.Parse(new(f.Text, f.File), ParseOptions.Default with { Workspace = f.Workspace }))
+            )
+            .GetAllDiagnostics()
+            .Where(static d => d.Severity == DiagnosticSeverity.Error)
+    ];
+
+    static IReadOnlyList<Diagnostic> ErrorsAcross(params (string Text, string File)[] files) =>
+        ErrorsAcross([..files.Select(static f => (f.Text, f.File, (string?)null))]);
+
+    static void AssertNone(IReadOnlyList<Diagnostic> errors) =>
+        Assert.True(errors.Count == 0, string.Join("\n", errors.Select(static e => $"{e.Id}: {e.Message}")));
+
+    /// <summary>An extension's internal member is its own module's, whoever declared the type.</summary>
+    [Fact]
+    public void AnInternalMemberOfAnExtensionIsVisibleInItsOwnModule() =>
+        AssertClean(
+            """
+            extension String { fn twice() -> String { return self + self } }
+            fn probe() -> String { return "a".twice() }
+            """
+        );
+
+    [Fact]
+    public void AnInternalMemberOfAnExtensionIsHiddenFromOtherModules() {
+        var errors = ErrorsAcross(
+            ("module First\npublic struct Box { public var n: Int }\nextension Box { fn doubled() -> Int { return n * 2 } }", "a.sb"),
+            ("module Second\nimport First\nfn probe(_ b: Box) -> Int { return b.doubled() }", "b.sb")
+        );
+        Assert.Contains(errors, static e => e.Code == ErrorCode.ERR_NotAccessible);
+    }
+
+    [Fact]
+    public void AnExtensionInAnotherModuleDoesNotSeePrivateMembers() {
+        var errors = ErrorsAcross(
+            ("module First\npublic struct Box { private var secret: Int }", "a.sb"),
+            ("module Second\nimport First\nextension Box { fn peek() -> Int { return secret } }", "b.sb")
+        );
+        Assert.Contains(errors, static e => e.Code == ErrorCode.ERR_NotAccessible);
+    }
+
+    /// <summary>A private member written in an extension belongs to the type, and its extensions in the module.</summary>
+    [Fact]
+    public void APrivateMemberOfAnExtensionIsTheTypes() =>
+        AssertClean(
+            """
+            extension Account { private fn tag() -> String { return "t" } }
+            extension Account { fn tagged() -> String { return tag() } }
+            """
+        );
+
+    /// <summary>At the top level, the enclosing declaration of a private one is its file.</summary>
+    [Fact]
+    public void ATopLevelPrivateDeclarationIsHiddenFromOtherFiles() {
+        var errors = ErrorsAcross(
+            ("module App\nprivate fn helper() -> Int { return 1 }\nprivate struct Local { var x: Int }\nfn here() -> Int { return helper() }", "a.sb"),
+            ("module App\nfn probe() -> Int { return helper() }\nfn make() -> Int { return Local(x: 1).x }", "b.sb")
+        );
+        Assert.Equal(2, errors.Count(static e => e.Code == ErrorCode.ERR_NotAccessible));
+        Assert.DoesNotContain(errors, static e => e.Code == ErrorCode.ERR_NameNotFound);
+    }
+
+    /// <summary>'package' reaches the workspace: its other modules, not the packages it depends on.</summary>
+    [Fact]
+    public void APackageMemberIsVisibleAcrossTheWorkspaceOnly() {
+        const string library = "module Lib\npublic struct Box { package var n: Int }\npackage fn shared() -> Int { return 1 }";
+        const string user = "module App\nimport Lib\nfn probe(_ b: Box) -> Int { return b.n + shared() }";
+
+        AssertNone(ErrorsAcross((library, "lib.sb", null), (user, "app.sb", null)));
+
+        var outside = ErrorsAcross((library, "lib.sb", "lib-1.0.0"), (user, "app.sb", null));
+        Assert.Equal(2, outside.Count(static e => e.Code == ErrorCode.ERR_NotAccessible));
+    }
+
+    /// <summary>A name another module keeps to itself is there, and says so.</summary>
+    [Fact]
+    public void AnotherModulesInternalNameIsReportedAsHidden() {
+        var errors = ErrorsAcross(
+            ("module First\nfn hidden() -> Int { return 1 }\nstruct Kept { var x: Int }", "a.sb"),
+            ("module Second\nimport First\nfn probe() -> Int { return hidden() }\nfn make(_ k: Kept) { }", "b.sb")
+        );
+        Assert.Equal(2, errors.Count(static e => e.Code == ErrorCode.ERR_NotAccessible));
+        Assert.DoesNotContain(errors, static e => e.Code is ErrorCode.ERR_NameNotFound or ErrorCode.ERR_TypeNotFound);
+    }
+
+    // ---- What a signature exposes -------------------------------------------
+
+    static void AssertExposes(string source) =>
+        Assert.Contains(ErrorsIn(source), static e => e.Code == ErrorCode.ERR_ExposesHiddenType);
+
+    [Fact]
+    public void APublicFunctionCannotReturnAnInternalType() =>
+        AssertExposes("struct Hidden { var x: Int }\npublic fn leak() -> Hidden { return Hidden(x: 1) }");
+
+    [Fact]
+    public void APublicFunctionCannotTakeAnInternalType() =>
+        AssertExposes("struct Hidden { var x: Int }\npublic fn take(_ h: Hidden?) { }");
+
+    [Fact]
+    public void APublicFieldCannotHaveAnInternalType() =>
+        AssertExposes("struct Hidden { var x: Int }\npublic struct Pub { public var h: Hidden }");
+
+    [Fact]
+    public void APublicSignatureCannotNameAnInternalProtocol() =>
+        AssertExposes("protocol Secret { }\npublic fn take(_ s: any Secret) { }");
+
+    [Fact]
+    public void AnInternalSignatureMayUseAnInternalType() =>
+        AssertClean("struct Hidden { var x: Int }\nfn keep() -> Hidden { return Hidden(x: 1) }\npublic struct Pub { var h: Hidden }");
+
+    [Fact]
+    public void APublicSignatureMayUseItsOwnTypeParameters() =>
+        AssertClean("public struct Wrap<T> { public var value: T }\npublic fn wrap<T>(_ v: T) -> Wrap<T> { return Wrap(value: v) }");
 }

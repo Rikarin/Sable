@@ -85,6 +85,16 @@ public static class MoveChecker {
                     );
                     break;
 
+                // A captured variable lives in a box the closure shares: moved
+                // out, the closure would find it empty, or move it again.
+                case LoadInst { Kind: LoadKind.Copy } load when IsMoveOnly(load.Type) && CapturedName(load.Address) is { } captured && reported.Add(load.Location):
+                    Report(
+                        ErrorCode.ERR_CopyOfNoncopyable,
+                        load,
+                        $"'{captured}' is captured by a closure, so its @noncopy value '{load.Type}' can be borrowed but not moved, in the closure or out of it"
+                    );
+                    break;
+
                 case LoadInst { Kind: LoadKind.Copy } load when IsMoveOnly(load.Type) && reported.Add(load.Location):
                     Report(
                         ErrorCode.ERR_PartialMove,
@@ -97,6 +107,31 @@ public static class MoveChecker {
     }
 
     static bool IsMoveOnly(SilType type) => type is NominalType { IsNoncopyable: true };
+
+    /// <summary>
+    ///     The variable whose box an address is the value of — a local a
+    ///     closure captures, reached through its slot or through the
+    ///     closure's context — or null.
+    /// </summary>
+    static string? CapturedName(SilValue address) {
+        // A box is the one-field class lowering keeps a captured variable in.
+        if (address is not RefElementAddrInst { Field: 0, Reference: { Type: ClassType boxType } box }
+            || !boxType.Name.StartsWith("Box$of$", StringComparison.Ordinal)) {
+            return null;
+        }
+
+        var held = box switch {
+            LoadInst load => load.Address,
+            LoadBorrowInst load => load.Address,
+            _ => null,
+        };
+
+        return held switch {
+            AllocStackInst { VariableName: { } name } => name,
+            RefElementAddrInst { Reference.Type: ClassType context, Field: var field } when field < context.Fields.Count => context.Fields[field].Name,
+            _ => null,
+        };
+    }
 
     enum State {
         Unknown,

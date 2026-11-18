@@ -10,7 +10,7 @@ fn missingCloseParen() -> Int {
 }                                       //! S1001 expected ')'
 
 fn expectedExpression() -> Int {
-    return + ,   //! S1002 expected an expression //! S1002 expected an expression //! S2002 no symbol //! S2002 no symbol //! S6005
+    return + ,   //! S1002 expected an expression //! S1002 expected an expression //! S6005
 }
 
 fn expectedTypeAfterColon(_ x: ) { }    //! S1003 expected a type

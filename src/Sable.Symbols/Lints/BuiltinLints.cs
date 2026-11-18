@@ -105,9 +105,17 @@ internal sealed class BodyFacts {
                 Walk(assignment.Value, PatternOrigin);
                 return;
 
-            case BoundCall { Function.IsMutating: true, Receiver: { } receiver }:
-                if (BaseBinding(receiver) is { } mutated) {
+            case BoundCall call:
+                if (call is { Function.IsMutating: true, Receiver: { } receiver } && BaseBinding(receiver) is { } mutated) {
                     Changed.Add(mutated);
+                }
+
+                // An 'inout' or 'out' argument is written by the callee, written with '&' or not.
+                for (var i = 0; i < call.Arguments.Length && i < call.Function.Parameters.Length; i++) {
+                    if (call.Function.Parameters[i].Modifier is ParameterModifier.InOut or ParameterModifier.Out
+                        && BaseBinding(call.Arguments[i] is BoundUnaryOperator { OperatorKind: UnaryOperatorKind.AddressOf } address ? address.Operand : call.Arguments[i]) is { } written) {
+                        Changed.Add(written);
+                    }
                 }
 
                 break;

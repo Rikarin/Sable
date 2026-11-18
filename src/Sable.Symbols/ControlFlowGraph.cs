@@ -20,6 +20,20 @@ internal enum FlowOpKind {
 /// <summary>One step: what happens, to which binding, and the bound node it came from.</summary>
 internal readonly record struct FlowOp(FlowOpKind Kind, Symbol? Symbol, BoundNode Node);
 
+/// <summary>
+///     What an initialiser is building: the type, and the stored fields its
+///     body has to give a value — those without an initial value of their own.
+/// </summary>
+internal sealed class InitializedSelf(NamedTypeSymbol type, IReadOnlyList<FieldSymbol> fields) {
+    public NamedTypeSymbol Type { get; } = type;
+    public IReadOnlyList<FieldSymbol> Fields { get; } = fields;
+
+    /// <summary>The field as tracked, if it is one the body has to set; a generic type's own fields are read through its constructed self.</summary>
+    public FieldSymbol? Tracked(FieldSymbol field) =>
+        Fields.FirstOrDefault(f => ReferenceEquals(f, field)
+            || f.Name == field.Name && field.ContainingSymbol is NamedTypeSymbol owner && ReferenceEquals(owner.OriginalDefinition, Type.OriginalDefinition));
+}
+
 /// <summary>A straight run of steps, entered only at the top and left only at the bottom.</summary>
 internal sealed class BasicBlock(int ordinal) {
     public int Ordinal { get; } = ordinal;
@@ -104,8 +118,8 @@ internal sealed class ControlFlowGraph {
     /// <summary>True when control can fall off the end of the body.</summary>
     public bool EndIsReachable => Reachable().Contains(End);
 
-    public static ControlFlowGraph Build(BoundStatement body, IEnumerable<Symbol>? parameters = null) =>
-        new Builder().Build(body, parameters ?? []);
+    public static ControlFlowGraph Build(BoundStatement body, IEnumerable<Symbol>? parameters = null, InitializedSelf? self = null) =>
+        new Builder { Self = self }.Build(body, parameters ?? []);
 
     // -----------------------------------------------------------------------
 
@@ -126,6 +140,9 @@ internal sealed class ControlFlowGraph {
 
         /// <summary>True inside a closure or local function, whose jumps do not leave the body.</summary>
         int _nestedBodies;
+
+        /// <summary>In an initialiser's body: the stored fields it must set, whose reads and writes are steps too.</summary>
+        public InitializedSelf? Self { get; init; }
 
         sealed record Loop(string? Label, BasicBlock Break, BasicBlock Continue);
 
@@ -598,6 +615,20 @@ internal sealed class ControlFlowGraph {
                             Op(FlowOpKind.Write, target.Parameter, target);
                             return;
 
+                        // 'self.name = name' in an initialiser: the field
+                        // gets its value. One with an initial value had it.
+                        case BoundFieldAccess { Receiver: BoundSelfAccess, Field.IsComputed: false } target when Self is not null:
+                            if (Self.Tracked(target.Field) is { } field) {
+                                Op(FlowOpKind.Write, field, target);
+                            }
+
+                            return;
+
+                        // 'self = other' in a struct's initialiser sets every field.
+                        case BoundSelfAccess target when Self is not null:
+                            WriteEveryField(target);
+                            return;
+
                         default:
                             // 'q.x = 1' changes q: its receiver chain is
                             // evaluated, and q is written in part.
@@ -648,12 +679,75 @@ internal sealed class ControlFlowGraph {
                     return;
                 }
 
+                // 'parse(s, out n)': the call writes n, without reading it.
+                case BoundCall call when call.Function.Parameters.Any(static p => p.Modifier == ParameterModifier.Out): {
+                    if (call.Receiver is { } receiver) {
+                        Expression(receiver);
+                    }
+
+                    var written = new List<BoundExpression>();
+                    for (var i = 0; i < call.Arguments.Length; i++) {
+                        if (i < call.Function.Parameters.Length && call.Function.Parameters[i].Modifier == ParameterModifier.Out
+                            && Unconverted(call.Arguments[i]) is BoundLocalAccess or BoundParameterAccess) {
+                            written.Add(Unconverted(call.Arguments[i]));
+                        } else {
+                            Expression(call.Arguments[i]);
+                        }
+                    }
+
+                    // A method of self called with self left implicit, in an initialiser.
+                    if (call is { Receiver: null, Function: { IsStatic: false, FunctionKind: FunctionKind.Ordinary, ContainingSymbol: NamedTypeSymbol or ExtensionSymbol } }
+                        && Self is not null) {
+                        Op(FlowOpKind.Read, Self.Type, call);
+                    }
+
+                    foreach (var target in written) {
+                        Op(FlowOpKind.Write, target is BoundLocalAccess local ? local.Local : ((BoundParameterAccess)target).Parameter, target);
+                    }
+
+                    return;
+                }
+
                 case BoundTry tryExpression:
                     Try(tryExpression);
                     return;
 
                 case BoundMatch match:
                     Match(match);
+                    return;
+
+                // In an initialiser, a stored field of self is read on its
+                // own; one with an initial value always has it.
+                case BoundFieldAccess { Receiver: BoundSelfAccess, Field.IsComputed: false } access when Self is not null:
+                    if (Self.Tracked(access.Field) is { } read) {
+                        Op(FlowOpKind.Read, read, access);
+                    }
+
+                    return;
+
+                // Any other use of self — a method called on it, a computed
+                // property, self passed on — may read any field.
+                case BoundSelfAccess or BoundSuperAccess when Self is not null:
+                    Op(FlowOpKind.Read, Self.Type, expression);
+                    return;
+
+                // 'self.init(...)' sets every field; 'super.init(...)' sets the
+                // superclass's, which are not this initialiser's to check.
+                case BoundCall { Function.FunctionKind: FunctionKind.Initializer, Receiver: BoundSelfAccess or BoundSuperAccess } delegation when Self is not null:
+                    foreach (var argument in delegation.Arguments) {
+                        Expression(argument);
+                    }
+
+                    if (delegation.Receiver is BoundSelfAccess) {
+                        WriteEveryField(delegation);
+                    }
+
+                    return;
+
+                // 'describe()' with self left implicit uses self as much as 'self.describe()'.
+                case BoundCall { Receiver: null, Function: { IsStatic: false, FunctionKind: FunctionKind.Ordinary, ContainingSymbol: NamedTypeSymbol or ExtensionSymbol } } implicitSelf when Self is not null:
+                    Children(implicitSelf);
+                    Op(FlowOpKind.Read, Self.Type, implicitSelf);
                     return;
 
                 case BoundClosure closure:
@@ -672,6 +766,16 @@ internal sealed class ControlFlowGraph {
                 default:
                     Children(expression);
                     return;
+            }
+        }
+
+        static BoundExpression Unconverted(BoundExpression expression) =>
+            expression is BoundConversion { ConversionKind: ConversionKind.Identity or ConversionKind.Reference } conversion
+                ? Unconverted(conversion.Operand)
+                : expression;
+        void WriteEveryField(BoundNode node) {
+            foreach (var field in Self!.Fields) {
+                Op(FlowOpKind.Write, field, node);
             }
         }
 
@@ -701,6 +805,10 @@ internal sealed class ControlFlowGraph {
                     _current = handler;
                     if (tryExpression.ErrorLocal is { } error) {
                         Op(FlowOpKind.Write, error, tryExpression);
+                    }
+
+                    if (tryExpression.FallbackBody is { } body) {
+                        Statement(body);
                     }
 
                     Expression(fallback);

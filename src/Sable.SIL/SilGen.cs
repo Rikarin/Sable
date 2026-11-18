@@ -69,11 +69,61 @@ public sealed partial class SilGen {
 
     public IReadOnlyList<Diagnostic> Diagnostics => [.._diagnostics];
 
+    /// <summary>
+    ///     The file each diagnostic is in, where lowering knows it: everything
+    ///     reported while a function's body is lowered or checked is that
+    ///     function's file's. Compared by reference, as two identical
+    ///     complaints in two files are two diagnostics.
+    /// </summary>
+    readonly Dictionary<Diagnostic, SyntaxTree> _files = new(ReferenceEqualityComparer.Instance);
+
+    IReadOnlyList<(Diagnostic Diagnostic, SyntaxTree? Tree)> PlacedDiagnostics =>
+        [.._diagnostics.Select(d => (d, _files.GetValueOrDefault(d)))];
+
+    /// <summary>Gives the diagnostics reported since <paramref name="before" /> the file they were reported in, unless they have one.</summary>
+    void Place(int before, SyntaxTree tree) {
+        foreach (var diagnostic in _diagnostics.Skip(before)) {
+            _files.TryAdd(diagnostic, tree);
+        }
+    }
+
+    SyntaxTree? TreeOf(SourceText source) => _compilation.SyntaxTrees.FirstOrDefault(t => ReferenceEquals(t.Text, source));
+
     /// <summary>Lowers every function the compilation declares, or reports why it cannot.</summary>
     public static (SilModule Module, IReadOnlyList<Diagnostic> Diagnostics) Lower(Compilation compilation) {
         var generator = new SilGen(compilation);
         generator.LowerAll();
         return (generator._module, generator.Diagnostics);
+    }
+
+    /// <summary>
+    ///     <see cref="Lower(Compilation)" />, with the file each diagnostic is
+    ///     in — null for one lowering cannot place — so that a program of many
+    ///     files can say where.
+    /// </summary>
+    public static (SilModule Module, IReadOnlyList<(Diagnostic Diagnostic, SyntaxTree? Tree)> Diagnostics) LowerByFile(Compilation compilation) {
+        var generator = new SilGen(compilation);
+        generator.LowerAll();
+        return (generator._module, generator.PlacedDiagnostics);
+    }
+
+    /// <summary>
+    ///     The checks that run on SIL — moves (S3057–S3059), exclusivity
+    ///     (S3062) and roots (S3060, S3061) — for <c>sable check</c> and the
+    ///     editor, which do not otherwise lower: the program is lowered and
+    ///     thrown away, and what lowering says of the program is kept, with
+    ///     the file it is in.
+    /// </summary>
+    /// <remarks>
+    ///     A construct lowering does not handle yet (S7000) is the compiler's
+    ///     limit, not the program's mistake, and is left to a build to report.
+    ///     Lowering is only asked of a program that type-checks: a bound tree
+    ///     with errors in it is not one it can take.
+    /// </remarks>
+    public static IReadOnlyList<(Diagnostic Diagnostic, SyntaxTree? Tree)> Check(Compilation compilation) {
+        var generator = new SilGen(compilation);
+        generator.LowerAll();
+        return [..generator.PlacedDiagnostics.Where(static d => d.Diagnostic.Code != ErrorCode.ERR_NotLoweredYet)];
     }
 
     /// <summary>
@@ -191,6 +241,22 @@ public sealed partial class SilGen {
             _names[symbol] = Mangle(symbol, overloaded);
         }
 
+        // Overloads with the same parameter types differ in their labels,
+        // 'g(a:)' and 'g(b:)': only those get the labels in their names too.
+        // A pair that still shares a name is one the binder has reported.
+        var lowered = functions.Select(static f => f.Symbol).Distinct().ToList();
+        foreach (var clash in lowered.GroupBy(s => _names[s], StringComparer.Ordinal).Where(static g => g.Count() > 1)) {
+            foreach (var symbol in clash) {
+                _names[symbol] += "$by$" + string.Join("$", symbol.Parameters.Select(static p => Sanitise(p.Label ?? p.Name)));
+            }
+        }
+
+        foreach (var clash in lowered.GroupBy(s => _names[s], StringComparer.Ordinal).Where(static g => g.Count() > 1)) {
+            foreach (var (symbol, i) in clash.Skip(1).Select(static (s, i) => (s, i + 1))) {
+                _names[symbol] += $"${i}";
+            }
+        }
+
         // Which classes something inherits from: their methods dispatch.
         foreach (var tree in _compilation.SyntaxTrees) {
             foreach (var declaration in Declarations(tree).OfType<ClassDeclarationSyntax>()) {
@@ -255,7 +321,9 @@ public sealed partial class SilGen {
         while (_pending.Count > 0) {
             var (symbol, name, type, substitution) = _pending.Dequeue();
             var (syntax, model) = _declarations[symbol];
+            _loweringInstance = name;
             LowerBody(symbol, syntax, model, name, type, substitution);
+            _loweringInstance = null;
         }
 
         // Separately, the globals are set up by the unit the program starts in.
@@ -264,7 +332,11 @@ public sealed partial class SilGen {
         }
 
         BuildVTables();
-        RootChecker.Check(_module, _sources, _diagnostics);
+        RootChecker.Check(_module, _sources, _diagnostics, (before, source) => {
+            if (TreeOf(source) is { } tree) {
+                Place(before, tree);
+            }
+        });
         if (_module.Unit is { } unitInfo) {
             DeclareReferenced(unitInfo);
             RecordAbi(unitInfo);
@@ -479,12 +551,38 @@ public sealed partial class SilGen {
     readonly Dictionary<string, FunctionType> _instances = new(StringComparer.Ordinal);
     readonly Queue<(FunctionSymbol Symbol, string Name, FunctionType Type, TypeSubstitution Substitution)> _pending = new();
 
+    /// <summary>
+    ///     What asked for each instance: the generic function, its type
+    ///     arguments, and the instance whose body asked, null when that body
+    ///     was not generic — the chain that brought each instance about.
+    /// </summary>
+    readonly Dictionary<string, (FunctionSymbol Symbol, TypeSubstitution Substitution, string? Requester)> _instanceOrigins =
+        new(StringComparer.Ordinal);
+
+    /// <summary>The instance whose body is being lowered, or null for a function that is not generic.</summary>
+    string? _loweringInstance;
+
+    /// <summary>
+    ///     How long a chain of instances, each asked for by the one before,
+    ///     may grow. Ordinary generic code comes nowhere near; it is a
+    ///     backstop for growth <see cref="Grows" /> does not see.
+    /// </summary>
+    const int MaxInstanceDepth = 200;
+
     void LowerBody(FunctionSymbol symbol, SyntaxNode syntax, SemanticModel model, string name, FunctionType type, TypeSubstitution substitution) {
         if ((_compilation.GetDerivedBody(symbol) ?? _compilation.GetLazyBody(symbol) ?? model.GetBoundNode(syntax)) is not BoundBlock body) {
             return;
         }
 
-        var source = model.SyntaxTree.Text;
+        var reported = _diagnostics.Count;
+        try {
+            LowerBody(symbol, syntax, body, model.SyntaxTree.Text, name, type, substitution);
+        } finally {
+            Place(reported, model.SyntaxTree);
+        }
+    }
+
+    void LowerBody(FunctionSymbol symbol, SyntaxNode syntax, BoundBlock body, SourceText source, string name, FunctionType type, TypeSubstitution substitution) {
         var function = new SilFunction(name, type) {
             SourceFile = source.FileName,
             Line = source.GetLinePosition(syntax.Span.Start).Line,
@@ -681,14 +779,84 @@ public sealed partial class SilGen {
             return (name, existing);
         }
 
+        if (EndlessInstances(symbol, substitution, at)) {
+            return null;
+        }
+
         if (SignatureOf(symbol, at, substitution) is not { } type) {
             return null;
         }
 
         _instances[name] = type;
+        _instanceOrigins[name] = (symbol, substitution, _loweringInstance);
         _pending.Enqueue((symbol, name, type, substitution));
         return (name, type);
     }
+
+    /// <summary>
+    ///     True, with an error reported, when a new instance would be one of
+    ///     an endless series: a generic function that calls itself, directly
+    ///     or through others, with a type argument built from its own, as
+    ///     <c>deep((x, x), n - 1)</c> in <c>deep&lt;T&gt;</c> does. Each copy
+    ///     would ask for a larger one, and monomorphisation would never end.
+    /// </summary>
+    bool EndlessInstances(FunctionSymbol symbol, TypeSubstitution substitution, SyntaxNode at) {
+        var depth = 0;
+        for (var requester = _loweringInstance;
+             requester is not null && _instanceOrigins.TryGetValue(requester, out var origin);
+             requester = origin.Requester) {
+            if (++depth >= MaxInstanceDepth) {
+                _diagnostics.Error(
+                    ErrorCode.ERR_EndlessInstantiation,
+                    at.Span,
+                    $"'{symbol.Name}' is reached through more than {MaxInstanceDepth} generic calls, each needing a copy "
+                    + "of a generic function for new types: a generic function is compiled once for each type it is used with, "
+                    + "so this would not finish compiling"
+                );
+                return true;
+            }
+
+            if (!ReferenceEquals(origin.Symbol, symbol)) {
+                continue;
+            }
+
+            foreach (var parameter in TypeParametersOf(symbol)) {
+                if (origin.Substitution.Lookup(parameter) is { } before
+                    && substitution.Lookup(parameter) is { } after
+                    && Grows(before, after)) {
+                    _diagnostics.Error(
+                        ErrorCode.ERR_EndlessInstantiation,
+                        at.Span,
+                        $"'{symbol.Name}' with {parameter.Name} = '{before.ToDisplayString()}' leads to a call of it with "
+                        + $"{parameter.Name} = '{after.ToDisplayString()}', which leads to a larger type again, without end: "
+                        + "a generic function is compiled once for each type it is used with, so this would not finish compiling"
+                    );
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>True when <paramref name="after" /> is built from <paramref name="before" />, and is larger.</summary>
+    static bool Grows(TypeSymbol before, TypeSymbol after) =>
+        !after.Equals(before) && Occurs(before, after);
+
+    /// <summary>True when <paramref name="part" /> is <paramref name="type" />, or one of the types it is made of.</summary>
+    static bool Occurs(TypeSymbol part, TypeSymbol type) =>
+        type.Equals(part)
+        || type switch {
+            NamedTypeSymbol named => named.TypeArguments.Any(a => Occurs(part, a)),
+            ArrayTypeSymbol array => Occurs(part, array.ElementType),
+            OptionalTypeSymbol optional => Occurs(part, optional.UnderlyingType),
+            ReferenceTypeSymbol reference => Occurs(part, reference.ReferencedType),
+            TupleTypeSymbol tuple => tuple.ElementTypes.Any(e => Occurs(part, e)),
+            FunctionTypeSymbol function =>
+                function.ParameterTypes.Any(p => Occurs(part, p)) || Occurs(part, function.ReturnType),
+            StructuralUnionTypeSymbol union => union.Cases.Any(c => Occurs(part, c)),
+            _ => false,
+        };
 
     /// <summary>
     ///     A function of the module, or a member of a struct, union, enum or
@@ -818,6 +986,9 @@ public sealed partial class SilGen {
             { FunctionKind: FunctionKind.Accessor, ContainingSymbol: FunctionSymbol { FunctionKind: FunctionKind.Subscript } subscript } =>
                 $"{owner}.{SubscriptName(subscript)}.{symbol.Name}",
             { FunctionKind: FunctionKind.Subscript } => $"{owner}.{SubscriptName(symbol)}.get",
+
+            // 'fn Drawable.render()' beside 'fn Printable.render()': 'M.Shape.Drawable.render'.
+            { ExplicitProtocol: NamedTypeSymbol protocol } => $"{owner}.{protocol.Name}.{symbol.Name}",
             _ => $"{owner}.{symbol.Name}",
         };
         if (symbol.FunctionKind == FunctionKind.Subscript || symbol.ContainingSymbol is FunctionSymbol { FunctionKind: FunctionKind.Subscript }) {
@@ -865,9 +1036,10 @@ public sealed partial class SilGen {
         }
 
         foreach (var parameter in symbol.Parameters) {
-            // 'in r: region' borrows the region, as any parameter is borrowed.
+            // 'in r: region' borrows the region, as any parameter is borrowed; so
+            // does a 'borrowing' one, which only says so (and may not let it escape).
             if (parameter.Modifier is not (ParameterModifier.None or ParameterModifier.InOut or ParameterModifier.Consuming
-                or ParameterModifier.Ref or ParameterModifier.In)) {
+                or ParameterModifier.Ref or ParameterModifier.In or ParameterModifier.Out or ParameterModifier.Borrowing)) {
                 return Unsupported<FunctionType>(at, $"the '{parameter.Modifier}' parameter '{parameter.Name}'");
             }
 
@@ -875,8 +1047,9 @@ public sealed partial class SilGen {
                 return Unsupported<FunctionType>(at, $"a parameter of type '{parameter.Type.ToDisplayString()}'");
             }
 
-            // An inout or ref parameter is the address of the caller's storage.
-            parameters.Add(parameter.Modifier is ParameterModifier.InOut or ParameterModifier.Ref ? SilType.Address(type) : type);
+            // An inout, out or ref parameter is the address of the caller's storage:
+            // an out one is written there before the callee returns.
+            parameters.Add(parameter.Modifier is ParameterModifier.InOut or ParameterModifier.Out or ParameterModifier.Ref ? SilType.Address(type) : type);
         }
 
         var resultSymbol = symbol.FunctionKind == FunctionKind.Initializer ? SelfType(symbol, substitution) : symbol.ReturnType;
@@ -1545,10 +1718,14 @@ public sealed partial class SilGen {
         _names[symbol] = name;
         _module.Add(function);
 
+        var reported = _diagnostics.Count;
         new FunctionLowering(this, symbol, function, source, substitution).Lower(body);
         function.RemoveUnreachableBlocks();
         MoveChecker.Check(function, source, _diagnostics);
         _sources[function] = source;
+        if (TreeOf(source) is { } tree) {
+            Place(reported, tree);
+        }
     }
 
     internal string ClosureName(string function) {
@@ -1906,15 +2083,67 @@ public sealed partial class SilGen {
         return null;
     }
 
+    /// <summary>
+    ///     A method or property a protocol extension adds that meets none of
+    ///     the protocol's requirements, nor those of a protocol it refines: it
+    ///     has no witness, only its own body.
+    /// </summary>
+    static bool IsExtensionOnly(Symbol member) {
+        if (member.ContainingSymbol is not ExtensionSymbol { ExtendedType: NamedTypeSymbol { TypeKind: TypeKind.Protocol } protocol }) {
+            return false;
+        }
+
+        bool Meets(Symbol requirement) =>
+            requirement.ContainingSymbol is NamedTypeSymbol
+            && requirement.Name == member.Name
+            && (requirement, member) switch {
+                (FunctionSymbol r, FunctionSymbol m) =>
+                    (r.IsStatic == m.IsStatic || r.FunctionKind == FunctionKind.Operator) && r.Parameters.Length == m.Parameters.Length,
+                (FieldSymbol r, FieldSymbol m) => r.IsStatic == m.IsStatic,
+                _ => false,
+            };
+
+        var visited = new HashSet<NamedTypeSymbol>();
+        bool Requires(NamedTypeSymbol current) =>
+            visited.Add(current.OriginalDefinition)
+            && (current.OriginalDefinition.Members.Any(Meets)
+                || current.OriginalDefinition.BaseTypes.OfType<NamedTypeSymbol>().Any(b => b.TypeKind == TypeKind.Protocol && Requires(b)));
+
+        return !Requires(protocol);
+    }
+
     /// <summary>The member of a concrete type that implements a protocol's method: its own, or a superclass's.</summary>
+    /// <summary>True when two functions' parameters have the same argument labels.</summary>
+    static bool SameLabels(FunctionSymbol a, FunctionSymbol b) =>
+        a.Parameters.Length == b.Parameters.Length
+        && a.Parameters.Zip(b.Parameters).All(static p => (p.First.Label ?? p.First.Name) == (p.Second.Label ?? p.Second.Name));
+
     internal static FunctionSymbol? Implementation(NamedTypeSymbol concrete, FunctionSymbol requirement) {
+        // docs/03 §3.2: a protocol extension's member that is not a
+        // requirement is chosen by the static type, not looked up on the
+        // concrete one — a 'g' the type declares itself does not replace it.
+        if (IsExtensionOnly(requirement)) {
+            return requirement;
+        }
+
+        var required = Owner(requirement)?.OriginalDefinition;
         for (var type = (NamedTypeSymbol?)concrete.OriginalDefinition; type is not null; type = SuperclassOf(type)?.OriginalDefinition) {
-            // An operator is static wherever it is written; a requirement's says nothing.
-            var found = type.Members.OfType<FunctionSymbol>().FirstOrDefault(f =>
-                f.Name == requirement.Name
-                && (f.IsStatic == requirement.IsStatic || requirement.FunctionKind == FunctionKind.Operator)
-                && f.Parameters.Length == requirement.Parameters.Length
-                && Owner(f) is { TypeKind: not TypeKind.Protocol });
+            // An operator is static wherever it is written; a requirement's
+            // says nothing. 'fn Printable.render()' implements Printable's
+            // requirement and no other's, and is the one for it even beside
+            // an ordinary 'render'. Overloads told apart by their labels are
+            // told apart here the same way.
+            var found = type.Members.OfType<FunctionSymbol>()
+                .Where(f =>
+                    f.Name == requirement.Name
+                    && (f.IsStatic == requirement.IsStatic || requirement.FunctionKind == FunctionKind.Operator)
+                    && f.Parameters.Length == requirement.Parameters.Length
+                    && Owner(f) is { TypeKind: not TypeKind.Protocol }
+                    && (f.ExplicitProtocol is null
+                        || ReferenceEquals((f.ExplicitProtocol as NamedTypeSymbol)?.OriginalDefinition, required)))
+                .OrderBy(f => f.ExplicitProtocol is null)
+                .ThenBy(f => !SameLabels(f, requirement))
+                .FirstOrDefault();
             if (found is not null) {
                 return found;
             }
@@ -1951,8 +2180,11 @@ public sealed partial class SilGen {
         var context = entry.AddArgument(SilType.Object);
         var opened = entry.Append(new RefElementAddrInst(entry.Append(new UncheckedRefCastInst(context, box)), 0));
 
-        // A property the type computes: its getter is the implementation.
-        if (requirement is FieldSymbol computed
+        // A property an extension of the protocol adds, and no requirement:
+        // its own getter, whatever the type declares (docs/03 §3.2).
+        if (requirement is FieldSymbol { IsComputed: true } extensionOnly && IsExtensionOnly(extensionOnly) && GetterOf(extensionOnly) is { } extensionGetter) {
+            requirement = extensionGetter;
+        } else if (requirement is FieldSymbol computed
             && FindField(concrete, computed.Name) is { IsComputed: true } own && GetterOf(own) is { } getter) {
             requirement = getter;
         } else if (requirement is FieldSymbol { IsComputed: true } defaulted
@@ -2685,6 +2917,19 @@ public sealed partial class SilGen {
                 return Hold(Emit(new LoadBorrowInst(place)));
             }
 
+            // So is one a closure captures, in its box. The box is held by the
+            // variable's slot, or by the closure's context, for longer than this.
+            if (CapturedMoveOnly(expression) is { } captured) {
+                var boxes = new List<SilValue>();
+                if (LocalAddress(captured.Local, captured.Syntax, boxes) is not { } boxed) {
+                    return null;
+                }
+
+                var borrowedInBox = Emit(new LoadBorrowInst(boxed));
+                EndAll(boxes);
+                return Hold(borrowedInBox);
+            }
+
             // A narrowed read is the payload, taken out: a value of its own.
             if (NarrowedUnion(expression) is not null) {
                 return Expression(expression) is { } payload ? Hold(payload) : null;
@@ -2724,11 +2969,11 @@ public sealed partial class SilGen {
         }
 
         /// <summary>
-        ///     True for a parameter passed by address — inout or ref — whose
+        ///     True for a parameter passed by address — inout, out or ref — whose
         ///     address stands for its value; a parameter of reference type is
         ///     an address that is the value.
         /// </summary>
-        static bool IsByAddress(ParameterSymbol parameter) => parameter.Modifier is ParameterModifier.InOut or ParameterModifier.Ref;
+        static bool IsByAddress(ParameterSymbol parameter) => parameter.Modifier is ParameterModifier.InOut or ParameterModifier.Out or ParameterModifier.Ref;
 
         /// <summary>The slot of a move-only local or parameter, or null.</summary>
         AllocStackInst? MoveOnlyPlace(BoundExpression expression) =>
@@ -2737,6 +2982,15 @@ public sealed partial class SilGen {
                     && slot.ElementType is NominalType { IsNoncopyable: true } => slot,
                 BoundParameterAccess parameter when _spilled.TryGetValue(parameter.Parameter, out var spilled) => spilled,
                 BoundConversion { ConversionKind: ConversionKind.Identity } conversion => MoveOnlyPlace(conversion.Operand),
+                _ => null,
+            };
+
+        /// <summary>A move-only local kept in a box, because a closure captures it — here or in the closure — or null.</summary>
+        BoundLocalAccess? CapturedMoveOnly(BoundExpression expression) =>
+            expression switch {
+                BoundLocalAccess local when LowerType(local.Type) is NominalType { IsNoncopyable: true }
+                    && (_boxed.Contains(local.Local) || closure?.Captures.TryGetValue(local.Local, out var capture) == true && capture.Boxed) => local,
+                BoundConversion { ConversionKind: ConversionKind.Identity } conversion => CapturedMoveOnly(conversion.Operand),
                 _ => null,
             };
 
@@ -2806,7 +3060,7 @@ public sealed partial class SilGen {
                             Statement(deferred);
                             break;
 
-                        case AllocStackInst slot:
+                        case AllocStackInst slot when !slot.ElementType.IsTrivial || _referred.Contains(slot):
                             Emit(new DestroyAddrInst(slot));
                             break;
 
@@ -2850,15 +3104,37 @@ public sealed partial class SilGen {
             return true;
         }
 
-        /// <summary>Gives a local's slot to the innermost scope, to be destroyed as it closes.</summary>
+        /// <summary>
+        ///     Gives a local's slot to the innermost scope, to be destroyed as it
+        ///     closes. A trivial one has nothing to destroy, but a reference
+        ///     taken to it must still not outlive the scope: its end is marked
+        ///     for root checking (docs/02 §2.4) when a reference was taken.
+        /// </summary>
         void EndsWithScope(AllocStackInst slot) {
-            if (slot.ElementType.IsTrivial || _scopes.Count == 0 || _scopes.Any(s => s.Contains(slot))) {
+            if (_scopes.Count == 0 || _scopes.Any(s => s.Contains(slot))) {
                 return;
             }
 
             _scopes[^1].Add(slot);
-            _scoped.Add(slot);
+            if (!slot.ElementType.IsTrivial) {
+                _scoped.Add(slot);
+            }
         }
+
+        /// <summary>
+        ///     Trivial slots a reference has been taken to, so far: those whose
+        ///     scope's end is written down as a <c>destroy_addr</c>. The rest
+        ///     need none, and stay promotable to SSA values.
+        /// </summary>
+        readonly HashSet<AllocStackInst> _referred = [];
+
+        static AllocStackInst? SlotUnder(SilValue address) =>
+            address switch {
+                AllocStackInst slot => slot,
+                StructElementAddrInst element => SlotUnder(element.Address),
+                TupleElementAddrInst element => SlotUnder(element.Address),
+                _ => null,
+            };
 
         /// <summary>
         ///     Slots a scope destroys: on every way out of it they are destroyed
@@ -3277,13 +3553,22 @@ public sealed partial class SilGen {
         }
 
         /// <summary><c>for i in a..&lt;b</c> and <c>a...b</c>: a counting loop, with no range built.</summary>
+        /// <remarks>
+        ///     <c>for i in a...</c> has no upper bound: it counts until the loop
+        ///     is left, and stepping past <c>Int.max</c> traps as any overflow does.
+        /// </remarks>
         void ForRange(BoundForEach loop, BoundRange range) {
-            if (range.Lower is null || range.Upper is null || loop.Element is null) {
-                Fail(loop.Syntax, "a 'for' over an open range");
+            if (range.Lower is null || loop.Element is null) {
+                Fail(loop.Syntax, "a 'for' over a range with no lower bound");
                 return;
             }
 
-            if (Expression(range.Lower) is not { } lower || Expression(range.Upper) is not { } upper) {
+            if (Expression(range.Lower) is not { } lower) {
+                return;
+            }
+
+            SilValue? upper = null;
+            if (range.Upper is not null && (upper = Expression(range.Upper)) is null) {
                 return;
             }
 
@@ -3312,7 +3597,7 @@ public sealed partial class SilGen {
             CountingLoop(loop, lower, upper, isInclusive);
         }
 
-        void CountingLoop(BoundForEach loop, SilValue lower, SilValue upper, bool isInclusive) {
+        void CountingLoop(BoundForEach loop, SilValue lower, SilValue? upper, bool isInclusive) {
             if (lower.Type != SilType.Int || SlotFor(loop.Element!, loop.Syntax) is null) {
                 Fail(loop.Syntax, "a 'for' over a range that is not of Int");
                 return;
@@ -3328,10 +3613,14 @@ public sealed partial class SilGen {
             Branch(header);
 
             _current = header;
-            var current = Emit(new LoadInst(counter));
-            var compare = isInclusive ? "cmp_le_Int" : "cmp_lt_Int";
-            var inside = Emit(new BuiltinInst(compare, SilType.Bool, current, upper));
-            Jump(new CondBranchInst(inside, body, [], after, []));
+            if (upper is null) {
+                Branch(body);
+            } else {
+                var current = Emit(new LoadInst(counter));
+                var compare = isInclusive ? "cmp_le_Int" : "cmp_lt_Int";
+                var inside = Emit(new BuiltinInst(compare, SilType.Bool, current, upper));
+                Jump(new CondBranchInst(inside, body, [], after, []));
+            }
 
             _current = body;
             BindLocal(loop.Element!, Emit(new LoadInst(counter)), loop.Syntax);
@@ -3352,7 +3641,7 @@ public sealed partial class SilGen {
             _current = step;
             var last = Emit(new LoadInst(counter));
             var more = function.AddBlock();
-            if (isInclusive) {
+            if (isInclusive && upper is not null) {
                 var atEnd = Emit(new BuiltinInst("cmp_eq_Int", SilType.Bool, last, upper));
                 Jump(new CondBranchInst(atEnd, after, [], more, []));
             } else {
@@ -3476,7 +3765,7 @@ public sealed partial class SilGen {
             // The catches all see one error type: what the body can throw.
             var errorType = ErrorTypeOf(doStatement);
             if (errorType is null) {
-                Fail(doStatement.Syntax, "a 'do' whose catches take an error type that has no SIL type yet");
+                Fail(doStatement.Syntax, "a 'do' whose catches take an error type that has no SIL type");
                 return;
             }
 
@@ -4518,6 +4807,10 @@ public sealed partial class SilGen {
             }
 
             if (Place(expression) is { } place) {
+                if (SlotUnder(place) is { ElementType.IsTrivial: true } referred) {
+                    _referred.Add(referred);
+                }
+
                 return place;
             }
 
@@ -5026,7 +5319,8 @@ public sealed partial class SilGen {
                 return value;
             }
 
-            var name = $"convert_{value.Type}_{target}";
+            // 'unchecked as' wraps where 'as' would trap.
+            var name = $"{(conversion.IsUnchecked ? "wrap" : "convert")}_{value.Type}_{target}";
             return SilBuiltins.Find(name) is not null
                 ? Emit(new BuiltinInst(name, target, value))
                 : Missing(conversion, $"the conversion from {value.Type} to {target}");
@@ -5655,11 +5949,27 @@ public sealed partial class SilGen {
                 return Expression(tryExpression.Expression);
             }
 
+            // Nothing in 'e' throws (the binder warns, S3036), so there is no
+            // error to handle: 'try? e' is 'e' made optional, and 'try! e' and
+            // 'try e ?? f' are 'e'.
+            if (tryExpression.ErrorLocal is null && !Throws(tryExpression.Expression)) {
+                var plain = Expression(tryExpression.Expression);
+                if (plain is null || _current is null || tryExpression.TryKind != TryKind.Optional) {
+                    return plain;
+                }
+
+                if (LowerType(tryExpression.Type) is not EnumType wrapped) {
+                    return Missing(tryExpression, $"a 'try' of type '{tryExpression.Type.ToDisplayString()}'");
+                }
+
+                return Emit(new EnumInst(wrapped, wrapped.CaseIndex("Some"), plain is UnitValue ? null : plain));
+            }
+
             // What the catch's 'error' is, when it names it; otherwise
             // whatever the expression can throw.
             var errorType = tryExpression.ErrorLocal is { } named ? LowerType(named.Type) : ThrownBy(tryExpression.Expression);
             if (errorType is null) {
-                return Missing(tryExpression, "a 'try' whose error type has no SIL type yet");
+                return Missing(tryExpression, "a 'try' whose error type has no SIL type");
             }
 
             var resultType = LowerType(tryExpression.Type);
@@ -5708,7 +6018,24 @@ public sealed partial class SilGen {
                         Destroy(error);
                     }
 
-                    var alternative = Expression(fallback);
+                    // A 'catch { ... }' block's statements run before its
+                    // value, in a scope of their own that the value can see.
+                    if (tryExpression.FallbackBody is { } body) {
+                        _scopes.Add([]);
+                        foreach (var statement in body.Statements) {
+                            Statement(statement);
+                        }
+                    }
+
+                    var alternative = _current is null ? null : Expression(fallback);
+                    if (tryExpression.FallbackBody is not null) {
+                        if (_current is not null) {
+                            RunDefers(_scopes.Count - 1);
+                        }
+
+                        _scopes.RemoveAt(_scopes.Count - 1);
+                    }
+
                     if (alternative is not null && _current is not null) {
                         if (result is null) {
                             Destroy(alternative);
@@ -5733,6 +6060,12 @@ public sealed partial class SilGen {
             return thrown.Count == 0 ? null
                 : thrown.Any(t => t.Equals(Core.AnyError)) ? LowerType(Core.AnyError)
                 : LowerType(StructuralUnionTypeSymbol.Create(thrown));
+        }
+
+        bool Throws(BoundNode node) {
+            var thrown = new List<TypeSymbol>();
+            CollectThrown(node, thrown);
+            return thrown.Count > 0;
         }
 
         void CollectThrown(BoundNode node, List<TypeSymbol> into) {
@@ -5976,8 +6309,8 @@ public sealed partial class SilGen {
                     continue;
                 }
 
-                // An inout argument passes where it is; the rest are borrowed.
-                if (i < callee.Parameters.Length && callee.Parameters[i].Modifier == ParameterModifier.InOut) {
+                // An inout or out argument passes where it is; the rest are borrowed.
+                if (i < callee.Parameters.Length && callee.Parameters[i].Modifier is ParameterModifier.InOut or ParameterModifier.Out) {
                     if (Address(call.Arguments[i], borrows) is not { } address) {
                         return null;
                     }
@@ -6303,6 +6636,10 @@ public sealed partial class SilGen {
             new FunctionLowering(generator, codeSymbol, code, source, substitution, info).Lower(body);
             code.RemoveUnreachableBlocks();
             generator._module.Add(code);
+
+            // A closure's body is checked as a function's is: what it does with
+            // a move-only value it captures, or makes, is held to the same rules.
+            MoveChecker.Check(code, source, generator._diagnostics);
 
             // The context.
             Locate(closureExpression.Syntax);

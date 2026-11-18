@@ -216,7 +216,7 @@ public fn describeError(_ e: MatrixError) -> String {
     return match e {
         case .ShapeMismatch(let rows, let columns) =>
             "shape " + rows.toString() + "x" + columns.toString()
-        case .Singular => "singular"
+        case .Singular              => "singular"
         case .OutOfRange(let index) => "out of range " + index.toString()
     }
 }

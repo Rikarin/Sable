@@ -99,7 +99,8 @@ public class BuildCommand : Command {
         var result = Pipeline.Compile(
             [SyntaxTree.Parse(source, Pipeline.ParseOptionsFor(options.Optimise))],
             options.Debug ? Path.GetDirectoryName(Path.GetFullPath(options.Input)) : null,
-            options.Exclusivity ?? (options.Debug || !options.Optimise)
+            options.Exclusivity ?? (options.Debug || !options.Optimise),
+            optimised: options.Optimise && !options.Debug
         );
         Report(result.Warnings);
 

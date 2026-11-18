@@ -508,7 +508,7 @@ public readonly record struct SilLocation(int Line, int Column) {
 ///     value, as in Swift's SIL, so a use names the instruction.
 /// </summary>
 public abstract class SilInstruction : SilValue {
-    readonly SilValue[] _operands;
+    SilValue[] _operands;
 
     protected SilInstruction(params SilValue[] operands) {
         _operands = operands;
@@ -522,6 +522,35 @@ public abstract class SilInstruction : SilValue {
     public IReadOnlyList<SilValue> Operands => _operands;
 
     internal void SetOperand(int index, SilValue value) => _operands[index] = value;
+
+    /// <summary>
+    ///     A copy, for another block — what the inliner makes of a callee's
+    ///     body: the same operands, each passed through <paramref name="value" />,
+    ///     and the same targets, through <paramref name="block" />.
+    /// </summary>
+    internal SilInstruction Clone(Func<SilValue, SilValue> value, Func<SilBlock, SilBlock> block) {
+        var copy = this is SwitchEnumInst switchEnum
+            ? new SwitchEnumInst(switchEnum.Value, [..switchEnum.Cases.Select(c => (c.Case, block(c.Target)))], switchEnum.Default is { } fallback ? block(fallback) : null)
+            : (SilInstruction)MemberwiseClone();
+        copy._operands = [.._operands.Select(value)];
+        copy.Block = null!;
+        copy.Location = Location;
+        switch (copy) {
+            case BranchInst branch:
+                branch.Target = block(branch.Target);
+                break;
+            case CondBranchInst conditional:
+                conditional.WhenTrue = block(conditional.WhenTrue);
+                conditional.WhenFalse = block(conditional.WhenFalse);
+                break;
+            case TryApplyInst tryApply:
+                tryApply.Normal = block(tryApply.Normal);
+                tryApply.Error = block(tryApply.Error);
+                break;
+        }
+
+        return copy;
+    }
 
     /// <summary>The text that names the instruction in SIL: <c>apply</c>, <c>cond_br</c>.</summary>
     public abstract string Opcode { get; }

@@ -26,12 +26,25 @@ public sealed class SilPassException(string message) : Exception(message);
 ///     SIL verifier runs after every pass in debug builds. Non-negotiable.").
 /// </summary>
 public static class SilPassManager {
-    /// <summary>The passes a build runs, in order.</summary>
+    /// <summary>The passes every build runs, in order, but a debug one: what keeps ARC's traffic down.</summary>
     /// <remarks>
     ///     Copies are forwarded before loads are borrowed and after: each
     ///     uncovers more of the other.
     /// </remarks>
-    public static IReadOnlyList<ISilPass> Default { get; } = [new PromoteSlots(), new ForwardCopies(), new BorrowLoads(), new ForwardCopies(), new BorrowFields(), new BorrowLocals(), new PromoteToStack(), new HoistUniqueness()];
+    public static IReadOnlyList<ISilPass> Default { get; } = [
+        new PromoteSlots(), new ForwardCopies(), new BorrowLoads(), new ForwardCopies(), new BorrowFields(), new BorrowLocals(),
+        new PromoteToStack(), new HoistUniqueness(),
+    ];
+
+    /// <summary>The passes an optimised build runs, in order.</summary>
+    /// <remarks>
+    ///     Calls the vtable can only answer one way are made direct, then
+    ///     small callees inlined, and the chain of blocks each call leaves
+    ///     merged, so that the passes after see the callee's body in the
+    ///     caller's; what is left is tidied last. An unoptimised build keeps
+    ///     its calls, so that a trap's backtrace names every frame.
+    /// </remarks>
+    public static IReadOnlyList<ISilPass> Optimising { get; } = [new Devirtualise(), new Inliner(), new Simplify(), ..Default, new Simplify()];
 
     /// <summary>
     ///     Drops every function the entry point cannot reach: through calls

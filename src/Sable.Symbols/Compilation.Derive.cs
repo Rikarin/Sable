@@ -303,7 +303,7 @@ internal static class DerivedConformance {
     public static IEnumerable<(string Name, string? Case, TypeSymbol Type)> Fields(NamedTypeSymbol type) =>
         type.TypeKind == TypeKind.Union
             ? type.Members.OfType<UnionCaseSymbol>().SelectMany(c => c.Payload.Select(p => (p.Label ?? $"{p.Ordinal}", (string?)c.Name, p.Type)))
-            : StoredFields(type).Select(static f => (f.Name, (string?)null, f.Type));
+            : StoredFields(type).Select(static f => (f.DisplayName, (string?)null, f.Type));
 
     public static IEnumerable<FieldSymbol> StoredFields(NamedTypeSymbol type) =>
         type.Members.OfType<FieldSymbol>().Where(static f => f is { IsStatic: false, IsComputed: false });

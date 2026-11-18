@@ -79,21 +79,27 @@ extension String {
 
     public fn toI8() -> I8? {
         if let value = self.toInt() {
-            if value >= -128 && value <= 127 { return I8(value) }
+            if value >= -128 && value <= 127 {
+                return I8(value)
+            }
         }
         return none
     }
 
     public fn toI16() -> I16? {
         if let value = self.toInt() {
-            if value >= -32768 && value <= 32767 { return I16(value) }
+            if value >= -32768 && value <= 32767 {
+                return I16(value)
+            }
         }
         return none
     }
 
     public fn toI32() -> I32? {
         if let value = self.toInt() {
-            if value >= -2147483648 && value <= 2147483647 { return I32(value) }
+            if value >= -2147483648 && value <= 2147483647 {
+                return I32(value)
+            }
         }
         return none
     }
@@ -107,21 +113,27 @@ extension String {
 
     public fn toU8() -> U8? {
         if let value = self.toInt() {
-            if value >= 0 && value <= 255 { return U8(value) }
+            if value >= 0 && value <= 255 {
+                return U8(value)
+            }
         }
         return none
     }
 
     public fn toU16() -> U16? {
         if let value = self.toInt() {
-            if value >= 0 && value <= 65535 { return U16(value) }
+            if value >= 0 && value <= 65535 {
+                return U16(value)
+            }
         }
         return none
     }
 
     public fn toU32() -> U32? {
         if let value = self.toInt() {
-            if value >= 0 && value <= 4294967295 { return U32(value) }
+            if value >= 0 && value <= 4294967295 {
+                return U32(value)
+            }
         }
         return none
     }
@@ -129,7 +141,9 @@ extension String {
     /// Up to Int's largest: the runtime parses no wider.
     public fn toU64() -> U64? {
         if let value = self.toInt() {
-            if value >= 0 { return U64(value) }
+            if value >= 0 {
+                return U64(value)
+            }
         }
         return none
     }
@@ -137,7 +151,9 @@ extension String {
     /// Up to Int's largest: the runtime parses no wider.
     public fn toUInt() -> UInt? {
         if let value = self.toInt() {
-            if value >= 0 { return UInt(value) }
+            if value >= 0 {
+                return UInt(value)
+            }
         }
         return none
     }

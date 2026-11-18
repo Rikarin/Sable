@@ -143,11 +143,21 @@ public class Logger {
 
 public fn parseLevel(_ text: String) -> Level? {
     let t = text.trimmed()
-    if t == "trace" || t == "TRACE" { return Level.Trace }
-    if t == "debug" || t == "DEBUG" { return Level.Debug }
-    if t == "info" || t == "INFO" { return Level.Info }
-    if t == "warn" || t == "warning" || t == "WARN" { return Level.Warning }
-    if t == "error" || t == "ERROR" { return Level.Error }
+    if t == "trace" || t == "TRACE" {
+        return Level.Trace
+    }
+    if t == "debug" || t == "DEBUG" {
+        return Level.Debug
+    }
+    if t == "info" || t == "INFO" {
+        return Level.Info
+    }
+    if t == "warn" || t == "warning" || t == "WARN" {
+        return Level.Warning
+    }
+    if t == "error" || t == "ERROR" {
+        return Level.Error
+    }
     return none
 }
 

@@ -84,7 +84,8 @@ public sealed partial class SemanticModel {
             return known;
         }
 
-        if (accessor.Body is null && accessor.ExpressionBody is null) {
+        if (accessor.Body is null && accessor.ExpressionBody is null
+            && !(accessor.Parent?.Parent is FieldDeclarationSyntax owner && _compilation.GetDeclaredSymbol(owner) is FieldSymbol property && IsPlainAccessor(accessor, property))) {
             return null;
         }
 
@@ -498,6 +499,12 @@ public sealed partial class SemanticModel {
 
         foreach (var accessor in accessors.Accessors) {
             if (accessor.Body is null && accessor.ExpressionBody is null) {
+                // A property kept in 'field': 'get' and 'set' written alone
+                // are the plain ones, reading and writing it.
+                if (IsPlainAccessor(accessor, owner) && owner is FieldSymbol { BackingField: { } backing } property) {
+                    _bound[accessor] = PlainAccessor(accessor, AccessorFunction(accessor, owner, valueType), property, backing);
+                }
+
                 continue;
             }
 
@@ -510,6 +517,24 @@ public sealed partial class SemanticModel {
 
             Collect(binder);
         }
+    }
+
+    /// <summary>A bodiless <c>get</c> or <c>set</c> of a property kept in <c>field</c>.</summary>
+    static bool IsPlainAccessor(AccessorSyntax accessor, Symbol owner) =>
+        accessor is { Body: null, ExpressionBody: null }
+        && accessor.Keyword.Kind is SyntaxKind.GetKeyword or SyntaxKind.SetKeyword
+        && owner is FieldSymbol { BackingField: not null };
+
+    /// <summary>The body a plain accessor has: <c>return field</c>, or <c>field = newValue</c>.</summary>
+    static BoundBlock PlainAccessor(AccessorSyntax accessor, FunctionSymbol function, FieldSymbol property, FieldSymbol backing) {
+        var self = property.IsStatic || property.ContainingSymbol is not NamedTypeSymbol type
+            ? null
+            : new BoundSelfAccess(accessor, type, function.IsMutating);
+        var storage = new BoundFieldAccess(accessor, self, backing);
+        BoundStatement statement = accessor.Keyword.Kind == SyntaxKind.GetKeyword
+            ? new BoundReturn(accessor, storage)
+            : new BoundExpressionStatement(accessor, new BoundAssignment(accessor, storage, new BoundParameterAccess(accessor, function.Parameters[^1])));
+        return new BoundBlock(accessor, [], [statement]);
     }
 
     /// <summary>An accessor's function, made the first time it is asked for: binding its body and declaring it share one.</summary>

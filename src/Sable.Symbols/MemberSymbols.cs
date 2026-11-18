@@ -305,6 +305,9 @@ public sealed class FieldSymbol(
     /// <summary>For a backing field, the property it is the storage of.</summary>
     public FieldSymbol? BackedProperty { get; internal set; }
 
+    /// <summary>What it is called where a person reads it — a derived description, reflection: a backing field by its property's name.</summary>
+    public string DisplayName => BackedProperty?.Name ?? Name;
+
     /// <summary>True when a computed member declares a <c>set</c>.</summary>
     public bool HasSetter { get; internal set; }
 

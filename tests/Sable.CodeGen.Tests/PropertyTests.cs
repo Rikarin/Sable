@@ -132,4 +132,33 @@ public sealed class PropertyTests {
                 print(t.target)
                 print("kept: \(n.label)")
             """);
+
+    [Fact]
+    public void GetAndSetAloneArePlainAndDescriptionsNameTheProperty() =>
+        Prints(
+            "[ada] 5\nAccount(owner: \"ada\", limit: 5, id: 7)\nowner,limit,id\nowner true\n",
+            """
+            @derive(Debug)
+            struct Account: Reflectable {
+                var owner: String = "" {
+                    get
+                    set => field = newValue.trimmed()
+                }
+                var limit: Int = 100 {
+                    get => field
+                    set
+                }
+                var id: Int
+            }
+            """,
+            """
+                var a = Account { id: 7 }
+                a.owner = "  ada "
+                a.limit = 5
+                print("[\(a.owner)] \(a.limit)")
+                print(a.debugDescription())
+                print(Runtime.joinStrings(Reflect.fieldNames(a), ","))
+                let info = TypeInfo.of(a)
+                print("\(info.fields[0].name) \(info.fields[0].isMutable)")
+            """);
 }

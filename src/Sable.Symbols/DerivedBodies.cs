@@ -67,7 +67,7 @@ internal sealed class DerivedBodies(CoreTypes core, Func<string, string, Functio
 
     /// <summary><c>Point(x: 1, y: 2)</c>: the name, and each field labelled.</summary>
     BoundExpression? StructDebug(NamedTypeSymbol type, NamedTypeSymbol self) {
-        return Describe(type.Name, DerivedConformance.StoredFields(type).Select(f => ((string?)f.Name, f.Type, Field(new BoundSelfAccess(_at, self), f))));
+        return Describe(type.Name, DerivedConformance.StoredFields(type).Select(f => ((string?)f.DisplayName, f.Type, Field(new BoundSelfAccess(_at, self), f))));
     }
 
     // ---- Unions -----------------------------------------------------------

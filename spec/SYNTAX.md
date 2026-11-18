@@ -652,9 +652,11 @@ assignment, and its incoming value is `newValue` (or the name it gives in
 A property's accessors may say `field`: storage of the property's own, which
 only they can name. The property is then stored — laid out with the type's
 other fields, starting from its initialiser, which it must have — but read and
-written through its accessors. An accessor it does not declare, it does not
-have, as for any computed property. An extension cannot add one, since
-`field` is storage.
+written through its accessors. `get` or `set` written alone is the plain one,
+`get => field` or `set => field = newValue`; an accessor it does not declare,
+it does not have, as for any computed property. Descriptions and reflection
+show the storage under the property's name. An extension cannot add one,
+since `field` is storage.
 
 ```sable
 struct Account {
@@ -663,7 +665,7 @@ struct Account {
         set => field = newValue.trimmed()
     }
     var limit: Int = 100 {
-        get => field
+        get
         set { field = newValue < 0 ? 0 : newValue }
     }
 }

@@ -85,7 +85,9 @@ extension F32: Comparable, Hashable {
     public fn hash() -> Int {
         // The integer part and four digits of the rest: equal values hash equal.
         let scaled = F64(self) * 10000.0
-        if scaled > 4.0e18 || scaled < -4.0e18 { return 0 }
+        if scaled > 4.0e18 || scaled < -4.0e18 {
+            return 0
+        }
         return Int(scaled)
     }
 }
@@ -96,7 +98,9 @@ extension F64: Comparable, Hashable {
     public fn hash() -> Int {
         // The integer part and four digits of the rest: equal values hash equal.
         let scaled = F64(self) * 10000.0
-        if scaled > 4.0e18 || scaled < -4.0e18 { return 0 }
+        if scaled > 4.0e18 || scaled < -4.0e18 {
+            return 0
+        }
         return Int(scaled)
     }
 }
@@ -136,18 +140,42 @@ public protocol Debug {
     fn debugDescription() -> String
 }
 
-extension Int: Debug { public fn debugDescription() -> String { return "\(self)" } }
-extension I8: Debug { public fn debugDescription() -> String { return "\(self)" } }
-extension I16: Debug { public fn debugDescription() -> String { return "\(self)" } }
-extension I32: Debug { public fn debugDescription() -> String { return "\(self)" } }
-extension I64: Debug { public fn debugDescription() -> String { return "\(self)" } }
-extension U8: Debug { public fn debugDescription() -> String { return "\(self)" } }
-extension U16: Debug { public fn debugDescription() -> String { return "\(self)" } }
-extension U32: Debug { public fn debugDescription() -> String { return "\(self)" } }
-extension U64: Debug { public fn debugDescription() -> String { return "\(self)" } }
-extension UInt: Debug { public fn debugDescription() -> String { return "\(self)" } }
-extension F32: Debug { public fn debugDescription() -> String { return floatDebugText("\(self)") } }
-extension F64: Debug { public fn debugDescription() -> String { return floatDebugText("\(self)") } }
+extension Int: Debug {
+    public fn debugDescription() -> String { return "\(self)" }
+}
+extension I8: Debug {
+    public fn debugDescription() -> String { return "\(self)" }
+}
+extension I16: Debug {
+    public fn debugDescription() -> String { return "\(self)" }
+}
+extension I32: Debug {
+    public fn debugDescription() -> String { return "\(self)" }
+}
+extension I64: Debug {
+    public fn debugDescription() -> String { return "\(self)" }
+}
+extension U8: Debug {
+    public fn debugDescription() -> String { return "\(self)" }
+}
+extension U16: Debug {
+    public fn debugDescription() -> String { return "\(self)" }
+}
+extension U32: Debug {
+    public fn debugDescription() -> String { return "\(self)" }
+}
+extension U64: Debug {
+    public fn debugDescription() -> String { return "\(self)" }
+}
+extension UInt: Debug {
+    public fn debugDescription() -> String { return "\(self)" }
+}
+extension F32: Debug {
+    public fn debugDescription() -> String { return floatDebugText("\(self)") }
+}
+extension F64: Debug {
+    public fn debugDescription() -> String { return floatDebugText("\(self)") }
+}
 
 /// A float as a literal is written: '4.0', not '4', so it reads as a float.
 fn floatDebugText(_ text: String) -> String {
@@ -161,7 +189,9 @@ fn floatDebugText(_ text: String) -> String {
     }
     return text + ".0"
 }
-extension Bool: Debug { public fn debugDescription() -> String { return self ? "true" : "false" } }
+extension Bool: Debug {
+    public fn debugDescription() -> String { return self ? "true" : "false" }
+}
 
 extension Char: Debug {
     /// In single quotes, as a literal is written.

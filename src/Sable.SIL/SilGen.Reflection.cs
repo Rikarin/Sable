@@ -138,7 +138,7 @@ public sealed partial class SilGen {
                 var parts = new List<Part>();
                 foreach (var (field, fieldType) in StoredParts((NamedTypeSymbol)type)) {
                     var index = structType.FieldIndex(field.Name);
-                    parts.Add(new(field.Name, fieldType, x => (x.Emit(new StructExtractInst(value, index)), false)));
+                    parts.Add(new(field.DisplayName, fieldType, x => (x.Emit(new StructExtractInst(value, index)), false)));
                 }
 
                 arm(new(null, parts));
@@ -151,7 +151,7 @@ public sealed partial class SilGen {
                 var parts = new List<Part>();
                 for (var i = 0; i < stored.Count && i < classType.Fields.Count; i++) {
                     var index = i;
-                    parts.Add(new(stored[i].Field.Name, stored[i].Type, x => {
+                    parts.Add(new(stored[i].Field.DisplayName, stored[i].Type, x => {
                         var address = x.Emit(new RefElementAddrInst(value, index));
                         return classType.Fields[index].Type switch {
                             WeakStorageType => (x.Emit(new LoadWeakInst(address)), true),
@@ -564,10 +564,11 @@ public sealed partial class SilGen {
         SilValue Flag(bool value) => s.Emit(new IntegerLiteralInst(SilType.Bool, value ? 1 : 0));
 
         values["fields"] = Records(fieldInfo, StoredParts(type).Select(p => new Dictionary<string, Func<SilValue>> {
-            ["name"] = () => s.Text(p.Field.Name),
+            // A property kept in 'field' is the property, as its users see it.
+            ["name"] = () => s.Text(p.Field.DisplayName),
             ["typeName"] = () => s.Text(p.Type.ToDisplayString()),
-            ["isMutable"] = () => Flag(p.Field.IsMutable),
-            ["isPublic"] = () => Flag(p.Field.DeclaredAccessibility == Accessibility.Public),
+            ["isMutable"] = () => Flag(p.Field.BackedProperty is { } property ? property.HasSetter : p.Field.IsMutable),
+            ["isPublic"] = () => Flag((p.Field.BackedProperty ?? p.Field).DeclaredAccessibility == Accessibility.Public),
         }));
 
         var members = TypeSubstitution.For(type);

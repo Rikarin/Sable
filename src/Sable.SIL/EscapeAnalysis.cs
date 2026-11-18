@@ -246,9 +246,11 @@ public sealed class PromoteToStack : ISilPass {
             return true;
         }
 
+        // A slice ('array_slice', 'slice_of') keeps the buffer it views, so
+        // it is not one of these.
         return builtin.Name switch {
             "string_count" or "string_at" or "string_slice" or "string_contains" or "string_index_of" or "string_trimmed"
-                or "string_split" or "string_concat" or "string_concat_many" or "array_count" or "array_get" or "array_get_borrowed" or "array_slice" or "print_String" => true,
+                or "string_split" or "string_concat" or "string_concat_many" or "array_count" or "array_get" or "array_get_borrowed" or "print_String" => true,
             _ when builtin.Name.StartsWith("cmp_", StringComparison.Ordinal) => true,
             _ => SilBuiltins.Resolve(builtin.Name, [..builtin.Operands.Select(static o => o.Type)], builtin.Type) is { } signature
                 && signature.Consumed.IsEmpty

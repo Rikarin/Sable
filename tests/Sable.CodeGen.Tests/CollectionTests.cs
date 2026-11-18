@@ -111,7 +111,7 @@ public sealed class CollectionTests {
         );
 
     [Fact]
-    public void SlicesCopyARangeAndTrapOutsideIt() {
+    public void SlicesViewARangeAndTrapOutsideIt() {
         var execution = AssertAgree(
             Program(
                 "",

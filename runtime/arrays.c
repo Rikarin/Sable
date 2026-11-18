@@ -104,24 +104,35 @@ void *sable_array_remove_last(SableArray **slot, const SableMetadata *type) {
     return array->elements + --array->count * type->element_size;
 }
 
-// A copy of elements [from, to): a buffer of its own, each element copied.
-SableArray *sable_array_slice(const SableArray *array, int64_t from, int64_t to, const SableMetadata *type) {
-    int64_t count = sable_array_count(array);
-    if (from < 0 || to > count || from > to) {
-        trap_here("array slice out of range");
-    }
+// ---- Slices ------------------------------------------------------------
 
-    if (from == to) {
-        return NULL;
+// A slice, 'T[:]': a run of an array's elements, seen where they are — the
+// buffer, which it holds a strong reference to, where the run starts and
+// how many elements it has. The empty slice is no buffer. Taking one, and
+// reading through one, is code the compiler writes in place; only a write,
+// which may need a copy, calls here.
+typedef struct SableSlice {
+    SableArray *buffer;
+    int64_t start;
+    int64_t count;
+} SableSlice;
+
+// The slice at '*slice', made the only reference to its buffer, so that an
+// element can be changed: a shared buffer gives way to a copy of the run
+// alone, as an array's copy is of its own elements.
+void sable_slice_make_unique(SableSlice *slice, const SableMetadata *type) {
+    SableArray *buffer = slice->buffer;
+    if (buffer == NULL || buffer->header.strong == 1) {
+        return;
     }
 
     int64_t size = type->element_size;
     SableArray *copy = sable_alloc(type, (int64_t)sizeof(SableArray));
-    copy->capacity = to - from;
-    copy->count = to - from;
+    copy->capacity = slice->count;
+    copy->count = slice->count;
     copy->elements = buffer_alloc(copy->capacity * size);
     for (int64_t i = 0; i < copy->count; i++) {
-        const char *source = array->elements + (from + i) * size;
+        const char *source = buffer->elements + (slice->start + i) * size;
         if (type->copy_element != NULL) {
             type->copy_element(copy->elements + i * size, source);
         } else {
@@ -129,7 +140,18 @@ SableArray *sable_array_slice(const SableArray *array, int64_t from, int64_t to,
         }
     }
 
-    return copy;
+    sable_release(buffer);
+    slice->buffer = copy;
+    slice->start = 0;
+}
+
+void *sable_slice_mutable_element(SableSlice *slice, const SableMetadata *type, int64_t index) {
+    if (index < 0 || index >= slice->count) {
+        trap_here("slice index out of range");
+    }
+
+    sable_slice_make_unique(slice, type);
+    return slice->buffer->elements + (slice->start + index) * type->element_size;
 }
 
 static void copy_string_element(void *destination, const void *source) {

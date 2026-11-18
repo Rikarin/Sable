@@ -250,6 +250,7 @@ public sealed partial class LlvmEmitter {
         static string DisplayName(SilType type) =>
             type switch {
                 ArrayType array => $"[{DisplayName(array.Element)}]",
+                SliceType slice => $"[{DisplayName(slice.Element)}:]",
                 EnumType enumType when OptionalPayload(enumType) is { } payload => DisplayName(payload) + "?",
                 StructType { Name: var name } when name.StartsWith("any$", StringComparison.Ordinal) => "any " + name[4..],
                 TupleType tuple => $"({string.Join(", ", tuple.Elements.Select(DisplayName))})",
@@ -398,6 +399,10 @@ public sealed partial class LlvmEmitter {
 
                 case TupleType tuple:
                     return Aggregate(DisplayName(tuple), tuple.Elements.Select(static (e, i) => (i.ToString(System.Globalization.CultureInfo.InvariantCulture), e)), Size(tuple), live: false);
+
+                // A slice: the buffer it views, where its run starts, and how long it is.
+                case SliceType slice:
+                    return Aggregate(DisplayName(slice), [("buffer", slice.Parts.Elements[0]), ("start", SilType.Int), ("count", SilType.Int)], Size(slice), live: false);
 
                 case StructType structType when structType.Name.StartsWith("any$", StringComparison.Ordinal):
                     return Typedef(DisplayName(structType), Aggregate(DisplayName(structType) + "$existential", structType.Fields, Size(structType), live: false));

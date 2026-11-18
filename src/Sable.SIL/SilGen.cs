@@ -5156,6 +5156,10 @@ public sealed partial class SilGen {
                     : Missing(index, $"indexing '{index.Receiver.Type.ToDisplayString()}'");
             }
 
+            if (index.Indices is [var rangeIndex] && Core.IsRange(Sub(rangeIndex.Type)) && !IsInlineArray(index.Receiver)) {
+                return RangeRead(index, rangeIndex);
+            }
+
             if (IsInlineArray(index.Receiver)) {
                 return InlineRead(index);
             }
@@ -5193,6 +5197,48 @@ public sealed partial class SilGen {
             var element = Emit(new BuiltinInst("array_get", arrayType.Element, array, position));
             End(array);
             return element;
+        }
+
+        /// <summary>
+        ///     'xs[1..<3]': the elements in the range, as a slice — copied,
+        ///     for now, as 'slice(from:to:)' does, trapping where the range
+        ///     is not within the array. A range written in place may leave out
+        ///     a bound: the start, or the array's count.
+        /// </summary>
+        SilValue? RangeRead(BoundIndexAccess index, BoundExpression rangeIndex) {
+            if (Borrow(index.Receiver) is not { Type: ArrayType arrayType } array) {
+                return null;
+            }
+
+            SilValue? from, to;
+            bool inclusive;
+            if (rangeIndex is BoundRange written) {
+                from = written.Lower is { } lower ? Expression(lower) : Emit(new IntegerLiteralInst(SilType.Int, 0));
+                to = written.Upper is { } upper ? Expression(upper) : Emit(new BuiltinInst("array_count", SilType.Int, array));
+                inclusive = written.IsInclusive && written.Upper is not null;
+            } else {
+                if (Expression(rangeIndex) is not { Type: StructType rangeType } range) {
+                    End(array);
+                    return null;
+                }
+
+                from = Emit(new StructExtractInst(range, rangeType.FieldIndex("lowerBound")));
+                to = Emit(new StructExtractInst(range, rangeType.FieldIndex("upperBound")));
+                inclusive = ReferenceEquals(((NamedTypeSymbol)Sub(rangeIndex.Type)).OriginalDefinition, Core.ClosedRange);
+            }
+
+            if (from is null || to is null) {
+                End(array);
+                return null;
+            }
+
+            if (inclusive) {
+                to = Emit(new BuiltinInst("add_Int", SilType.Int, to, Emit(new IntegerLiteralInst(SilType.Int, 1))));
+            }
+
+            var slice = Emit(new BuiltinInst("array_slice", arrayType, array, from, to));
+            End(array);
+            return slice;
         }
 
         /// <summary>A member reached through '?.': the receiver is optional, and the member is not the optional's own.</summary>

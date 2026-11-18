@@ -3708,6 +3708,12 @@ public sealed partial class Binder {
         ImmutableArray<BoundExpression> indices
     ) {
         if (receiver.Type is ArrayTypeSymbol array) {
+            // 'xs[1..<3]', 'xs[2...]', 'xs[..<2]': the elements in the range,
+            // as a slice (SYNTAX.md §11).
+            if (indices is [{ Type: NamedTypeSymbol { TypeArguments: [var bound] } range }] && Core.IsRange(range) && bound.Equals(Core.Int)) {
+                return new BoundIndexAccess(syntax, new ArrayTypeSymbol(array.ElementType, ArrayKind.Slice), receiver, indices);
+            }
+
             indices = CheckIndices(indices, Core.Int, syntax);
             return new BoundIndexAccess(syntax, array.ElementType, receiver, indices);
         }
@@ -4666,6 +4672,17 @@ public sealed partial class Binder {
             return new BoundError(syntax, target, value);
         }
 
+        // 'xs[1..<3]' is the elements in the range, read out: there is no
+        // place in the array that is all of them to store to.
+        if (target is BoundIndexAccess { Subscript: null, Indices: [var rangeIndex] } && Core.IsRange(rangeIndex.Type)) {
+            _diagnostics.Error(
+                ErrorCode.ERR_NotAssignable,
+                syntax.Left.Span,
+                "a range of an array's elements is read as a slice, and cannot be stored to; store each element"
+            );
+            return new BoundError(syntax, target, value);
+        }
+
         if (!target.HasError && !IsAssignableThroughChain(target) && !InitialisesLetField(target)) {
             _diagnostics.Error(
                 ErrorCode.ERR_NotAssignable,
@@ -5411,6 +5428,16 @@ public sealed partial class Binder {
 
         if (conversion == ConversionKind.Identity) {
             return expression;
+        }
+
+        // An array as a slice of it: the same value, with the slice's type.
+        if (conversion == ConversionKind.ArrayView) {
+            var viewed = new BoundConversion(syntax, target, expression, ConversionKind.Identity);
+            if (syntax == expression.Syntax) {
+                _bound[syntax] = viewed;
+            }
+
+            return viewed;
         }
 
         // A 'T!' where a T is wanted: unwrapped, then whatever takes it on.

@@ -186,8 +186,9 @@ public sealed class TypeSubstitution {
                 return true;
             }
 
+            // A slice takes any kind of array, so only the elements say what it is of.
             case ArrayTypeSymbol array when argument is ArrayTypeSymbol otherArray:
-                return array.ArrayKind == otherArray.ArrayKind
+                return (array.ArrayKind == otherArray.ArrayKind || array.ArrayKind == ArrayKind.Slice)
                     && Unify(array.ElementType, otherArray.ElementType, inferrable, into);
 
             case OptionalTypeSymbol optional when argument is OptionalTypeSymbol otherOptional:

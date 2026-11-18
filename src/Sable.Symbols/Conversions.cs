@@ -47,6 +47,13 @@ internal sealed class Conversions(CoreTypes core) {
             return ConversionKind.Explicit;
         }
 
+        // Every kind of array can be viewed as a slice of its elements.
+        if (source is ArrayTypeSymbol { ArrayKind: not ArrayKind.Slice } array
+            && target is ArrayTypeSymbol { ArrayKind: ArrayKind.Slice } slice
+            && array.ElementType.Equals(slice.ElementType)) {
+            return ConversionKind.ArrayView;
+        }
+
         // 'Never' is the bottom type: an expression that does not return fits
         // anywhere.
         if (source.Equals(core.Never)) {
@@ -219,6 +226,7 @@ internal sealed class Conversions(CoreTypes core) {
         kind switch {
             ConversionKind.Identity => 0,
             ConversionKind.LiteralTyping => 1,
+            ConversionKind.ArrayView => 1,
             ConversionKind.Upcast => 2,
             ConversionKind.OptionalWrap => 3,
             ConversionKind.UnionInjection => 4,

@@ -329,6 +329,13 @@ public enum ConversionKind {
     ///     is wanted — a <c>ref</c> result, a reference parameter.
     /// </summary>
     Reference,
+
+    /// <summary>
+    ///     An array of any kind as a slice, <c>T[:]</c>: the same elements
+    ///     (SYNTAX.md §11). It ranks overloads; the bound tree records it as
+    ///     <see cref="Identity" />, since every kind is stored alike.
+    /// </summary>
+    ArrayView,
 }
 
 public sealed class BoundConversion(

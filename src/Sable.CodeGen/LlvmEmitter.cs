@@ -1852,7 +1852,7 @@ public sealed partial class LlvmEmitter {
                     Line($"{Result()} = xor i1 {operands[0]}, true");
                     return;
 
-                case "add_F64" or "sub_F64" or "mul_F64" or "div_F64":
+                case "add_F64" or "sub_F64" or "mul_F64" or "div_F64" or "rem_F64":
                     Line($"{Result()} = f{builtin.Name[..3]} double {operands[0]}, {operands[1]}");
                     return;
 
@@ -2493,7 +2493,7 @@ public sealed partial class LlvmEmitter {
             var result = Result();
             if (type == SilType.F32) {
                 switch (op) {
-                    case "add" or "sub" or "mul" or "div":
+                    case "add" or "sub" or "mul" or "div" or "rem":
                         Line($"{result} = f{op} float {operands[0]}, {operands[1]}");
                         return true;
                     case "neg":

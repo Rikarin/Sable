@@ -3949,6 +3949,25 @@ public sealed partial class SilGen {
         /// </summary>
         SilValue? UserBinary(BoundBinaryOperator binary, FunctionSymbol method) {
             if (OperatorWitness(method, binary.Left.Type) is not { } callee) {
+                // An enum that says it is Equatable and writes no '==' of
+                // its own is compared by case, as one that says nothing is.
+                if (method.Name == "==" && binary.OperatorKind is BinaryOperatorKind.Equal or BinaryOperatorKind.NotEqual or BinaryOperatorKind.UserDefined
+                    && Sub(binary.Left.Type) is NamedTypeSymbol { TypeKind: TypeKind.Enum } && LowerType(binary.Left.Type) is { } enumType && IsPayloadFree(enumType)) {
+                    if (Borrow(binary.Left) is not { } left) {
+                        return null;
+                    }
+
+                    if (Borrow(binary.Right) is not { } right) {
+                        End(left);
+                        return null;
+                    }
+
+                    var compared = SameCase(left, right, binary.OperatorKind != BinaryOperatorKind.NotEqual);
+                    End(right);
+                    End(left);
+                    return compared;
+                }
+
                 return Missing(binary, $"'{method.Name}' for '{Sub(binary.Left.Type).ToDisplayString()}'");
             }
 
@@ -4357,6 +4376,16 @@ public sealed partial class SilGen {
                     : Emit(new BuiltinInst("not_Bool", SilType.Bool, equal));
             }
 
+            // An enum with no payloads and no '==' of its own is equal to
+            // another when the two are the same case.
+            if (binary.OperatorKind is BinaryOperatorKind.Equal or BinaryOperatorKind.NotEqual
+                && IsPayloadFree(left.Type) && right.Type == left.Type) {
+                var compared = SameCase(left, right, binary.OperatorKind == BinaryOperatorKind.Equal);
+                End(right);
+                End(left);
+                return compared;
+            }
+
             var op = binary.OperatorKind switch {
                 BinaryOperatorKind.Add when left.Type == SilType.String => "string_concat",
                 BinaryOperatorKind.Add => "add",
@@ -4389,6 +4418,36 @@ public sealed partial class SilGen {
             End(right);
             End(left);
             return result;
+        }
+
+        static bool IsPayloadFree(SilType type) =>
+            type is EnumType { Cases.Count: > 0 } enumType && enumType.Cases.All(static c => c.Payload is null);
+
+        /// <summary>Whether two payload-free enum values are the same case (or, with <paramref name="equal" /> false, different ones).</summary>
+        SilValue SameCase(SilValue left, SilValue right, bool equal) {
+            var enumType = (EnumType)left.Type;
+            var first = CaseNumber(left, enumType);
+            var second = CaseNumber(right, enumType);
+            return Emit(new BuiltinInst(equal ? "cmp_eq_Int" : "cmp_ne_Int", SilType.Bool, first, second));
+        }
+
+        /// <summary>Which case a payload-free enum value is, as an Int: one block per case, joined.</summary>
+        SilValue CaseNumber(SilValue value, EnumType type) {
+            var joined = function.AddBlock();
+            var number = joined.AddArgument(SilType.Int);
+            var targets = new List<(int, SilBlock)>();
+            for (var i = 0; i < type.Cases.Count; i++) {
+                targets.Add((i, function.AddBlock()));
+            }
+
+            Jump(new SwitchEnumInst(value, targets, null));
+            foreach (var (index, block) in targets) {
+                _current = block;
+                Branch(joined, Emit(new IntegerLiteralInst(SilType.Int, index)));
+            }
+
+            _current = joined;
+            return number;
         }
 
         static bool IsNone(BoundExpression expression) =>

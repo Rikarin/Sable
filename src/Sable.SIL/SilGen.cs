@@ -2529,6 +2529,12 @@ public sealed partial class SilGen {
         if (implementation is not null && !IsGeneric(implementation) && _names.TryGetValue(implementation, out var implementationName)) {
             target = implementationName;
             targetType = _module.Find(target)?.Type ?? SignatureOf(implementation, at, TypeSubstitution.Empty);
+        } else if (implementation is { ContainingSymbol: NamedTypeSymbol, TypeParameters.IsEmpty: true }
+                   && ConstructedOwner(concrete, implementation) is { } owner
+                   && Instance(implementation, TypeSubstitution.For(owner), at) is { } generic) {
+            // A method of a generic type, 'G<Int>' boxed as 'any P': its
+            // instance for the type arguments the boxed value has.
+            (target, targetType) = generic;
         } else if ((implementation is { ContainingSymbol: ExtensionSymbol }
                     || (implementation is { FunctionKind: FunctionKind.Accessor } && Owner(implementation) is { TypeKind: TypeKind.Protocol })
                         ? implementation
@@ -2609,6 +2615,21 @@ public sealed partial class SilGen {
 
         _module.Add(thunk);
         return (name, code);
+    }
+
+    /// <summary>
+    ///     The type, among a concrete type and its superclasses, that declares
+    ///     a method — with the type arguments the concrete type gives it.
+    /// </summary>
+    static NamedTypeSymbol? ConstructedOwner(NamedTypeSymbol concrete, FunctionSymbol method) {
+        var declaring = Owner(method)?.OriginalDefinition;
+        for (var type = (NamedTypeSymbol?)concrete; type is not null; type = SuperclassOf(type)) {
+            if (ReferenceEquals(type.OriginalDefinition, declaring)) {
+                return type;
+            }
+        }
+
+        return null;
     }
 
     /// <summary>

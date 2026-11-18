@@ -2076,6 +2076,50 @@ public sealed partial class SilGen {
     }
 
     /// <summary>
+    ///     What <c>d.shout</c> calls with <c>d: any Shout</c>: a closure whose
+    ///     context is a box holding the existential, which calls the
+    ///     requirement's slot of its witness table with its arguments and the
+    ///     existential's box.
+    /// </summary>
+    internal string ExistentialRequirementThunk(StructType layout, int index, ThickFunctionType closure) {
+        var thunkName = $"{layout.Name}${layout.Fields[index].Name}$bound";
+        if (_module.Find(thunkName) is not null) {
+            return thunkName;
+        }
+
+        var witness = (ThickFunctionType)layout.Fields[index].Type;
+        var type = witness.Signature;
+        var thunk = new SilFunction(thunkName, closure.Implementation);
+        var entry = thunk.AddBlock();
+        var arguments = closure.Signature.Parameters.Select(p => (SilValue)entry.AddArgument(p)).ToList();
+        var context = entry.AddArgument(SilType.Object);
+        var holder = entry.Append(new UncheckedRefCastInst(context, BoxType(layout)));
+        var existential = entry.Append(new LoadBorrowInst(entry.Append(new RefElementAddrInst(holder, 0))));
+        var box = entry.Append(new StructExtractInst(existential, 0));
+        var callee = entry.Append(new StructExtractInst(existential, index));
+        SilValue[] all = [..arguments, box];
+
+        if (type.Thrown is null) {
+            var result = entry.Append(new ApplyInst(callee, type.Result, all));
+            entry.Append(new EndBorrowInst(existential));
+            entry.Append(new ReturnInst(type.Result == SilType.Unit ? null : result));
+        } else {
+            var normal = thunk.AddBlock();
+            var result = type.Result == SilType.Unit ? null : normal.AddArgument(type.Result);
+            var failed = thunk.AddBlock();
+            var error = failed.AddArgument(type.Thrown);
+            entry.Append(new TryApplyInst(callee, type.Result, all, normal, failed));
+            normal.Append(new EndBorrowInst(existential));
+            normal.Append(new ReturnInst(result));
+            failed.Append(new EndBorrowInst(existential));
+            failed.Append(new ThrowInst(error));
+        }
+
+        _module.Add(thunk);
+        return thunkName;
+    }
+
+    /// <summary>
     ///     What <c>s.get</c> calls: a closure whose context is a box holding
     ///     the receiver, which it passes as <c>self</c> to the method, through
     ///     the vtable when a subclass may override it.
@@ -9416,23 +9460,27 @@ public sealed partial class SilGen {
             }
 
             // A protocol's requirement, named on an existential: its witness
-            // is only known at run time, and the existential already holds
-            // it as a closure over the value — its slot — so the value is a
-            // copy of that closure, which keeps the box alive.
+            // is only known at run time, from the existential's witness
+            // table. The closure's context holds a copy of the existential —
+            // its box and its table — and calls the requirement's slot with
+            // the box, as a call through the existential would.
             if (OwnerOf(callee) is { TypeKind: TypeKind.Protocol } && Sub(receiver.Type) is ExistentialTypeSymbol) {
                 var layout = LowerType(receiver.Type) as StructType;
                 var index = layout?.FieldIndex(SlotName(callee)) ?? -1;
-                if (layout is null || index < 0 || layout.Fields[index].Type != thick) {
+                if (layout is null || index < 0 || layout.Fields[index].Type is not ThickFunctionType witness
+                    || witness.Signature.Parameters[^1] is AddressType
+                    || new FunctionType([..witness.Signature.Parameters.SkipLast(1)], witness.Signature.Result, witness.Signature.Thrown) != thick.Signature) {
                     return Missing(reference, $"the requirement '{callee.Name}' of '{Sub(receiver.Type).ToDisplayString()}' as a value");
                 }
 
-                if (Borrow(receiver) is not { } existential) {
+                if (Expression(receiver) is not { } existential) {
                     return null;
                 }
 
-                var slot = Emit(new CopyValueInst(Emit(new StructExtractInst(existential, index))));
-                End(existential);
-                return slot;
+                var requirement = generator.ExistentialRequirementThunk(layout, index, thick);
+                var holder = Emit(new AllocRefInst(generator.BoxType(layout)));
+                Emit(new StoreInst(Owned(existential), Emit(new RefElementAddrInst(holder, 0)), StoreKind.Init));
+                return Emit(new PartialApplyInst(Emit(new FunctionRefInst(requirement, thick.Implementation)), holder, thick));
             }
 
             // A protocol's requirement, named on a type parameter: the

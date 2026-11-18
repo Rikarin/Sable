@@ -319,7 +319,7 @@ public sealed class ExpressionFormTests {
         // for the value in it; the closure keeps the value alive after the
         // existential is gone.
         Prints(
-            "woof rex\nmeow tom!\n2\nwoof rex\n",
+            "woof rex\nmeow tom!\n2\nwoof rex\n3\nfailed\n",
             """
             protocol Shout {
                 fn shout() -> String
@@ -342,6 +342,20 @@ public sealed class ExpressionFormTests {
             fn louder(_ s: any Shout) -> (String) -> String {
                 return s.shout
             }
+
+            enum Bad { Odd }
+
+            protocol Halve {
+                fn half() throws(Bad) -> Int
+            }
+
+            struct Number: Halve {
+                var n: Int
+                fn half() throws(Bad) -> Int {
+                    if n % 2 == 1 { throw Bad.Odd }
+                    return n / 2
+                }
+            }
             """,
             """
                 let d: any Shout = Dog(name: "rex")
@@ -356,6 +370,16 @@ public sealed class ExpressionFormTests {
                 }
                 print(all.count)
                 print(all[0]())
+                let six: any Halve = Number(n: 6)
+                let seven: any Halve = Number(n: 7)
+                let a = six.half
+                let b = seven.half
+                do {
+                    print(try a())
+                    print(try b())
+                } catch {
+                    print("failed")
+                }
             """
         );
 }

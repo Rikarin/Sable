@@ -192,6 +192,9 @@ public enum ErrorCode {
     ERR_ActorStateFromOutside = 3206,
     ERR_NotSendable = 3207,
 
+    // A type declared ': Sendable' that holds something that is not (S3410).
+    ERR_DeclaredSendableIsNot = 3410,
+
     // ---- Compile-time evaluation (S3220-S3222): 'const', 'const fn' and
     // 'comptime' (SYNTAX.md §21).
     ERR_NotConstant = 3220,

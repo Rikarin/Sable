@@ -1157,7 +1157,7 @@ the enclosing scope.
 @noncopy struct Handle { }          // move-only
 @reflectable class Model { }        // full runtime reflection
 @immutable class Config { }         // deeply immutable, therefore Sendable
-@immortal static let shared = ...   // never released
+@immortal static let shared = Registry()  // never released
 
 weak var delegate: Delegate?
 unowned let parent: Node

@@ -176,7 +176,11 @@ Copy Roslyn's **red/green tree** design exactly:
 
 ### 0.5 Exit criteria
 
-- [ ] Every construct in `SYNTAX.md` parses
+- [x] Every construct in `SYNTAX.md` parses — `SyntaxSpecTests` parses each of
+      its 59 `sable` blocks as a file, a function body, or piece by piece
+      (listings of types, patterns and literals item by item); a block that is
+      deliberately not Sable would be marked `<!-- not-sable: why -->` in the
+      spec, and none is
 - [ ] Round-trip invariant holds on a 2,000-file corpus — it holds on all
       the corpus there is: `RoundTripCorpusTests` takes every `.sb` file
       (140) and every `sable` block in the Markdown (418), broken ones

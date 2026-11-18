@@ -179,6 +179,19 @@ public sealed class NamedTypeSymbol : TypeSymbol {
     public bool IsInlineLayout { get; internal set; }
 
     /// <summary>
+    ///     <c>@packed</c> (SYNTAX.md §22): a struct whose fields follow one
+    ///     another with no padding, aligned to a byte unless <c>@align</c>
+    ///     says otherwise.
+    /// </summary>
+    public bool IsPacked { get; internal set; }
+
+    /// <summary>
+    ///     <c>@align(n)</c>: the least alignment of a value of the struct, a
+    ///     power of two its size is rounded up to; 0 when none is written.
+    /// </summary>
+    public int Alignment { get; internal set; }
+
+    /// <summary>
     ///     <c>@reflectable</c> (docs/06 §6.3): the type conforms to
     ///     <c>Reflectable</c>, so <c>TypeInfo.of</c> describes it.
     /// </summary>

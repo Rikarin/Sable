@@ -629,6 +629,8 @@ public sealed partial class Compilation {
                 && attributes.Any(static a => a.Name.ToString().Trim() == "inline_layout"),
             IsReflectable = attributes.Any(static a => a.Name.ToString().Trim() == "reflectable"),
             IsFlags = typeKind is TypeKind.Enum && attributes.Any(static a => a.Name.ToString().Trim() == "flags"),
+            IsPacked = typeKind is TypeKind.Struct && attributes.Any(static a => a.Name.ToString().Trim() == "packed"),
+            Alignment = typeKind is TypeKind.Struct ? AlignmentOf(attributes) : 0,
         };
 
         // A protocol has no values to look at, and so nothing to describe.

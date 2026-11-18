@@ -1643,7 +1643,11 @@ public sealed partial class SilGen {
                 return LowerInline(named);
 
             case NamedTypeSymbol { IsGenericDefinition: false, TypeKind: TypeKind.Struct } named: {
-                var structType = Begin(named, new StructType(TypeName(named)) { IsNoncopyable = named.OriginalDefinition.IsNoncopyable });
+                var structType = Begin(named, new StructType(TypeName(named)) {
+                    IsNoncopyable = named.OriginalDefinition.IsNoncopyable,
+                    IsPacked = named.OriginalDefinition.IsPacked,
+                    Alignment = named.OriginalDefinition.Alignment,
+                });
                 var members = TypeSubstitution.For(named);
                 if (StoredFields(named.OriginalDefinition).Any(static f => f.ReferenceKind != ReferenceKind.Strong)) {
                     return null; // weak and unowned fields of structs wait for value witnesses of their own
@@ -1774,7 +1778,7 @@ public sealed partial class SilGen {
     ///     relative references to inline structs. Nothing with a pointer in it.
     /// </summary>
     StructType? LowerInline(NamedTypeSymbol named) {
-        var structType = Begin(named, new StructType(TypeName(named)) { IsInline = true });
+        var structType = Begin(named, new StructType(TypeName(named)) { IsInline = true, Alignment = named.OriginalDefinition.Alignment });
         var members = TypeSubstitution.For(named);
         foreach (var field in StoredFields(named.OriginalDefinition)) {
             if (InlineField(members.Apply(field.Type)) is not { } fieldType) {

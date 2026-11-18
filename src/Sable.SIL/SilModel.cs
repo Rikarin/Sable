@@ -246,6 +246,19 @@ public sealed class StructType(string name) : NominalType(name) {
     /// </summary>
     public bool IsInline { get; set; }
 
+    /// <summary>
+    ///     <c>@packed</c>: its fields one after another, with no padding
+    ///     between them, and the struct aligned to a byte (or to
+    ///     <see cref="Alignment" />, when that is given too).
+    /// </summary>
+    public bool IsPacked { get; set; }
+
+    /// <summary>
+    ///     <c>@align(n)</c>: the struct is aligned to at least n bytes, and
+    ///     its size is a multiple of that; 0 when it is aligned as its fields are.
+    /// </summary>
+    public int Alignment { get; set; }
+
     public override bool IsTrivial => !IsInline && !IsNoncopyable && Fields.All(static f => f.Type.IsTrivial);
 }
 
@@ -323,9 +336,15 @@ public sealed class InlineLayout {
         var fixedSlots = new List<Slot>();
         var variableSlots = new List<Slot>();
         var offset = 0;
+        var alignment = Math.Max(1, type.Alignment);
         for (var i = 0; i < type.Fields.Count; i++) {
             var (name, fieldType) = type.Fields[i];
             if (FixedSizeOf(fieldType) is { } size) {
+                // An '@align(n)' struct, nested, starts at a multiple of n
+                // from the start of the value, after zero bytes.
+                var fieldAlignment = fieldType is StructType { IsInline: true } nested ? Of(nested).Alignment : 1;
+                alignment = Math.Max(alignment, fieldAlignment);
+                offset = (offset + fieldAlignment - 1) / fieldAlignment * fieldAlignment;
                 fixedSlots.Add(Describe(i, name, fieldType, offset));
                 offset += size;
             } else {
@@ -333,6 +352,10 @@ public sealed class InlineLayout {
             }
         }
 
+        // The fixed fields are rounded up to the alignment, so a value of a
+        // fixed size is a multiple of it: a record format's fixed stride.
+        Alignment = alignment;
+        offset = (offset + alignment - 1) / alignment * alignment;
         Prefix = offset;
         Slots = [..fixedSlots, ..variableSlots];
         FixedSize = variableSlots.Count == 0 ? offset : null;
@@ -343,7 +366,14 @@ public sealed class InlineLayout {
     /// <summary>The fields in the order they are stored: fixed ones first.</summary>
     public ImmutableArray<Slot> Slots { get; }
 
-    /// <summary>The bytes the fixed-size fields take, at the start.</summary>
+    /// <summary>
+    ///     What offsets from the start of a value its fixed part is laid out
+    ///     at multiples of: its own '@align(n)', or a nested struct's; 1 when
+    ///     neither says, and the fields are packed.
+    /// </summary>
+    public int Alignment { get; }
+
+    /// <summary>The bytes the fixed-size fields take, at the start, padding to the alignment included.</summary>
     public int Prefix { get; }
 
     /// <summary>The size of every value of it, when that does not vary.</summary>

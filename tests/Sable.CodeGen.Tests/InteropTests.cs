@@ -271,6 +271,91 @@ public sealed class InteropTests {
         }
     }
 
+    const string LayoutC = """
+                           #include <stdint.h>
+                           #include <stddef.h>
+                           typedef struct __attribute__((packed)) { uint8_t tag; uint32_t length; uint16_t flags; } Header;
+                           typedef struct { _Alignas(16) float x; float y; } Vec;
+                           typedef struct { uint8_t a; Vec v; Header h; } Holder;
+                           Header sable_header(Header h);
+                           Header c_header(Header h) { Header r = sable_header(h); r.length += 1000; return r; }
+                           Vec c_vec(Vec v) { Vec r = { v.y, v.x + 1 }; return r; }
+                           Holder c_holder(Holder h) { h.a += 1; h.v.y += 1; h.h.length += 2; return h; }
+                           int64_t c_layout(void) {
+                               return (int64_t)(sizeof(Header) * 1000000 + sizeof(Vec) * 10000 + sizeof(Holder) * 100 + offsetof(Holder, h));
+                           }
+                           """;
+
+    const string LayoutProgram = """
+                                 module Main
+
+                                 @packed
+                                 struct Header {
+                                     var tag: U8
+                                     var length: U32
+                                     var flags: U16
+                                 }
+
+                                 @align(16)
+                                 struct Vec {
+                                     var x: F32
+                                     var y: F32
+                                 }
+
+                                 struct Holder {
+                                     var a: U8
+                                     var v: Vec
+                                     var h: Header
+                                 }
+
+                                 @export("c", "sable_header")
+                                 fn header(_ h: Header) -> Header {
+                                     return Header(tag: h.tag + 1, length: h.length * 2, flags: h.flags + 3)
+                                 }
+
+                                 @extern("c")
+                                 fn c_header(_ h: Header) -> Header
+
+                                 @extern("c")
+                                 fn c_vec(_ v: Vec) -> Vec
+
+                                 @extern("c")
+                                 fn c_holder(_ h: Holder) -> Holder
+
+                                 @extern("c")
+                                 fn c_layout() -> Int
+
+                                 fn main() {
+                                     let h = c_header(Header(tag: 7, length: 21, flags: 40000))
+                                     print("\(h.tag) \(h.length) \(h.flags)")
+                                     let v = c_vec(Vec(x: 1.5, y: 2.5))
+                                     print("\(v.x) \(v.y)")
+                                     let held = c_holder(Holder(a: 1, v: Vec(x: 3, y: 4), h: Header(tag: 9, length: 70000, flags: 1)))
+                                     print("\(held.a) \(held.v.x) \(held.v.y) \(held.h.tag) \(held.h.length) \(held.h.flags)")
+                                     print(c_layout())
+                                 }
+                                 """;
+
+    /// <summary>
+    ///     '@packed' and '@align(16)' lay a struct out as C's packed and
+    ///     '_Alignas(16)' ones are, and C passes them as it would its own: a
+    ///     packed struct with misaligned fields in memory on x86-64, an
+    ///     over-aligned one in an even pair of registers on arm64, a struct
+    ///     holding both, padded, through memory.
+    /// </summary>
+    [Fact]
+    public void PackedAndAlignedStructsAreCs() {
+        if (!Programs.CanBuild) {
+            return;
+        }
+
+        const string output = "8 1042 40003\n2.5 2.5\n2 3.0 5.0 9 70002 1\n7164832\n";
+        Assert.Equal(output, BuildWithC(LayoutProgram, LayoutC));
+        if (NativeTarget.Host.Arch != "x86_64" && OperatingSystem.IsMacOS() && Rosetta()) {
+            Assert.Equal(output, BuildWithC(LayoutProgram, LayoutC, NativeTarget.Of("x86_64-apple-darwin")));
+        }
+    }
+
     /// <summary>The declarations each target's C sees, as clang declares the same C functions.</summary>
     [Theory]
     [InlineData("x86_64-unknown-linux-gnu", "declare i64 @\"c_five\"(i64, i64, i64, i64, i64, ptr byval({ i64, i64 }) align 8, i64)")]

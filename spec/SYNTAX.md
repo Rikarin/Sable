@@ -1262,6 +1262,17 @@ an optimised one; never both.
 | `@MainActor` | any | Main-executor isolation |
 | `@frozen` | struct, union | ABI-stable layout; no new cases/fields ever |
 
+`@packed` lays a struct's fields one after another with no padding, and
+aligns the struct to a byte. `@align(n)`, a power of two up to 16 (the
+alignment of every block the runtime allocates; more is S3510), aligns the
+struct to at least `n` and rounds its size up to a multiple of it; with
+`@packed`, the struct is aligned to exactly `n`. Both are C's layouts —
+`__attribute__((packed))` and `_Alignas(n)` — and a struct passed to or from
+C is passed as C passes its own. A field of a packed struct passed `inout`
+is copied to an aligned place and back. On an `@inline_layout` struct,
+`@align(n)` puts the struct at a multiple of `n` from the start of a value
+that holds it, and rounds its fixed part up to one.
+
 User-defined attributes are declared as structs conforming to `Attribute` and
 are readable through reflection on `@reflectable` types. (Not built yet: an
 attribute that is not in this table, or `@derive`, `@indirect`, `@allow` and

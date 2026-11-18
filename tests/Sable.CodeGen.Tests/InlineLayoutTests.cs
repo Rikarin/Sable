@@ -84,6 +84,54 @@ public sealed class InlineLayoutTests {
             ).Stdout
         );
 
+    /// <summary>
+    ///     '@align(n)' on an inline struct rounds its fixed part up to a
+    ///     multiple of n, and puts it at a multiple of n in one that holds it,
+    ///     with zero bytes between: a record format's fixed stride.
+    /// </summary>
+    [Fact]
+    public void AlignPadsTheFixedPart() =>
+        Assert.Equal(
+            "8\n33\n1 0 0 0 0 0 0 0 2 0 0 0 0 0 0 0\n3 0 1 7 9\n5 9 7 1 2\n",
+            AssertAgree(
+                Program(
+                    """
+                    @inline_layout
+                    @align(8)
+                    struct Stamp {
+                        var kind: U8
+                        var code: U16
+                    }
+
+                    @inline_layout
+                    struct Entry {
+                        var flag: U8
+                        var stamp: Stamp
+                        var count: U8
+                        var stamps: Stamp[..4]
+                    }
+                    """,
+                    """
+                        print(Bytes.of(Stamp { kind: 1, code: 2 }).count)
+                        var e = Entry { flag: 1, stamp: Stamp { kind: 2, code: 0 }, count: 3, stamps: [] }
+                        e.stamps.append(Stamp { kind: 7, code: 9 })
+                        let bytes = Bytes.of(e)
+                        print(bytes.count)
+                        var line = ""
+                        for i in 0..<16 {
+                            line = line + (i == 0 ? "" : " ") + "\(bytes[i])"
+                        }
+                        print(line)
+                        print("\(bytes[16]) \(bytes[17]) \(bytes[24]) \(bytes[25]) \(bytes[26])")
+                        match Entry.fromBytes(bytes) {
+                            case .Ok(let copy) => print("\(copy.count + 2) \(copy.stamps[0].code) \(copy.stamps[0].kind) \(copy.flag) \(copy.stamp.kind)")
+                            case .Invalid(let why) => print(why)
+                        }
+                    """
+                )
+            ).Stdout
+        );
+
     [Fact]
     public void ValuesAreCopiedOnWrite() =>
         Assert.Equal(

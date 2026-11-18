@@ -248,6 +248,22 @@ public sealed partial class Compilation {
         }
     }
 
+    /// <summary>The most a struct may be aligned to: what every block the runtime allocates is aligned to.</summary>
+    internal const int MaximumAlignment = 16;
+
+    /// <summary>The alignment an '@align(n)' among a type's attributes gives it, when n is one it may have; otherwise 0.</summary>
+    static int AlignmentOf(SyntaxList<AttributeSyntax> attributes) {
+        foreach (var attribute in attributes) {
+            if (AttributeName(attribute) == "align"
+                && attribute.ArgumentList?.Arguments.ToList() is [{ Expression: LiteralExpressionSyntax { Token.Value: ulong alignment } }]
+                && alignment is > 0 and <= MaximumAlignment && (alignment & (alignment - 1)) == 0) {
+                return (int)alignment;
+            }
+        }
+
+        return 0;
+    }
+
     /// <summary>The arguments of the attributes whose meaning depends on them, which are read later.</summary>
     void CheckAttributeArguments(AttributeSyntax attribute, string name) {
         var arguments = attribute.ArgumentList?.Arguments.ToList() ?? [];
@@ -274,6 +290,16 @@ public sealed partial class Compilation {
 
             case "align" when arguments is not [{ Expression: LiteralExpressionSyntax { Token.Value: ulong alignment } }] || alignment == 0 || (alignment & (alignment - 1)) != 0:
                 Malformed("'@align' takes a power of two: '@align(16)'");
+                return;
+
+            // The runtime's blocks are aligned to 16 bytes, so a value in an
+            // object or an array could be no more aligned than that.
+            case "align" when arguments is [{ Expression: LiteralExpressionSyntax { Token.Value: ulong alignment } }] && alignment > MaximumAlignment:
+                ReportDeclaration(
+                    ErrorCode.ERR_AlignTooLarge,
+                    attribute.Span,
+                    $"'@align({alignment})' is more than {MaximumAlignment}: objects and arrays are aligned to {MaximumAlignment} bytes, so a value in one could not be aligned to {alignment}"
+                );
                 return;
 
             case "packed" or "discardable" or "frozen" or "immutable" or "immortal" or "polymorphic" or "noncopy" or "escaping" or "flags" or "MainActor"

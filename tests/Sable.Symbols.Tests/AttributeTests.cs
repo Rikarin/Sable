@@ -47,6 +47,13 @@ public sealed class AttributeTests {
         Assert.Equal(ErrorCode.ERR_MalformedAttribute, Assert.Single(Errors($"module M\n{source}")).Code);
 
     [Fact]
+    public void AnAlignmentIsAtMostWhatTheHeapGives() {
+        var error = Assert.Single(Errors("module M\n@align(32)\nstruct S { var n: Int }"));
+        Assert.Equal(ErrorCode.ERR_AlignTooLarge, error.Code);
+        Assert.Contains("'@align(32)' is more than 16", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void TheAttributesThereAreAreAccepted() =>
         AssertClean("""
                     module M

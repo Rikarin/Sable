@@ -1168,11 +1168,14 @@ to the state machine where tasks are many.
       compiler knows by sight, and the shells the binder desugars to
       (`Error`, `From`, `Optional`, `Dictionary`). The I128, U128 and F16 types no
       longer declare `toString`, `abs`, `min` and `max`: nothing could lower
-      them, and SIL has no such types yet. Still thin, though not C#: the
-      built-in `[Key: Value]` dictionary is compiler-known as the arrays are,
-      its indexing and iteration lowered directly, and it has no members of
-      its own yet — no `count` or `remove` — since array extensions do not
-      reach it (`Sable.Collections.HashMap` is the Sable one with all of them)
+      them, and SIL has no such types yet. The built-in `[Key: Value]`
+      dictionary is compiler-known as the arrays are — its entries an array
+      of key and value pairs, its indexing and `for (key, value) in d` lowered
+      directly — and its members are Sable (`lib/Sable.Core/Dictionary.sab`:
+      `count`, `isEmpty`, `contains`, `remove`, `removeAll`, `keys`,
+      `values`), `count` and `removeAll` `@builtin`s on the entries. Its key
+      search is still linear; `Sable.Collections.HashMap` is the one that
+      hashes
 - [x] Reflection: hello-world binary grows < 50 KB with reflection off —
       it grows not at all (51,736 bytes either way): reflection is code
       synthesised per type a program reflects on, and nothing else

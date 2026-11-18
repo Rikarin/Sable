@@ -3035,6 +3035,11 @@ public sealed partial class SilGen {
                     ForArray(loop);
                     return;
 
+                // A dictionary's entries are an array of key and value pairs.
+                case BoundForEach loop when IsDictionary(loop.Sequence.Type):
+                    ForArray(loop);
+                    return;
+
                 case BoundBreak jump when FindLoop(jump.Label) is { } breakLoop:
                     DestroyTemporaries(breakLoop.Temporaries);
                     RunDefers(breakLoop.Scopes);

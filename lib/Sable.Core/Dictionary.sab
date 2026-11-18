@@ -1,0 +1,54 @@
+module Sable.Core
+
+// The built-in dictionary's members: '[Key: Value]', what the binder makes
+// of a dictionary type, written 'Dictionary' here since it has no other name
+// to extend. Its entries are kept as the compiler lays them out — an array
+// of key and value pairs, looked up by the key type's equality — so what
+// counts or empties them is a '@builtin' on that array; the rest is Sable
+// over indexing and iteration, which the compiler lowers directly.
+
+extension Dictionary {
+    /// How many keys it holds.
+    @builtin("array_count")
+    public var count: Int { get }
+
+    /// Whether it holds no keys.
+    public var isEmpty: Bool { get { return self.count == 0 } }
+
+    /// Whether the key has a value.
+    public fn contains(_ key: Key) -> Bool {
+        if let _ = self[key] {
+            return true
+        }
+        return false
+    }
+
+    /// The key's value, taken out: none when it had none.
+    public mutating fn remove(_ key: Key) -> Value? {
+        let removed = self[key]
+        self[key] = none
+        return removed
+    }
+
+    /// Every key and its value, taken out.
+    @builtin("array_clear")
+    public mutating fn removeAll()
+
+    /// The keys, in no order the dictionary promises.
+    public fn keys() -> Key[>..] {
+        var keys: Key[>..] = []
+        for (key, _) in self {
+            keys.append(key)
+        }
+        return keys
+    }
+
+    /// The values, in the order 'keys()' gives their keys.
+    public fn values() -> Value[>..] {
+        var values: Value[>..] = []
+        for (_, value) in self {
+            values.append(value)
+        }
+        return values
+    }
+}

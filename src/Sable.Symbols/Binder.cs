@@ -1552,12 +1552,31 @@ public sealed partial class Binder {
         PushScope();
 
         LocalSymbol? element = null;
+        BoundStatement? deconstruction = null;
         if (statement.Pattern is BindingPatternSyntax binding) {
             var elementType = ElementTypeOf(sequence.Type, statement.Sequence);
             element = new(binding.Identifier.Text, _containingSymbol, binding, false) {
                 TypeResolver = () => elementType
             };
             Declare(element.Name, element);
+        } else if (statement.Pattern is not WildcardPatternSyntax) {
+            // 'for (key, value) in d': each element in a variable of the
+            // loop's own, nameless, taken apart as 'let (key, value) =' would.
+            var elementType = ElementTypeOf(sequence.Type, statement.Sequence);
+            element = new("$element", _containingSymbol, statement.Pattern, false) {
+                TypeResolver = () => elementType
+            };
+            var pattern = BindPattern(statement.Pattern, elementType);
+            if (!pattern.IsIrrefutable && !ContainsErrorPattern(pattern) && !elementType.IsError) {
+                _diagnostics.Error(
+                    ErrorCode.ERR_RefutablePatternInDeclaration,
+                    statement.Pattern.Span,
+                    "this pattern might not match every element, so it cannot declare names here; "
+                    + "bind the element and use 'if case' in the loop"
+                );
+            }
+
+            deconstruction = new BoundPatternDeclaration(statement.Pattern, pattern, new BoundLocalAccess(statement.Pattern, element));
         }
 
         var filter = statement.WhereClause is { } where
@@ -1568,6 +1587,15 @@ public sealed partial class Binder {
         var body = BindStatement(statement.Body);
         _loopDepth--;
 
+        // The names come first, so the filter sees them too: '{ let (k, v) =
+        // element; if filter { body } }'.
+        if (deconstruction is not null) {
+            body = filter is null
+                ? new BoundBlock(statement.Body, [], [deconstruction, body])
+                : new BoundBlock(statement.Body, [], [deconstruction, new BoundIf(statement.Body, filter, body, null)]);
+            filter = null;
+        }
+
         PopScope();
         return Record(
             statement,
@@ -1576,6 +1604,18 @@ public sealed partial class Binder {
     }
 
     /// <summary>What a <c>for … in</c> yields, for the sequences understood so far.</summary>
+    /// <summary>
+    ///     A dictionary's key and value types: a <c>[Key: Value]</c>'s, or,
+    ///     inside <c>extension Dictionary</c>, where <c>self</c> is the type
+    ///     itself, its parameters.
+    /// </summary>
+    (TypeSymbol Key, TypeSymbol Value)? DictionaryTypes(TypeSymbol type) =>
+        type is NamedTypeSymbol named && named.OriginalDefinition.Equals(Core.Dictionary)
+            ? named.TypeArguments is [var key, var value] ? (key, value)
+            : named.TypeArguments.IsEmpty && named.TypeParameters is [var keyParameter, var valueParameter] ? (keyParameter, valueParameter)
+            : null
+            : null;
+
     TypeSymbol ElementTypeOf(TypeSymbol sequence, SyntaxNode syntax) {
         if (sequence.IsError) {
             return ErrorTypeSymbol.Instance;
@@ -1583,6 +1623,11 @@ public sealed partial class Binder {
 
         if (sequence is ArrayTypeSymbol array) {
             return array.ElementType;
+        }
+
+        // A dictionary yields its entries, each key with its value.
+        if (DictionaryTypes(sequence) is var (key, value)) {
+            return new TupleTypeSymbol([key, value], [null, null]);
         }
 
         if (sequence is NamedTypeSymbol named && Core.IsRange(named)) {
@@ -3586,11 +3631,9 @@ public sealed partial class Binder {
             return new BoundIndexAccess(syntax, array.ElementType, receiver, indices);
         }
 
-        if (receiver.Type is NamedTypeSymbol named
-            && named.OriginalDefinition.Equals(Core.Dictionary)
-            && named.TypeArguments.Length == 2) {
-            indices = CheckIndices(indices, named.TypeArguments[0], syntax);
-            return new BoundIndexAccess(syntax, new OptionalTypeSymbol(named.TypeArguments[1]), receiver, indices);
+        if (DictionaryTypes(receiver.Type) is var (key, value)) {
+            indices = CheckIndices(indices, key, syntax);
+            return new BoundIndexAccess(syntax, new OptionalTypeSymbol(value), receiver, indices);
         }
 
         // A type may declare its own indexing with 'subscript'.

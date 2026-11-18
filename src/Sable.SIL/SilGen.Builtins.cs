@@ -71,10 +71,20 @@ public sealed partial class SilGen {
     ///     work for any element, so a declaration of one is checked for one
     ///     element type, and agrees for every other.
     /// </summary>
+    /// <remarks>
+    ///     So is <c>extension Dictionary</c>'s: its builtins are the array
+    ///     operations on its entries, which work for any key and value.
+    /// </remarks>
     TypeSubstitution Representative(NamedTypeSymbol? owner) =>
-        owner is { ExtendedArray: not null, TypeParameters.IsEmpty: false }
+        owner is { ExtendedArray: not null, TypeParameters.IsEmpty: false } || owner is not null && ReferenceEquals(owner, Core.Dictionary)
             ? new(owner.TypeParameters.ToDictionary(static p => p, TypeSymbol (_) => Core.Int))
             : TypeSubstitution.Empty;
+
+    /// <summary>The type, its parameters replaced: a generic definition, which is what <c>self</c> is in its own extension, constructed with them.</summary>
+    static TypeSymbol Represent(TypeSubstitution representative, TypeSymbol type) =>
+        type is NamedTypeSymbol { IsGenericDefinition: true } definition && definition.TypeParameters.All(p => representative.Lookup(p) is not null)
+            ? definition.Construct([..definition.TypeParameters.Select(p => representative.Lookup(p)!)])
+            : representative.Apply(type);
 
     static NamedTypeSymbol? OwnerOfField(FieldSymbol field) =>
         field.ContainingSymbol switch {
@@ -86,8 +96,8 @@ public sealed partial class SilGen {
     void CheckBuiltin(Symbol symbol, string name, SyntaxList<AttributeSyntax> attributes, List<TypeSymbol> operands, TypeSymbol result, bool throws,
         TypeSubstitution representative, bool mutating) {
         var at = attributes.First(static a => a.Name.ToString().Trim() == "builtin").Span;
-        var lowered = operands.Select(o => Lower(representative.Apply(o))).ToList();
-        var loweredResult = Lower(representative.Apply(result));
+        var lowered = operands.Select(o => Lower(Represent(representative, o))).ToList();
+        var loweredResult = Lower(Represent(representative, result));
 
         // An inline array's members are lowered where its layout is
         // (SilGen.Inline.cs), never as the builtin; it has no SIL type of its own to check.

@@ -41,6 +41,52 @@ public sealed class CollectionTests {
         );
 
     [Fact]
+    public void DictionariesHaveMembersAndIterate() =>
+        Prints(
+            "2 false\n3 true false\n36 none 2\n2 126\n141 alangrace\n120 2\n1x 2y\n0 true\nv 0\n",
+            """
+            fn total(_ d: [String: Int]) -> Int {
+                var sum = 0
+                for (_, value) in d {
+                    sum = sum + value
+                }
+                return sum
+            }
+            """,
+            """
+                var ages: [String: Int] = ["ada": 36, "alan": 41]
+                print("\(ages.count) \(ages.isEmpty)")
+                ages["grace"] = 85
+                print("\(ages.count) \(ages.contains("grace")) \(ages.contains("bob"))")
+                let removed = ages.remove("ada")
+                let again = ages.remove("ada")
+                print("\(removed ?? -1) \(again == none ? "none" : "some") \(ages.count)")
+                var sum = 0
+                for v in ages.values() { sum = sum + v }
+                print("\(ages.keys().count) \(sum)")
+                var names = ""
+                for key in ages.keys() where key != "nobody" { names = names + key }
+                print("\(total(ages) + 15) \(names.count == 9 ? "alangrace" : names)")
+                let scores: [String: Int] = ["a": 10, "b": 50, "c": 70]
+                var kept = 0
+                var count = 0
+                for (name, score) in scores where score > 20 && name != "z" {
+                    kept = kept + score
+                    count = count + 1
+                }
+                print("\(kept) \(count)")
+                let pairs: (Int, String)[>..] = [(1, "x"), (2, "y")]
+                var line = ""
+                for (n, s) in pairs { line = line + (line.isEmpty ? "" : " ") + "\(n)\(s)" }
+                print(line)
+                ages.removeAll()
+                print("\(ages.count) \(ages.isEmpty)")
+                var words: [String: String] = ["k": "v"]
+                let gone = words.remove("k")
+                print("\(words["k"] ?? gone ?? "none") \(words.values().count)")
+            """);
+
+    [Fact]
     public void ADictionaryOfStringsAndStructs() =>
         Prints(
             "Ada Lovelace (36)\nmissing\n",

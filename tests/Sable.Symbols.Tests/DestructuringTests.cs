@@ -154,6 +154,49 @@ public sealed class DestructuringTests {
         );
 
     [Fact]
+    public void AForTakesEachElementApart() =>
+        AssertClean(
+            """
+            let ages: [String: Int] = ["ada": 36]
+            var sum = 0
+            for (name, age) in ages where !name.isEmpty {
+                let text: String = name
+                sum = sum + age
+            }
+            let pairs: (Int, String)[>..] = [pair()]
+            for (n, _) in pairs {
+                sum = sum + n
+            }
+            return sum
+            """
+        );
+
+    [Fact]
+    public void AForWhosePatternMightNotMatchIsReported() =>
+        AssertError(
+            ErrorCode.ERR_RefutablePatternInDeclaration,
+            """
+            let pairs: (Int, String)[>..] = [pair()]
+            for (1, label) in pairs {
+            }
+            return 0
+            """
+        );
+
+    [Fact]
+    public void ADictionaryHasItsMembers() =>
+        AssertClean(
+            """
+            var ages: [String: Int] = ["ada": 36]
+            let removed: Int? = ages.remove("ada")
+            let keys: String[>..] = ages.keys()
+            let values: Int[>..] = ages.values()
+            ages.removeAll()
+            return ages.count + keys.count + values.count + (ages.contains("ada") || ages.isEmpty ? 1 : 0)
+            """
+        );
+
+    [Fact]
     public void AnUnknownFieldIsReported() =>
         AssertError(
             ErrorCode.ERR_NameNotFound,

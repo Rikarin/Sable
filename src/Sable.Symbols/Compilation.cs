@@ -1381,7 +1381,9 @@ public sealed partial class Compilation {
     }
 
     void DeclareUnionCase(UnionCaseDeclarationSyntax declaration, NamedTypeSymbol union) {
-        var name = declaration.Identifier.Text;
+        // A case may be named by a keyword in backticks, '`none`', as a
+        // member name after '.' may be any keyword (SYNTAX.md §16).
+        var name = declaration.Identifier.Value as string ?? declaration.Identifier.Text;
         if (name.Length == 0) {
             return;
         }
@@ -1415,7 +1417,7 @@ public sealed partial class Compilation {
     }
 
     void DeclareEnumCase(EnumCaseDeclarationSyntax declaration, NamedTypeSymbol enumType) {
-        var name = declaration.Identifier.Text;
+        var name = declaration.Identifier.Value as string ?? declaration.Identifier.Text;
         if (name.Length == 0) {
             return;
         }

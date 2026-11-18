@@ -7419,6 +7419,21 @@ public sealed partial class Binder {
     ) {
         var token = pattern.Token;
 
+        // 'none' is the optional with no value, and nothing else: on a value
+        // that is not optional it would match nothing, and where the type has
+        // a case of that name ('`none`'), that case is '.none'.
+        if (token.Kind == SyntaxKind.NoneKeyword && inputType is not OptionalTypeSymbol && !inputType.IsError) {
+            var hint = inputType is NamedTypeSymbol named && named.GetMembers("none").Any(m => m is EnumCaseSymbol or UnionCaseSymbol)
+                ? "; its case 'none' is '.none'"
+                : "";
+            _diagnostics.Error(
+                ErrorCode.ERR_PatternTypeMismatch,
+                pattern.Span,
+                $"'{inputType.ToDisplayString()}' is not optional, so 'none' cannot match it{hint}"
+            );
+            return new BoundErrorPattern(pattern);
+        }
+
         var literalType = token.Kind switch {
             SyntaxKind.IntegerLiteralToken => Core.Int,
             SyntaxKind.FloatLiteralToken => Core.F64,
@@ -7593,13 +7608,20 @@ public sealed partial class Binder {
 
                 return new BoundSomePattern(pattern, optional, BindPattern(one[0].Pattern, optional.UnderlyingType));
 
-            default:
+            default: {
+                // The optional's cases are never looked through: '.none' on a
+                // 'Mode?' is not the 'Mode' case, which is '.Some(.none)'.
+                var wrapped = optional.UnderlyingType is NamedTypeSymbol underlying
+                              && underlying.GetMembers(name).Any(m => m is EnumCaseSymbol or UnionCaseSymbol)
+                    ? $"; the '{optional.UnderlyingType.ToDisplayString()}' case is '.Some(.{name})'"
+                    : "";
                 _diagnostics.Error(
                     ErrorCode.ERR_UnknownUnionCase,
                     pattern.Identifier.Span,
-                    $"'{optional.ToDisplayString()}' has no case named '{name}': an optional is '.Some' or '.None'"
+                    $"'{optional.ToDisplayString()}' has no case named '{name}': an optional is '.Some' or '.None'{wrapped}"
                 );
                 return new BoundErrorPattern(pattern);
+            }
         }
     }
 

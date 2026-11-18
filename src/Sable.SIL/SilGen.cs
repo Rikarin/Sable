@@ -1696,6 +1696,57 @@ public sealed partial class SilGen {
         return (name, code);
     }
 
+    /// <summary>
+    ///     What <c>s.get</c> calls: a closure whose context is a box holding
+    ///     the receiver, which it passes as <c>self</c> to the method, through
+    ///     the vtable when a subclass may override it.
+    /// </summary>
+    internal (string Name, FunctionType Type) BoundMethodThunk(FunctionSymbol method, string name, FunctionType type) {
+        var dynamic = IsDynamic(method);
+        var thunkName = $"{name}$bound{(dynamic ? "$dynamic" : "")}";
+        var closure = new ThickFunctionType(new([..type.Parameters.Skip(1)], type.Result, type.Thrown));
+        var code = closure.Implementation;
+        if (_module.Find(thunkName) is not null) {
+            return (thunkName, code);
+        }
+
+        var thunk = new SilFunction(thunkName, code);
+        var entry = thunk.AddBlock();
+        var arguments = closure.Signature.Parameters.Select(p => (SilValue)entry.AddArgument(p)).ToList();
+        var context = entry.AddArgument(SilType.Object);
+        var box = entry.Append(new UncheckedRefCastInst(context, BoxType(type.Parameters[0])));
+        var self = entry.Append(new LoadInst(entry.Append(new RefElementAddrInst(box, 0))));
+        SilValue callee = dynamic
+            ? entry.Append(new ClassMethodInst(self, SlotName(method), type))
+            : entry.Append(new FunctionRefInst(name, type));
+        SilValue[] all = [self, ..arguments];
+
+        void Release(SilBlock block) {
+            if (!self.Type.IsTrivial) {
+                block.Append(new DestroyValueInst(self));
+            }
+        }
+
+        if (type.Thrown is null) {
+            var result = entry.Append(new ApplyInst(callee, type.Result, all));
+            Release(entry);
+            entry.Append(new ReturnInst(type.Result == SilType.Unit ? null : result));
+        } else {
+            var normal = thunk.AddBlock();
+            var result = type.Result == SilType.Unit ? null : normal.AddArgument(type.Result);
+            var failed = thunk.AddBlock();
+            var error = failed.AddArgument(type.Thrown);
+            entry.Append(new TryApplyInst(callee, type.Result, all, normal, failed));
+            Release(normal);
+            normal.Append(new ReturnInst(result));
+            Release(failed);
+            failed.Append(new ThrowInst(error));
+        }
+
+        _module.Add(thunk);
+        return (thunkName, code);
+    }
+
     readonly Dictionary<string, int> _closureCounts = new(StringComparer.Ordinal);
 
     /// <summary>A function declared in another's body.</summary>
@@ -2539,7 +2590,11 @@ public sealed partial class SilGen {
             public override SilType Type => SilType.Unit;
         }
 
-        sealed record Loop(string? Label, SilBlock Break, SilBlock Continue, int Scopes, int Temporaries);
+        /// <summary>A loop, or a <c>switch</c>: a <c>break</c> leaves either, but a <c>continue</c> passes a switch, whose Continue is null.</summary>
+        sealed record Loop(string? Label, SilBlock Break, SilBlock? Continue, int Scopes, int Temporaries);
+
+        /// <summary>The case a <c>fallthrough</c> goes on to, and the defer scopes and temporaries open where it began.</summary>
+        sealed record Fallthrough(SilBlock Target, int Scopes, int Temporaries);
 
         /// <summary>Where an error goes: a block taking it, and how many defer scopes and temporaries were open there.</summary>
         sealed record Handler(SilBlock Block, SilType Type, int Scopes, int Temporaries);
@@ -2549,6 +2604,9 @@ public sealed partial class SilGen {
         readonly List<AllocStackInst> _allocations = [];
         readonly List<Loop> _loops = [];
         readonly List<Handler> _handlers = [];
+
+        /// <summary>For each <c>switch</c> case being lowered, innermost last: where its <c>fallthrough</c> goes.</summary>
+        readonly List<Fallthrough?> _fallthroughs = [];
 
         /// <summary>The deferred bodies of each open scope, innermost last.</summary>
         /// <remarks>
@@ -3468,10 +3526,20 @@ public sealed partial class SilGen {
                     Branch(breakLoop.Break);
                     return;
 
-                case BoundContinue jump when FindLoop(jump.Label) is { } continueLoop:
+                case BoundContinue jump when FindLoop(jump.Label, continues: true) is { Continue: { } target } continueLoop:
                     DestroyTemporaries(continueLoop.Temporaries);
                     RunDefers(continueLoop.Scopes);
-                    Branch(continueLoop.Continue);
+                    Branch(target);
+                    return;
+
+                case BoundSwitch switchStatement:
+                    Switch(switchStatement);
+                    return;
+
+                case BoundFallthrough when _fallthroughs is [.., { } next]:
+                    DestroyTemporaries(next.Temporaries);
+                    RunDefers(next.Scopes);
+                    Branch(next.Target);
                     return;
 
                 case BoundDo doStatement:
@@ -3780,14 +3848,101 @@ public sealed partial class SilGen {
             _loops.RemoveAt(_loops.Count - 1);
         }
 
-        Loop? FindLoop(string? label) {
+        Loop? FindLoop(string? label, bool continues = false) {
             for (var i = _loops.Count - 1; i >= 0; i--) {
+                if (continues && _loops[i].Continue is null) {
+                    continue;
+                }
+
                 if (label is null || _loops[i].Label == label) {
                     return _loops[i];
                 }
             }
 
             return null;
+        }
+
+        /// <summary>
+        ///     <c>switch</c>: the cases' values compared with the subject in
+        ///     order, then <c>default</c> if there is one. A case runs to its
+        ///     end, unless a <c>fallthrough</c> goes on into the next or a
+        ///     <c>break</c> leaves early. The subject lives until a case is
+        ///     chosen.
+        /// </summary>
+        void Switch(BoundSwitch switchStatement) {
+            if (Expression(switchStatement.Subject) is not { } subject) {
+                return;
+            }
+
+            var after = function.AddBlock();
+            var bodies = switchStatement.Cases.Select(_ => function.AddBlock()).ToList();
+            SilBlock? defaultBody = null;
+
+            Hold(subject);
+            for (var i = 0; i < switchStatement.Cases.Length; i++) {
+                var switchCase = switchStatement.Cases[i];
+                if (switchCase.Values.IsEmpty) {
+                    defaultBody = bodies[i];
+                    continue;
+                }
+
+                foreach (var value in switchCase.Values) {
+                    if (CaseEquals(subject, value) is not { } equal) {
+                        return;
+                    }
+
+                    var next = function.AddBlock();
+                    Jump(new CondBranchInst(equal, Destroying(subject, bodies[i]), [], next, []));
+                    _current = next;
+                }
+            }
+
+            Unhold(subject);
+            Destroy(subject);
+            Branch(defaultBody ?? after);
+
+            _loops.Add(new(null, after, null, _scopes.Count, _temporaries.Count));
+            for (var i = 0; i < switchStatement.Cases.Length; i++) {
+                _current = bodies[i];
+                _fallthroughs.Add(i + 1 < bodies.Count ? new(bodies[i + 1], _scopes.Count, _temporaries.Count) : null);
+                _scopes.Add([]);
+                foreach (var statement in switchStatement.Cases[i].Statements) {
+                    Statement(statement);
+                }
+
+                if (_current is not null) {
+                    RunDefers(_scopes.Count - 1);
+                    Branch(after);
+                }
+
+                _scopes.RemoveAt(_scopes.Count - 1);
+                _fallthroughs.RemoveAt(_fallthroughs.Count - 1);
+            }
+
+            _loops.RemoveAt(_loops.Count - 1);
+            _current = after;
+        }
+
+        /// <summary>
+        ///     Whether a switch's subject is one of its case's values: by case
+        ///     for an enum, and by value for a number, character or string.
+        /// </summary>
+        SilValue? CaseEquals(SilValue subject, BoundExpression value) {
+            if (Expression(value) is not { } candidate) {
+                return null;
+            }
+
+            SilValue? equal;
+            if (IsPayloadFree(subject.Type) && candidate.Type == subject.Type) {
+                equal = SameCase(subject, candidate, equal: true);
+            } else if (candidate.Type == subject.Type && SilBuiltins.Find($"cmp_eq_{subject.Type}") is not null) {
+                equal = Emit(new BuiltinInst($"cmp_eq_{subject.Type}", SilType.Bool, subject, candidate));
+            } else {
+                equal = Missing(value, $"a switch on '{value.Type.ToDisplayString()}'");
+            }
+
+            Destroy(candidate);
+            return equal;
         }
 
         void Do(BoundDo doStatement) {
@@ -3993,18 +4148,31 @@ public sealed partial class SilGen {
                     return;
                 }
 
-                case BoundRangePattern { Lower: BoundLiteralPattern lower, Upper: BoundLiteralPattern upper } range: {
-                    if (LiteralValue(lower.Value, lower.IsNegative, value.Type, range.Syntax) is not { } low
-                        || LiteralValue(upper.Value, upper.IsNegative, value.Type, range.Syntax) is not { } high) {
+                // '1...9', '0..<10', '...0', '5...': a bound left out is no
+                // test at all, and '..<' leaves its upper bound out.
+                case BoundRangePattern { Lower: null or BoundLiteralPattern, Upper: null or BoundLiteralPattern } range: {
+                    if (range.Lower is BoundLiteralPattern lower) {
+                        if (LiteralValue(lower.Value, lower.IsNegative, value.Type, range.Syntax) is not { } low) {
+                            return;
+                        }
+
+                        var aboveLow = function.AddBlock();
+                        var atLeast = Emit(new BuiltinInst($"cmp_ge_{value.Type}", SilType.Bool, value, low));
+                        Jump(new CondBranchInst(atLeast, aboveLow, [], failed, []));
+                        _current = aboveLow;
+                    }
+
+                    if (range.Upper is BoundLiteralPattern upper) {
+                        if (LiteralValue(upper.Value, upper.IsNegative, value.Type, range.Syntax) is not { } high) {
+                            return;
+                        }
+
+                        var below = Emit(new BuiltinInst($"{(range.IsHalfOpen ? "cmp_lt" : "cmp_le")}_{value.Type}", SilType.Bool, value, high));
+                        Jump(new CondBranchInst(below, matched, [], failed, []));
                         return;
                     }
 
-                    var aboveLow = function.AddBlock();
-                    var atLeast = Emit(new BuiltinInst($"cmp_ge_{value.Type}", SilType.Bool, value, low));
-                    Jump(new CondBranchInst(atLeast, aboveLow, [], failed, []));
-                    _current = aboveLow;
-                    var atMost = Emit(new BuiltinInst($"cmp_le_{value.Type}", SilType.Bool, value, high));
-                    Jump(new CondBranchInst(atMost, matched, [], failed, []));
+                    Branch(matched);
                     return;
                 }
 
@@ -4014,6 +4182,10 @@ public sealed partial class SilGen {
                         matched,
                         failed
                     );
+                    return;
+
+                case BoundArrayPattern array when value.Type is ArrayType arrayType:
+                    ArrayPattern(array, value, arrayType, matched, failed);
                     return;
 
                 case BoundRecordPattern { TestsType: false } record when value.Type is StructType structType:
@@ -4066,6 +4238,16 @@ public sealed partial class SilGen {
                     return;
                 }
 
+                // '.Some(p)' and 'p?': the payload, if there is one, against p.
+                case BoundSomePattern some when value.Type is EnumType optional && optional.CaseIndex("Some") is var index and >= 0: {
+                    var target = function.AddBlock();
+                    var payload = Payload(target, optional.Cases[index].Payload!);
+                    Jump(new SwitchEnumInst(value, [(index, target)], failed));
+                    _current = target;
+                    Pattern(some.Payload, payload, matched, failed);
+                    return;
+                }
+
                 case BoundEnumCasePattern enumCase when value.Type is EnumType enumType:
                     Jump(new SwitchEnumInst(value, [(enumType.CaseIndex(enumCase.EnumCase.Name), matched)], failed));
                     return;
@@ -4112,6 +4294,53 @@ public sealed partial class SilGen {
                     Fail(pattern.Syntax, $"the pattern '{Describe(pattern.Syntax)}'");
                     return;
             }
+        }
+
+        /// <summary>
+        ///     <c>[a, b]</c> matches an array of exactly two elements;
+        ///     <c>[first, ...rest, last]</c> one of at least two, whose middle
+        ///     <c>rest</c> is a copy of. The elements are borrowed where they
+        ///     are, as the array is held for as long as the patterns look; the
+        ///     middle is taken last, once every element has matched, so a
+        ///     failed match has nothing to give back.
+        /// </summary>
+        void ArrayPattern(BoundArrayPattern array, SilValue value, ArrayType arrayType, SilBlock matched, SilBlock failed) {
+            var restIndex = array.RestIndex;
+            var prefix = restIndex < 0 ? array.Elements.Length : restIndex;
+            var suffix = restIndex < 0 ? 0 : array.Elements.Length - restIndex - 1;
+
+            var count = Emit(new BuiltinInst("array_count", SilType.Int, value));
+            var length = Emit(new IntegerLiteralInst(SilType.Int, prefix + suffix));
+            var fits = Emit(new BuiltinInst(restIndex < 0 ? "cmp_eq_Int" : "cmp_ge_Int", SilType.Bool, count, length));
+            var sized = function.AddBlock();
+            Jump(new CondBranchInst(fits, sized, [], failed, []));
+            _current = sized;
+
+            SilValue Element(Func<SilValue> index) =>
+                Emit(new BuiltinInst("array_get_borrowed", arrayType.Element, value, index()));
+
+            SilValue FromStart(int i) => Emit(new IntegerLiteralInst(SilType.Int, i));
+
+            SilValue FromEnd(int back) =>
+                Emit(new BuiltinInst("sub_Int", SilType.Int, count, Emit(new IntegerLiteralInst(SilType.Int, back))));
+
+            var parts = new List<(BoundPattern, Func<SilValue>)>();
+            for (var i = 0; i < prefix; i++) {
+                var at = i;
+                parts.Add((array.Elements[at], () => Element(() => FromStart(at))));
+            }
+
+            for (var j = 0; j < suffix; j++) {
+                var back = suffix - j;
+                parts.Add((array.Elements[restIndex + 1 + j], () => Element(() => FromEnd(back))));
+            }
+
+            if (restIndex >= 0 && array.Elements[restIndex] is not BoundWildcardPattern) {
+                parts.Add((array.Elements[restIndex],
+                    () => Emit(new BuiltinInst("array_slice", arrayType, value, FromStart(prefix), FromEnd(suffix)))));
+            }
+
+            Sequence(parts, matched, failed);
         }
 
         /// <summary>A union case's sub-patterns, against its payload: one value, or a tuple of them.</summary>
@@ -4459,6 +4688,9 @@ public sealed partial class SilGen {
 
                 case BoundMatch match:
                     return Match(match);
+
+                case BoundIfExpression ifExpression:
+                    return IfValue(ifExpression);
 
                 case BoundTry tryExpression:
                     return Try(tryExpression);
@@ -5991,6 +6223,85 @@ public sealed partial class SilGen {
         }
 
         /// <summary>
+        ///     <c>if c { a } else { b }</c> as a value: the condition branches, as
+        ///     for the statement, and each branch's last line goes to the join
+        ///     as its value, after the branch's defers have run.
+        /// </summary>
+        SilValue? IfValue(BoundIfExpression ifExpression) {
+            if (LowerType(ifExpression.Type) is not { } resultType) {
+                return Missing(ifExpression, $"an 'if' of type '{ifExpression.Type.ToDisplayString()}'");
+            }
+
+            var producesValue = resultType != SilType.Unit && !ifExpression.Type.Equals(Core.Never);
+            var after = function.AddBlock();
+            var result = producesValue ? after.AddArgument(resultType) : null;
+
+            Branches(ifExpression.Body);
+            _current = after;
+            return result ?? (SilValue)UnitValue.Instance;
+
+            void Branches(BoundIf branch) {
+                var consequence = function.AddBlock();
+                var alternative = function.AddBlock();
+                Condition(branch.Condition, consequence, alternative);
+
+                _current = consequence;
+                Arm(branch.Consequence);
+
+                _current = alternative;
+                if (branch.Alternative is BoundIf elseIf) {
+                    Branches(elseIf);
+                } else if (branch.Alternative is { } otherwise) {
+                    Arm(otherwise);
+                }
+            }
+
+            void Arm(BoundStatement body) {
+                if (_current is null || body is not BoundBlock block) {
+                    return;
+                }
+
+                _scopes.Add([]);
+                foreach (var statement in block.Statements) {
+                    if (_current is null) {
+                        break;
+                    }
+
+                    if (statement != block.Statements[^1] || statement is not BoundExpressionStatement last) {
+                        Statement(statement);
+                        continue;
+                    }
+
+                    var value = Expression(last.Expression);
+                    if (_current is null || value is null) {
+                        break;
+                    }
+
+                    RunDefers(_scopes.Count - 1);
+                    if (producesValue && value is not UnitValue && value.Type == resultType) {
+                        Branch(after, value);
+                    } else {
+                        Destroy(value);
+                        if (producesValue) {
+                            Jump(new UnreachableInst());
+                        } else {
+                            Branch(after);
+                        }
+                    }
+                }
+
+                // A branch that ends some other way leaves: by 'return' or
+                // 'throw', where it has run its defers already.
+                if (_current is not null) {
+                    RunDefers(_scopes.Count - 1);
+                    Jump(new UnreachableInst());
+                }
+
+                _scopes.RemoveAt(_scopes.Count - 1);
+            }
+        }
+
+        /// <summary>
         ///     <c>try e</c> lets errors go to the handler in force; the others
         ///     put a handler of their own around <c>e</c>.
         /// </summary>
@@ -6760,6 +7071,10 @@ public sealed partial class SilGen {
                 return LocalFunctionValue(callee, reference);
             }
 
+            if (reference.Receiver is { } receiver && HasSelf(callee)) {
+                return BoundMethodValue(reference, receiver);
+            }
+
             if (reference.Receiver is not null || IsGeneric(callee) || !generator._names.TryGetValue(callee, out var name)
                 || LowerType(reference.Type) is not ThickFunctionType thick) {
                 return Missing(reference, $"'{callee.Name}' as a value");
@@ -6772,6 +7087,44 @@ public sealed partial class SilGen {
 
             var thunk = generator.Thunk(name, type);
             return Emit(new PartialApplyInst(Emit(new FunctionRefInst(thunk, thick.Implementation)), null, thick));
+        }
+
+        /// <summary>
+        ///     <c>s.get</c> as a value: the method with its receiver, evaluated
+        ///     here, in a box the closure carries — a copy of a value, or the
+        ///     reference to an object, as <c>s.get()</c> would have used.
+        /// </summary>
+        SilValue? BoundMethodValue(BoundFunctionReference reference, BoundExpression receiver) {
+            var callee = reference.Function;
+            if (IsGeneric(callee) || !generator._names.TryGetValue(callee, out var name)
+                || generator.SignatureOf(callee, reference.Syntax, TypeSubstitution.Empty) is not { } type
+                || LowerType(reference.Type) is not ThickFunctionType thick) {
+                return Missing(reference, $"'{callee.Name}' as a value");
+            }
+
+            // A mutating method changes the value it is called on, which the
+            // closure's copy is not; a consuming one takes what it is given.
+            if (type.Parameters[0] is AddressType || !type.Owned.IsEmpty) {
+                return Missing(reference, $"the {(type.Parameters[0] is AddressType ? "mutating" : "consuming")} method '{callee.Name}' as a value");
+            }
+
+            if (new FunctionType([..type.Parameters.Skip(1)], type.Result, type.Thrown) != thick.Signature) {
+                return Missing(reference, $"'{callee.Name}' as a value of type '{reference.Type.ToDisplayString()}'");
+            }
+
+            var thunk = generator.BoundMethodThunk(callee, name, type);
+            if (Expression(receiver) is not { } self) {
+                return null;
+            }
+
+            // A method a superclass declares takes the object as that class.
+            if (self.Type is ClassType selfClass && type.Parameters[0] is ClassType parameterClass && selfClass != parameterClass) {
+                self = Emit(new UpcastInst(self, parameterClass));
+            }
+
+            var boxed = Emit(new AllocRefInst(generator.BoxType(type.Parameters[0])));
+            Emit(new StoreInst(Owned(self), Emit(new RefElementAddrInst(boxed, 0)), StoreKind.Init));
+            return Emit(new PartialApplyInst(Emit(new FunctionRefInst(thunk.Name, thunk.Type)), boxed, thick));
         }
 
         /// <summary>A call through a closure: the closure and the arguments, all borrowed for the call.</summary>

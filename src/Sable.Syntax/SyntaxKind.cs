@@ -288,6 +288,8 @@ public enum SyntaxKind : ushort {
     InterpolatedText = 1142,
     Interpolation = 1143,
     TypeExpression = 1144,
+    LabeledClosure = 1160,
+    IfExpression = 1161,
 
     // ---- Pattern nodes (1200-1299) ----------------------------------------
     WildcardPattern = 1200,
@@ -306,6 +308,7 @@ public enum SyntaxKind : ushort {
     BindingTypeTestPattern = 1213,
     OrPattern = 1214,
     ParenthesizedPattern = 1215,
+    OptionalPattern = 1216,
 
     // ---- Statement nodes (1300-1399) --------------------------------------
     Block = 1300,

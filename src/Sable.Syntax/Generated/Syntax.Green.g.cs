@@ -1016,21 +1016,24 @@ internal sealed class InvocationExpressionGreen : GreenNode
     private readonly GreenToken? _questionToken;
     private readonly GreenNode? _argumentList;
     private readonly GreenNode? _trailingClosure;
+    private readonly GreenList? _labeledClosures;
 
-    public InvocationExpressionGreen(GreenNode? expression, GreenToken? questionToken, GreenNode? argumentList, GreenNode? trailingClosure)
+    public InvocationExpressionGreen(GreenNode? expression, GreenToken? questionToken, GreenNode? argumentList, GreenNode? trailingClosure, GreenList? labeledClosures)
         : base(SyntaxKind.InvocationExpression, 0)
     {
         _expression = expression;
         _questionToken = questionToken;
         _argumentList = argumentList;
         _trailingClosure = trailingClosure;
+        _labeledClosures = labeledClosures;
         FullWidth = (expression?.FullWidth ?? 0)
                     + (questionToken?.FullWidth ?? 0)
                     + (argumentList?.FullWidth ?? 0)
-                    + (trailingClosure?.FullWidth ?? 0);
+                    + (trailingClosure?.FullWidth ?? 0)
+                    + (labeledClosures?.FullWidth ?? 0);
     }
 
-    public override int SlotCount => 4;
+    public override int SlotCount => 5;
 
     public override GreenNode? GetSlot(int index) => index switch
     {
@@ -1038,11 +1041,68 @@ internal sealed class InvocationExpressionGreen : GreenNode
         1 => _questionToken,
         2 => _argumentList,
         3 => _trailingClosure,
+        4 => _labeledClosures,
         _ => null,
     };
 
     public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
         new InvocationExpressionSyntax(this, parent, position);
+}
+
+/// <summary>Green node for <see cref="IfExpressionSyntax"/>.</summary>
+internal sealed class IfExpressionGreen : GreenNode
+{
+    private readonly GreenNode? _statement;
+
+    public IfExpressionGreen(GreenNode? statement)
+        : base(SyntaxKind.IfExpression, 0)
+    {
+        _statement = statement;
+        FullWidth = (statement?.FullWidth ?? 0);
+    }
+
+    public override int SlotCount => 1;
+
+    public override GreenNode? GetSlot(int index) => index switch
+    {
+        0 => _statement,
+        _ => null,
+    };
+
+    public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
+        new IfExpressionSyntax(this, parent, position);
+}
+
+/// <summary>Green node for <see cref="LabeledClosureSyntax"/>.</summary>
+internal sealed class LabeledClosureGreen : GreenNode
+{
+    private readonly GreenToken? _nameToken;
+    private readonly GreenToken? _colonToken;
+    private readonly GreenNode? _closure;
+
+    public LabeledClosureGreen(GreenToken? nameToken, GreenToken? colonToken, GreenNode? closure)
+        : base(SyntaxKind.LabeledClosure, 0)
+    {
+        _nameToken = nameToken;
+        _colonToken = colonToken;
+        _closure = closure;
+        FullWidth = (nameToken?.FullWidth ?? 0)
+                    + (colonToken?.FullWidth ?? 0)
+                    + (closure?.FullWidth ?? 0);
+    }
+
+    public override int SlotCount => 3;
+
+    public override GreenNode? GetSlot(int index) => index switch
+    {
+        0 => _nameToken,
+        1 => _colonToken,
+        2 => _closure,
+        _ => null,
+    };
+
+    public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
+        new LabeledClosureSyntax(this, parent, position);
 }
 
 /// <summary>Green node for <see cref="ArgumentListSyntax"/>.</summary>
@@ -2759,6 +2819,34 @@ internal sealed class BindingTypeTestPatternGreen : GreenNode
 
     public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
         new BindingTypeTestPatternSyntax(this, parent, position);
+}
+
+/// <summary>Green node for <see cref="OptionalPatternSyntax"/>.</summary>
+internal sealed class OptionalPatternGreen : GreenNode
+{
+    private readonly GreenNode? _pattern;
+    private readonly GreenToken? _questionToken;
+
+    public OptionalPatternGreen(GreenNode? pattern, GreenToken? questionToken)
+        : base(SyntaxKind.OptionalPattern, 0)
+    {
+        _pattern = pattern;
+        _questionToken = questionToken;
+        FullWidth = (pattern?.FullWidth ?? 0)
+                    + (questionToken?.FullWidth ?? 0);
+    }
+
+    public override int SlotCount => 2;
+
+    public override GreenNode? GetSlot(int index) => index switch
+    {
+        0 => _pattern,
+        1 => _questionToken,
+        _ => null,
+    };
+
+    public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
+        new OptionalPatternSyntax(this, parent, position);
 }
 
 /// <summary>Green node for <see cref="OrPatternSyntax"/>.</summary>

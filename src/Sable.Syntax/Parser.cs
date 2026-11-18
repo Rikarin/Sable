@@ -607,7 +607,7 @@ internal sealed class Parser {
                 case SyntaxKind.OpenParenToken: {
                     var arguments = ParseArgumentList(SyntaxKind.OpenParenToken, SyntaxKind.CloseParenToken);
                     var trailing = TryParseTrailingClosure();
-                    expression = new InvocationExpressionGreen(expression, null, arguments, trailing);
+                    expression = new InvocationExpressionGreen(expression, null, arguments, trailing, ParseLabeledClosures(trailing));
                     continue;
                 }
 
@@ -615,7 +615,7 @@ internal sealed class Parser {
                 // closure; it has no parenthesised argument list.
                 case SyntaxKind.OpenBraceToken when CanTakeTrailingClosure(): {
                     var closure = ParseBraceClosure(null);
-                    expression = new InvocationExpressionGreen(expression, null, null, closure);
+                    expression = new InvocationExpressionGreen(expression, null, null, closure, ParseLabeledClosures(closure));
                     continue;
                 }
 
@@ -631,11 +631,13 @@ internal sealed class Parser {
                 case SyntaxKind.QuestionToken when Peek(1).Kind == SyntaxKind.OpenParenToken && !HasSpaceBeforeCurrent: {
                     var question = EatToken();
                     var arguments = ParseArgumentList(SyntaxKind.OpenParenToken, SyntaxKind.CloseParenToken);
+                    var trailing = TryParseTrailingClosure();
                     expression = new InvocationExpressionGreen(
                         expression,
                         question,
                         arguments,
-                        TryParseTrailingClosure()
+                        trailing,
+                        ParseLabeledClosures(trailing)
                     );
                     continue;
                 }
@@ -955,6 +957,12 @@ internal sealed class Parser {
 
             case SyntaxKind.MatchKeyword:
                 return ParseMatchExpression();
+
+            // 'let s = if x > 3 { "big" } else { "small" }': where a value is
+            // wanted, an 'if' gives one. At the start of a statement it is
+            // the statement, which the statement parser sees first.
+            case SyntaxKind.IfKeyword:
+                return new IfExpressionGreen(ParseIfStatement());
 
             // Where a '{' opens the body — after 'if p.x ==' with its right
             // operand missing — it is the body, not a closure for an operand;
@@ -1318,7 +1326,7 @@ internal sealed class Parser {
                 or SyntaxKind.TildeToken
                 or SyntaxKind.AmpersandToken => true,
             SyntaxKind.AwaitKeyword or SyntaxKind.MoveKeyword or SyntaxKind.TryKeyword => true,
-            SyntaxKind.MatchKeyword or SyntaxKind.CapitalSelfKeyword => true,
+            SyntaxKind.MatchKeyword or SyntaxKind.IfKeyword or SyntaxKind.CapitalSelfKeyword => true,
             SyntaxKind.OpenBraceToken or SyntaxKind.DollarToken => true,
             _ => false,
         };
@@ -1865,6 +1873,27 @@ internal sealed class Parser {
     /// <summary>A brace right after an argument list is the call's last argument.</summary>
     GreenNode? TryParseTrailingClosure() => CanTakeTrailingClosure() ? ParseBraceClosure(null) : null;
 
+    /// <summary>
+    ///     <c>both { 1 } onFail: { 2 }</c>: after a trailing closure, more of
+    ///     them, each labelled for the parameter it is — on the line the one
+    ///     before ends on, as a new line starts a new statement.
+    /// </summary>
+    GreenList ParseLabeledClosures(GreenNode? trailing) {
+        if (trailing is null) {
+            return GreenList.Empty;
+        }
+
+        var closures = ImmutableArray.CreateBuilder<GreenNode>();
+        while (At(SyntaxKind.IdentifierToken) && Peek(1).Kind == SyntaxKind.ColonToken && Peek(2).Kind == SyntaxKind.OpenBraceToken
+               && !_noBrace && !AtStatementStart) {
+            var name = EatToken();
+            var colon = EatToken();
+            closures.Add(new LabeledClosureGreen(name, colon, ParseBraceClosure(null)));
+        }
+
+        return GreenList.Create(closures.ToImmutable());
+    }
+
     /// <remarks>
     ///     A brace on a new line is never a trailing closure: the line before
     ///     it ended a statement, so the brace starts something else.
@@ -2212,6 +2241,17 @@ internal sealed class Parser {
 
         var op = EatToken();
         var right = CanStartPattern(Current.Kind) ? ParsePrimaryPattern() : null;
+
+        // '5...' runs to the end of the type; '5..<' would leave out a bound
+        // it never names.
+        if (right is null && op.Kind == SyntaxKind.DotDotLessToken) {
+            _diagnostics.Error(
+                ErrorCode.ERR_ExpectedPattern,
+                CurrentSpan,
+                "a half-open range needs an upper bound: write '5...' for one that runs to the end"
+            );
+        }
+
         return new RangePatternGreen(pattern, op, right);
     }
 
@@ -2222,7 +2262,14 @@ internal sealed class Parser {
 
         _nesting++;
         try {
-            return ParsePrimaryPatternCore();
+            // 'let v?' is '.Some(let v)': the pattern, matched against what
+            // an optional holds.
+            var pattern = ParsePrimaryPatternCore();
+            while (At(SyntaxKind.QuestionToken)) {
+                pattern = new OptionalPatternGreen(pattern, EatToken());
+            }
+
+            return pattern;
         } finally {
             _nesting--;
         }
@@ -2820,6 +2867,16 @@ internal sealed class Parser {
                 var pattern = At(SyntaxKind.SelfKeyword)
                     ? new BindingPatternGreen(null, EatToken())
                     : ParseBindingTarget();
+
+                // 'if let v? = o' is the pattern 'v?' where 'let' already
+                // unwraps: said once, rather than as everything after it.
+                if (At(SyntaxKind.QuestionToken)) {
+                    ReportUnexpected(
+                        ErrorCode.ERR_ExpectedToken,
+                        "'if let' unwraps the optional already: write 'if let v = o', or 'if case let v? = o'"
+                    );
+                    SkipCurrentToken();
+                }
 
                 GreenNode? annotation = null;
                 if (At(SyntaxKind.ColonToken)) {

@@ -74,6 +74,7 @@ public enum ErrorCode {
     ERR_CircularAlias = 2005,
     ERR_ModuleNotFound = 2006,
     ERR_NoModuleDeclaration = 2007,
+    ERR_ModuleInTwoPackages = 2090,
 
     // ---- Types (S3000-S3999) ---------------------------------------------
     ERR_WrongTypeArgumentCount = 3000,

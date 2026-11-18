@@ -37,6 +37,13 @@ public sealed record ParseOptions {
     /// </summary>
     public string? Workspace { get; init; }
 
+    /// <summary>
+    ///     The package the file belongs to, when a build knows it: a module is
+    ///     one package's (spec/SYNTAX.md §1), so two packages declaring the
+    ///     same one is an error rather than one module of both.
+    /// </summary>
+    public string? Package { get; init; }
+
     public ParseOptions WithSymbols(params string[] symbols) => this with { Symbols = [..symbols] };
 
     public ParseOptions WithFeatures(params string[] features) => this with { Features = [..features] };

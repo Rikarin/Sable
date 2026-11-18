@@ -337,6 +337,7 @@ public sealed partial class Compilation {
     static string ManifestModule(SyntaxTree tree) => "Manifest:" + Path.GetDirectoryName(Path.GetFullPath(tree.Text.FileName));
 
     void DeclareAll() {
+        var modulePackages = new Dictionary<ModuleSymbol, string>(ReferenceEqualityComparer.Instance);
         foreach (var tree in SyntaxTrees) {
             if (tree.Root is not CompilationUnitSyntax unit) {
                 continue;
@@ -365,6 +366,19 @@ public sealed partial class Compilation {
             var scope = new FileScope(tree, module);
             _fileScopes[tree] = scope;
             CurrentScope = scope;
+
+            // A module is one package's: two declaring it would merge into
+            // one module, each reaching the other's internals.
+            if (tree.Options.Package is { } package && unit.Module is { } written) {
+                if (!modulePackages.TryAdd(module, package) && modulePackages[module] is var first && first != package) {
+                    ReportDeclaration(
+                        ErrorCode.ERR_ModuleInTwoPackages,
+                        written.Name.Span,
+                        $"module '{moduleName}' is declared by package '{first}' and by package '{package}'; "
+                        + "a module belongs to one package, so give this one a name under its own package's"
+                    );
+                }
+            }
             CheckAttributes(tree);
 
             foreach (var member in unit.Members) {

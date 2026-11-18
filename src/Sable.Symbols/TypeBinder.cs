@@ -427,25 +427,30 @@ internal sealed class TypeBinder(Compilation compilation) {
     public void BindTypeDeclaration(NamedTypeSymbol type, SyntaxNode declaration) {
         var scope = compilation.CurrentScope;
 
-        Defer(() => {
-                BindTypeParameterConstraints(type.TypeParameters, type, scope);
+        // Bound when the base types are first asked for — whether the type
+        // conforms to something may be asked before this deferred work runs —
+        // and in any case with the rest of the signatures. What an extension
+        // adds is added to what this binds, never replaced by it.
+        type.PendingBaseTypes = () => {
+            BindTypeParameterConstraints(type.TypeParameters, type, scope);
 
-                var baseTypes = BaseTypeListOf(declaration);
-                if (baseTypes is not null) {
-                    type.BaseTypes =
-                        [..baseTypes.Types.Select(syntax => BindType(syntax, type, scope))];
-                }
-
-                // '@reflectable' is a conformance to Sable.Core's Reflectable,
-                // which 'TypeInfo.of' asks of its argument.
-                if (type.IsReflectable && compilation.Core.Module.GetType("Reflectable") is { TypeKind: TypeKind.Protocol } reflectable
-                    && !type.BaseTypes.Contains(reflectable)) {
-                    type.BaseTypes = type.BaseTypes.Add(reflectable);
-                }
-
-                BindWhereClause(WhereClauseOf(declaration), type, scope);
+            var baseTypes = BaseTypeListOf(declaration);
+            if (baseTypes is not null) {
+                type.BaseTypes =
+                    [..baseTypes.Types.Select(syntax => BindType(syntax, type, scope)), ..type.BaseTypes];
             }
-        );
+
+            // '@reflectable' is a conformance to Sable.Core's Reflectable,
+            // which 'TypeInfo.of' asks of its argument.
+            if (type.IsReflectable && compilation.Core.Module.GetType("Reflectable") is { TypeKind: TypeKind.Protocol } reflectable
+                && !type.BaseTypes.Contains(reflectable)) {
+                type.BaseTypes = type.BaseTypes.Add(reflectable);
+            }
+
+            BindWhereClause(WhereClauseOf(declaration), type, scope);
+        };
+
+        Defer(() => _ = type.BaseTypes);
 
         // Conformance is checked after every signature is bound, so that the
         // comparison sees real types rather than unresolved ones — and so that

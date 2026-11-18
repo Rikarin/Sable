@@ -273,6 +273,9 @@ public sealed partial class LlvmEmitter {
                                 declare ptr @sable_string_from_i128(i64, i64)
                                 declare ptr @sable_string_from_u128(i64, i64)
                                 declare ptr @sable_string_from_f16(float)
+                                declare i64 @sable_string_cursor_end(ptr)
+                                declare i32 @sable_string_cursor_scalar(ptr, i64)
+                                declare i64 @sable_string_cursor_next(ptr, i64)
                                 declare void @llvm.dbg.declare(metadata, metadata, metadata)
                                 declare void @llvm.dbg.value(metadata, metadata, metadata)
 
@@ -1972,6 +1975,18 @@ public sealed partial class LlvmEmitter {
 
                 case "string_index_of":
                     Line($"{Result()} = call i64 @sable_string_index_of(ptr {operands[0]}, i32 {operands[1]})");
+                    return;
+
+                case "string_cursor_end":
+                    Line($"{Result()} = call i64 @sable_string_cursor_end(ptr {operands[0]})");
+                    return;
+
+                case "string_cursor_scalar":
+                    Line($"{Result()} = call i32 @sable_string_cursor_scalar(ptr {operands[0]}, i64 {operands[1]})");
+                    return;
+
+                case "string_cursor_next":
+                    Line($"{Result()} = call i64 @sable_string_cursor_next(ptr {operands[0]}, i64 {operands[1]})");
                     return;
 
                 case "io_write" or "io_write_error":

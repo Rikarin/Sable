@@ -1442,6 +1442,12 @@ public static class SilBuiltins {
         Add("string_slice", SilType.String, SilType.String, SilType.Int, SilType.Int);
         Add("string_contains", SilType.Bool, SilType.String, SilType.Char);
         Add("string_index_of", SilType.Int, SilType.String, SilType.Char);
+
+        // Walking a string's scalars from a cursor, which only these read:
+        // a byte offset natively, a scalar index in the interpreter.
+        Add("string_cursor_end", SilType.Int, SilType.String);
+        Add("string_cursor_scalar", SilType.Char, SilType.String, SilType.Int);
+        Add("string_cursor_next", SilType.Int, SilType.String, SilType.Int);
         Add("string_trimmed", SilType.String, SilType.String);
         Add("string_split", new ArrayType(SilType.String), SilType.String, SilType.Char);
         Add("string_hash", SilType.Int, SilType.String);

@@ -893,6 +893,17 @@ public sealed partial class SilInterpreter(SilModule module, int stepLimit = 10_
             case "string_index_of":
                 return (long)Text(operands[0]).Scalars.IndexOf((Rune)operands[1]!);
 
+            // The cursor is a scalar index here, a byte offset natively;
+            // nothing but these three reads it.
+            case "string_cursor_end":
+                return (long)Text(operands[0]).Scalars.Count;
+
+            case "string_cursor_scalar":
+                return Text(operands[0]).Scalars[(int)(long)operands[1]!];
+
+            case "string_cursor_next":
+                return (long)operands[1]! + 1;
+
             case "string_trimmed": {
                 var scalars = Text(operands[0]).Scalars;
                 var start = 0;

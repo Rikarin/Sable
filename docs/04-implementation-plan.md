@@ -1148,8 +1148,7 @@ This trades the planned stackless state machine (§2.2, item 4) for a stack
 per task — far less compiler for the same semantics, at the cost of memory
 per task and of thread creation. Not yet: `async let` runs its child to
 completion at the declaration rather than alongside; no task groups,
-cancellation, `for await` or async sequences, no sleeping or I/O to wait
-on, and no parallelism — all `Sable.Concurrency`'s, along with the switch
+cancellation, no sleeping or I/O to wait on, and no parallelism — all `Sable.Concurrency`'s, along with the switch
 to the state machine where tasks are many.
 
 ### 4.4 Exit criteria
@@ -1174,7 +1173,11 @@ to the state machine where tasks are many.
       `lowerBound`, `upperBound`, `isEmpty`, `contains`, over a `Comparable`
       bound), and lower as values: stored, passed, returned and iterated,
       while a `for` over a range written in the loop still builds none.
-      Nothing else is declared in C# (`CoreTypes`): only the types the
+      A `for` over anything but an array, a dictionary or a range goes
+      through `Sequence` and `Iterator` (`lib/Sable.Core/Sequence.sb`) —
+      `makeIterator()`, then `next()` until none — which `String` conforms
+      to; `for await` the same through `AsyncSequence`, which
+      `Sable.Concurrency`'s `Channel` conforms to. Nothing else is declared in C# (`CoreTypes`): only the types the
       compiler knows by sight, and the shells the binder desugars to
       (`Error`, `From`, `Optional`, `Dictionary`). I128, U128 and F16 are SIL
       types (`i128` and `half` in LLVM), with literals up to 128 bits and the

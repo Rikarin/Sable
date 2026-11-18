@@ -1092,6 +1092,24 @@ SableString *sable_string_slice(const SableString *s, int64_t from, int64_t to) 
     return make_string(s->bytes + start, end - start);
 }
 
+// A cursor over a string's scalars is a byte offset: the next scalar starts
+// there, and the one after it past that scalar's bytes. A loop over a string
+// is then linear, where indexing by scalar would count from the start.
+int64_t sable_string_cursor_end(const SableString *s) {
+    return s->length;
+}
+
+int32_t sable_string_cursor_scalar(const SableString *s, int64_t cursor) {
+    int64_t width;
+    return decode(s->bytes + cursor, &width);
+}
+
+int64_t sable_string_cursor_next(const SableString *s, int64_t cursor) {
+    int64_t width;
+    decode(s->bytes + cursor, &width);
+    return cursor + width;
+}
+
 int64_t sable_string_index_of(const SableString *s, int32_t scalar) {
     int64_t index = 0;
     for (int64_t i = 0; i < s->length; index++) {

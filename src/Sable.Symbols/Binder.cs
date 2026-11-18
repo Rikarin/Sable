@@ -1726,13 +1726,27 @@ public sealed partial class Binder {
 
     BoundStatement BindForEach(ForStatementSyntax statement) {
         var sequence = BindExpression(statement.Sequence);
+        var isAwait = !statement.AwaitKeyword.IsNone;
 
         PushScope();
+
+        // A sequence the compiler does not know by sight goes through its
+        // iterator: 'var $iterator = s.makeIterator()', then 'next()' until
+        // it gives none. 'for await' always does, awaiting each 'next()'.
+        var throughIterator = isAwait || !IsKnownSequence(sequence.Type);
+        var iteration = throughIterator ? BindIteration(statement, sequence, isAwait) : null;
+
+        // A sequence that cannot be gone through has been reported; its
+        // elements are of no type.
+        TypeSymbol ElementType() =>
+            iteration is { } known ? known.Element
+            : throughIterator ? ErrorTypeSymbol.Instance
+            : ElementTypeOf(sequence.Type, statement.Sequence);
 
         LocalSymbol? element = null;
         BoundStatement? deconstruction = null;
         if (statement.Pattern is BindingPatternSyntax binding) {
-            var elementType = ElementTypeOf(sequence.Type, statement.Sequence);
+            var elementType = ElementType();
             element = new(binding.Identifier.Text, _containingSymbol, binding, false) {
                 TypeResolver = () => elementType
             };
@@ -1740,7 +1754,7 @@ public sealed partial class Binder {
         } else if (statement.Pattern is not WildcardPatternSyntax) {
             // 'for (key, value) in d': each element in a variable of the
             // loop's own, nameless, taken apart as 'let (key, value) =' would.
-            var elementType = ElementTypeOf(sequence.Type, statement.Sequence);
+            var elementType = ElementType();
             element = new("$element", _containingSymbol, statement.Pattern, false) {
                 TypeResolver = () => elementType
             };
@@ -1775,10 +1789,134 @@ public sealed partial class Binder {
         }
 
         PopScope();
+
+        if (iteration is { } through) {
+            // 'for _ in s' still takes each value, in a variable no one names.
+            element ??= new("$element", _containingSymbol, statement.Pattern, false) {
+                TypeResolver = () => through.Element
+            };
+            var loopBody = filter is null ? body : new BoundIf(statement.Body, filter, body, null);
+            var next = new BoundConditionBinding(statement.Sequence, Core.Bool, through.Next, null, element);
+            return Record(
+                statement,
+                new BoundBlock(
+                    statement,
+                    [through.Iterator],
+                    [
+                        new BoundLocalDeclaration(statement.Sequence, through.Iterator, through.MakeIterator),
+                        new BoundWhile(statement, next, loopBody),
+                    ]
+                )
+            );
+        }
+
         return Record(
             statement,
             new BoundForEach(statement, element, sequence, filter, body)
         );
+    }
+
+    /// <summary>
+    ///     A type 'for' goes through directly, with no iterator: an array, a
+    ///     dictionary, a range — and an error, already reported.
+    /// </summary>
+    bool IsKnownSequence(TypeSymbol type) =>
+        type.IsError || type is ArrayTypeSymbol || DictionaryTypes(type) is not null
+        || type is NamedTypeSymbol named && Core.IsRange(named);
+
+    /// <summary>How a loop goes through a sequence by its iterator.</summary>
+    /// <param name="Iterator">The loop's own variable holding the iterator.</param>
+    /// <param name="MakeIterator">The call that makes it.</param>
+    /// <param name="Next">The call that gives each value, as an optional.</param>
+    /// <param name="Element">What each value is.</param>
+    sealed record Iteration(LocalSymbol Iterator, BoundExpression MakeIterator, BoundExpression Next, TypeSymbol Element);
+
+    /// <summary>
+    ///     Binds the calls a loop over a <c>Sequence</c> (or, for
+    ///     <c>for await</c>, an <c>AsyncSequence</c>) makes, as if written:
+    ///     <c>makeIterator()</c> on the sequence and <c>next()</c> on the
+    ///     iterator, which the loop's variable holds and can change.
+    /// </summary>
+    Iteration? BindIteration(ForStatementSyntax statement, BoundExpression sequence, bool isAwait) {
+        var protocol = isAwait ? Core.AsyncSequence : Core.Sequence;
+        var make = isAwait ? "makeAsyncIterator" : "makeIterator";
+        var type = sequence.Type is OptionalTypeSymbol ? null : sequence.Type;
+
+        if (protocol is null || type is null || !Conversions.Satisfies(type, protocol, _conversions.Equivalence)) {
+            var description = sequence.Type.ToDisplayString();
+            _diagnostics.Error(
+                ErrorCode.ERR_NotIterable,
+                statement.Sequence.Span,
+                isAwait
+                    ? IsKnownSequence(sequence.Type) || type is not null && Core.Sequence is { } plain && Conversions.Satisfies(type, plain, _conversions.Equivalence)
+                        ? $"'{description}' is not an async sequence, so there is nothing to await: write 'for' without 'await'"
+                        : $"'{description}' cannot be iterated with 'for await': it does not conform to 'AsyncSequence'"
+                    : sequence.Type is OptionalTypeSymbol
+                        ? $"'{description}' may hold nothing, so unwrap it before iterating"
+                        : $"'{description}' cannot be iterated: it does not conform to 'Sequence'"
+            );
+            return null;
+        }
+
+        var makeIterator = BindIterationCall(statement.Sequence, sequence, make);
+        if (makeIterator.HasError) {
+            return null;
+        }
+
+        var iterator = new LocalSymbol("$iterator", _containingSymbol, statement.Sequence, true) {
+            TypeResolver = () => makeIterator.Type
+        };
+
+        // 'for await' awaits each value, as 'await iterator.next()' would.
+        if (isAwait) {
+            _awaitDepth++;
+        }
+
+        var next = BindIterationCall(statement.Sequence, new BoundLocalAccess(statement.Sequence, iterator, makeIterator.Type), "next");
+
+        if (isAwait) {
+            _awaitDepth--;
+        }
+
+        if (next.HasError) {
+            return null;
+        }
+
+        if (next.Type is not OptionalTypeSymbol optional) {
+            _diagnostics.Error(
+                ErrorCode.ERR_NotIterable,
+                statement.Sequence.Span,
+                $"'{makeIterator.Type.ToDisplayString()}.next()' gives '{next.Type.ToDisplayString()}', "
+                + "and an iterator gives an optional, none when it is done"
+            );
+            return null;
+        }
+
+        return new(iterator, makeIterator, next, optional.UnderlyingType);
+    }
+
+    /// <summary>A call, with no arguments, to the instance member named on the receiver, as 'receiver.name()' binds.</summary>
+    BoundExpression BindIterationCall(SyntaxNode syntax, BoundExpression receiver, string name) {
+        var found = LookupMember(receiver.Type, name);
+        ImmutableArray<FunctionSymbol> functions = found is null
+            ? []
+            : [..found.Value.Members.OfType<FunctionSymbol>().Where(static f => !f.IsStatic && f.Parameters.IsEmpty)];
+
+        if (functions.IsEmpty) {
+            _diagnostics.Error(
+                ErrorCode.ERR_NotIterable,
+                syntax.Span,
+                $"'{receiver.Type.ToDisplayString()}' has no '{name}()' for a loop to call"
+            );
+            return new BoundError(syntax, receiver);
+        }
+
+        if (!CheckAccessible(functions[0], syntax)) {
+            return new BoundError(syntax, receiver);
+        }
+
+        var group = new BoundFunctionGroup(syntax, receiver, functions) { Substitution = found!.Value.Substitution };
+        return BindCallToGroup(syntax, group, [], [], []);
     }
 
     /// <summary>What a <c>for … in</c> yields, for the sequences understood so far.</summary>
@@ -1824,8 +1962,8 @@ public sealed partial class Binder {
             return ErrorTypeSymbol.Instance;
         }
 
-        // User sequences need the Iterable protocol, which arrives with the
-        // standard library. A bare integer is not one: 'for i in 0..<n'.
+        // Any other type goes through its iterator (BindIteration), so is not
+        // asked about here.
         _diagnostics.Error(
             ErrorCode.ERR_NotIterable,
             syntax.Span,
@@ -3361,7 +3499,7 @@ public sealed partial class Binder {
             : BindExpression(syntax);
 
     BoundExpression BindCallToGroup(
-        InvocationExpressionSyntax syntax,
+        SyntaxNode syntax,
         BoundFunctionGroup group,
         ImmutableArray<BoundExpression> arguments,
         ImmutableArray<string?> labels,

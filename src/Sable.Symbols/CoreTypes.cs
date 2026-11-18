@@ -131,8 +131,23 @@ public sealed class CoreTypes {
 
     NamedTypeSymbol? _range, _closedRange;
 
+    /// <summary>
+    ///     <c>Sequence</c> and <c>AsyncSequence</c>, what <c>for</c> and
+    ///     <c>for await</c> go through when the compiler does not know the
+    ///     type by sight: declared in <c>lib/Sable.Core/Sequence.sb</c>.
+    /// </summary>
+    public NamedTypeSymbol? Sequence => _sequence ??= DeclaredProtocol("Sequence");
+
+    /// <inheritdoc cref="Sequence" />
+    public NamedTypeSymbol? AsyncSequence => _asyncSequence ??= DeclaredProtocol("AsyncSequence");
+
+    NamedTypeSymbol? _sequence, _asyncSequence;
+
     NamedTypeSymbol? DeclaredStruct(string name) =>
         Module.GetType(name) is { TypeKind: TypeKind.Struct } type ? type : null;
+
+    NamedTypeSymbol? DeclaredProtocol(string name) =>
+        Module.GetType(name) is { TypeKind: TypeKind.Protocol } type ? type : null;
 
     /// <summary>True for a <c>Range</c> or <c>ClosedRange</c> of some bound.</summary>
     public bool IsRange(TypeSymbol type) =>

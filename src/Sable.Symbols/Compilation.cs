@@ -1437,12 +1437,16 @@ public sealed partial class Compilation {
 
         var scope = CurrentScope;
 
+        // The constraints bind when first read, which may be before this
+        // file's deferred work runs; the deferral only makes sure they do.
+        if (declaration.BaseTypes is { } constraints) {
+            parameter.ConstraintsResolver = () => [
+                ..constraints.Types.Select(syntax => TypeBinder.BindType(syntax, protocol, scope))
+            ];
+        }
+
         TypeBinder.Defer(() => {
-                if (declaration.BaseTypes is { } constraints) {
-                    parameter.Constraints = [
-                        ..constraints.Types.Select(syntax => TypeBinder.BindType(syntax, protocol, scope))
-                    ];
-                }
+                _ = parameter.Constraints;
 
                 if (declaration.DefaultType is { } fallback) {
                     parameter.DefaultType = TypeBinder.BindType(fallback, protocol, scope);

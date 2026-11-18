@@ -32,6 +32,12 @@ internal sealed class Conversions(CoreTypes core) {
             return ConversionKind.Identity;
         }
 
+        // Inside a generic type, 'self' is of the definition, 'Channel',
+        // which is the type over its own parameters, 'Channel<Element>'.
+        if (IsOwnConstruction(source, target) || IsOwnConstruction(target, source)) {
+            return ConversionKind.Identity;
+        }
+
         // A reference stored as a relative one, or read back as absolute:
         // the same target, measured differently (docs/02 §2.5).
         if (SameReferent(source, target)) {
@@ -260,6 +266,13 @@ internal sealed class Conversions(CoreTypes core) {
 
         return false;
     }
+
+    /// <summary>True when <paramref name="constructed" /> is <paramref name="definition" /> applied to its own type parameters.</summary>
+    static bool IsOwnConstruction(TypeSymbol definition, TypeSymbol constructed) =>
+        definition is NamedTypeSymbol { TypeArguments.IsEmpty: true, TypeParameters.IsEmpty: false } generic
+        && constructed is NamedTypeSymbol named
+        && ReferenceEquals(named.OriginalDefinition, generic)
+        && named.TypeArguments.SequenceEqual(generic.TypeParameters);
 
     static bool SameReferent(TypeSymbol source, TypeSymbol target) =>
         source is ReferenceTypeSymbol from

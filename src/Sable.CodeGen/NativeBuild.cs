@@ -388,14 +388,25 @@ public static class NativeBuild {
     ///     when it is set; for Windows, LLVM's <c>llvm-lib</c>, which writes the
     ///     archives Microsoft's linker reads; elsewhere the system's <c>ar</c>.
     /// </summary>
+    /// <remarks>
+    ///     On Windows the archive takes in compiler-rt's builtins too, as
+    ///     <c>llvm-lib</c> merges a library it is given: the program and the
+    ///     runtime call them (F16, 128-bit division), and neither Microsoft's
+    ///     C runtime nor its linker has them, where on macOS and Linux every C
+    ///     compiler links them in. So the library is still all a C program
+    ///     needs beside its own objects.
+    /// </remarks>
     static (string Program, IReadOnlyList<string> Arguments) Archiver(NativeTarget target, string output, IReadOnlyList<string> objects) {
         if (Environment.GetEnvironmentVariable("AR") is { Length: > 0 } ar) {
             return (ar, ["rcs", output, ..objects]);
         }
 
-        return target.Platform == NativePlatform.Windows
-            ? ("llvm-lib", ["/out:" + output, ..objects])
-            : ("ar", ["rcs", output, ..objects]);
+        if (target.Platform != NativePlatform.Windows) {
+            return ("ar", ["rcs", output, ..objects]);
+        }
+
+        var builtins = NativeTarget.Host.Platform == NativePlatform.Windows && CompilerRtBuiltins.Value is { } found ? [found] : Array.Empty<string>();
+        return ("llvm-lib", ["/out:" + output, ..objects, ..builtins]);
     }
 
     /// <summary>Why an executable cannot be linked for <paramref name="target" />.</summary>

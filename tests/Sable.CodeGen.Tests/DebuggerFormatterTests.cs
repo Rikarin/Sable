@@ -498,7 +498,11 @@ public sealed class DebuggerFormatterTests {
             var result = Pipeline.Compile(new SourceText(Scopes, "scopes.sb"), directory.FullName);
             Assert.True(result.Succeeded, string.Join("\n", result.Errors));
             var ir = result.LlvmIr!;
-            Assert.Contains("!\"Dwarf Version\", i32 5}", ir, StringComparison.Ordinal);
+            // Windows' linker reads CodeView, not DWARF; the nodes below are the same either way.
+            Assert.Contains(
+                NativeTarget.Host.Platform == NativePlatform.Windows ? "!\"CodeView\", i32 1}" : "!\"Dwarf Version\", i32 5}",
+                ir,
+                StringComparison.Ordinal);
 
             // The inner 'x' is in the loop body's block, inside the loop's own.
             var innerX = System.Text.RegularExpressions.Regex.Match(ir, @"!DILocalVariable\(name: ""x"", scope: (![0-9]+), file: ![0-9]+, line: 11,");

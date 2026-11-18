@@ -152,6 +152,8 @@ public static class PackageOperations {
         var label = $"{package.Name} v{package.Version}";
         if (package.IsLocal) {
             label += root ? $" ({package.Package.Directory})" : $" (path {workspace.Relative(package.Package.Directory)})";
+        } else if (package.Git is { } git) {
+            label += $" ({git.Url}#{git.ShortCommit})";
         }
 
         var features = package.Features.Where(static f => f != "default").Order(StringComparer.Ordinal).ToList();
@@ -188,7 +190,9 @@ public static class PackageOperations {
                         continue;
                     }
 
-                    throw new PackageException($"{package.ManifestPath}:{spec.Line}: {kind} dependency '{spec.Name}' has only a path; a published package needs a version requirement for it, like {{ version = \"1.0\", path = \"{spec.Path}\" }}");
+                    throw spec.Git is { } url
+                        ? new PackageException($"{package.ManifestPath}:{spec.Line}: {kind} dependency '{spec.Name}' comes only from git; a published package needs a version requirement for it, which the registry must have, like {{ version = \"1.0\", git = \"{url}\" }}")
+                        : new PackageException($"{package.ManifestPath}:{spec.Line}: {kind} dependency '{spec.Name}' has only a path; a published package needs a version requirement for it, like {{ version = \"1.0\", path = \"{spec.Path}\" }}");
                 }
 
                 dependencies.Add(new(spec.Name, spec.Version.Text, kind, spec.Optional, spec.DefaultFeatures, spec.Features));

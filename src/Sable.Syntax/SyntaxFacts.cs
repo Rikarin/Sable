@@ -106,7 +106,7 @@ public static class SyntaxFacts {
         }.ToFrozenDictionary(StringComparer.Ordinal);
 
     static readonly FrozenSet<string> FutureReserved =
-        new[] { "macro", "yield", "trait", "impl", "become", "effect", "handler" }
+        new[] { "yield", "trait", "impl", "become", "effect", "handler" }
             .ToFrozenSet(StringComparer.Ordinal);
 
     /// <summary>Maps an identifier spelling to its keyword kind, or Identifier.</summary>

@@ -68,8 +68,8 @@ public sealed class DeriveTests {
 
     [Fact]
     public void AnUnknownDerivationIsAnError() {
-        var error = Single("@derive(Equatable, Copy) struct P { var x: Int }", ErrorCode.ERR_UnknownDerivation);
-        Assert.Contains("'Copy'", error.Message);
+        var error = Single("@derive(Equatable, Printable) struct P { var x: Int }", ErrorCode.ERR_UnknownDerivation);
+        Assert.Contains("'Printable'", error.Message);
     }
 
     [Fact]

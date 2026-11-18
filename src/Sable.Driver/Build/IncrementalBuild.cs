@@ -10,11 +10,29 @@ namespace Sable.Driver.Build;
 
 /// <summary>
 ///     A source file of a program: where it is, the name diagnostics give it,
-///     the features it is parsed with, and — for a registry dependency — the
-///     workspace outside this one it comes from, which <c>package</c> stops at.
+///     the features it is parsed with, for a registry dependency the
+///     workspace outside this one it comes from, which <c>package</c> stops
+///     at, and the package it belongs to, whose modules are its own.
 /// </summary>
-public sealed record SourceFile(string Path, string Name, IReadOnlyList<string> Features, string? Workspace = null) {
-    public ParseOptions Options => ParseOptions.Default with { Features = [..Features], Workspace = Workspace };
+public sealed record SourceFile(string Path, string Name, IReadOnlyList<string> Features, string? Workspace = null, string? Package = null) {
+    /// <summary>The attributes the package's generators answer to, and those they read on members (docs/08).</summary>
+    public GeneratorAttributes Generators { get; init; } = GeneratorAttributes.None;
+
+    public ParseOptions Options => ParseOptions.Default with {
+        Features = [..Features],
+        Workspace = Workspace,
+        Package = Package,
+        GeneratorAttributes = [..Generators.Types],
+        GeneratorMemberAttributes = [..Generators.Members],
+    };
+}
+
+/// <summary>The attributes a package's visible source generators answer to on types, and read on members.</summary>
+public sealed record GeneratorAttributes(IReadOnlyList<string> Types, IReadOnlyList<string> Members) {
+    public static readonly GeneratorAttributes None = new([], []);
+
+    /// <summary>What a cache keyed by a file's options hashes.</summary>
+    public override string ToString() => $"{string.Join(",", Types)};{string.Join(",", Members)}";
 }
 
 /// <summary>
@@ -142,7 +160,7 @@ public static class IncrementalBuild {
                 var (i, j, file) = item;
                 var text = File.ReadAllText(file.Path);
                 texts[i][j] = text;
-                fileHashes[i][j] = Hash($"{file.Name}\n{string.Join(",", file.Features.Order(StringComparer.Ordinal))}\n{text}");
+                fileHashes[i][j] = Hash($"{file.Name}\n{string.Join(",", file.Features.Order(StringComparer.Ordinal))}\n{file.Generators}\n{text}");
             });
         }
 

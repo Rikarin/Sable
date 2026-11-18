@@ -345,6 +345,8 @@ public sealed partial class LlvmEmitter {
                     return Typedef("F64", Basic("double", 64, "DW_ATE_float"));
                 case var _ when type == SilType.F32:
                     return Typedef("F32", Basic("float", 32, "DW_ATE_float"));
+                case var _ when type == SilType.F16:
+                    return Typedef("F16", Basic("_Float16", 16, "DW_ATE_float"));
                 case var _ when type == SilType.Char:
                     return Typedef("Char", Basic("char32_t", 32, "DW_ATE_UTF"));
                 case var _ when SilType.IntegerInfo(type) is var (bits, signed):

@@ -37,6 +37,24 @@ public sealed record ParseOptions {
     /// </summary>
     public string? Workspace { get; init; }
 
+    /// <summary>
+    ///     The package the file belongs to, when a build knows it: a module is
+    ///     one package's (spec/SYNTAX.md §1), so two packages declaring the
+    ///     same one is an error rather than one module of both.
+    /// </summary>
+    public string? Package { get; init; }
+
+    /// <summary>
+    ///     The attributes the package's source generators answer to (docs/08):
+    ///     each may be written on a type, as the compiler's own are.
+    /// </summary>
+    public ImmutableHashSet<string> GeneratorAttributes { get; init; } =
+        ImmutableHashSet<string>.Empty.WithComparer(StringComparer.Ordinal);
+
+    /// <summary>The attributes those generators read on a type's fields and cases.</summary>
+    public ImmutableHashSet<string> GeneratorMemberAttributes { get; init; } =
+        ImmutableHashSet<string>.Empty.WithComparer(StringComparer.Ordinal);
+
     public ParseOptions WithSymbols(params string[] symbols) => this with { Symbols = [..symbols] };
 
     public ParseOptions WithFeatures(params string[] features) => this with { Features = [..features] };

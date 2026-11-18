@@ -115,7 +115,19 @@ public abstract class HarnessCommand : Command {
             var environment = PackageEnvironment.FromProcess();
             var member = workspace.Current ?? workspace.Members[0];
             var graph = PackageBuilder.Resolve(workspace, environment, new BuildRequest(Package: member.Name));
-            var trees = PackageBuilder.TestProgram(graph, member.Name, options.Optimise);
+            // The tests' generators too: those of the dev-dependencies (docs/08 §8.2).
+            var generated = PackageGenerators.Run(graph, member.Name, dev: true, options.Optimise);
+            foreach (var message in generated.Warnings.Concat(generated.Errors)) {
+                Console.Error.WriteLine(message);
+                Console.Error.WriteLine();
+            }
+
+            if (generated.Errors.Count > 0) {
+                Console.Error.WriteLine($"error: could not compile {member.Name}");
+                return null;
+            }
+
+            var trees = PackageBuilder.TestProgram(graph, member.Name, options.Optimise, generated);
             if (trees.Count == 0) {
                 Console.Error.WriteLine($"sable: package '{member.Name}' has no source files");
                 return null;

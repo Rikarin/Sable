@@ -47,6 +47,9 @@ public sealed record UnitPlan(string Name, IReadOnlyList<SourceFile> Files);
 public sealed record BuildSettings(string Profile, bool Optimise, string? DebugDirectory, bool Exclusivity) {
     public bool Debug => DebugDirectory is not null;
 
+    /// <summary>Whether integer overflow traps (<c>overflow-checks</c>); without, the arithmetic wraps.</summary>
+    public bool OverflowChecks { get; init; } = true;
+
     /// <summary>
     ///     What clang is asked for: by default <c>-O2</c> or <c>-O0</c> as
     ///     <see cref="Optimise" /> says, with debug information when there is
@@ -153,7 +156,7 @@ public static class IncrementalBuild {
             _ = Toolchain;
         }
 
-        var settingsKey = $"{CacheVersion}|{Toolchain}|{settings.Profile}|opt={settings.Optimise}|debug={settings.DebugDirectory}|exclusivity={settings.Exclusivity}|whole={settings.Whole}|native={settings.Native.Key}";
+        var settingsKey = $"{CacheVersion}|{Toolchain}|{settings.Profile}|opt={settings.Optimise}|debug={settings.DebugDirectory}|exclusivity={settings.Exclusivity}|overflow={settings.OverflowChecks}|whole={settings.Whole}|native={settings.Native.Key}";
 
         // ---- Read and hash every file --------------------------------------
         string[][] texts;
@@ -239,7 +242,7 @@ public static class IncrementalBuild {
     // =======================================================================
 
     static BuildOutcome Whole(IReadOnlyList<SyntaxTree> program, BuildSettings settings, string executable, string cacheDirectory, BuildTimings? timings) {
-        var result = Pipeline.Compile(program, settings.DebugDirectory, settings.Exclusivity, timings, optimised: settings.Optimise, target: settings.Native.TargetOrHost);
+        var result = Pipeline.Compile(program, settings.DebugDirectory, settings.Exclusivity, timings, optimised: settings.Optimise, target: settings.Native.TargetOrHost, checkOverflow: settings.OverflowChecks);
         if (!result.Succeeded) {
             return BuildOutcome.Failed(result.Errors) with { Warnings = result.Warnings };
         }
@@ -385,6 +388,9 @@ public static class IncrementalBuild {
                 using (BuildTimings.Of(timings, "sil")) {
                     (module, lowering) = SilGen.LowerUnit(compilation, new SilUnit(owned.Contains), index);
                     module.CheckExclusivity = settings.Exclusivity;
+                    if (!settings.OverflowChecks) {
+                        WrappingArithmetic.Apply(module);
+                    }
                 }
 
                 // A unit sees less than the whole program: what it reports, the

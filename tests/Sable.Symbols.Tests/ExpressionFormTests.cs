@@ -224,4 +224,42 @@ public sealed class ExpressionFormTests {
             ),
             static e => e.Code == ErrorCode.ERR_NotAValue
         );
+
+    /// <summary>
+    ///     A generic function is a value once the type wanted settles its type
+    ///     parameters, and only then; one the type does not satisfy is not chosen.
+    /// </summary>
+    [Fact]
+    public void AGenericFunctionIsAValueOfTheTypeWanted() {
+        AssertClean(
+            """
+            fn id<T>(_ x: T) -> T { return x }
+            fn f() -> Int {
+                let g: (Int) -> Int = id
+                return g(1)
+            }
+            """
+        );
+
+        Assert.Contains(
+            ErrorsIn(
+                """
+                fn id<T>(_ x: T) -> T { return x }
+                fn f() { let g = id }
+                """
+            ),
+            static e => e.Code == ErrorCode.ERR_CannotInferTypeArgument
+        );
+
+        Assert.Contains(
+            ErrorsIn(
+                """
+                protocol Shout { fn shout() -> String }
+                fn loud<T: Shout>(_ x: T) -> String { return x.shout() }
+                fn f() { let g: (Int) -> String = loud }
+                """
+            ),
+            static e => e.Code == ErrorCode.ERR_TypeMismatch
+        );
+    }
 }

@@ -114,10 +114,12 @@ public sealed partial class LlvmEmitter {
         output.Append("%SableArrayHeader = type { %SableObjectHeader, i64, i64, ptr }\n\n");
         // Globals: zero until the entry point's start initialises them.
         // Separately compiled, every unit has the globals, and the linker keeps one of each.
+        // One C sees ('@export var') is named for C, and visible to it.
         foreach (var (globalName, globalType) in module.Globals) {
-            var linkage = module.Unit is null ? "internal" : "linkonce_odr";
-            output.Append('@').Append(Global("global." + globalName)).Append($" = {linkage} global ")
-                .Append(Type(globalType)).Append(" zeroinitializer").Append(Comdat("@" + Global("global." + globalName), linkage));
+            var exported = IsExportedGlobal(globalName);
+            var linkage = module.Unit is not null ? "linkonce_odr" : exported ? "dso_local" : "internal";
+            output.Append(GlobalStorage(globalName)).Append($" = {linkage} global ")
+                .Append(Type(globalType)).Append(" zeroinitializer").Append(Comdat(GlobalStorage(globalName), linkage));
             if (_debug?.GlobalVariable(globalName, globalType, local: module.Unit is null) is { } variable) {
                 output.Append(", !dbg ").Append(variable);
             }
@@ -425,6 +427,12 @@ public sealed partial class LlvmEmitter {
     ///     read that as a Swift symbol and try to demangle it.
     /// </summary>
     static string Global(string name) => $"\"{SymbolPrefix}{name}\"";
+
+    /// <summary>An <c>@export</c> variable: in the module's exports, and no function.</summary>
+    bool IsExportedGlobal(string name) => _module!.Exports.ContainsKey(name) && _module.Find(name) is null;
+
+    /// <summary>A global's storage, as an LLVM value: by its C name when C sees it.</summary>
+    string GlobalStorage(string name) => IsExportedGlobal(name) ? $"@\"{_module!.Exports[name]}\"" : "@" + Global("global." + name);
 
     public const string SymbolPrefix = "sable.";
 
@@ -1748,7 +1756,7 @@ public sealed partial class LlvmEmitter {
                     return;
 
                 case GlobalAddrInst global:
-                    _names[global] = "@" + Global("global." + global.Global);
+                    _names[global] = module.GlobalStorage(global.Global);
                     return;
 
                 case PartialApplyInst partial: {
@@ -2989,6 +2997,30 @@ public sealed partial class LlvmEmitter {
 
             if (name.StartsWith("wrap_", StringComparison.Ordinal)) {
                 Wrap(builtin.Operands[0].Type, builtin.Type, operands[0], Result());
+                return true;
+            }
+
+            // overflow-checks = false: LLVM's own arithmetic, which wraps.
+            if (name.StartsWith(SilBuiltins.WrappingPrefix, StringComparison.Ordinal)) {
+                var wt = Type(builtin.Type);
+                var wresult = Result();
+                switch (name[SilBuiltins.WrappingPrefix.Length..name.LastIndexOf('_')]) {
+                    case "neg":
+                        Line($"{wresult} = sub {wt} 0, {operands[0]}");
+                        break;
+                    case "abs": {
+                        var negated = Fresh();
+                        var negative = Fresh();
+                        Line($"{negated} = sub {wt} 0, {operands[0]}");
+                        Line($"{negative} = icmp slt {wt} {operands[0]}, 0");
+                        Line($"{wresult} = select i1 {negative}, {wt} {negated}, {wt} {operands[0]}");
+                        break;
+                    }
+                    case var arithmetic:
+                        Line($"{wresult} = {arithmetic} {wt} {operands[0]}, {operands[1]}");
+                        break;
+                }
+
                 return true;
             }
 

@@ -715,6 +715,11 @@ public sealed partial class SilGen {
             var owner = OwnerOf(call.Function)?.Name;
 
             if (owner == "TypeInfo" && call.Function.Name == "of") {
+                // 'TypeInfo.of(Point.self)' describes Point, not Point.Type.
+                if (type is MetatypeTypeSymbol { InstanceType: var instance }) {
+                    type = instance;
+                }
+
                 if (type is not NamedTypeSymbol named || LowerType(call.Type) is not StructType info) {
                     return Missing(call, $"the TypeInfo of '{type.ToDisplayString()}'");
                 }
@@ -754,7 +759,7 @@ public sealed partial class SilGen {
                 return Missing(call, $"the intrinsic 'Reflect.{call.Function.Name}'");
             }
 
-            if (argument is BoundTypeExpression) {
+            if (argument is BoundTypeExpression or BoundMetatype) {
                 return Missing(call, $"'Reflect.{call.Function.Name}' of a type rather than a value");
             }
 
@@ -788,7 +793,7 @@ public sealed partial class SilGen {
 
         /// <summary>An argument only its type is wanted of: a type names nothing to run; a value is run and let go.</summary>
         void Discard(BoundExpression argument) {
-            if (argument is BoundTypeExpression) {
+            if (argument is BoundTypeExpression or BoundMetatype) {
                 return;
             }
 

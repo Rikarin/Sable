@@ -270,6 +270,10 @@ public sealed class SilParser {
 
                 Expect("=");
                 module.Foreign[name] = (Expect(TokenKind.String, "a C symbol").Text, type);
+                if (Accept("variadic")) {
+                    module.ForeignVariadic[name] = int.Parse(Expect(TokenKind.Number, "the count of fixed parameters").Text, CultureInfo.InvariantCulture);
+                }
+
                 continue;
             }
 

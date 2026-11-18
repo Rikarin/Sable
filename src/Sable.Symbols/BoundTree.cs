@@ -155,6 +155,18 @@ public sealed class BoundTypeExpression(SyntaxNode syntax, TypeSymbol referenced
     public override IEnumerable<BoundNode> Children => [];
 }
 
+/// <summary>
+///     <c>Int.self</c>: a type as a value, of type <c>Int.Type</c>
+///     (<see cref="MetatypeTypeSymbol" />).
+/// </summary>
+public sealed class BoundMetatype(SyntaxNode syntax, TypeSymbol instanceType)
+    : BoundExpression(syntax, new MetatypeTypeSymbol(instanceType)) {
+    /// <summary>The type named: <c>Int</c> for <c>Int.self</c>.</summary>
+    public TypeSymbol InstanceType { get; } = instanceType;
+
+    public override IEnumerable<BoundNode> Children => [];
+}
+
 public sealed class BoundCall(
     SyntaxNode syntax,
     BoundExpression? receiver,
@@ -781,6 +793,13 @@ public sealed class BoundFunctionReference(
     FunctionSymbol function) : BoundExpression(syntax, type) {
     public BoundExpression? Receiver { get; } = receiver;
     public FunctionSymbol Function { get; } = function;
+
+    /// <summary>
+    ///     What the function's type parameters — its own, settled by the
+    ///     function type wanted, and its type's, from the receiver — stand for.
+    /// </summary>
+    public TypeSubstitution Substitution { get; init; } = TypeSubstitution.Empty;
+
     public override IEnumerable<BoundNode> Children => Nodes(Receiver);
 }
 

@@ -62,6 +62,10 @@ public static class Pipeline {
     ///     they leave; without it, a build with debug information keeps every
     ///     local in its slot.
     /// </param>
+    /// <param name="checkOverflow">
+    ///     Trap on integer overflow; a profile's <c>overflow-checks = false</c>
+    ///     turns it off, and the arithmetic wraps (<see cref="WrappingArithmetic" />).
+    /// </param>
     /// <param name="target">
     ///     What the program is built for, whose C calling convention its
     ///     <c>@extern</c> calls follow; the host when null. (What its files'
@@ -73,7 +77,8 @@ public static class Pipeline {
         bool checkExclusivity = true,
         BuildTimings? timings = null,
         bool optimised = false,
-        NativeTarget? target = null
+        NativeTarget? target = null,
+        bool checkOverflow = true
     ) {
         Compilation compilation;
         List<string> errors;
@@ -86,7 +91,7 @@ public static class Pipeline {
         }
 
         // The warnings go with whatever comes back, an error or the IR.
-        return CompileChecked(compilation, program, errors, debugDirectory, checkExclusivity, timings, optimised, target) with { Warnings = warnings };
+        return CompileChecked(compilation, program, errors, debugDirectory, checkExclusivity, timings, optimised, target, checkOverflow) with { Warnings = warnings };
     }
 
     /// <summary>The rest of <see cref="Compile(IReadOnlyList{SyntaxTree}, string?, bool, BuildTimings?, bool)" />, from a checked program.</summary>
@@ -98,7 +103,8 @@ public static class Pipeline {
         bool checkExclusivity,
         BuildTimings? timings,
         bool optimised,
-        NativeTarget? target
+        NativeTarget? target,
+        bool checkOverflow
     ) {
         if (errors.Count > 0) {
             return new(null, null, errors);
@@ -111,6 +117,10 @@ public static class Pipeline {
         }
 
         module.CheckExclusivity = checkExclusivity;
+        if (!checkOverflow) {
+            WrappingArithmetic.Apply(module);
+        }
+
         errors.AddRange(Formatted(lowering, program));
         if (errors.Count > 0) {
             return new(module, null, errors);

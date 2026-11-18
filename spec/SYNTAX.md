@@ -1248,7 +1248,11 @@ an optimised one; never both.
 | `@frozen` | struct, union | ABI-stable layout; no new cases/fields ever |
 
 User-defined attributes are declared as structs conforming to `Attribute` and
-are readable through reflection on `@reflectable` types.
+are readable through reflection on `@reflectable` types. (Not built yet: an
+attribute that is not in this table, or `@derive`, `@indirect`, `@allow` and
+`@warn`, is an error — S3092 — as is one written where it does not apply,
+S3093.) A public union matched from another module needs `default` unless
+it is `@frozen` (docs/03 §3.3).
 
 ---
 

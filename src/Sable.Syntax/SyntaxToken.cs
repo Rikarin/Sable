@@ -70,7 +70,8 @@ public readonly struct SyntaxToken : IEquatable<SyntaxToken> {
     public string Text => _green?.Text ?? string.Empty;
 
     /// <summary>
-    ///     The decoded value: <c>ulong</c> for integers, <c>double</c> for floats,
+    ///     The decoded value: <c>ulong</c> for integers (<c>UInt128</c> for one
+    ///     past 64 bits), <c>double</c> for floats,
     ///     <c>Rune</c> for chars, <c>string</c> for non-interpolated strings and
     ///     escaped identifiers, <c>bool</c> for <c>true</c>/<c>false</c>, otherwise
     ///     <see langword="null" />.

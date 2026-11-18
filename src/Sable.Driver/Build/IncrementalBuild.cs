@@ -10,11 +10,12 @@ namespace Sable.Driver.Build;
 
 /// <summary>
 ///     A source file of a program: where it is, the name diagnostics give it,
-///     the features it is parsed with, and — for a registry dependency — the
-///     workspace outside this one it comes from, which <c>package</c> stops at.
+///     the features it is parsed with, for a registry dependency the
+///     workspace outside this one it comes from, which <c>package</c> stops
+///     at, and the package it belongs to, whose modules are its own.
 /// </summary>
-public sealed record SourceFile(string Path, string Name, IReadOnlyList<string> Features, string? Workspace = null) {
-    public ParseOptions Options => ParseOptions.Default with { Features = [..Features], Workspace = Workspace };
+public sealed record SourceFile(string Path, string Name, IReadOnlyList<string> Features, string? Workspace = null, string? Package = null) {
+    public ParseOptions Options => ParseOptions.Default with { Features = [..Features], Workspace = Workspace, Package = Package };
 }
 
 /// <summary>

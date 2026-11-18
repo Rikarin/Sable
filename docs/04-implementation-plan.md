@@ -1539,8 +1539,17 @@ VS Code's own test host.
   declarations and the statements that ran, and runs each entry as the next
   statement of a `main` that replays them, under the SIL interpreter; an
   expression is bound to `resN` and shown with its type; `:type`, `:reset`,
-  `:help`, `:quit`. Replay re-runs side effects (I/O, clocks); a smarter
-  scheme would snapshot the interpreter's state instead.
+  `:help`, `:quit`. What a statement does to the world (files, input, the
+  environment, processes, the clock, sleeping) goes through an
+  `EffectJournal`: carried out the first time, replayed from the journal
+  after, so nothing happens twice and the clock reads as it did; a failed
+  entry's effects are dropped from it. The interpreter runs without a step
+  limit (Ctrl-C interrupts an entry) and 100,000 calls deep. On a terminal,
+  `LineEditor` gives readline's editing keys, ↑/↓ history (kept in
+  `~/.sable/repl_history`) and Tab completion of keywords and the session's
+  names. Not yet: replay still repeats the earlier statements' computation
+  (snapshotting the interpreter would not), and a package's dependencies
+  cannot be imported — only the standard library's modules.
 - **Lints** (`src/Sable.Symbols/Lints/`): `Lint` over a file's
   `SemanticModel` and bound bodies, `LintConfiguration` (levels by name,
   `FromTable` for a `[lints]` table), `@allow(name)`/`@warn(name)` on any

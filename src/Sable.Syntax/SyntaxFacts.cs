@@ -113,6 +113,9 @@ public static class SyntaxFacts {
     public static SyntaxKind KeywordKind(string text) =>
         Keywords.TryGetValue(text, out var kind) ? kind : SyntaxKind.IdentifierToken;
 
+    /// <summary>Every keyword's spelling, reserved and contextual: what a REPL completes.</summary>
+    public static IEnumerable<string> KeywordTexts => Keywords.Keys;
+
     public static bool IsFutureReserved(string text) => FutureReserved.Contains(text);
 
     public static bool IsKeyword(SyntaxKind kind) => IsReservedKeyword(kind) || IsContextualKeyword(kind);

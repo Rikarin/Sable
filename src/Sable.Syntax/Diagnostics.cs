@@ -233,6 +233,9 @@ public enum ErrorCode {
     LNT_PluginFailed = 3398,
     LNT_UnknownLint = 3399,
 
+    // ---- Memory (S3460-S3469): what ARC cannot free.
+    WRN_StrongReferenceCycle = 3460,
+
     // ---- Patterns and flow (S6000-S6999) ---------------------------------
     ERR_PatternTypeMismatch = 6000,
     ERR_UnknownUnionCase = 6001,

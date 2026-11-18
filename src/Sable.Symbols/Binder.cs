@@ -576,7 +576,12 @@ public sealed partial class Binder {
     }
 
     /// <summary>What <c>self</c> is in a member of the type: the type, or the array an array extension extends.</summary>
-    static TypeSymbol SelfTypeOf(NamedTypeSymbol type) => type.ExtendedArray ?? (TypeSymbol)type;
+    /// <summary>
+    ///     What <c>self</c> is inside a type: the type — a generic one with
+    ///     its own parameters as its arguments, <c>Nest&lt;T&gt;</c>, so that it is
+    ///     the same type its signatures write — or, in an array extension, the array.
+    /// </summary>
+    static TypeSymbol SelfTypeOf(NamedTypeSymbol type) => type.ExtendedArray ?? (TypeSymbol)TypeBinder.OwnConstruction(type);
 
     NamedTypeSymbol? EnclosingType() {
         for (var symbol = _containingSymbol; symbol is not null; symbol = symbol.ContainingSymbol) {
@@ -2371,6 +2376,24 @@ public sealed partial class Binder {
     }
 
     BoundExpression BindSelf(SelfExpressionSyntax syntax) {
+        // 'Self' is the type, as it is in a signature: 'Self(x: 3)' makes
+        // one, 'Self.origin' reads a static member.
+        if (syntax.SelfKeyword.Kind == SyntaxKind.CapitalSelfKeyword) {
+            if (EnclosingType() is { } enclosing) {
+                return new BoundTypeExpression(syntax, enclosing.SelfTypeParameter ?? SelfTypeOf(enclosing));
+            }
+
+            _diagnostics.Error(ErrorCode.ERR_SelfOutsideType, syntax.Span, "'Self' is only available inside a type");
+            return new BoundError(syntax);
+        }
+
+        // In a closure that captured it '[weak self]' or '[unowned self]',
+        // 'self' is the closure's own name for the object — or what
+        // 'guard let self' unwrapped it to.
+        if (LookupLocal("self") is LocalSymbol captured) {
+            return new BoundLocalAccess(syntax, captured, NarrowedType(captured));
+        }
+
         if (EnclosingType() is { } type) {
             return new BoundSelfAccess(syntax, SelfTypeOf(type), SelfIsMutable(type));
         }
@@ -2729,15 +2752,25 @@ public sealed partial class Binder {
 
         var functions = members.OfType<FunctionSymbol>().ToImmutableArray();
         if (!functions.IsEmpty) {
+            if (receiver is null && containingType is not null
+                && functions.Any(static f => f is { IsStatic: false, FunctionKind: FunctionKind.Ordinary })
+                && CapturedSelf(syntax, functions[0].Name) is { } captured) {
+                receiver = captured;
+            }
+
             return new BoundFunctionGroup(syntax, receiver, functions) { Substitution = substitution };
         }
 
         var member = members[0];
         switch (member) {
             case FieldSymbol field:
+                if (receiver is null && !field.IsStatic && containingType is not null && CapturedSelf(syntax, field.Name) is { } captured) {
+                    receiver = captured;
+                }
+
                 if (receiver is null && !field.IsStatic && containingType is not null) {
                     // An array extension's member, reached from another's: self is this one's array.
-                    var self = containingType.ExtendedArray is not null && EnclosingType() is { } enclosing ? SelfTypeOf(enclosing) : containingType;
+                    var self = containingType.ExtendedArray is not null && EnclosingType() is { } enclosing ? SelfTypeOf(enclosing) : SelfTypeOf(containingType);
                     receiver = new BoundSelfAccess(syntax, self, SelfIsMutable(containingType));
                 }
 
@@ -2749,6 +2782,19 @@ public sealed partial class Binder {
                         syntax.Span,
                         $"lazy '{field.Name}' is computed the first time it is read, which changes the value, so it needs one that can change"
                     );
+                }
+
+                // An observed property, written in its own observers or in
+                // its type's initialisers, is its storage: the observers run
+                // for changes made once the value is made, and not again for
+                // the changes they make themselves.
+                if (field is { BackingField: { } storage }
+                    && receiver is BoundSelfAccess or null
+                    && _compilation.ObservedProperties.ContainsKey(field)
+                    && EnclosingFunction() is { } within
+                    && (within is { FunctionKind: FunctionKind.Accessor } && ReferenceEquals(within.ContainingSymbol, field)
+                        || within is { FunctionKind: FunctionKind.Initializer } && ReferenceEquals(within.ContainingSymbol, field.ContainingSymbol))) {
+                    field = storage;
                 }
 
                 // 'task.value' waits for the task.
@@ -2874,6 +2920,17 @@ public sealed partial class Binder {
                 $"'{super.BaseType.ToDisplayString()}' has no member named '{name}'"
             );
             return new BoundError(syntax, receiver);
+        }
+
+        // 'self.init(…)', in an initialiser: the work handed to another of
+        // the type's own initialisers, which builds this value in its place.
+        if (name == "init" && receiver is BoundSelfAccess
+            && EnclosingFunction() is { FunctionKind: FunctionKind.Initializer } initializer
+            && initializer.ContainingSymbol is NamedTypeSymbol owner) {
+            var initializers = owner.GetMembers("init").OfType<FunctionSymbol>().Where(i => !ReferenceEquals(i, initializer)).ToList();
+            if (initializers.Count > 0) {
+                return BindMemberGroup(syntax, receiver, initializers, owner, TypeSubstitution.For(receiver.Type));
+            }
         }
 
         var receiverType = receiver.Type;
@@ -4062,6 +4119,10 @@ public sealed partial class Binder {
     ///     once, with the declaration, so they are not reported again here.
     /// </summary>
     BoundExpression? DefaultArgument(ParameterSymbol parameter, TypeSubstitution substitution) {
+        if (MemberwiseField(parameter) is { } field) {
+            return FieldDefault(field, substitution.Apply(parameter.Type));
+        }
+
         if (parameter.DeclaringSyntax is not [ParameterSyntax { DefaultValue: { } clause } syntax]
             || _compilation.FileScopeOf(syntax) is not { } scope
             || parameter.ContainingSymbol is not { } container) {
@@ -4069,6 +4130,35 @@ public sealed partial class Binder {
         }
 
         return new Binder(_compilation, scope, container).BindInitializer(clause.Value, substitution.Apply(parameter.Type));
+    }
+
+    /// <summary>
+    ///     The field a synthesised memberwise initialiser's parameter stands
+    ///     for, when that field has an initial value to default to.
+    /// </summary>
+    static FieldSymbol? MemberwiseField(ParameterSymbol parameter) =>
+        parameter is { HasDefaultValue: true, DeclaringSyntax.IsEmpty: true, ContainingSymbol: FunctionSymbol { FunctionKind: FunctionKind.Initializer, DeclaringSyntax.IsEmpty: true, ContainingSymbol: NamedTypeSymbol type } }
+            ? type.GetMembers(parameter.Name).OfType<FieldSymbol>().FirstOrDefault(static f => f.HasInitializer)
+            : null;
+
+    /// <summary>
+    ///     A field's initial value, as a memberwise initialiser left it to:
+    ///     bound afresh in the file that declares the field, as a parameter's
+    ///     default is. A lazy property's storage starts as none.
+    /// </summary>
+    BoundExpression? FieldDefault(FieldSymbol field, TypeSymbol type) {
+        if (field.DeclaringSyntax is not [FieldDeclarationSyntax declaration]
+            || _compilation.FileScopeOf(declaration) is not { } scope) {
+            return null;
+        }
+
+        if (field.BackedProperty is { IsLazy: true }) {
+            return new BoundLiteral(declaration.Declarator, type, null);
+        }
+
+        return declaration.Declarator.Initializer is { } initializer
+            ? new Binder(_compilation, scope, field).BindInitializer(initializer.Value, type)
+            : null;
     }
 
     /// <summary>
@@ -4486,9 +4576,9 @@ public sealed partial class Binder {
     ///     the parameters left to right, but a labelled one may pass over
     ///     parameters with defaults to reach the one its label names:
     ///     <c>connect(host: h, timeout: t)</c> leaves <c>port</c> its default.
-    ///     Only a default written in a declaration is passed over: a memberwise
-    ///     initialiser's defaults are the fields', which lowering fills in
-    ///     only at the end of the list.
+    ///     A memberwise initialiser's parameter for a field with an initial
+    ///     value is passed over the same way: <c>D(b: 2)</c> leaves <c>a</c>
+    ///     its initial value.
     ///     An index past the last parameter is an argument with nowhere to go;
     ///     from a variadic parameter on, every argument is one of its elements.
     /// </summary>
@@ -4500,7 +4590,8 @@ public sealed partial class Binder {
             if (i < labels.Length && labels[i] is { } label) {
                 var reach = next;
                 while (reach < parameters.Length
-                       && parameters[reach].DeclaringSyntax is [ParameterSyntax { DefaultValue: not null, EllipsisToken.IsNone: true }]
+                       && (parameters[reach].DeclaringSyntax is [ParameterSyntax { DefaultValue: not null, EllipsisToken.IsNone: true }]
+                           || MemberwiseField(parameters[reach]) is not null)
                        && !Names(parameters[reach], label)) {
                     reach++;
                 }
@@ -4693,6 +4784,11 @@ public sealed partial class Binder {
     }
 
     BoundExpression BindArray(ArrayExpressionSyntax syntax, TypeSymbol? expectedType) {
+        // '[.Read, .Write]' where a '@flags' enum is wanted: the flags, together.
+        if (Expand(expectedType) is NamedTypeSymbol { IsFlags: true } flags) {
+            return BindFlags(syntax, flags);
+        }
+
         var expectedElement = expectedType is ArrayTypeSymbol expectedArray
             ? expectedArray.ElementType
             : null;
@@ -5050,6 +5146,29 @@ public sealed partial class Binder {
         );
     }
 
+    /// <summary>
+    ///     A member reached implicitly through <c>self</c>, in a closure that
+    ///     captured <c>self</c> weakly or unowned: through the closure's own
+    ///     name for it, which a weak capture must first unwrap. Null where
+    ///     <c>self</c> is the ordinary one.
+    /// </summary>
+    BoundExpression? CapturedSelf(SyntaxNode syntax, string member) {
+        if (LookupLocal("self") is not LocalSymbol captured) {
+            return null;
+        }
+
+        if ((NarrowedType(captured) ?? captured.Type) is OptionalTypeSymbol optional) {
+            _diagnostics.Error(
+                ErrorCode.ERR_NameNotFound,
+                syntax.Span,
+                $"'{member}' is reached through 'self', which this closure holds weakly, as '{optional.ToDisplayString()}': "
+                + "unwrap it first, with 'guard let self'"
+            );
+        }
+
+        return new BoundLocalAccess(syntax, captured, NarrowedType(captured));
+    }
+
     ImmutableArray<BoundCapture> BindCaptures(CaptureListSyntax? captureList) {
         if (captureList is null) {
             return [];
@@ -5064,6 +5183,14 @@ public sealed partial class Binder {
             };
 
             var name = item.Identifier.Text;
+
+            if (kind is CaptureKind.Weak or CaptureKind.Unowned) {
+                if (BindHeldCapture(item, name, kind) is { } held) {
+                    captures.Add(held);
+                }
+
+                continue;
+            }
 
             if (item.Expression is { } expression) {
                 var value = BindExpression(expression);
@@ -5104,6 +5231,67 @@ public sealed partial class Binder {
         }
 
         return captures.ToImmutable();
+    }
+
+    /// <summary>
+    ///     <c>[weak x]</c>, <c>[unowned self]</c>, <c>[weak x = e]</c>: an
+    ///     object the closure holds without keeping it alive, under a name of
+    ///     the closure's own — optional for a weak one, which reads as none
+    ///     once the object is gone, so the body unwraps it:
+    ///     <c>guard let self else { … }</c>.
+    /// </summary>
+    BoundCapture? BindHeldCapture(CaptureItemSyntax item, string name, CaptureKind kind) {
+        BoundExpression value;
+        if (item.Expression is { } expression) {
+            value = BindExpression(expression);
+        } else if (item.Identifier.Kind == SyntaxKind.SelfKeyword || name == "self") {
+            if (LookupLocal("self") is LocalSymbol outer) {
+                value = new BoundLocalAccess(item, outer, NarrowedType(outer));
+            } else if (EnclosingType() is { } enclosing) {
+                value = new BoundSelfAccess(item, SelfTypeOf(enclosing), SelfIsMutable(enclosing));
+            } else {
+                _diagnostics.Error(ErrorCode.ERR_SelfOutsideType, item.Identifier.Span, "'self' is only available inside a type");
+                return null;
+            }
+        } else {
+            value = BindNameAsValue(name, item);
+        }
+
+        if (value.HasError || value.Type.IsError) {
+            return null;
+        }
+
+        var weak = kind == CaptureKind.Weak;
+        var objectType = weak && value.Type is OptionalTypeSymbol optional ? optional.UnderlyingType : value.Type;
+        if (objectType.TypeKind is not (TypeKind.Class or TypeKind.Actor)) {
+            _diagnostics.Error(
+                weak ? ErrorCode.ERR_WeakNeedsOptionalClass : ErrorCode.ERR_UnownedNeedsClass,
+                item.Span,
+                $"'{item.SpecifierToken.Text}' holds an object without keeping it alive, so it captures a class instance; "
+                + $"'{name}' is '{value.Type.ToDisplayString()}'"
+            );
+            return null;
+        }
+
+        var type = weak ? (TypeSymbol)new OptionalTypeSymbol(objectType) : objectType;
+        var local = new LocalSymbol(name, _containingSymbol, item, false) { TypeResolver = () => type };
+        return new(item, local, kind, Convert(value, type, item));
+    }
+
+    /// <summary>
+    ///     <c>[.Read, .Write]</c> as a <c>@flags</c> enum: its elements
+    ///     combined with <c>|</c>; <c>[]</c> is none of them, the integer 0.
+    /// </summary>
+    BoundExpression BindFlags(ArrayExpressionSyntax syntax, NamedTypeSymbol flags) {
+        BoundExpression? combined = null;
+        foreach (var element in syntax.Elements) {
+            var value = Convert(BindExpression(element, flags), flags, element);
+            combined = combined is null ? value : new BoundBinaryOperator(syntax, flags, BinaryOperatorKind.Or, combined, value);
+        }
+
+        return combined is null
+            ? new BoundConversion(syntax, flags, new BoundLiteral(syntax, _compilation.EnumRawType(flags), 0L), ConversionKind.Explicit)
+            : combined;
     }
 
     BoundExpression BindImplicitParameter(ImplicitParameterExpressionSyntax syntax) {
@@ -5238,6 +5426,12 @@ public sealed partial class Binder {
             var name = initializer.NameToken.Text;
             var field = named.GetMembers(name).OfType<FieldSymbol>().FirstOrDefault();
 
+            // An observed property is initialised in its storage: a value
+            // being made has no old value to observe.
+            if (field is { BackingField: { } storage } && _compilation.ObservedProperties.ContainsKey(field)) {
+                field = storage;
+            }
+
             if (field is null) {
                 _diagnostics.Error(
                     ErrorCode.ERR_NameNotFound,
@@ -5267,8 +5461,8 @@ public sealed partial class Binder {
         var missing = named.Members
             .OfType<FieldSymbol>()
             .Where(static f => f is { IsStatic: false, IsComputed: false, HasInitializer: false })
-            .Where(f => !initialized.Contains(f.Name))
-            .Select(static f => f.Name)
+            .Where(f => !initialized.Contains(f.DisplayName))
+            .Select(static f => f.DisplayName)
             .ToList();
 
         if (missing.Count > 0) {
@@ -5368,6 +5562,13 @@ public sealed partial class Binder {
             }
 
             return new BoundConversion(syntax, type, operand, ConversionKind.Explicit) { IsUnchecked = isUnchecked };
+        }
+
+        // Between an enum and an integer (spec/SYNTAX.md §10): a case is the
+        // integer it names, and an integer the case that names it, or a trap.
+        if (isPlain && !isUnchecked
+            && (source.TypeKind == TypeKind.Enum && Core.IsInteger(target) || Core.IsInteger(source) && target.TypeKind == TypeKind.Enum)) {
+            return new BoundConversion(syntax, type, operand, ConversionKind.Explicit);
         }
 
         if (isUnchecked) {
@@ -5720,7 +5921,7 @@ public sealed partial class Binder {
             UnaryOperatorKind.Not =>
                 operand.Type.Equals(Core.Bool) ? Core.Bool : null,
             UnaryOperatorKind.Complement =>
-                Core.IsInteger(operand.Type) ? operand.Type : null,
+                Core.IsInteger(operand.Type) || operand.Type is NamedTypeSymbol { IsFlags: true } ? operand.Type : null,
             UnaryOperatorKind.AddressOf => new ReferenceTypeSymbol(operand.Type),
 
 
@@ -5985,7 +6186,7 @@ public sealed partial class Binder {
                 left.Equals(right) && Core.IsNumeric(left) ? left : null,
 
             BinaryOperatorKind.And or BinaryOperatorKind.Or or BinaryOperatorKind.ExclusiveOr =>
-                left.Equals(right) && Core.IsInteger(left) ? left
+                left.Equals(right) && (Core.IsInteger(left) || left is NamedTypeSymbol { IsFlags: true }) ? left
                 : left.Equals(Core.Bool) && right.Equals(Core.Bool) ? Core.Bool
                 : null,
 

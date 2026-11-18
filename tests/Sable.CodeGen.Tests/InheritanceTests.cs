@@ -111,4 +111,166 @@ public sealed class InheritanceTests {
                 all.clear()
             """
         );
+
+    [Fact]
+    public void ASubclassIsMadeWithTheInitialisersItInherits() =>
+        Prints(
+            "1 2 s\n1 2\nsq 4 4\nr 0\nblank 4\n9 1\n6\n",
+            """
+            open class A {
+                var a: Int = 1
+                var s: String = "s"
+            }
+
+            open class B: A {
+                var b: Int = 2
+            }
+
+            class C: B { }
+
+            open class Shape {
+                var name: String
+                var sides: Int
+                init(name: String, sides: Int = 0) {
+                    self.name = name
+                    self.sides = sides
+                }
+                convenience init() { self.init(name: "blank") }
+            }
+
+            class Square: Shape {
+                var side: Int = 4
+            }
+
+            open class Box<T> {
+                var item: T
+                init(item: T) { self.item = item }
+            }
+
+            class IntBox: Box<Int> {
+                var extra: Int = 1
+            }
+
+            class D: A {
+                var d: Int = 5
+                init() {
+                    super.init()
+                    d = d + a
+                }
+            }
+            """,
+            """
+                let b = B()
+                print("\(b.a) \(b.b) \(b.s)")
+                let c = C()
+                print("\(c.a) \(c.b)")
+                let q = Square(name: "sq", sides: 4)
+                print("\(q.name) \(q.sides) \(q.side)")
+                let r = Square(name: "r")
+                print("\(r.name) \(r.sides)")
+                let e = Square()
+                print("\(e.name) \(e.side)")
+                let i = IntBox(item: 9)
+                print("\(i.item) \(i.extra)")
+                let d = D()
+                print(d.d)
+            """
+        );
+
+    [Fact]
+    public void AnInitialiserHandsItsWorkToAnotherAndSelfMakesTheType() =>
+        Prints(
+            "7 2 made\n9 0 q\n",
+            """
+            class Node {
+                var name: String
+                var children: Int = 0
+                init(name: String) { self.name = name }
+                convenience init() {
+                    self.init(name: "7")
+                    children = 2
+                }
+                static fn make() -> Self => Self(name: "made")
+            }
+
+            struct Q {
+                var n: Int
+                var tag: String
+                init(n: Int, tag: String) {
+                    self.n = n
+                    self.tag = tag
+                }
+                init() { self.init(n: 9, tag: "q") }
+                static fn zero() -> Self { return Self(n: 0, tag: "z") }
+            }
+            """,
+            """
+                let n = Node()
+                print("\(n.name) \(n.children) \(Node.make().name)")
+                let q = Q()
+                print("\(q.n) \(Q.zero().n) \(q.tag)")
+            """
+        );
+
+    [Fact]
+    public void AnOverriddenPropertyIsReadAndWrittenThroughTheVTable() =>
+        Prints(
+            "2 der\nset 7\n1 base\n",
+            """
+            open class Base {
+                var stored: Int = 0
+                open var q: Int { get => 1 }
+                open var label: String { get => "base" }
+                open var level: Int {
+                    get => stored
+                    set { stored = newValue }
+                }
+            }
+
+            class Der: Base {
+                override var q: Int { get => 2 }
+                override var label: String { get => "der" }
+                override var level: Int {
+                    get => stored
+                    set { print("set \(newValue)") }
+                }
+            }
+            """,
+            """
+                let b: Base = Der()
+                print("\(b.q) \(b.label)")
+                b.level = 7
+                let plain = Base()
+                print("\(plain.q) \(plain.label)")
+            """
+        );
+
+    [Fact]
+    public void AGenericClassIsInheritedAndItsMethodsOverridden() =>
+        Prints(
+            "1\n5\n5\n9\n",
+            """
+            open class GBase<T> {
+                open fn take(_ x: T) -> Int { return 1 }
+                fn name() -> Int { return 9 }
+            }
+
+            class GDer: GBase<Int> {
+                override fn take(_ x: Int) -> Int { return x + 1 }
+            }
+
+            class GDer2<T>: GBase<T> {
+                override fn take(_ x: T) -> Int { return 5 }
+            }
+            """,
+            """
+                let plain = GBase<Int>()
+                print(plain.take(1))
+                let g: GBase<Int> = GDer()
+                print(g.take(4))
+                let g2: GBase<String> = GDer2<String>()
+                print(g2.take("a"))
+                print(g2.name())
+            """
+        );
 }

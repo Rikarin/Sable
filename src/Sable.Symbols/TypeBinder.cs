@@ -66,6 +66,16 @@ internal sealed class TypeBinder(Compilation compilation) {
 
     internal void Defer(Action force) => _forcers.Add(force);
 
+    /// <summary>
+    ///     A generic type as its own declaration sees it: given its own
+    ///     parameters, <c>Nest&lt;T&gt;</c>, which is what its members write. Any
+    ///     other type is itself.
+    /// </summary>
+    internal static NamedTypeSymbol OwnConstruction(NamedTypeSymbol type) =>
+        type is { TypeArguments.IsEmpty: true, TypeParameters.IsEmpty: false }
+            ? type.Construct([..type.TypeParameters])
+            : type;
+
     /// <summary>Defers work that must see every signature, not just this one's.</summary>
     internal void DeferLate(Action force) => _late.Add(force);
 
@@ -883,7 +893,7 @@ internal sealed class TypeBinder(Compilation compilation) {
 
                 // Inside a protocol 'Self' is the conforming type, which is
                 // not known yet; everywhere else it is the type itself.
-                return enclosing.SelfTypeParameter ?? (TypeSymbol)enclosing;
+                return enclosing.SelfTypeParameter ?? (TypeSymbol)OwnConstruction(enclosing);
             }
 
             default:

@@ -119,6 +119,12 @@ public sealed class FunctionSymbol : Symbol {
     public bool IsAsync { get; internal set; }
     public bool IsMutating { get; internal set; }
     public bool IsOverride { get; internal set; }
+
+    /// <summary>
+    ///     For an <c>override</c>, the member it finally overrides, in the
+    ///     class at the top of the chain; null for any other function.
+    /// </summary>
+    public FunctionSymbol? RootOverridden => ConformanceChecker.RootOverridden(this);
     public bool IsOpen { get; internal set; }
 
     /// <summary><c>final</c>: no subclass may override it (spec/SYNTAX.md §7).</summary>
@@ -427,6 +433,9 @@ public sealed class EnumCaseSymbol(
 
     /// <summary>True when the case declared an explicit value.</summary>
     public bool HasExplicitValue { get; internal set; }
+
+    /// <summary>The integer the case is: the one it writes, or the one it follows on to.</summary>
+    public long RawValue { get; internal set; }
 }
 
 /// <summary>A local binding introduced by a statement.</summary>

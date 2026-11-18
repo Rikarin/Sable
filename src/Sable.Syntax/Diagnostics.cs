@@ -166,6 +166,9 @@ public enum ErrorCode {
     ERR_MissingBody = 3112,
     ERR_LazyProperty = 3113,
     ERR_IfValueNeedsElse = 3130,
+    ERR_PropertyObservers = 3140,
+    ERR_ConvenienceMustDelegate = 3141,
+    ERR_EnumCaseValue = 3142,
     ERR_ConstGenericPredicate = 3160,
     ERR_SelfRequirementOnExistential = 3161,
 

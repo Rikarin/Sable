@@ -136,6 +136,37 @@ public sealed class WeakTests {
         Assert.Equal("fatal error: read an unowned reference to an object that is gone\n  at test.sb:18:9\n", execution.Stderr);
     }
 
+    /// <summary>
+    ///     A class made by its implicit 'init()' gives a weak field its initial
+    ///     value as a weak store: it failed SIL verification as a plain store.
+    /// </summary>
+    [Fact]
+    public void AWeakFieldWithAnInitialValueInAClassMadeByInit() =>
+        Assert.Equal(
+            "true\nfalse\n",
+            AssertAgree(
+                Program(
+                    """
+                    class Owner {
+                        var pet: Pet? = none
+                    }
+
+                    class Pet {
+                        weak var owner: Owner? = none
+                    }
+                    """,
+                    """
+                        let pet = Pet()
+                        print(pet.owner == none)
+                        let owner = Owner()
+                        owner.pet = pet
+                        pet.owner = owner
+                        print(pet.owner == none)
+                    """
+                )
+            ).Stdout
+        );
+
     [Theory]
     [InlineData("class C {}\nclass D { weak let c: C? }", "'weak' needs a 'var'")]
     [InlineData("class C {}\nclass D { weak var c: C }", "'weak' needs a 'var' of an optional class type")]

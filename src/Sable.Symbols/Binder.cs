@@ -4544,10 +4544,12 @@ public sealed partial class Binder {
 
         if (syntax.OperatorToken.Kind != SyntaxKind.EqualsToken) {
             // A compound assignment is the binary operator then the store.
+            // The operator's result need not be the target's type: 'x ??= 5'
+            // on an Int? computes 'x ?? 5', an Int, which is stored as an Int?.
             var kind = CompoundOperatorKind(syntax.OperatorToken.Kind);
             if (kind is not null) {
                 var combined = BindBinaryOperator(syntax, kind.Value, target, value, syntax.OperatorToken);
-                return new BoundAssignment(syntax, target, combined);
+                return new BoundAssignment(syntax, target, Convert(combined, target.Type, syntax));
             }
         }
 

@@ -139,6 +139,33 @@ public sealed partial class SilGen {
                 _getters[field] = getter;
                 functions.Add((getter, accessor, model));
             }
+
+            // A subscript: its getter and setter, methods of the type taking
+            // the indices — and the setter the new value after them — that
+            // indexing calls. One written '=> e' is its own getter.
+            foreach (var declaration in Declarations(tree).OfType<SubscriptDeclarationSyntax>()) {
+                if (_compilation.GetDeclaredSymbol(declaration) is not FunctionSymbol { FunctionKind: FunctionKind.Subscript, IsStatic: false } subscript
+                    || !IsLowerable(subscript)) {
+                    continue;
+                }
+
+                if (declaration.ExpressionBody is not null) {
+                    _subscriptGetters[subscript] = subscript;
+                    functions.Add((subscript, declaration, model));
+                    continue;
+                }
+
+                foreach (var accessor in declaration.Accessors?.Accessors ?? []) {
+                    if (accessor.Keyword.Kind is not (SyntaxKind.GetKeyword or SyntaxKind.SetKeyword)
+                        || (_unit is null || _unit.Owns(tree) ? model.GetAccessorSymbol(accessor) : model.GetAccessorDeclaration(accessor))
+                            is not { } function) {
+                        continue;
+                    }
+
+                    (accessor.Keyword.Kind == SyntaxKind.GetKeyword ? _subscriptGetters : _subscriptSetters)[subscript] = function;
+                    functions.Add((function, accessor, model));
+                }
+            }
         }
 
         AddDerived(functions);
@@ -538,6 +565,15 @@ public sealed partial class SilGen {
 
     internal FunctionSymbol? GetterOf(FieldSymbol field) => _getters.GetValueOrDefault(field);
 
+    /// <summary>Each subscript's getter and setter, lowered as methods.</summary>
+    readonly Dictionary<FunctionSymbol, FunctionSymbol> _subscriptGetters = [];
+
+    readonly Dictionary<FunctionSymbol, FunctionSymbol> _subscriptSetters = [];
+
+    internal FunctionSymbol? SubscriptGetter(FunctionSymbol subscript) => _subscriptGetters.GetValueOrDefault(subscript);
+
+    internal FunctionSymbol? SubscriptSetter(FunctionSymbol subscript) => _subscriptSetters.GetValueOrDefault(subscript);
+
     /// <summary>The type a member belongs to, whether declared in it or in an extension of it.</summary>
     internal static NamedTypeSymbol? OwnerOf(FunctionSymbol symbol) => Owner(symbol);
 
@@ -549,6 +585,9 @@ public sealed partial class SilGen {
             // An accessor belongs to its property, which belongs to the type.
             FieldSymbol { ContainingSymbol: NamedTypeSymbol type } => type,
             FieldSymbol { ContainingSymbol: ExtensionSymbol extension } => extension.ExtendedType,
+
+            // ... or to its subscript, which does too.
+            FunctionSymbol { FunctionKind: FunctionKind.Subscript } subscript => Owner(subscript),
             _ => null,
         };
 
@@ -718,12 +757,25 @@ public sealed partial class SilGen {
         var name = symbol switch {
             { FunctionKind: FunctionKind.Deinitializer } => $"{owner}.deinit",
             { FunctionKind: FunctionKind.Accessor, ContainingSymbol: FieldSymbol field } => $"{owner}.{field.Name}.{symbol.Name}",
+
+            // A type may have several subscripts, told apart by their indices'
+            // types: 'M.Grid.subscript$Int$Int.get'.
+            { FunctionKind: FunctionKind.Accessor, ContainingSymbol: FunctionSymbol { FunctionKind: FunctionKind.Subscript } subscript } =>
+                $"{owner}.{SubscriptName(subscript)}.{symbol.Name}",
+            { FunctionKind: FunctionKind.Subscript } => $"{owner}.{SubscriptName(symbol)}.get",
             _ => $"{owner}.{symbol.Name}",
         };
+        if (symbol.FunctionKind == FunctionKind.Subscript || symbol.ContainingSymbol is FunctionSymbol { FunctionKind: FunctionKind.Subscript }) {
+            return name;
+        }
+
         return overloaded
             ? name + string.Concat(symbol.Parameters.Select(static p => "$" + Sanitise(p.Type.ToDisplayString())))
             : name;
     }
+
+    static string SubscriptName(FunctionSymbol subscript) =>
+        "subscript" + string.Concat(subscript.Parameters.Select(static p => "$" + Sanitise(p.Type.ToDisplayString())));
 
     static string Sanitise(string text) =>
         new([..text.Select(static c => char.IsLetterOrDigit(c) || c is '_' or '.' ? c : '$')]);
@@ -3328,6 +3380,19 @@ public sealed partial class SilGen {
                 return ElementPartAssignment(assignment, element);
             }
 
+            // 'grid[x, y] = v': a call to the subscript's setter, which takes
+            // the receiver where it is, as any mutating method does.
+            if (assignment.Target is BoundIndexAccess { Subscript: { } subscript } subscripted) {
+                if (generator.SubscriptSetter(subscript) is not { } setter) {
+                    return Missing(assignment, $"storing through the subscript of '{subscripted.Receiver.Type.ToDisplayString()}'");
+                }
+
+                var stored = Expression(new BoundCall(assignment.Syntax, subscripted.Receiver, setter, [..subscripted.Indices, assignment.Value]) {
+                    Substitution = subscripted.Substitution
+                });
+                return stored is null ? null : UnitValue.Instance;
+            }
+
             if (Expression(assignment.Value) is not { } value) {
                 return null;
             }
@@ -4138,6 +4203,13 @@ public sealed partial class SilGen {
         }
 
         SilValue? IndexRead(BoundIndexAccess index) {
+            // A type's own subscript: a call to its getter.
+            if (index.Subscript is { } subscript) {
+                return generator.SubscriptGetter(subscript) is { } getter
+                    ? Expression(new BoundCall(index.Syntax, index.Receiver, getter, index.Indices, index.Type) { Substitution = index.Substitution })
+                    : Missing(index, $"indexing '{index.Receiver.Type.ToDisplayString()}'");
+            }
+
             if (IsInlineArray(index.Receiver)) {
                 return InlineRead(index);
             }

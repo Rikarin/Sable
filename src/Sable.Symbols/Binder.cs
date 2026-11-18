@@ -3584,7 +3584,7 @@ public sealed partial class Binder {
                     found.Substitution.Apply(resolved.ReturnType),
                     receiver,
                     converted.ToImmutable()
-                );
+                ) { Subscript = resolved, Substitution = found.Substitution };
             }
         }
 

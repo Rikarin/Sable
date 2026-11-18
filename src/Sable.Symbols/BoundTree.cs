@@ -412,7 +412,26 @@ public sealed class BoundIndexAccess(
     : BoundExpression(syntax, type) {
     public BoundExpression Receiver { get; } = receiver;
     public ImmutableArray<BoundExpression> Indices { get; } = indices;
-    public override bool IsAssignable => true;
+
+    /// <summary>The type's own <c>subscript</c> this indexing calls, or null for an array's or a dictionary's.</summary>
+    public FunctionSymbol? Subscript { get; init; }
+
+    /// <summary>What the subscript's type's parameters stand for here: <c>Row&lt;String&gt;</c>'s <c>Value</c>.</summary>
+    public TypeSubstitution Substitution { get; init; } = TypeSubstitution.Empty;
+
+    /// <summary>
+    ///     An array's element or a dictionary's entry may be written; a
+    ///     subscript's only when it has a setter and, as for a stored field,
+    ///     the value it indexes can be written through.
+    /// </summary>
+    public override bool IsAssignable =>
+        Subscript is null
+        || (HasSetter(Subscript) && (Receiver.Type.IsReferenceType || Receiver.IsAssignable));
+
+    /// <summary>True when a subscript declares a <c>set</c>.</summary>
+    public static bool HasSetter(FunctionSymbol subscript) =>
+        subscript.DeclaringSyntax.FirstOrDefault() is SubscriptDeclarationSyntax { Accessors: { } accessors }
+        && accessors.Accessors.Any(static a => a.Keyword.Kind == SyntaxKind.SetKeyword);
     public override IEnumerable<BoundNode> Children => Nodes([Receiver, ..Indices]);
 }
 

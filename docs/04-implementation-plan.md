@@ -1494,6 +1494,27 @@ breakpoint in a package build is verified and hit, frames are named, and a
 `String` local shows its text. Not checked: CodeLLDB, and the extension inside
 VS Code's own test host.
 
+Later (#206): `npm test` also runs the extension's own code under plain node
+against a stand-in for the `vscode` module and the language client
+(`test/vscode-mock.js`, no display and no VS Code download): activation
+against the manifest, the server's command and settings, tasks, Run and
+Debug, lenses, quick fixes, debug configurations (the lldb-dap one included;
+CodeLLDB's only as far as being chosen), and the Test Explorer against a
+`sable` that prints what the real one does. The server reads every folder of
+a multi-root workspace and follows folders added and removed, each folder's
+loose files a program of their own; it reports `sable check`'s lints as you
+type (at the package's `[lints]` levels, in a file without errors); and it
+takes `inlayHints.enable` and `lints.enable` as initialization options or
+configuration, which the extension sets from `sable.inlayHints.enable` and
+`sable.lints.enable`. Beyond VS Code, `editors/` has Vim and Neovim (syntax,
+filetype, indentation, and `lsp/sable.lua` for Neovim 0.11), Helix
+(`languages.toml`), Emacs (`sable-mode` with Eglot) and Sublime Text (the
+TextMate grammar, generated from VS Code's), checked by
+`editors/test/editors.test.js` — in Vim itself when it is installed, which
+CI's runner has. Not yet: a tree-sitter grammar (no tree-sitter CLI here to
+generate and test one), and so Zed and highlighting in Helix; Emacs is not
+loaded in any test.
+
 ### Formatting, docs, explain, repl and lints, as implemented
 
 - **`sable fmt [paths…] [--check]`** (and `sable fmt -` for a filter) formats

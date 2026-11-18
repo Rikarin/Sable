@@ -204,7 +204,23 @@ public sealed partial class Manifest {
         public Manifest Read(TomlTable root) {
             string[] known = ["package", "lib", "bin", "dependencies", "dev-dependencies", "build-dependencies", "features", "profile", "workspace", "reflect", "targets", "build", "registry", "lints"];
             foreach (var key in root.Keys.Where(k => !known.Contains(k))) {
-                Warn(root, key, key, "unknown manifest key, ignored");
+                if (key == "target") {
+                    // Cargo's [target.'cfg(...)'.dependencies]: ignoring it would build without them.
+                    Error(root, key, key, "there are no platform-specific dependency tables: give the dependency `when = \"os(linux)\"` (or `when: .os(.linux)` in package.sb)");
+                } else {
+                    Warn(root, key, key, "unknown manifest key, ignored");
+                }
+            }
+
+            // Accepted, so a manifest written for a later toolchain still
+            // reads, but nothing here acts on them yet: say so.
+            if (root["reflect"] is not null) {
+                Warn(root, "reflect", "reflect",
+                    "has no effect yet: reflection is generated where a program asks for it, and nothing looks a type up by name (docs/04 §4.2)");
+            }
+
+            if (root["targets"] is not null) {
+                Warn(root, "targets", "targets", "per-target settings wait on cross-compilation (docs/05 §5.2.10); ignored");
             }
 
             var package = Table(root, "package", "package") is { } p ? ReadPackage(p) : null;
@@ -249,6 +265,10 @@ public sealed partial class Manifest {
             var dependencies = ReadDependencies(root, "dependencies");
             var devDependencies = ReadDependencies(root, "dev-dependencies");
             var buildDependencies = ReadDependencies(root, "build-dependencies");
+            if (buildDependencies.Count > 0) {
+                Warn(root, "build-dependencies", "build-dependencies",
+                    "are for a build script, and build scripts are not run yet (docs/05 §5.6): they are checked, not resolved or built");
+            }
             var features = ReadFeatures(root, dependencies);
             var (dev, release) = ReadProfiles(root);
             var build = Table(root, "build", "build") is { } b ? ReadBuild(b) : null;
@@ -349,6 +369,12 @@ public sealed partial class Manifest {
                 Warn(table, key, $"package.{key}", "unknown key, ignored");
             }
 
+            foreach (var (key, value) in table.Entries) {
+                if (value is TomlTable { } inherited && inherited["workspace"] is not null) {
+                    Error(table, key, $"package.{key}", "inheriting a setting from the workspace is not supported yet (docs/05 §5.2.10): write it out here");
+                }
+            }
+
             var name = String(table, "name", "package.name");
             if (name is null && table["name"] is null) {
                 Error(table, "package", "package.name", "a package needs a name");
@@ -382,7 +408,10 @@ public sealed partial class Manifest {
 
         WorkspaceSpec ReadWorkspace(TomlTable table) {
             foreach (var key in table.Keys.Where(static k => k is not ("members" or "exclude" or "resolver"))) {
-                Warn(table, key, $"workspace.{key}", "unknown key, ignored");
+                Warn(table, key, $"workspace.{key}",
+                    key is "package" or "dependencies" or "metadata"
+                        ? "members cannot inherit from the workspace yet (docs/05 §5.2.10); ignored"
+                        : "unknown key, ignored");
             }
 
             return new(Strings(table, "members", "workspace.members") ?? [], Strings(table, "exclude", "workspace.exclude") ?? []);
@@ -410,9 +439,16 @@ public sealed partial class Manifest {
 
                         break;
                     case TomlTable detail:
-                        string[] known = ["version", "path", "git", "tag", "branch", "rev", "optional", "default-features", "features", "package", "registry", "when"];
+                        string[] known = ["version", "path", "git", "tag", "branch", "rev", "optional", "default-features", "features", "when"];
                         foreach (var key in detail.Keys.Where(k => !known.Contains(k))) {
-                            Error(detail, key, $"{path}.{key}", "unknown key in a dependency");
+                            Error(detail, key, $"{path}.{key}", key switch {
+                                // Code imports a package's modules and never names the
+                                // package, so a second name for it would mean nothing.
+                                "package" => "a dependency cannot be renamed: code imports its modules, not its name, so the key must be the package's name",
+                                "registry" => "every dependency comes from the workspace's registry ([registry] path, else $SABLE_REGISTRY); naming another one is not supported",
+                                "workspace" => "inheriting a dependency from the workspace is not supported yet (docs/05 §5.2.10): write it out here",
+                                _ => "unknown key in a dependency",
+                            });
                         }
 
                         var versionText = String(detail, "version", $"{path}.version");

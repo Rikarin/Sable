@@ -1330,7 +1330,10 @@ In `src/Sable.Driver/Packages/`, with a command per file under `Commands/`.
   plus a note when a failure comes from two major versions of one package.
   Features are packages of their own (`name[feature]` depends on its
   package at the same version and on what the feature turns on, `dep:`
-  included), so the resolver unifies them across the graph.
+  included), so the resolver unifies them across the graph. A weak
+  `dep?/feature` is applied after resolution, at the version chosen, when
+  something else turned `dep` on, and resolution runs again until there is
+  nothing left to turn on.
 - **Lock file.** `sable.lock`, written deterministically (sorted, no times,
   same bytes for the same resolution), holds each package's version, source
   and dependencies, and each registry package's sha256. It resolves with
@@ -1355,9 +1358,17 @@ In `src/Sable.Driver/Packages/`, with a command per file under `Commands/`.
   what the lock names, nothing reads the registry.
 
 Deferred: build scripts (`[build]` is read and validated, and a build warns
-that it is not run — the capability sandbox needs runtime support); git
-dependencies (refused with an error); weak `dep?/feature` features (accepted,
-not acted on); `[build-dependencies]` are resolved but nothing uses them;
+that it is not run — the capability sandbox needs runtime support), and with
+them `[build-dependencies]` (checked, not resolved or built, and warned
+about); git dependencies (refused with an error); workspace inheritance
+(`version.workspace = true` and `{ workspace = true }` are refused,
+`[workspace.package]` and `[workspace.dependencies]` warned about); `[reflect]`
+and `[targets]` (accepted with a warning: nothing looks a type up by name
+yet, and there is no cross-compilation). A dependency's `package =` and
+`registry =` are refused: code imports a package's modules, so a rename means
+nothing, and every dependency comes from the workspace's one registry. Cargo's
+`[target.'cfg(...)'.dependencies]` is refused in favour of `when`. Every
+manifest warning is printed by `check`, `build`, `run`, `test` and `bench`.
 `publish` checks neither for a tag nor for passing tests; `org/name`
 packages are accepted but unprefixed names are not reserved; module names
 are not namespaced by package, so two packages declaring the same module

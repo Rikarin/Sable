@@ -184,6 +184,31 @@ public sealed class ManifestTests {
     }
 
     [Fact]
+    public void SettingsNothingActsOnAreRefusedOrWarnedAbout() {
+        const string Package = "[package]\nname = \"a\"\nversion = \"1.0.0\"\n";
+
+        // Refused: building without them would build something else than asked.
+        Assert.Contains(Errors(Package + "[dependencies]\nb = { version = \"1\", package = \"c\" }\n"),
+            static e => e.Key == "dependencies.b.package" && e.Message.Contains("cannot be renamed", StringComparison.Ordinal));
+        Assert.Contains(Errors(Package + "[dependencies]\nb = { version = \"1\", registry = \"other\" }\n"),
+            static e => e.Key == "dependencies.b.registry");
+        Assert.Contains(Errors(Package + "[dependencies]\nb = { workspace = true }\n"),
+            static e => e.Key == "dependencies.b.workspace" && e.Message.Contains("not supported yet", StringComparison.Ordinal));
+        Assert.Contains(Errors("[package]\nname = \"a\"\nversion.workspace = true\n"),
+            static e => e.Key == "package.version" && e.Message.Contains("inheriting", StringComparison.Ordinal));
+        Assert.Contains(Errors(Package + "[target.'cfg(unix)'.dependencies]\nb = \"1\"\n"),
+            static e => e.Key == "target" && e.Message.Contains("when", StringComparison.Ordinal));
+
+        // Warned about: accepted, with a word that nothing uses them yet.
+        var manifest = Parse(Package + "[build-dependencies]\nb = \"1\"\n[reflect]\ninclude = [\"Scene\"]\n[targets.wasm]\nx = 1\n");
+        Assert.Contains(manifest.Warnings, static w => w.Key == "build-dependencies");
+        Assert.Contains(manifest.Warnings, static w => w.Key == "reflect");
+        Assert.Contains(manifest.Warnings, static w => w.Key == "targets");
+        Assert.Contains(Parse("[workspace]\nmembers = [\"a\"]\n[workspace.dependencies]\nb = \"1\"\n").Warnings,
+            static w => w.Key == "workspace.dependencies" && w.Message.Contains("inherit", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void AVirtualWorkspaceHasNoPackage() {
         var manifest = Parse("[workspace]\nmembers = [\"a\", \"b\"]\n");
         Assert.Null(manifest.Package);

@@ -105,7 +105,7 @@ public sealed partial class PackageGraph {
         var (root, rootVersion) = source.SetRoot([..workspace.Members.Select(static m => (m, AllFeatures(m)))]);
         IReadOnlyDictionary<string, SemVersion> full;
         try {
-            full = Resolver.Resolve(source, root, rootVersion, preferred);
+            full = ResolveWithWeakFeatures(source, root, rootVersion, preferred);
         } catch (ResolutionException e) when (!registry.IsAvailable) {
             throw new ResolutionException($"{e.Message}\nnote: the registry at '{registry.Directory}' cannot be read, so only versions in the cache and vendor/ were considered\n", e.Incompatibility);
         }
@@ -126,8 +126,28 @@ public sealed partial class PackageGraph {
         var requests = workspace.Members.Select(m => (m, selected.Contains(m) ? Requested(m, request) : Requested(m, FeatureRequest.Default))).ToList();
         (root, rootVersion) = source.SetRoot(requests);
         var locked = lockFile.Packages.ToDictionary(static p => p.Name, static p => p.Version, StringComparer.Ordinal);
-        var build = Resolver.Resolve(source, root, rootVersion, locked);
+        var build = ResolveWithWeakFeatures(source, root, rootVersion, locked);
         return new(workspace, source.Packages(build, root, lockFile), lockFile, store);
+    }
+
+    /// <summary>
+    ///     Resolves, then turns on what weak features (<c>dep?/feature</c>)
+    ///     ask of the dependencies that ended up on, and resolves again, until
+    ///     there are none left to turn on. A weak feature depends on whether
+    ///     its dependency is on at all, which is a result of resolution, not
+    ///     an input PubGrub can be given; so it is applied after, as a
+    ///     requirement of the root at the version already chosen.
+    /// </summary>
+    static IReadOnlyDictionary<string, SemVersion> ResolveWithWeakFeatures(
+        GraphSource source, string root, SemVersion rootVersion, IReadOnlyDictionary<string, SemVersion> preferred) {
+        while (true) {
+            var decisions = Resolver.Resolve(source, root, rootVersion, preferred);
+            if (source.WeakFeatures(decisions) is not { Count: > 0 } weak) {
+                return decisions;
+            }
+
+            source.Require(weak);
+        }
     }
 
     /// <summary>Every feature a package has: those it declares, and its optional dependencies' implicit ones.</summary>
@@ -255,9 +275,11 @@ sealed class GraphSource(Workspace workspace, IReadOnlyDictionary<string, LocalP
     string _root = "";
     SemVersion _rootVersion = new(0, 0, 0);
     IReadOnlyList<(string, VersionReq)> _rootDependencies = [];
+    readonly List<(string, VersionReq)> _weak = [];
 
     /// <summary>Makes the resolution's root: the lone member itself, or a workspace root depending on every member.</summary>
     public (string Root, SemVersion Version) SetRoot(IReadOnlyList<(LocalPackage Member, IReadOnlyList<string> Features)> members) {
+        _weak.Clear();
         if (members is [var (single, features)] && !workspace.IsWorkspace) {
             _root = single.Name;
             _rootVersion = single.Version;
@@ -337,7 +359,7 @@ sealed class GraphSource(Workspace workspace, IReadOnlyDictionary<string, LocalP
 
     public IReadOnlyList<(string Package, VersionReq Requirement)> Dependencies(string package, SemVersion version) {
         if (package == _root) {
-            return _rootDependencies;
+            return [.._rootDependencies, .._weak];
         }
 
         var (name, feature) = Split(package);
@@ -376,7 +398,8 @@ sealed class GraphSource(Workspace workspace, IReadOnlyDictionary<string, LocalP
             var dependencyName = value[..slash];
             var subfeature = value[(slash + 1)..];
 
-            // "dep?/feature" is weak: it does not turn the dependency on. Not acted on yet.
+            // "dep?/feature" is weak: it does not turn the dependency on, and
+            // turns the feature on only if something else does (WeakFeatures).
             if (dependencyName.EndsWith('?') || Find(dependencyName) is not { } dependency) {
                 return [];
             }
@@ -390,6 +413,42 @@ sealed class GraphSource(Workspace workspace, IReadOnlyDictionary<string, LocalP
 
         return Find(value) is { Optional: true } optional ? Expand([optional]) : [];
     }
+
+    /// <summary>
+    ///     The features weak values (<c>dep?/feature</c>) of the features on
+    ///     ask for, of dependencies that are on, and that are not on yet.
+    /// </summary>
+    public IReadOnlyList<(string Package, VersionReq Requirement)> WeakFeatures(IReadOnlyDictionary<string, SemVersion> decisions) {
+        var needed = new List<(string, VersionReq)>();
+        foreach (var (name, version) in Real(decisions, _root)) {
+            var spec = Of(name, version);
+            List<string>? enabled = null;
+            foreach (var feature in FeaturesOf(name, decisions)) {
+                if (!spec.Features.TryGetValue(feature, out var values)) {
+                    continue;
+                }
+
+                foreach (var value in values) {
+                    var slash = value.IndexOf('/', StringComparison.Ordinal);
+                    if (slash < 2 || value[slash - 1] != '?') {
+                        continue;
+                    }
+
+                    var dependency = value[..(slash - 1)];
+                    var id = FeatureId(dependency, value[(slash + 1)..]);
+                    enabled ??= EnabledDependencies(name, version, decisions, true);
+                    if (enabled.Contains(dependency) && !decisions.ContainsKey(id) && !needed.Any(n => n.Item1 == id)) {
+                        needed.Add((id, VersionReq.Exactly(decisions[dependency])));
+                    }
+                }
+            }
+        }
+
+        return needed;
+    }
+
+    /// <summary>Makes the root require these too, for the rest of this resolution.</summary>
+    public void Require(IEnumerable<(string Package, VersionReq Requirement)> requirements) => _weak.AddRange(requirements);
 
     /// <summary>A dependency as the resolver sees it: the package, its default features, and the features asked of it.</summary>
     static IEnumerable<(string, VersionReq)> Expand(IEnumerable<DependencySpec> dependencies) {

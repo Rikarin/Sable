@@ -31,8 +31,22 @@ public static class PackageBuilder {
         : workspace.Current is { } current ? [current]
         : workspace.Members;
 
-    internal static PackageGraph Resolve(Workspace workspace, PackageEnvironment environment, BuildRequest request) =>
-        PackageGraph.ResolveCached(workspace, environment, new(request.Features, null, request.Locked, [..Selected(workspace, request.Package).Select(static m => m.Name)]));
+    internal static PackageGraph Resolve(Workspace workspace, PackageEnvironment environment, BuildRequest request) {
+        ReportManifestWarnings(workspace, environment);
+        return PackageGraph.ResolveCached(workspace, environment, new(request.Features, null, request.Locked, [..Selected(workspace, request.Package).Select(static m => m.Name)]));
+    }
+
+    /// <summary>
+    ///     What the workspace's manifests say that this toolchain accepts but
+    ///     does not act on — an unknown key, a setting not built yet — so that
+    ///     nothing in a manifest is ignored without a word.
+    /// </summary>
+    static void ReportManifestWarnings(Workspace workspace, PackageEnvironment environment) {
+        IEnumerable<Manifest> manifests = [workspace.RootManifest, ..workspace.LocalPackages().Values.Select(static p => p.Manifest)];
+        foreach (var warning in manifests.DistinctBy(static m => m.File).SelectMany(static m => m.Warnings).Distinct()) {
+            environment.Error.WriteLine($"warning: {warning}");
+        }
+    }
 
     /// <summary>
     ///     The trees of one target: the binary's entry file first (where the

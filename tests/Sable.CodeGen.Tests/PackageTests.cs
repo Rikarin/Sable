@@ -213,6 +213,46 @@ public sealed class PackageTests {
     }
 
     [Fact]
+    public void AWeakFeatureTurnsOnOnlyWhenItsDependencyIsOn() {
+        using var fixture = new PackageFixture();
+        fixture.Package("extra", "extra", "1.0.0", "[features]\nvalidation = []\n", ("src/lib.sb", "module Extra\n"));
+        fixture.Package("app", "app", "1.0.0", """
+            [dependencies]
+            extra = { path = "../extra", optional = true }
+
+            [features]
+            debug = ["extra?/validation"]
+            with-extra = ["dep:extra"]
+            """,
+            ("src/main.sb", "module App\nfn main() {}\n"));
+        var workspace = fixture.Load("app");
+
+        // Alone, the weak feature turns nothing on: no dependency, no feature.
+        var graph = PackageGraph.Resolve(workspace, fixture.Environment, new(new(["debug"])));
+        Assert.False(graph.Packages.ContainsKey("extra"));
+
+        // With the dependency on, it turns the dependency's feature on.
+        graph = PackageGraph.Resolve(workspace, fixture.Environment, new(new(["debug", "with-extra"])));
+        Assert.Equal(["default", "validation"], graph.Packages["extra"].Features.Order());
+
+        // The dependency on without the weak feature: not turned on.
+        graph = PackageGraph.Resolve(workspace, fixture.Environment, new(new(["with-extra"])));
+        Assert.DoesNotContain("validation", graph.Packages["extra"].Features);
+    }
+
+    [Fact]
+    public void WhatAManifestSaysThatIsNotActedOnIsWarnedAbout() {
+        using var fixture = new PackageFixture();
+        fixture.Package("app", "app", "1.0.0", "flavour = \"mint\"\n[reflect]\ninclude = [\"Scene\"]\n",
+            ("src/main.sb", "module App\nfn main() {}\n"));
+        Assert.Equal(0, PackageBuilder.Check(fixture.Load("app"), fixture.Environment, new()));
+        var errors = fixture.Errors.ToString();
+        Assert.Contains("warning: ", errors, StringComparison.Ordinal);
+        Assert.Contains("package.flavour: unknown key, ignored", errors, StringComparison.Ordinal);
+        Assert.Contains("reflect: has no effect yet", errors, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void TheRootPackagesOwnFeaturesComeFromTheCommandLine() {
         using var fixture = new PackageFixture();
         fixture.Package("app", "app", "1.0.0", "[features]\nloud = []\n",

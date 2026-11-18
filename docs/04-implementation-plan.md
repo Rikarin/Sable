@@ -1715,19 +1715,23 @@ loaded in any test.
   `$BROWSER` or the system's browser. Not yet: doc tests, search beyond the
   index.
 - **`sable repl`**: `ReplSession` (separate from the console) keeps imports,
-  declarations and the statements that ran, and runs each entry as the next
-  statement of a `main` that replays them, under the SIL interpreter; an
-  expression is bound to `resN` and shown with its type; `:type`, `:reset`,
-  `:help`, `:quit`. What a statement does to the world (files, input, the
-  environment, processes, the clock, sleeping) goes through an
-  `EffectJournal`: carried out the first time, replayed from the journal
-  after, so nothing happens twice and the clock reads as it did; a failed
-  entry's effects are dropped from it. The interpreter runs without a step
-  limit (Ctrl-C interrupts an entry) and 100,000 calls deep. On a terminal,
-  `LineEditor` gives readline's editing keys, ↑/↓ history (kept in
-  `~/.sable/repl_history`) and Tab completion of keywords and the session's
-  names. Not yet: replay still repeats the earlier statements' computation
-  (snapshotting the interpreter would not). In a package the session is
+  declarations, bindings and the entries that ran, under the SIL
+  interpreter. An entry runs as a function of its own; each binding at its
+  top level becomes a global of the session (its type written out), set up
+  where the binding stood. The program is lowered with
+  `SilGen.LowerForSession` — each global has its own initialiser, run when
+  the global is first reached, and nothing destroys them at the end — and
+  run with the heap and globals the earlier entries' programs left
+  (`SilInterpreter.Session`), so nothing earlier is computed or done again.
+  Earlier entries' functions are compiled with each new one, so a closure
+  one made still has its code. A failed entry's bindings are forgotten; a
+  binding that cannot be a global (its value needs a name bound inside the
+  entry) lasts only for the entry. An expression is bound to `resN` and
+  shown with its type; `:type`, `:reset`, `:help`, `:quit`. The interpreter
+  runs without a step limit (Ctrl-C interrupts an entry) and 100,000 calls
+  deep. On a terminal, `LineEditor` gives readline's editing keys, ↑/↓
+  history (kept in `~/.sable/repl_history`) and Tab completion of keywords
+  and the session's names. In a package the session is
   compiled with the package's library and its dependencies, so `import`
   takes their modules (`--no-package` for a session without).
 - **Lints** (`src/Sable.Symbols/Lints/`): `Lint` over a file's

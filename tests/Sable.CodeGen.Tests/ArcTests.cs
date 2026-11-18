@@ -209,6 +209,20 @@ public sealed class ArcTests {
     }
 
     /// <summary>
+    ///     Retains and releases are inline in the program, not calls into the
+    ///     runtime that only link-time optimisation could inline: only a last
+    ///     release calls it, to run the deinit and free the memory.
+    /// </summary>
+    [Fact]
+    public void RetainAndReleaseAreInline() {
+        var ir = Pipeline.Compile(new SourceText(Program(Walk, "    print(total(Node(1, Node(2, none))))"), "test.sb"), optimised: true).LlvmIr!;
+        Assert.Contains("define internal void @sable.retain(ptr %object) alwaysinline", ir, StringComparison.Ordinal);
+        Assert.Contains("call void @sable_release_last(ptr %object)", ir, StringComparison.Ordinal);
+        Assert.DoesNotContain("call void @sable_retain(", ir, StringComparison.Ordinal);
+        Assert.DoesNotContain("call void @sable_release(", ir, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     ///     The walking local of a read-only walk holds its nodes unretained:
     ///     each is kept by the field of the one before, back to the borrowed
     ///     parameter.

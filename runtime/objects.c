@@ -74,8 +74,11 @@ static bool tracking;
 
 // What ARC did: the counts the benchmarks track, and what the ARC passes are
 // measured by. Retains and releases count only those that touch a count —
-// not null, not immortal.
-static int64_t allocations, retains, releases;
+// not null, not immortal. The two are the program's to count too: compiled
+// code retains and releases inline, calling here only for an object's last
+// release (sable_release_last), and keeps these counts as the runtime does.
+static int64_t allocations;
+int64_t sable_retains, sable_releases;
 
 // With SABLE_CHECK_LEAKS set, a program that ends with objects still alive
 // says how many: tests run every program this way. With SABLE_STATS set, it
@@ -92,6 +95,6 @@ SABLE_AT_EXIT(sable_report) {
     if (getenv("SABLE_STATS") != NULL) {
         fflush(stdout);
         fprintf(stderr, "sable: allocations %lld, retains %lld, releases %lld\n",
-            (long long)allocations, (long long)retains, (long long)releases);
+            (long long)allocations, (long long)sable_retains, (long long)sable_releases);
     }
 }

@@ -229,13 +229,18 @@ void *sable_stack_object(void *memory, const SableMetadata *type, int64_t size) 
     return object;
 }
 
+// Compiled code does what these two do inline (LlvmEmitter's sable.retain
+// and sable.release), so that a build without link-time optimisation keeps
+// its retains and releases out of calls; the runtime's own code calls them.
 void sable_retain(void *pointer) {
     SableObject *object = pointer;
     if (object != NULL && !(object->flags & SABLE_IMMORTAL)) {
         object->strong++;
-        retains++;
+        sable_retains++;
     }
 }
+
+void sable_release_last(void *pointer);
 
 void sable_release(void *pointer) {
     SableObject *object = pointer;
@@ -243,10 +248,19 @@ void sable_release(void *pointer) {
         return;
     }
 
-    releases++;
+    sable_releases++;
     if (--object->strong > 0) {
         return;
     }
+
+    sable_release_last(object);
+}
+
+// The last strong reference gone: its count is zero, and it is counted.
+// The deinit runs, the fields are destroyed, and the memory goes when no
+// unowned reference holds it.
+void sable_release_last(void *pointer) {
+    SableObject *object = pointer;
 
     // The deinit, and the destruction of the fields, see the object alive.
     object->strong = 1;

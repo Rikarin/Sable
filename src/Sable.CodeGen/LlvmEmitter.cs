@@ -132,6 +132,8 @@ public sealed partial class LlvmEmitter {
 
         output.Append(Declarations);
         output.Append('\n');
+        output.Append(Counting);
+        output.Append('\n');
         output.Append(functions);
         output.Append(ForeignFunctions(module));
         output.Append(ExportedFunctions(module));
@@ -159,6 +161,72 @@ public sealed partial class LlvmEmitter {
 
         return output.ToString();
     }
+
+    /// <summary>
+    ///     Retain and release, inline: the runtime's <c>sable_retain</c> and
+    ///     <c>sable_release</c>, which only a link-time optimised build could
+    ///     otherwise inline — a call for every count, on Linux and Windows
+    ///     without lld, or with LTO off. The object header is { metadata,
+    ///     strong count, flags }; an immortal object (a string literal) is not
+    ///     counted, nor is null. Only a last release calls the runtime, to run
+    ///     the deinit and free the memory. The runtime's counts of retains and
+    ///     releases, which SABLE_STATS reports, are kept here as there.
+    /// </summary>
+    const string Counting = """
+                            @sable_retains = external global i64
+                            @sable_releases = external global i64
+                            declare void @sable_release_last(ptr) cold
+
+                            define internal void @sable.retain(ptr %object) alwaysinline nounwind {
+                            entry:
+                              %none = icmp eq ptr %object, null
+                              br i1 %none, label %done, label %present
+                            present:
+                              %flagsField = getelementptr inbounds { ptr, i32, i32 }, ptr %object, i32 0, i32 2
+                              %flags = load i32, ptr %flagsField
+                              %immortalBit = and i32 %flags, 1
+                              %immortal = icmp ne i32 %immortalBit, 0
+                              br i1 %immortal, label %done, label %count
+                            count:
+                              %strongField = getelementptr inbounds { ptr, i32, i32 }, ptr %object, i32 0, i32 1
+                              %strong = load i32, ptr %strongField
+                              %more = add i32 %strong, 1
+                              store i32 %more, ptr %strongField
+                              %retains = load i64, ptr @sable_retains
+                              %retainsMore = add i64 %retains, 1
+                              store i64 %retainsMore, ptr @sable_retains
+                              br label %done
+                            done:
+                              ret void
+                            }
+
+                            define internal void @sable.release(ptr %object) alwaysinline nounwind {
+                            entry:
+                              %none = icmp eq ptr %object, null
+                              br i1 %none, label %done, label %present
+                            present:
+                              %flagsField = getelementptr inbounds { ptr, i32, i32 }, ptr %object, i32 0, i32 2
+                              %flags = load i32, ptr %flagsField
+                              %immortalBit = and i32 %flags, 1
+                              %immortal = icmp ne i32 %immortalBit, 0
+                              br i1 %immortal, label %done, label %count
+                            count:
+                              %releases = load i64, ptr @sable_releases
+                              %releasesMore = add i64 %releases, 1
+                              store i64 %releasesMore, ptr @sable_releases
+                              %strongField = getelementptr inbounds { ptr, i32, i32 }, ptr %object, i32 0, i32 1
+                              %strong = load i32, ptr %strongField
+                              %less = sub i32 %strong, 1
+                              store i32 %less, ptr %strongField
+                              %gone = icmp eq i32 %less, 0
+                              br i1 %gone, label %last, label %done, !prof !{!"branch_weights", i32 1, i32 1000}
+                            last:
+                              call void @sable_release_last(ptr %object)
+                              br label %done
+                            done:
+                              ret void
+                            }
+                            """;
 
     const string Declarations = """
                                 @sable_string_metadata = external constant %SableMetadata
@@ -606,8 +674,8 @@ public sealed partial class LlvmEmitter {
         var copy = what == Witnessing.Copy;
         if (type is ScalarType or ClassType or ArrayType or StructType { IsInline: true } || type is EnumType nullable && IsNullable(nullable)) {
             var call = what switch {
-                Witnessing.Copy => "sable_retain",
-                Witnessing.Destroy => "sable_release",
+                Witnessing.Copy => "sable.retain",
+                Witnessing.Destroy => "sable.release",
                 _ => "sable_heap_visit",
             };
             output.Append(indent).Append($"call void @{call}(ptr {value}){dbg}\n");
@@ -2554,7 +2622,7 @@ public sealed partial class LlvmEmitter {
                     var old = Fresh();
                     Line($"{old} = load ptr, ptr {operands[0]}");
                     Line($"store ptr null, ptr {operands[0]}");
-                    Line($"call void @sable_release(ptr {old})");
+                    Line($"call void @sable.release(ptr {old})");
                     return;
                 }
 

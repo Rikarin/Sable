@@ -10,6 +10,51 @@ public enum NativePlatform {
     Other,
 }
 
+/// <summary>Link-time optimisation: none, ThinLTO, or the whole program as one module.</summary>
+public enum LtoMode {
+    Off,
+    Thin,
+    Fat,
+}
+
+/// <summary>What the link leaves out of the executable.</summary>
+public enum StripMode {
+    None,
+    DebugInfo,
+    Symbols,
+}
+
+/// <summary>
+///     What clang is asked for: the settings of a build profile that reach the
+///     native build (docs/05 §5.2).
+/// </summary>
+public sealed record NativeOptions {
+    /// <summary>clang's optimisation level: <c>0</c> to <c>3</c>, <c>s</c> or <c>z</c>.</summary>
+    public string OptLevel { get; init; } = "2";
+
+    /// <summary>
+    ///     Compile with <c>-g</c>. At <c>-O0</c> every variable stays where the
+    ///     debug information says it is; optimised, the debugger sees what is left.
+    /// </summary>
+    public bool DebugInfo { get; init; }
+
+    /// <summary>Link-time optimisation, in an optimised build where the platform's linker takes LLVM bitcode.</summary>
+    public LtoMode Lto { get; init; } = LtoMode.Fat;
+
+    public StripMode Strip { get; init; } = StripMode.None;
+
+    /// <summary>Look for shared libraries beside the executable.</summary>
+    public bool Rpath { get; init; }
+
+    public bool Optimise => OptLevel != "0";
+
+    /// <summary>
+    ///     The two builds a single file's <c>sable build</c> knows: <c>-O2</c>
+    ///     or <c>-O0</c>, and a debug build, which is <c>-g</c> at <c>-O0</c>.
+    /// </summary>
+    public static NativeOptions Of(bool optimise, bool debug) => new() { OptLevel = optimise && !debug ? "2" : "0", DebugInfo = debug };
+}
+
 /// <summary>The outcome of turning LLVM IR into an executable.</summary>
 public sealed record NativeBuildResult(bool Succeeded, string Output);
 
@@ -20,8 +65,9 @@ public sealed record NativeBuildResult(bool Succeeded, string Output);
 /// </summary>
 /// <remarks>
 ///     The compiler is <c>$CC</c> when it is set, otherwise <c>clang</c> on the
-///     path. Optimisation is <c>-O2</c>: the IR is written for clarity, every
-///     slot an <c>alloca</c>, and LLVM's own passes make it fast.
+///     path. Optimisation is <c>-O2</c> unless a profile says otherwise: the
+///     IR is written for clarity, every slot an <c>alloca</c>, and LLVM's own
+///     passes make it fast.
 /// </remarks>
 public static class NativeBuild {
     /// <summary>The runtime's C source, carried inside this assembly.</summary>
@@ -72,7 +118,15 @@ public static class NativeBuild {
     ///     the executable, and the lldb formatter plugin goes into it, where
     ///     lldb finds it once <c>target.load-script-from-symbol-file</c> is on.
     /// </param>
-    public static NativeBuildResult Build(string llvmIr, string outputPath, bool optimise = true, bool debug = false) {
+    public static NativeBuildResult Build(string llvmIr, string outputPath, bool optimise = true, bool debug = false) =>
+        Build(llvmIr, outputPath, NativeOptions.Of(optimise, debug));
+
+    /// <summary>
+    ///     Builds with a profile's settings: any optimisation level, with or
+    ///     without debug information, link-time optimisation where the
+    ///     platform's linker can do it, and what the link strips.
+    /// </summary>
+    public static NativeBuildResult Build(string llvmIr, string outputPath, NativeOptions options) {
         var directory = Directory.CreateTempSubdirectory("sable-build-");
         try {
             var irPath = Path.Combine(directory.FullName, "program.ll");
@@ -80,19 +134,14 @@ public static class NativeBuild {
             File.WriteAllText(irPath, llvmIr);
             File.WriteAllText(runtimePath, RuntimeSource);
 
-            List<string> arguments = debug
-                ? ["-g", "-O0"]
-                : [optimise ? "-O2" : "-O0"];
+            var lto = LtoFlags(options, Host, LinksBitcode);
+            List<string> arguments = [..CompileFlags(options), ..lto];
 
-            // Link-time optimisation lets LLVM inline the runtime's small
-            // functions into the program — where the platform's linker takes
-            // LLVM bitcode, as Apple's does; elsewhere it needs a plugin.
+            // LLVM inlines the runtime's small functions into the program only
+            // into functions built for at least the runtime's CPU features.
             var attributes = new List<string>();
-            if (optimise && !debug && OperatingSystem.IsMacOS()) {
-                arguments.Add("-flto");
-                if (HostAttributes.Value is { } host) {
-                    attributes.Add(host);
-                }
+            if (lto.Count > 0 && HostAttributes.Value is { } host) {
+                attributes.Add(host);
             }
 
             if (PlatformAttributes is { } platform) {
@@ -103,19 +152,35 @@ public static class NativeBuild {
                 File.WriteAllText(irPath, WithHostAttributes(llvmIr, string.Join(' ', attributes)));
             }
 
+            // With debug information the runtime is compiled apart, without
+            // it — and, optimised, as bitcode, so link-time optimisation still
+            // inlines it.
             var runtime = runtimePath;
-            if (debug) {
+            if (options.DebugInfo) {
                 runtime = Path.Combine(directory.FullName, "sable_runtime.o");
-                var (runtimeExit, runtimeOutput) = Run(CompilerPath, ["-c", "-O2", runtimePath, "-o", runtime]);
+                var bitcode = lto.Where(static f => f.StartsWith("-flto", StringComparison.Ordinal));
+                var (runtimeExit, runtimeOutput) = Run(CompilerPath, ["-c", options.Optimise ? $"-O{options.OptLevel}" : "-O2", ..bitcode, runtimePath, "-o", runtime]);
                 if (runtimeExit != 0) {
                     return new(false, runtimeOutput);
                 }
+
+                // Apple's linker deletes the object link-time optimisation
+                // makes, and dsymutil, which clang runs next, reads the debug
+                // information from it: keep it until the build is done.
+                if (lto.Count > 0 && Host == NativePlatform.MacOS) {
+                    var kept = Path.Combine(directory.FullName, "lto");
+                    if (options.Lto == LtoMode.Thin) {
+                        Directory.CreateDirectory(kept);
+                    }
+
+                    arguments.Add("-Wl,-object_path_lto," + kept);
+                }
             }
 
-            arguments.AddRange(["-Wno-override-module", irPath, runtime, "-o", outputPath, ..PlatformLinkFlags(Host)]);
+            arguments.AddRange(["-Wno-override-module", irPath, runtime, "-o", outputPath, ..LinkFlags(options, Host)]);
 
             var (exitCode, output) = Run(CompilerPath, arguments);
-            if (exitCode == 0 && debug) {
+            if (exitCode == 0 && options.DebugInfo) {
                 ShipLldbPlugin(outputPath);
             }
 
@@ -124,6 +189,71 @@ public static class NativeBuild {
             directory.Delete(true);
         }
     }
+
+    /// <summary>The flags the program's IR is compiled with: its optimisation level, and <c>-g</c> for debug information.</summary>
+    public static IReadOnlyList<string> CompileFlags(NativeOptions options) =>
+        options.DebugInfo ? ["-g", $"-O{options.OptLevel}"] : [$"-O{options.OptLevel}"];
+
+    /// <summary>
+    ///     Link-time optimisation's flags, which let LLVM inline the runtime's
+    ///     small functions into the program: in an optimised build that asks
+    ///     for it, where the linker takes LLVM bitcode — Apple's does; on Linux
+    ///     it is lld, as the GNU linkers need a plugin few installations have.
+    /// </summary>
+    public static IReadOnlyList<string> LtoFlags(NativeOptions options, NativePlatform platform, bool linksBitcode) =>
+        !options.Optimise || options.Lto == LtoMode.Off || !linksBitcode ? []
+        : [options.Lto == LtoMode.Thin ? "-flto=thin" : "-flto", ..platform == NativePlatform.Linux ? new[] { "-fuse-ld=lld" } : []];
+
+    /// <summary>
+    ///     What the link takes after the objects: what the platform needs, then
+    ///     what the profile strips, and where it looks for shared libraries.
+    /// </summary>
+    public static IReadOnlyList<string> LinkFlags(NativeOptions options, NativePlatform platform) {
+        List<string> flags = [..PlatformLinkFlags(platform)];
+
+        // GNU ld's and lld's -S and -s; Apple's linker has -S for the debug
+        // map, and -x for local symbols — a program's exported ones it keeps.
+        flags.AddRange((options.Strip, platform) switch {
+            (StripMode.DebugInfo, NativePlatform.Linux) => ["-Wl,--strip-debug"],
+            (StripMode.Symbols, NativePlatform.Linux) => ["-Wl,--strip-all"],
+            (StripMode.DebugInfo, NativePlatform.MacOS) => ["-Wl,-S"],
+            (StripMode.Symbols, NativePlatform.MacOS) => ["-Wl,-S", "-Wl,-x"],
+            _ => [],
+        });
+
+        if (options.Rpath) {
+            flags.AddRange(platform switch {
+                NativePlatform.Linux => ["-Wl,-rpath,$ORIGIN"],
+                NativePlatform.MacOS => ["-Wl,-rpath,@executable_path"],
+                _ => [],
+            });
+        }
+
+        return flags;
+    }
+
+    /// <summary>
+    ///     Whether this machine's link takes LLVM bitcode: always on macOS; on
+    ///     Linux when clang can link through lld, which is asked once per process.
+    /// </summary>
+    public static bool LinksBitcode => Host switch {
+        NativePlatform.MacOS => true,
+        NativePlatform.Linux => LldLinks.Value,
+        _ => false,
+    };
+
+    static readonly Lazy<bool> LldLinks = new(() => {
+        var directory = Directory.CreateTempSubdirectory("sable-probe-");
+        try {
+            var probe = Path.Combine(directory.FullName, "probe.c");
+            File.WriteAllText(probe, "int main(void) { return 0; }\n");
+            return Run(CompilerPath, ["-O2", "-flto", "-fuse-ld=lld", probe, "-o", Path.Combine(directory.FullName, "probe")]).ExitCode == 0;
+        } catch (Exception e) when (e is IOException or System.ComponentModel.Win32Exception) {
+            return false;
+        } finally {
+            directory.Delete(true);
+        }
+    });
 
     /// <summary>
     ///     What linking a Sable program needs on <paramref name="platform" />,

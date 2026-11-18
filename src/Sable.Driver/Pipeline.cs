@@ -35,7 +35,18 @@ public static class Pipeline {
     ///     together. The first tree is the one that should hold the entry
     ///     point: '@main', or a function called main, is looked for there first.
     /// </summary>
-    public static CompileResult Compile(IReadOnlyList<SyntaxTree> program, string? debugDirectory = null, bool checkExclusivity = true, BuildTimings? timings = null) {
+    /// <param name="optimised">
+    ///     An optimised build with debug information: the SIL passes run
+    ///     anyway, and the debugger sees what they leave. Without it, a build
+    ///     with debug information keeps every local in its slot.
+    /// </param>
+    public static CompileResult Compile(
+        IReadOnlyList<SyntaxTree> program,
+        string? debugDirectory = null,
+        bool checkExclusivity = true,
+        BuildTimings? timings = null,
+        bool optimised = false
+    ) {
         Compilation compilation;
         List<string> errors;
         using (BuildTimings.Of(timings, "bind")) {
@@ -70,9 +81,10 @@ public static class Pipeline {
             return new(module, null, ["error: no entry point: mark a function '@main' or name one 'main'"]);
         }
 
-        // The SIL passes, each followed by the verifier. A debug build keeps
-        // every local in its slot, where the debug information says it is.
-        if (debugDirectory is null) {
+        // The SIL passes, each followed by the verifier. An unoptimised debug
+        // build keeps every local in its slot, where the debug information
+        // says it is.
+        if (debugDirectory is null || optimised) {
             try {
                 using var _ = BuildTimings.Of(timings, "passes");
                 SilPassManager.Run(module, SilPassManager.Default);

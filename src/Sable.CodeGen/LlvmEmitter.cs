@@ -71,7 +71,7 @@ public sealed partial class LlvmEmitter {
         }
 
         if (module.EntryPoint is { } entry && module.Find(entry) is { } main) {
-            functions.Append(MainShim(main));
+            functions.Append(MainShim(main, keepEntry: _debug is not null));
         }
 
         var output = new StringBuilder();
@@ -263,8 +263,13 @@ public sealed partial class LlvmEmitter {
                                 """;
 
     /// <summary>The C <c>main</c>: calls the program's entry point and returns its result, if it has one.</summary>
-    static string MainShim(SilFunction entry) {
-        var call = $"@{Global(entry.Name)}()";
+    /// <param name="keepEntry">
+    ///     Never inline the entry point into the shim: with debug information,
+    ///     as the shim has none, and what LLVM inlines into a function without
+    ///     any loses its own — in an optimised build, often the whole program.
+    /// </param>
+    static string MainShim(SilFunction entry, bool keepEntry) {
+        var call = $"@{Global(entry.Name)}()" + (keepEntry ? " noinline" : "");
         return entry.Type.Result == SilType.Int
             ? $"define i32 @main(i32 %argc, ptr %argv) {{\n  call void @sable_set_arguments(i32 %argc, ptr %argv)\n  %r = call i64 {call}\n  %c = trunc i64 %r to i32\n  ret i32 %c\n}}\n"
             : $"define i32 @main(i32 %argc, ptr %argv) {{\n  call void @sable_set_arguments(i32 %argc, ptr %argv)\n  call void {call}\n  ret i32 0\n}}\n";

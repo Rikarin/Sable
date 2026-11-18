@@ -179,6 +179,12 @@ public static class PackageBuilder {
         var built = new List<BuiltBinary>();
         var members = Selected(workspace, request.Package);
 
+        // What the profile in use asks for and does not get is said, not
+        // taken silently.
+        foreach (var warning in workspace.RootManifest.Warnings.Where(w => w.Key.StartsWith($"profile.{profile.Name}.", StringComparison.Ordinal))) {
+            environment.Error.WriteLine($"warning: {warning}");
+        }
+
         if (members.Any(static m => m.Manifest.Build is not null)) {
             environment.Error.WriteLine("warning: [build] scripts are not run yet (docs/05 §5.6); building without it");
         }
@@ -214,7 +220,10 @@ public static class PackageBuilder {
                 // Incrementally (docs/05 §5.4): the cache in target/<profile>/cache.
                 Directory.CreateDirectory(output);
                 var executable = Path.Combine(output, bin.Name);
-                var buildSettings = new BuildSettings(profile.Name, profile.Optimise, profile.Debug ? workspace.Root : null, profile.Exclusivity);
+                var buildSettings = new BuildSettings(profile.Name, profile.Optimise, profile.Debug ? workspace.Root : null, profile.Exclusivity) {
+                    Native = profile.Native,
+                    Whole = profile.CodegenUnits == 1,
+                };
                 var outcome = IncrementalBuild.Build(Units(graph, member.Name, bin), buildSettings, executable, Path.Combine(output, "cache"), timings, environment.Error);
                 if (!outcome.Succeeded) {
                     Report(environment, outcome.Errors);

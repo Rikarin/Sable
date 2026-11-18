@@ -44,6 +44,12 @@ public sealed partial class Binder {
     int _loopDepth;
 
     /// <summary>
+    ///     The <c>switch</c> cases being bound, innermost last: true for one
+    ///     with a case after it, which a <c>fallthrough</c> can go on to.
+    /// </summary>
+    List<bool> _switchCases = [];
+
+    /// <summary>
     ///     True inside a closure body whose return type was not written and could
     ///     not be read off the context: the first <c>return</c> with a value fixes
     ///     it, and the rest are checked against that.
@@ -963,8 +969,7 @@ public sealed partial class Binder {
             DeclarationStatementSyntax declaration => BindDeclarationStatement(declaration),
             DoStatementSyntax doStatement => BindDo(doStatement),
             SwitchStatementSyntax switchStatement => BindSwitch(switchStatement),
-            FallthroughStatementSyntax fallthrough =>
-                Record(fallthrough, new BoundFallthrough(fallthrough)),
+            FallthroughStatementSyntax fallthrough => BindFallthrough(fallthrough),
             UnsafeStatementSyntax unsafeBlock => BindScopedBlock(
                 unsafeBlock,
                 ScopeKind.Unsafe,
@@ -1023,17 +1028,34 @@ public sealed partial class Binder {
             }
 
             PushScope();
+            _switchCases.Add(cases.Count + 1 < statement.Cases.Count);
             var statements = ImmutableArray.CreateBuilder<BoundStatement>();
             foreach (var inner in clause.Statements) {
                 statements.Add(BindStatement(inner));
             }
 
+            _switchCases.RemoveAt(_switchCases.Count - 1);
             PopScope();
 
             cases.Add(new(clause, values.ToImmutable(), statements.ToImmutable()));
         }
 
         return Record(statement, new BoundSwitch(statement, subject, cases.ToImmutable()));
+    }
+
+    /// <summary><c>fallthrough</c> goes on into the next case, so there has to be one.</summary>
+    BoundStatement BindFallthrough(FallthroughStatementSyntax statement) {
+        if (_switchCases.Count == 0 || !_switchCases[^1]) {
+            _diagnostics.Error(
+                ErrorCode.ERR_FallthroughOutOfPlace,
+                statement.Span,
+                _switchCases.Count == 0
+                    ? "'fallthrough' is only allowed in a switch case"
+                    : "'fallthrough' in the last case of a switch has no case to go on to"
+            );
+        }
+
+        return Record(statement, new BoundFallthrough(statement));
     }
 
     /// <summary>
@@ -1796,8 +1818,12 @@ public sealed partial class Binder {
         return Record(statement, new BoundContinue(statement, statement.Label.IsNone ? null : statement.Label.Text));
     }
 
-    /// <summary>A jump needs a loop, and a labelled one needs that label.</summary>
+    /// <summary>A jump needs a loop, and a labelled one needs that label. A plain 'break' may leave a switch instead.</summary>
     void CheckJump(TextSpan span, SyntaxToken label, string keyword) {
+        if (keyword == "break" && label.IsNone && _switchCases.Count > 0) {
+            return;
+        }
+
         if (_loopDepth == 0) {
             _diagnostics.Error(
                 ErrorCode.ERR_NoEnclosingLoop,
@@ -3960,6 +3986,7 @@ public sealed partial class Binder {
         var savedReturn = _returnType;
         var savedInferring = _inferringReturn;
         var savedLoopDepth = _loopDepth;
+        var savedSwitchCases = _switchCases;
         var savedOpen = _openTypeParameters;
         var savedEffects = SaveEffects();
 
@@ -3967,6 +3994,7 @@ public sealed partial class Binder {
         _returnType = returnType;
         _inferringReturn = inferring;
         _loopDepth = 0;
+        _switchCases = [];
         _openTypeParameters = [];
         _declaredThrows = symbol.ThrownType;
         _rethrows = symbol.IsRethrows;
@@ -4082,6 +4110,7 @@ public sealed partial class Binder {
         RestoreEffects(savedEffects);
         _openTypeParameters = savedOpen;
         _loopDepth = savedLoopDepth;
+        _switchCases = savedSwitchCases;
         _inferringReturn = savedInferring;
         _returnType = savedReturn;
         _containingSymbol = savedSymbol;

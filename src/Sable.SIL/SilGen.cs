@@ -2168,7 +2168,11 @@ public sealed partial class SilGen {
             public override SilType Type => SilType.Unit;
         }
 
-        sealed record Loop(string? Label, SilBlock Break, SilBlock Continue, int Scopes, int Temporaries);
+        /// <summary>A loop, or a <c>switch</c>: a <c>break</c> leaves either, but a <c>continue</c> passes a switch, whose Continue is null.</summary>
+        sealed record Loop(string? Label, SilBlock Break, SilBlock? Continue, int Scopes, int Temporaries);
+
+        /// <summary>The case a <c>fallthrough</c> goes on to, and the defer scopes and temporaries open where it began.</summary>
+        sealed record Fallthrough(SilBlock Target, int Scopes, int Temporaries);
 
         /// <summary>Where an error goes: a block taking it, and how many defer scopes and temporaries were open there.</summary>
         sealed record Handler(SilBlock Block, SilType Type, int Scopes, int Temporaries);
@@ -2178,6 +2182,9 @@ public sealed partial class SilGen {
         readonly List<AllocStackInst> _allocations = [];
         readonly List<Loop> _loops = [];
         readonly List<Handler> _handlers = [];
+
+        /// <summary>For each <c>switch</c> case being lowered, innermost last: where its <c>fallthrough</c> goes.</summary>
+        readonly List<Fallthrough?> _fallthroughs = [];
 
         /// <summary>The deferred bodies of each open scope, innermost last.</summary>
         /// <remarks>
@@ -3053,10 +3060,20 @@ public sealed partial class SilGen {
                     Branch(breakLoop.Break);
                     return;
 
-                case BoundContinue jump when FindLoop(jump.Label) is { } continueLoop:
+                case BoundContinue jump when FindLoop(jump.Label, continues: true) is { Continue: { } target } continueLoop:
                     DestroyTemporaries(continueLoop.Temporaries);
                     RunDefers(continueLoop.Scopes);
-                    Branch(continueLoop.Continue);
+                    Branch(target);
+                    return;
+
+                case BoundSwitch switchStatement:
+                    Switch(switchStatement);
+                    return;
+
+                case BoundFallthrough when _fallthroughs is [.., { } next]:
+                    DestroyTemporaries(next.Temporaries);
+                    RunDefers(next.Scopes);
+                    Branch(next.Target);
                     return;
 
                 case BoundDo doStatement:
@@ -3348,14 +3365,101 @@ public sealed partial class SilGen {
             _loops.RemoveAt(_loops.Count - 1);
         }
 
-        Loop? FindLoop(string? label) {
+        Loop? FindLoop(string? label, bool continues = false) {
             for (var i = _loops.Count - 1; i >= 0; i--) {
+                if (continues && _loops[i].Continue is null) {
+                    continue;
+                }
+
                 if (label is null || _loops[i].Label == label) {
                     return _loops[i];
                 }
             }
 
             return null;
+        }
+
+        /// <summary>
+        ///     <c>switch</c>: the cases' values compared with the subject in
+        ///     order, then <c>default</c> if there is one. A case runs to its
+        ///     end, unless a <c>fallthrough</c> goes on into the next or a
+        ///     <c>break</c> leaves early. The subject lives until a case is
+        ///     chosen.
+        /// </summary>
+        void Switch(BoundSwitch switchStatement) {
+            if (Expression(switchStatement.Subject) is not { } subject) {
+                return;
+            }
+
+            var after = function.AddBlock();
+            var bodies = switchStatement.Cases.Select(_ => function.AddBlock()).ToList();
+            SilBlock? defaultBody = null;
+
+            Hold(subject);
+            for (var i = 0; i < switchStatement.Cases.Length; i++) {
+                var switchCase = switchStatement.Cases[i];
+                if (switchCase.Values.IsEmpty) {
+                    defaultBody = bodies[i];
+                    continue;
+                }
+
+                foreach (var value in switchCase.Values) {
+                    if (CaseEquals(subject, value) is not { } equal) {
+                        return;
+                    }
+
+                    var next = function.AddBlock();
+                    Jump(new CondBranchInst(equal, Destroying(subject, bodies[i]), [], next, []));
+                    _current = next;
+                }
+            }
+
+            Unhold(subject);
+            Destroy(subject);
+            Branch(defaultBody ?? after);
+
+            _loops.Add(new(null, after, null, _scopes.Count, _temporaries.Count));
+            for (var i = 0; i < switchStatement.Cases.Length; i++) {
+                _current = bodies[i];
+                _fallthroughs.Add(i + 1 < bodies.Count ? new(bodies[i + 1], _scopes.Count, _temporaries.Count) : null);
+                _scopes.Add([]);
+                foreach (var statement in switchStatement.Cases[i].Statements) {
+                    Statement(statement);
+                }
+
+                if (_current is not null) {
+                    RunDefers(_scopes.Count - 1);
+                    Branch(after);
+                }
+
+                _scopes.RemoveAt(_scopes.Count - 1);
+                _fallthroughs.RemoveAt(_fallthroughs.Count - 1);
+            }
+
+            _loops.RemoveAt(_loops.Count - 1);
+            _current = after;
+        }
+
+        /// <summary>
+        ///     Whether a switch's subject is one of its case's values: by case
+        ///     for an enum, and by value for a number, character or string.
+        /// </summary>
+        SilValue? CaseEquals(SilValue subject, BoundExpression value) {
+            if (Expression(value) is not { } candidate) {
+                return null;
+            }
+
+            SilValue? equal;
+            if (IsPayloadFree(subject.Type) && candidate.Type == subject.Type) {
+                equal = SameCase(subject, candidate, equal: true);
+            } else if (candidate.Type == subject.Type && SilBuiltins.Find($"cmp_eq_{subject.Type}") is not null) {
+                equal = Emit(new BuiltinInst($"cmp_eq_{subject.Type}", SilType.Bool, subject, candidate));
+            } else {
+                equal = Missing(value, $"a switch on '{value.Type.ToDisplayString()}'");
+            }
+
+            Destroy(candidate);
+            return equal;
         }
 
         void Do(BoundDo doStatement) {

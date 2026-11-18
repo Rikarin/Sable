@@ -183,6 +183,7 @@ public enum ErrorCode {
     ERR_MatchArmTypesDiffer = 6007,
     ERR_UseBeforeAssignment = 6008,
     ERR_RefutablePatternInDeclaration = 6009,
+    ERR_FallthroughOutOfPlace = 6020,
 
     // ---- Code generation (S7000-S7999) ---------------------------------
     ERR_NotLoweredYet = 7000,

@@ -853,6 +853,11 @@ switch code {
 }
 ```
 
+The values are compared with the subject in order, and `default`, wherever it
+is written, runs when none is equal. A case ends where the next begins:
+`fallthrough` goes on into the case written after it, `break` leaves the
+`switch` early, and `continue` goes on with the loop around it.
+
 ---
 
 ## 16. Expressions and operators

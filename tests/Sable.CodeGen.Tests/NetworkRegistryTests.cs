@@ -231,7 +231,7 @@ public sealed class NetworkRegistryTests {
 
         var cli = SableProcess.Run(fixture.Root, fixture.Home, "search", "parsing", "--registry", server.Url);
         Assert.True(cli.ExitCode == 0, cli.Errors);
-        Assert.Equal("acme/parse = \"0.3.0\"    # Parsing numbers from text\n", cli.Output);
+        Assert.Equal("acme/parse = \"0.3.0\"    # Parsing numbers from text\n", cli.Output.ReplaceLineEndings("\n"));
     }
 
     [Fact]
@@ -313,8 +313,8 @@ public sealed class NetworkRegistryTests {
 
         using var registry = server.Client();
         var installed = Installer.Install(server.Environment, registry, "alice/hello@1", null, force: false);
-        Assert.Equal(["hello"], installed.Binaries);
-        var binary = Path.Combine(fixture.Home, "bin", "hello");
+        Assert.Equal([Platform.Executable("hello")], installed.Binaries);
+        var binary = Path.Combine(fixture.Home, "bin", Platform.Executable("hello"));
         Assert.Equal("hello from an install\n", PackageFixture.Execute(binary).Output);
         Assert.Equal("alice/hello", Assert.Single(Installer.Load(server.Environment)).Name);
 

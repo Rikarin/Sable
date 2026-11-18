@@ -234,7 +234,7 @@ public static class NativeBuild {
         var directory = Directory.CreateTempSubdirectory("sable-build-");
         try {
             var irPath = Path.Combine(directory.FullName, "program.ll");
-            File.WriteAllText(irPath, ForTarget(llvmIr, target, lto.Count > 0));
+            File.WriteAllText(irPath, ForTarget(llvmIr, target, lto.Count > 0, namesFrames: !options.Optimise));
 
             List<string> arguments = [..target.ClangFlags, ..SysrootFlags(options), ..CompileFlags(options), ..lto];
 
@@ -281,7 +281,18 @@ public static class NativeBuild {
     ///     IR, written by hand, said nothing, so under LTO the runtime's
     ///     retain and release were never inlined into it.)
     /// </param>
-    public static string ForTarget(string llvmIr, NativeTarget target, bool inlinesRuntime = false) {
+    /// <param name="namesFrames">
+    ///     An unoptimised build, whose trap's backtrace names every frame.
+    ///     A whole program's functions are internal, which the symbol table
+    ///     a backtrace reads on Linux (the dynamic one) and Windows (a PDB's
+    ///     public symbols) leaves out: there they are kept external. Nothing
+    ///     else links with the program, so no name can clash.
+    /// </param>
+    public static string ForTarget(string llvmIr, NativeTarget target, bool inlinesRuntime = false, bool namesFrames = false) {
+        if (namesFrames && target.Platform is NativePlatform.Linux or NativePlatform.Windows) {
+            llvmIr = llvmIr.Replace("\ndefine internal ", "\ndefine ", StringComparison.Ordinal);
+        }
+
         var attributes = new List<string>();
         if (inlinesRuntime && target.Describe()?.FunctionAttributes is { } features) {
             attributes.Add(features);
@@ -514,13 +525,20 @@ public static class NativeBuild {
 
     /// <summary>
     ///     What every function needs on the target's platform, whatever the
-    ///     build. macOS's backtrace(), which a trap's backtrace and the
-    ///     system's crash reports use, walks the frame-pointer chain: keep it
-    ///     in every function that calls, as clang does for C there. (Without
-    ///     it an unoptimised build's trap showed the innermost frame only.)
+    ///     build, for a trap's backtrace (and the system's crash reports) to
+    ///     see past it. macOS's backtrace() walks the frame-pointer chain:
+    ///     keep it in every function that calls, as clang does for C there.
+    ///     glibc's, and Windows' CaptureStackBackTrace, walk the unwind
+    ///     tables, which LLVM writes for a function that cannot throw — all
+    ///     of Sable's — only when asked to, as clang asks for C there.
+    ///     (Without them an unoptimised build's trap showed the innermost
+    ///     frame only.)
     /// </summary>
-    public static string? PlatformAttributesFor(NativeTarget target) =>
-        target.Platform == NativePlatform.MacOS ? "\"frame-pointer\"=\"non-leaf\"" : null;
+    public static string? PlatformAttributesFor(NativeTarget target) => target.Platform switch {
+        NativePlatform.MacOS => "\"frame-pointer\"=\"non-leaf\"",
+        NativePlatform.Linux or NativePlatform.Windows => "uwtable",
+        _ => null,
+    };
 
     /// <summary>Every function the IR defines, given the host's attributes through one attribute group.</summary>
     public static string WithHostAttributes(string llvmIr, string attributes) {

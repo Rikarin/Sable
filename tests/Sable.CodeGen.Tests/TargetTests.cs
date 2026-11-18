@@ -69,10 +69,11 @@ public sealed class TargetTests {
     [Fact]
     public void TheHostIsBuiltWithoutATargetFlag() {
         Assert.True(NativeTarget.Host.IsHost);
-        Assert.Empty(NativeTarget.Host.ClangFlags);
+        Assert.DoesNotContain(NativeTarget.Host.ClangFlags, static f => f.StartsWith("--target", StringComparison.Ordinal));
         Assert.Equal(ParseOptions.HostOs, NativeTarget.Host.Os);
         Assert.Equal(ParseOptions.HostArch, NativeTarget.Host.Arch);
         Assert.Equal(["--target=x86_64-unknown-linux-gnu"], NativeTarget.Of("x86_64-unknown-linux-gnu").ClangFlags);
+        Assert.Equal(["--target=x86_64-pc-windows-msvc", "-fms-runtime-lib=dll"], NativeTarget.Of("x86_64-pc-windows-msvc").ClangFlags);
     }
 
     // ---- The IR ------------------------------------------------------------

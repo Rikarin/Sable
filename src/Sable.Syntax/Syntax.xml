@@ -252,11 +252,24 @@
   </Node>
 
   <Node Name="InvocationExpressionSyntax" Base="ExpressionSyntax" Kind="InvocationExpression"
-        Doc="`f(x)`, `f?(x)`, or `f(x) { ... }` with a trailing closure.">
+        Doc="`f(x)`, `f?(x)`, or `f(x) { ... }` with a trailing closure, and `onFail: { ... }` after it with more.">
     <Field Name="Expression" Type="ExpressionSyntax" />
     <Field Name="QuestionToken" Type="Token" Optional="true" />
     <Field Name="ArgumentList" Type="ArgumentListSyntax" Optional="true" />
     <Field Name="TrailingClosure" Type="BraceClosureExpressionSyntax" Optional="true" />
+    <Field Name="LabeledClosures" Type="List:LabeledClosureSyntax" />
+  </Node>
+
+  <Node Name="IfExpressionSyntax" Base="ExpressionSyntax" Kind="IfExpression"
+        Doc="`if c { a } else { b }` where a value is wanted: each branch's last line is its value.">
+    <Field Name="Statement" Type="IfStatementSyntax" />
+  </Node>
+
+  <Node Name="LabeledClosureSyntax" Base="SyntaxNode" Kind="LabeledClosure"
+        Doc="`onFail: { ... }`: a trailing closure after the first, labelled for its parameter.">
+    <Field Name="NameToken" Type="Token" />
+    <Field Name="ColonToken" Type="Token" />
+    <Field Name="Closure" Type="BraceClosureExpressionSyntax" />
   </Node>
 
   <Node Name="ArgumentListSyntax" Base="SyntaxNode" Kind="ArgumentList"
@@ -641,6 +654,12 @@
     <Field Name="Identifier" Type="Token" />
     <Field Name="AsKeyword" Type="Token" />
     <Field Name="Type" Type="TypeSyntax" />
+  </Node>
+
+  <Node Name="OptionalPatternSyntax" Base="PatternSyntax" Kind="OptionalPattern"
+        Doc="`let v?`: an optional that holds a value, which the pattern matches; `.Some(let v)`.">
+    <Field Name="Pattern" Type="PatternSyntax" />
+    <Field Name="QuestionToken" Type="Token" />
   </Node>
 
   <Node Name="OrPatternSyntax" Base="PatternSyntax" Kind="OrPattern" Doc="`a | b`.">

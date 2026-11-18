@@ -15,7 +15,8 @@ through `sable` too.
   syntax error is left alone.
 - **Run and Debug** above a program's `main`, and in the editor title; `Cmd/Ctrl+F5` runs.
 - **The Test Explorer**: each package's `@test` functions, listed by `sable test --list` and run
-  from the gutter, with failures (and the values that differ) shown where the test is.
+  from the gutter, with failures (and the values that differ) shown where the test is; or debugged,
+  in a harness built with debug information (the Debug profile).
 - **Tasks** for `build`, `check`, `run`, `test`, `bench`, `fmt` and `clean` in every package
   (Terminal → Run Task → sable). Their diagnostics reach the Problems panel through `$sable`.
 - **Debugging** with lldb: Sable's formatters are loaded, so a `String` shows its text, a list its

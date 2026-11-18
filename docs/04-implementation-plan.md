@@ -1342,11 +1342,29 @@ Full design in [05-toolchain.md](05-toolchain.md).
 - **Proved on the library:** `tests/lib/CollectionsTests.sb` and
   `tests/lib/TextTests.sb` test Sable.Collections and Sable.Text with
   `@test`/`@bench`, and the test suite runs them.
+- **Later (#205).** A test may be `async`: each test's closure is
+  `async () -> String?` and the harness's entry point and `runTests` are
+  async, awaiting it (a benchmark still may not be, S3104). What a test
+  throws is in its failure's report (`the test threw an error: Oops.Bad`,
+  as interpolation describes it). `@test(traps)` passes by trapping and fails
+  by returning, `@test(traps: "out of range")` also wants that in the trap's
+  message; a failed assertion is not the trap. In one process such a test
+  is ignored, said so. `sable test` now runs the processes itself
+  (`TestRunner.cs`) from what the harness's `--describe` says: several at
+  once (`-j`, one per processor by default), each line as its test
+  finishes, failures reported in declaration order, the same text the
+  harness's own runner prints; `--timeout <s>` stops and fails a test that
+  runs longer, and one running over 60 s with no limit is said to be.
+  `--harness-out <path>` (with `-g`) builds the harness and runs nothing, so
+  the VS Code Test Explorer's Debug profile starts `<harness> --run-test
+  <name>` under the debugger.
 - **Deferred:** a `blackBox` to keep the optimiser from deleting a
-  benchmark's work (it needs a core builtin); async tests; a parallel test
-  runner; timeouts for a hung test; printing the error a throwing test threw;
-  `#[should_panic]`-style expected traps; snapshot and property testing
-  (docs/06 lists them under Sable.Testing).
+  benchmark's work (it needs a core builtin); async benchmarks; snapshot and
+  property testing (docs/06 lists them under Sable.Testing; #73, #107); a
+  coverage tool (it needs the code generator to count lines, as
+  `-fprofile-instr-generate` does, and the Test Explorer then a Coverage
+  profile); a time limit inside the harness's own runner, which would need a
+  builtin to wait on a child with one.
 
 ### Packages, as implemented
 
@@ -1573,6 +1591,8 @@ the toolchain:
 - The Test Explorer, from `sable test --list`. A run is one `sable test <names>
   --exact` per package, read as it prints; a failure carries the differing
   values as expected and actual output.
+  A Debug profile builds the package's harness with `-g --harness-out` and
+  debugs each selected test in it, one after another.
 - A `sable` debug type. It builds the package (its dev profile has debug
   information) or a lone file with `-g`. It writes the formatter plugin with
   the new `sable debug --write-plugin`, and becomes an `lldb-dap` (or

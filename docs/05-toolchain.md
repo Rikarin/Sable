@@ -13,9 +13,10 @@ sable new <name> [--lib|--bin]     scaffold a package
 sable init                         scaffold in the current directory
 sable build [--release] [--target] compile
 sable run [-- args...]             build and execute
-sable test [filter] [--doc]        run @test functions and doc examples
+sable test [filter] [--doc] [-j n] [--timeout s]  run @test functions and doc examples
 sable bench [filter]               run @bench functions, compare to baseline
 sable check                        type-check only, no codegen (fast)
+sable fix [--check]                apply the fixes the lints suggest
 sable fmt [--check]                format; no options, ever
 sable doc [--open] [--json]        generate documentation + symbol graph
 sable add <pkg>[@<ver>] [--dev]    add a dependency, update the lock

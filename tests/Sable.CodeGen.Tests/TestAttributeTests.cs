@@ -38,8 +38,8 @@ public sealed class TestAttributeTests {
         Rejects("S3103", "struct S {\n    @test\n    fn t() { }\n}", "marks an instance method");
 
     [Fact]
-    public void ATestIsNotAsync() =>
-        Rejects("S3104", "@test\nasync fn t() { }", "cannot be async");
+    public void ABenchmarkIsNotAsync() =>
+        Rejects("S3104", "@bench\nasync fn b() { }", "cannot be async");
 
     [Fact]
     public void ABenchmarkTakesNothingOrABencher() {
@@ -53,8 +53,11 @@ public sealed class TestAttributeTests {
         Rejects("S3106", "@test @bench\nfn t() { }", "not both");
 
     [Fact]
-    public void TheAttributesTakeNoArguments() =>
-        Rejects("S3107", "@test(\"slow\")\nfn t() { }", "'@test' takes no arguments");
+    public void TheAttributesTakeOnlyWhatTheyTake() {
+        Rejects("S3107", "@test(\"slow\")\nfn t() { }", "'@test' takes nothing, or 'traps'");
+        Rejects("S3107", "@test(traps: 1)\nfn t() { }", "'@test' takes nothing, or 'traps'");
+        Rejects("S3107", "@bench(traps)\nfn b() { }", "'@bench' takes no arguments");
+    }
 
     [Fact]
     public void NotALocalFunction() =>
@@ -88,5 +91,11 @@ public sealed class TestAttributeTests {
                 @test
                 static fn inExtension() { }
             }
+            @test
+            async fn awaits() { }
+            @test(traps)
+            fn traps() { }
+            @test(traps: "out of range")
+            fn trapsSaying() { }
             """)));
 }

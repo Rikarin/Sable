@@ -43,6 +43,10 @@ if [ "$1" = "test" ] && [ "$2" = "--list" ]; then
   echo "Demo.fails: test (src/main.sb:7)"
   exit 0
 fi
+if [ "$1" = "test" ] && [ "$2" = "-g" ] && [ "$3" = "--harness-out" ]; then
+  echo "harness" > "$4"
+  exit 0
+fi
 if [ "$1" = "test" ]; then
   echo "running 2 tests"
   echo "test Demo.adds ... ok (1.5 ms)"
@@ -368,6 +372,34 @@ test("the Test Explorer lists a package's tests and reports a run", { skip: !pos
   assert.match(message.message, /assertion failed/);
   assert.equal(message.location.range.start.line, 6);
   assert.match(run.output, /test result: FAILED/);
+});
+
+test("the Test Explorer debugs a test in a harness built with debug information", { skip: !posix && "needs a shell script for sable" }, async () => {
+  const root = tree({ "package.sb": PACKAGE, "src/main.sb": MAIN });
+  const sablePath = fakeSable(root);
+  const { modules, recorded } = load({ folders: [root], settings: { "sable.path": sablePath } });
+  modules.testing.register(context(root));
+  const controller = recorded.controllers[0];
+  await controller.resolveHandler(undefined);
+
+  const debug = controller.profiles.find((p) => p.kind === 2);
+  assert.ok(debug, "a Debug profile");
+  const packageItem = [];
+  controller.items.forEach((item) => packageItem.push(item));
+  const tests = [];
+  packageItem[0].children.forEach((item) => tests.push(item));
+  const fails = tests.find((t) => t.label === "fails");
+  await debug.handler({ include: [fails], exclude: [] }, { isCancellationRequested: false, onCancellationRequested: () => {} });
+
+  assert.equal(recorded.started.length, 1);
+  const { configuration } = recorded.started[0];
+  assert.equal(configuration.type, "sable");
+  assert.deepEqual(configuration.args, ["--run-test", "Demo.fails"]);
+  assert.equal(configuration.cwd, root);
+  assert.equal(fs.readFileSync(configuration.program, "utf8"), "harness\n");
+  const run = controller.runs[0];
+  assert.ok(run.ended);
+  assert.deepEqual(run.events.map((e) => e.event), ["started", "skipped"]);
 });
 
 test("every snippet and grammar the manifest names exists", () => {

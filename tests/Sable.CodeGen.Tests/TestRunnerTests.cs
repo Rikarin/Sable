@@ -80,7 +80,7 @@ public sealed class TestRunnerTests {
         Assert.DoesNotContain("the program's own main", run.Stdout, StringComparison.Ordinal);
 
         Assert.Contains("---- Suite.outOfRange (test.sb:22) ----\n    fatal error: array index out of range\n    (exit status 134)\n", run.Stdout, StringComparison.Ordinal);
-        Assert.Contains("---- Suite.throwing (test.sb:28) ----\n    assertion failed: the test threw an error\n", run.Stdout, StringComparison.Ordinal);
+        Assert.Contains("---- Suite.throwing (test.sb:28) ----\n    assertion failed: the test threw an error: Oops.Bad\n", run.Stdout, StringComparison.Ordinal);
         Assert.Contains("failed:\n    Suite.wrongAnswer\n    Suite.outOfRange\n    Suite.throwing\n", run.Stdout, StringComparison.Ordinal);
         Assert.Matches(@"\ntest result: FAILED\. 3 passed; 3 failed; 0 filtered out; finished in [0-9.]+ (µs|ms|s)\n$", run.Stdout);
     }
@@ -325,12 +325,13 @@ public sealed class TestRunnerTests {
         Assert.Equal(2, files.Count);
         var list = files[0].Text.Text;
         Assert.StartsWith("module Suite\n", list, StringComparison.Ordinal);
-        Assert.Contains("() => { Checks.inAType(); return true }", list, StringComparison.Ordinal);
-        Assert.Contains("do { try throwing() } catch { return false }", list, StringComparison.Ordinal);
+        Assert.Contains("() => { Checks.inAType(); return none }", list, StringComparison.Ordinal);
+        Assert.Contains("do { try throwing() } catch { return \"\\(error)\" }", list, StringComparison.Ordinal);
         var main = files[1].Text.Text;
         Assert.Contains($"module {TestHarness.HarnessModule}\n", main, StringComparison.Ordinal);
         Assert.Contains("import Suite.{ sableHarnessList0 }", main, StringComparison.Ordinal);
-        Assert.Contains("all.append(TestCase { name: \"Suite.doubling\", location: \"test.sb:10\", run: list0[0] })", main, StringComparison.Ordinal);
+        Assert.Contains("all.append(TestCase { name: \"Suite.doubling\", location: \"test.sb:10\", run: list0[0], traps: none })", main, StringComparison.Ordinal);
+        Assert.Contains("async fn sableHarnessMain() -> Int", main, StringComparison.Ordinal);
     }
 
     [Fact]

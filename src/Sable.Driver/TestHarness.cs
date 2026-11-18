@@ -163,7 +163,9 @@ public static class TestHarness {
             var list = $"sableHarnessList{m}";
             var thunks = new StringBuilder();
             thunks.Append(CultureInfo.InvariantCulture, $"module {module.Key}\n\n");
-            var closure = "() -> Bool";
+            // A test's closure is async, so an async test can be awaited:
+            // none when it returned, what it threw when it threw.
+            var closure = "async () -> String?";
             if (kind == TestKind.Bench) {
                 // Each is run with a Bencher: given it, if it takes one, or
                 // timed whole by it, if not.
@@ -182,27 +184,33 @@ public static class TestHarness {
         }
 
         var (caseType, run) = kind == TestKind.Test ? ("TestCase", "runTests") : ("BenchCase", "runBenchmarks");
-        main.Append(CultureInfo.InvariantCulture, $"\n@main\nfn {EntryName}() -> Int {{\n    var all: {caseType}[>..] = []\n");
+        // The tests' entry point is async: 'runTests' awaits each test.
+        var entryAsync = kind == TestKind.Test ? "async " : "";
+        main.Append(CultureInfo.InvariantCulture, $"\n@main\n{entryAsync}fn {EntryName}() -> Int {{\n    var all: {caseType}[>..] = []\n");
         for (var m = 0; m < modules.Count; m++) {
             main.Append(CultureInfo.InvariantCulture, $"    let list{m} = sableHarnessList{m}()\n");
             var i = 0;
             foreach (var test in modules[m]) {
-                main.Append(CultureInfo.InvariantCulture, $"    all.append({caseType} {{ name: {Quote(test.QualifiedName)}, location: {Quote(test.Location)}, run: list{m}[{i++}] }})\n");
+                var traps = kind == TestKind.Test ? $", traps: {(test.ExpectedTrap is { } trap ? Quote(trap) : "none")}" : "";
+                main.Append(CultureInfo.InvariantCulture, $"    all.append({caseType} {{ name: {Quote(test.QualifiedName)}, location: {Quote(test.Location)}, run: list{m}[{i++}]{traps} }})\n");
             }
         }
 
-        main.Append(CultureInfo.InvariantCulture, $"    return {run}(all)\n}}\n");
+        main.Append(CultureInfo.InvariantCulture, $"    return {(kind == TestKind.Test ? "await " : "")}{run}(all)\n}}\n");
         files.Add(SyntaxTree.Parse(new SourceText(main.ToString(), "<harness>")));
         return files;
     }
 
     /// <summary>The closure that runs one test from inside its module.</summary>
+    /// <remarks>What a test throws is described as interpolation describes it, for its failure's report.</remarks>
     static string Thunk(TestFunction test) => test switch {
-        { Kind: TestKind.Test, Throws: false } => $"() => {{ {test.CallPath}(); return true }}",
-        { Kind: TestKind.Test, Throws: true } => $"() => {{\n            do {{ try {test.CallPath}() }} catch {{ return false }}\n            return true\n        }}",
+        { Kind: TestKind.Test, Throws: false } => $"() => {{ {Await(test)}{test.CallPath}(); return none }}",
+        { Kind: TestKind.Test, Throws: true } => $"() => {{\n            do {{ try {Await(test)}{test.CallPath}() }} catch {{ return \"\\(error)\" }}\n            return none\n        }}",
         { Kind: TestKind.Bench, TakesBencher: true } => $"(b: Bencher) => {test.CallPath}(b)",
         _ => $"(b: Bencher) => b.iterate(() => {test.CallPath}())",
     };
+
+    static string Await(TestFunction test) => test.IsAsync ? "await " : "";
 
     static string Quote(string text) {
         var quoted = new StringBuilder("\"");

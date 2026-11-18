@@ -193,6 +193,8 @@ function createTestController(id, label) {
  * @param {{ folders?: string[], settings?: Record<string, unknown>, folderSettings?: Record<string, Record<string, unknown>>, extensions?: string[] }} [world]
  */
 function create(world = {}) {
+  /** @type {Set<(session: { configuration: unknown }) => void>} */
+  const terminated = new Set();
   const recorded = {
     commands: new Map(),
     executed: [],
@@ -333,7 +335,16 @@ function create(world = {}) {
     },
     debug: {
       registerDebugConfigurationProvider: (type, provider, trigger) => (recorded.debugProviders.push({ type, provider, trigger }), new Disposable()),
-      startDebugging: async (folder, configuration) => (recorded.started.push({ folder, configuration }), true),
+      // A session ends as soon as it starts: what was started is recorded.
+      startDebugging: async (folder, configuration) => {
+        recorded.started.push({ folder, configuration });
+        setImmediate(() => terminated.forEach((listener) => listener({ configuration })));
+        return true;
+      },
+      onDidTerminateDebugSession: (listener) => {
+        terminated.add(listener);
+        return new Disposable(() => terminated.delete(listener));
+      },
     },
     extensions: {
       getExtension: (id) => ((world.extensions ?? []).includes(id) ? { id } : undefined),

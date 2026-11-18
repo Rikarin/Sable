@@ -394,7 +394,7 @@ fn main() {
     [Fact]
     public void JsonIsWrittenInSable() =>
         Assert.Equal(
-            "{\"name\":\"Sable\",\"tags\":[\"fast\",\"safe\"],\"version\":4}\n4\nsafe\n{\n  \"name\": \"Sable\",\n  \"tags\": [\n    \"fast\",\n    \"safe\"\n  ],\n  \"version\": 4\n}\nerror\n",
+            "{\"name\":\"Sable\",\"tags\":[\"fast\",\"safe\"],\"version\":4}\n4.0\nsafe\n{\n  \"name\": \"Sable\",\n  \"tags\": [\n    \"fast\",\n    \"safe\"\n  ],\n  \"version\": 4\n}\nerror\n",
             AssertAgree("""
                 module P
                 import Sable.Serialize

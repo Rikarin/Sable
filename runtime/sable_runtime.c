@@ -1087,22 +1087,115 @@ SableString *sable_string_from_int(int64_t value) {
     return make_counted(start, end - start, end - start);
 }
 
-// The shortest %.Ng that reads back as the same double — 0.1, not
-// 0.10000000000000001. %.17g always does. The interpreter formats the same way.
-static void format_f64(double value, char *text, size_t size) {
-    if (isnan(value)) {
-        snprintf(text, size, "nan");
-        return;
+// A float is written as its shortest round-tripping digits — 0.1, not
+// 0.10000000000000001 — laid out the way Python's repr does: plain decimal
+// with a point for exponents -4 through 15 (100.0, 4.0, -0.0, 0.0001), and
+// scientific outside them (1e+20, 1.5e-07). The point keeps a whole float
+// from reading as an integer. The interpreter formats the same way.
+//
+// 'scientific' is printf's %.Ne of the value, whose digits are already the
+// shortest that round-trip; this only moves the point.
+static void layout_float(const char *scientific, char *text, size_t size) {
+    const char *p = scientific;
+    bool negative = *p == '-';
+    if (negative) {
+        p++;
     }
 
-    for (int precision = 1; precision < 17; precision++) {
-        snprintf(text, size, "%.*g", precision, value);
-        if (strtod(text, NULL) == value) {
-            return;
+    char digits[32];
+    int count = 0;
+    for (; *p != 'e' && *p != '\0'; p++) {
+        if (*p != '.' && count < (int)sizeof digits - 1) {
+            digits[count++] = *p;
         }
     }
 
-    snprintf(text, size, "%.17g", value);
+    int exponent = *p == 'e' ? atoi(p + 1) : 0;
+
+    // %.Ne pads with zeros the shortest digits never need.
+    while (count > 1 && digits[count - 1] == '0') {
+        count--;
+    }
+
+    digits[count] = '\0';
+
+    char *out = text, *limit = text + size - 1;
+#define PUT(c) do { if (out < limit) *out++ = (c); } while (0)
+    if (negative) {
+        PUT('-');
+    }
+
+    if (exponent < -4 || exponent >= 16) {
+        PUT(digits[0]);
+        if (count > 1) {
+            PUT('.');
+            for (int i = 1; i < count; i++) {
+                PUT(digits[i]);
+            }
+        }
+
+        char tail[8];
+        snprintf(tail, sizeof tail, "e%c%02d", exponent < 0 ? '-' : '+', exponent < 0 ? -exponent : exponent);
+        for (char *t = tail; *t != '\0'; t++) {
+            PUT(*t);
+        }
+    } else if (exponent < 0) {
+        PUT('0');
+        PUT('.');
+        for (int i = -1; i > exponent; i--) {
+            PUT('0');
+        }
+
+        for (int i = 0; i < count; i++) {
+            PUT(digits[i]);
+        }
+    } else {
+        for (int i = 0; i <= exponent; i++) {
+            PUT(i < count ? digits[i] : '0');
+        }
+
+        PUT('.');
+        if (count > exponent + 1) {
+            for (int i = exponent + 1; i < count; i++) {
+                PUT(digits[i]);
+            }
+        } else {
+            PUT('0');
+        }
+    }
+#undef PUT
+
+    *out = '\0';
+}
+
+static bool format_special(double value, char *text, size_t size) {
+    if (isnan(value)) {
+        snprintf(text, size, "nan");
+        return true;
+    }
+
+    if (isinf(value)) {
+        snprintf(text, size, value > 0 ? "inf" : "-inf");
+        return true;
+    }
+
+    return false;
+}
+
+static void format_f64(double value, char *text, size_t size) {
+    if (format_special(value, text, size)) {
+        return;
+    }
+
+    char scientific[40];
+    for (int precision = 1; precision <= 17; precision++) {
+        snprintf(scientific, sizeof scientific, "%.*e", precision - 1, value);
+        if (precision == 17 || strtod(scientific, NULL) == value) {
+            break;
+        }
+    }
+
+    layout_float(scientific, text, size);
 }
 
 SableString *sable_string_from_f64(double value) {
@@ -1113,19 +1206,19 @@ SableString *sable_string_from_f64(double value) {
 
 // F32 the same way, against a float: 1.1, not 1.10000002.
 static void format_f32(float value, char *text, size_t size) {
-    if (isnan(value)) {
-        snprintf(text, size, "nan");
+    if (format_special(value, text, size)) {
         return;
     }
 
-    for (int precision = 1; precision < 9; precision++) {
-        snprintf(text, size, "%.*g", precision, (double)value);
-        if (strtof(text, NULL) == value) {
-            return;
+    char scientific[40];
+    for (int precision = 1; precision <= 9; precision++) {
+        snprintf(scientific, sizeof scientific, "%.*e", precision - 1, (double)value);
+        if (precision == 9 || strtof(scientific, NULL) == value) {
+            break;
         }
     }
 
-    snprintf(text, size, "%.9g", (double)value);
+    layout_float(scientific, text, size);
 }
 
 SableString *sable_string_from_f32(float value) {

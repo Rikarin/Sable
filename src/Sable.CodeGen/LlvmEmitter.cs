@@ -2027,7 +2027,8 @@ public sealed partial class LlvmEmitter {
                     var slot = Scratch(type);
                     Line($"store {type} zeroinitializer, ptr {slot}");
                     Line($"store {TagType(enumInst.EnumType)} {enumInst.Case}, ptr {slot}");
-                    if (enumInst.Payload is { } payload) {
+                    // A payload of no bytes, an empty struct's, has no area to go in.
+                    if (enumInst.Payload is { } payload && Area(enumInst.EnumType).Count > 0) {
                         var area = Fresh();
                         Line($"{area} = getelementptr inbounds {type}, ptr {slot}, i32 0, i32 1");
                         Line($"store {Type(payload.Type)} {Name(payload)}, ptr {area}");
@@ -2176,6 +2177,15 @@ public sealed partial class LlvmEmitter {
             foreach (var (caseIndex, target) in switchEnum.Cases) {
                 if (enumType.Cases[caseIndex].Payload is not { } payload) {
                     arms.Add($"{tagType} {caseIndex}, label %{_labels[target]}");
+                    continue;
+                }
+
+                // A payload of no bytes is all of its one value.
+                if (Area(enumType).Count == 0) {
+                    var empty = NewLabel("case");
+                    _extra.Append(empty).Append(":\n").Append($"  br label %{_labels[target]}\n");
+                    _incoming[target.Arguments[0]].Add(("zeroinitializer", empty));
+                    arms.Add($"{tagType} {caseIndex}, label %{empty}");
                     continue;
                 }
 

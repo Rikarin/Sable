@@ -287,6 +287,28 @@ public sealed class OptionalAndUnionTests {
             """
         );
 
+    /// <summary>An optional of an empty struct has no bytes for its payload: made, and matched, all the same.</summary>
+    [Fact]
+    public void AnOptionalOfAnEmptyStructHoldsIt() =>
+        Prints(
+            "1\nsome\n",
+            """
+            protocol P { }
+            struct Empty: P { }
+            struct Full: P { var n: Int }
+            """,
+            """
+                let all: (any P)[>..] = [Full(n: 1), Empty()]
+                var count = 0
+                for a in all {
+                    if let e = a as? Empty { count += 1 }
+                }
+                print(count)
+                let o: Empty? = Empty()
+                print(o == none ? "none" : "some")
+            """
+        );
+
     /// <summary>
     ///     A case named by a keyword in backticks is that name: '.none' is the
     ///     enum's or the union's case wherever the value is not optional, and

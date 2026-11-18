@@ -2436,6 +2436,27 @@ public sealed partial class Binder {
             return new BoundError(syntax, receiver);
         }
 
+        // Through 'any P', Self and P's associated types are some conformer's,
+        // and which one is not known: 'a.same(b)' could compare two different
+        // types. A requirement that speaks of them is reached only through a
+        // generic parameter, which names one conformer.
+        if (_conversions.Equivalence.Canonical(receiverType) is ExistentialTypeSymbol
+            && instanceMembers.Where(m => !SpeaksOfSelf(m)).ToList() is var callable
+            && callable.Count < instanceMembers.Count) {
+            if (callable.Count == 0) {
+                _diagnostics.Error(
+                    ErrorCode.ERR_SelfRequirementOnExistential,
+                    syntax.Name.Span,
+                    $"'{name}' takes or gives 'Self' or an associated type of '{found.Owner.ToDisplayString()}', "
+                    + $"which '{receiverType.ToDisplayString()}' does not know; reach it through a generic parameter "
+                    + $"'T: {found.Owner.ToDisplayString()}' instead"
+                );
+                return new BoundError(syntax, receiver);
+            }
+
+            instanceMembers = callable;
+        }
+
         var member = BindMemberGroup(syntax, receiver, instanceMembers, found.Owner, found.Substitution);
 
         if (!optionalChain) {
@@ -2584,6 +2605,40 @@ public sealed partial class Binder {
     ///     substitution, so a member of <c>Base&lt;Int&gt;</c> reached through
     ///     <c>Derived : Base&lt;Int&gt;</c> still reports Int.
     /// </remarks>
+    /// <summary>
+    ///     True for a protocol's requirement whose signature mentions the
+    ///     protocol's <c>Self</c> or one of its associated types.
+    /// </summary>
+    static bool SpeaksOfSelf(Symbol member) {
+        if (member.ContainingSymbol is not NamedTypeSymbol { TypeKind: TypeKind.Protocol } protocol) {
+            return false;
+        }
+
+        var own = new HashSet<TypeParameterSymbol>(AssociatedTypes.All(protocol));
+        if (protocol.SelfTypeParameter is { } self) {
+            own.Add(self);
+        }
+
+        return member switch {
+            FunctionSymbol function => function.Parameters.Any(p => Mentions(p.Type)) || Mentions(function.ReturnType),
+            FieldSymbol field => Mentions(field.Type),
+            _ => false,
+        };
+
+        bool Mentions(TypeSymbol type) =>
+            type switch {
+                TypeParameterSymbol parameter => own.Contains(parameter),
+                DependentMemberTypeSymbol dependent => Mentions(dependent.BaseType) || own.Contains(dependent.Associated),
+                NamedTypeSymbol named => named.TypeArguments.Any(Mentions),
+                ArrayTypeSymbol array => Mentions(array.ElementType),
+                OptionalTypeSymbol optional => Mentions(optional.UnderlyingType),
+                TupleTypeSymbol tuple => tuple.ElementTypes.Any(Mentions),
+                FunctionTypeSymbol function => function.ParameterTypes.Any(Mentions) || Mentions(function.ReturnType),
+                ReferenceTypeSymbol reference => Mentions(reference.ReferencedType),
+                _ => false,
+            };
+    }
+
     MemberLookup? LookupMember(TypeSymbol type, string name) {
         // After 'where T == Int' a T has Int's members.
         type = _conversions.Equivalence.Canonical(type);
@@ -4451,6 +4506,14 @@ public sealed partial class Binder {
         var isOptional = syntax.QuestionOrBangToken.Kind == SyntaxKind.QuestionToken;
         var type = isOptional ? new OptionalTypeSymbol(target) : target;
 
+        // A plain 'as' that converts implicitly anyway — 'Square() as any
+        // Shape', 'dog as Animal' — is that conversion, written out.
+        if (syntax.QuestionOrBangToken.IsNone
+            && !operand.HasError
+            && _conversions.Classify(operand.Type, target, IsLiteral(operand)) is ConversionKind.Existential or ConversionKind.Upcast) {
+            return Convert(operand, target, syntax);
+        }
+
         return new BoundConversion(syntax, type, operand, ConversionKind.Explicit);
     }
 
@@ -5149,6 +5212,16 @@ public sealed partial class Binder {
         }
 
         var conversion = _conversions.Classify(expression.Type, target, IsLiteral(expression));
+
+        // 'let o: (any Shape)? = Square()': into what the optional wraps,
+        // boxed or upcast, and then wrapped.
+        if (conversion is null
+            && target is OptionalTypeSymbol { UnderlyingType: var wrapped }
+            && expression.Type is not OptionalTypeSymbol
+            && _conversions.Classify(expression.Type, wrapped, IsLiteral(expression)) is ConversionKind.Existential or ConversionKind.Upcast) {
+            return new BoundConversion(syntax, target, Convert(expression, wrapped, syntax), ConversionKind.OptionalWrap);
+        }
+
         if (conversion is null) {
             if (!expression.HasError && !target.IsError) {
                 _diagnostics.Error(

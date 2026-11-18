@@ -165,6 +165,7 @@ public enum ErrorCode {
     ERR_CannotSuppressConstraint = 3130,
     ERR_NoncopyableTypeArgument = 3131,
     ERR_ConstGenericPredicate = 3132,
+    ERR_SelfRequirementOnExistential = 3133,
 
     // ---- Lints (S3300-S3399): reported by Sable.Symbols' Lints, which
     // 'sable check' runs, never by compiling. Their severity is configured.

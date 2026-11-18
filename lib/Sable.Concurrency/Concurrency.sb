@@ -96,6 +96,15 @@ public class TaskGroup<Result> {
 
     public var count: Int => tasks.count
 
+    /// Cancels every task in the group: each finds 'Task.isCancelled()'
+    /// true, and a sleep it is in ends at once. Their results are still
+    /// waited for.
+    public fn cancelAll() {
+        for task in tasks {
+            task.cancel()
+        }
+    }
+
     /// Every task's result, in the order added; the group is empty after.
     public fn waitForAll() async -> Result[>..] {
         var results: Result[>..] = []

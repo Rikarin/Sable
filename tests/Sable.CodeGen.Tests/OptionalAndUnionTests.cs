@@ -210,6 +210,84 @@ public sealed class OptionalAndUnionTests {
         );
 
     /// <summary>
+    ///     An optional a comparison with 'none' narrowed reads as its payload:
+    ///     in the else of '== none', inside '!= none', and after '== none'
+    ///     returns — for a value, a class and a parameter (#231).
+    /// </summary>
+    [Fact]
+    public void AComparisonWithNoneNarrowsTheOptional() =>
+        Prints(
+            "none\nyo\nabc\n3\n4\n-1\n6\n",
+            """
+            class Node {
+                var v: Int
+                init(v: Int) { self.v = v }
+            }
+            fn f(_ s: String) { print(s) }
+            fn g(_ s: String?) {
+                if s == none {
+                    return
+                }
+                f(s)
+                print(s.count)
+            }
+            fn h(_ n: Node?) -> Int {
+                if n == none { return -1 } else { return n.v }
+            }
+            """,
+            """
+                var x: String? = none
+                if x == none { print("none") } else { f(x) }
+                x = "yo"
+                if x == none { print("none") } else { f(x) }
+                g("abc")
+                g(none)
+                print(h(Node(v: 4)))
+                print(h(none))
+                let i: Int? = 5
+                if i != none { print(i + 1) }
+            """
+        );
+
+    /// <summary>
+    ///     The right side of '&amp;&amp;' sees what the left says when it holds,
+    ///     and of '||' what it says when it fails; a condition in a list
+    ///     sees what those before it say — in 'if' and 'guard' alike.
+    /// </summary>
+    [Fact]
+    public void AShortCircuitNarrowsItsRightSide() =>
+        Prints(
+            "big 6\nsmall\nnone or negative\nnone or negative\n3\n-1\n-1\ntrue\nfalse\ncond list 9\ntrue\n",
+            """
+            fn check(_ i: Int?) -> String {
+                if i != none && i > 3 { return "big \(i + 1)" }
+                if i == none || i < 0 { return "none or negative" }
+                return "small"
+            }
+            fn first(_ s: String?, _ n: Int?) -> Int {
+                guard s != none, n != none, s.count > n else { return -1 }
+                return s.count - n
+            }
+            fn word(_ v: Int | String) -> Bool { return v is String && v.count > 2 }
+            """,
+            """
+                print(check(5))
+                print(check(2))
+                print(check(none))
+                print(check(-4))
+                print(first("hello", 2))
+                print(first(none, 2))
+                print(first("hi", 5))
+                print(word("abc"))
+                print(word(7))
+                let o: Int? = 9
+                if o != none, o > 3 { print("cond list \(o)") }
+                let b = o != none && o % 2 == 1
+                print(b)
+            """
+        );
+
+    /// <summary>
     ///     What the layouts are: 'Bool?' a byte, 'Char?' four, 'String?' the
     ///     pointer, an enum of cases alone its byte's tag, and a payload area
     ///     in units of the most aligned payload — where every enum was once

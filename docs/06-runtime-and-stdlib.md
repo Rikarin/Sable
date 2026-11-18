@@ -67,8 +67,15 @@ live object is kept in a set, and a program that ends with objects alive
 lists them by type and prints the reference cycles among them, each as the
 types along it. Not yet: a kind, a stride, a value-witness table for
 non-class types, field descriptors with names and offsets, conformance
-records in the metadata, and the profiles and `--deny-reflection`. The
-allocator's size classes reach 1 KB.
+records in the metadata, and the
+profiles and `--deny-reflection`. The allocator's size classes reach 1 KB;
+each class has 64 KiB slabs of its own, mapped from the system aligned to
+their size, which count the blocks they have out and are unmapped when that
+reaches zero (but for one each class keeps): memory a program once held in
+small objects goes back to the system. `SABLE_STATS` reports the slabs held,
+the most held, and those given back. The compiler warns (S3460) of classes
+that hold one another strongly: the type-level strong-reference graph's
+cycles through two or more classes, broken by a `weak` or `unowned` field.
 
 An existential, `any P`, is its box — an object of a class for the value's
 type, `any$box$of$T`, each a subclass of one root class — and P's witness

@@ -8,6 +8,7 @@
 #include <pthread.h>
 #include <signal.h>
 #include <spawn.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -184,6 +185,33 @@ static bool start_thread(void (*body)(void *argument), void *argument) {
     }
 
     return started;
+}
+
+// ---- Memory ----------------------------------------------------------------
+
+// The system's mapping is aligned to a page, not to the slab: twice the size
+// is mapped, and what lies outside the aligned slab within it unmapped.
+static void *map_slab(size_t size) {
+    char *mapped = mmap(NULL, size * 2, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (mapped == MAP_FAILED) {
+        return NULL;
+    }
+
+    uintptr_t start = ((uintptr_t)mapped + size - 1) & ~(uintptr_t)(size - 1);
+    size_t before = start - (uintptr_t)mapped;
+    if (before > 0) {
+        munmap(mapped, before);
+    }
+
+    if (size - before > 0) {
+        munmap((char *)start + size, size - before);
+    }
+
+    return (void *)start;
+}
+
+static void unmap_slab(void *slab, size_t size) {
+    munmap(slab, size);
 }
 
 // ---- Time (Sable.Time's floor) ------------------------------------------

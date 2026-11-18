@@ -205,6 +205,35 @@ static bool start_thread(void (*body)(void *argument), void *argument) {
     return true;
 }
 
+// ---- Memory ----------------------------------------------------------------
+
+// What VirtualAlloc gives starts on its allocation granularity, 64 KiB: a
+// slab no larger is aligned to its size as it comes. A larger one is found
+// by reserving twice the size, giving it back, and taking the aligned part
+// of it — which another thread may take first, so it is tried again.
+static void *map_slab(size_t size) {
+    for (int attempt = 0; attempt < 16; attempt++) {
+        char *reserved = VirtualAlloc(NULL, size * 2, MEM_RESERVE, PAGE_NOACCESS);
+        if (reserved == NULL) {
+            return NULL;
+        }
+
+        uintptr_t start = ((uintptr_t)reserved + size - 1) & ~(uintptr_t)(size - 1);
+        VirtualFree(reserved, 0, MEM_RELEASE);
+        void *slab = VirtualAlloc((void *)start, size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+        if (slab != NULL) {
+            return slab;
+        }
+    }
+
+    return NULL;
+}
+
+static void unmap_slab(void *slab, size_t size) {
+    (void)size;
+    VirtualFree(slab, 0, MEM_RELEASE);
+}
+
 // ---- Time (Sable.Time's floor) ------------------------------------------
 
 int64_t sable_time_monotonic(void) {

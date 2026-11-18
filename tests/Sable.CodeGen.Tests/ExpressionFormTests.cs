@@ -102,4 +102,63 @@ public sealed class ExpressionFormTests {
                 print(if 1 < 2 { 10 } else { 20 })
             """
         );
+
+    [Fact]
+    public void AMethodWithItsReceiverIsAValue() =>
+        // The receiver is taken when the method is: a struct's copy then,
+        // an object's reference, whose override is the one called.
+        Prints(
+            "4\n4\nhi ann\ndog\n12\ncaught\n",
+            """
+            struct Counter {
+                var count: Int
+                fn get() -> Int { return count }
+            }
+
+            class Animal {
+                let name: String
+                init(name: String) { self.name = name }
+                fn greet(_ greeting: String) -> String { return greeting + " " + name }
+                fn kind() -> String { return "animal" }
+            }
+
+            class Dog: Animal {
+                init() { super.init(name: "rex") }
+                override fn kind() -> String { return "dog" }
+            }
+
+            struct Scale {
+                let factor: Int
+                fn apply(_ n: Int) throws -> Int {
+                    if n < 0 { throw Oops.Negative }
+                    return n * factor
+                }
+            }
+
+            union Oops: Error { Negative }
+
+            fn run(_ f: (Int) throws -> Int, _ n: Int) -> String {
+                return match try? f(n) {
+                    case let v? => "\(v)"
+                    case none => "caught"
+                }
+            }
+            """,
+            """
+                var c = Counter(count: 4)
+                let read = c.get
+                c.count = 9
+                print(read())
+                print(read())
+                let ann = Animal(name: "ann")
+                let greet = ann.greet
+                print(greet("hi"))
+                let animal: Animal = Dog()
+                let kind = animal.kind
+                print(kind())
+                let triple = Scale(factor: 3).apply
+                print(run(triple, 4))
+                print(run(triple, -1))
+            """
+        );
 }

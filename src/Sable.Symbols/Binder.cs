@@ -5389,6 +5389,17 @@ public sealed partial class Binder {
             return new BoundError(group.Syntax);
         }
 
+        // 'counter.bump' would change a copy the closure keeps, not counter.
+        if (group.Receiver is { } receiver && chosen.IsMutating && !receiver.Type.IsReferenceType) {
+            _diagnostics.Error(
+                ErrorCode.ERR_NotAValue,
+                group.Syntax.Span,
+                $"'{chosen.Name}' changes the value it is called on, so it cannot be taken with it as a value; "
+                + "call it in a closure instead"
+            );
+            return new BoundError(group.Syntax);
+        }
+
         return new BoundFunctionReference(
             group.Syntax,
             Apply(chosen.FunctionType, substitution),

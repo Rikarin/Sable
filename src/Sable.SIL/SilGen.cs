@@ -1478,6 +1478,57 @@ public sealed partial class SilGen {
         return (name, code);
     }
 
+    /// <summary>
+    ///     What <c>s.get</c> calls: a closure whose context is a box holding
+    ///     the receiver, which it passes as <c>self</c> to the method, through
+    ///     the vtable when a subclass may override it.
+    /// </summary>
+    internal (string Name, FunctionType Type) BoundMethodThunk(FunctionSymbol method, string name, FunctionType type) {
+        var dynamic = IsDynamic(method);
+        var thunkName = $"{name}$bound{(dynamic ? "$dynamic" : "")}";
+        var closure = new ThickFunctionType(new([..type.Parameters.Skip(1)], type.Result, type.Thrown));
+        var code = closure.Implementation;
+        if (_module.Find(thunkName) is not null) {
+            return (thunkName, code);
+        }
+
+        var thunk = new SilFunction(thunkName, code);
+        var entry = thunk.AddBlock();
+        var arguments = closure.Signature.Parameters.Select(p => (SilValue)entry.AddArgument(p)).ToList();
+        var context = entry.AddArgument(SilType.Object);
+        var box = entry.Append(new UncheckedRefCastInst(context, BoxType(type.Parameters[0])));
+        var self = entry.Append(new LoadInst(entry.Append(new RefElementAddrInst(box, 0))));
+        SilValue callee = dynamic
+            ? entry.Append(new ClassMethodInst(self, SlotName(method), type))
+            : entry.Append(new FunctionRefInst(name, type));
+        SilValue[] all = [self, ..arguments];
+
+        void Release(SilBlock block) {
+            if (!self.Type.IsTrivial) {
+                block.Append(new DestroyValueInst(self));
+            }
+        }
+
+        if (type.Thrown is null) {
+            var result = entry.Append(new ApplyInst(callee, type.Result, all));
+            Release(entry);
+            entry.Append(new ReturnInst(type.Result == SilType.Unit ? null : result));
+        } else {
+            var normal = thunk.AddBlock();
+            var result = type.Result == SilType.Unit ? null : normal.AddArgument(type.Result);
+            var failed = thunk.AddBlock();
+            var error = failed.AddArgument(type.Thrown);
+            entry.Append(new TryApplyInst(callee, type.Result, all, normal, failed));
+            Release(normal);
+            normal.Append(new ReturnInst(result));
+            Release(failed);
+            failed.Append(new ThrowInst(error));
+        }
+
+        _module.Add(thunk);
+        return (thunkName, code);
+    }
+
     readonly Dictionary<string, int> _closureCounts = new(StringComparer.Ordinal);
 
     /// <summary>A function declared in another's body.</summary>
@@ -6491,6 +6542,10 @@ public sealed partial class SilGen {
                 return LocalFunctionValue(callee, reference);
             }
 
+            if (reference.Receiver is { } receiver && HasSelf(callee)) {
+                return BoundMethodValue(reference, receiver);
+            }
+
             if (reference.Receiver is not null || IsGeneric(callee) || !generator._names.TryGetValue(callee, out var name)
                 || LowerType(reference.Type) is not ThickFunctionType thick) {
                 return Missing(reference, $"'{callee.Name}' as a value");
@@ -6503,6 +6558,44 @@ public sealed partial class SilGen {
 
             var thunk = generator.Thunk(name, type);
             return Emit(new PartialApplyInst(Emit(new FunctionRefInst(thunk, thick.Implementation)), null, thick));
+        }
+
+        /// <summary>
+        ///     <c>s.get</c> as a value: the method with its receiver, evaluated
+        ///     here, in a box the closure carries — a copy of a value, or the
+        ///     reference to an object, as <c>s.get()</c> would have used.
+        /// </summary>
+        SilValue? BoundMethodValue(BoundFunctionReference reference, BoundExpression receiver) {
+            var callee = reference.Function;
+            if (IsGeneric(callee) || !generator._names.TryGetValue(callee, out var name)
+                || generator.SignatureOf(callee, reference.Syntax, TypeSubstitution.Empty) is not { } type
+                || LowerType(reference.Type) is not ThickFunctionType thick) {
+                return Missing(reference, $"'{callee.Name}' as a value");
+            }
+
+            // A mutating method changes the value it is called on, which the
+            // closure's copy is not; a consuming one takes what it is given.
+            if (type.Parameters[0] is AddressType || !type.Owned.IsEmpty) {
+                return Missing(reference, $"the {(type.Parameters[0] is AddressType ? "mutating" : "consuming")} method '{callee.Name}' as a value");
+            }
+
+            if (new FunctionType([..type.Parameters.Skip(1)], type.Result, type.Thrown) != thick.Signature) {
+                return Missing(reference, $"'{callee.Name}' as a value of type '{reference.Type.ToDisplayString()}'");
+            }
+
+            var thunk = generator.BoundMethodThunk(callee, name, type);
+            if (Expression(receiver) is not { } self) {
+                return null;
+            }
+
+            // A method a superclass declares takes the object as that class.
+            if (self.Type is ClassType selfClass && type.Parameters[0] is ClassType parameterClass && selfClass != parameterClass) {
+                self = Emit(new UpcastInst(self, parameterClass));
+            }
+
+            var boxed = Emit(new AllocRefInst(generator.BoxType(type.Parameters[0])));
+            Emit(new StoreInst(Owned(self), Emit(new RefElementAddrInst(boxed, 0)), StoreKind.Init));
+            return Emit(new PartialApplyInst(Emit(new FunctionRefInst(thunk.Name, thunk.Type)), boxed, thick));
         }
 
         /// <summary>A call through a closure: the closure and the arguments, all borrowed for the call.</summary>

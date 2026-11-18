@@ -185,4 +185,43 @@ public sealed class ExpressionFormTests {
             }
             """
         );
+
+    // ---- Methods as values ------------------------------------------------------
+
+    [Fact]
+    public void AMethodWithItsReceiverIsAFunction() =>
+        AssertClean(
+            """
+            struct Counter {
+                var count: Int
+                fn plus(_ n: Int) -> Int { return count + n }
+            }
+
+            fn f() -> Int {
+                let c = Counter(count: 1)
+                let add: (Int) -> Int = c.plus
+                let again = c.plus
+                return add(2) + again(3)
+            }
+            """
+        );
+
+    [Fact]
+    public void AMutatingMethodIsNotAValue() =>
+        Assert.Contains(
+            ErrorsIn(
+                """
+                struct Counter {
+                    var count: Int
+                    mutating fn bump() { count += 1 }
+                }
+
+                fn f() {
+                    var c = Counter(count: 1)
+                    let bump = c.bump
+                }
+                """
+            ),
+            static e => e.Code == ErrorCode.ERR_NotAValue
+        );
 }

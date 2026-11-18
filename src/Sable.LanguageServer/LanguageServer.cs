@@ -363,6 +363,25 @@ public sealed partial class LanguageServer {
             _published[document.Uri] = true;
             await PublishAsync(document.Uri, document.Version, [..diagnostics.Select(d => DiagnosticNode(document, d))]);
         }
+
+        // Use after move, overlapping accesses and dangling references are
+        // found on SIL, by lowering the workspace — slower than binding, so
+        // the type errors above go out first, and these follow, with them.
+        var checks = await RootSummariesAsync(analysis);
+        if (!checks.HasChecks) {
+            return;
+        }
+
+        foreach (var document in snapshot.Documents.Values.Where(static d => d.IsOpen)) {
+            cancellation.ThrowIfCancellationRequested();
+            var found = checks.ChecksOf(document.Tree);
+            if (found.Count == 0 || !ReferenceEquals(_workspace.Current.Find(document.Uri)?.Tree, document.Tree)) {
+                continue;
+            }
+
+            var diagnostics = analysis.DiagnosticsOf(document.Tree, cancellation).Concat(found).OrderBy(static d => d.Span.Start);
+            await PublishAsync(document.Uri, document.Version, [..diagnostics.Select(d => DiagnosticNode(document, d))]);
+        }
     }
 
     static JsonNode DiagnosticNode(Document document, Diagnostic diagnostic) =>

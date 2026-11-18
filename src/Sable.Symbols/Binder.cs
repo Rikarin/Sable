@@ -1951,7 +1951,40 @@ public sealed partial class Binder {
             }
         }
 
-        return new BoundLiteral(literal, type, token.Value);
+        var bound = new BoundLiteral(literal, type, token.Value);
+
+        // '-128' is checked as a whole, where it is negated.
+        if (literal.Parent is not PrefixUnaryExpressionSyntax { OperatorToken.Kind: SyntaxKind.MinusToken }) {
+            CheckIntegerFits(bound, type);
+        }
+
+        return bound;
+    }
+
+    /// <summary>
+    ///     Reports an integer literal that its type cannot hold — 'let x: I8 =
+    ///     200' — where the type is given to it, rather than leaving lowering
+    ///     to find out.
+    /// </summary>
+    void CheckIntegerFits(BoundLiteral literal, TypeSymbol type) {
+        if (Core.IntegerRange(type) is not var (low, high)) {
+            return;
+        }
+
+        System.Numerics.BigInteger? value = literal.Value switch {
+            long l => l,
+            int i => i,
+            ulong u => u,
+            _ => null,
+        };
+
+        if (value is { } number && (number < low || number > high)) {
+            _diagnostics.Error(
+                ErrorCode.ERR_IntegerDoesNotFit,
+                literal.Syntax.Span,
+                $"'{number}' does not fit in '{type.ToDisplayString()}', which holds {low} through {high}"
+            );
+        }
     }
 
     BoundExpression BindInterpolatedString(InterpolatedStringExpressionSyntax syntax) {
@@ -4698,7 +4731,19 @@ public sealed partial class Binder {
             };
 
             if (negated is not null) {
-                return new BoundLiteral(syntax, type, negated);
+                var negative = new BoundLiteral(syntax, type, negated);
+                CheckIntegerFits(negative, type);
+                return negative;
+            }
+
+            // Past -2^63, there is no integer type it fits.
+            if (literal.Value is ulong digits) {
+                _diagnostics.Error(
+                    ErrorCode.ERR_IntegerDoesNotFit,
+                    syntax.Span,
+                    $"'-{digits}' does not fit in any integer type"
+                );
+                return new BoundError(syntax, operand);
             }
         }
 
@@ -5113,6 +5158,11 @@ public sealed partial class Binder {
             }
 
             return new BoundError(syntax, expression);
+        }
+
+        // '-1' bound first, then given the 'U8' its place wants.
+        if (conversion == ConversionKind.LiteralTyping && expression is BoundLiteral literal) {
+            CheckIntegerFits(literal, target is OptionalTypeSymbol optional ? optional.UnderlyingType : target);
         }
 
         // docs/02 §2.5: a variable-mode value is exactly its variant's size,

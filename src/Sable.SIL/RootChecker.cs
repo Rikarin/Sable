@@ -78,7 +78,12 @@ public static class RootChecker {
         }
     }
 
-    public static void Check(SilModule module, IReadOnlyDictionary<SilFunction, SourceText> sources, DiagnosticBag diagnostics) {
+    /// <param name="reported">
+    ///     Told, after each function is checked, how many diagnostics there
+    ///     were before it and which source it is — so that what it reported
+    ///     can be given that file.
+    /// </param>
+    public static void Check(SilModule module, IReadOnlyDictionary<SilFunction, SourceText> sources, DiagnosticBag diagnostics, Action<int, SourceText>? reported = null) {
         // Summaries to a fixed point: each pass may let a caller see more of its callee.
         var summaries = new Dictionary<string, HashSet<int>>(StringComparer.Ordinal);
         for (var round = 0; round < module.Functions.Count + 2; round++) {
@@ -118,10 +123,12 @@ public static class RootChecker {
                 continue;
             }
 
+            var before = diagnostics.Count;
             var anchors = Anchors(function, summaries);
             CheckReturns(function, anchors, source, diagnostics);
             CheckStores(function, anchors, source, diagnostics);
             CheckLiveness(function, anchors, source, diagnostics);
+            reported?.Invoke(before, source);
         }
     }
 

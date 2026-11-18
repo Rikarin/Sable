@@ -19,6 +19,30 @@ public sealed class PipelineTests {
         Assert.Contains(result.Errors, static e => e.Contains("S7000", StringComparison.Ordinal));
     }
 
+    // 'sable check' reports what the checks on SIL find, as a build does (#130).
+    [Theory]
+    [InlineData("S3057", "@noncopy struct H { var v: Int }\nfn take(_ h: consuming H) {}\nfn f() {\n    let h = H(v: 1)\n    take(h)\n    take(h)\n}\n", 6)]
+    [InlineData("S3062", "fn both(_ a: inout Int, _ b: inout Int) {}\nfn f() {\n    var n = 1\n    both(&n, &n)\n}\n", 4)]
+    [InlineData("S3061", "fn f() -> ref Int {\n    var n = 1\n    return &n\n}\n", 3)]
+    public void CheckReportsWhatTheSilChecksFind(string code, string body, int line) {
+        var errors = Pipeline.Check([SyntaxTree.Parse(new SourceText("module M\n" + body, "test.sb"))]);
+        var error = Assert.Single(errors);
+        Assert.Contains(code, error, StringComparison.Ordinal);
+        Assert.Contains($"test.sb:{line + 1}:", error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CheckLeavesWhatIsNotLoweredYetToTheBuild() =>
+        Assert.Empty(Pipeline.Check([SyntaxTree.Parse(new SourceText("module M\nstruct P { var x: U128 }\nfn f() { let p: P? = none }\n", "test.sb"))]));
+
+    [Fact]
+    public void ALoweringErrorSaysWhichFileItIsIn() {
+        var main = SyntaxTree.Parse(new SourceText("module M\nfn main() { print(f()) }\n", "main.sb"));
+        var other = SyntaxTree.Parse(new SourceText("module M\nfn f() -> Int {\n    var a = 1\n    swap(&a, &a)\n    return a\n}\nfn swap(_ x: inout Int, _ y: inout Int) {}\n", "other.sb"));
+        var result = Pipeline.Compile([main, other]);
+        Assert.Contains(result.Errors, static e => e.Contains("S3062", StringComparison.Ordinal) && e.Contains("other.sb:4:", StringComparison.Ordinal));
+    }
+
     [Fact]
     public void AProgramNeedsAnEntryPoint() {
         var result = Compile("module M\nfn helper() -> Int { return 1 }\n");

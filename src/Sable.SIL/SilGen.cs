@@ -69,11 +69,61 @@ public sealed partial class SilGen {
 
     public IReadOnlyList<Diagnostic> Diagnostics => [.._diagnostics];
 
+    /// <summary>
+    ///     The file each diagnostic is in, where lowering knows it: everything
+    ///     reported while a function's body is lowered or checked is that
+    ///     function's file's. Compared by reference, as two identical
+    ///     complaints in two files are two diagnostics.
+    /// </summary>
+    readonly Dictionary<Diagnostic, SyntaxTree> _files = new(ReferenceEqualityComparer.Instance);
+
+    IReadOnlyList<(Diagnostic Diagnostic, SyntaxTree? Tree)> PlacedDiagnostics =>
+        [.._diagnostics.Select(d => (d, _files.GetValueOrDefault(d)))];
+
+    /// <summary>Gives the diagnostics reported since <paramref name="before" /> the file they were reported in, unless they have one.</summary>
+    void Place(int before, SyntaxTree tree) {
+        foreach (var diagnostic in _diagnostics.Skip(before)) {
+            _files.TryAdd(diagnostic, tree);
+        }
+    }
+
+    SyntaxTree? TreeOf(SourceText source) => _compilation.SyntaxTrees.FirstOrDefault(t => ReferenceEquals(t.Text, source));
+
     /// <summary>Lowers every function the compilation declares, or reports why it cannot.</summary>
     public static (SilModule Module, IReadOnlyList<Diagnostic> Diagnostics) Lower(Compilation compilation) {
         var generator = new SilGen(compilation);
         generator.LowerAll();
         return (generator._module, generator.Diagnostics);
+    }
+
+    /// <summary>
+    ///     <see cref="Lower(Compilation)" />, with the file each diagnostic is
+    ///     in — null for one lowering cannot place — so that a program of many
+    ///     files can say where.
+    /// </summary>
+    public static (SilModule Module, IReadOnlyList<(Diagnostic Diagnostic, SyntaxTree? Tree)> Diagnostics) LowerByFile(Compilation compilation) {
+        var generator = new SilGen(compilation);
+        generator.LowerAll();
+        return (generator._module, generator.PlacedDiagnostics);
+    }
+
+    /// <summary>
+    ///     The checks that run on SIL — moves (S3057–S3059), exclusivity
+    ///     (S3062) and roots (S3060, S3061) — for <c>sable check</c> and the
+    ///     editor, which do not otherwise lower: the program is lowered and
+    ///     thrown away, and what lowering says of the program is kept, with
+    ///     the file it is in.
+    /// </summary>
+    /// <remarks>
+    ///     A construct lowering does not handle yet (S7000) is the compiler's
+    ///     limit, not the program's mistake, and is left to a build to report.
+    ///     Lowering is only asked of a program that type-checks: a bound tree
+    ///     with errors in it is not one it can take.
+    /// </remarks>
+    public static IReadOnlyList<(Diagnostic Diagnostic, SyntaxTree? Tree)> Check(Compilation compilation) {
+        var generator = new SilGen(compilation);
+        generator.LowerAll();
+        return [..generator.PlacedDiagnostics.Where(static d => d.Diagnostic.Code != ErrorCode.ERR_NotLoweredYet)];
     }
 
     /// <summary>
@@ -264,7 +314,11 @@ public sealed partial class SilGen {
         }
 
         BuildVTables();
-        RootChecker.Check(_module, _sources, _diagnostics);
+        RootChecker.Check(_module, _sources, _diagnostics, (before, source) => {
+            if (TreeOf(source) is { } tree) {
+                Place(before, tree);
+            }
+        });
         if (_module.Unit is { } unitInfo) {
             DeclareReferenced(unitInfo);
             RecordAbi(unitInfo);
@@ -484,7 +538,15 @@ public sealed partial class SilGen {
             return;
         }
 
-        var source = model.SyntaxTree.Text;
+        var reported = _diagnostics.Count;
+        try {
+            LowerBody(symbol, syntax, body, model.SyntaxTree.Text, name, type, substitution);
+        } finally {
+            Place(reported, model.SyntaxTree);
+        }
+    }
+
+    void LowerBody(FunctionSymbol symbol, SyntaxNode syntax, BoundBlock body, SourceText source, string name, FunctionType type, TypeSubstitution substitution) {
         var function = new SilFunction(name, type) {
             SourceFile = source.FileName,
             Line = source.GetLinePosition(syntax.Span.Start).Line,
@@ -1537,10 +1599,14 @@ public sealed partial class SilGen {
         _names[symbol] = name;
         _module.Add(function);
 
+        var reported = _diagnostics.Count;
         new FunctionLowering(this, symbol, function, source, substitution).Lower(body);
         function.RemoveUnreachableBlocks();
         MoveChecker.Check(function, source, _diagnostics);
         _sources[function] = source;
+        if (TreeOf(source) is { } tree) {
+            Place(reported, tree);
+        }
     }
 
     internal string ClosureName(string function) {

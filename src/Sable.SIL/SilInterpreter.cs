@@ -1503,6 +1503,10 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             return Find(parts[1]) is { } from && Find(parts[2]) is { } to ? WrapNumber(operands[0], from, to) : null;
         }
 
+        if (name.StartsWith(SilBuiltins.WrappingPrefix, StringComparison.Ordinal)) {
+            return Wrapping(name, operands);
+        }
+
         var separator = name.LastIndexOf('_');
         if (separator < 0 || Find(name[(separator + 1)..]) is not { } type || type == SilType.Int || type == SilType.F64) {
             return null;
@@ -1571,6 +1575,32 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             case "cmp_ge": return x >= y;
             default: return null;
         }
+    }
+
+    /// <summary>
+    ///     <c>wrapping_add_I32</c> and the rest, which a build with
+    ///     <c>overflow-checks = false</c> has in place of the trapping
+    ///     operations: the exact result, keeping the type's low bits.
+    /// </summary>
+    static object? Wrapping(string name, object?[] operands) {
+        var separator = name.LastIndexOf('_');
+        var type = SilType.Integers.FirstOrDefault(n => n.ToString() == name[(separator + 1)..]);
+        if (type is null || separator <= SilBuiltins.WrappingPrefix.Length) {
+            return null;
+        }
+
+        var (bits, signed) = SilType.IntegerInfo(type)!.Value;
+        var x = Big(operands[0]);
+        var y = operands.Length > 1 ? Big(operands[1]) : BigInteger.Zero;
+        BigInteger? exact = name[SilBuiltins.WrappingPrefix.Length..separator] switch {
+            "add" => x + y,
+            "sub" => x - y,
+            "mul" => x * y,
+            "neg" => -x,
+            "abs" => BigInteger.Abs(x),
+            _ => null,
+        };
+        return exact is { } value ? NarrowBig(Wrapped(value, bits, signed), type) : null;
     }
 
     /// <summary>An I128 or U128 operation: Numeric's, over BigInteger, which holds a U128's every value.</summary>

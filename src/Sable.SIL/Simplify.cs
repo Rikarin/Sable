@@ -78,6 +78,11 @@ public sealed class Simplify : ISilPass {
                 "add_Int" => checked(a + b),
                 "sub_Int" => checked(a - b),
                 "mul_Int" => checked(a * b),
+                "wrapping_add_Int" => unchecked(a + b),
+                "wrapping_sub_Int" => unchecked(a - b),
+                "wrapping_mul_Int" => unchecked(a * b),
+                "wrapping_neg_Int" => unchecked(-a),
+                "wrapping_abs_Int" => a < 0 ? unchecked(-a) : a,
                 "and_Int" or "and_Bool" => a & b,
                 "or_Int" or "or_Bool" => a | b,
                 "xor_Int" or "xor_Bool" => a ^ b,
@@ -313,6 +318,7 @@ public sealed class Simplify : ISilPass {
         || name.StartsWith("min_", StringComparison.Ordinal)
         || name.StartsWith("max_", StringComparison.Ordinal)
         || name.StartsWith("wrap_", StringComparison.Ordinal)
+        || name.StartsWith(SilBuiltins.WrappingPrefix, StringComparison.Ordinal)
         || name is "add_F64" or "sub_F64" or "mul_F64" or "div_F64" or "rem_F64" or "neg_F64" or "abs_F64"
             or "add_F32" or "sub_F32" or "mul_F32" or "div_F32" or "rem_F32" or "neg_F32" or "abs_F32"
             or "string_count" or "string_compare" or "string_hash" or "string_contains" or "string_index_of";

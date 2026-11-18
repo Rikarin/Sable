@@ -1347,6 +1347,12 @@ public static class SilBuiltins {
     public static readonly ImmutableArray<string> ArrayOperations =
         ["array_empty", "array_count", "array_get", "array_get_borrowed", "array_append", "array_set_unique", "array_element_addr", "array_make_unique", "array_set", "array_remove_last", "array_clear", "array_slice", "region_alloc"];
 
+    /// <summary>
+    ///     The prefix of the wrapping forms of integer arithmetic
+    ///     (<c>wrapping_add_Int</c>), which never trap: see <see cref="WrappingArithmetic" />.
+    /// </summary>
+    public const string WrappingPrefix = "wrapping_";
+
     /// <summary>A builtin with fixed operand types, by name.</summary>
     public static Signature? Find(string name) => Table.GetValueOrDefault(name);
 
@@ -1559,6 +1565,17 @@ public static class SilBuiltins {
             Unary("not", integer);
             if (SilType.IntegerInfo(integer)!.Value.Signed) {
                 Unary("abs", integer);
+            }
+
+            // What overflow-checks = false makes of the operations that trap
+            // on overflow: each keeps the low bits of the exact result.
+            foreach (var op in new[] { "add", "sub", "mul" }) {
+                Binary(WrappingPrefix + op, integer, integer);
+            }
+
+            Unary(WrappingPrefix + "neg", integer);
+            if (SilType.IntegerInfo(integer)!.Value.Signed) {
+                Unary(WrappingPrefix + "abs", integer);
             }
         }
 

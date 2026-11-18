@@ -2875,6 +2875,30 @@ public sealed partial class LlvmEmitter {
                 return true;
             }
 
+            // overflow-checks = false: LLVM's own arithmetic, which wraps.
+            if (name.StartsWith(SilBuiltins.WrappingPrefix, StringComparison.Ordinal)) {
+                var wt = Type(builtin.Type);
+                var wresult = Result();
+                switch (name[SilBuiltins.WrappingPrefix.Length..name.LastIndexOf('_')]) {
+                    case "neg":
+                        Line($"{wresult} = sub {wt} 0, {operands[0]}");
+                        break;
+                    case "abs": {
+                        var negated = Fresh();
+                        var negative = Fresh();
+                        Line($"{negated} = sub {wt} 0, {operands[0]}");
+                        Line($"{negative} = icmp slt {wt} {operands[0]}, 0");
+                        Line($"{wresult} = select i1 {negative}, {wt} {negated}, {wt} {operands[0]}");
+                        break;
+                    }
+                    case var arithmetic:
+                        Line($"{wresult} = {arithmetic} {wt} {operands[0]}, {operands[1]}");
+                        break;
+                }
+
+                return true;
+            }
+
             var separator = name.LastIndexOf('_');
             if (separator < 0) {
                 return false;

@@ -390,6 +390,7 @@ public static class PackageBuilder {
                         LinkInputs = graph.LinkInputs(member.Name),
                     },
                     Whole = profile.CodegenUnits == 1,
+                    OverflowChecks = profile.OverflowChecks,
                 };
                 var outcome = IncrementalBuild.Build(Units(graph, member.Name, bin, generated), buildSettings, executable, Path.Combine(output, "cache"), timings, environment.Error);
                 Report(environment, outcome.Warnings);

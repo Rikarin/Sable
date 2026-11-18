@@ -1417,11 +1417,17 @@ In `src/Sable.Driver/Packages/`, with a command per file under `Commands/`.
   keeps the entry point out of the C `main`, so the program's functions keep
   theirs), `lto` (`fat`, `thin` or off; on Linux through lld, used when clang
   can link with it), `codegen-units = 1` (compile whole even in an
-  unoptimised debug build), `strip`, `rpath`, `exclusivity` and `leak-check`
-  (`sable run` sets `SABLE_CHECK_LEAKS`). A build prints the warnings of the
-  profile it uses: `panic = "unwind"` (a trap always aborts), `arc-checks`
-  (there are no optional ARC checks) and `overflow-checks = false`
-  (arithmetic is always checked) have no effect.
+  unoptimised debug build), `strip`, `rpath`, `exclusivity`, `leak-check`
+  (`sable run` sets `SABLE_CHECK_LEAKS`) and `overflow-checks = false`
+  (integer `+`, `-`, `*`, negation, `abs` and `as` wrap rather than trap:
+  SIL has `wrapping_` forms of them, which the interpreter, the emitter and
+  constant folding read as written; division by zero, shifts out of range
+  and an overflowing `const` are still errors). `package.sb` sets all of
+  them, `optSize: .size` or `.minSize` for `-Os` and `-Oz`. A build prints
+  the warnings of the profile it uses: `panic = "unwind"` (a trap always
+  aborts) and `arc-checks` (there are no optional ARC checks: the one
+  reference-count check, an object outliving its deinit, guards memory
+  safety and stays) have no effect.
 - **Packages of many files.** A package is every `.sb` under `src/`:
   `src/main.sb` (or `[[bin]]`, or `src/bin/*.sb`) is a binary's entry, the
   rest is the library. A binary is compiled with its package's library and

@@ -301,11 +301,15 @@ public sealed class RegistryServer(string root, string prefix) : IDisposable {
     }
 
     public void Dispose() {
-        if (_listener.IsListening) {
-            _listener.Stop();
+        // Close alone: after Stop, the managed listener's Close looks the
+        // port up again, and binds it afresh if it can, or fails if another
+        // process took it meanwhile.
+        try {
+            _listener.Close();
+        } catch (HttpListenerException) {
+            // Closed already, as far as anyone can tell.
         }
 
-        _listener.Close();
         try {
             _loop?.Wait(TimeSpan.FromSeconds(5));
         } catch (AggregateException) {

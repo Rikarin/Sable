@@ -17,14 +17,25 @@ public sealed class NetworkRegistryTests {
     sealed class Server : IDisposable {
         public Server(PackageFixture fixture) {
             Root = Path.Combine(fixture.Root, "server");
-            var listener = new TcpListener(IPAddress.Loopback, 0);
-            listener.Start();
-            var port = ((IPEndPoint)listener.LocalEndpoint).Port;
-            listener.Stop();
-            Url = $"http://127.0.0.1:{port}/";
             Alice = RegistryTokens.Issue(Root, new("alice", ["acme"], false));
-            Host = new RegistryServer(Root, Url);
-            Host.Start();
+
+            // A free port, asked of the system; another test may take it
+            // before the server binds it, so a few tries.
+            for (var attempt = 0; ; attempt++) {
+                var listener = new TcpListener(IPAddress.Loopback, 0);
+                listener.Start();
+                var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+                listener.Stop();
+                Url = $"http://127.0.0.1:{port}/";
+                Host = new RegistryServer(Root, Url);
+                try {
+                    Host.Start();
+                    break;
+                } catch (HttpListenerException) when (attempt < 5) {
+                    Host.Dispose();
+                }
+            }
+
             Credentials.Save(fixture.Home, Url, Alice);
             Environment = fixture.Environment with { RegistryDirectory = Url };
         }

@@ -18,6 +18,19 @@ internal static class Fuzzing {
     /// <summary>How many inputs to try: the test's count, times the night's scale.</summary>
     public static int Iterations(int usual) => usual * Math.Max(1, Setting("SABLE_FUZZ_SCALE") ?? 1);
 
+    /// <summary>
+    ///     Every keyword and every fixed-text token the lexer knows, taken from
+    ///     its own tables, so that a keyword or operator added to the language
+    ///     is in the soup without anyone remembering to add it.
+    /// </summary>
+    public static IReadOnlyList<string> EveryFixedToken { get; } =
+        SyntaxFacts.KeywordTexts
+            .Concat(Enum.GetValues<SyntaxKind>().Select(SyntaxFacts.GetText).OfType<string>())
+            .Where(static text => text.Length > 0)
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
     /// <summary>What a failure says, so that it can be run again.</summary>
     public static string Reproduce(string source) =>
         $"SABLE_FUZZ_SEED={Environment.GetEnvironmentVariable("SABLE_FUZZ_SEED") ?? "(unset)"}; input: {System.Text.Json.JsonSerializer.Serialize(source)}";

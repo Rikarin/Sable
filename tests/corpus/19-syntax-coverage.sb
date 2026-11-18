@@ -1,0 +1,55 @@
+/// Syntax the other programs don't use, so that the compiler fuzzer, which
+/// mutates the repository's programs, has every node kind to work from.
+module Corpus.SyntaxCoverage
+
+import Sable.Core.{ Platform, Reflect as Reflection }
+
+comptime {
+    let width = 8
+}
+
+fn both(_ ok: () -> Int, onFail: () -> Int) -> Int => ok() + onFail()
+
+fn classify(_ n: Int) -> String {
+    switch n {
+        case 0:
+        return "zero"
+        case 1, 2:
+        return "small"
+        default:
+        return "large"
+    }
+}
+
+fn sign(_ n: Int) -> Int {
+    match n {
+        case 0:
+        return 0
+        case let m where m > 0:
+        return 1
+        default:
+        return -1
+    }
+}
+
+fn describe(_ value: Int | String) -> String {
+    return match value {
+        case is Int     => "a number"
+        case (let text) => "the text \(text)"
+    }
+}
+
+fn first(_ values: Int?) -> Int {
+    return match values {
+        case let v? => v
+        case none   => 0
+    }
+}
+
+fn main() {
+    let small = Platform.pointerWidth / 4 + Reflection.typeName(1).count
+    let size = if small > 10 { "big" } else { "small" }
+    let total = both { 1 } onFail: { 2 }
+    let forced: Int! = 3
+    print("\(size) \(total) \(classify(2)) \(describe(1)) \(first(4)) \(forced + 1) \(sign(-3))")
+}

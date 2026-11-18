@@ -293,6 +293,30 @@ public sealed class CompilerFuzzTests(Xunit.Abstractions.ITestOutputHelper outpu
         }
     }
 
+    /// <summary>
+    ///     Every kind of syntax node is in some seed. Mutants are cut from the
+    ///     seeds and spliced with their pieces, so syntax no seed uses is
+    ///     syntax the fuzzer never writes; new syntax needs a seed that uses
+    ///     it (tests/corpus/19-syntax-coverage.sb and
+    ///     tests/negative/75-syntax-coverage.sb are where the otherwise unused
+    ///     forms go).
+    /// </summary>
+    [Fact]
+    public void EveryKindOfNodeIsInASeed() {
+        var seen = Seeds()
+            .SelectMany(static source => SyntaxTree.Parse(source).Root.DescendantNodesAndSelf())
+            .Select(static node => node.GetType())
+            .ToHashSet();
+        var missing = typeof(SyntaxNode).Assembly.GetTypes()
+            .Where(static t => t.IsPublic && !t.IsAbstract && t.IsSubclassOf(typeof(SyntaxNode)))
+            .Where(t => !seen.Contains(t))
+            .Select(static t => t.Name)
+            .Order(StringComparer.Ordinal)
+            .ToList();
+
+        Assert.True(missing.Count == 0, "no seed program uses: " + string.Join(", ", missing));
+    }
+
     static string Reproduce(string source) =>
         $"SABLE_FUZZ_SEED={Environment.GetEnvironmentVariable("SABLE_FUZZ_SEED") ?? "(unset)"}; input:\n{source}";
 

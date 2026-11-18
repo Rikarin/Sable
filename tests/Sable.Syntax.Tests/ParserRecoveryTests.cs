@@ -402,7 +402,10 @@ public sealed class ParserRecoveryTests {
 
     /// <summary>
     ///     Every token kind the parser treats specially, mixed with newlines, so
-    ///     that speculative parsing, splitting and recovery all meet garbage.
+    ///     that speculative parsing, splitting and recovery all meet garbage:
+    ///     the pieces above, which the lexer's tables cannot give (literals,
+    ///     comments, directives, interpolation), and every keyword and
+    ///     fixed-text token from those tables.
     /// </summary>
     [Fact]
     public void WideSoupRoundTrips() {
@@ -412,6 +415,7 @@ public sealed class ParserRecoveryTests {
             "Self", ".", "..", "...", "..<", "->", "=>", "=", "==", ",", ":", ";", "@", "#if",
             "#endif", "a", "List", "Int", "1", "0x1F", "\"s\"", "\"\\(x)\"", "/*", "*/", "//c",
             "\n", "\n", " ", "try", "await", "some", "any", "is", "as", "$0", "in",
+            ..Fuzzing.EveryFixedToken,
         ];
 
         var random = Fuzzing.Random(20261120);

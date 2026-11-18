@@ -156,7 +156,8 @@ public static partial class InterfaceFingerprint {
     /// <summary>
     ///     One file's interface: its fingerprint, and its source as another
     ///     unit sees it — the file with each body that is not interface
-    ///     written <c>{ … }</c>, what a <c>.sbi</c> file holds (<see cref="InterfaceFile" />) —
+    ///     blanked (<see cref="Blank" />), what a <c>.sbi</c> file holds
+    ///     (<see cref="InterfaceFile" />) and other units bind against —
     ///     the fingerprint of its extensions, and the dotted names it writes.
     /// </summary>
     /// <remarks>
@@ -168,17 +169,37 @@ public static partial class InterfaceFingerprint {
     public static FileInterface Interface(SyntaxTree tree, IReadOnlySet<string> concreteTypes) {
         var writer = new Writer(tree, concreteTypes);
         writer.Node(tree.Root, positional: false);
-        var source = new StringBuilder();
         var text = tree.Text.Text;
-        var at = 0;
+        var source = new StringBuilder(text);
         foreach (var body in writer.Elided) {
-            source.Append(text, at, body.Start - at).Append("{ … }");
-            at = body.End;
+            Blank(source, body);
         }
 
-        source.Append(text, at, text.Length - at);
         var references = DottedName().Matches(text).Select(static m => m.Value).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList();
         return new(Hash(writer.Text.ToString()), source.ToString(), Hash(writer.Extensions.ToString()), references);
+    }
+
+    /// <summary>
+    ///     A body left out of a file's source as other units see it: a block
+    ///     becomes an empty one, an expression <c>0</c>, and the rest spaces —
+    ///     with its line breaks kept, so that everything after it is where it
+    ///     was, and what other units lower from the file (a generic body, a
+    ///     default) has the lines and columns it has in the file.
+    /// </summary>
+    static void Blank(StringBuilder source, TextSpan body) {
+        var block = source[body.Start] == '{';
+        for (var i = body.Start; i < body.End; i++) {
+            if (source[i] is not ('\n' or '\r')) {
+                source[i] = ' ';
+            }
+        }
+
+        if (block) {
+            source[body.Start] = '{';
+            source[body.End - 1] = '}';
+        } else {
+            source[body.Start] = '0';
+        }
     }
 
     static string Hash(string text) => Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(text)));

@@ -1,102 +1,176 @@
+using System.Security.Cryptography;
 using System.Text;
 
 namespace Sable.Driver.Build;
 
 /// <summary>
-///     A unit's <c>.sbi</c> file (docs/05 §5.4): what other units can see of
-///     it — for each file its interface fingerprint, its extensions'
-///     fingerprint, the dotted names it writes, and its source with every
-///     body that is not interface written <c>{ … }</c> — written when the
-///     unit's interface is first worked out, and read back by later builds
-///     instead of walking the unit's files again.
+///     A unit's <c>.sbi</c> file (docs/05 §5.4): what other units bind and
+///     lower against — for each file its interface fingerprint, its
+///     extensions' fingerprint, the dotted names it writes, and its source
+///     with every body that is not interface blanked — written when the
+///     unit's interface is first worked out, and read back by later builds:
+///     an unchanged unit's interface is not worked out again, and a unit
+///     whose object is kept is parsed and bound from it rather than from its
+///     source.
 /// </summary>
 /// <remarks>
 ///     <para>
-///         The format is text, with a version on its first line:
-///         <code>
-///         sable-interface 2
-///         unit lib shapes-0.1.0
-///         file shapes/src/lib.sb 3f2a… 9c01…
-///         refs Sable.IO Shapes.Shape
-///         --- shapes/src/lib.sb
-///         module Shapes
-///         public fn area(_ side: Int) -> Int { … }
-///         </code>
-///         It is kept in the build cache under a key over the unit's
-///         content, which of the types its extensions extend the program
-///         declares concretely, and the build's settings, so a file found is
-///         only ever the one this build would write; one that cannot be read
-///         is worked out again.
+///         The file is binary: the bytes <c>SBI</c>, a version, the payload,
+///         and the payload's SHA-256. One of another version, cut short, or
+///         whose hash does not match is not read, and is worked out again.
+///         In the payload, strings are length-prefixed UTF-8 and a source is
+///         a list of pieces of text, each followed by a count of spaces —
+///         a blanked body, or indentation — so that what other units do not
+///         see takes almost no room.
+///     </para>
+///     <para>
+///         It is kept in the build cache under a key over the unit's content
+///         and the build's settings. What else the interface depends on —
+///         which of the types its extensions extend the program declares as
+///         concrete types (<see cref="InterfaceFingerprint.ConcreteTypeNames" />),
+///         which decides whether their bodies are interface — is written
+///         in it (<see cref="Assumed" />), and a build that finds the program
+///         otherwise works the interface out again.
 ///     </para>
 /// </remarks>
-public sealed record InterfaceFile(string Unit, IReadOnlyList<(string File, FileInterface Interface)> Files) {
-    public const string Header = "sable-interface 2";
+public sealed record InterfaceFile(string Unit, IReadOnlyList<string> Assumed, IReadOnlyList<(string File, FileInterface Interface)> Files) {
+    /// <summary>The format's version: bump when what is written, or what it means, changes.</summary>
+    public const int Version = 3;
 
-    /// <summary>The file's text.</summary>
-    public string Write() {
-        var text = new StringBuilder(Header).Append('\n').Append("unit ").Append(Unit).Append('\n');
-        foreach (var (file, face) in Files) {
-            text.Append("file ").Append(file).Append(' ').Append(face.Fingerprint).Append(' ').Append(face.Extensions).Append('\n');
-            text.Append("refs");
-            foreach (var reference in face.References) {
-                text.Append(' ').Append(reference);
+    static ReadOnlySpan<byte> Magic => "SBI"u8;
+
+    /// <summary>Indentation and blanked bodies: runs of at least this many spaces are counted, not written.</summary>
+    const int Run = 4;
+
+    /// <summary>The file's bytes.</summary>
+    public byte[] Write() {
+        using var payload = new MemoryStream();
+        using (var writer = new BinaryWriter(payload, Encoding.UTF8, leaveOpen: true)) {
+            writer.Write(Unit);
+            WriteList(writer, Assumed);
+            writer.Write(Files.Count);
+            foreach (var (file, face) in Files) {
+                writer.Write(file);
+                writer.Write(face.Fingerprint);
+                writer.Write(face.Extensions);
+                WriteList(writer, face.References);
+                WriteSource(writer, face.Source);
             }
-
-            text.Append('\n');
         }
 
-        foreach (var (file, face) in Files) {
-            text.Append("--- ").Append(file).Append('\n').Append(face.Source);
-            if (!face.Source.EndsWith('\n')) {
-                text.Append('\n');
+        var body = payload.ToArray();
+        using var output = new MemoryStream();
+        output.Write(Magic);
+        output.Write(BitConverter.GetBytes(Version));
+        output.Write(body);
+        output.Write(SHA256.HashData(body));
+        return output.ToArray();
+    }
+
+    static void WriteList(BinaryWriter writer, IReadOnlyCollection<string> items) {
+        writer.Write(items.Count);
+        foreach (var item in items) {
+            writer.Write(item);
+        }
+    }
+
+    static void WriteSource(BinaryWriter writer, string source) {
+        var pieces = new List<(int Start, int Length, int Spaces)>();
+        var start = 0;
+        for (var i = 0; i < source.Length;) {
+            if (source[i] != ' ') {
+                i++;
+                continue;
             }
+
+            var end = i;
+            while (end < source.Length && source[end] == ' ') {
+                end++;
+            }
+
+            if (end - i >= Run) {
+                pieces.Add((start, i - start, end - i));
+                start = end;
+            }
+
+            i = end;
         }
 
-        return text.ToString();
+        pieces.Add((start, source.Length - start, 0));
+        writer.Write(pieces.Count);
+        foreach (var (at, length, spaces) in pieces) {
+            writer.Write(source.Substring(at, length));
+            writer.Write(spaces);
+        }
     }
 
     /// <summary>
-    ///     The interfaces a <c>.sbi</c> file gives the unit's files, in order;
-    ///     null unless it is whole, of this version and of exactly these files.
+    ///     What a <c>.sbi</c> file holds; null unless it is whole, of this
+    ///     version, of this unit and of exactly these files.
     /// </summary>
-    public static IReadOnlyList<FileInterface>? Read(string path, string unit, IReadOnlyList<string> files) {
+    public static InterfaceFile? Read(string path, string unit, IReadOnlyList<string> files) {
         try {
             if (!File.Exists(path)) {
                 return null;
             }
 
-            using var reader = new StreamReader(path);
-            if (reader.ReadLine() != Header || reader.ReadLine() != "unit " + unit) {
+            var bytes = File.ReadAllBytes(path);
+            const int header = 3 + sizeof(int), hash = 32;
+            if (bytes.Length < header + hash || !bytes.AsSpan(0, 3).SequenceEqual(Magic) || BitConverter.ToInt32(bytes, 3) != Version) {
                 return null;
             }
 
-            var heads = new List<(string Fingerprint, string Extensions, string[] References)>();
+            var body = bytes.AsSpan(header, bytes.Length - header - hash);
+            if (!SHA256.HashData(body).AsSpan().SequenceEqual(bytes.AsSpan(bytes.Length - hash))) {
+                return null;
+            }
+
+            using var reader = new BinaryReader(new MemoryStream(bytes, header, body.Length), Encoding.UTF8);
+            if (reader.ReadString() != unit) {
+                return null;
+            }
+
+            var assumed = ReadList(reader);
+            if (reader.ReadInt32() != files.Count) {
+                return null;
+            }
+
+            var read = new List<(string, FileInterface)>();
             foreach (var file in files) {
-                var prefix = "file " + file + " ";
-                if (reader.ReadLine() is not { } line || !line.StartsWith(prefix, StringComparison.Ordinal) || line.Length != prefix.Length + 64 + 1 + 64
-                    || reader.ReadLine() is not { } refs || !(refs == "refs" || refs.StartsWith("refs ", StringComparison.Ordinal))) {
+                if (reader.ReadString() != file) {
                     return null;
                 }
 
-                heads.Add((line.Substring(prefix.Length, 64), line[^64..], refs.Split(' ', StringSplitOptions.RemoveEmptyEntries)[1..]));
+                var fingerprint = reader.ReadString();
+                var extensions = reader.ReadString();
+                var references = ReadList(reader);
+                read.Add((file, new FileInterface(fingerprint, ReadSource(reader), extensions, references)));
             }
 
-            // The sources follow, one section per file: a file cut short was not written whole.
-            var sources = new List<StringBuilder>();
-            while (reader.ReadLine() is { } line) {
-                if (sources.Count < files.Count && line == "--- " + files[sources.Count]) {
-                    sources.Add(new());
-                } else if (sources.Count > 0) {
-                    sources[^1].Append(line).Append('\n');
-                }
-            }
-
-            return sources.Count == files.Count
-                ? [..heads.Select((h, i) => new FileInterface(h.Fingerprint, sources[i].ToString(), h.Extensions, h.References))]
-                : null;
-        } catch (Exception e) when (e is IOException or UnauthorizedAccessException) {
+            return new(unit, assumed, read);
+        } catch (Exception e) when (e is IOException or UnauthorizedAccessException or EndOfStreamException or FormatException or ArgumentException) {
             return null;
         }
+    }
+
+    static List<string> ReadList(BinaryReader reader) {
+        var count = reader.ReadInt32();
+        var items = new List<string>(Math.Min(count, 4096));
+        for (var i = 0; i < count; i++) {
+            items.Add(reader.ReadString());
+        }
+
+        return items;
+    }
+
+    static string ReadSource(BinaryReader reader) {
+        var count = reader.ReadInt32();
+        var source = new StringBuilder();
+        for (var i = 0; i < count; i++) {
+            source.Append(reader.ReadString()).Append(' ', reader.ReadInt32());
+        }
+
+        return source.ToString();
     }
 
     /// <summary>Writes the file whole or not at all.</summary>
@@ -104,7 +178,7 @@ public sealed record InterfaceFile(string Unit, IReadOnlyList<(string File, File
         try {
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             var temporary = path + $".{Environment.ProcessId}.{Guid.NewGuid():N}.tmp";
-            File.WriteAllText(temporary, Write());
+            File.WriteAllBytes(temporary, Write());
             File.Move(temporary, path, overwrite: true);
         } catch (Exception e) when (e is IOException or UnauthorizedAccessException) {
             // Not kept: the next build works the interface out again.

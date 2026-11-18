@@ -446,11 +446,24 @@ from a compilation of the whole program and cached in
 where the fingerprint is the unit's content and the interfaces of the units
 it depends on. An interface is a hash of each file's public surface —
 declarations, signatures and the bodies other units lower (generic
-functions, `const fn`s, defaults). Each unit's is written to a `.sbi` in
-`cache/interfaces/` (each file's fingerprint, its extensions' fingerprint,
-the dotted names it writes, and its source with every body other units
-cannot see left out), and read back by the next build in place of walking
-the unchanged unit's files.
+functions, `const fn`s, defaults). Each unit's is written to a binary
+`.sbi` in `cache/interfaces/`, keyed by the unit's content (`SBI`, a
+version, the payload and its SHA-256; one of another version, cut short or
+corrupt is worked out again): each file's fingerprint, its extensions'
+fingerprint, the dotted names it writes, which of the types its extensions
+extend it took to be concrete, and its source with every body other units
+cannot see blanked — line breaks kept, so that every declaration and every
+body other units lower is where it is in the file, and their debug
+information and trap messages come out the same. The next build reads an
+unchanged unit's interface from it rather than working it out, and parses
+and binds a unit whose object it keeps from that source rather than from
+the unit's own: the compiled units are type-checked and lowered against the
+others' interfaces. A unit found to need compiling is parsed from its
+source; so is the whole program, when a build falls back to compiling it
+whole. What the `.sbi` does not hold yet, of what is planned above: escape
+summaries (a unit assumes the worst of another's functions, docs/02 §2.2),
+and declarations as symbols rather than source — binding them is still the
+front end's work on each build, over the interfaces' shorter text.
 
 **Dependents only.** A unit depends on the units declaring a module it
 imports or names in full (`Shapes.Square` needs no import), on the units

@@ -1989,15 +1989,16 @@ than "every unit" when an interface changes (today a signature change
 anywhere is a ~6 s rebuild here); keeping parsed trees and bound
 declarations in a long-lived process (a build daemon, or the LSP server)
 so a warm build re-parses only what changed; and early cut-off when a
-change's result is unchanged. Also deferred: a binary `.sbi` (the
-interface is a fingerprint, and each unit still binds every file's
-declarations from source); separate compilation for optimised builds
+change's result is unchanged. (Since done: invalidation by dependency,
+and a binary `.sbi` that units whose objects are kept are parsed and bound
+from — docs/05 §5.4, "As built". Declarations are still bound from source
+text, the interfaces', on each build.) Also deferred: separate compilation for optimised builds
 (they need the whole program for the SIL passes and LTO — ThinLTO over
 units would parallelise their 26 s of clang); escape and root summaries
 across units (a unit assumes the worst, and the program is compiled whole
 when that rejects it); lowering units in parallel; packages built once
-for several binaries or members (a unit's key includes the whole
-program's interface, so each binary has its own objects); a `.dSYM` for
+for several binaries or members (the entry unit depends on every unit,
+and each binary's units are keyed by the program it is in); a `.dSYM` for
 separately compiled builds (lldb reads DWARF from the cached objects
 through the debug map; `sable clean` removes them); `sable test` and
 `sable bench` still compile whole.

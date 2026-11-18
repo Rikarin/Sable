@@ -179,7 +179,7 @@ public sealed class IncrementalTests {
             Assert.True(report.Success, Fixture.Errors.ToString());
             var (output, exitCode) = PackageFixture.Execute(binaries[0].Path);
             Assert.Equal(0, exitCode);
-            return new(output, report.Groups[1].Value, int.Parse(report.Groups[2].Value), int.Parse(report.Groups[3].Value));
+            return new(output, report.Groups[1].Value, int.Parse(report.Groups[2].Value), int.Parse(report.Groups[3].Value), Fixture.Errors.ToString());
         }
 
         /// <summary>The build's errors, when it fails.</summary>
@@ -213,7 +213,11 @@ public sealed class IncrementalTests {
         public void Dispose() => Fixture.Dispose();
     }
 
-    sealed record Built(string Output, string Kind, int Compiled, int Reused);
+    sealed record Built(string Output, string Kind, int Compiled, int Reused, string Log = "") {
+        /// <summary>A count the build's timings report.</summary>
+        public int Counted(string what) =>
+            Regex.Match(Log, $@"{Regex.Escape(what)}\s+(\d+)") is { Success: true } found ? int.Parse(found.Groups[1].Value) : 0;
+    }
 
     const string Expected = """
         circle of area 12
@@ -299,11 +303,12 @@ public sealed class IncrementalTests {
     }
 
     /// <summary>
-    ///     Each unit's interface is written as a <c>.sbi</c> file — its
-    ///     files' fingerprints and their source without the bodies other
-    ///     units cannot see — and read back by the next build in place of
-    ///     the unit's files: a fingerprint planted in one is what the program
-    ///     is keyed by, and one cut short is worked out again.
+    ///     Each unit's interface is written as a binary <c>.sbi</c> file — its
+    ///     files' fingerprints, and their source with the bodies other units
+    ///     cannot see blanked — and read back by the next build: a unit whose
+    ///     object is kept is parsed and bound from it, not from its source; a
+    ///     fingerprint planted in one is what the units are keyed by; and one
+    ///     cut short, corrupted or of another version is worked out again.
     /// </summary>
     [Fact]
     public void EachUnitsInterfaceIsWrittenAndReadBack() {
@@ -314,45 +319,64 @@ public sealed class IncrementalTests {
         using var scenario = new Scenario();
         scenario.Check();
         var interfaces = scenario.PathOf("app/target/dev/cache/interfaces");
-        string Sbi(string unit) => Assert.Single(Directory.GetFiles(interfaces, "*.sbi"), f => File.ReadLines(f).Skip(1).First() == "unit " + unit);
+        string Sbi(string unit, string file) => Assert.Single(Directory.GetFiles(interfaces, "*.sbi"), f => InterfaceFile.Read(f, unit, [file]) is not null);
+        InterfaceFile Read(string unit, string file) => InterfaceFile.Read(Sbi(unit, file), unit, [file])!;
 
         // The program's three units (the standard library has none of its own).
         Assert.Equal(Units - 1, Directory.GetFiles(interfaces, "*.sbi").Length);
-        var shapes = File.ReadAllText(Sbi("lib shapes-0.1.0"));
-        Assert.True(shapes.StartsWith("sable-interface 2\nunit lib shapes-0.1.0\nfile ../shapes/src/lib.sb ", StringComparison.Ordinal), shapes[..200]);
-        // The dotted names it writes, from which what depends on what is found.
-        Assert.Contains("\nrefs ", shapes, StringComparison.Ordinal);
-        Assert.Contains("\n--- ../shapes/src/lib.sb\nmodule Shapes\n", shapes, StringComparison.Ordinal);
-        Assert.Contains("fn scale(_ x: Int) -> Int { … }", shapes, StringComparison.Ordinal);
-        Assert.DoesNotContain("return x\n", shapes, StringComparison.Ordinal);
+        var shapesFile = Read("lib shapes-0.1.0", "../shapes/src/lib.sb");
+        var shapes = Assert.Single(shapesFile.Files).Interface;
+        Assert.Equal("SBI"u8.ToArray(), File.ReadAllBytes(Sbi("lib shapes-0.1.0", "../shapes/src/lib.sb"))[..3]);
+        // Its source: every line where it is, an ordinary body blanked.
+        var source = File.ReadAllText(scenario.PathOf("shapes/src/lib.sb"));
+        Assert.Equal(source.Length, shapes.Source.Length);
+        Assert.Equal(source.Count(static c => c == '\n'), shapes.Source.Count(static c => c == '\n'));
+        Assert.StartsWith("module Shapes\n", shapes.Source, StringComparison.Ordinal);
+        Assert.Matches(@"fn scale\(_ x: Int\) -> Int \{\s+\}", shapes.Source);
+        Assert.DoesNotContain("return x\n", shapes.Source, StringComparison.Ordinal);
         // A generic body is lowered where it is used: it is interface.
-        Assert.Contains("if x > best {", shapes, StringComparison.Ordinal);
+        Assert.Contains("if x > best {", shapes.Source, StringComparison.Ordinal);
+        // The dotted names it writes, from which what depends on what is found.
+        Assert.Contains("xs.count", shapes.References);
 
-        // A body change writes the changed unit's interface beside the old one.
+        // A body change writes the changed unit's interface beside the old
+        // one, and the units kept are bound from theirs.
         scenario.Edit("shapes/src/lib.sb", "    return x\n", "    return x + 1\n");
-        Assert.Equal(1, scenario.Check().Compiled);
+        var changed = scenario.Check();
+        Assert.Equal(1, changed.Compiled);
         Assert.Equal(Units, Directory.GetFiles(interfaces, "*.sbi").Length);
+        Assert.Equal(2, changed.Counted("files parsed from interfaces"));
 
         // What the next build reads is what the units are keyed by: a
         // fingerprint planted in geometry's compiles the unit that depends
         // on geometry again, and no other. (The executable is removed, so
         // that the build is not merely fresh.)
         var executable = Platform.Executable(scenario.PathOf("app/target/dev/app"));
-        var geometry = Sbi("lib geometry-0.1.0");
-        var text = File.ReadAllText(geometry);
-        var line = text.Split('\n')[2];
-        File.WriteAllText(geometry, text.Replace(line, line[..^129] + new string('0', 64) + line[^65..], StringComparison.Ordinal));
+        var geometryPath = Sbi("lib geometry-0.1.0", "../geometry/src/lib.sb");
+        var geometry = Read("lib geometry-0.1.0", "../geometry/src/lib.sb");
+        var bytes = File.ReadAllBytes(geometryPath);
+        var face = geometry.Files[0].Interface;
+        (geometry with { Files = [(geometry.Files[0].File, face with { Fingerprint = new string('0', 64) })] }).WriteTo(geometryPath);
         File.Delete(executable);
         var planted = scenario.Check();
         Assert.Equal(("incremental", 1), (planted.Kind, planted.Compiled));
 
-        // One cut short is not read.
-        File.WriteAllText(geometry, string.Join('\n', text.Split('\n').Take(3)));
-        File.Delete(executable);
-        var cut = scenario.Check();
-        Assert.Equal(Expected.Replace("12", "13", StringComparison.Ordinal), cut.Output);
-        Assert.Equal(0, cut.Compiled);
-        Assert.Contains("--- ../geometry/src/lib.sb", File.ReadAllText(geometry), StringComparison.Ordinal);
+        // One cut short, corrupted or of another version is not read, but
+        // worked out again: the units are keyed as they were, and nothing is compiled.
+        byte[][] broken = [bytes[..^10], [..bytes[..40], (byte)(bytes[40] ^ 1), ..bytes[41..]], [..bytes[..3], 99, 0, 0, 0, ..bytes[7..]]];
+        foreach (var damaged in broken) {
+            Assert.Null(InterfaceFile.Read(Write(geometryPath, damaged), "lib geometry-0.1.0", ["../geometry/src/lib.sb"]));
+            File.Delete(executable);
+            var rebuilt = scenario.Check();
+            Assert.Equal(Expected.Replace("12", "13", StringComparison.Ordinal), rebuilt.Output);
+            Assert.Equal(0, rebuilt.Compiled);
+            Assert.Equal(face, Read("lib geometry-0.1.0", "../geometry/src/lib.sb").Files[0].Interface with { References = face.References });
+        }
+    }
+
+    static string Write(string path, byte[] bytes) {
+        File.WriteAllBytes(path, bytes);
+        return path;
     }
 
     [Fact]
@@ -862,6 +886,18 @@ public sealed class IncrementalTests {
             var whole = IncrementalBuild.Build(units, settings with { Whole = true }, Path.Combine(directory, "whole"), Path.Combine(directory, "cache"));
             Assert.True(whole.Succeeded, string.Join("\n", whole.Errors));
             Assert.Equal(PackageFixture.Execute(Path.Combine(directory, "whole")), PackageFixture.Execute(Path.Combine(directory, "separate")));
+
+            // Each part changed in turn — but not its interface — is compiled
+            // alone, against the others bound from their .sbi files.
+            for (var i = units.Count - 1; i >= 0; i--) {
+                File.AppendAllText(units[i].Files[0].Path, "\n// changed\n");
+                var timings = new BuildTimings();
+                var again = IncrementalBuild.Build(units, settings, Path.Combine(directory, "separate"), Path.Combine(directory, "cache"), timings);
+                Assert.True(again.Succeeded, string.Join("\n", again.Errors));
+                Assert.Equal(("incremental", 1), (again.Kind, again.Compiled));
+                Assert.Equal(units.Count - 1, timings.CountOf("files parsed from interfaces"));
+                Assert.Equal(PackageFixture.Execute(Path.Combine(directory, "whole")), PackageFixture.Execute(Path.Combine(directory, "separate")));
+            }
         } finally {
             Directory.Delete(directory, true);
         }

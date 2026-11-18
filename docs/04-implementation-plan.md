@@ -325,6 +325,20 @@ Order matters; each of these is a self-contained lowering:
   Retrofitting debug info is awful; emitting it alongside is easy.
 - Targets in order: `arm64-apple-darwin` → `x86_64-linux-gnu` →
   `aarch64-linux-gnu` → `x86_64-windows-msvc`.
+- **As built.** `sable build --target <triple>` (and `--sysroot <dir>`) for a
+  file or a package; a package's output goes to `target/<triple>/<profile>/`.
+  `NativeTarget` parses the triple (aarch64/arm64, x86_64, wasm32; darwin,
+  linux, windows, wasi) and asks clang, once per triple, for the target's
+  `target datalayout`, normalised triple and CPU features, which head the
+  program's IR — the layout clang compiles the runtime with. The IR reads
+  the runtime's object, string and array headers through typed GEPs, so 32-bit
+  pointers lay them out as C does; `#if os()`/`arch()`, `Platform.*` (the
+  core library is parsed per target), a dependency's `when:` and the C ABI's
+  classification follow the target. Every target compiles to an object
+  (`--emit obj`); an executable links where the runtime has a platform layer —
+  macOS and Linux. Not yet: the runtime's Windows and WASI layers (it needs
+  pthread, dlfcn, execinfo, posix_spawn, dirent and poll), WebAssembly's C ABI
+  for `@extern` structs, and CI beyond Linux x64 and macOS arm64.
 
 ### 2.4 Minimal runtime (C)
 

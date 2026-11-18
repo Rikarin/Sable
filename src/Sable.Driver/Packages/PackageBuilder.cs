@@ -12,7 +12,13 @@ public sealed record BuildRequest(
     string? Package = null,
     string? Bin = null,
     bool Locked = false,
-    bool Timings = false);
+    bool Timings = false) {
+    /// <summary>What to build for (<c>--target</c>): null for this machine.</summary>
+    public NativeTarget? Target { get; init; }
+
+    /// <summary>clang's <c>--sysroot</c> for the target (<c>--sysroot</c>).</summary>
+    public string? Sysroot { get; init; }
+}
 
 /// <summary>An executable a build made.</summary>
 public sealed record BuiltBinary(string Package, string Name, string Path, Profile Profile);
@@ -33,7 +39,9 @@ public static class PackageBuilder {
 
     internal static PackageGraph Resolve(Workspace workspace, PackageEnvironment environment, BuildRequest request) {
         ReportManifestWarnings(workspace, environment);
-        return PackageGraph.ResolveCached(workspace, environment, new(request.Features, null, request.Locked, [..Selected(workspace, request.Package).Select(static m => m.Name)]));
+        return PackageGraph.ResolveCached(workspace, environment, new(
+            request.Features, null, request.Locked, [..Selected(workspace, request.Package).Select(static m => m.Name)],
+            request.Target is { } target ? (target.Os, target.Arch) : null));
     }
 
     /// <summary>
@@ -54,16 +62,16 @@ public static class PackageBuilder {
     ///     its dependencies' — each parsed with its own package's features, and
     ///     <c>DEBUG</c> or <c>RELEASE</c> as <paramref name="optimise" /> says.
     /// </summary>
-    public static IReadOnlyList<SyntaxTree> Program(PackageGraph graph, string member, BinTarget? bin, bool optimise = false, BuildTimings? timings = null) {
+    public static IReadOnlyList<SyntaxTree> Program(PackageGraph graph, string member, BinTarget? bin, bool optimise = false, BuildTimings? timings = null, NativeTarget? target = null) {
         using var _ = BuildTimings.Of(timings, "parse");
         var trees = new List<SyntaxTree>();
         var own = graph.Packages[member];
         if (bin is not null) {
-            trees.Add(Parse(graph, own, bin.Path, optimise));
+            trees.Add(Parse(graph, own, bin.Path, optimise, target));
         }
 
         foreach (var package in graph.Closure(member)) {
-            trees.AddRange(package.Package.LibrarySources().Select(file => Parse(graph, package, file, optimise)));
+            trees.AddRange(package.Package.LibrarySources().Select(file => Parse(graph, package, file, optimise, target)));
         }
 
         return trees;
@@ -93,9 +101,10 @@ public static class PackageBuilder {
         ];
     }
 
-    static SyntaxTree Parse(PackageGraph graph, ResolvedPackage package, string file, bool optimise) {
+    static SyntaxTree Parse(PackageGraph graph, ResolvedPackage package, string file, bool optimise, NativeTarget? target = null) {
         var source = SourceOf(graph, package, file);
-        return SyntaxTree.Parse(new SourceText(File.ReadAllText(file), source.Name), Pipeline.ParseOptionsFor(optimise, source.Options));
+        var options = target is null ? source.Options : source.Options.ForTarget(target.Os, target.Arch);
+        return SyntaxTree.Parse(new SourceText(File.ReadAllText(file), source.Name), Pipeline.ParseOptionsFor(optimise, options));
     }
 
     /// <summary>A file of a package, with the name its diagnostics give it and the features it is parsed with.</summary>
@@ -194,7 +203,16 @@ public static class PackageBuilder {
         }
 
         var profile = workspace.RootManifest.ProfileFor(request.Release);
-        var output = Path.Combine(workspace.TargetDirectory, profile.Name);
+
+        // Another machine's build goes to target/<triple>/<profile>/, as
+        // Cargo's does, beside this machine's.
+        var output = request.Target is { } target
+            ? Path.Combine(workspace.TargetDirectory, target.Triple, profile.Name)
+            : Path.Combine(workspace.TargetDirectory, profile.Name);
+        if (request.Target is { HasRuntime: false } bare) {
+            throw new PackageException(NativeBuild.NoRuntime(bare));
+        }
+
         var built = new List<BuiltBinary>();
         var members = Selected(workspace, request.Package);
 
@@ -220,7 +238,7 @@ public static class PackageBuilder {
 
             environment.Error.WriteLine($"   Compiling {Describe(graph.Packages[member.Name], workspace)}");
             if (bins.Count == 0) {
-                var (errors, warnings) = Pipeline.Diagnose(Program(graph, member.Name, null, profile.Optimise));
+                var (errors, warnings) = Pipeline.Diagnose(Program(graph, member.Name, null, profile.Optimise, target: request.Target));
                 Report(environment, warnings);
                 if (errors.Count > 0) {
                     Report(environment, errors);
@@ -240,9 +258,9 @@ public static class PackageBuilder {
 
                 // Incrementally (docs/05 §5.4): the cache in target/<profile>/cache.
                 Directory.CreateDirectory(output);
-                var executable = Path.Combine(output, bin.Name);
+                var executable = Path.Combine(output, bin.Name + (request.Target ?? NativeTarget.Host).ExecutableSuffix);
                 var buildSettings = new BuildSettings(profile.Name, profile.Optimise, profile.Debug ? workspace.Root : null, profile.Exclusivity) {
-                    Native = profile.Native,
+                    Native = profile.Native with { Target = request.Target, Sysroot = request.Sysroot },
                     Whole = profile.CodegenUnits == 1,
                 };
                 var outcome = IncrementalBuild.Build(Units(graph, member.Name, bin), buildSettings, executable, Path.Combine(output, "cache"), timings, environment.Error);

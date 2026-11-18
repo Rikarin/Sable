@@ -14,6 +14,8 @@ public struct Platform {
     public const os: String = "linux"
     #elseif os(windows)
     public const os: String = "windows"
+    #elseif os(wasi)
+    public const os: String = "wasi"
     #else
     public const os: String = "unknown"
     #endif
@@ -23,12 +25,19 @@ public struct Platform {
     public const arch: String = "arm64"
     #elseif arch(x86_64)
     public const arch: String = "x86_64"
+    #elseif arch(wasm32)
+    public const arch: String = "wasm32"
     #else
     public const arch: String = "unknown"
     #endif
 
-    /// How many bits a pointer has: what Int and UInt have too.
+    /// How many bits a pointer has on the target. (Int and UInt are 64
+    /// bits on every target.)
+    #if arch(wasm32)
+    public const pointerWidth: Int = 32
+    #else
     public const pointerWidth: Int = 64
+    #endif
 }
 
 /// Stops the compile with the message, where the call is: a 'comptime'

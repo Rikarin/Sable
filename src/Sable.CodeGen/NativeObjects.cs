@@ -28,16 +28,42 @@ public static class NativeObjects {
         }
     });
 
-    /// <summary>The flags a unit's IR is compiled with: <c>-g</c> at <c>-O0</c> for a debug build.</summary>
-    public static IReadOnlyList<string> Flags(bool optimise, bool debug) => debug ? ["-g", "-O0"] : [optimise ? "-O2" : "-O0"];
+    /// <summary>
+    ///     The flags a unit's IR, and the runtime beside it, are compiled with:
+    ///     <c>-g</c> at <c>-O0</c> for an unoptimised debug build; otherwise
+    ///     the profile's level and, where the link takes bitcode, link-time
+    ///     optimisation's — so each unit is LLVM bitcode that the link
+    ///     optimises across units (ThinLTO, or the whole program at once).
+    /// </summary>
+    public static IReadOnlyList<string> Flags(NativeOptions options) =>
+        options.DebugInfo && !options.Optimise ? ["-g", "-O0"]
+        : [..NativeBuild.CompileFlags(options), ..Bitcode(options)];
 
-    /// <summary>Compiles one unit's IR to an object file, written whole or not at all.</summary>
-    public static NativeBuildResult CompileIr(string llvmIr, string objectPath, bool optimise, bool debug) {
+    /// <summary>Link-time optimisation's flags for the options' target, without the linker's: what makes an object bitcode.</summary>
+    public static IReadOnlyList<string> Bitcode(NativeOptions options) => [
+        ..NativeBuild.LtoFlags(options, options.TargetOrHost.Platform, NativeBuild.LinksBitcodeFor(options.TargetOrHost))
+            .Where(static f => f.StartsWith("-flto", StringComparison.Ordinal)),
+    ];
+
+    /// <summary>One unit's IR to a native object file for this machine: <c>-O2</c>, or <c>-g -O0</c> for a debug build.</summary>
+    public static NativeBuildResult CompileIr(string llvmIr, string objectPath, bool optimise, bool debug) =>
+        CompileIr(llvmIr, objectPath, NativeOptions.Of(optimise, debug) with { Lto = LtoMode.Off });
+
+    /// <summary>The runtime to a native object file for this machine, as <see cref="CompileIr(string, string, bool, bool)" /> compiles a unit.</summary>
+    public static NativeBuildResult CompileRuntime(string objectPath, bool optimise, bool debug) =>
+        CompileRuntime(objectPath, NativeOptions.Of(optimise, debug) with { Lto = LtoMode.Off });
+
+    /// <summary>
+    ///     Compiles one unit's IR to an object file for the options' target,
+    ///     written whole or not at all.
+    /// </summary>
+    public static NativeBuildResult CompileIr(string llvmIr, string objectPath, NativeOptions options) {
+        var target = options.TargetOrHost;
         var temporary = objectPath + $".{Environment.ProcessId}.{Guid.NewGuid():N}.tmp";
         var irPath = temporary + ".ll";
         try {
-            File.WriteAllText(irPath, NativeBuild.PlatformAttributes is { } platform ? NativeBuild.WithHostAttributes(llvmIr, platform) : llvmIr);
-            var (exitCode, output) = Run(NativeBuild.CompilerPath, [..Flags(optimise, debug), "-Wno-override-module", "-c", "-x", "ir", irPath, "-o", temporary]);
+            File.WriteAllText(irPath, NativeBuild.ForTarget(llvmIr, target, Bitcode(options).Count > 0));
+            var (exitCode, output) = Run(NativeBuild.CompilerPath, [..target.ClangFlags, ..Flags(options), "-Wno-override-module", "-c", "-x", "ir", irPath, "-o", temporary]);
             if (exitCode != 0) {
                 return new(false, output);
             }
@@ -50,13 +76,18 @@ public static class NativeObjects {
         }
     }
 
-    /// <summary>Compiles the runtime's C source to an object file.</summary>
-    public static NativeBuildResult CompileRuntime(string objectPath, bool optimise, bool debug) {
+    /// <summary>Compiles the runtime's C source to an object file for the options' target.</summary>
+    public static NativeBuildResult CompileRuntime(string objectPath, NativeOptions options) {
+        var target = options.TargetOrHost;
+        if (!target.HasRuntime) {
+            return new(false, NativeBuild.NoRuntime(target));
+        }
+
         var temporary = objectPath + $".{Environment.ProcessId}.{Guid.NewGuid():N}.tmp";
         var source = temporary + ".c";
         try {
             File.WriteAllText(source, NativeBuild.RuntimeSource);
-            var (exitCode, output) = Run(NativeBuild.CompilerPath, [..Flags(optimise, debug), "-c", source, "-o", temporary]);
+            var (exitCode, output) = Run(NativeBuild.CompilerPath, [..target.ClangFlags, ..NativeBuild.SysrootFlags(options), ..Flags(options), "-c", source, "-o", temporary]);
             if (exitCode != 0) {
                 return new(false, output);
             }
@@ -69,12 +100,23 @@ public static class NativeObjects {
         }
     }
 
-    /// <summary>Links objects into an executable, which replaces the one there only once it is whole.</summary>
+    /// <summary>
+    ///     Links objects into an executable for the options' target, which
+    ///     replaces the one there only once it is whole. Objects that are
+    ///     bitcode (<see cref="Flags" />) are optimised together as they link.
+    /// </summary>
     /// <param name="options">What the profile strips, and whether it looks beside the executable for shared libraries.</param>
     public static NativeBuildResult Link(IReadOnlyList<string> objects, string outputPath, NativeOptions? options = null) {
+        options ??= NativeOptions.Of(false, true);
+        var target = options.TargetOrHost;
         var temporary = outputPath + $".{Environment.ProcessId}.tmp";
         try {
-            var (exitCode, output) = Run(NativeBuild.CompilerPath, LinkArguments(objects, temporary, NativeBuild.Host, options));
+            var lto = NativeBuild.LtoFlags(options, target.Platform, NativeBuild.LinksBitcodeFor(target));
+            List<string> arguments = [
+                ..target.ClangFlags, ..NativeBuild.SysrootFlags(options), ..lto.Count > 0 ? NativeBuild.CompileFlags(options) : [], ..lto,
+                ..LinkArguments(objects, temporary, target.Platform, options), ..NativeBuild.CrossLinkFlags(target),
+            ];
+            var (exitCode, output) = Run(NativeBuild.CompilerPath, arguments);
             if (exitCode != 0) {
                 return new(false, output);
             }

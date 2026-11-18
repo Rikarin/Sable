@@ -1,4 +1,3 @@
-using System.Runtime.InteropServices;
 using System.Text;
 using Sable.SIL;
 
@@ -21,10 +20,12 @@ namespace Sable.CodeGen;
 ///     </para>
 ///     <para>
 ///         The classification is the target's — the one the program is built
-///         for, which is the machine building it: AAPCS64 (Apple's and
-///         Linux's arm64) or the System V x86-64 ABI. An integer narrower
-///         than 32 bits, and <c>Bool</c>, is widened by the side the ABI
-///         says (<c>signext</c>, <c>zeroext</c>).
+///         for, the machine building it unless a target says otherwise:
+///         AAPCS64 (Apple's and Linux's arm64) or the System V x86-64 ABI.
+///         An integer narrower than 32 bits, and <c>Bool</c>, is widened by
+///         the side the ABI says (<c>signext</c>, <c>zeroext</c>).
+///         (WebAssembly's C ABI, which passes most structs through memory,
+///         is not written yet: there a struct crosses to C as on x86-64.)
 ///     </para>
 ///     <para>
 ///         AAPCS64: a struct of one to four floats or doubles of one kind
@@ -59,10 +60,11 @@ public sealed partial class LlvmEmitter {
     /// <summary>How C passes one value of a Sable type: how, as what LLVM type, with what attributes.</summary>
     sealed record CType(CPassing Passing, string Coerced, string Attributes);
 
-    static readonly bool IsArm64 = RuntimeInformation.OSArchitecture == Architecture.Arm64;
+    /// <summary>The target follows AAPCS64; otherwise the System V x86-64 ABI.</summary>
+    bool IsArm64 => _arch == "arm64";
 
     /// <summary>How C passes a value of the type as an argument.</summary>
-    static CType CArgument(SilType type) {
+    CType CArgument(SilType type) {
         if (type is not StructType structure) {
             return new(CPassing.Direct, Type(type), Extension(type));
         }
@@ -84,7 +86,7 @@ public sealed partial class LlvmEmitter {
     }
 
     /// <summary>How C returns a value of the type: null when through memory the caller gives (<c>sret</c>).</summary>
-    static CType? CResult(SilType type) {
+    CType? CResult(SilType type) {
         if (type is not StructType structure) {
             return new(CPassing.Direct, Type(type), Extension(type));
         }
@@ -158,7 +160,7 @@ public sealed partial class LlvmEmitter {
     ///     The C functions the module calls: each declared by its C name,
     ///     with a thunk of Sable's signature that calls it as C would.
     /// </summary>
-    static string ForeignFunctions(SilModule module) {
+    string ForeignFunctions(SilModule module) {
         var text = new StringBuilder();
         var declared = new HashSet<string>(StringComparer.Ordinal);
         foreach (var (name, (symbol, type)) in module.Foreign) {

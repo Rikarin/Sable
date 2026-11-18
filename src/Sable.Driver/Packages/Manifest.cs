@@ -33,24 +33,33 @@ public sealed record DependencySpec(
     ///     <c>when</c> names another operating system or architecture. The
     ///     resolver and the lock file keep it either way.
     /// </summary>
-    public bool AppliesHere => When is null || DependencyCondition.Holds(When);
+    public bool AppliesHere => AppliesTo(Sable.Syntax.ParseOptions.HostOs, Sable.Syntax.ParseOptions.HostArch);
+
+    /// <summary>Whether it applies to a build for the target, its operating system and architecture as <c>#if</c> names them.</summary>
+    public bool AppliesTo(string os, string arch) => When is null || DependencyCondition.Holds(When, os, arch);
 }
 
 /// <summary>
 ///     A dependency's <c>when</c> (docs/05 §5.2.4): <c>os(macos|linux|windows)</c>
-///     or <c>arch(arm64|x64)</c>, applied to the target being built — today
-///     always this machine, since there is no cross-compilation.
+///     or <c>arch(arm64|x64)</c>, applied to the target being built: this
+///     machine, or the one <c>--target</c> names.
 /// </summary>
 public static class DependencyCondition {
     public static bool IsValid(string text) => Parse(text) is not null;
 
-    public static bool Holds(string text) =>
+    /// <summary>Whether the condition holds on this machine.</summary>
+    public static bool Holds(string text) => Holds(text, Sable.Syntax.ParseOptions.HostOs, Sable.Syntax.ParseOptions.HostArch);
+
+    /// <summary>
+    ///     Whether the condition holds for a target, its operating system and
+    ///     architecture as <c>#if</c> names them (<c>macos</c>, <c>x86_64</c>):
+    ///     the manifest's <c>x64</c> is <c>#if</c>'s <c>x86_64</c>.
+    /// </summary>
+    public static bool Holds(string text, string os, string arch) =>
         Parse(text) switch {
-            ("os", "macos") => OperatingSystem.IsMacOS(),
-            ("os", "linux") => OperatingSystem.IsLinux(),
-            ("os", "windows") => OperatingSystem.IsWindows(),
-            ("arch", "arm64") => System.Runtime.InteropServices.RuntimeInformation.OSArchitecture == System.Runtime.InteropServices.Architecture.Arm64,
-            ("arch", "x64") => System.Runtime.InteropServices.RuntimeInformation.OSArchitecture == System.Runtime.InteropServices.Architecture.X64,
+            ("os", var name) => name == os,
+            ("arch", "x64") => arch == "x86_64",
+            ("arch", var name) => name == arch,
             _ => false,
         };
 
@@ -237,7 +246,7 @@ public sealed partial class Manifest {
             }
 
             if (root["targets"] is not null) {
-                Warn(root, "targets", "targets", "per-target settings wait on cross-compilation (docs/05 §5.2.10); ignored");
+                Warn(root, "targets", "targets", "per-target settings (a runtime profile, reflection) are not built yet (docs/05 §5.2.10); ignored. To build for another machine, pass --target");
             }
 
             var package = Table(root, "package", "package") is { } p ? ReadPackage(p) : null;

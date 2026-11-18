@@ -291,8 +291,9 @@ with both kinds is an error, so there is never a question which one applies.
 ### 5.2.10 Not built yet
 
 - Workspace inheritance: `shared` and `.workspace` (§5.2.3).
-- Per-target settings (`[targets.*]`: runtime profile, reflection), waiting on
-  cross-compilation; `when:` covers `os()` and `arch()` only.
+- Per-target settings (`[targets.*]`: runtime profile, reflection); `when:`
+  covers `os()` and `arch()` only. `sable build --target <triple>` builds for
+  another machine, and `when:` is tested against that target.
 - The language server showing a manifest's evaluation errors (the effect
   rules, a trap) in the editor; it type-checks manifests, and logs the rest.
 - A manifest's `const`s and `comptime` blocks follow the manifest's rules

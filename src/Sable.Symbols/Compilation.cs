@@ -56,10 +56,13 @@ public sealed partial class Compilation {
         // given, so that those keep their places (CoreLibrary). A
         // compilation made from another passes the core's trees back in;
         // they are not added twice. Files that declare Sable.Core themselves
-        // are the core, and the embedded one stays out.
+        // are the core, and the embedded one stays out. The core is parsed
+        // for the target the program's files are: what its '#if os(...)' says
+        // follows what theirs does.
+        var target = syntaxTrees.FirstOrDefault(static t => !CoreLibrary.Contains(t))?.Options ?? options;
         SyntaxTrees = CoreLibrary.IsBroughtBy(syntaxTrees)
             ? [..syntaxTrees.Where(static t => !CoreLibrary.Contains(t))]
-            : [..syntaxTrees.Where(static t => !CoreLibrary.Contains(t)), ..CoreLibrary.Trees];
+            : [..syntaxTrees.Where(static t => !CoreLibrary.Contains(t)), ..CoreLibrary.TreesFor(target)];
         Options = options;
 
         var coreModule = new ModuleSymbol("Sable.Core");

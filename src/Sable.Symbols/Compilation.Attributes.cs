@@ -129,11 +129,10 @@ public sealed partial class Compilation {
                     continue;
                 }
 
-                ReportDeclaration(
-                    ErrorCode.ERR_UnknownAttribute,
-                    attribute.Name.Span,
-                    $"there is no attribute '@{name}'"
-                );
+                // A struct conforming to Attribute, once every type is
+                // declared and its conformances known.
+                var unknown = attribute;
+                TypeBinder.DeferLate(() => CheckUserAttribute(tree, unknown, name));
                 continue;
             }
 
@@ -161,6 +160,107 @@ public sealed partial class Compilation {
                 TypeBinder.DeferLate(() => CheckImmutable(immutableClass));
             }
         }
+    }
+
+    readonly Dictionary<AttributeSyntax, (NamedTypeSymbol Type, BoundExpression Value)> _userAttributes = [];
+
+    /// <summary>
+    ///     A user-defined attribute (SYNTAX.md §22): a struct conforming to
+    ///     Sable.Core's <c>Attribute</c>, named as the attribute is, whose
+    ///     arguments are an initialiser's, and constants. Any other name is
+    ///     no attribute (S3092).
+    /// </summary>
+    void CheckUserAttribute(SyntaxTree tree, AttributeSyntax attribute, string name) {
+        var scope = _fileScopes[tree];
+        var context = AttributeContext(attribute) ?? scope.Module;
+        var found = attribute.Name is SimpleNameTypeSyntax { TypeArgumentList: null } simple
+            ? TypeBinder.Lookup(simple.Identifier.Text, context, scope, simple.Span, report: false)
+            : null;
+        if (found is not NamedTypeSymbol { TypeKind: TypeKind.Struct } type || Core.Attribute is not { } protocol
+            || !type.BaseTypes.Contains(protocol)) {
+            ReportDeclaration(
+                ErrorCode.ERR_UnknownAttribute,
+                attribute.Name.Span,
+                found is NamedTypeSymbol other && Core.Attribute is not null
+                    ? $"'{other.ToDisplayString()}' is not an attribute: an attribute of the program's own is a struct conforming to 'Attribute'"
+                    : $"there is no attribute '@{name}'"
+            );
+            return;
+        }
+
+        if (type.IsGenericDefinition) {
+            ReportDeclaration(ErrorCode.ERR_MalformedAttribute, attribute.Span, $"'@{name}' is generic, and an attribute's type is not");
+            return;
+        }
+
+        var binder = new Binder(this, scope, context);
+        var value = binder.BindAttribute(attribute, type);
+        foreach (var diagnostic in binder.Diagnostics) {
+            _declarationDiagnostics.Add(diagnostic);
+        }
+
+        if (value.HasError) {
+            return;
+        }
+
+        // What reflection gives back is made again each time it is asked
+        // for, so it can be nothing but constants.
+        if (FirstNonConstant(value is BoundCall call ? call.Arguments : []) is { } variable) {
+            ReportDeclaration(
+                ErrorCode.ERR_AttributeArgumentNotConstant,
+                variable.Syntax.Span,
+                $"an argument of '@{name}' is a constant — a literal, a case, or an array or tuple of them — and this is not"
+            );
+            return;
+        }
+
+        _userAttributes[attribute] = (type, value);
+    }
+
+    /// <summary>The declaration an attribute is written on, as a symbol, if it is one.</summary>
+    Symbol? AttributeContext(AttributeSyntax attribute) {
+        for (var node = attribute.Parent; node is not null; node = node.Parent) {
+            if (GetDeclaredSymbol(node) is { } symbol) {
+                return symbol is FunctionSymbol or NamedTypeSymbol ? symbol : symbol.ContainingSymbol;
+            }
+        }
+
+        return null;
+    }
+
+    static BoundExpression? FirstNonConstant(IEnumerable<BoundExpression> arguments) {
+        foreach (var argument in arguments) {
+            var bad = argument switch {
+                BoundLiteral => null,
+                BoundMetatype => null,
+                BoundConversion { ConversionKind: ConversionKind.Identity or ConversionKind.LiteralTyping or ConversionKind.OptionalWrap or ConversionKind.UnionInjection or ConversionKind.Existential } conversion => FirstNonConstant([conversion.Operand]),
+                BoundUnaryOperator { Method: null } unary => FirstNonConstant([unary.Operand]),
+                BoundBinaryOperator { Method: null } binary => FirstNonConstant([binary.Left, binary.Right]),
+                BoundArray array => FirstNonConstant(array.Elements),
+                BoundTuple tuple => FirstNonConstant(tuple.Elements),
+                BoundUnionCaseConstruction construction => FirstNonConstant(construction.Arguments),
+                _ => argument,
+            };
+
+            if (bad is not null) {
+                return bad;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    ///     The program's own attributes written on a declaration, each its
+    ///     struct and the value its arguments make, in the order written.
+    /// </summary>
+    public IReadOnlyList<(NamedTypeSymbol Type, BoundExpression Value)> UserAttributesOf(Symbol symbol) {
+        var definition = symbol is NamedTypeSymbol named ? named.OriginalDefinition : symbol;
+        if (definition.DeclaringSyntax is not [var declaration, ..]) {
+            return [];
+        }
+
+        return [..AttributesOf(declaration).Where(_userAttributes.ContainsKey).Select(a => _userAttributes[a])];
     }
 
     /// <summary>

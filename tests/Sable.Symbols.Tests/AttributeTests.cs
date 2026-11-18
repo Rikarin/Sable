@@ -54,6 +54,49 @@ public sealed class AttributeTests {
     }
 
     [Fact]
+    public void AStructConformingToAttributeIsOne() =>
+        AssertClean("""
+                    module M
+                    struct Route: Attribute {
+                        var path: String
+                        var method: String = "GET"
+                    }
+                    @Route("/users") @Route("/users", method: "POST") struct Users { }
+                    @Route(path: "/f") fn f() { }
+                    """);
+
+    const string Attributes = """
+                              module M
+                              struct Route: Attribute {
+                                  var path: String
+                              }
+                              struct Plain {
+                                  var n: Int
+                              }
+                              fn base() -> String { return "/" }
+
+                              """;
+
+    /// <summary>The arguments are checked as a call to the struct's initialisers would be.</summary>
+    [Theory]
+    [InlineData("@Route(3)\nstruct S { }")]
+    [InlineData("@Route(\"/a\", verb: \"GET\")\nstruct S { }")]
+    [InlineData("@Route\nstruct S { }")]
+    public void AnAttributesArgumentsAreAnInitialisers(string source) =>
+        Assert.NotEmpty(Errors(Attributes + source));
+
+    [Fact]
+    public void AnAttributesArgumentsAreConstants() =>
+        Assert.Equal(ErrorCode.ERR_AttributeArgumentNotConstant, Assert.Single(Errors(Attributes + "@Route(base())\nstruct S { }")).Code);
+
+    [Fact]
+    public void AStructNotConformingToAttributeIsNone() {
+        var error = Assert.Single(Errors(Attributes + "@Plain(n: 1)\nstruct S { }"));
+        Assert.Equal(ErrorCode.ERR_UnknownAttribute, error.Code);
+        Assert.Contains("'Plain' is not an attribute", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void TheAttributesThereAreAreAccepted() =>
         AssertClean("""
                     module M

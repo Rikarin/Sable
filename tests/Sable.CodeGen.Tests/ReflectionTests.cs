@@ -218,7 +218,7 @@ public sealed class ReflectionTests {
                     print((m.isPublic ? "public " : "") + m.signature)
                 }
                 print("\(t.conformances[0]) \(t.conformances[1])")
-                print(t.attributes[0])
+                print(t.attributeNames[0])
                 print("\(t.conforms(to: "Equatable")) \(t.conforms(to: "Hashable")) \(t.hasAttribute("reflectable")) \(t.hasAttribute("frozen"))")
                 if let deposit = t.method(named: "deposit") {
                     print("\(deposit.parameterTypeNames[0]) \(deposit.parameterNames[0]) \(deposit.returnTypeName == "Void" ? "_" : deposit.returnTypeName) \(deposit.name)")
@@ -398,6 +398,54 @@ public sealed class ReflectionTests {
                         print("caught \(error)")
                     }
                 }
+            """
+        );
+
+    /// <summary>
+    ///     An attribute of the program's own is a struct conforming to
+    ///     Attribute, its arguments an initialiser's; a @reflectable type's
+    ///     are values TypeInfo gives back, by their type, in the order written.
+    /// </summary>
+    [Fact]
+    public void TheProgramsOwnAttributesAreValuesReflectionGives() =>
+        Prints(
+            "2\nGET /users\nPOST /users\n-3 2 b\n0\n4\n1\n",
+            """
+            struct Route: Attribute {
+                var path: String
+                var method: String = "GET"
+            }
+
+            struct Weight: Attribute {
+                var value: Int
+                var tags: String[>..]
+            }
+
+            struct Unused: Attribute { }
+
+            @reflectable
+            @Route("/users")
+            @Weight(value: -3, tags: ["a", "b"])
+            @Route("/users", method: "POST")
+            struct Users {
+                var count: Int
+            }
+
+            @Route("/plain")
+            fn plain() -> Int { return 1 }
+            """,
+            """
+                let info = TypeInfo.of(Users.self)
+                let routes = info.attributes(of: Route.self)
+                print(routes.count)
+                for r in routes {
+                    print("\(r.method) \(r.path)")
+                }
+                let w = info.attributes(of: Weight.self)[0]
+                print("\(w.value) \(w.tags.count) \(w.tags[1])")
+                print(info.attributes(of: Unused.self).count)
+                print(info.attributeNames.count)
+                print(plain())
             """
         );
 }

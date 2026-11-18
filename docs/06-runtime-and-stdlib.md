@@ -183,7 +183,7 @@ let doc = try t.construct(args: ["title": "Untitled"])
 let result = try t.invoke("render", on: doc, args: [])
 
 // Attribute reading
-for attr in t.attributes(of: Serializable.self) { }
+for route in t.attributes(of: Route.self) { }  // Route: a struct conforming to Attribute
 
 // Dynamic lookup by name — the plugin story
 if let ty = Runtime.lookupType("App.Plugins.MyPlugin") { }

@@ -349,6 +349,40 @@ public sealed partial class Binder {
         return null;
     }
 
+    /// <summary>
+    ///     A user-defined attribute, <c>@Route("/users", method: "GET")</c>:
+    ///     its arguments as a call to one of the struct's initialisers, as
+    ///     <c>Route("/users", method: "GET")</c> would be — a value of the
+    ///     struct, which reflection gives back.
+    /// </summary>
+    public BoundExpression BindAttribute(AttributeSyntax attribute, NamedTypeSymbol type) {
+        PushScope();
+        var syntaxes = ImmutableArray.CreateBuilder<ExpressionSyntax>();
+        var labels = ImmutableArray.CreateBuilder<string?>();
+        foreach (var argument in attribute.ArgumentList?.Arguments ?? default) {
+            syntaxes.Add(argument.Expression);
+            labels.Add(argument.NameToken.IsNone ? null : argument.NameToken.Text);
+        }
+
+        var arguments = syntaxes.Select(e => BindExpression(e)).ToImmutableArray();
+        var initializers = type.GetMembers("init").OfType<FunctionSymbol>().Where(i => i.DeclaringSyntax.IsEmpty || IsAccessible(i)).ToImmutableArray();
+        BoundExpression bound;
+        if (initializers.IsEmpty) {
+            _diagnostics.Error(
+                ErrorCode.ERR_MalformedAttribute,
+                attribute.Span,
+                $"'{type.ToDisplayString()}' has no initialiser here, so '@{type.Name}' cannot make one"
+            );
+            bound = new BoundError(attribute, arguments.ToArray());
+        } else {
+            var group = new BoundFunctionGroup(attribute, new BoundTypeExpression(attribute.Name, type), initializers);
+            bound = BindCallToGroup(attribute, group, arguments, labels.ToImmutable(), syntaxes.ToImmutable(), type);
+        }
+
+        PopScope();
+        return bound;
+    }
+
     /// <summary>Binds a standalone statement, for tests and scripts.</summary>
     public BoundStatement BindStatementInNewScope(StatementSyntax statement) {
         PushScope();

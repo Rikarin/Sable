@@ -106,4 +106,42 @@ public sealed class LoweringGapTests {
                 print(rem(6.0, 3.0))
             """
         );
+
+    // ---- 'some P' parameters -------------------------------------------------
+
+    [Fact]
+    public void ASomeParameterIsAnAnonymousGeneric() =>
+        // One instance per type passed; one 'some P' passed on to another.
+        Prints(
+            "point 1\nlabel hi\n<point 1>\n<label hi>\n",
+            """
+            protocol Describable {
+                fn describe() -> String
+            }
+
+            struct Point: Describable {
+                var x: Int
+                fn describe() -> String { return "point \(x)" }
+            }
+
+            struct Label: Describable {
+                var text: String
+                fn describe() -> String { return "label " + text }
+            }
+
+            fn describeAny(_ value: some Describable) -> String {
+                return value.describe()
+            }
+
+            fn bracketed(_ value: some Describable) -> String {
+                return "<" + describeAny(value) + ">"
+            }
+            """,
+            """
+                print(describeAny(Point(x: 1)))
+                print(describeAny(Label(text: "hi")))
+                print(bracketed(Point(x: 1)))
+                print(bracketed(Label(text: "hi")))
+            """
+        );
 }

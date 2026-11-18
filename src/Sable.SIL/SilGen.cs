@@ -557,7 +557,49 @@ public sealed partial class SilGen {
     static IEnumerable<TypeParameterSymbol> TypeParametersOf(FunctionSymbol symbol) {
         var owner = Owner(symbol)?.OriginalDefinition;
         IEnumerable<TypeParameterSymbol> self = owner is { TypeKind: TypeKind.Protocol, SelfTypeParameter: { } selfParameter } ? [selfParameter] : [];
-        return self.Concat(owner?.TypeParameters ?? []).Concat(symbol.TypeParameters);
+        return self.Concat(owner?.TypeParameters ?? []).Concat(symbol.TypeParameters).Concat(OpaqueParametersOf(symbol));
+    }
+
+    /// <summary>The type parameter standing for each distinct <c>some P</c> a function's parameters have.</summary>
+    static readonly System.Runtime.CompilerServices.ConditionalWeakTable<FunctionSymbol, TypeParameterSymbol[]> s_opaqueParameters = new();
+
+    /// <summary>The <c>some P</c> each of those type parameters stands in for.</summary>
+    static readonly System.Runtime.CompilerServices.ConditionalWeakTable<TypeParameterSymbol, OpaqueTypeSymbol> s_opaqueOf = new();
+
+    /// <summary>
+    ///     A parameter of type <c>some P</c> is an anonymous generic parameter
+    ///     (docs/03 §3.1): each distinct one has a type parameter here, which a
+    ///     call binds to its argument's type, so the function is monomorphised
+    ///     as a generic one is. The binder gives two <c>some P</c> of the same
+    ///     P one type, so they share one parameter.
+    /// </summary>
+    static TypeParameterSymbol[] OpaqueParametersOf(FunctionSymbol symbol) =>
+        s_opaqueParameters.GetValue(symbol, static function => {
+            var opaques = new List<OpaqueTypeSymbol>();
+            foreach (var parameter in function.Parameters) {
+                if (parameter.Type is OpaqueTypeSymbol opaque && !opaques.Contains(opaque)) {
+                    opaques.Add(opaque);
+                }
+            }
+
+            return [..opaques.Select((opaque, i) => {
+                var parameter = new TypeParameterSymbol(opaque.ToDisplayString(), function, null, -1 - i);
+                s_opaqueOf.Add(parameter, opaque);
+                return parameter;
+            })];
+        });
+
+    /// <summary>A type with these type arguments in force, a <c>some P</c> parameter's type among them.</summary>
+    internal static TypeSymbol Substitute(TypeSubstitution substitution, TypeSymbol type) {
+        if (type is OpaqueTypeSymbol opaque) {
+            foreach (var parameter in substitution.Parameters) {
+                if (s_opaqueOf.TryGetValue(parameter, out var standsFor) && standsFor.Equals(opaque)) {
+                    return substitution.Lookup(parameter)!;
+                }
+            }
+        }
+
+        return substitution.Apply(type);
     }
 
     static bool IsGeneric(FunctionSymbol symbol) => TypeParametersOf(symbol).Any();
@@ -734,14 +776,18 @@ public sealed partial class SilGen {
         Owner(symbol) is not null && !symbol.IsStatic && symbol.FunctionKind is not (FunctionKind.Initializer or FunctionKind.Operator);
 
     FunctionType? SignatureOf(FunctionSymbol symbol, SyntaxNode at, TypeSubstitution substitution) {
-        SilType? Lower(TypeSymbol type) => this.Lower(substitution.Apply(type));
+        SilType? Lower(TypeSymbol type) => this.Lower(Substitute(substitution, type));
 
-        // An async function is an ordinary one: a task suspends only where
-        // it waits, in the runtime, with its whole stack (docs/04 §5).
-        if (symbol.IsRethrows) {
-            return Unsupported<FunctionType>(at, $"'{symbol.Name}', which is async or rethrows");
+        // An opaque result hides a type the body chooses, which an anonymous
+        // generic parameter of the same constraint would otherwise be taken for.
+        if (symbol.ReturnType is OpaqueTypeSymbol) {
+            return Unsupported<FunctionType>(at, $"a result of type '{symbol.ReturnType.ToDisplayString()}'");
         }
 
+        // An async function is an ordinary one: a task suspends only where
+        // it waits, in the runtime, with its whole stack (docs/04 §5). A
+        // 'rethrows' one throws what its function parameters throw, together:
+        // the binder has made that its thrown type.
         var parameters = ImmutableArray.CreateBuilder<SilType>();
 
         // 'self' comes first: by value, or by address when the method may change it.
@@ -775,7 +821,7 @@ public sealed partial class SilGen {
 
         SilType? thrown = null;
         if (symbol.ThrownType is { } thrownSymbol) {
-            if (substitution.Apply(thrownSymbol).Equals(Core.AnyError) || Lower(thrownSymbol) is not { } thrownType) {
+            if (Lower(thrownSymbol) is not { } thrownType) {
                 return Unsupported<FunctionType>(at, $"'{symbol.Name}', which throws '{thrownSymbol.ToDisplayString()}'");
             }
 
@@ -923,6 +969,18 @@ public sealed partial class SilGen {
                     : new ArrayType(SilType.Tuple([keyType, valueType]));
             }
 
+            // 'any Error': an object, which each error type boxes itself in.
+            case ExistentialTypeSymbol { Constraint: var constraint } when constraint.Equals(Core.Error):
+                return AnyErrorType();
+
+            // 'A | any Error' is any error at all.
+            case StructuralUnionTypeSymbol union when union.Cases.Any(c => c.Equals(Core.AnyError)):
+                return AnyErrorType();
+
+            // 'A | B': an enum with a case for each.
+            case StructuralUnionTypeSymbol union:
+                return LowerUnion(union);
+
             // 'any P': a closure per requirement, sharing one box with the value.
             case ExistentialTypeSymbol { Constraint: NamedTypeSymbol { TypeKind: TypeKind.Protocol } protocol }:
                 return ExistentialLayout(protocol);
@@ -952,7 +1010,7 @@ public sealed partial class SilGen {
                 }
 
                 SilType? thrown = null;
-                if (functionType.ThrownType is { } thrownSymbol && (thrownSymbol.Equals(Core.AnyError) || (thrown = Lower(thrownSymbol)) is null)) {
+                if (functionType.ThrownType is { } thrownSymbol && (thrown = Lower(thrownSymbol)) is null) {
                     return null;
                 }
 
@@ -1135,6 +1193,205 @@ public sealed partial class SilGen {
         var box = _module.AddType(new ClassType(name));
         box.Fields.Add(("value", type));
         return box;
+    }
+
+    // -----------------------------------------------------------------------
+    // Errors
+    // -----------------------------------------------------------------------
+
+    /// <summary>
+    ///     <c>any Error</c>, as bare <c>throws</c> throws it: an object, of a
+    ///     class with no fields that each error type has a box subclass of —
+    ///     so the error stays what it was, and <c>catch let e as IoError</c>
+    ///     asks the object's class, as a downcast does. A typed error is
+    ///     thrown as itself; this is what one becomes where <c>any Error</c>
+    ///     is wanted.
+    /// </summary>
+    internal ClassType AnyErrorType() =>
+        _module.FindType("any$Error") as ClassType ?? _module.AddType(new ClassType("any$Error"));
+
+    /// <summary>The subclass of <c>any Error</c>'s class that holds an error of one type.</summary>
+    internal ClassType ErrorBox(SilType error) {
+        var name = $"any$Error$of${Sanitise(error.ToString())}";
+        if (_module.FindType(name) is ClassType existing) {
+            return existing;
+        }
+
+        var box = _module.AddType(new ClassType(name) { Superclass = AnyErrorType() });
+        box.Fields.Add(("value", error));
+        return box;
+    }
+
+    /// <summary>The structural unions lowered so far: <c>A | B</c> is an enum with a case for each.</summary>
+    readonly HashSet<EnumType> _unions = [];
+
+    internal bool IsUnion(SilType type) => type is EnumType enumType && _unions.Contains(enumType);
+
+    /// <summary><c>A | B</c>: an enum whose cases are named for, and carry, the types it joins.</summary>
+    EnumType? LowerUnion(StructuralUnionTypeSymbol union) {
+        var cases = new List<SilType>();
+        foreach (var member in union.Cases) {
+            if (Lower(member) is not { } lowered || cases.Contains(lowered)) {
+                return null;
+            }
+
+            cases.Add(lowered);
+        }
+
+        var name = "Union$" + string.Join("$or$", cases.Select(static c => Sanitise(c.ToString())));
+        if (_module.FindType(name) is EnumType existing) {
+            return existing;
+        }
+
+        var enumType = Begin(union, new EnumType(name));
+        foreach (var lowered in cases) {
+            enumType.Cases.Add((Sanitise(lowered.ToString()), lowered));
+        }
+
+        _unions.Add(enumType);
+        return HoldsItself(enumType) ? null : enumType;
+    }
+
+    /// <summary>
+    ///     An owned error, as the error type wanted where it goes: put in a
+    ///     union that has a case for it, boxed as <c>any Error</c>, or — where
+    ///     the binder knows only that type can arrive, as a 'rethrows' call
+    ///     that throws less than its signature does — taken back out, with a
+    ///     trap should anything else turn up. Each case of a union is converted
+    ///     on its own. The instructions go into <paramref name="block" />,
+    ///     which ends as the block the converted error is in; null when there
+    ///     is no conversion between the two.
+    /// </summary>
+    internal SilValue? ConvertError(SilFunction function, ref SilBlock block, SilValue error, SilType to) {
+        var from = error.Type;
+        if (from == to) {
+            return error;
+        }
+
+        // A union, case by case, each converted and the results joined.
+        if (IsUnion(from) && from is EnumType union) {
+            var joined = function.AddBlock();
+            var result = joined.AddArgument(to);
+            var targets = new List<(int, SilBlock)>();
+            for (var i = 0; i < union.Cases.Count; i++) {
+                var target = function.AddBlock();
+                var payload = target.AddArgument(union.Cases[i].Payload!, !union.Cases[i].Payload!.IsTrivial);
+                targets.Add((i, target));
+
+                SilValue owned = payload.Type.IsTrivial ? payload : target.Append(new CopyValueInst(payload));
+                if (!from.IsTrivial) {
+                    target.Append(new DestroyValueInst(error));
+                }
+
+                var current = target;
+                if (ConvertError(function, ref current, owned, to) is not { } converted) {
+                    return null;
+                }
+
+                current.Append(new BranchInst(joined, [converted]));
+            }
+
+            block.Append(new SwitchEnumInst(error, targets, null));
+            block = joined;
+            return result;
+        }
+
+        // Into a union with a case for it.
+        if (IsUnion(to) && to is EnumType into && into.Cases.FindIndex(c => c.Payload == from) is var index and >= 0) {
+            return block.Append(new EnumInst(into, index, error));
+        }
+
+        var anyError = AnyErrorType();
+        if (to == anyError) {
+            var box = ErrorBox(from);
+            var boxed = block.Append(new AllocRefInst(box));
+            block.Append(new StoreInst(error, block.Append(new RefElementAddrInst(boxed, 0)), StoreKind.Init));
+            var upcast = block.Append(new CopyValueInst(block.Append(new UpcastInst(boxed, anyError))));
+            block.Append(new DestroyValueInst(boxed));
+            return upcast;
+        }
+
+        // Out of 'any Error': into a union, trying each case's box in turn;
+        // or as the one type it must be.
+        if (from == anyError) {
+            var cases = IsUnion(to) ? ((EnumType)to).Cases.Select(static c => c.Payload!).ToList() : [to];
+            var joined = function.AddBlock();
+            var result = joined.AddArgument(to);
+            foreach (var wanted in cases) {
+                var box = ErrorBox(wanted);
+                var isA = block.Append(new BuiltinInst($"class_is:{box.Name}", SilType.Bool, error));
+                var yes = function.AddBlock();
+                var no = function.AddBlock();
+                block.Append(new CondBranchInst(isA, yes, [], no, []));
+
+                var unboxed = yes.Append(new LoadInst(yes.Append(new RefElementAddrInst(yes.Append(new UncheckedRefCastInst(error, box)), 0))));
+                yes.Append(new DestroyValueInst(error));
+                var current = yes;
+                if (ConvertError(function, ref current, unboxed, to) is not { } converted) {
+                    return null;
+                }
+
+                current.Append(new BranchInst(joined, [converted]));
+                block = no;
+            }
+
+            block.Append(new CondFailInst(block.Append(new IntegerLiteralInst(SilType.Bool, 1)), $"an error that is not {to}"));
+            block.Append(new UnreachableInst());
+            block = joined;
+            return result;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    ///     A function value as a function type that throws where it does not,
+    ///     or throws another error: code that calls it, converting what it
+    ///     throws. Its context is a box holding the function converted.
+    /// </summary>
+    internal (string Name, FunctionType Type)? ConversionThunk(ThickFunctionType from, ThickFunctionType to) {
+        var name = $"$convert${Sanitise(from.ToString())}$to${Sanitise(to.ToString())}";
+        var code = to.Implementation;
+        if (_module.Find(name) is not null) {
+            return (name, code);
+        }
+
+        var source = from.Signature;
+        if (!source.Parameters.SequenceEqual(to.Signature.Parameters) || source.Result != to.Signature.Result
+            || source.Thrown is not null && to.Signature.Thrown is null) {
+            return null;
+        }
+
+        var thunk = new SilFunction(name, code);
+        var entry = thunk.AddBlock();
+        var arguments = to.Signature.Parameters.Select((p, i) => (SilValue)entry.AddArgument(p)).ToList();
+        var context = entry.AddArgument(SilType.Object);
+        var box = BoxType(from);
+        var callee = entry.Append(new LoadInst(entry.Append(new RefElementAddrInst(entry.Append(new UncheckedRefCastInst(context, box)), 0))));
+        if (source.Thrown is null) {
+            var result = entry.Append(new ApplyInst(callee, source.Result, [..arguments]));
+            entry.Append(new DestroyValueInst(callee));
+            entry.Append(new ReturnInst(source.Result == SilType.Unit ? null : result));
+        } else {
+            var normal = thunk.AddBlock();
+            var result = source.Result == SilType.Unit ? null : normal.AddArgument(source.Result);
+            var failed = thunk.AddBlock();
+            var error = failed.AddArgument(source.Thrown);
+            entry.Append(new TryApplyInst(callee, source.Result, [..arguments], normal, failed));
+            normal.Append(new DestroyValueInst(callee));
+            normal.Append(new ReturnInst(result));
+            failed.Append(new DestroyValueInst(callee));
+            var current = failed;
+            if (ConvertError(thunk, ref current, error, to.Signature.Thrown!) is not { } converted) {
+                return null;
+            }
+
+            current.Append(new ThrowInst(converted));
+        }
+
+        thunk.RemoveUnreachableBlocks();
+        _module.Add(thunk);
+        return (name, code);
     }
 
     readonly Dictionary<string, int> _closureCounts = new(StringComparer.Ordinal);
@@ -1680,7 +1937,7 @@ public sealed partial class SilGen {
                 : type is NamedTypeSymbol { IsGenericDefinition: true } definition
             && definition.TypeParameters.All(p => substitution.Lookup(p) is not null)
                 ? definition.Construct([..definition.TypeParameters.Select(p => substitution.Lookup(p)!)])
-                : substitution.Apply(type);
+                : Substitute(substitution, type);
 
         SilType? LowerType(TypeSymbol type) => generator.Lower(Sub(type));
 
@@ -2119,6 +2376,9 @@ public sealed partial class SilGen {
                 case BoundConversion { ConversionKind: ConversionKind.Identity } conversion:
                     return Borrow(conversion.Operand);
 
+                case BoundConversion { ConversionKind: ConversionKind.Existential, Type: OpaqueTypeSymbol } opened:
+                    return Borrow(opened.Operand);
+
                 // A stored field of something borrowed is itself borrowed.
                 case BoundFieldAccess { Receiver: { } receiver, Field: { IsComputed: false, IsStatic: false } field }
                     when Sub(receiver.Type).TypeKind == TypeKind.Struct && IsBorrowable(receiver) && !IsInlineType(receiver.Type): {
@@ -2312,14 +2572,30 @@ public sealed partial class SilGen {
                 return;
             }
 
-            if (handler.Type != error.Type) {
-                Fail(at, $"an error of type {error.Type} converted to {handler.Type}");
+            if (Convert(Owned(error), handler.Type, at) is not { } converted) {
                 return;
             }
 
             DestroyTemporaries(handler.Temporaries);
             RunDefers(handler.Scopes);
-            Branch(handler.Block, Owned(error));
+            Branch(handler.Block, converted);
+        }
+
+        /// <summary>An owned error as the type a handler takes: into a union, into or out of 'any Error'.</summary>
+        SilValue? Convert(SilValue error, SilType to, SyntaxNode at) {
+            if (error.Type == to) {
+                return error;
+            }
+
+            _current ??= function.AddBlock();
+            var block = _current;
+            if (generator.ConvertError(function, ref block, error, to) is not { } converted) {
+                Fail(at, $"an error of type {error.Type} converted to {to}");
+                return null;
+            }
+
+            _current = block;
+            return converted;
         }
 
         /// <summary>The function's own throw, as a handler.</summary>
@@ -3063,6 +3339,36 @@ public sealed partial class SilGen {
                     return;
                 }
 
+                // 'let e as IoError' on a union: the case that carries it.
+                case BoundTypeTestPattern test when generator.IsUnion(value.Type) && LowerType(test.TestedType) is { } tested
+                                                    && ((EnumType)value.Type).Cases.FindIndex(c => c.Payload == tested) is var index and >= 0: {
+                    var target = function.AddBlock();
+                    var payload = Payload(target, tested);
+                    Jump(new SwitchEnumInst(value, [(index, target)], failed));
+                    _current = target;
+                    if (test.Local is { } local) {
+                        BindLocal(local, payload, test.Syntax);
+                    }
+
+                    Branch(matched);
+                    return;
+                }
+
+                // ... and on 'any Error': the object, if it boxes one.
+                case BoundTypeTestPattern test when value.Type == generator.AnyErrorType() && LowerType(test.TestedType) is { } tested: {
+                    var box = generator.ErrorBox(tested);
+                    var isA = Emit(new BuiltinInst($"class_is:{box.Name}", SilType.Bool, value));
+                    var target = function.AddBlock();
+                    Jump(new CondBranchInst(isA, target, [], failed, []));
+                    _current = target;
+                    if (test.Local is { } local) {
+                        BindLocal(local, Emit(new LoadInst(Emit(new RefElementAddrInst(Emit(new UncheckedRefCastInst(value, box)), 0)))), test.Syntax);
+                    }
+
+                    Branch(matched);
+                    return;
+                }
+
                 default:
                     Fail(pattern.Syntax, $"the pattern '{Describe(pattern.Syntax)}'");
                     return;
@@ -3134,6 +3440,20 @@ public sealed partial class SilGen {
                 case BoundConversion { ConversionKind: ConversionKind.OptionalWrap } conversion:
                     return Wrap(conversion);
 
+                // A value passed as 'some P' is passed as it is: the callee is
+                // an instance for its type.
+                case BoundConversion { ConversionKind: ConversionKind.Existential, Type: OpaqueTypeSymbol } opened:
+                    return Expression(opened.Operand);
+
+                // An error as 'any Error': boxed, keeping what it was.
+                case BoundConversion { ConversionKind: ConversionKind.Existential } toError when Sub(toError.Type).Equals(Core.AnyError): {
+                    if (Expression(toError.Operand) is not { } error) {
+                        return null;
+                    }
+
+                    return Convert(Owned(error), generator.AnyErrorType(), toError.Syntax);
+                }
+
                 case BoundConversion { ConversionKind: ConversionKind.Existential } conversion:
                     return MakeExistential(conversion);
 
@@ -3149,6 +3469,10 @@ public sealed partial class SilGen {
                     return ReferenceTo(target);
 
                 // An object as one of its superclasses: the same object, owned as that.
+                // A function as a function type that throws more: a thunk.
+                case BoundConversion { ConversionKind: ConversionKind.Upcast } functionConversion when Sub(functionConversion.Type) is FunctionTypeSymbol:
+                    return FunctionConversion(functionConversion);
+
                 case BoundConversion { ConversionKind: ConversionKind.Upcast } conversion: {
                     if (LowerType(conversion.Type) is not ClassType target || Expression(conversion.Operand) is not { Type: ClassType } value) {
                         return Missing(conversion, $"the conversion to '{conversion.Type.ToDisplayString()}'");
@@ -3984,6 +4308,25 @@ public sealed partial class SilGen {
         /// </summary>
         SilValue? UserBinary(BoundBinaryOperator binary, FunctionSymbol method) {
             if (OperatorWitness(method, binary.Left.Type) is not { } callee) {
+                // An enum that says it is Equatable and writes no '==' of
+                // its own is compared by case, as one that says nothing is.
+                if (method.Name == "==" && binary.OperatorKind is BinaryOperatorKind.Equal or BinaryOperatorKind.NotEqual or BinaryOperatorKind.UserDefined
+                    && Sub(binary.Left.Type) is NamedTypeSymbol { TypeKind: TypeKind.Enum } && LowerType(binary.Left.Type) is { } enumType && IsPayloadFree(enumType)) {
+                    if (Borrow(binary.Left) is not { } left) {
+                        return null;
+                    }
+
+                    if (Borrow(binary.Right) is not { } right) {
+                        End(left);
+                        return null;
+                    }
+
+                    var compared = SameCase(left, right, binary.OperatorKind != BinaryOperatorKind.NotEqual);
+                    End(right);
+                    End(left);
+                    return compared;
+                }
+
                 return Missing(binary, $"'{method.Name}' for '{Sub(binary.Left.Type).ToDisplayString()}'");
             }
 
@@ -4415,6 +4758,16 @@ public sealed partial class SilGen {
                     : Emit(new BuiltinInst("not_Bool", SilType.Bool, equal));
             }
 
+            // An enum with no payloads and no '==' of its own is equal to
+            // another when the two are the same case.
+            if (binary.OperatorKind is BinaryOperatorKind.Equal or BinaryOperatorKind.NotEqual
+                && IsPayloadFree(left.Type) && right.Type == left.Type) {
+                var compared = SameCase(left, right, binary.OperatorKind == BinaryOperatorKind.Equal);
+                End(right);
+                End(left);
+                return compared;
+            }
+
             var op = binary.OperatorKind switch {
                 BinaryOperatorKind.Add when left.Type == SilType.String => "string_concat",
                 BinaryOperatorKind.Add => "add",
@@ -4447,6 +4800,36 @@ public sealed partial class SilGen {
             End(right);
             End(left);
             return result;
+        }
+
+        static bool IsPayloadFree(SilType type) =>
+            type is EnumType { Cases.Count: > 0 } enumType && enumType.Cases.All(static c => c.Payload is null);
+
+        /// <summary>Whether two payload-free enum values are the same case (or, with <paramref name="equal" /> false, different ones).</summary>
+        SilValue SameCase(SilValue left, SilValue right, bool equal) {
+            var enumType = (EnumType)left.Type;
+            var first = CaseNumber(left, enumType);
+            var second = CaseNumber(right, enumType);
+            return Emit(new BuiltinInst(equal ? "cmp_eq_Int" : "cmp_ne_Int", SilType.Bool, first, second));
+        }
+
+        /// <summary>Which case a payload-free enum value is, as an Int: one block per case, joined.</summary>
+        SilValue CaseNumber(SilValue value, EnumType type) {
+            var joined = function.AddBlock();
+            var number = joined.AddArgument(SilType.Int);
+            var targets = new List<(int, SilBlock)>();
+            for (var i = 0; i < type.Cases.Count; i++) {
+                targets.Add((i, function.AddBlock()));
+            }
+
+            Jump(new SwitchEnumInst(value, targets, null));
+            foreach (var (index, block) in targets) {
+                _current = block;
+                Branch(joined, Emit(new IntegerLiteralInst(SilType.Int, index)));
+            }
+
+            _current = joined;
+            return number;
         }
 
         static bool IsNone(BoundExpression expression) =>
@@ -4605,7 +4988,9 @@ public sealed partial class SilGen {
                 return Expression(tryExpression.Expression);
             }
 
-            var errorType = ThrownBy(tryExpression.Expression);
+            // What the catch's 'error' is, when it names it; otherwise
+            // whatever the expression can throw.
+            var errorType = tryExpression.ErrorLocal is { } named ? LowerType(named.Type) : ThrownBy(tryExpression.Expression);
             if (errorType is null) {
                 return Missing(tryExpression, "a 'try' whose error type has no SIL type yet");
             }
@@ -4674,27 +5059,58 @@ public sealed partial class SilGen {
             return result ?? (SilValue)UnitValue.Instance;
         }
 
-        /// <summary>The error type of the first throwing call inside an expression.</summary>
+        /// <summary>The error type of the throwing calls inside an expression: one's, or the union of theirs.</summary>
         SilType? ThrownBy(BoundNode node) {
-            if (node is BoundCall { Function.ThrownType: { } thrown }) {
-                return LowerType(thrown);
-            }
+            var thrown = new List<TypeSymbol>();
+            CollectThrown(node, thrown);
+            return thrown.Count == 0 ? null
+                : thrown.Any(t => t.Equals(Core.AnyError)) ? LowerType(Core.AnyError)
+                : LowerType(StructuralUnionTypeSymbol.Create(thrown));
+        }
 
-            if (node is BoundIndirectCall { Callee.Type: FunctionTypeSymbol { ThrownType: { } indirectThrown } }) {
-                return LowerType(indirectThrown);
+        void CollectThrown(BoundNode node, List<TypeSymbol> into) {
+            switch (node) {
+                // A 'rethrows' callee throws what its arguments do, not all its signature allows.
+                case BoundCall { Function.IsRethrows: true } rethrowing:
+                    if (RethrownBy(rethrowing) is { } rethrown) {
+                        into.Add(Sub(rethrowing.Substitution.Apply(rethrown)));
+                    }
+
+                    break;
+
+                case BoundCall { Function.ThrownType: { } thrown } call:
+                    into.Add(Sub(call.Substitution.Apply(thrown)));
+                    break;
+
+                case BoundIndirectCall { Callee.Type: FunctionTypeSymbol { ThrownType: { } indirectThrown } }:
+                    into.Add(Sub(indirectThrown));
+                    break;
             }
 
             foreach (var child in node.Children) {
-                if (child is BoundClosure) {
-                    continue;
+                if (child is not BoundClosure) {
+                    CollectThrown(child, into);
                 }
+            }
+        }
 
-                if (ThrownBy(child) is { } found) {
-                    return found;
+        /// <summary>
+        ///     What a call to a 'rethrows' function can throw: what the
+        ///     arguments it was given throw, before they were converted to its
+        ///     parameters' types — as the binder decided whether it needs 'try'.
+        /// </summary>
+        static TypeSymbol? RethrownBy(BoundCall call) {
+            TypeSymbol? thrown = null;
+            foreach (var argument in call.Arguments) {
+                var passed = argument is BoundConversion { ConversionKind: ConversionKind.Upcast or ConversionKind.Identity } conversion
+                    ? conversion.Operand.Type
+                    : argument.Type;
+                if ((passed is OptionalTypeSymbol optional ? optional.UnderlyingType : passed) is FunctionTypeSymbol { ThrownType: { } one }) {
+                    thrown = thrown is null ? one : StructuralUnionTypeSymbol.Create([thrown, one]);
                 }
             }
 
-            return null;
+            return thrown;
         }
 
         // -------------------------------------------------------------------
@@ -4942,14 +5358,16 @@ public sealed partial class SilGen {
             SilValue code = HasSelf(callee) && call.Receiver is not BoundSuperAccess && generator.IsDynamic(callee)
                 ? Emit(new ClassMethodInst(arguments[0], SlotName(callee), type))
                 : Emit(new FunctionRefInst(name, type));
-            return Invoke(code, type, arguments, borrows, call.Syntax);
+            // A 'rethrows' callee given functions that throw nothing throws
+            // nothing: the binder asked for no 'try', and nothing handles it.
+            return Invoke(code, type, arguments, borrows, call.Syntax, cannotThrow: callee.IsRethrows && RethrownBy(call) is null);
         }
 
         /// <summary>
         ///     Calls a function or a closure with borrowed arguments: <c>apply</c>,
         ///     or <c>try_apply</c> with the borrows ended on both of its edges.
         /// </summary>
-        SilValue? Invoke(SilValue reference, FunctionType type, List<SilValue> arguments, List<SilValue> borrows, SyntaxNode at) {
+        SilValue? Invoke(SilValue reference, FunctionType type, List<SilValue> arguments, List<SilValue> borrows, SyntaxNode at, bool cannotThrow = false) {
             if (type.Thrown is null) {
                 var apply = Emit(new ApplyInst(reference, type.Result, [..arguments]));
                 EndAll(borrows);
@@ -4973,7 +5391,12 @@ public sealed partial class SilGen {
                 Destroy(borrows[i]);
             }
 
-            RouteError(error, at);
+            if (cannotThrow) {
+                Destroy(error);
+                Jump(new UnreachableInst());
+            } else {
+                RouteError(error, at);
+            }
 
             _current = normal;
             for (var i = borrows.Count - 1; i >= 0; i--) {
@@ -5011,6 +5434,23 @@ public sealed partial class SilGen {
                 }
             }
 
+            // A 'some P' parameter stands for the type of what is passed to it.
+            foreach (var opaque in OpaqueParametersOf(callee)) {
+                var standsFor = s_opaqueOf.TryGetValue(opaque, out var found) ? found : null;
+                foreach (var (parameter, argument) in callee.Parameters.Zip(call.Arguments)) {
+                    if (!parameter.Type.Equals(standsFor)) {
+                        continue;
+                    }
+
+                    var passed = Sub(argument is BoundConversion { ConversionKind: ConversionKind.Existential, Type: OpaqueTypeSymbol } opened
+                        ? opened.Operand.Type
+                        : argument.Type);
+
+                    // Two arguments of different types for one 'some P' have no one instance.
+                    map[opaque] = map.TryGetValue(opaque, out var earlier) && !earlier.Equals(passed) ? ErrorTypeSymbol.Instance : passed;
+                }
+            }
+
             return new(map);
         }
 
@@ -5025,6 +5465,34 @@ public sealed partial class SilGen {
                     : null,
             };
             return self is NamedTypeSymbol concrete ? Implementation(concrete, call.Function) : null;
+        }
+
+        /// <summary>
+        ///     A function value as a function type that throws where it did
+        ///     not, or throws another error: the same function, when the two
+        ///     lower alike; otherwise a thunk over it, which converts errors.
+        /// </summary>
+        SilValue? FunctionConversion(BoundConversion conversion) {
+            if (LowerType(conversion.Type) is not ThickFunctionType target || LowerType(conversion.Operand.Type) is not ThickFunctionType source) {
+                return Missing(conversion, $"the conversion to '{conversion.Type.ToDisplayString()}'");
+            }
+
+            if (source == target) {
+                return Expression(conversion.Operand);
+            }
+
+            if (generator.ConversionThunk(source, target) is not { } thunk) {
+                return Missing(conversion, $"the conversion to '{conversion.Type.ToDisplayString()}'");
+            }
+
+            if (Expression(conversion.Operand) is not { } value) {
+                return null;
+            }
+
+            var box = generator.BoxType(source);
+            var boxed = Emit(new AllocRefInst(box));
+            Emit(new StoreInst(Owned(value), Emit(new RefElementAddrInst(boxed, 0)), StoreKind.Init));
+            return Emit(new PartialApplyInst(Emit(new FunctionRefInst(thunk.Name, thunk.Type)), boxed, target));
         }
 
         /// <summary>A value as <c>any P</c>: boxed, with a closure per requirement over the box.</summary>

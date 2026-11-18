@@ -1356,7 +1356,8 @@ public static class SilBuiltins {
         }
 
         foreach (var real in new[] { SilType.F64, SilType.F32 }) {
-            foreach (var op in new[] { "add", "sub", "mul", "div", "min", "max" }) {
+            // 'rem' is C's fmod (LLVM's frem): exact, with the sign of the dividend.
+            foreach (var op in new[] { "add", "sub", "mul", "div", "rem", "min", "max" }) {
                 Binary(op, real, real);
             }
 

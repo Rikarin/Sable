@@ -1296,6 +1296,7 @@ public sealed partial class SilInterpreter(SilModule module, int stepLimit = 10_
                 "sub" => a - b,
                 "mul" => a * b,
                 "div" => a / b,
+                "rem" => a % b,
                 "neg" => -a,
                 "abs" => Math.Abs(a),
                 "min" => float.IsNaN(a) ? b : float.IsNaN(b) ? a : Math.Min(a, b),
@@ -1522,6 +1523,7 @@ public sealed partial class SilInterpreter(SilModule module, int stepLimit = 10_
                 ("sub_F64", [double a, double b]) => a - b,
                 ("mul_F64", [double a, double b]) => a * b,
                 ("div_F64", [double a, double b]) => a / b,
+                ("rem_F64", [double a, double b]) => a % b, // C#'s '%' on doubles is fmod
                 ("neg_F64", [double a]) => -a,
                 ("abs_F64", [double a]) => Math.Abs(a),
 

@@ -109,6 +109,11 @@ public static class NativeBuild {
 
             arguments.AddRange(["-Wno-override-module", irPath, runtime, "-o", outputPath]);
 
+            // 'frem' becomes a call to fmod, which glibc keeps in libm.
+            if (OperatingSystem.IsLinux()) {
+                arguments.Add("-lm");
+            }
+
             var (exitCode, output) = Run(CompilerPath, arguments);
             if (exitCode == 0 && debug) {
                 ShipLldbPlugin(outputPath);

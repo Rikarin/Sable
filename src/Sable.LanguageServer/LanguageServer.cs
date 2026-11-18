@@ -25,6 +25,13 @@ public sealed class LanguageServerOptions {
     /// </summary>
     public Func<string, IReadOnlyList<LanguageProject>> ProjectsFor { get; init; } = static _ => [];
 
+    /// <summary>
+    ///     Where a diagnostic code's long-form page is, for the editor to link
+    ///     to (the driver's <c>DiagnosticDocs.Link</c>); null for a code that
+    ///     has none.
+    /// </summary>
+    public Func<string, string?> ExplainLink { get; init; } = static _ => null;
+
     /// <summary>How long the workspace must be quiet before diagnostics are recomputed.</summary>
     public TimeSpan DiagnosticsDelay { get; init; } = TimeSpan.FromMilliseconds(250);
 
@@ -69,14 +76,8 @@ public sealed partial class LanguageServer {
     readonly ConcurrentDictionary<string, CancellationTokenSource> _pending = new(StringComparer.Ordinal);
     readonly CancellationTokenSource _stopping = new();
     readonly SemaphoreSlim _changed = new(0);
-    readonly ConcurrentDictionary<string, bool> _published = new(StringComparer.Ordinal);
 
     Task _loading = Task.CompletedTask;
-    IReadOnlyList<string> _folders = [];
-    volatile bool _inlayHints = true;
-    volatile bool _lints = true;
-    bool _inlayHintRefresh;
-    int _nextRequest;
     bool _initialized;
     bool _shutdown;
 
@@ -89,63 +90,18 @@ public sealed partial class LanguageServer {
     Analysis BuildAnalysis(WorkspaceSnapshot snapshot, string key) {
         var project = snapshot.Layout.Projects.FirstOrDefault(p => p.Directory == key);
         var dependencies = project is null ? [] : _dependencies.For(project, snapshot, Log);
-        return Analysis.Build(snapshot, key, dependencies, _options.LibraryFor);
+        return Analysis.Build(
+            snapshot, key, dependencies, _options.LibraryFor, project?.Generate is { } generate ? trees => Generated(generate, trees) : null, project?.Lints);
     }
 
-    /// <summary>
-    ///     The packages under the folder, as the driver reads them. A failure
-    ///     is logged, and leaves every file loose.
-    /// </summary>
-    IReadOnlyList<LanguageProject> ReadProjects(string folder) {
+    /// <summary>The generators' output; a generator program that fails outright is logged, and leaves the package without it.</summary>
+    GeneratedTrees Generated(Func<IReadOnlyList<SyntaxTree>, GeneratedTrees> generate, IReadOnlyList<SyntaxTree> trees) {
         try {
-            var projects = _options.ProjectsFor(folder);
-            foreach (var project in projects) {
-                Log($"package {project.Name} in {project.Directory}: features [{string.Join(", ", project.Features)}], {project.Dependencies.Count} dependency file(s)");
-            }
-
-            return projects;
+            return generate(trees);
         } catch (Exception e) when (e is not OutOfMemoryException) {
-            Log($"cannot read the packages under {folder}: {e.Message}");
-            return [];
+            Log($"the source generators failed: {e.Message}");
+            return GeneratedTrees.None;
         }
-    }
-
-    /// <summary>The packages of every workspace folder; one two folders both hold is read once.</summary>
-    ProjectLayout LayoutOf(IReadOnlyList<string> roots) {
-        var projects = new List<LanguageProject>();
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var root in roots.Where(Directory.Exists)) {
-            projects.AddRange(ReadProjects(root).Where(p => seen.Add(Path.GetFullPath(p.Directory))));
-        }
-
-        return new(projects, roots);
-    }
-
-    /// <summary>
-    ///     Reads the packages of the folders again, then the files under
-    ///     <paramref name="added" />, after whatever loading is under way.
-    /// </summary>
-    void Load(IReadOnlyList<string> added) {
-        var roots = _folders;
-        var previous = _loading;
-        _loading = Task.Run(async () => {
-            try {
-                await previous;
-            } catch (Exception e) when (e is not OutOfMemoryException) {
-                // That load's failure was logged where it was awaited; this one starts afresh.
-            }
-
-            // The packages first: each file is parsed with its package's features.
-            _workspace.SetLayout(LayoutOf(roots));
-            var files = added.Where(Directory.Exists)
-                .SelectMany(Workspace.SourceFilesUnder)
-                .Distinct(StringComparer.Ordinal)
-                .AsParallel()
-                .Select(path => (path, _workspace.Parse(path, File.ReadAllText(path))))
-                .ToList();
-            _workspace.AddFromDisk(files);
-            Changed();
-        });
     }
 
     /// <summary>A file whose change can change the packages: a manifest, or the lock file.</summary>
@@ -199,7 +155,8 @@ public sealed partial class LanguageServer {
         var parameters = message.Get("params") ?? default;
 
         if (method is null) {
-            // A response to a request of ours; the server sends none it waits on.
+            // A response to a request of ours.
+            Answered(id, message);
             return true;
         }
 
@@ -275,21 +232,42 @@ public sealed partial class LanguageServer {
     RequestHandler? Handler(string method) =>
         method switch {
             "textDocument/completion" => CompletionAsync,
+            "completionItem/resolve" => CompletionResolveAsync,
             "textDocument/hover" => HoverAsync,
-            "textDocument/definition" => DefinitionAsync,
+            "textDocument/definition" or "textDocument/declaration" => DefinitionAsync,
+            "textDocument/typeDefinition" => TypeDefinitionAsync,
+            "textDocument/implementation" => ImplementationAsync,
             "textDocument/references" => ReferencesAsync,
+            "textDocument/documentHighlight" => DocumentHighlightAsync,
+            "workspace/symbol" => WorkspaceSymbolsAsync,
+            "textDocument/foldingRange" => FoldingRangesAsync,
+            "textDocument/selectionRange" => SelectionRangesAsync,
+            "textDocument/semanticTokens/full" => SemanticTokensFullAsync,
+            "textDocument/semanticTokens/range" => SemanticTokensRangeAsync,
+            "textDocument/codeAction" => CodeActionsAsync,
+            "textDocument/prepareCallHierarchy" => PrepareCallHierarchyAsync,
+            "callHierarchy/incomingCalls" => IncomingCallsAsync,
+            "callHierarchy/outgoingCalls" => OutgoingCallsAsync,
+            "textDocument/prepareTypeHierarchy" => PrepareTypeHierarchyAsync,
+            "typeHierarchy/supertypes" => SupertypesAsync,
+            "typeHierarchy/subtypes" => SubtypesAsync,
             "textDocument/prepareRename" => PrepareRenameAsync,
             "textDocument/rename" => RenameAsync,
             "textDocument/documentSymbol" => DocumentSymbolsAsync,
             "textDocument/signatureHelp" => SignatureHelpAsync,
             "textDocument/inlayHint" => InlayHintsAsync,
             "textDocument/formatting" => FormattingAsync,
+            "textDocument/rangeFormatting" => RangeFormattingAsync,
+            "textDocument/onTypeFormatting" => OnTypeFormattingAsync,
+            "textDocument/diagnostic" => DocumentDiagnosticsAsync,
+            "workspace/diagnostic" => WorkspaceDiagnosticsAsync,
             _ => null,
         };
 
     void HandleNotification(string method, JsonElement parameters) {
         switch (method) {
             case "initialized":
+                ClientInitialized();
                 return;
 
             case "$/cancelRequest":
@@ -324,11 +302,10 @@ public sealed partial class LanguageServer {
 
             case "textDocument/didClose": {
                 var uri = parameters.Get("textDocument")!.Value.GetString("uri")!;
+                // A file of the workspace goes back to what is on disk, and
+                // keeps being diagnosed; any other is gone, and the next round
+                // clears its diagnostics.
                 _workspace.Close(uri, _folders);
-                if (_published.TryRemove(uri, out _)) {
-                    _ = PublishAsync(uri, null, []);
-                }
-
                 Changed();
                 return;
             }
@@ -348,7 +325,7 @@ public sealed partial class LanguageServer {
                 }
 
                 // A manifest or the lock changed: the packages may have too.
-                if (packages && _folders.Count > 0) {
+                if (packages) {
                     Load([]);
                 }
 
@@ -356,23 +333,26 @@ public sealed partial class LanguageServer {
                 return;
             }
 
-            case "workspace/didChangeWorkspaceFolders": {
-                var change = parameters.Get("event");
-                var added = FoldersIn(change?.Get("added"));
-                var removed = FoldersIn(change?.Get("removed"));
-                var roots = _folders.Where(r => !removed.Contains(r)).Concat(added.Where(a => !_folders.Contains(a))).ToList();
-                _folders = roots;
-                foreach (var folder in removed) {
-                    _workspace.RemoveFromDisk(folder, roots);
+            case "textDocument/didSave": {
+                // The editor has the text already; but a client that watches
+                // no files says this much about a manifest saved.
+                if (parameters.Get("textDocument")?.GetString("uri") is { } uri && IsPackageFile(uri)) {
+                    Load([]);
                 }
 
-                Load(added);
-                Changed();
                 return;
             }
 
+            case "workspace/didChangeWorkspaceFolders":
+                ChangeFolders(parameters);
+                return;
+
             case "workspace/didChangeConfiguration":
-                ReadSettings(parameters.Get("settings"));
+                if (parameters.Get("settings")?.Get("sable") is { } settings) {
+                    ReadSettings(settings);
+                    Changed();
+                }
+
                 return;
 
             default:
@@ -380,217 +360,73 @@ public sealed partial class LanguageServer {
         }
     }
 
-    /// <summary>The paths of an array of <c>WorkspaceFolder</c>s.</summary>
-    static List<string> FoldersIn(JsonElement? folders) =>
-        folders is { ValueKind: JsonValueKind.Array } array
-            ? [..array.EnumerateArray().Select(static f => f.GetString("uri")).OfType<string>().Select(Workspace.PathOf).OfType<string>().Select(Path.GetFullPath)]
-            : [];
-
-    /// <summary>
-    ///     The editor's settings, from <c>initializationOptions</c> or
-    ///     <c>workspace/didChangeConfiguration</c>: <c>{ "inlayHints": { "enable": false }, "lints": { "enable": false } }</c>,
-    ///     under <c>"sable"</c> or not, with <c>true</c>/<c>false</c> for the
-    ///     object too. What is not said is left as it was.
-    /// </summary>
-    void ReadSettings(JsonElement? settings) {
-        if (settings is not { ValueKind: JsonValueKind.Object } found) {
-            return;
-        }
-
-        if (found.Get("sable") is { ValueKind: JsonValueKind.Object } nested) {
-            found = nested;
-        }
-
-        if (Enabled(found, "lints") is { } lints && lints != _lints) {
-            _lints = lints;
-            // Published diagnostics have them, or lack them: publish again.
-            Changed();
-        }
-
-        if (Enabled(found, "inlayHints") is { } hints && hints != _inlayHints) {
-            _inlayHints = hints;
-            if (_initialized && _inlayHintRefresh) {
-                _ = _channel.WriteAsync(new JsonObject {
-                    ["jsonrpc"] = "2.0",
-                    ["id"] = $"sable-{Interlocked.Increment(ref _nextRequest)}",
-                    ["method"] = "workspace/inlayHint/refresh"
-                });
-            }
-        }
-    }
-
-    static bool? Enabled(JsonElement settings, string name) =>
-        settings.Get(name) switch {
-            { ValueKind: JsonValueKind.True } => true,
-            { ValueKind: JsonValueKind.False } => false,
-            { ValueKind: JsonValueKind.Object } section => section.Get("enable") switch {
-                { ValueKind: JsonValueKind.True } => true,
-                { ValueKind: JsonValueKind.False } => false,
-                _ => null,
-            },
-            _ => null,
-        };
-
-    /// <summary>The workspace changed: diagnostics are due once it is quiet.</summary>
-    void Changed() => _changed.Release();
-
     JsonNode Initialize(JsonElement parameters) {
         _initialized = true;
-
-        // Every folder of a multi-root workspace; an older client names one.
-        var roots = FoldersIn(parameters.Get("workspaceFolders"));
-        if (roots.Count == 0 && (parameters.GetString("rootUri") is { } uri ? Workspace.PathOf(uri) : parameters.GetString("rootPath")) is { } root) {
-            roots.Add(Path.GetFullPath(root));
+        ReadClient(parameters);
+        _folders = [..FoldersOf(parameters).Distinct(StringComparer.Ordinal)];
+        if (_folders.Length > 0) {
+            Load(_folders);
         }
 
-        _folders = roots;
-        if (roots.Any(Directory.Exists)) {
-            Load(roots);
-        }
+        var capabilities = new JsonObject {
+            ["positionEncoding"] = "utf-16",
+            ["textDocumentSync"] = new JsonObject {
+                ["openClose"] = true,
+                ["change"] = 2,
+                ["save"] = new JsonObject { ["includeText"] = false }
+            },
+            ["workspace"] = new JsonObject {
+                ["workspaceFolders"] = new JsonObject { ["supported"] = true, ["changeNotifications"] = true }
+            },
+            ["completionProvider"] = new JsonObject {
+                ["triggerCharacters"] = new JsonArray("."),
+                ["resolveProvider"] = true
+            },
+            ["hoverProvider"] = true,
+            ["definitionProvider"] = true,
+            ["declarationProvider"] = true,
+            ["typeDefinitionProvider"] = true,
+            ["implementationProvider"] = true,
+            ["documentHighlightProvider"] = true,
+            ["workspaceSymbolProvider"] = true,
+            ["foldingRangeProvider"] = true,
+            ["selectionRangeProvider"] = true,
+            ["semanticTokensProvider"] = new JsonObject {
+                ["legend"] = SemanticTokensLegend(),
+                ["full"] = true,
+                ["range"] = true
+            },
+            ["codeActionProvider"] = new JsonObject { ["codeActionKinds"] = new JsonArray("quickfix") },
+            ["callHierarchyProvider"] = true,
+            ["typeHierarchyProvider"] = true,
+            ["referencesProvider"] = true,
+            ["renameProvider"] = new JsonObject { ["prepareProvider"] = true },
+            ["documentSymbolProvider"] = true,
+            ["signatureHelpProvider"] = new JsonObject {
+                ["triggerCharacters"] = new JsonArray("(", ","),
+                ["retriggerCharacters"] = new JsonArray(",")
+            },
+            ["inlayHintProvider"] = true,
+            ["documentFormattingProvider"] = true,
+            ["documentRangeFormattingProvider"] = true,
+            ["documentOnTypeFormattingProvider"] = new JsonObject { ["firstTriggerCharacter"] = "}" }
+        };
 
-        _inlayHintRefresh = parameters.Get("capabilities")?.Get("workspace")?.Get("inlayHint")?.GetBool("refreshSupport") ?? false;
-        ReadSettings(parameters.Get("initializationOptions"));
+        // A client that can pull diagnostics is not also sent them: it would
+        // show each twice. A change in one file can change another's, and
+        // the server lists the files nobody opened.
+        if (_pull) {
+            capabilities["diagnosticProvider"] = new JsonObject {
+                ["identifier"] = "sable",
+                ["interFileDependencies"] = true,
+                ["workspaceDiagnostics"] = true
+            };
+        }
 
         return new JsonObject {
-            ["capabilities"] = new JsonObject {
-                ["positionEncoding"] = "utf-16",
-                ["textDocumentSync"] = new JsonObject {
-                    ["openClose"] = true,
-                    ["change"] = 2
-                },
-                ["completionProvider"] = new JsonObject {
-                    ["triggerCharacters"] = new JsonArray("."),
-                    ["resolveProvider"] = false
-                },
-                ["hoverProvider"] = true,
-                ["definitionProvider"] = true,
-                ["referencesProvider"] = true,
-                ["renameProvider"] = new JsonObject { ["prepareProvider"] = true },
-                ["documentSymbolProvider"] = true,
-                ["signatureHelpProvider"] = new JsonObject {
-                    ["triggerCharacters"] = new JsonArray("(", ","),
-                    ["retriggerCharacters"] = new JsonArray(",")
-                },
-                ["inlayHintProvider"] = true,
-                ["documentFormattingProvider"] = true,
-                ["workspace"] = new JsonObject {
-                    ["workspaceFolders"] = new JsonObject { ["supported"] = true, ["changeNotifications"] = true }
-                }
-            },
+            ["capabilities"] = capabilities,
             ["serverInfo"] = new JsonObject { ["name"] = "sable-lsp", ["version"] = "0.1" }
         };
-    }
-
-    // -----------------------------------------------------------------------
-    // Diagnostics
-    // -----------------------------------------------------------------------
-
-    /// <summary>
-    ///     Recomputes and publishes the open documents' diagnostics each time
-    ///     the workspace has been quiet for the configured delay.
-    /// </summary>
-    async Task DiagnosticsLoopAsync(CancellationToken cancellation) {
-        while (!cancellation.IsCancellationRequested) {
-            await _changed.WaitAsync(cancellation);
-
-            // Debounce: wait until nothing has changed for a while.
-            do {
-                while (_changed.CurrentCount > 0) {
-                    await _changed.WaitAsync(cancellation);
-                }
-            } while (await _changed.WaitAsync(_options.DiagnosticsDelay, cancellation));
-
-            try {
-                await _loading;
-                await PublishDiagnosticsAsync(cancellation);
-            } catch (OperationCanceledException) when (!cancellation.IsCancellationRequested) {
-                // Superseded.
-            } catch (Exception e) when (e is not OperationCanceledException and not OutOfMemoryException) {
-                Log($"diagnostics failed: {e}");
-            }
-        }
-    }
-
-    async Task PublishDiagnosticsAsync(CancellationToken cancellation) {
-        var snapshot = _workspace.Current;
-        var published = new List<(Document Document, Analysis Analysis)>();
-        foreach (var document in snapshot.Documents.Values.Where(static d => d.IsOpen).OrderBy(snapshot.KeyOf, StringComparer.Ordinal)) {
-            cancellation.ThrowIfCancellationRequested();
-            var analysis = await _analyses.GetAsync(snapshot, snapshot.KeyOf(document));
-
-            // A document edited since is the next round's.
-            if (!ReferenceEquals(_workspace.Current.Find(document.Uri)?.Tree, document.Tree)) {
-                continue;
-            }
-
-            var diagnostics = WithLints(snapshot, analysis, document, analysis.DiagnosticsOf(document.Tree, cancellation));
-            _published[document.Uri] = true;
-            published.Add((document, analysis));
-            await PublishAsync(document.Uri, document.Version, [..diagnostics.Select(d => DiagnosticNode(document, d))]);
-        }
-
-        // Use after move, overlapping accesses and dangling references are
-        // found on SIL, by lowering each package's compilation — slower than
-        // binding, so the type errors above go out first, and these follow,
-        // with them. Documents are in package order, so each is lowered once.
-        foreach (var (document, analysis) in published) {
-            cancellation.ThrowIfCancellationRequested();
-            var checks = await RootSummariesAsync(analysis);
-            var found = checks.ChecksOf(document.Tree);
-            if (found.Count == 0 || !ReferenceEquals(_workspace.Current.Find(document.Uri)?.Tree, document.Tree)) {
-                continue;
-            }
-
-            var diagnostics = WithLints(snapshot, analysis, document, analysis.DiagnosticsOf(document.Tree, cancellation)).Concat(found).OrderBy(static d => d.Span.Start);
-            await PublishAsync(document.Uri, document.Version, [..diagnostics.Select(d => DiagnosticNode(document, d))]);
-        }
-    }
-
-    /// <summary>
-    ///     A document's diagnostics with what the lints report in it, at its
-    ///     package's <c>[lints]</c> levels — as <c>sable check</c> reports
-    ///     them, and like it only for a file without errors, whose bodies all
-    ///     bound. Off with the <c>lints</c> setting.
-    /// </summary>
-    IReadOnlyList<Diagnostic> WithLints(WorkspaceSnapshot snapshot, Analysis analysis, Document document, IReadOnlyList<Diagnostic> diagnostics) {
-        if (!_lints || diagnostics.Any(static d => d.Severity == DiagnosticSeverity.Error) || document.Tree.Root is not CompilationUnitSyntax) {
-            return diagnostics;
-        }
-
-        var configuration = snapshot.Layout.Projects.FirstOrDefault(p => p.Directory == analysis.Key)?.Lints ?? Symbols.LintConfiguration.Default;
-        IReadOnlyList<Diagnostic> lints;
-        try {
-            lock (analysis.Gate) {
-                lints = Symbols.Lints.Run(analysis.Compilation, configuration, [document.Tree]);
-            }
-        } catch (Exception e) when (e is not OutOfMemoryException) {
-            Log($"lints failed on {document.Uri}: {e.Message}");
-            return diagnostics;
-        }
-
-        return lints.Count == 0 ? diagnostics : [..diagnostics.Concat(lints).OrderBy(static d => d.Span.Start)];
-    }
-
-    static JsonNode DiagnosticNode(Document document, Diagnostic diagnostic) =>
-        new JsonObject {
-            ["range"] = RangeNode(document.Lines.RangeOf(diagnostic.Span)),
-            ["severity"] = diagnostic.Severity == DiagnosticSeverity.Error ? 1 : diagnostic.Severity == DiagnosticSeverity.Warning ? 2 : 3,
-            ["code"] = diagnostic.Id,
-            ["source"] = "sable",
-            ["message"] = diagnostic.Message
-        };
-
-    Task PublishAsync(string uri, int? version, JsonNode?[] diagnostics) {
-        var parameters = new JsonObject { ["uri"] = uri, ["diagnostics"] = new JsonArray(diagnostics) };
-        if (version is { } v) {
-            parameters["version"] = v;
-        }
-
-        return _channel.WriteAsync(new JsonObject {
-            ["jsonrpc"] = "2.0",
-            ["method"] = "textDocument/publishDiagnostics",
-            ["params"] = parameters
-        });
     }
 
     // -----------------------------------------------------------------------

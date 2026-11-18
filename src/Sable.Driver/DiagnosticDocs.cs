@@ -77,6 +77,16 @@ public static partial class DiagnosticDocs {
             : null;
     }
 
+    /// <summary>Where the source of the pages is published, for a link an editor can open.</summary>
+    const string Published = "https://github.com/Rikarin/Sable/blob/master/docs/diagnostics/";
+
+    /// <summary>
+    ///     A link to a code's page, for an editor to show beside the
+    ///     diagnostic (the protocol's <c>codeDescription</c>), as the
+    ///     command line points at <c>sable explain</c>; null when it has none.
+    /// </summary>
+    public static string? Link(string code) => Page(code) is null ? null : Published + code + ".md";
+
     /// <summary>The page for a code, such as <c>S3004</c>, if it has one.</summary>
     public static string? Page(string code) => Pages.Value.GetValueOrDefault(code);
 

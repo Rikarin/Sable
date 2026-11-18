@@ -95,6 +95,24 @@ extension I64 {
     public fn max(other: I64) -> I64
 }
 
+extension I128 {
+    /// The number in decimal.
+    @builtin("string_from_I128")
+    public fn toString() -> String
+
+    /// The number's distance from zero.
+    @builtin("abs_I128")
+    public fn abs() -> I128
+
+    /// The smaller of the two.
+    @builtin("min_I128")
+    public fn min(other: I128) -> I128
+
+    /// The larger of the two.
+    @builtin("max_I128")
+    public fn max(other: I128) -> I128
+}
+
 extension U8 {
     /// The number in decimal.
     @builtin("string_from_U8")
@@ -180,6 +198,23 @@ extension UInt {
     public fn max(other: UInt) -> UInt
 }
 
+extension U128 {
+    /// The number in decimal.
+    @builtin("string_from_U128")
+    public fn toString() -> String
+
+    /// The number itself: an unsigned one is never below zero.
+    public fn abs() -> U128 { return self }
+
+    /// The smaller of the two.
+    @builtin("min_U128")
+    public fn min(other: U128) -> U128
+
+    /// The larger of the two.
+    @builtin("max_U128")
+    public fn max(other: U128) -> U128
+}
+
 extension F64 {
     /// The ratio of a circle's circumference to its diameter, as near as an F64 holds it.
     public static var pi: F64 => 3.141592653589793
@@ -217,6 +252,24 @@ extension F32 {
     /// The larger of the two.
     @builtin("max_F32")
     public fn max(other: F32) -> F32
+}
+
+extension F16 {
+    /// The number in decimal.
+    @builtin("string_from_F16")
+    public fn toString() -> String
+
+    /// The number's distance from zero.
+    @builtin("abs_F16")
+    public fn abs() -> F16
+
+    /// The smaller of the two.
+    @builtin("min_F16")
+    public fn min(other: F16) -> F16
+
+    /// The larger of the two.
+    @builtin("max_F16")
+    public fn max(other: F16) -> F16
 }
 
 extension Bool {

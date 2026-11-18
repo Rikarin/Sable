@@ -879,6 +879,43 @@ public sealed class GenericsAndConformanceTests {
         AssertClean("fn some<T>(_ a: T?) -> Bool { return a != none }");
     }
 
+    /// <summary>
+    ///     A type declared in a file read after the one using it still has its
+    ///     conformances when asked: a construction made early, 'Box<Int>', and
+    ///     an associated type's constraint, 'Iter: Cursor', both read what the
+    ///     later file declares.
+    /// </summary>
+    [Fact]
+    public void ConformancesDeclaredInALaterFileAreSeen() {
+        var errors = Compilation.Create(
+                """
+                module App
+                import Lib
+                fn wants<X: Shape>(_ x: X) { }
+                fn probe(_ box: Box<Int>) { wants(box) }
+                fn first<B: Bag>(_ bag: B) -> B.Iter.Item { return bag.cursor().get() }
+                """,
+                """
+                module Lib
+                public protocol Shape { }
+                public class Box<T>: Shape { }
+                public protocol Cursor {
+                    associatedtype Item
+                    fn get() -> Item
+                }
+                public protocol Bag {
+                    associatedtype Iter: Cursor
+                    fn cursor() -> Iter
+                }
+                """
+            )
+            .GetAllDiagnostics()
+            .Where(static d => d.Severity == DiagnosticSeverity.Error)
+            .ToList();
+
+        Assert.True(errors.Count == 0, string.Join("\n", errors.Select(static e => $"{e.Id}: {e.Message}")));
+    }
+
     [Fact]
     public void AGenericSubclassOverridesInItsBasesTermsAndIsItsBase() {
         var source = """

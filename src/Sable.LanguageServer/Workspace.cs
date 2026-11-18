@@ -114,22 +114,6 @@ internal sealed class Workspace {
             return builder.ToImmutable();
         });
 
-    /// <summary>
-    ///     A workspace folder was removed: the files read from under it go,
-    ///     unless another folder still holds them; those open in the editor stay.
-    /// </summary>
-    public WorkspaceSnapshot RemoveFromDisk(string root, IReadOnlyList<string> remaining) =>
-        Update(current => {
-            var builder = current.Documents.ToBuilder();
-            foreach (var (key, document) in current.Documents) {
-                if (!document.IsOpen && PathOf(document.Uri) is { } path && IsUnder(path, root) && !remaining.Any(r => IsUnder(path, r))) {
-                    builder.Remove(key);
-                }
-            }
-
-            return builder.ToImmutable();
-        });
-
     public WorkspaceSnapshot Open(string uri, string text, int? version) =>
         Update(current => {
             var tree = SyntaxTree.Parse(new SourceText(text, PathOf(uri) ?? uri), current.Layout.OptionsFor(PathOf(uri)));
@@ -170,16 +154,29 @@ internal sealed class Workspace {
     ///     Closes a document: it goes back to what is on disk, if it is a
     ///     file of the workspace, and away otherwise.
     /// </summary>
-    public WorkspaceSnapshot Close(string uri, IReadOnlyList<string> roots) {
+    public WorkspaceSnapshot Close(string uri, IReadOnlyList<string> folders) {
         var key = KeyOf(uri);
         var path = PathOf(uri);
-        if (path is not null && File.Exists(path) && roots.Any(root => IsUnder(path, root))) {
+        if (path is not null && File.Exists(path) && folders.Any(f => IsUnder(path, f))) {
             var text = File.ReadAllText(path);
             return Update(current => current.Documents.SetItem(key, new(uri, SyntaxTree.Parse(new SourceText(text, path), current.Layout.OptionsFor(path)), null, false)));
         }
 
         return Update(current => current.Documents.Remove(key));
     }
+
+    /// <summary>
+    ///     A folder was removed from the workspace: its files go, but for
+    ///     those the editor has open and those under a folder still there.
+    /// </summary>
+    public WorkspaceSnapshot Forget(string folder, IReadOnlyList<string> remaining) =>
+        Update(current => current.Documents.RemoveRange(
+            current.Documents
+                .Where(d => !d.Value.IsOpen
+                            && PathOf(d.Value.Uri) is { } path
+                            && IsUnder(path, folder)
+                            && !remaining.Any(f => IsUnder(path, f)))
+                .Select(static d => d.Key)));
 
     /// <summary>A file changed on disk: read it again, unless the editor has it open.</summary>
     public WorkspaceSnapshot? Reload(string uri) {

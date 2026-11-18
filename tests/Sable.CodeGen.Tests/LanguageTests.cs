@@ -749,6 +749,20 @@ public sealed class LanguageTests {
                 print(words?[0] ?? "nothing")
             """);
 
+    // ---- Modules named in expressions ------------------------------------------
+
+    [Fact]
+    public void AModuleIsReachedInFullAndThroughItsAlias() =>
+        Prints(
+            "6\n6\n0\n",
+            "import Sable.Math as M\nimport Sable.Collections as C",
+            """
+                print(M.gcd(12, 18))
+                print(Sable.Math.gcd(12, 18))
+                let d: C.Deque<Int> = Sable.Collections.Deque<Int>()
+                print(d.count)
+            """);
+
     [Fact]
     public void AnEnumIsANamedIntegerAndAFlagsEnumASetOfThem() =>
         Prints(

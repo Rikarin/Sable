@@ -670,7 +670,7 @@ public sealed class SilParser {
                 var type = ParseType();
                 Expect(",");
                 var text = Expect(TokenKind.Number, "an integer").Text;
-                if (!long.TryParse(text, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var value)) {
+                if (!Int128.TryParse(text, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var value)) {
                     throw new SilParseException($"'{text}' is not an integer", line);
                 }
 

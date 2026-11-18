@@ -2,7 +2,13 @@
 #
 # - fromBytes: tools/fuzz/run.sh, mutated inline-layout records under
 #   AddressSanitizer and UndefinedBehaviorSanitizer (docs/04 §3.8);
-# - the parser: the random-input round-trip tests, many times over.
+# - the parser: the random-input round-trip tests, many times over;
+# - the compiler: CompilerFuzzTests, mutated programs from the repository
+#   through parsing, binding, constant evaluation, lowering, the SIL
+#   verifier and the passes;
+# - the package resolver: ResolverFuzzTests, random registries through
+#   PubGrub (checked against trying every assignment) and random text
+#   through the version parsers.
 #
 # Steps run under 'shell: bash', which GitHub runs with pipefail, so a
 # failure piped through 'tee' still fails the job. Each job prints its seed
@@ -28,6 +34,14 @@ on:
         description: Parser iterations, times the tests' usual count
         required: false
         default: "2000"
+      compiler_scale:
+        description: Compiler mutants, times the test's usual 24
+        required: false
+        default: "1500"
+      resolver_scale:
+        description: Resolver and version-parser iterations, times the tests' usual count
+        required: false
+        default: "200"
 
 permissions:
   contents: read
@@ -113,4 +127,82 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: parser-${{ steps.seed.outputs.seed }}
+          path: fuzz.log
+
+  compiler:
+    name: Compiler on mutated programs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "11.0.x"
+
+      - name: Choose the seed
+        id: seed
+        env:
+          GIVEN: ${{ inputs.seed }}
+        run: |
+          seed="${GIVEN:-$(( ( $(date +%s) * 1299709 + ${{ github.run_id }} ) % 2147483647 ))}"
+          echo "seed=$seed" >> "$GITHUB_OUTPUT"
+          echo "compiler seed: \`$seed\`" >> "$GITHUB_STEP_SUMMARY"
+
+      # Each input is written to crash/current.sb before it is compiled, so
+      # that one which takes the process down (a stack overflow cannot be
+      # caught) is kept with the log.
+      - name: Fuzz
+        env:
+          SABLE_FUZZ_SEED: ${{ steps.seed.outputs.seed }}
+          SABLE_FUZZ_SCALE: ${{ inputs.compiler_scale || '1500' }}
+          SABLE_FUZZ_CRASH_DIR: ${{ github.workspace }}/crash
+        run: |
+          dotnet test tests/Sable.SIL.Tests -c Release \
+            --filter "FullyQualifiedName~CompilerFuzzTests" \
+            --logger "console;verbosity=normal" 2>&1 | tee fuzz.log
+
+      - name: Keep the log and the input
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compiler-${{ steps.seed.outputs.seed }}
+          path: |
+            fuzz.log
+            crash/
+
+  resolver:
+    name: Package resolver
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "11.0.x"
+
+      - name: Choose the seed
+        id: seed
+        env:
+          GIVEN: ${{ inputs.seed }}
+        run: |
+          seed="${GIVEN:-$(( ( $(date +%s) * 15485863 + ${{ github.run_id }} ) % 2147483647 ))}"
+          echo "seed=$seed" >> "$GITHUB_OUTPUT"
+          echo "resolver seed: \`$seed\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Fuzz
+        env:
+          SABLE_FUZZ_SEED: ${{ steps.seed.outputs.seed }}
+          SABLE_FUZZ_SCALE: ${{ inputs.resolver_scale || '200' }}
+        run: |
+          dotnet test tests/Sable.CodeGen.Tests -c Release \
+            --filter "FullyQualifiedName~ResolverFuzzTests" \
+            --logger "console;verbosity=normal" 2>&1 | tee fuzz.log
+
+      - name: Keep the log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: resolver-${{ steps.seed.outputs.seed }}
           path: fuzz.log

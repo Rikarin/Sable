@@ -17,7 +17,7 @@ fn leadingUnderscoreInNumber() -> Int {
 }
 
 fn integerOverflow() -> Int {
-    return 99999999999999999999999      //! S0014
+    return 999999999999999999999999999999999999999  //! S0014
 }
 
 fn badFloat() -> F64 {

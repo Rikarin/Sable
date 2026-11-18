@@ -23,7 +23,12 @@ internal sealed partial class Analysis {
     readonly HashSet<SyntaxTree> _library = new(ReferenceEqualityComparer.Instance);
     readonly HashSet<SyntaxTree> _dependencies = new(ReferenceEqualityComparer.Instance);
     readonly Dictionary<SyntaxTree, IReadOnlyList<Diagnostic>> _diagnostics = new(ReferenceEqualityComparer.Instance);
+    readonly Dictionary<SyntaxTree, IReadOnlyList<Diagnostic>> _lints = new(ReferenceEqualityComparer.Instance);
+    readonly Dictionary<SyntaxTree, List<Diagnostic>> _generatorDiagnostics = new(ReferenceEqualityComparer.Instance);
     IReadOnlyList<Diagnostic>? _unplaced;
+
+    /// <summary>Whether its package's generators wrote some of its trees, from programs the snapshot does not show.</summary>
+    bool _generated;
 
     public object Gate { get; } = new();
     public WorkspaceSnapshot Snapshot { get; }
@@ -32,12 +37,17 @@ internal sealed partial class Analysis {
     /// <summary>The package it compiles (<see cref="ProjectLayout.KeyOf" />).</summary>
     public string Key { get; }
 
+    /// <summary>The level of each lint in this package: its manifest's <c>[lints]</c>.</summary>
+    public LintConfiguration Lints { get; }
+
     /// <summary>The snapshot's documents in this compilation: the package's own, and those of its dependencies the editor has.</summary>
     public IReadOnlyList<Document> Documents { get; }
 
-    Analysis(WorkspaceSnapshot snapshot, string key, Compilation compilation, IEnumerable<SyntaxTree> library, IEnumerable<SyntaxTree> dependencies) {
+    Analysis(
+        WorkspaceSnapshot snapshot, string key, LintConfiguration lints, Compilation compilation, IEnumerable<SyntaxTree> library, IEnumerable<SyntaxTree> dependencies) {
         Snapshot = snapshot;
         Key = key;
+        Lints = lints;
         Compilation = compilation;
         foreach (var tree in compilation.SyntaxTrees) {
             _treesByRoot[tree.Root] = tree;
@@ -69,12 +79,26 @@ internal sealed partial class Analysis {
     ///     comes after — a member's body — is all that is left to bind.
     /// </summary>
     public static Analysis Build(
-        WorkspaceSnapshot snapshot, string key, IReadOnlyList<SyntaxTree> dependencies, Func<SyntaxTree, IReadOnlyList<SyntaxTree>> libraryFor) {
+        WorkspaceSnapshot snapshot,
+        string key,
+        IReadOnlyList<SyntaxTree> dependencies,
+        Func<SyntaxTree, IReadOnlyList<SyntaxTree>> libraryFor,
+        Func<IReadOnlyList<SyntaxTree>, GeneratedTrees>? generate = null,
+        LintConfiguration? lints = null
+    ) {
         var trees = snapshot.Documents.Values
             .Where(d => snapshot.KeyOf(d) == key)
             .Select(static d => d.Tree)
             .OrderBy(static t => t.Text.FileName, StringComparer.Ordinal)
             .ToList();
+
+        // What the package's generators write for its documents, as they are
+        // now (docs/08 §8.7): compiled with them, as a dependency's files are.
+        var generated = generate?.Invoke(trees) ?? GeneratedTrees.None;
+        if (generated.Trees.Count > 0) {
+            dependencies = [..generated.Trees, ..dependencies];
+        }
+
         var own = trees.ToHashSet(ReferenceEqualityComparer.Instance);
         trees.AddRange(dependencies.Where(t => own.Add(t)));
 
@@ -97,7 +121,15 @@ internal sealed partial class Analysis {
         }
 
         var compilation = Compilation.Create([..trees, ..library]);
-        var analysis = new Analysis(snapshot, key, compilation, library, dependencies);
+        var analysis = new Analysis(snapshot, key, lints ?? LintConfiguration.Default, compilation, library, dependencies) { _generated = generate is not null };
+        foreach (var (diagnostic, tree) in generated.Diagnostics) {
+            if (!analysis._generatorDiagnostics.TryGetValue(tree, out var list)) {
+                analysis._generatorDiagnostics[tree] = list = [];
+            }
+
+            list.Add(diagnostic);
+        }
+
         lock (analysis.Gate) {
             // Binding every signature reports the declarations' problems too.
             analysis._unplaced = [..compilation.GetDiagnostics().Except(trees.SelectMany(static t => t.Diagnostics))];
@@ -118,6 +150,47 @@ internal sealed partial class Analysis {
     public bool IsDependencyFile(SyntaxTree tree) => _dependencies.Contains(tree);
 
     public bool Contains(SyntaxTree tree) => _treesByRoot.TryGetValue(tree.Root, out var known) && ReferenceEquals(known, tree);
+
+    /// <summary>
+    ///     Whether this analysis is the one a later snapshot would build: the
+    ///     same packages, and the same text for every file it compiles — an
+    ///     edit in another package does not make this one's compilation, its
+    ///     bound members or its lowering out of date.
+    /// </summary>
+    /// <remarks>
+    ///     A dependency's file read from disk is compared by text, as the
+    ///     snapshot would give it; one outside the workspace that changes on
+    ///     disk is not noticed — no one is told it changed.
+    /// </remarks>
+    public bool IsCurrentIn(WorkspaceSnapshot snapshot) {
+        // What generators write depends on their programs too, which are
+        // other files: such a package is built again.
+        if (_generated || !ReferenceEquals(snapshot.Layout, Snapshot.Layout)) {
+            return false;
+        }
+
+        foreach (var document in Documents) {
+            if (!ReferenceEquals(snapshot.Find(document.Uri)?.Tree, document.Tree)) {
+                return false;
+            }
+        }
+
+        foreach (var tree in _dependencies) {
+            if (snapshot.Documents.GetValueOrDefault(Path.GetFullPath(tree.Text.FileName)) is { } document && document.Tree.Text.Text != tree.Text.Text) {
+                return false;
+            }
+        }
+
+        // Nothing added to the package: as many files as it compiles.
+        var own = 0;
+        foreach (var document in snapshot.Documents.Values) {
+            if (snapshot.KeyOf(document) == Key && ++own > Documents.Count) {
+                return false;
+            }
+        }
+
+        return own == Documents.Count(d => Snapshot.KeyOf(d) == Key);
+    }
 
     static SyntaxNode RootOf(SyntaxNode node) {
         while (node.Parent is { } parent) {
@@ -175,6 +248,10 @@ internal sealed partial class Analysis {
         }
 
         var all = new List<Diagnostic>(tree.Diagnostics);
+        if (_generatorDiagnostics.TryGetValue(tree, out var generated)) {
+            all.AddRange(generated);
+        }
+
         foreach (var member in MembersOf(tree.Root)) {
             cancellation.ThrowIfCancellationRequested();
             lock (Gate) {
@@ -197,6 +274,36 @@ internal sealed partial class Analysis {
             IReadOnlyList<Diagnostic> result = [..all.Distinct().OrderBy(static d => d.Span.Start)];
             _diagnostics[tree] = result;
             return result;
+        }
+    }
+
+    /// <summary>
+    ///     What the lints (docs/05 §5.7) report in a file, at the levels the
+    ///     package's <c>[lints]</c> and the file's <c>@allow</c> / <c>@warn</c>
+    ///     give them. <c>sable check</c> lints only a program that
+    ///     type-checks; here a file is linted once it has no errors of its
+    ///     own, so its warnings do not wait for every other file to be right
+    ///     — while a lint over code that does not bind would only add noise.
+    /// </summary>
+    /// <remarks>
+    ///     A lint walks the whole file's bound bodies, so this holds
+    ///     <see cref="Gate" /> for the whole file: it runs after the type
+    ///     errors are out, beside the SIL checks.
+    /// </remarks>
+    public IReadOnlyList<Diagnostic> LintsOf(SyntaxTree tree, CancellationToken cancellation) {
+        if (DiagnosticsOf(tree, cancellation).Any(static d => d.Severity == DiagnosticSeverity.Error)) {
+            return [];
+        }
+
+        lock (Gate) {
+            if (_lints.TryGetValue(tree, out var known)) {
+                return known;
+            }
+
+            cancellation.ThrowIfCancellationRequested();
+            IReadOnlyList<Diagnostic> found = [..Symbols.Lints.Run(Compilation, Lints, [tree])];
+            _lints[tree] = found;
+            return found;
         }
     }
 
@@ -255,7 +362,7 @@ internal sealed class AnalysisCache(Func<WorkspaceSnapshot, string, Analysis> bu
     /// <summary>The analysis of a package in exactly this snapshot, building it if no one has.</summary>
     public Task<Analysis> GetAsync(WorkspaceSnapshot snapshot, string key) {
         lock (_lock) {
-            if (_latest.TryGetValue(key, out var latest) && latest.Snapshot.Generation == snapshot.Generation) {
+            if (_latest.TryGetValue(key, out var latest) && (latest.Snapshot.Generation == snapshot.Generation || latest.IsCurrentIn(snapshot))) {
                 return Task.FromResult(latest);
             }
 

@@ -96,4 +96,64 @@ public sealed class RangeTests {
                               """);
         Assert.Contains(errors, static e => e.Code == ErrorCode.ERR_NotIterable);
     }
+
+    [Fact]
+    public void ARangeOfCharactersOrOfAnyIntegerIsIterated() =>
+        AssertClean("""
+                    fn f(_ u: ClosedRange<U8>, _ i: Range<I128>) {
+                        for c in 'a'...'z' { let d: Char = c }
+                        for x in u { let y: U8 = x }
+                        for x in i { let y: I128 = x }
+                    }
+                    """);
+
+    /// <summary>The one-sided ranges are types of their own, with the one bound each has.</summary>
+    [Fact]
+    public void OneSidedRangesAreTheirOwnTypes() =>
+        AssertClean("""
+                    fn upTo() -> PartialRangeUpTo<Int> { return ..<10 }
+                    fn through() -> PartialRangeThrough<U8> { return ...9 }
+                    fn from(_ n: Int) -> PartialRangeFrom<Int> { return n... }
+                    fn probe() -> Bool {
+                        let r = from(3)
+                        for i in r { if i > 5 { break } }
+                        return upTo().contains(9) && through().upperBound == 9 && r.lowerBound == 3
+                    }
+                    """);
+
+    [Fact]
+    public void ARangeOpenAtTheStartIsNotIterated() {
+        var error = Assert.Single(ErrorsIn("fn f() { for i in ..<5 { } }"));
+        Assert.Equal(ErrorCode.ERR_NotIterable, error.Code);
+        Assert.Contains("no lower bound", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AHalfOpenRangeNeedsItsUpperBound() {
+        var error = Assert.Single(ErrorsIn("fn f() -> Bool { let r = (5..<)\nreturn true }"));
+        Assert.Equal(ErrorCode.ERR_HalfOpenRangeWithoutEnd, error.Code);
+    }
+
+    /// <summary>'count' is declared 'where Bound == Int', so a range of anything else has none.</summary>
+    [Fact]
+    public void ARangeOfIntsCountsItsValues() {
+        AssertClean("""
+                    fn f(_ r: Range<Int>, _ c: ClosedRange<Int>) -> Int { return r.count + c.count + (0..<5).count }
+                    """);
+
+        var error = Assert.Single(ErrorsIn("fn f(_ r: Range<F64>) -> Int { return r.count }"));
+        Assert.Equal(ErrorCode.ERR_DoesNotConform, error.Code);
+        Assert.Contains("'Range<F64>' has 'count' only where 'Bound == Int'", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void StrideCountsBySteps() =>
+        AssertClean("""
+                    fn f() -> Int {
+                        var total = 0
+                        for i in stride(from: 0, to: 10, by: 3) { total = total + i }
+                        for i in stride(from: 10, through: 0, by: -2) { total = total + i }
+                        return total
+                    }
+                    """);
 }

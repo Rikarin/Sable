@@ -97,7 +97,27 @@ public sealed class CompileTimeLoweringTests {
     public void ThePlatformsConstantsAreKnown() {
         var module = Lower("fn width() -> Int => Platform.pointerWidth\nfn os() -> String => Platform.os");
         Assert.Equal(64L, Run(module, "width"));
-        Assert.Equal("macos", Run(module, "os"));
+        // The machine compiling: what a program built without --target runs on.
+        Assert.Equal(ParseOptions.HostOs, Run(module, "os"));
+    }
+
+    /// <summary>
+    ///     A program built for another machine sees that machine's constants:
+    ///     the core library is parsed for the target its files are, so its
+    ///     '#if os(...)' follows the program's (it once said macOS everywhere).
+    /// </summary>
+    [Theory]
+    [InlineData("linux", "x86_64", 64L)]
+    [InlineData("macos", "arm64", 64L)]
+    [InlineData("wasi", "wasm32", 32L)]
+    public void ThePlatformsConstantsAreTheTargets(string os, string arch, long width) {
+        var options = ParseOptions.Default.ForTarget(os, arch);
+        var tree = SyntaxTree.Parse(new SourceText("module M\nfn width() -> Int => Platform.pointerWidth\nfn os() -> String => Platform.os\nfn arch() -> String => Platform.arch", "m.sb"), options);
+        var (module, diagnostics) = SilGen.Lower(Compilation.Create([tree]));
+        Assert.Empty(diagnostics);
+        Assert.Equal(os, Run(module, "os"));
+        Assert.Equal(arch, Run(module, "arch"));
+        Assert.Equal(width, Run(module, "width"));
     }
 
     // ---- What goes wrong ---------------------------------------------------

@@ -185,7 +185,6 @@ public sealed class Lexer {
                 new(0, 1),
                 "byte order mark is not allowed; save the file as UTF-8 without a BOM"
             );
-            _position = 1;
         }
 
         var green = new List<GreenToken>();
@@ -283,6 +282,15 @@ public sealed class Lexer {
 
                 ScanDisabledLine();
                 builder.Add(Trivia(SyntaxKind.DisabledTextTrivia, start));
+                continue;
+            }
+
+            // A byte order mark is an error, reported once for the file; it is
+            // kept as skipped text on the first token, so that the tree still
+            // gives back every character of the file.
+            if (_position == 0 && Current == '\uFEFF') {
+                _position = 1;
+                builder.Add(Trivia(SyntaxKind.SkippedTokensTrivia, start));
                 continue;
             }
 
@@ -567,16 +575,22 @@ public sealed class Lexer {
             return (SyntaxKind.FloatLiteralToken, d, default);
         }
 
-        if (!ulong.TryParse(cleaned, NumberStyles.None, CultureInfo.InvariantCulture, out var u)) {
-            _diagnostics.Error(
-                ErrorCode.ERR_IntegerLiteralOverflow,
-                span,
-                $"integer literal '{text}' does not fit in 64 bits"
-            );
-            u = 0;
+        // A literal is a ulong when it fits one, and a UInt128 when only the
+        // 128-bit types can hold it.
+        if (ulong.TryParse(cleaned, NumberStyles.None, CultureInfo.InvariantCulture, out var u)) {
+            return (SyntaxKind.IntegerLiteralToken, u, default);
         }
 
-        return (SyntaxKind.IntegerLiteralToken, u, default);
+        if (UInt128.TryParse(cleaned, NumberStyles.None, CultureInfo.InvariantCulture, out var wide)) {
+            return (SyntaxKind.IntegerLiteralToken, wide, default);
+        }
+
+        _diagnostics.Error(
+            ErrorCode.ERR_IntegerLiteralOverflow,
+            span,
+            $"integer literal '{text}' does not fit in 128 bits"
+        );
+        return (SyntaxKind.IntegerLiteralToken, 0UL, default);
     }
 
     (SyntaxKind, object?, ImmutableArray<StringPart>) ScanRadix(int start, int radix) {
@@ -754,8 +768,8 @@ public sealed class Lexer {
         return false;
     }
 
-    ulong ParseRadix(string digits, int radix, TextSpan span) {
-        ulong value = 0;
+    object ParseRadix(string digits, int radix, TextSpan span) {
+        UInt128 value = 0;
         foreach (var c in digits) {
             if (c == '_') {
                 continue;
@@ -767,23 +781,23 @@ public sealed class Lexer {
                     span,
                     $"'{c}' is not a valid base-{radix} digit"
                 );
-                return 0;
+                return 0UL;
             }
 
-            var digit = (ulong)Convert.ToInt32(c.ToString(), 16);
-            if (value > (ulong.MaxValue - digit) / (ulong)radix) {
+            var digit = (UInt128)Convert.ToInt32(c.ToString(), 16);
+            if (value > (UInt128.MaxValue - digit) / (UInt128)radix) {
                 _diagnostics.Error(
                     ErrorCode.ERR_IntegerLiteralOverflow,
                     span,
-                    "integer literal does not fit in 64 bits"
+                    "integer literal does not fit in 128 bits"
                 );
-                return 0;
+                return 0UL;
             }
 
-            value = value * (ulong)radix + digit;
+            value = value * (UInt128)radix + digit;
         }
 
-        return value;
+        return value <= ulong.MaxValue ? (object)(ulong)value : value;
     }
 
     double ParseHexFloat(string text, TextSpan span) {

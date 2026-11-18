@@ -104,6 +104,11 @@
           "default": true,
           "markdownDescription": "Report the lints of `sable check` (unused locals, imports and parameters, …) as you type, at the levels of the package's `[lints]` table."
         },
+        "sable.diagnostics.workspace": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Report the problems of every file in the workspace, not only of the open ones. Turn it off for a workspace too large to check after each edit."
+        },
         "sable.codeLens.enable": {
           "type": "boolean",
           "default": true,

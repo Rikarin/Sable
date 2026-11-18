@@ -408,3 +408,51 @@ internal sealed class ShadowedParameterLint : Lint {
         }
     }
 }
+
+/// <summary>
+///     <c>unused_result</c>: a call whose result is left unused, as a statement
+///     of its own, where the function does not say that is fine with
+///     <c>@discardable</c>.
+/// </summary>
+internal sealed class UnusedResultLint : Lint {
+    public override string Name => "unused_result";
+    public override ErrorCode Code => ErrorCode.LNT_UnusedResult;
+    public override LintLevel DefaultLevel => LintLevel.Warn;
+    public override string Description => "a call's result left unused, where the function is not '@discardable'; write '_ = f()' if that is meant";
+
+    public override void Check(LintContext context) {
+        foreach (var body in context.Bodies) {
+            Walk(context, body.Body);
+        }
+    }
+
+    static void Walk(LintContext context, BoundNode node) {
+        if (node is BoundExpressionStatement { Expression: var expression }) {
+            // 'try f()' and 'try? f()' discard what f gives as much as 'f()' does.
+            while (expression is BoundTry attempt) {
+                expression = attempt.Expression;
+            }
+
+            if (expression is BoundCall call && Discards(context.Compilation, call)) {
+                context.Report(call.Syntax, $"the result of '{call.Function.Name}' is unused; write '_ = ...' if that is meant, or mark '{call.Function.Name}' '@discardable'");
+            }
+        }
+
+        foreach (var child in node.Children) {
+            Walk(context, child);
+        }
+    }
+
+    /// <summary>Whether leaving the call's result unused loses something: a value, from a function that does not say it may be dropped.</summary>
+    static bool Discards(Compilation compilation, BoundCall call) {
+        var type = call.Type;
+        if (type.IsError || type.Equals(compilation.Core.Void) || type.Equals(compilation.Core.Never)
+            || type is TupleTypeSymbol { ElementTypes.IsEmpty: true }
+            || call.Function.FunctionKind is FunctionKind.Initializer) {
+            return false;
+        }
+
+        return call.Function.DeclaringSyntax is not [var declaration, ..]
+            || !Compilation.AttributesOf(declaration).Any(static a => Compilation.AttributeName(a) == "discardable");
+    }
+}

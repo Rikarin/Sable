@@ -287,8 +287,9 @@ def _active_case(valobj):
 
 
 def _is_tuple(value):
+    """A tuple, or a union case's named fields ('U.Case$case'): shown as the case's own parentheses."""
     name = value.GetType().GetCanonicalType().GetName() or ""
-    return name.startswith("(") and not name.endswith("$closure")
+    return (name.startswith("(") and not name.endswith("$closure")) or name.endswith("$case")
 
 
 class UnionProvider(object):
@@ -647,6 +648,16 @@ def _register(debugger, module):
     for regex, provider in synthetics:
         run('type synthetic add -w %s -p -r -x "%s" -l %s.%s' % (CATEGORY, regex, module, provider))
     run("type category enable %s" % CATEGORY)
+
+    # A function is found by its Sable name, 'b Demo.Point.length', which is
+    # its whole DWARF name. With no language given, an lldb may read the name
+    # as Swift's or C++'s would be and look up only what follows the last dot
+    # ('length'), which no function is called; as C, the name is taken whole.
+    # The compile unit says C, so expressions are read as they would be
+    # anyway. A language the user chose is left alone.
+    language = debugger.GetInternalVariableValue("target.language", debugger.GetInstanceName())
+    if language is None or language.GetSize() == 0 or language.GetStringAtIndex(0) in ("", "unknown"):
+        run("settings set target.language c")
 
 
 def __lldb_init_module(debugger, internal_dict):

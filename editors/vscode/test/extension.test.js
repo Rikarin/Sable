@@ -113,15 +113,15 @@ test("the language server is started as 'sable lsp' with the editor's settings",
   const client = recorded.clients[0];
   assert.equal(client.serverOptions.run.command, "/opt/sable/bin/sable");
   assert.deepEqual(client.serverOptions.run.args, ["lsp"]);
-  assert.deepEqual(client.clientOptions.initializationOptions, { inlayHints: { enable: true }, lints: { enable: true } });
+  assert.deepEqual(client.clientOptions.initializationOptions, { inlayHints: { enable: true }, lints: { enable: true }, diagnostics: { workspace: true } });
   assert.equal(client.clientOptions.synchronize.configurationSection, "sable");
   assert.ok(client.isRunning());
 });
 
 test("inlay hints and lints can be turned off, and the server turned off", async () => {
-  const off = load({ folders: [tree({})], settings: { "sable.inlayHints.enable": false, "sable.lints.enable": false } });
+  const off = load({ folders: [tree({})], settings: { "sable.inlayHints.enable": false, "sable.lints.enable": false, "sable.diagnostics.workspace": false } });
   await off.modules.extension.activate(context(os.tmpdir()));
-  assert.deepEqual(off.recorded.clients[0].clientOptions.initializationOptions, { inlayHints: { enable: false }, lints: { enable: false } });
+  assert.deepEqual(off.recorded.clients[0].clientOptions.initializationOptions, { inlayHints: { enable: false }, lints: { enable: false }, diagnostics: { workspace: false } });
 
   const none = load({ folders: [tree({})], settings: { "sable.server.enable": false } });
   await none.modules.extension.activate(context(os.tmpdir()));

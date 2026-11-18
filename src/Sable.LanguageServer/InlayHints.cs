@@ -92,24 +92,34 @@ internal sealed class RootSummaries(
 
 public sealed partial class LanguageServer {
     readonly object _rootsLock = new();
-    Task<RootSummaries>? _roots;
+    readonly Dictionary<string, (Analysis Analysis, Task<RootSummaries> Task)> _roots = new(StringComparer.Ordinal);
+    Task _lowering = Task.CompletedTask;
 
-    /// <summary>The root summaries of an analysis's snapshot, computed once per snapshot asked about.</summary>
+    /// <summary>
+    ///     The root summaries of an analysis, computed once per analysis
+    ///     asked about, and kept — the latest — for each package.
+    /// </summary>
     Task<RootSummaries> RootSummariesAsync(Analysis analysis) {
         lock (_rootsLock) {
-            if (_roots is { IsCompletedSuccessfully: true } done && done.Result.Generation == analysis.Snapshot.Generation && done.Result.Key == analysis.Key) {
-                return done;
+            if (_roots.TryGetValue(analysis.Key, out var known) && ReferenceEquals(known.Analysis, analysis)) {
+                return known.Task;
             }
 
-            if (_roots is { IsCompleted: false } running) {
-                // One lowering at a time: the newer request waits for it,
-                // then for its own.
-                _roots = running.ContinueWith(_ => RootSummaries.Compute(analysis), TaskScheduler.Default);
-            } else {
-                _roots = Task.Run(() => RootSummaries.Compute(analysis));
-            }
+            // One lowering at a time: a lowering takes memory, and a newer
+            // request waits for the one under way, then for its own.
+            var task = _lowering.ContinueWith(_ => RootSummaries.Compute(analysis), TaskScheduler.Default);
+            _lowering = task;
+            _roots[analysis.Key] = (analysis, task);
+            return task;
+        }
+    }
 
-            return _roots;
+    /// <summary>The root summaries of an analysis if they are computed, without waiting for them.</summary>
+    RootSummaries? RootSummariesIfDone(Analysis analysis) {
+        lock (_rootsLock) {
+            return _roots.TryGetValue(analysis.Key, out var known) && ReferenceEquals(known.Analysis, analysis) && known.Task.IsCompletedSuccessfully
+                ? known.Task.Result
+                : null;
         }
     }
 
@@ -150,6 +160,7 @@ public sealed partial class LanguageServer {
             lock (analysis.Gate) {
                 var model = analysis.Model(document.Tree).GetMemberModel(member);
                 AddTypeHints(document, model, member, start, end, roots, hints);
+                AddCallAndClosureHints(document, model, member, start, end, hints);
                 if (member is FunctionDeclarationSyntax { ReturnClause: { } result } function
                     && roots is not null
                     && model.GetSymbolOf(function) is FunctionSymbol symbol
@@ -194,6 +205,104 @@ public sealed partial class LanguageServer {
                     + (names.Count == 1 ? "it is" : "they are") + " gone"));
             }
         }
+    }
+
+    /// <summary>
+    ///     The parameter an argument written without a label is for, before
+    ///     it — where the call takes more than one and the argument does not
+    ///     already say it; and a closure's parameter and result types, where
+    ///     they are inferred.
+    /// </summary>
+    static void AddCallAndClosureHints(Document document, SemanticModel model, SyntaxNode member, int start, int end, JsonArray hints) {
+        foreach (var node in member.DescendantNodes()) {
+            if (node.Span.End < start || node.Span.Start > end) {
+                continue;
+            }
+
+            switch (node) {
+                case InvocationExpressionSyntax { ArgumentList: { } list } invocation: {
+                    var function = Unconverted(model.GetBoundNode(invocation)) switch {
+                        BoundCall call => call.Function,
+                        _ => null,
+                    };
+
+                    if (function is null || function.Parameters.Length < 2) {
+                        break;
+                    }
+
+                    var arguments = list.Arguments.ToList();
+                    for (var i = 0; i < arguments.Count && i < function.Parameters.Length; i++) {
+                        var (argument, parameter) = (arguments[i], function.Parameters[i]);
+
+                        // A label written puts the arguments after it by name, not place.
+                        if (argument.NameToken is { IsNone: false } label && label.Text.Length > 0) {
+                            break;
+                        }
+
+                        var written = argument.Expression.ToString().Trim();
+                        if (parameter.Label != "_" || parameter.IsVariadic || parameter.Name.StartsWith('_') || argument.Span.Length == 0
+                            || written == parameter.Name || written.EndsWith("." + parameter.Name, StringComparison.Ordinal)) {
+                            continue;
+                        }
+
+                        hints.Add(new JsonObject {
+                            ["position"] = PositionNode(document.Lines.PositionOf(argument.Span.Start)),
+                            ["label"] = parameter.Name + ":",
+                            ["kind"] = 2,
+                            ["paddingRight"] = true
+                        });
+                    }
+
+                    break;
+                }
+
+                case ClosureExpressionSyntax closure:
+                    AddClosureHints(document, model, closure, closure.Signature.Parameters, closure.Signature.CloseParenToken, closure.Signature.ReturnType, hints);
+                    break;
+
+                case BraceClosureExpressionSyntax { Header: { } header } closure:
+                    AddClosureHints(document, model, closure, header.Parameters, header.CloseParenToken, null, hints);
+                    break;
+            }
+        }
+    }
+
+    static void AddClosureHints(
+        Document document, SemanticModel model, ExpressionSyntax closure, SeparatedSyntaxList<ClosureParameterSyntax> parameters,
+        SyntaxToken closeParen, TypeSyntax? returnType, JsonArray hints) {
+        if (Unconverted(model.GetBoundNode(closure)) is not BoundClosure { Symbol: var function }) {
+            return;
+        }
+
+        var written = parameters.ToList();
+        for (var i = 0; i < written.Count && i < function.Parameters.Length; i++) {
+            if (written[i].Type is null && !written[i].Identifier.IsMissing && function.Parameters[i].Type is { IsError: false } type) {
+                hints.Add(new JsonObject {
+                    ["position"] = PositionNode(document.Lines.PositionOf(written[i].Identifier.Span.End)),
+                    ["label"] = ": " + SymbolDisplay.Type(type),
+                    ["kind"] = 1
+                });
+            }
+        }
+
+        // The result, after the parameters' closing parenthesis, or the last parameter.
+        var after = !closeParen.IsNone && !closeParen.IsMissing ? closeParen.Span.End : written.Count > 0 ? written[^1].Span.End : -1;
+        if (returnType is null && after >= 0 && function.ReturnType is { IsError: false } result && result.ToDisplayString() != "Void") {
+            hints.Add(new JsonObject {
+                ["position"] = PositionNode(document.Lines.PositionOf(after)),
+                ["label"] = "-> " + SymbolDisplay.Type(result),
+                ["kind"] = 1,
+                ["paddingLeft"] = true
+            });
+        }
+    }
+
+    static BoundNode? Unconverted(BoundNode? node) {
+        while (node is BoundConversion conversion) {
+            node = conversion.Operand;
+        }
+
+        return node;
     }
 
     static JsonObject RootHint(Document document, int offset, IReadOnlyList<string> names, string tooltip) =>

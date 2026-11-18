@@ -84,7 +84,7 @@ public sealed class BorrowFields : ISilPass {
         };
 
     /// <summary>For every function, whether it may write an object's field.</summary>
-    static Dictionary<string, bool> Summarise(SilModule module) {
+    internal static Dictionary<string, bool> Summarise(SilModule module) {
         var writes = module.Functions.ToDictionary(static f => f.Name, static _ => false);
         for (var changed = true; changed;) {
             changed = false;
@@ -107,7 +107,14 @@ public sealed class BorrowFields : ISilPass {
             _ => false,
         };
 
-    static bool MayWrite(SilFunction function, Dictionary<string, bool> writes, AllocStackInst? ignoring) {
+    /// <summary>
+    ///     True when the function may write an object's field or run a deinit:
+    ///     a store outside its own slots, a release of what could have one, a
+    ///     call to a function that may. The stores to and destroys of the
+    ///     slots <paramref name="ignoring" /> names are left out: slots that
+    ///     will hold their objects unretained, so that neither releases.
+    /// </summary>
+    internal static bool MayWrite(SilFunction function, Dictionary<string, bool> writes, IReadOnlySet<AllocStackInst>? ignoring) {
         if (function.Blocks.Count == 0) {
             return true; // declared, not defined: anything
         }
@@ -116,6 +123,11 @@ public sealed class BorrowFields : ISilPass {
         foreach (var block in function.Blocks) {
             foreach (var instruction in block.Instructions) {
                 switch (instruction) {
+                    case StoreInst or DestroyAddrInst when ignoring is not null && instruction.Operands[^1] is AllocStackInst slot && ignoring.Contains(slot):
+                        break;
+
+                    // Moving a value out of a field leaves the field without it.
+                    case LoadInst { Kind: LoadKind.Take } take when !LocalSlot(take.Address):
                     case StoreInst store when !LocalSlot(store.Address):
                     case StoreWeakInst or StoreUnownedInst:
                         return true;

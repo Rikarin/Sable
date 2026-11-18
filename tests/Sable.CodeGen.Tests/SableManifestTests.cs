@@ -48,6 +48,32 @@ public sealed class SableManifestTests {
     }
 
     [Fact]
+    public void AProfileSetsSizeStripRpathAndOverflowChecks() {
+        using var fixture = new PackageFixture();
+        var manifest = Load(fixture, """
+                                     import Sable.Build
+
+                                     let manifest = Package {
+                                         name: "small",
+                                         version: "1.0.0",
+                                         profiles: [
+                                             .release(optLevel: 3, overflowChecks: false, optSize: .minSize, strip: .symbols, rpath: true),
+                                             .dev(optSize: .size, strip: .debuginfo),
+                                         ],
+                                     }
+                                     """);
+
+        Assert.Equal("z", manifest.Release.OptLevel);
+        Assert.Equal(StripMode.Symbols, manifest.Release.Strip);
+        Assert.True(manifest.Release.Rpath);
+        Assert.False(manifest.Release.OverflowChecks);
+        Assert.Equal("s", manifest.Dev.OptLevel);
+        Assert.Equal(StripMode.DebugInfo, manifest.Dev.Strip);
+        Assert.False(manifest.Dev.Rpath);
+        Assert.True(manifest.Dev.OverflowChecks);
+    }
+
+    [Fact]
     public void TheDesignDocumentsManifestEvaluates() {
         using var fixture = new PackageFixture();
         var manifest = Load(fixture, Full);

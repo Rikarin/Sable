@@ -146,7 +146,12 @@ public struct TypeInfo {
     /// The type's information: 'TypeInfo.of(Point.self)'. Only a
     /// @reflectable type has it, and only one asked for is emitted.
     @intrinsic
-    public static fn of<T: Reflectable>(_ type: T) -> TypeInfo
+    public static fn of<T: Reflectable>(_ type: T.Type) -> TypeInfo
+
+    /// The information of a value's type: 'TypeInfo.of(point)' is
+    /// 'TypeInfo.of(Point.self)'.
+    @intrinsic
+    public static fn of<T: Reflectable>(_ value: T) -> TypeInfo
 
     /// The stored field with this name, or none.
     public fn field(named name: String) -> FieldInfo? {

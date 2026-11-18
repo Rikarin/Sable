@@ -82,7 +82,12 @@ public static class SilPrinter {
         }
 
         foreach (var (name, (symbol, type)) in module.Foreign) {
-            builder.Append("sil_extern @").Append(name).Append(" : $").Append(type).Append(" = ").Append(Quote(symbol)).Append('\n');
+            builder.Append("sil_extern @").Append(name).Append(" : $").Append(type).Append(" = ").Append(Quote(symbol));
+            if (module.ForeignVariadic.TryGetValue(name, out var fixedCount)) {
+                builder.Append(" variadic ").Append(fixedCount);
+            }
+
+            builder.Append('\n');
         }
 
         foreach (var (name, symbol) in module.Exports) {
@@ -218,7 +223,7 @@ public static class SilPrinter {
                         break;
 
                     case BuiltinInst builtin:
-                        builder.Append(" \"").Append(builtin.Name).Append("\"(")
+                        builder.Append(builtin.InBounds ? " [in_bounds]" : "").Append(" \"").Append(builtin.Name).Append("\"(")
                             .Append(string.Join(", ", builtin.Operands.Select(Name)))
                             .Append(") : $").Append(builtin.Type);
                         break;

@@ -61,6 +61,48 @@ internal static class Sendability {
         }
     }
 
+    /// <summary>
+    ///     Why a type that declares <c>: Sendable</c> is not, naming the field
+    ///     or case that holds what is not; null when it is.
+    /// </summary>
+    /// <remarks>
+    ///     Crossing a boundary asks what a value is made of, never what its
+    ///     type declares, so a wrong declaration is not unsafe by itself; but
+    ///     it promises what is not true, and a reader, or a generic function
+    ///     constrained <c>T: Sendable</c>, takes it at its word. Its type
+    ///     parameters are its own here: <c>struct Box&lt;T&gt;: Sendable</c>
+    ///     holding a <c>T</c> needs <c>T: Sendable</c>.
+    /// </remarks>
+    public static string? WhyNotAsDeclared(NamedTypeSymbol type) {
+        if (type.TypeKind is not (TypeKind.Struct or TypeKind.Union or TypeKind.Enum)) {
+            return Why(type, []) is { } reason ? $"'{type.Name}' cannot be Sendable: {reason}" : null;
+        }
+
+        // A type that holds itself, through an indirect case, is as Sendable
+        // as the rest of it.
+        HashSet<TypeSymbol> seen = [type];
+        foreach (var member in type.Members) {
+            switch (member) {
+                case FieldSymbol { IsStatic: false, IsComputed: false } field
+                    when Why(field.Type, seen) is { } reason:
+                    return $"'{type.Name}' cannot be Sendable: its field '{field.Name}' has type "
+                           + $"'{field.Type.ToDisplayString()}', which is not Sendable: {reason}";
+
+                case UnionCaseSymbol unionCase:
+                    foreach (var payload in unionCase.Payload) {
+                        if (Why(payload.Type, seen) is { } reason) {
+                            return $"'{type.Name}' cannot be Sendable: its case '{unionCase.Name}' carries "
+                                   + $"'{payload.Type.ToDisplayString()}', which is not Sendable: {reason}";
+                        }
+                    }
+
+                    break;
+            }
+        }
+
+        return null;
+    }
+
     static string? Named(NamedTypeSymbol type, HashSet<TypeSymbol> seen) {
         switch (type.TypeKind) {
             case TypeKind.Actor:
@@ -108,6 +150,8 @@ internal static class Sendability {
     }
 
     /// <summary>A protocol that is Sendable, or refines it.</summary>
+    public static bool RefinesSendable(TypeSymbol constraint) => Refines(constraint, []);
+
     static bool Refines(TypeSymbol constraint, HashSet<TypeSymbol> seen) =>
         constraint switch {
             _ when IsSendableProtocol(constraint) => true,

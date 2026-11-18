@@ -140,6 +140,29 @@ public sealed partial class SilGen {
     FunctionSymbol? _entryOverride;
 
     /// <summary>
+    ///     Lowers a program for a session that outlives it, as a REPL's
+    ///     entries do: each global gets an initialiser of its own,
+    ///     <c>$global.init.&lt;name&gt;</c>, which the interpreter runs when the
+    ///     global is first reached (<see cref="SilInterpreter.Session" />), and
+    ///     the entry point neither initialises nor destroys the globals. A
+    ///     global an earlier program of the session set up keeps its value,
+    ///     and its initialiser is not run again.
+    /// </summary>
+    public static (SilModule Module, IReadOnlyList<Diagnostic> Diagnostics) LowerForSession(Compilation compilation) {
+        var generator = new SilGen(compilation) { _lazyGlobals = true };
+        generator.LowerAll();
+        return (generator._module, generator.Diagnostics);
+    }
+
+    bool _lazyGlobals;
+
+    /// <summary>The prefix of a global's own initialiser, in a module lowered for a session.</summary>
+    internal const string GlobalInitPrefix = "$global.init.";
+
+    /// <summary>Whether a function sets up globals — all of them, or a session's one — rather than being the entry point it is lowered as.</summary>
+    static bool IsGlobalInit(string function) => function == GlobalsInit || function.StartsWith(GlobalInitPrefix, StringComparison.Ordinal);
+
+    /// <summary>
     ///     Lowers one unit of a program compiled separately: the functions of
     ///     the files it owns, and whatever instances of generic functions they
     ///     use; the program's other functions are only declared. The module's
@@ -316,8 +339,13 @@ public sealed partial class SilGen {
                 continue;
             }
 
-            // '@extern': C's function, declared in every unit that may call it.
+            // '@extern': C's function, declared in every unit that may call it;
+            // a variadic one for each call's types, where it is called.
             if (symbol.ForeignName is { } foreign) {
+                if (symbol.Parameters is [.., { IsVariadic: true }]) {
+                    continue;
+                }
+
                 if (SignatureOf(symbol, syntax, TypeSubstitution.Empty) is { } signature) {
                     _module.Foreign[_names[symbol]] = (foreign, signature);
                 }
@@ -358,28 +386,13 @@ public sealed partial class SilGen {
             }
         }
 
-        // A generic class's vtable names instances of its methods, which
-        // are lowered in their turn — and may make more classes.
-        do {
-            while (_pending.Count > 0) {
-                var (symbol, name, type, substitution) = _pending.Dequeue();
-                if (_localGenerics.TryGetValue(symbol, out var local)) {
-                    LowerLocalFunction(symbol, local.Body, name, type, local.Source, substitution);
-                    continue;
-                }
+        LowerPendingInstances();
 
-                var (syntax, model) = _declarations[symbol];
-                _loweringInstance = name;
-                LowerBody(symbol, syntax, model, name, type, substitution);
-                _loweringInstance = null;
-            }
-
-            BuildVTables();
-        } while (_pending.Count > 0);
-
-        // Separately, the globals are set up by the unit the program starts in.
+        // Separately, the globals are set up by the unit the program starts
+        // in. Their initial values may ask for instances nothing else did.
         if (_unit is null || _module.EntryPoint is not null) {
             LowerGlobalLifetimes();
+            LowerPendingInstances();
         }
 
         BuildVTables();
@@ -528,8 +541,8 @@ public sealed partial class SilGen {
                     continue;
                 }
 
-                // A constant written where it is read needs no storage.
-                if (_evaluation is null && ConstantRead(field) is not null) {
+                // A constant written where it is read needs no storage, unless C reads it.
+                if (_evaluation is null && field.ExportName is null && ConstantRead(field) is not null) {
                     continue;
                 }
 
@@ -546,8 +559,38 @@ public sealed partial class SilGen {
                 _globalFields.Add((field, name, model));
                 _globalsByField[field] = (name, type);
                 _module.Globals.Add((name, type));
+
+                // '@export var': C reads and writes the storage by its name,
+                // which every unit, having the global, calls it by.
+                if (field.ExportName is { } export) {
+                    _module.Exports[name] = export;
+                }
             }
         }
+    }
+
+    /// <summary>
+    ///     Lowers the instances of generic functions asked for so far. A
+    ///     generic class's vtable names instances of its methods, which are
+    ///     lowered in their turn — and may make more classes.
+    /// </summary>
+    void LowerPendingInstances() {
+        do {
+            while (_pending.Count > 0) {
+                var (symbol, name, type, substitution) = _pending.Dequeue();
+                if (_localGenerics.TryGetValue(symbol, out var local)) {
+                    LowerLocalFunction(symbol, local.Body, name, type, local.Source, substitution);
+                    continue;
+                }
+
+                var (syntax, model) = _declarations[symbol];
+                _loweringInstance = name;
+                LowerBody(symbol, syntax, model, name, type, substitution);
+                _loweringInstance = null;
+            }
+
+            BuildVTables();
+        } while (_pending.Count > 0);
     }
 
     static bool InsideBody(SyntaxNode node) {
@@ -564,22 +607,44 @@ public sealed partial class SilGen {
 
     /// <summary>
     ///     Two functions the entry point calls: one that stores each global's
-    ///     initial value, in the order declared, before anything else runs;
-    ///     one that destroys them, last first, as the program returns.
+    ///     initial value, each after those it reads (SilGen.Globals.cs), before
+    ///     anything else runs; one that destroys them, last first, as the
+    ///     program returns.
     /// </summary>
     void LowerGlobalLifetimes() {
         if (_globalFields.Count == 0 || _entrySymbol is not { } initSymbol) {
             return;
         }
 
+        var ordered = OrderGlobals();
+
         // Lowered in the entry point's context: a function of no parameters.
         var unit = new FunctionType([], SilType.Unit);
         var statements = new List<BoundStatement>();
-        foreach (var (field, _, model) in _globalFields) {
+        foreach (var (field, _, model) in ordered) {
             if (model.GetFieldInitializer(field) is { } initial) {
                 var target = new BoundFieldAccess(initial.Syntax, null, field);
                 statements.Add(new BoundExpressionStatement(initial.Syntax, new BoundAssignment(initial.Syntax, target, initial)));
             }
+        }
+
+        // A session's globals are set up one at a time, as each is reached,
+        // and outlive the program: nothing destroys them at its end.
+        if (_lazyGlobals) {
+            foreach (var (field, name, model) in _globalFields) {
+                if (model.GetFieldInitializer(field) is not { } initial) {
+                    continue;
+                }
+
+                var target = new BoundFieldAccess(initial.Syntax, null, field);
+                var assignment = new BoundExpressionStatement(initial.Syntax, new BoundAssignment(initial.Syntax, target, initial));
+                var own = new SilFunction(GlobalInitPrefix + name, unit);
+                new FunctionLowering(this, initSymbol, own, model.SyntaxTree.Text, TypeSubstitution.Empty).Lower(new BoundBlock(initial.Syntax, [], [assignment]));
+                own.RemoveUnreachableBlocks();
+                _module.Add(own);
+            }
+
+            return;
         }
 
         var source = _globalFields[0].Model.SyntaxTree.Text;
@@ -591,8 +656,8 @@ public sealed partial class SilGen {
 
         var deinit = new SilFunction(GlobalsDeinit, unit);
         var entry = deinit.AddBlock();
-        for (var i = _globalFields.Count - 1; i >= 0; i--) {
-            var (name, type) = _globalsByField[_globalFields[i].Field];
+        for (var i = ordered.Count - 1; i >= 0; i--) {
+            var (name, type) = _globalsByField[ordered[i].Field];
             if (!type.IsTrivial) {
                 entry.Append(new DestroyAddrInst(entry.Append(new GlobalAddrInst(name, type))));
             }
@@ -667,6 +732,11 @@ public sealed partial class SilGen {
             initialize.RemoveUnreachableBlocks();
             _module.Add(initialize);
             _module.Add(Allocator(function, classType, initialize));
+
+            // Its body is checked as any other is: 'self.h = h' moves a
+            // @noncopy parameter into the object, and is not a copy of it.
+            MoveChecker.Check(initialize, source, _diagnostics);
+            _sources[initialize] = source;
             return;
         }
 
@@ -964,6 +1034,7 @@ public sealed partial class SilGen {
             NamedTypeSymbol named => named.TypeArguments.Any(a => Occurs(part, a)),
             ArrayTypeSymbol array => Occurs(part, array.ElementType),
             OptionalTypeSymbol optional => Occurs(part, optional.UnderlyingType),
+            MetatypeTypeSymbol metatype => Occurs(part, metatype.InstanceType),
             ReferenceTypeSymbol reference => Occurs(part, reference.ReferencedType),
             TupleTypeSymbol tuple => tuple.ElementTypes.Any(e => Occurs(part, e)),
             FunctionTypeSymbol function =>
@@ -1395,6 +1466,13 @@ public sealed partial class SilGen {
             // 'any P': a closure per requirement, sharing one box with the value.
             case ExistentialTypeSymbol { Constraint: NamedTypeSymbol { TypeKind: TypeKind.Protocol } protocol }:
                 return ExistentialLayout(protocol);
+
+            // 'T.Type': its one value is the type, which each instance of the
+            // code is generated for, so it holds nothing. SIL has no value of
+            // type (), so it is a Bool that is always false: a byte, and free
+            // to copy.
+            case MetatypeTypeSymbol:
+                return SilType.Bool;
 
             // A reference to an inline value, absolute or relative: a view of its bytes.
             case ReferenceTypeSymbol reference when Lower(reference.ReferencedType) is StructType { IsInline: true } inline:
@@ -1901,7 +1979,7 @@ public sealed partial class SilGen {
         var box = entry.Append(new UncheckedRefCastInst(context, BoxType(type.Parameters[0])));
         var self = entry.Append(new LoadInst(entry.Append(new RefElementAddrInst(box, 0))));
         SilValue callee = dynamic
-            ? entry.Append(new ClassMethodInst(self, SlotName(method), type))
+            ? entry.Append(new ClassMethodInst(self, VTableSlot(method), type))
             : entry.Append(new FunctionRefInst(name, type));
         SilValue[] all = [self, ..arguments];
 
@@ -2983,7 +3061,7 @@ public sealed partial class SilGen {
             }
 
             // The entry point first gives every global its initial value.
-            if (ReferenceEquals(symbol, generator._entrySymbol) && generator._globalFields.Count > 0 && function.Name != GlobalsInit) {
+            if (ReferenceEquals(symbol, generator._entrySymbol) && generator._globalFields.Count > 0 && !IsGlobalInit(function.Name) && !generator._lazyGlobals) {
                 var unit = new FunctionType([], SilType.Unit);
                 Emit(new ApplyInst(Emit(new FunctionRefInst(GlobalsInit, unit)), SilType.Unit));
             }
@@ -3029,11 +3107,11 @@ public sealed partial class SilGen {
                 DestroyOwnedParameters();
                 Deallocate();
                 // The program ends once every task has, and then its globals go.
-                if (ReferenceEquals(symbol, generator._entrySymbol) && function.Name != GlobalsInit) {
+                if (ReferenceEquals(symbol, generator._entrySymbol) && !IsGlobalInit(function.Name)) {
                     Emit(new BuiltinInst("task_drain", SilType.Unit));
                 }
 
-                if (ReferenceEquals(symbol, generator._entrySymbol) && generator._globalFields.Count > 0 && function.Name != GlobalsInit) {
+                if (ReferenceEquals(symbol, generator._entrySymbol) && generator._globalFields.Count > 0 && !IsGlobalInit(function.Name) && !generator._lazyGlobals) {
                     var unit = new FunctionType([], SilType.Unit);
                     Emit(new ApplyInst(Emit(new FunctionRefInst(GlobalsDeinit, unit)), SilType.Unit));
                 }
@@ -3257,7 +3335,32 @@ public sealed partial class SilGen {
                 _temporaries.RemoveAt(_temporaries.LastIndexOf(value));
             }
 
+            // What a borrow is borrowed out of comes off with it.
+            if (value is LoadBorrowInst inner && _borrowedOutOf.TryGetValue(inner, out var outer)) {
+                Unhold(outer);
+            }
+
             return value;
+        }
+
+        /// <summary>
+        ///     A borrow of a field of an object, and the object, itself borrowed
+        ///     or a temporary, that must outlive it: ended right after it.
+        /// </summary>
+        readonly Dictionary<LoadBorrowInst, SilValue> _borrowedOutOf = new(ReferenceEqualityComparer.Instance);
+
+        /// <summary>Ends what a borrow, already ended and off the temporaries, was borrowed out of.</summary>
+        void ReleaseOuter(LoadBorrowInst inner) {
+            if (!_borrowedOutOf.TryGetValue(inner, out var outer)) {
+                return;
+            }
+
+            if (outer is LoadBorrowInst outerBorrow) {
+                Emit(new EndBorrowInst(outerBorrow));
+                ReleaseOuter(outerBorrow);
+            } else {
+                Destroy(outer);
+            }
         }
 
         /// <summary>The end of a borrow: a temporary is taken off the temporaries and destroyed, a load_borrow ended.</summary>
@@ -3278,6 +3381,7 @@ public sealed partial class SilGen {
             if (value is LoadBorrowInst borrowed) {
                 Unhold(borrowed);
                 Emit(new EndBorrowInst(borrowed));
+                ReleaseOuter(borrowed);
                 return;
             }
 
@@ -3312,6 +3416,19 @@ public sealed partial class SilGen {
             // would be a move out of what holds it.
             if (expression is BoundFieldAccess && LowerType(expression.Type) is NominalType { IsNoncopyable: true } && Place(expression) is { } inPlace) {
                 return Hold(Emit(new LoadBorrowInst(inPlace)));
+            }
+
+            // And one of an object: borrowed in the object, which stays
+            // borrowed, or alive, until the field's borrow ends.
+            if (expression is BoundFieldAccess && LowerType(expression.Type) is NominalType { IsNoncopyable: true }
+                && ObjectOf(expression) is not null) {
+                if (FieldInObject(expression) is not var (address, reference)) {
+                    return null;
+                }
+
+                var inObject = Emit(new LoadBorrowInst(address));
+                _borrowedOutOf[inObject] = reference;
+                return Hold(inObject);
             }
 
             // So is one a closure captures, in its box. The box is held by the
@@ -3370,7 +3487,56 @@ public sealed partial class SilGen {
         ///     address stands for its value; a parameter of reference type is
         ///     an address that is the value.
         /// </summary>
-        static bool IsByAddress(ParameterSymbol parameter) => parameter.Modifier is ParameterModifier.InOut or ParameterModifier.Out or ParameterModifier.Ref;
+        static bool IsByAddress(ParameterSymbol parameter) => IsByAddressModifier(parameter);
+
+        /// <summary>
+        ///     The object a stored field is in — 'c.box.value' is in 'c' —
+        ///     reached through value fields; null when it is in none.
+        /// </summary>
+        BoundExpression? ObjectOf(BoundExpression expression) =>
+            expression is BoundFieldAccess { Receiver: { } receiver, Field: { IsComputed: false, IsStatic: false } field } && !SilGen.IsGlobal(field)
+                ? Sub(receiver.Type).TypeKind is TypeKind.Class or TypeKind.Actor ? receiver
+                : Sub(receiver.Type).TypeKind == TypeKind.Struct && !IsInlineType(receiver.Type) ? ObjectOf(receiver)
+                : null
+                : null;
+
+        /// <summary>
+        ///     The address of a stored field inside an object, and the object,
+        ///     borrowed, which must outlive any use of the address.
+        /// </summary>
+        (SilValue Address, SilValue Reference)? FieldInObject(BoundExpression expression) {
+            var access = (BoundFieldAccess)expression;
+            var receiver = access.Receiver!;
+            if (Sub(receiver.Type).TypeKind is TypeKind.Class or TypeKind.Actor) {
+                if (Borrow(receiver) is not { Type: ClassType classType } reference) {
+                    return null;
+                }
+
+                var index = classType.FieldIndex(access.Field.Name);
+                if (index < 0) {
+                    End(reference);
+                    Missing(expression, $"the member '{access.Field.Name}'");
+                    return null;
+                }
+
+                return (Emit(new RefElementAddrInst(reference, index)), reference);
+            }
+
+            if (FieldInObject(receiver) is not var (outer, owner)) {
+                return null;
+            }
+
+            var fieldIndex = ((outer.Type as AddressType)?.Pointee as StructType)?.FieldIndex(access.Field.Name) ?? -1;
+            if (fieldIndex < 0) {
+                End(owner);
+                Missing(expression, $"the member '{access.Field.Name}'");
+                return null;
+            }
+
+            return (Emit(new StructElementAddrInst(outer, fieldIndex)), owner);
+        }
+
+        static bool IsByAddressModifier(ParameterSymbol parameter) => parameter.Modifier is ParameterModifier.InOut or ParameterModifier.Out or ParameterModifier.Ref;
 
         /// <summary>The slot of a move-only local or parameter, or null.</summary>
         AllocStackInst? MoveOnlyPlace(BoundExpression expression) =>
@@ -4967,6 +5133,10 @@ public sealed partial class SilGen {
 
                 case BoundFunctionReference reference:
                     return FunctionValue(reference);
+
+                // 'Int.self': the type is known here, so the value holds nothing.
+                case BoundMetatype:
+                    return Emit(new IntegerLiteralInst(SilType.Bool, 0));
 
                 case BoundIndirectCall indirect:
                     return IndirectCall(indirect);
@@ -7490,6 +7660,14 @@ public sealed partial class SilGen {
                         return UnitValue.Instance;
                     }
 
+                    if (callee.Name == "cancel") {
+                        return CancelTask(call);
+                    }
+
+                    if (callee.Name == "isCancelled") {
+                        return Emit(new BuiltinInst("task_is_cancelled", SilType.Bool));
+                    }
+
                     Emit(new BuiltinInst("task_yield", SilType.Unit));
                     return UnitValue.Instance;
                 }
@@ -7588,6 +7766,11 @@ public sealed partial class SilGen {
                 }
 
                 callee = witness;
+            }
+
+            // C's '...': declared for the types this call passes.
+            if (callee is { ForeignName: { } cName, Parameters: [.., { IsVariadic: true }] }) {
+                return VariadicForeignCall(call, callee, cName);
             }
 
             string name;
@@ -7778,6 +7961,7 @@ public sealed partial class SilGen {
                         break;
                     case LoadBorrowInst borrowed:
                         Emit(new EndBorrowInst(borrowed));
+                        ReleaseOuter(borrowed);
                         break;
                     default:
                         Destroy(borrow);
@@ -8110,6 +8294,46 @@ public sealed partial class SilGen {
             }
         }
 
+        /// <summary>
+        ///     A call to a variadic C function: the fixed arguments as any C
+        ///     call passes them, then each of the rest as the value it is —
+        ///     not the CVarArg the binder saw it as — through a declaration of
+        ///     the function for exactly these types, which the emitter calls
+        ///     with C's '...' (and its default promotions).
+        /// </summary>
+        SilValue? VariadicForeignCall(BoundCall call, FunctionSymbol callee, string cName) {
+            var fixedCount = callee.Parameters.Length - 1;
+            var arguments = new List<SilValue>();
+            for (var i = 0; i < call.Arguments.Length; i++) {
+                var argument = call.Arguments[i];
+                while (i >= fixedCount && argument is BoundConversion { Type: NamedTypeSymbol { TypeKind: TypeKind.Protocol } } toProtocol) {
+                    argument = toProtocol.Operand;
+                }
+
+                if (Borrow(argument) is not { } value) {
+                    arguments.ForEach(End);
+                    return null;
+                }
+
+                arguments.Add(value);
+            }
+
+            var result = ReferenceEquals(callee.ReturnType, Core.Void) ? SilType.Unit : LowerType(callee.ReturnType);
+            if (result is null) {
+                arguments.ForEach(End);
+                return Missing(call, $"the result of '{callee.Name}'");
+            }
+
+            var type = new FunctionType([..arguments.Select(static a => a.Type)], result);
+            var name = $"{generator._names[callee]}$va${string.Join("$", type.Parameters.Skip(fixedCount).Select(static t => Sanitise(t.ToString())))}";
+            generator._module.Foreign[name] = (cName, type);
+            generator._module.ForeignVariadic[name] = fixedCount;
+            Locate(call.Syntax);
+            var made = Emit(new ApplyInst(Emit(new FunctionRefInst(name, type)), result, [..arguments]));
+            arguments.ForEach(End);
+            return result == SilType.Unit ? UnitValue.Instance : made;
+        }
+
         /// <summary>A named function as a value: a closure over a thunk, with no context.</summary>
         SilValue? FunctionValue(BoundFunctionReference reference) {
             var callee = reference.Function;
@@ -8123,18 +8347,60 @@ public sealed partial class SilGen {
                 return BoundMethodValue(reference, receiver);
             }
 
-            if (reference.Receiver is not null || IsGeneric(callee) || !generator._names.TryGetValue(callee, out var name)
-                || LowerType(reference.Type) is not ThickFunctionType thick) {
+            if (reference.Receiver is not null || LowerType(reference.Type) is not ThickFunctionType thick) {
                 return Missing(reference, $"'{callee.Name}' as a value");
             }
 
-            var type = generator._module.Find(name)?.Type ?? generator.SignatureOf(callee, reference.Syntax, TypeSubstitution.Empty);
-            if (type is null || type != thick.Signature || !type.Owned.IsEmpty) {
+            if (ReferencedFunction(reference, callee) is not var (name, type)) {
+                return null;
+            }
+
+            if (type != thick.Signature || !type.Owned.IsEmpty) {
                 return Missing(reference, $"'{callee.Name}' as a value");
             }
 
             var thunk = generator.Thunk(name, type);
             return Emit(new PartialApplyInst(Emit(new FunctionRefInst(thunk, thick.Implementation)), null, thick));
+        }
+
+        /// <summary>
+        ///     The function a reference names, and its signature: for a generic
+        ///     one, the instance for the type arguments the reference settled
+        ///     and its receiver's type gives. Null, with the error reported,
+        ///     when there is none.
+        /// </summary>
+        (string Name, FunctionType Type)? ReferencedFunction(BoundFunctionReference reference, FunctionSymbol callee) {
+            if (IsGeneric(callee)) {
+                var receiver = reference.Receiver is { } r ? TypeSubstitution.For(Sub(r.Type)) : TypeSubstitution.Empty;
+                var map = new Dictionary<TypeParameterSymbol, TypeSymbol>();
+                foreach (var parameter in TypeParametersOf(callee)) {
+                    var bound = reference.Substitution.Lookup(parameter) is { } settled
+                        ? Sub(settled)
+                        : receiver.Lookup(parameter) ?? substitution.Lookup(parameter);
+                    if (bound is not null) {
+                        map[parameter] = bound;
+                    }
+                }
+
+                if (generator.Instance(callee, new TypeSubstitution(map), reference.Syntax) is not { } instance) {
+                    _failed = true;
+                    return null;
+                }
+
+                return instance;
+            }
+
+            if (!generator._names.TryGetValue(callee, out var name)) {
+                Missing(reference, $"'{callee.Name}' as a value");
+                return null;
+            }
+
+            if ((generator._module.Find(name)?.Type ?? generator.SignatureOf(callee, reference.Syntax, TypeSubstitution.Empty)) is not { } type) {
+                _failed = true;
+                return null;
+            }
+
+            return (name, type);
         }
 
         /// <summary>
@@ -8144,10 +8410,24 @@ public sealed partial class SilGen {
         /// </summary>
         SilValue? BoundMethodValue(BoundFunctionReference reference, BoundExpression receiver) {
             var callee = reference.Function;
-            if (IsGeneric(callee) || !generator._names.TryGetValue(callee, out var name)
-                || generator.SignatureOf(callee, reference.Syntax, TypeSubstitution.Empty) is not { } type
-                || LowerType(reference.Type) is not ThickFunctionType thick) {
+            if (LowerType(reference.Type) is not ThickFunctionType thick) {
                 return Missing(reference, $"'{callee.Name}' as a value");
+            }
+
+            // A protocol's requirement, named on a type parameter: the
+            // concrete type's own member, now that the type is known. An
+            // existential's would need its witness at run time.
+            if (OwnerOf(callee) is { TypeKind: TypeKind.Protocol }) {
+                if (Sub(receiver.Type) is not NamedTypeSymbol { TypeKind: not TypeKind.Protocol } concrete
+                    || Implementation(concrete, callee) is not { Builtin: null } witness) {
+                    return Missing(reference, $"the requirement '{callee.Name}' of '{Sub(receiver.Type).ToDisplayString()}' as a value");
+                }
+
+                callee = witness;
+            }
+
+            if (ReferencedFunction(reference, callee) is not var (name, type)) {
+                return null;
             }
 
             // A mutating method changes the value it is called on, which the

@@ -182,6 +182,11 @@ public struct Runtime {
     @builtin("string_hash")
     public static fn hashString(text: String) -> Int
 
+    /// Where the part next occurs in the text at or after the scalar
+    /// position: its scalar index, or -1. Natively a vectorised byte search.
+    @builtin("string_find")
+    public static fn findString(text: String, part: String, from: Int) -> Int
+
     @builtin("string_join")
     public static fn joinStrings(parts: String[>..], separator: String) -> String
 

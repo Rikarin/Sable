@@ -3,7 +3,7 @@ module Sable.Core
 // What the operating system gives a program, through the runtime: the
 // calls Sable.IO, Sable.Time and Sable.Process are written over
 // (docs/06 §6.4), and 'print'. Each is a '@builtin', which the runtime
-// implements in C (sable_runtime.c) and the interpreter in .NET.
+// implements in C (runtime/) and the interpreter in .NET.
 
 /// Writes the value and a line break to standard output: what hello world
 /// needs, without importing Sable.IO.

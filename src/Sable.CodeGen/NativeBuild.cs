@@ -98,14 +98,47 @@ public sealed record NativeBuildResult(bool Succeeded, string Output);
 ///     passes make it fast.
 /// </remarks>
 public static class NativeBuild {
-    /// <summary>The runtime's C source, carried inside this assembly.</summary>
-    public static string RuntimeSource {
-        get {
-            using var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("Sable.CodeGen.sable_runtime.c")
-                ?? throw new InvalidOperationException("the runtime source is missing from Sable.CodeGen");
-            using var reader = new StreamReader(stream);
-            return reader.ReadToEnd();
+    /// <summary>
+    ///     The runtime's C source, carried inside this assembly: each file of
+    ///     <c>runtime/</c> by its name. <c>sable_runtime.c</c> is the one
+    ///     compiled; it includes the rest.
+    /// </summary>
+    public static IReadOnlyList<(string Name, string Text)> RuntimeFiles => RuntimeFileList.Value;
+
+    static readonly Lazy<IReadOnlyList<(string Name, string Text)>> RuntimeFileList = new(static () => {
+        const string prefix = "Sable.CodeGen.runtime/";
+        var assembly = Assembly.GetExecutingAssembly();
+        var files = assembly.GetManifestResourceNames()
+            .Where(static name => name.StartsWith(prefix, StringComparison.Ordinal))
+            .Order(StringComparer.Ordinal)
+            .Select(name => {
+                using var reader = new StreamReader(assembly.GetManifestResourceStream(name)!);
+                return (name[prefix.Length..], reader.ReadToEnd());
+            })
+            .ToList();
+        return files.Any(static f => f.Item1 == RuntimeMain) ? files : throw new InvalidOperationException("the runtime source is missing from Sable.CodeGen");
+    });
+
+    /// <summary>The runtime's file that is compiled, which includes the others.</summary>
+    public const string RuntimeMain = "sable_runtime.c";
+
+    /// <summary>
+    ///     The whole of the runtime's source, every file named and in order:
+    ///     what a compiled runtime is keyed by.
+    /// </summary>
+    public static string RuntimeSource => string.Concat(RuntimeFiles.Select(static f => $"--- {f.Name}\n{f.Text}\n"));
+
+    /// <summary>
+    ///     Writes the runtime's files into <paramref name="directory" />, and
+    ///     gives the path of the one to compile.
+    /// </summary>
+    public static string WriteRuntime(string directory) {
+        Directory.CreateDirectory(directory);
+        foreach (var (name, text) in RuntimeFiles) {
+            File.WriteAllText(Path.Combine(directory, name), text);
         }
+
+        return Path.Combine(directory, RuntimeMain);
     }
 
     /// <summary>
@@ -336,9 +369,9 @@ public static class NativeBuild {
 
         Directory.CreateDirectory(cacheDirectory);
         var temporary = path + $".{Environment.ProcessId}.{Guid.NewGuid():N}.tmp";
-        var source = temporary + ".c";
+        var sources = temporary + ".src";
         try {
-            File.WriteAllText(source, RuntimeSource);
+            var source = WriteRuntime(sources);
             var (exitCode, output) = Run(CompilerPath, [..flags, source, "-o", temporary]);
             if (exitCode != 0) {
                 return (path, new(false, output));
@@ -347,7 +380,10 @@ public static class NativeBuild {
             File.Move(temporary, path, overwrite: true);
             return (path, new(true, output));
         } finally {
-            File.Delete(source);
+            if (Directory.Exists(sources)) {
+                Directory.Delete(sources, true);
+            }
+
             File.Delete(temporary);
         }
     }

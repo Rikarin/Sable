@@ -84,9 +84,9 @@ public static class NativeObjects {
         }
 
         var temporary = objectPath + $".{Environment.ProcessId}.{Guid.NewGuid():N}.tmp";
-        var source = temporary + ".c";
+        var sources = temporary + ".src";
         try {
-            File.WriteAllText(source, NativeBuild.RuntimeSource);
+            var source = NativeBuild.WriteRuntime(sources);
             var (exitCode, output) = Run(NativeBuild.CompilerPath, [..target.ClangFlags, ..NativeBuild.SysrootFlags(options), ..Flags(options), "-c", source, "-o", temporary]);
             if (exitCode != 0) {
                 return new(false, output);
@@ -95,7 +95,10 @@ public static class NativeObjects {
             File.Move(temporary, objectPath, overwrite: true);
             return new(true, output);
         } finally {
-            File.Delete(source);
+            if (Directory.Exists(sources)) {
+                Directory.Delete(sources, true);
+            }
+
             File.Delete(temporary);
         }
     }

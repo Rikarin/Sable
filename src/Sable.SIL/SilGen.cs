@@ -652,8 +652,14 @@ public sealed partial class SilGen {
     ///     The concrete type behind a <c>some P</c> result or local — itself
     ///     perhaps another's result — or the type unchanged.
     /// </summary>
+    /// <remarks>
+    ///     Functions that return only each other's results hide nothing
+    ///     concrete; the chain is followed until it repeats, and then the
+    ///     opaque type is left as it is, which nothing lowers.
+    /// </remarks>
     static TypeSymbol Reveal(TypeSymbol type) {
-        while (type is OpaqueTypeSymbol { Origin: not null, HiddenType: { } hidden }) {
+        var seen = new HashSet<Symbol>(ReferenceEqualityComparer.Instance);
+        while (type is OpaqueTypeSymbol { Origin: { } origin, HiddenType: { } hidden } && seen.Add(origin)) {
             type = hidden;
         }
 

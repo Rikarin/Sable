@@ -224,6 +224,30 @@ public sealed class LoweringGapTests {
             """
         );
 
+    [Fact]
+    public void ASomeResultMayReturnItself() =>
+        Prints(
+            "9\n",
+            """
+            protocol Shape {
+                fn area() -> Int
+            }
+
+            struct Square: Shape {
+                var side: Int
+                fn area() -> Int { return side * side }
+            }
+
+            fn down(_ n: Int) -> some Shape {
+                if n == 0 {
+                    return Square { side: 3 }
+                }
+                return down(n - 1)
+            }
+            """,
+            "    print(down(3).area())"
+        );
+
     // ---- Untyped and union throws ----------------------------------------------
 
     const string Errors = """

@@ -1770,10 +1770,13 @@ public sealed partial class Binder {
     ///     the same one.
     /// </summary>
     void CheckOpaqueReturn(BoundExpression value, SyntaxNode syntax) {
+        // A return of the function's own result, recursively, is that
+        // result whatever it hides; it says nothing of what that is.
         if (_returnType is not OpaqueTypeSymbol opaque
             || value.HasError
             || value.Type.IsError
-            || value.Type.Equals(Core.Never)) {
+            || value.Type.Equals(Core.Never)
+            || value.Type is OpaqueTypeSymbol { Origin: { } returned } && ReferenceEquals(returned, _containingSymbol)) {
             return;
         }
 

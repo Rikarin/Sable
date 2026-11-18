@@ -87,4 +87,27 @@ public sealed class GenericTests {
                 )
             ).Stdout
         );
+
+    [Fact]
+    public void SelfInAGenericTypeIsTheTypeWithItsOwnParameters() =>
+        Assert.Equal(
+            "3\n3\n",
+            AssertAgree(
+                Program(
+                    """
+                    struct Nest<T> {
+                        var inner: T
+                        fn wrap() -> Nest<Nest<T>> { return Nest<Nest<T>> { inner: self } }
+                        fn me() -> Self { return self }
+                        fn same(_ other: Nest<T>) -> Nest<T> { return other }
+                    }
+                    """,
+                    """
+                        let n = Nest<Int> { inner: 3 }
+                        print(n.wrap().inner.inner)
+                        print(n.me().same(n).inner)
+                    """
+                )
+            ).Stdout
+        );
 }

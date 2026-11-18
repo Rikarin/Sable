@@ -482,7 +482,12 @@ public sealed partial class Binder {
     }
 
     /// <summary>What <c>self</c> is in a member of the type: the type, or the array an array extension extends.</summary>
-    static TypeSymbol SelfTypeOf(NamedTypeSymbol type) => type.ExtendedArray ?? (TypeSymbol)type;
+    /// <summary>
+    ///     What <c>self</c> is inside a type: the type — a generic one with
+    ///     its own parameters as its arguments, <c>Nest&lt;T&gt;</c>, so that it is
+    ///     the same type its signatures write — or, in an array extension, the array.
+    /// </summary>
+    static TypeSymbol SelfTypeOf(NamedTypeSymbol type) => type.ExtendedArray ?? (TypeSymbol)TypeBinder.OwnConstruction(type);
 
     NamedTypeSymbol? EnclosingType() {
         for (var symbol = _containingSymbol; symbol is not null; symbol = symbol.ContainingSymbol) {
@@ -2213,7 +2218,7 @@ public sealed partial class Binder {
 
                 if (receiver is null && !field.IsStatic && containingType is not null) {
                     // An array extension's member, reached from another's: self is this one's array.
-                    var self = containingType.ExtendedArray is not null && EnclosingType() is { } enclosing ? SelfTypeOf(enclosing) : containingType;
+                    var self = containingType.ExtendedArray is not null && EnclosingType() is { } enclosing ? SelfTypeOf(enclosing) : SelfTypeOf(containingType);
                     receiver = new BoundSelfAccess(syntax, self, SelfIsMutable(containingType));
                 }
 

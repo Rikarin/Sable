@@ -111,4 +111,19 @@ public sealed class SelfTypeTests {
             static d => d.Code == ErrorCode.ERR_TypeMismatch
         );
     }
+
+    [Fact]
+    public void SelfInAGenericTypeIsTheTypeWithItsOwnParameters() {
+        var source = """
+                     module M
+                     struct Nest<T> {
+                         var inner: T
+                         fn wrap() -> Nest<Nest<T>> { return Nest<Nest<T>> { inner: self } }
+                         fn me() -> Self { return self }
+                         fn same(_ other: Nest<T>) -> Self { return other }
+                     }
+                     """;
+        var errors = Compilation.Create(source).GetAllDiagnostics().Where(static d => d.Severity == DiagnosticSeverity.Error).ToList();
+        Assert.True(errors.Count == 0, string.Join("\n", errors.Select(static e => $"{e.Id}: {e.Message}")));
+    }
 }

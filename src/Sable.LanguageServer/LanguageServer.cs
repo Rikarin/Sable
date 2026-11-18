@@ -94,6 +94,15 @@ public sealed partial class LanguageServer {
 
     Analysis BuildAnalysis(WorkspaceSnapshot snapshot, string key) {
         Interlocked.Increment(ref _analysesBuilt);
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        try {
+            return BuildAnalysisNow(snapshot, key);
+        } finally {
+            Log($"compiled {(key.Length == 0 ? "the loose files" : key)} in {watch.ElapsedMilliseconds} ms");
+        }
+    }
+
+    Analysis BuildAnalysisNow(WorkspaceSnapshot snapshot, string key) {
         var project = snapshot.Layout.Projects.FirstOrDefault(p => p.Directory == key);
         var dependencies = project is null ? [] : _dependencies.For(project, snapshot, Log);
         return Analysis.Build(

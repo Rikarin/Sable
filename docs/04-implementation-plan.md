@@ -1600,8 +1600,13 @@ records what each written name resolved to).
 with every signature bound before it is used. A completion or signature help
 never waits for one: it binds the member being edited, as it is now, against
 the newest compilation there is. Only a member the newest compilation does not
-have — one being written from scratch — waits for a new compilation; hover,
-references and rename always use one of exactly the current text.
+have — one being written from scratch — waits for a new compilation. Hover
+binds the member under the cursor the same way. References and rename, after
+edits inside members' bodies only, answer from an older compilation — the one
+with the most files already bound — with each edited member bound again
+speculatively and the rest of its file moved by the edits (a body cannot
+change what anything outside it means); any other edit waits for a
+compilation of exactly the current text.
 `tools/Sable.LspBench` writes a 205,180-line project (180 files, nine modules
 importing one another), starts `sable lsp` as a process, and types statements
 into function bodies a key at a time (40–120 ms apart), asking for completion
@@ -1609,9 +1614,22 @@ after each and pausing so the server rebuilds in the background (two dozen rebui
 per run), timed at the client. Release build, macOS arm64, four runs of 831
 completions: p50 1.0–1.7 ms, **p95 5.2–9.4 ms**, p99 10–24 ms, max 15–34 ms;
 after a `.` alone, p95 2.7–12.6 ms. For contrast, a hover just after an edit,
-which waits for a compilation of the whole project, takes 125–170 ms, and the
-first diagnostics come 1.3–1.5 s after start (reading and parsing 205k lines
+which waited for a compilation of the whole project, took 125–170 ms, and the
+first diagnostics came 1.3–1.5 s after start (reading and parsing 205k lines
 included).
+
+The benchmark also times references just after an edit in a body. They used
+to wait for a new compilation and then bind every file naming the symbol in
+it — all 180 here — every time: 10–28 s per request on a heavily loaded
+machine (load average 60–200, other builds running). Answered from the
+compilation already bound, the first takes as long (binding it), and the
+next five 0.4–0.65 s on the same machine. The first diagnostics now skip the
+quiet period after loading (there is no typing to wait out), and a small
+program is compiled while the files are read, so the compiler's code is
+jitted by the time the workspace's compilation starts: that compilation
+went from 1.6–2.1 s to 0.9–1.2 s, and first diagnostics from about 3.5 s to
+1.9–2.4 s, measured back to back under the same load. Unloaded figures are
+still to be taken again.
 
 Deferred: diagnostics for files that are not open; completion of argument
 labels, implicit members (`.Case` with no receiver) and snippets; references

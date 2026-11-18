@@ -210,17 +210,17 @@ public sealed partial class LanguageServer {
 
     /// <summary>
     ///     The analysis references and rename are answered from: one of
-    ///     exactly this snapshot, or one older by an edit inside a member's
-    ///     body (<see cref="BodyEdit" />), which answers the same and needs no
-    ///     compilation built first. The one with the most files bound is
+    ///     exactly this snapshot, or one older by edits inside members'
+    ///     bodies (<see cref="BodyEdits" />), which answers the same and needs
+    ///     no compilation built first. The one with the most files bound is
     ///     tried first, since a search binds every file that names what it
     ///     looks for — and the one a search used stays bound for the next.
     /// </summary>
-    async Task<(Analysis Analysis, BodyEdit? Edit)> ReferenceAnalysisAsync(WorkspaceSnapshot snapshot, Document document) {
+    async Task<(Analysis Analysis, BodyEdits? Edits)> ReferenceAnalysisAsync(WorkspaceSnapshot snapshot, Document document) {
         snapshot = await LoadedAsync(snapshot);
         var key = snapshot.KeyOf(snapshot.Find(document.Uri) ?? document);
         var warm = _analyses.Warm(key);
-        if (warm is not null && BodyEdit.Between(warm, snapshot, out var fromWarm)) {
+        if (warm is not null && BodyEdits.Between(warm, snapshot, out var fromWarm)) {
             return (warm, fromWarm);
         }
 
@@ -228,7 +228,7 @@ public sealed partial class LanguageServer {
             _analyses.Cold(warm);
         }
 
-        if (_analyses.Latest(key) is { } latest && BodyEdit.Between(latest, snapshot, out var fromLatest)) {
+        if (_analyses.Latest(key) is { } latest && BodyEdits.Between(latest, snapshot, out var fromLatest)) {
             return (latest, fromLatest);
         }
 
@@ -236,15 +236,15 @@ public sealed partial class LanguageServer {
     }
 
     /// <summary>The token at an offset of a document as it is, and the symbol it names. Hold the analysis's gate.</summary>
-    static (SyntaxToken Token, Symbol? Symbol) SymbolAt(Analysis analysis, BodyEdit? edit, Document document, int offset) {
+    static (SyntaxToken Token, Symbol? Symbol) SymbolAt(Analysis analysis, BodyEdits? edits, Document document, int offset) {
         var token = SemanticModel.FindToken(document.Tree.Root, offset);
         if (token.IsNone) {
             return (token, null);
         }
 
-        if (edit is not null && ReferenceEquals(edit.Document.Tree, document.Tree)) {
-            if (edit.InNewMember(token.Span.Start)) {
-                return (token, edit.Speculative(analysis).GetSymbolOfToken(token));
+        if (edits?.OfCurrent(document) is { } edit) {
+            if (edit.NewMemberAt(token.Span.Start) is { } member) {
+                return (token, edit.Speculative(analysis, member).GetSymbolOfToken(token));
             }
 
             var old = SemanticModel.FindToken(edit.Old.Tree.Root, edit.ToOld(token.Span.Start));
@@ -257,12 +257,12 @@ public sealed partial class LanguageServer {
 
     async Task<JsonNode?> ReferencesAsync(WorkspaceSnapshot snapshot, JsonElement parameters, CancellationToken cancellation) {
         var (document, offset) = Locate(snapshot, parameters);
-        var (analysis, edit) = await ReferenceAnalysisAsync(snapshot, document);
+        var (analysis, edits) = await ReferenceAnalysisAsync(snapshot, document);
         var includeDeclaration = parameters.Get("context")?.GetBool("includeDeclaration") ?? true;
 
         Symbol? symbol;
         lock (analysis.Gate) {
-            symbol = SymbolAt(analysis, edit, document, offset).Symbol;
+            symbol = SymbolAt(analysis, edits, document, offset).Symbol;
         }
 
         if (symbol is null) {
@@ -270,7 +270,7 @@ public sealed partial class LanguageServer {
         }
 
         var locations = new JsonArray();
-        var references = References(analysis, symbol, document, cancellation, edit);
+        var references = References(analysis, symbol, document, cancellation, edits);
         _analyses.Bound(analysis);
         foreach (var (owner, span, isDeclaration) in references) {
             if (includeDeclaration || !isDeclaration) {
@@ -287,12 +287,12 @@ public sealed partial class LanguageServer {
     ///     and so can a parameter — but one whose label is its name is also
     ///     named by the label of each argument for it, in any file. Anything
     ///     else is looked for in each file whose text mentions it, binding
-    ///     only the members that do. With an <paramref name="edit" />, the
-    ///     edited document is searched as it is: the edited member bound
-    ///     again, the rest as the analysis has it, moved by the edit.
+    ///     only the members that do. With <paramref name="edits" />, an edited
+    ///     document is searched as it is: its edited members bound again, the
+    ///     rest as the analysis has it, moved by the edits.
     /// </summary>
     static List<(Document Document, TextSpan Span, bool IsDeclaration)> References(
-        Analysis analysis, Symbol symbol, Document origin, CancellationToken cancellation, BodyEdit? edit = null) {
+        Analysis analysis, Symbol symbol, Document origin, CancellationToken cancellation, BodyEdits? edits = null) {
         var labelled = symbol is ParameterSymbol { Label: null, ContainingSymbol: FunctionSymbol { FunctionKind: not FunctionKind.Accessor } } parameter
             ? parameter
             : null;
@@ -303,11 +303,11 @@ public sealed partial class LanguageServer {
         var declaration = !symbol.DeclaringSyntax.IsEmpty ? SemanticModel.NameTokenOf(symbol, symbol.DeclaringSyntax[0]) : default;
         var declaredIn = !symbol.DeclaringSyntax.IsEmpty ? analysis.DocumentOf(symbol.DeclaringSyntax[0]) : null;
         var declarationSpan = declaration.IsNone ? default : declaration.Span;
-        if (edit is not null && !symbol.DeclaringSyntax.IsEmpty) {
-            if (ReferenceEquals(declaredIn, edit.Old)) {
-                (declaredIn, declarationSpan) = (edit.Document, edit.ToNew(declarationSpan));
-            } else if (declaredIn is null && edit.InNewMember(symbol.DeclaringSyntax[0].Span.Start) && RootOf(symbol.DeclaringSyntax[0]) == edit.Document.Tree.Root) {
-                declaredIn = edit.Document;
+        if (edits is not null && !symbol.DeclaringSyntax.IsEmpty) {
+            if (declaredIn is not null && edits.OfOld(declaredIn) is { } moved) {
+                (declaredIn, declarationSpan) = (moved.Document, moved.ToNew(declarationSpan));
+            } else if (declaredIn is null && edits.Containing(symbol.DeclaringSyntax[0]) is { } edited) {
+                declaredIn = edited.Document;
             }
         }
 
@@ -318,9 +318,9 @@ public sealed partial class LanguageServer {
 
         foreach (var document in documents) {
             cancellation.ThrowIfCancellationRequested();
-            var edited = edit is not null && ReferenceEquals(document, edit.Old);
+            var edit = edits?.OfOld(document);
             if (!document.Tree.Text.Text.Contains(symbol.Name, StringComparison.Ordinal)
-                && !(edited && edit!.Document.Tree.Text.Text.Contains(symbol.Name, StringComparison.Ordinal))) {
+                && !(edit is not null && edit.Document.Tree.Text.Text.Contains(symbol.Name, StringComparison.Ordinal))) {
                 continue;
             }
 
@@ -330,7 +330,7 @@ public sealed partial class LanguageServer {
                 analysis.MarkBound(document.Tree);
             }
 
-            if (!edited) {
+            if (edit is null) {
                 foreach (var span in spans) {
                     Add(document, span);
                 }
@@ -344,26 +344,33 @@ public sealed partial class LanguageServer {
                 continue;
             }
 
-            // The edited document: the old text's references outside the
-            // member, where they are now, and the member's as it is.
-            var current = edit!.Document;
+            // An edited document: the old text's references outside the
+            // edited members, where they are now, and theirs as they are.
+            var current = edit.Document;
             foreach (var span in spans.Where(s => !edit.InOldMember(s))) {
                 Add(current, edit.ToNew(span));
             }
 
-            lock (analysis.Gate) {
-                spans = edit.Speculative(analysis).FindReferences(symbol);
-            }
+            foreach (var member in edit.NewMembers) {
+                lock (analysis.Gate) {
+                    spans = edit.Speculative(analysis, member).FindReferences(symbol);
+                }
 
-            foreach (var span in spans) {
-                Add(current, span);
+                foreach (var span in spans) {
+                    Add(current, span);
+                }
             }
 
             if (labelled is not null) {
                 var outside = ArgumentLabels(document.Tree.Root, m => edit.InOldMember(m.Span) ? null : analysis.Model(document.Tree).GetMemberModel(m), analysis.Gate, labelled, cancellation);
-                var inside = ArgumentLabels(edit.NewMember, m => ReferenceEquals(m, edit.NewMember) ? edit.Speculative(analysis) : null, analysis.Gate, labelled, cancellation);
-                foreach (var span in outside.Select(edit.ToNew).Concat(inside)) {
-                    Add(current, span);
+                foreach (var span in outside) {
+                    Add(current, edit.ToNew(span));
+                }
+
+                foreach (var member in edit.NewMembers) {
+                    foreach (var span in ArgumentLabels(member, m => ReferenceEquals(m, member) ? edit.Speculative(analysis, m) : null, analysis.Gate, labelled, cancellation)) {
+                        Add(current, span);
+                    }
                 }
             }
         }
@@ -418,10 +425,10 @@ public sealed partial class LanguageServer {
 
     async Task<JsonNode?> PrepareRenameAsync(WorkspaceSnapshot snapshot, JsonElement parameters, CancellationToken cancellation) {
         var (document, offset) = Locate(snapshot, parameters);
-        var (analysis, edit) = await ReferenceAnalysisAsync(snapshot, document);
+        var (analysis, edits) = await ReferenceAnalysisAsync(snapshot, document);
         lock (analysis.Gate) {
-            var (token, symbol) = SymbolAt(analysis, edit, document, offset);
-            CheckRenamable(analysis, symbol, edit);
+            var (token, symbol) = SymbolAt(analysis, edits, document, offset);
+            CheckRenamable(analysis, symbol, edits);
             return new JsonObject {
                 ["range"] = RangeNode(document.Lines.RangeOf(token.Span)),
                 ["placeholder"] = token.Text
@@ -434,13 +441,13 @@ public sealed partial class LanguageServer {
     ///     and anything the library declares — renaming <c>print</c> would
     ///     rename it for every program.
     /// </summary>
-    static void CheckRenamable(Analysis analysis, Symbol? symbol, BodyEdit? edit = null) {
+    static void CheckRenamable(Analysis analysis, Symbol? symbol, BodyEdits? edits = null) {
         if (symbol is null) {
             throw new LspException(LspException.RequestFailed, "there is nothing here to rename");
         }
 
         // A local of the member being edited is declared in its new text.
-        var inEdit = edit is not null && !symbol.DeclaringSyntax.IsEmpty && RootOf(symbol.DeclaringSyntax[0]) == edit.Document.Tree.Root;
+        var inEdit = edits is not null && !symbol.DeclaringSyntax.IsEmpty && edits.Containing(symbol.DeclaringSyntax[0]) is not null;
         if (!inEdit && (symbol.DeclaringSyntax.IsEmpty || analysis.TreeOf(symbol.DeclaringSyntax[0]) is null)) {
             throw new LspException(LspException.RequestFailed, $"'{symbol.Name}' is built into the compiler and cannot be renamed");
         }
@@ -461,23 +468,23 @@ public sealed partial class LanguageServer {
             throw new LspException(LspException.InvalidParams, $"'{newName}' is not a name");
         }
 
-        var (analysis, edit) = await ReferenceAnalysisAsync(snapshot, document);
+        var (analysis, edits) = await ReferenceAnalysisAsync(snapshot, document);
         Symbol? symbol;
         lock (analysis.Gate) {
-            symbol = SymbolAt(analysis, edit, document, offset).Symbol;
-            CheckRenamable(analysis, symbol, edit);
+            symbol = SymbolAt(analysis, edits, document, offset).Symbol;
+            CheckRenamable(analysis, symbol, edits);
         }
 
         var changes = new JsonObject();
-        var references = References(analysis, symbol!, document, cancellation, edit);
+        var references = References(analysis, symbol!, document, cancellation, edits);
         _analyses.Bound(analysis);
         foreach (var group in references.GroupBy(static r => r.Document.Uri)) {
-            var edits = new JsonArray();
+            var renames = new JsonArray();
             foreach (var (owner, span, _) in group) {
-                edits.Add(new JsonObject { ["range"] = RangeNode(owner.Lines.RangeOf(span)), ["newText"] = newName });
+                renames.Add(new JsonObject { ["range"] = RangeNode(owner.Lines.RangeOf(span)), ["newText"] = newName });
             }
 
-            changes[group.Key] = edits;
+            changes[group.Key] = renames;
         }
 
         return new JsonObject { ["changes"] = changes };

@@ -317,7 +317,7 @@ public sealed class LanguageServerTests : IDisposable {
 
     [Fact]
     public async Task ReferencesAfterAnEditInABodyNeedNoNewCompilation() {
-        Write("geometry.sb", Geometry);
+        var geometry = Write("geometry.sb", Geometry);
         var main = Write("main.sb", Main);
         // No round of diagnostics runs: only the requests build analyses.
         await using var client = new TestClient(TimeSpan.FromHours(1));
@@ -352,6 +352,30 @@ public sealed class LanguageServerTests : IDisposable {
         var edits = rename.Get("changes")!.Value.Get(main)!.Value;
         Assert.Equal(lines.PositionOf(At(text, "twice")), ReadStart(edits[0]));
         Assert.Equal(built, client.Server.AnalysesBuilt);
+
+        // More edits, in another file and in two of its members: the body of
+        // 'sum' calls itself, and 'origin' gets a statement before it.
+        var geometryText = Geometry;
+        await client.OpenAsync(geometry, geometryText);
+        var inSum = At(geometryText, "        return x + y");
+        const string Recursion = "        let again = sum()\n";
+        await client.ChangeAsync(geometry, 2, geometryText, inSum, inSum, Recursion);
+        geometryText = geometryText.Insert(inSum, Recursion);
+        var inOrigin = At(geometryText, "    return Point {");
+        const string Spare = "    let spare = 1\n";
+        await client.ChangeAsync(geometry, 3, geometryText, inOrigin, inOrigin, Spare);
+        geometryText = geometryText.Insert(inOrigin, Spare);
+        var everywhere = await client.AtAsync("textDocument/references", main, text, At(text, "p.sum() +", 3), new { context = new { includeDeclaration = true } });
+        Assert.Equal(built, client.Server.AnalysesBuilt);
+        var geometryLines = LineIndex.Of(geometryText);
+        var inGeometry = everywhere.EnumerateArray()
+            .Where(r => r.GetString("uri") == geometry)
+            .Select(static r => r.Get("range")!.Value.Get("start")!.Value)
+            .Select(static s => new LspPosition(s.GetInt("line")!.Value, s.GetInt("character")!.Value))
+            .OrderBy(static p => p.Line)
+            .ToList();
+        Assert.Equal([geometryLines.PositionOf(At(geometryText, "fn sum", 3)), geometryLines.PositionOf(At(geometryText, "again = sum", 8))], inGeometry);
+        Assert.Equal(3, everywhere.EnumerateArray().Count(r => r.GetString("uri") == main));
 
         // An edit to a declaration does need one: main is renamed.
         var name = At(text, "fn main()", 7);

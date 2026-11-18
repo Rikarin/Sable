@@ -34,6 +34,9 @@ public sealed partial class LanguageServer {
     /// <summary>The client takes <c>workspace/diagnostic/refresh</c>: a pull need not wait for the SIL checks.</summary>
     bool _refresh;
 
+    /// <summary>Set when loading the files ends: the round it starts need not wait for the workspace to be quiet.</summary>
+    int _loaded;
+
     /// <summary>The workspace changed: diagnostics are due once it is quiet, and a round under way is out of date.</summary>
     void Changed() {
         _changed.Release();
@@ -53,12 +56,13 @@ public sealed partial class LanguageServer {
         while (!cancellation.IsCancellationRequested) {
             await _changed.WaitAsync(cancellation);
 
-            // Debounce: wait until nothing has changed for a while.
+            // Debounce: wait until nothing has changed for a while — unless
+            // the files were just loaded, which is no typing to wait out.
             do {
                 while (_changed.CurrentCount > 0) {
                     await _changed.WaitAsync(cancellation);
                 }
-            } while (await _changed.WaitAsync(_options.DiagnosticsDelay, cancellation));
+            } while (Interlocked.Exchange(ref _loaded, 0) == 0 && await _changed.WaitAsync(_options.DiagnosticsDelay, cancellation));
 
             using var round = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
             Volatile.Write(ref _round, round);

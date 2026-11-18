@@ -260,6 +260,32 @@ public sealed class ExtensionTests {
         Assert.NotEmpty(errors);
     }
 
+    [Fact]
+    public void AMemberwiseInitializerMayLeaveOutDefaultedFields() =>
+        AssertClean(
+            """
+            struct D { var a: Int = 1; var b: Int = 5 }
+            struct E { var x: Int; var y: Int = 9; var z: String = "z" }
+            fn probe() -> Int {
+                let d = D()
+                let e = D(b: 2)
+                let f = E(x: 3, z: "q")
+                return d.a + e.b + f.y
+            }
+            """
+        );
+
+    [Fact]
+    public void AMemberwiseInitializerStillNeedsTheFieldsWithoutDefaults() {
+        var errors = ErrorsIn(
+            """
+            struct E { var x: Int; var y: Int = 9 }
+            fn probe() -> E { return E(y: 2) }
+            """
+        );
+        Assert.NotEmpty(errors);
+    }
+
     // ---- Lookup through what stands in for a type -------------------------
 
     [Fact]

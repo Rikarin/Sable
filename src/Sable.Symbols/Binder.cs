@@ -3245,6 +3245,10 @@ public sealed partial class Binder {
     ///     once, with the declaration, so they are not reported again here.
     /// </summary>
     BoundExpression? DefaultArgument(ParameterSymbol parameter, TypeSubstitution substitution) {
+        if (MemberwiseField(parameter) is { } field) {
+            return FieldDefault(field, substitution.Apply(parameter.Type));
+        }
+
         if (parameter.DeclaringSyntax is not [ParameterSyntax { DefaultValue: { } clause } syntax]
             || _compilation.FileScopeOf(syntax) is not { } scope
             || parameter.ContainingSymbol is not { } container) {
@@ -3252,6 +3256,35 @@ public sealed partial class Binder {
         }
 
         return new Binder(_compilation, scope, container).BindInitializer(clause.Value, substitution.Apply(parameter.Type));
+    }
+
+    /// <summary>
+    ///     The field a synthesised memberwise initialiser's parameter stands
+    ///     for, when that field has an initial value to default to.
+    /// </summary>
+    static FieldSymbol? MemberwiseField(ParameterSymbol parameter) =>
+        parameter is { HasDefaultValue: true, DeclaringSyntax.IsEmpty: true, ContainingSymbol: FunctionSymbol { FunctionKind: FunctionKind.Initializer, DeclaringSyntax.IsEmpty: true, ContainingSymbol: NamedTypeSymbol type } }
+            ? type.GetMembers(parameter.Name).OfType<FieldSymbol>().FirstOrDefault(static f => f.HasInitializer)
+            : null;
+
+    /// <summary>
+    ///     A field's initial value, as a memberwise initialiser left it to:
+    ///     bound afresh in the file that declares the field, as a parameter's
+    ///     default is. A lazy property's storage starts as none.
+    /// </summary>
+    BoundExpression? FieldDefault(FieldSymbol field, TypeSymbol type) {
+        if (field.DeclaringSyntax is not [FieldDeclarationSyntax declaration]
+            || _compilation.FileScopeOf(declaration) is not { } scope) {
+            return null;
+        }
+
+        if (field.BackedProperty is { IsLazy: true }) {
+            return new BoundLiteral(declaration.Declarator, type, null);
+        }
+
+        return declaration.Declarator.Initializer is { } initializer
+            ? new Binder(_compilation, scope, field).BindInitializer(initializer.Value, type)
+            : null;
     }
 
     /// <summary>Works out a generic function's type arguments from the call.</summary>
@@ -3553,9 +3586,9 @@ public sealed partial class Binder {
     ///     the parameters left to right, but a labelled one may pass over
     ///     parameters with defaults to reach the one its label names:
     ///     <c>connect(host: h, timeout: t)</c> leaves <c>port</c> its default.
-    ///     Only a default written in a declaration is passed over: a memberwise
-    ///     initialiser's defaults are the fields', which lowering fills in
-    ///     only at the end of the list.
+    ///     A memberwise initialiser's parameter for a field with an initial
+    ///     value is passed over the same way: <c>D(b: 2)</c> leaves <c>a</c>
+    ///     its initial value.
     ///     An index past the last parameter is an argument with nowhere to go;
     ///     from a variadic parameter on, every argument is one of its elements.
     /// </summary>
@@ -3567,7 +3600,8 @@ public sealed partial class Binder {
             if (i < labels.Length && labels[i] is { } label) {
                 var reach = next;
                 while (reach < parameters.Length
-                       && parameters[reach].DeclaringSyntax is [ParameterSyntax { DefaultValue: not null, EllipsisToken.IsNone: true }]
+                       && (parameters[reach].DeclaringSyntax is [ParameterSyntax { DefaultValue: not null, EllipsisToken.IsNone: true }]
+                           || MemberwiseField(parameters[reach]) is not null)
                        && !Names(parameters[reach], label)) {
                     reach++;
                 }

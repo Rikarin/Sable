@@ -29,6 +29,30 @@ public sealed class LanguageTests {
                           """;
 
     [Fact]
+    public void AMemberwiseInitializerLeavesOutFieldsWithInitialValues() =>
+        Prints(
+            "1 5 1 2\n3 9 z q\n0 4 30 x\n",
+            """
+            struct D { var a: Int = 1; var b: Int = 5 }
+            struct E { var x: Int; var y: Int = 9; var z: String = "z" }
+            struct G<T> { var items: T[] = []; var n: Int = 2 }
+            struct L { var k: Int; lazy var big: Int = k * 10 }
+            struct F { var name: String = "x" { set { field = newValue + "!" } get => field } }
+            """,
+            """
+                let d = D()
+                let e = D(b: 2)
+                print("\(d.a) \(d.b) \(e.a) \(e.b)")
+                let f = E(x: 3)
+                let g = E(x: 3, z: "q")
+                print("\(f.x) \(f.y) \(f.z) \(g.z)")
+                let h = G<String>(n: 4)
+                var l = L(k: 3)
+                let p = F()
+                print("\(h.items.count) \(h.n) \(l.big) \(p.name)")
+            """);
+
+    [Fact]
     public void StructsFieldsAndMethods() =>
         Prints(
             "11\n6\n3\n9\n",

@@ -109,7 +109,7 @@ public sealed record Profile(
 
 public sealed record WorkspaceSpec(IReadOnlyList<string> Members, IReadOnlyList<string> Exclude);
 
-/// <summary><c>[build]</c>: a build script and what it may touch (docs/05 §5.6) — read and checked, not yet run.</summary>
+/// <summary><c>[build]</c>: a build script and what it may touch (docs/05 §5.6), run by <see cref="BuildScripts" />.</summary>
 public sealed record BuildSpec(string Script, bool AllowNet, IReadOnlyList<string> AllowExec, IReadOnlyList<string> AllowRead, IReadOnlyList<string> AllowWrite);
 
 /// <summary>
@@ -284,7 +284,7 @@ public sealed partial class Manifest {
             var buildDependencies = ReadDependencies(root, "build-dependencies");
             if (buildDependencies.Count > 0) {
                 Warn(root, "build-dependencies", "build-dependencies",
-                    "are for a build script, and build scripts are not run yet (docs/05 §5.6): they are checked, not resolved or built");
+                    "are for a build script, which for now imports only the standard library (docs/05 §5.6): they are checked, not resolved or built");
             }
             var features = ReadFeatures(root, dependencies);
             var (dev, release) = ReadProfiles(root);

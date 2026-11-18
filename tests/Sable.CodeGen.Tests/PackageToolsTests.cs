@@ -21,7 +21,7 @@ public sealed class PackageToolsTests {
         fixture.Package("app", "app", "1.0.0", $"[dependencies]\nutil = {{ path = \"../util\" }}\n{lints}",
             ("src/lib.sb", AppLibrary),
             ("src/main.sb", "module Main\n\nimport App\n\nfn main() {\n    print(twice(21))\n}\n"),
-            ("tests/app_tests.sb", "module AppTests\n\nimport App\n\n@test\nfn doubles() {\n    assert(twice(2) == 4)\n}\n"));
+            ("tests/app_tests.sb", "module AppTests\n\nimport App\nimport Sable.Testing\n\n@test\nfn doubles() {\n    assert(twice(2) == 4)\n}\n"));
         return Path.Combine(fixture.Root, "app");
     }
 

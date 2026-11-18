@@ -31,9 +31,16 @@ public static class PackageBuilder {
         : workspace.Current is { } current ? [current]
         : workspace.Members;
 
+    /// <summary>
+    ///     Resolves what a request builds, and runs the build scripts of the
+    ///     packages that have one (docs/05 §5.6), for the request's profile:
+    ///     what they write is part of the program every command compiles.
+    /// </summary>
     internal static PackageGraph Resolve(Workspace workspace, PackageEnvironment environment, BuildRequest request) {
         ReportManifestWarnings(workspace, environment);
-        return PackageGraph.ResolveCached(workspace, environment, new(request.Features, null, request.Locked, [..Selected(workspace, request.Package).Select(static m => m.Name)]));
+        var graph = PackageGraph.ResolveCached(workspace, environment, new(request.Features, null, request.Locked, [..Selected(workspace, request.Package).Select(static m => m.Name)]));
+        graph.BuildOutputs = BuildScripts.Run(graph, workspace.RootManifest.ProfileFor(request.Release), environment);
+        return graph;
     }
 
     /// <summary>
@@ -63,7 +70,7 @@ public static class PackageBuilder {
         }
 
         foreach (var package in graph.Closure(member)) {
-            trees.AddRange(package.Package.LibrarySources().Select(file => Parse(graph, package, file, optimise)));
+            trees.AddRange(graph.LibrarySources(package).Select(file => Parse(graph, package, file, optimise)));
         }
 
         return trees;
@@ -87,9 +94,9 @@ public static class PackageBuilder {
             .Select(file => Parse(graph, own, file, optimise))
             .ToList();
         return [
-            ..own.Package.LibrarySources().Select(file => Parse(graph, own, file, optimise)),
+            ..graph.LibrarySources(own).Select(file => Parse(graph, own, file, optimise)),
             ..extra,
-            ..graph.Closure(member, dev: true).Where(p => p.Name != member).SelectMany(p => p.Package.LibrarySources().Select(file => Parse(graph, p, file, optimise))),
+            ..graph.Closure(member, dev: true).Where(p => p.Name != member).SelectMany(p => graph.LibrarySources(p).Select(file => Parse(graph, p, file, optimise))),
         ];
     }
 
@@ -121,7 +128,7 @@ public static class PackageBuilder {
         var own = graph.Packages[member];
         var units = new List<UnitPlan> { new($"bin {member}/{bin.Name}", [SourceOf(graph, own, bin.Path)]) };
         foreach (var package in graph.Closure(member)) {
-            units.Add(new($"lib {package.Name}-{package.Version}", [..package.Package.LibrarySources().Select(file => SourceOf(graph, package, file))]));
+            units.Add(new($"lib {package.Name}-{package.Version}", [..graph.LibrarySources(package).Select(file => SourceOf(graph, package, file))]));
         }
 
         return units;
@@ -206,10 +213,6 @@ public static class PackageBuilder {
             environment.Error.WriteLine($"warning: {warning}");
         }
 
-        if (members.Any(static m => m.Manifest.Build is not null)) {
-            environment.Error.WriteLine("warning: [build] scripts are not run yet (docs/05 §5.6); building without it");
-        }
-
         foreach (var member in members) {
             var bins = member.Bins.Where(b => request.Bin is null || b.Name == request.Bin).ToList();
             if (request.Bin is not null && bins.Count == 0) {
@@ -244,7 +247,8 @@ public static class PackageBuilder {
                 Directory.CreateDirectory(output);
                 var executable = Path.Combine(output, bin.Name);
                 var buildSettings = new BuildSettings(profile.Name, profile.Optimise, profile.Debug ? workspace.Root : null, profile.Exclusivity) {
-                    Native = profile.Native,
+                    // What the build scripts found for the link: native libraries and where they are.
+                    Native = profile.Native with { LinkArguments = graph.LinkArguments(member.Name), LinkInputs = graph.LinkInputs(member.Name) },
                     Whole = profile.CodegenUnits == 1,
                 };
                 var outcome = IncrementalBuild.Build(Units(graph, member.Name, bin), buildSettings, executable, Path.Combine(output, "cache"), timings, environment.Error);

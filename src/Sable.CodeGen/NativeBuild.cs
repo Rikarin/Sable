@@ -46,6 +46,21 @@ public sealed record NativeOptions {
     /// <summary>Look for shared libraries beside the executable.</summary>
     public bool Rpath { get; init; }
 
+    /// <summary>
+    ///     More for the link, after everything else: the native libraries a
+    ///     package's build script found (<c>-lfoo</c>, <c>-L dir</c>).
+    /// </summary>
+    public IReadOnlyList<string> LinkArguments { get; init; } = [];
+
+    /// <summary>
+    ///     A hash of what <see cref="LinkArguments" /> bring in: a library
+    ///     rebuilt under the same name is a different link.
+    /// </summary>
+    public string LinkInputs { get; init; } = "";
+
+    /// <summary>The settings as text, every one of them: what a cache of builds made with them is keyed by.</summary>
+    public string Key => $"{OptLevel}|{DebugInfo}|{Lto}|{Strip}|{Rpath}|{string.Join(' ', LinkArguments)}|{LinkInputs}";
+
     public bool Optimise => OptLevel != "0";
 
     /// <summary>
@@ -229,6 +244,7 @@ public static class NativeBuild {
             });
         }
 
+        flags.AddRange(options.LinkArguments);
         return flags;
     }
 

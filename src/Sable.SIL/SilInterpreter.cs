@@ -50,6 +50,16 @@ public sealed partial class SilInterpreter(SilModule module, int stepLimit = 10_
     /// <summary>The program's arguments, after its own name.</summary>
     public IReadOnlyList<string> Arguments { get; init; } = [];
 
+    /// <summary>
+    ///     What the program may do outside itself — read, write, run, see of
+    ///     the environment — when that is limited, as a build script's is
+    ///     (docs/05 §5.6); null for everything, as a native program may.
+    /// </summary>
+    public SilSandbox? Sandbox { get; init; }
+
+    /// <summary>The path a runtime call is to use, once the sandbox, if there is one, allows it.</summary>
+    string PathFor(object? operand, SilAccess access) => Sandbox is { } sandbox ? sandbox.Check(Text(operand).Value, access) : Text(operand).Value;
+
     /// <summary>The last program <c>Runtime.run</c> ran: how it ended, and what it wrote to standard error.</summary>
     long _lastStatus;
 
@@ -958,7 +968,7 @@ public sealed partial class SilInterpreter(SilModule module, int stepLimit = 10_
                 try {
                     // Bytes, decoded as the runtime decodes them: no byte-order
                     // mark taken as a request for UTF-16, and ill-formed UTF-8 as U+FFFD.
-                    contents = DecodeUtf8(File.ReadAllBytes(Text(operands[0]).Value));
+                    contents = DecodeUtf8(File.ReadAllBytes(PathFor(operands[0], SilAccess.Read)));
                 } catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException) {
                 }
 
@@ -968,7 +978,7 @@ public sealed partial class SilInterpreter(SilModule module, int stepLimit = 10_
 
             case "io_write_file": {
                 try {
-                    var (path, text) = (Text(operands[0]).Value, Text(operands[1]).Value);
+                    var (path, text) = (PathFor(operands[0], SilAccess.Write), Text(operands[1]).Value);
                     if ((bool)operands[2]!) {
                         File.AppendAllText(path, text);
                     } else {
@@ -982,15 +992,15 @@ public sealed partial class SilInterpreter(SilModule module, int stepLimit = 10_
             }
 
             case "io_file_exists": {
-                var path = Text(operands[0]).Value;
+                var path = PathFor(operands[0], SilAccess.Read);
                 return File.Exists(path) || Directory.Exists(path);
             }
 
             case "io_is_directory":
-                return Directory.Exists(Text(operands[0]).Value);
+                return Directory.Exists(PathFor(operands[0], SilAccess.Read));
 
             case "io_remove_file": {
-                var path = Text(operands[0]).Value;
+                var path = PathFor(operands[0], SilAccess.Write);
                 try {
                     if (File.Exists(path)) {
                         File.Delete(path);
@@ -1008,7 +1018,7 @@ public sealed partial class SilInterpreter(SilModule module, int stepLimit = 10_
             }
 
             case "io_make_directory": {
-                var path = Text(operands[0]).Value;
+                var path = PathFor(operands[0], SilAccess.Write);
                 if (Directory.Exists(path) || File.Exists(path) || Path.GetDirectoryName(Path.GetFullPath(path)) is { } parent && !Directory.Exists(parent)) {
                     return false;
                 }
@@ -1022,7 +1032,7 @@ public sealed partial class SilInterpreter(SilModule module, int stepLimit = 10_
             }
 
             case "io_list_directory": {
-                var path = Text(operands[0]).Value;
+                var path = PathFor(operands[0], SilAccess.Read);
                 string[] names;
                 try {
                     names = [..Directory.EnumerateFileSystemEntries(path).Select(Path.GetFileName).Select(static n => n!)];
@@ -1039,15 +1049,23 @@ public sealed partial class SilInterpreter(SilModule module, int stepLimit = 10_
             }
 
             case "io_environment": {
-                var value = Environment.GetEnvironmentVariable(Text(operands[0]).Value);
+                var name = Text(operands[0]).Value;
+                var value = Sandbox is { } sandbox ? sandbox.Environment(name) : Environment.GetEnvironmentVariable(name);
                 _ioFailed = value is null;
                 return Allocate(new HeapString(value ?? ""));
             }
 
             case "process_run": {
-                var start = new System.Diagnostics.ProcessStartInfo(Text(operands[0]).Value) {
+                var start = new System.Diagnostics.ProcessStartInfo(Sandbox?.CheckProgram(Text(operands[0]).Value) ?? Text(operands[0]).Value) {
                     RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false,
                 };
+                if (Sandbox is { } confined) {
+                    start.WorkingDirectory = confined.CurrentDirectory;
+                    foreach (var (variable, setting) in confined.ProgramEnvironment) {
+                        start.Environment[variable] = setting;
+                    }
+                }
+
                 if (operands[1] is HeapArray given) {
                     foreach (var argument in Alive(given).Elements) {
                         start.ArgumentList.Add(Text(argument).Value);
@@ -1091,10 +1109,22 @@ public sealed partial class SilInterpreter(SilModule module, int stepLimit = 10_
                 return Allocate(new HeapString(_lastErrorOutput));
 
             case "process_current_directory":
-                return Allocate(new HeapString(Directory.GetCurrentDirectory()));
+                return Allocate(new HeapString(Sandbox?.CurrentDirectory ?? Directory.GetCurrentDirectory()));
 
             case "process_change_directory":
                 try {
+                    // A sandboxed program's working directory is its own: the
+                    // process's stays where it is, for the rest of the build.
+                    if (Sandbox is { } within) {
+                        var directory = within.Check(Text(operands[0]).Value, SilAccess.Read);
+                        if (!Directory.Exists(directory)) {
+                            return false;
+                        }
+
+                        within.CurrentDirectory = directory;
+                        return true;
+                    }
+
                     Directory.SetCurrentDirectory(Text(operands[0]).Value);
                     return true;
                 } catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException) {

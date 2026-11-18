@@ -86,7 +86,7 @@ public abstract class HarnessCommand : Command {
 
         var executable = Path.Combine(Path.GetTempPath(), $"sable-{Name}-{Guid.NewGuid():N}");
         try {
-            return Build(program.Trees, program.Directory, options, executable) ?? Execute(executable, options.HarnessArguments);
+            return Build(program.Trees, program.Directory, options, executable, program.Link) ?? Execute(executable, options.HarnessArguments);
         } finally {
             File.Delete(executable);
         }
@@ -98,7 +98,7 @@ public abstract class HarnessCommand : Command {
     ///     library with its <c>tests/</c> and <c>benches/</c> files, and its
     ///     dependencies'. Null, having said why, when there is nothing to build.
     /// </summary>
-    static (IReadOnlyList<SyntaxTree> Trees, string Directory)? Program(Options options) {
+    static (IReadOnlyList<SyntaxTree> Trees, string Directory, IReadOnlyList<string> Link)? Program(Options options) {
         if (options.Files.Count > 0) {
             foreach (var file in options.Files.Where(static f => !File.Exists(f))) {
                 Console.Error.WriteLine($"sable: no such file '{file}'");
@@ -107,7 +107,7 @@ public abstract class HarnessCommand : Command {
 
             var parseOptions = Pipeline.ParseOptionsFor(options.Optimise);
             return ([..options.Files.Select(f => SyntaxTree.Parse(new SourceText(File.ReadAllText(f), Path.GetFileName(f)), parseOptions))],
-                Path.GetDirectoryName(Path.GetFullPath(options.Files[0]))!);
+                Path.GetDirectoryName(Path.GetFullPath(options.Files[0]))!, []);
         }
 
         try {
@@ -121,7 +121,8 @@ public abstract class HarnessCommand : Command {
                 return null;
             }
 
-            return (trees, workspace.Root);
+            // What the package's build scripts found for the link: the harness links it too.
+            return (trees, workspace.Root, graph.LinkArguments(member.Name));
         } catch (PackageException failure) {
             Console.Error.WriteLine($"error: {failure.Message}");
             return null;
@@ -129,7 +130,7 @@ public abstract class HarnessCommand : Command {
     }
 
     /// <summary>Builds the harness; null when built, else the exit code to fail with.</summary>
-    protected int? Build(IReadOnlyList<SyntaxTree> trees, string directory, Options options, string executable) {
+    protected int? Build(IReadOnlyList<SyntaxTree> trees, string directory, Options options, string executable, IReadOnlyList<string> link) {
         var result = TestHarness.Compile(
             trees,
             Kind,
@@ -158,7 +159,7 @@ public abstract class HarnessCommand : Command {
             return 1;
         }
 
-        var build = NativeBuild.Build(result.LlvmIr!, executable, options.Optimise, options.Debug);
+        var build = NativeBuild.Build(result.LlvmIr!, executable, NativeOptions.Of(options.Optimise, options.Debug) with { LinkArguments = link });
         if (!build.Succeeded) {
             Console.Error.WriteLine("internal error: the native build failed:");
             Console.Error.Write(build.Output);

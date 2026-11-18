@@ -100,6 +100,21 @@ public sealed partial class PackageGraph {
 
     public LockFile Lock { get; }
 
+    /// <summary>What the packages' build scripts left, by package: set once they have run (<see cref="BuildScripts" />).</summary>
+    public IReadOnlyDictionary<string, BuildScriptOutput> BuildOutputs { get; internal set; } = new Dictionary<string, BuildScriptOutput>();
+
+    /// <summary>A package's library files: its own, then what its build script wrote.</summary>
+    public IReadOnlyList<string> LibrarySources(ResolvedPackage package) =>
+        BuildOutputs.TryGetValue(package.Name, out var output) ? [..package.Package.LibrarySources(), ..output.Sources] : package.Package.LibrarySources();
+
+    /// <summary>What linking <paramref name="member" />'s binaries needs from the build scripts of it and its dependencies.</summary>
+    public IReadOnlyList<string> LinkArguments(string member) =>
+        [..Closure(member).SelectMany(p => BuildOutputs.TryGetValue(p.Name, out var output) ? output.LinkArguments : []).Distinct()];
+
+    /// <summary>A hash of what those build scripts wrote, for the build's cache: a library rebuilt is a new link.</summary>
+    public string LinkInputs(string member) =>
+        string.Join(",", Closure(member).Select(p => BuildOutputs.TryGetValue(p.Name, out var output) ? output.Fingerprint : "").Where(static f => f.Length > 0));
+
     /// <summary>The name a resolution gives the workspace when it has several members.</summary>
     public const string WorkspaceRoot = "(workspace)";
 

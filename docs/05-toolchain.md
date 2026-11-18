@@ -468,6 +468,37 @@ A build script that wants more than it declared fails rather than being
 silently permitted. `cargo` not having this is a known supply-chain weakness and
 there is no reason to repeat it.
 
+**As built.** The script is compiled with the standard library and run by the
+SIL interpreter, as a manifest is (§5.2.6), before any command that compiles
+the package (`build`, `run`, `check`, `test`, `doc`, …), for the profile in
+use. Every runtime call that touches the machine asks the sandbox first, so
+the declaration is enforced, not trusted:
+
+- It reads under `allowRead` and `allowWrite`, writes under `allowWrite`, and
+  always reads and writes its own `$OUT_DIR`
+  (`target/<profile>/build/<package>-<version>/out`). Paths are taken from
+  the package's directory with links followed, so a link cannot lead out.
+- It runs only the programs `allowExec` names. Such a program is a process of
+  its own, which the interpreter cannot confine: `allowExec` is the line.
+- It sees only the build's variables: `OUT_DIR`, `SABLE_PACKAGE_DIR`,
+  `SABLE_PACKAGE_NAME`, `SABLE_PACKAGE_VERSION`, `SABLE_PROFILE`,
+  `SABLE_FEATURES`, `SABLE_TARGET_OS`, `SABLE_TARGET_ARCH`; and its working
+  directory is its own.
+- A refusal stops the build, naming the path or program and the list to add it
+  to; so does a trap or a type error in the script, with what it wrote to
+  standard error.
+
+What it leaves: the `.sb` files it writes under `$OUT_DIR` are compiled into
+the package's library, and what it prints as `sable:link-lib=NAME`,
+`sable:link-search=DIR`, `sable:rerun-if-changed=PATH` and
+`sable:warning=TEXT` goes to the link (and the test harness's), the cache and
+the user. It runs again only when its text, the manifest, the profile, the
+features, the toolchain, or a file it read or directory it listed changed —
+the sandbox records those, so they need not be declared; what a program it ran
+read, it names with `rerun-if-changed`. Not built yet: `allowNet` allows
+nothing, as there is no network library to reach; `build-dependencies` are
+checked but not resolved, so a script imports only the standard library.
+
 ## 5.7 Formatting and linting
 
 - `sable fmt` has **no options**. One style, enforced, settled by argument once

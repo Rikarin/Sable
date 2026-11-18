@@ -140,7 +140,8 @@ public sealed class DocCommand : PackageCommand {
         }
 
         // A binary's entry file comes first, then the package's own library files.
-        var own = bin is not null ? 1 : member.LibrarySources().Count;
+        // What its build script wrote is part of its library, and documented with it.
+        var own = bin is not null ? 1 : graph.LibrarySources(graph.Packages[member.Name]).Count;
         return ForSources(program, out errors, [..program.Take(own)]);
     }
 

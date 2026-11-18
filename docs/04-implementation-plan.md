@@ -1784,8 +1784,9 @@ Every command of docs/05 §5.1 exists (with `debug`, `lint`, `yank` and
 the foreign-function interface passes — integers, floats, `Bool` and structs
 of them — and lists the rest; pointers and C strings wait for the library
 half (`Sable.Interop`, #74). `sable toolchain` installs from a build, as
-there are no released toolchains to download. Build scripts (§5.6) are read but not run, and the
-registry is a directory, not a network service.
+there are no released toolchains to download. Build scripts (§5.6) run in
+the interpreter's sandbox, without build-dependencies yet; the registry is a
+directory, not a network service.
 
 ### Exit criteria
 - [x] Cold build of a 100-package graph < 60 s; warm incremental < 1 s

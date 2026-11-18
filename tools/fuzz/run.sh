@@ -19,10 +19,27 @@ root=$(cd "$(dirname "$0")/../.." && pwd)
 work=$(mktemp -d "${TMPDIR:-/tmp}/sable-fuzz.XXXXXX")
 trap 'rm -rf "$work"' EXIT
 
-dotnet build "$root/src/Sable.Driver" -c Release -o "$work/compiler" -v quiet -nologo >/dev/null
-"$work/compiler/sable" build "$root/tools/fuzz/inline_layout.sb" --emit llvm-ir > "$work/fuzz.ll"
+# Whatever stops it says why: a build that fails shows its output, and a
+# fuzzer that exits other than cleanly, its status.
+if ! dotnet build "$root/src/Sable.Driver" -c Release -o "$work/compiler" -v quiet -nologo > "$work/build.log" 2>&1; then
+    cat "$work/build.log" >&2
+    echo "error: the compiler does not build" >&2
+    exit 1
+fi
+if ! "$work/compiler/sable" build "$root/tools/fuzz/inline_layout.sb" --emit llvm-ir > "$work/fuzz.ll"; then
+    echo "error: tools/fuzz/inline_layout.sb does not compile" >&2
+    exit 1
+fi
 
-${CC:-clang} -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined -fno-sanitize-recover=all \
-    -Wno-override-module "$work/fuzz.ll" "$root/runtime/sable_runtime.c" -o "$work/fuzz"
+if ! ${CC:-clang} -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined -fno-sanitize-recover=all \
+    -Wno-override-module "$work/fuzz.ll" "$root/runtime/sable_runtime.c" -o "$work/fuzz"; then
+    echo "error: the fuzzer does not build with ${CC:-clang}" >&2
+    exit 1
+fi
 
-ASAN_OPTIONS=detect_leaks=0 SABLE_CHECK_LEAKS=1 "$work/fuzz"
+status=0
+ASAN_OPTIONS=detect_leaks=0 SABLE_CHECK_LEAKS=1 "$work/fuzz" || status=$?
+if [ "$status" -ne 0 ]; then
+    echo "error: the fuzzer exited with status $status" >&2
+    exit "$status"
+fi

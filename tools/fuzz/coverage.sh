@@ -204,6 +204,19 @@ triage() {
     echo "$(date +%H:%M) $name: $(basename "$file"): $what"
 }
 
+# A target that could not be set up: its log shown, and the failure recorded.
+setup_failed() {
+    local name=$1 log=$2 why=$3 what
+    what=$(signature "$log")
+    case "$why" in
+        [0-9]*) why="exit $why" ;;
+    esac
+    echo "cannot start: $why${what:+: $what}; see $log" > "$out/$name/about"
+    echo "$name	$log	cannot start: ${what:-$why}" >> "$out/failures.tsv"
+    echo "$(date +%H:%M) $name: $(cat "$out/$name/about")"
+    cat "$log"
+}
+
 # One target, run by its engine until the deadline or a stop, started again
 # whenever it stops early, at a hang or (libFuzzer) any failure.
 fuzz() {
@@ -215,18 +228,22 @@ fuzz() {
     mkdir -p "$dir" "$corpus" "$crashes"
     echo 0 > "$dir/rounds"
 
-    local length limit
+    # A target that cannot even start — its seeds, dictionary or limits not
+    # written, the harness dying as it starts — fuzzed nothing: a failure,
+    # said and summarised, not a quiet zero rounds.
+    local setup="$dir/setup.log" length limit
     if [ "$name" = frombytes ]; then
         engine=$fuzzer_engine
         length=4096 limit=10
         mkdir -p "$dir/seeds"
-        "$out/frombytes/replay" seeds "$dir/seeds" > /dev/null || return
+        "$out/frombytes/replay" seeds "$dir/seeds" > "$setup" 2>&1 || { setup_failed "$name" "$setup" $?; return; }
     else
         engine=${LIBFUZZER_DOTNET:+libfuzzer}
         engine=${engine:-in-process}
-        read -r length limit < <("$bin/Sable.Fuzz" "$name" info)
-        "$bin/Sable.Fuzz" "$name" seeds "$dir/seeds" > /dev/null || return
-        "$bin/Sable.Fuzz" "$name" dict "$dir/dict" || return
+        read -r length limit < <("$bin/Sable.Fuzz" "$name" info 2> "$setup")
+        [ -n "${limit:-}" ] || { setup_failed "$name" "$setup" "no limits from 'info'"; return; }
+        "$bin/Sable.Fuzz" "$name" seeds "$dir/seeds" > "$setup" 2>&1 || { setup_failed "$name" "$setup" $?; return; }
+        "$bin/Sable.Fuzz" "$name" dict "$dir/dict" > "$setup" 2>&1 || { setup_failed "$name" "$setup" $?; return; }
     fi
 
     if [ "$engine" = none ]; then

@@ -347,7 +347,7 @@ public sealed class IntegerTests {
         try {
             var build = NativeBuild.Build(result.LlvmIr!, executable, optimise);
             Assert.True(build.Succeeded, build.Output);
-            var start = new System.Diagnostics.ProcessStartInfo(executable) { RedirectStandardOutput = true, RedirectStandardError = true };
+            var start = new System.Diagnostics.ProcessStartInfo(executable) { RedirectStandardOutput = true, RedirectStandardError = true }.Utf8();
             using var process = System.Diagnostics.Process.Start(start)!;
             var stdout = process.StandardOutput.ReadToEndAsync();
             var stderr = process.StandardError.ReadToEnd();

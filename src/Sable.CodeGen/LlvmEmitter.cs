@@ -2468,7 +2468,7 @@ public sealed partial class LlvmEmitter {
                     return;
 
                 case "array_get" or "array_get_borrowed": {
-                    var element = InlineElement(operands[0], operands[1], ((ArrayType)builtin.Operands[0].Type).Element);
+                    var element = InlineElement(operands[0], operands[1], ((ArrayType)builtin.Operands[0].Type).Element, check: !builtin.InBounds);
                     var value = Result();
                     Line($"{value} = load {Type(builtin.Type)}, ptr {element}, !tbaa {TbaaElement}");
                     if (builtin.Name == "array_get") {
@@ -2497,7 +2497,7 @@ public sealed partial class LlvmEmitter {
                     var elementType = Type(arrayType.Element);
                     var array = Fresh();
                     Line($"{array} = load ptr, ptr {operands[0]}");
-                    var element = InlineElement(array, operands[1], arrayType.Element);
+                    var element = InlineElement(array, operands[1], arrayType.Element, check: !builtin.InBounds);
                     var old = Fresh();
                     Line($"{old} = load {elementType}, ptr {element}, !tbaa {TbaaElement}");
                     Line($"store {elementType} {operands[2]}, ptr {element}, !tbaa {TbaaElement}");
@@ -3305,11 +3305,16 @@ public sealed partial class LlvmEmitter {
         }
 
         /// <summary>An element's address, its index checked against the count — inline, with no call.</summary>
-        string InlineElement(string array, string index, SilType elementType) {
-            var count = Count(array);
-            var outside = Fresh();
-            Line($"{outside} = icmp uge i64 {index}, {count}");
-            TrapIf(outside, "array index out of range");
+        string InlineElement(string array, string index, SilType elementType, bool check = true) {
+            // An index proved in range is not checked again: an array with an
+            // element in range is not the empty one, null.
+            if (check) {
+                var count = Count(array);
+                var outside = Fresh();
+                Line($"{outside} = icmp uge i64 {index}, {count}");
+                TrapIf(outside, "array index out of range");
+            }
+
             var elementsField = Fresh();
             var elements = Fresh();
             var element = Fresh();

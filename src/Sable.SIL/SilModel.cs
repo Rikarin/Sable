@@ -650,6 +650,15 @@ public sealed class BuiltinInst(string name, SilType type, params SilValue[] ope
 
     /// <summary>The same operation, differently made: <c>inline_new</c> on the stack.</summary>
     public void Rename(string name) => Name = name;
+
+    /// <summary>
+    ///     <c>builtin [in_bounds]</c>: an element access whose index a pass has
+    ///     proved in range — once, before a loop (<see cref="VersionLoops" />)
+    ///     — so that it is not checked again: no compare, no trap, nothing to
+    ///     stop LLVM vectorising the loop.
+    /// </summary>
+    public bool InBounds { get; set; }
+
     public override SilType Type { get; } = type;
     public override bool HasResult => Type != SilType.Unit;
     public override string Opcode => "builtin";

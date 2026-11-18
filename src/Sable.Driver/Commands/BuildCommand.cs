@@ -16,7 +16,7 @@ public class BuildCommand : Command {
     public override string Usage => """
         usage: sable build [--release] [--features <a,b>] [-p <package>] [--bin <name>]
                sable build <file.sb> [-o <output>] [--emit sil|llvm-ir|obj] [-O0] [-g] [--exclusivity=checked|unchecked]
-                                     [--target <triple>] [--sysroot <dir>]
+                                     [--target <triple>] [--sysroot <dir>] [--vectorize-report]
 
         Without a file, builds the package in this directory or the nearest above it (sable.toml).
 
@@ -28,6 +28,8 @@ public class BuildCommand : Command {
           --emit sil         print the verified SIL instead of building
           --emit llvm-ir     print the LLVM IR instead of building
           --emit obj         write the program's object file (<output>.o), without the runtime or a link
+          --vectorize-report say, for each loop by its place in the source, whether LLVM's loop
+                             vectoriser vectorised it in an optimised build, and if not, why not
           -O0                build without LLVM's optimiser
           -g                 build with debug information, for lldb
           --exclusivity=...  keep the dynamic exclusivity checks, or drop them; by default
@@ -74,6 +76,7 @@ public class BuildCommand : Command {
                 case "--sysroot" when i + 1 < args.Count: sysroot = args[++i]; break;
                 case "-O0": optimise = false; break;
                 case "-g": debug = true; break;
+                case "--vectorize-report" when !TakesProgramArguments: emit = "vectorize-report"; break;
                 case "--exclusivity=checked": exclusivity = true; break;
                 case "--exclusivity=unchecked": exclusivity = false; break;
                 default:
@@ -86,7 +89,7 @@ public class BuildCommand : Command {
             }
         }
 
-        if (input is null || emit is not (null or "sil" or "llvm-ir" or "obj")) {
+        if (input is null || emit is not (null or "sil" or "llvm-ir" or "obj" or "vectorize-report")) {
             return null;
         }
 
@@ -123,12 +126,15 @@ public class BuildCommand : Command {
         var target = options.Target ?? NativeTarget.Host;
         // Dynamic exclusivity checks: on in a debug build, off in a release one,
         // unless asked for (docs/02 §2.3).
+        // A vectorisation report is of the optimised build, with the debug
+        // information that gives LLVM's remarks their places in the source.
+        var report = options.Emit == "vectorize-report";
         var result = Pipeline.Compile(
             [SyntaxTree.Parse(source, Pipeline.ParseOptionsFor(options.Optimise, target))],
-            options.Debug ? Path.GetDirectoryName(Path.GetFullPath(options.Input)) : null,
-            options.Exclusivity ?? (options.Debug || !options.Optimise),
+            options.Debug || report ? Path.GetDirectoryName(Path.GetFullPath(options.Input)) : null,
+            options.Exclusivity ?? ((options.Debug && !report) || !options.Optimise),
             target: target,
-            optimised: options.Optimise && !options.Debug
+            optimised: options.Optimise && (!options.Debug || report)
         );
         Report(result.Warnings);
 
@@ -153,6 +159,18 @@ public class BuildCommand : Command {
         if (!NativeBuild.IsAvailable()) {
             Console.Error.WriteLine($"sable: cannot run '{NativeBuild.CompilerPath}'; set CC to a clang that can link for this platform");
             return 1;
+        }
+
+        if (report) {
+            var remarks = NativeBuild.Remarks(result.LlvmIr!, options.Native with { OptLevel = options.Optimise ? "2" : "0", DebugInfo = false }, VectorizationReport.Flags);
+            if (!remarks.Succeeded) {
+                Console.Error.WriteLine($"internal error: compiling for {target.Triple} failed:");
+                Console.Error.Write(remarks.Output);
+                return 1;
+            }
+
+            Console.Write(VectorizationReport.Format(VectorizationReport.Parse(remarks.Output)));
+            return -1;
         }
 
         // An object file needs no runtime: it is what another machine's link,

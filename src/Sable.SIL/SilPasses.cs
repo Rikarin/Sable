@@ -44,7 +44,7 @@ public static class SilPassManager {
     ///     caller's; what is left is tidied last. An unoptimised build keeps
     ///     its calls, so that a trap's backtrace names every frame.
     /// </remarks>
-    public static IReadOnlyList<ISilPass> Optimising { get; } = [new Devirtualise(), new Inliner(), new Simplify(), ..Default, new Simplify()];
+    public static IReadOnlyList<ISilPass> Optimising { get; } = [new Devirtualise(), new Inliner(), new Simplify(), ..Default, new VersionLoops(), new Simplify()];
 
     /// <summary>
     ///     Drops every function the entry point cannot reach: through calls

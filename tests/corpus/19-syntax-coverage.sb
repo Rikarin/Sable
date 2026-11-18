@@ -13,22 +13,22 @@ fn both(_ ok: () -> Int, onFail: () -> Int) -> Int => ok() + onFail()
 fn classify(_ n: Int) -> String {
     switch n {
         case 0:
-        return "zero"
+            return "zero"
         case 1, 2:
-        return "small"
+            return "small"
         default:
-        return "large"
+            return "large"
     }
 }
 
 fn sign(_ n: Int) -> Int {
     match n {
         case 0:
-        return 0
+            return 0
         case let m where m > 0:
-        return 1
+            return 1
         default:
-        return -1
+            return -1
     }
 }
 

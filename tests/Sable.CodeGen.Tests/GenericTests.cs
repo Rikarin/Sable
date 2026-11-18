@@ -351,4 +351,68 @@ public sealed class GenericTests {
                 )
             ).Stdout
         );
+
+    /// <summary>
+    ///     A protocol extension's methods that return, take or compute with an
+    ///     associated type, specialised for the conformer: Item is Int for
+    ///     Pair and T for Wrap&lt;T&gt;, whose own members need T known — also
+    ///     through a refining protocol and a generic caller (#233).
+    /// </summary>
+    [Fact]
+    public void AProtocolExtensionComputesWithAnAssociatedType() =>
+        Assert.Equal(
+            "2\ntrue\nfalse\n2\n2\npair: 2\nz\n9\n2\n",
+            AssertAgree(
+                Program(
+                    """
+                    protocol Container {
+                        associatedtype Item: Comparable
+                        fn first() -> Item
+                        fn second() -> Item
+                    }
+                    protocol Named: Container {
+                        fn label() -> String
+                    }
+                    fn larger<T: Comparable>(_ a: T, _ b: T) -> T { return a < b ? b : a }
+                    extension Container {
+                        fn bigger() -> Item {
+                            let a = first()
+                            let b = second()
+                            return a < b ? b : a
+                        }
+                        fn holds(_ x: Item) -> Bool { return x == first() || x == second() }
+                        fn both() -> Item[] { return [first(), second()] }
+                        fn viaGeneric() -> Item { return larger(first(), second()) }
+                    }
+                    extension Named {
+                        fn describe() -> String { return "\(label()): \(bigger())" }
+                    }
+                    struct Pair: Named {
+                        fn first() -> Int { return 1 }
+                        fn second() -> Int { return 2 }
+                        fn label() -> String { return "pair" }
+                    }
+                    struct Wrap<T: Comparable>: Container {
+                        alias Item = T
+                        var a: T
+                        var b: T
+                        fn first() -> T { return a }
+                        fn second() -> T { return b }
+                    }
+                    fn top<C: Container>(_ c: C) -> C.Item { return c.bigger() }
+                    """,
+                    """
+                        print(Pair().bigger())
+                        print(Pair().holds(2))
+                        print(Pair().holds(3))
+                        print(Pair().both().count)
+                        print(Pair().viaGeneric())
+                        print(Pair().describe())
+                        print(Wrap<String>(a: "z", b: "a").bigger())
+                        print(top(Wrap<Int>(a: 9, b: 3)))
+                        print(top(Pair()))
+                    """
+                )
+            ).Stdout
+        );
 }

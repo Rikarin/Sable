@@ -1831,11 +1831,23 @@ public sealed partial class Binder {
     ) {
         BoundExpression? result = null;
 
+        // A condition is tested only once those before it held, so what
+        // they say about a binding holds in it: 'if x != none, x > 3'.
+        var pushed = 0;
         foreach (var condition in conditions) {
+            if (result is not null) {
+                PushNarrowing(NarrowingsWhen(result, true));
+                pushed++;
+            }
+
             var bound = BindCondition(condition);
             result = result is null
                 ? bound
                 : new BoundBinaryOperator(syntax, Core.Bool, BinaryOperatorKind.LogicalAnd, result, bound);
+        }
+
+        for (; pushed > 0; pushed--) {
+            PopNarrowing();
         }
 
         return result ?? new BoundLiteral(syntax, Core.Bool, true);
@@ -4934,6 +4946,48 @@ public sealed partial class Binder {
     /// </remarks>
     static bool IsLiteral(BoundExpression expression) => expression is BoundLiteral or BoundArray or BoundDictionary;
 
+    /// <summary>The message for a value of one type where another is wanted.</summary>
+    /// <remarks>
+    ///     Two functions' <c>some Shape</c> results are two types that print
+    ///     alike, so naming them alone reads "expected 'some Shape' but found
+    ///     'some Shape'". Each is told apart by what chose its hidden type.
+    /// </remarks>
+    static string DescribeMismatch(TypeSymbol target, TypeSymbol found) {
+        var wanted = target.ToDisplayString();
+        var actual = found.ToDisplayString();
+        if (wanted != actual) {
+            return $"expected '{wanted}' but found '{actual}'";
+        }
+
+        if (target is OpaqueTypeSymbol wantedOpaque && found is OpaqueTypeSymbol foundOpaque) {
+            var why = ReferenceEquals(wantedOpaque.Origin, foundOpaque.Origin)
+                ? "each choice of its type parameters gives a type of its own"
+                : $"each function's or variable's '{wanted}' is a type of its own";
+            return $"expected the '{wanted}' {DescribeOpaqueOrigin(wantedOpaque)} but found the one "
+                   + $"{DescribeOpaqueOrigin(foundOpaque)}; {why}";
+        }
+
+        return $"expected '{wanted}' but found a different type also written '{actual}'";
+    }
+
+    static string DescribeOpaqueOrigin(OpaqueTypeSymbol opaque) {
+        // 'make(1)' and 'make("x")' return two types from one function.
+        var context = opaque.Context.IsEmpty
+            ? ""
+            : " with "
+              + string.Join(
+                  ", ",
+                  opaque.Context.Parameters.Select(p => $"{p.Name} = {opaque.Context.Lookup(p)!.ToDisplayString()}")
+              );
+        return opaque.Origin switch {
+            FunctionSymbol { ContainingSymbol: TypeSymbol owner } method =>
+                $"returned by '{owner.Name}.{method.Name}()'{context}",
+            FunctionSymbol function => $"returned by '{function.Name}()'{context}",
+            LocalSymbol local => $"of '{local.Name}'",
+            _ => "of a parameter",
+        };
+    }
+
     BoundExpression BindElementAccess(ElementAccessExpressionSyntax syntax) {
         var receiver = BindExpression(syntax.Expression);
         var indices = syntax.ArgumentList.Arguments
@@ -6489,7 +6543,23 @@ public sealed partial class Binder {
             ? (left.Type as OptionalTypeSymbol)?.UnderlyingType
             : left.Type;
 
+        // The right side of 'a && b' is evaluated only when 'a' holds, and
+        // of 'a || b' only when it does not: what that says about a binding
+        // holds there — 'i != none && i > 3' reads 'i' unwrapped.
+        var shortCircuit = syntax.OperatorToken.Kind switch {
+            SyntaxKind.AmpersandAmpersandToken => NarrowingsWhen(left, true),
+            SyntaxKind.PipePipeToken => NarrowingsWhen(left, false),
+            _ => null,
+        };
+
+        if (shortCircuit is not null) {
+            PushNarrowing(shortCircuit);
+        }
+
         var right = BindExpression(syntax.Right, expected);
+        if (shortCircuit is not null) {
+            PopNarrowing();
+        }
 
         var kind = BinaryKindOf(syntax.OperatorToken.Kind);
         if (kind is null) {
@@ -7014,12 +7084,7 @@ public sealed partial class Binder {
 
         if (conversion is null) {
             if (!expression.HasError && !target.IsError) {
-                _diagnostics.Error(
-                    ErrorCode.ERR_TypeMismatch,
-                    syntax.Span,
-                    $"expected '{target.ToDisplayString()}' but found "
-                    + $"'{expression.Type.ToDisplayString()}'"
-                );
+                _diagnostics.Error(ErrorCode.ERR_TypeMismatch, syntax.Span, DescribeMismatch(target, expression.Type));
             }
 
             return new BoundError(syntax, expression);

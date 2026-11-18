@@ -95,6 +95,13 @@ internal static class ConformanceChecker {
             }
         }
 
+        // Sendable has no members to check; what it asks is what the type is
+        // made of. Checked once, however many protocols bring it in.
+        if (type.BaseTypes.Any(static b => !b.IsError && Sendability.RefinesSendable(b))
+            && Sendability.WhyNotAsDeclared(type) is { } notSendable) {
+            Report(diagnostics, ErrorCode.ERR_DeclaredSendableIsNot, type, notSendable);
+        }
+
         if (classBases > 1) {
             Report(
                 diagnostics,

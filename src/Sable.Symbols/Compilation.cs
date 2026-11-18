@@ -314,6 +314,7 @@ public sealed partial class Compilation {
         }
 
         AttachExtensions();
+        DeclareInlineLayouts();
         DeclareDerivations();
     }
 
@@ -555,8 +556,9 @@ public sealed partial class Compilation {
             );
         }
 
+        // Its conformance to InlineLayout, and 'fromBytes', once Sable.Core is declared.
         if (type.IsInlineLayout) {
-            type.AddMember(Core.FromBytes(type));
+            _inlineLayouts.Add((type, attributes.First(static a => a.Name.ToString().Trim() == "inline_layout")));
         }
 
         if (typeParameters is not null) {
@@ -651,7 +653,9 @@ public sealed partial class Compilation {
     }
 
     void DeclareFunction(FunctionDeclarationSyntax declaration, Symbol container) {
-        var name = declaration.Identifier.Text;
+        // An escaped identifier names it by what is between the backticks:
+        // 'fn `yield`()' declares 'yield', which is reserved.
+        var name = declaration.Identifier.Value as string ?? declaration.Identifier.Text;
         if (name.Length == 0) {
             return;
         }
@@ -736,6 +740,7 @@ public sealed partial class Compilation {
         CurrentScope = scope;
         try {
             DeclareMember(declaration, container);
+            DeclareInlineLayouts();
             DeclareDerivations();
         } finally {
             CurrentScope = saved;
@@ -880,6 +885,9 @@ public sealed partial class Compilation {
                 : declaration.Modifiers.Any(SyntaxKind.UnownedKeyword) ? ReferenceKind.Unowned
                 : ReferenceKind.Strong,
             IsComputed = declaration.Accessors is not null,
+            // 'var value: T { async get }': reading it is awaited.
+            IsAsyncGetter = declaration.Accessors is { } getters
+                && getters.Accessors.Any(static a => a.Keyword.Kind == SyntaxKind.GetKeyword && a.Modifiers.Any(SyntaxKind.AsyncKeyword)),
             HasSetter = declaration.Accessors is not { } list
                 || list.Accessors.Any(static a => a.Keyword.Kind == SyntaxKind.SetKeyword),
             IsAbstract = declaration.Accessors is { } accessors

@@ -60,15 +60,6 @@ public sealed class CoreTypes {
         Optional = DeclareGeneric("Optional", TypeKind.Union, "Wrapped");
         Dictionary = DeclareGeneric("Dictionary", TypeKind.Struct, "Key", "Value");
 
-        // What 'fromBytes' gives (docs/02 §2.5): the value, or why the bytes were refused.
-        Decoded = DeclareGeneric("Decoded", TypeKind.Union, "Value");
-
-        // Concurrency's one core type, until Sable.Concurrency (docs/06): a task
-        // running concurrently, whose result is awaited.
-        Task = DeclareGeneric("Task", TypeKind.Class, "Success");
-        Bytes = new NamedTypeSymbol("Bytes", TypeKind.Struct, Module, accessibility: Accessibility.Public);
-        Module.AddMember(Bytes);
-
         Integers = [I8, I16, I32, I64, I128, Int, U8, U16, U32, U64, U128, UInt];
         Floats = [F16, F32, F64];
         Numerics = [..Integers, ..Floats];
@@ -88,60 +79,15 @@ public sealed class CoreTypes {
     ///     <c>lib/Sable.Core</c> — String's, Char's and the numbers' members,
     ///     <c>print</c>, <c>Runtime</c> — written in Sable, the floor of it as
     ///     <c>@builtin</c>s (Compilation.Builtins.cs). What is left here is
-    ///     generic in a way a declaration cannot write, or lowered by more
-    ///     than one builtin: a region's <c>alloc</c> (its result is a
-    ///     reference to whatever it is given), <c>Task</c>'s members (a spawn
-    ///     builds a closure's task object), <c>Bytes.of</c> and
-    ///     <c>Decoded</c> (inline layout's), and the array members, built per element type in
-    ///     <see cref="GetArrayMembers" />.
+    ///     generic in a way a declaration cannot write: the array members,
+    ///     built per element type in <see cref="GetArrayMembers" />.
+    ///     <c>Range</c> and <c>ClosedRange</c>, a region's <c>alloc</c>,
+    ///     <c>Task</c>, <c>Decoded</c>, <c>Bytes.of</c> and the
+    ///     <c>InlineLayout</c> protocol are Sable too, their bodies the
+    ///     compiler's where they must be (<c>@intrinsic</c>, and
+    ///     <c>fromBytes</c> synthesised per type).
     /// </remarks>
     void DeclarePrimitiveMembers() {
-        // 'arena.alloc(value)': the value, moved into the region; a reference
-        // to it, rooted in the region, back.
-        var alloc = new FunctionSymbol("alloc", Region, null, Accessibility.Public, FunctionKind.Ordinary);
-        var element = new TypeParameterSymbol("T", alloc, null, 0);
-        alloc.TypeParameters = [element];
-        var allocated = new ParameterSymbol("value", "_", alloc, null, 0) { TypeResolver = () => element };
-        alloc.Parameters = [allocated];
-        alloc.ReturnTypeResolver = () => new ReferenceTypeSymbol(element);
-        Region.AddMember(alloc);
-
-        // 'Decoded<T>': '.Ok(value)' or '.Invalid(why)'.
-        var ok = new UnionCaseSymbol("Ok", Decoded, null);
-        ok.Payload = [new ParameterSymbol("value", null, ok, null, 0) { TypeResolver = () => Decoded.TypeParameters[0] }];
-        Decoded.AddMember(ok);
-        var invalid = new UnionCaseSymbol("Invalid", Decoded, null);
-        invalid.Payload = [new ParameterSymbol("why", null, invalid, null, 0) { TypeResolver = () => String }];
-        Decoded.AddMember(invalid);
-
-        // 'Task.spawn { … }': a task, queued; 'await task.value': its result;
-        // 'await Task.yield()': every task queued runs first.
-        var spawn = new FunctionSymbol("spawn", Task, null, Accessibility.Public, FunctionKind.Ordinary) { IsStatic = true };
-        var success = new TypeParameterSymbol("T", spawn, null, 0);
-        spawn.TypeParameters = [success];
-        spawn.Parameters = [
-            new ParameterSymbol("body", "_", spawn, null, 0) { TypeResolver = () => new FunctionTypeSymbol([], success, isAsync: true) },
-        ];
-        spawn.ReturnTypeResolver = () => Task.Construct([success]);
-        Task.AddMember(spawn);
-
-        var value = new FieldSymbol("value", Task, null, Accessibility.Public, false) {
-            IsComputed = true, IsAsyncGetter = true, TypeResolver = () => Task.TypeParameters[0],
-        };
-        Task.AddMember(value);
-
-        var yielding = new FunctionSymbol("yield", Task, null, Accessibility.Public, FunctionKind.Ordinary) { IsStatic = true, IsAsync = true };
-        yielding.Parameters = [];
-        yielding.ReturnTypeResolver = () => Void;
-        Task.AddMember(yielding);
-
-        // 'Bytes.of(value)': an @inline_layout value's bytes, as they are — no serialising pass.
-        var of = new FunctionSymbol("of", Bytes, null, Accessibility.Public, FunctionKind.Ordinary) { IsStatic = true };
-        var serialised = new TypeParameterSymbol("T", of, null, 0);
-        of.TypeParameters = [serialised];
-        of.Parameters = [new ParameterSymbol("value", "_", of, null, 0) { TypeResolver = () => serialised }];
-        of.ReturnTypeResolver = () => new ArrayTypeSymbol(U8, ArrayKind.Grow);
-        Bytes.AddMember(of);
     }
 
     /// <summary>The members every array has, built for one element type.</summary>
@@ -224,25 +170,24 @@ public sealed class CoreTypes {
 
     public ModuleSymbol Module { get; }
 
-    /// <summary><c>Task&lt;Success&gt;</c>: a task and, once it finishes, its result.</summary>
-    public NamedTypeSymbol Task { get; }
+    // Declared in Sable, in lib/Sable.Core, and known here by name, since
+    // lowering gives their '@intrinsic' members bodies. Null before the core
+    // is declared, or when a Sable.Core read from disk lacks them.
 
-    /// <summary><c>Decoded&lt;T&gt;</c>: what <c>fromBytes</c> gives.</summary>
-    public NamedTypeSymbol Decoded { get; }
+    /// <summary><c>Task&lt;Success&gt;</c>: a task and, once it finishes, its result (<c>Task.sab</c>).</summary>
+    public NamedTypeSymbol? Task => Declared("Task", TypeKind.Class);
 
-    /// <summary><c>Bytes</c>: where <c>Bytes.of</c> lives.</summary>
-    public NamedTypeSymbol Bytes { get; }
+    /// <summary><c>Decoded&lt;Value&gt;</c>: what <c>fromBytes</c> gives (<c>InlineLayout.sab</c>).</summary>
+    public NamedTypeSymbol? Decoded => Declared("Decoded", TypeKind.Union);
 
-    /// <summary>
-    ///     <c>T.fromBytes(bytes)</c> for an <c>@inline_layout</c> struct: the
-    ///     bytes, validated — framing, lengths, tags and every relative link.
-    /// </summary>
-    public FunctionSymbol FromBytes(NamedTypeSymbol type) {
-        var function = new FunctionSymbol("fromBytes", type, null, Accessibility.Public, FunctionKind.Ordinary) { IsStatic = true };
-        function.Parameters = [new ParameterSymbol("bytes", "_", function, null, 0) { TypeResolver = () => new ArrayTypeSymbol(U8, ArrayKind.Grow) }];
-        function.ReturnTypeResolver = () => Decoded.Construct([type]);
-        return function;
-    }
+    /// <summary><c>Bytes</c>: where <c>Bytes.of</c> lives (<c>InlineLayout.sab</c>).</summary>
+    public NamedTypeSymbol? Bytes => Declared("Bytes", TypeKind.Struct);
+
+    /// <summary><c>InlineLayout</c>: what every <c>@inline_layout</c> struct conforms to (<c>InlineLayout.sab</c>).</summary>
+    public NamedTypeSymbol? InlineLayout => Declared("InlineLayout", TypeKind.Protocol);
+
+    NamedTypeSymbol? Declared(string name, TypeKind kind) =>
+        Module.GetType(name) is { } type && type.TypeKind == kind ? type : null;
 
     public NamedTypeSymbol Bool { get; }
     public NamedTypeSymbol I8 { get; }

@@ -1,0 +1,29 @@
+module Sable.Core
+
+// Zero-copy serialisation (docs/02 §2.5): an '@inline_layout' value is
+// already its bytes, so 'Bytes.of' copies them out and 'T.fromBytes'
+// validates them back — framing, every tag, every length and every relative
+// link — before handing out a value.
+
+/// What 'fromBytes' gives: the value, or why the bytes were refused.
+public union Decoded<Value> {
+    Ok(value: Value),
+    Invalid(why: String),
+}
+
+/// A struct laid out inline, its bytes position-independent.
+///
+/// Conformance is the compiler's, the way '@derive' is: every
+/// '@inline_layout' struct conforms, and its 'fromBytes' is written for its
+/// layout. A type cannot conform any other way.
+public protocol InlineLayout {
+    /// The bytes, validated: '.Ok' with the value, or '.Invalid' with why.
+    static fn fromBytes(_ bytes: U8[>..]) -> Decoded<Self>
+}
+
+/// Where an inline-layout value's bytes are had.
+public struct Bytes {
+    /// The value's bytes, as they are: there is no serialising pass.
+    @intrinsic
+    public static fn of<T: InlineLayout>(_ value: T) -> U8[>..]
+}

@@ -244,6 +244,42 @@ public sealed class InlineLayoutTests {
         );
 
     /// <summary>
+    ///     '@inline_layout' conforms the struct to Sable.Core's InlineLayout,
+    ///     so generic code can decode one by its requirement.
+    /// </summary>
+    [Fact]
+    public void GenericCodeDecodesThroughInlineLayout() =>
+        Assert.Equal(
+            "16\nrejected\n",
+            AssertAgree(
+                Program(
+                    """
+                    @inline_layout
+                    struct Packed { var a: U8, var b: U8 }
+
+                    fn load<T: InlineLayout>(_ bytes: U8[>..]) -> Decoded<T> {
+                        return T.fromBytes(bytes)
+                    }
+
+                    fn show(_ decoded: Decoded<Packed>) -> String {
+                        return match decoded {
+                            case .Ok(let p) => "\(Int(p.a) + Int(p.b))"
+                            case .Invalid(_) => "rejected"
+                        }
+                    }
+                    """,
+                    """
+                        let good: Decoded<Packed> = load(Bytes.of(Packed { a: 7, b: 9 }))
+                        print(show(good))
+                        let short: U8[>..] = [1]
+                        let bad: Decoded<Packed> = load(short)
+                        print(show(bad))
+                    """
+                )
+            ).Stdout
+        );
+
+    /// <summary>
     ///     The fuzzer of tools/fuzz, cut to a few thousand cases: the native
     ///     validator and the interpreter's accept and refuse the same inputs.
     /// </summary>

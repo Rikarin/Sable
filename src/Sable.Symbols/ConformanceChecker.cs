@@ -62,6 +62,18 @@ internal static class ConformanceChecker {
             }
 
             switch (named.TypeKind) {
+                // '@inline_layout' is how a struct conforms: only for that
+                // layout can the compiler write 'fromBytes' (Compilation.InlineLayout.cs).
+                case TypeKind.Protocol when ReferenceEquals(named, core.InlineLayout) && !type.IsInlineLayout:
+                    Report(
+                        diagnostics,
+                        ErrorCode.ERR_DoesNotConform,
+                        type,
+                        $"'{type.Name}' cannot conform to 'InlineLayout' by naming it: the compiler conforms "
+                        + "every '@inline_layout' struct, writing 'fromBytes' for its layout; mark the struct '@inline_layout'"
+                    );
+                    break;
+
                 case TypeKind.Protocol:
                     CheckProtocol(type, named, diagnostics);
                     break;
@@ -518,6 +530,10 @@ internal static class ConformanceChecker {
 
             ArrayTypeSymbol array =>
                 new ArrayTypeSymbol(SubstituteSelf(array.ElementType, protocol, conformer), array.ArrayKind),
+
+            // 'Decoded<Self>': Self as a type argument, or deeper.
+            NamedTypeSymbol { IsConstructed: true } constructed when protocol.SelfTypeParameter is { } selfParameter =>
+                new TypeSubstitution(new() { [selfParameter] = asItself }).Apply(constructed),
 
             _ => type,
         };

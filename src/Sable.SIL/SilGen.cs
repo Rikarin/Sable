@@ -3216,7 +3216,9 @@ public sealed partial class SilGen {
                 case BoundAssignment assignment:
                     return Assignment(assignment);
 
-                case BoundFieldAccess { Field: { Name: "value", IsAsyncGetter: true } } taskValue:
+                // 'task.value', Sable.Core's @intrinsic async getter.
+                case BoundFieldAccess { Field: { Name: "value", IsAsyncGetter: true, ContainingSymbol: var task } } taskValue
+                    when task is not null && ReferenceEquals(task, Core.Task):
                     return TaskValue(taskValue);
 
                 // A global: read where it lives.
@@ -4709,19 +4711,32 @@ public sealed partial class SilGen {
                 return BuiltinCall(call, callee);
             }
 
-            // Sable.Core's @intrinsic members: the compiler writes their bodies (SilGen.Reflection.cs).
+            // Sable.Core's @intrinsic members: the compiler writes their bodies.
             if (IsIntrinsic(callee)) {
-                return Intrinsic(call);
-            }
+                var owner = Owner(callee)?.OriginalDefinition;
 
-            // Tasks: made, and yielded to.
-            if (ReferenceEquals(Owner(callee)?.OriginalDefinition, Core.Task) && callee.IsStatic) {
-                if (callee.Name == "spawn") {
-                    return Spawn(call);
+                // Tasks: made, and yielded to (SilGen.Tasks.cs).
+                if (owner is not null && ReferenceEquals(owner, Core.Task)) {
+                    if (callee.Name == "spawn") {
+                        return Spawn(call);
+                    }
+
+                    Emit(new BuiltinInst("task_yield", SilType.Unit));
+                    return UnitValue.Instance;
                 }
 
-                Emit(new BuiltinInst("task_yield", SilType.Unit));
-                return UnitValue.Instance;
+                // An inline-layout value's bytes (SilGen.Inline.cs).
+                if (owner is not null && ReferenceEquals(owner, Core.Bytes)) {
+                    return BytesOf(call);
+                }
+
+                // 'arena.alloc(value)'.
+                if (owner is not null && owner.Equals(Core.Region)) {
+                    return RegionAlloc(call);
+                }
+
+                // Reflection (SilGen.Reflection.cs).
+                return Intrinsic(call);
             }
 
             // A class or actor's implicit 'init()'.
@@ -4730,11 +4745,8 @@ public sealed partial class SilGen {
                 return ImplicitInit(call, implicitClass);
             }
 
-            // Inline layout: the bytes of a value, a value from bytes, an inline array's members.
-            if (callee is { Name: "of", IsStatic: true } && ReferenceEquals(callee.ContainingSymbol, Core.Bytes)) {
-                return BytesOf(call);
-            }
-
+            // Inline layout: a value from bytes, its 'fromBytes' synthesised
+            // for InlineLayout (Compilation.InlineLayout.cs); an inline array's members.
             if (callee is { Name: "fromBytes", IsStatic: true, ContainingSymbol: NamedTypeSymbol { IsInlineLayout: true } }) {
                 return FromBytes(call);
             }
@@ -4777,6 +4789,11 @@ public sealed partial class SilGen {
             if (OwnerOf(callee) is { TypeKind: TypeKind.Protocol } && Witness(call) is { } witness) {
                 if (witness.Builtin is not null) {
                     return BuiltinCall(call, witness);
+                }
+
+                // 'T.fromBytes(…)' where T is an @inline_layout struct: its synthesised body.
+                if (witness is { Name: "fromBytes", IsStatic: true, ContainingSymbol: NamedTypeSymbol { IsInlineLayout: true } }) {
+                    return FromBytes(call);
                 }
 
                 callee = witness;
@@ -5218,6 +5235,31 @@ public sealed partial class SilGen {
         sealed record Handled(SilValue? Value);
 
         /// <summary>
+        ///     <c>arena.alloc(value)</c>, Sable.Core's <c>@intrinsic</c>: room in
+        ///     the region, the value moved there, its address back.
+        /// </summary>
+        SilValue? RegionAlloc(BoundCall call) {
+            if (call is not { Receiver: { } receiver, Arguments: [var argument] }) {
+                return Missing(call, "'alloc' without a region and a value");
+            }
+
+            if (Expression(argument) is not { } allocated) {
+                return null;
+            }
+
+            Hold(allocated);
+            if (Borrow(receiver) is not { } region) {
+                return null;
+            }
+
+            var room = Emit(new BuiltinInst("region_alloc", SilType.Address(allocated.Type), region));
+            Unhold(allocated);
+            Emit(new StoreInst(Owned(allocated), room, StoreKind.Init));
+            End(region);
+            return room;
+        }
+
+        /// <summary>
         ///     The members the compiler gives arrays and regions, as builtins on
         ///     the receiver. Strings', numbers' and characters' are Sable's
         ///     (lib/Sable.Core), lowered as calls or as @builtins.
@@ -5265,24 +5307,6 @@ public sealed partial class SilGen {
 
                 EndAll(borrows);
                 return new(result);
-            }
-
-            // 'arena.alloc(value)': room in the region, the value moved there, its address back.
-            if (Sub(receiver.Type).Equals(Core.Region) && callee.Name == "alloc") {
-                if (Expression(call.Arguments[0]) is not { } allocated) {
-                    return new((SilValue?)null);
-                }
-
-                Hold(allocated);
-                if (Borrow(receiver) is not { } region) {
-                    return new((SilValue?)null);
-                }
-
-                var room = Emit(new BuiltinInst("region_alloc", SilType.Address(allocated.Type), region));
-                Unhold(allocated);
-                Emit(new StoreInst(Owned(allocated), room, StoreKind.Init));
-                End(region);
-                return new(room);
             }
 
             if (Sub(receiver.Type) is not ArrayTypeSymbol) {

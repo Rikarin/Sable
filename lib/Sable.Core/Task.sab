@@ -1,0 +1,25 @@
+module Sable.Core
+
+// Concurrency's one core type (docs/02 §2.7): Sable.Concurrency's channels,
+// groups and sleeping are written over it. Its members' bodies are the
+// compiler's ('@intrinsic'): a task is a class holding the runtime's handle,
+// the body to run and, once run, its result, laid out per result type, and
+// the runtime schedules it (SilGen.Tasks.cs).
+
+/// A task running concurrently, and, once it finishes, its result.
+public class Task<Success> {
+    /// Made by 'spawn' alone: a task is its body, queued.
+    private init() { }
+
+    /// The body, queued to run as a task of its own; the task, to await.
+    @intrinsic
+    public static fn spawn<T>(_ body: async () -> T) -> Task<T>
+
+    /// The task's result, waiting for it to finish.
+    @intrinsic
+    public var value: Success { async get }
+
+    /// Lets every task queued run before this one goes on.
+    @intrinsic
+    public static async fn `yield`()
+}

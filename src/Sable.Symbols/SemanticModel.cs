@@ -528,7 +528,9 @@ public sealed partial class SemanticModel {
             FunctionKind.Accessor
         ) {
             // A setter writes the value it belongs to; a getter does not.
-            IsMutating = !isGetter
+            IsMutating = !isGetter,
+            // 'async get' may await, as its readers do.
+            IsAsync = isGetter && accessor.Modifiers.Any(SyntaxKind.AsyncKeyword)
         };
 
         // A subscript's accessors see its indices.

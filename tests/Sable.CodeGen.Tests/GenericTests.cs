@@ -521,4 +521,63 @@ public sealed class GenericTests {
                 )
             ).Stdout
         );
+
+    const string PolymorphicDeclarations = """
+        protocol Shape {
+            fn area() -> Int
+            fn name() -> String
+        }
+
+        struct Square: Shape {
+            var side: Int
+            fn area() -> Int { return side * side }
+            fn name() -> String { return "square" }
+        }
+
+        class Circle: Shape {
+            var r: Int
+            init(_ r: Int) { self.r = r }
+            fn area() -> Int { return 3 * r * r }
+            fn name() -> String { return "circle" }
+        }
+
+        @polymorphic
+        fn describe<S: Shape>(_ s: S, _ times: Int) -> String {
+            var total = 0
+            for i in 0..<times {
+                total += s.area()
+            }
+            return "\(s.name()) \(total)"
+        }
+
+        @polymorphic
+        fn larger<A: Shape, B: Shape>(_ a: A, _ b: B) -> A {
+            if a.area() >= b.area() {
+                return a
+            }
+            return a
+        }
+        """;
+
+    /// <summary>
+    ///     '@polymorphic' compiles a generic function once: each value of a
+    ///     type parameter passed in a box with its witness table, a result
+    ///     taken back out as the type the call gives it, whatever the types.
+    /// </summary>
+    [Fact]
+    public void APolymorphicFunctionIsCompiledOnce() {
+        var source = Program(PolymorphicDeclarations, """
+            print(describe(Square(side: 2), 3))
+            print(describe(Circle(2), 1))
+            let s: any Shape = Square(side: 5)
+            print(describe(s, 2))
+            let big = larger(Square(side: 3), Circle(1))
+            print(big.side)
+        """);
+        Assert.Equal("square 12\ncircle 12\nsquare 50\n3\n", AssertAgree(source).Stdout);
+        var sil = SilPrinter.Print(Pipeline.Compile(new SourceText(source, "test.sb")).Sil!);
+        Assert.Contains("sil @Test.describe$polymorphic : $(any$Test.Shape, Int) -> String", sil, StringComparison.Ordinal);
+        Assert.Contains("sil @Test.larger$polymorphic : $(any$Test.Shape, any$Test.Shape) -> any$Test.Shape", sil, StringComparison.Ordinal);
+        Assert.DoesNotContain("sil @Test.describe$of$", sil, StringComparison.Ordinal);
+    }
 }

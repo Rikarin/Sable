@@ -144,12 +144,14 @@ public sealed partial class LlvmEmitter {
                 return new(CPassing.Direct, $"[{count} x {element}]", "");
             }
 
-            return size <= 8 ? new(CPassing.Direct, "i64", "")
+            // A struct aligned to 16 goes in an even pair of registers, as an i128.
+            return size <= 16 && Align(structure) == 16 ? new(CPassing.Direct, "i128", "")
+                : size <= 8 ? new(CPassing.Direct, "i64", "")
                 : size <= 16 ? new(CPassing.Direct, "[2 x i64]", "")
                 : new(CPassing.Indirect, "ptr", "noundef");
         }
 
-        return size <= 16
+        return size <= 16 && !HasUnalignedFields(structure)
             ? new(CPassing.Direct, EightBytes(structure), "")
             : new(CPassing.ByValue, "ptr", $"byval({Type(structure)}) align {Math.Max(8, Align(structure))}");
     }
@@ -169,13 +171,13 @@ public sealed partial class LlvmEmitter {
             return SingleScalar(structure) is { } scalar ? new(CPassing.Direct, Type(scalar), "") : null;
         }
 
-        if (size > 16) {
+        if (size > 16 || !IsArm64 && HasUnalignedFields(structure)) {
             return null;
         }
 
         if (IsArm64) {
             return FloatAggregate(structure) is var (element, count) ? new(CPassing.Direct, $"[{count} x {element}]", "")
-                : new(CPassing.Direct, size <= 8 ? "i64" : "[2 x i64]", "");
+                : new(CPassing.Direct, size <= 8 ? "i64" : Align(structure) == 16 ? "i128" : "[2 x i64]", "");
         }
 
         return new(CPassing.Direct, EightBytes(structure), "");
@@ -189,26 +191,35 @@ public sealed partial class LlvmEmitter {
 
     /// <summary>The struct's scalars, in order, each with where it is: what an ABI classifies.</summary>
     static IEnumerable<(SilType Type, int Offset)> Flatten(StructType structure, int at = 0) {
-        var offset = 0;
-        foreach (var part in StructParts(structure)) {
-            var align = Align(part);
-            offset = (offset + align - 1) / align * align;
-            if (part is StructType inner) {
+        // At the offsets the layout gives: packed, or padded for '@align'.
+        var layout = LayoutOf(structure);
+        var parts = StructParts(structure).ToList();
+        for (var i = 0; i < parts.Count; i++) {
+            var offset = layout.Offsets[i];
+            if (parts[i] is StructType { IsInline: false } inner) {
                 foreach (var scalar in Flatten(inner, at + offset)) {
                     yield return scalar;
                 }
             } else {
-                yield return (part, at + offset);
+                yield return (parts[i], at + offset);
             }
-
-            offset += Size(part);
         }
     }
+
+    /// <summary>
+    ///     Whether a scalar of the struct is at an offset its type is not
+    ///     aligned to — which only <c>@packed</c> does. System V x86-64
+    ///     passes such a struct in memory.
+    /// </summary>
+    static bool HasUnalignedFields(StructType structure) =>
+        Flatten(structure).Any(static s => s.Offset % Align(s.Type) != 0);
 
     /// <summary>AAPCS64's homogeneous floating-point aggregate: one to four of one float type.</summary>
     static (string Element, int Count)? FloatAggregate(StructType structure) {
         var scalars = Flatten(structure).Select(static s => s.Type).ToList();
+        // With no padding: an '@align' struct that rounds its floats up is not one.
         return scalars.Count is >= 1 and <= 4 && SilType.IsFloat(scalars[0]) && scalars.TrueForAll(s => s == scalars[0])
+               && Size(structure) == scalars.Count * Size(scalars[0])
             ? (Type(scalars[0]), scalars.Count)
             : null;
     }
@@ -225,6 +236,10 @@ public sealed partial class LlvmEmitter {
         for (var start = 0; start < size; start += 8) {
             var end = Math.Min(start + 8, size);
             var inside = scalars.Where(s => s.Offset >= start && s.Offset < end).Select(static s => s.Type).ToList();
+            if (start > 0 && !scalars.Any(s => s.Offset < end && s.Offset + Size(s.Type) > start)) {
+                break; // padding alone, which an '@align' struct may end with: no class, not passed
+            }
+
             classes.Add(inside.Count > 0 && inside.TrueForAll(static t => SilType.IsFloat(t)));
         }
 
@@ -239,6 +254,10 @@ public sealed partial class LlvmEmitter {
         for (var start = 0; start < size; start += 8) {
             var end = Math.Min(start + 8, size);
             var inside = scalars.Where(s => s.Offset >= start && s.Offset < end).Select(static s => s.Type).ToList();
+            if (start > 0 && !scalars.Any(s => s.Offset < end && s.Offset + Size(s.Type) > start)) {
+                break;
+            }
+
             if (inside.Count > 0 && inside.TrueForAll(static t => SilType.IsFloat(t))) {
                 parts.Add(inside.Count == 2 && inside[0] == SilType.F32 ? "<2 x float>"
                     : inside[0] == SilType.F32 && end - start <= 4 ? "float"

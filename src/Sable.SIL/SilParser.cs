@@ -326,6 +326,18 @@ public sealed class SilParser {
             type.IsInline = true;
         }
 
+        if (Current is { Kind: TokenKind.Global, Text: "packed" }) {
+            Next();
+            type.IsPacked = true;
+        }
+
+        if (Current is { Kind: TokenKind.Global, Text: "align" }) {
+            Next();
+            Expect("(");
+            type.Alignment = int.Parse(Expect(TokenKind.Number, "an alignment").Text, CultureInfo.InvariantCulture);
+            Expect(")");
+        }
+
         Expect("{");
         if (!At("}")) {
             do {

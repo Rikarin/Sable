@@ -405,7 +405,7 @@ public sealed partial class LlvmEmitter {
                     return Typedef(DisplayName(unowned), Type(unowned.Referent));
 
                 case TupleType tuple:
-                    return Aggregate(DisplayName(tuple), tuple.Elements.Select(static (e, i) => (i.ToString(System.Globalization.CultureInfo.InvariantCulture), e)), Size(tuple), live: false);
+                    return Aggregate(DisplayName(tuple), tuple.Elements.Select(static (e, i) => (i.ToString(System.Globalization.CultureInfo.InvariantCulture), e)), Size(tuple), live: false, LayoutOf(tuple).Offsets);
 
                 // A slice: the buffer it views, where its run starts, and how
                 // long it is — named '$slice' under the typedef, for the
@@ -418,7 +418,7 @@ public sealed partial class LlvmEmitter {
                     return Typedef(DisplayName(structType), Aggregate(DisplayName(structType) + "$existential", structType.Fields, Size(structType), live: false));
 
                 case StructType structType:
-                    return Aggregate(DisplayName(structType), structType.Fields, Size(structType), live: structType.Deinit is not null);
+                    return Aggregate(DisplayName(structType), structType.Fields, Size(structType), live: structType.Deinit is not null, LayoutOf(structType).Offsets);
 
                 case EnumType enumType when IsNullable(enumType):
                     return Typedef(DisplayName(enumType), Type(enumType.Cases[SomeCase(enumType)].Payload!));
@@ -494,7 +494,7 @@ public sealed partial class LlvmEmitter {
         }
 
         /// <summary>A struct or tuple, field by field, after the hidden live byte of one with a deinit.</summary>
-        string Aggregate(string name, IEnumerable<(string Name, SilType Type)> fields, int size, bool live) {
+        string Aggregate(string name, IEnumerable<(string Name, SilType Type)> fields, int size, bool live, int[]? offsets = null) {
             var members = new List<string>();
             var offset = 0;
             if (live) {
@@ -502,14 +502,18 @@ public sealed partial class LlvmEmitter {
                 offset = 1;
             }
 
+            var index = live ? 1 : 0;
             foreach (var (fieldName, fieldType) in fields) {
+                // At the offset the layout gives, packed or padded; or else
+                // the next its alignment allows.
                 var align = Align(fieldType);
-                offset = (offset + align - 1) / align * align;
+                offset = offsets is null ? (offset + align - 1) / align * align : offsets[index];
                 if (Type(fieldType) is { } fieldNode) {
                     members.Add(Member(fieldName, fieldNode, Size(fieldType), offset));
                 }
 
                 offset += Size(fieldType);
+                index++;
             }
 
             return Structure(name, size, members);

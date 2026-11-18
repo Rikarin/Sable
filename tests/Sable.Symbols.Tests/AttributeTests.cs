@@ -47,6 +47,80 @@ public sealed class AttributeTests {
         Assert.Equal(ErrorCode.ERR_MalformedAttribute, Assert.Single(Errors($"module M\n{source}")).Code);
 
     [Fact]
+    public void AnAlignmentIsAtMostWhatTheHeapGives() {
+        var error = Assert.Single(Errors("module M\n@align(32)\nstruct S { var n: Int }"));
+        Assert.Equal(ErrorCode.ERR_AlignTooLarge, error.Code);
+        Assert.Contains("'@align(32)' is more than 16", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AStructConformingToAttributeIsOne() =>
+        AssertClean("""
+                    module M
+                    struct Route: Attribute {
+                        var path: String
+                        var method: String = "GET"
+                    }
+                    @Route("/users") @Route("/users", method: "POST") struct Users { }
+                    @Route(path: "/f") fn f() { }
+                    """);
+
+    const string Attributes = """
+                              module M
+                              struct Route: Attribute {
+                                  var path: String
+                              }
+                              struct Plain {
+                                  var n: Int
+                              }
+                              fn base() -> String { return "/" }
+
+                              """;
+
+    /// <summary>The arguments are checked as a call to the struct's initialisers would be.</summary>
+    [Theory]
+    [InlineData("@Route(3)\nstruct S { }")]
+    [InlineData("@Route(\"/a\", verb: \"GET\")\nstruct S { }")]
+    [InlineData("@Route\nstruct S { }")]
+    public void AnAttributesArgumentsAreAnInitialisers(string source) =>
+        Assert.NotEmpty(Errors(Attributes + source));
+
+    [Fact]
+    public void AnAttributesArgumentsAreConstants() =>
+        Assert.Equal(ErrorCode.ERR_AttributeArgumentNotConstant, Assert.Single(Errors(Attributes + "@Route(base())\nstruct S { }")).Code);
+
+    [Fact]
+    public void AStructNotConformingToAttributeIsNone() {
+        var error = Assert.Single(Errors(Attributes + "@Plain(n: 1)\nstruct S { }"));
+        Assert.Equal(ErrorCode.ERR_UnknownAttribute, error.Code);
+        Assert.Contains("'Plain' is not an attribute", error.Message, StringComparison.Ordinal);
+    }
+
+    const string Shapes = """
+                          module M
+                          protocol Shape { fn area() -> Int }
+                          class Base { }
+
+                          """;
+
+    [Theory]
+    [InlineData("@polymorphic fn f(_ n: Int) -> Int { return n }", "it has no type parameters")]
+    [InlineData("@polymorphic fn f<T: Base>(_ t: T) { }", "'T: Base' is not a protocol")]
+    [InlineData("@polymorphic fn f<T: Equatable>(_ t: T) { }", "requires '==', which mentions Self")]
+    [InlineData("@polymorphic fn f<T: Shape>(_ ts: T[>..]) { }", "'ts: T[>..]' holds a type parameter inside it")]
+    [InlineData("@polymorphic fn f<T: Shape>() -> T? { return none }", "its result 'T?' holds a type parameter inside it")]
+    [InlineData("@polymorphic fn f<T: Shape>(_ t: inout T) { }", "'t' is 'inout'")]
+    [InlineData("struct G<U> { @polymorphic fn f<T: Shape>(_ t: T) { } }", "'G' around it is generic")]
+    public void APolymorphicFunctionPassesItsValuesInBoxes(string source, string why) {
+        var error = Assert.Single(Errors(Shapes + source), static e => e.Code == ErrorCode.ERR_NotPolymorphic);
+        Assert.Contains(why, error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void APolymorphicFunctionWithBoxableValuesIsOne() =>
+        AssertClean(Shapes + "@polymorphic fn larger<A: Shape, B: Shape>(_ a: A, _ b: B, _ n: Int) -> A { return a }");
+
+    [Fact]
     public void TheAttributesThereAreAreAccepted() =>
         AssertClean("""
                     module M

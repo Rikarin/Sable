@@ -129,11 +129,10 @@ public sealed partial class Compilation {
                     continue;
                 }
 
-                ReportDeclaration(
-                    ErrorCode.ERR_UnknownAttribute,
-                    attribute.Name.Span,
-                    $"there is no attribute '@{name}'"
-                );
+                // A struct conforming to Attribute, once every type is
+                // declared and its conformances known.
+                var unknown = attribute;
+                TypeBinder.DeferLate(() => CheckUserAttribute(tree, unknown, name));
                 continue;
             }
 
@@ -160,7 +159,112 @@ public sealed partial class Compilation {
             if (name == "immutable" && attribute.Parent is ClassDeclarationSyntax immutableClass) {
                 TypeBinder.DeferLate(() => CheckImmutable(immutableClass));
             }
+
+            if (name == "polymorphic" && attribute.Parent is FunctionDeclarationSyntax polymorphicFunction) {
+                TypeBinder.DeferLate(() => CheckPolymorphic(polymorphicFunction, attribute));
+            }
         }
+    }
+
+    readonly Dictionary<AttributeSyntax, (NamedTypeSymbol Type, BoundExpression Value)> _userAttributes = [];
+
+    /// <summary>
+    ///     A user-defined attribute (SYNTAX.md §22): a struct conforming to
+    ///     Sable.Core's <c>Attribute</c>, named as the attribute is, whose
+    ///     arguments are an initialiser's, and constants. Any other name is
+    ///     no attribute (S3092).
+    /// </summary>
+    void CheckUserAttribute(SyntaxTree tree, AttributeSyntax attribute, string name) {
+        var scope = _fileScopes[tree];
+        var context = AttributeContext(attribute) ?? scope.Module;
+        var found = attribute.Name is SimpleNameTypeSyntax { TypeArgumentList: null } simple
+            ? TypeBinder.Lookup(simple.Identifier.Text, context, scope, simple.Span, report: false)
+            : null;
+        if (found is not NamedTypeSymbol { TypeKind: TypeKind.Struct } type || Core.Attribute is not { } protocol
+            || !type.BaseTypes.Contains(protocol)) {
+            ReportDeclaration(
+                ErrorCode.ERR_UnknownAttribute,
+                attribute.Name.Span,
+                found is NamedTypeSymbol other && Core.Attribute is not null
+                    ? $"'{other.ToDisplayString()}' is not an attribute: an attribute of the program's own is a struct conforming to 'Attribute'"
+                    : $"there is no attribute '@{name}'"
+            );
+            return;
+        }
+
+        if (type.IsGenericDefinition) {
+            ReportDeclaration(ErrorCode.ERR_MalformedAttribute, attribute.Span, $"'@{name}' is generic, and an attribute's type is not");
+            return;
+        }
+
+        var binder = new Binder(this, scope, context);
+        var value = binder.BindAttribute(attribute, type);
+        foreach (var diagnostic in binder.Diagnostics) {
+            _declarationDiagnostics.Add(diagnostic);
+        }
+
+        if (value.HasError) {
+            return;
+        }
+
+        // What reflection gives back is made again each time it is asked
+        // for, so it can be nothing but constants.
+        if (FirstNonConstant(value is BoundCall call ? call.Arguments : []) is { } variable) {
+            ReportDeclaration(
+                ErrorCode.ERR_AttributeArgumentNotConstant,
+                variable.Syntax.Span,
+                $"an argument of '@{name}' is a constant — a literal, a case, or an array or tuple of them — and this is not"
+            );
+            return;
+        }
+
+        _userAttributes[attribute] = (type, value);
+    }
+
+    /// <summary>The declaration an attribute is written on, as a symbol, if it is one.</summary>
+    Symbol? AttributeContext(AttributeSyntax attribute) {
+        for (var node = attribute.Parent; node is not null; node = node.Parent) {
+            if (GetDeclaredSymbol(node) is { } symbol) {
+                return symbol is FunctionSymbol or NamedTypeSymbol ? symbol : symbol.ContainingSymbol;
+            }
+        }
+
+        return null;
+    }
+
+    static BoundExpression? FirstNonConstant(IEnumerable<BoundExpression> arguments) {
+        foreach (var argument in arguments) {
+            var bad = argument switch {
+                BoundLiteral => null,
+                BoundMetatype => null,
+                BoundConversion { ConversionKind: ConversionKind.Identity or ConversionKind.LiteralTyping or ConversionKind.OptionalWrap or ConversionKind.UnionInjection or ConversionKind.Existential } conversion => FirstNonConstant([conversion.Operand]),
+                BoundUnaryOperator { Method: null } unary => FirstNonConstant([unary.Operand]),
+                BoundBinaryOperator { Method: null } binary => FirstNonConstant([binary.Left, binary.Right]),
+                BoundArray array => FirstNonConstant(array.Elements),
+                BoundTuple tuple => FirstNonConstant(tuple.Elements),
+                BoundUnionCaseConstruction construction => FirstNonConstant(construction.Arguments),
+                _ => argument,
+            };
+
+            if (bad is not null) {
+                return bad;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    ///     The program's own attributes written on a declaration, each its
+    ///     struct and the value its arguments make, in the order written.
+    /// </summary>
+    public IReadOnlyList<(NamedTypeSymbol Type, BoundExpression Value)> UserAttributesOf(Symbol symbol) {
+        var definition = symbol is NamedTypeSymbol named ? named.OriginalDefinition : symbol;
+        if (definition.DeclaringSyntax is not [var declaration, ..]) {
+            return [];
+        }
+
+        return [..AttributesOf(declaration).Where(_userAttributes.ContainsKey).Select(a => _userAttributes[a])];
     }
 
     /// <summary>
@@ -248,6 +352,128 @@ public sealed partial class Compilation {
         }
     }
 
+    /// <summary>The most a struct may be aligned to: what every block the runtime allocates is aligned to.</summary>
+    internal const int MaximumAlignment = 16;
+
+    /// <summary>The alignment an '@align(n)' among a type's attributes gives it, when n is one it may have; otherwise 0.</summary>
+    static int AlignmentOf(SyntaxList<AttributeSyntax> attributes) {
+        foreach (var attribute in attributes) {
+            if (AttributeName(attribute) == "align"
+                && attribute.ArgumentList?.Arguments.ToList() is [{ Expression: LiteralExpressionSyntax { Token.Value: ulong alignment } }]
+                && alignment is > 0 and <= MaximumAlignment && (alignment & (alignment - 1)) == 0) {
+                return (int)alignment;
+            }
+        }
+
+        return 0;
+    }
+
+    /// <summary>
+    ///     A <c>@polymorphic</c> function is compiled once, each type
+    ///     parameter standing for <c>any</c> of its constraints: a value of it
+    ///     is passed boxed, with the witness table of its type's conformance.
+    ///     That needs a signature a box can be passed through and taken back
+    ///     out of, and constraints a box can meet (S3512).
+    /// </summary>
+    void CheckPolymorphic(FunctionDeclarationSyntax declaration, AttributeSyntax attribute) {
+        if (GetDeclaredSymbol(declaration) is not FunctionSymbol function) {
+            return;
+        }
+
+        void Refuse(string why) =>
+            ReportDeclaration(
+                ErrorCode.ERR_NotPolymorphic,
+                attribute.Span,
+                $"'@polymorphic' compiles '{function.Name}' once, each type parameter a box with its witness table, and {why}"
+            );
+
+        if (function.TypeParameters.IsEmpty) {
+            Refuse("it has no type parameters");
+            return;
+        }
+
+        for (Symbol? outer = function.ContainingSymbol; outer is not null; outer = outer.ContainingSymbol) {
+            if (outer is FunctionSymbol) {
+                Refuse("a local function is compiled with the one around it");
+                return;
+            }
+
+            if (outer is NamedTypeSymbol { TypeParameters.IsEmpty: false } generic) {
+                Refuse($"'{generic.Name}' around it is generic, and compiled for each type itself");
+                return;
+            }
+        }
+
+        bool MentionsAny(TypeSymbol type) => function.TypeParameters.Any(p => Mentions(type, p));
+
+        foreach (var parameter in function.TypeParameters) {
+            foreach (var constraint in parameter.Constraints) {
+                if (constraint is not NamedTypeSymbol { TypeKind: TypeKind.Protocol } protocol) {
+                    Refuse($"'{parameter.Name}: {constraint.ToDisplayString()}' is not a protocol, which a box can meet");
+                    return;
+                }
+
+                if (SelfBound(protocol) is { } requirement) {
+                    Refuse($"'{protocol.ToDisplayString()}' {requirement}, which a box of an unknown type cannot meet");
+                    return;
+                }
+            }
+        }
+
+        foreach (var parameter in function.Parameters) {
+            if (parameter.Type is TypeParameterSymbol && parameter.Modifier is not (ParameterModifier.None or ParameterModifier.In)) {
+                Refuse($"'{parameter.Name}' is '{parameter.Modifier.ToString().ToLowerInvariant()}', and a box passed so could not be given back as the caller's value");
+                return;
+            }
+
+            if (parameter.Type is not TypeParameterSymbol && MentionsAny(parameter.Type)) {
+                Refuse($"'{parameter.Name}: {parameter.Type.ToDisplayString()}' holds a type parameter inside it, which would need each part boxed; write it as a type parameter, or one that mentions none");
+                return;
+            }
+        }
+
+        if (function.ReturnType is not TypeParameterSymbol && MentionsAny(function.ReturnType)) {
+            Refuse($"its result '{function.ReturnType.ToDisplayString()}' holds a type parameter inside it; write it as a type parameter, or one that mentions none");
+            return;
+        }
+
+        if (function.ThrownType is { } thrown && MentionsAny(thrown)) {
+            Refuse($"what it throws, '{thrown.ToDisplayString()}', mentions a type parameter");
+        }
+    }
+
+    /// <summary>
+    ///     What of a protocol, or one it refines, a value in a box cannot do:
+    ///     an associated type, or a requirement that mentions Self — or null.
+    /// </summary>
+    static string? SelfBound(NamedTypeSymbol protocol) {
+        var seen = new HashSet<NamedTypeSymbol>(ReferenceEqualityComparer.Instance);
+        var pending = new Stack<NamedTypeSymbol>([protocol.OriginalDefinition]);
+        while (pending.TryPop(out var current)) {
+            if (!seen.Add(current)) {
+                continue;
+            }
+
+            if (!current.AssociatedTypes.IsEmpty) {
+                return $"has an associated type, '{current.AssociatedTypes[0].Name}'";
+            }
+
+            if (current.SelfTypeParameter is { } self) {
+                foreach (var function in current.Members.OfType<FunctionSymbol>()) {
+                    if (function.Parameters.Any(p => Mentions(p.Type, self)) || Mentions(function.ReturnType, self)) {
+                        return $"requires '{function.Name}', which mentions Self";
+                    }
+                }
+            }
+
+            foreach (var refined in current.BaseTypes.OfType<NamedTypeSymbol>().Where(static b => b.TypeKind == TypeKind.Protocol)) {
+                pending.Push(refined.OriginalDefinition);
+            }
+        }
+
+        return null;
+    }
+
     /// <summary>The arguments of the attributes whose meaning depends on them, which are read later.</summary>
     void CheckAttributeArguments(AttributeSyntax attribute, string name) {
         var arguments = attribute.ArgumentList?.Arguments.ToList() ?? [];
@@ -274,6 +500,16 @@ public sealed partial class Compilation {
 
             case "align" when arguments is not [{ Expression: LiteralExpressionSyntax { Token.Value: ulong alignment } }] || alignment == 0 || (alignment & (alignment - 1)) != 0:
                 Malformed("'@align' takes a power of two: '@align(16)'");
+                return;
+
+            // The runtime's blocks are aligned to 16 bytes, so a value in an
+            // object or an array could be no more aligned than that.
+            case "align" when arguments is [{ Expression: LiteralExpressionSyntax { Token.Value: ulong alignment } }] && alignment > MaximumAlignment:
+                ReportDeclaration(
+                    ErrorCode.ERR_AlignTooLarge,
+                    attribute.Span,
+                    $"'@align({alignment})' is more than {MaximumAlignment}: objects and arrays are aligned to {MaximumAlignment} bytes, so a value in one could not be aligned to {alignment}"
+                );
                 return;
 
             case "packed" or "discardable" or "frozen" or "immutable" or "immortal" or "polymorphic" or "noncopy" or "escaping" or "flags" or "MainActor"

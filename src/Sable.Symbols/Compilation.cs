@@ -629,6 +629,8 @@ public sealed partial class Compilation {
                 && attributes.Any(static a => a.Name.ToString().Trim() == "inline_layout"),
             IsReflectable = attributes.Any(static a => a.Name.ToString().Trim() == "reflectable"),
             IsFlags = typeKind is TypeKind.Enum && attributes.Any(static a => a.Name.ToString().Trim() == "flags"),
+            IsPacked = typeKind is TypeKind.Struct && attributes.Any(static a => a.Name.ToString().Trim() == "packed"),
+            Alignment = typeKind is TypeKind.Struct ? AlignmentOf(attributes) : 0,
         };
 
         // A protocol has no values to look at, and so nothing to describe.
@@ -764,6 +766,7 @@ public sealed partial class Compilation {
             IsConst = declaration.Modifiers.Any(SyntaxKind.ConstKeyword),
             IsFinal = declaration.Modifiers.Any(SyntaxKind.FinalKeyword),
             IsAbstract = declaration.Body is null && declaration.ExpressionBody is null,
+            IsPolymorphic = declaration.Attributes.Any(static a => AttributeName(a) == "polymorphic"),
             Builtin = BuiltinOf(declaration)
         };
 
@@ -1083,6 +1086,8 @@ public sealed partial class Compilation {
             IsStatic = declaration.Modifiers.Any(SyntaxKind.StaticKeyword),
             IsOverride = declaration.Modifiers.Any(SyntaxKind.OverrideKeyword),
             IsFinal = declaration.Modifiers.Any(SyntaxKind.FinalKeyword),
+            IsImmortal = declaration.Modifiers.Any(SyntaxKind.StaticKeyword) && declaration.LetOrVarKeyword.Kind == SyntaxKind.LetKeyword
+                && AttributesOf(declaration).Any(static a => AttributeName(a) == "immortal"),
             SetterAccessibility = SetterAccessibilityOf(declaration.Modifiers),
             IsLazy = declaration.Modifiers.Any(SyntaxKind.LazyKeyword),
             ReferenceKind = declaration.Modifiers.Any(SyntaxKind.WeakKeyword) ? ReferenceKind.Weak
@@ -1381,7 +1386,9 @@ public sealed partial class Compilation {
     }
 
     void DeclareUnionCase(UnionCaseDeclarationSyntax declaration, NamedTypeSymbol union) {
-        var name = declaration.Identifier.Text;
+        // A case may be named by a keyword in backticks, '`none`', as a
+        // member name after '.' may be any keyword (SYNTAX.md §16).
+        var name = declaration.Identifier.Value as string ?? declaration.Identifier.Text;
         if (name.Length == 0) {
             return;
         }
@@ -1415,7 +1422,7 @@ public sealed partial class Compilation {
     }
 
     void DeclareEnumCase(EnumCaseDeclarationSyntax declaration, NamedTypeSymbol enumType) {
-        var name = declaration.Identifier.Text;
+        var name = declaration.Identifier.Value as string ?? declaration.Identifier.Text;
         if (name.Length == 0) {
             return;
         }

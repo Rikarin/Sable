@@ -671,6 +671,34 @@ public sealed partial class SilGen {
         return false;
     }
 
+    /// <summary>
+    ///     After an initialiser has stored the globals' values, marks every
+    ///     object an '@immortal' one holds immortal: its count is never
+    ///     touched again, it is never released, and what it keeps alive is
+    ///     no leak (docs/02 §2.2). Done where the initialiser returns.
+    /// </summary>
+    void MakeImmortal(SilFunction init, IEnumerable<FieldSymbol> fields) {
+        var immortal = fields.Where(static f => f.IsImmortal).Select(GlobalOf).OfType<(string Name, SilType Type)>().Where(static g => !g.Type.IsTrivial).ToList();
+        if (immortal.Count == 0) {
+            return;
+        }
+
+        foreach (var block in init.Blocks) {
+            if (block.Instructions.Count == 0 || block.Instructions[^1] is not ReturnInst returned) {
+                continue;
+            }
+
+            block.Instructions.RemoveAt(block.Instructions.Count - 1);
+            foreach (var (name, type) in immortal) {
+                var value = block.Append(new LoadBorrowInst(block.Append(new GlobalAddrInst(name, type))));
+                block.Append(new BuiltinInst("make_immortal", SilType.Unit, value));
+                block.Append(new EndBorrowInst(value));
+            }
+
+            block.Append(returned);
+        }
+    }
+
     internal (string Name, SilType Type)? GlobalOf(FieldSymbol field) {
         if (!_globalsByField.TryGetValue(field, out var global) && _otherGlobals.Remove(field, out var declaration)) {
             DeclareGlobal(field, declaration);
@@ -721,6 +749,7 @@ public sealed partial class SilGen {
                 var own = new SilFunction(GlobalInitPrefix + name, unit);
                 new FunctionLowering(this, initSymbol, own, model.SyntaxTree.Text, TypeSubstitution.Empty).Lower(new BoundBlock(initial.Syntax, [], [assignment]));
                 own.RemoveUnreachableBlocks();
+                MakeImmortal(own, [field]);
                 _module.Add(own);
             }
 
@@ -732,13 +761,15 @@ public sealed partial class SilGen {
         var init = new SilFunction(GlobalsInit, unit);
         new FunctionLowering(this, initSymbol, init, source, TypeSubstitution.Empty).Lower(new BoundBlock(syntax, [], [..statements]));
         init.RemoveUnreachableBlocks();
+        MakeImmortal(init, ordered.Select(static g => g.Field));
         _module.Add(init);
 
         var deinit = new SilFunction(GlobalsDeinit, unit);
         var entry = deinit.AddBlock();
         for (var i = ordered.Count - 1; i >= 0; i--) {
             var (name, type) = _globalsByField[ordered[i].Field];
-            if (!type.IsTrivial) {
+            // An immortal global's objects are never released.
+            if (!type.IsTrivial && !ordered[i].Field.IsImmortal) {
                 entry.Append(new DestroyAddrInst(entry.Append(new GlobalAddrInst(name, type))));
             }
         }
@@ -992,6 +1023,12 @@ public sealed partial class SilGen {
         }
 
         substitution = WithAssociatedTypes(symbol, substitution);
+
+        // '@polymorphic': the one instance, whatever the types, for a call
+        // that passes its arguments as that instance takes them.
+        if (polymorphic && symbol.IsPolymorphic && PolymorphicInstance(symbol, at) is { } single) {
+            return single;
+        }
 
         var arguments = new List<string>();
         foreach (var parameter in TypeParametersOf(symbol)) {
@@ -1711,7 +1748,11 @@ public sealed partial class SilGen {
                 return LowerInline(named);
 
             case NamedTypeSymbol { IsGenericDefinition: false, TypeKind: TypeKind.Struct } named: {
-                var structType = Begin(named, new StructType(TypeName(named)) { IsNoncopyable = named.OriginalDefinition.IsNoncopyable });
+                var structType = Begin(named, new StructType(TypeName(named)) {
+                    IsNoncopyable = named.OriginalDefinition.IsNoncopyable,
+                    IsPacked = named.OriginalDefinition.IsPacked,
+                    Alignment = named.OriginalDefinition.Alignment,
+                });
                 var members = TypeSubstitution.For(named);
                 if (StoredFields(named.OriginalDefinition).Any(static f => f.ReferenceKind != ReferenceKind.Strong)) {
                     return null; // weak and unowned fields of structs wait for value witnesses of their own
@@ -1842,7 +1883,7 @@ public sealed partial class SilGen {
     ///     relative references to inline structs. Nothing with a pointer in it.
     /// </summary>
     StructType? LowerInline(NamedTypeSymbol named) {
-        var structType = Begin(named, new StructType(TypeName(named)) { IsInline = true });
+        var structType = Begin(named, new StructType(TypeName(named)) { IsInline = true, Alignment = named.OriginalDefinition.Alignment });
         var members = TypeSubstitution.For(named);
         foreach (var field in StoredFields(named.OriginalDefinition)) {
             if (InlineField(members.Apply(field.Type)) is not { } fieldType) {
@@ -2141,6 +2182,50 @@ public sealed partial class SilGen {
         thunk.RemoveUnreachableBlocks();
         _module.Add(thunk);
         return (name, code);
+    }
+
+    /// <summary>
+    ///     What <c>d.shout</c> calls with <c>d: any Shout</c>: a closure whose
+    ///     context is a box holding the existential, which calls the
+    ///     requirement's slot of its witness table with its arguments and the
+    ///     existential's box.
+    /// </summary>
+    internal string ExistentialRequirementThunk(StructType layout, int index, ThickFunctionType closure) {
+        var thunkName = $"{layout.Name}${layout.Fields[index].Name}$bound";
+        if (_module.Find(thunkName) is not null) {
+            return thunkName;
+        }
+
+        var witness = (ThickFunctionType)layout.Fields[index].Type;
+        var type = witness.Signature;
+        var thunk = new SilFunction(thunkName, closure.Implementation);
+        var entry = thunk.AddBlock();
+        var arguments = closure.Signature.Parameters.Select(p => (SilValue)entry.AddArgument(p)).ToList();
+        var context = entry.AddArgument(SilType.Object);
+        var holder = entry.Append(new UncheckedRefCastInst(context, BoxType(layout)));
+        var existential = entry.Append(new LoadBorrowInst(entry.Append(new RefElementAddrInst(holder, 0))));
+        var box = entry.Append(new StructExtractInst(existential, 0));
+        var callee = entry.Append(new StructExtractInst(existential, index));
+        SilValue[] all = [..arguments, box];
+
+        if (type.Thrown is null) {
+            var result = entry.Append(new ApplyInst(callee, type.Result, all));
+            entry.Append(new EndBorrowInst(existential));
+            entry.Append(new ReturnInst(type.Result == SilType.Unit ? null : result));
+        } else {
+            var normal = thunk.AddBlock();
+            var result = type.Result == SilType.Unit ? null : normal.AddArgument(type.Result);
+            var failed = thunk.AddBlock();
+            var error = failed.AddArgument(type.Thrown);
+            entry.Append(new TryApplyInst(callee, type.Result, all, normal, failed));
+            normal.Append(new EndBorrowInst(existential));
+            normal.Append(new ReturnInst(result));
+            failed.Append(new EndBorrowInst(existential));
+            failed.Append(new ThrowInst(error));
+        }
+
+        _module.Add(thunk);
+        return thunkName;
     }
 
     /// <summary>
@@ -7843,6 +7928,21 @@ public sealed partial class SilGen {
         }
 
         SilValue? Binary(BoundBinaryOperator binary) {
+            // 'T.self == Int.self': a metatype holds nothing, as its value is
+            // its type, so in this instance of the code the two are equal or
+            // not already. The operands are still evaluated, for what they do.
+            if (binary.OperatorKind is BinaryOperatorKind.Equal or BinaryOperatorKind.NotEqual
+                && Sub(binary.Left.Type) is MetatypeTypeSymbol leftMetatype
+                && Sub(binary.Right.Type) is MetatypeTypeSymbol rightMetatype) {
+                if (Expression(binary.Left) is null || Expression(binary.Right) is null) {
+                    return null;
+                }
+
+                var same = leftMetatype.InstanceType.Equals(rightMetatype.InstanceType);
+                var equal = binary.OperatorKind == BinaryOperatorKind.Equal;
+                return Emit(new IntegerLiteralInst(SilType.Bool, same == equal ? 1 : 0));
+            }
+
             // 'x == none': only the case matters, so any optional compares.
             if (binary.OperatorKind is BinaryOperatorKind.Equal or BinaryOperatorKind.NotEqual
                 && (IsNone(binary.Right) ? binary.Left : IsNone(binary.Left) ? binary.Right : null) is { } tested) {
@@ -9519,9 +9619,32 @@ public sealed partial class SilGen {
                 return Missing(reference, $"'{callee.Name}' as a value");
             }
 
+            // A protocol's requirement, named on an existential: its witness
+            // is only known at run time, from the existential's witness
+            // table. The closure's context holds a copy of the existential —
+            // its box and its table — and calls the requirement's slot with
+            // the box, as a call through the existential would.
+            if (OwnerOf(callee) is { TypeKind: TypeKind.Protocol } && Sub(receiver.Type) is ExistentialTypeSymbol) {
+                var layout = LowerType(receiver.Type) as StructType;
+                var index = layout?.FieldIndex(SlotName(callee)) ?? -1;
+                if (layout is null || index < 0 || layout.Fields[index].Type is not ThickFunctionType witness
+                    || witness.Signature.Parameters[^1] is AddressType
+                    || new FunctionType([..witness.Signature.Parameters.SkipLast(1)], witness.Signature.Result, witness.Signature.Thrown) != thick.Signature) {
+                    return Missing(reference, $"the requirement '{callee.Name}' of '{Sub(receiver.Type).ToDisplayString()}' as a value");
+                }
+
+                if (Expression(receiver) is not { } existential) {
+                    return null;
+                }
+
+                var requirement = generator.ExistentialRequirementThunk(layout, index, thick);
+                var holder = Emit(new AllocRefInst(generator.BoxType(layout)));
+                Emit(new StoreInst(Owned(existential), Emit(new RefElementAddrInst(holder, 0)), StoreKind.Init));
+                return Emit(new PartialApplyInst(Emit(new FunctionRefInst(requirement, thick.Implementation)), holder, thick));
+            }
+
             // A protocol's requirement, named on a type parameter: the
-            // concrete type's own member, now that the type is known. An
-            // existential's would need its witness at run time.
+            // concrete type's own member, now that the type is known.
             if (OwnerOf(callee) is { TypeKind: TypeKind.Protocol }) {
                 if (Sub(receiver.Type) is not NamedTypeSymbol { TypeKind: not TypeKind.Protocol } concrete
                     || Implementation(concrete, callee) is not { Builtin: null } witness) {

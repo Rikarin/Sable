@@ -88,6 +88,9 @@ public sealed class CoreTypes {
     /// <summary><c>Bytes</c>: where <c>Bytes.of</c> lives (<c>InlineLayout.sb</c>).</summary>
     public NamedTypeSymbol? Bytes => Declared("Bytes", TypeKind.Struct);
 
+    /// <summary><c>Attribute</c>: what a user-defined attribute's struct conforms to (<c>Reflection.sb</c>).</summary>
+    public NamedTypeSymbol? Attribute => Declared("Attribute", TypeKind.Protocol);
+
     /// <summary><c>InlineLayout</c>: what every <c>@inline_layout</c> struct conforms to (<c>InlineLayout.sb</c>).</summary>
     public NamedTypeSymbol? InlineLayout => Declared("InlineLayout", TypeKind.Protocol);
 

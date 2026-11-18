@@ -55,6 +55,7 @@ public sealed class TypeParserTests {
     [Theory]
     [InlineData("Int?", "(OptionalType (SimpleNameType Int) ?)")]
     [InlineData("Int??", "(OptionalType (OptionalType (SimpleNameType Int) ?) ?)")]
+    [InlineData("Int?.Type", "(QualifiedName (OptionalType (SimpleNameType Int) ?) . (SimpleNameType Type))")]
     [InlineData("Widget!", "(ImplicitlyUnwrappedType (SimpleNameType Widget) !)")]
     [InlineData("Order&", "(ReferenceType (SimpleNameType Order) &)")]
     [InlineData("Order&?", "(ReferenceType (SimpleNameType Order) & ?)")]

@@ -103,6 +103,12 @@ public struct Mirror<Subject> {
 /// also conform by hand.
 public protocol Reflectable { }
 
+/// What a user-defined attribute is (SYNTAX.md §22): a struct conforming to
+/// it is written '@Name(arguments)' on a declaration, the arguments checked
+/// against its initialisers. On a @reflectable type, 'TypeInfo.attributes(of:)'
+/// gives the values.
+public protocol Attribute { }
+
 /// A stored field of a @reflectable type.
 public struct FieldInfo {
     public let name: String
@@ -140,8 +146,12 @@ public struct TypeInfo {
     public let methods: MethodInfo[>..]
     public let cases: CaseInfo[>..]
     public let conformances: String[>..]
-    /// As written, without the '@': 'reflectable', 'derive(Equatable)'.
-    public let attributes: String[>..]
+    /// The attributes as written, without the '@': 'reflectable',
+    /// 'derive(Equatable)'.
+    public let attributeNames: String[>..]
+    /// The program's own attributes on the type, as values, in the order
+    /// written: '@Route("/users")' is a 'Route'.
+    public let attributeValues: (any Attribute)[>..]
 
     /// The type's information: 'TypeInfo.of(Point.self)'. Only a
     /// @reflectable type has it, and only one asked for is emitted.
@@ -183,9 +193,20 @@ public struct TypeInfo {
         return false
     }
 
+    /// The values of the attributes of one type: 'attributes(of: Route.self)'.
+    public fn attributes<A: Attribute>(of type: A.Type) -> A[>..] {
+        var found: A[>..] = []
+        for value in attributeValues {
+            if let attribute = value as? A {
+                found.append(attribute)
+            }
+        }
+        return found
+    }
+
     /// Whether the type carries the attribute named, with or without arguments.
     public fn hasAttribute(_ name: String) -> Bool {
-        for attribute in attributes {
+        for attribute in attributeNames {
             if attribute == name || TypeInfo.begins(attribute, with: name + "(") {
                 return true
             }

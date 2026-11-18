@@ -287,6 +287,97 @@ public sealed class OptionalAndUnionTests {
             """
         );
 
+    /// <summary>An optional of an empty struct has no bytes for its payload: made, and matched, all the same.</summary>
+    [Fact]
+    public void AnOptionalOfAnEmptyStructHoldsIt() =>
+        Prints(
+            "1\nsome\n",
+            """
+            protocol P { }
+            struct Empty: P { }
+            struct Full: P { var n: Int }
+            """,
+            """
+                let all: (any P)[>..] = [Full(n: 1), Empty()]
+                var count = 0
+                for a in all {
+                    if let e = a as? Empty { count += 1 }
+                }
+                print(count)
+                let o: Empty? = Empty()
+                print(o == none ? "none" : "some")
+            """
+        );
+
+    /// <summary>
+    ///     A case named by a keyword in backticks is that name: '.none' is the
+    ///     enum's or the union's case wherever the value is not optional, and
+    ///     inside an optional it is '.Some(.none)'.
+    /// </summary>
+    [Fact]
+    public void ACaseNamedNoneIsTheTypesOwn() =>
+        Prints(
+            "none\nall\n0\n4\neq\nabsent\npresent\nother\nflag\n",
+            """
+            enum Mode {
+                `none`
+                all
+            }
+
+            @flags
+            enum Perm: U32 {
+                `none` = 0
+                read = 1
+            }
+
+            union Pick<T> {
+                `none`
+                one(T)
+            }
+
+            fn name(_ m: Mode) -> String {
+                return match m {
+                    case .none => "none"
+                    case .all => "all"
+                }
+            }
+
+            fn pick(_ p: Pick<Int>) -> Int {
+                return match p {
+                    case .none => 0
+                    case .one(let x) => x
+                }
+            }
+
+            fn wrapped(_ m: Mode?) -> String {
+                return match m {
+                    case none => "absent"
+                    case .Some(.none) => "present"
+                    case .Some(_) => "other"
+                }
+            }
+
+            fn perm(_ p: Perm) -> String {
+                return match p {
+                    case .none => "flag"
+                    default => "set"
+                }
+            }
+            """,
+            """
+                print(name(.none))
+                print(name(Mode.all))
+                print(pick(.none))
+                print(pick(.one(4)))
+                let m: Mode = .none
+                if case .none = m { print("eq") }
+                print(wrapped(none))
+                print(wrapped(Mode.none))
+                print(wrapped(.all))
+                print(perm(.none))
+            """
+        );
+
     /// <summary>
     ///     What the layouts are: 'Bool?' a byte, 'Char?' four, 'String?' the
     ///     pointer, an enum of cases alone its byte's tag, and a payload area

@@ -57,7 +57,8 @@ public static class PackageBuilder {
     /// <summary>
     ///     What <c>sable test</c> and <c>sable bench</c> build for a member:
     ///     its library, the files under its <c>tests/</c> and <c>benches/</c>
-    ///     (which an ordinary build leaves out), then its dependencies' libraries.
+    ///     (which an ordinary build leaves out), then its dependencies' libraries,
+    ///     its dev-dependencies' among them.
     ///     The harness supplies the entry point, so no binary's entry file is in it.
     /// </summary>
     public static IReadOnlyList<SyntaxTree> TestProgram(PackageGraph graph, string member) {
@@ -73,7 +74,7 @@ public static class PackageBuilder {
         return [
             ..own.Package.LibrarySources().Select(file => Parse(graph, own, file)),
             ..extra,
-            ..graph.Closure(member).Where(p => p.Name != member).SelectMany(p => p.Package.LibrarySources().Select(file => Parse(graph, p, file))),
+            ..graph.Closure(member, dev: true).Where(p => p.Name != member).SelectMany(p => p.Package.LibrarySources().Select(file => Parse(graph, p, file))),
         ];
     }
 

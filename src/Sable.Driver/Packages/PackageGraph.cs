@@ -151,7 +151,12 @@ public sealed partial class PackageGraph {
     }
 
     /// <summary>The packages a member needs to build, itself first, then each dependency after everything that depends on it.</summary>
-    public IReadOnlyList<ResolvedPackage> Closure(string member) {
+    /// <param name="dev">
+    ///     For a test or bench build: the member's dev-dependencies too, and
+    ///     what they depend on. Only the member's own count, as in Cargo — a
+    ///     dependency's dev-dependencies are for its own tests.
+    /// </param>
+    public IReadOnlyList<ResolvedPackage> Closure(string member, bool dev = false) {
         var order = new List<ResolvedPackage>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
 
@@ -161,7 +166,7 @@ public sealed partial class PackageGraph {
             }
 
             var package = Packages[name];
-            foreach (var dependency in package.Dependencies) {
+            foreach (var dependency in dev && name == member ? [..package.Dependencies, ..package.DevDependencies] : package.Dependencies) {
                 Visit(dependency);
             }
 

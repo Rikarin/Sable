@@ -1276,8 +1276,8 @@ Full design in [05-toolchain.md](05-toolchain.md).
   rest of the arguments, exit with its code. With no file named they test
   the package in the current directory (or the nearest above): its library,
   the files under its `tests/` and `benches/` — which an ordinary build
-  leaves out — and its dependencies' libraries
-  (`PackageBuilder.TestProgram`).
+  leaves out — and its dependencies' libraries, its `[dev-dependencies]`
+  and what they depend on among them (`PackageBuilder.TestProgram`).
 - **`--doc`.** Each ` ```sable ` block of a `///` comment (not ` ```sable
   ignore `) becomes `@test fn doc_<item>_<n>()` in a file of the documented
   file's module, with that file's imports and Sable.Testing; the file has the
@@ -1290,8 +1290,7 @@ Full design in [05-toolchain.md](05-toolchain.md).
   benchmark's work (it needs a core builtin); async tests; a parallel test
   runner; timeouts for a hung test; printing the error a throwing test threw;
   `#[should_panic]`-style expected traps; snapshot and property testing
-  (docs/06 lists them under Sable.Testing); `[dev-dependencies]` in a test
-  build (they are resolved, not yet compiled in).
+  (docs/06 lists them under Sable.Testing).
 
 ### Packages, as implemented
 

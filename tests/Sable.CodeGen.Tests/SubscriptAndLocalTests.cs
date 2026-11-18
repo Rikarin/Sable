@@ -228,6 +228,66 @@ public sealed class SubscriptAndLocalTests {
             """
         );
 
+    [Fact]
+    public void AGenericLocalFunctionIsInstantiatedForEachCall() =>
+        // Its own type arguments per call; those around it per instance of
+        // the function it is in; and calling itself.
+        Prints(
+            "3\nthree\n1 x true\n1 x 2.5\n4\n10\n",
+            """
+            fn outer<U>(_ u: U) -> String {
+                fn pair<T>(_ a: T, _ b: U) -> (T, U) {
+                    return (a, b)
+                }
+                let p = pair(1, u)
+                let q = pair("x", u)
+                return "\(p.0) \(q.0) \(q.1)"
+            }
+            """,
+            """
+                fn id<T>(_ x: T) -> T {
+                    return x
+                }
+                fn count<T>(_ n: Int, _ x: T) -> Int {
+                    if n == 0 {
+                        return 0
+                    }
+                    return 1 + count(n - 1, x)
+                }
+                print(id(3))
+                print(id("three"))
+                print(outer(true))
+                print(outer(2.5))
+                print(count(4, "a"))
+                let twice = { (n: Int) -> Int in id(n) * 2 }
+                print(twice(5))
+            """
+        );
+
+    [Fact]
+    public void ALocalFunctionThatCapturesTakesInoutParameters() =>
+        Prints(
+            "22 axx 12\n34 axxx 13\n",
+            "",
+            """
+                var total = 10
+                var label = "x"
+                fn bump(_ n: inout Int, _ s: inout String) {
+                    n = n + total
+                    s = s + label
+                    total = total + 1
+                }
+                var k = 1
+                var text = "a"
+                bump(&k, &text)
+                bump(&k, &text)
+                print("\(k) \(text) \(total)")
+                let again = { bump(&k, &text) }
+                again()
+                print("\(k) \(text) \(total)")
+            """
+        );
+
     // ---- Bounded arrays outside an inline struct --------------------------------
 
     [Fact]

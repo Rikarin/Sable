@@ -973,14 +973,22 @@
 
   <Node Name="WhereClauseSyntax" Base="SyntaxNode" Kind="WhereClause">
     <Field Name="WhereKeyword" Type="Token" />
-    <Field Name="Constraints" Type="SeparatedList:WhereConstraintSyntax" />
+    <Field Name="Constraints" Type="SeparatedList:WhereItemSyntax" />
   </Node>
 
-  <Node Name="WhereConstraintSyntax" Base="SyntaxNode" Kind="WhereConstraint"
+  <Abstract Name="WhereItemSyntax" Base="SyntaxNode"
+            Doc="One item of a `where` clause." />
+
+  <Node Name="WhereConstraintSyntax" Base="WhereItemSyntax" Kind="WhereConstraint"
         Doc="`T: P` or `S.Element == T`.">
     <Field Name="Left" Type="TypeSyntax" />
     <Field Name="OperatorToken" Type="Token" />
     <Field Name="Right" Type="TypeSyntax" />
+  </Node>
+
+  <Node Name="WherePredicateSyntax" Base="WhereItemSyntax" Kind="WherePredicate"
+        Doc="`N > 0`: a const-generic predicate.">
+    <Field Name="Expression" Type="ExpressionSyntax" />
   </Node>
 
   <Node Name="BaseTypeListSyntax" Base="SyntaxNode" Kind="BaseTypeList"

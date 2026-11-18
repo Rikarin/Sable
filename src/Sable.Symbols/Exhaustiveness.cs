@@ -31,6 +31,15 @@ namespace Sable.Symbols;
 ///     </para>
 /// </remarks>
 internal sealed class Exhaustiveness(CoreTypes core) {
+    /// <summary>
+    ///     The module the match is written in, when that matters: a public
+    ///     union of another module that is not <c>@frozen</c> may gain cases
+    ///     (docs/03 §3.3), so naming every case it has today does not cover it.
+    /// </summary>
+    public ModuleSymbol? Module { get; init; }
+
+    /// <summary>What a witness shows for a case a union may gain.</summary>
+    public const string LaterCase = "a case added later";
     // ---- Lowered patterns ---------------------------------------------------
 
     internal abstract class Pat;
@@ -69,6 +78,7 @@ internal sealed class Exhaustiveness(CoreTypes core) {
         Length,
         LengthAtLeast,
         Opaque,
+        Later,
     }
 
     /// <summary>A constructor: two are the same constructor exactly when their keys are equal.</summary>
@@ -363,7 +373,9 @@ internal sealed class Exhaustiveness(CoreTypes core) {
                 return [..union.Cases.Select(TypeCaseCtor)];
 
             case NamedTypeSymbol { TypeKind: TypeKind.Union } named:
-                return [..named.Members.OfType<UnionCaseSymbol>().Select(c => UnionCtor(c, named))];
+                return MayGainCases(named)
+                    ? [..named.Members.OfType<UnionCaseSymbol>().Select(c => UnionCtor(c, named)), new(CtorKind.Later, "later", LaterCase, [])]
+                    : [..named.Members.OfType<UnionCaseSymbol>().Select(c => UnionCtor(c, named))];
 
             // A '@flags' enum's values are any set of its cases, which its
             // cases alone do not cover: it splits no more than an integer does.
@@ -628,6 +640,17 @@ internal sealed class Exhaustiveness(CoreTypes core) {
             default:
                 return null;
         }
+    }
+
+    /// <summary>A public union another module declares without '@frozen': it may gain cases.</summary>
+    bool MayGainCases(NamedTypeSymbol union) {
+        if (Module is null || union.DeclaredAccessibility != Accessibility.Public
+            || Visibility.ModuleOf(union.OriginalDefinition) is not { } declaredIn || ReferenceEquals(declaredIn, Module)) {
+            return false;
+        }
+
+        return union.OriginalDefinition.DeclaringSyntax is not [var declaration, ..]
+            || !Compilation.AttributesOf(declaration).Any(static a => Compilation.AttributeName(a) == "frozen");
     }
 
     // ---- Witnesses ----------------------------------------------------------

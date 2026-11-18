@@ -1154,8 +1154,7 @@ This trades the planned stackless state machine (§2.2, item 4) for a stack
 per task — far less compiler for the same semantics, at the cost of memory
 per task and of thread creation. Not yet: `async let` runs its child to
 completion at the declaration rather than alongside; no task groups,
-cancellation, `for await` or async sequences, no sleeping or I/O to wait
-on, and no parallelism — all `Sable.Concurrency`'s, along with the switch
+cancellation, no sleeping or I/O to wait on, and no parallelism — all `Sable.Concurrency`'s, along with the switch
 to the state machine where tasks are many.
 
 ### 4.4 Exit criteria
@@ -1178,13 +1177,23 @@ to the state machine where tasks are many.
       And `Range` and `ClosedRange` — what the binder
       makes of `a..<b` and `a...b` — are Sable (`lib/Sable.Core/Range.sb`:
       `lowerBound`, `upperBound`, `isEmpty`, `contains`, over a `Comparable`
-      bound), and lower as values: stored, passed, returned and iterated,
-      while a `for` over a range written in the loop still builds none.
-      Nothing else is declared in C# (`CoreTypes`): only the types the
+      bound, and `count` where the bound is an Int), as are the one-sided
+      `PartialRangeUpTo`, `PartialRangeThrough` and `PartialRangeFrom`
+      (`..<b`, `...b`, `a...`) and `stride(from:to:by:)`. They lower as
+      values: stored, passed, returned and iterated — a range of any integer
+      type or of characters counting in its own type — while a `for` over a
+      range written in the loop still builds none. An extension's `where`
+      clause (`extension Range where Bound == Int`) holds in its members and
+      decides on which constructions they are found.
+      A `for` over anything but an array, a dictionary or a range goes
+      through `Sequence` and `Iterator` (`lib/Sable.Core/Sequence.sb`) —
+      `makeIterator()`, then `next()` until none — which `String` conforms
+      to; `for await` the same through `AsyncSequence`, which
+      `Sable.Concurrency`'s `Channel` conforms to. Nothing else is declared in C# (`CoreTypes`): only the types the
       compiler knows by sight, and the shells the binder desugars to
-      (`Error`, `From`, `Optional`, `Dictionary`). The I128, U128 and F16 types no
-      longer declare `toString`, `abs`, `min` and `max`: nothing could lower
-      them, and SIL has no such types yet. The built-in `[Key: Value]`
+      (`Error`, `From`, `Optional`, `Dictionary`). I128, U128 and F16 are SIL
+      types (`i128` and `half` in LLVM), with literals up to 128 bits and the
+      same members, printing and conversions as the other numbers. The built-in `[Key: Value]`
       dictionary is compiler-known as the arrays are — its entries an array
       of key and value pairs, its indexing and `for (key, value) in d` lowered
       directly — and its members are Sable (`lib/Sable.Core/Dictionary.sb`:
@@ -1374,7 +1383,7 @@ In `src/Sable.Driver/Packages/`, with a command per file under `Commands/`.
 Deferred: build scripts (`[build]` is read and validated, and a build warns
 that it is not run — the capability sandbox needs runtime support), and with
 them `[build-dependencies]` (checked, not resolved or built, and warned
-about); git dependencies (refused with an error); workspace inheritance
+about); workspace inheritance
 (`version.workspace = true` and `{ workspace = true }` are refused,
 `[workspace.package]` and `[workspace.dependencies]` warned about); `[reflect]`
 and `[targets]` (accepted with a warning: nothing looks a type up by name

@@ -4377,6 +4377,30 @@ internal sealed class WhereConstraintGreen : GreenNode
         new WhereConstraintSyntax(this, parent, position);
 }
 
+/// <summary>Green node for <see cref="WherePredicateSyntax"/>.</summary>
+internal sealed class WherePredicateGreen : GreenNode
+{
+    private readonly GreenNode? _expression;
+
+    public WherePredicateGreen(GreenNode? expression)
+        : base(SyntaxKind.WherePredicate, 0)
+    {
+        _expression = expression;
+        FullWidth = (expression?.FullWidth ?? 0);
+    }
+
+    public override int SlotCount => 1;
+
+    public override GreenNode? GetSlot(int index) => index switch
+    {
+        0 => _expression,
+        _ => null,
+    };
+
+    public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
+        new WherePredicateSyntax(this, parent, position);
+}
+
 /// <summary>Green node for <see cref="BaseTypeListSyntax"/>.</summary>
 internal sealed class BaseTypeListGreen : GreenNode
 {

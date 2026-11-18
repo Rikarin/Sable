@@ -135,7 +135,7 @@ public static class PackageBuilder {
             : $"{package.Name}-{package.Version}/{Path.GetRelativePath(package.Package.Directory, file).Replace(Path.DirectorySeparatorChar, '/')}";
         // A workspace's own packages share 'package' members; a registry
         // dependency is a workspace of its own.
-        return new(file, name, [..package.Features.Order(StringComparer.Ordinal)], package.IsLocal ? null : $"{package.Name}-{package.Version}");
+        return new(file, name, [..package.Features.Order(StringComparer.Ordinal)], package.IsLocal ? null : $"{package.Name}-{package.Version}", package.Name);
     }
 
     /// <summary>
@@ -172,7 +172,9 @@ public static class PackageBuilder {
     }
 
     static string Describe(ResolvedPackage package, Workspace workspace) =>
-        package.IsLocal ? $"{package.Name} v{package.Version} ({workspace.Relative(package.Package.Directory)})" : $"{package.Name} v{package.Version}";
+        package.IsLocal ? $"{package.Name} v{package.Version} ({workspace.Relative(package.Package.Directory)})"
+        : package.Git is { } git ? $"{package.Name} v{package.Version} ({git.Url}#{git.ShortCommit})"
+        : $"{package.Name} v{package.Version}";
 
     static void Report(PackageEnvironment environment, IEnumerable<string> errors) {
         foreach (var error in errors) {

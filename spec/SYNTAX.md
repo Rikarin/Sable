@@ -1315,7 +1315,11 @@ is passed as the platform's C passes the struct of the same fields (S3224).
 `@export("name") var count: Int = 0` names a stored variable of the module for
 C, which reads and writes its storage by that name; it holds its initial value
 once the program has started.
-Pointers, C strings, variadic calls and callbacks are `Sable.Interop`'s.
+A variadic C function takes `CVarArg...` (Sable.Core: the integers, the floats
+and `Bool`) after at least one fixed parameter, and an `@extern` alone may: each
+call passes its values with C's default promotions (an integer narrower than
+32 bits and `Bool` as an `int`, `F32` as a `double`). Pointers, C strings and
+callbacks are `Sable.Interop`'s.
 
 Header import (`sable bindgen`) generates `.sbi` interface files from C headers
 and is the recommended path for anything larger than a few functions.

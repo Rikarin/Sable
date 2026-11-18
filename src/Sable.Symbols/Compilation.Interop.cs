@@ -155,6 +155,19 @@ public sealed partial class Compilation {
 
         var attribute = function.ForeignName is not null ? "@extern" : "@export";
         foreach (var (parameter, syntax) in function.Parameters.Zip(declaration.Parameters.Parameters)) {
+            // 'args: CVarArg...': C's '...', after at least one fixed parameter.
+            if (parameter.IsVariadic) {
+                var why = function.ForeignName is null ? "C calls an '@export' function with its parameters fixed"
+                    : !IsCVarArgs(parameter.Type) ? "the variadic arguments C takes are 'CVarArg...'"
+                    : ReferenceEquals(parameter, function.Parameters[0]) ? "C's '...' follows at least one fixed parameter"
+                    : null;
+                if (why is not null) {
+                    yield return Diagnostic.Error(ErrorCode.ERR_NotACType, syntax.Span, $"'{parameter.Name}' cannot cross to C: {why}");
+                }
+
+                continue;
+            }
+
             if (parameter.Modifier != ParameterModifier.None) {
                 yield return Diagnostic.Error(ErrorCode.ERR_NotACType, syntax.Span,
                     $"an '{attribute}' function's parameter is passed by value, as C passes it; '{parameter.Name}' is not");
@@ -169,6 +182,11 @@ public sealed partial class Compilation {
                 declaration.ReturnClause?.Span ?? declaration.Identifier.Span, $"the result cannot cross to C: {result}");
         }
     }
+
+    /// <summary>A variadic parameter's type that is Sable.Core's 'CVarArg...'.</summary>
+    bool IsCVarArgs(TypeSymbol type) =>
+        type is ArrayTypeSymbol { ElementType: NamedTypeSymbol { TypeKind: TypeKind.Protocol, Name: "CVarArg" } protocol }
+        && ReferenceEquals(protocol.ContainingSymbol, Core.Module);
 
     /// <summary>Why C has no value of the type the same way, or null when it has.</summary>
     string? WhyNotC(TypeSymbol type, HashSet<TypeSymbol> visiting) {

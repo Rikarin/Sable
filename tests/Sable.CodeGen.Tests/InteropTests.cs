@@ -309,6 +309,68 @@ public sealed class InteropTests {
     }
 
     /// <summary>
+    ///     A variadic C function (CVarArg...): each call declares it for the
+    ///     types it passes, and calls it with C's '...' and its promotions.
+    /// </summary>
+    [Fact]
+    public void SableCallsAVariadicCFunction() {
+        if (!Programs.CanBuild) {
+            return;
+        }
+
+        // C reads what follows its fixed parameters as its default
+        // promotions leave it: an I8 and a Bool as an int, an F32 as a double.
+        const string c = """
+                         #include <stdarg.h>
+                         #include <stdint.h>
+                         int64_t c_add(int32_t n, ...) {
+                             va_list args;
+                             va_start(args, n);
+                             int64_t total = 0;
+                             for (int32_t i = 0; i < n; i++) total += va_arg(args, int64_t);
+                             va_end(args);
+                             return total;
+                         }
+                         double c_mix(int32_t tag, ...) {
+                             va_list args;
+                             va_start(args, tag);
+                             int64_t a = va_arg(args, int64_t);
+                             int b = va_arg(args, int);
+                             double f = va_arg(args, double);
+                             int t = va_arg(args, int);
+                             uint32_t u = va_arg(args, uint32_t);
+                             double d = va_arg(args, double);
+                             va_end(args);
+                             return tag * 1000000.0 + a * 1000 + b * 100 + f * 10 + t + u + d;
+                         }
+                         """;
+
+        const string source = """
+                              module Main
+
+                              @extern("c")
+                              fn c_add(_ n: I32, _ values: CVarArg...) -> Int
+
+                              @extern("c")
+                              fn c_mix(_ tag: I32, _ rest: CVarArg...) -> F64
+
+                              fn main() {
+                                  print(c_add(0))
+                                  print(c_add(3, 1, 20, 300))
+                                  let small: I8 = -3
+                                  let half: F32 = 0.5
+                                  let big: U32 = 4000000000
+                                  print(c_mix(2, 7, small, half, true, big, 0.25))
+                              }
+                              """;
+
+        Assert.Equal("0\n321\n4002006706.25\n", BuildWithC(source, c));
+        if (NativeTarget.Host.Arch != "x86_64" && OperatingSystem.IsMacOS() && Rosetta()) {
+            Assert.Equal("0\n321\n4002006706.25\n", BuildWithC(source, c, NativeTarget.Of("x86_64-apple-darwin")));
+        }
+    }
+
+    /// <summary>
     ///     '@export var': C reads and writes the variable's storage by its C
     ///     name, and sees what Sable wrote, the initial value among it.
     /// </summary>

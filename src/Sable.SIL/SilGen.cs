@@ -316,8 +316,13 @@ public sealed partial class SilGen {
                 continue;
             }
 
-            // '@extern': C's function, declared in every unit that may call it.
+            // '@extern': C's function, declared in every unit that may call it;
+            // a variadic one for each call's types, where it is called.
             if (symbol.ForeignName is { } foreign) {
+                if (symbol.Parameters is [.., { IsVariadic: true }]) {
+                    continue;
+                }
+
                 if (SignatureOf(symbol, syntax, TypeSubstitution.Empty) is { } signature) {
                     _module.Foreign[_names[symbol]] = (foreign, signature);
                 }
@@ -7491,6 +7496,11 @@ public sealed partial class SilGen {
                 callee = witness;
             }
 
+            // C's '...': declared for the types this call passes.
+            if (callee is { ForeignName: { } cName, Parameters: [.., { IsVariadic: true }] }) {
+                return VariadicForeignCall(call, callee, cName);
+            }
+
             string name;
             FunctionType? type;
             if (IsGeneric(callee)) {
@@ -7997,6 +8007,46 @@ public sealed partial class SilGen {
                 default:
                     return Missing(at, "this capture");
             }
+        }
+
+        /// <summary>
+        ///     A call to a variadic C function: the fixed arguments as any C
+        ///     call passes them, then each of the rest as the value it is —
+        ///     not the CVarArg the binder saw it as — through a declaration of
+        ///     the function for exactly these types, which the emitter calls
+        ///     with C's '...' (and its default promotions).
+        /// </summary>
+        SilValue? VariadicForeignCall(BoundCall call, FunctionSymbol callee, string cName) {
+            var fixedCount = callee.Parameters.Length - 1;
+            var arguments = new List<SilValue>();
+            for (var i = 0; i < call.Arguments.Length; i++) {
+                var argument = call.Arguments[i];
+                while (i >= fixedCount && argument is BoundConversion { Type: NamedTypeSymbol { TypeKind: TypeKind.Protocol } } toProtocol) {
+                    argument = toProtocol.Operand;
+                }
+
+                if (Borrow(argument) is not { } value) {
+                    arguments.ForEach(End);
+                    return null;
+                }
+
+                arguments.Add(value);
+            }
+
+            var result = ReferenceEquals(callee.ReturnType, Core.Void) ? SilType.Unit : LowerType(callee.ReturnType);
+            if (result is null) {
+                arguments.ForEach(End);
+                return Missing(call, $"the result of '{callee.Name}'");
+            }
+
+            var type = new FunctionType([..arguments.Select(static a => a.Type)], result);
+            var name = $"{generator._names[callee]}$va${string.Join("$", type.Parameters.Skip(fixedCount).Select(static t => Sanitise(t.ToString())))}";
+            generator._module.Foreign[name] = (cName, type);
+            generator._module.ForeignVariadic[name] = fixedCount;
+            Locate(call.Syntax);
+            var made = Emit(new ApplyInst(Emit(new FunctionRefInst(name, type)), result, [..arguments]));
+            arguments.ForEach(End);
+            return result == SilType.Unit ? UnitValue.Instance : made;
         }
 
         /// <summary>A named function as a value: a closure over a thunk, with no context.</summary>

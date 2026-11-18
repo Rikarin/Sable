@@ -1251,6 +1251,14 @@ public sealed class SilModule {
     public SortedDictionary<string, (string Symbol, FunctionType Type)> Foreign { get; } = new(StringComparer.Ordinal);
 
     /// <summary>
+    ///     The C functions of <see cref="Foreign" /> that are variadic, with
+    ///     how many of their parameters are fixed: a call to C's '...' is
+    ///     declared once for the types it passes after them,
+    ///     <c>sil_extern @M.f$va$Int : $(I32, Int) -> F64 = "f" variadic 1</c>.
+    /// </summary>
+    public SortedDictionary<string, int> ForeignVariadic { get; } = new(StringComparer.Ordinal);
+
+    /// <summary>
     ///     The module's functions C calls (<c>@export</c>), by name, with the
     ///     C symbol each is called by: <c>sil_export @M.entry = "sable_entry"</c>.
     ///     They are kept however little the program itself calls them. A

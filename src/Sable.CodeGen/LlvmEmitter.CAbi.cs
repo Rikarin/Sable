@@ -260,13 +260,22 @@ public sealed partial class LlvmEmitter {
         var declared = new HashSet<string>(StringComparer.Ordinal);
         foreach (var (name, (symbol, type)) in module.Foreign) {
             var result = CResult(type.Result);
-            var arguments = CArguments(type.Parameters, indirectResult: result is null);
+
+            // A variadic function is C's with its fixed parameters and '...',
+            // whatever this call passes after them.
+            var fixedCount = module.ForeignVariadic.TryGetValue(name, out var count) ? count : type.Parameters.Length;
+            var variadic = fixedCount < type.Parameters.Length || module.ForeignVariadic.ContainsKey(name);
+            var arguments = CArguments([..type.Parameters.Take(fixedCount)], indirectResult: result is null);
             var cParameters = new List<string>();
             if (result is null) {
                 cParameters.Add($"ptr sret({Type(type.Result)}) align {MemoryAlign(type.Result)}");
             }
 
             cParameters.AddRange(arguments.Select(static a => $"{a.Coerced}{(a.Attributes.Length > 0 ? " " + a.Attributes : "")}"));
+            if (variadic) {
+                cParameters.Add("...");
+            }
+
             var cResult = result is null ? "void" : $"{(result.Attributes.Length > 0 ? result.Attributes + " " : "")}{result.Coerced}";
 
             // The runtime's own functions are declared already, one the module
@@ -304,7 +313,17 @@ public sealed partial class LlvmEmitter {
                 }
             }
 
-            var call = $"call {cResult} @\"{symbol}\"({string.Join(", ", passed)})";
+            // After the fixed arguments, C's default promotions: an integer
+            // narrower than an int, and Bool, as an int; a float as a double.
+            for (var i = fixedCount; i < type.Parameters.Length; i++) {
+                passed.Add(Promoted(text, type.Parameters[i], $"%a{i}", $"%v{i}"));
+            }
+
+            // A variadic callee is called by its type, '...' and all.
+            var callee = variadic
+                ? $"{result?.Coerced ?? "void"} ({string.Join(", ", (result is null ? new[] { "ptr" } : []).Concat(arguments.Select(static a => a.Coerced)).Append("..."))}) @\"{symbol}\""
+                : $"{cResult} @\"{symbol}\"";
+            var call = $"call {callee}({string.Join(", ", passed)})";
             if (result is null) {
                 text.Append($"  {call}\n  %r = load {Type(type.Result)}, ptr %out\n  ret {Type(type.Result)} %r\n}}\n\n");
             } else if (type.Result == SilType.Unit) {
@@ -318,6 +337,26 @@ public sealed partial class LlvmEmitter {
         }
 
         return text.ToString();
+    }
+
+    /// <summary>An argument to C's '...', as its default promotions pass it, with the instructions that promote it.</summary>
+    static string Promoted(StringBuilder text, SilType type, string value, string promoted) {
+        if (type == SilType.Bool) {
+            text.Append($"  {promoted} = zext i1 {value} to i32\n");
+            return $"i32 {promoted}";
+        }
+
+        if (SilType.IntegerInfo(type) is var (bits, signed) && bits < 32) {
+            text.Append($"  {promoted} = {(signed ? "sext" : "zext")} {Type(type)} {value} to i32\n");
+            return $"i32 {promoted}";
+        }
+
+        if (type == SilType.F32 || type == SilType.F16) {
+            text.Append($"  {promoted} = fpext {Type(type)} {value} to double\n");
+            return $"double {promoted}";
+        }
+
+        return $"{Type(type)} {value}";
     }
 
     /// <summary>

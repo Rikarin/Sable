@@ -73,14 +73,7 @@ public static class NativeObjects {
     public static NativeBuildResult Link(IReadOnlyList<string> objects, string outputPath) {
         var temporary = outputPath + $".{Environment.ProcessId}.tmp";
         try {
-            List<string> arguments = [..objects, "-o", temporary];
-
-            // As NativeBuild does: a trap's backtrace reads the dynamic symbol table on Linux.
-            if (OperatingSystem.IsLinux()) {
-                arguments.Add("-rdynamic");
-            }
-
-            var (exitCode, output) = Run(NativeBuild.CompilerPath, arguments);
+            var (exitCode, output) = Run(NativeBuild.CompilerPath, LinkArguments(objects, temporary, NativeBuild.Host));
             if (exitCode != 0) {
                 return new(false, output);
             }
@@ -91,6 +84,15 @@ public static class NativeObjects {
             File.Delete(temporary);
         }
     }
+
+    /// <summary>
+    ///     The arguments that link <paramref name="objects" /> into
+    ///     <paramref name="outputPath" /> for <paramref name="platform" />: the
+    ///     objects, then what the platform needs, as the whole program's build
+    ///     links them.
+    /// </summary>
+    public static IReadOnlyList<string> LinkArguments(IReadOnlyList<string> objects, string outputPath, NativePlatform platform) =>
+        [..objects, "-o", outputPath, ..NativeBuild.PlatformLinkFlags(platform)];
 
     static (int ExitCode, string Output) Run(string program, IEnumerable<string> arguments) {
         var start = new ProcessStartInfo(program) {

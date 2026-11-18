@@ -615,4 +615,21 @@ public sealed class IncrementalTests {
             Directory.Delete(directory, true);
         }
     }
+
+    /// <summary>
+    ///     A separate build's link takes what the whole program's build does on
+    ///     each platform: on Linux, <c>-rdynamic</c> for a trap's backtrace and
+    ///     libm for the <c>fmod</c> a float's remainder calls. Checked by its
+    ///     arguments, as this may not run where Linux does.
+    /// </summary>
+    [Theory]
+    [InlineData(NativePlatform.Linux, new[] { "-rdynamic", "-lm" })]
+    [InlineData(NativePlatform.MacOS, new string[0])]
+    public void ASeparateLinkTakesThePlatformsLibraries(NativePlatform platform, string[] flags) {
+        Assert.Equal(flags, NativeBuild.PlatformLinkFlags(platform));
+        Assert.Equal(
+            ["a.o", "runtime.o", "-o", "program", ..flags],
+            NativeObjects.LinkArguments(["a.o", "runtime.o"], "program", platform)
+        );
+    }
 }

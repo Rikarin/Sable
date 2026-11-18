@@ -3,6 +3,13 @@ using System.Reflection;
 
 namespace Sable.CodeGen;
 
+/// <summary>The platform a program is built for, which decides some of clang's flags: today always the host.</summary>
+public enum NativePlatform {
+    MacOS,
+    Linux,
+    Other,
+}
+
 /// <summary>The outcome of turning LLVM IR into an executable.</summary>
 public sealed record NativeBuildResult(bool Succeeded, string Output);
 
@@ -40,6 +47,10 @@ public static class NativeBuild {
             return reader.ReadToEnd();
         }
     }
+
+    /// <summary>The platform this process runs on, which is the one built for.</summary>
+    public static NativePlatform Host =>
+        OperatingSystem.IsMacOS() ? NativePlatform.MacOS : OperatingSystem.IsLinux() ? NativePlatform.Linux : NativePlatform.Other;
 
     public static string CompilerPath => Environment.GetEnvironmentVariable("CC") is { Length: > 0 } cc ? cc : "clang";
 
@@ -92,12 +103,6 @@ public static class NativeBuild {
                 File.WriteAllText(irPath, WithHostAttributes(llvmIr, string.Join(' ', attributes)));
             }
 
-            // A trap's backtrace names frames through dladdr, which on Linux
-            // sees only the dynamic symbol table: the program's functions go there too.
-            if (OperatingSystem.IsLinux()) {
-                arguments.Add("-rdynamic");
-            }
-
             var runtime = runtimePath;
             if (debug) {
                 runtime = Path.Combine(directory.FullName, "sable_runtime.o");
@@ -107,12 +112,7 @@ public static class NativeBuild {
                 }
             }
 
-            arguments.AddRange(["-Wno-override-module", irPath, runtime, "-o", outputPath]);
-
-            // 'frem' becomes a call to fmod, which glibc keeps in libm.
-            if (OperatingSystem.IsLinux()) {
-                arguments.Add("-lm");
-            }
+            arguments.AddRange(["-Wno-override-module", irPath, runtime, "-o", outputPath, ..PlatformLinkFlags(Host)]);
 
             var (exitCode, output) = Run(CompilerPath, arguments);
             if (exitCode == 0 && debug) {
@@ -124,6 +124,21 @@ public static class NativeBuild {
             directory.Delete(true);
         }
     }
+
+    /// <summary>
+    ///     What linking a Sable program needs on <paramref name="platform" />,
+    ///     after its objects. The whole program's build and separate
+    ///     compilation's link both take them from here, so that the two cannot
+    ///     drift apart.
+    /// </summary>
+    public static IReadOnlyList<string> PlatformLinkFlags(NativePlatform platform) =>
+        platform == NativePlatform.Linux
+            // A trap's backtrace names frames through dladdr, which on Linux
+            // sees only the dynamic symbol table: the program's functions go
+            // there too. And 'frem' becomes a call to fmod, which glibc keeps
+            // in libm, not libc.
+            ? ["-rdynamic", "-lm"]
+            : [];
 
     /// <summary>
     ///     Puts the formatter plugin where lldb looks for a program's scripts:

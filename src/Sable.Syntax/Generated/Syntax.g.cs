@@ -581,6 +581,22 @@ public sealed class SelfTypeSyntax : TypeSyntax
     public override void Accept(SyntaxVisitor visitor) => visitor.VisitSelfType(this);
 }
 
+/// <summary>`4` in `Buf&lt;Int, 4&gt;`: a value given to a value generic parameter.</summary>
+public sealed class LiteralTypeSyntax : TypeSyntax
+{
+    internal LiteralTypeSyntax(GreenNode green, SyntaxNode? parent, int position)
+        : base(green, parent, position) { }
+
+    public SyntaxToken Token => GetToken(0);
+
+    internal override SyntaxNode? GetNodeSlot(int index) => index switch
+    {
+        _ => null,
+    };
+
+    public override void Accept(SyntaxVisitor visitor) => visitor.VisitLiteralType(this);
+}
+
 /// <summary>`(T)`.</summary>
 public sealed class ParenthesizedTypeSyntax : TypeSyntax
 {
@@ -3574,6 +3590,7 @@ public abstract class SyntaxVisitor
     public virtual void VisitCompositionType(CompositionTypeSyntax node) => DefaultVisit(node);
     public virtual void VisitUnionType(UnionTypeSyntax node) => DefaultVisit(node);
     public virtual void VisitSelfType(SelfTypeSyntax node) => DefaultVisit(node);
+    public virtual void VisitLiteralType(LiteralTypeSyntax node) => DefaultVisit(node);
     public virtual void VisitParenthesizedType(ParenthesizedTypeSyntax node) => DefaultVisit(node);
     public virtual void VisitLiteralExpression(LiteralExpressionSyntax node) => DefaultVisit(node);
     public virtual void VisitIdentifierName(IdentifierNameSyntax node) => DefaultVisit(node);

@@ -133,6 +133,9 @@ public abstract class PackageCommand : Command {
 
                     request = request with { Sysroot = sysroot };
                     break;
+                case "--deny-reflection":
+                    request = request with { DenyReflection = true };
+                    break;
                 default:
                     if (argument.StartsWith("--features=", StringComparison.Ordinal)) {
                         features.AddRange(argument["--features=".Length..].Split([',', ' '], StringSplitOptions.RemoveEmptyEntries));
@@ -186,5 +189,6 @@ public abstract class PackageCommand : Command {
           --target <triple>        build for another machine (aarch64-unknown-linux-gnu, x86_64-apple-darwin,
                                    ...); output in target/<triple>/<profile>/
           --sysroot <dir>          where the target's C library is, for clang's link
+          --deny-reflection        carry no reflection (also [targets.<triple>] reflection = false)
         """;
 }

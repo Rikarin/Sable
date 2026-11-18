@@ -222,6 +222,11 @@ internal sealed class Conversions(CoreTypes core) {
             return Satisfies(sourceExistential.Constraint, constraint, context);
         }
 
+        // 'any A & B' is an A, and a B.
+        if (source is CompositionTypeSymbol sourceComposition) {
+            return sourceComposition.Parts.Any(part => Satisfies(part, constraint, context));
+        }
+
         // A conformance '@derive' gave a generic type is conditional: it
         // holds where the construction's fields conform.
         if (source is NamedTypeSymbol { IsConstructed: true } derived && constraint is NamedTypeSymbol protocol

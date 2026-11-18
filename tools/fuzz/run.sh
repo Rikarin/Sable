@@ -9,6 +9,10 @@
 #
 # SABLE_FUZZ_SEED and SABLE_FUZZ_CASES change where the mutations start and
 # how many there are; a failure reproduces with the seed it printed.
+#
+# These mutations are random. tools/fuzz/coverage.sh fuzzes the same
+# fromBytes under libFuzzer instead, steered by coverage, through the
+# program's @export entry points and tools/fuzz/from_bytes.c.
 set -eu
 
 root=$(cd "$(dirname "$0")/../.." && pwd)

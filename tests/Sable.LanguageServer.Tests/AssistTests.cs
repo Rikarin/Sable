@@ -112,6 +112,33 @@ public sealed class AssistTests : IDisposable {
     }
 
     [Fact]
+    public async Task ANameFromALibraryModuleNoFileImportsBringsItsImport() {
+        const string main = "module App\n\nfn main() {\n    print(1)\n}\n";
+        await using var client = new TestClient();
+        await client.InitializeAsync();
+        const string uri = "file:///tmp/library-import.sb";
+        await client.OpenAsync(uri, main);
+        var at = main.IndexOf("    print(1)", StringComparison.Ordinal);
+        var edited = main.Insert(at, "    gc");
+        await client.ChangeAsync(uri, 2, main, at, at, "    gc");
+
+        // The library is indexed in the background, once something asks.
+        JsonElement? gcd = null;
+        for (var attempt = 0; attempt < 300 && gcd is null; attempt++) {
+            var completion = await client.AtAsync("textDocument/completion", uri, edited, at + "    gc".Length);
+            gcd = completion.Get("items")!.Value.EnumerateArray().Where(static i => i.GetString("label") == "gcd").Cast<JsonElement?>().FirstOrDefault();
+            if (gcd is null) {
+                await Task.Delay(100);
+            }
+        }
+
+        Assert.NotNull(gcd);
+        var edit = gcd.Value.Get("additionalTextEdits")!.Value[0];
+        Assert.Equal("import Sable.Math\n", edit.GetString("newText"));
+        Assert.Equal(1, edit.Get("range")!.Value.Get("start")!.Value.GetInt("line"));
+    }
+
+    [Fact]
     public async Task ANameFromAModuleNotImportedBringsItsImport() {
         Write("util.sb", "module Util\n\n/// Twice its argument.\npublic fn twice(_ x: Int) -> Int {\n    return x * 2\n}\n\nfn hidden() -> Int {\n    return 0\n}\n");
         const string main = "module App\n\nfn main() {\n    print(1)\n}\n";

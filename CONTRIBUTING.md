@@ -127,6 +127,50 @@ clicking the source selects the deepest node under the caret. `--syntax-only`
 skips binding, and `--sil` prints what the file lowers to, verified, instead of
 the tree.
 
+## Fuzzing
+
+Two kinds of fuzzer look for inputs the compiler mishandles.
+
+The random ones are tests, run small by every build and large every night
+([.github/workflows/fuzz.yml](.github/workflows/fuzz.yml)): token soup through
+the parser (`Sable.Syntax.Tests`, `Soup`), the repository's programs mutated at
+token boundaries through the whole front end (`CompilerFuzzTests`), random
+registries through the package resolver (`ResolverFuzzTests`), and
+`fromBytes` under AddressSanitizer and UBSan
+([tools/fuzz/run.sh](tools/fuzz/run.sh)). `SABLE_FUZZ_SEED` and
+`SABLE_FUZZ_SCALE` run them from another seed, many times over;
+`tools/fuzz/overnight.sh 8h` runs them all in rounds until a deadline and keeps
+every distinct failure.
+
+The coverage-guided one, [tools/fuzz/coverage.sh](tools/fuzz/coverage.sh),
+sees the code: SharpFuzz rewrites the Sable assemblies to record the branches
+they take, and an input that takes a new one is kept and mutated further. Its
+targets ([tools/fuzz/Sable.Fuzz](tools/fuzz/Sable.Fuzz)) are the parser (round
+trips, every node's children covering it exactly, incremental reparse equal to
+a full one), the front end (what `CompilerFuzzTests` asks), the resolver (on a
+registry written as text, checked against trying every assignment), the
+package files (manifest, lock file, registry index) and `fromBytes`. The
+mutations use dictionaries generated from the lexer's own tables, and the
+corpus starts from the repository's `.sb` files.
+
+```bash
+tools/fuzz/coverage.sh 30m                 # every target for half an hour
+tools/fuzz/coverage.sh 2h parser frontend  # some of them
+tools/fuzz/coverage.sh --summary           # the latest run's results so far
+```
+
+On Linux, with `LIBFUZZER_DOTNET` set to a built libfuzzer-dotnet, the engine
+is libFuzzer, as the nightly jobs run it, one job and 90 minutes a target. On macOS, Apple's
+clang has no libFuzzer runtime: the .NET targets run under the fuzzer's own
+in-process loop, on the same coverage, and `fromBytes` is not fuzzed (its seeds
+are only checked under the sanitizers). The corpus persists in
+`artifacts/fuzz-corpus/`. Results go to `artifacts/fuzz/<start>/`, as
+`overnight.sh`'s do: `summary.txt` lists each distinct failure with the inputs
+that hit it, and each input is kept with what replaying it says and a
+minimised copy (`.min`). `<run>/bin/Sable.Fuzz <target> replay <file>`
+reproduces one. A fixed bug's minimised input becomes a regression test in the
+layer's own project.
+
 ## Design documents
 
 [docs/04-implementation-plan.md](docs/04-implementation-plan.md) is the build

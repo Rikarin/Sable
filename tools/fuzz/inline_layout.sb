@@ -8,7 +8,9 @@ module Fuzz
 // field, every element, every relative reference followed. And it must
 // write back out as exactly the bytes it was read from. tools/fuzz/run.sh
 // builds this with AddressSanitizer and UndefinedBehaviorSanitizer over the
-// runtime, so a read outside the block is a crash, not a quiet pass.
+// runtime, so a read outside the block is a crash, not a quiet pass. The
+// @export functions below are the same check for libFuzzer, which
+// tools/fuzz/coverage.sh drives instead of main's random mutations.
 
 @inline_layout
 struct OrderLine {
@@ -159,6 +161,84 @@ fn mutate(_ bytes: U8[>..], _ state: Int) -> U8[>..] {
     return result
 }
 
+/// What fromBytes makes of one input, read as an order or as a tree:
+/// -1 when it is accepted but does not write back as the bytes it was read
+/// from (said on the way out), 0 when it is rejected, and otherwise 1 plus
+/// a little of what walking it summed, so that the walk is not optimised away.
+fn check(_ bytes: U8[>..], _ isOrder: Bool) -> Int {
+    if isOrder {
+        match Order.fromBytes(bytes) {
+            case .Ok(let order) => {
+                if !same(Bytes.of(order), bytes) {
+                    print("an order did not write back as it was read")
+                    return -1
+                }
+                return 1 + walkOrder(order) % 3
+            }
+            case .Invalid(let why) => {
+                return 0
+            }
+        }
+    }
+    match Tree.fromBytes(bytes) {
+        case .Ok(let tree) => {
+            if !same(Bytes.of(tree), bytes) {
+                print("a tree did not write back as it was read")
+                return -1
+            }
+            return 1 + walkTree(tree) % 3
+        }
+        case .Invalid(let why) => {
+            return 0
+        }
+    }
+}
+
+// The coverage-guided harness (tools/fuzz/from_bytes.c, built by
+// tools/fuzz/coverage.sh): libFuzzer chooses the bytes, and C hands them
+// over one at a time, as only integers cross to C, then asks for the check.
+// The first byte says which record they are read as; the rest are the record.
+
+var input: U8[>..] = []
+
+@export("c", "sable_fuzz_begin")
+fn begin() {
+    input = []
+}
+
+@export("c", "sable_fuzz_push")
+fn push(_ byte: U8) {
+    input.append(byte)
+}
+
+/// The input C pushed: what check says of it.
+@export("c", "sable_fuzz_check")
+fn checkInput() -> Int {
+    if input.count == 0 {
+        return 0
+    }
+    var bytes: U8[>..] = []
+    for i in 1..<input.count {
+        bytes.append(input[i])
+    }
+    return check(bytes, input[0] % 2 == 0)
+}
+
+/// Seed n of the corpus, as C reads it a byte at a time: the selector
+/// byte, then the record. Its length, and its byte at an index.
+@export("c", "sable_fuzz_seed_count")
+fn seedCount(_ n: Int) -> Int {
+    return 1 + (n % 2 == 0 ? seedOrder(n) : seedTree(n)).count
+}
+
+@export("c", "sable_fuzz_seed_byte")
+fn seedByte(_ n: Int, _ at: Int) -> U8 {
+    if at == 0 {
+        return U8(n % 2)
+    }
+    return (n % 2 == 0 ? seedOrder(n) : seedTree(n))[at - 1]
+}
+
 /// A whole number from the environment, or the default when it is unset or not one.
 fn setting(_ name: String, _ fallback: Int) -> Int {
     if let text = Runtime.environment(name: name) {
@@ -196,34 +276,15 @@ fn main() -> Int {
             state = next(state)
         }
 
-        if seed % 2 == 0 {
-            match Order.fromBytes(bytes) {
-                case .Ok(let order) => {
-                    accepted = accepted + 1
-                    walked = walked + walkOrder(order) % 3
-                    if !same(Bytes.of(order), bytes) {
-                        print("an order did not write back as it was read")
-                        return 1
-                    }
-                }
-                case .Invalid(let why) => {
-                    rejected = rejected + 1
-                }
-            }
+        let result = check(bytes, seed % 2 == 0)
+        if result < 0 {
+            return 1
+        }
+        if result == 0 {
+            rejected = rejected + 1
         } else {
-            match Tree.fromBytes(bytes) {
-                case .Ok(let tree) => {
-                    accepted = accepted + 1
-                    walked = walked + walkTree(tree) % 3
-                    if !same(Bytes.of(tree), bytes) {
-                        print("a tree did not write back as it was read")
-                        return 1
-                    }
-                }
-                case .Invalid(let why) => {
-                    rejected = rejected + 1
-                }
-            }
+            accepted = accepted + 1
+            walked = walked + result - 1
         }
     }
 

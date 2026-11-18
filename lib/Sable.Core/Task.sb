@@ -24,7 +24,19 @@ public class Task<Success> {
     public static async fn `yield`()
 
     /// Waits at least this many nanoseconds, off the run queue: every other
-    /// task runs meanwhile, and the program waits only when none can.
+    /// task runs meanwhile, and the program waits only when none can. A
+    /// task cancelled while asleep wakes at once.
     @intrinsic
     public static async fn sleep(nanoseconds: Int)
+
+    /// Asks the task to stop. Cancelling is cooperative: the task goes on
+    /// until it asks 'Task.isCancelled()' and returns early itself, but a
+    /// sleep it is in, or starts, ends at once. Cancelling a task that has
+    /// finished, or cancelling twice, does nothing.
+    @intrinsic
+    public fn cancel()
+
+    /// Whether the running task has been cancelled.
+    @intrinsic
+    public static fn isCancelled() -> Bool
 }

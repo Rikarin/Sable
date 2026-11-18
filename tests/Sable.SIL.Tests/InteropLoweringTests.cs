@@ -63,6 +63,34 @@ public sealed class InteropLoweringTests {
         Assert.Empty(SilVerifier.Verify(reparsed));
     }
 
+    /// <summary>
+    ///     A variadic C function is declared for each call's types after the
+    ///     fixed ones — the values themselves, not CVarArg — and says how
+    ///     many are fixed; an exported variable's storage is named for C.
+    /// </summary>
+    [Fact]
+    public void AVariadicCallAndAnExportedVariableRoundTripThroughText() {
+        var module = Lower("""
+                           @extern("c")
+                           fn add(_ n: I32, _ values: CVarArg...) -> Int
+
+                           @export("sable_count")
+                           var count: Int = 0
+
+                           fn main() {
+                               let small: I8 = 1
+                               count = add(2, 10, small)
+                           }
+                           """);
+        var text = SilPrinter.Print(module);
+        Assert.Contains("sil_extern @M.add$va$Int$I8 : $(I32, Int, I8) -> Int = \"add\" variadic 1", text, StringComparison.Ordinal);
+        Assert.Contains("sil_export @M.count = \"sable_count\"", text, StringComparison.Ordinal);
+
+        var reparsed = SilParser.Parse(text);
+        Assert.Equal(text, SilPrinter.Print(reparsed));
+        Assert.Empty(SilVerifier.Verify(reparsed));
+    }
+
     [Fact]
     public void TheInterpreterSaysItCannotCallC() {
         var module = Lower(Source);

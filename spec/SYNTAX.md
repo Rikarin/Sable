@@ -940,6 +940,17 @@ only a name: `Int?.self`, `Point[].self`, `Token[>..].self`,
 expression position when `.self` follows it, so `xs[0]` stays an index and
 `p?.x` stays an optional chain.
 
+The type of `T.self` is the metatype `T.Type` (written after a type's name,
+unless the type has a nested type called `Type`). Its one value is the type,
+so it holds nothing at run time. A `T.Type` parameter infers `T`, and a
+metatype value reaches the type's static members:
+
+```sable
+fn make<T: Zero>(_ type: T.Type) -> T { return type.zero() }
+let m = make(Meters.self)              // T is Meters
+let info = TypeInfo.of(Point.self)     // of<T: Reflectable>(_ type: T.Type)
+```
+
 ### Member access and optionals
 
 ```sable
@@ -1157,7 +1168,7 @@ the enclosing scope.
 @noncopy struct Handle { }          // move-only
 @reflectable class Model { }        // full runtime reflection
 @immutable class Config { }         // deeply immutable, therefore Sendable
-@immortal static let shared = ...   // never released
+@immortal static let shared = Registry()  // never released
 
 weak var delegate: Delegate?
 unowned let parent: Node
@@ -1301,7 +1312,14 @@ the module, not generic, not `async`, not throwing; an `@extern` one has no
 body (S3223). What crosses is passed by value and must be something C has the
 same way — an integer type, `F32`, `F64`, `Bool`, or a struct of those, which
 is passed as the platform's C passes the struct of the same fields (S3224).
-Pointers, C strings, variadic calls and callbacks are `Sable.Interop`'s.
+`@export("name") var count: Int = 0` names a stored variable of the module for
+C, which reads and writes its storage by that name; it holds its initial value
+once the program has started.
+A variadic C function takes `CVarArg...` (Sable.Core: the integers, the floats
+and `Bool`) after at least one fixed parameter, and an `@extern` alone may: each
+call passes its values with C's default promotions (an integer narrower than
+32 bits and `Bool` as an `int`, `F32` as a `double`). Pointers, C strings and
+callbacks are `Sable.Interop`'s.
 
 Header import (`sable bindgen`) generates `.sbi` interface files from C headers
 and is the recommended path for anything larger than a few functions.

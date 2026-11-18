@@ -47,11 +47,53 @@ public sealed class SilTrap(string message, bool located = true) : Exception(mes
 /// </remarks>
 public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10_000_000, int depthLimit = 2_000) {
     long _steps;
-    readonly HashSet<Counted> _live = [];
     readonly Dictionary<StringLiteralInst, HeapString> _literals = [];
 
-    /// <summary>The globals' storage, made as each is first reached.</summary>
-    readonly Dictionary<string, Slot> _globals = [];
+    /// <summary>
+    ///     What one program leaves for the next of a session to go on from: the
+    ///     heap and the globals. Values are the same across modules — a
+    ///     function, a type, a method are found by name — so a program
+    ///     compiled after another, with the same declarations, can use what
+    ///     the other made.
+    /// </summary>
+    /// <remarks>
+    ///     In a session, a global is set up the first time it is reached, by
+    ///     its own initialiser (<see cref="SilGen.LowerForSession" />), and
+    ///     never again: a later program finds it holding what it held.
+    /// </remarks>
+    public sealed class Session {
+        internal HashSet<Counted> Live { get; } = [];
+
+        /// <summary>The globals' storage, made as each is first reached.</summary>
+        internal Dictionary<string, Slot> Globals { get; } = [];
+
+        /// <summary>The globals given their initial value, and those being given it.</summary>
+        internal HashSet<string> Initialised { get; } = [];
+
+        /// <summary>The globals set up so far, by name.</summary>
+        public IReadOnlySet<string> GlobalNames => Initialised;
+
+        /// <summary>
+        ///     Forgets the globals not among <paramref name="kept" />: those a
+        ///     program set up whose declarations are not kept, as a REPL's
+        ///     failed entry's are not. A later program declaring one again
+        ///     sets it up again.
+        /// </summary>
+        public void Forget(IReadOnlySet<string> kept) {
+            foreach (var global in Initialised.Where(g => !kept.Contains(g)).ToList()) {
+                Globals.Remove(global);
+                Initialised.Remove(global);
+            }
+        }
+    }
+
+    /// <summary>The session this program goes on from, and leaves its heap and globals to; null for a program of its own.</summary>
+    public Session? Carried { get; init; }
+
+    Session? _state;
+    Session State => _state ??= Carried ?? new Session();
+    HashSet<Counted> _live => State.Live;
+    Dictionary<string, Slot> _globals => State.Globals;
 
     /// <summary>Where <c>print</c> writes: one line per call, as the native runtime does.</summary>
     public StringBuilder Output { get; } = new();
@@ -83,24 +125,14 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
     /// <summary>Whether the last runtime call that can fail did.</summary>
     bool _ioFailed;
 
-    /// <summary>
-    ///     Where the program's effects on the world — what it reads, the
-    ///     files it writes, the clock — are recorded, and replayed instead of
-    ///     carried out again while the journal has more; null to carry every
-    ///     one out. A REPL session runs its earlier statements again for
-    ///     each entry, and with this they read what they read the first time
-    ///     and change nothing twice.
-    /// </summary>
-    public EffectJournal? Journal { get; init; }
-
     /// <summary>Stops the program, as a trap, once cancelled: for a REPL, whose step limit is too high to wait for.</summary>
     public CancellationToken Interrupt { get; init; }
 
-    /// <summary>How many of the journal's effects this run has replayed.</summary>
-    int _replayed;
-
     /// <summary>Heap objects allocated and not yet freed: after a whole program, a leak.</summary>
     public int LiveObjects => _live.Count;
+
+    /// <summary>How many instructions the last run carried out.</summary>
+    public long Steps => _steps;
 
     /// <summary>What ARC did, counted as the runtime counts it: only what touches a count.</summary>
     public int Allocations { get; private set; }
@@ -114,7 +146,7 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
     // =======================================================================
 
     /// <summary>A counted heap object: a string, a class instance or an array buffer.</summary>
-    abstract class Counted {
+    internal abstract class Counted {
         public int Strong = 1;
         public bool Immortal;
         public bool Freed;
@@ -386,7 +418,7 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
     }
 
     /// <summary>An <c>alloc_stack</c>.</summary>
-    sealed class Slot : IReference {
+    internal sealed class Slot : IReference {
         object? _value;
         public object? Get() => _value ?? throw new SilTrap("load from uninitialised storage");
         public void Set(object? value) => _value = value;
@@ -653,7 +685,7 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                         break;
 
                     case BuiltinInst builtin:
-                        values[builtin] = Builtin(builtin, [..builtin.Operands.Select(Get)], depth);
+                        values[builtin] = Perform(builtin, [..builtin.Operands.Select(Get)], depth);
                         break;
 
                     case AllocStackInst alloc:
@@ -865,6 +897,12 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                             _globals[global.Global] = globalSlot = new Slot();
                         }
 
+                        // A session's global is set up as it is first reached.
+                        if (Carried is not null && State.Initialised.Add(global.Global)
+                            && module.Find(SilGen.GlobalInitPrefix + global.Global) is { } setUp) {
+                            Call(setUp, [], depth + 1);
+                        }
+
                         values[global] = globalSlot;
                         break;
 
@@ -944,41 +982,12 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
     // Builtins
     // =======================================================================
 
-    object? Builtin(BuiltinInst builtin, object?[] operands, int depth) =>
-        Journal is { } journal && EffectJournal.Records(builtin.Name) ? Journaled(journal, builtin, operands, depth) : Perform(builtin, operands, depth);
-
-    /// <summary>
-    ///     An effect, through the journal: what it gave the last time, while
-    ///     there is a last time to replay; otherwise carried out, and what it
-    ///     gave written down.
-    /// </summary>
-    object? Journaled(EffectJournal journal, BuiltinInst builtin, object?[] operands, int depth) {
-        if (_replayed < journal.Count) {
-            var effect = journal.Entries[_replayed++];
-            if (effect.Name != builtin.Name) {
-                throw new SilTrap($"the session replayed differently: '{builtin.Name}' where '{effect.Name}' ran before");
-            }
-
-            (_ioFailed, _lastStatus, _lastErrorOutput) = (effect.IoFailed, effect.LastStatus, effect.LastErrorOutput);
-            return effect.Result switch {
-                string text => Allocate(new HeapString(text)),
-                string[] texts => Allocate(new HeapArray(new ArrayType(SilType.String), [..texts.Select(t => (object?)Allocate(new HeapString(t)))])),
-                var value => value,
-            };
-        }
-
-        var result = Perform(builtin, operands, depth);
-        var plain = result switch {
-            HeapString text => text.Value,
-            HeapArray array => array.Elements.Select(static e => ((HeapString)e!).Value).ToArray(),
-            var value => value,
-        };
-        journal.Entries.Add(new(builtin.Name, plain, _ioFailed, _lastStatus, _lastErrorOutput));
-        return result;
-    }
-
     object? Perform(BuiltinInst builtin, object?[] operands, int depth) {
         switch (builtin.Name) {
+            // Counted by the native runtime only: interpreted, a block runs uncounted.
+            case Coverage.Builtin:
+                return null;
+
             case "array_empty":
                 return null;
 
@@ -1021,6 +1030,9 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             case "ref_identical":
                 return ReferenceEquals(Alive((HeapObject)operands[0]!), Alive((HeapObject)operands[1]!));
 
+            case "ref_is_unique":
+                return ((IReference)operands[0]!).Peek() is Counted { Strong: 1, Immortal: false };
+
             case "string_count":
                 return (long)Text(operands[0]).Scalars.Count;
 
@@ -1031,6 +1043,25 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
 
             case "string_hash":
                 return StringHash(Encoding.UTF8.GetBytes(Text(operands[0]).Value));
+
+            // Scalar by scalar, as the runtime's byte search finds the same place.
+            case "string_find": {
+                var text = Text(operands[0]).Scalars;
+                var part = Text(operands[1]).Scalars;
+                var from = Math.Max(0L, (long)operands[2]!);
+                for (var i = from; i + part.Count <= text.Count; i++) {
+                    var k = 0;
+                    while (k < part.Count && text[(int)i + k] == part[k]) {
+                        k++;
+                    }
+
+                    if (k == part.Count) {
+                        return i;
+                    }
+                }
+
+                return -1L;
+            }
 
             // UTF-8's byte order is the scalars' order, as the runtime compares.
             case "string_compare":
@@ -1203,6 +1234,12 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             case "process_run": {
                 var start = new System.Diagnostics.ProcessStartInfo(Sandbox?.CheckProgram(Text(operands[0]).Value) ?? Text(operands[0]).Value) {
                     RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false,
+                    // Text goes to and from the program as UTF-8, as the native
+                    // runtime passes it, and not in the console's code page,
+                    // which is what Windows would use.
+                    StandardInputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
+                    StandardOutputEncoding = Encoding.UTF8,
+                    StandardErrorEncoding = Encoding.UTF8,
                 };
                 if (Sandbox is { } confined) {
                     start.WorkingDirectory = confined.CurrentDirectory;
@@ -1503,6 +1540,10 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             return Find(parts[1]) is { } from && Find(parts[2]) is { } to ? WrapNumber(operands[0], from, to) : null;
         }
 
+        if (name.StartsWith(SilBuiltins.WrappingPrefix, StringComparison.Ordinal)) {
+            return Wrapping(name, operands);
+        }
+
         var separator = name.LastIndexOf('_');
         if (separator < 0 || Find(name[(separator + 1)..]) is not { } type || type == SilType.Int || type == SilType.F64) {
             return null;
@@ -1571,6 +1612,32 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             case "cmp_ge": return x >= y;
             default: return null;
         }
+    }
+
+    /// <summary>
+    ///     <c>wrapping_add_I32</c> and the rest, which a build with
+    ///     <c>overflow-checks = false</c> has in place of the trapping
+    ///     operations: the exact result, keeping the type's low bits.
+    /// </summary>
+    static object? Wrapping(string name, object?[] operands) {
+        var separator = name.LastIndexOf('_');
+        var type = SilType.Integers.FirstOrDefault(n => n.ToString() == name[(separator + 1)..]);
+        if (type is null || separator <= SilBuiltins.WrappingPrefix.Length) {
+            return null;
+        }
+
+        var (bits, signed) = SilType.IntegerInfo(type)!.Value;
+        var x = Big(operands[0]);
+        var y = operands.Length > 1 ? Big(operands[1]) : BigInteger.Zero;
+        BigInteger? exact = name[SilBuiltins.WrappingPrefix.Length..separator] switch {
+            "add" => x + y,
+            "sub" => x - y,
+            "mul" => x * y,
+            "neg" => -x,
+            "abs" => BigInteger.Abs(x),
+            _ => null,
+        };
+        return exact is { } value ? NarrowBig(Wrapped(value, bits, signed), type) : null;
     }
 
     /// <summary>An I128 or U128 operation: Numeric's, over BigInteger, which holds a U128's every value.</summary>
@@ -1839,6 +1906,12 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
         checked {
             return (name, operands) switch {
                 ("add_Int", [long a, long b]) => Wrap(() => a + b),
+                ("wrapping_add_Int", [long a, long b]) => unchecked(a + b),
+                ("wrapping_sub_Int", [long a, long b]) => unchecked(a - b),
+                ("wrapping_mul_Int", [long a, long b]) => unchecked(a * b),
+                ("overflow_at_add_Int", [long a, long b, long i, long m]) => Overflows(() => a + b) ? Math.Min(m, i) : m,
+                ("overflow_at_sub_Int", [long a, long b, long i, long m]) => Overflows(() => a - b) ? Math.Min(m, i) : m,
+                ("overflow_at_mul_Int", [long a, long b, long i, long m]) => Overflows(() => a * b) ? Math.Min(m, i) : m,
                 ("sub_Int", [long a, long b]) => Wrap(() => a - b),
                 ("mul_Int", [long a, long b]) => Wrap(() => a * b),
                 ("div_Int", [long a, long b]) => b == 0 ? throw new SilTrap("division by zero") : Wrap(() => a / b),
@@ -2010,6 +2083,15 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
         }
 
         return text.ToString();
+    }
+
+    static bool Overflows(Func<long> operation) {
+        try {
+            _ = checked(operation());
+            return false;
+        } catch (OverflowException) {
+            return true;
+        }
     }
 
     static object Wrap(Func<long> operation) {

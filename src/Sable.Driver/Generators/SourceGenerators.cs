@@ -95,6 +95,29 @@ public static class SourceGenerators {
     /// <summary>A generator program, compiled: its module, or why it could not be.</summary>
     sealed record CompiledGenerators(SilModule? Module, IReadOnlyList<(Diagnostic Diagnostic, SyntaxTree Tree)> Diagnostics) {
         public readonly object Gate = new();
+
+        /// <summary>The trees of the set it was compiled from, which its diagnostics are on.</summary>
+        public IReadOnlyList<SyntaxTree> Files { get; init; } = [];
+
+        /// <summary>
+        ///     Its diagnostics, on a set's own trees. The program is cached by
+        ///     its text, so the set asking may hold that same text parsed again
+        ///     — a file opened in the editor after it was read from disk — and
+        ///     a diagnostic on another set's tree would be reported on no file
+        ///     the asker has. Each goes to the tree in its file's place.
+        /// </summary>
+        public IEnumerable<(Diagnostic Diagnostic, SyntaxTree Tree)> DiagnosticsFor(GeneratorSet set) {
+            foreach (var (diagnostic, tree) in Diagnostics) {
+                var index = -1;
+                for (var i = 0; i < Files.Count && index < 0; i++) {
+                    if (ReferenceEquals(Files[i], tree)) {
+                        index = i;
+                    }
+                }
+
+                yield return (diagnostic, index >= 0 && index < set.Files.Count ? set.Files[index] : tree);
+            }
+        }
     }
 
     /// <summary>A message a run reported, and where: a location's id, or "" for the attribute that started it.</summary>
@@ -143,7 +166,7 @@ public static class SourceGenerators {
         var modules = input.Files.Select(static f => (f.Root as CompilationUnitSyntax)?.Module?.Name.ToString().Trim()).OfType<string>().ToHashSet(StringComparer.Ordinal);
         foreach (var group in requests.GroupBy(static r => r.Set)) {
             var compiled = Compile(group.Key);
-            diagnostics.AddRange(compiled.Diagnostics);
+            diagnostics.AddRange(compiled.DiagnosticsFor(group.Key));
             if (compiled.Module is not { } module) {
                 continue;
             }
@@ -169,7 +192,7 @@ public static class SourceGenerators {
     public static IReadOnlyList<(Diagnostic Diagnostic, SyntaxTree Tree)> Check(GeneratorSet set) {
         var diagnostics = new List<(Diagnostic, SyntaxTree)>();
         Visible([set], diagnostics);
-        diagnostics.AddRange(Compile(set).Diagnostics.Where(static d => d.Diagnostic.Code == ErrorCode.ERR_GeneratorRule));
+        diagnostics.AddRange(Compile(set).DiagnosticsFor(set).Where(static d => d.Diagnostic.Code == ErrorCode.ERR_GeneratorRule));
         return diagnostics;
     }
 
@@ -259,7 +282,7 @@ public static class SourceGenerators {
 
     /// <summary>The generator program, compiled once per text for the life of the process.</summary>
     static CompiledGenerators Compile(GeneratorSet set) =>
-        Compiled.GetOrAdd(set.Key, _ => new(() => CompileUncached(set))).Value;
+        Compiled.GetOrAdd(set.Key, _ => new(() => CompileUncached(set) with { Files = set.Files })).Value;
 
     static CompiledGenerators CompileUncached(GeneratorSet set) {
         var diagnostics = new List<(Diagnostic, SyntaxTree)>();

@@ -418,5 +418,12 @@ public sealed partial class SilGen {
             Jump(new UnreachableInst());
             return UnitValue.Instance;
         }
+
+        /// <summary><c>unreachable()</c>: a trap that says what was reached, while compiling or running.</summary>
+        SilValue? Unreachable() {
+            Emit(new CondFailInst(Emit(new IntegerLiteralInst(SilType.Bool, 1)), "reached code marked unreachable()"));
+            Jump(new UnreachableInst());
+            return UnitValue.Instance;
+        }
     }
 }

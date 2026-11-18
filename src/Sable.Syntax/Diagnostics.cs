@@ -180,6 +180,8 @@ public enum ErrorCode {
     ERR_EnumCaseValue = 3142,
     ERR_OpenExistentialInUnion = 3150,
     ERR_ConstGenericPredicate = 3160,
+    ERR_ValueGenericArgument = 3420,
+    ERR_ConstGenericPredicateFails = 3421,
     ERR_SelfRequirementOnExistential = 3161,
 
     // Ownership, escape and isolation checks (S3200-S3207).
@@ -191,6 +193,12 @@ public enum ErrorCode {
     ERR_Escapes = 3205,
     ERR_ActorStateFromOutside = 3206,
     ERR_NotSendable = 3207,
+
+    // A type declared ': Sendable' that holds something that is not (S3410).
+    ERR_DeclaredSendableIsNot = 3410,
+
+    // Globals and statics whose initial values need each other (S3411).
+    ERR_GlobalInitializationCycle = 3411,
 
     // ---- Compile-time evaluation (S3220-S3222): 'const', 'const fn' and
     // 'comptime' (SYNTAX.md §21).
@@ -226,6 +234,12 @@ public enum ErrorCode {
     LNT_PluginLint = 3397,
     LNT_PluginFailed = 3398,
     LNT_UnknownLint = 3399,
+
+    // ---- Reflection and the runtime's profiles (S3450-S3459) ---------------
+    ERR_ReflectionDenied = 3450,
+
+    // ---- Memory (S3460-S3469): what ARC cannot free.
+    WRN_StrongReferenceCycle = 3460,
 
     // ---- Patterns and flow (S6000-S6999) ---------------------------------
     ERR_PatternTypeMismatch = 6000,
@@ -272,6 +286,18 @@ public sealed record Diagnostic(
     /// </summary>
     public ImmutableArray<DiagnosticFix> Fixes { get; init; } = [];
 
+    /// <summary>
+    ///     The other places it is about — the earlier declaration a duplicate
+    ///     clashes with, the other access of a conflict, the requirement a
+    ///     member fails to match — each with a word on what is there. An
+    ///     editor shows them beside the diagnostic, as links.
+    /// </summary>
+    public ImmutableArray<DiagnosticLocation> Related { get; init; } = [];
+
+    /// <summary>The same diagnostic, saying another place is part of it.</summary>
+    public Diagnostic WithRelated(DiagnosticLocation? location) =>
+        location is null ? this : this with { Related = Related.Add(location) };
+
     // Two reports of the same thing are equal whatever fixes they carry:
     // the fixes are advice about the diagnostic, not part of what it says.
     public bool Equals(Diagnostic? other) =>
@@ -305,6 +331,20 @@ public sealed record Diagnostic(
                 {pad} | {caretPad}{caret}
                 """;
     }
+}
+
+/// <summary>
+///     A place a diagnostic points at besides its own span. A span is an
+///     offset into one file, so it comes with a node of that file, which
+///     whoever shows it finds the file by; with none, it is in the
+///     diagnostic's own file.
+/// </summary>
+public sealed record DiagnosticLocation(SyntaxNode? Anchor, TextSpan Span, string Message) {
+    /// <summary>A declaration's name, or the node itself when it has none.</summary>
+    public static DiagnosticLocation? At(SyntaxNode? node, string message) => node is null ? null : new(node, node.Span, message);
+
+    public static DiagnosticLocation? At(SyntaxToken token, string message) =>
+        token.IsNone || token.Parent is not { } parent ? null : new(parent, token.Span, message);
 }
 
 /// <summary>A machine-applicable fix: what it does, in a few words, and the edits that do it.</summary>

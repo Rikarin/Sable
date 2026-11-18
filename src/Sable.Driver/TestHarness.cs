@@ -55,11 +55,14 @@ public static class TestHarness {
         out IReadOnlyList<TestFunction> tests,
         bool docExamples = false,
         string? debugDirectory = null,
-        bool checkExclusivity = true
+        bool checkExclusivity = true,
+        Func<string, bool>? coverage = null
     ) {
         var warnings = new List<string>();
-        var result = Compile(trees, kind, out tests, docExamples, debugDirectory, checkExclusivity, warnings);
-        return result with { Warnings = warnings };
+        CoverageMap? map = null;
+        var result = Compile(trees, kind, out tests, docExamples, debugDirectory, checkExclusivity, warnings,
+            coverage is null ? null : (coverage, m => map = m));
+        return result with { Warnings = warnings, Coverage = map };
     }
 
     /// <param name="warnings">Filled with the program's warnings, once it has been checked.</param>
@@ -70,7 +73,8 @@ public static class TestHarness {
         bool docExamples,
         string? debugDirectory,
         bool checkExclusivity,
-        List<string> warnings
+        List<string> warnings,
+        (Func<string, bool> Measured, Action<CoverageMap> Made)? coverage = null
     ) {
         tests = [];
         var program = trees.ToList();
@@ -107,6 +111,13 @@ public static class TestHarness {
             return new(module, null, [..problems.Select(static p => $"internal error: SIL verification failed: {p}")]);
         }
 
+        // Counted where the program's own code is, before any pass: the
+        // tests' files are not measured, nor the library's.
+        if (coverage is var (wanted, made)) {
+            var measured = trees.Select(static t => t.Text.FileName).Where(f => wanted(f) && !IsTestFile(f)).ToHashSet(StringComparer.Ordinal);
+            made(Coverage.Instrument(module, measured.Contains));
+        }
+
         if (debugDirectory is null) {
             try {
                 SilPassManager.Run(module, SilPassManager.Default);
@@ -118,6 +129,10 @@ public static class TestHarness {
         var ir = debugDirectory is null ? LlvmEmitter.Emit(module) : LlvmEmitter.EmitWithDebugInfo(module, debugDirectory);
         return new(module, ir, []);
     }
+
+    /// <summary>A file of a package's tests/ directory.</summary>
+    static bool IsTestFile(string path) =>
+        path.Replace('\\', '/').Split('/').SkipLast(1).Contains("tests", StringComparer.Ordinal);
 
     /// <summary>The library modules the files import, each once.</summary>
     static IReadOnlyList<SyntaxTree> LibraryFor(IEnumerable<SyntaxTree> trees) {

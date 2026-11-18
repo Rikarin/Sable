@@ -495,6 +495,8 @@ public sealed partial class SemanticModel {
             return;
         }
 
+        _diagnostics.AddRange(_compilation.CheckForeignVariable(field, declaration));
+
         if (field.IsLazy && _compilation.LazyProperties.TryGetValue(field, out var lazy) && declaration.Declarator.Initializer is { } computed) {
             BindLazy(declaration, field, lazy, computed.Value, scope);
             CheckReferenceKind(declaration, field);

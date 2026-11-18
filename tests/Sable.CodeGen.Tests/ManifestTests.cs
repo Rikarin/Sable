@@ -239,20 +239,83 @@ public sealed class ManifestTests {
             static e => e.Key == "dependencies.b.package" && e.Message.Contains("cannot be renamed", StringComparison.Ordinal));
         Assert.Contains(Errors(Package + "[dependencies]\nb = { version = \"1\", registry = \"other\" }\n"),
             static e => e.Key == "dependencies.b.registry");
+        // Taken from a workspace there is none of.
         Assert.Contains(Errors(Package + "[dependencies]\nb = { workspace = true }\n"),
-            static e => e.Key == "dependencies.b.workspace" && e.Message.Contains("not supported yet", StringComparison.Ordinal));
+            static e => e.Key == "dependencies.b" && e.Message.Contains("no workspace above", StringComparison.Ordinal));
         Assert.Contains(Errors("[package]\nname = \"a\"\nversion.workspace = true\n"),
-            static e => e.Key == "package.version" && e.Message.Contains("inheriting", StringComparison.Ordinal));
+            static e => e.Key == "package.version" && e.Message.Contains("no workspace above", StringComparison.Ordinal));
         Assert.Contains(Errors(Package + "[target.'cfg(unix)'.dependencies]\nb = \"1\"\n"),
             static e => e.Key == "target" && e.Message.Contains("when", StringComparison.Ordinal));
 
         // Warned about: accepted, with a word that nothing uses them yet.
-        var manifest = Parse(Package + "[build-dependencies]\nb = \"1\"\n[reflect]\ninclude = [\"Scene\"]\n[targets.wasm]\nx = 1\n");
+        var manifest = Parse(Package + "[build-dependencies]\nb = \"1\"\n[reflect]\ninclude = [\"Scene\"]\n[targets.wasm32-wasi]\nruntime = \"minimal\"\nx = 1\n");
         Assert.Contains(manifest.Warnings, static w => w.Key == "build-dependencies");
         Assert.Contains(manifest.Warnings, static w => w.Key == "reflect");
-        Assert.Contains(manifest.Warnings, static w => w.Key == "targets");
-        Assert.Contains(Parse("[workspace]\nmembers = [\"a\"]\n[workspace.dependencies]\nb = \"1\"\n").Warnings,
-            static w => w.Key == "workspace.dependencies" && w.Message.Contains("inherit", StringComparison.Ordinal));
+        Assert.Contains(manifest.Warnings, static w => w.Key == "targets.wasm32-wasi.runtime");
+        Assert.Contains(manifest.Warnings, static w => w.Key == "targets.wasm32-wasi.x");
+        Assert.Contains(Parse("[workspace]\nmembers = [\"a\"]\n[workspace.metadata]\nb = 1\n").Warnings,
+            static w => w.Key == "workspace.metadata");
+    }
+
+    [Fact]
+    public void AMemberTakesSettingsAndDependenciesFromItsWorkspace() {
+        using var fixture = new PackageFixture();
+        fixture.Write("ws/sable.toml", """
+            [workspace]
+            members = ["crates/*"]
+
+            [workspace.package]
+            version = "0.4.2"
+            edition = "2027"
+            authors = ["A. Person"]
+
+            [workspace.dependencies]
+            image = { version = "0.6", features = ["png"] }
+            shared = { path = "libs/shared" }
+            """);
+        fixture.Write("ws/crates/app/sable.toml", """
+            [package]
+            name = "app"
+            version.workspace = true
+            edition = { workspace = true }
+            authors.workspace = true
+
+            [dependencies]
+            image = { workspace = true, features = ["jpeg"], optional = true }
+            shared.workspace = true
+            """);
+
+        var manifest = ManifestFiles.Load(Path.Combine(fixture.Root, "ws", "crates", "app"));
+        Assert.True(manifest.InheritsFromWorkspace);
+        Assert.Equal("0.4.2", manifest.Package!.Version.ToString());
+        Assert.Equal("2027", manifest.Package.Edition);
+        Assert.Equal(["A. Person"], manifest.Package.Authors);
+
+        var image = manifest.Dependencies.Single(static d => d.Name == "image");
+        Assert.Equal(["png", "jpeg"], image.Features);
+        Assert.True(image.Optional);
+        Assert.Equal("0.6", image.Version!.ToString());
+
+        // A path is the workspace's, written from the member.
+        Assert.Equal("../../libs/shared", manifest.Dependencies.Single(static d => d.Name == "shared").Path);
+
+        // A published package has no workspace to take them from.
+        var refused = Assert.Throws<PackageException>(() => PackageOperations.Published(Path.Combine(fixture.Root, "ws", "crates", "app")));
+        Assert.Contains("write them out", refused.Message, StringComparison.Ordinal);
+
+        // What the workspace does not have is said, with where it looked.
+        fixture.Write("ws/crates/other/sable.toml", "[package]\nname = \"other\"\nversion = \"1.0.0\"\nlicense.workspace = true\n\n[dependencies]\nmissing = { workspace = true }\n");
+        var errors = Assert.Throws<ManifestException>(() => ManifestFiles.Load(Path.Combine(fixture.Root, "ws", "crates", "other"))).Errors;
+        Assert.Contains(errors, static e => e.Key == "package.license" && e.Message.Contains("no 'license' under [workspace.package]", StringComparison.Ordinal));
+        Assert.Contains(errors, static e => e.Key == "dependencies.missing" && e.Message.Contains("no 'missing' under [workspace.dependencies]", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void AWorkspacesSharedSettingsAreChecked() {
+        var errors = Errors("[workspace]\nmembers = []\n[workspace.package]\nname = \"x\"\nversion = \"one\"\n[workspace.dependencies]\nb = { version = \"1\", optional = true }\n");
+        Assert.Contains(errors, static e => e.Key == "workspace.package.name");
+        Assert.Contains(errors, static e => e.Key == "workspace.package.version");
+        Assert.Contains(errors, static e => e.Key == "workspace.dependencies.b");
     }
 
     [Fact]

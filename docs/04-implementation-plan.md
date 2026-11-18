@@ -176,7 +176,11 @@ Copy Roslyn's **red/green tree** design exactly:
 
 ### 0.5 Exit criteria
 
-- [ ] Every construct in `SYNTAX.md` parses
+- [x] Every construct in `SYNTAX.md` parses — `SyntaxSpecTests` parses each of
+      its 59 `sable` blocks as a file, a function body, or piece by piece
+      (listings of types, patterns and literals item by item); a block that is
+      deliberately not Sable would be marked `<!-- not-sable: why -->` in the
+      spec, and none is
 - [ ] Round-trip invariant holds on a 2,000-file corpus — it holds on all
       the corpus there is: `RoundTripCorpusTests` takes every `.sb` file
       (140) and every `sable` block in the Markdown (418), broken ones
@@ -204,14 +208,21 @@ Copy Roslyn's **red/green tree** design exactly:
       yanked versions, pre-releases, locks naming what is gone) through
       PubGrub, every answer checked against every requirement and every
       failure without pre-releases against trying every assignment, plus
-      the version parsers and the set algebra. The compiler fuzzer is
-      guided by features (syntax kinds, diagnostic codes, the stage
-      reached), not by code coverage, which would need the compiler
-      instrumented, and no fuzzer has yet run for 24 hours on end. Found
-      and fixed so far: an extension nested in an extension threw while
+      the version parsers and the set algebra. Beside them,
+      `tools/fuzz/coverage.sh` fuzzes guided by code coverage: SharpFuzz
+      instruments the Sable assemblies, and libFuzzer (on Linux, through
+      libfuzzer-dotnet; on macOS, the fuzzer's own in-process loop) drives
+      the parser (round trips, spans that tile, incremental reparse equal to
+      a full one), the front end (as `CompilerFuzzTests` holds it), the
+      resolver and the package files, and `fromBytes` under libFuzzer with
+      ASan and UBSan, from the repository's sources and a dictionary from
+      the lexer's tables, nightly for 90 minutes a target with the corpus kept from
+      night to night. No fuzzer has yet run for 24 hours on end. Found and
+      fixed so far: an extension nested in an extension threw while
       attaching; a self-dependency hung the resolver and crashed its
       explanation; a `-` in a requirement's build metadata threw; ranges
-      past the largest number wrapped round to nothing
+      past the largest number wrapped round to nothing; an edit in a file
+      with directives reparsed incrementally to a different tree
 
 ---
 
@@ -361,7 +372,10 @@ Order matters; each of these is a self-contained lowering:
   core library is parsed per target), a dependency's `when:` and the C ABI's
   classification follow the target. Every target compiles to an object
   (`--emit obj`); an executable links where the runtime has a platform layer —
-  macOS and Linux. Not yet: the runtime's Windows and WASI layers (it needs
+  macOS and Linux. A program can also be a library C links (`--emit
+  staticlib|dylib`, `[lib] kind`; docs/05 §5.2.2): no entry point, its
+  globals set up by a constructor and destroyed by the runtime at exit.
+  Not yet: the runtime's Windows and WASI layers (it needs
   pthread, dlfcn, execinfo, posix_spawn, dirent and poll), WebAssembly's C ABI
   for `@extern` structs, and CI beyond Linux x64 and macOS arm64.
 
@@ -945,7 +959,7 @@ Written so far (`tests/Sable.CodeGen.Tests/LibraryTests.cs`):
   (unbounded, closable, `receive` awaits), `TaskGroup` (results in the order
   the tasks were added), and a `sleep` that yields so that other tasks run
   meanwhile. Tasks switch only where they await, so none of it needs a lock.
-  Not yet: bounded channels, cancellation, `Mutex` and `Atomic` (useless
+  `TaskGroup.cancelAll()` cancels its tasks. Not yet: bounded channels, `Mutex` and `Atomic` (useless
   until tasks run in parallel), and deadlock detection: a task waiting on
   nothing yields for ever.
 
@@ -1215,7 +1229,9 @@ tasks sleeping a second take a second. `Sable.Concurrency`'s `sleep` is
 `Task.sleep`; `Clock.sleep` does not await, so it still holds every task. An async function is an ordinary function,
 and `await` is its operand; `Task.spawn { … }` queues a task (a class holding
 the runtime's handle, the body and the result), `await task.value` waits for
-it, and the program ends once every task has. Actors lower as classes: with
+it, and the program ends once every task has. `task.cancel()` cancels
+cooperatively: the task sees `Task.isCancelled()`, and a sleep it is in, or
+starts, ends at once (it is taken off the sleepers and queued). Actors lower as classes: with
 one task running at a time a call into one runs alone, and the binder makes
 a call from outside it `await`. `async let` binds; reading it needs `await`.
 A class or actor whose fields all have initial values is made with `init()`.
@@ -1225,7 +1241,7 @@ per task — far less compiler for the same semantics, at the cost of a
 thread (8 MB of address space) for each task waiting at once. Not yet:
 `async let` runs its child to completion at the declaration rather than
 alongside; actors have no executor or mailbox of their own; no task groups
-as scopes, cancellation, `for await` or async sequences, priorities, I/O to
+as scopes, priorities, I/O to
 wait on (an I/O reactor), and no parallelism (a work-stealing pool, and
 with it atomic counts) — all `Sable.Concurrency`'s, along with the switch
 to the state machine where many tasks wait at once.
@@ -1392,13 +1408,23 @@ Full design in [05-toolchain.md](05-toolchain.md).
   `--harness-out <path>` (with `-g`) builds the harness and runs nothing, so
   the VS Code Test Explorer's Debug profile starts `<harness> --run-test
   <name>` under the debugger.
+- `sable test --coverage` counts lines with counters in the code
+  (`Sable.SIL/Coverage.cs`): before any pass, each block of a function from
+  the package's own files (not `tests/`, not dependencies or the library)
+  starts with the builtin `coverage_hit(n)`, which the runtime counts
+  (`runtime/coverage.c`) and appends to the file `SABLE_COVERAGE` names when
+  the program ends, or traps. Every test process appends to one file; the
+  runner adds them up and prints the share of lines run per file with the
+  lines that never ran, and writes `target/coverage/lcov.info`. A line counts
+  as often as the most-run block it is in; code the optimiser removes is
+  still a line, since the counters go in first. The SIL interpreter runs a
+  counter as nothing.
 - **Deferred:** a `blackBox` to keep the optimiser from deleting a
   benchmark's work (it needs a core builtin); async benchmarks; snapshot and
-  property testing (docs/06 lists them under Sable.Testing; #73, #107); a
-  coverage tool (it needs the code generator to count lines, as
-  `-fprofile-instr-generate` does, and the Test Explorer then a Coverage
-  profile); a time limit inside the harness's own runner, which would need a
-  builtin to wait on a child with one.
+  property testing (docs/06 lists them under Sable.Testing; #73, #107); the
+  Test Explorer's Coverage profile reading `lcov.info`; branch coverage; a
+  time limit inside the harness's own runner, which would need a builtin to
+  wait on a child with one.
 
 ### Packages, as implemented
 
@@ -1417,11 +1443,17 @@ In `src/Sable.Driver/Packages/`, with a command per file under `Commands/`.
   keeps the entry point out of the C `main`, so the program's functions keep
   theirs), `lto` (`fat`, `thin` or off; on Linux through lld, used when clang
   can link with it), `codegen-units = 1` (compile whole even in an
-  unoptimised debug build), `strip`, `rpath`, `exclusivity` and `leak-check`
-  (`sable run` sets `SABLE_CHECK_LEAKS`). A build prints the warnings of the
-  profile it uses: `panic = "unwind"` (a trap always aborts), `arc-checks`
-  (there are no optional ARC checks) and `overflow-checks = false`
-  (arithmetic is always checked) have no effect.
+  unoptimised debug build), `strip`, `rpath`, `exclusivity`, `leak-check`
+  (`sable run` sets `SABLE_CHECK_LEAKS`) and `overflow-checks = false`
+  (integer `+`, `-`, `*`, negation, `abs` and `as` wrap rather than trap:
+  SIL has `wrapping_` forms of them, which the interpreter, the emitter and
+  constant folding read as written; division by zero, shifts out of range
+  and an overflowing `const` are still errors). `package.sb` sets all of
+  them, `optSize: .size` or `.minSize` for `-Os` and `-Oz`. A build prints
+  the warnings of the profile it uses: `panic = "unwind"` (a trap always
+  aborts) and `arc-checks` (there are no optional ARC checks: the one
+  reference-count check, an object outliving its deinit, guards memory
+  safety and stays) have no effect.
 - **Packages of many files.** A package is every `.sb` under `src/`:
   `src/main.sb` (or `[[bin]]`, or `src/bin/*.sb`) is a binary's entry, the
   rest is the library. A binary is compiled with its package's library and
@@ -1483,8 +1515,9 @@ In `src/Sable.Driver/Packages/`, with a command per file under `Commands/`.
 Deferred: workspace inheritance
 (`version.workspace = true` and `{ workspace = true }` are refused,
 `[workspace.package]` and `[workspace.dependencies]` warned about); `[reflect]`
-and `[targets]` (accepted with a warning: nothing looks a type up by name
-yet, and there is no cross-compilation). A dependency's `package =` and
+(accepted with a warning: nothing looks a type up by name yet); `[targets]`'s
+`runtime` (warned about: there are no runtime profiles yet — its
+`reflection = false` is built). A dependency's `package =` and
 `registry =` are refused: code imports a package's modules, so a rename means
 nothing, and every dependency comes from the workspace's one registry. Cargo's
 `[target.'cfg(...)'.dependencies]` is refused in favour of `when`. Every
@@ -1561,8 +1594,18 @@ member at a time.
   declaration, conforming extensions and `@derive`; subtypes in the
   workspace). Quick fixes for the lints: what each message suggests (`_` before
   an unused name, a parameter renamed keeping its label, the import removed,
-  `let` for `var`) and `@allow(lint)` on the declaration. `completionItem/resolve`
-  adds a symbol's doc comment to the item shown.
+  `let` for `var`) and `@allow(lint)` on the declaration. Quick fixes for the
+  compiler's own errors: `try` before a call that can throw, a match's missing
+  cases, a stub of each requirement a type lacks (the bodies `unreachable()`,
+  which `Sable.Core` now has: a trap of type `Never`), the import of a module —
+  the workspace's or any library one — with a name not found, and the label a
+  call's parameter has. `source.fixAll` and the `sable.fixAll` command
+  (`workspace/executeCommand`, applied through `workspace/applyEdit`) take
+  every first fix at once. Code lenses count each type's and function's
+  references (resolved when shown; `sable.showReferences` is the client's
+  command that lists them), and document links take an import to its
+  module's first file and a URL in a comment to its page.
+  `completionItem/resolve` adds a symbol's doc comment to the item shown.
 - Completion: members after `.` and `?.` (statics after a type name), the
   names in scope — locals declared before the caret, parameters, the enclosing
   types' members, the module, imports, `Sable.Core` — and keywords; module
@@ -1572,7 +1615,9 @@ member at a time.
   `.`, the cases and statics of the type the context wants (a parameter's, an
   annotated declaration's, an assignment's or comparison's other side, the
   function's result). A public name of another module of the compilation that
-  the file does not import is offered with the `import` it needs.
+  the file does not import is offered with the `import` it needs, and so is
+  one of a library module nothing imports yet (every library module is
+  compiled once, in the background, for its names).
 - Inlay hints: the type of each `let`/`var` written without one; the
   parameter an argument without a label is for, where the call takes more than
   one and the argument is not already that name; a closure's inferred
@@ -1596,8 +1641,13 @@ records what each written name resolved to).
 with every signature bound before it is used. A completion or signature help
 never waits for one: it binds the member being edited, as it is now, against
 the newest compilation there is. Only a member the newest compilation does not
-have — one being written from scratch — waits for a new compilation; hover,
-references and rename always use one of exactly the current text.
+have — one being written from scratch — waits for a new compilation. Hover
+binds the member under the cursor the same way. References and rename, after
+edits inside members' bodies only, answer from an older compilation — the one
+with the most files already bound — with each edited member bound again
+speculatively and the rest of its file moved by the edits (a body cannot
+change what anything outside it means); any other edit waits for a
+compilation of exactly the current text.
 `tools/Sable.LspBench` writes a 205,180-line project (180 files, nine modules
 importing one another), starts `sable lsp` as a process, and types statements
 into function bodies a key at a time (40–120 ms apart), asking for completion
@@ -1605,9 +1655,22 @@ after each and pausing so the server rebuilds in the background (two dozen rebui
 per run), timed at the client. Release build, macOS arm64, four runs of 831
 completions: p50 1.0–1.7 ms, **p95 5.2–9.4 ms**, p99 10–24 ms, max 15–34 ms;
 after a `.` alone, p95 2.7–12.6 ms. For contrast, a hover just after an edit,
-which waits for a compilation of the whole project, takes 125–170 ms, and the
-first diagnostics come 1.3–1.5 s after start (reading and parsing 205k lines
+which waited for a compilation of the whole project, took 125–170 ms, and the
+first diagnostics came 1.3–1.5 s after start (reading and parsing 205k lines
 included).
+
+The benchmark also times references just after an edit in a body. They used
+to wait for a new compilation and then bind every file naming the symbol in
+it — all 180 here — every time: 10–28 s per request on a heavily loaded
+machine (load average 60–200, other builds running). Answered from the
+compilation already bound, the first takes as long (binding it), and the
+next five 0.4–0.65 s on the same machine. The first diagnostics now skip the
+quiet period after loading (there is no typing to wait out), and a small
+program is compiled while the files are read, so the compiler's code is
+jitted by the time the workspace's compilation starts: that compilation
+went from 1.6–2.1 s to 0.9–1.2 s, and first diagnostics from about 3.5 s to
+1.9–2.4 s, measured back to back under the same load. Unloaded figures are
+still to be taken again.
 
 Deferred: diagnostics for files that are not open; completion of argument
 labels, implicit members (`.Case` with no receiver) and snippets; references
@@ -1715,19 +1778,23 @@ loaded in any test.
   `$BROWSER` or the system's browser. Not yet: doc tests, search beyond the
   index.
 - **`sable repl`**: `ReplSession` (separate from the console) keeps imports,
-  declarations and the statements that ran, and runs each entry as the next
-  statement of a `main` that replays them, under the SIL interpreter; an
-  expression is bound to `resN` and shown with its type; `:type`, `:reset`,
-  `:help`, `:quit`. What a statement does to the world (files, input, the
-  environment, processes, the clock, sleeping) goes through an
-  `EffectJournal`: carried out the first time, replayed from the journal
-  after, so nothing happens twice and the clock reads as it did; a failed
-  entry's effects are dropped from it. The interpreter runs without a step
-  limit (Ctrl-C interrupts an entry) and 100,000 calls deep. On a terminal,
-  `LineEditor` gives readline's editing keys, ↑/↓ history (kept in
-  `~/.sable/repl_history`) and Tab completion of keywords and the session's
-  names. Not yet: replay still repeats the earlier statements' computation
-  (snapshotting the interpreter would not). In a package the session is
+  declarations, bindings and the entries that ran, under the SIL
+  interpreter. An entry runs as a function of its own; each binding at its
+  top level becomes a global of the session (its type written out), set up
+  where the binding stood. The program is lowered with
+  `SilGen.LowerForSession` — each global has its own initialiser, run when
+  the global is first reached, and nothing destroys them at the end — and
+  run with the heap and globals the earlier entries' programs left
+  (`SilInterpreter.Session`), so nothing earlier is computed or done again.
+  Earlier entries' functions are compiled with each new one, so a closure
+  one made still has its code. A failed entry's bindings are forgotten; a
+  binding that cannot be a global (its value needs a name bound inside the
+  entry) lasts only for the entry. An expression is bound to `resN` and
+  shown with its type; `:type`, `:reset`, `:help`, `:quit`. The interpreter
+  runs without a step limit (Ctrl-C interrupts an entry) and 100,000 calls
+  deep. On a terminal, `LineEditor` gives readline's editing keys, ↑/↓
+  history (kept in `~/.sable/repl_history`) and Tab completion of keywords
+  and the session's names. In a package the session is
   compiled with the package's library and its dependencies, so `import`
   takes their modules (`--no-package` for a session without).
 - **Lints** (`src/Sable.Symbols/Lints/`): `Lint` over a file's
@@ -1818,7 +1885,7 @@ object's metadata.
 (Int?) absent = none
 (any Values.Named) bird = Values.Bird { [value] = Values.Bird { legs = 2  [strong] = 1 } }
 (Values.Node) node = Values.Node { value = 7  label = "seven"  next = none  [strong] = 2 }
-(Sable.Collections.HashMap$of$String$Int) map = … count = 2 { ["one"] = 1  ["two"] = 2 }
+(Sable.Collections.HashMap<String, Int>) map = … count = 2 { ["one"] = 1  ["two"] = 2 }
 ((Int) -> Int) times = Values.main$closure0
 ```
 
@@ -1844,13 +1911,21 @@ A union case whose payload fields are named (`EnumType.PayloadLabels`) has a
 payload described as a struct of them, `U.Case$case`, laid out as the tuple
 is, which the plugin shows as the case's fields.
 
-Not yet: readable names for generic instances (`HashMap$of$String$Int`);
-`@inline_layout` values, which show as a pointer to their bytes; the standard
+A generic type's instance is named as Sable writes it (`NominalType.DisplayName`):
+`HashMap<String, Int>`, where its symbols and its metadata say
+`HashMap$of$String$Int`; the plugin finds the class by the metadata's name
+and shows the type's. For Windows the same nodes are written as CodeView (the
+`"CodeView"` module flag), which lld gathers into the PDB beside the
+executable, and which Windows' debuggers read; the debugger tests still drive
+lldb with the plugin's DWARF-shaped names, and are run on macOS and Linux only.
+
+Not yet: `@inline_layout` values, which show as a pointer to their bytes; the standard
 library's own source lines (its functions name a file the debugger cannot
 find); expression evaluation in Sable syntax (`expression` is lldb's C); a
 language code of Sable's own (the unit says `DW_LANG_C`, which is what lets
 lldb evaluate expressions at all); `inlinedAt` (a debug build inlines
-nothing); CodeView for Windows; and gdb.
+nothing); generic functions' readable names (`describe$of$Int`); debugger
+tests against a PDB on Windows; and gdb.
 
 ### Incremental builds, as implemented
 

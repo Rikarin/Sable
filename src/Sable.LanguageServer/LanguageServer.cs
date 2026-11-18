@@ -85,9 +85,28 @@ public sealed partial class LanguageServer {
         _channel = new(input, output);
         _options = options ?? new();
         _analyses = new(BuildAnalysis);
+        _library = new(_options.LibraryModules, _options.LibraryFor, Log);
     }
 
+    /// <summary>Every library module's public names, for what no file imports yet.</summary>
+    readonly LibraryIndex _library;
+
+    /// <summary>How many analyses have been built, for tests of what waits for one.</summary>
+    internal int AnalysesBuilt => Volatile.Read(ref _analysesBuilt);
+
+    int _analysesBuilt;
+
     Analysis BuildAnalysis(WorkspaceSnapshot snapshot, string key) {
+        Interlocked.Increment(ref _analysesBuilt);
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        try {
+            return BuildAnalysisNow(snapshot, key);
+        } finally {
+            Log($"compiled {(key.Length == 0 ? "the loose files" : key)} in {watch.ElapsedMilliseconds} ms");
+        }
+    }
+
+    Analysis BuildAnalysisNow(WorkspaceSnapshot snapshot, string key) {
         var project = snapshot.Layout.Projects.FirstOrDefault(p => p.Directory == key);
         var dependencies = project is null ? [] : _dependencies.For(project, snapshot, Log);
         return Analysis.Build(
@@ -245,6 +264,10 @@ public sealed partial class LanguageServer {
             "textDocument/semanticTokens/full" => SemanticTokensFullAsync,
             "textDocument/semanticTokens/range" => SemanticTokensRangeAsync,
             "textDocument/codeAction" => CodeActionsAsync,
+            "textDocument/codeLens" => CodeLensesAsync,
+            "codeLens/resolve" => CodeLensResolveAsync,
+            "textDocument/documentLink" => DocumentLinksAsync,
+            "workspace/executeCommand" => ExecuteCommandAsync,
             "textDocument/prepareCallHierarchy" => PrepareCallHierarchyAsync,
             "callHierarchy/incomingCalls" => IncomingCallsAsync,
             "callHierarchy/outgoingCalls" => OutgoingCallsAsync,
@@ -396,7 +419,10 @@ public sealed partial class LanguageServer {
                 ["full"] = true,
                 ["range"] = true
             },
-            ["codeActionProvider"] = new JsonObject { ["codeActionKinds"] = new JsonArray("quickfix") },
+            ["codeActionProvider"] = new JsonObject { ["codeActionKinds"] = new JsonArray("quickfix", "source.fixAll") },
+            ["codeLensProvider"] = new JsonObject { ["resolveProvider"] = true },
+            ["documentLinkProvider"] = new JsonObject { ["resolveProvider"] = false },
+            ["executeCommandProvider"] = new JsonObject { ["commands"] = new JsonArray(FixAllCommand) },
             ["callHierarchyProvider"] = true,
             ["typeHierarchyProvider"] = true,
             ["referencesProvider"] = true,

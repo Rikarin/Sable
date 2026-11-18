@@ -61,7 +61,7 @@ static void sable_region_destroy(void *pointer) {
     }
 }
 
-static const SableMetadata region_metadata = { sable_region_destroy, "Region", 0, NULL, NULL, sizeof(SableRegion), _Alignof(SableRegion), NULL };
+static const SableMetadata region_metadata = { sable_region_destroy, "Region", 0, NULL, NULL, sizeof(SableRegion), _Alignof(SableRegion), NULL, NULL };
 
 void *sable_region_create(void) {
     return sable_alloc(&region_metadata, (int64_t)sizeof(SableRegion));

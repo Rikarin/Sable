@@ -293,8 +293,8 @@ public sealed partial class Compilation {
         }
     }
 
-    internal void ReportDeclaration(ErrorCode code, TextSpan span, string message) {
-        var diagnostic = Diagnostic.Error(code, span, message);
+    internal void ReportDeclaration(ErrorCode code, TextSpan span, string message, DiagnosticLocation? related = null) {
+        var diagnostic = Diagnostic.Error(code, span, message).WithRelated(related);
         _declarationDiagnostics.Add(diagnostic);
 
         // The file being declared is the one the span is in. A check run
@@ -853,7 +853,7 @@ public sealed partial class Compilation {
                 declaration.Identifier.Span,
                 $"'{function.Name}({labels})' is already declared in this scope with the same parameters{where}; "
                 + "overloads differ in their parameter types or labels, not in their result type alone"
-            );
+            ).WithRelated(earlier.DeclaredHere("declared first here"));
             ReportDeclaration(diagnostic, tree);
             return;
         }
@@ -1106,6 +1106,9 @@ public sealed partial class Compilation {
 
         TypeBinder.BindFieldType(field, declaration);
         RecordDeclaration(declaration, field);
+
+        // Seen by C (Compilation.Interop.cs).
+        DeclareExportedVariable(field, declaration, container);
 
         // 'var name: String = "" { set { field = newValue.trimmed() } }':
         // accessors that say 'field' have storage, laid out where the
@@ -1856,7 +1859,8 @@ public sealed partial class Compilation {
         ReportDeclaration(
             ErrorCode.ERR_DuplicateDeclaration,
             identifier.Span,
-            $"'{name}' is already declared in this scope{where}"
+            $"'{name}' is already declared in this scope{where}",
+            existing.DeclaredHere("declared first here")
         );
     }
 

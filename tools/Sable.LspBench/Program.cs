@@ -161,6 +161,37 @@ for (var i = 0; i < 6; i++) {
 Console.WriteLine("hover just after an edit, which waits for a new compilation:");
 Report("hover", hovers);
 
+// References right after an edit inside a body: every file's uses of a
+// method, which the previous compilation can find while the edit changed
+// no declaration.
+var references = new List<double>();
+var found = 0;
+for (var i = 0; i < 6; i++) {
+    var at = BodyStarts(text)[i + 6];
+    var position = Position(text, at);
+    version++;
+    await client.NotifyAsync("textDocument/didChange", new JsonObject {
+        ["textDocument"] = new JsonObject { ["uri"] = uri, ["version"] = version },
+        ["contentChanges"] = new JsonArray(new JsonObject {
+            ["range"] = new JsonObject { ["start"] = position.DeepClone(), ["end"] = position.DeepClone() },
+            ["text"] = " "
+        })
+    });
+    text = text.Insert(at, " ");
+    var timer = Stopwatch.StartNew();
+    var result = await client.RequestAsync("textDocument/references", new JsonObject {
+        ["textDocument"] = new JsonObject { ["uri"] = uri },
+        ["position"] = Position(text, text.IndexOf("other.total(2)", at, StringComparison.Ordinal) + 7),
+        ["context"] = new JsonObject { ["includeDeclaration"] = true }
+    });
+    references.Add(timer.Elapsed.TotalMilliseconds);
+    found = result?.AsArray().Count ?? 0;
+    await Task.Delay(1500);
+}
+
+Console.WriteLine($"references just after an edit ({found} found; {string.Join(", ", references.Select(static r => r.ToString("F0", CultureInfo.InvariantCulture)))} ms):");
+Report("references", references);
+
 await client.RequestAsync("shutdown", null);
 await client.NotifyAsync("exit", null);
 await server.WaitForExitAsync();

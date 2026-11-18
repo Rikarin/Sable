@@ -2,8 +2,8 @@ namespace Sable.Symbols.Tests;
 
 /// <summary>
 ///     The implicit <c>Copyable</c> constraint and its lifting with
-///     <c>~Copyable</c> (docs/03 §3.4), and const-generic predicates, which
-///     parse but have no value parameter to test yet.
+///     <c>~Copyable</c> (docs/03 §3.4), and value generic parameters with
+///     the const-generic predicates over them.
 /// </summary>
 public sealed class CopyableConstraintTests {
     const string Handle = """
@@ -129,4 +129,50 @@ public sealed class CopyableConstraintTests {
     [Fact]
     public void AConstGenericPredicateSaysItHasNothingToTest() =>
         AssertReports(ErrorCode.ERR_ConstGenericPredicate, "struct Buffer<T, N> where N > 0 { var first: T }");
+
+    // ---- Value generic parameters --------------------------------------------
+
+    const string Buffer = """
+                          struct Buf<T, N: Int> where N > 0, N % 2 == 0 {
+                              var items: T[N]
+                              fn count() -> Int { return N }
+                          }
+                          """;
+
+    [Fact]
+    public void AValueParameterIsANumberInTheBodyAndSizesAnArray() {
+        AssertClean(Buffer + "\nfn f() -> Int { let b = Buf<Int, 2> { items: [1, 2] }\n return b.count() }");
+        var compilation = Compilation.Create($"module M\n{Buffer}");
+        Assert.DoesNotContain(compilation.GetAllDiagnostics(), static d => d.Severity == DiagnosticSeverity.Error);
+        var buf = (NamedTypeSymbol)compilation.GetModule("M")!.GetMembers("Buf").Single();
+        Assert.True(buf.TypeParameters[1].IsValue);
+        Assert.False(buf.TypeParameters[0].IsValue);
+        var items = buf.Members.OfType<FieldSymbol>().Single(static f => f.Name == "items");
+        Assert.Equal("T[N]", items.Type.ToDisplayString());
+
+        // An instance is a type of its own, with the number in its array.
+        var four = buf.Construct([compilation.Core.Int, new ValueTypeArgumentSymbol(4)]);
+        Assert.Equal("Buf<Int, 4>", four.ToDisplayString());
+        Assert.Equal("Int[4]", TypeSubstitution.For(four).Apply(items.Type).ToDisplayString());
+        Assert.NotEqual(four, buf.Construct([compilation.Core.Int, new ValueTypeArgumentSymbol(6)]));
+    }
+
+    [Theory]
+    [InlineData("let b: Buf<Int, 0>? = none")]
+    [InlineData("let b: Buf<Int, 3>? = none")]
+    public void AValueTheTypesPredicateRefusesIsReported(string body) =>
+        AssertReports(ErrorCode.ERR_ConstGenericPredicateFails, Buffer + $"\nfn f() {{ {body} }}");
+
+    [Theory]
+    [InlineData("let b: Buf<Int, String>? = none")]
+    [InlineData("let b: Buf<4, 4>? = none")]
+    public void ANumberAndATypeAreNotGivenForEachOther(string body) =>
+        AssertReports(ErrorCode.ERR_ValueGenericArgument, Buffer + $"\nfn f() {{ {body} }}");
+
+    [Theory]
+    [InlineData("struct Bad<N: Int> where N > limit { }")]
+    [InlineData("struct Bad<N: Int> where N > count() { }")]
+    [InlineData("fn bad<N: Int>() where N > 0 { }")]
+    public void APredicateIsMadeOfValueParametersNumbersAndOperators(string source) =>
+        AssertReports(ErrorCode.ERR_ConstGenericPredicate, source);
 }

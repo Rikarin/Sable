@@ -23,8 +23,12 @@ internal static class TestRunner {
     internal sealed record TestEntry(string Name, string Location, string? Traps);
 
     /// <summary>How one test's process ended.</summary>
+    /// <param name="Started">
+    ///     Whether its process started at all. Not told by the status: on
+    ///     Windows one that was stopped, or crashed, ends with a negative one.
+    /// </param>
     /// <param name="Limit">The time limit it was stopped at, when it was.</param>
-    sealed record Outcome(TestEntry Test, int Status, string Output, string Errors, TimeSpan Took, TimeSpan? Limit) {
+    sealed record Outcome(TestEntry Test, bool Started, int Status, string Output, string Errors, TimeSpan Took, TimeSpan? Limit) {
         public bool TimedOut => Limit is not null;
     }
 
@@ -46,9 +50,9 @@ internal static class TestRunner {
 
         // Every test, then those the filters select, as the harness selects them.
         var described = Capture(executable, ["--describe"], null);
-        if (described.Status != 0) {
+        if (!described.Started || described.Status != 0) {
             error.Write(described.Errors);
-            return described.Status < 0 ? 1 : described.Status;
+            return described.Started && described.Status > 0 ? described.Status : 1;
         }
 
         var all = Parse(described.Output);
@@ -118,15 +122,19 @@ internal static class TestRunner {
     static Outcome RunOne(string executable, TestEntry test, TimeSpan? timeout, Action runningLong) {
         var clock = Stopwatch.StartNew();
         var result = Capture(executable, ["--run-test", test.Name], timeout, runningLong);
-        return new(test, result.Status, result.Output, result.Errors, clock.Elapsed, result.TimedOut ? timeout : null);
+        return new(test, result.Started, result.Status, result.Output, result.Errors, clock.Elapsed, result.TimedOut ? timeout : null);
     }
 
-    /// <summary>Runs the harness to its end (or its time limit), keeping what it wrote; status -1 when it could not be started.</summary>
-    static (int Status, string Output, string Errors, bool TimedOut) Capture(string executable, IReadOnlyList<string> arguments, TimeSpan? timeout, Action? runningLong = null) {
+    /// <summary>Runs the harness to its end (or its time limit), keeping what it wrote; not started, with why in its errors, when it could not be.</summary>
+    static (bool Started, int Status, string Output, string Errors, bool TimedOut) Capture(string executable, IReadOnlyList<string> arguments, TimeSpan? timeout, Action? runningLong = null) {
         var start = new ProcessStartInfo(executable) {
             RedirectStandardInput = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
+            // The harness writes UTF-8 whatever the console's code page,
+            // which Windows would otherwise read it in.
+            StandardOutputEncoding = Encoding.UTF8,
+            StandardErrorEncoding = Encoding.UTF8,
             UseShellExecute = false,
         };
         foreach (var argument in arguments) {
@@ -137,7 +145,7 @@ internal static class TestRunner {
         try {
             process = Process.Start(start) ?? throw new InvalidOperationException();
         } catch (Exception e) when (e is System.ComponentModel.Win32Exception or InvalidOperationException) {
-            return (-1, "", e.Message, false);
+            return (false, -1, "", e.Message, false);
         }
 
         using (process) {
@@ -155,7 +163,7 @@ internal static class TestRunner {
             }
 
             process.WaitForExit();
-            return (process.ExitCode, output.Result, errors.Result, timedOut);
+            return (true, process.ExitCode, output.Result, errors.Result, timedOut);
         }
     }
 
@@ -180,7 +188,7 @@ internal static class TestRunner {
             return $"the test was to trap{(expected.Length == 0 ? "" : $" with '{expected}'")}, and it returned";
         }
 
-        if (outcome.Status < 0 || outcome.Errors.Contains(FailureMarker, StringComparison.Ordinal)) {
+        if (!outcome.Started || outcome.Errors.Contains(FailureMarker, StringComparison.Ordinal)) {
             return "";
         }
 
@@ -190,7 +198,7 @@ internal static class TestRunner {
     /// <summary>What a failed test's process said, and how it ended. (Sable.Testing's <c>failureReport</c>.)</summary>
     static string Report(Outcome outcome) {
         var report = new StringBuilder($"---- {outcome.Test.Name} ({outcome.Test.Location}) ----");
-        if (outcome.Status < 0) {
+        if (!outcome.Started) {
             return report.Append("\nthe test's process could not be started").ToString();
         }
 

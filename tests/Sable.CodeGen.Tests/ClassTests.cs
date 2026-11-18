@@ -108,6 +108,35 @@ public sealed class ClassTests {
         Assert.Equal("fatal error: cast to 'Bird' failed\n  at test.sb:60:13\n", execution.Stderr);
     }
 
+    /// <summary>A global's initial value may need an instance of a generic function that nothing else asks for.</summary>
+    [Fact]
+    public void AGlobalsInitialValueMayNeedAGenericInstance() =>
+        Assert.Equal(
+            "0\n1\n",
+            AssertAgree(
+                """
+                module Test
+
+                struct Box<T> {
+                    var items: T[>..]
+
+                    init() {
+                        self.items = []
+                    }
+                }
+
+                var boxes: Box<String> = Box<String>()
+
+                @main
+                fn main() {
+                    print(boxes.items.count)
+                    boxes.items.append("a")
+                    print(boxes.items.count)
+                }
+                """
+            ).Stdout
+        );
+
     [Theory]
     [InlineData("    let c = Counter()\n    c.value = 5", "'value' can be read here but not written: its setter is private")]
     [InlineData("    print(1)", "'later' needs a type annotation")]

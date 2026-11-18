@@ -287,8 +287,9 @@ def _active_case(valobj):
 
 
 def _is_tuple(value):
+    """A tuple, or a union case's named fields ('U.Case$case'): shown as the case's own parentheses."""
     name = value.GetType().GetCanonicalType().GetName() or ""
-    return name.startswith("(") and not name.endswith("$closure")
+    return (name.startswith("(") and not name.endswith("$closure")) or name.endswith("$case")
 
 
 class UnionProvider(object):

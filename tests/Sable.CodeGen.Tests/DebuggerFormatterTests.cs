@@ -267,9 +267,9 @@ public sealed class DebuggerFormatterTests {
     [Fact]
     public void UnionsShowTheirCaseAndPayload() =>
         Shows(
-            "(Values.Shape) circle = Circle(1.5)",
-            "(Values.Shape) rect = Rect(2, 3)",
-            "(Values.Shape) tagged = Named(\"box\")",
+            "(Values.Shape) circle = Circle(radius: 1.5)",
+            "(Values.Shape) rect = Rect(width: 2, height: 3)",
+            "(Values.Shape) tagged = Named(label: \"box\")",
             "(Values.Shape) hollow = Empty",
             "(Values.Direction) heading = West"
         );
@@ -462,6 +462,72 @@ public sealed class DebuggerFormatterTests {
         var output = await Run(lldb, source, "rec.sb", ["b rec.sb:28", "run", "frame variable root n", "kill"]);
         Expect(output, "children = count = 1 {\n    [0] = {\n      label = \"leaf\"");
         Expect(output, "next = Rec.Node {\n    value = 2\n    next = none");
+    }
+
+    const string Scopes = """
+                          module Scopes
+
+                          let limit = 3
+                          var counter = 10
+
+                          @main
+                          fn main() {
+                              let x = 1
+                              var total = 0
+                              for i in 0..<2 {
+                                  let x = i + 100
+                                  total = total + x
+                                  print(x) // inner
+                              }
+                              counter = counter + limit
+                              print(x + total + counter) // after
+                          }
+                          """;
+
+    /// <summary>
+    ///     DWARF 5, a block's locals in a lexical block of their own, and the
+    ///     program's globals — in the IR, whatever debugger there is.
+    /// </summary>
+    [Fact]
+    public void BlocksAndGlobalsAreDescribed() {
+        var directory = Directory.CreateTempSubdirectory("sable-scopes-");
+        try {
+            var result = Pipeline.Compile(new SourceText(Scopes, "scopes.sb"), directory.FullName);
+            Assert.True(result.Succeeded, string.Join("\n", result.Errors));
+            var ir = result.LlvmIr!;
+            Assert.Contains("!\"Dwarf Version\", i32 5}", ir, StringComparison.Ordinal);
+
+            // The inner 'x' is in the loop body's block, inside the loop's own.
+            var innerX = System.Text.RegularExpressions.Regex.Match(ir, @"!DILocalVariable\(name: ""x"", scope: (![0-9]+), file: ![0-9]+, line: 11,");
+            Assert.True(innerX.Success, ir);
+            Assert.Matches($@"{innerX.Groups[1].Value} = distinct !DILexicalBlock\(scope: ![0-9]+, file: ![0-9]+, line: 10,", ir);
+            Assert.Matches(@"!DILocalVariable\(name: ""x"", scope: ![0-9]+, file: ![0-9]+, line: 8,", ir);
+
+            Assert.Matches(@"@""sable\.global\.Scopes\.limit"" = internal global i64 zeroinitializer, !dbg ![0-9]+", ir);
+            Assert.Contains("!DIGlobalVariable(name: \"counter\"", ir, StringComparison.Ordinal);
+        } finally {
+            directory.Delete(true);
+        }
+    }
+
+    [Fact]
+    public async Task AShadowedNameShowsOnlyWhereItIsInScope() {
+        if (Lldb.Value is not { } lldb) {
+            return;
+        }
+
+        var output = await Run(lldb, Scopes, "scopes.sb", [
+            $"b scopes.sb:{LineOf(Scopes, "// inner")}", $"b scopes.sb:{LineOf(Scopes, "// after")}",
+            "run", "frame variable x", "continue", "continue", "frame variable", "target variable", "kill",
+        ]);
+
+        // In the loop, the name is the loop's 'x'.
+        Expect(output, "(lldb) frame variable x\n(Int) x = 100\n");
+
+        // After it, only the outer one is, and no loop variable.
+        Expect(output, "(lldb) frame variable\n(Int) x = 1\n(Int) total = 201\n(lldb)");
+        Expect(output, "(Int) counter = 13");
+        Expect(output, "(Int) limit = 3");
     }
 
     [Fact]

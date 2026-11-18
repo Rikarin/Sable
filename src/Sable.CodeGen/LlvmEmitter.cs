@@ -82,7 +82,12 @@ public sealed partial class LlvmEmitter {
         // Separately compiled, every unit has the globals, and the linker keeps one of each.
         foreach (var (globalName, globalType) in module.Globals) {
             output.Append('@').Append(Global("global." + globalName)).Append(module.Unit is null ? " = internal global " : " = linkonce_odr global ")
-                .Append(Type(globalType)).Append(" zeroinitializer\n");
+                .Append(Type(globalType)).Append(" zeroinitializer");
+            if (_debug?.GlobalVariable(globalName, globalType, local: module.Unit is null) is { } variable) {
+                output.Append(", !dbg ").Append(variable);
+            }
+
+            output.Append('\n');
         }
 
         output.Append(_globals);
@@ -958,6 +963,27 @@ public sealed partial class LlvmEmitter {
         /// <summary>The function's subprogram, when there is debug information.</summary>
         string? _scope;
 
+        /// <summary>The lexical blocks' nodes, made as an instruction or a variable is first in one.</summary>
+        readonly Dictionary<int, string> _blocks = [];
+
+        /// <summary>
+        ///     The node for a lexical scope of the function: the subprogram
+        ///     for its own (0), else a block inside its parent's. One the
+        ///     function does not know — code a pass cloned — is the function's.
+        /// </summary>
+        string ScopeNode(int scope) {
+            if (scope <= 0 || scope > function.Scopes.Count) {
+                return _scope!;
+            }
+
+            if (!_blocks.TryGetValue(scope, out var node)) {
+                var (parent, line, column) = function.Scopes[scope - 1];
+                _blocks[scope] = node = Debug!.LexicalBlock(ScopeNode(parent), Debug.FileOf(function), line, column);
+            }
+
+            return node;
+        }
+
         /// <summary>The <c>!dbg</c> attachment for what is being written now.</summary>
         string _dbg = "";
 
@@ -1157,7 +1183,7 @@ public sealed partial class LlvmEmitter {
         void Instruction(SilInstruction instruction) {
             // A slot is made where the function starts, whatever line declared its variable.
             if (_scope is not null && instruction.Location is { } location && instruction is not AllocStackInst) {
-                _dbg = $", !dbg {Debug!.Location(location.Line, location.Column, _scope)}";
+                _dbg = $", !dbg {Debug!.Location(location.Line, location.Column, ScopeNode(location.Scope))}";
             }
 
             switch (instruction) {
@@ -1205,16 +1231,25 @@ public sealed partial class LlvmEmitter {
                         Line($"store {Type(alloc.ElementType)} zeroinitializer, ptr {name}");
                     }
 
-                    // A source variable lives in this slot for the whole function.
+                    // A source variable lives in this slot for the whole function,
+                    // though a debugger shows it only in the block declaring it.
                     // One a closure captures lives in a box, which the slot
                     // points to: the variable is the value inside it.
                     if (_scope is not null && alloc.VariableName is { } variable) {
                         var line = alloc.Location?.Line ?? function.Line;
+                        var scope = ScopeNode(alloc.Location?.Scope ?? 0);
+
+                        // LLVM puts the variable in the scope of the
+                        // declaration's location, not the variable's own.
+                        if (alloc.Location is { Scope: > 0 } declared) {
+                            _dbg = $", !dbg {Debug!.Location(declared.Line, declared.Column, scope)}";
+                        }
+
                         if (BoxedType(alloc.ElementType) is { } boxed) {
-                            var node = Debug!.Variable(variable, _scope, Debug.FileOf(function), line, boxed);
+                            var node = Debug!.Variable(variable, scope, Debug.FileOf(function), line, boxed);
                             Line($"call void @llvm.dbg.declare(metadata ptr {name}, metadata {node}, metadata !DIExpression(DW_OP_deref, DW_OP_plus_uconst, {ObjectHeaderSize}))");
                         } else {
-                            var node = Debug!.Variable(variable, _scope, Debug.FileOf(function), line, alloc.ElementType);
+                            var node = Debug!.Variable(variable, scope, Debug.FileOf(function), line, alloc.ElementType);
                             Line($"call void @llvm.dbg.declare(metadata ptr {name}, metadata {node}, metadata !DIExpression())");
                         }
                     }

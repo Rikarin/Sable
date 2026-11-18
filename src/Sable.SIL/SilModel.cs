@@ -411,6 +411,13 @@ public sealed class InlineLayout {
 public sealed class EnumType(string name) : NominalType(name) {
     public List<(string Name, SilType? Payload)> Cases { get; } = [];
 
+    /// <summary>
+    ///     A union case's payload fields' names, by case, for a debugger to
+    ///     show (<c>Rect(width: 2, height: 3)</c>); only for a case whose
+    ///     fields all have one. The payload itself is the bare value or tuple.
+    /// </summary>
+    public Dictionary<string, ImmutableArray<string>> PayloadLabels { get; } = [];
+
     public int CaseIndex(string @case) => Cases.FindIndex(c => c.Name == @case);
 
     public override bool IsTrivial => !IsNoncopyable && Cases.All(static c => c.Payload?.IsTrivial ?? true);
@@ -498,10 +505,17 @@ public sealed class SilArgument(SilBlock block, SilType type, bool guaranteed = 
 // Instructions
 // ===========================================================================
 
-/// <summary>Where in the source an instruction came from: one-based line and column.</summary>
-public readonly record struct SilLocation(int Line, int Column) {
+/// <summary>
+///     Where in the source an instruction came from: one-based line and
+///     column, and the lexical scope it is in — 0 for the function's own,
+///     otherwise one of <see cref="SilFunction.Scopes" />, counted from 1.
+/// </summary>
+public readonly record struct SilLocation(int Line, int Column, int Scope = 0) {
     public override string ToString() => $"{Line}:{Column}";
 }
+
+/// <summary>A block of a function's source that its locals can be declared in: the scope it is inside (0 for the function's), and where it starts.</summary>
+public readonly record struct SilScope(int Parent, int Line, int Column);
 
 /// <summary>
 ///     One SIL instruction. An instruction that produces a value is itself the
@@ -1014,6 +1028,13 @@ public sealed class SilFunction(string name, FunctionType type) {
 
     /// <summary>The name of each parameter, <c>self</c> included, for a debugger.</summary>
     public List<string> ParameterNames { get; } = [];
+
+    /// <summary>
+    ///     The blocks within the function's body that a debugger tells apart,
+    ///     so that a name shadowed in one shows only there; scope <c>n</c> of
+    ///     a <see cref="SilLocation" /> is the <c>n</c>-th.
+    /// </summary>
+    public List<SilScope> Scopes { get; } = [];
 
     public SilBlock Entry => Blocks[0];
 

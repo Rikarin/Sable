@@ -169,6 +169,33 @@ public sealed partial class LlvmEmitter {
             );
         }
 
+        /// <summary>A block within a function, inside another scope: its own, for every block.</summary>
+        public string LexicalBlock(string parent, string file, int line, int column) =>
+            Node($"!DILexicalBlock(scope: {parent}, file: {file}, line: {line}, column: {column})", distinct: true);
+
+        readonly List<string> _globals = [];
+
+        /// <summary>
+        ///     A global of the program's, for <c>target variable</c> and for
+        ///     expressions to read: named by its last part (<c>limit</c> for
+        ///     <c>Demo.limit</c>), since a debugger reads a dot in a name as a
+        ///     member's. The <c>!dbg</c> for its definition; null for one with
+        ///     no values.
+        /// </summary>
+        public string? GlobalVariable(string name, SilType type, bool local) {
+            if (Type(type) is not { } typeNode) {
+                return null;
+            }
+
+            var variable = Node(
+                $"!DIGlobalVariable(name: {Quote(name[(name.LastIndexOf('.') + 1)..])}, scope: {Unit}, file: {_firstFile}, line: 0, type: {typeNode}, isLocal: {(local ? "true" : "false")}, isDefinition: true)",
+                distinct: true
+            );
+            var expression = Node($"!DIGlobalVariableExpression(var: {variable}, expr: !DIExpression())");
+            _globals.Add(expression);
+            return expression;
+        }
+
         public string Location(int line, int column, string scope) =>
             Node($"!DILocation(line: {line}, column: {column}, scope: {scope})");
 
@@ -391,7 +418,7 @@ public sealed partial class LlvmEmitter {
                     }
 
                     var payloads = enumType.Cases.Where(static c => c.Payload is not null && c.Payload != SilType.Unit)
-                        .Select(c => Member(c.Name, Type(c.Payload!), Size(c.Payload!), 0));
+                        .Select(c => Member(c.Name, Payload(enumType, c.Name, c.Payload!), Size(c.Payload!), 0));
                     var union = Structure(DisplayName(enumType) + "$payload", PayloadWords(enumType) * 8, payloads, "DW_TAG_union_type");
                     var body = Structure(DisplayName(enumType) + (OptionalPayload(enumType) is null ? "$union" : "$optional"), Size(enumType), [
                         Member("$tag", tag, 8, 0),
@@ -406,6 +433,20 @@ public sealed partial class LlvmEmitter {
                 default:
                     return null;
             }
+        }
+
+        /// <summary>
+        ///     A union case's payload: the value or tuple it is — or, when its
+        ///     fields have names, a struct of them laid out as that is, named
+        ///     <c>U.Case$case</c> for the plugin to show as the case's fields.
+        /// </summary>
+        string? Payload(EnumType union, string caseName, SilType payload) {
+            if (!union.PayloadLabels.TryGetValue(caseName, out var labels)) {
+                return Type(payload);
+            }
+
+            var fields = payload is TupleType tuple ? labels.Zip(tuple.Elements) : [(labels[0], payload)];
+            return Aggregate($"{DisplayName(union)}.{caseName}$case", fields, Size(payload), live: false);
         }
 
         string Subroutine(FunctionType function) {
@@ -447,9 +488,9 @@ public sealed partial class LlvmEmitter {
         /// </summary>
         public string Metadata() {
             var output = new StringBuilder();
-            var dwarf = Node("!{i32 7, !\"Dwarf Version\", i32 4}");
+            var dwarf = Node("!{i32 7, !\"Dwarf Version\", i32 5}");
             var version = Node("!{i32 2, !\"Debug Info Version\", i32 3}");
-            var globals = "!{}";
+            var globals = new List<string>(_globals);
             if (_classes.Count > 0) {
                 var holder = Structure("$SableClasses", 8 * _classes.Count, _classes.Select((c, i) => Member(c.Name, c.Node, 8, 8 * i)));
                 var variable = Node(
@@ -457,14 +498,14 @@ public sealed partial class LlvmEmitter {
                     distinct: true
                 );
                 var expression = Node($"!DIGlobalVariableExpression(var: {variable}, expr: !DIExpression())");
-                globals = Node($"!{{{expression}}}");
+                globals.Add(expression);
                 output.Append($"\n@\"sable.debug.classes\" = internal constant [{_classes.Count} x i64] zeroinitializer, !dbg {expression}\n")
                     .Append("@llvm.compiler.used = appending global [1 x ptr] [ptr @\"sable.debug.classes\"], section \"llvm.metadata\"\n");
             }
 
             Define(Unit,
                 $"distinct !DICompileUnit(language: DW_LANG_C, file: {_firstFile}, producer: \"sable\", isOptimized: false, "
-                + $"runtimeVersion: 0, emissionKind: FullDebug, globals: {globals})");
+                + $"runtimeVersion: 0, emissionKind: FullDebug, globals: {(globals.Count == 0 ? "!{}" : Node($"!{{{string.Join(", ", globals)}}}"))})");
             output.Append($"\n!llvm.dbg.cu = !{{{Unit}}}\n!llvm.module.flags = !{{{dwarf}, {version}}}\n\n");
             foreach (var node in _nodes) {
                 output.Append(node).Append('\n');

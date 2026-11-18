@@ -1571,8 +1571,18 @@ so every local stays in its slot (`src/Sable.CodeGen/LlvmEmitter.Debug.cs`).
 Every function has a `DISubprogram` named by its full Sable name —
 `Demo.Point.length`, `Demo.main$closure0` — with no linkage name: the symbol
 is the same name behind `sable.`, nothing to demangle, and `b Demo.describe`
-finds it. A compiler-made function (a protocol witness) is artificial, at
-line 0, and `step` goes through it. Parameters are spilled to slots as clang
+finds it (the plugin sets `target.language` to C, so that no lldb reads the
+dots as Swift's or C++'s scopes and looks up only `describe`). A compiler-made
+function (a protocol witness) is artificial, at line 0, and `step` goes
+through it: its subprogram names its target (`DW_AT_trampoline`), it is in a
+`<compiler-generated>` file, and with an LLVM before 20 — which writes a
+line-0 function as one row, out of which lldb 18 steps straight back — its
+prologue is given line 1 there, so the body's line 0 starts a row of its own.
+The DWARF is version 5. Each nested block, and each loop, `if`, `switch` and
+`do` (which bind names for their bodies), is a `DILexicalBlock`, so a local
+shows only where it can be named and a shadowing one hides what it shadows;
+a global is a `DIGlobalVariable` named by its last part (`target variable`,
+`p limit`). Parameters are spilled to slots as clang
 does, so they read correctly anywhere in the function; slots are made in
 the prologue at the function's line, so a line breakpoint and `next` land on
 statements, one line at a time; a local a closure captures by reference is
@@ -1599,7 +1609,7 @@ object's metadata.
 ```
 (String) greeting = "hello, world"
 ([Int]) numbers = count = 3 { [0] = 10  [1] = 20  [2] = 30 }
-(Values.Shape) rect = Rect(2, 3)
+(Values.Shape) rect = Rect(width: 2, height: 3)
 (Int?) absent = none
 (any Values.Named) bird = Values.Bird { [value] = Values.Bird { legs = 2  [strong] = 1 } }
 (Values.Node) node = Values.Node { value = 7  label = "seven"  next = none  [strong] = 2 }
@@ -1623,13 +1633,17 @@ x64 container on an arm64 Mac, where lldb 21 launches the program but it
 stops at once with SIGILL. There only the DWARF check runs, with
 `llvm-dwarfdump-21 --verify`; the formatters are verified on macOS.
 
-Not yet: lexical scopes (every local is in its function's scope, so a
-shadowed name shows twice); union payload field names (SIL keeps a tuple, so
-`Rect(2, 3)` not `Rect(width: 2, height: 3)`); readable names for generic
-instances (`HashMap$of$String$Int`); `@inline_layout` values, which show as a
-pointer to their bytes; the standard library's own source lines (its
-functions name a file the debugger cannot find); expression evaluation in
-Sable syntax (`expression` is lldb's C); and gdb.
+A union case whose payload fields are named (`EnumType.PayloadLabels`) has a
+payload described as a struct of them, `U.Case$case`, laid out as the tuple
+is, which the plugin shows as the case's fields.
+
+Not yet: readable names for generic instances (`HashMap$of$String$Int`);
+`@inline_layout` values, which show as a pointer to their bytes; the standard
+library's own source lines (its functions name a file the debugger cannot
+find); expression evaluation in Sable syntax (`expression` is lldb's C); a
+language code of Sable's own (the unit says `DW_LANG_C`, which is what lets
+lldb evaluate expressions at all); `inlinedAt` (a debug build inlines
+nothing); CodeView for Windows; and gdb.
 
 ### Incremental builds, as implemented
 

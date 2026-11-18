@@ -1489,6 +1489,9 @@ public sealed partial class SilGen {
                         }
 
                         payload = parts.Count == 1 ? parts[0] : SilType.Tuple(parts.ToImmutable());
+                        if (unionCase.Payload.All(static field => field.Label is not null)) {
+                            enumType.PayloadLabels[unionCase.Name] = [..unionCase.Payload.Select(static field => field.Label!)];
+                        }
                     }
 
                     enumType.Cases.Add((unionCase.Name, payload));
@@ -2819,9 +2822,15 @@ public sealed partial class SilGen {
         /// <summary>The source position instructions emitted now belong to.</summary>
         SilLocation? _location;
 
+        /// <summary>The lexical scope being lowered: 0 for the function's own, else one of its <see cref="SilFunction.Scopes" />.</summary>
+        int _scope;
+
+        /// <summary>The function's body, whose scope is the function's own.</summary>
+        BoundBlock? _body;
+
         void Locate(SyntaxNode syntax) {
             var position = source.GetLinePosition(syntax.Span.Start);
-            _location = new SilLocation(position.Line, position.Column);
+            _location = new SilLocation(position.Line, position.Column, _scope);
         }
 
         SilBlock _entry = null!;
@@ -2904,6 +2913,7 @@ public sealed partial class SilGen {
                 }
             }
 
+            _body = body;
             Statement(body);
 
             // Falling off the end: fine for a function returning nothing, and
@@ -3558,7 +3568,28 @@ public sealed partial class SilGen {
         // Statements
         // -------------------------------------------------------------------
 
+        /// <summary>
+        ///     Lowers a statement, in a lexical scope of its own when it is a
+        ///     nested block or binds names for one — a loop's variable, an
+        ///     'if let''s, a case's — so that a debugger shows a local only
+        ///     where it can be named, and a shadowing one hides what it shadows.
+        /// </summary>
         void Statement(BoundStatement statement) {
+            var outer = _scope;
+            if (statement is BoundBlock or BoundForEach or BoundIf or BoundWhile or BoundSwitch or BoundDo && !ReferenceEquals(statement, _body)) {
+                var start = source.GetLinePosition(statement.Syntax.Span.Start);
+                function.Scopes.Add(new SilScope(outer, start.Line, start.Column));
+                _scope = function.Scopes.Count;
+            }
+
+            try {
+                LowerStatement(statement);
+            } finally {
+                _scope = outer;
+            }
+        }
+
+        void LowerStatement(BoundStatement statement) {
             if (_failed) {
                 return;
             }
@@ -3568,7 +3599,7 @@ public sealed partial class SilGen {
             }
 
             switch (statement) {
-                case BoundBlock block:
+                case BoundBlock block: {
                     _scopes.Add([]);
                     foreach (var child in block.Statements) {
                         Statement(child);
@@ -3580,6 +3611,7 @@ public sealed partial class SilGen {
 
                     _scopes.RemoveAt(_scopes.Count - 1);
                     return;
+                }
 
                 case BoundDefer defer:
                     _scopes[^1].Add(defer.Body);

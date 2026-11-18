@@ -95,7 +95,7 @@ public sealed class LoweringGapTests {
     [Fact]
     public void TheRemainderOfFloatsIsFmod() =>
         Prints(
-            "1.5\n-1.5\n1.5\n0\n",
+            "1.5\n-1.5\n1.5\n0.0\n",
             """
             fn rem(_ a: F64, _ b: F64) -> F64 { return a % b }
             """,
@@ -211,6 +211,23 @@ public sealed class LoweringGapTests {
         );
 
     [Fact]
+    public void AnInlineCatchBlockRunsItsStatementsBeforeItsValue() =>
+        Prints(
+            "in the block\ndeferred\nfallback!\n",
+            Errors,
+            """
+                let a = try bare("") catch {
+                    defer { print("deferred") }
+                    print("in the block")
+                    var s = "fallback"
+                    s += "!"
+                    s
+                }
+                print(a)
+            """
+        );
+
+    [Fact]
     public void AUnionOfErrorsCarriesEither() =>
         Prints(
             "x\nnet 7\nio\n",
@@ -287,6 +304,57 @@ public sealed class LoweringGapTests {
                 } catch {
                     print("other")
                 }
+            """
+        );
+
+    // ---- Overloads told apart by labels, and explicit implementations ------------
+
+    [Fact]
+    public void OverloadsThatDifferOnlyInLabelsAreTwoFunctions() =>
+        Prints(
+            "1\n2\n12\n",
+            """
+            fn g(a x: Int) -> Int { return x }
+            fn g(b x: Int) -> Int { return x + 1 }
+
+            protocol Scaled { fn scale(by n: Int) -> Int }
+
+            struct Ten: Scaled {
+                fn scale(to n: Int) -> Int { return n }
+                fn scale(by n: Int) -> Int { return n + 10 }
+            }
+
+            fn scaled<T: Scaled>(_ value: T) -> Int { return value.scale(by: 2) }
+            """,
+            """
+                print(g(a: 1))
+                print(g(b: 1))
+                print(scaled(Ten()))
+            """
+        );
+
+    [Fact]
+    public void ExplicitImplementationsMeetCollidingRequirements() =>
+        Prints(
+            "1\npage\n1\n",
+            """
+            protocol Drawable { fn render() -> Int }
+            protocol Printable { fn render() -> String }
+
+            class Shape: Drawable, Printable {
+                fn Drawable.render() -> Int { return 1 }
+                fn Printable.render() -> String { return "page" }
+            }
+
+            fn draw<T: Drawable>(_ x: T) -> Int { return x.render() }
+            fn show<T: Printable>(_ x: T) -> String { return x.render() }
+            """,
+            """
+                let s = Shape()
+                print(draw(s))
+                print(show(s))
+                let d: any Drawable = Shape()
+                print(d.render())
             """
         );
 }

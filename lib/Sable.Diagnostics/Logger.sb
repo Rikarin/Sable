@@ -17,21 +17,21 @@ public union Level {
 /// A level's rank, so that one can be compared with the logger's threshold.
 public fn rank(_ level: Level) -> Int {
     return match level {
-        case .Trace => 0
-        case .Debug => 1
-        case .Info => 2
+        case .Trace   => 0
+        case .Debug   => 1
+        case .Info    => 2
         case .Warning => 3
-        case .Error => 4
+        case .Error   => 4
     }
 }
 
 public fn levelName(_ level: Level) -> String {
     return match level {
-        case .Trace => "TRACE"
-        case .Debug => "DEBUG"
-        case .Info => "INFO"
+        case .Trace   => "TRACE"
+        case .Debug   => "DEBUG"
+        case .Info    => "INFO"
         case .Warning => "WARN"
-        case .Error => "ERROR"
+        case .Error   => "ERROR"
     }
 }
 

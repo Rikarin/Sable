@@ -142,8 +142,8 @@ public enum Architecture {
 
 fn osName(_ os: OperatingSystem) -> String {
     return match os {
-        case .macOS => "macos"
-        case .linux => "linux"
+        case .macOS   => "macos"
+        case .linux   => "linux"
         case .windows => "windows"
     }
 }
@@ -151,7 +151,7 @@ fn osName(_ os: OperatingSystem) -> String {
 fn archName(_ arch: Architecture) -> String {
     return match arch {
         case .arm64 => "arm64"
-        case .x64 => "x64"
+        case .x64   => "x64"
     }
 }
 
@@ -403,9 +403,9 @@ struct TomlWriter {
         }
         if let lto = profile.lto {
             match lto {
-                case .off => raw("lto", "false")
+                case .off  => raw("lto", "false")
                 case .thin => string("lto", "thin")
-                case .fat => string("lto", "fat")
+                case .fat  => string("lto", "fat")
             }
         }
         if let units = profile.codegenUnits {
@@ -414,7 +414,7 @@ struct TomlWriter {
         if let panic = profile.panic {
             match panic {
                 case .unwind => string("panic", "unwind")
-                case .abort => string("panic", "abort")
+                case .abort  => string("panic", "abort")
             }
         }
         if let checks = profile.arcChecks {
@@ -423,7 +423,7 @@ struct TomlWriter {
         if let exclusivity = profile.exclusivity {
             match exclusivity {
                 case .checked => string("exclusivity", "checked")
-                case .off => string("exclusivity", "unchecked")
+                case .off     => string("exclusivity", "unchecked")
             }
         }
         if let checks = profile.overflowChecks {

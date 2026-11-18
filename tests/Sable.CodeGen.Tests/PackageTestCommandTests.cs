@@ -66,4 +66,48 @@ public sealed class PackageTestCommandTests {
         var built = Sable(fixture, app, "build");
         Assert.True(built.ExitCode == 0, built.Errors);
     }
+
+    /// <summary>
+    ///     A dev-dependency is compiled into the test build, with what it
+    ///     depends on — and kept out of an ordinary one, where using it is an error.
+    /// </summary>
+    [Fact]
+    public void ATestBuildHasTheDevDependencies() {
+        if (!CanBuild) {
+            return;
+        }
+
+        using var fixture = new PackageFixture();
+        fixture.Package("digits", "digits", "0.1.0", "",
+            ("src/lib.sb", "module Digits\n\npublic fn seven() -> Int {\n    return 7\n}\n"));
+        fixture.Package("helper", "helper", "0.1.0", "[dependencies]\ndigits = { path = \"../digits\" }\n",
+            ("src/lib.sb", "module Helper\n\nimport Digits\n\npublic fn expected() -> Int {\n    return seven() * 2\n}\n"));
+        var app = fixture.Package("app", "app", "0.1.0", "[dev-dependencies]\nhelper = { path = \"../helper\" }\n",
+            ("src/lib.sb", "module App\n\npublic fn fourteen() -> Int {\n    return 14\n}\n"),
+            ("src/main.sb", "module Main\n\nimport App\n\nfn main() {\n    print(fourteen())\n}\n"),
+            ("tests/fourteen.sb", """
+                module App
+
+                import Helper
+                import Sable.Testing
+
+                @test
+                fn fourteenIsTwiceSeven() {
+                    assertEqual(fourteen(), expected())
+                }
+                """));
+
+        var run = Sable(fixture, app, "test");
+        Assert.True(run.ExitCode == 0, run.Output + run.Errors);
+        Assert.Contains("fourteenIsTwiceSeven", run.Output + run.Errors, StringComparison.Ordinal);
+
+        var built = Sable(fixture, app, "build");
+        Assert.True(built.ExitCode == 0, built.Errors);
+
+        // The library itself may not use a dev-dependency.
+        File.WriteAllText(Path.Combine(app, "src/lib.sb"), "module App\n\nimport Helper\n\npublic fn fourteen() -> Int {\n    return expected()\n}\n");
+        var refused = Sable(fixture, app, "build");
+        Assert.NotEqual(0, refused.ExitCode);
+        Assert.Contains("Helper", refused.Errors, StringComparison.Ordinal);
+    }
 }

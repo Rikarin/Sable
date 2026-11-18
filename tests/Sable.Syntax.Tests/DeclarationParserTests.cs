@@ -72,10 +72,49 @@ public sealed class DeclarationParserTests {
         Assert.False(parameters[2].EllipsisToken.IsNone);
     }
 
+    // Before the parameter or on its type (#125); on a type, the parenthesis
+    // after an attribute is the function type's, not the attribute's.
+    [Theory]
+    [InlineData("fn keep(_ f: @escaping () -> Int) -> () -> Int { }")]
+    [InlineData("fn keep(@escaping _ f: () -> Int) -> () -> Int { }")]
+    public void ParsesEscapingOnAParameterOrItsType(string source) {
+        var tree = SyntaxTree.Parse(new SourceText(source, "test.sb"));
+        Assert.Empty(tree.Diagnostics);
+        var parameter = Assert.Single(Assert.IsType<FunctionDeclarationSyntax>(Assert.Single(((CompilationUnitSyntax)tree.Root).Members)).Parameters.Parameters);
+        var attributes = parameter.Type is AttributedTypeSyntax attributed ? attributed.Attributes : parameter.Attributes;
+        Assert.Equal("escaping", Assert.Single(attributes).Name.ToString().Trim());
+        Assert.IsType<FunctionTypeSyntax>(parameter.Type is AttributedTypeSyntax { Type: var inner } ? inner : parameter.Type);
+        Assert.Equal(source, tree.Root.ToFullString());
+    }
+
     [Fact]
     public void ParsesAKeywordParameterLabel() {
         var fn = ParseMember<FunctionDeclarationSyntax>("fn first(where p: (Element) -> Bool) -> Element? { }");
         Assert.Equal("where", fn.Parameters.Parameters[0].Label.Text);
+    }
+
+    /// <summary>
+    ///     'in r: region' is labelled 'in' — 'build(in: arena)' — while the
+    ///     other modifiers before a name stay modifiers, and 'in' is still
+    ///     the modifier after the colon or before a label.
+    /// </summary>
+    [Fact]
+    public void ParsesInBeforeANameAsTheLabel() {
+        var parameters = ParseMember<FunctionDeclarationSyntax>(
+            "fn build(in r: region, inout v: Int, s: in region, in _ t: region) { }"
+        ).Parameters.Parameters;
+
+        Assert.Equal("in", parameters[0].Label.Text);
+        Assert.Equal("r", parameters[0].Identifier.Text);
+        Assert.Empty(parameters[0].Modifiers);
+
+        Assert.True(parameters[1].Label.IsNone);
+        Assert.Equal("inout", Assert.Single(parameters[1].Modifiers).Text);
+
+        Assert.Equal("in", parameters[2].TypeModifierToken.Text);
+
+        Assert.Equal("in", Assert.Single(parameters[3].Modifiers).Text);
+        Assert.Equal("_", parameters[3].Label.Text);
     }
 
     [Fact]

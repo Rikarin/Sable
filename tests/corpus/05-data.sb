@@ -28,10 +28,10 @@ public union Json {
 
 public fn depth(_ value: Json) -> Int {
     return match value {
-        case .Null => 1
-        case .Boolean(_) => 1
-        case .Number(_) => 1
-        case .Text(_) => 1
+        case .Null             => 1
+        case .Boolean(_)       => 1
+        case .Number(_)        => 1
+        case .Text(_)          => 1
         case .Items(let items) => deepest(items) + 1
     }
 }

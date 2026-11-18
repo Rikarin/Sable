@@ -73,3 +73,50 @@ public struct Temperature {
     public var celsius: F64
     public var label: String { get => "warm" }
 }
+
+fn bump(_ x: inout Int) {
+    x = x + 1
+}
+
+fn passingALetAsInOut() {
+    let n = 3
+    bump(&n)                            //! S3010 an 'inout' argument is written by the call
+}
+
+fn passingALetWithoutAmpersand() {
+    let n = 3
+    bump(n)                             //! S3010 an 'inout' argument
+}
+
+fn passingALetFieldAsInOut() {
+    var point = Fixed { a: 1, b: 2 }
+    bump(&point.a)                      //! S3010 an 'inout' argument
+    bump(&point.b)
+}
+
+fn passingAFieldOfALetAsInOut() {
+    let point = Fixed { a: 1, b: 2 }
+    bump(&point.b)                      //! S3010 an 'inout' argument
+}
+
+fn passingAVarAsInOut() {
+    var n = 3
+    bump(&n)
+}
+
+fn passingAPlainParameterAsInOut(_ n: Int) {
+    bump(&n)                            //! S3010 an 'inout' argument
+}
+
+fn passingAnInOutParameterOn(_ n: inout Int) {
+    bump(&n)
+}
+
+fn passingAClassFieldAsInOut(_ box: Box) {
+    bump(&box.value)
+}
+
+public struct Fixed {
+    public let a: Int
+    public var b: Int
+}

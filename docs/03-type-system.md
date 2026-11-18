@@ -155,7 +155,7 @@ concrete example of an unmatched value — which is what makes the diagnostic
 useful:
 
 ```
-error[S0631]: match is not exhaustive
+error[S6003]: match is not exhaustive
   --> src/shape.sb:12:11
    |
 12 |     match s {

@@ -512,8 +512,14 @@ internal sealed class Parser {
             return left;
         }
 
+        // Where a brace opens the statement's body, 'for i in 3... {' is a
+        // range with no upper bound, not one bounded by a closure.
         var op = EatToken();
-        var right = CanStartExpression(Current.Kind) && !AtStatementStart ? ParseShift() : null;
+        var right = CanStartExpression(Current.Kind)
+            && !AtStatementStart
+            && !(_noBrace && At(SyntaxKind.OpenBraceToken))
+                ? ParseShift()
+                : null;
         return new RangeExpressionGreen(left, op, right);
     }
 
@@ -709,8 +715,31 @@ internal sealed class Parser {
             return EatToken();
         }
 
+        // A keyword that begins a statement, first on its line, is the next
+        // statement rather than a member: 'p.' left unfinished above 'let b'
+        // must not swallow the 'let'.
+        if (StartsStatement(Current.Kind) && HasNewLineBeforeCurrent) {
+            _diagnostics.Error(
+                ErrorCode.ERR_ExpectedIdentifier,
+                CurrentSpan,
+                $"expected a member name but found '{DescribeCurrent()}'"
+            );
+            return CreateMissing(SyntaxKind.IdentifierToken);
+        }
+
         return Current.IsKeywordToken() ? EatToken() : EatIdentifier();
     }
+
+    bool HasNewLineBeforeCurrent =>
+        Current.Leading.Any(static t => t.Kind == SyntaxKind.NewLineTrivia)
+        || (_index > 0 && _tokens[_index - 1].Trailing.Any(static t => t.Kind == SyntaxKind.NewLineTrivia));
+
+    static bool StartsStatement(SyntaxKind kind) =>
+        kind is SyntaxKind.LetKeyword or SyntaxKind.VarKeyword or SyntaxKind.IfKeyword
+            or SyntaxKind.GuardKeyword or SyntaxKind.WhileKeyword or SyntaxKind.RepeatKeyword
+            or SyntaxKind.ForKeyword or SyntaxKind.ReturnKeyword or SyntaxKind.ThrowKeyword
+            or SyntaxKind.BreakKeyword or SyntaxKind.ContinueKeyword or SyntaxKind.DoKeyword
+            or SyntaxKind.DeferKeyword or SyntaxKind.FnKeyword;
 
     /// <summary>True for a float literal that is really a path of indices.</summary>
     static bool IsTupleIndexPath(GreenToken token) {
@@ -935,7 +964,10 @@ internal sealed class Parser {
             case SyntaxKind.IfKeyword:
                 return new IfExpressionGreen(ParseIfStatement());
 
-            case SyntaxKind.OpenBraceToken:
+            // Where a '{' opens the body — after 'if p.x ==' with its right
+            // operand missing — it is the body, not a closure for an operand;
+            // read as one, the body went with it and the '{' after went missing.
+            case SyntaxKind.OpenBraceToken when !_noBrace:
                 return ParseBraceClosure(null);
 
             case SyntaxKind.DollarToken: {
@@ -1527,6 +1559,10 @@ internal sealed class Parser {
 
             case SyntaxKind.RefKeyword:
                 return new RefTypeGreen(EatToken(), ParsePostfixType());
+
+            // '~Copyable': parsed wherever a type is, and bound only as a constraint.
+            case SyntaxKind.TildeToken:
+                return new SuppressedTypeGreen(EatToken(), ParsePostfixType());
 
             // 'region' names the region type too: 'fn f(in r: region)' (docs/02 §2.8).
             case SyntaxKind.RegionKeyword:
@@ -2510,8 +2546,18 @@ internal sealed class Parser {
             var before = _index;
             var reported = _diagnostics.Count;
             items.Add(ParseStatement());
+
+            // Nothing could start here. The rest of the line is skipped with
+            // it: parsed as a statement of its own, the '?' of 'let x?' made a
+            // conditional out of missing operands, and every missing piece
+            // was another error, in the parser and again in the binder.
             if (_index == before) {
-                SkipCurrentToken();
+                do {
+                    SkipCurrentToken();
+                } while (!AtStatementStart
+                         && !At(SyntaxKind.EndOfFile)
+                         && !At(SyntaxKind.SemicolonToken)
+                         && Array.IndexOf(terminators, Current.Kind) < 0);
                 continue;
             }
 
@@ -2531,6 +2577,7 @@ internal sealed class Parser {
                     ErrorCode.ERR_ExpectedStatementEnd,
                     $"expected a new line or ';' before '{DescribeCurrent()}'"
                 );
+                _statementEndReportedAt = _index;
             }
         }
 
@@ -2693,11 +2740,40 @@ internal sealed class Parser {
             }
 
             default: {
+                // What cannot start an expression cannot start a statement
+                // either; this consumes nothing, and the statement list skips
+                // the line. Straight after "expected a new line or ';'", that
+                // is the one error to give.
+                if (!CanStartExpressionStatement()) {
+                    if (_statementEndReportedAt != _index) {
+                        ReportUnexpected(
+                            ErrorCode.ERR_ExpectedExpression,
+                            $"expected an expression but found '{DescribeCurrent()}'"
+                        );
+                    }
+
+                    return new ExpressionStatementGreen(MissingExpression(), null);
+                }
+
                 var expression = ParseExpression();
                 return new ExpressionStatementGreen(expression, TryEatToken(SyntaxKind.SemicolonToken));
             }
         }
     }
+
+    /// <summary>Where the last "expected a new line or ';'" was reported, so the next statement does not report it again.</summary>
+    int _statementEndReportedAt = -1;
+
+    /// <summary>
+    ///     True when an expression statement can begin at the current token:
+    ///     whatever <see cref="ParseUnaryCore" /> and <see cref="ParsePrimary" />
+    ///     accept first, which includes a metatype written as a type.
+    /// </summary>
+    bool CanStartExpressionStatement() =>
+        CanStartExpression(Current.Kind)
+        || IsPrefixOperator(Current.Kind)
+        || IsRangeOperator(Current.Kind)
+        || AtCompoundMetatype();
 
     static bool IsLabelTarget(SyntaxKind kind) =>
         kind is SyntaxKind.ForKeyword
@@ -2994,7 +3070,11 @@ internal sealed class Parser {
         return new ImportItemGreen(name, asKeyword, alias);
     }
 
-    GreenList ParseAttributes() {
+    /// <param name="onType">
+    ///     Attributes written on a type, '@escaping () -> Int', take no
+    ///     arguments: the parenthesis after one is the type's.
+    /// </param>
+    GreenList ParseAttributes(bool onType = false) {
         if (!At(SyntaxKind.AtToken)) {
             return GreenList.Empty;
         }
@@ -3003,7 +3083,7 @@ internal sealed class Parser {
         while (At(SyntaxKind.AtToken)) {
             var at = EatToken();
             var name = ParseTypeName();
-            var arguments = At(SyntaxKind.OpenParenToken)
+            var arguments = At(SyntaxKind.OpenParenToken) && !onType
                 ? ParseArgumentList(SyntaxKind.OpenParenToken, SyntaxKind.CloseParenToken)
                 : null;
             items.Add(new AttributeGreen(at, name, arguments));
@@ -3342,8 +3422,14 @@ internal sealed class Parser {
     GreenNode ParseParameter() {
         var attributes = ParseAttributes();
 
+        // 'fn build(in r: region)' is labelled 'in', as the spec calls it —
+        // 'build(in: arena)' — not an unlabelled parameter with the 'in'
+        // modifier: that modifier only borrows, as every parameter does, so
+        // reading the word as the label loses nothing. The modifier can still
+        // be written after the colon ('r: in region') or before a label
+        // ('in _ r: region').
         var modifierItems = ImmutableArray.CreateBuilder<GreenNode>();
-        while (IsParameterModifier(Current.Kind)) {
+        while (IsParameterModifier(Current.Kind) && !IsInLabel()) {
             modifierItems.Add(EatToken());
         }
 
@@ -3365,7 +3451,8 @@ internal sealed class Parser {
         // the form that reads well once a parameter has an external label.
         var typeModifier = IsParameterModifier(Current.Kind) ? EatToken() : null;
 
-        var type = ParseType();
+        // 'f: @escaping () -> Int' says of the type what '@escaping f: …' does.
+        var type = At(SyntaxKind.AtToken) ? new AttributedTypeGreen(ParseAttributes(onType: true), ParseType()) : ParseType();
         var ellipsis = TryEatToken(SyntaxKind.DotDotDotToken);
 
         GreenNode? defaultValue = null;
@@ -3386,6 +3473,12 @@ internal sealed class Parser {
             defaultValue
         );
     }
+
+    /// <summary>Whether a parameter starts 'in name:', where 'in' is the external label.</summary>
+    bool IsInLabel() =>
+        At(SyntaxKind.InKeyword)
+        && Peek(1).Kind == SyntaxKind.IdentifierToken
+        && Peek(2).Kind == SyntaxKind.ColonToken;
 
     static bool IsParameterModifier(SyntaxKind kind) =>
         kind switch {

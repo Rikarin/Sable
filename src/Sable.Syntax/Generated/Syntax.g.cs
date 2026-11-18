@@ -452,6 +452,46 @@ public sealed class ExistentialTypeSyntax : TypeSyntax
     public override void Accept(SyntaxVisitor visitor) => visitor.VisitExistentialType(this);
 }
 
+/// <summary>`~Copyable`: a constraint a generic parameter has unless it says otherwise, lifted.</summary>
+public sealed class SuppressedTypeSyntax : TypeSyntax
+{
+    private TypeSyntax? _constraintType;
+
+    internal SuppressedTypeSyntax(GreenNode green, SyntaxNode? parent, int position)
+        : base(green, parent, position) { }
+
+    public SyntaxToken TildeToken => GetToken(0);
+    public TypeSyntax ConstraintType => GetRed(ref _constraintType, 1);
+
+    internal override SyntaxNode? GetNodeSlot(int index) => index switch
+    {
+        1 => ConstraintType,
+        _ => null,
+    };
+
+    public override void Accept(SyntaxVisitor visitor) => visitor.VisitSuppressedType(this);
+}
+
+/// <summary>`@escaping () -&gt; Int`: a parameter's type with an attribute on it.</summary>
+public sealed class AttributedTypeSyntax : TypeSyntax
+{
+    private TypeSyntax? _type;
+
+    internal AttributedTypeSyntax(GreenNode green, SyntaxNode? parent, int position)
+        : base(green, parent, position) { }
+
+    public SyntaxList<AttributeSyntax> Attributes => GetList<AttributeSyntax>(0);
+    public TypeSyntax Type => GetRed(ref _type, 1);
+
+    internal override SyntaxNode? GetNodeSlot(int index) => index switch
+    {
+        1 => Type,
+        _ => null,
+    };
+
+    public override void Accept(SyntaxVisitor visitor) => visitor.VisitAttributedType(this);
+}
+
 /// <summary>`ref T`: a borrowed reference whose root is inferred.</summary>
 public sealed class RefTypeSyntax : TypeSyntax
 {
@@ -3480,6 +3520,8 @@ public abstract class SyntaxVisitor
     public virtual void VisitThrowsSpec(ThrowsSpecSyntax node) => DefaultVisit(node);
     public virtual void VisitOpaqueType(OpaqueTypeSyntax node) => DefaultVisit(node);
     public virtual void VisitExistentialType(ExistentialTypeSyntax node) => DefaultVisit(node);
+    public virtual void VisitSuppressedType(SuppressedTypeSyntax node) => DefaultVisit(node);
+    public virtual void VisitAttributedType(AttributedTypeSyntax node) => DefaultVisit(node);
     public virtual void VisitRefType(RefTypeSyntax node) => DefaultVisit(node);
     public virtual void VisitCompositionType(CompositionTypeSyntax node) => DefaultVisit(node);
     public virtual void VisitUnionType(UnionTypeSyntax node) => DefaultVisit(node);

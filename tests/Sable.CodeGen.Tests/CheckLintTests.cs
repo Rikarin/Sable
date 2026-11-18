@@ -40,6 +40,52 @@ public sealed class CheckLintTests {
         Assert.DoesNotContain("S3300", fixture.Errors.ToString(), StringComparison.Ordinal);
     }
 
+    /// <summary>
+    ///     The compiler's own warnings are reported by check and build, and
+    ///     by check even beside an error, where the lints do not run.
+    /// </summary>
+    [Fact]
+    public void TheCompilersWarningsAreReported() {
+        const string unreachable = "module Shapes\n\npublic fn area(_ side: Int) -> Int {\n    return side * side\n    print(side)\n}\n";
+        using var fixture = new PackageFixture();
+        fixture.Package("shapes", "shapes", "0.1.0", "", ("src/lib.sb", unreachable));
+
+        Assert.Equal(0, PackageBuilder.Check(fixture.Load("shapes"), fixture.Environment, new BuildRequest()));
+        Assert.Contains("warning[S6005]", fixture.Errors.ToString(), StringComparison.Ordinal);
+
+        fixture.Errors.GetStringBuilder().Clear();
+        Assert.Empty(PackageBuilder.Build(fixture.Load("shapes"), fixture.Environment, new BuildRequest())!);
+        Assert.Contains("warning[S6005]", fixture.Errors.ToString(), StringComparison.Ordinal);
+
+        fixture.Errors.GetStringBuilder().Clear();
+        fixture.Write("shapes/src/lib.sb", unreachable + "\nfn broken() -> Int {\n    return true\n}\n");
+        Assert.Equal(1, PackageBuilder.Check(fixture.Load("shapes"), fixture.Environment, new BuildRequest()));
+        Assert.Contains("warning[S6005]", fixture.Errors.ToString(), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    ///     A binary's build reports its warnings, separately compiled (dev) or
+    ///     whole (release), and is built with DEBUG or RELEASE defined.
+    /// </summary>
+    [Fact]
+    public void ABinarysBuildReportsItsWarnings() {
+        if (!Programs.CanBuild) {
+            return;
+        }
+
+        using var fixture = new PackageFixture();
+        fixture.Package("app", "app", "0.1.0", "",
+            ("src/main.sb", "module Main\n\nfn main() {\n#warning(\"look here\")\n#if DEBUG\n    print(\"debug\")\n#elseif RELEASE\n    print(\"release\")\n#endif\n}\n"));
+
+        foreach (var release in new[] { false, true }) {
+            fixture.Errors.GetStringBuilder().Clear();
+            var built = PackageBuilder.Build(fixture.Load("app"), fixture.Environment, new BuildRequest(Release: release));
+            var binary = Assert.Single(built!);
+            Assert.Contains("warning[S0030]: look here", fixture.Errors.ToString(), StringComparison.Ordinal);
+            Assert.Equal((release ? "release\n" : "debug\n", 0), PackageFixture.Execute(binary.Path));
+        }
+    }
+
     [Fact]
     public void ADependencysLintsAreNotReported() {
         using var fixture = new PackageFixture();

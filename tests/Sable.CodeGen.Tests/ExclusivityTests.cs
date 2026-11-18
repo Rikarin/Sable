@@ -39,6 +39,11 @@ public sealed class ExclusivityTests {
                                 fn both(_ one: Box, _ two: Box) {
                                     bump(&one.value, &two.value)
                                 }
+
+                                fn withWrite(_ x: inout Int, _ body: () -> Void) {
+                                    body()
+                                    x = x + 1
+                                }
                                 """;
 
     static IReadOnlyList<string> Errors(string body) =>
@@ -52,6 +57,10 @@ public sealed class ExclusivityTests {
     [InlineData("var n = 1\ncopy(&n, &n)", "argument 1 ('from') reads it by reference, and argument 2 ('to') is inout")]
     [InlineData("var p = Pair { a: 1, b: 2 }\np.absorb(&p.a)", "the call to the mutating 'absorb' changes it")]
     [InlineData("let box = Box(1)\nbump(&box.value, &box.value)", "overlapping accesses to 'box.value'")]
+    // A closure written into the call may run during it (#125).
+    [InlineData("var m = 10\nwithWrite(&m) { m = 99 }", "argument 1 ('x') is inout, and argument 2 is a closure that changes it")]
+    [InlineData("var m = 10\nwithWrite(&m) { print(m) }", "argument 1 ('x') is inout, and argument 2 is a closure that reads it")]
+    [InlineData("var p = Pair { a: 1, b: 2 }\nwithWrite(&p.a) { p = Pair { a: 0, b: 0 } }", "overlapping accesses to 'p'")]
     public void OverlappingAccessesInOneCallAreRejected(string body, string message) {
         var errors = Errors(body);
         Assert.Contains(errors, e => e.Contains("S3062", StringComparison.Ordinal) && e.Contains(message, StringComparison.Ordinal));
@@ -60,7 +69,7 @@ public sealed class ExclusivityTests {
     [Fact]
     public void DistinctStorageIsFine() =>
         Assert.Equal(
-            "5 4 7\n4 4 4\n",
+            "5 4 7\n4 4 4\n2 2\n",
             AssertAgree(
                 Program(
                     Declarations,
@@ -78,6 +87,10 @@ public sealed class ExclusivityTests {
                         both(one, two)
                         copy(&one.value, &two.pair.a)
                         print("\(one.value) \(two.pair.a) \(two.value - 1)")
+                        var m = 1
+                        var k = 1
+                        withWrite(&m) { k = k + 1 }
+                        print("\(m) \(k)")
                     """
                 )
             ).Stdout

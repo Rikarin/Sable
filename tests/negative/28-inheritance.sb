@@ -49,3 +49,89 @@ public class DifferentSignature: Shape {
         return scale
     }
 }
+
+public open class Base {
+    public init() { }
+
+    public open fn measure(_ x: Int) -> Int {
+        return x
+    }
+
+    public final fn sealedAnswer() -> Int {
+        return 1
+    }
+
+    public open fn load() throws(String) -> Int {
+        return 1
+    }
+
+    public open fn quiet() -> Int {
+        return 1
+    }
+
+    public open var size: Int { get => 1 }
+
+    public open var label: String { get => "base" set { } }
+
+    public final var fixed: Int { get => 1 }
+}
+
+public class ReturnsAnotherType: Base {
+    public override init() { super.init() }
+
+    public override fn measure(_ x: Int) -> String {    //! S3065 which returns 'Int', but returns 'String'
+        return "s"
+    }
+}
+
+public class OverridesAFinal: Base {
+    public override init() { super.init() }
+
+    public override fn sealedAnswer() -> Int {          //! S3044 is 'final'
+        return 2
+    }
+}
+
+public class ThrowsSomethingElse: Base {
+    public override init() { super.init() }
+
+    public override fn load() throws(Int) -> Int {      //! S3065 which throws 'String', but throws 'Int'
+        return 2
+    }
+
+    public override fn quiet() throws(String) -> Int {  //! S3065 which throws nothing
+        return 2
+    }
+}
+
+public class PropertyOfAnotherType: Base {
+    public override init() { super.init() }
+
+    public override var size: String { get => "s" }     //! S3065 which is 'Int', but is 'String'
+
+    public override var label: String { get => "x" }    //! S3065 which can be written
+
+    public override var fixed: Int { get => 2 }         //! S3044 is 'final'
+
+    public override var nothing: Int { get => 2 }       //! S3043 no base class declares it
+}
+
+public class KeepsTheSignatures: Base {
+    public override init() { super.init() }
+
+    public override fn measure(_ x: Int) -> Int {
+        return x + 1
+    }
+
+    public override fn load() throws(String) -> Int {
+        return 2
+    }
+
+    public override var size: Int { get => 2 }
+
+    public override var label: String { get => "x" set { } }
+}
+
+public final class Leaf { }
+
+public class UnderALeaf: Leaf { }       //! S3044 is final

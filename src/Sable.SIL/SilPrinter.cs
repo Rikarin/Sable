@@ -81,7 +81,15 @@ public static class SilPrinter {
             builder.Append("sil_global @").Append(name).Append(" : $").Append(type).Append('\n');
         }
 
-        if ((module.Types.Count > 0 || module.Globals.Count > 0) && module.Functions.Count > 0) {
+        foreach (var (name, (symbol, type)) in module.Foreign) {
+            builder.Append("sil_extern @").Append(name).Append(" : $").Append(type).Append(" = ").Append(Quote(symbol)).Append('\n');
+        }
+
+        foreach (var (name, symbol) in module.Exports) {
+            builder.Append("sil_export @").Append(name).Append(" = ").Append(Quote(symbol)).Append('\n');
+        }
+
+        if ((module.Types.Count > 0 || module.Globals.Count > 0 || module.Foreign.Count > 0 || module.Exports.Count > 0) && module.Functions.Count > 0) {
             builder.Append('\n');
         }
 

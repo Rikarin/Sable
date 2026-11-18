@@ -40,7 +40,8 @@ public static class SilPassManager {
         }
 
         var reached = new HashSet<string>(StringComparer.Ordinal);
-        var pending = new Stack<string>([entry, "$globals.init", "$globals.deinit"]);
+        // What C calls is reached from outside.
+        var pending = new Stack<string>([entry, "$globals.init", "$globals.deinit", ..module.Exports.Keys]);
         foreach (var type in module.Types) {
             switch (type) {
                 case StructType { Deinit: { } deinit }:

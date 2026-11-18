@@ -130,6 +130,19 @@ public sealed class FunctionSymbol : Symbol {
     public bool IsConst { get; internal set; }
 
     /// <summary>
+    ///     <c>@extern("c", "name")</c>: the C function this declares, which a
+    ///     call calls by that name, with C's calling convention. Null for a
+    ///     function written in Sable.
+    /// </summary>
+    public string? ForeignName { get; internal set; }
+
+    /// <summary>
+    ///     <c>@export("c", "name")</c>: the name C calls this function by,
+    ///     with C's calling convention. Null when C does not see it.
+    /// </summary>
+    public string? ExportName { get; internal set; }
+
+    /// <summary>
     ///     Declared <c>rethrows</c>: it throws exactly when one of the closures
     ///     handed to it does, so <see cref="ThrownType" /> is what those closures
     ///     throw rather than anything written at the declaration.

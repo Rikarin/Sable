@@ -720,6 +720,12 @@ public sealed partial class Compilation {
             function.IsAbstract = false;
         }
 
+        // C's, or seen by C (Compilation.Interop.cs).
+        DeclareForeign(function, declaration, container);
+        if (function.ForeignName is not null) {
+            function.IsAbstract = false;
+        }
+
         if (declaration.Body is null && declaration.ExpressionBody is null) {
             RequireBody(declaration, declaration.Identifier.Span, declaration.Attributes, declaration.Modifiers, container, $"'{name}'");
         }

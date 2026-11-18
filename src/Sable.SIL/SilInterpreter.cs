@@ -818,7 +818,9 @@ public sealed partial class SilInterpreter(SilModule module, int stepLimit = 10_
             _ => ((string)callee, null, false),
         };
 
-        var function = module.Find(name) ?? throw new SilTrap($"call to undefined @{name}");
+        var function = module.Find(name) ?? throw new SilTrap(module.Foreign.TryGetValue(name, out var foreign)
+            ? $"'{foreign.Symbol}' is a C function, which the interpreter cannot call; build the program to run it"
+            : $"call to undefined @{name}");
         var passed = arguments.ToList();
         if (hasContext) {
             passed.Add(context);

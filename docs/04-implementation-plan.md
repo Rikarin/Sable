@@ -1729,8 +1729,9 @@ through the debug map; `sable clean` removes them); `sable test` and
 ### Not built in Phase 5
 
 Of docs/05 §5.1's commands, all but two exist (with `debug`, `lint` and
-`yank` beside them). `sable bindgen` waits for a foreign-function interface,
-which the language does not have yet; `sable toolchain` waits for released
+`yank` beside them). `sable bindgen` waits for the library half of the foreign-function
+interface (`Sable.Interop`'s C strings and pointers, #74) — the compiler's
+half, `@extern`, `@export` and C's calling convention, is built; `sable toolchain` waits for released
 toolchains to manage. Build scripts (§5.6) are read but not run, and the
 registry is a directory, not a network service.
 

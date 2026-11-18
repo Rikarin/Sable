@@ -242,6 +242,15 @@ public sealed partial class SilGen {
                 continue;
             }
 
+            // '@extern': C's function, declared in every unit that may call it.
+            if (symbol.ForeignName is { } foreign) {
+                if (SignatureOf(symbol, syntax, TypeSubstitution.Empty) is { } signature) {
+                    _module.Foreign[_names[symbol]] = (foreign, signature);
+                }
+
+                continue;
+            }
+
             if (_unit is not null && !_unit.Owns(model.SyntaxTree)) {
                 DeclareExternal(symbol, syntax, _names[symbol]);
                 continue;
@@ -253,6 +262,11 @@ public sealed partial class SilGen {
 
             if (ReferenceEquals(symbol, entry)) {
                 _module.EntryPoint = _names[symbol];
+            }
+
+            // '@export': the name C calls it by.
+            if (symbol.ExportName is { } export) {
+                _module.Exports[_names[symbol]] = export;
             }
 
             var before = _module.Functions.Count;

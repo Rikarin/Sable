@@ -261,6 +261,25 @@ public sealed class SilParser {
                 continue;
             }
 
+            if (Accept("sil_extern")) {
+                var name = Expect(TokenKind.Global, "a function's name").Text;
+                Expect(":");
+                if (ParseType() is not FunctionType type) {
+                    throw Error($"@{name} is a C function, so its type is a function type");
+                }
+
+                Expect("=");
+                module.Foreign[name] = (Expect(TokenKind.String, "a C symbol").Text, type);
+                continue;
+            }
+
+            if (Accept("sil_export")) {
+                var name = Expect(TokenKind.Global, "a function's name").Text;
+                Expect("=");
+                module.Exports[name] = Expect(TokenKind.String, "a C symbol").Text;
+                continue;
+            }
+
             if (Accept("sil_global")) {
                 var global = Expect(TokenKind.Global, "a global's name").Text;
                 Expect(":");

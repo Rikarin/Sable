@@ -169,6 +169,10 @@ public enum ErrorCode {
     ERR_ConstantEvaluationFailed = 3201,
     ERR_CompileError = 3202,
 
+    // ---- C interop (S3210-S3219): '@extern' and '@export' (SYNTAX.md §24).
+    ERR_MalformedForeign = 3210,
+    ERR_NotACType = 3211,
+
     // ---- Lints (S3300-S3399): reported by Sable.Symbols' Lints, which
     // 'sable check' runs, never by compiling. Their severity is configured.
     LNT_UnusedLocal = 3300,

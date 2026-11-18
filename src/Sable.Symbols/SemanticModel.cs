@@ -380,6 +380,10 @@ public sealed partial class SemanticModel {
 
         BindParameterDefaults(function, scope);
 
+        if (declaration is FunctionDeclarationSyntax { Attributes.Count: > 0 } written) {
+            _diagnostics.AddRange(_compilation.CheckForeignSignature(function, written));
+        }
+
         if (body is null && expressionBody is null) {
             return;
         }

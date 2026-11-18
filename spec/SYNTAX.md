@@ -1218,6 +1218,14 @@ fn sqlite3_open(_ path: CString, _ db: out RawPtr<Opaque>) -> I32
 public fn entry(argc: I32, argv: RawPtr<CString>) -> I32 { }
 ```
 
+`@extern("c")` alone takes the C name to be the function's, and
+`@export("name")` alone takes the language to be C. Either is a function of
+the module, not generic, not `async`, not throwing; an `@extern` one has no
+body (S3210). What crosses is passed by value and must be something C has the
+same way — an integer type, `F32`, `F64`, `Bool`, or a struct of those, which
+is passed as the platform's C passes the struct of the same fields (S3211).
+Pointers, C strings, variadic calls and callbacks are `Sable.Interop`'s.
+
 Header import (`sable bindgen`) generates `.sbi` interface files from C headers
 and is the recommended path for anything larger than a few functions.
 

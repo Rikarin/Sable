@@ -344,7 +344,15 @@ public open class Document: Serializable, Equatable {
 
 - Single inheritance, multiple protocol conformance.
 - `required init` must be implemented by subclasses.
-- `convenience init` must delegate to a designated `init`.
+- `convenience init` must delegate to a designated `init`, `self.init(…)`
+  (S3141); a struct's initialiser may delegate the same way. One that
+  delegates leaves the fields' initial values to the one it calls.
+- A class that declares no `init`, whose own stored fields all have initial
+  values, is made with `init()` — or, a subclass, inherits its superclass's
+  initialisers, each of which sets the subclass's fields and then calls the
+  one it inherits.
+- In an expression, `Self` is the enclosing type: `Self(x: 3)` makes one,
+  `Self.zero` reads a static member.
 - Members are non-virtual unless declared `open` or `abstract`; `override` is
   mandatory when overriding.
 - `final` seals a single member.
@@ -501,6 +509,24 @@ let p: Permissions = [.Read, .Write]
 if p.contains(.Write) { }
 ```
 
+A case's value is the integer it writes — a literal, an earlier case, or
+those combined with `| & ^ + - * << >> ~` — or else the one after the
+previous case's, starting from 0; in a `@flags` enum, the next bit up,
+starting from 1. The type is the integer the base list names, or `Int`.
+Outside `@flags` no two cases share a value (S3142).
+
+- `Status.Closed as U8` is the integer a case is; `9 as Status` is the case
+  an integer is, and traps when no case is it.
+- `"\(direction)"` is the case's name, `East`.
+- A `@flags` enum's value is any set of its cases: `[.Read, .Write]` is the
+  two together, `[]` none of them; `|`, `&`, `^` and `~` combine values,
+  `==` compares them, and `p.contains(.Write)` is true when every flag of the
+  argument is set. Interpolated, a value is the name of the case it is
+  exactly, or else its integer. A `match` on one needs a `default`.
+- `@derive(Equatable, Hashable, Comparable, Debug)` on an enum compares cases,
+  orders them as they are declared, and describes one as `Direction.East`.
+  A `@flags` enum derives nothing: its values are compared as integers.
+
 `enum` is a distinct declaration from `union` deliberately: an enum is a named
 integer, a union is a tagged sum. Conflating them (as Rust and Swift do) makes
 the C ABI story and the "just give me a bitfield" story both worse.
@@ -634,6 +660,16 @@ class Temperature {
     lazy var expensive: Report = computeReport()    // computed once, on first read
 }
 ```
+
+`willSet` and `didSet` observe a stored property: a store to it calls
+`willSet` with the new value (`newValue`, or the name it gives in
+`willSet(name)`), stores it, then calls `didSet` with the old one
+(`oldValue`); compound assignment stores through them too. In its own
+observers, and in its type's initialisers, the property names its storage,
+so the observers do not run for the changes they make themselves, nor while
+the value is being made; a record literal or memberwise initialiser sets it
+without observing either. An observed property is a `var`, declares no `get`
+or `set`, and belongs to a struct, class or actor (S3140).
 
 A property with a getter alone may write it without the braces or the
 keyword: `=>` and the value, as a function written `=> e` does.
@@ -1014,6 +1050,14 @@ let c = [weak self, count = localCount] (x: Int) => {
     return self.total + count + x
 }
 ```
+
+`[weak x]` and `[unowned x]` capture a class instance without keeping it
+alive, under a name of the closure's own — `self` included. A weak capture is
+optional, and reads as `none` once the object is gone, so the body unwraps
+it (`guard let self`, `if let s = self`, `self?.total`); a member reached
+implicitly through a weak `self` is an error until it is unwrapped. An
+unowned capture is the object itself, and reading it once the object is gone
+traps. `[weak x = expression]` captures what the expression gives.
 
 An escaping closure must be declared `@escaping` on the parameter; non-escaping
 closures are stack-allocated and cost nothing.

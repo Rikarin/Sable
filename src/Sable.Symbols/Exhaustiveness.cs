@@ -365,7 +365,9 @@ internal sealed class Exhaustiveness(CoreTypes core) {
             case NamedTypeSymbol { TypeKind: TypeKind.Union } named:
                 return [..named.Members.OfType<UnionCaseSymbol>().Select(c => UnionCtor(c, named))];
 
-            case NamedTypeSymbol { TypeKind: TypeKind.Enum } named:
+            // A '@flags' enum's values are any set of its cases, which its
+            // cases alone do not cover: it splits no more than an integer does.
+            case NamedTypeSymbol { TypeKind: TypeKind.Enum, IsFlags: false } named:
                 return [..named.Members.OfType<EnumCaseSymbol>().Select(EnumCtor)];
 
             // An integer named by literals and ranges: its whole domain, cut

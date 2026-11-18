@@ -234,4 +234,58 @@ public sealed class ClosureTests {
                 }
             """
         );
+
+    [Fact]
+    public void AWeakCaptureDoesNotKeepItsObjectAndReadsNoneOnceItIsGone() =>
+        Prints(
+            "24\n11\n11\n11\ncounter gone\n-1\n-3\n-2\n",
+            """
+            class Counter {
+                var total: Int = 10
+                init() { }
+                fn bump() -> Int {
+                    total += 1
+                    return total
+                }
+
+                fn adder() -> (Int) -> Int {
+                    let localCount = 2
+                    return [weak self, count = localCount] (x: Int) => {
+                        guard let self else { return -1 }
+                        return self.total + count + x + bump()
+                    }
+                }
+
+                fn peek() -> () -> Int {
+                    return [unowned self] () => total
+                }
+
+                fn nested() -> () -> Int {
+                    return [weak self] () => {
+                        let inner = [weak self] () => self?.total ?? -2
+                        return inner()
+                    }
+                }
+
+                deinit { print("counter gone") }
+            }
+            """,
+            """
+                var f: (Int) -> Int = (x: Int) => x
+                var g: () -> Int = () => 0
+                var h: () -> Int = () => 0
+                if true {
+                    let c = Counter()
+                    f = c.adder()
+                    g = [weak c] () => c?.total ?? -3
+                    h = c.nested()
+                    print(f(1))
+                    print(g())
+                    print(h())
+                    print(c.peek()())
+                }
+                print(f(1))
+                print(g())
+                print(h())
+            """);
 }

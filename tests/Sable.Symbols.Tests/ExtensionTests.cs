@@ -391,6 +391,132 @@ public sealed class ExtensionTests {
         Assert.NotEmpty(errors);
     }
 
+    [Fact]
+    public void AMemberwiseInitializerMayLeaveOutDefaultedFields() =>
+        AssertClean(
+            """
+            struct D { var a: Int = 1; var b: Int = 5 }
+            struct E { var x: Int; var y: Int = 9; var z: String = "z" }
+            fn probe() -> Int {
+                let d = D()
+                let e = D(b: 2)
+                let f = E(x: 3, z: "q")
+                return d.a + e.b + f.y
+            }
+            """
+        );
+
+    [Fact]
+    public void AMemberwiseInitializerStillNeedsTheFieldsWithoutDefaults() {
+        var errors = ErrorsIn(
+            """
+            struct E { var x: Int; var y: Int = 9 }
+            fn probe() -> E { return E(y: 2) }
+            """
+        );
+        Assert.NotEmpty(errors);
+    }
+
+    // ---- Initialisers a class has without declaring them -------------------
+
+    [Fact]
+    public void ASubclassInheritsItsSuperclasssInitialisers() =>
+        AssertClean(
+            """
+            open class A { var a: Int = 1 }
+            open class B: A { var b: Int = 2 }
+            class C: B { }
+            open class Shape {
+                var name: String
+                init(name: String, sides: Int = 0) { self.name = name }
+            }
+            class Square: Shape { var side: Int = 4 }
+            open class Box<T> {
+                var item: T
+                init(item: T) { self.item = item }
+            }
+            class IntBox: Box<Int> { }
+            fn probe() -> Int {
+                let b = B()
+                let c = C()
+                let s = Square(name: "s")
+                let t = Square(name: "t", sides: 4)
+                let i = IntBox(item: 3)
+                return b.a + c.b + s.side + t.side + i.item
+            }
+            """
+        );
+
+    [Fact]
+    public void AnInheritedOrImplicitInitialiserMeetsAProtocolsRequirement() =>
+        AssertClean(
+            """
+            protocol Makeable { init() }
+            class K: Makeable { var x: Int = 3 }
+            class L: K { }
+            """
+        );
+
+    [Fact]
+    public void ASubclassWithAFieldWithoutAValueInheritsNoInitialiser() {
+        var errors = ErrorsIn(
+            """
+            open class A { var a: Int = 1 }
+            class B: A { var b: Int }
+            fn probe() -> B { return B() }
+            """
+        );
+        Assert.Contains(errors, static e => e.Code == ErrorCode.ERR_NotAValue);
+    }
+
+    [Fact]
+    public void AnInitialiserMayHandItsWorkToAnother() =>
+        AssertClean(
+            """
+            class P {
+                var x: Int
+                init(x: Int) { self.x = x }
+                convenience init() { self.init(x: 7) }
+            }
+            struct Q {
+                var n: Int
+                init(n: Int) { self.n = n }
+                init() { self.init(n: 9) }
+            }
+            """
+        );
+
+    [Fact]
+    public void AConvenienceInitialiserMustDelegate() {
+        var errors = ErrorsIn(
+            """
+            class Node {
+                var name: String
+                init(name: String) { self.name = name }
+                convenience init() { self.name = "root" }
+            }
+            """
+        );
+        Assert.Contains(errors, static e => e.Code == ErrorCode.ERR_ConvenienceMustDelegate);
+    }
+
+    [Fact]
+    public void SelfInAnExpressionIsTheType() =>
+        AssertClean(
+            """
+            class P {
+                var x: Int
+                init(x: Int) { self.x = x }
+                static fn make() -> Self => Self(x: 3)
+            }
+            struct Q {
+                var n: Int
+                static let zero: Int = 0
+                static fn make() -> Self { return Self(n: Self.zero) }
+            }
+            """
+        );
+
     // ---- Lookup through what stands in for a type -------------------------
 
     [Fact]

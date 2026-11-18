@@ -43,12 +43,18 @@ public sealed record BuildSettings(string Profile, bool Optimise, string? DebugD
 
     /// <summary>
     ///     Separately compiled — each unit to an object of its own, cached —
-    ///     when nothing needs to see the whole program: an unoptimised debug
-    ///     build, which runs no SIL passes and no link-time optimisation.
-    ///     Otherwise the program is compiled whole, and only an unchanged
-    ///     build is skipped.
+    ///     when nothing needs to see the whole program at once: an unoptimised
+    ///     debug build, which runs no SIL passes and no link-time optimisation;
+    ///     or an optimised build whose profile asks for ThinLTO (or none),
+    ///     where each unit's SIL passes run on the unit and LLVM optimises
+    ///     across units as they link. A profile's default, whole-program
+    ///     link-time optimisation (<c>lto = "fat"</c>), compiles the program
+    ///     whole, so that the SIL passes see all of it; so does an optimised
+    ///     build with debug information, whose link-time objects Apple's
+    ///     debugger would need kept. Otherwise only an unchanged build is skipped.
     /// </summary>
-    public bool Separate => Debug && !Optimise && !Whole;
+    public bool Separate =>
+        !Whole && (Debug ? !Optimise : Optimise && Native.Lto != LtoMode.Fat);
 
     /// <summary>Compile the program whole even where it could be compiled separately: what a separate build is checked against.</summary>
     public bool Whole { get; init; }
@@ -344,6 +350,20 @@ public static class IncrementalBuild {
                     return BuildOutcome.Failed([..problems.Select(static p => $"internal error: SIL verification failed: {p}")]);
                 }
 
+                // Optimised, the SIL passes run on the unit as on a whole
+                // program. What they learn about a function from its callees
+                // — whether a parameter escapes, whether a field is written —
+                // they assume the worst of for a function another unit
+                // defines, which this one only declares.
+                if (settings.Optimise) {
+                    try {
+                        using var _ = BuildTimings.Of(timings, "passes");
+                        SilPassManager.Run(module, SilPassManager.Default);
+                    } catch (SilPassException failure) {
+                        return BuildOutcome.Failed([$"internal error: {failure.Message}"]);
+                    }
+                }
+
                 string ir;
                 using (BuildTimings.Of(timings, "emit")) {
                     ir = settings.DebugDirectory is { } directory ? LlvmEmitter.EmitWithDebugInfo(module, directory, settings.Native.TargetOrHost) : LlvmEmitter.Emit(module, settings.Native.TargetOrHost);
@@ -388,7 +408,7 @@ public static class IncrementalBuild {
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(executable))!);
         NativeBuildResult link;
         using (BuildTimings.Of(timings, "link")) {
-            link = NativeObjects.Link([..units.Select(static u => u.ObjectPath), runtime], executable, settings.Native);
+            link = NativeObjects.Link([..units.Select(static u => u.ObjectPath), runtime], executable, settings.Native, Path.Combine(cacheDirectory, "thinlto"));
         }
 
         if (!link.Succeeded) {

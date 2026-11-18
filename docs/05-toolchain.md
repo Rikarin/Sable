@@ -410,6 +410,14 @@ interface is a hash of each file's public surface — declarations,
 signatures and the bodies other units lower — not yet a `.sbi` file, and an
 interface change invalidates every unit rather than only the dependents.
 Clang runs on units in parallel; lowering is still one unit at a time.
+An unoptimised debug build is compiled this way, and so is an optimised one
+whose profile asks for `lto = "thin"` (or `"off"`): each unit's SIL passes
+run on the unit — assuming the worst of what another unit defines — its
+object is LLVM bitcode, and the link optimises across units with ThinLTO,
+keeping ThinLTO's own cache beside the objects. The default `lto = "fat"`,
+and an optimised build with debug information, compile the program whole.
+The runtime is compiled once per set of options and kept, in the build cache
+(or `$SABLE_HOME/cache/runtime` for a single file).
 
 ---
 

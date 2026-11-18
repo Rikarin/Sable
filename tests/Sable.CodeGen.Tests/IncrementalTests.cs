@@ -265,6 +265,38 @@ public sealed class IncrementalTests {
         Assert.Equal(("incremental", 1, Units - 1), (built.Kind, built.Compiled, built.Reused));
     }
 
+    /// <summary>
+    ///     A release profile that asks for ThinLTO is compiled separately too:
+    ///     each unit's SIL passes run on the unit, its object is LLVM bitcode,
+    ///     and the link optimises across units. A body change compiles one
+    ///     unit again, and the program behaves as the whole program built
+    ///     from nothing does. The default, whole-program LTO, stays whole.
+    /// </summary>
+    [Fact]
+    public void AThinLtoReleaseBuildIsCompiledSeparately() {
+        if (!CanBuild) {
+            return;
+        }
+
+        using var scenario = new Scenario();
+        var release = new BuildRequest(Release: true);
+        Assert.Equal("whole", scenario.Check(release).Kind);
+
+        File.AppendAllText(scenario.PathOf("app/sable.toml"), "\n[profile.release]\nlto = \"thin\"\n");
+        var first = scenario.Check(release);
+        Assert.Equal(Expected, first.Output);
+        Assert.Equal(("incremental", Units, 0), (first.Kind, first.Compiled, first.Reused));
+
+        scenario.Edit("shapes/src/lib.sb", "    return x\n", "    return x + 1\n");
+        var built = scenario.Check(release);
+        Assert.Contains("circle of area 13", built.Output);
+        Assert.Equal(("incremental", 1, Units - 1), (built.Kind, built.Compiled, built.Reused));
+
+        // Without link-time optimisation, the units are native objects.
+        scenario.Edit("app/sable.toml", "lto = \"thin\"", "lto = \"off\"");
+        Assert.Equal(("incremental", Units), scenario.Check(release) is var off ? (off.Kind, off.Compiled) : default);
+    }
+
     [Fact]
     public void APublicSignatureChangeRecompilesWhatDependsOnIt() {
         if (!CanBuild) {
@@ -581,7 +613,14 @@ public sealed class IncrementalTests {
     [InlineData("benchmarks/sort.sb", 3)]
     [InlineData("benchmarks/binary-trees.sb", 4)]
     [InlineData("benchmarks/orders.sb", 4)]
-    public void SeparatelyCompiledProgramsBehaveAsWholeOnes(string file, int parts) {
+    // Optimised with ThinLTO: the SIL passes run on each unit apart.
+    [InlineData("examples/ssg/ssg.sb", 6, true)]
+    [InlineData("benchmarks/shapes.sb", 3, true)]
+    [InlineData("benchmarks/words.sb", 3, true)]
+    [InlineData("benchmarks/sort.sb", 3, true)]
+    [InlineData("benchmarks/binary-trees.sb", 4, true)]
+    [InlineData("benchmarks/orders.sb", 4, true)]
+    public void SeparatelyCompiledProgramsBehaveAsWholeOnes(string file, int parts, bool release = false) {
         if (!CanBuild) {
             return;
         }
@@ -604,7 +643,9 @@ public sealed class IncrementalTests {
                 return new UnitPlan($"part{i}", [new SourceFile(path, $"part{i}.sb", [])]);
             }).ToList();
 
-            var settings = new BuildSettings("dev", false, directory, true);
+            var settings = release
+                ? new BuildSettings("release", true, null, false) { Native = new NativeOptions { OptLevel = "3", Lto = LtoMode.Thin } }
+                : new BuildSettings("dev", false, directory, true);
             var separate = IncrementalBuild.Build(units, settings, Path.Combine(directory, "separate"), Path.Combine(directory, "cache"));
             Assert.True(separate.Succeeded, string.Join("\n", separate.Errors));
             Assert.Equal(("incremental", units.Count + 1), (separate.Kind, separate.Compiled));

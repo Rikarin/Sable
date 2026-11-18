@@ -106,14 +106,21 @@ public static class NativeObjects {
     ///     bitcode (<see cref="Flags" />) are optimised together as they link.
     /// </summary>
     /// <param name="options">What the profile strips, and whether it looks beside the executable for shared libraries.</param>
-    public static NativeBuildResult Link(IReadOnlyList<string> objects, string outputPath, NativeOptions? options = null) {
+    /// <param name="thinLtoCache">
+    ///     Where ThinLTO keeps what it optimised for each unit, so that a link
+    ///     after one unit changed optimises that unit again and not the rest.
+    /// </param>
+    public static NativeBuildResult Link(IReadOnlyList<string> objects, string outputPath, NativeOptions? options = null, string? thinLtoCache = null) {
         options ??= NativeOptions.Of(false, true);
         var target = options.TargetOrHost;
         var temporary = outputPath + $".{Environment.ProcessId}.tmp";
         try {
             var lto = NativeBuild.LtoFlags(options, target.Platform, NativeBuild.LinksBitcodeFor(target));
+            List<string> cache = thinLtoCache is null || options.Lto != LtoMode.Thin || lto.Count == 0 ? []
+                : target.Platform == NativePlatform.MacOS ? ["-Wl,-cache_path_lto," + thinLtoCache]
+                : ["-Wl,--thinlto-cache-dir=" + thinLtoCache];
             List<string> arguments = [
-                ..target.ClangFlags, ..NativeBuild.SysrootFlags(options), ..lto.Count > 0 ? NativeBuild.CompileFlags(options) : [], ..lto,
+                ..target.ClangFlags, ..NativeBuild.SysrootFlags(options), ..lto.Count > 0 ? NativeBuild.CompileFlags(options) : [], ..lto, ..cache,
                 ..LinkArguments(objects, temporary, target.Platform, options), ..NativeBuild.CrossLinkFlags(target),
             ];
             var (exitCode, output) = Run(NativeBuild.CompilerPath, arguments);

@@ -3701,6 +3701,10 @@ public sealed partial class SilGen {
                     );
                     return;
 
+                case BoundArrayPattern array when value.Type is ArrayType arrayType:
+                    ArrayPattern(array, value, arrayType, matched, failed);
+                    return;
+
                 case BoundRecordPattern { TestsType: false } record when value.Type is StructType structType:
                     Sequence(
                         record.Fields.Select(f => (f.Pattern,
@@ -3797,6 +3801,53 @@ public sealed partial class SilGen {
                     Fail(pattern.Syntax, $"the pattern '{Describe(pattern.Syntax)}'");
                     return;
             }
+        }
+
+        /// <summary>
+        ///     <c>[a, b]</c> matches an array of exactly two elements;
+        ///     <c>[first, ...rest, last]</c> one of at least two, whose middle
+        ///     <c>rest</c> is a copy of. The elements are borrowed where they
+        ///     are, as the array is held for as long as the patterns look; the
+        ///     middle is taken last, once every element has matched, so a
+        ///     failed match has nothing to give back.
+        /// </summary>
+        void ArrayPattern(BoundArrayPattern array, SilValue value, ArrayType arrayType, SilBlock matched, SilBlock failed) {
+            var restIndex = array.RestIndex;
+            var prefix = restIndex < 0 ? array.Elements.Length : restIndex;
+            var suffix = restIndex < 0 ? 0 : array.Elements.Length - restIndex - 1;
+
+            var count = Emit(new BuiltinInst("array_count", SilType.Int, value));
+            var length = Emit(new IntegerLiteralInst(SilType.Int, prefix + suffix));
+            var fits = Emit(new BuiltinInst(restIndex < 0 ? "cmp_eq_Int" : "cmp_ge_Int", SilType.Bool, count, length));
+            var sized = function.AddBlock();
+            Jump(new CondBranchInst(fits, sized, [], failed, []));
+            _current = sized;
+
+            SilValue Element(Func<SilValue> index) =>
+                Emit(new BuiltinInst("array_get_borrowed", arrayType.Element, value, index()));
+
+            SilValue FromStart(int i) => Emit(new IntegerLiteralInst(SilType.Int, i));
+
+            SilValue FromEnd(int back) =>
+                Emit(new BuiltinInst("sub_Int", SilType.Int, count, Emit(new IntegerLiteralInst(SilType.Int, back))));
+
+            var parts = new List<(BoundPattern, Func<SilValue>)>();
+            for (var i = 0; i < prefix; i++) {
+                var at = i;
+                parts.Add((array.Elements[at], () => Element(() => FromStart(at))));
+            }
+
+            for (var j = 0; j < suffix; j++) {
+                var back = suffix - j;
+                parts.Add((array.Elements[restIndex + 1 + j], () => Element(() => FromEnd(back))));
+            }
+
+            if (restIndex >= 0 && array.Elements[restIndex] is not BoundWildcardPattern) {
+                parts.Add((array.Elements[restIndex],
+                    () => Emit(new BuiltinInst("array_slice", arrayType, value, FromStart(prefix), FromEnd(suffix)))));
+            }
+
+            Sequence(parts, matched, failed);
         }
 
         /// <summary>A union case's sub-patterns, against its payload: one value, or a tuple of them.</summary>

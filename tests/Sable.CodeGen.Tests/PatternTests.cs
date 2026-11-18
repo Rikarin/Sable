@@ -215,4 +215,102 @@ public sealed class PatternTests {
                 kind("what")
             """
         );
+
+    // ---- Array patterns -------------------------------------------------------
+
+    [Fact]
+    public void ArrayPatternsMatchByLengthAndElement() =>
+        Prints(
+            "empty\none: x\nthree: a c\nmany: a +1\nmany: a +3\n",
+            """
+            fn describe(_ xs: String[]) -> String {
+                return match xs {
+                    case [] => "empty"
+                    case [let a] => "one: \(a)"
+                    case [let first, _, let last] => "three: \(first) \(last)"
+                    case [let head, ...let tail] => "many: \(head) +\(tail.count)"
+                }
+            }
+            """,
+            """
+                print(describe([]))
+                print(describe(["x"]))
+                print(describe(["a", "b", "c"]))
+                print(describe(["a", "b"]))
+                print(describe(["a", "b", "c", "d"]))
+            """
+        );
+
+    [Fact]
+    public void TheRestOfAnArrayIsASlice() =>
+        Prints(
+            "10\n0\n",
+            """
+            fn sum(_ xs: Int[:]) -> Int {
+                return match xs {
+                    case [] => 0
+                    case [let head, ...let tail] => head + sum(tail)
+                }
+            }
+            """,
+            """
+                print(sum([1, 2, 3, 4]))
+                print(sum([]))
+            """
+        );
+
+    [Fact]
+    public void ElementsAfterTheRestCountFromTheEnd() =>
+        Prints(
+            "7\n9\n-1\n-1\n",
+            """
+            fn ends(_ xs: Int[]) -> Int {
+                return match xs {
+                    case [1, ..., let last] => last
+                    case [..., 9] => 9
+                    default => -1
+                }
+            }
+            """,
+            """
+                print(ends([1, 5, 7]))
+                print(ends([2, 9]))
+                print(ends([2, 3]))
+                print(ends([]))
+            """
+        );
+
+    [Fact]
+    public void ArrayPatternsNestAndBindObjects() =>
+        // A failed match after an element has been looked at gives nothing back twice.
+        Prints(
+            "ann and bob\nnot a pair\nann alone\n",
+            """
+            class Person {
+                let name: String
+                init(name: String) { self.name = name }
+            }
+
+            fn pair(_ people: Person[], _ flag: Bool) -> String {
+                return match (people, flag) {
+                    case ([let a, let b], true) => "\(a.name) and \(b.name)"
+                    case ([let a], _) => "\(a.name) alone"
+                    default => "not a pair"
+                }
+            }
+            """,
+            """
+                let ann = Person(name: "ann")
+                let bob = Person(name: "bob")
+                print(pair([ann, bob], true))
+                print(pair([ann, bob], false))
+                print(pair([ann], true))
+                let both = [bob, ann]
+                if case [let first, ...] = both {
+                    if first.name != "bob" {
+                        print("wrong")
+                    }
+                }
+            """
+        );
 }

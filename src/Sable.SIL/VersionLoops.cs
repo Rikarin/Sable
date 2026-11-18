@@ -29,6 +29,12 @@ namespace Sable.SIL;
 ///         what, it always did — after whatever the loop did first.
 ///     </para>
 ///     <para>
+///         Integer overflow is the other way out of a loop. In the copy of a
+///         loop whose body is one block, it is checked after the loop instead
+///         (DeferOverflow), so that sums, differences and element-wise
+///         arithmetic over Int arrays vectorise too.
+///     </para>
+///     <para>
 ///         Values the loop works out and the code after it uses (a sum, an
 ///         index found) leave either version through a block that takes them
 ///         as arguments; only trivial ones are allowed, so that nothing owned
@@ -267,6 +273,197 @@ public sealed class VersionLoops : ISilPass {
         return true;
     }
 
+    /// <summary>
+    ///     In the checked-once copy of a loop of one block after its header,
+    ///     the Int additions, subtractions and multiplications check for
+    ///     overflow after the loop rather than in it, so that their traps are
+    ///     no way out of it either. Each wraps instead, and what the loop as
+    ///     written would have done is worked out on the way out.
+    /// </summary>
+    /// <remarks>
+    ///     <para>
+    ///         An operation on values of one iteration keeps the first
+    ///         iteration it overflowed in: a running minimum, which vectorises.
+    ///         On the way out the earliest traps, an earlier operation in the
+    ///         body first where two overflowed in one iteration: the trap the
+    ///         loop as written would have stopped at, with its message and
+    ///         place. What the copy did after it (stores of wrapped values)
+    ///         nothing can see, as the program stops; so the body may do
+    ///         nothing else that is seen, or that traps: no call, no other
+    ///         store, no unchecked index.
+    ///     </para>
+    ///     <para>
+    ///         A running total, <c>sum = sum + x</c>, overflows on a partial
+    ///         sum, which a vectorised loop does not have. In a loop that reads
+    ///         and writes nothing, the copy instead notes any term of 2^30 or
+    ///         more either way; when there is none, the loop ran fewer than
+    ///         2^31 times and the total started below 2^62, no partial sum can
+    ///         have overflowed. Otherwise, or when anything overflowed, the
+    ///         loop as written runs again from its start: it has done nothing
+    ///         to undo, and finds the overflow, if there is one, as it always did.
+    ///     </para>
+    /// </remarks>
+    /// <returns>What the preheader passes the header's new arguments; empty when nothing changed.</returns>
+    static List<SilValue> DeferOverflow(
+        SilFunction function,
+        SilBlock header,
+        SilBlock block,
+        SilArgument index,
+        SilBlock original,
+        IReadOnlyList<SilValue> entry,
+        SilValue start,
+        SilValue limit,
+        Func<SilInstruction, SilValue> before
+    ) {
+        if (block.Terminator is not BranchInst { Target: var target } latch || target != header) {
+            return [];
+        }
+
+        var sites = new List<BuiltinInst>();
+        var writes = false;
+        foreach (var instruction in header.Instructions.Concat(block.Instructions)) {
+            switch (instruction) {
+                // The induction step: one more than an index below the bound, which cannot overflow.
+                case BuiltinInst { Name: "add_Int" } step when ReferenceEquals(step.Operands[0], index) && step.Operands[1] is IntegerLiteralInst:
+                    break;
+                case BuiltinInst { Name: "add_Int" or "sub_Int" or "mul_Int" } site when instruction.Block == block:
+                    sites.Add(site);
+                    break;
+                // An exclusivity check is left out too: it can trap, and must not after an overflow.
+                case BuiltinInst { InBounds: true, Name: "array_set_unique" } write when ((ArrayType)((AddressType)write.Operands[0].Type).Pointee).Element.IsTrivial:
+                    writes = true;
+                    break;
+                case BuiltinInst { InBounds: true, Name: "array_get" or "array_get_borrowed" } read when read.Type.IsTrivial:
+                case BuiltinInst { Name: "array_count" }:
+                case BuiltinInst builtin when Simplify.Pure(builtin.Name):
+                case IntegerLiteralInst or FloatLiteralInst or StructExtractInst or TupleExtractInst or LoadBorrowInst or EndBorrowInst:
+                case LoadInst { Kind: LoadKind.Trivial }:
+                case BranchInst or CondBranchInst:
+                    break;
+                default:
+                    return [];
+            }
+        }
+
+        // Running totals: an addition or subtraction of a header argument
+        // that only it uses in the loop, handed round as that argument's next
+        // value; the header may hand it on out of the loop.
+        var totals = new Dictionary<BuiltinInst, SilArgument>();
+        if (!writes && header.Arguments.All(static a => a.Type.IsTrivial)) {
+            foreach (var site in sites.Where(static s => s.Name is "add_Int" or "sub_Int")) {
+                foreach (var side in site.Name == "add_Int" ? [0, 1] : new[] { 0 }) {
+                    if (site.Operands[side] is SilArgument total && total.Block == header && !ReferenceEquals(total, index)
+                        && ReferenceEquals(latch.Operands[header.Arguments.IndexOf(total)], site)
+                        && header.Instructions.SkipLast(1).Concat(block.Instructions).Count(i => i.Operands.Any(o => ReferenceEquals(o, total))) == 1) {
+                        totals[site] = total;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (sites.Count == 0) {
+            return [];
+        }
+
+        var initial = new List<SilValue>();
+        var next = new List<SilValue>();
+
+        // Per operation of one iteration, the first iteration it overflowed in, carried round the loop.
+        var firsts = new List<(BuiltinInst Site, SilArgument First)>();
+        foreach (var site in sites.Where(s => !totals.ContainsKey(s))) {
+            var first = header.AddArgument(SilType.Int);
+            firsts.Add((site, first));
+            initial.Add(before(new IntegerLiteralInst(SilType.Int, long.MaxValue)));
+            var overflow = new BuiltinInst($"overflow_at_{site.Name[..3]}_Int", SilType.Int, site.Operands[0], site.Operands[1], index, first) {
+                Block = block, Location = site.Location, InlinedSite = site.InlinedSite,
+            };
+            block.Instructions.Insert(block.Instructions.IndexOf(site), overflow);
+            next.Add(overflow);
+        }
+
+        // For the running totals, whether any term was large.
+        SilArgument? large = null;
+        if (totals.Count > 0) {
+            large = header.AddArgument(SilType.Bool);
+            initial.Add(before(new IntegerLiteralInst(SilType.Bool, 0)));
+            SilValue any = large;
+            var bound = block.Append(new IntegerLiteralInst(SilType.Int, 1L << 30));
+            var negative = block.Append(new IntegerLiteralInst(SilType.Int, -(1L << 30)));
+            block.Instructions.Remove(bound);
+            block.Instructions.Remove(negative);
+            block.Instructions.Insert(0, bound);
+            block.Instructions.Insert(1, negative);
+            foreach (var (site, total) in totals) {
+                var term = ReferenceEquals(site.Operands[0], total) ? site.Operands[1] : site.Operands[0];
+                var at = block.Instructions.IndexOf(site);
+                var above = new BuiltinInst("cmp_ge_Int", SilType.Bool, term, bound) { Block = block, Location = site.Location };
+                var below = new BuiltinInst("cmp_le_Int", SilType.Bool, term, negative) { Block = block, Location = site.Location };
+                var either = new BuiltinInst("or_Bool", SilType.Bool, above, below) { Block = block, Location = site.Location };
+                var anyNext = new BuiltinInst("or_Bool", SilType.Bool, any, either) { Block = block, Location = site.Location };
+                block.Instructions.InsertRange(at, [above, below, either, anyNext]);
+                any = anyNext;
+            }
+
+            next.Add(any);
+        }
+
+        foreach (var site in sites) {
+            site.Rename($"wrapping_{site.Name[..3]}_Int");
+        }
+
+        block.Instructions[^1] = new BranchInst(header, [..latch.Operands, ..next]) { Block = block, Location = latch.Location };
+
+        // On the way out, before anything else, what the loop as written would have done.
+        var test = (CondBranchInst)header.Terminator!;
+        var check = function.AddBlock();
+        T Add<T>(T instruction) where T : SilInstruction {
+            instruction.Location ??= test.Location;
+            return check.Append(instruction);
+        }
+
+        var none = Add(new IntegerLiteralInst(SilType.Int, long.MaxValue));
+        if (large is null) {
+            // Every overflow of one iteration: the earliest traps.
+            SilValue earliest = firsts[0].First;
+            foreach (var (_, first) in firsts.Skip(1)) {
+                earliest = Add(new BuiltinInst("min_Int", SilType.Int, earliest, first));
+            }
+
+            var overflowed = Add(new BuiltinInst("cmp_ne_Int", SilType.Bool, earliest, none));
+            foreach (var (site, first) in firsts) {
+                var here = Add(new BuiltinInst("cmp_eq_Int", SilType.Bool, first, earliest) { Location = site.Location });
+                var fails = Add(new BuiltinInst("and_Bool", SilType.Bool, overflowed, here) { Location = site.Location });
+                Add(new CondFailInst(fails, "integer overflow") { Location = site.Location, InlinedSite = site.InlinedSite });
+            }
+
+            Add(new BranchInst(test.WhenFalse, [..test.FalseArguments]));
+        } else {
+            // Anything that might have overflowed: the loop as written, again.
+            SilValue again = large;
+            foreach (var (_, first) in firsts) {
+                again = Add(new BuiltinInst("or_Bool", SilType.Bool, again, Add(new BuiltinInst("cmp_ne_Int", SilType.Bool, first, none))));
+            }
+
+            var trips = Add(new BuiltinInst("wrapping_sub_Int", SilType.Int, limit, start));
+            var many = Add(new BuiltinInst("cmp_ge_Int", SilType.Bool, trips, Add(new IntegerLiteralInst(SilType.Int, 1L << 31))));
+            again = Add(new BuiltinInst("or_Bool", SilType.Bool, again, many));
+            var high = Add(new IntegerLiteralInst(SilType.Int, 1L << 62));
+            var low = Add(new IntegerLiteralInst(SilType.Int, -(1L << 62)));
+            foreach (var total in totals.Values) {
+                var from = entry[header.Arguments.IndexOf(total)];
+                var above = Add(new BuiltinInst("cmp_ge_Int", SilType.Bool, from, high));
+                var below = Add(new BuiltinInst("cmp_le_Int", SilType.Bool, from, low));
+                again = Add(new BuiltinInst("or_Bool", SilType.Bool, again, Add(new BuiltinInst("or_Bool", SilType.Bool, above, below))));
+            }
+
+            Add(new CondBranchInst(again, original, [..entry], test.WhenFalse, [..test.FalseArguments]));
+        }
+
+        header.Instructions[^1] = new CondBranchInst(test.Condition, test.WhenTrue, [..test.TrueArguments], check, []) { Block = header, Location = test.Location };
+        return initial;
+    }
+
     static void Version(SilFunction function, Loop loop) {
         var (header, body, preheader, test, index, bound, accesses, arrays, liveOut) = loop;
 
@@ -349,8 +546,17 @@ public sealed class VersionLoops : ISilPass {
             ok = Add(new BuiltinInst("and_Bool", SilType.Bool, ok, fits));
         }
 
+        List<SilValue> deferred = body.Count == 2
+            ? DeferOverflow(function, blocks[header], blocks[test.WhenTrue], (SilArgument)values[index], header, entry.Operands, start, limit, i => Add(i))
+            : [];
         preheader.Instructions.InsertRange(preheader.Instructions.Count - 1, checks);
-        preheader.Instructions[^1] = new CondBranchInst(ok, blocks[header], [..entry.Operands], header, [..entry.Operands]) { Block = preheader, Location = at };
+        preheader.Instructions[^1] = new CondBranchInst(
+            ok,
+            blocks[header],
+            [..entry.Operands, ..deferred],
+            header,
+            [..entry.Operands]
+        ) { Block = preheader, Location = at };
         return;
 
         SilValue CountOf(SilValue array) {

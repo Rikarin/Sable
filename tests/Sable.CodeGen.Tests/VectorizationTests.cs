@@ -180,6 +180,80 @@ public sealed class VectorizationTests {
             ).Stdout
         );
 
+    const string Sums = """
+                        fn sum(_ a: Int[:]) -> Int {
+                            var total = 0
+                            for x in a {
+                                total = total + x
+                            }
+                            return total
+                        }
+
+                        fn fall(_ a: Int[:], _ from: Int) -> Int {
+                            var left = from
+                            var i = 0
+                            while i < a.count {
+                                left = left - a[i]
+                                i = i + 1
+                            }
+                            return left
+                        }
+
+                        fn scaled(_ a: Int[:], _ b: Int[:], _ d: Int[:], _ c: inout Int[>..]) {
+                            var i = 0
+                            while i < a.count {
+                                c[i] = a[i] * b[i] + d[i]
+                                i = i + 1
+                            }
+                        }
+                        """;
+
+    /// <summary>Integer sums, differences and element-wise products vectorise, their overflow checked after the loop.</summary>
+    [Fact]
+    public void IntegerReductionsAndElementWiseArithmeticVectorize() {
+        if (!Programs.CanBuild) {
+            return;
+        }
+
+        var loops = Report(Programs.Program(Sums, "    var c: Int[>..] = [0]\n    scaled([1], [2], [3], &c)\n    print(sum([1, 2]) + fall([1], 0) + c[0])"));
+        Assert.True(loops.Any(l => l.Line is >= 3 and <= 6 && l.Vectorized), VectorizationReport.Format(loops));
+        Assert.True(loops.Any(l => l.Line is >= 11 and <= 16 && l.Vectorized), VectorizationReport.Format(loops));
+        Assert.True(loops.Any(l => l.Line is >= 21 and <= 25 && l.Vectorized), VectorizationReport.Format(loops));
+    }
+
+    /// <summary>Totals that need the loop as written: large terms, a total that starts large, one that overflows only on the way.</summary>
+    [Theory]
+    [InlineData("print(sum([1099511627776, 1099511627776, -5]))", "2199023255547\n", null)]
+    [InlineData("print(fall([1, 2, 3], -4611686018427387904))", "-4611686018427387910\n", null)]
+    [InlineData("print(sum([9223372036854775807, 1, -1]))", "", "test.sb:5:17")]
+    [InlineData("print(fall([1, 2, 3], -9223372036854775806))", "", "test.sb:14:16")]
+    public void ARunningTotalTrapsWhereItAlwaysDid(string body, string output, string? trap) {
+        var execution = Programs.AssertAgree(Programs.Program(Sums, "    " + body));
+        Assert.Equal(output, execution.Stdout);
+        if (trap is not null) {
+            Assert.Contains("integer overflow", execution.Stderr, StringComparison.Ordinal);
+            Assert.Contains(trap, execution.Stderr, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
+    ///     Element-wise overflow traps at the operation and the iteration the
+    ///     loop as written stops at: the earliest iteration, and in it the
+    ///     operation that comes first. (Both operations here have the place of
+    ///     their left operand; the interpreter, running the loop as written,
+    ///     holds the rest of the report to the same.)
+    /// </summary>
+    [Theory]
+    [InlineData("[1, 1, 4611686018427387904, 1]", "[1, 1, 2, 1]", "[0, 9223372036854775807, 0, 0]", "test.sb:23:16")] // the addition, at 1
+    [InlineData("[1, 1, 4611686018427387904, 1]", "[1, 1, 2, 1]", "[0, 0, 0, 9223372036854775807]", "test.sb:23:16")] // the product, at 2
+    [InlineData("[1, 4611686018427387904, 1, 1]", "[1, 2, 1, 1]", "[0, 9223372036854775807, 0, 0]", "test.sb:23:16")] // both at 1: the product first
+    public void ElementWiseOverflowTrapsAtTheFirst(string a, string b, string d, string trap) {
+        var execution = Programs.AssertAgree(Programs.Program(Sums, $"    var c: Int[>..] = [0, 0, 0, 0]\n    scaled({a}, {b}, {d}, &c)\n    print(c[0])"));
+        Assert.Equal("", execution.Stdout);
+        Assert.Contains("integer overflow", execution.Stderr, StringComparison.Ordinal);
+        Assert.Contains(trap, execution.Stderr, StringComparison.Ordinal);
+    }
+
     /// <summary><c>sable build --vectorize-report</c> names each loop by its place, and says why one was not vectorised.</summary>
     [Fact]
     public void TheReportNamesEachLoopAndWhyNot() {

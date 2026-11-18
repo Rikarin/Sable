@@ -1585,6 +1585,14 @@ public static class SilBuiltins {
             Binary(op, SilType.Bool, SilType.Bool);
         }
 
+        // Int arithmetic whose overflow is checked later (VersionLoops): the
+        // result, wrapped; and, given the iteration and the first iteration
+        // that overflowed so far (Int.max for none), that first iteration.
+        foreach (var op in new[] { "add", "sub", "mul" }) {
+            Add($"wrapping_{op}_Int", SilType.Int, SilType.Int, SilType.Int);
+            Add($"overflow_at_{op}_Int", SilType.Int, SilType.Int, SilType.Int, SilType.Int, SilType.Int);
+        }
+
         foreach (var type in SilType.Numbers.Concat([SilType.Bool, SilType.Char, SilType.String])) {
             Binary("cmp_eq", type, SilType.Bool);
             Binary("cmp_ne", type, SilType.Bool);

@@ -1858,6 +1858,12 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
         checked {
             return (name, operands) switch {
                 ("add_Int", [long a, long b]) => Wrap(() => a + b),
+                ("wrapping_add_Int", [long a, long b]) => unchecked(a + b),
+                ("wrapping_sub_Int", [long a, long b]) => unchecked(a - b),
+                ("wrapping_mul_Int", [long a, long b]) => unchecked(a * b),
+                ("overflow_at_add_Int", [long a, long b, long i, long m]) => Overflows(() => a + b) ? Math.Min(m, i) : m,
+                ("overflow_at_sub_Int", [long a, long b, long i, long m]) => Overflows(() => a - b) ? Math.Min(m, i) : m,
+                ("overflow_at_mul_Int", [long a, long b, long i, long m]) => Overflows(() => a * b) ? Math.Min(m, i) : m,
                 ("sub_Int", [long a, long b]) => Wrap(() => a - b),
                 ("mul_Int", [long a, long b]) => Wrap(() => a * b),
                 ("div_Int", [long a, long b]) => b == 0 ? throw new SilTrap("division by zero") : Wrap(() => a / b),
@@ -2029,6 +2035,15 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
         }
 
         return text.ToString();
+    }
+
+    static bool Overflows(Func<long> operation) {
+        try {
+            _ = checked(operation());
+            return false;
+        } catch (OverflowException) {
+            return true;
+        }
     }
 
     static object Wrap(Func<long> operation) {

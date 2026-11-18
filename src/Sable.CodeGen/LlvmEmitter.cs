@@ -317,6 +317,7 @@ public sealed partial class LlvmEmitter {
                                 declare { i64, i1 } @llvm.sadd.with.overflow.i64(i64, i64)
                                 declare { i64, i1 } @llvm.ssub.with.overflow.i64(i64, i64)
                                 declare { i64, i1 } @llvm.smul.with.overflow.i64(i64, i64)
+                                declare i64 @llvm.smin.i64(i64, i64)
                                 declare { i8, i1 } @llvm.sadd.with.overflow.i8(i8, i8)
                                 declare { i8, i1 } @llvm.ssub.with.overflow.i8(i8, i8)
                                 declare { i8, i1 } @llvm.smul.with.overflow.i8(i8, i8)
@@ -2232,6 +2233,43 @@ public sealed partial class LlvmEmitter {
                 case "neg_Int":
                     Overflowing("ssub", "0", operands[0], Result());
                     return;
+
+                case "wrapping_add_Int" or "wrapping_sub_Int" or "wrapping_mul_Int":
+                    Line($"{Result()} = {builtin.Name[9..12]} i64 {operands[0]}, {operands[1]}");
+                    return;
+
+                // The iteration, when this one overflowed and it is the first:
+                // a select and a min, which vectorise. The overflow is worked
+                // out in plain arithmetic, as the vectoriser takes no
+                // with.overflow intrinsic: a sum overflowed when it has the
+                // sign of neither operand, a difference when the operands'
+                // signs differ and it has the second's; a product is made in
+                // 128 bits and must fit back in 64.
+                case "overflow_at_add_Int" or "overflow_at_sub_Int" or "overflow_at_mul_Int": {
+                    var overflowed = Fresh();
+                    var at = Fresh();
+                    if (builtin.Name[12..15] == "mul") {
+                        var (left, right, wide, narrow, back) = (Fresh(), Fresh(), Fresh(), Fresh(), Fresh());
+                        Line($"{left} = sext i64 {operands[0]} to i128");
+                        Line($"{right} = sext i64 {operands[1]} to i128");
+                        Line($"{wide} = mul i128 {left}, {right}");
+                        Line($"{narrow} = trunc i128 {wide} to i64");
+                        Line($"{back} = sext i64 {narrow} to i128");
+                        Line($"{overflowed} = icmp ne i128 {back}, {wide}");
+                    } else {
+                        var add = builtin.Name[12..15] == "add";
+                        var (result, first, second, both) = (Fresh(), Fresh(), Fresh(), Fresh());
+                        Line($"{result} = {(add ? "add" : "sub")} i64 {operands[0]}, {operands[1]}");
+                        Line($"{first} = xor i64 {operands[0]}, {result}");
+                        Line($"{second} = xor i64 {(add ? operands[1] : operands[0])}, {(add ? result : operands[1])}");
+                        Line($"{both} = and i64 {first}, {second}");
+                        Line($"{overflowed} = icmp slt i64 {both}, 0");
+                    }
+
+                    Line($"{at} = select i1 {overflowed}, i64 {operands[2]}, i64 9223372036854775807");
+                    Line($"{Result()} = call i64 @llvm.smin.i64(i64 {operands[3]}, i64 {at})");
+                    return;
+                }
 
                 case "div_Int" or "rem_Int": {
                     var zero = Fresh();

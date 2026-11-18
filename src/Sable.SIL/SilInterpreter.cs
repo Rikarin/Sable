@@ -1439,7 +1439,7 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                 var (array, start, count) = ElementsOf(operands[0]);
                 var index = (long)operands[1]!;
                 if (array is null || index < 0 || index >= count) {
-                    throw new SilTrap(operands[0] is SliceValue ? "slice index out of range" : "array index out of range");
+                    throw new SilTrap("array index out of range");
                 }
 
                 var element = array.Elements[start + (int)index];
@@ -1851,7 +1851,7 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
     (HeapArray Array, int At) Writable(SilValue addressValue, IReference address, long index) {
         if (address.Peek() is SliceValue view) {
             if (index < 0 || index >= view.Count) {
-                throw new SilTrap("slice index out of range");
+                throw new SilTrap("array index out of range");
             }
 
             var unique = UniqueSlice(addressValue, address);

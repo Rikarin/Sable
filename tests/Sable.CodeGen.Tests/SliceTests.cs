@@ -211,7 +211,7 @@ public sealed class SliceTests {
             )
         );
         Assert.Equal("4\n", execution.Stdout);
-        Assert.Equal("fatal error: slice index out of range\n  at test.sb:8:11\n", execution.Stderr);
+        Assert.Equal("fatal error: array index out of range\n  at test.sb:8:11\n", execution.Stderr);
     }
 
     /// <summary>A range of a slice is checked against the slice's count too.</summary>
@@ -248,7 +248,7 @@ public sealed class SliceTests {
             )
         );
         Assert.Equal("[2, 3, 0]\n", execution.Stdout);
-        Assert.Equal("fatal error: slice index out of range\n  at test.sb:9:5\n", execution.Stderr);
+        Assert.Equal("fatal error: array index out of range\n  at test.sb:9:5\n", execution.Stderr);
     }
 
     /// <summary>

@@ -3705,7 +3705,7 @@ public sealed partial class LlvmEmitter {
                 var count = SlicePart(slice, type, 2);
                 var outside = Fresh();
                 Line($"{outside} = icmp uge i64 {index}, {count}");
-                TrapIf(outside, "slice index out of range");
+                TrapIf(outside, "array index out of range");
             }
 
             var elementsField = Fresh();

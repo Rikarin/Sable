@@ -147,7 +147,7 @@ void sable_slice_make_unique(SableSlice *slice, const SableMetadata *type) {
 
 void *sable_slice_mutable_element(SableSlice *slice, const SableMetadata *type, int64_t index) {
     if (index < 0 || index >= slice->count) {
-        trap_here("slice index out of range");
+        trap_here("array index out of range");
     }
 
     sable_slice_make_unique(slice, type);

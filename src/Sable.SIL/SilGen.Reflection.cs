@@ -320,6 +320,46 @@ public sealed partial class SilGen {
         }
     }
 
+    /// <summary>The slot of <c>any Error</c>'s vtable that writes out the error an object holds.</summary>
+    const string ErrorDescribeSlot = "describe";
+
+    /// <summary>What is in that slot: the object and a depth, to a string.</summary>
+    internal static FunctionType ErrorDescriberType(ClassType anyError) => new([anyError, SilType.Int], SilType.String);
+
+    /// <summary>
+    ///     The function in a box's slot: the error it holds, written out as
+    ///     <c>Reflect.describe</c> writes its type. The base class's, which no
+    ///     object has, writes only that it is an error.
+    /// </summary>
+    string ErrorDescriber(ClassType anyError, ClassType? box, SilType? error) {
+        var name = box is null ? "$error.describe" : $"$error.describe${Sanitise(error!.ToString())}";
+        if (_module.Find(name) is not null) {
+            return name;
+        }
+
+        var function = new SilFunction(name, ErrorDescriberType(anyError));
+        _module.Add(function);
+        var s = new Synthesis(function);
+        var self = s.Block.AddArgument(anyError);
+        var depth = s.Block.AddArgument(SilType.Int);
+        if (box is null) {
+            s.Emit(new ReturnInst(s.Text("<any Error>")));
+            return name;
+        }
+
+        // The error's type, as the program named it: lowering it is what
+        // made this SIL type.
+        var type = _types.FirstOrDefault(pair => error!.Equals(pair.Value)).Key;
+        var held = s.Emit(new LoadInst(s.Emit(new RefElementAddrInst(s.Emit(new UncheckedRefCastInst(self, box)), 0))));
+        var text = type is null ? s.Text($"<{error}>") : DescribePart(s, held, type, depth);
+        if (!held.Type.IsTrivial) {
+            s.Emit(new DestroyValueInst(held));
+        }
+
+        s.Emit(new ReturnInst(text));
+        return name;
+    }
+
     /// <summary>A function a question about a type is answered by, made the first time it is asked.</summary>
     string? Reflector(string question, TypeSymbol type) {
         if (_reflectors.TryGetValue((question, type), out var known)) {
@@ -381,6 +421,12 @@ public sealed partial class SilGen {
 
         if (lowered is ScalarType && SilBuiltins.Find($"string_from_{lowered}") is not null) {
             return s.Emit(new BuiltinInst($"string_from_{lowered}", SilType.String, value));
+        }
+
+        // 'any Error': the error the object holds, as its box writes it.
+        if (lowered is ClassType anyError && anyError == AnyErrorType()) {
+            var describer = s.Emit(new ClassMethodInst(value, ErrorDescribeSlot, ErrorDescriberType(anyError)));
+            return s.Emit(new ApplyInst(describer, SilType.String, value, depth));
         }
 
         if (ShapeOf(type, lowered) == Shape.Opaque || Reflector("describe", type) is not { } describe) {

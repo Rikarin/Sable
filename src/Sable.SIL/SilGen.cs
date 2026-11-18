@@ -1312,8 +1312,20 @@ public sealed partial class SilGen {
     ///     thrown as itself; this is what one becomes where <c>any Error</c>
     ///     is wanted.
     /// </summary>
-    internal ClassType AnyErrorType() =>
-        _module.FindType("any$Error") as ClassType ?? _module.AddType(new ClassType("any$Error"));
+    /// <remarks>
+    ///     Its one vtable slot writes the error out, as <c>Reflect.describe</c>
+    ///     writes the error's own type: that is how <c>"\(error)"</c> in a
+    ///     <c>catch</c> says which error it caught.
+    /// </remarks>
+    internal ClassType AnyErrorType() {
+        if (_module.FindType("any$Error") is ClassType existing) {
+            return existing;
+        }
+
+        var anyError = _module.AddType(new ClassType("any$Error"));
+        anyError.VTable.Add((ErrorDescribeSlot, ErrorDescriber(anyError, null, null)));
+        return anyError;
+    }
 
     /// <summary>The subclass of <c>any Error</c>'s class that holds an error of one type.</summary>
     internal ClassType ErrorBox(SilType error) {
@@ -1322,8 +1334,10 @@ public sealed partial class SilGen {
             return existing;
         }
 
-        var box = _module.AddType(new ClassType(name) { Superclass = AnyErrorType() });
+        var anyError = AnyErrorType();
+        var box = _module.AddType(new ClassType(name) { Superclass = anyError });
         box.Fields.Add(("value", error));
+        box.VTable.Add((ErrorDescribeSlot, ErrorDescriber(anyError, box, error)));
         return box;
     }
 
@@ -4728,15 +4742,12 @@ public sealed partial class SilGen {
 
                     piece = Emit(new StringLiteralInst(value));
                 } else {
-                    if (hole >= interpolated.Parts.Length || Expression(interpolated.Parts[hole]) is not { } part) {
+                    if (hole >= interpolated.Parts.Length || Hole(interpolated.Parts[hole]) is not { } written) {
                         return null;
                     }
 
-                    piece = Stringify(part, interpolated.Parts[hole]);
+                    piece = written;
                     hole++;
-                    if (piece is null) {
-                        return null;
-                    }
                 }
 
                 pieces.Add(Hold(piece));
@@ -4763,6 +4774,50 @@ public sealed partial class SilGen {
             }
 
             return joined;
+        }
+
+        /// <summary>
+        ///     What a hole writes: a string itself; a number, a Bool or a Char
+        ///     as text; a <c>Debug</c> value as its <c>debugDescription()</c>
+        ///     says, so a type that describes itself is written that way; and
+        ///     anything else as <c>Reflect.describe</c> writes it. Decided for
+        ///     the type a generic instance has, so <c>"\(t)"</c> writes a
+        ///     <c>T</c> that is a String as a string.
+        /// </summary>
+        SilValue? Hole(BoundExpression part) {
+            if (LowerType(part.Type) is not { } lowered) {
+                return Missing(part, $"interpolating a value of type '{part.Type.ToDisplayString()}'");
+            }
+
+            if (lowered == SilType.String || (lowered is ScalarType && SilBuiltins.Find($"string_from_{lowered}") is not null)) {
+                return Expression(part) is { } value ? Stringify(value, part) : null;
+            }
+
+            if (Core.Module.GetType("Debug") is { TypeKind: TypeKind.Protocol } debug
+                && debug.GetMembers("debugDescription").OfType<FunctionSymbol>().FirstOrDefault() is { } describe
+                && Sub(part.Type).Satisfies(debug)) {
+                return Expression(new BoundCall(part.Syntax, part, describe, [], Core.String));
+            }
+
+            // '()' is no value to pass, and is always written the same.
+            if (lowered == SilType.Unit) {
+                Discard(part);
+                return Emit(new StringLiteralInst("()"));
+            }
+
+            if (Borrow(part) is not { } borrowed) {
+                return null;
+            }
+
+            if (generator.Reflector("describe", Sub(part.Type)) is not { } describer) {
+                End(borrowed);
+                return Missing(part, $"interpolating a value of type '{part.Type.ToDisplayString()}'");
+            }
+
+            var signature = ReflectorType("describe", borrowed.Type);
+            var described = Emit(new ApplyInst(Emit(new FunctionRefInst(describer, signature)), SilType.String, borrowed, Emit(new IntegerLiteralInst(SilType.Int, 0))));
+            End(borrowed);
+            return described;
         }
 
         /// <summary>A value as a string, for interpolation: a string itself, or the scalars written out.</summary>

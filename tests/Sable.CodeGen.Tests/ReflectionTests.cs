@@ -324,4 +324,80 @@ public sealed class ReflectionTests {
         Assert.DoesNotContain("$reflect.describe$Other", reflecting.LlvmIr!);
         Assert.DoesNotContain("TypeInfo", reflecting.LlvmIr!);
     }
+
+    [Fact]
+    public void InterpolationWritesAnyValue() =>
+        // A string as it is; Debug as the type says; anything else as
+        // Reflect.describe writes it; a generic hole by its instance's type.
+        Prints(
+            "Point(x: 1, y: 2) IoError.Denied Tagged(name: \"t\") custom!\n3 none [1, 2] (1, \"a\") Node(value: 4) ()\n<custom!> <3> <text>\n",
+            """
+            union IoError { NotFound(path: String), Denied }
+
+            struct Point {
+                var x: Int
+                var y: Int
+            }
+
+            @derive(Debug)
+            struct Tagged {
+                var name: String
+            }
+
+            struct Custom: Debug {
+                var n: Int
+                fn debugDescription() -> String { return "custom!" }
+            }
+
+            class Node {
+                var value: Int
+                init(_ value: Int) {
+                    self.value = value
+                }
+            }
+
+            fn bracketed<T>(_ t: T) -> String {
+                return "<\(t)>"
+            }
+            """,
+            """
+                let p = Point { x: 1, y: 2 }
+                print("\(p) \(IoError.Denied) \(Tagged { name: "t" }) \(Custom { n: 1 })")
+                let three: Int? = 3
+                let nothing: Int? = none
+                print("\(three) \(nothing) \([1, 2]) \((1, "a")) \(Node(4)) \(())")
+                print(bracketed(Custom { n: 2 }) + " " + bracketed(3) + " " + bracketed("text"))
+            """
+        );
+
+    [Fact]
+    public void ACaughtErrorIsWrittenAsTheErrorItIs() =>
+        Prints(
+            "caught IoError.NotFound(path: \"a.txt\")\ncaught IoError.Denied\ncaught Point(x: 1, y: 2)\nok 3\n",
+            """
+            union IoError { NotFound(path: String), Denied }
+
+            struct Point {
+                var x: Int
+                var y: Int
+            }
+
+            fn fail(_ k: Int) throws -> Int {
+                if k == 0 { throw IoError.NotFound(path: "a.txt") }
+                if k == 1 { throw IoError.Denied }
+                if k == 2 { throw Point { x: 1, y: 2 } }
+                return k
+            }
+            """,
+            """
+                for k in [0, 1, 2, 3] {
+                    do {
+                        let v = try fail(k)
+                        print("ok \(v)")
+                    } catch {
+                        print("caught \(error)")
+                    }
+                }
+            """
+        );
 }

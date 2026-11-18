@@ -21,6 +21,9 @@ public abstract class TypeSymbol : Symbol, IEquatable<TypeSymbol> {
     /// <summary>The type as it would be written in source.</summary>
     public abstract string ToDisplayString();
 
+    /// <summary>True when this type meets a constraint: conforms to a protocol, or is or inherits from a class.</summary>
+    public bool Satisfies(TypeSymbol constraint) => Conversions.Satisfies(this, constraint);
+
     public override string ToString() => ToDisplayString();
 
     public virtual bool Equals(TypeSymbol? other) => ReferenceEquals(this, other);

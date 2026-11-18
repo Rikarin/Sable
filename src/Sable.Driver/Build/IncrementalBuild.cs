@@ -10,11 +10,29 @@ namespace Sable.Driver.Build;
 
 /// <summary>
 ///     A source file of a program: where it is, the name diagnostics give it,
-///     the features it is parsed with, and — for a registry dependency — the
-///     workspace outside this one it comes from, which <c>package</c> stops at.
+///     the features it is parsed with, for a registry dependency the
+///     workspace outside this one it comes from, which <c>package</c> stops
+///     at, and the package it belongs to, whose modules are its own.
 /// </summary>
-public sealed record SourceFile(string Path, string Name, IReadOnlyList<string> Features, string? Workspace = null) {
-    public ParseOptions Options => ParseOptions.Default with { Features = [..Features], Workspace = Workspace };
+public sealed record SourceFile(string Path, string Name, IReadOnlyList<string> Features, string? Workspace = null, string? Package = null) {
+    /// <summary>The attributes the package's generators answer to, and those they read on members (docs/08).</summary>
+    public GeneratorAttributes Generators { get; init; } = GeneratorAttributes.None;
+
+    public ParseOptions Options => ParseOptions.Default with {
+        Features = [..Features],
+        Workspace = Workspace,
+        Package = Package,
+        GeneratorAttributes = [..Generators.Types],
+        GeneratorMemberAttributes = [..Generators.Members],
+    };
+}
+
+/// <summary>The attributes a package's visible source generators answer to on types, and read on members.</summary>
+public sealed record GeneratorAttributes(IReadOnlyList<string> Types, IReadOnlyList<string> Members) {
+    public static readonly GeneratorAttributes None = new([], []);
+
+    /// <summary>What a cache keyed by a file's options hashes.</summary>
+    public override string ToString() => $"{string.Join(",", Types)};{string.Join(",", Members)}";
 }
 
 /// <summary>
@@ -43,12 +61,18 @@ public sealed record BuildSettings(string Profile, bool Optimise, string? DebugD
 
     /// <summary>
     ///     Separately compiled — each unit to an object of its own, cached —
-    ///     when nothing needs to see the whole program: an unoptimised debug
-    ///     build, which runs no SIL passes and no link-time optimisation.
-    ///     Otherwise the program is compiled whole, and only an unchanged
-    ///     build is skipped.
+    ///     when nothing needs to see the whole program at once: an unoptimised
+    ///     debug build, which runs no SIL passes and no link-time optimisation;
+    ///     or an optimised build whose profile asks for ThinLTO (or none),
+    ///     where each unit's SIL passes run on the unit and LLVM optimises
+    ///     across units as they link. A profile's default, whole-program
+    ///     link-time optimisation (<c>lto = "fat"</c>), compiles the program
+    ///     whole, so that the SIL passes see all of it; so does an optimised
+    ///     build with debug information, whose link-time objects Apple's
+    ///     debugger would need kept. Otherwise only an unchanged build is skipped.
     /// </summary>
-    public bool Separate => Debug && !Optimise && !Whole;
+    public bool Separate =>
+        !Whole && (Debug ? !Optimise : Optimise && Native.Lto != LtoMode.Fat);
 
     /// <summary>Compile the program whole even where it could be compiled separately: what a separate build is checked against.</summary>
     public bool Whole { get; init; }
@@ -142,7 +166,7 @@ public static class IncrementalBuild {
                 var (i, j, file) = item;
                 var text = File.ReadAllText(file.Path);
                 texts[i][j] = text;
-                fileHashes[i][j] = Hash($"{file.Name}\n{string.Join(",", file.Features.Order(StringComparer.Ordinal))}\n{text}");
+                fileHashes[i][j] = Hash($"{file.Name}\n{string.Join(",", file.Features.Order(StringComparer.Ordinal))}\n{file.Generators}\n{text}");
             });
         }
 
@@ -152,7 +176,8 @@ public static class IncrementalBuild {
             return new(true, [], "fresh", 0, units.Count + 1);
         }
 
-        // ---- Parse ---------------------------------------------------------
+        // ---- Parse, for the target ------------------------------------------
+        var target = settings.Native.TargetOrHost;
         SyntaxTree[][] trees;
         using (BuildTimings.Of(timings, "parse")) {
             trees = [..units.Select(static u => new SyntaxTree[u.Files.Count])];
@@ -160,7 +185,7 @@ public static class IncrementalBuild {
             Parallel.ForEach(all, item => {
                 var (i, j, file) = item;
                 // 'DEBUG' or 'RELEASE' follows from the settings, which key the cache.
-                trees[i][j] = SyntaxTree.Parse(new SourceText(texts[i][j], file.Name), Pipeline.ParseOptionsFor(settings.Optimise, file.Options));
+                trees[i][j] = SyntaxTree.Parse(new SourceText(texts[i][j], file.Name), Pipeline.ParseOptionsFor(settings.Optimise, file.Options.ForTarget(target.Os, target.Arch)));
             });
             timings?.Count("files parsed", all.Count);
         }
@@ -170,7 +195,7 @@ public static class IncrementalBuild {
 
         var outcome = settings.Separate
             ? Separately(units, trees, fileHashes, library, settings, settingsKey, executable, cacheDirectory, timings, log)
-            : Whole(program, settings, executable, timings);
+            : Whole(program, settings, executable, cacheDirectory, timings);
 
         if (outcome.Succeeded) {
             using var _ = BuildTimings.Of(timings, "record");
@@ -213,8 +238,8 @@ public static class IncrementalBuild {
     // The whole program
     // =======================================================================
 
-    static BuildOutcome Whole(IReadOnlyList<SyntaxTree> program, BuildSettings settings, string executable, BuildTimings? timings) {
-        var result = Pipeline.Compile(program, settings.DebugDirectory, settings.Exclusivity, timings, optimised: settings.Optimise);
+    static BuildOutcome Whole(IReadOnlyList<SyntaxTree> program, BuildSettings settings, string executable, string cacheDirectory, BuildTimings? timings) {
+        var result = Pipeline.Compile(program, settings.DebugDirectory, settings.Exclusivity, timings, optimised: settings.Optimise, target: settings.Native.TargetOrHost);
         if (!result.Succeeded) {
             return BuildOutcome.Failed(result.Errors) with { Warnings = result.Warnings };
         }
@@ -222,7 +247,7 @@ public static class IncrementalBuild {
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(executable))!);
         NativeBuildResult native;
         using (BuildTimings.Of(timings, "clang")) {
-            native = NativeBuild.Build(result.LlvmIr!, executable, settings.Native);
+            native = NativeBuild.Build(result.LlvmIr!, executable, settings.Native, Path.Combine(cacheDirectory, "objects"));
         }
 
         return (native.Succeeded
@@ -254,7 +279,7 @@ public static class IncrementalBuild {
         // The units: the program's, then the standard library's — the core,
         // which every compilation has, and the modules the program imports.
         var units = plans.Select((p, i) => new Unit(p.Name, trees[i], Hash(string.Join("\n", fileHashes[i])))).ToList();
-        var standard = new Unit("std", [..library, ..CoreLibrary.Trees], Hash(string.Join("\n", library.Select(static t => t.Text.FileName))));
+        var standard = new Unit("std", [..library, ..CoreLibrary.TreesFor(trees[0][0].Options)], Hash(string.Join("\n", library.Select(static t => t.Text.FileName))));
         units.Add(standard);
 
         // Binding the program's declarations — every unit compiled needs them —
@@ -270,15 +295,45 @@ public static class IncrementalBuild {
             timings?.Add("declarations (alongside)", System.Diagnostics.Stopwatch.GetElapsedTime(started));
             return created;
         });
-        var indexing = Task.Run(() => SilProgram.Index([..program, ..library, ..CoreLibrary.Trees]));
+        var indexing = Task.Run(() => SilProgram.Index([..program, ..standard.Trees]));
 
         // ---- The program's interface ----------------------------------------
+        // Each unit's interface is read from its .sbi when the unit, and the
+        // program's concrete types, are as they were; otherwise it is worked
+        // out from the unit's files and its .sbi written.
         string programInterface;
+        var interfaces = Path.Combine(cacheDirectory, "interfaces");
+        var interfaceFiles = new List<string>();
         using (BuildTimings.Of(timings, "interface")) {
             var allTrees = units.SelectMany(static u => u.Trees).ToList();
             var concrete = InterfaceFingerprint.ConcreteTypeNames(allTrees);
+            var concreteKey = Hash(string.Join(",", concrete.Order(StringComparer.Ordinal)));
             var fingerprints = new ConcurrentDictionary<SyntaxTree, string>();
-            Parallel.ForEach(units.Where(u => u != standard).SelectMany(static u => u.Trees), tree => fingerprints[tree] = InterfaceFingerprint.Of(tree, concrete));
+            var read = 0;
+            Parallel.ForEach(units.Where(u => u != standard), unit => {
+                var path = Path.Combine(interfaces, Hash($"{settingsKey}\ninterface {unit.Name}\n{unit.ContentHash}\n{concreteKey}") + ".sbi");
+                lock (interfaceFiles) {
+                    interfaceFiles.Add(path);
+                }
+
+                var names = unit.Trees.Select(static t => t.Text.FileName).ToList();
+                if (InterfaceFile.ReadFingerprints(path, unit.Name, names) is { } known) {
+                    for (var i = 0; i < known.Count; i++) {
+                        fingerprints[unit.Trees[i]] = known[i];
+                    }
+
+                    Interlocked.Increment(ref read);
+                    return;
+                }
+
+                var worked = unit.Trees.AsParallel().AsOrdered().Select(tree => InterfaceFingerprint.Interface(tree, concrete)).ToList();
+                for (var i = 0; i < worked.Count; i++) {
+                    fingerprints[unit.Trees[i]] = worked[i].Fingerprint;
+                }
+
+                new InterfaceFile(unit.Name, [..names.Zip(worked, static (n, w) => (n, w.Fingerprint))], [..worked.Select(static w => w.Source)]).WriteTo(path);
+            });
+            timings?.Count("interfaces read", read);
             programInterface = Hash(string.Join("\n", units.Select(u => u == standard
                 ? $"{u.Name}:{u.ContentHash}"
                 : $"{u.Name}:{string.Join(",", u.Trees.Select(t => t.Text.FileName + "=" + fingerprints[t]))}")));
@@ -299,7 +354,7 @@ public static class IncrementalBuild {
         var runtime = Path.Combine(objects, "runtime-" + Hash(settingsKey + "\nruntime") + ".o");
         var runtimeTask = File.Exists(runtime)
             ? Task.FromResult(new NativeBuildResult(true, ""))
-            : Task.Run(() => NativeObjects.CompileRuntime(runtime, settings.Optimise, settings.Debug));
+            : Task.Run(() => NativeObjects.CompileRuntime(runtime, settings.Native));
 
         var compiling = new List<(Unit Unit, Task<NativeBuildResult> Task)>();
         var throttle = new SemaphoreSlim(Environment.ProcessorCount);
@@ -335,7 +390,7 @@ public static class IncrementalBuild {
                 // whole program's compilation says authoritatively.
                 if (lowering.Count > 0) {
                     log?.WriteLine($"note: unit '{unit.Name}' could not be lowered on its own; compiling the program whole");
-                    return Whole(program, settings, executable, timings);
+                    return Whole(program, settings, executable, cacheDirectory, timings);
                 }
 
                 var problems = timings is null ? SilVerifier.Verify(module) : timings.Measure("verify", () => SilVerifier.Verify(module));
@@ -343,9 +398,23 @@ public static class IncrementalBuild {
                     return BuildOutcome.Failed([..problems.Select(static p => $"internal error: SIL verification failed: {p}")]);
                 }
 
+                // Optimised, the SIL passes run on the unit as on a whole
+                // program. What they learn about a function from its callees
+                // — whether a parameter escapes, whether a field is written —
+                // they assume the worst of for a function another unit
+                // defines, which this one only declares.
+                if (settings.Optimise) {
+                    try {
+                        using var _ = BuildTimings.Of(timings, "passes");
+                        SilPassManager.Run(module, SilPassManager.Default);
+                    } catch (SilPassException failure) {
+                        return BuildOutcome.Failed([$"internal error: {failure.Message}"]);
+                    }
+                }
+
                 string ir;
                 using (BuildTimings.Of(timings, "emit")) {
-                    ir = settings.DebugDirectory is { } directory ? LlvmEmitter.EmitWithDebugInfo(module, directory) : LlvmEmitter.Emit(module);
+                    ir = settings.DebugDirectory is { } directory ? LlvmEmitter.EmitWithDebugInfo(module, directory, settings.Native.TargetOrHost) : LlvmEmitter.Emit(module, settings.Native.TargetOrHost);
                 }
 
                 var abi = string.Join("\n", module.Unit!.Abi.Select(static p => $"{p.Key}\t{p.Value}"));
@@ -354,7 +423,7 @@ public static class IncrementalBuild {
                     try {
                         var started = System.Diagnostics.Stopwatch.GetTimestamp();
                         File.WriteAllText(unit.AbiPath, abi);
-                        var result = NativeObjects.CompileIr(ir, unit.ObjectPath, settings.Optimise, settings.Debug);
+                        var result = NativeObjects.CompileIr(ir, unit.ObjectPath, settings.Native);
                         timings?.Add("clang (units, summed)", System.Diagnostics.Stopwatch.GetElapsedTime(started));
                         return result;
                     } finally {
@@ -381,22 +450,23 @@ public static class IncrementalBuild {
         // ---- Every unit must have seen the same types -----------------------
         if ((timings is null ? Disagreement(units) : timings.Measure("abi check", () => Disagreement(units))) is { } disagreement) {
             log?.WriteLine($"note: the units disagree about {disagreement}; compiling the program whole");
-            return Whole(trees.SelectMany(static t => t).ToList(), settings, executable, timings);
+            return Whole(trees.SelectMany(static t => t).ToList(), settings, executable, cacheDirectory, timings);
         }
 
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(executable))!);
         NativeBuildResult link;
         using (BuildTimings.Of(timings, "link")) {
-            link = NativeObjects.Link([..units.Select(static u => u.ObjectPath), runtime], executable, settings.Native);
+            link = NativeObjects.Link([..units.Select(static u => u.ObjectPath), runtime], executable, settings.Native, Path.Combine(cacheDirectory, "thinlto"));
         }
 
         if (!link.Succeeded) {
             log?.WriteLine($"note: the units did not link ({FirstLine(link.Output)}); compiling the program whole");
-            return Whole(trees.SelectMany(static t => t).ToList(), settings, executable, timings);
+            return Whole(trees.SelectMany(static t => t).ToList(), settings, executable, cacheDirectory, timings);
         }
 
         using (BuildTimings.Of(timings, "cache upkeep")) {
             Collect(objects, units);
+            CollectInterfaces(interfaces, interfaceFiles);
         }
 
         return new(true, [], "incremental", stale.Count, units.Count - stale.Count) { Warnings = warnings };
@@ -423,6 +493,24 @@ public static class IncrementalBuild {
         foreach (var marker in markers.OrderBy(static m => m.LastWriteTimeUtc).Take(markers.Length - limit)) {
             File.Delete(Path.ChangeExtension(marker.FullName, ".o"));
             marker.Delete();
+        }
+    }
+
+    /// <summary>The same for the <c>.sbi</c> files: those this build used are marked, and past a limit the least recently used go.</summary>
+    static void CollectInterfaces(string interfaces, IReadOnlyList<string> used) {
+        if (!Directory.Exists(interfaces)) {
+            return;
+        }
+
+        var now = DateTime.UtcNow;
+        foreach (var path in used.Where(File.Exists)) {
+            File.SetLastWriteTimeUtc(path, now);
+        }
+
+        var limit = Math.Max(256, 8 * used.Count);
+        var files = new DirectoryInfo(interfaces).GetFiles("*.sbi");
+        foreach (var file in files.OrderBy(static f => f.LastWriteTimeUtc).Take(Math.Max(0, files.Length - limit))) {
+            file.Delete();
         }
     }
 

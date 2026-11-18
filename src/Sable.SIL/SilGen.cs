@@ -1279,7 +1279,7 @@ public sealed partial class SilGen {
         }
 
         if (type is NamedTypeSymbol { TypeArguments.IsEmpty: true } primitive
-            && (Core.Integers.Contains(primitive) || primitive.Equals(Core.F32))
+            && (Core.Integers.Contains(primitive) || Core.Floats.Contains(primitive))
             && SilType.Numbers.FirstOrDefault(n => n.ToString() == primitive.Name) is { } number) {
             return number;
         }
@@ -1489,6 +1489,9 @@ public sealed partial class SilGen {
                         }
 
                         payload = parts.Count == 1 ? parts[0] : SilType.Tuple(parts.ToImmutable());
+                        if (unionCase.Payload.All(static field => field.Label is not null)) {
+                            enumType.PayloadLabels[unionCase.Name] = [..unionCase.Payload.Select(static field => field.Label!)];
+                        }
                     }
 
                     enumType.Cases.Add((unionCase.Name, payload));
@@ -2851,9 +2854,15 @@ public sealed partial class SilGen {
         /// <summary>The source position instructions emitted now belong to.</summary>
         SilLocation? _location;
 
+        /// <summary>The lexical scope being lowered: 0 for the function's own, else one of its <see cref="SilFunction.Scopes" />.</summary>
+        int _scope;
+
+        /// <summary>The function's body, whose scope is the function's own.</summary>
+        BoundBlock? _body;
+
         void Locate(SyntaxNode syntax) {
             var position = source.GetLinePosition(syntax.Span.Start);
-            _location = new SilLocation(position.Line, position.Column);
+            _location = new SilLocation(position.Line, position.Column, _scope);
         }
 
         SilBlock _entry = null!;
@@ -2936,6 +2945,7 @@ public sealed partial class SilGen {
                 }
             }
 
+            _body = body;
             Statement(body);
 
             // Falling off the end: fine for a function returning nothing, and
@@ -3590,7 +3600,28 @@ public sealed partial class SilGen {
         // Statements
         // -------------------------------------------------------------------
 
+        /// <summary>
+        ///     Lowers a statement, in a lexical scope of its own when it is a
+        ///     nested block or binds names for one — a loop's variable, an
+        ///     'if let''s, a case's — so that a debugger shows a local only
+        ///     where it can be named, and a shadowing one hides what it shadows.
+        /// </summary>
         void Statement(BoundStatement statement) {
+            var outer = _scope;
+            if (statement is BoundBlock or BoundForEach or BoundIf or BoundWhile or BoundSwitch or BoundDo && !ReferenceEquals(statement, _body)) {
+                var start = source.GetLinePosition(statement.Syntax.Span.Start);
+                function.Scopes.Add(new SilScope(outer, start.Line, start.Column));
+                _scope = function.Scopes.Count;
+            }
+
+            try {
+                LowerStatement(statement);
+            } finally {
+                _scope = outer;
+            }
+        }
+
+        void LowerStatement(BoundStatement statement) {
             if (_failed) {
                 return;
             }
@@ -3600,7 +3631,7 @@ public sealed partial class SilGen {
             }
 
             switch (statement) {
-                case BoundBlock block:
+                case BoundBlock block: {
                     _scopes.Add([]);
                     foreach (var child in block.Statements) {
                         Statement(child);
@@ -3612,6 +3643,7 @@ public sealed partial class SilGen {
 
                     _scopes.RemoveAt(_scopes.Count - 1);
                     return;
+                }
 
                 case BoundDefer defer:
                     _scopes[^1].Add(defer.Body);
@@ -3722,7 +3754,7 @@ public sealed partial class SilGen {
                     ForRange(loop, range);
                     return;
 
-                case BoundForEach loop when Core.IsRange(Sub(loop.Sequence.Type)):
+                case BoundForEach loop when Core.IsCountableRange(Sub(loop.Sequence.Type)):
                     ForRangeValue(loop);
                     return;
 
@@ -3917,21 +3949,39 @@ public sealed partial class SilGen {
                 return;
             }
 
+            // 'a...' held in a variable has no upper bound to stop at.
             var lower = Emit(new StructExtractInst(range, structType.FieldIndex("lowerBound")));
-            var upper = Emit(new StructExtractInst(range, structType.FieldIndex("upperBound")));
+            var upper = structType.FieldIndex("upperBound") is var upperIndex and >= 0
+                ? Emit(new StructExtractInst(range, upperIndex))
+                : null;
             Destroy(range);
             var isInclusive = Sub(loop.Sequence.Type) is NamedTypeSymbol named
                 && named.OriginalDefinition.Equals(Core.ClosedRange);
             CountingLoop(loop, lower, upper, isInclusive);
         }
 
+        /// <remarks>
+        ///     The counter is of the bounds' own integer type, and steps with
+        ///     that type's arithmetic, so stepping past its largest value traps.
+        ///     A range of characters counts their code points, as Ints, and
+        ///     steps over the surrogates, which are no characters.
+        /// </remarks>
         void CountingLoop(BoundForEach loop, SilValue lower, SilValue? upper, bool isInclusive) {
-            if (lower.Type != SilType.Int || SlotFor(loop.Element!, loop.Syntax) is null) {
-                Fail(loop.Syntax, "a 'for' over a range that is not of Int");
+            var isCharacter = lower.Type == SilType.Char;
+            if (!(SilType.IsInteger(lower.Type) || isCharacter) || SlotFor(loop.Element!, loop.Syntax) is null) {
+                Fail(loop.Syntax, $"a 'for' over a range of {lower.Type}");
                 return;
             }
 
-            var counter = NewSlot(SilType.Int);
+            if (isCharacter) {
+                lower = Emit(new BuiltinInst("char_to_Int", SilType.Int, lower));
+                if (upper is not null) {
+                    upper = Emit(new BuiltinInst("char_to_Int", SilType.Int, upper));
+                }
+            }
+
+            var type = lower.Type;
+            var counter = NewSlot(type);
             Emit(new StoreInst(lower, counter, StoreKind.Init));
 
             var header = function.AddBlock();
@@ -3945,13 +3995,18 @@ public sealed partial class SilGen {
                 Branch(body);
             } else {
                 var current = Emit(new LoadInst(counter));
-                var compare = isInclusive ? "cmp_le_Int" : "cmp_lt_Int";
+                var compare = isInclusive ? $"cmp_le_{type}" : $"cmp_lt_{type}";
                 var inside = Emit(new BuiltinInst(compare, SilType.Bool, current, upper));
                 Jump(new CondBranchInst(inside, body, [], after, []));
             }
 
             _current = body;
-            BindLocal(loop.Element!, Emit(new LoadInst(counter)), loop.Syntax);
+            SilValue value = Emit(new LoadInst(counter));
+            if (isCharacter) {
+                value = Emit(new TupleExtractInst(Emit(new BuiltinInst("char_from_Int", SilType.Tuple([SilType.Bool, SilType.Char]), value)), 1));
+            }
+
+            BindLocal(loop.Element!, value, loop.Syntax);
             if (loop.Filter is { } filter) {
                 var filtered = function.AddBlock();
                 Condition(filter, filtered, step);
@@ -3970,15 +4025,27 @@ public sealed partial class SilGen {
             var last = Emit(new LoadInst(counter));
             var more = function.AddBlock();
             if (isInclusive && upper is not null) {
-                var atEnd = Emit(new BuiltinInst("cmp_eq_Int", SilType.Bool, last, upper));
+                var atEnd = Emit(new BuiltinInst($"cmp_eq_{type}", SilType.Bool, last, upper));
                 Jump(new CondBranchInst(atEnd, after, [], more, []));
             } else {
                 Branch(more);
             }
 
             _current = more;
-            var one = Emit(new IntegerLiteralInst(SilType.Int, 1));
-            Emit(new StoreInst(Emit(new BuiltinInst("add_Int", SilType.Int, last, one)), counter, StoreKind.Assign));
+            var one = Emit(new IntegerLiteralInst(type, 1));
+            var stepped = Emit(new BuiltinInst($"add_{type}", type, last, one));
+
+            Emit(new StoreInst(stepped, counter, StoreKind.Assign));
+
+            // After U+D7FF comes U+E000: the surrogates between are no characters.
+            if (isCharacter) {
+                var isSurrogate = Emit(new BuiltinInst("cmp_eq_Int", SilType.Bool, stepped, Emit(new IntegerLiteralInst(SilType.Int, 0xD800))));
+                var skip = function.AddBlock();
+                Jump(new CondBranchInst(isSurrogate, skip, [], header, []));
+                _current = skip;
+                Emit(new StoreInst(Emit(new IntegerLiteralInst(SilType.Int, 0xE000)), counter, StoreKind.Assign));
+            }
+
             Branch(header);
 
             _current = after;
@@ -5643,13 +5710,9 @@ public sealed partial class SilGen {
                 return Emit(new IntegerLiteralInst(SilType.Char, scalar.Value));
             }
 
-            if (type == SilType.Int && value is long or int or ulong) {
-                var number = System.Convert.ToDecimal(value);
-                if (negative) {
-                    number = -number;
-                }
-
-                if (number is > long.MaxValue or < long.MinValue) {
+            if (type == SilType.Int && IntegerOf(value) is { } whole) {
+                var number = negative ? -whole : whole;
+                if (number > long.MaxValue || number < long.MinValue) {
                     Fail(at, $"the integer '{value}', which does not fit in Int");
                     return null;
                 }
@@ -5657,12 +5720,8 @@ public sealed partial class SilGen {
                 return Emit(new IntegerLiteralInst(SilType.Int, (long)number));
             }
 
-            if (SilType.IntegerInfo(type) is var (bits, signed) && value is long or int or ulong) {
-                var number = (System.Numerics.BigInteger)System.Convert.ToDecimal(value);
-                if (negative) {
-                    number = -number;
-                }
-
+            if (SilType.IntegerInfo(type) is var (bits, signed) && IntegerOf(value) is { } integer) {
+                var number = negative ? -integer : integer;
                 var low = signed ? -(System.Numerics.BigInteger.One << (bits - 1)) : 0;
                 var high = signed ? (System.Numerics.BigInteger.One << (bits - 1)) - 1 : (System.Numerics.BigInteger.One << bits) - 1;
                 if (number < low || number > high) {
@@ -5670,17 +5729,30 @@ public sealed partial class SilGen {
                     return null;
                 }
 
-                return Emit(new IntegerLiteralInst(type, number > long.MaxValue ? unchecked((long)(ulong)number) : (long)number));
+                // The bits, read as signed: an unsigned value past the signed
+                // range is kept as the negative number with the same bits.
+                var bitsValue = number > (System.Numerics.BigInteger)Int128.MaxValue ? number - (System.Numerics.BigInteger.One << 128) : number;
+                return Emit(new IntegerLiteralInst(type, (Int128)bitsValue));
             }
 
-            if (SilType.IsFloat(type) && value is double or long or int or ulong) {
-                var number = System.Convert.ToDouble(value);
-                return Emit(new FloatLiteralInst(negative ? -number : number, type));
+            if (SilType.IsFloat(type) && (value is double ? System.Convert.ToDouble(value) : IntegerOf(value) is { } exact ? (double)exact : (double?)null) is { } real) {
+                return Emit(new FloatLiteralInst(negative ? -real : real, type));
             }
 
             Fail(at, $"the literal '{Describe(at)}' of type {type}");
             return null;
         }
+
+        /// <summary>An integer literal's value, of whichever width the lexer and binder gave it; null for anything else.</summary>
+        static System.Numerics.BigInteger? IntegerOf(object? value) =>
+            value switch {
+                int i => i,
+                long l => l,
+                ulong u => u,
+                Int128 i => (System.Numerics.BigInteger)i,
+                UInt128 u => (System.Numerics.BigInteger)u,
+                _ => null,
+            };
 
         /// <summary>
         ///     <c>"x = \(x)"</c>: the text and the holes, each as a string,
@@ -6002,6 +6074,22 @@ public sealed partial class SilGen {
                 return value;
             }
 
+            // A character converts through its code point, an Int: to an
+            // integer as an Int converts, and from one only when the number
+            // is a Unicode scalar, which 'as' checks and traps on.
+            if (value.Type == SilType.Char && SilType.IsInteger(target)) {
+                var code = Emit(new BuiltinInst("char_to_Int", SilType.Int, value));
+                return target == SilType.Int ? code : Emit(new BuiltinInst($"{(conversion.IsUnchecked ? "wrap" : "convert")}_Int_{target}", target, code));
+            }
+
+            if (target == SilType.Char && SilType.IsInteger(value.Type)) {
+                var number = value.Type == SilType.Int ? value : Emit(new BuiltinInst($"convert_{value.Type}_Int", SilType.Int, value));
+                var scalar = Emit(new BuiltinInst("char_from_Int", SilType.Tuple([SilType.Bool, SilType.Char]), number));
+                var valid = Emit(new TupleExtractInst(scalar, 0));
+                Emit(new CondFailInst(Emit(new BuiltinInst("not_Bool", SilType.Bool, valid)), $"{value.Type} is not a Unicode scalar, so it is no Char"));
+                return Emit(new TupleExtractInst(scalar, 1));
+            }
+
             // 'unchecked as' wraps where 'as' would trap.
             var name = $"{(conversion.IsUnchecked ? "wrap" : "convert")}_{value.Type}_{target}";
             return SilBuiltins.Find(name) is not null
@@ -6014,21 +6102,33 @@ public sealed partial class SilGen {
         ///     built from its two bounds.
         /// </summary>
         SilValue? RangeValue(BoundRange range) {
-            if (range.Lower is null || range.Upper is null) {
-                return Missing(range, "a range open at one end");
-            }
-
             if (LowerType(range.Type) is not StructType structType) {
                 return Missing(range, $"a range of type '{Sub(range.Type).ToDisplayString()}'");
             }
 
-            if (Evaluate([range.Lower, range.Upper]) is not { } bounds) {
+            // A one-sided range has a field for the bound it has, and only that.
+            var given = new List<(string Field, BoundExpression Value)>();
+            if (range.Lower is { } lowerBound) {
+                given.Add(("lowerBound", lowerBound));
+            }
+
+            if (range.Upper is { } upperBound) {
+                given.Add(("upperBound", upperBound));
+            }
+
+            if (given.Count != structType.Fields.Count || given.Any(g => structType.FieldIndex(g.Field) < 0)) {
+                return Missing(range, $"a range of type '{Sub(range.Type).ToDisplayString()}'");
+            }
+
+            if (Evaluate(given.Select(static g => g.Value)) is not { } bounds) {
                 return null;
             }
 
             var fields = new SilValue[structType.Fields.Count];
-            fields[structType.FieldIndex("lowerBound")] = bounds[0];
-            fields[structType.FieldIndex("upperBound")] = bounds[1];
+            for (var i = 0; i < given.Count; i++) {
+                fields[structType.FieldIndex(given[i].Field)] = bounds[i];
+            }
+
             return Emit(new StructInst(structType, fields));
         }
 
@@ -6182,7 +6282,7 @@ public sealed partial class SilGen {
                     : Missing(index, $"indexing '{index.Receiver.Type.ToDisplayString()}'");
             }
 
-            if (index.Indices is [var rangeIndex] && Core.IsRange(Sub(rangeIndex.Type)) && !IsInlineArray(index.Receiver)) {
+            if (index.Indices is [var rangeIndex] && Core.IsAnyRange(Sub(rangeIndex.Type)) && !IsInlineArray(index.Receiver)) {
                 return RangeRead(index, rangeIndex);
             }
 
@@ -6248,9 +6348,18 @@ public sealed partial class SilGen {
                     return null;
                 }
 
-                from = Emit(new StructExtractInst(range, rangeType.FieldIndex("lowerBound")));
-                to = Emit(new StructExtractInst(range, rangeType.FieldIndex("upperBound")));
-                inclusive = ReferenceEquals(((NamedTypeSymbol)Sub(rangeIndex.Type)).OriginalDefinition, Core.ClosedRange);
+                // A one-sided range held in a variable has only one of the
+                // fields: the start, or the array's count, stands in for the other.
+                from = rangeType.FieldIndex("lowerBound") is var lowerIndex and >= 0
+                    ? Emit(new StructExtractInst(range, lowerIndex))
+                    : Emit(new IntegerLiteralInst(SilType.Int, 0));
+                var upperIndex = rangeType.FieldIndex("upperBound");
+                to = upperIndex >= 0
+                    ? Emit(new StructExtractInst(range, upperIndex))
+                    : Emit(new BuiltinInst("array_count", SilType.Int, array));
+                var definition = ((NamedTypeSymbol)Sub(rangeIndex.Type)).OriginalDefinition;
+                inclusive = upperIndex >= 0
+                    && (ReferenceEquals(definition, Core.ClosedRange) || ReferenceEquals(definition, Core.PartialRangeThrough));
             }
 
             if (from is null || to is null) {

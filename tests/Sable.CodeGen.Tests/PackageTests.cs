@@ -108,6 +108,19 @@ public sealed class PackageTests {
         Assert.Contains("Built app: whole", fixture.Errors.ToString(), StringComparison.Ordinal);
     }
 
+    /// <summary>A module is one package's: another package declaring it too is an error, not one module of both.</summary>
+    [Fact]
+    public void TwoPackagesCannotDeclareTheSameModule() {
+        using var fixture = new PackageFixture();
+        WriteUtil(fixture);
+        WriteApp(fixture);
+        fixture.Write("app/src/borrowed.sb", "module Util\n\nfn thrice(_ x: Int) -> Int {\n    return x * 3\n}\n");
+
+        Assert.Equal(1, PackageBuilder.Check(fixture.Load("app"), fixture.Environment, new()));
+        Assert.Contains("module 'Util' is declared by package", fixture.Errors.ToString(), StringComparison.Ordinal);
+        Assert.Contains("S2090", fixture.Errors.ToString(), StringComparison.Ordinal);
+    }
+
     [Fact]
     public void ErrorsAreReportedAgainstTheFileTheyAreIn() {
         using var fixture = new PackageFixture();

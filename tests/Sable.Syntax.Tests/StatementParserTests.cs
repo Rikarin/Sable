@@ -88,6 +88,16 @@ public sealed class StatementParserTests {
         Assert.Null(Assert.IsType<ReturnStatementSyntax>(block.Statements[0]).Expression);
     }
 
+    [Theory]
+    [InlineData("return ..<n")]
+    [InlineData("return ...n")]
+    public void ReturnTakesARangeOpenAtTheStart(string source) {
+        var tree = SyntaxTree.ParseStatement(source);
+        Assert.False(tree.HasErrors, tree.FormatDiagnostics());
+        var range = Assert.IsType<RangeExpressionSyntax>(Assert.IsType<ReturnStatementSyntax>(tree.Root).Expression);
+        Assert.Null(range.Left);
+    }
+
     // ---- Control flow -----------------------------------------------------
 
     [Fact]

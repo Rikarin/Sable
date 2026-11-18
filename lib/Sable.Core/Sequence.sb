@@ -1,0 +1,87 @@
+module Sable.Core
+
+// The iteration protocols: what 'for x in s' asks of a type that is not an
+// array, a dictionary or a range, which the compiler knows by sight. The
+// loop is
+//
+//     var iterator = s.makeIterator()
+//     while let x = iterator.next() { ... }
+//
+// and 'for await' the same over 'makeAsyncIterator()', awaiting each 'next()'.
+
+/// Gives the values of a sequence one at a time, then none.
+public protocol Iterator {
+    /// What it gives.
+    associatedtype Element
+
+    /// The next value, or none once there are no more; after that, none again.
+    mutating fn next() -> Element?
+}
+
+/// Values that a 'for' loop can go through, by the iterator it makes. The
+/// loop is given the iterator's elements, 'Iter.Element': generic code
+/// constrains those, 'where S.Iter.Element == Int'.
+public protocol Sequence {
+    /// What goes through it.
+    associatedtype Iter: Iterator
+
+    /// An iterator positioned at the first value.
+    fn makeIterator() -> Iter
+}
+
+/// Gives values one at a time as they come, then none: what 'for await'
+/// goes through.
+public protocol AsyncIterator {
+    /// What it gives.
+    associatedtype Element
+
+    /// The next value, waiting for it, or none once there are no more.
+    mutating fn next() async -> Element?
+}
+
+/// Values that a 'for await' loop can go through, by the iterator it makes,
+/// whose elements, 'Iter.Element', the loop is given.
+public protocol AsyncSequence {
+    /// What goes through it.
+    associatedtype Iter: AsyncIterator
+
+    /// An iterator positioned at the first value.
+    fn makeAsyncIterator() -> Iter
+}
+
+/// A string's characters, one Unicode scalar at a time.
+public struct StringIterator: Iterator {
+    public alias Element = Char
+
+    let text: String
+
+    // Where the next character starts: a position only the runtime reads.
+    var cursor: Int
+
+    public mutating fn next() -> Char? {
+        if cursor >= StringIterator.end(text) {
+            return none
+        }
+        let character = StringIterator.scalar(text, cursor)
+        cursor = StringIterator.after(text, cursor)
+        return character
+    }
+
+    @builtin("string_cursor_end")
+    static fn end(_ text: String) -> Int
+
+    @builtin("string_cursor_scalar")
+    static fn scalar(_ text: String, _ cursor: Int) -> Char
+
+    @builtin("string_cursor_next")
+    static fn after(_ text: String, _ cursor: Int) -> Int
+}
+
+extension String: Sequence {
+    public alias Iter = StringIterator
+
+    /// An iterator over the characters, from the first.
+    public fn makeIterator() -> StringIterator {
+        return StringIterator { text: self, cursor: 0 }
+    }
+}

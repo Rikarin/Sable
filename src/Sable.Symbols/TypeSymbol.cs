@@ -194,9 +194,28 @@ public sealed class NamedTypeSymbol : TypeSymbol {
     public bool IsAbstract { get; internal set; }
 
     public ImmutableArray<TypeSymbol> BaseTypes {
-        get => _baseTypes;
+        get {
+            // A construction's are its definition's, whenever they were bound:
+            // 'Channel<Int>' may be made before 'Channel: AsyncSequence' is.
+            if (!ReferenceEquals(OriginalDefinition, this)) {
+                return OriginalDefinition.BaseTypes;
+            }
+
+            // Bound the first time they are asked for, as the constraints of
+            // an associated type are: a body in a file read before this
+            // type's may ask whether it conforms to something.
+            if (PendingBaseTypes is { } bind) {
+                PendingBaseTypes = null;
+                bind();
+            }
+
+            return _baseTypes;
+        }
         internal set => _baseTypes = value;
     }
+
+    /// <summary>Binds the declaration's base types, its constraints and its 'where' clause; null once it has.</summary>
+    internal Action? PendingBaseTypes { get; set; }
 
     /// <summary>Members by name, built on demand; see <see cref="ModuleSymbol" />.</summary>
     Dictionary<string, List<Symbol>>? _byName;
@@ -280,7 +299,28 @@ public sealed class TypeParameterSymbol(
     public int Ordinal { get; } = ordinal;
 
     /// <summary>The types this parameter must conform to or inherit from.</summary>
-    public ImmutableArray<TypeSymbol> Constraints { get; internal set; } = [];
+    public ImmutableArray<TypeSymbol> Constraints {
+        get {
+            // Bound the first time they are asked for: an associated type's
+            // constraints may be wanted by a signature in a file read before
+            // the protocol's own, as 'S.Iter.Element' wants 'Iter: Iterator'.
+            if (ConstraintsResolver is { } resolve) {
+                ConstraintsResolver = null;
+                _constraints = resolve();
+            }
+
+            return _constraints;
+        }
+        internal set {
+            ConstraintsResolver = null;
+            _constraints = value;
+        }
+    }
+
+    ImmutableArray<TypeSymbol> _constraints = [];
+
+    /// <summary>Binds <see cref="Constraints" /> when they are first read; null once they are.</summary>
+    internal Func<ImmutableArray<TypeSymbol>>? ConstraintsResolver { get; set; }
 
     /// <summary>Variance, from <c>out T</c> or <c>in T</c>.</summary>
     public VarianceKind Variance { get; internal set; } = VarianceKind.None;

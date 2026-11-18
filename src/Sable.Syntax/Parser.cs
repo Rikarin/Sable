@@ -2672,7 +2672,9 @@ internal sealed class Parser {
 
             case SyntaxKind.ReturnKeyword: {
                 var returnKeyword = EatToken();
-                var value = !returnKeyword.TerminatesStatement && CanStartExpression(Current.Kind)
+
+                // 'return ..<n' returns a range open at the start.
+                var value = !returnKeyword.TerminatesStatement && (CanStartExpression(Current.Kind) || IsRangeOperator(Current.Kind))
                     ? ParseExpression()
                     : null;
                 return new ReturnStatementGreen(

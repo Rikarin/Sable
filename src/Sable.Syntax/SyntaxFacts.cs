@@ -106,12 +106,15 @@ public static class SyntaxFacts {
         }.ToFrozenDictionary(StringComparer.Ordinal);
 
     static readonly FrozenSet<string> FutureReserved =
-        new[] { "macro", "yield", "trait", "impl", "become", "effect", "handler" }
+        new[] { "yield", "trait", "impl", "become", "effect", "handler" }
             .ToFrozenSet(StringComparer.Ordinal);
 
     /// <summary>Maps an identifier spelling to its keyword kind, or Identifier.</summary>
     public static SyntaxKind KeywordKind(string text) =>
         Keywords.TryGetValue(text, out var kind) ? kind : SyntaxKind.IdentifierToken;
+
+    /// <summary>Every keyword's spelling, reserved and contextual: what a REPL completes.</summary>
+    public static IEnumerable<string> KeywordTexts => Keywords.Keys;
 
     public static bool IsFutureReserved(string text) => FutureReserved.Contains(text);
 

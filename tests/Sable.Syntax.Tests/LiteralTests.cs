@@ -20,9 +20,21 @@ public sealed class LiteralTests {
         Assert.Equal(expected, token.Value);
     }
 
+    // Past 64 bits a literal is a UInt128, for the 128-bit types to take.
     [Theory]
-    [InlineData("18446744073709551616", ErrorCode.ERR_IntegerLiteralOverflow)]
-    [InlineData("0xFFFFFFFFFFFFFFFFF", ErrorCode.ERR_IntegerLiteralOverflow)]
+    [InlineData("18446744073709551616", "18446744073709551616")]
+    [InlineData("340282366920938463463374607431768211455", "340282366920938463463374607431768211455")]
+    [InlineData("0xFFFFFFFFFFFFFFFFF", "295147905179352825855")]
+    [InlineData("0b1_0000000000_0000000000_0000000000_0000000000_0000000000_0000000000_0000", "18446744073709551616")]
+    public void LexesIntegersPastSixtyFourBits(string text, string expected) {
+        var token = TestHelpers.LexSingle(text);
+        Assert.Equal(SyntaxKind.IntegerLiteralToken, token.Kind);
+        Assert.Equal(UInt128.Parse(expected), token.Value);
+    }
+
+    [Theory]
+    [InlineData("340282366920938463463374607431768211456", ErrorCode.ERR_IntegerLiteralOverflow)]
+    [InlineData("0x1_0000_0000_0000_0000_0000_0000_0000_0000", ErrorCode.ERR_IntegerLiteralOverflow)]
     [InlineData("0x", ErrorCode.ERR_NumericLiteralNoDigits)]
     [InlineData("0b", ErrorCode.ERR_NumericLiteralNoDigits)]
     [InlineData("0o", ErrorCode.ERR_NumericLiteralNoDigits)]

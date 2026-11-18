@@ -467,4 +467,41 @@ public sealed class NativeTests {
         Assert.Contains("declare void @sable_retain(ptr)\n", marked, StringComparison.Ordinal);
         Assert.EndsWith("attributes #9000 = { \"target-cpu\"=\"x\" }\n", marked, StringComparison.Ordinal);
     }
+
+    /// <summary>
+    ///     The runtime is compiled once for each set of options that changes
+    ///     it, and kept: a second program built the same way links the object
+    ///     the first one left, rather than compiling 3,000 lines of C again.
+    ///     A build with other options makes, and keeps, another.
+    /// </summary>
+    [Fact]
+    public void TheRuntimeIsCompiledOnceAndKept() {
+        if (!CanBuild) {
+            return;
+        }
+
+        var cache = Directory.CreateTempSubdirectory("sable-runtime-cache-");
+        var executable = Path.Combine(cache.FullName, "program");
+        try {
+            var compiled = Pipeline.Compile(new SourceText("module Kept\n\n@main\nfn main() {\n    print(\"kept\")\n}\n", "test.sb"));
+            Assert.True(compiled.Succeeded, string.Join("\n", compiled.Errors));
+            var ir = compiled.LlvmIr!;
+            var options = NativeOptions.Of(optimise: true, debug: false);
+            Assert.True(NativeBuild.Build(ir, executable, options, cache.FullName).Succeeded);
+            var runtime = Assert.Single(Directory.GetFiles(cache.FullName, "runtime-*.o"));
+            var written = File.GetLastWriteTimeUtc(runtime);
+
+            File.Delete(executable);
+            Assert.True(NativeBuild.Build(ir, executable, options, cache.FullName).Succeeded);
+            Assert.Equal(written, File.GetLastWriteTimeUtc(Assert.Single(Directory.GetFiles(cache.FullName, "runtime-*.o"))));
+            Assert.Equal(("kept\n", 0), PackageFixture.Execute(executable));
+
+            // Unoptimised, it is another object.
+            Assert.True(NativeBuild.Build(ir, executable, NativeOptions.Of(optimise: false, debug: false), cache.FullName).Succeeded);
+            Assert.Equal(2, Directory.GetFiles(cache.FullName, "runtime-*.o").Length);
+            Assert.Equal(("kept\n", 0), PackageFixture.Execute(executable));
+        } finally {
+            cache.Delete(true);
+        }
+    }
 }

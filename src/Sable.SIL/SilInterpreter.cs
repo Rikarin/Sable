@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Numerics;
 using System.Text;
 
 namespace Sable.SIL;
@@ -30,8 +31,8 @@ public sealed class SilTrap(string message) : Exception(message);
 ///         <see cref="LiveObjects" /> above zero.
 ///     </para>
 /// </remarks>
-public sealed partial class SilInterpreter(SilModule module, int stepLimit = 10_000_000, int depthLimit = 2_000) {
-    int _steps;
+public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10_000_000, int depthLimit = 2_000) {
+    long _steps;
     readonly HashSet<Counted> _live = [];
     readonly Dictionary<StringLiteralInst, HeapString> _literals = [];
 
@@ -57,6 +58,22 @@ public sealed partial class SilInterpreter(SilModule module, int stepLimit = 10_
 
     /// <summary>Whether the last runtime call that can fail did.</summary>
     bool _ioFailed;
+
+    /// <summary>
+    ///     Where the program's effects on the world — what it reads, the
+    ///     files it writes, the clock — are recorded, and replayed instead of
+    ///     carried out again while the journal has more; null to carry every
+    ///     one out. A REPL session runs its earlier statements again for
+    ///     each entry, and with this they read what they read the first time
+    ///     and change nothing twice.
+    /// </summary>
+    public EffectJournal? Journal { get; init; }
+
+    /// <summary>Stops the program, as a trap, once cancelled: for a REPL, whose step limit is too high to wait for.</summary>
+    public CancellationToken Interrupt { get; init; }
+
+    /// <summary>How many of the journal's effects this run has replayed.</summary>
+    int _replayed;
 
     /// <summary>Heap objects allocated and not yet freed: after a whole program, a leak.</summary>
     public int LiveObjects => _live.Count;
@@ -515,6 +532,11 @@ public sealed partial class SilInterpreter(SilModule module, int stepLimit = 10_
                     throw new SilTrap("step limit reached");
                 }
 
+                // Asked every so many steps, not every one: a REPL's Ctrl-C.
+                if ((_steps & 0xFFFF) == 0 && Interrupt.IsCancellationRequested) {
+                    throw new SilTrap("interrupted");
+                }
+
                 object? Get(SilValue value) => values[value];
 
                 switch (instruction) {
@@ -522,11 +544,15 @@ public sealed partial class SilInterpreter(SilModule module, int stepLimit = 10_
                         values[literal] = literal.Type == SilType.Bool ? literal.Value != 0
                             : literal.Type == SilType.Char ? new Rune((int)literal.Value)
                             : literal.Type == SilType.U64 || literal.Type == SilType.UInt ? unchecked((ulong)literal.Value)
+                            : literal.Type == SilType.I128 ? literal.WideValue
+                            : literal.Type == SilType.U128 ? unchecked((UInt128)literal.WideValue)
                             : literal.Value;
                         break;
 
                     case FloatLiteralInst literal:
-                        values[literal] = literal.Type == SilType.F32 ? (object)(float)literal.Value : literal.Value;
+                        values[literal] = literal.Type == SilType.F32 ? (float)literal.Value
+                            : literal.Type == SilType.F16 ? (Half)literal.Value
+                            : (object)literal.Value;
                         break;
 
                     case StringLiteralInst literal:
@@ -833,7 +859,40 @@ public sealed partial class SilInterpreter(SilModule module, int stepLimit = 10_
     // Builtins
     // =======================================================================
 
-    object? Builtin(BuiltinInst builtin, object?[] operands, int depth) {
+    object? Builtin(BuiltinInst builtin, object?[] operands, int depth) =>
+        Journal is { } journal && EffectJournal.Records(builtin.Name) ? Journaled(journal, builtin, operands, depth) : Perform(builtin, operands, depth);
+
+    /// <summary>
+    ///     An effect, through the journal: what it gave the last time, while
+    ///     there is a last time to replay; otherwise carried out, and what it
+    ///     gave written down.
+    /// </summary>
+    object? Journaled(EffectJournal journal, BuiltinInst builtin, object?[] operands, int depth) {
+        if (_replayed < journal.Count) {
+            var effect = journal.Entries[_replayed++];
+            if (effect.Name != builtin.Name) {
+                throw new SilTrap($"the session replayed differently: '{builtin.Name}' where '{effect.Name}' ran before");
+            }
+
+            (_ioFailed, _lastStatus, _lastErrorOutput) = (effect.IoFailed, effect.LastStatus, effect.LastErrorOutput);
+            return effect.Result switch {
+                string text => Allocate(new HeapString(text)),
+                string[] texts => Allocate(new HeapArray(new ArrayType(SilType.String), [..texts.Select(t => (object?)Allocate(new HeapString(t)))])),
+                var value => value,
+            };
+        }
+
+        var result = Perform(builtin, operands, depth);
+        var plain = result switch {
+            HeapString text => text.Value,
+            HeapArray array => array.Elements.Select(static e => ((HeapString)e!).Value).ToArray(),
+            var value => value,
+        };
+        journal.Entries.Add(new(builtin.Name, plain, _ioFailed, _lastStatus, _lastErrorOutput));
+        return result;
+    }
+
+    object? Perform(BuiltinInst builtin, object?[] operands, int depth) {
         switch (builtin.Name) {
             case "array_empty":
                 return null;
@@ -914,6 +973,17 @@ public sealed partial class SilInterpreter(SilModule module, int stepLimit = 10_
 
             case "string_index_of":
                 return (long)Text(operands[0]).Scalars.IndexOf((Rune)operands[1]!);
+
+            // The cursor is a scalar index here, a byte offset natively;
+            // nothing but these three reads it.
+            case "string_cursor_end":
+                return (long)Text(operands[0]).Scalars.Count;
+
+            case "string_cursor_scalar":
+                return Text(operands[0]).Scalars[(int)(long)operands[1]!];
+
+            case "string_cursor_next":
+                return (long)operands[1]! + 1;
 
             case "string_trimmed": {
                 var scalars = Text(operands[0]).Scalars;
@@ -1295,9 +1365,11 @@ public sealed partial class SilInterpreter(SilModule module, int stepLimit = 10_
     }
 
     /// <summary>
-    ///     The sized integers and F32, as the native code computes them:
-    ///     through Int128, trapping where the result does not fit. A U64 or
-    ///     UInt is held as a ulong, any other integer as a long, an F32 as a float.
+    ///     The sized integers, F32 and F16, as the native code computes them:
+    ///     through Int128 (BigInteger for the 128-bit types), trapping where
+    ///     the result does not fit. A U64 or UInt is held as a ulong, an I128
+    ///     as an Int128, a U128 as a UInt128, any other integer as a long; an
+    ///     F32 as a float and an F16 as a Half.
     /// </summary>
     static object? Numeric(string name, object?[] operands) {
         static SilType? Find(string typeName) => SilType.Numbers.FirstOrDefault(n => n.ToString() == typeName);
@@ -1322,19 +1394,24 @@ public sealed partial class SilInterpreter(SilModule module, int stepLimit = 10_
         }
 
         var op = name[..separator];
-        if (type == SilType.F32) {
-            var a = (float)operands[0]!;
-            var b = operands.Length > 1 ? (float)operands[1]! : 0f;
+        if (type == SilType.F32 || type == SilType.F16) {
+            // An F16 is computed as a float and rounded back, which gives
+            // the half each operation would: a float has room enough that
+            // the two roundings never disagree.
+            var isHalf = type == SilType.F16;
+            var a = isHalf ? (float)(Half)operands[0]! : (float)operands[0]!;
+            var b = operands.Length > 1 ? isHalf ? (float)(Half)operands[1]! : (float)operands[1]! : 0f;
+            object? Real(float value) => isHalf ? (Half)value : value;
             return op switch {
-                "add" => a + b,
-                "sub" => a - b,
-                "mul" => a * b,
-                "div" => a / b,
-                "rem" => a % b,
-                "neg" => -a,
-                "abs" => Math.Abs(a),
-                "min" => float.IsNaN(a) ? b : float.IsNaN(b) ? a : Math.Min(a, b),
-                "max" => float.IsNaN(a) ? b : float.IsNaN(b) ? a : Math.Max(a, b),
+                "add" => Real(a + b),
+                "sub" => Real(a - b),
+                "mul" => Real(a * b),
+                "div" => Real(a / b),
+                "rem" => Real(a % b),
+                "neg" => Real(-a),
+                "abs" => Real(Math.Abs(a)),
+                "min" => Real(float.IsNaN(a) ? b : float.IsNaN(b) ? a : Math.Min(a, b)),
+                "max" => Real(float.IsNaN(a) ? b : float.IsNaN(b) ? a : Math.Max(a, b)),
                 "cmp_eq" => a == b,
                 "cmp_ne" => a != b,
                 "cmp_lt" => a < b,
@@ -1346,6 +1423,10 @@ public sealed partial class SilInterpreter(SilModule module, int stepLimit = 10_
         }
 
         var (bits, signed) = SilType.IntegerInfo(type)!.Value;
+        if (bits == 128) {
+            return Numeric128(op, type, signed, operands);
+        }
+
         var x = Wide(operands[0]);
         var y = operands.Length > 1 ? Wide(operands[1]) : Int128.Zero;
         object Fit(Int128 value) => InRange(value, bits, signed) ? Narrow(value, type) : throw new SilTrap("integer overflow");
@@ -1377,12 +1458,87 @@ public sealed partial class SilInterpreter(SilModule module, int stepLimit = 10_
         }
     }
 
+    /// <summary>An I128 or U128 operation: Numeric's, over BigInteger, which holds a U128's every value.</summary>
+    static object? Numeric128(string op, SilType type, bool signed, object?[] operands) {
+        var x = Big(operands[0]);
+        var y = operands.Length > 1 ? Big(operands[1]) : BigInteger.Zero;
+        object Fit(BigInteger value) => InRange(value, 128, signed) ? NarrowBig(value, type) : throw new SilTrap("integer overflow");
+        object Wrap(BigInteger value) => NarrowBig(Wrapped(value, 128, signed), type);
+
+        switch (op) {
+            case "add": return Fit(x + y);
+            case "sub": return Fit(x - y);
+            case "mul": return Fit(x * y);
+            case "neg": return Fit(-x);
+            case "abs": return Fit(BigInteger.Abs(x));
+            case "div" or "rem":
+                return y.IsZero ? throw new SilTrap("division by zero") : Fit(op == "div" ? BigInteger.Divide(x, y) : BigInteger.Remainder(x, y));
+            case "shl" or "shr":
+                return y < 0 || y >= 128 ? throw new SilTrap("shift out of range") : Wrap(op == "shl" ? x << (int)y : x >> (int)y);
+            case "and": return Wrap(x & y);
+            case "or": return Wrap(x | y);
+            case "xor": return Wrap(x ^ y);
+            case "not": return Wrap(~x);
+            case "min": return NarrowBig(BigInteger.Min(x, y), type);
+            case "max": return NarrowBig(BigInteger.Max(x, y), type);
+            case "cmp_eq": return x == y;
+            case "cmp_ne": return x != y;
+            case "cmp_lt": return x < y;
+            case "cmp_le": return x <= y;
+            case "cmp_gt": return x > y;
+            case "cmp_ge": return x >= y;
+            default: return null;
+        }
+    }
+
     static Int128 Wide(object? value) =>
         value switch {
             long l => l,
             ulong u => u,
             _ => throw new SilTrap($"not an integer: {value}"),
         };
+
+    /// <summary>Any integer the interpreter holds, at full width.</summary>
+    static BigInteger Big(object? value) =>
+        value switch {
+            long l => l,
+            ulong u => u,
+            Int128 i => (BigInteger)i,
+            UInt128 u => (BigInteger)u,
+            _ => throw new SilTrap($"not an integer: {value}"),
+        };
+
+    static bool InRange(BigInteger value, int bits, bool signed) =>
+        signed
+            ? value >= -(BigInteger.One << (bits - 1)) && value < (BigInteger.One << (bits - 1))
+            : value >= 0 && value < (BigInteger.One << bits);
+
+    static BigInteger Wrapped(BigInteger value, int bits, bool signed) {
+        var modulus = BigInteger.One << bits;
+        var reduced = ((value % modulus) + modulus) % modulus;
+        return signed && reduced >= (BigInteger.One << (bits - 1)) ? reduced - modulus : reduced;
+    }
+
+    /// <summary>A value known to fit the type, held as the interpreter holds that type.</summary>
+    static object NarrowBig(BigInteger value, SilType type) =>
+        type == SilType.I128 ? (Int128)value
+        : type == SilType.U128 ? (UInt128)value
+        : type == SilType.U64 || type == SilType.UInt ? (object)(ulong)value
+        : (long)value;
+
+    /// <summary>A float of any width, as a double, which holds each exactly.</summary>
+    static double Real(object? value) =>
+        value switch {
+            float f => f,
+            Half h => (double)h,
+            _ => (double)value!,
+        };
+
+    /// <summary>A double as the float type it is converted to, rounded once.</summary>
+    static object RealOf(double value, SilType type) =>
+        type == SilType.F32 ? (float)value
+        : type == SilType.F16 ? (Half)value
+        : value;
 
     static bool InRange(Int128 value, int bits, bool signed) =>
         signed
@@ -1408,18 +1564,18 @@ public sealed partial class SilInterpreter(SilModule module, int stepLimit = 10_
         var toInteger = SilType.IntegerInfo(to);
 
         if (fromInteger is not null && toInteger is var (bits, signed)) {
-            return Narrow(Wrapped(Wide(value), bits, signed), to);
+            return NarrowBig(Wrapped(Big(value), bits, signed), to);
         }
 
         if (fromInteger is null && toInteger is var (toBits, toSigned)) {
-            var real = value is float f ? f : (double)value!;
-            var low = toSigned ? -(Int128.One << (toBits - 1)) : Int128.Zero;
-            var high = toSigned ? (Int128.One << (toBits - 1)) - 1 : (Int128.One << toBits) - 1;
-            var clamped = double.IsNaN(real) ? Int128.Zero
+            var real = Real(value);
+            var low = toSigned ? -(BigInteger.One << (toBits - 1)) : BigInteger.Zero;
+            var high = toSigned ? (BigInteger.One << (toBits - 1)) - 1 : (BigInteger.One << toBits) - 1;
+            var clamped = double.IsNaN(real) ? BigInteger.Zero
                 : real <= (double)low ? low
                 : real >= (double)high ? high
-                : (Int128)Math.Truncate(real);
-            return Narrow(clamped, to);
+                : new BigInteger(Math.Truncate(real));
+            return NarrowBig(clamped, to);
         }
 
         return ConvertNumber(value, from, to);
@@ -1431,24 +1587,27 @@ public sealed partial class SilInterpreter(SilModule module, int stepLimit = 10_
         var failed = new SilTrap($"{from} does not fit in {to}");
 
         if (fromInteger is not null && toInteger is var (bits, signed)) {
-            var wide = Wide(value);
-            return InRange(wide, bits, signed) ? Narrow(wide, to) : throw failed;
+            var wide = Big(value);
+            return InRange(wide, bits, signed) ? NarrowBig(wide, to) : throw failed;
         }
 
+        // An integer to a float rounds once, as the native conversion does:
+        // to an F32 straight from the integer, to an F16 through the double,
+        // which is exact for every integer an F16 does not overflow on.
         if (fromInteger is not null) {
-            var wide = Wide(value);
-            return to == SilType.F32 ? (object)(float)wide : (double)wide;
+            var wide = Big(value);
+            return to == SilType.F32 ? (float)wide : RealOf((double)wide, to);
         }
 
-        var real = value is float f ? f : (double)value!;
+        var real = Real(value);
         if (toInteger is var (toBits, toSigned)) {
             var (low, high) = toSigned
                 ? (-Math.Pow(2, toBits - 1), Math.Pow(2, toBits - 1))
                 : (0.0, Math.Pow(2, toBits));
-            return real >= low && real < high ? Narrow((Int128)Math.Truncate(real), to) : throw failed;
+            return real >= low && real < high ? NarrowBig(new BigInteger(Math.Truncate(real)), to) : throw failed;
         }
 
-        return to == SilType.F32 ? (object)(float)real : real;
+        return RealOf(real, to);
     }
 
     /// <summary>The array at an address, made unique — copied if it is shared — so that it can be changed.</summary>
@@ -1632,7 +1791,10 @@ public sealed partial class SilInterpreter(SilModule module, int stepLimit = 10_
         value switch {
             long n => n.ToString(CultureInfo.InvariantCulture),
             ulong n => n.ToString(CultureInfo.InvariantCulture),
+            Int128 n => n.ToString(CultureInfo.InvariantCulture),
+            UInt128 n => n.ToString(CultureInfo.InvariantCulture),
             float f => FormatFloat(f),
+            Half h => FormatHalf(h),
             bool b => b ? "true" : "false",
             double d => FormatDouble(d),
             string s => s,
@@ -1654,6 +1816,23 @@ public sealed partial class SilInterpreter(SilModule module, int stepLimit = 10_
         for (var precision = 1; precision <= 9; precision++) {
             scientific = ((double)value).ToString("E" + (precision - 1), CultureInfo.InvariantCulture);
             if (float.Parse(scientific, NumberStyles.Float, CultureInfo.InvariantCulture) == value) {
+                break;
+            }
+        }
+
+        return Layout(scientific);
+    }
+
+    /// <summary>An F16 the same way, against a half, as the runtime reads the digits back: through a float.</summary>
+    static string FormatHalf(Half value) {
+        if (Special((double)value) is { } special) {
+            return special;
+        }
+
+        var scientific = "";
+        for (var precision = 1; precision <= 5; precision++) {
+            scientific = ((double)value).ToString("E" + (precision - 1), CultureInfo.InvariantCulture);
+            if ((Half)float.Parse(scientific, NumberStyles.Float, CultureInfo.InvariantCulture) == value) {
                 break;
             }
         }

@@ -79,6 +79,26 @@ extension UInt: Comparable, Hashable {
     public fn hash() -> Int { return Int(self % 4611686018427387903) }
 }
 
+extension I128: Comparable, Hashable {
+    public operator == (lhs: I128, rhs: I128) -> Bool { return lhs == rhs }
+    public operator < (lhs: I128, rhs: I128) -> Bool { return lhs < rhs }
+    public fn hash() -> Int { return Int(self % 4611686018427387903) }
+}
+
+extension U128: Comparable, Hashable {
+    public operator == (lhs: U128, rhs: U128) -> Bool { return lhs == rhs }
+    public operator < (lhs: U128, rhs: U128) -> Bool { return lhs < rhs }
+    public fn hash() -> Int { return Int(self % 4611686018427387903) }
+}
+
+extension F16: Comparable, Hashable {
+    public operator == (lhs: F16, rhs: F16) -> Bool { return lhs == rhs }
+    public operator < (lhs: F16, rhs: F16) -> Bool { return lhs < rhs }
+
+    /// Every F16 is an F64 exactly, so it hashes as one: equal values hash equal.
+    public fn hash() -> Int { return F64(self).hash() }
+}
+
 extension F32: Comparable, Hashable {
     public operator == (lhs: F32, rhs: F32) -> Bool { return lhs == rhs }
     public operator < (lhs: F32, rhs: F32) -> Bool { return lhs < rhs }
@@ -169,6 +189,15 @@ extension U64: Debug {
 }
 extension UInt: Debug {
     public fn debugDescription() -> String { return "\(self)" }
+}
+extension I128: Debug {
+    public fn debugDescription() -> String { return "\(self)" }
+}
+extension U128: Debug {
+    public fn debugDescription() -> String { return "\(self)" }
+}
+extension F16: Debug {
+    public fn debugDescription() -> String { return floatDebugText("\(self)") }
 }
 extension F32: Debug {
     public fn debugDescription() -> String { return floatDebugText("\(self)") }

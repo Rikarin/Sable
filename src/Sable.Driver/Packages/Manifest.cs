@@ -24,7 +24,8 @@ public sealed record DependencySpec(
     bool DefaultFeatures,
     IReadOnlyList<string> Features,
     int Line,
-    string? When = null) {
+    string? When = null,
+    GitReference? Reference = null) {
     /// <summary>What a resolver holds it to: the version written, or any version of a path dependency.</summary>
     public VersionReq Requirement => Version ?? VersionReq.Any;
 
@@ -33,24 +34,43 @@ public sealed record DependencySpec(
     ///     <c>when</c> names another operating system or architecture. The
     ///     resolver and the lock file keep it either way.
     /// </summary>
-    public bool AppliesHere => When is null || DependencyCondition.Holds(When);
+    public bool AppliesHere => AppliesTo(Sable.Syntax.ParseOptions.HostOs, Sable.Syntax.ParseOptions.HostArch);
+
+    /// <summary>Whether it applies to a build for the target, its operating system and architecture as <c>#if</c> names them.</summary>
+    public bool AppliesTo(string os, string arch) => When is null || DependencyCondition.Holds(When, os, arch);
+}
+
+/// <summary>
+///     Which commit of a git dependency to use: a <c>tag</c>, a
+///     <c>branch</c>'s tip, or a <c>rev</c> (a commit, or anything
+///     <c>git rev-parse</c> takes); with none, the repository's default branch.
+/// </summary>
+public sealed record GitReference(string Kind, string Value) {
+    /// <summary>As the lock file writes it after a git URL: <c>tag=v1.0</c>.</summary>
+    public override string ToString() => $"{Kind}={Value}";
 }
 
 /// <summary>
 ///     A dependency's <c>when</c> (docs/05 §5.2.4): <c>os(macos|linux|windows)</c>
-///     or <c>arch(arm64|x64)</c>, applied to the target being built — today
-///     always this machine, since there is no cross-compilation.
+///     or <c>arch(arm64|x64)</c>, applied to the target being built: this
+///     machine, or the one <c>--target</c> names.
 /// </summary>
 public static class DependencyCondition {
     public static bool IsValid(string text) => Parse(text) is not null;
 
-    public static bool Holds(string text) =>
+    /// <summary>Whether the condition holds on this machine.</summary>
+    public static bool Holds(string text) => Holds(text, Sable.Syntax.ParseOptions.HostOs, Sable.Syntax.ParseOptions.HostArch);
+
+    /// <summary>
+    ///     Whether the condition holds for a target, its operating system and
+    ///     architecture as <c>#if</c> names them (<c>macos</c>, <c>x86_64</c>):
+    ///     the manifest's <c>x64</c> is <c>#if</c>'s <c>x86_64</c>.
+    /// </summary>
+    public static bool Holds(string text, string os, string arch) =>
         Parse(text) switch {
-            ("os", "macos") => OperatingSystem.IsMacOS(),
-            ("os", "linux") => OperatingSystem.IsLinux(),
-            ("os", "windows") => OperatingSystem.IsWindows(),
-            ("arch", "arm64") => System.Runtime.InteropServices.RuntimeInformation.OSArchitecture == System.Runtime.InteropServices.Architecture.Arm64,
-            ("arch", "x64") => System.Runtime.InteropServices.RuntimeInformation.OSArchitecture == System.Runtime.InteropServices.Architecture.X64,
+            ("os", var name) => name == os,
+            ("arch", "x64") => arch == "x86_64",
+            ("arch", var name) => name == arch,
             _ => false,
         };
 
@@ -237,7 +257,7 @@ public sealed partial class Manifest {
             }
 
             if (root["targets"] is not null) {
-                Warn(root, "targets", "targets", "per-target settings wait on cross-compilation (docs/05 §5.2.10); ignored");
+                Warn(root, "targets", "targets", "per-target settings (a runtime profile, reflection) are not built yet (docs/05 §5.2.10); ignored. To build for another machine, pass --target");
             }
 
             var package = Table(root, "package", "package") is { } p ? ReadPackage(p) : null;
@@ -476,8 +496,27 @@ public sealed partial class Manifest {
                             Error(table, name, path, "a dependency needs a version, a path or a git repository");
                         }
 
-                        if (git is not null) {
-                            Error(detail, "git", $"{path}.git", "git dependencies are not supported yet: use a path or the registry");
+                        GitReference? reference = null;
+                        foreach (var kind in new[] { "tag", "branch", "rev" }) {
+                            if (String(detail, kind, $"{path}.{kind}") is not { } referenced) {
+                                continue;
+                            }
+
+                            if (git is null) {
+                                Error(detail, kind, $"{path}.{kind}", $"'{kind}' says which commit of a git dependency to use, and this one has no 'git'");
+                            } else if (reference is not null) {
+                                Error(detail, kind, $"{path}.{kind}", $"a git dependency takes one of 'tag', 'branch' and 'rev', and this one already has '{reference.Kind}'");
+                            } else if (referenced.Length == 0) {
+                                Error(detail, kind, $"{path}.{kind}", $"'{kind}' cannot be empty");
+                            } else {
+                                reference = new(kind, referenced);
+                            }
+                        }
+
+                        if (git is not null && dependencyPath is not null) {
+                            Error(detail, "git", $"{path}.git", "a dependency comes from a path or from git, not both");
+                        } else if (git is not null && !GitSource.IsUrl(git)) {
+                            Error(detail, "git", $"{path}.git", $"'{git}' is not a git repository: a URL (https://, ssh://, git://, file://) or user@host:path");
                         }
 
                         var when = String(detail, "when", $"{path}.when");
@@ -494,7 +533,8 @@ public sealed partial class Manifest {
                             Bool(detail, "default-features", $"{path}.default-features") ?? true,
                             Strings(detail, "features", $"{path}.features") ?? [],
                             line,
-                            when));
+                            when,
+                            reference));
                         break;
                     default:
                         Error(table, name, path, $"must be a version requirement or a table, not {value.Kind}");

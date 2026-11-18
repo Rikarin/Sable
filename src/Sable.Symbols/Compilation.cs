@@ -56,10 +56,13 @@ public sealed partial class Compilation {
         // given, so that those keep their places (CoreLibrary). A
         // compilation made from another passes the core's trees back in;
         // they are not added twice. Files that declare Sable.Core themselves
-        // are the core, and the embedded one stays out.
+        // are the core, and the embedded one stays out. The core is parsed
+        // for the target the program's files are: what its '#if os(...)' says
+        // follows what theirs does.
+        var target = syntaxTrees.FirstOrDefault(static t => !CoreLibrary.Contains(t))?.Options ?? options;
         SyntaxTrees = CoreLibrary.IsBroughtBy(syntaxTrees)
             ? [..syntaxTrees.Where(static t => !CoreLibrary.Contains(t))]
-            : [..syntaxTrees.Where(static t => !CoreLibrary.Contains(t)), ..CoreLibrary.Trees];
+            : [..syntaxTrees.Where(static t => !CoreLibrary.Contains(t)), ..CoreLibrary.TreesFor(target)];
         Options = options;
 
         var coreModule = new ModuleSymbol("Sable.Core");
@@ -97,6 +100,25 @@ public sealed partial class Compilation {
     public IEnumerable<ModuleSymbol> Modules => _modules.Values;
 
     public ModuleSymbol? GetModule(string name) => _modules.TryGetValue(name, out var module) ? module : null;
+
+    /// <summary>
+    ///     The module a dotted name written in a file names: in full,
+    ///     <c>Sable.Math</c>, or through an alias the file imported,
+    ///     <c>M</c> for <c>import Sable.Math as M</c> — whose first segment
+    ///     the alias stands for, so <c>S.Math</c> works for an alias of
+    ///     <c>Sable</c>'s module path too.
+    /// </summary>
+    public ModuleSymbol? ResolveModule(string dottedName, FileScope? scope) {
+        if (scope is not null) {
+            var dot = dottedName.IndexOf('.');
+            var first = dot < 0 ? dottedName : dottedName[..dot];
+            if (scope.ImportAliases.TryGetValue(first, out var aliased)) {
+                return dot < 0 ? aliased : GetModule(aliased.Name + dottedName[dot..]);
+            }
+        }
+
+        return GetModule(dottedName);
+    }
 
     public FileScope GetFileScope(SyntaxTree tree) => _fileScopes[tree];
 
@@ -318,6 +340,7 @@ public sealed partial class Compilation {
     static string ManifestModule(SyntaxTree tree) => "Manifest:" + Path.GetDirectoryName(Path.GetFullPath(tree.Text.FileName));
 
     void DeclareAll() {
+        var modulePackages = new Dictionary<ModuleSymbol, string>(ReferenceEqualityComparer.Instance);
         foreach (var tree in SyntaxTrees) {
             if (tree.Root is not CompilationUnitSyntax unit) {
                 continue;
@@ -346,6 +369,20 @@ public sealed partial class Compilation {
             var scope = new FileScope(tree, module);
             _fileScopes[tree] = scope;
             CurrentScope = scope;
+
+            // A module is one package's: two declaring it would merge into
+            // one module, each reaching the other's internals.
+            if (tree.Options.Package is { } package && unit.Module is { } written) {
+                if (!modulePackages.TryAdd(module, package) && modulePackages[module] is var first && first != package) {
+                    ReportDeclaration(
+                        ErrorCode.ERR_ModuleInTwoPackages,
+                        written.Name.Span,
+                        $"module '{moduleName}' is declared by package '{first}' and by package '{package}'; "
+                        + "a module belongs to one package, so give this one a name under its own package's"
+                    );
+                }
+            }
+            CheckAttributes(tree);
 
             foreach (var member in unit.Members) {
                 DeclareMember(member, module);
@@ -1516,12 +1553,16 @@ public sealed partial class Compilation {
 
         var scope = CurrentScope;
 
+        // The constraints bind when first read, which may be before this
+        // file's deferred work runs; the deferral only makes sure they do.
+        if (declaration.BaseTypes is { } constraints) {
+            parameter.ConstraintsResolver = () => [
+                ..constraints.Types.SelectMany(syntax => CompositionTypeSymbol.PartsOf(TypeBinder.BindType(syntax, protocol, scope)))
+            ];
+        }
+
         TypeBinder.Defer(() => {
-                if (declaration.BaseTypes is { } constraints) {
-                    parameter.Constraints = [
-                        ..constraints.Types.SelectMany(syntax => CompositionTypeSymbol.PartsOf(TypeBinder.BindType(syntax, protocol, scope)))
-                    ];
-                }
+                _ = parameter.Constraints;
 
                 if (declaration.DefaultType is { } fallback) {
                     parameter.DefaultType = TypeBinder.BindType(fallback, protocol, scope);

@@ -1919,13 +1919,27 @@ public sealed partial class Binder {
 
     BoundStatement BindForEach(ForStatementSyntax statement) {
         var sequence = BindExpression(statement.Sequence);
+        var isAwait = !statement.AwaitKeyword.IsNone;
 
         PushScope();
+
+        // A sequence the compiler does not know by sight goes through its
+        // iterator: 'var $iterator = s.makeIterator()', then 'next()' until
+        // it gives none. 'for await' always does, awaiting each 'next()'.
+        var throughIterator = isAwait || !IsKnownSequence(sequence.Type);
+        var iteration = throughIterator ? BindIteration(statement, sequence, isAwait) : null;
+
+        // A sequence that cannot be gone through has been reported; its
+        // elements are of no type.
+        TypeSymbol ElementType() =>
+            iteration is { } known ? known.Element
+            : throughIterator ? ErrorTypeSymbol.Instance
+            : ElementTypeOf(sequence.Type, statement.Sequence);
 
         LocalSymbol? element = null;
         BoundStatement? deconstruction = null;
         if (statement.Pattern is BindingPatternSyntax binding) {
-            var elementType = ElementTypeOf(sequence.Type, statement.Sequence);
+            var elementType = ElementType();
             element = new(binding.Identifier.Text, _containingSymbol, binding, false) {
                 TypeResolver = () => elementType
             };
@@ -1933,7 +1947,7 @@ public sealed partial class Binder {
         } else if (statement.Pattern is not WildcardPatternSyntax) {
             // 'for (key, value) in d': each element in a variable of the
             // loop's own, nameless, taken apart as 'let (key, value) =' would.
-            var elementType = ElementTypeOf(sequence.Type, statement.Sequence);
+            var elementType = ElementType();
             element = new("$element", _containingSymbol, statement.Pattern, false) {
                 TypeResolver = () => elementType
             };
@@ -1968,10 +1982,134 @@ public sealed partial class Binder {
         }
 
         PopScope();
+
+        if (iteration is { } through) {
+            // 'for _ in s' still takes each value, in a variable no one names.
+            element ??= new("$element", _containingSymbol, statement.Pattern, false) {
+                TypeResolver = () => through.Element
+            };
+            var loopBody = filter is null ? body : new BoundIf(statement.Body, filter, body, null);
+            var next = new BoundConditionBinding(statement.Sequence, Core.Bool, through.Next, null, element);
+            return Record(
+                statement,
+                new BoundBlock(
+                    statement,
+                    [through.Iterator],
+                    [
+                        new BoundLocalDeclaration(statement.Sequence, through.Iterator, through.MakeIterator),
+                        new BoundWhile(statement, next, loopBody),
+                    ]
+                )
+            );
+        }
+
         return Record(
             statement,
             new BoundForEach(statement, element, sequence, filter, body)
         );
+    }
+
+    /// <summary>
+    ///     A type 'for' goes through directly, with no iterator: an array, a
+    ///     dictionary, a range — and an error, already reported.
+    /// </summary>
+    bool IsKnownSequence(TypeSymbol type) =>
+        type.IsError || type is ArrayTypeSymbol || DictionaryTypes(type) is not null
+        || type is NamedTypeSymbol named && Core.IsAnyRange(named);
+
+    /// <summary>How a loop goes through a sequence by its iterator.</summary>
+    /// <param name="Iterator">The loop's own variable holding the iterator.</param>
+    /// <param name="MakeIterator">The call that makes it.</param>
+    /// <param name="Next">The call that gives each value, as an optional.</param>
+    /// <param name="Element">What each value is.</param>
+    sealed record Iteration(LocalSymbol Iterator, BoundExpression MakeIterator, BoundExpression Next, TypeSymbol Element);
+
+    /// <summary>
+    ///     Binds the calls a loop over a <c>Sequence</c> (or, for
+    ///     <c>for await</c>, an <c>AsyncSequence</c>) makes, as if written:
+    ///     <c>makeIterator()</c> on the sequence and <c>next()</c> on the
+    ///     iterator, which the loop's variable holds and can change.
+    /// </summary>
+    Iteration? BindIteration(ForStatementSyntax statement, BoundExpression sequence, bool isAwait) {
+        var protocol = isAwait ? Core.AsyncSequence : Core.Sequence;
+        var make = isAwait ? "makeAsyncIterator" : "makeIterator";
+        var type = sequence.Type is OptionalTypeSymbol ? null : sequence.Type;
+
+        if (protocol is null || type is null || !Conversions.Satisfies(type, protocol, _conversions.Equivalence)) {
+            var description = sequence.Type.ToDisplayString();
+            _diagnostics.Error(
+                ErrorCode.ERR_NotIterable,
+                statement.Sequence.Span,
+                isAwait
+                    ? IsKnownSequence(sequence.Type) || type is not null && Core.Sequence is { } plain && Conversions.Satisfies(type, plain, _conversions.Equivalence)
+                        ? $"'{description}' is not an async sequence, so there is nothing to await: write 'for' without 'await'"
+                        : $"'{description}' cannot be iterated with 'for await': it does not conform to 'AsyncSequence'"
+                    : sequence.Type is OptionalTypeSymbol
+                        ? $"'{description}' may hold nothing, so unwrap it before iterating"
+                        : $"'{description}' cannot be iterated: it does not conform to 'Sequence'"
+            );
+            return null;
+        }
+
+        var makeIterator = BindIterationCall(statement.Sequence, sequence, make);
+        if (makeIterator.HasError) {
+            return null;
+        }
+
+        var iterator = new LocalSymbol("$iterator", _containingSymbol, statement.Sequence, true) {
+            TypeResolver = () => makeIterator.Type
+        };
+
+        // 'for await' awaits each value, as 'await iterator.next()' would.
+        if (isAwait) {
+            _awaitDepth++;
+        }
+
+        var next = BindIterationCall(statement.Sequence, new BoundLocalAccess(statement.Sequence, iterator, makeIterator.Type), "next");
+
+        if (isAwait) {
+            _awaitDepth--;
+        }
+
+        if (next.HasError) {
+            return null;
+        }
+
+        if (next.Type is not OptionalTypeSymbol optional) {
+            _diagnostics.Error(
+                ErrorCode.ERR_NotIterable,
+                statement.Sequence.Span,
+                $"'{makeIterator.Type.ToDisplayString()}.next()' gives '{next.Type.ToDisplayString()}', "
+                + "and an iterator gives an optional, none when it is done"
+            );
+            return null;
+        }
+
+        return new(iterator, makeIterator, next, optional.UnderlyingType);
+    }
+
+    /// <summary>A call, with no arguments, to the instance member named on the receiver, as 'receiver.name()' binds.</summary>
+    BoundExpression BindIterationCall(SyntaxNode syntax, BoundExpression receiver, string name) {
+        var found = LookupMember(receiver.Type, name);
+        ImmutableArray<FunctionSymbol> functions = found is null
+            ? []
+            : [..found.Value.Members.OfType<FunctionSymbol>().Where(static f => !f.IsStatic && f.Parameters.IsEmpty)];
+
+        if (functions.IsEmpty) {
+            _diagnostics.Error(
+                ErrorCode.ERR_NotIterable,
+                syntax.Span,
+                $"'{receiver.Type.ToDisplayString()}' has no '{name}()' for a loop to call"
+            );
+            return new BoundError(syntax, receiver);
+        }
+
+        if (!CheckAccessible(functions[0], syntax)) {
+            return new BoundError(syntax, receiver);
+        }
+
+        var group = new BoundFunctionGroup(syntax, receiver, functions) { Substitution = found!.Value.Substitution };
+        return BindCallToGroup(syntax, group, [], [], []);
     }
 
     /// <summary>What a <c>for … in</c> yields, for the sequences understood so far.</summary>
@@ -2001,10 +2139,20 @@ public sealed partial class Binder {
             return new TupleTypeSymbol([key, value], [null, null]);
         }
 
-        if (sequence is NamedTypeSymbol named && Core.IsRange(named)) {
-            // Only an integer range enumerates; a range of anything else is a
-            // test of membership, not a sequence.
-            if (Core.IsInteger(named.TypeArguments[0])) {
+        if (sequence is NamedTypeSymbol named && Core.IsAnyRange(named)) {
+            // A range open at the start has no first value to count from.
+            if (!Core.IsCountableRange(named)) {
+                _diagnostics.Error(
+                    ErrorCode.ERR_NotIterable,
+                    syntax.Span,
+                    $"'{named.ToDisplayString()}' cannot be iterated: it has no lower bound to start from"
+                );
+                return ErrorTypeSymbol.Instance;
+            }
+
+            // A range of integers or characters counts through them; a range
+            // of anything else is a test of membership, not a sequence.
+            if (Core.IsInteger(named.TypeArguments[0]) || named.TypeArguments[0].Equals(Core.Char)) {
                 return named.TypeArguments[0];
             }
 
@@ -2012,13 +2160,13 @@ public sealed partial class Binder {
                 ErrorCode.ERR_NotIterable,
                 syntax.Span,
                 $"'{named.ToDisplayString()}' cannot be iterated: "
-                + "only a range of integers enumerates"
+                + "only a range of integers or characters enumerates"
             );
             return ErrorTypeSymbol.Instance;
         }
 
-        // User sequences need the Iterable protocol, which arrives with the
-        // standard library. A bare integer is not one: 'for i in 0..<n'.
+        // Any other type goes through its iterator (BindIteration), so is not
+        // asked about here.
         _diagnostics.Error(
             ErrorCode.ERR_NotIterable,
             syntax.Span,
@@ -2764,6 +2912,16 @@ public sealed partial class Binder {
             return new BoundError(syntax);
         }
 
+        // A module is reached through, never held: 'M.gcd(a, b)', not 'M'.
+        if (_compilation.ResolveModule(name, _scope) is { } namedModule) {
+            _diagnostics.Error(
+                ErrorCode.ERR_NotAValue,
+                syntax.Span,
+                $"'{name}' names the module '{namedModule.Name}', which is not a value; reach its members with '.'"
+            );
+            return new BoundError(syntax);
+        }
+
         _diagnostics.Error(
             ErrorCode.ERR_NameNotFound,
             syntax.Span,
@@ -2771,6 +2929,80 @@ public sealed partial class Binder {
         );
         return new BoundError(syntax);
     }
+
+    /// <summary>
+    ///     Whether a name means something here other than a module: a local,
+    ///     a member, or a declaration in this module, an import or the core.
+    ///     Such a name hides a module of the same name, as it would hide a
+    ///     declaration further out.
+    /// </summary>
+    bool NamesAValue(string name) {
+        Symbol? hidden = null;
+        return LookupLocal(name) is not null
+            || LocalTypes(name, false).Count > 0
+            || LocalTypes(name, true).Count > 0
+            || EnclosingType() is { } enclosing && LookupMember(SelfTypeOf(enclosing), name) is not null
+            || Visible(_scope.Module.GetMembers(name), ref hidden).Count > 0
+            || _scope.ImportedNames.ContainsKey(name)
+            || _scope.Imports.Any(module => Visible(module.GetMembers(name), ref hidden).Count > 0)
+            || Core.Module.GetMembers(name).Any()
+            || _compilation.TypeBinder.Lookup(name, _containingSymbol, _scope, default, report: false) is TypeParameterSymbol;
+    }
+
+    /// <summary>
+    ///     The module an expression names, when it is a dotted name that does:
+    ///     <c>Sable.Math</c>, or an alias imported for one.
+    /// </summary>
+    ModuleSymbol? ModuleNamedBy(ExpressionSyntax syntax) {
+        var path = new List<string>();
+        var here = syntax;
+        while (here is MemberAccessExpressionSyntax { OperatorToken.Kind: SyntaxKind.DotToken, Name: IdentifierNameSyntax name } member) {
+            path.Insert(0, name.Identifier.Text);
+            here = member.Expression;
+        }
+
+        if (here is not IdentifierNameSyntax first || NamesAValue(first.Identifier.Text)) {
+            return null;
+        }
+
+        path.Insert(0, first.Identifier.Text);
+        return _compilation.ResolveModule(string.Join('.', path), _scope);
+    }
+
+    /// <summary>
+    ///     <c>M.gcd</c> or <c>Sable.Collections.Deque&lt;Int&gt;</c>: a member of
+    ///     a module named in full or through its alias, as it would be found
+    ///     unqualified after importing the module — and only as visible as it is.
+    /// </summary>
+    BoundExpression BindModuleMember(MemberAccessExpressionSyntax syntax, ModuleSymbol module, string name) {
+        Symbol? hidden = null;
+        var members = Visible(module.GetMembers(name), ref hidden);
+        if (members.Count == 0) {
+            if (hidden is not null) {
+                ReportInaccessible(hidden, syntax.Name);
+            } else {
+                _diagnostics.Error(
+                    ErrorCode.ERR_NameNotFound,
+                    syntax.Name.Span,
+                    $"'{module.Name}' has no member named '{name}'"
+                );
+            }
+
+            return new BoundError(syntax);
+        }
+
+        // 'Sable.Collections.Deque<Int>' names the type with its arguments.
+        if (syntax.Name is GenericNameSyntax generic && members[0] is NamedTypeSymbol or AliasSymbol) {
+            var type = _compilation.TypeBinder.BindGenericName(members[0], generic, _containingSymbol, _scope);
+            return type.IsError ? new BoundError(syntax) : new BoundTypeExpression(syntax, type);
+        }
+
+        return BindMemberGroup(syntax, null, members, null);
+    }
+
+    /// <summary>A use of a declaration, which '@deprecated' warns of and '@available' may refuse.</summary>
+    void ReportUse(Symbol used, SyntaxNode at) =>
+        _compilation.ReportUse(_diagnostics, used, at.Span, _containingSymbol, _scope);
 
     BoundExpression BindMemberGroup(
         SyntaxNode syntax,
@@ -2780,6 +3012,11 @@ public sealed partial class Binder {
         TypeSubstitution? substitution = null
     ) {
         substitution ??= TypeSubstitution.Empty;
+
+        // A function is reported once its overload is chosen.
+        if (members is [not FunctionSymbol and var used, ..]) {
+            ReportUse(used, syntax is MemberAccessExpressionSyntax { Name: var name } ? name : syntax);
+        }
 
         var functions = members.OfType<FunctionSymbol>().ToImmutableArray();
         if (!functions.IsEmpty) {
@@ -2881,6 +3118,19 @@ public sealed partial class Binder {
         };
 
     BoundExpression BindMemberAccess(MemberAccessExpressionSyntax syntax) {
+        // 'Sable.Math.gcd' and 'M.gcd': the left names a module, not a value.
+        if (syntax.OperatorToken.Kind == SyntaxKind.DotToken && ModuleNamedBy(syntax.Expression) is { } module) {
+            return BindModuleMember(
+                syntax,
+                module,
+                syntax.Name switch {
+                    IdentifierNameSyntax identifier => identifier.Identifier.Text,
+                    GenericNameSyntax generic => generic.Identifier.Text,
+                    _ => string.Empty,
+                }
+            );
+        }
+
         var receiver = BindExpression(syntax.Expression);
 
         // A member of a reference is the member of what it refers to.
@@ -3304,6 +3554,7 @@ public sealed partial class Binder {
                 }
 
                 var members = named.GetMembers(name).ToList();
+
                 if (members.Count > 0) {
                     // A constrained extension's member is there only where its
                     // requirements hold: Wrapper<T>'s 'doubled', from 'extension
@@ -3889,7 +4140,7 @@ public sealed partial class Binder {
             : BindExpression(syntax);
 
     BoundExpression BindCallToGroup(
-        InvocationExpressionSyntax syntax,
+        SyntaxNode syntax,
         BoundFunctionGroup group,
         ImmutableArray<BoundExpression> arguments,
         ImmutableArray<string?> labels,
@@ -3902,7 +4153,7 @@ public sealed partial class Binder {
         // parameters the call infers. Inside Box, T is Box's own, and
         // inferring it from a T gives it back unchanged.
         var savedOwner = _ownerTypeParameters;
-        _ownerTypeParameters = syntax.Expression is MemberAccessExpressionSyntax { Expression: var typeSyntax }
+        _ownerTypeParameters = syntax is InvocationExpressionSyntax { Expression: MemberAccessExpressionSyntax { Expression: var typeSyntax } }
                                && _bound.TryGetValue(typeSyntax, out var named)
                                && named is BoundTypeExpression { ReferencedType: NamedTypeSymbol { IsConstructed: false, TypeParameters.IsEmpty: false } bare }
                                && outer.IsEmpty
@@ -3918,7 +4169,7 @@ public sealed partial class Binder {
     }
 
     BoundExpression BindResolvedCall(
-        InvocationExpressionSyntax syntax,
+        SyntaxNode syntax,
         BoundFunctionGroup group,
         ImmutableArray<BoundExpression> arguments,
         ImmutableArray<string?> labels,
@@ -4149,6 +4400,7 @@ public sealed partial class Binder {
         }
 
         ReportUnmetDerivation(resolved, group.Receiver?.Type, syntax);
+        ReportUse(resolved, group.Syntax is MemberAccessExpressionSyntax { Name: var name } ? name : group.Syntax);
 
         var call = new BoundCall(syntax, group.Receiver, resolved, converted.ToImmutable(), result) {
             Substitution = substitution,
@@ -4734,7 +4986,7 @@ public sealed partial class Binder {
         if (receiver.Type is ArrayTypeSymbol array) {
             // 'xs[1..<3]', 'xs[2...]', 'xs[..<2]': the elements in the range,
             // as a slice (SYNTAX.md §11).
-            if (indices is [{ Type: NamedTypeSymbol { TypeArguments: [var bound] } range }] && Core.IsRange(range) && bound.Equals(Core.Int)) {
+            if (indices is [{ Type: NamedTypeSymbol { TypeArguments: [var bound] } range }] && Core.IsAnyRange(range) && bound.Equals(Core.Int)) {
                 return new BoundIndexAccess(syntax, new ArrayTypeSymbol(array.ElementType, ArrayKind.Slice), receiver, indices);
             }
 
@@ -5699,6 +5951,32 @@ public sealed partial class Binder {
             return new BoundConversion(syntax, type, operand, ConversionKind.Explicit) { IsUnchecked = isUnchecked };
         }
 
+        // A character and an integer convert through its code point: 'c as
+        // U32', and 'n as Char', which traps on a number that is no Unicode
+        // scalar. Nothing wraps to a character, so 'unchecked' goes only the
+        // other way, keeping the code point's low bits: 'c unchecked as U8'.
+        if (source.Equals(Core.Char) && Core.IsInteger(target) || Core.IsInteger(source) && target.Equals(Core.Char)) {
+            if (!isPlain) {
+                return InvalidCast(
+                    syntax,
+                    operand,
+                    $"'{syntax.AsKeyword.Text}{syntax.QuestionOrBangToken.Text}' tests what a value is, and "
+                    + $"'{source.ToDisplayString()}' is always one: convert it with 'as'"
+                );
+            }
+
+            if (isUnchecked && target.Equals(Core.Char)) {
+                return InvalidCast(
+                    syntax,
+                    operand,
+                    "a number that is not a Unicode scalar has no character to wrap to: "
+                    + "convert it with 'as', which traps on one, or 'Char.fromCodePoint', which gives none"
+                );
+            }
+
+            return new BoundConversion(syntax, type, operand, ConversionKind.Explicit) { IsUnchecked = isUnchecked };
+        }
+
         // Between an enum and an integer (spec/SYNTAX.md §10): a case is the
         // integer it names, and an integer the case that names it, or a trap.
         if (isPlain && !isUnchecked
@@ -5770,17 +6048,33 @@ public sealed partial class Binder {
 
     /// <summary>
     ///     Binds <c>a..&lt;b</c> to a <c>Range&lt;T&gt;</c> and <c>a...b</c> to a
-    ///     <c>ClosedRange&lt;T&gt;</c>, both declared in Sable.Core; the
-    ///     one-sided forms are a <c>Range</c> with a bound missing.
+    ///     <c>ClosedRange&lt;T&gt;</c>; the one-sided forms to
+    ///     <c>PartialRangeUpTo</c> (<c>..&lt;b</c>), <c>PartialRangeThrough</c>
+    ///     (<c>...b</c>) and <c>PartialRangeFrom</c> (<c>a...</c>) — all
+    ///     declared in Sable.Core.
     /// </summary>
     BoundExpression BindRange(RangeExpressionSyntax syntax, TypeSymbol? expectedType) {
         var isInclusive = syntax.OperatorToken.Kind == SyntaxKind.DotDotDotToken;
-        var definition = isInclusive && syntax.Left is not null && syntax.Right is not null
-            ? Core.ClosedRange
-            : Core.Range;
+        var (definition, name) = (syntax.Left, syntax.Right) switch {
+            (not null, not null) => isInclusive ? (Core.ClosedRange, "ClosedRange") : (Core.Range, "Range"),
+            (null, not null) => isInclusive ? (Core.PartialRangeThrough, "PartialRangeThrough") : (Core.PartialRangeUpTo, "PartialRangeUpTo"),
+            _ => (Core.PartialRangeFrom, "PartialRangeFrom"),
+        };
+
+        // 'a..<' stops before an end it does not name: there is no such range.
+        if (syntax.Left is not null && syntax.Right is null && !isInclusive) {
+            _diagnostics.Error(
+                ErrorCode.ERR_HalfOpenRangeWithoutEnd,
+                syntax.OperatorToken.Span,
+                "'..<' stops before its upper bound, and this range has none; "
+                + "write the bound, or 'a...' for the values from 'a' on"
+            );
+            BindExpression(syntax.Left);
+            return new BoundError(syntax);
+        }
 
         var bound = expectedType is NamedTypeSymbol { TypeArguments.Length: 1 } expected
-            && Core.IsRange(expected)
+            && Core.IsAnyRange(expected)
                 ? expected.TypeArguments[0]
                 : null;
 
@@ -5810,7 +6104,7 @@ public sealed partial class Binder {
             _diagnostics.Error(
                 ErrorCode.ERR_NameNotFound,
                 syntax.Span,
-                $"no type named '{(isInclusive ? "ClosedRange" : "Range")}' is declared in Sable.Core"
+                $"no type named '{name}' is declared in Sable.Core"
             );
             return new BoundError(syntax);
         }
@@ -5924,7 +6218,7 @@ public sealed partial class Binder {
 
         // 'xs[1..<3]' is the elements in the range, read out: there is no
         // place in the array that is all of them to store to.
-        if (target is BoundIndexAccess { Subscript: null, Indices: [var rangeIndex] } && Core.IsRange(rangeIndex.Type)) {
+        if (target is BoundIndexAccess { Subscript: null, Indices: [var rangeIndex] } && Core.IsAnyRange(rangeIndex.Type)) {
             _diagnostics.Error(
                 ErrorCode.ERR_NotAssignable,
                 syntax.Left.Span,
@@ -6137,6 +6431,8 @@ public sealed partial class Binder {
                 long l => -l,
                 int i => -(long)i,
                 ulong u when u <= 1UL << 63 => unchecked(-(long)u),
+                ulong u => -(Int128)u,
+                UInt128 u when u <= UInt128.One << 127 => unchecked(-(Int128)u),
                 double d => -d,
                 _ => null,
             };
@@ -7467,7 +7763,7 @@ public sealed partial class Binder {
             return;
         }
 
-        var checker = new Exhaustiveness(Core);
+        var checker = new Exhaustiveness(Core) { Module = _scope.Module };
         var rows = new List<Exhaustiveness.Pat>();
 
         foreach (var arm in match.Arms) {
@@ -7486,6 +7782,17 @@ public sealed partial class Binder {
 
         var missing = checker.Missing(rows, subject);
         if (missing.Count == 0 || checker.GaveUp || checker.HasErrors) {
+            return;
+        }
+
+        // Every case named, of a union that may gain more: only 'default' covers those.
+        if (missing is [Exhaustiveness.LaterCase]) {
+            _diagnostics.Error(
+                ErrorCode.ERR_MatchNotExhaustive,
+                match.Syntax.Span,
+                $"match is not exhaustive: '{subject.ToDisplayString()}' is another module's, and not '@frozen', "
+                + "so it may gain cases; add 'default => ...' for them"
+            );
             return;
         }
 

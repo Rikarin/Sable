@@ -9,6 +9,14 @@ public sealed partial class LlvmEmitter {
     // =======================================================================
 
     /// <summary>
+    ///     Whether a forwarding thunk's prologue is given a line of its own
+    ///     for this compiler: for an LLVM before 20, which ends no prologue
+    ///     on line 0 (see <c>DebugInfo.Subprogram</c>). Apple's lldb steps
+    ///     through the thunk as a trampoline whatever its lines.
+    /// </summary>
+    public static bool ThunkPrologueHasALine((int Major, bool Apple)? compiler) => compiler is { Apple: false, Major: < 20 };
+
+    /// <summary>
     ///     The DWARF metadata: one compile unit, a file per source, a
     ///     subprogram per function, a location per instruction, and a variable
     ///     per local and parameter — what lldb needs for frames, locals and
@@ -99,8 +107,19 @@ public sealed partial class LlvmEmitter {
 
         string Unit => _unit ??= Reserve();
 
-        /// <summary>The function's file; for one the compiler made, the compile unit's.</summary>
-        public string FileOf(SilFunction function) => function.SourceFile is { } file ? File(file) : _firstFile!;
+        /// <summary>
+        ///     The function's file; for one the compiler made, the compile
+        ///     unit's — or, for a forwarding thunk, a file no source is, as
+        ///     Swift's thunks are: it has no line of the program's, and may
+        ///     be given a line of its own (see <see cref="Subprogram"/>).
+        /// </summary>
+        public string FileOf(SilFunction function) =>
+            function.SourceFile is { } file ? File(file)
+            : function.TrampolineTarget is not null ? File(CompilerGenerated)
+            : _firstFile!;
+
+        /// <summary>The file a forwarding thunk's prologue is said to be in: one no breakpoint by line can name.</summary>
+        const string CompilerGenerated = "<compiler-generated>";
 
         /// <summary>
         ///     A function's subprogram, named by the function's full Sable name
@@ -117,16 +136,64 @@ public sealed partial class LlvmEmitter {
             var artificial = function.SourceFile is null;
             var file = FileOf(function);
             var line = artificial ? 0 : function.Line;
+            var scopeLine = line;
 
             // A forwarding thunk names what it forwards to: DW_AT_trampoline,
             // which lldb steps through ('step' into a witness lands in the
             // method, not back at the call).
-            var trampoline = function.TrampolineTarget is { } target ? $"targetFuncName: {Quote(target)}, " : "";
+            //
+            // An lldb that does not (Ubuntu 24.04's lldb 18) still steps on
+            // through code at line 0 — unless the whole function is one
+            // line-0 row: then it steps straight back out, over the call.
+            // An LLVM from before 20 writes just that: the row the scope
+            // line starts, and no second line-0 row where the prologue
+            // ends. For one of those the prologue is given a line of its
+            // own, in a file no source is: stepped into, the prologue is
+            // skipped, the body is line 0 to the end but not from the
+            // start, and lldb steps on through it into the method; a
+            // 'finish' from the method returns to line 0, which it steps
+            // out of to the caller. (A newer LLVM ends the prologue on the
+            // scope line, where lldb would stop; it needs nothing.)
+            var trampoline = "";
+            if (function.TrampolineTarget is { } target) {
+                trampoline = $"targetFuncName: {Quote(target)}, ";
+                if (ThunkPrologueHasALine(NativeBuild.CompilerVersion)) {
+                    scopeLine = 1;
+                }
+            }
+
             return Node(
                 $"!DISubprogram(name: {Quote(function.Name)}, scope: {file}, file: {file}, "
-                + $"line: {line}, type: {Subroutine(function.Type)}, scopeLine: {line}, {(artificial ? "flags: DIFlagArtificial, " : "")}spFlags: DISPFlagDefinition, unit: {Unit}, {trampoline})".Replace(", )", ")", StringComparison.Ordinal),
+                + $"line: {line}, type: {Subroutine(function.Type)}, scopeLine: {scopeLine}, {(artificial ? "flags: DIFlagArtificial, " : "")}spFlags: DISPFlagDefinition, unit: {Unit}, {trampoline})".Replace(", )", ")", StringComparison.Ordinal),
                 distinct: true
             );
+        }
+
+        /// <summary>A block within a function, inside another scope: its own, for every block.</summary>
+        public string LexicalBlock(string parent, string file, int line, int column) =>
+            Node($"!DILexicalBlock(scope: {parent}, file: {file}, line: {line}, column: {column})", distinct: true);
+
+        readonly List<string> _globals = [];
+
+        /// <summary>
+        ///     A global of the program's, for <c>target variable</c> and for
+        ///     expressions to read: named by its last part (<c>limit</c> for
+        ///     <c>Demo.limit</c>), since a debugger reads a dot in a name as a
+        ///     member's. The <c>!dbg</c> for its definition; null for one with
+        ///     no values.
+        /// </summary>
+        public string? GlobalVariable(string name, SilType type, bool local) {
+            if (Type(type) is not { } typeNode) {
+                return null;
+            }
+
+            var variable = Node(
+                $"!DIGlobalVariable(name: {Quote(name[(name.LastIndexOf('.') + 1)..])}, scope: {Unit}, file: {_firstFile}, line: 0, type: {typeNode}, isLocal: {(local ? "true" : "false")}, isDefinition: true)",
+                distinct: true
+            );
+            var expression = Node($"!DIGlobalVariableExpression(var: {variable}, expr: !DIExpression())");
+            _globals.Add(expression);
+            return expression;
         }
 
         public string Location(int line, int column, string scope) =>
@@ -278,6 +345,8 @@ public sealed partial class LlvmEmitter {
                     return Typedef("F64", Basic("double", 64, "DW_ATE_float"));
                 case var _ when type == SilType.F32:
                     return Typedef("F32", Basic("float", 32, "DW_ATE_float"));
+                case var _ when type == SilType.F16:
+                    return Typedef("F16", Basic("_Float16", 16, "DW_ATE_float"));
                 case var _ when type == SilType.Char:
                     return Typedef("Char", Basic("char32_t", 32, "DW_ATE_UTF"));
                 case var _ when SilType.IntegerInfo(type) is var (bits, signed):
@@ -372,7 +441,7 @@ public sealed partial class LlvmEmitter {
                     }
 
                     var payloads = enumType.Cases.Where(static c => c.Payload is not null && c.Payload != SilType.Unit)
-                        .Select(c => Member(c.Name, Type(c.Payload!), Size(c.Payload!), 0));
+                        .Select(c => Member(c.Name, Payload(enumType, c.Name, c.Payload!), Size(c.Payload!), 0));
                     var union = Structure(DisplayName(enumType) + "$payload", count * unit, payloads, "DW_TAG_union_type");
                     var body = Structure(DisplayName(enumType) + (OptionalPayload(enumType) is null ? "$union" : "$optional"), Size(enumType), [
                         Member("$tag", tag, TagBytes(enumType), 0),
@@ -387,6 +456,20 @@ public sealed partial class LlvmEmitter {
                 default:
                     return null;
             }
+        }
+
+        /// <summary>
+        ///     A union case's payload: the value or tuple it is — or, when its
+        ///     fields have names, a struct of them laid out as that is, named
+        ///     <c>U.Case$case</c> for the plugin to show as the case's fields.
+        /// </summary>
+        string? Payload(EnumType union, string caseName, SilType payload) {
+            if (!union.PayloadLabels.TryGetValue(caseName, out var labels)) {
+                return Type(payload);
+            }
+
+            var fields = payload is TupleType tuple ? labels.Zip(tuple.Elements) : [(labels[0], payload)];
+            return Aggregate($"{DisplayName(union)}.{caseName}$case", fields, Size(payload), live: false);
         }
 
         string Subroutine(FunctionType function) {
@@ -428,9 +511,9 @@ public sealed partial class LlvmEmitter {
         /// </summary>
         public string Metadata() {
             var output = new StringBuilder();
-            var dwarf = Node("!{i32 7, !\"Dwarf Version\", i32 4}");
+            var dwarf = Node("!{i32 7, !\"Dwarf Version\", i32 5}");
             var version = Node("!{i32 2, !\"Debug Info Version\", i32 3}");
-            var globals = "!{}";
+            var globals = new List<string>(_globals);
             if (_classes.Count > 0) {
                 var holder = Structure("$SableClasses", 8 * _classes.Count, _classes.Select((c, i) => Member(c.Name, c.Node, 8, 8 * i)));
                 var variable = Node(
@@ -438,14 +521,14 @@ public sealed partial class LlvmEmitter {
                     distinct: true
                 );
                 var expression = Node($"!DIGlobalVariableExpression(var: {variable}, expr: !DIExpression())");
-                globals = Node($"!{{{expression}}}");
+                globals.Add(expression);
                 output.Append($"\n@\"sable.debug.classes\" = internal constant [{_classes.Count} x i64] zeroinitializer, !dbg {expression}\n")
                     .Append("@llvm.compiler.used = appending global [1 x ptr] [ptr @\"sable.debug.classes\"], section \"llvm.metadata\"\n");
             }
 
             Define(Unit,
                 $"distinct !DICompileUnit(language: DW_LANG_C, file: {_firstFile}, producer: \"sable\", isOptimized: false, "
-                + $"runtimeVersion: 0, emissionKind: FullDebug, globals: {globals})");
+                + $"runtimeVersion: 0, emissionKind: FullDebug, globals: {(globals.Count == 0 ? "!{}" : Node($"!{{{string.Join(", ", globals)}}}"))})");
             output.Append($"\n!llvm.dbg.cu = !{{{Unit}}}\n!llvm.module.flags = !{{{dwarf}, {version}}}\n\n");
             foreach (var node in _nodes) {
                 output.Append(node).Append('\n');

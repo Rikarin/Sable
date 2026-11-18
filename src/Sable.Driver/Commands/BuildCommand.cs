@@ -15,7 +15,8 @@ public class BuildCommand : Command {
 
     public override string Usage => """
         usage: sable build [--release] [--features <a,b>] [-p <package>] [--bin <name>]
-               sable build <file.sb> [-o <output>] [--emit sil|llvm-ir] [-O0] [-g] [--exclusivity=checked|unchecked]
+               sable build <file.sb> [-o <output>] [--emit sil|llvm-ir|obj] [-O0] [-g] [--exclusivity=checked|unchecked]
+                                     [--target <triple>] [--sysroot <dir>]
 
         Without a file, builds the package in this directory or the nearest above it (sable.toml).
 
@@ -26,14 +27,26 @@ public class BuildCommand : Command {
           -o <output>        the executable's name (default: the file's)
           --emit sil         print the verified SIL instead of building
           --emit llvm-ir     print the LLVM IR instead of building
+          --emit obj         write the program's object file (<output>.o), without the runtime or a link
           -O0                build without LLVM's optimiser
           -g                 build with debug information, for lldb
           --exclusivity=...  keep the dynamic exclusivity checks, or drop them; by default
                              kept in a debug or -O0 build, dropped in an optimised one
+          --target <triple>  build for another machine: aarch64-unknown-linux-gnu, x86_64-apple-darwin,
+                             x86_64-pc-windows-msvc, wasm32-wasi, ... (default: this one)
+          --sysroot <dir>    where the target's C library is, for clang's link
         """;
 
     /// <summary>What the command line asked for.</summary>
-    protected sealed record Options(string Input, string? Output, string? Emit, bool Optimise, bool Debug, bool? Exclusivity, IReadOnlyList<string> ProgramArguments);
+    protected sealed record Options(string Input, string? Output, string? Emit, bool Optimise, bool Debug, bool? Exclusivity, IReadOnlyList<string> ProgramArguments) {
+        /// <summary>What to build for: null for this machine.</summary>
+        public NativeTarget? Target { get; init; }
+
+        public string? Sysroot { get; init; }
+
+        /// <summary>What clang is asked for.</summary>
+        public NativeOptions Native => NativeOptions.Of(Optimise, Debug) with { Target = Target, Sysroot = Sysroot };
+    }
 
     protected virtual bool TakesProgramArguments => false;
 
@@ -44,6 +57,8 @@ public class BuildCommand : Command {
         var optimise = true;
         var debug = false;
         bool? exclusivity = null;
+        string? triple = null;
+        string? sysroot = null;
         var arguments = new List<string>();
 
         for (var i = 0; i < args.Count; i++) {
@@ -55,6 +70,8 @@ public class BuildCommand : Command {
                     break;
                 case "-o" when i + 1 < args.Count && !TakesProgramArguments: output = args[++i]; break;
                 case "--emit" when i + 1 < args.Count && !TakesProgramArguments: emit = args[++i]; break;
+                case "--target" when i + 1 < args.Count: triple = args[++i]; break;
+                case "--sysroot" when i + 1 < args.Count: sysroot = args[++i]; break;
                 case "-O0": optimise = false; break;
                 case "-g": debug = true; break;
                 case "--exclusivity=checked": exclusivity = true; break;
@@ -69,9 +86,17 @@ public class BuildCommand : Command {
             }
         }
 
-        return input is null || emit is not (null or "sil" or "llvm-ir")
-            ? null
-            : new(input, output, emit, optimise, debug, exclusivity, arguments);
+        if (input is null || emit is not (null or "sil" or "llvm-ir" or "obj")) {
+            return null;
+        }
+
+        NativeTarget? target = null;
+        if (triple is not null && (target = NativeTarget.Parse(triple, out var error)) is null) {
+            Console.Error.WriteLine($"sable: {error}");
+            return null;
+        }
+
+        return new(input, output, emit, optimise, debug, exclusivity, arguments) { Target = target, Sysroot = sysroot };
     }
 
     public override int Run(IReadOnlyList<string> arguments) {
@@ -83,7 +108,8 @@ public class BuildCommand : Command {
             return BadUsage();
         }
 
-        return Build(options, options.Output ?? Path.GetFileNameWithoutExtension(options.Input)) is { } failure ? Math.Max(failure, 0) : 0;
+        var suffix = options.Emit == "obj" ? ".o" : (options.Target ?? NativeTarget.Host).ExecutableSuffix;
+        return Build(options, options.Output ?? Path.GetFileNameWithoutExtension(options.Input) + suffix) is { } failure ? Math.Max(failure, 0) : 0;
     }
 
     /// <summary>Builds <paramref name="executable" />; null when built, -1 when --emit printed a stage instead, else the exit code to fail with.</summary>
@@ -94,12 +120,14 @@ public class BuildCommand : Command {
         }
 
         var source = new SourceText(File.ReadAllText(options.Input), Path.GetFileName(options.Input));
+        var target = options.Target ?? NativeTarget.Host;
         // Dynamic exclusivity checks: on in a debug build, off in a release one,
         // unless asked for (docs/02 §2.3).
         var result = Pipeline.Compile(
-            [SyntaxTree.Parse(source, Pipeline.ParseOptionsFor(options.Optimise))],
+            [SyntaxTree.Parse(source, Pipeline.ParseOptionsFor(options.Optimise, target))],
             options.Debug ? Path.GetDirectoryName(Path.GetFullPath(options.Input)) : null,
             options.Exclusivity ?? (options.Debug || !options.Optimise),
+            target: target,
             optimised: options.Optimise && !options.Debug
         );
         Report(result.Warnings);
@@ -117,7 +145,8 @@ public class BuildCommand : Command {
         }
 
         if (options.Emit == "llvm-ir") {
-            Console.Write(result.LlvmIr);
+            // As clang is given it: with the target's data layout and triple.
+            Console.Write(NativeBuild.WithTargetHeader(result.LlvmIr!, target));
             return -1;
         }
 
@@ -126,7 +155,25 @@ public class BuildCommand : Command {
             return 1;
         }
 
-        var build = NativeBuild.Build(result.LlvmIr!, executable, options.Optimise, options.Debug);
+        // An object file needs no runtime: it is what another machine's link,
+        // or a target the runtime is not built for yet, starts from.
+        if (options.Emit == "obj") {
+            var compiled = NativeObjects.CompileIr(result.LlvmIr!, Path.GetFullPath(executable), options.Native with { Lto = LtoMode.Off });
+            if (!compiled.Succeeded) {
+                Console.Error.WriteLine($"internal error: compiling for {target.Triple} failed:");
+                Console.Error.Write(compiled.Output);
+                return 1;
+            }
+
+            return null;
+        }
+
+        if (!target.HasRuntime) {
+            Console.Error.WriteLine($"sable: {NativeBuild.NoRuntime(target)}");
+            return 1;
+        }
+
+        var build = NativeBuild.Build(result.LlvmIr!, executable, options.Native);
         if (!build.Succeeded) {
             Console.Error.WriteLine("internal error: the native build failed:");
             Console.Error.Write(build.Output);

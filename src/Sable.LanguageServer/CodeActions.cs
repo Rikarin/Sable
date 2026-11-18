@@ -11,7 +11,11 @@ namespace Sable.LanguageServer;
 ///     — the fix each one's message suggests, and turning the lint off for
 ///     the declaration with <c>@allow</c>. Those of the older lints are
 ///     worked out from the text alone; any other lint's are the fixes it
-///     carried when it ran over the document's compilation.
+///     carried when it ran over the document's compilation. The compiler's
+///     own errors get the fixes they carry (<c>try</c>, a match's missing
+///     cases, a protocol's stubs), an import for a name no module in scope
+///     declares, and the label a call's parameter has; and the whole file
+///     gets <c>source.fixAll</c>, every first fix at once.
 /// </summary>
 public sealed partial class LanguageServer {
     [GeneratedRegex(@"\[([a-z_]+)\]$")]
@@ -24,26 +28,55 @@ public sealed partial class LanguageServer {
         var document = DocumentOf(snapshot, parameters);
         var actions = new JsonArray();
         var context = parameters.Get("context");
-        if (context?.Get("only") is { ValueKind: JsonValueKind.Array } only
-            && !only.EnumerateArray().Any(static k => k.GetString() is { } kind && ("quickfix".StartsWith(kind, StringComparison.Ordinal) || kind.Length == 0))) {
+        bool Wanted(string kind) =>
+            context?.Get("only") is not { ValueKind: JsonValueKind.Array } only
+            || only.EnumerateArray().Any(k => k.GetString() is { } asked && (kind.StartsWith(asked, StringComparison.Ordinal) || asked.Length == 0));
+
+        if (Wanted("source.fixAll.sable") && context?.Get("only") is { ValueKind: JsonValueKind.Array }) {
+            var all = await FixAllAsync(snapshot, document, cancellation);
+            if (all.Count > 0) {
+                actions.Add(new JsonObject {
+                    ["title"] = "Fix everything that has a fix",
+                    ["kind"] = "source.fixAll.sable",
+                    ["edit"] = new JsonObject { ["changes"] = new JsonObject { [document.Uri] = all } }
+                });
+            }
+        }
+
+        if (!Wanted("quickfix")) {
             return actions;
         }
 
         IReadOnlyList<Diagnostic>? lints = null;
+        IReadOnlyList<Diagnostic>? errors = null;
         foreach (var diagnostic in context?.Get("diagnostics")?.EnumerateArray() ?? default) {
             cancellation.ThrowIfCancellationRequested();
             if (diagnostic.GetString("source") != "sable" || diagnostic.GetString("code") is not { } code || diagnostic.Get("range") is not { } range) {
                 continue;
             }
 
-            var lint = LintName().Match(diagnostic.GetString("message") ?? "");
-            if (!lint.Success) {
-                continue;
-            }
-
             var r = ReadRange(range);
             var span = TextSpan.FromBounds(document.Lines.OffsetOf(r.Start), Math.Max(document.Lines.OffsetOf(r.Start), document.Lines.OffsetOf(r.End)));
             var message = diagnostic.GetString("message") ?? "";
+            var lint = LintName().Match(message);
+            if (!lint.Success) {
+                var analysis = await AnalysisOfAsync(snapshot, document);
+                errors ??= analysis.Snapshot.Find(document.Uri) is { } known && ReferenceEquals(known.Tree, document.Tree)
+                    ? analysis.DiagnosticsOf(document.Tree, cancellation)
+                    : [];
+                var preferred = true;
+                foreach (var fix in errors.Where(d => d.Id == code && d.Span == span && d.Message == message).SelectMany(static d => d.Fixes)) {
+                    actions.Add(Action(document, fix.Title, diagnostic, [..fix.Changes.Select(c => TextEdit(document, c.Span, c.NewText))], preferred));
+                    preferred = false;
+                }
+
+                foreach (var (fixTitle, fixEdits) in await ErrorFixesAsync(analysis, document, code, span, message)) {
+                    actions.Add(Action(document, fixTitle, diagnostic, fixEdits, false));
+                }
+
+                continue;
+            }
+
             if (FixOf(document, code, span, message) is var (title, edits) && edits.Count > 0) {
                 actions.Add(Action(document, title, diagnostic, edits, true));
             } else {
@@ -59,6 +92,64 @@ public sealed partial class LanguageServer {
         }
 
         return actions;
+    }
+
+    [GeneratedRegex(@"argument (\d+) is labelled '([A-Za-z_][A-Za-z0-9_]*)', and the parameter is '([A-Za-z_][A-Za-z0-9_]*)'")]
+    private static partial Regex WrongLabel();
+
+    /// <summary>
+    ///     Fixes the compiler does not carry, worked out here: the import of
+    ///     each module — the workspace's, or the library's, imported or not —
+    ///     with a public name a file could not find, and the label a call's
+    ///     parameter has where its argument says another.
+    /// </summary>
+    async Task<List<(string Title, List<JsonObject> Edits)>> ErrorFixesAsync(Analysis analysis, Document document, string code, TextSpan span, string message) {
+        var fixes = new List<(string, List<JsonObject>)>();
+        switch (code) {
+            case "S2002" when QuotedIdentifier().Match(message) is { Success: true } quoted && document.Tree.Root is CompilationUnitSyntax unit: {
+                var name = quoted.Groups[1].Value;
+                var own = unit.Module?.Name.ToString().Trim();
+                var imported = unit.Imports.Select(static i => i.Name.ToString().Trim()).ToHashSet(StringComparer.Ordinal);
+                var modules = new SortedSet<string>(StringComparer.Ordinal);
+                lock (analysis.Gate) {
+                    foreach (var module in analysis.Compilation.Modules) {
+                        if (module.Members.Any(m => m.Name == name && m.DeclaredAccessibility == Accessibility.Public)) {
+                            modules.Add(module.Name);
+                        }
+                    }
+                }
+
+                foreach (var entry in await _library.GetAsync()) {
+                    if (entry.Symbol.Name == name) {
+                        modules.Add(entry.Module);
+                    }
+                }
+
+                var line = ImportLineOf(document);
+                foreach (var module in modules.Where(m => m.Length > 0 && m != own && m != CoreLibrary.ModuleName && !imported.Contains(m))) {
+                    fixes.Add(($"Import {module}", [TextEdit(document, new(document.Lines.OffsetOf(new(line, 0)), 0), $"import {module}\n")]));
+                }
+
+                break;
+            }
+
+            case "S3007" when WrongLabel().Match(message) is { Success: true } wrong: {
+                var index = int.Parse(wrong.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture) - 1;
+                InvocationExpressionSyntax? call = null;
+                for (var node = SemanticModel.FindToken(document.Tree.Root, span.Start).Parent; node is not null && call is null; node = node.Parent) {
+                    call = node as InvocationExpressionSyntax;
+                }
+
+                if (call?.ArgumentList?.Arguments.ElementAtOrDefault(index) is { NameToken: { IsNone: false } label } && label.Text == wrong.Groups[2].Value) {
+                    var expected = wrong.Groups[3].Value;
+                    fixes.Add(($"Label it '{expected}'", [TextEdit(document, label.Span, expected)]));
+                }
+
+                break;
+            }
+        }
+
+        return fixes;
     }
 
     static JsonObject Action(Document document, string title, JsonElement diagnostic, IReadOnlyList<JsonObject> edits, bool preferred) =>

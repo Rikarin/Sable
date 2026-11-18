@@ -4724,6 +4724,20 @@ public sealed partial class SilGen {
                 case BoundConversion { ConversionKind: ConversionKind.Identity } conversion:
                     return Expression(conversion.Operand);
 
+                // 'Never' standing for a value — 'case .A => unreachable()':
+                // what makes it does not return, so nothing after it runs and
+                // no value of the wanted type is ever made.
+                case BoundConversion { ConversionKind: ConversionKind.Bottom } bottom:
+                    if (Expression(bottom.Operand) is null) {
+                        return null;
+                    }
+
+                    if (_current is not null) {
+                        Jump(new UnreachableInst());
+                    }
+
+                    return UnitValue.Instance;
+
                 // A literal taking the type the context asked for: 'let x: F64 = 1'.
                 case BoundConversion { ConversionKind: ConversionKind.LiteralTyping, Operand: BoundLiteral literal } conversion:
                     return Literal(literal, conversion.Type);
@@ -7353,8 +7367,8 @@ public sealed partial class SilGen {
             }
 
             // Sable.Core's @intrinsic members: the compiler writes their bodies.
-            if (IsIntrinsic(callee) && callee is { Name: "compileError", ContainingSymbol: ModuleSymbol }) {
-                return CompileError(call);
+            if (IsIntrinsic(callee) && callee is { Name: "compileError" or "unreachable", ContainingSymbol: ModuleSymbol }) {
+                return callee.Name == "unreachable" ? Unreachable() : CompileError(call);
             }
 
             if (IsIntrinsic(callee)) {

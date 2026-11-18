@@ -46,3 +46,11 @@ public struct Platform {
 /// The compiler writes each call (SilGen.Constants.cs).
 @intrinsic
 public const fn compileError(_ message: String) -> Never
+
+/// Stops the program: the code it is in is never meant to run, or is not
+/// written yet. Its type is Never, so it stands for a value of any type —
+/// the quick fixes for a missing match case or protocol requirement write
+/// it as the body they leave to the programmer. The compiler writes each
+/// call (SilGen.Constants.cs).
+@intrinsic
+public fn unreachable() -> Never

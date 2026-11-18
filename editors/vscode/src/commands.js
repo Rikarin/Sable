@@ -24,12 +24,38 @@ function register(context) {
   command("sable.debug", (/** @type {vscode.Uri | undefined} */ uri) => debug(uri));
   command("sable.explain", (/** @type {string | undefined} */ code) => explain(code));
   command("sable.newPackage", () => newPackage());
+  command("sable.showReferences", (/** @type {string} */ uri, /** @type {any} */ position, /** @type {any[]} */ locations) =>
+    showReferences(uri, position, locations));
 
   context.subscriptions.push(
     vscode.languages.registerCodeLensProvider({ language: "sable" }, new MainLens()),
     vscode.languages.registerCodeActionsProvider({ language: "sable" }, new ExplainAction(), {
       providedCodeActionKinds: [vscode.CodeActionKind.QuickFix],
     }),
+  );
+}
+
+/**
+ * The language server's references lens: it gives the protocol's URI,
+ * position and locations, which VS Code's own references view takes as its
+ * own types.
+ * @param {string} uri
+ * @param {{ line: number, character: number }} position
+ * @param {{ uri: string, range: { start: { line: number, character: number }, end: { line: number, character: number } } }[]} locations
+ */
+function showReferences(uri, position, locations) {
+  const places = (locations ?? []).map(
+    (l) =>
+      new vscode.Location(
+        vscode.Uri.parse(l.uri),
+        new vscode.Range(l.range.start.line, l.range.start.character, l.range.end.line, l.range.end.character),
+      ),
+  );
+  return vscode.commands.executeCommand(
+    "editor.action.showReferences",
+    vscode.Uri.parse(uri),
+    new vscode.Position(position.line, position.character),
+    places,
   );
 }
 

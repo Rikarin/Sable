@@ -1565,8 +1565,18 @@ member at a time.
   declaration, conforming extensions and `@derive`; subtypes in the
   workspace). Quick fixes for the lints: what each message suggests (`_` before
   an unused name, a parameter renamed keeping its label, the import removed,
-  `let` for `var`) and `@allow(lint)` on the declaration. `completionItem/resolve`
-  adds a symbol's doc comment to the item shown.
+  `let` for `var`) and `@allow(lint)` on the declaration. Quick fixes for the
+  compiler's own errors: `try` before a call that can throw, a match's missing
+  cases, a stub of each requirement a type lacks (the bodies `unreachable()`,
+  which `Sable.Core` now has: a trap of type `Never`), the import of a module —
+  the workspace's or any library one — with a name not found, and the label a
+  call's parameter has. `source.fixAll` and the `sable.fixAll` command
+  (`workspace/executeCommand`, applied through `workspace/applyEdit`) take
+  every first fix at once. Code lenses count each type's and function's
+  references (resolved when shown; `sable.showReferences` is the client's
+  command that lists them), and document links take an import to its
+  module's first file and a URL in a comment to its page.
+  `completionItem/resolve` adds a symbol's doc comment to the item shown.
 - Completion: members after `.` and `?.` (statics after a type name), the
   names in scope — locals declared before the caret, parameters, the enclosing
   types' members, the module, imports, `Sable.Core` — and keywords; module
@@ -1576,7 +1586,9 @@ member at a time.
   `.`, the cases and statics of the type the context wants (a parameter's, an
   annotated declaration's, an assignment's or comparison's other side, the
   function's result). A public name of another module of the compilation that
-  the file does not import is offered with the `import` it needs.
+  the file does not import is offered with the `import` it needs, and so is
+  one of a library module nothing imports yet (every library module is
+  compiled once, in the background, for its names).
 - Inlay hints: the type of each `let`/`var` written without one; the
   parameter an argument without a label is for, where the call takes more than
   one and the argument is not already that name; a closure's inferred

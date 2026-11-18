@@ -307,6 +307,34 @@ public sealed class OptionalAndUnionLoweringTests {
         Assert.Equal("unwrapped a none", Assert.Throws<SilTrap>(() => new SilInterpreter(module).Run("M.nothing")).Message);
     }
 
+    // ---- Never standing for a value ----------------------------------------
+
+    [Fact]
+    public void UnreachableStandsForAValueOfAnyTypeAndTraps() {
+        var module = Lower(
+            """
+            union Shape { Circle(F64), Empty }
+            fn area(_ s: Shape) -> Int {
+                return match s {
+                    case .Empty => 0
+                    case .Circle(_) => unreachable()
+                }
+            }
+            fn pick(_ x: Int) -> String {
+                let s: String = x > 0 ? "yes" : unreachable()
+                return s
+            }
+            fn empty() -> Int { return area(.Empty) }
+            fn circle() -> Int { return area(.Circle(1.0)) }
+            fn positive() -> String { return pick(1) }
+            """
+        );
+
+        Assert.Equal(0L, Run(module, "empty"));
+        Assert.Equal("yes", Run(module, "positive"));
+        Assert.Equal("reached code marked unreachable()", Assert.Throws<SilTrap>(() => new SilInterpreter(module).Run("M.circle")).Message);
+    }
+
     // ---- A binding that takes the whole subject -----------------------------
 
     /// <summary>

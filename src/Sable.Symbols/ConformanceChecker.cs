@@ -657,7 +657,8 @@ internal static class ConformanceChecker {
                 type,
                 $"'{type.Name}' does not conform to '{protocol.Name}': "
                 + $"it is missing '{Describe(requirement)}'",
-                required
+                required,
+                requirement
             );
             return;
         }
@@ -729,7 +730,8 @@ internal static class ConformanceChecker {
                 $"'{type.Name}' does not conform to '{protocol.Name}': "
                 + $"it is missing '{requirement.Name}: "
                 + $"{requirement.Type.ToDisplayString()}'",
-                required
+                required,
+                requirement
             );
             return;
         }
@@ -960,10 +962,17 @@ internal static class ConformanceChecker {
         ErrorCode code,
         Symbol at,
         string message,
-        DiagnosticLocation? related = null
+        DiagnosticLocation? related = null,
+        Symbol? missing = null
     ) {
         // A conformance failure belongs to the type, but an override mistake
-        // belongs to the member that made it.
-        diagnostics.Add(Diagnostic.Error(code, at.Location ?? default, message).WithRelated(related));
+        // belongs to the member that made it. A missing requirement can be
+        // written in, as a stub.
+        var diagnostic = Diagnostic.Error(code, at.Location ?? default, message).WithRelated(related);
+        if (missing is not null && at is NamedTypeSymbol type) {
+            diagnostic = QuickFixes.Stub(diagnostic, type, missing);
+        }
+
+        diagnostics.Add(diagnostic);
     }
 }

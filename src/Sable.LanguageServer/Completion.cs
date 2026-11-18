@@ -336,7 +336,7 @@ public sealed partial class LanguageServer {
         }
 
         var own = unit.Module?.Name.ToString().Trim();
-        var imported = unit.Members.OfType<ImportDeclarationSyntax>().Select(static i => i.Name.ToString().Trim()).ToHashSet(StringComparer.Ordinal);
+        var imported = unit.Imports.Select(static i => i.Name.ToString().Trim()).ToHashSet(StringComparer.Ordinal);
         foreach (var module in analysis.Compilation.Modules.OrderBy(static m => m.Name, StringComparer.Ordinal)) {
             if (module.Name.Length == 0 || module.Name == own || module.Name == CoreLibrary.ModuleName || imported.Contains(module.Name)) {
                 continue;
@@ -367,7 +367,7 @@ public sealed partial class LanguageServer {
             return 0;
         }
 
-        var last = unit.Members.OfType<ImportDeclarationSyntax>().LastOrDefault() as SyntaxNode ?? unit.Module;
+        var last = unit.Imports.LastOrDefault() as SyntaxNode ?? unit.Module;
         return last is null ? 0 : document.Lines.PositionOf(last.Span.End).Line + 1;
     }
 

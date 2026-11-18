@@ -2199,6 +2199,19 @@ public sealed partial class Binder {
                     );
                 }
 
+                // An observed property, written in its own observers or in
+                // its type's initialisers, is its storage: the observers run
+                // for changes made once the value is made, and not again for
+                // the changes they make themselves.
+                if (field is { BackingField: { } storage }
+                    && receiver is BoundSelfAccess or null
+                    && _compilation.ObservedProperties.ContainsKey(field)
+                    && EnclosingFunction() is { } within
+                    && (within is { FunctionKind: FunctionKind.Accessor } && ReferenceEquals(within.ContainingSymbol, field)
+                        || within is { FunctionKind: FunctionKind.Initializer } && ReferenceEquals(within.ContainingSymbol, field.ContainingSymbol))) {
+                    field = storage;
+                }
+
                 // 'task.value' waits for the task.
                 if (field.IsAsyncGetter) {
                     MarkAsync(syntax.Span, $"reading '{field.Name}'");
@@ -4334,6 +4347,12 @@ public sealed partial class Binder {
             var name = initializer.NameToken.Text;
             var field = named.GetMembers(name).OfType<FieldSymbol>().FirstOrDefault();
 
+            // An observed property is initialised in its storage: a value
+            // being made has no old value to observe.
+            if (field is { BackingField: { } storage } && _compilation.ObservedProperties.ContainsKey(field)) {
+                field = storage;
+            }
+
             if (field is null) {
                 _diagnostics.Error(
                     ErrorCode.ERR_NameNotFound,
@@ -4363,8 +4382,8 @@ public sealed partial class Binder {
         var missing = named.Members
             .OfType<FieldSymbol>()
             .Where(static f => f is { IsStatic: false, IsComputed: false, HasInitializer: false })
-            .Where(f => !initialized.Contains(f.Name))
-            .Select(static f => f.Name)
+            .Where(f => !initialized.Contains(f.DisplayName))
+            .Select(static f => f.DisplayName)
             .ToList();
 
         if (missing.Count > 0) {

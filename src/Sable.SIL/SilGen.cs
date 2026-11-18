@@ -128,15 +128,22 @@ public sealed partial class SilGen {
 
             // A computed property's getter and setter: methods of the type,
             // named for the property, that reading and writing it call.
+            // An observed property's 'willSet' and 'didSet' are methods too,
+            // which the setter the compiler writes for it calls.
             foreach (var accessor in Declarations(tree).OfType<AccessorSyntax>()) {
-                if (accessor.Keyword.Kind is not (SyntaxKind.GetKeyword or SyntaxKind.SetKeyword)
+                if (accessor.Keyword.Kind is not (SyntaxKind.GetKeyword or SyntaxKind.SetKeyword or SyntaxKind.WillSetKeyword or SyntaxKind.DidSetKeyword)
                     || (_unit is null || _unit.Owns(tree) ? model.GetAccessorSymbol(accessor) : model.GetAccessorDeclaration(accessor))
                         is not { ContainingSymbol: FieldSymbol field } function
                     || !IsLowerable(function)) {
                     continue;
                 }
 
-                (accessor.Keyword.Kind == SyntaxKind.GetKeyword ? _getters : _setters)[field] = function;
+                if (accessor.Keyword.Kind is SyntaxKind.GetKeyword or SyntaxKind.SetKeyword) {
+                    (accessor.Keyword.Kind == SyntaxKind.GetKeyword ? _getters : _setters)[field] = function;
+                } else if (!_compilation.ObservedProperties.ContainsKey(field)) {
+                    continue;
+                }
+
                 functions.Add((function, accessor, model));
             }
 

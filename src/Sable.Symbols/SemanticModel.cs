@@ -440,18 +440,83 @@ public sealed partial class SemanticModel {
             return;
         }
 
-        // A property kept in 'field' starts with its initial value there.
+        // A property kept in 'field', or observed, starts with its initial
+        // value in its storage.
         if (declaration.Declarator.Initializer is { } initializer) {
             BindInitializer(initializer.Value, field.BackingField ?? field, field.Type, scope);
         }
 
         BindAccessors(declaration.Accessors, field, field.Type, scope);
         CheckReferenceKind(declaration, field);
+
+        if (_compilation.ObservedProperties.TryGetValue(field, out var observed)) {
+            BindObserved(declaration, field, observed);
+        }
+    }
+
+    /// <summary>
+    ///     An observed property's getter, <c>return self.storage</c>, and its
+    ///     setter, written here:
+    ///     <code>
+    ///     self.willSet(newValue)
+    ///     let oldValue = self.storage
+    ///     self.storage = newValue
+    ///     self.didSet(oldValue)
+    ///     </code>
+    ///     with only the observers it has. The observers are the accessors
+    ///     written in source, bound with the others.
+    /// </summary>
+    void BindObserved(FieldDeclarationSyntax declaration, FieldSymbol field, Compilation.LazyAccessors accessors) {
+        var backing = field.BackingField!;
+        var at = declaration.Declarator;
+        var type = field.ContainingSymbol as NamedTypeSymbol;
+
+        BoundSelfAccess? Self(bool mutable) => field.IsStatic || type is null ? null : new BoundSelfAccess(at, type, mutable);
+        BoundFieldAccess Storage(bool mutable) => new(at, Self(mutable), backing);
+
+        _lazyBodies[accessors.Getter] = new BoundBlock(at, [], [new BoundReturn(at, Storage(false))]);
+
+        AccessorSyntax? willSet = null, didSet = null;
+        foreach (var accessor in declaration.Accessors!.Accessors) {
+            if (accessor.Keyword.Kind == SyntaxKind.WillSetKeyword) {
+                willSet = accessor;
+            } else if (accessor.Keyword.Kind == SyntaxKind.DidSetKeyword) {
+                didSet = accessor;
+            }
+        }
+
+        BoundStatement Observe(AccessorSyntax observer, BoundExpression value) {
+            var function = AccessorFunction(observer, field, field.Type);
+            return new BoundExpressionStatement(at, new BoundCall(at, Self(true), function, [value], _compilation.Core.Void));
+        }
+
+        var setter = accessors.Setter;
+        BoundExpression NewValue() => new BoundParameterAccess(at, setter.Parameters[0]);
+
+        var locals = new List<LocalSymbol>();
+        var statements = new List<BoundStatement>();
+        if (willSet is not null) {
+            statements.Add(Observe(willSet, NewValue()));
+        }
+
+        LocalSymbol? oldValue = null;
+        if (didSet is not null) {
+            oldValue = new LocalSymbol("oldValue", setter, at, false) { TypeResolver = () => field.Type };
+            locals.Add(oldValue);
+            statements.Add(new BoundLocalDeclaration(at, oldValue, Storage(false)));
+        }
+
+        statements.Add(new BoundExpressionStatement(at, new BoundAssignment(at, Storage(true), NewValue())));
+        if (didSet is not null) {
+            statements.Add(Observe(didSet, new BoundLocalAccess(at, oldValue!)));
+        }
+
+        _lazyBodies[setter] = new BoundBlock(at, [..locals], [..statements]);
     }
 
     readonly Dictionary<FunctionSymbol, BoundBlock> _lazyBodies = [];
 
-    /// <summary>The body the compiler wrote for a lazy property's getter or setter.</summary>
+    /// <summary>The body the compiler wrote for a lazy or observed property's getter or setter.</summary>
     public BoundBlock? GetLazyBody(FunctionSymbol accessor) {
         EnsureBound();
         return _lazyBodies.GetValueOrDefault(accessor);

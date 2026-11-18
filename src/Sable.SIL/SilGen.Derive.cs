@@ -18,9 +18,9 @@ public sealed partial class SilGen {
         }
     }
 
-    /// <summary>A lazy property's getter and setter, which the compilation wrote: lowered where the property is declared.</summary>
+    /// <summary>A lazy or observed property's getter and setter, which the compilation wrote: lowered where the property is declared.</summary>
     void AddLazy(List<(FunctionSymbol Symbol, SyntaxNode Syntax, SemanticModel Model)> functions) {
-        foreach (var (field, lazy) in _compilation.LazyProperties) {
+        foreach (var (field, lazy) in _compilation.LazyProperties.Concat(_compilation.ObservedProperties)) {
             if (!IsLowerable(lazy.Getter) || field.DeclaringSyntax is not [var declaration, ..]) {
                 continue;
             }

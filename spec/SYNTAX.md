@@ -635,6 +635,16 @@ class Temperature {
 }
 ```
 
+`willSet` and `didSet` observe a stored property: a store to it calls
+`willSet` with the new value (`newValue`, or the name it gives in
+`willSet(name)`), stores it, then calls `didSet` with the old one
+(`oldValue`); compound assignment stores through them too. In its own
+observers, and in its type's initialisers, the property names its storage,
+so the observers do not run for the changes they make themselves, nor while
+the value is being made; a record literal or memberwise initialiser sets it
+without observing either. An observed property is a `var`, declares no `get`
+or `set`, and belongs to a struct, class or actor (S3140).
+
 A property with a getter alone may write it without the braces or the
 keyword: `=>` and the value, as a function written `=> e` does.
 

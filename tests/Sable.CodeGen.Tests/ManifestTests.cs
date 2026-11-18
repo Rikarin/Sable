@@ -169,8 +169,6 @@ public sealed class ManifestTests {
     public void ADependencyNeedsSomewhereToComeFrom() {
         Assert.Contains(Errors("[package]\nname = \"a\"\nversion = \"1.0.0\"\n[dependencies]\nb = { features = [\"x\"] }\n"),
             static e => e is { Line: 5, Key: "dependencies.b" } && e.Message.Contains("needs a version, a path", StringComparison.Ordinal));
-        Assert.Contains(Errors("[package]\nname = \"a\"\nversion = \"1.0.0\"\n[dependencies]\nb = { git = \"https://example.com/b\" }\n"),
-            static e => e.Key == "dependencies.b.git");
         Assert.Contains(Errors("[package]\nname = \"a\"\nversion = \"1.0.0\"\n[dependencies]\nb = { version = \"1\", colour = \"red\" }\n"),
             static e => e.Key == "dependencies.b.colour");
     }

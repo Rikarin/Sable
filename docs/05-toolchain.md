@@ -139,8 +139,18 @@ let manifest = Package {
   toolchain (§5.2.8), and from the pure parts of `Sable.Core`. Nothing else
   can be imported: not the package's own code, not its dependencies — they
   are what the manifest decides.
-- `.git` dependencies are written and kept, but the resolver refuses them
-  until it fetches from git (#201); everything else above builds today.
+- `.git(name, url)` takes one of `tag:`, `branch:` or `rev:` (a commit),
+  else the repository's default branch, and optionally `version:` for when
+  the package is published. Any URL git fetches from works (`https://`,
+  `ssh://`, `file://`, `git@host:path`); credentials are git's own. The
+  repository is fetched into `$SABLE_HOME/cache/git/`, and the package is
+  looked for at the top of the repository, then in directories below it,
+  so one repository can hold several. `sable.lock` pins the commit
+  (`source = "git+<url>?tag=v2.1.0#<commit>"`); a moving branch stays at
+  that commit until `sable update <name>`, or until the manifest names
+  another reference. A pinned commit already checked out builds offline.
+  A package from git is, like a registry package, a workspace of its own,
+  and a published package cannot depend on git alone.
 - Field names are the TOML keys in Sable's spelling (`defaultFeatures`,
   `optLevel`); every table of the TOML format has a field. Enumerated
   settings are enum cases (`.fat`, `.abort`), so a misspelling is a type

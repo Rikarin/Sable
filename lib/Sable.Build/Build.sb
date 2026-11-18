@@ -78,6 +78,8 @@ public struct Dependency {
     var path: String?
     var git: String?
     var tag: String?
+    var branch: String?
+    var rev: String?
     var optional: Bool
     var defaultFeatures: Bool
     var features: String[>..]
@@ -87,7 +89,7 @@ public struct Dependency {
     public static fn registry(_ name: String, _ version: String, features: String[>..] = [], defaultFeatures: Bool = true,
         optional: Bool = false, when: Condition? = none) -> Dependency {
         return Dependency {
-            name: name, version: version, path: none, git: none, tag: none,
+            name: name, version: version, path: none, git: none, tag: none, branch: none, rev: none,
             optional: optional, defaultFeatures: defaultFeatures, features: features, condition: when,
         }
     }
@@ -97,16 +99,20 @@ public struct Dependency {
     public static fn path(_ name: String, _ path: String, version: String? = none, features: String[>..] = [], defaultFeatures: Bool = true,
         optional: Bool = false, when: Condition? = none) -> Dependency {
         return Dependency {
-            name: name, version: version, path: path, git: none, tag: none,
+            name: name, version: version, path: path, git: none, tag: none, branch: none, rev: none,
             optional: optional, defaultFeatures: defaultFeatures, features: features, condition: when,
         }
     }
 
-    /// A package in a git repository, at a tag.
-    public static fn git(_ name: String, _ url: String, tag: String, features: String[>..] = [], defaultFeatures: Bool = true,
+    /// A package in a git repository: at a `tag`, the tip of a `branch`, or
+    /// a `rev` (a commit) — one of them — else the default branch's tip. The
+    /// lock file pins the commit; `sable update` moves it. With a version,
+    /// the one the registry has when this package is published.
+    public static fn git(_ name: String, _ url: String, tag: String? = none, branch: String? = none, rev: String? = none,
+        version: String? = none, features: String[>..] = [], defaultFeatures: Bool = true,
         optional: Bool = false, when: Condition? = none) -> Dependency {
         return Dependency {
-            name: name, version: none, path: none, git: url, tag: tag,
+            name: name, version: version, path: none, git: url, tag: tag, branch: branch, rev: rev,
             optional: optional, defaultFeatures: defaultFeatures, features: features, condition: when,
         }
     }
@@ -376,6 +382,12 @@ struct TomlWriter {
             }
             if let tag = dependency.tag {
                 parts.append("tag = \(quote(tag))")
+            }
+            if let branch = dependency.branch {
+                parts.append("branch = \(quote(branch))")
+            }
+            if let rev = dependency.rev {
+                parts.append("rev = \(quote(rev))")
             }
             if dependency.optional {
                 parts.append("optional = true")

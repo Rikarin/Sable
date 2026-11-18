@@ -143,7 +143,26 @@ public static class Pipeline {
     /// <summary>Type-checks a program: its errors, and the warnings about its own files.</summary>
     public static (IReadOnlyList<string> Errors, IReadOnlyList<string> Warnings) Diagnose(IReadOnlyList<SyntaxTree> program) {
         var compilation = CompilationOf(program);
-        return (Errors(compilation, program), Warnings(compilation, program));
+        var errors = Errors(compilation, program);
+        return (errors.Count > 0 ? errors : ConstantErrors(compilation, program), Warnings(compilation, program));
+    }
+
+    /// <summary>
+    ///     What computing the constants and running the comptime blocks
+    ///     reports (SYNTAX.md §21): part of type-checking, since a program
+    ///     whose constant divides by zero is not a program.
+    /// </summary>
+    static List<string> ConstantErrors(Compilation compilation, IReadOnlyList<SyntaxTree> program) {
+        var order = program.Select(static (tree, index) => (tree, index)).ToDictionary(static p => p.tree, static p => p.index);
+        return [
+            ..SilGen.EvaluateConstants(compilation)
+                .Where(static d => d.Diagnostic.Severity == DiagnosticSeverity.Error)
+                .OrderBy(d => order.TryGetValue(d.Tree, out var index) ? index : int.MaxValue)
+                .ThenBy(static d => d.Diagnostic.Span.Start)
+                .Select(d => order.ContainsKey(d.Tree) && d.Diagnostic.Span.End <= d.Tree.Text.Length
+                    ? d.Diagnostic.Format(d.Tree.Text)
+                    : $"error[{d.Diagnostic.Id}] in the standard library: {d.Diagnostic.Message}"),
+        ];
     }
 
     /// <summary>
@@ -160,6 +179,10 @@ public static class Pipeline {
     ) {
         var compilation = CompilationOf(program);
         var errors = Errors(compilation, program);
+        if (errors.Count == 0) {
+            errors = ConstantErrors(compilation, program);
+        }
+
         var warnings = Warnings(compilation, program);
         if (errors.Count > 0) {
             return (errors, warnings);

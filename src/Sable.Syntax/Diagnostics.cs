@@ -182,6 +182,16 @@ public enum ErrorCode {
     ERR_ActorStateFromOutside = 3206,
     ERR_NotSendable = 3207,
 
+    // ---- Compile-time evaluation (S3220-S3222): 'const', 'const fn' and
+    // 'comptime' (SYNTAX.md §21).
+    ERR_NotConstant = 3220,
+    ERR_ConstantEvaluationFailed = 3221,
+    ERR_CompileError = 3222,
+
+    // ---- C interop (S3223-S3229): '@extern' and '@export' (SYNTAX.md §24).
+    ERR_MalformedForeign = 3223,
+    ERR_NotACType = 3224,
+
     // ---- Lints (S3300-S3399): reported by Sable.Symbols' Lints, which
     // 'sable check' runs, never by compiling. Their severity is configured.
     LNT_UnusedLocal = 3300,

@@ -1205,6 +1205,19 @@ inside a function body, where they are ordinary statements.
 `const fn` bodies run in the compiler's interpreter. They may allocate, loop,
 and call other `const fn`s; they may not do I/O or touch `unsafe`.
 
+A `const` is computed while the program is compiled and written, as a
+literal, wherever it is read; its type may be left out when its value is a
+literal, another constant, a call, or arithmetic on those. What a constant's
+value, a `const fn` or a `comptime` block calls must be a `const fn`,
+something the compiler wrote (a memberwise initialiser), or a member of
+`Sable.Core` that neither reads, writes nor waits (S3220). A trap while
+computing one — overflow, division by zero, a loop past the step limit — is
+an error at compile time (S3201 for arithmetic, S3221 otherwise), and so is reaching `compileError("...")`
+(S3222). A `comptime` block, at the top level or in a body, runs once, while
+compiling, and leaves no code; one in a body cannot see the function's
+parameters or locals. `Platform.os`, `Platform.arch` and
+`Platform.pointerWidth` are the target's, as constants.
+
 `DEBUG` is defined in an unoptimised build (and by `sable check`), `RELEASE` in
 an optimised one; never both.
 
@@ -1276,6 +1289,14 @@ fn sqlite3_open(_ path: CString, _ db: out RawPtr<Opaque>) -> I32
 @export("c", "sable_entry")
 public fn entry(argc: I32, argv: RawPtr<CString>) -> I32 { }
 ```
+
+`@extern("c")` alone takes the C name to be the function's, and
+`@export("name")` alone takes the language to be C. Either is a function of
+the module, not generic, not `async`, not throwing; an `@extern` one has no
+body (S3223). What crosses is passed by value and must be something C has the
+same way — an integer type, `F32`, `F64`, `Bool`, or a struct of those, which
+is passed as the platform's C passes the struct of the same fields (S3224).
+Pointers, C strings, variadic calls and callbacks are `Sable.Interop`'s.
 
 Header import (`sable bindgen`) generates `.sbi` interface files from C headers
 and is the recommended path for anything larger than a few functions.

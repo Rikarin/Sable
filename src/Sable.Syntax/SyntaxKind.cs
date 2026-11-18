@@ -383,5 +383,6 @@ public enum SyntaxKind : ushort {
     UnionCaseField = 1435,
     EnumCaseDeclaration = 1436,
     IncompleteDeclaration = 1437,
-    WherePredicate = 1438
+    ComptimeDeclaration = 1438,
+    WherePredicate = 1439
 }

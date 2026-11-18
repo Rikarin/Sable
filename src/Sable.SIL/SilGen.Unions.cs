@@ -27,7 +27,20 @@ public sealed partial class SilGen {
                 _ => (null, null),
             };
 
-            if (whole is null || StructuralUnionTypeSymbol.Of(Sub(declared!)) is not { } union) {
+            if (whole is null) {
+                return null;
+            }
+
+            // 'if x != none' (or the else of 'x == none', or an early return)
+            // leaves an optional as its payload: an optional is an enum like
+            // a union, and the narrowed read is its 'Some' case.
+            if (Sub(declared!) is OptionalTypeSymbol optional) {
+                return Sub(expression.Type).Equals(Sub(optional.UnderlyingType)) && LowerType(optional) is EnumType lowered
+                    ? (whole, [lowered.CaseIndex("Some")])
+                    : null;
+            }
+
+            if (StructuralUnionTypeSymbol.Of(Sub(declared!)) is not { } union) {
                 return null;
             }
 

@@ -88,6 +88,27 @@ public sealed class SemverTests {
         Assert.False(VersionReq.TryParse("1+27X-.a>8", out _, out _));
     }
 
+    /// <summary>
+    ///     Found by the resolver fuzzer: a range ending past the largest number
+    ///     wrapped round to a negative one, so '~1.9223372036854775807.0'
+    ///     matched nothing, not even 1.9223372036854775807.0, without a word.
+    /// </summary>
+    [Theory]
+    [InlineData("^9223372036854775807")]
+    [InlineData("~1.9223372036854775807.0")]
+    [InlineData("0.0.9223372036854775807")]
+    [InlineData("<=1.9223372036854775807")]
+    public void ARangePastTheLargestNumberIsAnError(string text) {
+        Assert.False(VersionReq.TryParse(text, out _, out var error));
+        Assert.Contains("too large", error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TheLargestNumberIsFineWhereNoRangeEndsPastIt() {
+        Assert.True(VersionReq.Parse(">=9223372036854775807.0.0").Matches(V("9223372036854775807.0.0")));
+        Assert.True(VersionReq.Parse("=1.2.9223372036854775807").Matches(V("1.2.9223372036854775807")));
+    }
+
     [Fact]
     public void SetsAreClosedUnderTheBooleanOperations() {
         var a = VersionReq.Parse("^1.2").Set;

@@ -110,6 +110,18 @@ public sealed partial class SilGen {
     IEnumerable<SyntaxNode> Declarations(SyntaxTree tree) => _program?.Declarations(tree, _unit is null || _unit.Owns(tree)) ?? tree.Root.DescendantNodes();
 
     void LowerAll() {
+        // Constants are computed, and comptime blocks run, before anything
+        // is lowered: lowering writes each constant's value where it is read
+        // (SilGen.Constants.cs). Each unit reports what is in its own files.
+        if (_evaluation is null) {
+            _constants = ConstantsOf(_compilation);
+            foreach (var (diagnostic, tree) in _constants.Diagnostics) {
+                if (diagnostic.Code is ErrorCode.ERR_ConstantEvaluationFailed or ErrorCode.ERR_CompileError && (_unit is null || _unit.Owns(tree))) {
+                    _diagnostics.Add(diagnostic);
+                }
+            }
+        }
+
         var functions = new List<(FunctionSymbol Symbol, SyntaxNode Syntax, SemanticModel Model)>();
 
         foreach (var tree in _compilation.SyntaxTrees) {
@@ -217,10 +229,16 @@ public sealed partial class SilGen {
         DeclareGlobals();
         _entrySymbol = entry;
 
+        // Compile-time evaluation lowers what it runs, as it needs it.
+        if (_evaluation is not null) {
+            return;
+        }
+
         // What is not generic is lowered as it is; what is, once for each set
         // of type arguments something calls it with.
         foreach (var (symbol, syntax, model) in functions) {
-            if (IsGeneric(symbol)) {
+            // A Sable.Core '@intrinsic' has the body each use is lowered to.
+            if (IsGeneric(symbol) || IsIntrinsic(symbol)) {
                 continue;
             }
 
@@ -400,6 +418,11 @@ public sealed partial class SilGen {
             foreach (var declaration in Declarations(tree).Where(static d => d is FieldDeclarationSyntax or ConstDeclarationSyntax)) {
                 if (_compilation.GetDeclaredSymbol(declaration) is not FieldSymbol field || !IsGlobal(field)
                     || field.ContainingSymbol is NamedTypeSymbol { IsGenericDefinition: true } || Lower(field.Type) is not { } type) {
+                    continue;
+                }
+
+                // A constant written where it is read needs no storage.
+                if (_evaluation is null && ConstantRead(field) is not null) {
                     continue;
                 }
 
@@ -3113,6 +3136,10 @@ public sealed partial class SilGen {
                     return;
                 }
 
+                // 'comptime { … }' ran as the program was compiled (SilGen.Constants.cs).
+                case BoundScopedBlock { ScopeKind: ScopeKind.Comptime }:
+                    return;
+
                 // 'unsafe { … }' and the like: a block, as far as lowering goes.
                 case BoundScopedBlock { ScopeKind: not ScopeKind.Region } scoped:
                     Statement(scoped.Body);
@@ -3902,6 +3929,11 @@ public sealed partial class SilGen {
                     when task is not null && ReferenceEquals(task, Core.Task):
                     return TaskValue(taskValue);
 
+                // A constant: its value, computed as the program was compiled.
+                case BoundFieldAccess { Field: var constantField } when generator.ConstantRead(constantField) is { } constant
+                    && LowerType(constantField.Type) is { } constantType:
+                    return Constant(constant, constantType, expression.Syntax);
+
                 // A global: read where it lives.
                 case BoundFieldAccess { Field: var globalField } when SilGen.IsGlobal(globalField) && generator.GlobalOf(globalField) is var (globalName, globalType):
                     return Emit(new LoadInst(Emit(new GlobalAddrInst(globalName, globalType))));
@@ -4452,6 +4484,10 @@ public sealed partial class SilGen {
         }
 
         SilValue? FieldAccess(BoundFieldAccess access, BoundExpression receiver, FieldSymbol field) {
+            if (generator.ConstantRead(field) is { } constant && LowerType(field.Type) is { } constantType) {
+                return Constant(constant, constantType, access.Syntax);
+            }
+
             if (SilGen.IsGlobal(field) && generator.GlobalOf(field) is var (globalName, globalType)) {
                 return Emit(new LoadInst(Emit(new GlobalAddrInst(globalName, globalType))));
             }
@@ -5669,6 +5705,10 @@ public sealed partial class SilGen {
             }
 
             // Sable.Core's @intrinsic members: the compiler writes their bodies.
+            if (IsIntrinsic(callee) && callee is { Name: "compileError", ContainingSymbol: ModuleSymbol }) {
+                return CompileError(call);
+            }
+
             if (IsIntrinsic(callee)) {
                 var owner = Owner(callee)?.OriginalDefinition;
 

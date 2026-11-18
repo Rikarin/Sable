@@ -287,9 +287,9 @@ with both kinds is an error, so there is never a question which one applies.
   cross-compilation; `when:` covers `os()` and `arch()` only.
 - The language server evaluating manifests and applying the effect rules
   (#192); it type-checks them.
-- Compile-time evaluation of `const` and `comptime` in ordinary code (#172).
-  The manifest evaluator runs the interpreter directly, under its own rules,
-  and does not wait on it.
+- A manifest's `const`s and `comptime` blocks follow the manifest's rules
+  rather than ordinary code's: the manifest evaluator runs the interpreter
+  directly, under its own rules (§5.2.4).
 
 ### Deliberate departures from Cargo
 

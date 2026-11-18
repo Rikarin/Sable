@@ -415,6 +415,28 @@ public sealed partial class SilInterpreter(SilModule module, int stepLimit = 10_
     /// <summary>An enum value: which case, and its payload.</summary>
     public sealed record EnumValue(int Case, object? Payload);
 
+    /// <summary>What <see cref="GlobalValue" /> gives for a part no literal can say: an object, an array, a function.</summary>
+    public static readonly object Opaque = new();
+
+    /// <summary>
+    ///     What the global holds, as plain values: numbers, <see cref="bool" />,
+    ///     <see cref="Rune" />, strings as .NET strings, an array of parts for
+    ///     a struct or tuple, an <see cref="EnumValue" />; anything else is
+    ///     <see cref="Opaque" />. Null when nothing is stored there.
+    /// </summary>
+    public object? GlobalValue(string name) {
+        static object? Plain(object? value) =>
+            value switch {
+                null or long or ulong or bool or double or float or Rune => value,
+                HeapString text => text.Value,
+                object?[] parts => parts.Select(Plain).ToArray(),
+                EnumValue e => e with { Payload = Plain(e.Payload) },
+                _ => Opaque,
+            };
+
+        return _globals.TryGetValue(name, out var slot) ? Plain(slot.Peek()) : null;
+    }
+
     /// <summary>A closure: its code, and the context it captured, or null.</summary>
     sealed record ClosureValue(string Function, object? Context);
 

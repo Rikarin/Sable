@@ -709,6 +709,7 @@ public sealed partial class Compilation {
             IsMutating = declaration.Modifiers.Any(SyntaxKind.MutatingKeyword),
             IsOverride = declaration.Modifiers.Any(SyntaxKind.OverrideKeyword),
             IsOpen = declaration.Modifiers.Any(SyntaxKind.OpenKeyword),
+            IsConst = declaration.Modifiers.Any(SyntaxKind.ConstKeyword),
             IsAbstract = declaration.Body is null && declaration.ExpressionBody is null,
             Builtin = BuiltinOf(declaration)
         };
@@ -802,7 +803,8 @@ public sealed partial class Compilation {
             FunctionKind.Ordinary
         ) {
             IsAsync = !declaration.AsyncKeyword.IsNone
-                || declaration.Modifiers.Any(SyntaxKind.AsyncKeyword)
+                || declaration.Modifiers.Any(SyntaxKind.AsyncKeyword),
+            IsConst = declaration.Modifiers.Any(SyntaxKind.ConstKeyword)
         };
 
         if (declaration.TypeParameters is { } typeParameters) {

@@ -163,6 +163,12 @@ public enum ErrorCode {
     ERR_MissingBody = 3112,
     ERR_LazyProperty = 3113,
 
+    // ---- Compile-time evaluation (S3200-S3209): 'const', 'const fn' and
+    // 'comptime' (SYNTAX.md §21).
+    ERR_NotConstant = 3200,
+    ERR_ConstantEvaluationFailed = 3201,
+    ERR_CompileError = 3202,
+
     // ---- Lints (S3300-S3399): reported by Sable.Symbols' Lints, which
     // 'sable check' runs, never by compiling. Their severity is configured.
     LNT_UnusedLocal = 3300,

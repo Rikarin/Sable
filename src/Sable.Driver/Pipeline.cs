@@ -94,7 +94,27 @@ public static class Pipeline {
     ///     the errors, each formatted against the file it is in, the program's
     ///     own files first.
     /// </summary>
-    public static IReadOnlyList<string> Check(IReadOnlyList<SyntaxTree> program) => Errors(CompilationOf(program), program);
+    public static IReadOnlyList<string> Check(IReadOnlyList<SyntaxTree> program) {
+        var compilation = CompilationOf(program);
+        var errors = Errors(compilation, program);
+        return errors.Count > 0 ? errors : ConstantErrors(compilation, program);
+    }
+
+    /// <summary>
+    ///     What computing the constants and running the comptime blocks
+    ///     reports (SYNTAX.md §21): part of type-checking, since a program
+    ///     whose constant divides by zero is not a program.
+    /// </summary>
+    static List<string> ConstantErrors(Compilation compilation, IReadOnlyList<SyntaxTree> program) {
+        var order = program.Select(static (tree, index) => (tree, index)).ToDictionary(static p => p.tree, static p => p.index);
+        return [
+            ..SilGen.EvaluateConstants(compilation)
+                .Where(static d => d.Diagnostic.Severity == DiagnosticSeverity.Error)
+                .OrderBy(d => order.TryGetValue(d.Tree, out var index) ? index : int.MaxValue)
+                .ThenBy(static d => d.Diagnostic.Span.Start)
+                .Select(d => order.ContainsKey(d.Tree) ? d.Diagnostic.Format(d.Tree.Text) : $"error[{d.Diagnostic.Id}] in the standard library: {d.Diagnostic.Message}"),
+        ];
+    }
 
     /// <summary>
     ///     <c>sable check</c> with the lint set (docs/05 §5.7): the errors, and
@@ -109,6 +129,10 @@ public static class Pipeline {
     ) {
         var compilation = CompilationOf(program);
         var errors = Errors(compilation, program);
+        if (errors.Count == 0) {
+            errors = ConstantErrors(compilation, program);
+        }
+
         if (errors.Count > 0) {
             return (errors, []);
         }

@@ -1136,6 +1136,19 @@ inside a function body, where they are ordinary statements.
 `const fn` bodies run in the compiler's interpreter. They may allocate, loop,
 and call other `const fn`s; they may not do I/O or touch `unsafe`.
 
+A `const` is computed while the program is compiled and written, as a
+literal, wherever it is read; its type may be left out when its value is a
+literal, another constant, a call, or arithmetic on those. What a constant's
+value, a `const fn` or a `comptime` block calls must be a `const fn`,
+something the compiler wrote (a memberwise initialiser), or a member of
+`Sable.Core` that neither reads, writes nor waits (S3200). A trap while
+computing one — overflow, division by zero, a loop past the step limit — is
+an error at compile time (S3201), and so is reaching `compileError("...")`
+(S3202). A `comptime` block, at the top level or in a body, runs once, while
+compiling, and leaves no code; one in a body cannot see the function's
+parameters or locals. `Platform.os`, `Platform.arch` and
+`Platform.pointerWidth` are the target's, as constants.
+
 ---
 
 ## 22. Attributes

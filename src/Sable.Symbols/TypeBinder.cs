@@ -242,13 +242,133 @@ internal sealed class TypeBinder(Compilation compilation) {
     public void BindConstantType(FieldSymbol field, ConstDeclarationSyntax declaration) {
         var scope = compilation.CurrentScope;
 
-        field.TypeResolver = () => declaration.TypeAnnotation is { } annotation
-            ? BindType(annotation.Type, field, scope)
-            : ErrorTypeSymbol.Instance;
+        field.TypeResolver = () => {
+            if (declaration.TypeAnnotation is { } annotation) {
+                return BindType(annotation.Type, field, scope);
+            }
 
-        if (declaration.TypeAnnotation is not null) {
-            Defer(() => _ = field.Type);
+            // 'const Pi = 3.14', 'const Table = factorial(5)': the type is read
+            // off the value's form, as a stored property's is, with what a
+            // constant is usually written as besides — a call, another
+            // constant, arithmetic on them. A ring of constants, each the
+            // next's, has no type to find.
+            if (!_inferringConstants.Add(field)) {
+                return Error(
+                    ErrorCode.ERR_TypeNotFound,
+                    declaration.Identifier.Span,
+                    $"'{field.Name}' is defined in terms of itself, so its type cannot be inferred; write it"
+                );
+            }
+
+            try {
+                return InferConstant(declaration.Initializer.Value, field, scope) is { IsError: false } inferred
+                    ? inferred
+                    : Error(
+                        ErrorCode.ERR_TypeNotFound,
+                        declaration.Identifier.Span,
+                        $"'{field.Name}' needs a type annotation: its type can be left out only when its value is a literal, "
+                        + "another constant, a call to a function or a type's initialiser, or arithmetic on those"
+                    );
+            } finally {
+                _inferringConstants.Remove(field);
+            }
+        };
+
+        Defer(() => _ = field.Type);
+    }
+
+    readonly HashSet<FieldSymbol> _inferringConstants = [];
+
+    /// <summary>
+    ///     A constant's type, from the form of its value: what
+    ///     <see cref="InferFromSyntax" /> reads, and calls, names and
+    ///     operators over them.
+    /// </summary>
+    TypeSymbol? InferConstant(ExpressionSyntax value, Symbol context, FileScope? scope) {
+        var core = compilation.Core;
+        switch (value) {
+            case ParenthesizedExpressionSyntax parenthesized:
+                return InferConstant(parenthesized.Expression, context, scope);
+
+            case PrefixUnaryExpressionSyntax { OperatorToken.Kind: SyntaxKind.MinusToken or SyntaxKind.TildeToken } negated:
+                return InferConstant(negated.Operand, context, scope) is { } number && core.IsNumeric(number) ? number : null;
+
+            case PrefixUnaryExpressionSyntax { OperatorToken.Kind: SyntaxKind.BangToken }:
+                return core.Bool;
+
+            case BinaryExpressionSyntax binary:
+                switch (binary.OperatorToken.Kind) {
+                    case SyntaxKind.EqualsEqualsToken or SyntaxKind.BangEqualsToken or SyntaxKind.LessToken
+                        or SyntaxKind.LessEqualsToken or SyntaxKind.GreaterToken or SyntaxKind.GreaterEqualsToken
+                        or SyntaxKind.AmpersandAmpersandToken or SyntaxKind.PipePipeToken:
+                        return core.Bool;
+                    case SyntaxKind.PlusToken or SyntaxKind.MinusToken or SyntaxKind.StarToken or SyntaxKind.SlashToken
+                        or SyntaxKind.PercentToken or SyntaxKind.AmpersandToken or SyntaxKind.PipeToken or SyntaxKind.CaretToken
+                        or SyntaxKind.LessLessToken or SyntaxKind.GreaterGreaterToken: {
+                        // A literal takes the other side's type: 'Width * 2' is what Width is.
+                        var left = InferConstant(binary.Left, context, scope);
+                        var right = InferConstant(binary.Right, context, scope);
+                        return (left, right) switch {
+                            ({ } l, { } r) when ReferenceEquals(l, r) => l,
+                            ({ } l, _) when binary.Right is LiteralExpressionSyntax => l,
+                            (_, { } r) when binary.Left is LiteralExpressionSyntax => r,
+                            _ => null,
+                        };
+                    }
+                    default:
+                        return null;
+                }
+
+            case ConditionalExpressionSyntax conditional:
+                return InferConstant(conditional.WhenTrue, context, scope) ?? InferConstant(conditional.WhenFalse, context, scope);
+
+            case IdentifierNameSyntax name when LookupValue(name.Identifier.Text, context, scope) is FieldSymbol other:
+                return other.Type is { IsError: false } type ? type : null;
+
+            // 'Platform.pointerWidth': a type's static member.
+            case MemberAccessExpressionSyntax { Expression: IdentifierNameSyntax owner, Name: IdentifierNameSyntax memberName }
+                when Lookup(owner.Identifier.Text, context, scope, owner.Span) is NamedTypeSymbol ownerType
+                && ownerType.GetMembers(memberName.Identifier.Text).OfType<FieldSymbol>().FirstOrDefault(static f => f.IsStatic) is { } member:
+                return member.Type is { IsError: false } memberType ? memberType : null;
+
+            // 'factorial(5)': what the function it calls returns.
+            case InvocationExpressionSyntax { Expression: IdentifierNameSyntax callee }
+                when LookupValue(callee.Identifier.Text, context, scope) is FunctionSymbol { TypeParameters.IsEmpty: true } function:
+                return function.ReturnType is { IsError: false } returned ? returned : null;
+
+            default:
+                return InferFromSyntax(value, context, scope);
         }
+    }
+
+    /// <summary>
+    ///     The function or stored value a name means where a constant's value
+    ///     is written: a member of an enclosing type, the module's, an
+    ///     import's, the core's.
+    /// </summary>
+    Symbol? LookupValue(string name, Symbol context, FileScope? scope) {
+        static Symbol? Value(IEnumerable<Symbol> members, bool publicOnly) =>
+            members.FirstOrDefault(m => m is FunctionSymbol or FieldSymbol && (!publicOnly || m.DeclaredAccessibility == Accessibility.Public));
+
+        for (var symbol = context.ContainingSymbol; symbol is not null; symbol = symbol.ContainingSymbol) {
+            if (symbol is NamedTypeSymbol type && Value(type.GetMembers(name), false) is { } member) {
+                return member;
+            }
+        }
+
+        if (scope is not null) {
+            if (Value(scope.Module.GetMembers(name), false) is { } own) {
+                return own;
+            }
+
+            foreach (var module in scope.Imports) {
+                if (Value(module.GetMembers(name), true) is { } imported) {
+                    return imported;
+                }
+            }
+        }
+
+        return Value(compilation.Core.Module.GetMembers(name), true);
     }
 
     /// <summary>Aliases being resolved right now, to catch a cycle.</summary>

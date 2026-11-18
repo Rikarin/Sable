@@ -330,6 +330,10 @@ public sealed partial class SemanticModel {
                 BindConstant(declaration, scope);
                 return;
 
+            case ComptimeDeclarationSyntax declaration:
+                BindComptime(declaration, scope);
+                return;
+
             case StructDeclarationSyntax type:
                 BindAll(type.Members, scope);
                 return;
@@ -382,12 +386,41 @@ public sealed partial class SemanticModel {
 
         var binder = NewBinder(scope, function);
 
-        _bound[declaration] = body is not null
+        var bound = _bound[declaration] = body is not null
             ? binder.BindFunctionBody(function, body)
             : binder.BindExpressionBody(function, expressionBody!);
 
         Collect(binder);
+
+        // What runs in the compiler: a const fn's body, a comptime block.
+        if (function.IsConst || CompileTimeRules.MightNeedChecking(SyntaxTree, (SyntaxNode?)body ?? expressionBody!)) {
+            CompileTimeRules.CheckBody(bound, function, _diagnostics);
+            RecordComptime(bound, function);
+        }
     }
+
+    /// <summary>
+    ///     Each <c>comptime</c> block in a body, as a function of its own: it
+    ///     runs as the program is compiled, apart from the function it is
+    ///     written in.
+    /// </summary>
+    void RecordComptime(BoundNode node, FunctionSymbol function) {
+        if (node is BoundScopedBlock { ScopeKind: ScopeKind.Comptime } comptime) {
+            _comptime[comptime.Syntax] = (ComptimeFunction(comptime.Syntax, function.ContainingSymbol!), comptime.Body);
+            return;
+        }
+
+        foreach (var child in node.Children) {
+            RecordComptime(child, function);
+        }
+    }
+
+    FunctionSymbol ComptimeFunction(SyntaxNode syntax, Symbol owner) =>
+        new("comptime", owner, syntax, Accessibility.Private, FunctionKind.Ordinary) {
+            IsStatic = owner is NamedTypeSymbol,
+            IsConst = true,
+            ReturnTypeResolver = () => _compilation.Core.Void,
+        };
 
     /// <summary>
     ///     Binds a parameter's default value against the parameter's type.
@@ -526,12 +559,55 @@ public sealed partial class SemanticModel {
         }
     }
 
+    readonly Dictionary<SyntaxNode, (FunctionSymbol Function, BoundBlock Body)> _comptime = [];
+    readonly Dictionary<FieldSymbol, FunctionSymbol> _constantFunctions = [];
+
+    /// <summary>
+    ///     The file's <c>comptime</c> blocks, among its declarations and in
+    ///     its bodies: each a function of no parameters, with its body, that
+    ///     lowering runs while the program is compiled.
+    /// </summary>
+    public IReadOnlyList<(SyntaxNode Syntax, FunctionSymbol Function, BoundBlock Body)> GetComptimeBlocks() {
+        EnsureBound();
+        return [.._comptime.OrderBy(static c => c.Key.Span.Start).Select(static c => (c.Key, c.Value.Function, c.Value.Body))];
+    }
+
+    /// <summary>
+    ///     A constant's value as a function of no parameters, for lowering to
+    ///     compute it with while the program is compiled.
+    /// </summary>
+    public FunctionSymbol? GetConstantFunction(FieldSymbol constant) {
+        EnsureBound();
+        return _constantFunctions.GetValueOrDefault(constant);
+    }
+
+    void BindComptime(ComptimeDeclarationSyntax declaration, FileScope scope) {
+        // In a type, it sees the type's static members, as a static method would.
+        var owner = declaration.Parent is { } parent && DeclaredSymbol(parent) is NamedTypeSymbol type ? (Symbol)type : scope.Module;
+        var function = ComptimeFunction(declaration, owner);
+        var binder = NewBinder(scope, function);
+        var body = binder.BindFunctionBody(function, declaration.Body);
+        _bound[declaration] = body;
+        _comptime[declaration] = (function, body);
+        Collect(binder);
+        CompileTimeRules.CheckComptime(body, _diagnostics);
+    }
+
     void BindConstant(ConstDeclarationSyntax declaration, FileScope scope) {
         if (DeclaredSymbol(declaration) is not FieldSymbol constant) {
             return;
         }
 
         BindInitializer(declaration.Initializer.Value, constant, constant.Type, scope);
+        if (_initializers.GetValueOrDefault(constant) is { } value) {
+            CompileTimeRules.CheckConstant(value, constant, _diagnostics);
+        }
+
+        _constantFunctions[constant] = new(constant.Name, constant.ContainingSymbol!, declaration, Accessibility.Private, FunctionKind.Ordinary) {
+            IsStatic = true,
+            IsConst = true,
+            ReturnTypeResolver = () => _compilation.Core.Void,
+        };
     }
 
     /// <summary>

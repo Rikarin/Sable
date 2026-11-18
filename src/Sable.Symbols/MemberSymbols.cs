@@ -122,6 +122,14 @@ public sealed class FunctionSymbol : Symbol {
     public bool IsOpen { get; internal set; }
 
     /// <summary>
+    ///     Declared <c>const fn</c>: it may run in the compiler, so a
+    ///     <c>const</c> initialiser or a <c>comptime</c> block can call it. Its
+    ///     body is held to what can (SYNTAX.md §21): no I/O, no <c>unsafe</c>,
+    ///     and calls only to what is itself const.
+    /// </summary>
+    public bool IsConst { get; internal set; }
+
+    /// <summary>
     ///     Declared <c>rethrows</c>: it throws exactly when one of the closures
     ///     handed to it does, so <see cref="ThrownType" /> is what those closures
     ///     throw rather than anything written at the declaration.

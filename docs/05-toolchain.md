@@ -179,6 +179,11 @@ inheritance, which `sable.toml` never had either.)
 
 A package that is also its workspace's root has both files in one directory.
 
+`sable new` and `init` inside a workspace add the new package to its
+`members`, unless a glob already covers it or `exclude` names it; where
+`members` is computed rather than a literal list, they say what to add
+instead of editing it.
+
 ### 5.2.4 What the manifest may do
 
 The manifest is checked as ordinary Sable, then evaluated by the SIL

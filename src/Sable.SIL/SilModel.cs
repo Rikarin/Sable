@@ -1145,6 +1145,13 @@ public sealed class SilBlock(SilFunction function) {
     public List<SilArgument> Arguments { get; } = [];
     public List<SilInstruction> Instructions { get; } = [];
 
+    /// <summary>
+    ///     For branch coverage, the outcome of a decision that entering this
+    ///     block means — a block that only that outcome's edges enter — or
+    ///     null. Set only when lowering marks decisions (<see cref="SilDecision" />).
+    /// </summary>
+    public (SilDecision Decision, int Outcome)? Outcome { get; set; }
+
     public SilInstruction? Terminator =>
         Instructions.Count > 0 && Instructions[^1].IsTerminator ? Instructions[^1] : null;
 
@@ -1170,6 +1177,17 @@ public sealed class SilBlock(SilFunction function) {
     }
 }
 
+/// <summary>
+///     A decision in the source — an <c>if</c>'s condition, a <c>match</c>,
+///     the left side of <c>&amp;&amp;</c> — and the outcomes it can have, for
+///     branch coverage: lowering, asked to, marks the blocks that stand for
+///     each outcome (<see cref="SilBlock.Outcome" />), and coverage counts them.
+/// </summary>
+/// <param name="At">Where it is written: the keyword or operator that makes it.</param>
+/// <param name="Kind">What it is, as written: <c>if</c>, <c>&amp;&amp;</c>, <c>match</c>.</param>
+/// <param name="Outcomes">A name for each outcome: <c>true</c> and <c>false</c>, a match's arms.</param>
+public sealed record SilDecision(SilLocation At, string Kind, IReadOnlyList<string> Outcomes);
+
 /// <summary>A SIL function: a signature and blocks, the first of which is the entry.</summary>
 public sealed class SilFunction(string name, FunctionType type) {
     public string Name { get; } = name;
@@ -1185,6 +1203,9 @@ public sealed class SilFunction(string name, FunctionType type) {
     public IReadOnlyList<int>? ResultRoots { get; set; }
     public FunctionType Type { get; } = type;
     public List<SilBlock> Blocks { get; } = [];
+
+    /// <summary>The decisions of its source that lowering marked, for branch coverage: each kept though its blocks may be gone, as code never reached.</summary>
+    public List<SilDecision> Decisions { get; } = [];
 
     /// <summary>The source file and line it was declared at, for debug information.</summary>
     public string? SourceFile { get; set; }

@@ -87,9 +87,19 @@ public sealed class CoverageTests {
         // The test that traps ran the line it trapped on, and its counts were kept.
         Assert.Equal(1, lines[LineOf("return xs[xs.count]")]);
 
+        // Both tests found n not negative; one found it zero, one not.
+        var negative = LineOf("if n < 0");
+        var zero = LineOf("if n == 0");
+        Assert.Equal(
+            [$"BRDA:{negative},0,0,0", $"BRDA:{negative},0,1,2", $"BRDA:{zero},0,0,1", $"BRDA:{zero},0,1,1", "BRF:4", "BRH:3"],
+            lcov.Split('\n').Where(static l => l.StartsWith("BR", StringComparison.Ordinal)));
+
         var text = output.ToString().ReplaceLineEndings("\n");
         Assert.Contains("coverage: ", text, StringComparison.Ordinal);
-        Assert.Matches(@"  calc\.sb: [0-9.]+% \(\d+ of \d+\), not run: ", text);
+        Assert.Contains("75% of branches (3 of 4)", text, StringComparison.Ordinal);
+        Assert.Matches(@"  calc\.sb: [0-9.]+% \(\d+ of \d+\), not run: .*; branches 75% \(3 of 4\)", text);
+        Assert.Contains($"    {negative}:5 'if' never: true\n", text, StringComparison.Ordinal);
+        Assert.DoesNotContain($"    {zero}:5", text, StringComparison.Ordinal);
     }
 
     [Fact]

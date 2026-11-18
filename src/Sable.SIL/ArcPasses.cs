@@ -428,7 +428,8 @@ public sealed class BorrowLoads : ISilPass {
             StructInst or TupleInst or EnumInst or StructExtractInst or TupleExtractInst => false,
             StructElementAddrInst or TupleElementAddrInst or RefElementAddrInst => false,
             CopyValueInst or UpcastInst or UncheckedRefCastInst or ClassMethodInst => false,
-            BuiltinInst builtin => builtin.Operands.Any(static o => o.Type is AddressType),
+            // An exclusivity marker or check reads where an access is; it writes nothing the program sees.
+            BuiltinInst builtin => !SharedStorage.IsMarker(builtin.Name) && builtin.Operands.Any(static o => o.Type is AddressType),
             _ => true,
         };
     }
@@ -613,7 +614,7 @@ public sealed class ForwardCopies : ISilPass {
                     return false;
                 }
             } else if ((root is null || root is LoadBorrowInst)
-                && (instruction is ApplyInst or TryApplyInst || instruction is BuiltinInst builtin && builtin.Operands.Any(static o => o.Type is AddressType))) {
+                && (instruction is ApplyInst or TryApplyInst || instruction is BuiltinInst builtin && !SharedStorage.IsMarker(builtin.Name) && builtin.Operands.Any(static o => o.Type is AddressType))) {
                 return false;
             }
         }

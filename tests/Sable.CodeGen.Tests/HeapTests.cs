@@ -370,6 +370,51 @@ public sealed class HeapTests {
         Assert.Single(cycles, static c => c.Contains("[Test.Node]", StringComparison.Ordinal));
     }
 
+    /// <summary>Small blocks freed together give their slabs back to the system, but for one each class keeps.</summary>
+    [Fact]
+    public void FreedSmallBlocksGoBackToTheSystem() {
+        var source = Program(
+            """
+            class Cell {
+                var value: Int
+                init(_ value: Int) {
+                    self.value = value
+                }
+            }
+            """,
+            """
+                var total = 0
+                for round in 0..<3 {
+                    var cells: Cell[>..] = []
+                    for i in 0..<20_000 {
+                        cells.append(Cell(i + round))
+                    }
+
+                    for cell in cells {
+                        total += cell.value
+                    }
+                }
+
+                print(total)
+            """
+        );
+        Assert.Equal("600030000\n", AssertAgree(source).Stdout);
+        if (!CanBuild) {
+            return;
+        }
+
+        var stats = BuildAndRun(source, environment: new Dictionary<string, string> { ["SABLE_STATS"] = "1" }).Stderr;
+        var line = stats.Split('\n').Single(static l => l.StartsWith("sable: slabs ", StringComparison.Ordinal));
+        var numbers = line.Split(' ').Select(static w => long.TryParse(w, out var n) ? n : -1).Where(static n => n >= 0).ToList();
+        var (held, most, returned) = (numbers[0], numbers[1], numbers[2]);
+
+        // 20,000 cells of 32 bytes are about ten slabs; each round's are
+        // given back as its array goes, and the next round's take new ones.
+        Assert.True(most >= 10, line);
+        Assert.True(returned >= 2 * 9, line);
+        Assert.True(held < most, line);
+    }
+
     static string Before(string text, string marker) => text.IndexOf(marker, StringComparison.Ordinal) is var at and >= 0 ? text[..at] : text;
 
     static string Root {

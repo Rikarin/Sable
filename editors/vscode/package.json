@@ -39,7 +39,7 @@
           "sable"
         ],
         "extensions": [
-          ".sab"
+          ".sb"
         ],
         "firstLine": "^#!.*\\bsable\\b",
         "configuration": "./language-configuration.json",
@@ -344,7 +344,7 @@
             "properties": {
               "program": {
                 "type": "string",
-                "description": "A .sab file to build with debug information and debug; or an executable already built. Leave out to debug the package."
+                "description": "A .sb file to build with debug information and debug; or an executable already built. Leave out to debug the package."
               },
               "package": {
                 "type": "string",
@@ -419,7 +419,7 @@
           },
           {
             "label": "Sable: Debug the current file",
-            "description": "Build the open .sab file on its own, and debug it.",
+            "description": "Build the open .sb file on its own, and debug it.",
             "body": {
               "type": "sable",
               "request": "launch",

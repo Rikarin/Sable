@@ -80,7 +80,7 @@ public sealed partial class Compilation {
     public static Compilation Create(params string[] sources) =>
         Create(
             sources.Select(static (text, i) =>
-                SyntaxTree.Parse(new(text, $"file{i}.sab"))
+                SyntaxTree.Parse(new(text, $"file{i}.sb"))
             )
         );
 

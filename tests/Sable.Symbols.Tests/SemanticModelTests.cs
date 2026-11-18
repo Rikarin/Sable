@@ -333,8 +333,8 @@ public sealed class SemanticModelTests {
     /// </summary>
     [Fact]
     public void ADiagnosticKnowsItsFile() {
-        var program = SyntaxTree.Parse(new("module P\nfn main() {\n    let a = 1\n    let b = 2\n}\n", "p.sab"));
-        var other = SyntaxTree.Parse(new("module Q\nfn f() -> Int { return true }\n", "q.sab"));
+        var program = SyntaxTree.Parse(new("module P\nfn main() {\n    let a = 1\n    let b = 2\n}\n", "p.sb"));
+        var other = SyntaxTree.Parse(new("module Q\nfn f() -> Int { return true }\n", "q.sb"));
 
         var found = Compilation.Create([program, other])
             .GetAllDiagnosticsByFile()

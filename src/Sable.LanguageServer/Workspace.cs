@@ -151,7 +151,7 @@ internal sealed class Workspace {
             var folder = pending.Pop();
             IEnumerable<string> files, folders;
             try {
-                files = Directory.EnumerateFiles(folder, "*.sab");
+                files = Directory.EnumerateFiles(folder, "*.sb");
                 folders = Directory.EnumerateDirectories(folder);
             } catch (Exception e) when (e is IOException or UnauthorizedAccessException) {
                 continue;

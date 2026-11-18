@@ -59,7 +59,7 @@ public sealed class MetatypeTests {
     [Fact]
     public void ACompoundMetatypeRoundTripsThroughTheTree() {
         const string source = "let a = Token[>..].self";
-        var tree = SyntaxTree.Parse(new(source, "t.sab"));
+        var tree = SyntaxTree.Parse(new(source, "t.sb"));
         Assert.Equal(source, tree.Root.ToFullString());
     }
 

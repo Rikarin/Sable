@@ -75,9 +75,9 @@ public sealed class AccessibilityTests {
 
     [Fact]
     public void AnInternalMemberIsHiddenFromAnotherModule() {
-        var first = SyntaxTree.Parse(new("module First\npublic struct Box { internal var n: Int }", "a.sab"));
+        var first = SyntaxTree.Parse(new("module First\npublic struct Box { internal var n: Int }", "a.sb"));
         var second = SyntaxTree.Parse(
-            new("module Second\nimport First\nfn probe(_ b: Box) -> Int { return b.n }", "b.sab")
+            new("module Second\nimport First\nfn probe(_ b: Box) -> Int { return b.n }", "b.sb")
         );
 
         var compilation = Compilation.Create([first, second]);
@@ -90,9 +90,9 @@ public sealed class AccessibilityTests {
 
     [Fact]
     public void APublicMemberCrossesModules() {
-        var first = SyntaxTree.Parse(new("module First\npublic struct Box { public var n: Int }", "a.sab"));
+        var first = SyntaxTree.Parse(new("module First\npublic struct Box { public var n: Int }", "a.sb"));
         var second = SyntaxTree.Parse(
-            new("module Second\nimport First\nfn probe(_ b: Box) -> Int { return b.n }", "b.sab")
+            new("module Second\nimport First\nfn probe(_ b: Box) -> Int { return b.n }", "b.sb")
         );
 
         var errors = Compilation.Create([first, second])

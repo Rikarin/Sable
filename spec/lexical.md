@@ -246,5 +246,5 @@ one file can produce different trees. Both round-trip.
 ## 10. Shebang
 
 A file may begin with `#!...` on line 1. It is trivia. This exists so that
-`sable run script.sab` can be used with `#!/usr/bin/env sable` for single-file
+`sable run script.sb` can be used with `#!/usr/bin/env sable` for single-file
 scripts.

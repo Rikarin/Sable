@@ -5,7 +5,7 @@
 > Compiled to native code via LLVM.
 
 **`Sable` is a placeholder name.** It is short, unclaimed in the major package
-registries, and the file extension `.sab` is free. Rename at will — the only
+registries, and the file extension `.sb` is free. Rename at will — the only
 places the name is load-bearing are the toolchain binary (`sable`), the manifest
 (`sable.toml`) and the module namespace root.
 
@@ -79,11 +79,11 @@ tokens and skipped text error recovery produces, and what the semantic model
 says about each node: its type and the symbol it binds to.
 
 ```bash
-dotnet run --project tools/Sable.Visualiser -- examples/01-hello.sab
+dotnet run --project tools/Sable.Visualiser -- examples/01-hello.sb
 ```
 
 ```bash
-dotnet run --project tools/Sable.Visualiser -- examples/01-hello.sab --html hello.html
+dotnet run --project tools/Sable.Visualiser -- examples/01-hello.sb --html hello.html
 ```
 
 The first prints the tree as indented text (`--trivia` adds whitespace and
@@ -112,11 +112,11 @@ dotnet test Sable.slnx
 linking the small C runtime in [runtime/](runtime/):
 
 ```bash
-dotnet run --project src/Sable.Driver -- build hello.sab -o hello
+dotnet run --project src/Sable.Driver -- build hello.sb -o hello
 ```
 
 ```bash
-dotnet run --project src/Sable.Driver -- run hello.sab
+dotnet run --project src/Sable.Driver -- run hello.sb
 ```
 
 `--emit sil` and `--emit llvm-ir` print a stage's output instead, and `-g`

@@ -256,7 +256,7 @@ public sealed partial class LanguageServer {
 
             case "workspace/didChangeWatchedFiles":
                 foreach (var change in parameters.Get("changes")?.EnumerateArray() ?? default) {
-                    if (change.GetString("uri") is { } uri && uri.EndsWith(".sab", StringComparison.Ordinal)) {
+                    if (change.GetString("uri") is { } uri && uri.EndsWith(".sb", StringComparison.Ordinal)) {
                         _workspace.Reload(uri);
                     }
                 }

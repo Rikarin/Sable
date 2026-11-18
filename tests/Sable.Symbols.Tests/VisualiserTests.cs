@@ -8,7 +8,7 @@ namespace Sable.Symbols.Tests;
 ///     and trivia, broken input included, and what the semantic model says.
 /// </summary>
 public sealed class VisualiserTests {
-    static VisualDocument Build(string text, bool semantics = true) => VisualTree.Build(new(text, "t.sab"), semantics);
+    static VisualDocument Build(string text, bool semantics = true) => VisualTree.Build(new(text, "t.sb"), semantics);
 
     static IEnumerable<VisualItem> All(VisualItem item) => item.Children.SelectMany(All).Prepend(item);
 

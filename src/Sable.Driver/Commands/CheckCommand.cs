@@ -11,11 +11,11 @@ public sealed class CheckCommand : PackageCommand {
 
     public override string Usage => """
         usage: sable check [--features <a,b>] [--no-default-features] [--all-features] [-p <package>] [--locked]
-               sable check <file.sab>
+               sable check <file.sb>
         """;
 
     public override int Run(IReadOnlyList<string> arguments) {
-        if (arguments is [var file] && file.EndsWith(".sab", StringComparison.Ordinal)) {
+        if (arguments is [var file] && file.EndsWith(".sb", StringComparison.Ordinal)) {
             if (!File.Exists(file)) {
                 Console.Error.WriteLine($"sable: no such file '{file}'");
                 return 1;

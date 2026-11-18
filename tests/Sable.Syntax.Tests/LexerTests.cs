@@ -256,11 +256,11 @@ public sealed class LexerTests {
 
     [Fact]
     public void DiagnosticFormatsWithCaret() {
-        var source = new SourceText("let x = §\n", "test.sab");
+        var source = new SourceText("let x = §\n", "test.sb");
         Lexer.Tokenize(source, out var diagnostics);
         var formatted = diagnostics[0].Format(source);
         Assert.Contains("S0001", formatted, StringComparison.Ordinal);
-        Assert.Contains("test.sab:1:9", formatted, StringComparison.Ordinal);
+        Assert.Contains("test.sb:1:9", formatted, StringComparison.Ordinal);
         Assert.Contains("^", formatted, StringComparison.Ordinal);
     }
 

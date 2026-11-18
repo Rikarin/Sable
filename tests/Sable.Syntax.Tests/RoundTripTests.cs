@@ -66,7 +66,7 @@ public sealed class RoundTripTests {
     [Fact]
     public void RoundTripsEveryCorpusFile() {
         var examples = Path.Combine(TestHelpers.RepositoryRoot, "examples");
-        var files = Directory.GetFiles(examples, "*.sab", SearchOption.AllDirectories);
+        var files = Directory.GetFiles(examples, "*.sb", SearchOption.AllDirectories);
         Assert.NotEmpty(files);
 
         foreach (var file in files) {
@@ -84,7 +84,7 @@ public sealed class RoundTripTests {
     [Fact]
     public void CorpusFilesLexWithoutDiagnostics() {
         var examples = Path.Combine(TestHelpers.RepositoryRoot, "examples");
-        foreach (var file in Directory.GetFiles(examples, "*.sab", SearchOption.AllDirectories)) {
+        foreach (var file in Directory.GetFiles(examples, "*.sb", SearchOption.AllDirectories)) {
             var source = new SourceText(File.ReadAllText(file), file);
             Lexer.Tokenize(source, out var diagnostics);
             var errors = diagnostics.Where(static d => d.Severity == DiagnosticSeverity.Error).ToList();

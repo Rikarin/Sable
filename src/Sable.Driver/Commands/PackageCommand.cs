@@ -102,10 +102,10 @@ public abstract class PackageCommand : Command {
 
     /// <summary>
     ///     Whether <c>build</c> or <c>run</c> should work on a package: no
-    ///     <c>.sab</c> file is named (before any <c>--</c>).
+    ///     <c>.sb</c> file is named (before any <c>--</c>).
     /// </summary>
     internal static bool IsPackageMode(IReadOnlyList<string> args) =>
-        !args.TakeWhile(static a => a != "--").Any(static a => a.EndsWith(".sab", StringComparison.Ordinal));
+        !args.TakeWhile(static a => a != "--").Any(static a => a.EndsWith(".sb", StringComparison.Ordinal));
 
     /// <summary><c>sable build</c> on a package.</summary>
     internal static int BuildPackage(IReadOnlyList<string> args, string usage) {

@@ -234,7 +234,7 @@ public sealed class HeapTests {
 
     [Fact]
     public void TheCorpusJsonParserParsesAndRenders() {
-        var parser = File.ReadAllText(Path.Combine(Root, "tests/corpus/11-json.sab"));
+        var parser = File.ReadAllText(Path.Combine(Root, "tests/corpus/11-json.sb"));
         var program = parser + """
 
                                fn show(_ text: String) {

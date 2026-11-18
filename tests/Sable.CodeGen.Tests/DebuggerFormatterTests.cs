@@ -176,7 +176,7 @@ public sealed class DebuggerFormatterTests {
         }
 
         // Tracing may be impossible even so: try it on the smallest program.
-        var probe = Run(lldb, "module Probe\n@main\nfn main() {\n    print(1)\n}\n", "probe.sab", ["b probe.sab:4", "run", "kill"]).GetAwaiter().GetResult();
+        var probe = Run(lldb, "module Probe\n@main\nfn main() {\n    print(1)\n}\n", "probe.sb", ["b probe.sb:4", "run", "kill"]).GetAwaiter().GetResult();
         return probe.Contains("stop reason = breakpoint", StringComparison.Ordinal) ? lldb : null;
     }
 
@@ -240,7 +240,7 @@ public sealed class DebuggerFormatterTests {
     static readonly Lazy<string?> ValuesOutput = new(() =>
         Lldb.Value is not { } lldb
             ? null
-            : Run(lldb, Values, "values.sab", [$"b values.sab:{LineOf(Values, "// stop")}", "run", "frame variable", "kill"]).GetAwaiter().GetResult());
+            : Run(lldb, Values, "values.sb", [$"b values.sb:{LineOf(Values, "// stop")}", "run", "frame variable", "kill"]).GetAwaiter().GetResult());
 
     static void Shows(params string[] expected) {
         if (ValuesOutput.Value is not { } output) {
@@ -317,12 +317,12 @@ public sealed class DebuggerFormatterTests {
             return;
         }
 
-        var output = await Run(lldb, Steps, "steps.sab", ["b steps.sab:11", "run", "next", "next", "step", "next", "frame variable", "finish", "next", "next", "frame variable total", "kill"]);
+        var output = await Run(lldb, Steps, "steps.sb", ["b steps.sb:11", "run", "next", "next", "step", "next", "frame variable", "finish", "next", "next", "frame variable total", "kill"]);
 
         // 'next' goes one statement at a time, 'step' into the call.
-        var stops = System.Text.RegularExpressions.Regex.Matches(output, @"frame #0: .*? at steps\.sab:(\d+)").Select(static m => int.Parse(m.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture)).ToList();
+        var stops = System.Text.RegularExpressions.Regex.Matches(output, @"frame #0: .*? at steps\.sb:(\d+)").Select(static m => int.Parse(m.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture)).ToList();
         Assert.Equal([11, 12, 13, 4, 5], stops.Take(5));
-        Assert.Contains("Steps.triple(n=1) at steps.sab:4", output, StringComparison.Ordinal);
+        Assert.Contains("Steps.triple(n=1) at steps.sb:4", output, StringComparison.Ordinal);
         Assert.Contains("(Int) doubled = 2", output, StringComparison.Ordinal);
 
         // 'finish' comes back to the caller with the result.
@@ -336,10 +336,10 @@ public sealed class DebuggerFormatterTests {
             return;
         }
 
-        var output = await Run(lldb, Calls, "calls.sab", ["b calls.sab:23", "run", "step", "bt", "finish", "kill"]);
+        var output = await Run(lldb, Calls, "calls.sb", ["b calls.sb:23", "run", "step", "bt", "finish", "kill"]);
 
         // The compiler's thunk between them is in the backtrace, but is not stopped in.
-        Assert.Contains("Calls.Dog.name(self=(breed = \"collie\")) at calls.sab:10", output, StringComparison.Ordinal);
+        Assert.Contains("Calls.Dog.name(self=(breed = \"collie\")) at calls.sb:10", output, StringComparison.Ordinal);
         Assert.Contains("$witness$Calls.Dog$name", output, StringComparison.Ordinal);
         Assert.Contains("Return value: (String) $0 = \"collie\"", output, StringComparison.Ordinal);
     }
@@ -350,10 +350,10 @@ public sealed class DebuggerFormatterTests {
             return;
         }
 
-        var output = await Run(lldb, Calls, "calls.sab", ["b calls.sab:20", "run", "frame variable", "up", "frame variable add.count add.label", "kill"]);
+        var output = await Run(lldb, Calls, "calls.sb", ["b calls.sb:20", "run", "frame variable", "up", "frame variable add.count add.label", "kill"]);
 
         // Inside, what it captured reads as locals do — by reference or by value.
-        Assert.Contains("Calls.main$closure0(a=3) at calls.sab:20", output, StringComparison.Ordinal);
+        Assert.Contains("Calls.main$closure0(a=3) at calls.sb:20", output, StringComparison.Ordinal);
         Assert.Contains("(Int) a = 3\n(Int) count = 2", output, StringComparison.Ordinal);
 
         // Outside, a closure is its function, and its captures are its children.
@@ -366,9 +366,9 @@ public sealed class DebuggerFormatterTests {
             return;
         }
 
-        var output = await Run(lldb, Steps, "steps.sab", ["b Steps.triple", "run", "bt", "kill"]);
-        Assert.Contains("Steps.triple(n=1) at steps.sab:4", output, StringComparison.Ordinal);
-        Assert.Contains("Steps.main at steps.sab:13", output, StringComparison.Ordinal);
+        var output = await Run(lldb, Steps, "steps.sb", ["b Steps.triple", "run", "bt", "kill"]);
+        Assert.Contains("Steps.triple(n=1) at steps.sb:4", output, StringComparison.Ordinal);
+        Assert.Contains("Steps.main at steps.sb:13", output, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -406,11 +406,11 @@ public sealed class DebuggerFormatterTests {
                               """;
         if (Lldb.Value is not { } lldb) {
             // Still: the description must be written without recursing forever.
-            Assert.True(Pipeline.Compile(new SourceText(source, "rec.sab"), Path.GetTempPath()).Succeeded);
+            Assert.True(Pipeline.Compile(new SourceText(source, "rec.sb"), Path.GetTempPath()).Succeeded);
             return;
         }
 
-        var output = await Run(lldb, source, "rec.sab", ["b rec.sab:28", "run", "frame variable root n", "kill"]);
+        var output = await Run(lldb, source, "rec.sb", ["b rec.sb:28", "run", "frame variable root n", "kill"]);
         Assert.Contains("children = count = 1 {\n    [0] = {\n      label = \"leaf\"", output, StringComparison.Ordinal);
         Assert.Contains("next = Rec.Node {\n    value = 2\n    next = none", output, StringComparison.Ordinal);
     }
@@ -419,7 +419,7 @@ public sealed class DebuggerFormatterTests {
     public void TheDebugCommandIsThere() {
         var command = Command.Find("debug");
         Assert.NotNull(command);
-        Assert.Contains("sable debug <file.sab>", command.Usage, StringComparison.Ordinal);
+        Assert.Contains("sable debug <file.sb>", command.Usage, StringComparison.Ordinal);
     }
 
     /// <summary>What an editor's debugger loads: the plugin <c>sable debug</c> itself would.</summary>
@@ -448,7 +448,7 @@ public sealed class DebuggerFormatterTests {
 
         var directory = Directory.CreateTempSubdirectory("sable-dwarf-");
         try {
-            var result = Pipeline.Compile(new SourceText(Values, "values.sab"), directory.FullName);
+            var result = Pipeline.Compile(new SourceText(Values, "values.sb"), directory.FullName);
             Assert.True(result.Succeeded, string.Join("\n", result.Errors));
             var executable = Path.Combine(directory.FullName, "values");
             var build = NativeBuild.Build(result.LlvmIr!, executable, debug: true);

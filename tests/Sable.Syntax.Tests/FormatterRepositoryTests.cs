@@ -26,7 +26,7 @@ public sealed class FormatterRepositoryTests {
         get {
             var data = new TheoryData<string>();
             foreach (var root in Roots) {
-                foreach (var file in Directory.GetFiles(Path.Combine(TestHelpers.RepositoryRoot, root), "*.sab", SearchOption.AllDirectories).Order(StringComparer.Ordinal)) {
+                foreach (var file in Directory.GetFiles(Path.Combine(TestHelpers.RepositoryRoot, root), "*.sb", SearchOption.AllDirectories).Order(StringComparer.Ordinal)) {
                     if (Parses(File.ReadAllText(file))) {
                         data.Add(Relative(file));
                     }

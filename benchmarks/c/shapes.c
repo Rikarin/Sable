@@ -1,4 +1,4 @@
-// Manually-managed port of benchmarks/shapes.sab (see README.md).
+// Manually-managed port of benchmarks/shapes.sb (see README.md).
 //
 // An `any Shape` is a witness table (a struct of function pointers) and a
 // heap box holding the struct value: one malloc per existential, as Sable

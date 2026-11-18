@@ -122,7 +122,7 @@ sable/
 │   ├── Syntax.Tests/
 │   ├── Semantic.Tests/
 │   ├── lit/                   # FileCheck-style end-to-end tests
-│   └── corpus/                # .sab files that must parse/compile
+│   └── corpus/                # .sb files that must parse/compile
 └── docs/
 ```
 
@@ -136,7 +136,7 @@ Decisions to make now, because changing them later is expensive:
 - **Diagnostics carry structured data**, not formatted strings — spans,
   related locations, and machine-applicable fix-its. The LSP and the CLI render
   the same object.
-- **Every test is a `.sab` file plus expected output.** Directive-driven, lit
+- **Every test is a `.sb` file plus expected output.** Directive-driven, lit
   style. 50 handwritten unit tests will not find what 5,000 corpus files find.
 
 ### 0.2 Lexer
@@ -243,7 +243,7 @@ with no code generation.**
 ---
 
 ## Phase 2 — SIL and the first native binary
-**~4 months. Deliverable: `sable build hello.sab && ./hello`.**
+**~4 months. Deliverable: `sable build hello.sb && ./hello`.**
 
 ### 2.1 SIL design
 
@@ -330,7 +330,7 @@ Order matters; each of these is a self-contained lowering:
       container (`tools/linux/test.sh`, Ubuntu clang 21), each builds, runs
       and agrees with the interpreter
 - [x] A 2,000-line program (JSON parser + pretty printer) compiles and passes
-      its tests — `tests/programs/json.sab`, 2,100 lines: strict RFC 8259
+      its tests — `tests/programs/json.sb`, 2,100 lines: strict RFC 8259
       parsing with line/column errors and opt-in comments, trailing commas,
       duplicate-key and depth checks; compact, pretty, sorted and ASCII-only
       printing; JSON Pointer (RFC 6901); Merge Patch (RFC 7386); comparison,
@@ -471,7 +471,7 @@ The novel pass. Algorithm sketch:
    verify that the destination's lifetime is outlived by every anchor.
 4. **Summaries.** Compute a per-function summary
    (`params: [borrowed | owned | escaping]`,
-    `result: fresh | anchors(S) | heap`) and serialise it into the `.sabi`.
+    `result: fresh | anchors(S) | heap`) and serialise it into the `.sbi`.
    Summaries make the analysis modular — the whole point.
 5. **Specialisation.** Where codegen differs by root shape (region vs heap),
    emit specialised bodies, keyed by the anchor signature.
@@ -501,7 +501,7 @@ is rejected naming the local and the region, as is linking one region's
 node from another's — so a linked structure lives in one region and
 nothing in it points out. Non-escape now deletes allocations rather than
 ARC traffic (§3.7), from summaries of the same shape. Deferred: references
-in arrays, summaries serialised into a `.sabi` (the `.sabi` itself is
+in arrays, summaries serialised into a `.sbi` (the `.sbi` itself is
 Phase 5's), secondary diagnostic labels, and rule 5's specialisation by
 root shape, which waits on code generation that would differ by shape.
 
@@ -676,11 +676,11 @@ provably never read, and promotion inside loops.
       `lines: OrderLine[>..]`, `parent: Order&<u32>?`) for customer "Ann"
       with one line is 26 bytes against Goose's 29, and building it, reading
       it and totalling it allocates nothing (`SABLE_STATS`: allocations 0);
-      `benchmarks/orders.sab` builds a million of them with 2,000
+      `benchmarks/orders.sb` builds a million of them with 2,000
       allocations, all in the thousand that go out as bytes and back
 - [x] Round-trip `Bytes.of` / `fromBytes` survives a 10M-case fuzzer with no
       memory-safety failure on corrupt input — `tools/fuzz/run.sh` builds
-      `tools/fuzz/inline_layout.sab` with AddressSanitizer and
+      `tools/fuzz/inline_layout.sb` with AddressSanitizer and
       UndefinedBehaviorSanitizer over the runtime and feeds `fromBytes`
       ten million mutations of valid orders and trees (with relative links,
       cycles among them): about 990,000 are accepted, each walked entirely,
@@ -721,7 +721,7 @@ small program is inlined into `main`, so expect few frames.
 
 #### Reflection, as implemented
 
-A first slice, in `lib/Sable.Core/Reflection.sab` over `Reflect`, a struct
+A first slice, in `lib/Sable.Core/Reflection.sb` over `Reflect`, a struct
 of `@intrinsic` members whose bodies the compiler writes, per type (unlike
 `@builtin`, which names one SIL builtin; see "Sable.Core in Sable")
 (`src/Sable.SIL/SilGen.Reflection.cs`; tests in
@@ -784,7 +784,7 @@ first large program and the best source of language bugs.
 
 ### The library, as begun
 
-The library is Sable source in `lib/<Module>/*.sab`, embedded in the driver
+The library is Sable source in `lib/<Module>/*.sb`, embedded in the driver
 and compiled with every program (`src/Sable.Driver/Library.cs`):
 `Sable.Core` always, every other module when a program imports it, and what
 those import in turn. Only what the entry point, the globals and the deinits
@@ -827,7 +827,7 @@ Written so far (`tests/Sable.CodeGen.Tests/LibraryTests.cs`):
   withoutExtension), `Console` (the standard streams, `readLine`,
   `readLines`) and `Environment` (variables, arguments), failing with
   `IoError`. It is written over `Runtime`, a `Sable.Core` struct of static
-  `@builtin` calls (`lib/Sable.Core/Runtime.sab`, see "Sable.Core in Sable"
+  `@builtin` calls (`lib/Sable.Core/Runtime.sb`, see "Sable.Core in Sable"
   below) that the runtime implements in C (`sable_io_*`) and the interpreter
   in .NET; a call that may fail gives a value either way and `io_succeeded`
   says whether to keep it, which `Runtime`'s Sable wrappers turn into an
@@ -887,8 +887,8 @@ readers and writers, memory-mapped files), and the names the plan lists that are
 
 The primitive types (`Int`, `String`, `Char`, …) are the compiler's, since
 every layer knows them by sight; their members are now Sable, in
-`lib/Sable.Core` — `String.sab`, `Char.sab`, `Numbers.sab` and
-`Runtime.sab`, beside `Protocols.sab` and `Reflection.sab`. At the floor is
+`lib/Sable.Core` — `String.sb`, `Char.sb`, `Numbers.sb` and
+`Runtime.sb`, beside `Protocols.sb` and `Reflection.sb`. At the floor is
 `@builtin("name")` on a bodiless declaration, naming the SIL builtin it is:
 
 ```sable
@@ -930,12 +930,12 @@ builtin.
 
 `@intrinsic` also declares what is one builtin for no single signature, or
 more than one: `Region.alloc<T>(_ value: T) -> T&` (room bumped, the value
-stored, for any `T`); `Task<Success>` in `Task.sab`, a class whose
+stored, for any `T`); `Task<Success>` in `Task.sb`, a class whose
 `static fn spawn<T>(_ body: async () -> T) -> Task<T>` builds the task object
 around the closure, whose `var value: Success { async get }` waits for it,
 and whose ``static async fn `yield`()`` lets the queue run (it is made by
 `spawn` alone: its `init` is private, and a private initialiser is now
-enforced). Inline layout's are in `InlineLayout.sab`: `union Decoded<Value>
+enforced). Inline layout's are in `InlineLayout.sb`: `union Decoded<Value>
 { Ok(value: Value), Invalid(why: String) }`; `protocol InlineLayout { static
 fn fromBytes(_ bytes: U8[>..]) -> Decoded<Self> }`; and `Bytes.of<T:
 InlineLayout>(_ value: T) -> U8[>..]`. The conformance is synthesised the way
@@ -970,7 +970,7 @@ extension, generic over its parameters and holding the array it extends;
 inside, `self` is that array, and looking a member up on an array matches it
 against each extension's array and substitutes what it finds, constraints
 checked (`Compilation.ArrayExtensions.cs`). So a member is an ordinary
-generic, monomorphised per element type. `lib/Sable.Core/Array.sab` declares
+generic, monomorphised per element type. `lib/Sable.Core/Array.sb` declares
 `count`, `slice`, `append`, `removeLast` and `clear` as `@builtin`s —
 `mutating` ones pass the array where it is, and an array builtin's
 declaration is checked as if its element were `Int`, as the array builtins
@@ -986,12 +986,12 @@ after (processor time, fastest of five, on a busy machine).
 
 ### The first real program
 
-`examples/ssg/ssg.sab` is a static site generator, some 640 lines of Sable: it
+`examples/ssg/ssg.sb` is a static site generator, some 640 lines of Sable: it
 reads a directory of Markdown pages with front matter and a template,
 renders a pragmatic Markdown subset (headings with unique ids, paragraphs,
 emphasis, code, links and images, nested lists, quotes, rules, fenced code)
 and writes a page each, an index newest first, a page of tags, and the
-static files; `sable run examples/ssg/ssg.sab -- <site> <out>` (`run` now
+static files; `sable run examples/ssg/ssg.sb -- <site> <out>` (`run` now
 passes what follows `--` to the program). `StaticSiteTests.cs` builds the
 sample site in `examples/ssg/site` both ways and requires the same output
 and the same files, byte for byte, with nothing leaked. Writing it found:
@@ -1035,7 +1035,7 @@ yet), and a directly recursive union, which SIL lowering does not lay out.
 
 ### Against .NET
 
-The exit criterion below, measured: `benchmarks/versus-dotnet/*.sab` and
+The exit criterion below, measured: `benchmarks/versus-dotnet/*.sb` and
 their C# ports in `benchmarks/dotnet` (Release, tiered PGO), run by
 `tools/bench/versus_dotnet.py`, which checks the two print the same line.
 `map-int` is a million pseudo-random `Int` keys in `HashMap` against
@@ -1151,16 +1151,16 @@ to the state machine where tasks are many.
       in Sable"). The primitive types themselves stay compiler-known, as
       the plan allows. The array family's members (`count`, `isEmpty`,
       `contains`, `slice`, `append`, `removeLast`, `clear`, and bytes'
-      `toString`) are Sable too, in `lib/Sable.Core/Array.sab`, by array extensions,
+      `toString`) are Sable too, in `lib/Sable.Core/Array.sb`, by array extensions,
       `extension<Element> Element[>..] { … }` (SYNTAX.md §11), which range
       over every element type. So are `Region.alloc`, `Task` (`spawn`, the async getter
       `value`, `yield`), `Decoded`, `Bytes.of` and the `InlineLayout`
-      protocol `fromBytes` comes from, in `Runtime.sab`,
-      `Task.sab` and `InlineLayout.sab`, their bodies the compiler's
+      protocol `fromBytes` comes from, in `Runtime.sb`,
+      `Task.sb` and `InlineLayout.sb`, their bodies the compiler's
       (`@intrinsic`, and `fromBytes` synthesised per `@inline_layout`
       struct as `@derive` synthesises `==`; see "Sable.Core in Sable").
       And `Range` and `ClosedRange` — what the binder
-      makes of `a..<b` and `a...b` — are Sable (`lib/Sable.Core/Range.sab`:
+      makes of `a..<b` and `a...b` — are Sable (`lib/Sable.Core/Range.sb`:
       `lowerBound`, `upperBound`, `isEmpty`, `contains`, over a `Comparable`
       bound), and lower as values: stored, passed, returned and iterated,
       while a `for` over a range written in the loop still builds none.
@@ -1171,7 +1171,7 @@ to the state machine where tasks are many.
       them, and SIL has no such types yet. The built-in `[Key: Value]`
       dictionary is compiler-known as the arrays are — its entries an array
       of key and value pairs, its indexing and `for (key, value) in d` lowered
-      directly — and its members are Sable (`lib/Sable.Core/Dictionary.sab`:
+      directly — and its members are Sable (`lib/Sable.Core/Dictionary.sb`:
       `count`, `isEmpty`, `contains`, `remove`, `removeAll`, `keys`,
       `values`), `count` and `removeAll` `@builtin`s on the entries. Its key
       search is still linear; `Sable.Collections.HashMap` is the one that
@@ -1258,8 +1258,8 @@ Full design in [05-toolchain.md](05-toolchain.md).
   twice the two runs' deviations relative to the old mean, never under 5% —
   `improved` below it, else `within noise`. `--quick` and `--samples <n>`
   shorten a run.
-- **Commands.** `sable test <file.sab>... [filter...] [--doc]` (unoptimised
-  by default, `--release` to optimise) and `sable bench <file.sab>...`
+- **Commands.** `sable test <file.sb>... [filter...] [--doc]` (unoptimised
+  by default, `--release` to optimise) and `sable bench <file.sb>...`
   (optimised) share `HarnessCommand`: build the harness, run it with the
   rest of the arguments, exit with its code. With no file named they test
   the package in the current directory (or the nearest above): its library,
@@ -1271,8 +1271,8 @@ Full design in [05-toolchain.md](05-toolchain.md).
   file's module, with that file's imports and Sable.Testing; the file has the
   original's name and the code its original line numbers, so an error in an
   example points into the doc comment.
-- **Proved on the library:** `tests/lib/CollectionsTests.sab` and
-  `tests/lib/TextTests.sab` test Sable.Collections and Sable.Text with
+- **Proved on the library:** `tests/lib/CollectionsTests.sb` and
+  `tests/lib/TextTests.sb` test Sable.Collections and Sable.Text with
   `@test`/`@bench`, and the test suite runs them.
 - **Deferred:** a `blackBox` to keep the optimiser from deleting a
   benchmark's work (it needs a core builtin); async tests; a parallel test
@@ -1296,15 +1296,15 @@ In `src/Sable.Driver/Packages/`, with a command per file under `Commands/`.
   `SABLE_CHECK_LEAKS`); `lto`, `codegen-units`, `panic`, `strip` and
   `arc-checks` are recorded only, and `overflow-checks = false` is warned
   about, since arithmetic is always checked.
-- **Packages of many files.** A package is every `.sab` under `src/`:
-  `src/main.sab` (or `[[bin]]`, or `src/bin/*.sab`) is a binary's entry, the
+- **Packages of many files.** A package is every `.sb` under `src/`:
+  `src/main.sb` (or `[[bin]]`, or `src/bin/*.sb`) is a binary's entry, the
   rest is the library. A binary is compiled with its package's library and
   every dependency's, each file parsed with its own package's features (so
   `#if feature(x)` works). `Pipeline.Compile` takes many trees, and reports
   each error against its own file. Output goes to `target/dev/` or
   `target/release/`.
 - **Commands.** `new`, `init`, `build` and `run` (no file: the package in or
-  above the current directory; a `.sab` argument keeps the single-file
+  above the current directory; a `.sb` argument keeps the single-file
   behaviour), `check` (front end only), `clean`, `add` (registry or
   `--path`, `--dev`; the manifest is edited as text so comments survive, and
   an edit that does not resolve is undone), `remove`, `update [pkg]`,
@@ -1355,7 +1355,7 @@ merge; the cache has no garbage collection; there is no network registry.
 
 `sable lsp` (`src/Sable.LanguageServer`, `src/Sable.Driver/Commands/LspCommand.cs`):
 JSON-RPC 2.0 over stdio with `Content-Length` framing, System.Text.Json and
-nothing else. The workspace is the open documents plus the `.sab` files under
+nothing else. The workspace is the open documents plus the `.sb` files under
 the root, compiled together with the library modules they import (the
 library's trees are shared, parsed once). Edits are incremental
 (`TextDocumentSyncKind.Incremental`) and reparsed by the incremental parser;
@@ -1442,7 +1442,7 @@ the toolchain:
   and a `sable.toml` schema for Even Better TOML.
 
 `npm test` runs the grammar under `vscode-textmate` against 50 expectations
-and over every `.sab` file in the repository, and checks that none ends inside
+and over every `.sb` file in the repository, and checks that none ends inside
 a construct. The language server, test-output parsing and the problem matcher
 were checked against the real `sable`. Debugging was checked by driving Xcode's
 `lldb-dap` over DAP with the configuration the extension produces: a
@@ -1455,7 +1455,7 @@ VS Code's own test host.
 - **`sable fmt [paths…] [--check]`** (and `sable fmt -` for a filter) formats
   in place with `SyntaxFormatter`, skipping `target/` and hidden directories,
   and refuses a file with syntax errors. The formatter is tested idempotent,
-  tree- and token-preserving and comment-keeping on every `.sab` file in the
+  tree- and token-preserving and comment-keeping on every `.sb` file in the
   repository and every `sable` block in `docs/` and `spec/`. Running it over
   all of them found and fixed: `else if` split across lines, a label split
   from its loop, `try?`/`as?` glued to the next token, `- 1` patterns, a `}`
@@ -1551,7 +1551,7 @@ tools/lldb/sable_lldb.py` (or put that in `~/.lldbinit`). On macOS `sable
 build -g` also copies it into the `.dSYM` (`Contents/Resources/Python`), which
 lldb loads after `settings set target.load-script-from-symbol-file true`;
 Linux has no such place — lldb does not read `.debug_gdb_scripts` — so it is
-imported by hand there. `sable debug <file.sab> [--batch] [-o <command>]… [--
+imported by hand there. `sable debug <file.sb> [--batch] [-o <command>]… [--
 <arguments>]` builds with `-g` into a temporary directory and starts lldb
 (`$LLDB`, else `lldb`) with the plugin loaded.
 `tests/Sable.CodeGen.Tests/DebuggerFormatterTests.cs` drives the real lldb;
@@ -1603,7 +1603,7 @@ Sable.CodeGen. `sable build` and `sable run` on a package go through it;
     nothing more: it reads and hashes the files and stops.
   - `objects/<key>.o` and `.abi`: one per unit, keyed by its own files'
     content and the **program's interface fingerprint**. The interface is
-    not a binary `.sabi` file (docs/05 §5.4) but a hash per file
+    not a binary `.sbi` file (docs/05 §5.4) but a hash per file
     (`InterfaceFingerprint`) of its tokens with the bodies left out that
     only their own unit lowers: functions, initialisers, deinits, operators
     and getters with no type parameters, no `some` or `ref` in the
@@ -1701,7 +1701,7 @@ than "every unit" when an interface changes (today a signature change
 anywhere is a ~6 s rebuild here); keeping parsed trees and bound
 declarations in a long-lived process (a build daemon, or the LSP server)
 so a warm build re-parses only what changed; and early cut-off when a
-change's result is unchanged. Also deferred: a binary `.sabi` (the
+change's result is unchanged. Also deferred: a binary `.sbi` (the
 interface is a fingerprint, and each unit still binds every file's
 declarations from source); separate compilation for optimised builds
 (they need the whole program for the SIL passes and LTO — ThinLTO over

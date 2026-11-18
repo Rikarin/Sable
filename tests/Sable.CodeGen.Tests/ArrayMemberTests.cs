@@ -3,7 +3,7 @@ using static Sable.CodeGen.Tests.Programs;
 namespace Sable.CodeGen.Tests;
 
 /// <summary>
-///     The array family's members, declared in Sable (lib/Sable.Core/Array.sab)
+///     The array family's members, declared in Sable (lib/Sable.Core/Array.sb)
 ///     and an array extension of the program's own: native and interpreted
 ///     alike, leak-checked.
 /// </summary>

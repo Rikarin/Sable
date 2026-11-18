@@ -1,6 +1,6 @@
 // The .NET side of the Phase 4 exit criterion "Dictionary/List/String within
 // 15% of their .NET equivalents" (docs/04 §4.4): each benchmark here is a
-// port of ../versus-dotnet/<name>.sab — the same steps, sizes and output.
+// port of ../versus-dotnet/<name>.sb — the same steps, sizes and output.
 //
 //     dotnet run -c Release -- <name> [runs]
 //

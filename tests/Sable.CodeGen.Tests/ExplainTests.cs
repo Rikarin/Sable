@@ -54,7 +54,7 @@ public sealed class ExplainTests {
 
     /// <remarks>A lint's page (S3300-S3399) is checked with the lints run too, at their default levels.</remarks>
     static List<string> Diagnose(string source, bool lints = false) {
-        var tree = SyntaxTree.Parse(new SourceText(source, "example.sab"));
+        var tree = SyntaxTree.Parse(new SourceText(source, "example.sb"));
         var compilation = Compilation.Create([tree, ..Library.For(tree)]);
         var found = compilation.GetAllDiagnosticsByFile()
             .Where(d => d.Tree is null || d.Tree == tree)

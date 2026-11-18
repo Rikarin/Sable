@@ -2,7 +2,7 @@
 
 The baseline for the Phase 3 exit criterion "ARC overhead on the suite < 5%
 vs a manually-managed equivalent" (docs/04-implementation-plan.md §3.8). Each
-`X.c` is a port of `../X.sab`: the same algorithm, sizes and iteration counts,
+`X.c` is a port of `../X.sb`: the same algorithm, sizes and iteration counts,
 and byte-for-byte the same output.
 
     clang -O2 -Wall -Wextra X.c -o X -lm

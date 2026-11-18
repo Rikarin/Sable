@@ -4,7 +4,7 @@ Complete syntax, construct by construct, with an example for each. The formal
 grammar is in [grammar.ebnf](grammar.ebnf); lexical rules are in
 [lexical.md](lexical.md).
 
-File extension: `.sab`. Interface files: `.sabi`. Encoding: UTF-8, no BOM.
+File extension: `.sb`. Interface files: `.sbi`. Encoding: UTF-8, no BOM.
 
 ---
 
@@ -1155,7 +1155,7 @@ fn sqlite3_open(_ path: CString, _ db: out RawPtr<Opaque>) -> I32
 public fn entry(argc: I32, argv: RawPtr<CString>) -> I32 { }
 ```
 
-Header import (`sable bindgen`) generates `.sabi` interface files from C headers
+Header import (`sable bindgen`) generates `.sbi` interface files from C headers
 and is the recommended path for anything larger than a few functions.
 
 ### C++ and Objective-C

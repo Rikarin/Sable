@@ -3,7 +3,7 @@ using Sable.Symbols;
 using Sable.Syntax;
 using Sable.Visualiser;
 
-// sable-visualise <file.sab> [--html <out.html>] [--trivia] [--syntax-only] [--sil]
+// sable-visualise <file.sb> [--html <out.html>] [--trivia] [--syntax-only] [--sil]
 //
 // The syntax-tree visualiser of docs/04 §0.5. With no options it prints the
 // tree as indented text; with --html it writes a page that shows the source
@@ -88,7 +88,7 @@ static int PrintSil(SourceText source) {
 
 static int Usage(int code) {
     var writer = code == 0 ? Console.Out : Console.Error;
-    writer.WriteLine("usage: sable-visualise <file.sab> [--html <out.html>] [--trivia] [--syntax-only] [--sil]");
+    writer.WriteLine("usage: sable-visualise <file.sb> [--html <out.html>] [--trivia] [--syntax-only] [--sil]");
     writer.WriteLine();
     writer.WriteLine("  --html <out.html>  write an interactive page instead of printing text");
     writer.WriteLine("  --trivia           include whitespace, newlines and comments in the text dump");

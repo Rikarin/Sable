@@ -15,7 +15,7 @@ public sealed class SharedTreeTests {
         );
 
         for (var round = 0; round < 20; round++) {
-            var tree = SyntaxTree.Parse(new SourceText("module M\n" + source, "shared.sab"));
+            var tree = SyntaxTree.Parse(new SourceText("module M\n" + source, "shared.sb"));
             var walks = Enumerable.Range(0, 8)
                 .AsParallel()
                 .WithDegreeOfParallelism(8)

@@ -306,7 +306,7 @@ public sealed class LoweringTests {
         var module = Lower("fn max(_ a: Int, _ b: Int) -> Int { return a > b ? a : b }");
         Assert.Equal(
             """
-            sil @M.max : $(Int, Int) -> Int loc "file0.sab":2 {
+            sil @M.max : $(Int, Int) -> Int loc "file0.sb":2 {
             bb0(%0 : $Int var "a", %1 : $Int var "b"):
               %2 = builtin "cmp_gt_Int"(%0, %1) : $Bool loc 2:37
               cond_br %2, bb1, bb2 loc 2:37

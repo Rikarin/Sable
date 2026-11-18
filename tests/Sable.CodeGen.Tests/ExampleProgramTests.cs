@@ -12,7 +12,7 @@ public sealed class ExampleProgramTests {
     public void HelloGreetsEveryone() =>
         Assert.Equal(
             "hello, world\nhello, Sable\nhello, everyone\n",
-            Run("01-hello.sab")
+            Run("01-hello.sb")
         );
 
     [Fact]
@@ -34,7 +34,7 @@ public sealed class ExampleProgramTests {
             42.5% of 200 is 85
 
             """,
-            Run("02-shapes.sab")
+            Run("02-shapes.sb")
         );
 
     [Fact]
@@ -56,7 +56,7 @@ public sealed class ExampleProgramTests {
             closing plan.md
 
             """,
-            Run("03-memory-tiers.sab")
+            Run("03-memory-tiers.sb")
         );
 
     [Fact]
@@ -77,7 +77,7 @@ public sealed class ExampleProgramTests {
             served 4
 
             """,
-            Run("04-async-service.sab")
+            Run("04-async-service.sb")
         );
 
     static string Run(string example) =>

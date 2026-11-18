@@ -141,7 +141,7 @@ public sealed class WeakTests {
     [InlineData("class C {}\nclass D { weak var c: C }", "'weak' needs a 'var' of an optional class type")]
     [InlineData("class D { unowned var n: Int }", "'unowned' needs a class type")]
     public void MisplacedWeakAndUnownedAreErrors(string declarations, string message) {
-        var result = Pipeline.Compile(new SourceText($"module M\n{declarations}\n@main\nfn main() {{ }}\n", "test.sab"));
+        var result = Pipeline.Compile(new SourceText($"module M\n{declarations}\n@main\nfn main() {{ }}\n", "test.sb"));
         Assert.Contains(result.Errors, e => e.Contains(message, StringComparison.Ordinal));
     }
 }

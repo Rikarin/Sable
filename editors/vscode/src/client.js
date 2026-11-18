@@ -33,7 +33,7 @@ async function start(context) {
         { scheme: "untitled", language: "sable" },
       ],
       synchronize: {
-        fileEvents: vscode.workspace.createFileSystemWatcher("**/*.sab"),
+        fileEvents: vscode.workspace.createFileSystemWatcher("**/*.sb"),
       },
       outputChannel: sable.channel(),
       markdown: { isTrusted: false, supportHtml: false },

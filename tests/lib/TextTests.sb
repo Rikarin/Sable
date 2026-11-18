@@ -1,7 +1,7 @@
 module TextTests
 
 // Sable.Text, tested with '@test': run with
-//     sable test tests/lib/TextTests.sab
+//     sable test tests/lib/TextTests.sb
 
 import Sable.Text
 import Sable.Testing
@@ -57,7 +57,7 @@ fn trimming() {
     assertEqual(trimmedEnd("  x  "), "  x")
     assert(isBlank(" \t\n"))
     assertEqual(removingPrefix("v1.2", "v"), "1.2")
-    assertEqual(removingSuffix("file.sab", ".sab"), "file")
+    assertEqual(removingSuffix("file.sb", ".sb"), "file")
 }
 
 @test

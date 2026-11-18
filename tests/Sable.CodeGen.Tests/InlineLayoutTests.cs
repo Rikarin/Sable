@@ -290,7 +290,7 @@ public sealed class InlineLayoutTests {
             directory = directory.Parent;
         }
 
-        var source = File.ReadAllText(Path.Combine(directory.FullName, "tools", "fuzz", "inline_layout.sab"))
+        var source = File.ReadAllText(Path.Combine(directory.FullName, "tools", "fuzz", "inline_layout.sb"))
             .Replace("let cases = 10000000", "let cases = 3000", StringComparison.Ordinal);
         Assert.StartsWith("cases 3000, accepted ", AssertAgree(source, stepLimit: 100_000_000).Stdout, StringComparison.Ordinal);
     }
@@ -344,7 +344,7 @@ public sealed class InlineLayoutTests {
     [InlineData("", "    var bag = Bag { items: [Item { value: 1 }] }\n    for item in bag.items {\n        bag.items.append(Item { value: item.value })\n    }",
         "this reference into local 'bag' is stale")]
     public void AViewCannotOutliveOrOutlastItsBlock(string declarations, string body, string message) {
-        var result = Pipeline.Compile(new SourceText(Program(Views + "\n" + declarations, body.Length == 0 ? "    print(1)" : body), "test.sab"));
+        var result = Pipeline.Compile(new SourceText(Program(Views + "\n" + declarations, body.Length == 0 ? "    print(1)" : body), "test.sb"));
         Assert.False(result.Succeeded, "expected the program to be rejected");
         Assert.Contains(result.Errors, e => e.Contains(message, StringComparison.Ordinal));
     }

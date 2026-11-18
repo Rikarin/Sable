@@ -3,7 +3,7 @@ using Sable.Syntax;
 namespace Sable.Symbols;
 
 /// <summary>
-///     <c>Sable.Core</c>'s source, <c>lib/Sable.Core/*.sab</c>, embedded in
+///     <c>Sable.Core</c>'s source, <c>lib/Sable.Core/*.sb</c>, embedded in
 ///     this assembly and part of every compilation.
 /// </summary>
 /// <remarks>

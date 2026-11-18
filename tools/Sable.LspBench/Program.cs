@@ -51,7 +51,7 @@ await client.RequestAsync("initialize", new JsonObject {
 await client.NotifyAsync("initialized", new JsonObject());
 
 // A file in the middle of the project, open in the editor.
-var path = Path.Combine(root, $"part{files / 2 / 20:D2}", $"file{files / 2:D3}.sab");
+var path = Path.Combine(root, $"part{files / 2 / 20:D2}", $"file{files / 2:D3}.sb");
 var uri = new Uri(path).AbsoluteUri;
 var text = File.ReadAllText(path);
 await client.NotifyAsync("textDocument/didOpen", new JsonObject {
@@ -295,7 +295,7 @@ static int Generate(string root, int files) {
 
         var text = builder.ToString();
         total += text.Count(static c => c == '\n');
-        File.WriteAllText(Path.Combine(folder, $"file{f:D3}.sab"), text);
+        File.WriteAllText(Path.Combine(folder, $"file{f:D3}.sb"), text);
     }
 
     return total;

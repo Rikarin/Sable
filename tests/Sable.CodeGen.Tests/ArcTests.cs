@@ -103,7 +103,7 @@ public sealed class ArcTests {
                                   return -1
                               }
                               """;
-        var result = Pipeline.Compile(new SourceText(Program(Shapes, "    let links: Link[>..] = [Link(\"a\", none)]\n    print(\"\\(length(links[0])) \\(find(links, \"a\"))\")"), "test.sab"));
+        var result = Pipeline.Compile(new SourceText(Program(Shapes, "    let links: Link[>..] = [Link(\"a\", none)]\n    print(\"\\(length(links[0])) \\(find(links, \"a\"))\")"), "test.sb"));
         Assert.True(result.Succeeded, string.Join("\n", result.Errors));
         var sil = SilPrinter.Print(result.Sil!);
 
@@ -144,6 +144,6 @@ public sealed class ArcTests {
             """
         );
         Assert.Equal("0 1 2 7 8 9 10 12\n", AssertAgree(source).Stdout);
-        Assert.Contains("array_set_unique", SilPrinter.Print(Pipeline.Compile(new SourceText(source, "test.sab")).Sil!), StringComparison.Ordinal);
+        Assert.Contains("array_set_unique", SilPrinter.Print(Pipeline.Compile(new SourceText(source, "test.sb")).Sil!), StringComparison.Ordinal);
     }
 }

@@ -23,7 +23,7 @@ public sealed class StaticSiteTests {
 
             var written = new Dictionary<string, Dictionary<string, string>>();
             var run = AssertAgree(
-                File.ReadAllText(Path.Combine(Root, "examples/ssg/ssg.sab")),
+                File.ReadAllText(Path.Combine(Root, "examples/ssg/ssg.sb")),
                 stepLimit: 100_000_000,
                 arguments: [site, output],
                 afterEach: way => {
@@ -99,7 +99,7 @@ public sealed class StaticSiteTests {
     [Fact]
     public void AMissingSiteIsReported() {
         var missing = Path.Combine(Path.GetTempPath(), $"sable-ssg-missing-{Guid.NewGuid():N}");
-        var source = File.ReadAllText(Path.Combine(Root, "examples/ssg/ssg.sab"));
+        var source = File.ReadAllText(Path.Combine(Root, "examples/ssg/ssg.sb"));
         Assert.Equal("usage: ssg <site> <output>\n", Programs.InterpretWithArguments(source, []).Errors);
         Assert.Equal(
             $"ssg: no such file or directory: {missing}/site.txt\n",

@@ -25,7 +25,7 @@ public sealed class CorpusSemanticTests {
     public static TheoryData<string> CorpusFiles {
         get {
             var data = new TheoryData<string>();
-            foreach (var file in Directory.GetFiles(CorpusDirectory, "*.sab")) {
+            foreach (var file in Directory.GetFiles(CorpusDirectory, "*.sb")) {
                 data.Add(Path.GetFileName(file));
             }
 
@@ -55,7 +55,7 @@ public sealed class CorpusSemanticTests {
 
     [Fact]
     public void TheWholeCorpusCompilesTogether() {
-        var trees = Directory.GetFiles(CorpusDirectory, "*.sab")
+        var trees = Directory.GetFiles(CorpusDirectory, "*.sb")
             .Select(static file => SyntaxTree.Parse(new(File.ReadAllText(file), file)))
             .ToList();
 

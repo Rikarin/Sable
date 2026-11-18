@@ -23,7 +23,7 @@ public sealed class IncrementalTests {
 
         public Scenario() {
             Fixture.Package("shapes", "shapes", "0.1.0", "[features]\nfancy = []\n",
-                ("src/lib.sab", """
+                ("src/lib.sb", """
                     module Shapes
 
                     /// A shape: its area, and a name.
@@ -96,9 +96,9 @@ public sealed class IncrementalTests {
                     #endif
                     """));
             Fixture.Package("geometry", "geometry", "0.1.0", "[dependencies]\nshapes = { path = \"../shapes\" }\n",
-                ("src/lib.sab", Geometry("largest")));
+                ("src/lib.sb", Geometry("largest")));
             Fixture.Package("app", "app", "0.1.0", "[dependencies]\nshapes = { path = \"../shapes\" }\ngeometry = { path = \"../geometry\" }\n\n[features]\nfancy = [\"shapes/fancy\"]\n",
-                ("src/main.sab", """
+                ("src/main.sb", """
                     module App
 
                     import Sable.IO
@@ -246,7 +246,7 @@ public sealed class IncrementalTests {
         Assert.Equal(Expected, again.Output);
 
         // A newer time is not a change: the cache goes by content.
-        File.SetLastWriteTimeUtc(scenario.PathOf("shapes/src/lib.sab"), DateTime.UtcNow.AddMinutes(1));
+        File.SetLastWriteTimeUtc(scenario.PathOf("shapes/src/lib.sb"), DateTime.UtcNow.AddMinutes(1));
         Assert.Equal("fresh", scenario.Build(new()).Kind);
     }
 
@@ -258,7 +258,7 @@ public sealed class IncrementalTests {
 
         using var scenario = new Scenario();
         scenario.Check();
-        scenario.Edit("shapes/src/lib.sab", "    return x\n", "    return x + 1\n");
+        scenario.Edit("shapes/src/lib.sb", "    return x\n", "    return x + 1\n");
         var built = scenario.Check();
         Assert.Contains("circle of area 13", built.Output);
         Assert.Contains("areas 3, largest 13", built.Output);
@@ -275,14 +275,14 @@ public sealed class IncrementalTests {
         scenario.Check();
 
         // A default argument is code at every call: the callers are compiled again.
-        scenario.Edit("shapes/src/lib.sab", "public fn flourish() -> String {\n    return \"plain\"", "public fn flourish(_ times: Int = 2) -> String {\n    return \"plain x\\(times)\"");
-        scenario.Edit("shapes/src/lib.sab", "public fn flourish() -> String {\n    return \"~fancy~\"", "public fn flourish(_ times: Int = 2) -> String {\n    return \"~fancy~ x\\(times)\"");
+        scenario.Edit("shapes/src/lib.sb", "public fn flourish() -> String {\n    return \"plain\"", "public fn flourish(_ times: Int = 2) -> String {\n    return \"plain x\\(times)\"");
+        scenario.Edit("shapes/src/lib.sb", "public fn flourish() -> String {\n    return \"~fancy~\"", "public fn flourish(_ times: Int = 2) -> String {\n    return \"~fancy~ x\\(times)\"");
         var built = scenario.Check();
         Assert.Contains("7 3 plain x2", built.Output);
         Assert.Equal(Units, built.Compiled);
 
         // So is a global's initial value, set up where the program starts.
-        scenario.Edit("shapes/src/lib.sab", "public var created = 0", "public var created = 10");
+        scenario.Edit("shapes/src/lib.sb", "public var created = 0", "public var created = 10");
         Assert.Contains("7 13 plain x2", scenario.Check().Output);
     }
 
@@ -294,7 +294,7 @@ public sealed class IncrementalTests {
 
         using var scenario = new Scenario();
         scenario.Check();
-        scenario.Edit("shapes/src/lib.sab", "if x > best {", "if x < best {");
+        scenario.Edit("shapes/src/lib.sb", "if x > best {", "if x < best {");
         var built = scenario.Check();
         Assert.Contains("areas 3, largest 0", built.Output);
         Assert.Contains("\napple\n", built.Output);
@@ -310,15 +310,15 @@ public sealed class IncrementalTests {
         using var scenario = new Scenario();
         scenario.Check();
 
-        scenario.Fixture.Write("shapes/src/extra.sab", "module Shapes\n\npublic fn extra() -> Int {\n    return 42\n}\n");
-        scenario.Edit("app/src/main.sab", "print(survey(shapes))", "print(survey(shapes))\n    print(\"extra \\(extra())\")");
+        scenario.Fixture.Write("shapes/src/extra.sb", "module Shapes\n\npublic fn extra() -> Int {\n    return 42\n}\n");
+        scenario.Edit("app/src/main.sb", "print(survey(shapes))", "print(survey(shapes))\n    print(\"extra \\(extra())\")");
         Assert.Contains("extra 42", scenario.Check().Output);
 
         // A file removed while it is still used: an error, never the last binary.
-        File.Delete(scenario.PathOf("shapes/src/extra.sab"));
+        File.Delete(scenario.PathOf("shapes/src/extra.sb"));
         Assert.Contains("extra", scenario.Fails());
 
-        scenario.Edit("app/src/main.sab", "\n    print(\"extra \\(extra())\")", "");
+        scenario.Edit("app/src/main.sb", "\n    print(\"extra \\(extra())\")", "");
         Assert.Equal(Expected, scenario.Check().Output);
     }
 
@@ -332,7 +332,7 @@ public sealed class IncrementalTests {
         scenario.Check();
 
         // Another geometry, at another path: resolved afresh.
-        scenario.Fixture.Package("geometry2", "geometry", "0.2.0", "[dependencies]\nshapes = { path = \"../shapes\" }\n", ("src/lib.sab", Scenario.Geometry("biggest")));
+        scenario.Fixture.Package("geometry2", "geometry", "0.2.0", "[dependencies]\nshapes = { path = \"../shapes\" }\n", ("src/lib.sb", Scenario.Geometry("biggest")));
         scenario.Edit("app/sable.toml", "path = \"../geometry\"", "path = \"../geometry2\"");
         Assert.Contains("areas 3, biggest 12", scenario.Check().Output);
 
@@ -372,7 +372,7 @@ public sealed class IncrementalTests {
         Assert.Equal("fresh", scenario.Build(release).Kind);
         Assert.Equal("fresh", scenario.Build(new()).Kind);
 
-        scenario.Edit("shapes/src/lib.sab", "    return x\n", "    return x * 2\n");
+        scenario.Edit("shapes/src/lib.sb", "    return x\n", "    return x * 2\n");
         Assert.Contains("circle of area 24", scenario.Check(release).Output);
         Assert.Contains("circle of area 24", scenario.Check().Output);
     }
@@ -385,9 +385,9 @@ public sealed class IncrementalTests {
 
         using var scenario = new Scenario();
         scenario.Check();
-        scenario.Edit("geometry/src/lib.sab", "return side * side", "return side * side + 1");
+        scenario.Edit("geometry/src/lib.sb", "return side * side", "return side * side + 1");
         Assert.Contains("square of area 10", scenario.Check().Output);
-        scenario.Edit("geometry/src/lib.sab", "return side * side + 1", "return side * side");
+        scenario.Edit("geometry/src/lib.sb", "return side * side + 1", "return side * side");
         var reverted = scenario.Check();
         Assert.Equal(Expected, reverted.Output);
         Assert.Equal(("incremental", 0), (reverted.Kind, reverted.Compiled));
@@ -401,9 +401,9 @@ public sealed class IncrementalTests {
 
         using var scenario = new Scenario();
         scenario.Check();
-        scenario.Edit("geometry/src/lib.sab", "return side * side", "return side * \"side\"");
-        Assert.Contains("geometry/src/lib.sab", scenario.Fails());
-        scenario.Edit("geometry/src/lib.sab", "return side * \"side\"", "return side * side * 2");
+        scenario.Edit("geometry/src/lib.sb", "return side * side", "return side * \"side\"");
+        Assert.Contains("geometry/src/lib.sb", scenario.Fails());
+        scenario.Edit("geometry/src/lib.sb", "return side * \"side\"", "return side * side * 2");
         Assert.Contains("square of area 18", scenario.Check().Output);
     }
 
@@ -421,7 +421,7 @@ public sealed class IncrementalTests {
             File.WriteAllBytes(file, []);
         }
 
-        scenario.Edit("app/src/main.sab", "print(survey(shapes))", "print(\"surveyed: \" + survey(shapes))");
+        scenario.Edit("app/src/main.sb", "print(survey(shapes))", "print(\"surveyed: \" + survey(shapes))");
         var built = scenario.Check();
         Assert.Contains("surveyed: areas 3, largest 12", built.Output);
         Assert.Equal("whole", built.Kind);
@@ -437,9 +437,9 @@ public sealed class IncrementalTests {
         // into, and must assume either argument; the whole program knows it is 'a'.
         using var fixture = new PackageFixture();
         fixture.Package("refs", "refs", "0.1.0", "",
-            ("src/lib.sab", "module Refs\n\npublic fn first(ref a: String, ref b: String) -> ref String {\n    return a\n}\n"));
+            ("src/lib.sb", "module Refs\n\npublic fn first(ref a: String, ref b: String) -> ref String {\n    return a\n}\n"));
         fixture.Package("app", "app", "0.1.0", "[dependencies]\nrefs = { path = \"../refs\" }\n",
-            ("src/main.sab", """
+            ("src/main.sb", """
                 module App
 
                 import Sable.IO
@@ -472,7 +472,7 @@ public sealed class IncrementalTests {
         // subclasses. Their records of it disagree, and the program is built whole.
         var directory = Directory.CreateTempSubdirectory("sable-disagree-").FullName;
         try {
-            File.WriteAllText(Path.Combine(directory, "base.sab"), """
+            File.WriteAllText(Path.Combine(directory, "base.sb"), """
                 module T
 
                 import Sable.IO
@@ -486,7 +486,7 @@ public sealed class IncrementalTests {
                     print(b.name())
                 }
                 """);
-            File.WriteAllText(Path.Combine(directory, "main.sab"), """
+            File.WriteAllText(Path.Combine(directory, "main.sb"), """
                 module T
 
                 fn main() {
@@ -498,7 +498,7 @@ public sealed class IncrementalTests {
                     show(Base())
                 }
                 """);
-            UnitPlan Unit(string name) => new(name, [new SourceFile(Path.Combine(directory, name + ".sab"), name + ".sab", [])]);
+            UnitPlan Unit(string name) => new(name, [new SourceFile(Path.Combine(directory, name + ".sb"), name + ".sb", [])]);
             var log = new StringWriter();
             var executable = Path.Combine(directory, "program");
             var outcome = IncrementalBuild.Build([Unit("main"), Unit("base")], new BuildSettings("dev", false, directory, true), executable, Path.Combine(directory, "cache"), null, log);
@@ -514,7 +514,7 @@ public sealed class IncrementalTests {
     // ---- Interface fingerprints ---------------------------------------------
 
     static string Fingerprint(string source) {
-        var tree = SyntaxTree.Parse(new SourceText(source, "f.sab"));
+        var tree = SyntaxTree.Parse(new SourceText(source, "f.sb"));
         return InterfaceFingerprint.Of(tree, InterfaceFingerprint.ConcreteTypeNames([tree]));
     }
 
@@ -574,13 +574,13 @@ public sealed class IncrementalTests {
         Path.GetFullPath(Path.Combine(Path.GetDirectoryName(path)!, "..", ".."));
 
     [Theory]
-    [InlineData("examples/ssg/ssg.sab", 1)]
-    [InlineData("examples/ssg/ssg.sab", 6)]
-    [InlineData("benchmarks/shapes.sab", 3)]
-    [InlineData("benchmarks/words.sab", 3)]
-    [InlineData("benchmarks/sort.sab", 3)]
-    [InlineData("benchmarks/binary-trees.sab", 4)]
-    [InlineData("benchmarks/orders.sab", 4)]
+    [InlineData("examples/ssg/ssg.sb", 1)]
+    [InlineData("examples/ssg/ssg.sb", 6)]
+    [InlineData("benchmarks/shapes.sb", 3)]
+    [InlineData("benchmarks/words.sb", 3)]
+    [InlineData("benchmarks/sort.sb", 3)]
+    [InlineData("benchmarks/binary-trees.sb", 4)]
+    [InlineData("benchmarks/orders.sb", 4)]
     public void SeparatelyCompiledProgramsBehaveAsWholeOnes(string file, int parts) {
         if (!CanBuild) {
             return;
@@ -588,7 +588,7 @@ public sealed class IncrementalTests {
 
         // The file's declarations dealt into files of their own, each a unit.
         var text = File.ReadAllText(Path.Combine(Repository(), file));
-        var root = (CompilationUnitSyntax)SyntaxTree.Parse(new SourceText(text, "program.sab")).Root;
+        var root = (CompilationUnitSyntax)SyntaxTree.Parse(new SourceText(text, "program.sb")).Root;
         var members = root.Members.ToList();
         var header = text[..members[0].FullSpan.Start];
         var bodies = Enumerable.Range(0, Math.Min(parts, members.Count)).Select(_ => new System.Text.StringBuilder(header)).ToList();
@@ -599,9 +599,9 @@ public sealed class IncrementalTests {
         var directory = Directory.CreateTempSubdirectory("sable-separate-").FullName;
         try {
             var units = bodies.Select((body, i) => {
-                var path = Path.Combine(directory, $"part{i}.sab");
+                var path = Path.Combine(directory, $"part{i}.sb");
                 File.WriteAllText(path, body.ToString());
-                return new UnitPlan($"part{i}", [new SourceFile(path, $"part{i}.sab", [])]);
+                return new UnitPlan($"part{i}", [new SourceFile(path, $"part{i}.sb", [])]);
             }).ToList();
 
             var settings = new BuildSettings("dev", false, directory, true);

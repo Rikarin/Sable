@@ -85,7 +85,7 @@ fn removeLastGivesAnElement(_ xs: Int[>..]) -> String {
     return ys.removeLast()              //! S3004 expected 'String'
 }
 
-// The growing members are mutating (lib/Sable.Core/Array.sab): an array is a
+// The growing members are mutating (lib/Sable.Core/Array.sb): an array is a
 // value, so one that cannot change cannot grow.
 fn appendingToALet() {
     let xs: Int[>..] = []

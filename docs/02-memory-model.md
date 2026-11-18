@@ -133,7 +133,7 @@ be implemented:
 That last one is important and is a place to beat Swift: Swift loses most of
 these at module boundaries without whole-module optimisation. Sable serialises a
 per-function **escape summary** (`params: [borrowed, owned, escaping]`,
-`returns: [fresh, borrowed-from-0, escaping]`) into the `.sabi` interface file,
+`returns: [fresh, borrowed-from-0, escaping]`) into the `.sbi` interface file,
 so the optimisation survives separate compilation.
 
 ---
@@ -240,7 +240,7 @@ variance reasoning. Sable rejects them with a diagnostic naming the fix:
 
 ```
 error[S0412]: cannot return a reference rooted in local 'tmp'
-  --> src/parse.sab:41:12
+  --> src/parse.sb:41:12
    |
 41 |     return &tmp.name
    |            ^^^^^^^^^ 'tmp' dies at the end of this function

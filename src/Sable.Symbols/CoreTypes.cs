@@ -11,7 +11,7 @@ namespace Sable.Symbols;
 ///     generation all know them by sight: a literal's type, an integer's width,
 ///     a string's representation. Their members are not: those are Sable, in
 ///     <c>lib/Sable.Core</c> (<see cref="CoreLibrary" />): every one of them,
-///     the array family's included (<c>Array.sab</c>, through array
+///     the array family's included (<c>Array.sb</c>, through array
 ///     extensions), with <c>@builtin</c> and <c>@intrinsic</c> bodies where
 ///     only the compiler can write one. What is declared here is the types
 ///     themselves, and the shells the binder desugars to.
@@ -74,16 +74,16 @@ public sealed class CoreTypes {
     // lowering gives their '@intrinsic' members bodies. Null before the core
     // is declared, or when a Sable.Core read from disk lacks them.
 
-    /// <summary><c>Task&lt;Success&gt;</c>: a task and, once it finishes, its result (<c>Task.sab</c>).</summary>
+    /// <summary><c>Task&lt;Success&gt;</c>: a task and, once it finishes, its result (<c>Task.sb</c>).</summary>
     public NamedTypeSymbol? Task => Declared("Task", TypeKind.Class);
 
-    /// <summary><c>Decoded&lt;Value&gt;</c>: what <c>fromBytes</c> gives (<c>InlineLayout.sab</c>).</summary>
+    /// <summary><c>Decoded&lt;Value&gt;</c>: what <c>fromBytes</c> gives (<c>InlineLayout.sb</c>).</summary>
     public NamedTypeSymbol? Decoded => Declared("Decoded", TypeKind.Union);
 
-    /// <summary><c>Bytes</c>: where <c>Bytes.of</c> lives (<c>InlineLayout.sab</c>).</summary>
+    /// <summary><c>Bytes</c>: where <c>Bytes.of</c> lives (<c>InlineLayout.sb</c>).</summary>
     public NamedTypeSymbol? Bytes => Declared("Bytes", TypeKind.Struct);
 
-    /// <summary><c>InlineLayout</c>: what every <c>@inline_layout</c> struct conforms to (<c>InlineLayout.sab</c>).</summary>
+    /// <summary><c>InlineLayout</c>: what every <c>@inline_layout</c> struct conforms to (<c>InlineLayout.sb</c>).</summary>
     public NamedTypeSymbol? InlineLayout => Declared("InlineLayout", TypeKind.Protocol);
 
     NamedTypeSymbol? Declared(string name, TypeKind kind) =>
@@ -121,7 +121,7 @@ public sealed class CoreTypes {
     /// <summary>
     ///     <c>Range&lt;Bound&gt;</c>, what <c>a..&lt;b</c> makes, and
     ///     <c>ClosedRange&lt;Bound&gt;</c>, what <c>a...b</c> makes: declared in
-    ///     <c>lib/Sable.Core/Range.sab</c>, so null only in a compilation that
+    ///     <c>lib/Sable.Core/Range.sb</c>, so null only in a compilation that
     ///     brings a Sable.Core of its own without them.
     /// </summary>
     public NamedTypeSymbol? Range => _range ??= DeclaredStruct("Range");

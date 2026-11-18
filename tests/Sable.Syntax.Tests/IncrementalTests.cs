@@ -70,7 +70,7 @@ public sealed class IncrementalTests {
                           }
                           """;
 
-    static SyntaxTree ParseSample() => SyntaxTree.Parse(new(Sample, "sample.sab"));
+    static SyntaxTree ParseSample() => SyntaxTree.Parse(new(Sample, "sample.sb"));
 
     // ---- Targeted edits ----------------------------------------------------
 
@@ -196,7 +196,7 @@ public sealed class IncrementalTests {
 
     [Fact]
     public void TypingAFunctionOneCharacterAtATime() {
-        var tree = SyntaxTree.Parse(new(Sample, "sample.sab"));
+        var tree = SyntaxTree.Parse(new(Sample, "sample.sb"));
         const string typed = "\npublic fn typed(a: Int) -> Int => a * 2\n";
 
         var position = Sample.Length;
@@ -233,7 +233,7 @@ public sealed class IncrementalTests {
             ".", ",", "#if A\n", "public ", "0", "=>", "<", ">"
         ];
 
-        foreach (var file in Directory.GetFiles(directory, "*.sab")) {
+        foreach (var file in Directory.GetFiles(directory, "*.sb")) {
             var original = File.ReadAllText(file);
 
             for (var iteration = 0; iteration < 120; iteration++) {
@@ -278,7 +278,7 @@ public sealed class IncrementalTests {
         var random = new Random(20261121);
 
         for (var iteration = 0; iteration < 200; iteration++) {
-            var tree = SyntaxTree.Parse(new(original, "generated.sab"));
+            var tree = SyntaxTree.Parse(new(original, "generated.sb"));
             var position = random.Next(original.Length);
 
             var change = random.Next(2) == 0
@@ -311,7 +311,7 @@ public sealed class IncrementalTests {
             );
         }
 
-        return new(builder.ToString(), "bench.sab");
+        return new(builder.ToString(), "bench.sb");
     }
 
     [Fact]
@@ -394,7 +394,7 @@ public sealed class IncrementalTests {
                               fn b() { }
                               """;
 
-        var tree = SyntaxTree.Parse(new(source, "d.sab"));
+        var tree = SyntaxTree.Parse(new(source, "d.sb"));
         AssertSameAsFullParse(tree, TextChange.Insert(source.Length, "\nfn c() { }\n"));
     }
 
@@ -446,8 +446,8 @@ public sealed class IncrementalTests {
             "+", "=", "\"", "\\(", "<", ">", "?", "//", "/*", "*/", "case ", "=>", "1", "_", "while ", "else ",
         ];
 
-        var files = Directory.GetFiles(Path.Combine(TestHelpers.RepositoryRoot, "tests", "corpus"), "*.sab")
-            .Concat(Directory.GetFiles(Path.Combine(TestHelpers.RepositoryRoot, "examples"), "*.sab"))
+        var files = Directory.GetFiles(Path.Combine(TestHelpers.RepositoryRoot, "tests", "corpus"), "*.sb")
+            .Concat(Directory.GetFiles(Path.Combine(TestHelpers.RepositoryRoot, "examples"), "*.sb"))
             .Order(StringComparer.Ordinal)
             .ToArray();
 

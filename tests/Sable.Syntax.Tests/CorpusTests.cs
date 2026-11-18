@@ -11,9 +11,9 @@ public sealed class CorpusTests {
         get {
             var data = new TheoryData<string>();
             var directory = Path.Combine(TestHelpers.RepositoryRoot, "examples");
-            foreach (var file in Directory.GetFiles(directory, "*.sab", SearchOption.AllDirectories)) {
+            foreach (var file in Directory.GetFiles(directory, "*.sb", SearchOption.AllDirectories)) {
                 // Relative to examples/, so that a program of its own
-                // directory — examples/ssg/ssg.sab — is found again.
+                // directory — examples/ssg/ssg.sb — is found again.
                 data.Add(Path.GetRelativePath(directory, file));
             }
 
@@ -57,7 +57,7 @@ public sealed class CorpusTests {
     [Fact]
     public void EveryExampleNodeSpanTilesItsParent() {
         var directory = Path.Combine(TestHelpers.RepositoryRoot, "examples");
-        foreach (var file in Directory.GetFiles(directory, "*.sab")) {
+        foreach (var file in Directory.GetFiles(directory, "*.sb")) {
             var tree = SyntaxTree.Parse(new(File.ReadAllText(file), file));
             AssertTiles(tree.Root, Path.GetFileName(file));
         }
@@ -81,8 +81,8 @@ public sealed class CorpusTests {
 
     [Fact]
     public void DocCommentsSurviveOnTheirDeclaration() {
-        var path = Path.Combine(TestHelpers.RepositoryRoot, "examples", "02-shapes.sab");
-        var tree = SyntaxTree.Parse(new(File.ReadAllText(path), "02-shapes.sab"));
+        var path = Path.Combine(TestHelpers.RepositoryRoot, "examples", "02-shapes.sb");
+        var tree = SyntaxTree.Parse(new(File.ReadAllText(path), "02-shapes.sb"));
         var unit = (CompilationUnitSyntax)tree.Root;
 
         var protocolDeclaration = unit.Members
@@ -96,7 +96,7 @@ public sealed class CorpusTests {
     [Fact]
     public void ReparsingTheFormattedOutputGivesTheSameTree() {
         var directory = Path.Combine(TestHelpers.RepositoryRoot, "examples");
-        foreach (var file in Directory.GetFiles(directory, "*.sab")) {
+        foreach (var file in Directory.GetFiles(directory, "*.sb")) {
             var source = File.ReadAllText(file);
             var first = SyntaxTree.Parse(new(source, file));
             var second = SyntaxTree.Parse(new(first.ToFullString(), file));

@@ -6,7 +6,7 @@ within 15% of their .NET equivalents on a standard benchmark set" (docs/04
     tools/bench/versus_dotnet.py [--runs N] [name ...]
 
 Builds the compiler and benchmarks/dotnet (Release), then for each
-benchmarks/versus-dotnet/<name>.sab builds it optimised and runs both sides
+benchmarks/versus-dotnet/<name>.sb builds it optimised and runs both sides
 N times, keeping the fastest of each. The two must print the same line, or
 the comparison means nothing and the script fails.
 
@@ -70,7 +70,7 @@ def main():
         reference = build(DOTNET, scratch / "dotnet", "VersusDotnet")
 
         rows = []
-        for source in sorted(SOURCES.glob("*.sab")):
+        for source in sorted(SOURCES.glob("*.sb")):
             name = source.stem
             if arguments.names and name not in arguments.names:
                 continue

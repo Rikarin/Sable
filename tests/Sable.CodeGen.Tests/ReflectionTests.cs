@@ -311,14 +311,14 @@ public sealed class ReflectionTests {
     /// </summary>
     [Fact]
     public void OnlyTheTypesReflectedOnAreEmitted() {
-        var plain = Pipeline.Compile(new SourceText(Program("struct Point { var x: Int }", "print(Point(x: 1).x)"), "test.sab"));
+        var plain = Pipeline.Compile(new SourceText(Program("struct Point { var x: Int }", "print(Point(x: 1).x)"), "test.sb"));
         Assert.True(plain.Succeeded, string.Join("\n", plain.Errors));
         Assert.DoesNotContain("reflect", plain.LlvmIr!);
         Assert.DoesNotContain("Mirror", plain.LlvmIr!);
 
         var reflecting = Pipeline.Compile(new SourceText(
             Program("struct Point { var x: Int }\nstruct Other { var y: Int }", "print(Reflect.describe(Point(x: 1)))\nprint(Other(y: 2).y)"),
-            "test.sab"));
+            "test.sb"));
         Assert.True(reflecting.Succeeded, string.Join("\n", reflecting.Errors));
         Assert.Contains("$reflect.describe$Point", reflecting.LlvmIr!);
         Assert.DoesNotContain("$reflect.describe$Other", reflecting.LlvmIr!);

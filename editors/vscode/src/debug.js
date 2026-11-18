@@ -121,7 +121,7 @@ class Provider {
 }
 
 /**
- * Builds what the configuration names with debug information: a .sab file
+ * Builds what the configuration names with debug information: a .sb file
  * on its own, or a package (dev builds carry debug information).
  * @param {vscode.ExtensionContext} context
  * @param {vscode.WorkspaceFolder | undefined} folder
@@ -131,7 +131,7 @@ class Provider {
  */
 async function build(context, folder, configuration, token) {
   const program = typeof configuration.program === "string" ? configuration.program : undefined;
-  if (program && !program.endsWith(".sab")) {
+  if (program && !program.endsWith(".sb")) {
     return program; // Already built, by a preLaunchTask or by hand.
   }
 
@@ -143,7 +143,7 @@ async function build(context, folder, configuration, token) {
     const storage = context.storageUri?.fsPath ?? context.globalStorageUri.fsPath;
     const directory = path.join(storage, "debug");
     fs.mkdirSync(directory, { recursive: true });
-    executable = path.join(directory, path.basename(program, ".sab") + (process.platform === "win32" ? ".exe" : ""));
+    executable = path.join(directory, path.basename(program, ".sb") + (process.platform === "win32" ? ".exe" : ""));
     args = ["build", program, "-g", "-o", executable];
     cwd = path.dirname(program);
   } else {
@@ -151,7 +151,7 @@ async function build(context, folder, configuration, token) {
       : typeof configuration.cwd === "string" && fs.existsSync(path.join(configuration.cwd, "sable.toml")) ? configuration.cwd
         : folder?.uri.fsPath;
     if (!root || !fs.existsSync(path.join(root, "sable.toml"))) {
-      throw new Error("no package to debug: set 'program' to a .sab file, or 'package' to a directory with a sable.toml");
+      throw new Error("no package to debug: set 'program' to a .sb file, or 'package' to a directory with a sable.toml");
     }
 
     const bin = typeof configuration.bin === "string" ? configuration.bin : sable.packageName(root);

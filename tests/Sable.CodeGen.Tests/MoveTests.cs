@@ -81,7 +81,7 @@ public sealed class MoveTests {
         );
 
     static void Rejects(string declarations, string body, string message) {
-        var result = Pipeline.Compile(new SourceText(Program(declarations, body), "test.sab"));
+        var result = Pipeline.Compile(new SourceText(Program(declarations, body), "test.sb"));
         Assert.False(result.Succeeded, "expected the program to be rejected");
         Assert.Contains(result.Errors, e => e.Contains(message, StringComparison.Ordinal));
     }

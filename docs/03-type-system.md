@@ -156,7 +156,7 @@ useful:
 
 ```
 error[S0631]: match is not exhaustive
-  --> src/shape.sab:12:11
+  --> src/shape.sb:12:11
    |
 12 |     match s {
    |           ^ pattern '.Poly(_)' not covered

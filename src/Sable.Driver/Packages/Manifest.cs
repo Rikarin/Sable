@@ -178,7 +178,7 @@ public sealed partial class Manifest {
                             Error(element, "name", "bin.name", $"two binaries are called '{name}'");
                         }
 
-                        bins.Add(new(name, path ?? (bins.Count == 0 && package is not null && name == package.Name ? "src/main.sab" : $"src/bin/{name}.sab")));
+                        bins.Add(new(name, path ?? (bins.Count == 0 && package is not null && name == package.Name ? "src/main.sb" : $"src/bin/{name}.sb")));
                     }
                 }
             }

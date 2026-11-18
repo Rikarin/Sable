@@ -91,7 +91,7 @@ public sealed class AsyncTests {
     [InlineData("    let t = Task.spawn { 1 }\n    print(t.value)", "reading 'value' is async, so the expression needs 'await'")]
     [InlineData("    async let y = work(1)\n    print(y)", "'y', an 'async let', is async, so the expression needs 'await'")]
     public void AwaitIsWrittenWhereATaskMayWait(string body, string message) {
-        var result = Pipeline.Compile(new SourceText(AsyncProgram(Declarations, body), "test.sab"));
+        var result = Pipeline.Compile(new SourceText(AsyncProgram(Declarations, body), "test.sb"));
         Assert.Contains(result.Errors, e => e.Contains(message, StringComparison.Ordinal));
     }
 

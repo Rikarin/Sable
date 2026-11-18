@@ -40,7 +40,7 @@ function register(context) {
 function target(uri) {
   const file = uri instanceof vscode.Uri ? uri : vscode.window.activeTextEditor?.document.uri;
   if (!file || file.scheme !== "file") {
-    vscode.window.showWarningMessage("Sable: open a .sab file first.");
+    vscode.window.showWarningMessage("Sable: open a .sb file first.");
     return undefined;
   }
 
@@ -122,8 +122,8 @@ async function explain(code) {
 async function newPackage() {
   const kind = await vscode.window.showQuickPick(
     [
-      { label: "Binary", description: "a program, with src/main.sab", flag: "--bin" },
-      { label: "Library", description: "a library, with src/lib.sab", flag: "--lib" },
+      { label: "Binary", description: "a program, with src/main.sb", flag: "--bin" },
+      { label: "Library", description: "a library, with src/lib.sb", flag: "--lib" },
     ],
     { title: "New Sable package" },
   );
@@ -160,7 +160,7 @@ async function newPackage() {
     const created = vscode.Uri.joinPath(parent[0], name);
     const inWorkspace = vscode.workspace.getWorkspaceFolder(created);
     if (inWorkspace) {
-      const main = vscode.Uri.joinPath(created, "src", kind.flag === "--lib" ? "lib.sab" : "main.sab");
+      const main = vscode.Uri.joinPath(created, "src", kind.flag === "--lib" ? "lib.sb" : "main.sb");
       await vscode.window.showTextDocument(main);
     } else {
       await vscode.commands.executeCommand("vscode.openFolder", created, { forceNewWindow: false });

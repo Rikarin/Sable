@@ -38,7 +38,7 @@ public sealed class NegativeCorpusTests {
     public static TheoryData<string> Files {
         get {
             var data = new TheoryData<string>();
-            foreach (var file in System.IO.Directory.GetFiles(Directory, "*.sab")) {
+            foreach (var file in System.IO.Directory.GetFiles(Directory, "*.sb")) {
                 data.Add(Path.GetFileName(file));
             }
 
@@ -138,7 +138,7 @@ public sealed class NegativeCorpusTests {
         var claimed = new HashSet<string>(StringComparer.Ordinal);
         var cases = 0;
 
-        foreach (var file in System.IO.Directory.GetFiles(Directory, "*.sab")) {
+        foreach (var file in System.IO.Directory.GetFiles(Directory, "*.sb")) {
             foreach (var expectation in Parse(File.ReadAllText(file))) {
                 claimed.Add(expectation.Code);
                 cases++;

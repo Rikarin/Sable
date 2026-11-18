@@ -112,7 +112,7 @@ public sealed class ClassTests {
     [InlineData("    let c = Counter()\n    c.value = 5", "'value' can be read here but not written: its setter is private")]
     [InlineData("    print(1)", "'later' needs a type annotation")]
     public void TheFrontEndHoldsTheRules(string body, string message) {
-        var result = Pipeline.Compile(new SourceText(Program(Declarations + "\nvar later = Counter.created + 1\n", body), "test.sab"));
+        var result = Pipeline.Compile(new SourceText(Program(Declarations + "\nvar later = Counter.created + 1\n", body), "test.sb"));
         Assert.Contains(result.Errors, e => e.Contains(message, StringComparison.Ordinal));
     }
 }

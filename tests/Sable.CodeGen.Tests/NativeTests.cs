@@ -17,7 +17,7 @@ public sealed class NativeTests {
     sealed record Execution(string Stdout, string Stderr, int ExitCode);
 
     static Execution BuildAndRun(string source, bool optimise = true) {
-        var result = Pipeline.Compile(new SourceText(source, "test.sab"));
+        var result = Pipeline.Compile(new SourceText(source, "test.sb"));
         Assert.True(result.Succeeded, string.Join("\n", result.Errors));
 
         var executable = Path.Combine(Path.GetTempPath(), $"sable-test-{Guid.NewGuid():N}");
@@ -38,7 +38,7 @@ public sealed class NativeTests {
 
     /// <summary>What the interpreter prints for the same program, and whether it trapped.</summary>
     static (string Output, string? Trap) Interpret(string source) {
-        var result = Pipeline.Compile(new SourceText(source, "test.sab"));
+        var result = Pipeline.Compile(new SourceText(source, "test.sb"));
         var interpreter = new SilInterpreter(result.Sil!);
         try {
             interpreter.Run(result.Sil!.EntryPoint!);
@@ -349,7 +349,7 @@ public sealed class NativeTests {
         }
 
         // docs/04 §2.5: under 400 KB stripped.
-        var result = Pipeline.Compile(new SourceText("module H\n@main\nfn main() { print(\"hi\") }\n", "h.sab"));
+        var result = Pipeline.Compile(new SourceText("module H\n@main\nfn main() { print(\"hi\") }\n", "h.sb"));
         var executable = Path.Combine(Path.GetTempPath(), $"sable-test-{Guid.NewGuid():N}");
         try {
             Assert.True(NativeBuild.Build(result.LlvmIr!, executable).Succeeded);

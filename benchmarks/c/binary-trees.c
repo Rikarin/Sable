@@ -1,4 +1,4 @@
-// Manually-managed port of benchmarks/binary-trees.sab (see README.md).
+// Manually-managed port of benchmarks/binary-trees.sb (see README.md).
 //
 // One malloc per Node, as one Sable class instance is one heap object; each
 // tree is freed when the Sable program lets it go (right after check), the

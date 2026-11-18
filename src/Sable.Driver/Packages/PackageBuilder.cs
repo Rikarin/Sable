@@ -65,7 +65,7 @@ public static class PackageBuilder {
         var extra = new[] { "tests", "benches" }
             .Select(d => Path.Combine(own.Package.Directory, d))
             .Where(Directory.Exists)
-            .SelectMany(static d => Directory.GetFiles(d, "*.sab", SearchOption.AllDirectories))
+            .SelectMany(static d => Directory.GetFiles(d, "*.sb", SearchOption.AllDirectories))
             .Select(Path.GetFullPath)
             .Order(StringComparer.Ordinal)
             .Select(file => Parse(graph, own, file))
@@ -243,7 +243,7 @@ public static class PackageBuilder {
     public static int Run(Workspace workspace, PackageEnvironment environment, BuildRequest request, IReadOnlyList<string> arguments) {
         var candidates = Selected(workspace, request.Package).SelectMany(m => m.Bins.Select(b => (m, b))).Where(c => request.Bin is null || c.b.Name == request.Bin).ToList();
         if (candidates.Count == 0) {
-            throw new PackageException(request.Bin is null ? "there is no binary to run: a package needs src/main.sab or a [[bin]]" : $"no binary called '{request.Bin}'");
+            throw new PackageException(request.Bin is null ? "there is no binary to run: a package needs src/main.sb or a [[bin]]" : $"no binary called '{request.Bin}'");
         }
 
         if (candidates.Count > 1) {

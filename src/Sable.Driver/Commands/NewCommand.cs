@@ -10,8 +10,8 @@ public sealed class NewCommand : PackageCommand {
     public override string Usage => """
         usage: sable new <name> [--lib|--bin]
 
-          --bin    a program, src/main.sab (the default)
-          --lib    a library, src/lib.sab
+          --bin    a program, src/main.sb (the default)
+          --lib    a library, src/lib.sb
         """;
 
     public override int Run(IReadOnlyList<string> arguments) {

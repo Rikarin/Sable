@@ -1,7 +1,7 @@
 namespace Sable.SIL.Tests;
 
 /// <summary>
-///     The array family's members, declared in Sable (lib/Sable.Core/Array.sab)
+///     The array family's members, declared in Sable (lib/Sable.Core/Array.sb)
 ///     by array extensions: the <c>@builtin</c>s in place at each use, as
 ///     the compiler's own lowering was; the rest monomorphised per element
 ///     type, as any generic is; both run by the interpreter.

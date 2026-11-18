@@ -10,7 +10,7 @@ The generator reads `pages/*.md`, pours each into `template.html`, and
 writes the index and a page of tags. Run it as:
 
 ```sh
-sable run examples/ssg/ssg.sab -- examples/ssg/site out
+sable run examples/ssg/ssg.sb -- examples/ssg/site out
 ```
 
 ## The Markdown it reads

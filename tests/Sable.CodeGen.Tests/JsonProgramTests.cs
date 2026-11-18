@@ -10,7 +10,7 @@ namespace Sable.CodeGen.Tests;
 public sealed class JsonProgramTests {
     [Fact]
     public void TheJsonProgramPassesItsOwnTests() {
-        var source = File.ReadAllText(Path.Combine(Root, "tests/programs/json.sab"));
+        var source = File.ReadAllText(Path.Combine(Root, "tests/programs/json.sb"));
         Assert.True(source.Split('\n').Length >= 2000, "the exit program is meant to be 2,000 lines");
 
         var execution = AssertAgree(source, stepLimit: 50_000_000);
@@ -24,7 +24,7 @@ public sealed class JsonProgramTests {
     /// </summary>
     [Fact]
     public void TheSuitePassesAgainstSableSerialize() {
-        var lines = File.ReadAllLines(Path.Combine(Root, "tests/programs/json.sab"));
+        var lines = File.ReadAllLines(Path.Combine(Root, "tests/programs/json.sb"));
         int Section(string title) => Array.FindIndex(lines, l => l == "// " + title) - 1;
         var helpers = lines[Section("Text utilities")..Section("Errors")];
         var suite = lines[Section("The test suite")..];

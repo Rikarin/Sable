@@ -24,7 +24,7 @@ sable update [pkg]                 re-resolve within semver bounds
 sable tree                         print the resolved dependency graph
 sable publish [--dry-run]          publish to the registry
 sable clean                        remove the target directory
-sable bindgen <header.h>           generate .sabi from a C header
+sable bindgen <header.h>           generate .sbi from a C header
 sable repl                         interactive, backed by the const evaluator
 sable lsp                          language server (stdio)
 sable explain <S1234>              print the full documentation for a diagnostic
@@ -54,11 +54,11 @@ description = "A small forward renderer"
 repository  = "https://example.com/render-engine"
 
 [lib]
-path = "src/lib.sab"
+path = "src/lib.sb"
 
 [[bin]]
 name = "render"
-path = "src/main.sab"
+path = "src/main.sb"
 
 [dependencies]
 sable-math  = "1.2"
@@ -183,7 +183,7 @@ optimisation in the engine.
 The on-disk cache lives in `target/<profile>/cache`, keyed by
 `(toolchain, profile, target, fingerprint)`.
 
-### Separate compilation and `.sabi`
+### Separate compilation and `.sbi`
 
 Each module emits an interface file containing:
 
@@ -194,7 +194,7 @@ Each module emits an interface file containing:
 - Layout information for `@frozen` types
 - Conformance records
 
-`.sabi` is a binary format with a stable version header, designed so that a
+`.sbi` is a binary format with a stable version header, designed so that a
 change to a private implementation detail does not change the file, and
 therefore does not invalidate downstream modules.
 
@@ -214,7 +214,7 @@ from a compilation of the whole program and cached in
 `target/<profile>/cache` under `(toolchain, profile, target, fingerprint)`,
 where the fingerprint is the unit's content and the program's interface. The
 interface is a hash of each file's public surface — declarations,
-signatures and the bodies other units lower — not yet a `.sabi` file, and an
+signatures and the bodies other units lower — not yet a `.sbi` file, and an
 interface change invalidates every unit rather than only the dependents.
 Clang runs on units in parallel; lowering is still one unit at a time.
 
@@ -234,12 +234,12 @@ Clang runs on units in parallel; lowering is still one unit at a time.
 
 ## 5.6 Build scripts
 
-`build.sab` runs before the package compiles, for code generation and native
+`build.sb` runs before the package compiles, for code generation and native
 library discovery. It is sandboxed by default and declares what it needs:
 
 ```toml
 [build]
-script       = "build.sab"
+script       = "build.sb"
 allow-net    = false
 allow-exec   = ["pkg-config", "glslc"]
 allow-read   = ["$OUT_DIR", "shaders/"]

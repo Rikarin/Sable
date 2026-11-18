@@ -42,7 +42,7 @@ public sealed class ExclusivityTests {
                                 """;
 
     static IReadOnlyList<string> Errors(string body) =>
-        Pipeline.Compile(new SourceText(Program(Declarations, body), "test.sab")).Errors;
+        Pipeline.Compile(new SourceText(Program(Declarations, body), "test.sb")).Errors;
 
     [Theory]
     [InlineData("var p = Pair { a: 1, b: 2 }\nbump(&p.a, &p.a)", "overlapping accesses to 'p.a'")]
@@ -92,7 +92,7 @@ public sealed class ExclusivityTests {
 
     [Fact]
     public void AReleaseBuildDropsTheDynamicChecks() {
-        var source = new SourceText(Program(Declarations, "    let box = Box(1)\n    both(box, box)"), "test.sab");
+        var source = new SourceText(Program(Declarations, "    let box = Box(1)\n    both(box, box)"), "test.sb");
         Assert.Contains("call void @sable_access_begin(", Pipeline.Compile(source).LlvmIr!, StringComparison.Ordinal);
         Assert.DoesNotContain("call void @sable_access_begin(", Pipeline.Compile(source, checkExclusivity: false).LlvmIr!, StringComparison.Ordinal);
     }

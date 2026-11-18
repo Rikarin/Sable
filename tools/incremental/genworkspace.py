@@ -118,10 +118,10 @@ def package_sources(p: int, deps: list[int], units: int, files: int) -> dict[str
     for f in range(files):
         body = "".join(unit(p, u) for u in range(f * per_file, min(units, (f + 1) * per_file)))
         if body:
-            sources[f"src/part{f}.sab"] = f"module {module}\n\n{imports}{body}"
+            sources[f"src/part{f}.sb"] = f"module {module}\n\n{imports}{body}"
     calls = "\n".join(f"    total = total + run{p}_{u}(seed + {u})" for u in range(units))
     dep_calls = "\n".join(f"    total = total + run{d}_0(seed)" for d in deps)
-    sources["src/lib.sab"] = f"""module {module}
+    sources["src/lib.sb"] = f"""module {module}
 
 {imports}
 /// Package {p}'s answer for a seed: its units', and a little of each dependency's.
@@ -170,7 +170,7 @@ def main() -> None:
     write(f"{root}/app/sable.toml", f'[package]\nname = "app"\nversion = "0.1.0"\n\n[dependencies]\n{app_deps}')
     imports = "".join(f"import Pkg{p}\n" for p in range(args.packages))
     calls = "\n".join(f"    total = total + pkg{p}Value({p})" for p in range(args.packages))
-    write(f"{root}/app/src/main.sab", f"""module App
+    write(f"{root}/app/src/main.sb", f"""module App
 
 import Sable.IO
 {imports}

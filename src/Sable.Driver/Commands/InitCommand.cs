@@ -10,8 +10,8 @@ public sealed class InitCommand : PackageCommand {
     public override string Usage => """
         usage: sable init [--lib|--bin] [--name <name>]
 
-          --bin           a program, src/main.sab (the default)
-          --lib           a library, src/lib.sab
+          --bin           a program, src/main.sb (the default)
+          --lib           a library, src/lib.sb
           --name <name>   the package's name (default: the directory's)
         """;
 

@@ -32,10 +32,10 @@ public sealed class FmtCommandTests : IDisposable {
 
     [Fact]
     public void FormatsADirectoryInPlaceSkippingTargetAndHiddenDirectories() {
-        var messy = Write("src/main.sab", "module M\nfn f(){let x=1\nlet y=x}");
-        var tidy = Write("src/tidy.sab", "module M\n\nfn g() { }\n");
-        var built = Write("target/gen.sab", "module M\nfn f(){}");
-        var hidden = Write(".cache/x.sab", "module M\nfn f(){}");
+        var messy = Write("src/main.sb", "module M\nfn f(){let x=1\nlet y=x}");
+        var tidy = Write("src/tidy.sb", "module M\n\nfn g() { }\n");
+        var built = Write("target/gen.sb", "module M\nfn f(){}");
+        var hidden = Write(".cache/x.sb", "module M\nfn f(){}");
         var other = Write("notes.txt", "fn f(){}");
 
         var (exit, _, errors) = Run(_root);
@@ -51,8 +51,8 @@ public sealed class FmtCommandTests : IDisposable {
 
     [Fact]
     public void CheckListsUnformattedFilesAndChangesNothing() {
-        var messy = Write("a.sab", "module M\nfn f(){}");
-        Write("b.sab", "module M\n\nfn g() { }\n");
+        var messy = Write("a.sb", "module M\nfn f(){}");
+        Write("b.sb", "module M\n\nfn g() { }\n");
 
         var (exit, output, _) = Run("--check", _root);
 
@@ -66,8 +66,8 @@ public sealed class FmtCommandTests : IDisposable {
 
     [Fact]
     public void RefusesAFileWithSyntaxErrors() {
-        var broken = Write("broken.sab", "module M\nfn f( {");
-        var messy = Write("fine.sab", "module M\nfn f(){}");
+        var broken = Write("broken.sb", "module M\nfn f( {");
+        var messy = Write("fine.sb", "module M\nfn f(){}");
 
         var (exit, _, errors) = Run(_root);
 
@@ -79,9 +79,9 @@ public sealed class FmtCommandTests : IDisposable {
 
     [Fact]
     public void AFileNamedDirectlyIsFormattedAndAMissingOneIsAnError() {
-        var file = Write("one.sab", "module M\nfn f(){}");
+        var file = Write("one.sb", "module M\nfn f(){}");
         Assert.Equal(0, Run(file).Exit);
         Assert.Equal("module M\nfn f() { }\n", File.ReadAllText(file));
-        Assert.Equal(1, Run(Path.Combine(_root, "missing.sab")).Exit);
+        Assert.Equal(1, Run(Path.Combine(_root, "missing.sb")).Exit);
     }
 }

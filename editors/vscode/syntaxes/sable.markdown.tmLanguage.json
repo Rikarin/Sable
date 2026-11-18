@@ -5,7 +5,7 @@
   "patterns": [{ "include": "#sable-code-block" }],
   "repository": {
     "sable-code-block": {
-      "begin": "(^|\\G)(\\s*)(`{3,}|~{3,})\\s*(?i:(sable|sab)(\\s+[^`~]*)?$)",
+      "begin": "(^|\\G)(\\s*)(`{3,}|~{3,})\\s*(?i:(sable|sb)(\\s+[^`~]*)?$)",
       "beginCaptures": {
         "3": { "name": "punctuation.definition.markdown" },
         "4": { "name": "fenced_code.block.language.markdown" },

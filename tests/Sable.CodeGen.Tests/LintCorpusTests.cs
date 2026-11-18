@@ -24,7 +24,7 @@ public sealed class LintCorpusTests {
         get {
             var data = new TheoryData<string>();
             foreach (var directory in new[] { "tests/corpus", "examples", "tests/programs" }) {
-                foreach (var file in Directory.GetFiles(Path.Combine(Root, directory), "*.sab", SearchOption.AllDirectories).Order(StringComparer.Ordinal)) {
+                foreach (var file in Directory.GetFiles(Path.Combine(Root, directory), "*.sb", SearchOption.AllDirectories).Order(StringComparer.Ordinal)) {
                     data.Add(Path.GetRelativePath(Root, file));
                 }
             }
@@ -34,7 +34,7 @@ public sealed class LintCorpusTests {
     }
 
     static (Compilation Compilation, SyntaxTree Tree) Compile(string text) {
-        var tree = SyntaxTree.Parse(new SourceText(text, "program.sab"));
+        var tree = SyntaxTree.Parse(new SourceText(text, "program.sb"));
         return (Compilation.Create([tree, ..Library.For(tree)]), tree);
     }
 

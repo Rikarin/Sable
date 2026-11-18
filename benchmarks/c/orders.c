@@ -1,4 +1,4 @@
-// Manually-managed port of benchmarks/orders.sab (see README.md).
+// Manually-managed port of benchmarks/orders.sb (see README.md).
 //
 // The @inline_layout records are kept in exactly Sable's byte layout
 // (docs/02 §2.5): the fixed-size fields first, packed, then each

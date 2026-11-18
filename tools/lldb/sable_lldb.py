@@ -4,7 +4,7 @@ Load it into lldb with
 
     (lldb) command script import tools/lldb/sable_lldb.py
 
-or put that line in ~/.lldbinit. `sable debug <file.sab>` loads it for you,
+or put that line in ~/.lldbinit. `sable debug <file.sb>` loads it for you,
 and on macOS `sable build -g` copies it into the program's .dSYM, where lldb
 finds it once `settings set target.load-script-from-symbol-file true` is set.
 

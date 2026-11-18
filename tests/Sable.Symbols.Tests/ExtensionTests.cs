@@ -148,7 +148,7 @@ public sealed class ExtensionTests {
                         module Types
                         public struct Point { public var x: Int }
                         """,
-                        "types.sab"
+                        "types.sb"
                     )
                 ),
                 SyntaxTree.Parse(
@@ -157,10 +157,10 @@ public sealed class ExtensionTests {
                         module Protocols
                         public protocol Named { fn name() -> String }
                         """,
-                        "protocols.sab"
+                        "protocols.sb"
                     )
                 ),
-                SyntaxTree.Parse(new(third, "third.sab"))
+                SyntaxTree.Parse(new(third, "third.sb"))
             ]
         );
 

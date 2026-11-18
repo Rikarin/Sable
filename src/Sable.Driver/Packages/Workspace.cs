@@ -17,15 +17,15 @@ public sealed class LocalPackage {
 
     public string ManifestPath => Path.Combine(Directory, Workspace.ManifestName);
 
-    /// <summary>The library's root file: <c>[lib] path</c>, else <c>src/lib.sab</c> when there is one.</summary>
+    /// <summary>The library's root file: <c>[lib] path</c>, else <c>src/lib.sb</c> when there is one.</summary>
     public string? LibraryFile =>
         Manifest.LibPath is { } path ? Path.GetFullPath(Path.Combine(Directory, path))
-        : File.Exists(Path.Combine(Directory, "src", "lib.sab")) ? Path.Combine(Directory, "src", "lib.sab")
+        : File.Exists(Path.Combine(Directory, "src", "lib.sb")) ? Path.Combine(Directory, "src", "lib.sb")
         : null;
 
     /// <summary>
-    ///     The binaries: the <c>[[bin]]</c> tables, else <c>src/main.sab</c>
-    ///     (named for the package) and each <c>src/bin/*.sab</c>.
+    ///     The binaries: the <c>[[bin]]</c> tables, else <c>src/main.sb</c>
+    ///     (named for the package) and each <c>src/bin/*.sb</c>.
     /// </summary>
     public IReadOnlyList<BinTarget> Bins {
         get {
@@ -34,14 +34,14 @@ public sealed class LocalPackage {
             }
 
             var bins = new List<BinTarget>();
-            var main = Path.Combine(Directory, "src", "main.sab");
+            var main = Path.Combine(Directory, "src", "main.sb");
             if (File.Exists(main)) {
                 bins.Add(new(BinaryName(Name), main));
             }
 
             var binDirectory = Path.Combine(Directory, "src", "bin");
             if (System.IO.Directory.Exists(binDirectory)) {
-                bins.AddRange(System.IO.Directory.GetFiles(binDirectory, "*.sab").Order(StringComparer.Ordinal)
+                bins.AddRange(System.IO.Directory.GetFiles(binDirectory, "*.sb").Order(StringComparer.Ordinal)
                     .Select(static f => new BinTarget(Path.GetFileNameWithoutExtension(f), f)));
             }
 
@@ -53,14 +53,14 @@ public sealed class LocalPackage {
     public static string BinaryName(string package) => package[(package.LastIndexOf('/') + 1)..];
 
     /// <summary>
-    ///     The library's files: every <c>.sab</c> under <c>src/</c> but the
+    ///     The library's files: every <c>.sb</c> under <c>src/</c> but the
     ///     binaries' entry files and <c>src/bin/</c>, sorted, so a package of
     ///     many files is compiled the same way every time.
     /// </summary>
     public IReadOnlyList<string> LibrarySources() {
         var source = Path.Combine(Directory, "src");
         var files = System.IO.Directory.Exists(source)
-            ? System.IO.Directory.GetFiles(source, "*.sab", SearchOption.AllDirectories).Select(Path.GetFullPath).ToList()
+            ? System.IO.Directory.GetFiles(source, "*.sb", SearchOption.AllDirectories).Select(Path.GetFullPath).ToList()
             : [];
         if (LibraryFile is { } library && !files.Contains(library) && File.Exists(library)) {
             files.Add(library);

@@ -1,7 +1,7 @@
 // @ts-check
 // The grammar, run by the same TextMate engine VS Code runs: each line of
 // a sample is tokenised, and what a token's scopes should include is checked.
-// Then every .sab file in the repository is tokenised, to show that none
+// Then every .sb file in the repository is tokenised, to show that none
 // throws the engine off (an unclosed string swallowing the rest of a file).
 "use strict";
 
@@ -163,7 +163,7 @@ function* walk(directory) {
     const full = path.join(directory, entry.name);
     if (entry.isDirectory()) {
       yield* walk(full);
-    } else if (entry.name.endsWith(".sab")) {
+    } else if (entry.name.endsWith(".sb")) {
       yield full;
     }
   }

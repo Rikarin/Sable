@@ -1,4 +1,4 @@
-// Manually-managed port of benchmarks/nbody.sab (see README.md).
+// Manually-managed port of benchmarks/nbody.sb (see README.md).
 //
 // The bodies are a growable array — a header and an element buffer, built
 // by appending as Sable's array literal is — indexed with bounds checks.

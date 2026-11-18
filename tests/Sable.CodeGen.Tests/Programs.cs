@@ -18,7 +18,7 @@ internal static class Programs {
         IReadOnlyList<string>? arguments = null,
         IReadOnlyDictionary<string, string>? environment = null
     ) {
-        var result = Pipeline.Compile(new SourceText(source, "test.sab"));
+        var result = Pipeline.Compile(new SourceText(source, "test.sb"));
         Assert.True(result.Succeeded, string.Join("\n", result.Errors));
 
         var executable = Path.Combine(Path.GetTempPath(), $"sable-test-{Guid.NewGuid():N}");
@@ -60,7 +60,7 @@ internal static class Programs {
 
     /// <summary>Interpreted, with standard input and arguments given and standard error kept.</summary>
     static (string Output, string Errors, string? Trap) Interpret(string source, int stepLimit, string input, IReadOnlyList<string> arguments) {
-        var result = Pipeline.Compile(new SourceText(source, "test.sab"));
+        var result = Pipeline.Compile(new SourceText(source, "test.sb"));
         Assert.True(result.Succeeded, string.Join("\n", result.Errors));
         var interpreter = new SilInterpreter(result.Sil!, stepLimit) { Input = new StringReader(input), Arguments = arguments };
         try {

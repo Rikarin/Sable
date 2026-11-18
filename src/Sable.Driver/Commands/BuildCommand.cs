@@ -6,7 +6,7 @@ using Sable.Syntax;
 namespace Sable.Driver.Commands;
 
 /// <summary>
-///     <c>sable build &lt;file.sab&gt;</c>: one file to a native executable.
+///     <c>sable build &lt;file.sb&gt;</c>: one file to a native executable.
 ///     <see cref="RunCommand" /> shares it, and runs what it built.
 /// </summary>
 public class BuildCommand : Command {
@@ -15,7 +15,7 @@ public class BuildCommand : Command {
 
     public override string Usage => """
         usage: sable build [--release] [--features <a,b>] [-p <package>] [--bin <name>]
-               sable build <file.sab> [-o <output>] [--emit sil|llvm-ir] [-O0] [-g] [--exclusivity=checked|unchecked]
+               sable build <file.sb> [-o <output>] [--emit sil|llvm-ir] [-O0] [-g] [--exclusivity=checked|unchecked]
 
         Without a file, builds the package in this directory or the nearest above it (sable.toml).
 
@@ -154,14 +154,14 @@ public class BuildCommand : Command {
     }
 }
 
-/// <summary><c>sable run &lt;file.sab&gt;</c>: build to a temporary executable, run it, and exit with its code.</summary>
+/// <summary><c>sable run &lt;file.sb&gt;</c>: build to a temporary executable, run it, and exit with its code.</summary>
 public sealed class RunCommand : BuildCommand {
     public override string Name => "run";
     public override string Summary => "compile and run, exiting with the program's exit code";
 
     public override string Usage => """
         usage: sable run [--release] [--features <a,b>] [-p <package>] [--bin <name>] [-- <arguments>]
-               sable run <file.sab> [-O0] [-g] [--exclusivity=checked|unchecked] [-- <arguments>]
+               sable run <file.sb> [-O0] [-g] [--exclusivity=checked|unchecked] [-- <arguments>]
 
         Without a file, builds and runs the package's binary (see 'sable build --help').
 

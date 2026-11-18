@@ -156,7 +156,7 @@ public sealed partial class DocTests {
             }
             """;
 
-        var set = DocCommand.ForSources([SyntaxTree.Parse(new SourceText(source, "shop.sab"))], out var errors);
+        var set = DocCommand.ForSources([SyntaxTree.Parse(new SourceText(source, "shop.sb"))], out var errors);
         Assert.Empty(errors);
         Assert.NotNull(set);
 
@@ -181,7 +181,7 @@ public sealed partial class DocTests {
 
     [Fact]
     public void AProgramThatDoesNotCompileIsNotDocumented() {
-        var set = DocCommand.ForSources([SyntaxTree.Parse(new SourceText("module M\npublic fn f() -> Int { return \"no\" }\n", "m.sab"))], out var errors);
+        var set = DocCommand.ForSources([SyntaxTree.Parse(new SourceText("module M\npublic fn f() -> Int { return \"no\" }\n", "m.sb"))], out var errors);
         Assert.Null(set);
         Assert.Contains(errors, static e => e.Contains("S3004", StringComparison.Ordinal));
     }

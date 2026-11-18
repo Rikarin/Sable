@@ -21,11 +21,11 @@ public sealed class ManifestTests {
             repository  = "https://example.com/render-engine"
 
             [lib]
-            path = "src/lib.sab"
+            path = "src/lib.sb"
 
             [[bin]]
             name = "render"
-            path = "src/main.sab"
+            path = "src/main.sb"
 
             [dependencies]
             sable-math  = "1.2"
@@ -75,8 +75,8 @@ public sealed class ManifestTests {
         Assert.Equal(SemVersion.Parse("0.4.2"), package.Version);
         Assert.Equal("2027", package.Edition);
         Assert.Equal(["A. Person"], package.Authors);
-        Assert.Equal("src/lib.sab", manifest.LibPath);
-        Assert.Equal([new BinTarget("render", "src/main.sab")], manifest.Bins);
+        Assert.Equal("src/lib.sb", manifest.LibPath);
+        Assert.Equal([new BinTarget("render", "src/main.sb")], manifest.Bins);
 
         var image = manifest.Dependencies.Single(static d => d.Name == "image");
         Assert.Equal("0.6", image.Version!.Text);
@@ -192,8 +192,8 @@ public sealed class ManifestTests {
 
     [Fact]
     public void BuildScriptsAreReadButNotRun() {
-        var manifest = Parse("[package]\nname = \"a\"\nversion = \"1.0.0\"\n[build]\nscript = \"build.sab\"\nallow-exec = [\"pkg-config\"]\n");
-        Assert.Equal("build.sab", manifest.Build!.Script);
+        var manifest = Parse("[package]\nname = \"a\"\nversion = \"1.0.0\"\n[build]\nscript = \"build.sb\"\nallow-exec = [\"pkg-config\"]\n");
+        Assert.Equal("build.sb", manifest.Build!.Script);
         Assert.Equal(["pkg-config"], manifest.Build.AllowExec);
         Assert.False(manifest.Build.AllowNet);
     }

@@ -68,13 +68,13 @@ public sealed class RegionTests {
 
     [Fact]
     public void AReferenceIntoAParameterRegionIsRootedThere() {
-        var result = Pipeline.Compile(new SourceText(Program(Declarations, ""), "test.sab"));
+        var result = Pipeline.Compile(new SourceText(Program(Declarations, ""), "test.sb"));
         Assert.True(result.Succeeded, string.Join("\n", result.Errors));
         Assert.Equal([0], result.Sil!.Find("Test.build")!.ResultRoots);
     }
 
     static void Rejects(string declarations, string body, string message) {
-        var result = Pipeline.Compile(new SourceText(Program(Declarations + "\n" + declarations, body), "test.sab"));
+        var result = Pipeline.Compile(new SourceText(Program(Declarations + "\n" + declarations, body), "test.sb"));
         Assert.False(result.Succeeded, "expected the program to be rejected");
         Assert.Contains(result.Errors, e => e.Contains(message, StringComparison.Ordinal));
     }

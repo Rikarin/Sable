@@ -1,7 +1,7 @@
 module CollectionsTests
 
 // Sable.Collections, tested with '@test': run with
-//     sable test tests/lib/CollectionsTests.sab
+//     sable test tests/lib/CollectionsTests.sb
 // TextLibraryTests and CollectionLibraryTests check the same library from
 // C#; these are the same kind of checks, written the way a Sable package
 // tests itself.

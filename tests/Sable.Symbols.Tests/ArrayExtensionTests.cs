@@ -3,7 +3,7 @@ namespace Sable.Symbols.Tests;
 /// <summary>
 ///     <c>extension&lt;Element&gt; Element[&gt;..] { … }</c>: members for every
 ///     array of a kind (Compilation.ArrayExtensions.cs), which is how
-///     lib/Sable.Core/Array.sab declares the array family's.
+///     lib/Sable.Core/Array.sb declares the array family's.
 /// </summary>
 public sealed class ArrayExtensionTests {
     static Compilation Compile(string source) => Compilation.Create("module M\n" + source);

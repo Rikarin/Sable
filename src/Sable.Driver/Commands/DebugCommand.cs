@@ -5,7 +5,7 @@ using Sable.Syntax;
 namespace Sable.Driver.Commands;
 
 /// <summary>
-///     <c>sable debug &lt;file.sab&gt;</c>: build with debug information and
+///     <c>sable debug &lt;file.sb&gt;</c>: build with debug information and
 ///     start lldb on the program, with the Sable formatters loaded
 ///     (docs/04 Phase 5), so that a <c>String</c> shows its text, a list its
 ///     elements, a union its case.
@@ -13,14 +13,14 @@ namespace Sable.Driver.Commands;
 /// <remarks>
 ///     lldb is <c>$LLDB</c> when it is set, otherwise <c>lldb</c> on the path.
 ///     <c>--batch</c> and <c>-o</c> are handed to it, for scripts and tests:
-///     <c>sable debug x.sab --batch -o "b x.sab:3" -o run -o "frame variable"</c>.
+///     <c>sable debug x.sb --batch -o "b x.sb:3" -o run -o "frame variable"</c>.
 /// </remarks>
 public sealed class DebugCommand : Command {
     public override string Name => "debug";
     public override string Summary => "build with debug information and run it under lldb, with Sable's formatters";
 
     public override string Usage => """
-        usage: sable debug <file.sab> [--batch] [-o <lldb command>]... [-- <arguments>]
+        usage: sable debug <file.sb> [--batch] [-o <lldb command>]... [-- <arguments>]
                sable debug --write-plugin <path.py>
 
           --batch            have lldb run the -o commands and exit, as 'lldb --batch' does

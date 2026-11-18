@@ -55,10 +55,10 @@ public sealed class DebuggerTests {
 
         var directory = Directory.CreateTempSubdirectory("sable-debug-");
         try {
-            var sourcePath = Path.Combine(directory.FullName, "debug.sab");
+            var sourcePath = Path.Combine(directory.FullName, "debug.sb");
             File.WriteAllText(sourcePath, Source);
 
-            var result = Pipeline.Compile(new SourceText(Source, "debug.sab"), directory.FullName);
+            var result = Pipeline.Compile(new SourceText(Source, "debug.sb"), directory.FullName);
             Assert.True(result.Succeeded, string.Join("\n", result.Errors));
 
             var executable = Path.Combine(directory.FullName, "debug");
@@ -68,7 +68,7 @@ public sealed class DebuggerTests {
             var start = new ProcessStartInfo("lldb") { RedirectStandardOutput = true, RedirectStandardError = true };
             foreach (var argument in new[] {
                          "--batch",
-                         "-o", "breakpoint set --file debug.sab --line 13",
+                         "-o", "breakpoint set --file debug.sb --line 13",
                          "-o", "run",
                          "-o", "bt",
                          "-o", "frame variable",
@@ -88,8 +88,8 @@ public sealed class DebuggerTests {
             var text = await output;
 
             // The frames: where it stopped, with its arguments, and its caller.
-            Assert.Contains("gcd(a=1071, b=462) at debug.sab:13", text, StringComparison.Ordinal);
-            Assert.Contains("main at debug.sab:24", text, StringComparison.Ordinal);
+            Assert.Contains("gcd(a=1071, b=462) at debug.sb:13", text, StringComparison.Ordinal);
+            Assert.Contains("main at debug.sb:24", text, StringComparison.Ordinal);
 
             // The locals, with Sable's names for their types.
             Assert.Contains("(Int) t = 147", text, StringComparison.Ordinal);

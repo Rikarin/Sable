@@ -5,7 +5,7 @@ module Sable.Serialize
 // and column, compact, pretty and canonical printing, JSON Pointer (RFC 6901),
 // Merge Patch (RFC 7386), comparing, measuring and transforming documents.
 //
-// It began as docs/04 §2.5's exit program (tests/programs/json.sab), whose
+// It began as docs/04 §2.5's exit program (tests/programs/json.sb), whose
 // own suite runs against this module too. Its text helpers stay internal, so
 // that importing it alongside Sable.Text or Sable.Collections clashes with
 // neither.

@@ -4,7 +4,7 @@
 
 using Sable.Syntax; using Sable.Symbols; using Sable.SIL; using Sable.Driver;
 var root = args.Length > 0 ? args[0] : Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../.."));
-foreach (var file in new[] { "tests/corpus", "examples" }.SelectMany(d => Directory.GetFiles(Path.Combine(root, d), "*.sab")).Order()) {
+foreach (var file in new[] { "tests/corpus", "examples" }.SelectMany(d => Directory.GetFiles(Path.Combine(root, d), "*.sb")).Order()) {
     var tree = SyntaxTree.Parse(new SourceText(File.ReadAllText(file), Path.GetFileName(file)));
     var compilation = Compilation.Create([tree, ..Library.For(tree)]);
     foreach (var d in compilation.GetAllDiagnosticsByFile().Where(d => d.Tree == tree && d.Diagnostic.Severity == DiagnosticSeverity.Error))

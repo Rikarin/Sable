@@ -10,7 +10,7 @@ namespace Sable.Driver.Build;
 ///     field, initial value and generic body — and nothing that only its own
 ///     unit's code depends on: the bodies of ordinary functions. A change to
 ///     such a body leaves the fingerprint as it was, so that other units'
-///     objects stay valid (docs/05 §5.4's <c>.sabi</c>, as a hash rather than
+///     objects stay valid (docs/05 §5.4's <c>.sbi</c>, as a hash rather than
 ///     a file).
 /// </summary>
 /// <remarks>

@@ -1,4 +1,4 @@
-// Manually-managed port of benchmarks/words.sab (see README.md).
+// Manually-managed port of benchmarks/words.sb (see README.md).
 //
 // Strings are one heap object each (literals static); arrays are a header
 // and an element buffer (two mallocs; the empty array is NULL), growing 4,

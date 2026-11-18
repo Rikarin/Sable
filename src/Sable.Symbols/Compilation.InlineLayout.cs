@@ -8,7 +8,7 @@ namespace Sable.Symbols;
 /// </summary>
 /// <remarks>
 ///     <para>
-///         The protocol is Sable (<c>lib/Sable.Core/InlineLayout.sab</c>):
+///         The protocol is Sable (<c>lib/Sable.Core/InlineLayout.sb</c>):
 ///         <c>static fn fromBytes(_ bytes: U8[&gt;..]) -&gt; Decoded&lt;Self&gt;</c>,
 ///         beside <c>Decoded</c> and <c>Bytes.of&lt;T: InlineLayout&gt;</c>.
 ///         The conformance is synthesised, as <c>@derive</c>'s are: once every

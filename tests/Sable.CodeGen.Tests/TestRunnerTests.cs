@@ -79,8 +79,8 @@ public sealed class TestRunnerTests {
         Assert.Contains("test Suite.afterTheTrap ... ok (", run.Stdout, StringComparison.Ordinal);
         Assert.DoesNotContain("the program's own main", run.Stdout, StringComparison.Ordinal);
 
-        Assert.Contains("---- Suite.outOfRange (test.sab:22) ----\n    fatal error: array index out of range\n    (exit status 134)\n", run.Stdout, StringComparison.Ordinal);
-        Assert.Contains("---- Suite.throwing (test.sab:28) ----\n    assertion failed: the test threw an error\n", run.Stdout, StringComparison.Ordinal);
+        Assert.Contains("---- Suite.outOfRange (test.sb:22) ----\n    fatal error: array index out of range\n    (exit status 134)\n", run.Stdout, StringComparison.Ordinal);
+        Assert.Contains("---- Suite.throwing (test.sb:28) ----\n    assertion failed: the test threw an error\n", run.Stdout, StringComparison.Ordinal);
         Assert.Contains("failed:\n    Suite.wrongAnswer\n    Suite.outOfRange\n    Suite.throwing\n", run.Stdout, StringComparison.Ordinal);
         Assert.Matches(@"\ntest result: FAILED\. 3 passed; 3 failed; 0 filtered out; finished in [0-9.]+ (µs|ms|s)\n$", run.Stdout);
     }
@@ -94,7 +94,7 @@ public sealed class TestRunnerTests {
         var run = Native(Suite, arguments: ["wrongAnswer"]);
         Assert.Contains(
             """
-            ---- Suite.wrongAnswer (test.sab:16) ----
+            ---- Suite.wrongAnswer (test.sb:16) ----
             stdout:
                 this output is shown, as the test failed
                 assertion failed: the values differ
@@ -132,10 +132,10 @@ public sealed class TestRunnerTests {
         Assert.Equal(0, list.ExitCode);
         Assert.Equal(
             """
-            Suite.doubling: test (test.sab:10)
-            Suite.wrongAnswer: test (test.sab:16)
-            Suite.outOfRange: test (test.sab:22)
-            Suite.throwing: test (test.sab:28)
+            Suite.doubling: test (test.sb:10)
+            Suite.wrongAnswer: test (test.sb:16)
+            Suite.outOfRange: test (test.sb:22)
+            Suite.throwing: test (test.sb:28)
             4 tests
 
             """,
@@ -143,7 +143,7 @@ public sealed class TestRunnerTests {
         );
 
         var exact = Native(Suite, arguments: ["--list", "--exact", "Suite.doubling", "Suite.Checks"]);
-        Assert.Equal("Suite.doubling: test (test.sab:10)\n1 test\n", exact.Stdout);
+        Assert.Equal("Suite.doubling: test (test.sb:10)\n1 test\n", exact.Stdout);
 
         var none = Native(Suite, arguments: ["nothing matches this"]);
         Assert.Equal(0, none.ExitCode);
@@ -260,9 +260,9 @@ public sealed class TestRunnerTests {
         }
 
         var run = Native([
-            new SourceText("module First\nimport Sable.Testing\n@test\nfn one() { assert(true) }\nfn helper() -> Int { return 7 }\n", "first.sab"),
-            new SourceText("module Second\nimport Sable.Testing\nimport First\n@test\nfn two() { assertEqual(helperValue(), 7) }\n", "second.sab"),
-            new SourceText("module First\nimport Sable.Testing\npublic fn helperValue() -> Int { return helper() }\n@test\nfn three() { assertEqual(helper(), 7) }\n", "third.sab"),
+            new SourceText("module First\nimport Sable.Testing\n@test\nfn one() { assert(true) }\nfn helper() -> Int { return 7 }\n", "first.sb"),
+            new SourceText("module Second\nimport Sable.Testing\nimport First\n@test\nfn two() { assertEqual(helperValue(), 7) }\n", "second.sb"),
+            new SourceText("module First\nimport Sable.Testing\npublic fn helperValue() -> Int { return helper() }\n@test\nfn three() { assertEqual(helper(), 7) }\n", "third.sb"),
         ]);
         Assert.Equal(0, run.ExitCode);
         Assert.Contains("test First.one ... ok", run.Stdout, StringComparison.Ordinal);
@@ -303,7 +303,7 @@ public sealed class TestRunnerTests {
 
     [Fact]
     public void AnOrdinaryBuildIgnoresTheTests() {
-        var result = Pipeline.Compile(new SourceText(Suite, "test.sab"));
+        var result = Pipeline.Compile(new SourceText(Suite, "test.sb"));
         Assert.True(result.Succeeded, string.Join("\n", result.Errors));
         Assert.Equal("Suite.main", result.Sil!.EntryPoint);
         Assert.Contains("the program's own main", Programs.AssertAgree(Suite).Stdout, StringComparison.Ordinal);
@@ -312,8 +312,8 @@ public sealed class TestRunnerTests {
     [Fact]
     public void TheHarnessIsWrittenInSable() {
         var tests = Compilation.Create([
-            SyntaxTree.Parse(new SourceText(Suite, "test.sab")),
-            ..Library.For(SyntaxTree.Parse(new SourceText(Suite, "test.sab"))),
+            SyntaxTree.Parse(new SourceText(Suite, "test.sb")),
+            ..Library.For(SyntaxTree.Parse(new SourceText(Suite, "test.sb"))),
         ]).GetTestFunctions(TestKind.Test);
         Assert.Equal(
             ["Suite.doubling", "Suite.wrongAnswer", "Suite.outOfRange", "Suite.throwing", "Suite.Checks.inAType", "Suite.afterTheTrap"],
@@ -330,7 +330,7 @@ public sealed class TestRunnerTests {
         var main = files[1].Text.Text;
         Assert.Contains($"module {TestHarness.HarnessModule}\n", main, StringComparison.Ordinal);
         Assert.Contains("import Suite.{ sableHarnessList0 }", main, StringComparison.Ordinal);
-        Assert.Contains("all.append(TestCase { name: \"Suite.doubling\", location: \"test.sab:10\", run: list0[0] })", main, StringComparison.Ordinal);
+        Assert.Contains("all.append(TestCase { name: \"Suite.doubling\", location: \"test.sb:10\", run: list0[0] })", main, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -341,7 +341,7 @@ public sealed class TestRunnerTests {
 
         var directory = Directory.CreateTempSubdirectory("sable-test-command-");
         try {
-            var file = Path.Combine(directory.FullName, "suite.sab");
+            var file = Path.Combine(directory.FullName, "suite.sb");
             File.WriteAllText(file, Suite);
             var test = Command.Find("test")!;
             Assert.Equal(0, test.Run([file, "doubling"]));
@@ -349,10 +349,10 @@ public sealed class TestRunnerTests {
             Assert.Equal(0, test.Run([file, "--list"]));
             Assert.Equal(2, test.Run([file, "--no-such-option"]));
 
-            var broken = Path.Combine(directory.FullName, "broken.sab");
+            var broken = Path.Combine(directory.FullName, "broken.sb");
             File.WriteAllText(broken, "module Broken\nimport Sable.Testing\n@test\nfn takes(_ n: Int) { }\n");
             Assert.Equal(1, test.Run([broken]));
-            Assert.Equal(1, test.Run([Path.Combine(directory.FullName, "missing.sab")]));
+            Assert.Equal(1, test.Run([Path.Combine(directory.FullName, "missing.sb")]));
             Assert.Equal(1, test.Run([]));
         } finally {
             directory.Delete(true);
@@ -365,7 +365,7 @@ public sealed class TestRunnerTests {
             return;
         }
 
-        foreach (var name in new[] { "CollectionsTests.sab", "TextTests.sab" }) {
+        foreach (var name in new[] { "CollectionsTests.sb", "TextTests.sb" }) {
             var path = Path.Combine(Root, "tests/lib", name);
             var run = Native([new SourceText(File.ReadAllText(path), name)]);
             Assert.True(run.ExitCode == 0, run.Stdout + run.Stderr);

@@ -1,4 +1,4 @@
-// Manually-managed port of benchmarks/sort.sab (see README.md).
+// Manually-managed port of benchmarks/sort.sb (see README.md).
 //
 // The generic merge sort is instantiated twice, for Int and for String, as
 // Sable monomorphises it; the ordering is a function pointer. Arrays are a

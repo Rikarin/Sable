@@ -36,7 +36,7 @@ through `sable` too.
 
 ## Debugging
 
-Press F5 in a `.sab` file with no `launch.json`. The extension debugs the package the file is in, or
+Press F5 in a `.sb` file with no `launch.json`. The extension debugs the package the file is in, or
 the file alone if it is in no package. To keep a configuration, add one of type `sable`:
 
 ```jsonc
@@ -46,7 +46,7 @@ the file alone if it is in no package. To keep a configuration, add one of type 
   "name": "Debug the package",
   "args": [],
   "cwd": "${workspaceFolder}"
-  // "program": "${file}"          a .sab file on its own, instead of the package
+  // "program": "${file}"          a .sb file on its own, instead of the package
   // "bin": "tool"                 a package's binary, when it has several
   // "buildArgs": ["--features", "extra"]
 }
@@ -71,7 +71,7 @@ starts the debug adapter with the plugin imported.
 cd editors/vscode
 npm install
 npm run check      # type-check the JavaScript (tsc, checkJs)
-npm test           # the grammar, against samples and every .sab file in the repository
+npm test           # the grammar, against samples and every .sb file in the repository
 npm run package    # sable.vsix
 ```
 

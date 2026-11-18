@@ -327,9 +327,9 @@ fn main() {
     /// <summary>An error in the library is reported in the library's file, whatever its offset.</summary>
     [Fact]
     public void AnErrorInTheLibraryIsNotPlacedInTheProgram() {
-        var result = Pipeline.Compile(new SourceText("module H\nimport Sable.Time\n@main\nfn main() {\n    let d: Duration = 5\n}\n", "test.sab"));
+        var result = Pipeline.Compile(new SourceText("module H\nimport Sable.Time\n@main\nfn main() {\n    let d: Duration = 5\n}\n", "test.sb"));
         Assert.False(result.Succeeded);
-        Assert.Contains(result.Errors, static e => e.Contains("test.sab:5:", StringComparison.Ordinal));
+        Assert.Contains(result.Errors, static e => e.Contains("test.sb:5:", StringComparison.Ordinal));
         Assert.DoesNotContain(result.Errors, static e => e.Contains("lib/", StringComparison.Ordinal));
     }
 
@@ -582,7 +582,7 @@ fn main() {
     /// <summary>Only what a program reaches is built: the library costs a program that does not use it nothing.</summary>
     [Fact]
     public void WhatAProgramDoesNotUseIsNotBuilt() {
-        var result = Pipeline.Compile(new SourceText("module H\nimport Sable.Collections\n@main\nfn main() {\n    print(1)\n}\n", "test.sab"));
+        var result = Pipeline.Compile(new SourceText("module H\nimport Sable.Collections\n@main\nfn main() {\n    print(1)\n}\n", "test.sb"));
         Assert.True(result.Succeeded, string.Join("\n", result.Errors));
         Assert.DoesNotContain("HashMap", result.LlvmIr!, StringComparison.Ordinal);
         Assert.DoesNotContain("Sable.Core.Int.<", result.LlvmIr!, StringComparison.Ordinal);

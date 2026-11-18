@@ -67,8 +67,8 @@ public sealed class LanguageServerTests : IDisposable {
 
     /// <summary>A workspace of two files on disk, the second open in the editor.</summary>
     async Task<(TestClient Client, string Geometry, string Main)> OpenWorkspaceAsync() {
-        var geometry = Write("geometry.sab", Geometry);
-        var main = Write("main.sab", Main);
+        var geometry = Write("geometry.sb", Geometry);
+        var main = Write("main.sb", Main);
         var client = new TestClient();
         await client.InitializeAsync(_root);
         await client.NotifyAsync("initialized", new { });
@@ -102,7 +102,7 @@ public sealed class LanguageServerTests : IDisposable {
     [Fact]
     public async Task ARequestBeforeInitializeIsRefused() {
         await using var client = new TestClient();
-        var response = await client.SendAsync("textDocument/hover", new { textDocument = new { uri = "file:///x.sab" }, position = new { line = 0, character = 0 } });
+        var response = await client.SendAsync("textDocument/hover", new { textDocument = new { uri = "file:///x.sb" }, position = new { line = 0, character = 0 } });
         Assert.Equal(-32002, response.Get("error")!.Value.GetInt("code"));
     }
 
@@ -118,7 +118,7 @@ public sealed class LanguageServerTests : IDisposable {
     public async Task CancellingIsHarmless() {
         await using var client = new TestClient();
         await client.InitializeAsync();
-        const string uri = "file:///tmp/cancel.sab";
+        const string uri = "file:///tmp/cancel.sb";
         await client.OpenAsync(uri, Main);
 
         // Whether the cancellation lands before the answer is a race; either
@@ -137,7 +137,7 @@ public sealed class LanguageServerTests : IDisposable {
     public async Task DiagnosticsArePublishedAndClearedByAnEdit() {
         await using var client = new TestClient();
         await client.InitializeAsync();
-        const string uri = "file:///tmp/broken.sab";
+        const string uri = "file:///tmp/broken.sb";
         var text = "module App\n\nfn f() -> Int {\n    let s: String = 1\n    return 2\n}\n";
         await client.OpenAsync(uri, text);
 
@@ -157,7 +157,7 @@ public sealed class LanguageServerTests : IDisposable {
     public async Task ASignatureProblemIsPublishedInItsFile() {
         await using var client = new TestClient();
         await client.InitializeAsync();
-        const string uri = "file:///tmp/signature.sab";
+        const string uri = "file:///tmp/signature.sb";
         await client.OpenAsync(uri, "module App\n\nfn f(_ x: Nowhere) -> Int {\n    return 1\n}\n");
         var diagnostics = await client.DiagnosticsAsync(uri, static d => d.GetArrayLength() > 0);
         Assert.Contains(diagnostics.EnumerateArray(), static d => d.GetString("message")!.Contains("Nowhere", StringComparison.Ordinal));
@@ -167,7 +167,7 @@ public sealed class LanguageServerTests : IDisposable {
     public async Task AParseErrorIsPublished() {
         await using var client = new TestClient();
         await client.InitializeAsync();
-        const string uri = "file:///tmp/parse.sab";
+        const string uri = "file:///tmp/parse.sb";
         await client.OpenAsync(uri, "module App\n\nfn f( {\n");
         await client.DiagnosticsAsync(uri, static d => d.GetArrayLength() > 0);
     }
@@ -192,7 +192,7 @@ public sealed class LanguageServerTests : IDisposable {
     public async Task HoverOnAnArrayMemberShowsItsSableDeclaration() {
         await using var client = new TestClient();
         await client.InitializeAsync();
-        const string uri = "file:///tmp/arrays.sab";
+        const string uri = "file:///tmp/arrays.sb";
         const string text = "module App\n\nfn f(_ xs: Int[>..]) -> Bool {\n    var ys = xs\n    ys.append(1)\n    return ys.contains(2)\n}\n";
         await client.OpenAsync(uri, text);
 
@@ -311,7 +311,7 @@ public sealed class LanguageServerTests : IDisposable {
         // completion has to bind the edited function against the old one.
         await using var client = new TestClient(TimeSpan.FromSeconds(30));
         await client.InitializeAsync();
-        const string uri = "file:///tmp/typing.sab";
+        const string uri = "file:///tmp/typing.sb";
         await client.OpenAsync(uri, Geometry + "\n" + Main.Replace("module App\n", "", StringComparison.Ordinal));
         var text = Geometry + "\n" + Main.Replace("module App\n", "", StringComparison.Ordinal);
 
@@ -329,7 +329,7 @@ public sealed class LanguageServerTests : IDisposable {
     public async Task CompletionAfterImportOffersModules() {
         await using var client = new TestClient();
         await client.InitializeAsync();
-        const string uri = "file:///tmp/imports.sab";
+        const string uri = "file:///tmp/imports.sb";
         const string text = "module App\nimport Sable.Co\n";
         await client.OpenAsync(uri, text);
         var labels = Labels(await client.AtAsync("textDocument/completion", uri, text, At(text, "Sable.Co", 8)));
@@ -342,7 +342,7 @@ public sealed class LanguageServerTests : IDisposable {
     public async Task SignatureHelpShowsTheParameterBeingTyped() {
         await using var client = new TestClient();
         await client.InitializeAsync();
-        const string uri = "file:///tmp/signature-help.sab";
+        const string uri = "file:///tmp/signature-help.sb";
         const string text = "module App\n\nfn add(_ a: Int, to b: Int) -> Int => a + b\n\nfn main() {\n    let n = add(1, 2)\n}\n";
         await client.OpenAsync(uri, text);
         var help = await client.AtAsync("textDocument/signatureHelp", uri, text, At(text, "add(1, ", 7));
@@ -368,7 +368,7 @@ public sealed class LanguageServerTests : IDisposable {
 
         foreach (var module in new[] { "Sable.Core", "Sable.Text" }) {
             var target = Directory.CreateDirectory(Path.Combine(_root, "lib", module)).FullName;
-            foreach (var file in Directory.GetFiles(Path.Combine(repository, "lib", module), "*.sab")) {
+            foreach (var file in Directory.GetFiles(Path.Combine(repository, "lib", module), "*.sb")) {
                 File.Copy(file, Path.Combine(target, Path.GetFileName(file)));
             }
         }
@@ -384,7 +384,7 @@ public sealed class LanguageServerTests : IDisposable {
                                   print(b)
                               }
                               """;
-        var main = Write("main.sab", source);
+        var main = Write("main.sb", source);
         await using var client = new TestClient();
         await client.InitializeAsync(_root);
         await client.NotifyAsync("initialized", new { });
@@ -403,7 +403,7 @@ public sealed class LanguageServerTests : IDisposable {
     public async Task FormattingRewritesOnlyTheLinesThatChange() {
         await using var client = new TestClient();
         await client.InitializeAsync();
-        const string uri = "file:///tmp/format.sab";
+        const string uri = "file:///tmp/format.sb";
         const string text = "module App\n\nfn first() -> Int {\n    return 1\n}\n\nfn second()->Int{\nreturn   2\n}\n\nfn third() -> Int {\n    return 3\n}\n";
         await client.OpenAsync(uri, text);
         var edits = await client.RequestAsync("textDocument/formatting", new {
@@ -422,16 +422,16 @@ public sealed class LanguageServerTests : IDisposable {
         var start = lines.OffsetOf(new(6, 0));
         var end = lines.OffsetOf(new(8, 0));
         var applied = text[..start] + edit.GetString("newText") + text[end..];
-        Assert.Equal(SyntaxFormatter.Format(SyntaxTree.Parse(new SourceText(text, "format.sab"))), applied);
+        Assert.Equal(SyntaxFormatter.Format(SyntaxTree.Parse(new SourceText(text, "format.sb"))), applied);
     }
 
     [Fact]
     public async Task FormattingLeavesAFormattedOrBrokenDocumentAlone() {
         await using var client = new TestClient();
         await client.InitializeAsync();
-        const string formatted = "file:///tmp/formatted.sab";
-        const string broken = "file:///tmp/broken.sab";
-        var text = SyntaxFormatter.Format(SyntaxTree.Parse(new SourceText(Geometry, "g.sab")));
+        const string formatted = "file:///tmp/formatted.sb";
+        const string broken = "file:///tmp/broken.sb";
+        var text = SyntaxFormatter.Format(SyntaxTree.Parse(new SourceText(Geometry, "g.sb")));
         await client.OpenAsync(formatted, text);
         await client.OpenAsync(broken, "module App\n\nfn f( -> Int {\nreturn   1\n");
         foreach (var uri in new[] { formatted, broken }) {
@@ -446,7 +446,7 @@ public sealed class LanguageServerTests : IDisposable {
     public async Task DocumentSymbolsOutlineTheFile() {
         await using var client = new TestClient();
         await client.InitializeAsync();
-        const string uri = "file:///tmp/outline.sab";
+        const string uri = "file:///tmp/outline.sb";
         await client.OpenAsync(uri, Geometry);
         var symbols = await client.RequestAsync("textDocument/documentSymbol", new { textDocument = new { uri } });
         var point = symbols.EnumerateArray().First(static s => s.GetString("name") == "Point");
@@ -477,7 +477,7 @@ public sealed class LanguageServerTests : IDisposable {
     public async Task InlayHintsShowInferredRoots() {
         await using var client = new TestClient();
         await client.InitializeAsync();
-        const string uri = "file:///tmp/roots.sab";
+        const string uri = "file:///tmp/roots.sb";
         const string text = """
                             module Test
 
@@ -523,7 +523,7 @@ public sealed class LanguageServerTests : IDisposable {
     public async Task PositionsCountUtf16CodeUnits() {
         await using var client = new TestClient();
         await client.InitializeAsync();
-        const string uri = "file:///tmp/utf16.sab";
+        const string uri = "file:///tmp/utf16.sb";
 
         // An emoji is two UTF-16 code units: the column of 'shout' after it
         // is counted in those, not in characters or bytes.

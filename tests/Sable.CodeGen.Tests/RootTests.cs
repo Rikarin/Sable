@@ -60,7 +60,7 @@ public sealed class RootTests {
 
     [Fact]
     public void TheSummariesArePartOfTheInterface() {
-        var result = Pipeline.Compile(new SourceText(Program(Functions, ""), "test.sab"));
+        var result = Pipeline.Compile(new SourceText(Program(Functions, ""), "test.sb"));
         Assert.True(result.Succeeded, string.Join("\n", result.Errors));
         Assert.Equal([0, 1], result.Sil!.Find("Test.longest")!.ResultRoots);
         Assert.Equal([0, 1, 2], result.Sil!.Find("Test.longestOfThree")!.ResultRoots);
@@ -70,7 +70,7 @@ public sealed class RootTests {
     }
 
     static void Rejects(string declarations, string body, string message) {
-        var result = Pipeline.Compile(new SourceText(Program(Functions + "\n" + declarations, body), "test.sab"));
+        var result = Pipeline.Compile(new SourceText(Program(Functions + "\n" + declarations, body), "test.sb"));
         Assert.False(result.Succeeded, "expected the program to be rejected");
         Assert.Contains(result.Errors, e => e.Contains(message, StringComparison.Ordinal));
     }

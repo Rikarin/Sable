@@ -17,7 +17,7 @@ public sealed class DocCommand : Command {
         usage: sable doc [paths...] [--out <dir>] [--json]
                sable doc --std [--out <dir>] [--json]
 
-          paths      .sab files, or directories of them (default: the current directory);
+          paths      .sb files, or directories of them (default: the current directory);
                      the modules they declare are documented
           --std      document the standard library instead
           --out dir  where to write it (default: target/doc)
@@ -54,7 +54,7 @@ public sealed class DocCommand : Command {
         } else {
             var files = FmtCommand.SourceFiles(paths.Count == 0 ? ["."] : paths).ToList();
             if (files.Count == 0) {
-                Console.Error.WriteLine("sable doc: no .sab files to document");
+                Console.Error.WriteLine("sable doc: no .sb files to document");
                 return 1;
             }
 
@@ -118,7 +118,7 @@ public sealed class DocCommand : Command {
     public static Compilation StandardLibraryCompilation() {
         var everything = SyntaxTree.Parse(new SourceText(
             "module Documentation\n" + string.Concat(Library.ModuleNames.Select(static m => $"import {m}\n")),
-            "documentation.sab"));
+            "documentation.sb"));
         return Compilation.Create([everything, ..Library.For(everything)]);
     }
 }

@@ -14,14 +14,14 @@ internal static class Harnesses {
     public sealed record Run(string Stdout, string Stderr, int ExitCode);
 
     public static CompileResult Compile(string source, TestKind kind = TestKind.Test, bool doc = false) =>
-        Compile([new SourceText(source, "test.sab")], kind, doc);
+        Compile([new SourceText(source, "test.sb")], kind, doc);
 
     public static CompileResult Compile(IReadOnlyList<SourceText> sources, TestKind kind = TestKind.Test, bool doc = false) =>
         TestHarness.Compile(sources, kind, out _, doc);
 
     /// <summary>Builds the harness natively and runs it with the arguments, leak-checked.</summary>
     public static Run Native(string source, TestKind kind = TestKind.Test, IReadOnlyList<string>? arguments = null, bool doc = false) =>
-        Native([new SourceText(source, "test.sab")], kind, arguments, doc);
+        Native([new SourceText(source, "test.sb")], kind, arguments, doc);
 
     public static Run Native(IReadOnlyList<SourceText> sources, TestKind kind = TestKind.Test, IReadOnlyList<string>? arguments = null, bool doc = false) {
         var result = Compile(sources, kind, doc);
@@ -67,7 +67,7 @@ internal static class Harnesses {
     }
 
     /// <summary>The errors of compiling the source as an ordinary program would be.</summary>
-    public static IReadOnlyList<string> ErrorsOf(string source) => Pipeline.Compile(new SourceText(source, "test.sab")).Errors;
+    public static IReadOnlyList<string> ErrorsOf(string source) => Pipeline.Compile(new SourceText(source, "test.sb")).Errors;
 
     /// <summary>The repository's root, where Sable.slnx is.</summary>
     public static string Root {

@@ -34,11 +34,11 @@ public sealed class PackageTestCommandTests {
 
         using var fixture = new PackageFixture();
         fixture.Package("base", "base", "0.1.0", "",
-            ("src/lib.sab", "module Base\n\npublic fn twice(_ n: Int) -> Int {\n    return n * 2\n}\n"));
+            ("src/lib.sb", "module Base\n\npublic fn twice(_ n: Int) -> Int {\n    return n * 2\n}\n"));
         var app = fixture.Package("app", "app", "0.1.0", "[dependencies]\nbase = { path = \"../base\" }\n",
-            ("src/lib.sab", "module App\n\nimport Base\n\nfn quadruple(_ n: Int) -> Int {\n    return twice(twice(n))\n}\n"),
-            ("src/main.sab", "module Main\n\nimport App\n\nfn main() {\n    print(\"main\")\n}\n"),
-            ("tests/quadruple.sab", """
+            ("src/lib.sb", "module App\n\nimport Base\n\nfn quadruple(_ n: Int) -> Int {\n    return twice(twice(n))\n}\n"),
+            ("src/main.sb", "module Main\n\nimport App\n\nfn main() {\n    print(\"main\")\n}\n"),
+            ("tests/quadruple.sb", """
                 module App
 
                 import Sable.Testing

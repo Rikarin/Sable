@@ -70,7 +70,7 @@ public static partial class Scaffold {
             """);
 
         var module = ModuleName(name);
-        var file = Path.Combine(source, library ? "lib.sab" : "main.sab");
+        var file = Path.Combine(source, library ? "lib.sb" : "main.sb");
         if (!File.Exists(file)) {
             File.WriteAllText(file, library
                 ? $$"""

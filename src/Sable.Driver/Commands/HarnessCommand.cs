@@ -61,7 +61,7 @@ public abstract class HarnessCommand : Command {
                         }
                     } else if (argument.StartsWith('-')) {
                         return null;
-                    } else if (argument.EndsWith(".sab", StringComparison.Ordinal)) {
+                    } else if (argument.EndsWith(".sb", StringComparison.Ordinal)) {
                         files.Add(argument);
                     } else {
                         // Anything else selects tests by name.

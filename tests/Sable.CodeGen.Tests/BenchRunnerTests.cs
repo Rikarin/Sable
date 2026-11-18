@@ -74,7 +74,7 @@ public sealed class BenchRunnerTests {
         }
 
         var list = Native(Benches, TestKind.Bench, ["--list", "ing"]);
-        Assert.Equal("Speed.summing: bench (test.sab:14)\nSpeed.Grouped.joining: bench (test.sab:28)\n2 benchmarks\n", list.Stdout);
+        Assert.Equal("Speed.summing: bench (test.sb:14)\nSpeed.Grouped.joining: bench (test.sb:28)\n2 benchmarks\n", list.Stdout);
 
         var one = Native(Benches, TestKind.Bench, ["--quick", "Whole"]);
         Assert.Matches($"^running 1 benchmark\nbench Speed\\.timedWhole \\.\\.\\. {Line}\n\nbench result: 1 measured\n$", one.Stdout);
@@ -179,7 +179,7 @@ public sealed class BenchRunnerTests {
 
         var directory = Directory.CreateTempSubdirectory("sable-bench-command-");
         try {
-            var file = Path.Combine(directory.FullName, "speed.sab");
+            var file = Path.Combine(directory.FullName, "speed.sb");
             File.WriteAllText(file, Benches);
             var bench = Command.Find("bench")!;
             Assert.Equal(0, bench.Run([file, "--quick", "--baseline-dir", Path.Combine(directory.FullName, "b"), "--save-baseline", "x", "summing"]));

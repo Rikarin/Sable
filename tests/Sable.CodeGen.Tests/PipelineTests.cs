@@ -2,7 +2,7 @@ namespace Sable.CodeGen.Tests;
 
 /// <summary>Where the pipeline stops, and what it says, when it cannot go on.</summary>
 public sealed class PipelineTests {
-    static CompileResult Compile(string source) => Pipeline.Compile(new SourceText(source, "test.sab"));
+    static CompileResult Compile(string source) => Pipeline.Compile(new SourceText(source, "test.sb"));
 
     [Fact]
     public void ATypeErrorStopsItBeforeLowering() {

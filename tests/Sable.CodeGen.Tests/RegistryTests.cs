@@ -13,11 +13,11 @@ public sealed class RegistryTests {
 
     static void WriteConsumer(PackageFixture fixture, string requirement, string directory = "app") =>
         fixture.Package(directory, "app", "1.0.0", $"[dependencies]\nnumbers = \"{requirement}\"\n",
-            ("src/main.sab", "module App\n\nimport Sable.IO\nimport Numbers\n\nfn main() {\n    print(\"\\(numbersValue())\")\n}\n"));
+            ("src/main.sb", "module App\n\nimport Sable.IO\nimport Numbers\n\nfn main() {\n    print(\"\\(numbersValue())\")\n}\n"));
 
     [Fact]
     public void ArchivesAreDeterministic() {
-        var files = new Dictionary<string, byte[]> { ["src/lib.sab"] = "module A\n"u8.ToArray(), ["sable.toml"] = "[package]\n"u8.ToArray() };
+        var files = new Dictionary<string, byte[]> { ["src/lib.sb"] = "module A\n"u8.ToArray(), ["sable.toml"] = "[package]\n"u8.ToArray() };
         var first = Registry.Pack(files);
         var second = Registry.Pack(new Dictionary<string, byte[]>(files.Reverse()));
         Assert.Equal(first, second);
@@ -77,7 +77,7 @@ public sealed class RegistryTests {
         using var fixture = new PackageFixture();
         fixture.PublishLibrary("numbers", "1.0.0");
         var stranger = PackageEnvironment.At(Path.Combine(fixture.Root, "stranger")) with { RegistryDirectory = fixture.Environment.RegistryDirectory };
-        fixture.Package("theirs", "numbers", "1.0.1", "", ("src/lib.sab", "module Numbers\n"));
+        fixture.Package("theirs", "numbers", "1.0.1", "", ("src/lib.sb", "module Numbers\n"));
         var workspace = fixture.Load("theirs");
         var error = Assert.Throws<RegistryException>(() => PackageOperations.Publish(workspace, stranger, workspace.Members[0], false, true));
         Assert.Contains("owned by another key", error.Message, StringComparison.Ordinal);
@@ -88,13 +88,13 @@ public sealed class RegistryTests {
     [Fact]
     public void ADryRunShowsWhatWouldBeUploadedAndUploadsNothing() {
         using var fixture = new PackageFixture();
-        fixture.Package("lib", "numbers", "1.0.0", "", ("src/lib.sab", "module Numbers\n"), ("README.md", "# numbers"), ("target/dev/junk", "x"), (".hidden", "x"));
+        fixture.Package("lib", "numbers", "1.0.0", "", ("src/lib.sb", "module Numbers\n"), ("README.md", "# numbers"), ("target/dev/junk", "x"), (".hidden", "x"));
         var workspace = fixture.Load("lib");
         var plan = PackageOperations.Publish(workspace, fixture.Environment, workspace.Members[0], dryRun: true, allowDirty: true);
 
-        Assert.Equal(["README.md", "sable.toml", "src/lib.sab"], plan.Files.Keys);
+        Assert.Equal(["README.md", "sable.toml", "src/lib.sb"], plan.Files.Keys);
         var shown = fixture.Output.ToString();
-        Assert.Contains("src/lib.sab", shown, StringComparison.Ordinal);
+        Assert.Contains("src/lib.sb", shown, StringComparison.Ordinal);
         Assert.Contains(plan.Entry.Checksum, shown, StringComparison.Ordinal);
         Assert.Contains("Dry run: nothing was uploaded", shown, StringComparison.Ordinal);
         Assert.Empty(RegistryOf(fixture).Entries("numbers"));
@@ -104,14 +104,14 @@ public sealed class RegistryTests {
     [Fact]
     public void PublishRefusesWhatCannotBeUsedFromTheRegistry() {
         using var fixture = new PackageFixture();
-        fixture.Package("util", "util", "1.0.0", "", ("src/lib.sab", "module Util\n"));
-        fixture.Package("lib", "numbers", "1.0.0", "[dependencies]\nutil = { path = \"../util\" }\n", ("src/lib.sab", "module Numbers\n"));
+        fixture.Package("util", "util", "1.0.0", "", ("src/lib.sb", "module Util\n"));
+        fixture.Package("lib", "numbers", "1.0.0", "[dependencies]\nutil = { path = \"../util\" }\n", ("src/lib.sb", "module Numbers\n"));
         var workspace = fixture.Load("lib");
         var error = Assert.Throws<PackageException>(() => PackageOperations.Publish(workspace, fixture.Environment, workspace.Members[0], true, true));
         Assert.Contains("has only a path", error.Message, StringComparison.Ordinal);
 
         // And what does not type-check.
-        fixture.Package("broken", "broken", "1.0.0", "", ("src/lib.sab", "module Broken\nfn f() -> Int { return true }\n"));
+        fixture.Package("broken", "broken", "1.0.0", "", ("src/lib.sb", "module Broken\nfn f() -> Int { return true }\n"));
         workspace = fixture.Load("broken");
         error = Assert.Throws<PackageException>(() => PackageOperations.Publish(workspace, fixture.Environment, workspace.Members[0], true, true));
         Assert.Contains("has errors", error.Message, StringComparison.Ordinal);
@@ -276,7 +276,7 @@ public sealed class RegistryTests {
         var workspace = fixture.Load("app");
 
         Assert.Equal(["base v1.0.0", "numbers v1.0.0"], PackageOperations.Vendor(workspace, fixture.Environment));
-        Assert.True(File.Exists(Path.Combine(workspace.VendorDirectory, "numbers-1.0.0", "src", "lib.sab")));
+        Assert.True(File.Exists(Path.Combine(workspace.VendorDirectory, "numbers-1.0.0", "src", "lib.sb")));
 
         Directory.Delete(fixture.Environment.RegistryDirectory, true);
         Directory.Delete(fixture.Environment.CacheDirectory, true);
@@ -296,7 +296,7 @@ public sealed class RegistryTests {
         fixture.PublishLibrary("color-space", "2.0.0");
         fixture.PublishLibrary("image", "0.6.0", "color-space = \"2.0\"");
         fixture.PublishLibrary("platform", "1.4.0", "color-space = \"1.8\"");
-        fixture.Package("engine", "render-engine", "0.4.2", "[dependencies]\nimage = \"0.6\"\nplatform = \"1.4\"\n", ("src/lib.sab", "module Engine\n"));
+        fixture.Package("engine", "render-engine", "0.4.2", "[dependencies]\nimage = \"0.6\"\nplatform = \"1.4\"\n", ("src/lib.sb", "module Engine\n"));
 
         var error = Assert.Throws<ResolutionException>(() => PackageGraph.Resolve(fixture.Load("engine"), fixture.Environment));
         Assert.StartsWith("error: cannot resolve dependencies", error.Message, StringComparison.Ordinal);
@@ -310,15 +310,15 @@ public sealed class RegistryTests {
         using var fixture = new PackageFixture();
         fixture.PublishLibrary("png", "1.0.0");
         fixture.Package("published/image", "image", "0.6.0", "[dependencies]\npng = { version = \"1\", optional = true }\n[features]\ndefault = []\npng = [\"dep:png\"]\n",
-            ("src/lib.sab", "module Image\n"));
+            ("src/lib.sb", "module Image\n"));
         fixture.Publish("published/image");
 
-        fixture.Package("app", "app", "1.0.0", "[dependencies]\nimage = { version = \"0.6\", features = [\"png\"] }\n", ("src/main.sab", "module App\nfn main() {}\n"));
+        fixture.Package("app", "app", "1.0.0", "[dependencies]\nimage = { version = \"0.6\", features = [\"png\"] }\n", ("src/main.sb", "module App\nfn main() {}\n"));
         var graph = PackageGraph.Resolve(fixture.Load("app"), fixture.Environment);
         Assert.Contains("png", graph.Packages["image"].Features);
         Assert.Equal(["png"], graph.Packages["image"].Dependencies);
 
-        fixture.Package("app", "app", "1.0.0", "[dependencies]\nimage = \"0.6\"\n", ("src/main.sab", "module App\nfn main() {}\n"));
+        fixture.Package("app", "app", "1.0.0", "[dependencies]\nimage = \"0.6\"\n", ("src/main.sb", "module App\nfn main() {}\n"));
         File.Delete(fixture.Load("app").LockPath);
         graph = PackageGraph.Resolve(fixture.Load("app"), fixture.Environment);
         Assert.False(graph.Packages.ContainsKey("png"));

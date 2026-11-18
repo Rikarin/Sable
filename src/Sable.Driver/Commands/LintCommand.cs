@@ -17,7 +17,7 @@ public sealed class LintCommand : Command {
     public override string Usage => $"""
         usage: sable lint [paths...] [--allow <lint>] [--warn <lint>] [--error <lint>] [--list]
 
-          paths            .sab files, or directories of them (default: the current directory)
+          paths            .sb files, or directories of them (default: the current directory)
           --allow <lint>   turn a lint off
           --warn <lint>    report it as a warning
           --error <lint>   report it as an error, and fail
@@ -59,7 +59,7 @@ public sealed class LintCommand : Command {
 
         var files = FmtCommand.SourceFiles(paths.Count == 0 ? ["."] : paths).ToList();
         if (files.Count == 0) {
-            Console.Error.WriteLine("sable lint: no .sab files");
+            Console.Error.WriteLine("sable lint: no .sb files");
             return 1;
         }
 

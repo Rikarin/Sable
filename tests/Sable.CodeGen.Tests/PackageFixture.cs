@@ -53,7 +53,7 @@ internal sealed class PackageFixture : IDisposable {
         var module = Scaffold.ModuleName(name);
         var directory = $"published/{name}-{version}";
         Package(directory, name, version, $"[dependencies]\n{dependencies}",
-            ("src/lib.sab", $"module {module}\n\npublic fn {module.ToLowerInvariant()}Value() -> Int {{\n    return {value}\n}}\n"));
+            ("src/lib.sb", $"module {module}\n\npublic fn {module.ToLowerInvariant()}Value() -> Int {{\n    return {value}\n}}\n"));
         Publish(directory);
     }
 

@@ -402,7 +402,7 @@ public sealed class SubscriptAndLocalTests {
     [Fact]
     public void TheCompilerBuiltinsSayWhereTheyAre() =>
         Prints(
-            "test.sab:5:50 in main of Test\nwhere\n",
+            "test.sb:5:50 in main of Test\nwhere\n",
             "fn whereAmI() -> String { return #function }",
             """
                 print(#file + ":" + #line.toString() + ":" + #column.toString() + " in " + #function + " of " + #module)

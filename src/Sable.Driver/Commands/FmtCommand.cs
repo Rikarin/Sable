@@ -18,7 +18,7 @@ public sealed class FmtCommand : Command {
         usage: sable fmt [paths...] [--check]
                sable fmt -
 
-          paths     .sab files, or directories to format recursively (default: the
+          paths     .sb files, or directories to format recursively (default: the
                     current directory); target/ and hidden directories are skipped
           --check   change nothing; list the files that are not formatted, and exit 1
                     if there are any
@@ -102,7 +102,7 @@ public sealed class FmtCommand : Command {
     }
 
     /// <summary>
-    ///     The files the paths name: a file as given, and every <c>.sab</c>
+    ///     The files the paths name: a file as given, and every <c>.sb</c>
     ///     file under a directory, skipping <c>target/</c> and hidden
     ///     directories, in a stable order.
     /// </summary>
@@ -119,7 +119,7 @@ public sealed class FmtCommand : Command {
     }
 
     static IEnumerable<string> Walk(string directory) {
-        foreach (var file in Directory.GetFiles(directory, "*.sab").Order(StringComparer.Ordinal)) {
+        foreach (var file in Directory.GetFiles(directory, "*.sb").Order(StringComparer.Ordinal)) {
             yield return file;
         }
 

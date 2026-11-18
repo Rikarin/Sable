@@ -78,7 +78,7 @@ def main():
         for name in BENCHMARKS:
             ir = scratch / f"{name}.ll"
             with ir.open("w") as out:
-                subprocess.run([scratch / "compiler" / "sable", "build", ROOT / "benchmarks" / f"{name}.sab", "--emit", "llvm-ir"], check=True, stdout=out)
+                subprocess.run([scratch / "compiler" / "sable", "build", ROOT / "benchmarks" / f"{name}.sb", "--emit", "llvm-ir"], check=True, stdout=out)
             plain, twice, c = scratch / name, scratch / f"{name}.twice", scratch / f"{name}.c"
             subprocess.run(["clang", "-O2", "-Wno-override-module", ir, ROOT / "runtime" / "sable_runtime.c", "-o", plain, "-lm"], check=True)
             subprocess.run(["clang", "-O2", "-Wno-override-module", ir, doubled, "-o", twice, "-lm"], check=True)

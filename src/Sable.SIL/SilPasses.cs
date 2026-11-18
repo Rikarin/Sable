@@ -1,10 +1,21 @@
 namespace Sable.SIL;
 
-/// <summary>A transformation of one SIL function.</summary>
+/// <summary>A transformation of SIL: of each function, or of the module as a whole.</summary>
 public interface ISilPass {
     string Name { get; }
 
     void Run(SilFunction function);
+
+    /// <summary>
+    ///     Runs the pass over a module: each function in turn, unless the pass
+    ///     looks across functions — the inliner, devirtualisation — and runs
+    ///     over the module itself.
+    /// </summary>
+    void Run(SilModule module) {
+        foreach (var function in module.Functions) {
+            Run(function);
+        }
+    }
 }
 
 /// <summary>A pass left SIL the verifier rejects: a compiler bug, named by the pass.</summary>
@@ -20,7 +31,7 @@ public static class SilPassManager {
     ///     Copies are forwarded before loads are borrowed and after: each
     ///     uncovers more of the other.
     /// </remarks>
-    public static IReadOnlyList<ISilPass> Default { get; } = [new PromoteSlots(), new ForwardCopies(), new BorrowLoads(), new ForwardCopies(), new BorrowFields(), new PromoteToStack(), new HoistUniqueness()];
+    public static IReadOnlyList<ISilPass> Default { get; } = [new PromoteSlots(), new ForwardCopies(), new BorrowLoads(), new ForwardCopies(), new BorrowFields(), new BorrowLocals(), new PromoteToStack(), new HoistUniqueness()];
 
     /// <summary>
     ///     Drops every function the entry point cannot reach: through calls
@@ -99,9 +110,7 @@ public static class SilPassManager {
 
     public static void Run(SilModule module, IEnumerable<ISilPass> passes) {
         foreach (var pass in passes) {
-            foreach (var function in module.Functions) {
-                pass.Run(function);
-            }
+            pass.Run(module);
 
             var problems = SilVerifier.Verify(module);
             if (problems.Count > 0) {

@@ -606,11 +606,18 @@ public sealed partial class LlvmEmitter {
     string SharedLinkage => _module?.Unit is null ? "internal" : "linkonce_odr";
 
     /// <summary>
-    ///     How a function is linked: from a unit of several, one only it
-    ///     defines is the program's; one another unit may define as well — a
-    ///     generic instance, a thunk — is kept once by the linker.
+    ///     How a function is linked. A whole program's are its own: nothing
+    ///     outside calls them by name — C reaches the exported ones through
+    ///     wrappers of their own — so they are internal, which lets LLVM
+    ///     inline one with a single caller and drop one it no longer calls.
+    ///     From a unit of several, one only it defines is the program's; one
+    ///     another unit may define as well — a generic instance, a thunk — is
+    ///     kept once by the linker.
     /// </summary>
-    string Linkage(string function) => _module?.Unit is { } unit && !unit.Owned.Contains(function) ? "linkonce_odr " : "";
+    string Linkage(string function) =>
+        _module?.Unit is not { } unit ? "internal "
+        : unit.Owned.Contains(function) ? ""
+        : "linkonce_odr ";
 
     /// <summary>
     ///     A <c>declare</c> for every function the unit refers to and does not
@@ -1011,8 +1018,10 @@ public sealed partial class LlvmEmitter {
             }
 
             var text = new StringBuilder();
+            // Sable has no unwinding: an error is a returned value and a trap
+            // ends the program. Said, LLVM needs no unwind paths for calls.
             text.Append("define ").Append(module.Linkage(function.Name)).Append(ReturnType(function.Type)).Append(" @").Append(Global(function.Name))
-                .Append('(').Append(string.Join(", ", parameters)).Append(')');
+                .Append('(').Append(string.Join(", ", parameters)).Append(") nounwind");
             if (_scope is not null) {
                 text.Append(" !dbg ").Append(_scope);
             }

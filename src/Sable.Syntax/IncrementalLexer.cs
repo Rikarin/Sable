@@ -46,12 +46,15 @@ internal static class IncrementalLexer {
         bool oldHadDirectives,
         TextChange change
     ) {
-        // Directives make the lexer stateful across tokens, so resynchronising
-        // is not simply a matter of matching positions. Those files re-lex.
+        // Directives make the lexer stateful across tokens: how text lexes
+        // depends on the #if branches open before it. A lexer started after
+        // the reused prefix would start with none open, and resynchronising
+        // is not simply a matter of matching positions. Those files re-lex,
+        // from the start.
         var canReuseSuffix = !oldHadDirectives;
 
         var oldPositions = ComputePositions(oldTokens);
-        var prefixCount = FindReusablePrefix(oldTokens, oldPositions, change.Span.Start);
+        var prefixCount = oldHadDirectives ? 0 : FindReusablePrefix(oldTokens, oldPositions, change.Span.Start);
         var prefixEnd = prefixCount == 0 ? 0 : oldPositions[prefixCount];
 
         var lexer = new Lexer(newText, options, prefixEnd);

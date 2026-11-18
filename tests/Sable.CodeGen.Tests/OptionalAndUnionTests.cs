@@ -210,6 +210,46 @@ public sealed class OptionalAndUnionTests {
         );
 
     /// <summary>
+    ///     An optional a comparison with 'none' narrowed reads as its payload:
+    ///     in the else of '== none', inside '!= none', and after '== none'
+    ///     returns — for a value, a class and a parameter (#231).
+    /// </summary>
+    [Fact]
+    public void AComparisonWithNoneNarrowsTheOptional() =>
+        Prints(
+            "none\nyo\nabc\n3\n4\n-1\n6\n",
+            """
+            class Node {
+                var v: Int
+                init(v: Int) { self.v = v }
+            }
+            fn f(_ s: String) { print(s) }
+            fn g(_ s: String?) {
+                if s == none {
+                    return
+                }
+                f(s)
+                print(s.count)
+            }
+            fn h(_ n: Node?) -> Int {
+                if n == none { return -1 } else { return n.v }
+            }
+            """,
+            """
+                var x: String? = none
+                if x == none { print("none") } else { f(x) }
+                x = "yo"
+                if x == none { print("none") } else { f(x) }
+                g("abc")
+                g(none)
+                print(h(Node(v: 4)))
+                print(h(none))
+                let i: Int? = 5
+                if i != none { print(i + 1) }
+            """
+        );
+
+    /// <summary>
     ///     What the layouts are: 'Bool?' a byte, 'Char?' four, 'String?' the
     ///     pointer, an enum of cases alone its byte's tag, and a payload area
     ///     in units of the most aligned payload — where every enum was once

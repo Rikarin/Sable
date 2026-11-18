@@ -5,7 +5,6 @@ public union IoError {
     Denied
 }
 
-
 public fn read(_ path: String) throws(IoError) -> String {
     if path == "" {
         throw IoError.Denied

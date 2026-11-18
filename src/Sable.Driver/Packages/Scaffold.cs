@@ -37,6 +37,7 @@ public static partial class Scaffold {
 
         Write(directory, name, library);
         environment.Error.WriteLine($"     Created {(library ? "library" : "binary")} package `{name}` in {directory}");
+        JoinWorkspace(directory, environment);
         return directory;
     }
 
@@ -50,6 +51,62 @@ public static partial class Scaffold {
         name ??= NameFrom(Path.GetFileName(directory));
         Write(directory, name, library);
         environment.Error.WriteLine($"     Created {(library ? "library" : "binary")} package `{name}` in {directory}");
+        JoinWorkspace(directory, environment);
+    }
+
+    /// <summary>
+    ///     A package made inside a workspace becomes one of its members, as
+    ///     Cargo does it: otherwise the next command run in it finds the
+    ///     workspace above, which does not list it, and builds as though it
+    ///     were not there. One the workspace excludes is left out; one whose
+    ///     <c>members</c> cannot be edited safely gets a warning saying what
+    ///     to add.
+    /// </summary>
+    static void JoinWorkspace(string directory, PackageEnvironment environment) {
+        for (var parent = Directory.GetParent(directory); parent is not null; parent = parent.Parent) {
+            if (!ManifestFiles.Exists(parent.FullName)) {
+                continue;
+            }
+
+            Manifest manifest;
+            try {
+                manifest = ManifestFiles.Load(parent.FullName);
+            } catch (ManifestException) {
+                // A broken manifest above is not this package's to report.
+                return;
+            }
+
+            if (manifest.Workspace is not { } workspace) {
+                // A package above that is not a workspace: look further up.
+                continue;
+            }
+
+            if (Workspace.MemberDirectories(parent.FullName, workspace).Contains(directory) || Workspace.IsExcluded(parent.FullName, workspace, directory)) {
+                return;
+            }
+
+            var member = Path.GetRelativePath(parent.FullName, directory).Replace(Path.DirectorySeparatorChar, '/');
+            var file = ManifestFiles.PathIn(parent.FullName);
+            try {
+                var original = File.ReadAllText(file);
+                var edited = Path.GetFileName(file) == ManifestFiles.TomlFile
+                    ? ManifestEditor.AddWorkspaceMember(original, file, member)
+                    : SableManifestEditor.AddWorkspaceMember(original, file, member);
+                File.WriteAllText(file, edited);
+                try {
+                    ManifestFiles.Load(parent.FullName);
+                } catch (ManifestException) {
+                    File.WriteAllText(file, original);
+                    throw new PackageException("the edited manifest was not valid, so it was put back");
+                }
+
+                environment.Error.WriteLine($"      Adding `{member}` as a member of the workspace at {parent.FullName}");
+            } catch (PackageException e) {
+                environment.Error.WriteLine($"warning: this package is inside the workspace at {parent.FullName}, which does not list it: add \"{member}\" to its members ({e.Message})");
+            }
+
+            return;
+        }
     }
 
     static void Write(string directory, string name, bool library) {
@@ -96,7 +153,9 @@ public static partial class Scaffold {
 
         var ignore = Path.Combine(directory, ".gitignore");
         if (!File.Exists(ignore)) {
-            File.WriteAllText(ignore, "/target\n");
+            // A library does not commit its lock file (docs/05 §5.3): the
+            // versions it is built with are chosen by whatever depends on it.
+            File.WriteAllText(ignore, library ? $"/target\n/{Workspace.LockName}\n" : "/target\n");
         }
     }
 }
@@ -199,6 +258,75 @@ public static partial class ManifestEditor {
         }
 
         return removed;
+    }
+
+    /// <summary>
+    ///     Adds <paramref name="member" /> to <c>[workspace] members</c>,
+    ///     before the list's closing bracket, laid out as the list is.
+    /// </summary>
+    /// <exception cref="PackageException">There is no list written there to add to.</exception>
+    public static string AddWorkspaceMember(string text, string file, string member) {
+        var lines = text.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n').ToList();
+        var header = lines.FindIndex(l => Header().Match(l) is { Success: true } m && m.Groups[1].Value == "workspace");
+        if (header < 0) {
+            throw new PackageException($"{file} has no [workspace] table");
+        }
+
+        var end = lines.FindIndex(header + 1, l => AnyHeader().IsMatch(l));
+        end = end < 0 ? lines.Count : end;
+        var entry = TomlText.Quote(member);
+        var key = lines.FindIndex(header + 1, end - header - 1, l => IsKey(l, "members"));
+        if (key < 0) {
+            lines.Insert(header + 1, $"members = [{entry}]");
+            return string.Join('\n', lines);
+        }
+
+        // The list's closing bracket: the first ']' after its '[' that is
+        // not in a string or a comment.
+        var joined = string.Join('\n', lines);
+        var start = lines.Take(key).Sum(static l => l.Length + 1);
+        var open = joined.IndexOf('[', joined.IndexOf('=', start));
+        var close = -1;
+        var quote = '\0';
+        for (var i = open + 1; open > 0 && i < joined.Length && close < 0; i++) {
+            var c = joined[i];
+            if (quote != '\0') {
+                if (c == '\\' && quote == '"') {
+                    i++;
+                } else if (c == quote) {
+                    quote = '\0';
+                }
+            } else if (c is '"' or '\'') {
+                quote = c;
+            } else if (c == '#') {
+                i = joined.IndexOf('\n', i) is var newline and >= 0 ? newline : joined.Length;
+            } else if (c == ']') {
+                close = i;
+            } else if (c == '[') {
+                break;
+            }
+        }
+
+        if (open < 0 || close < 0) {
+            throw new PackageException($"{file}: [workspace] members is not written as a list");
+        }
+
+        var inside = joined[(open + 1)..close];
+        var body = inside.TrimEnd();
+        var trailingComma = body.EndsWith(',');
+        string replacement;
+        if (body.Trim().Length == 0) {
+            replacement = entry;
+        } else if (inside.Contains('\n', StringComparison.Ordinal)) {
+            // One to a line: a new line, indented as the last one.
+            var lastLine = body[(body.LastIndexOf('\n') + 1)..];
+            var indent = lastLine[..(lastLine.Length - lastLine.TrimStart().Length)];
+            replacement = body + (trailingComma ? "" : ",") + $"\n{indent}{entry}" + (trailingComma ? "," : "") + inside[body.Length..];
+        } else {
+            replacement = body.TrimEnd(',') + $", {entry}" + (trailingComma ? "," : "") + inside[body.Length..];
+        }
+
+        return joined[..(open + 1)] + replacement + joined[close..];
     }
 
     static void Save(string path, string original, string text) {

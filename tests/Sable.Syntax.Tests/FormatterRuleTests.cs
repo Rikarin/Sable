@@ -45,11 +45,104 @@ public sealed class FormatterRuleTests {
     [InlineData("struct S {\n    var n: Int { get { return 1 } }\n}\n", "struct S {\n    var n: Int { get { return 1 } }\n}\n")]
     [InlineData("fn f() {\n    guard let x = y else { return }\n}\n", "fn f() {\n    guard let x = y else { return }\n}\n")]
     [InlineData("fn f() -> String {\n    return try read(p) catch { \"\" }\n}\n", "fn f() -> String {\n    return try read(p) catch { \"\" }\n}\n")]
-    // …but a statement's block takes its own lines, and so does a body written over several.
-    [InlineData("fn f() {\n    if a { return }\n}\n", "fn f() {\n    if a {\n        return\n    }\n}\n")]
+    // …and so does an 'if'/'else' chain of such bodies, written on one line (#203)…
+    [InlineData("fn f() {\n    if a { return }\n}\n", "fn f() {\n    if a { return }\n}\n")]
+    [InlineData("fn f() {\n    if a { return 1 } else if b { return 2 } else { return 3 }\n}\n",
+        "fn f() {\n    if a { return 1 } else if b { return 2 } else { return 3 }\n}\n")]
+    // …but a loop's block takes its own lines, and so does a body written over several,
+    // a chain only part of which is on one line, and a body that holds an 'if'.
+    [InlineData("fn f() {\n    while a { g() }\n}\n", "fn f() {\n    while a {\n        g()\n    }\n}\n")]
     [InlineData("fn f() {\n    return\n}\n", "fn f() {\n    return\n}\n")]
-    [InlineData("fn f() { if a { return } }\n", "fn f() {\n    if a {\n        return\n    }\n}\n")]
+    [InlineData("fn f() {\n    if a { g() } else {\n        h()\n    }\n}\n", "fn f() {\n    if a {\n        g()\n    } else {\n        h()\n    }\n}\n")]
+    [InlineData("fn f() { if a { return } }\n", "fn f() {\n    if a { return }\n}\n")]
     public void OneLineBodies(string source, string expected) => AssertFormats(source, expected);
+
+    [Theory]
+    // A type's body written on one line, of members without bodies of their own, stays there (#203)…
+    [InlineData("struct P { var x: Int }\n", "struct P { var x: Int }\n")]
+    [InlineData("struct Q {var x: Int;var y: Int}\n", "struct Q { var x: Int; var y: Int }\n")]
+    [InlineData("enum Dir { north, south }\n", "enum Dir { north, south }\n")]
+    [InlineData("union U { A, B(x: Int) }\n", "union U { A, B(x: Int) }\n")]
+    [InlineData("protocol Shape { fn area() -> F64 }\n", "protocol Shape { fn area() -> F64 }\n")]
+    [InlineData("extension P { fn g() -> Int { return x } }\n", "extension P { fn g() -> Int { return x } }\n")]
+    [InlineData("/// A point.\n@derive(Eq)\npublic struct P { var x: Int }\n", "/// A point.\n@derive(Eq)\npublic struct P { var x: Int }\n")]
+    // …and one written over several lines, or with a member that has a body, does not.
+    [InlineData("enum Dir {\n    north, south\n}\n", "enum Dir {\n    north,\n    south\n}\n")]
+    [InlineData("struct S { fn f() {\n    g()\n} }\n", "struct S {\n    fn f() {\n        g()\n    }\n}\n")]
+    [InlineData("struct S { struct T { var x: Int } }\n", "struct S {\n    struct T { var x: Int }\n}\n")]
+    public void OneLineTypes(string source, string expected) => AssertFormats(source, expected);
+
+    [Theory]
+    // A closure with a header around one expression, written on one line, stays there (#203).
+    [InlineData("fn f() {\n    let ys = xs.map { x in x * 2 }\n}\n", "fn f() {\n    let ys = xs.map { x in x * 2 }\n}\n")]
+    [InlineData("fn f() {\n    let ys = xs.map { (x: Int) -> Int in x * 2 }\n}\n", "fn f() {\n    let ys = xs.map { (x: Int) -> Int in x * 2 }\n}\n")]
+    [InlineData("fn f() {\n    let ys = xs.map { x in\n        x * 2 }\n}\n", "fn f() {\n    let ys = xs.map { x in\n        x * 2\n    }\n}\n")]
+    [InlineData("fn f() {\n    let ys = xs.map { x in return x * 2 }\n}\n", "fn f() {\n    let ys = xs.map { x in\n        return x * 2\n    }\n}\n")]
+    public void OneLineClosures(string source, string expected) => AssertFormats(source, expected);
+
+    [Fact]
+    public void LinesUpTheArrowsOfARunOfArms() =>
+        AssertFormats("""
+                      fn f() -> Int {
+                          return match d {
+                              case .North => 1
+                              case .East => 2
+                              case .Nowhere(let reason) =>
+                                  3
+                              case .Up => 4
+                              case .Down => 5
+
+                              // after a blank line, a new run
+                              case .Sideways => 6
+                              default => 7
+                          }
+                      }
+
+                      """, """
+                           fn f() -> Int {
+                               return match d {
+                                   case .North => 1
+                                   case .East  => 2
+                                   case .Nowhere(let reason) =>
+                                       3
+                                   case .Up   => 4
+                                   case .Down => 5
+
+                                   // after a blank line, a new run
+                                   case .Sideways => 6
+                                   default        => 7
+                               }
+                           }
+
+                           """);
+
+    [Fact]
+    public void LinesUpANestedMatchOnItsOwn() =>
+        AssertFormats("""
+                      fn f() -> Int {
+                          return match a {
+                              case 1 => match b {
+                                  case 10 => 1
+                                  case 2 => 2
+                              }
+                              case 100 => 3
+                              default => 4
+                          }
+                      }
+
+                      """, """
+                           fn f() -> Int {
+                               return match a {
+                                   case 1 => match b {
+                                       case 10 => 1
+                                       case 2  => 2
+                                   }
+                                   case 100 => 3
+                                   default  => 4
+                               }
+                           }
+
+                           """);
 
     [Fact]
     public void AClosureHeaderStaysOnTheBracesLine() =>

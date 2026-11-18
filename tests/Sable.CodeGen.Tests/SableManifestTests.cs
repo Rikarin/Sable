@@ -208,6 +208,83 @@ public sealed class SableManifestTests {
         var manifest = ManifestFiles.Load(directory);
         Assert.Equal("my-app", manifest.Package!.Name);
         Assert.DoesNotContain("import Sable.IO", File.ReadAllText(Path.Combine(directory, "src", "main.sb")), StringComparison.Ordinal);
+
+        // Its first check is clean: no warning about an import it does not use (#199).
+        Assert.Equal(0, PackageBuilder.Check(Workspace.Load(directory), fixture.Environment, new()));
+        Assert.DoesNotContain("warning", fixture.Errors.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ALibraryIgnoresItsLockFileAndABinaryDoesNot() {
+        using var fixture = new PackageFixture();
+        var library = Scaffold.New(fixture.Root, "my-lib", library: true, fixture.Environment);
+        var binary = Scaffold.New(fixture.Root, "my-bin", library: false, fixture.Environment);
+        Assert.Equal("/target\n/sable.lock\n", File.ReadAllText(Path.Combine(library, ".gitignore")));
+        Assert.Equal("/target\n", File.ReadAllText(Path.Combine(binary, ".gitignore")));
+    }
+
+    [Fact]
+    public void NewInsideAWorkspaceSbJoinsItsMembers() {
+        using var fixture = new PackageFixture();
+        fixture.Write("ws/workspace.sb", """
+                                         import Sable.Build
+
+                                         let workspace = Workspace {
+                                             members: [
+                                                 "a", // the first
+                                             ],
+                                             exclude: ["scratch"],
+                                         }
+                                         """);
+        fixture.Package("ws/a", "a", "0.1.0", "", ("src/lib.sb", "module A\n"));
+
+        Scaffold.New(Path.Combine(fixture.Root, "ws"), "c", library: true, fixture.Environment);
+        var text = File.ReadAllText(Path.Combine(fixture.Root, "ws", "workspace.sb"));
+        Assert.Contains("        \"a\", // the first\n        \"c\",\n    ],", text, StringComparison.Ordinal);
+        Assert.Equal(["a", "c"], fixture.Load("ws").Members.Select(static m => m.Name).Order());
+
+        // From inside the new package, the workspace is found and it is current.
+        Assert.Equal("c", fixture.Load("ws/c").Current!.Name);
+
+        // An excluded directory stays out, and the manifest is untouched.
+        Scaffold.New(Path.Combine(fixture.Root, "ws"), "scratch", library: true, fixture.Environment);
+        Assert.Equal(text, File.ReadAllText(Path.Combine(fixture.Root, "ws", "workspace.sb")));
+    }
+
+    [Fact]
+    public void NewInsideASableTomlWorkspaceJoinsItsMembers() {
+        using var fixture = new PackageFixture();
+        fixture.Write("ws/sable.toml", "# the workspace\n[workspace]\nmembers = [\"a\"] # one so far\n");
+        fixture.Package("ws/a", "a", "0.1.0", "", ("src/lib.sb", "module A\n"));
+        Directory.CreateDirectory(Path.Combine(fixture.Root, "ws", "tools"));
+
+        Scaffold.New(Path.Combine(fixture.Root, "ws", "tools"), "b", library: false, fixture.Environment);
+        Assert.Equal("# the workspace\n[workspace]\nmembers = [\"a\", \"tools/b\"] # one so far\n", File.ReadAllText(Path.Combine(fixture.Root, "ws", "sable.toml")));
+        Assert.Equal(["a", "b"], fixture.Load("ws").Members.Select(static m => m.Name).Order());
+
+        // A member a glob already covers is not added again.
+        fixture.Write("ws2/sable.toml", "[workspace]\nmembers = [\"crates/*\"]\n");
+        Directory.CreateDirectory(Path.Combine(fixture.Root, "ws2", "crates"));
+        Scaffold.New(Path.Combine(fixture.Root, "ws2", "crates"), "d", library: true, fixture.Environment);
+        Assert.Equal("[workspace]\nmembers = [\"crates/*\"]\n", File.ReadAllText(Path.Combine(fixture.Root, "ws2", "sable.toml")));
+    }
+
+    [Fact]
+    public void AWorkspaceWhoseMembersAreComputedGetsAWarningNotAnEdit() {
+        using var fixture = new PackageFixture();
+        const string text = """
+                            import Sable.Build
+
+                            fn all() -> String[>..] {
+                                return ["a"]
+                            }
+
+                            let workspace = Workspace { members: all() }
+                            """;
+        fixture.Write("ws/workspace.sb", text);
+        Scaffold.New(Path.Combine(fixture.Root, "ws"), "e", library: true, fixture.Environment);
+        Assert.Equal(text + "\n", File.ReadAllText(Path.Combine(fixture.Root, "ws", "workspace.sb")));
+        Assert.Contains("add \"e\" to its members", fixture.Errors.ToString(), StringComparison.Ordinal);
     }
 
     [Fact]

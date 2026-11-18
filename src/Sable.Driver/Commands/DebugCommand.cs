@@ -86,6 +86,7 @@ public sealed class DebugCommand : Command {
                 Console.Error.WriteLine();
             }
 
+            DiagnosticDocs.WriteHint(Console.Error, result.Errors);
             return 1;
         }
 

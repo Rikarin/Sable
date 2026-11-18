@@ -179,6 +179,11 @@ inheritance, which `sable.toml` never had either.)
 
 A package that is also its workspace's root has both files in one directory.
 
+`sable new` and `init` inside a workspace add the new package to its
+`members`, unless a glob already covers it or `exclude` names it; where
+`members` is computed rather than a literal list, they say what to add
+instead of editing it.
+
 ### 5.2.4 What the manifest may do
 
 The manifest is checked as ordinary Sable, then evaluated by the SIL
@@ -245,9 +250,12 @@ against the manifest with the setting's path (`package.version`).
    and the lock file keep it on every machine, and only the build leaves out
    what does not apply to the target.
 5. The language server compiles each manifest in a module of its own, so the
-   editor has completion, hover and type errors in `package.sb`. It does not
-   evaluate manifests or apply the effect rules, and still does not read the
-   dependencies they declare (#192).
+   editor has completion, hover and type errors in `package.sb`. It reads the
+   packages through the toolchain, evaluating their manifests, and compiles
+   each package as `sable check` does: with its default features and its
+   dependencies. The effect rules' errors are not shown in the editor; a
+   manifest that breaks one leaves its package's files loose, and says why in
+   the server's log.
 
 ### 5.2.7 `sable add`, `remove` and `update` edit the source
 
@@ -285,8 +293,8 @@ with both kinds is an error, so there is never a question which one applies.
 - Workspace inheritance: `shared` and `.workspace` (§5.2.3).
 - Per-target settings (`[targets.*]`: runtime profile, reflection), waiting on
   cross-compilation; `when:` covers `os()` and `arch()` only.
-- The language server evaluating manifests and applying the effect rules
-  (#192); it type-checks them.
+- The language server showing a manifest's evaluation errors (the effect
+  rules, a trap) in the editor; it type-checks manifests, and logs the rest.
 - Compile-time evaluation of `const` and `comptime` in ordinary code (#172).
   The manifest evaluator runs the interpreter directly, under its own rules,
   and does not wait on it.

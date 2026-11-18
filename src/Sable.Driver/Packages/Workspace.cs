@@ -182,14 +182,16 @@ public sealed class Workspace {
     }
 
     /// <summary>The member directories a <c>[workspace]</c> names: globs with <c>*</c> in any segment, less the exclusions.</summary>
-    static HashSet<string> MemberDirectories(string root, WorkspaceSpec workspace) {
-        var excluded = workspace.Exclude.SelectMany(e => Expand(root, e)).ToHashSet(StringComparer.Ordinal);
-        return [
-            ..workspace.Members.SelectMany(m => Expand(root, m))
-                .Where(d => !excluded.Contains(d) && !excluded.Any(e => d.StartsWith(e + Path.DirectorySeparatorChar, StringComparison.Ordinal)))
-                .Where(static d => ManifestFiles.Exists(d)),
-        ];
-    }
+    internal static HashSet<string> MemberDirectories(string root, WorkspaceSpec workspace) => [
+        ..workspace.Members.SelectMany(m => Expand(root, m))
+            .Where(d => !IsExcluded(root, workspace, d))
+            .Where(static d => ManifestFiles.Exists(d)),
+    ];
+
+    /// <summary>Whether the directory is, or is inside, one the workspace's <c>exclude</c> names.</summary>
+    internal static bool IsExcluded(string root, WorkspaceSpec workspace, string directory) =>
+        workspace.Exclude.SelectMany(e => Expand(root, e))
+            .Any(e => directory == e || directory.StartsWith(e + Path.DirectorySeparatorChar, StringComparison.Ordinal));
 
     static IEnumerable<string> Expand(string root, string pattern) {
         IEnumerable<string> current = [Path.GetFullPath(root)];

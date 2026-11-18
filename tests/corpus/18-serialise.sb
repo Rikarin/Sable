@@ -100,7 +100,7 @@ public struct Point: Codable {
         var buffer = writer
         buffer.int(x)
         buffer.int(y)
-                return buffer
+        return buffer
     }
 
     public static fn decode(from reader: Reader) throws(CodecError) -> Point {
@@ -117,7 +117,7 @@ public struct Label: Codable {
     public fn encode(into writer: Writer) -> Writer {
         var buffer = writer
         buffer.text(text)
-                return buffer
+        return buffer
     }
 
     public static fn decode(from reader: Reader) throws(CodecError) -> Label {
@@ -169,9 +169,9 @@ public fn roundTrip(_ p: Point) -> Point? {
 
 public fn describeError(_ e: CodecError) -> String {
     return match e {
-        case .Truncated(let at) => "truncated at " + at.toString()
-        case .BadTag(let found) => "bad tag"
-        case .BadLength(let found) => "bad length " + found.toString()
+        case .Truncated(let at)     => "truncated at " + at.toString()
+        case .BadTag(let found)     => "bad tag"
+        case .BadLength(let found)  => "bad length " + found.toString()
         case .Unsupported(let what) => "unsupported " + what
     }
 }

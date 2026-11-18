@@ -29,6 +29,7 @@ public sealed class CheckCommand : PackageCommand {
                 Console.Error.WriteLine();
             }
 
+            DiagnosticDocs.WriteHint(Console.Error, errors.Concat(warnings));
             return errors.Count == 0 ? 0 : 1;
         }
 

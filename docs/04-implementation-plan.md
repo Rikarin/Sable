@@ -180,7 +180,9 @@ Copy Roslyn's **red/green tree** design exactly:
 - [ ] Round-trip invariant holds on a 2,000-file corpus
 - [ ] Incremental reparse of a 10,000-line file after a one-character edit
       completes in < 2 ms
-- [ ] `sable fmt` is idempotent and reproduces the corpus modulo normalisation
+- [x] `sable fmt` is idempotent and reproduces the corpus modulo normalisation
+      — `FormatterRepositoryTests` holds `lib/`, `examples/`, `tests/corpus/`
+      and `tests/programs/` to being formatted already
 - [x] A syntax-tree visualiser exists (Roslyn's Syntax Visualiser equivalent)
       — `tools/Sable.Visualiser`
 - [ ] Fuzzer runs for 24h without a crash or an assertion failure
@@ -1205,7 +1207,7 @@ Full design in [05-toolchain.md](05-toolchain.md).
 
 - `sable` single binary: `new init build run test bench fmt doc check add
   update publish clean bindgen repl`
-- `sable.toml` manifest, `sable.lock`, semver resolution (PubGrub), workspaces,
+- A manifest, `sable.lock`, semver resolution (PubGrub), workspaces,
   feature flags, build scripts with a capability sandbox. The manifest is
   `package.sb` (and `workspace.sb`) — Sable, evaluated in the interpreter
   under docs/05 §5.2.4's rules to the canonical `sable.toml`, which is cached
@@ -1299,7 +1301,8 @@ In `src/Sable.Driver/Packages/`, with a command per file under `Commands/`.
 - **Manifest.** A TOML 1.0 reader (tables, arrays of tables, inline tables,
   dotted and quoted keys, every string and integer form, floats, booleans,
   arrays, comments; dates kept as text) whose errors carry file, line and
-  column. `sable.toml` is read into a `Manifest` — `[package]`, `[lib]`,
+  column. `sable.toml` (written by hand, or what a `package.sb` evaluates
+  to) is read into a `Manifest` — `[package]`, `[lib]`,
   `[[bin]]`, the three dependency tables, `[features]`, `[profile.dev]` and
   `[profile.release]`, `[workspace]`, `[build]`, `[registry] path` — and
   every validation error names the file, the line and the key. Profiles act
@@ -1335,7 +1338,10 @@ In `src/Sable.Driver/Packages/`, with a command per file under `Commands/`.
   plus a note when a failure comes from two major versions of one package.
   Features are packages of their own (`name[feature]` depends on its
   package at the same version and on what the feature turns on, `dep:`
-  included), so the resolver unifies them across the graph.
+  included), so the resolver unifies them across the graph. A weak
+  `dep?/feature` is applied after resolution, at the version chosen, when
+  something else turned `dep` on, and resolution runs again until there is
+  nothing left to turn on.
 - **Lock file.** `sable.lock`, written deterministically (sorted, no times,
   same bytes for the same resolution), holds each package's version, source
   and dependencies, and each registry package's sha256. It resolves with
@@ -1360,9 +1366,17 @@ In `src/Sable.Driver/Packages/`, with a command per file under `Commands/`.
   what the lock names, nothing reads the registry.
 
 Deferred: build scripts (`[build]` is read and validated, and a build warns
-that it is not run — the capability sandbox needs runtime support); git
-dependencies (refused with an error); weak `dep?/feature` features (accepted,
-not acted on); `[build-dependencies]` are resolved but nothing uses them;
+that it is not run — the capability sandbox needs runtime support), and with
+them `[build-dependencies]` (checked, not resolved or built, and warned
+about); git dependencies (refused with an error); workspace inheritance
+(`version.workspace = true` and `{ workspace = true }` are refused,
+`[workspace.package]` and `[workspace.dependencies]` warned about); `[reflect]`
+and `[targets]` (accepted with a warning: nothing looks a type up by name
+yet, and there is no cross-compilation). A dependency's `package =` and
+`registry =` are refused: code imports a package's modules, so a rename means
+nothing, and every dependency comes from the workspace's one registry. Cargo's
+`[target.'cfg(...)'.dependencies]` is refused in favour of `when`. Every
+manifest warning is printed by `check`, `build`, `run`, `test` and `bench`.
 `publish` checks neither for a tag nor for passing tests; `org/name`
 packages are accepted but unprefixed names are not reserved; module names
 are not namespaced by package, so two packages declaring the same module
@@ -1373,8 +1387,15 @@ merge; the cache has no garbage collection; there is no network registry.
 `sable lsp` (`src/Sable.LanguageServer`, `src/Sable.Driver/Commands/LspCommand.cs`):
 JSON-RPC 2.0 over stdio with `Content-Length` framing, System.Text.Json and
 nothing else. The workspace is the open documents plus the `.sb` files under
-the root, compiled together with the library modules they import (the
-library's trees are shared, parsed once). Edits are incremental
+the root (less `target/`, `vendor/` and hidden directories). Each package
+under the root — found by its manifest, `package.sb` or `sable.toml`, and
+resolved as `sable check` resolves it — is a compilation of its own: its
+files, parsed with the features it is built with by default, and every
+library file of every package it depends on (path, registry or vendored,
+with theirs), so the members of a workspace are compiled apart. Files in no
+package are one loose program, as before. Each compilation has the library
+modules its trees import (the library's trees are shared, parsed once). A
+change to a manifest or to `sable.lock` reads the packages again. Edits are incremental
 (`TextDocumentSyncKind.Incremental`) and reparsed by the incremental parser;
 positions are UTF-16 columns, as the protocol defaults to. The message loop
 applies document changes in order; each request runs on the thread pool
@@ -1482,16 +1503,26 @@ VS Code's own test host.
   off the brace's line. Rules added: the author's line breaks inside
   expressions are kept, with one continuation indent (gofmt's rule, since
   there is no line width); a declaration's, an expression's or a guard's
-  one-statement body written on one line stays there; `operator == (`.
-  `lib/` is not reformatted yet (others were editing it): once it is, a test
-  that `sable fmt --check lib` is clean should follow.
+  one-statement body written on one line stays there, and so do an
+  `if`/`else` chain of such bodies, a closure with a header around one
+  expression, and a type's body of members without bodies of their own
+  (`struct P { var x: Int }`, `enum Dir { north, south }`, `;` between
+  members); `operator == (`; a run of match arms whose `=>` the author lined
+  up stays lined up (kept, as a line break is, not imposed). `lib/`,
+  `examples/`, `tests/corpus/` and `tests/programs/` are formatted, and a
+  test keeps them so; `tests/negative/` is not, since its expectation
+  comments sit in a column of their own.
 - **`sable explain <code>`** prints `docs/diagnostics/S####.md`, embedded in
-  the driver; `--list` lists them. There is a page for every code but five no
-  user can meet (S1005, S3082, S3099, S7001, S7002). `ExplainTests` compiles
-  each page's example and requires exactly its code, and its fix to be clean;
-  a few pages (S0001, S1002, S1009, S2003, S3038, S7000) explain without an
-  example, since no short program isolates them. Compiler output does not yet
-  point at `sable explain`; `sable lint` does.
+  the driver; `--list` lists them. There is a page for every code, those a
+  user rarely meets included (S1005 from the single-construct parsers, the
+  builtins' S3082, S7001 and S7002, the binder's fallback S3099).
+  `ExplainTests` compiles each page's example and requires exactly its code,
+  and its fix to be clean; a few pages (S0001, S1002, S1009, S2003, S3038,
+  S7000, and those five) explain without an example, since no short program
+  isolates them. A report of diagnostics from `build`, `run`, `check`,
+  `test`, `bench` and `debug` ends with a note naming `sable explain` and the
+  codes in it that have a page, as rustc's does; `sable lint` points at it
+  under each warning.
 - **`sable doc [paths] [--std] [--out dir] [--json]`**: HTML (index with a
   filter box, a page per module and per type, signatures rendered from the
   symbols with type names linked, `///` and `//!` comments as light Markdown)

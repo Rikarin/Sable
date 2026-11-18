@@ -21,7 +21,7 @@ internal static class Programs {
         var result = Pipeline.Compile(new SourceText(source, "test.sb"), optimised: optimise);
         Assert.True(result.Succeeded, string.Join("\n", result.Errors));
 
-        var executable = Path.Combine(Path.GetTempPath(), $"sable-test-{Guid.NewGuid():N}");
+        var executable = Platform.Executable(Path.Combine(Path.GetTempPath(), $"sable-test-{Guid.NewGuid():N}"));
         try {
             var build = NativeBuild.Build(result.LlvmIr!, executable, optimise);
             Assert.True(build.Succeeded, build.Output + "\n\n" + result.LlvmIr);
@@ -45,7 +45,7 @@ internal static class Programs {
             process.WaitForExit();
             return new(stdout.Result, stderr, process.ExitCode);
         } finally {
-            File.Delete(executable);
+            Platform.DeleteExecutable(executable);
         }
     }
 

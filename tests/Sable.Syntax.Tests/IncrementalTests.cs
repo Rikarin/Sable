@@ -291,7 +291,7 @@ public sealed class IncrementalTests {
 
     // ---- Reuse actually happens, and is fast -------------------------------
 
-    static SourceText LargeSource() {
+    internal static SourceText LargeSource() {
         var builder = new StringBuilder();
         builder.AppendLine("module Bench");
         for (var i = 0; i < 1000; i++) {
@@ -312,49 +312,6 @@ public sealed class IncrementalTests {
         }
 
         return new(builder.ToString(), "bench.sb");
-    }
-
-    [Fact]
-    public void AOneCharacterEditInATenThousandLineFileIsFast() {
-        var source = LargeSource();
-        Assert.True(source.LineCount > 10_000, $"expected a large file, got {source.LineCount}");
-
-        var tree = SyntaxTree.Parse(source);
-        var position = source.Text.IndexOf("Item500", StringComparison.Ordinal) + 4;
-
-        // Warm up the incremental path.
-        for (var i = 0; i < 5; i++) {
-            tree.WithChange(TextChange.Insert(position, "z"));
-        }
-
-        var watch = Stopwatch.StartNew();
-        const int iterations = 20;
-        for (var i = 0; i < iterations; i++) {
-            tree.WithChange(TextChange.Insert(position, "z"));
-        }
-
-        watch.Stop();
-
-        var perEdit = watch.Elapsed.TotalMilliseconds / iterations;
-
-        // A full reparse of the same file, on the same machine under the same
-        // load, is what an incremental edit is measured against.
-        var full = Stopwatch.StartNew();
-        for (var i = 0; i < 3; i++) {
-            SyntaxTree.Parse(source);
-        }
-
-        var perParse = full.Elapsed.TotalMilliseconds / 3;
-
-        // The plan's exit criterion is 2 ms, and this measures 0.9-1.8 ms on a
-        // development machine, against about 30 ms to reparse. Either bound
-        // catches a regression back to full reparsing: the absolute one on an
-        // ordinary machine, the relative one on a loaded or emulated one,
-        // where every number is slower alike.
-        Assert.True(
-            perEdit < 6.0 || perEdit * 5 < perParse,
-            $"incremental reparse took {perEdit:F2} ms per edit, a full parse {perParse:F2} ms, for {source.LineCount:N0} lines"
-        );
     }
 
     [Fact]
@@ -497,5 +454,70 @@ public sealed class IncrementalTests {
 
         var closed = edited.WithChange(TextChange.Delete(new TextSpan(edited.Text.Text.IndexOf('('), 1)));
         Assert.Equal(StrictDump(SyntaxTree.Parse(closed.Text.Text)), StrictDump(closed));
+    }
+}
+
+/// <summary>
+///     How fast an incremental edit is. Timing is measured apart from the
+///     other tests (the collection runs alone), and against a full parse of
+///     the same file on the same machine, so that a slow or loaded machine
+///     makes both slower alike and only a real regression fails it.
+/// </summary>
+[Collection(TimingCollection.Name)]
+[Trait("Category", "Timing")]
+public sealed class IncrementalTimingTests {
+    [Fact]
+    public void AOneCharacterEditInATenThousandLineFileIsFast() {
+        var source = IncrementalTests.LargeSource();
+        Assert.True(source.LineCount > 10_000, $"expected a large file, got {source.LineCount}");
+
+        var tree = SyntaxTree.Parse(source);
+        var position = source.Text.IndexOf("Item500", StringComparison.Ordinal) + 4;
+
+        // Warm up both paths, so that what is measured is the JIT's
+        // optimised code. A method is recompiled with optimisations after
+        // thirty calls, on a background thread, once no new method has been
+        // compiled for a while (tiered compilation) — and in a test host,
+        // with the rest of the runner compiling, that can take a second or
+        // two. So both run, pausing for the JIT, for two seconds first. (The
+        // project turns dynamic PGO off, for the same reason.)
+        var warm = Stopwatch.StartNew();
+        while (warm.Elapsed.TotalSeconds < 2) {
+            for (var i = 0; i < 10; i++) {
+                tree.WithChange(TextChange.Insert(position, "z"));
+            }
+
+            SyntaxTree.Parse(source);
+            Thread.Sleep(100);
+        }
+
+        // Edits and full parses, interleaved so that both see the same
+        // load, each timed alone and the best of each kept: what the code
+        // costs, not what the machine was doing besides. (An edit allocates
+        // its token array on the large-object heap; a collection the parses'
+        // garbage brings on lands in whichever edit comes next, which on a
+        // loaded runner made a batch's average ten times the edit's cost.)
+        var perEdit = double.MaxValue;
+        var perParse = double.MaxValue;
+        for (var round = 0; round < 10; round++) {
+            for (var i = 0; i < 3; i++) {
+                var edit = Stopwatch.StartNew();
+                tree.WithChange(TextChange.Insert(position, "z"));
+                perEdit = Math.Min(perEdit, edit.Elapsed.TotalMilliseconds);
+            }
+
+            var parse = Stopwatch.StartNew();
+            SyntaxTree.Parse(source);
+            perParse = Math.Min(perParse, parse.Elapsed.TotalMilliseconds);
+        }
+
+        // The plan's exit criterion is 2 ms, and this measures about 1 ms on
+        // a development machine, against about 20 ms to reparse. A
+        // regression to reparsing the file, or most of it, brings the two
+        // together; a sixth of a parse is the bound, which holds on any
+        // machine however slow, as both are slower alike.
+        var message = $"incremental reparse took {perEdit:F2} ms per edit, a full parse {perParse:F2} ms, for {source.LineCount:N0} lines";
+        Assert.True(perEdit * 6 < perParse, message);
+        Console.WriteLine(message);
     }
 }

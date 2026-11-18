@@ -244,7 +244,7 @@ fn main() {
     print("drew \(workspace.render())")
     print("\(notes.path) belongs to a workspace: \(notes.owner != none)")
 
-    let directory = Environment.variable("TMPDIR") ?? "/tmp"
+    let directory = Environment.variable("TMPDIR") ?? Environment.variable("TEMP") ?? "/tmp"
     do {
         let copied = try copyThrough("tiers", inside: directory)
         print("copied: \(copied)")

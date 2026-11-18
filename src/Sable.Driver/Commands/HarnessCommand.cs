@@ -109,7 +109,7 @@ public abstract class HarnessCommand : Command {
 
         // Built to be run here, and then gone; or, with '--harness-out',
         // written there and kept, for a debugger to start.
-        var executable = options.Output ?? Path.Combine(Path.GetTempPath(), $"sable-{Name}-{Guid.NewGuid():N}");
+        var executable = options.Output ?? Path.Combine(Path.GetTempPath(), $"sable-{Name}-{Guid.NewGuid():N}{NativeTarget.Host.ExecutableSuffix}");
         try {
             var code = Build(program.Trees, program.Directory, options, executable, program.Cache, program.Link, program.LinkInputs)
                 ?? (options.Output is null ? Execute(executable, options.HarnessArguments) : 0);

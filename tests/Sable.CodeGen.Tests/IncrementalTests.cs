@@ -196,7 +196,7 @@ public sealed class IncrementalTests {
             var profile = workspace.RootManifest.ProfileFor(request.Release);
             var directory = Directory.CreateTempSubdirectory("sable-clean-").FullName;
             try {
-                var executable = Path.Combine(directory, "app");
+                var executable = Platform.Executable(Path.Combine(directory, "app"));
                 var settings = new BuildSettings(profile.Name, profile.Optimise, profile.Debug ? workspace.Root : null, profile.Exclusivity) { Whole = true };
                 var outcome = IncrementalBuild.Build(PackageBuilder.Units(graph, member.Name, member.Bins[0]), settings, executable, Path.Combine(directory, "cache"));
                 Assert.True(outcome.Succeeded, string.Join("\n", outcome.Errors));
@@ -332,7 +332,7 @@ public sealed class IncrementalTests {
 
         // What the next build reads is what the program is keyed by. (The
         // executable is removed, so that the build is not merely fresh.)
-        var executable = scenario.PathOf("app/target/dev/app");
+        var executable = Platform.Executable(scenario.PathOf("app/target/dev/app"));
         var geometry = Sbi("lib geometry-0.1.0");
         var text = File.ReadAllText(geometry);
         var line = text.Split('\n')[2];
@@ -585,7 +585,7 @@ public sealed class IncrementalTests {
                 """);
             UnitPlan Unit(string name) => new(name, [new SourceFile(Path.Combine(directory, name + ".sb"), name + ".sb", [])]);
             var log = new StringWriter();
-            var executable = Path.Combine(directory, "program");
+            var executable = Platform.Executable(Path.Combine(directory, "program"));
             var outcome = IncrementalBuild.Build([Unit("main"), Unit("base")], new BuildSettings("dev", false, directory, true), executable, Path.Combine(directory, "cache"), null, log);
             Assert.True(outcome.Succeeded, string.Join("\n", outcome.Errors));
             Assert.Equal("whole", outcome.Kind);

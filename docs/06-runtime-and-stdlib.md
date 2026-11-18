@@ -55,7 +55,7 @@ typedef struct {
 } TypeMetadata;
 ```
 
-As implemented so far (`runtime/sable_runtime.c`), the metadata of a
+As implemented so far (`runtime/objects.c`), the metadata of a
 counted object is smaller: the destroy function, the name, an array's
 element size, copier and destroyer (a class keeps its superclass there),
 the instance's size and alignment, and a visitor that hands each strong

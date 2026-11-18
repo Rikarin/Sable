@@ -600,6 +600,6 @@ public sealed class LanguageServerTests : IDisposable {
         await client.ChangeAsync(uri, 2, text, at, at + "shout".Length, "shout2");
         var diagnostics = await client.DiagnosticsAsync(uri, static d => d.GetArrayLength() > 0);
         var start = diagnostics[0].Get("range")!.Value.Get("start")!.Value;
-        Assert.Equal(new { line = 5, character = 28 }.ToString(), Shape(start));
+        Assert.True(new { line = 5, character = 28 }.ToString() == Shape(start), diagnostics.ToString());
     }
 }

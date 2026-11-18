@@ -159,11 +159,12 @@ public sealed class TestRunnerMoreTests {
             directory.Delete(true);
         }
 
-        var text = output.ToString();
+        // The driver's lines end as the platform's do; the harness's in '\n'.
+        var text = output.ToString().ReplaceLineEndings("\n");
         Assert.StartsWith("running 8 tests\n", text, StringComparison.Ordinal);
         AssertTheSuitesVerdicts(text);
         Assert.Contains("test Suite.hangs ... FAILED (", text, StringComparison.Ordinal);
-        Assert.Contains("---- Suite.hangs (test.sb:51) ----\n    the test did not finish within 3", text, StringComparison.Ordinal);
+        Assert.True(text.Contains("---- Suite.hangs (test.sb:51) ----\n    the test did not finish within 3", StringComparison.Ordinal), text);
         Assert.Contains("test result: FAILED. 3 passed; 5 failed; 0 filtered out; finished in ", text, StringComparison.Ordinal);
 
         // Failures are reported in the order the tests are declared, whatever order they finished in.
@@ -190,7 +191,7 @@ public sealed class TestRunnerMoreTests {
             directory.Delete(true);
         }
 
-        Assert.Contains("running 2 tests\n", output.ToString(), StringComparison.Ordinal);
+        Assert.Contains("running 2 tests\n", output.ToString().ReplaceLineEndings("\n"), StringComparison.Ordinal);
         Assert.Contains("test result: ok. 2 passed; 0 failed; 5 filtered out;", output.ToString(), StringComparison.Ordinal);
     }
 

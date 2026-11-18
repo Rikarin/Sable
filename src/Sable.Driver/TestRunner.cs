@@ -23,7 +23,10 @@ internal static class TestRunner {
     internal sealed record TestEntry(string Name, string Location, string? Traps);
 
     /// <summary>How one test's process ended.</summary>
-    sealed record Outcome(TestEntry Test, int Status, string Output, string Errors, TimeSpan Took, bool TimedOut);
+    /// <param name="Limit">The time limit it was stopped at, when it was.</param>
+    sealed record Outcome(TestEntry Test, int Status, string Output, string Errors, TimeSpan Took, TimeSpan? Limit) {
+        public bool TimedOut => Limit is not null;
+    }
 
     /// <summary>The marker a failed assertion's report starts with (Sable.Testing's <c>failureMarker</c>).</summary>
     const string FailureMarker = "assertion failed: ";
@@ -115,7 +118,7 @@ internal static class TestRunner {
     static Outcome RunOne(string executable, TestEntry test, TimeSpan? timeout, Action runningLong) {
         var clock = Stopwatch.StartNew();
         var result = Capture(executable, ["--run-test", test.Name], timeout, runningLong);
-        return new(test, result.Status, result.Output, result.Errors, clock.Elapsed, result.TimedOut);
+        return new(test, result.Status, result.Output, result.Errors, clock.Elapsed, result.TimedOut ? timeout : null);
     }
 
     /// <summary>Runs the harness to its end (or its time limit), keeping what it wrote; status -1 when it could not be started.</summary>
@@ -164,7 +167,9 @@ internal static class TestRunner {
     /// </summary>
     static string? Verdict(Outcome outcome) {
         if (outcome.TimedOut) {
-            return $"the test did not finish within {outcome.Took.TotalSeconds:0.#} s, and was stopped";
+            // The limit, not the time it took: stopping a process tree can
+            // take a while, on Windows most of all.
+            return $"the test did not finish within {outcome.Limit!.Value.TotalSeconds:0.#} s, and was stopped";
         }
 
         if (outcome.Test.Traps is not { } expected) {

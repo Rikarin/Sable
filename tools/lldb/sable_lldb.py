@@ -23,7 +23,7 @@ in a suffix saying what kind of thing it is:
 
 The formatters match those names by regular expression, so they work with
 any lldb that runs Python (no recognizer functions needed), and they read
-the runtime's layouts (runtime/sable_runtime.c) directly.
+the runtime's layouts (runtime/*.c) directly.
 """
 
 import lldb

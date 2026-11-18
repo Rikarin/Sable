@@ -19,6 +19,7 @@ gap to manual C: allocation, layout and code generation included.
 
 import argparse
 import pathlib
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -39,15 +40,19 @@ __attribute__((noinline)) void sable_extra_count(void *pointer) {
 """
 
 
-def doubled_runtime(path):
-    source = (ROOT / "runtime" / "sable_runtime.c").read_text()
+def doubled_runtime(directory):
+    """The runtime copied into 'directory', retain and release counting twice; the file to compile."""
+    shutil.copytree(ROOT / "runtime", directory)
+    memory = directory / "memory.c"
+    source = memory.read_text()
     source = source.replace("void sable_retain(void *pointer) {", DOUBLE + "\nvoid sable_retain(void *pointer) {\n    sable_extra_count(pointer);", 1)
     source = source.replace(
         "void sable_release(void *pointer) {",
         "void sable_release(void *pointer) {\n    if (pointer != NULL && ((SableObject *)pointer)->strong > 1) {\n        sable_extra_count(pointer);\n    }",
         1,
     )
-    path.write_text(source)
+    memory.write_text(source)
+    return directory / "sable_runtime.c"
 
 
 def best(executable, runs):
@@ -70,8 +75,7 @@ def main():
             ["dotnet", "build", str(ROOT / "src" / "Sable.Driver"), "-c", "Release", "-o", str(scratch / "compiler"), "-v", "quiet", "-nologo"],
             check=True, stdout=subprocess.DEVNULL,
         )
-        doubled = scratch / "doubled.c"
-        doubled_runtime(doubled)
+        doubled = doubled_runtime(scratch / "doubled-runtime")
 
         total, manual_total = 0.0, 0.0
         print(f"{'benchmark':<13} {'ms':>7} {'counts':>7} {'overhead':>8} {'C ms':>7} {'vs C':>6}")

@@ -74,8 +74,14 @@ internal sealed class PackageFixture : IDisposable {
 
     public void Dispose() {
         try {
+            // git makes its object files read-only, which on Windows a file
+            // must not be to be deleted.
+            foreach (var file in Directory.EnumerateFiles(Root, "*", SearchOption.AllDirectories)) {
+                File.SetAttributes(file, FileAttributes.Normal);
+            }
+
             Directory.Delete(Root, true);
-        } catch (IOException) {
+        } catch (Exception e) when (e is IOException or UnauthorizedAccessException) {
             // A test's leftovers in the temporary directory are harmless.
         }
     }

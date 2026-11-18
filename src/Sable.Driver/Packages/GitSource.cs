@@ -116,7 +116,7 @@ public sealed partial class GitSource(string cacheDirectory, TextWriter output, 
             if (!Directory.Exists(database)) {
                 Directory.Move(temporary, database);
             } else {
-                Directory.Delete(temporary, true);
+                DeleteTree(temporary);
             }
         }
 

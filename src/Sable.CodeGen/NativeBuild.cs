@@ -98,14 +98,47 @@ public sealed record NativeBuildResult(bool Succeeded, string Output);
 ///     passes make it fast.
 /// </remarks>
 public static class NativeBuild {
-    /// <summary>The runtime's C source, carried inside this assembly.</summary>
-    public static string RuntimeSource {
-        get {
-            using var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("Sable.CodeGen.sable_runtime.c")
-                ?? throw new InvalidOperationException("the runtime source is missing from Sable.CodeGen");
-            using var reader = new StreamReader(stream);
-            return reader.ReadToEnd();
+    /// <summary>
+    ///     The runtime's C source, carried inside this assembly: each file of
+    ///     <c>runtime/</c> by its name. <c>sable_runtime.c</c> is the one
+    ///     compiled; it includes the rest.
+    /// </summary>
+    public static IReadOnlyList<(string Name, string Text)> RuntimeFiles => RuntimeFileList.Value;
+
+    static readonly Lazy<IReadOnlyList<(string Name, string Text)>> RuntimeFileList = new(static () => {
+        const string prefix = "Sable.CodeGen.runtime/";
+        var assembly = Assembly.GetExecutingAssembly();
+        var files = assembly.GetManifestResourceNames()
+            .Where(static name => name.StartsWith(prefix, StringComparison.Ordinal))
+            .Order(StringComparer.Ordinal)
+            .Select(name => {
+                using var reader = new StreamReader(assembly.GetManifestResourceStream(name)!);
+                return (name[prefix.Length..], reader.ReadToEnd());
+            })
+            .ToList();
+        return files.Any(static f => f.Item1 == RuntimeMain) ? files : throw new InvalidOperationException("the runtime source is missing from Sable.CodeGen");
+    });
+
+    /// <summary>The runtime's file that is compiled, which includes the others.</summary>
+    public const string RuntimeMain = "sable_runtime.c";
+
+    /// <summary>
+    ///     The whole of the runtime's source, every file named and in order:
+    ///     what a compiled runtime is keyed by.
+    /// </summary>
+    public static string RuntimeSource => string.Concat(RuntimeFiles.Select(static f => $"--- {f.Name}\n{f.Text}\n"));
+
+    /// <summary>
+    ///     Writes the runtime's files into <paramref name="directory" />, and
+    ///     gives the path of the one to compile.
+    /// </summary>
+    public static string WriteRuntime(string directory) {
+        Directory.CreateDirectory(directory);
+        foreach (var (name, text) in RuntimeFiles) {
+            File.WriteAllText(Path.Combine(directory, name), text);
         }
+
+        return Path.Combine(directory, RuntimeMain);
     }
 
     /// <summary>
@@ -201,7 +234,7 @@ public static class NativeBuild {
         var directory = Directory.CreateTempSubdirectory("sable-build-");
         try {
             var irPath = Path.Combine(directory.FullName, "program.ll");
-            File.WriteAllText(irPath, ForTarget(llvmIr, target, lto.Count > 0));
+            File.WriteAllText(irPath, ForTarget(llvmIr, target, lto.Count > 0, namesFrames: !options.Optimise));
 
             List<string> arguments = [..target.ClangFlags, ..SysrootFlags(options), ..CompileFlags(options), ..lto];
 
@@ -232,7 +265,7 @@ public static class NativeBuild {
 
     /// <summary>Why an executable cannot be linked for <paramref name="target" />.</summary>
     public static string NoRuntime(NativeTarget target) =>
-        $"the runtime has no platform layer for {target.Triple} yet: it is built for macOS and Linux only (docs/06); "
+        $"the runtime has no platform layer for {target.Triple} yet: it is built for macOS, Linux and Windows only (docs/06); "
         + "the program can still be compiled to an object file (--emit obj) or to LLVM IR (--emit llvm-ir)";
 
     /// <summary>
@@ -248,7 +281,18 @@ public static class NativeBuild {
     ///     IR, written by hand, said nothing, so under LTO the runtime's
     ///     retain and release were never inlined into it.)
     /// </param>
-    public static string ForTarget(string llvmIr, NativeTarget target, bool inlinesRuntime = false) {
+    /// <param name="namesFrames">
+    ///     An unoptimised build, whose trap's backtrace names every frame.
+    ///     A whole program's functions are internal, which the symbol table
+    ///     a backtrace reads on Linux (the dynamic one) and Windows (a PDB's
+    ///     public symbols) leaves out: there they are kept external. Nothing
+    ///     else links with the program, so no name can clash.
+    /// </param>
+    public static string ForTarget(string llvmIr, NativeTarget target, bool inlinesRuntime = false, bool namesFrames = false) {
+        if (namesFrames && target.Platform is NativePlatform.Linux or NativePlatform.Windows) {
+            llvmIr = llvmIr.Replace("\ndefine internal ", "\ndefine ", StringComparison.Ordinal);
+        }
+
         var attributes = new List<string>();
         if (inlinesRuntime && target.Describe()?.FunctionAttributes is { } features) {
             attributes.Add(features);
@@ -336,9 +380,9 @@ public static class NativeBuild {
 
         Directory.CreateDirectory(cacheDirectory);
         var temporary = path + $".{Environment.ProcessId}.{Guid.NewGuid():N}.tmp";
-        var source = temporary + ".c";
+        var sources = temporary + ".src";
         try {
-            File.WriteAllText(source, RuntimeSource);
+            var source = WriteRuntime(sources);
             var (exitCode, output) = Run(CompilerPath, [..flags, source, "-o", temporary]);
             if (exitCode != 0) {
                 return (path, new(false, output));
@@ -347,7 +391,10 @@ public static class NativeBuild {
             File.Move(temporary, path, overwrite: true);
             return (path, new(true, output));
         } finally {
-            File.Delete(source);
+            if (Directory.Exists(sources)) {
+                Directory.Delete(sources, true);
+            }
+
             File.Delete(temporary);
         }
     }
@@ -360,11 +407,12 @@ public static class NativeBuild {
     ///     Link-time optimisation's flags, which let LLVM inline the runtime's
     ///     small functions into the program: in an optimised build that asks
     ///     for it, where the linker takes LLVM bitcode — Apple's does; on Linux
-    ///     it is lld, as the GNU linkers need a plugin few installations have.
+    ///     and Windows it is lld, as the GNU linkers need a plugin few
+    ///     installations have, and Microsoft's takes none.
     /// </summary>
     public static IReadOnlyList<string> LtoFlags(NativeOptions options, NativePlatform platform, bool linksBitcode) =>
         !options.Optimise || options.Lto == LtoMode.Off || !linksBitcode ? []
-        : [options.Lto == LtoMode.Thin ? "-flto=thin" : "-flto", ..platform == NativePlatform.Linux ? new[] { "-fuse-ld=lld" } : []];
+        : [options.Lto == LtoMode.Thin ? "-flto=thin" : "-flto", ..platform is NativePlatform.Linux or NativePlatform.Windows ? new[] { "-fuse-ld=lld" } : []];
 
     /// <summary>
     ///     What the link takes after the objects: what the platform needs, then
@@ -396,11 +444,12 @@ public static class NativeBuild {
     }
 
     /// <summary>
-    ///     Whether this machine's link takes LLVM bitcode: always on macOS; on
-    ///     Linux when clang can link through lld, which is asked once per process.
+    ///     Whether this machine's link takes LLVM bitcode: always on macOS, and
+    ///     on Windows, where the link is always lld's; on Linux when clang can
+    ///     link through lld, which is asked once per process.
     /// </summary>
     public static bool LinksBitcode => Host switch {
-        NativePlatform.MacOS => true,
+        NativePlatform.MacOS or NativePlatform.Windows => true,
         NativePlatform.Linux => LldLinks.Value,
         _ => false,
     };
@@ -424,14 +473,32 @@ public static class NativeBuild {
     ///     compilation's link both take them from here, so that the two cannot
     ///     drift apart.
     /// </summary>
-    public static IReadOnlyList<string> PlatformLinkFlags(NativePlatform platform) =>
-        platform == NativePlatform.Linux
-            // A trap's backtrace names frames through dladdr, which on Linux
-            // sees only the dynamic symbol table: the program's functions go
-            // there too. And 'frem' becomes a call to fmod, which glibc keeps
-            // in libm, not libc.
-            ? ["-rdynamic", "-lm"]
-            : [];
+    public static IReadOnlyList<string> PlatformLinkFlags(NativePlatform platform) => platform switch {
+        // A trap's backtrace names frames through dladdr, which on Linux
+        // sees only the dynamic symbol table: the program's functions go
+        // there too. And 'frem' becomes a call to fmod, which glibc keeps
+        // in libm, not libc.
+        NativePlatform.Linux => ["-rdynamic", "-lm"],
+
+        // lld, which takes LLVM bitcode as Microsoft's linker does not; the
+        // main thread's stack the size a POSIX one's is, 8 MiB, not 1; a
+        // PDB, with the program's symbols at least, from which a trap's
+        // backtrace names frames; and compiler-rt's builtins, which LLVM
+        // calls for what the machine has no instruction for (F16, 128-bit
+        // division) and which Microsoft's C runtime does not have.
+        NativePlatform.Windows => ["-fuse-ld=lld", "-Wl,/STACK:8388608", "-Wl,/DEBUG", ..CompilerRtBuiltins.Value is { } builtins ? [builtins] : Array.Empty<string>()],
+        _ => [],
+    };
+
+    /// <summary>compiler-rt's builtins library, as clang names it; null when it has none.</summary>
+    static readonly Lazy<string?> CompilerRtBuiltins = new(static () => {
+        try {
+            var (exitCode, output) = Run(CompilerPath, ["--rtlib=compiler-rt", "-print-libgcc-file-name"]);
+            return exitCode == 0 && output.Trim() is { Length: > 0 } path && File.Exists(path) ? path : null;
+        } catch (System.ComponentModel.Win32Exception) {
+            return null;
+        }
+    });
 
     /// <summary>
     ///     Puts the formatter plugin where lldb looks for a program's scripts:
@@ -458,13 +525,20 @@ public static class NativeBuild {
 
     /// <summary>
     ///     What every function needs on the target's platform, whatever the
-    ///     build. macOS's backtrace(), which a trap's backtrace and the
-    ///     system's crash reports use, walks the frame-pointer chain: keep it
-    ///     in every function that calls, as clang does for C there. (Without
-    ///     it an unoptimised build's trap showed the innermost frame only.)
+    ///     build, for a trap's backtrace (and the system's crash reports) to
+    ///     see past it. macOS's backtrace() walks the frame-pointer chain:
+    ///     keep it in every function that calls, as clang does for C there.
+    ///     glibc's, and Windows' CaptureStackBackTrace, walk the unwind
+    ///     tables, which LLVM writes for a function that cannot throw — all
+    ///     of Sable's — only when asked to, as clang asks for C there.
+    ///     (Without them an unoptimised build's trap showed the innermost
+    ///     frame only.)
     /// </summary>
-    public static string? PlatformAttributesFor(NativeTarget target) =>
-        target.Platform == NativePlatform.MacOS ? "\"frame-pointer\"=\"non-leaf\"" : null;
+    public static string? PlatformAttributesFor(NativeTarget target) => target.Platform switch {
+        NativePlatform.MacOS => "\"frame-pointer\"=\"non-leaf\"",
+        NativePlatform.Linux or NativePlatform.Windows => "uwtable",
+        _ => null,
+    };
 
     /// <summary>Every function the IR defines, given the host's attributes through one attribute group.</summary>
     public static string WithHostAttributes(string llvmIr, string attributes) {

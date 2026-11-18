@@ -24,7 +24,8 @@ namespace Sable.CodeGen;
 ///     <para>
 ///         Every target the triple parser knows can be compiled to an object
 ///         file. Linking an executable needs the runtime, whose platform
-///         layer is POSIX: macOS and Linux today (<see cref="HasRuntime" />).
+///         layer is POSIX for macOS and Linux and Win32 for Windows
+///         (<see cref="HasRuntime" />).
 ///     </para>
 /// </remarks>
 public sealed record NativeTarget {
@@ -54,11 +55,12 @@ public sealed record NativeTarget {
 
     /// <summary>
     ///     Whether the runtime can be built for it, and so an executable
-    ///     linked: the runtime's platform layer is POSIX (threads, dynamic
-    ///     symbol lookup, processes), which macOS and Linux have. Windows and
-    ///     WebAssembly need a layer of their own (docs/06), not written yet.
+    ///     linked: the runtime's platform layer (threads, a trap's backtrace,
+    ///     files, processes) is POSIX on macOS and Linux and Win32 on
+    ///     Windows. WebAssembly needs a layer of its own (docs/06), not
+    ///     written yet.
     /// </summary>
-    public bool HasRuntime => Platform is NativePlatform.MacOS or NativePlatform.Linux;
+    public bool HasRuntime => Platform is NativePlatform.MacOS or NativePlatform.Linux or NativePlatform.Windows;
 
     /// <summary>What an executable's file name ends with on the target.</summary>
     public string ExecutableSuffix => Platform switch {
@@ -67,8 +69,16 @@ public sealed record NativeTarget {
         _ => "",
     };
 
-    /// <summary>What clang is told so that it builds for this target: nothing for the host.</summary>
-    public IReadOnlyList<string> ClangFlags => IsHost ? [] : ["--target=" + Triple];
+    /// <summary>
+    ///     What clang is told so that it builds for this target: its triple,
+    ///     but for the host. On Windows, the C runtime is the DLL, as
+    ///     Microsoft's compiler links it by default: the Universal C Runtime
+    ///     is the system's, and a program carries none of it.
+    /// </summary>
+    public IReadOnlyList<string> ClangFlags => [
+        ..IsHost ? [] : new[] { "--target=" + Triple },
+        ..Platform == NativePlatform.Windows ? new[] { "-fms-runtime-lib=dll" } : [],
+    ];
 
     public override string ToString() => Triple;
 

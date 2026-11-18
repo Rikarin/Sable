@@ -156,6 +156,9 @@ public sealed class DebuggerFormatterTests {
                          }
                          """;
 
+    /// <summary>Why the tests that run lldb are skipped on Windows.</summary>
+    const string NeedsLldb = "lldb's Python formatter plugin and these sessions are for lldb on macOS and Linux; a Windows debugger reads a PDB's CodeView, which the compiler does not write yet";
+
     static readonly Lazy<string?> Lldb = new(FindLldb);
 
     /// <summary>An lldb that can launch and stop a program here; null when there is none.</summary>
@@ -252,11 +255,11 @@ public sealed class DebuggerFormatterTests {
         }
     }
 
-    [Fact]
+    [PosixFact(NeedsLldb)]
     public void StringsShowTheirText() =>
         Shows("(String) greeting = \"hello, world\"", "(String) blank = \"\"", "(String?) maybeText = \"maybe\"");
 
-    [Fact]
+    [PosixFact(NeedsLldb)]
     public void ListsShowTheirCountAndElements() =>
         Shows(
             "([Int]) numbers = count = 3 {\n  [0] = 10\n  [1] = 20\n  [2] = 30\n}",
@@ -264,7 +267,7 @@ public sealed class DebuggerFormatterTests {
             "([Int]) nothingYet = count = 0"
         );
 
-    [Fact]
+    [PosixFact(NeedsLldb)]
     public void UnionsShowTheirCaseAndPayload() =>
         Shows(
             "(Values.Shape) circle = Circle(radius: 1.5)",
@@ -274,7 +277,7 @@ public sealed class DebuggerFormatterTests {
             "(Values.Direction) heading = West"
         );
 
-    [Fact]
+    [PosixFact(NeedsLldb)]
     public void OptionalsShowTheirValueOrNone() =>
         Shows(
             "(Int?) answer = 42",
@@ -284,7 +287,7 @@ public sealed class DebuggerFormatterTests {
             "(Values.Node?) someNode = Values.Node {"
         );
 
-    [Fact]
+    [PosixFact(NeedsLldb)]
     public void ExistentialsShowTheDynamicTypeAndValue() =>
         Shows(
             "(any Values.Named) pet = Values.Dog {\n  [value] = (breed = \"collie\")\n}",
@@ -292,26 +295,26 @@ public sealed class DebuggerFormatterTests {
             "(any Values.Named) bird = Values.Bird {\n  [value] = Values.Bird {\n    legs = 2\n"
         );
 
-    [Fact]
+    [PosixFact(NeedsLldb)]
     public void ClassInstancesShowTheirFieldsAndReferenceCount() =>
         Shows("(Values.Node) node = Values.Node {\n  value = 7\n  label = \"seven\"\n  next = none\n  [strong] = 2\n}");
 
-    [Fact]
+    [PosixFact(NeedsLldb)]
     public void NestedStructsShowFieldByField() =>
         Shows("(Values.Line) line = {\n  from = (x = 1, y = 2)\n  to = (x = 3, y = 4)\n  name = \"diagonal\"\n}");
 
-    [Fact]
+    [PosixFact(NeedsLldb)]
     public void TuplesCharactersAndClosures() =>
         Shows("((Int, String)) pair = (1, \"one\")", "(Char) letter = 'x'", "((Int) -> Int) times = Values.main$closure0");
 
-    [Fact]
+    [PosixFact(NeedsLldb)]
     public void DictionariesAndHashMapsShowTheirEntries() =>
         Shows(
             "([(String, Int)]) ages = count = 1 {\n  [0] = (\"ann\", 31)\n}",
             "(Sable.Collections.HashMap$of$String$Int) map = Sable.Collections.HashMap$of$String$Int count = 2 {\n  [\"one\"] = 1\n  [\"two\"] = 2\n"
         );
 
-    [Fact]
+    [PosixFact(NeedsLldb)]
     public async Task NextStepsLineByLineAndFinishReturns() {
         if (Lldb.Value is not { } lldb) {
             return;
@@ -334,7 +337,7 @@ public sealed class DebuggerFormatterTests {
     static void Expect(string output, string expected) =>
         Assert.True(output.Contains(expected, StringComparison.Ordinal), $"lldb did not show: {expected}\n--- the session ---\n{output}");
 
-    [Fact]
+    [PosixFact(NeedsLldb)]
     public async Task StepGoesThroughAnExistentialIntoTheMethod() {
         if (Lldb.Value is not { } lldb) {
             return;
@@ -348,7 +351,7 @@ public sealed class DebuggerFormatterTests {
         Expect(output, "Return value: (String) $0 = \"collie\"");
     }
 
-    [Fact]
+    [PosixFact(NeedsLldb)]
     public async Task ClosuresShowTheirFunctionAndCaptures() {
         if (Lldb.Value is not { } lldb) {
             return;
@@ -364,7 +367,7 @@ public sealed class DebuggerFormatterTests {
         Expect(output, "(Int) add.count = 2");
     }
 
-    [Fact]
+    [PosixFact(NeedsLldb)]
     public async Task FunctionsAreFoundByTheirSableNames() {
         if (Lldb.Value is not { } lldb) {
             return;
@@ -420,7 +423,7 @@ public sealed class DebuggerFormatterTests {
         Assert.False(LlvmEmitter.ThunkPrologueHasALine(null));
     }
 
-    [Fact]
+    [PosixFact(NeedsLldb)]
     public async Task TypesThatContainThemselvesAreDescribed() {
         const string source = """
                               module Rec
@@ -510,7 +513,7 @@ public sealed class DebuggerFormatterTests {
         }
     }
 
-    [Fact]
+    [PosixFact(NeedsLldb)]
     public async Task AShadowedNameShowsOnlyWhereItIsInScope() {
         if (Lldb.Value is not { } lldb) {
             return;
@@ -551,7 +554,7 @@ public sealed class DebuggerFormatterTests {
     }
 
     /// <summary>The DWARF itself is well formed, as the platform's verifier sees it.</summary>
-    [Fact]
+    [PosixFact("the debug information is DWARF, for lldb and gdb; a Windows debugger reads CodeView from a PDB, which the compiler does not write yet")]
     public async Task DwarfVerifies() {
         // Apple's dwarfdump, or LLVM's, perhaps under its version's name.
         string[] candidates = OperatingSystem.IsMacOS()

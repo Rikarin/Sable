@@ -21,7 +21,8 @@ namespace Sable.CodeGen;
 ///     <para>
 ///         The classification is the target's — the one the program is built
 ///         for, the machine building it unless a target says otherwise:
-///         AAPCS64 (Apple's and Linux's arm64) or the System V x86-64 ABI.
+///         AAPCS64 (Apple's and Linux's arm64), the System V x86-64 ABI, or
+///         on Windows Microsoft's x64 convention.
 ///         An integer narrower than 32 bits, and <c>Bool</c>, is widened by
 ///         the side the ABI says (<c>signext</c>, <c>zeroext</c>).
 ///         (WebAssembly's C ABI, which passes most structs through memory,
@@ -60,8 +61,16 @@ public sealed partial class LlvmEmitter {
     /// <summary>How C passes one value of a Sable type: how, as what LLVM type, with what attributes.</summary>
     sealed record CType(CPassing Passing, string Coerced, string Attributes);
 
-    /// <summary>The target follows AAPCS64; otherwise the System V x86-64 ABI.</summary>
+    /// <summary>The target follows AAPCS64; otherwise the System V x86-64 ABI, or on Windows Microsoft's.</summary>
     bool IsArm64 => _arch == "arm64";
+
+    /// <summary>
+    ///     Microsoft's x64 convention: a struct of 1, 2, 4 or 8 bytes is
+    ///     passed and returned in an integer register, as an integer of its
+    ///     size — floats or not; any other as a pointer to a copy the caller
+    ///     makes, and returned through <c>sret</c>.
+    /// </summary>
+    bool IsWin64 => _windows && _arch == "x86_64";
 
     /// <summary>How C passes a value of the type as an argument.</summary>
     CType CArgument(SilType type) {
@@ -70,6 +79,10 @@ public sealed partial class LlvmEmitter {
         }
 
         var size = Size(structure);
+        if (IsWin64) {
+            return size is 1 or 2 or 4 or 8 ? new(CPassing.Direct, $"i{size * 8}", "") : new(CPassing.Indirect, "ptr", "noundef");
+        }
+
         if (IsArm64) {
             if (FloatAggregate(structure) is var (element, count)) {
                 return new(CPassing.Direct, $"[{count} x {element}]", "");
@@ -92,6 +105,10 @@ public sealed partial class LlvmEmitter {
         }
 
         var size = Size(structure);
+        if (IsWin64) {
+            return size is 1 or 2 or 4 or 8 ? new(CPassing.Direct, $"i{size * 8}", "") : null;
+        }
+
         if (size > 16) {
             return null;
         }

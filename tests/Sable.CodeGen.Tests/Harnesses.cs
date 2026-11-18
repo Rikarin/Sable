@@ -27,7 +27,7 @@ internal static class Harnesses {
         var result = Compile(sources, kind, doc);
         Assert.True(result.Succeeded, string.Join("\n", result.Errors));
 
-        var executable = Path.Combine(Path.GetTempPath(), $"sable-harness-{Guid.NewGuid():N}");
+        var executable = Platform.Executable(Path.Combine(Path.GetTempPath(), $"sable-harness-{Guid.NewGuid():N}"));
         try {
             // A test build is unoptimised, as 'sable test' builds it.
             var build = NativeBuild.Build(result.LlvmIr!, executable, kind == TestKind.Bench);
@@ -45,7 +45,7 @@ internal static class Harnesses {
             process.WaitForExit();
             return new(stdout.Result, stderr, process.ExitCode);
         } finally {
-            File.Delete(executable);
+            Platform.DeleteExecutable(executable);
         }
     }
 

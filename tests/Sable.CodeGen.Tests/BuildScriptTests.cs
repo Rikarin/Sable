@@ -245,6 +245,8 @@ public sealed class BuildScriptTests {
 
         using var fixture = new PackageFixture();
         var compiler = NativeBuild.CompilerPath;
+        // LLVM's archiver on Windows, where a library is 'triple.lib'.
+        var (archiver, library) = OperatingSystem.IsWindows() ? ("llvm-ar", "triple.lib") : ("ar", "libtriple.a");
         var script = $$"""
                        module Build
 
@@ -260,14 +262,14 @@ public sealed class BuildScriptTests {
                                let failed: Int? = none
                                print(failed!)
                            }
-                           let archived = try! Process.run("ar", ["rcs", Path.join(outDir, "libtriple.a"), object])
+                           let archived = try! Process.run("{{archiver}}", ["rcs", Path.join(outDir, "{{library}}"), object])
                            print(archived.succeeded ? "" : "sable:warning=ar failed")
                            print("sable:link-search=\(outDir)")
                            print("sable:link-lib=triple")
                            print("sable:rerun-if-changed=native/triple.c")
                        }
                        """;
-        var directory = Package(fixture, $"allow-exec = [\"{compiler}\", \"ar\"]\n", script,
+        var directory = Package(fixture, $"allow-exec = [\"{compiler}\", \"{archiver}\"]\n", script,
             ("native/triple.c", "int triple(int x) { return 3 * x; }\n"),
             ("src/lib.sb", "module Gen\n\n@extern(\"c\")\npublic fn triple(_ x: I32) -> I32\n"),
             ("src/main.sb", "module Main\n\nimport Gen\n\nfn main() {\n    print(triple(14))\n}\n"),

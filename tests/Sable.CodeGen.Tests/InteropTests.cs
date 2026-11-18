@@ -65,12 +65,12 @@ public sealed class InteropTests {
             fn cAbs(_ x: I32) -> I32
 
             @extern("c")
-            fn labs(_ x: Int) -> Int
+            fn llabs(_ x: Int) -> Int
 
             @extern("c", "div")
             fn cDiv(_ a: I32, _ b: I32) -> DivT
 
-            @extern("c", "ldiv")
+            @extern("c", "lldiv")
             fn cLdiv(_ a: Int, _ b: Int) -> LDivT
 
             @extern("c", "cabs")
@@ -78,7 +78,7 @@ public sealed class InteropTests {
 
             fn main() {
                 print(cAbs(-5))
-                print(labs(-50000000000))
+                print(llabs(-50000000000))
                 let d = cDiv(17, 5)
                 print("\(d.quot) \(d.rem)")
                 let l = cLdiv(100000000000, 7)
@@ -184,8 +184,9 @@ public sealed class InteropTests {
             Assert.True(built.Succeeded, built.Output);
             var runtime = Path.Combine(directory.FullName, "runtime.o");
             Assert.True(NativeObjects.CompileRuntime(runtime, true, false).Succeeded);
-            var executable = Path.Combine(directory.FullName, "program");
-            var linked = NativeObjects.Link([program, runtime, cObject, "-lm"], executable);
+            var executable = Platform.Executable(Path.Combine(directory.FullName, "program"));
+            // C's maths is in libm on POSIX, in the C runtime itself on Windows.
+            var linked = NativeObjects.Link([program, runtime, cObject, ..OperatingSystem.IsWindows() ? [] : new[] { "-lm" }], executable);
             Assert.True(linked.Succeeded, linked.Output);
 
             var run = Process.Start(new ProcessStartInfo(executable) { RedirectStandardOutput = true })!;

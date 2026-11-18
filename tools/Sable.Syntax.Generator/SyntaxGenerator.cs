@@ -59,8 +59,11 @@ public static partial class SyntaxGenerator {
 
         VerifyBases(nodes, abstracts);
 
+        // Line endings are LF on every platform, as the files are committed
+        // (AppendLine writes CRLF on Windows).
         return new Dictionary<string, string>(StringComparer.Ordinal) {
-            [GreenFileName] = GenerateGreen(nodes), [RedFileName] = GenerateRed(nodes, abstracts)
+            [GreenFileName] = GenerateGreen(nodes).ReplaceLineEndings("\n"),
+            [RedFileName] = GenerateRed(nodes, abstracts).ReplaceLineEndings("\n"),
         };
     }
 

@@ -68,7 +68,7 @@ public sealed class PackageTests {
             var built = PackageBuilder.Build(workspace, fixture.Environment, new(Release: release));
             Assert.True(built is not null, fixture.Errors.ToString());
             var binary = Assert.Single(built);
-            Assert.Equal(Path.Combine(fixture.Root, "app", "target", release ? "release" : "dev", "app"), binary.Path);
+            Assert.Equal(Platform.Executable(Path.Combine(fixture.Root, "app", "target", release ? "release" : "dev", "app")), binary.Path);
             Assert.Equal(("hello from a package\n42\n", 0), PackageFixture.Execute(binary.Path));
         }
     }
@@ -197,7 +197,7 @@ public sealed class PackageTests {
 
         if (CanBuild) {
             var binary = Assert.Single(PackageBuilder.Build(root, fixture.Environment, new())!);
-            Assert.Equal(Path.Combine(fixture.Root, "ws", "target", "dev", "app"), binary.Path);
+            Assert.Equal(Platform.Executable(Path.Combine(fixture.Root, "ws", "target", "dev", "app")), binary.Path);
         }
     }
 

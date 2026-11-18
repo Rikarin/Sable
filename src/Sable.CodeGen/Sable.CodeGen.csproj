@@ -7,7 +7,8 @@
     <ProjectReference Include="../Sable.SIL/Sable.SIL.csproj" />
   </ItemGroup>
   <ItemGroup>
-    <EmbeddedResource Include="../../runtime/sable_runtime.c" LogicalName="Sable.CodeGen.sable_runtime.c" />
+    <!-- The runtime, every file of it: sable_runtime.c includes the rest. -->
+    <EmbeddedResource Include="../../runtime/*.c;../../runtime/*.h" LogicalName="Sable.CodeGen.runtime/%(Filename)%(Extension)" />
     <EmbeddedResource Include="../../tools/lldb/sable_lldb.py" LogicalName="Sable.CodeGen.sable_lldb.py" />
   </ItemGroup>
 </Project>

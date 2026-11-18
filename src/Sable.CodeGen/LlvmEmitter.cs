@@ -305,7 +305,10 @@ public sealed partial class LlvmEmitter {
             StructType structType => $"{{ {string.Join(", ", StructParts(structType).Select(Type))} }}",
             TupleType tuple => $"{{ {string.Join(", ", tuple.Elements.Select(Type))} }}",
             EnumType enumType when IsNullable(enumType) => "ptr",
-            EnumType enumType => PayloadWords(enumType) == 0 ? "{ i64 }" : $"{{ i64, [{PayloadWords(enumType)} x i64] }}",
+            EnumType enumType when Niche(enumType) is { } niche => niche.Llvm,
+            EnumType enumType => Area(enumType) is { Count: > 0 } area
+                ? $"{{ {TagType(enumType)}, [{area.Count} x i{area.Unit * 8}] }}"
+                : $"{{ {TagType(enumType)} }}",
             _ => throw new NotSupportedException($"no LLVM type for {type}"),
         };
 
@@ -332,19 +335,76 @@ public sealed partial class LlvmEmitter {
                 ? $"{{ i1, {Type(thrown)} }}"
                 : $"{{ i1, {Type(type.Result)}, {Type(thrown)} }}";
 
-    /// <summary>The 8-byte words an enum's payload area needs: room for its largest case.</summary>
-    /// <summary>
-    ///     An optional class reference — one case holding the reference, one
-    ///     holding nothing — is the reference itself, null for none: one word,
-    ///     not a tag and a payload, as C's nullable pointer is.
-    /// </summary>
+    // ---- Enum layout --------------------------------------------------------
+    //
+    // An enum is laid out in the least room its cases allow:
+    //
+    // - An optional reference — one case holding a class reference or a
+    //   string, one holding nothing — is the reference itself, null for
+    //   none, as C's nullable pointer is: neither is ever null.
+    // - One case holding a Bool or a Char and the rest nothing is that
+    //   scalar, each other case one of the values it never takes — its
+    //   niche: a Bool is a byte, 0 or 1, so 'Bool?' is a byte with none 2;
+    //   a Char is a scalar value, never past U+10FFFF, so 'Char?' is four
+    //   bytes with none U+110000.
+    // - Anything else is a tag — a byte, unless there are more than 256
+    //   cases — and room for the largest payload, in units of the most
+    //   aligned one, after the tag. An enum of cases alone is its tag.
+
     static bool IsNullable(EnumType type) =>
-        type.Cases is [(_, ClassType), (_, null)] or [(_, null), (_, ClassType)];
+        type.Cases.Count == 2
+        && type.Cases[1 - SomeCase(type)].Payload is null
+        && type.Cases[SomeCase(type)].Payload is { } payload && (payload is ClassType || payload == SilType.String);
 
     static int SomeCase(EnumType type) => type.Cases[0].Payload is null ? 1 : 0;
 
-    static int PayloadWords(EnumType type) =>
-        (type.Cases.Where(static c => c.Payload is not null).Select(c => Size(c.Payload!)).DefaultIfEmpty(0).Max() + 7) / 8;
+    /// <summary>A scalar with values to spare, holding an enum: its LLVM type, its size, and the first value no payload takes.</summary>
+    sealed record NicheLayout(int Some, SilType Payload, string Llvm, int Bytes, long Spare) {
+        /// <summary>The value a case without a payload is: the spare values, in case order.</summary>
+        public long ValueOf(EnumType type, int @case) => Spare + type.Cases.Take(@case).Count(static c => c.Payload is null);
+    }
+
+    static NicheLayout? Niche(EnumType type) {
+        var payloads = type.Cases.Select(static (c, i) => (c.Payload, i)).Where(static c => c.Payload is not null).ToList();
+        if (payloads is not [var (payload, some)] || payload!.IsTrivial is false) {
+            return null;
+        }
+
+        var empty = type.Cases.Count - 1;
+        return payload == SilType.Bool && empty <= 254 ? new(some, payload, "i8", 1, 2)
+            : payload == SilType.Char && empty <= 0x7FFFFFFF - 0x110000 ? new(some, payload, "i32", 4, 0x110000)
+            : null;
+    }
+
+    /// <summary>A tagged enum's tag: a byte, or four for more than 256 cases.</summary>
+    static string TagType(EnumType type) => type.Cases.Count <= 256 ? "i8" : "i32";
+
+    static int TagBytes(EnumType type) => type.Cases.Count <= 256 ? 1 : 4;
+
+    /// <summary>A tagged enum's payload area: so many units of the most aligned payload's alignment, room for the largest.</summary>
+    static (int Count, int Unit) Area(EnumType type) {
+        var payloads = type.Cases.Where(static c => c.Payload is not null).Select(static c => c.Payload!).ToList();
+        var size = payloads.Select(Size).DefaultIfEmpty(0).Max();
+        if (size == 0) {
+            return (0, 1);
+        }
+
+        var unit = payloads.Select(Align).Max();
+        return ((size + unit - 1) / unit, unit);
+    }
+
+    /// <summary>Where a tagged enum's payload area starts: after the tag, aligned for the area.</summary>
+    static int AreaOffset(EnumType type) {
+        var (_, unit) = Area(type);
+        return (TagBytes(type) + unit - 1) / unit * unit;
+    }
+
+    static int TaggedSize(EnumType type) {
+        var (count, unit) = Area(type);
+        var align = Math.Max(unit, TagBytes(type));
+        var end = count == 0 ? TagBytes(type) : AreaOffset(type) + count * unit;
+        return (end + align - 1) / align * align;
+    }
 
     /// <summary>Bytes a value of the type occupies in memory, as LLVM lays it out.</summary>
     static int Size(SilType type) {
@@ -361,7 +421,8 @@ public sealed partial class LlvmEmitter {
             ThickFunctionType => 16,
             WeakStorageType or UnownedStorageType => 8,
             EnumType enumType when IsNullable(enumType) => 8,
-            EnumType enumType => 8 + PayloadWords(enumType) * 8,
+            EnumType enumType when Niche(enumType) is { } niche => niche.Bytes,
+            EnumType enumType => TaggedSize(enumType),
             StructType structType => Aggregate(StructParts(structType)),
             TupleType tuple => Aggregate(tuple.Elements),
             _ => 0,
@@ -389,6 +450,9 @@ public sealed partial class LlvmEmitter {
             StructType { IsInline: true } => 8,
             StructType structType => StructParts(structType).Select(Align).DefaultIfEmpty(1).Max(),
             TupleType tuple => tuple.Elements.Select(Align).DefaultIfEmpty(1).Max(),
+            EnumType enumType when IsNullable(enumType) => 8,
+            EnumType enumType when Niche(enumType) is { } niche => niche.Bytes,
+            EnumType enumType => Math.Max(Area(enumType).Unit, TagBytes(enumType)),
             _ => 8,
         };
 
@@ -504,6 +568,7 @@ public sealed partial class LlvmEmitter {
                 // By case: each payload that holds references is unpacked and handled.
                 var slot = Fresh();
                 var tag = Fresh();
+                var tagType = TagType(enumType);
                 body.Append($"  {slot} = alloca {llvmType}\n  store {llvmType} %v, ptr {slot}\n  {tag} = extractvalue {llvmType} %v, 0\n");
                 var arms = new StringBuilder();
                 var cases = new StringBuilder();
@@ -512,7 +577,7 @@ public sealed partial class LlvmEmitter {
                         continue;
                     }
 
-                    arms.Append($" i64 {i}, label %case{i}");
+                    arms.Append($" {tagType} {i}, label %case{i}");
                     var area = Fresh();
                     var loaded = Fresh();
                     cases.Append($"case{i}:\n  {area} = getelementptr inbounds {llvmType}, ptr {slot}, i32 0, i32 1\n")
@@ -521,7 +586,7 @@ public sealed partial class LlvmEmitter {
                     cases.Append("  ret void\n");
                 }
 
-                body.Append($"  switch i64 {tag}, label %done [{arms} ]\n").Append(cases).Append("done:\n  ret void\n");
+                body.Append($"  switch {tagType} {tag}, label %done [{arms} ]\n").Append(cases).Append("done:\n  ret void\n");
                 break;
             }
 
@@ -1292,9 +1357,9 @@ public sealed partial class LlvmEmitter {
                     Line($"{entry} = load ptr, ptr {Name(weak.Address)}");
                     Line($"{target} = call ptr @sable_weak_load(ptr {entry})");
                     Line($"{absent} = icmp eq ptr {target}, null");
-                    Line($"{tag} = select i1 {absent}, i64 {optional.CaseIndex("None")}, i64 {optional.CaseIndex("Some")}");
+                    Line($"{tag} = select i1 {absent}, {TagType(optional)} {optional.CaseIndex("None")}, {TagType(optional)} {optional.CaseIndex("Some")}");
                     Line($"{word} = ptrtoint ptr {target} to i64");
-                    Line($"{tagged} = insertvalue {type} zeroinitializer, i64 {tag}, 0");
+                    Line($"{tagged} = insertvalue {type} zeroinitializer, {TagType(optional)} {tag}, 0");
                     Line($"{name} = insertvalue {type} {tagged}, i64 {word}, 1, 0");
                     return;
                 }
@@ -1322,7 +1387,7 @@ public sealed partial class LlvmEmitter {
                     Line($"{tag} = extractvalue {type} {Name(weak.Value)}, 0");
                     Line($"{word} = extractvalue {type} {Name(weak.Value)}, 1, 0");
                     Line($"{pointer} = inttoptr i64 {word} to ptr");
-                    Line($"{present} = icmp eq i64 {tag}, {optional.CaseIndex("Some")}");
+                    Line($"{present} = icmp eq {TagType(optional)} {tag}, {optional.CaseIndex("Some")}");
                     Line($"{target} = select i1 {present}, ptr {pointer}, ptr null");
                     Line($"{entry} = call ptr @sable_weak_entry(ptr {target})");
                     Line($"{old} = load ptr, ptr {Name(weak.Address)}");
@@ -1535,11 +1600,26 @@ public sealed partial class LlvmEmitter {
                     _names[nullableInst] = nullableInst.Payload is { } held ? Name(held) : "null";
                     return;
 
+                // A niche: the payload as the scalar, or the case's spare value.
+                case EnumInst nicheInst when Niche(nicheInst.EnumType) is { } niche: {
+                    if (nicheInst.Payload is not { } payload) {
+                        _names[nicheInst] = niche.ValueOf(nicheInst.EnumType, nicheInst.Case).ToString(System.Globalization.CultureInfo.InvariantCulture);
+                    } else if (niche.Payload == SilType.Bool) {
+                        var widened = Fresh();
+                        _names[nicheInst] = widened;
+                        Line($"{widened} = zext i1 {Name(payload)} to i8");
+                    } else {
+                        _names[nicheInst] = Name(payload);
+                    }
+
+                    return;
+                }
+
                 case EnumInst enumInst: {
                     var type = Type(enumInst.Type);
                     var slot = Scratch(type);
                     Line($"store {type} zeroinitializer, ptr {slot}");
-                    Line($"store i64 {enumInst.Case}, ptr {slot}");
+                    Line($"store {TagType(enumInst.EnumType)} {enumInst.Case}, ptr {slot}");
                     if (enumInst.Payload is { } payload) {
                         var area = Fresh();
                         Line($"{area} = getelementptr inbounds {type}, ptr {slot}, i32 0, i32 1");
@@ -1667,6 +1747,12 @@ public sealed partial class LlvmEmitter {
                 return;
             }
 
+            if (Niche(enumType) is { } niche) {
+                SwitchNiche(switchEnum, niche);
+                return;
+            }
+
+            var tagType = TagType(enumType);
             var tag = Fresh();
             Line($"{tag} = extractvalue {type} {value}, 0");
 
@@ -1682,7 +1768,7 @@ public sealed partial class LlvmEmitter {
             var arms = new List<string>();
             foreach (var (caseIndex, target) in switchEnum.Cases) {
                 if (enumType.Cases[caseIndex].Payload is not { } payload) {
-                    arms.Add($"i64 {caseIndex}, label %{_labels[target]}");
+                    arms.Add($"{tagType} {caseIndex}, label %{_labels[target]}");
                     continue;
                 }
 
@@ -1697,10 +1783,51 @@ public sealed partial class LlvmEmitter {
                     .Append($"  {unpacked} = load {Type(payload)}, ptr {area}\n")
                     .Append($"  br label %{_labels[target]}\n");
                 _incoming[target.Arguments[0]].Add((unpacked, edge));
-                arms.Add($"i64 {caseIndex}, label %{edge}");
+                arms.Add($"{tagType} {caseIndex}, label %{edge}");
             }
 
-            Line($"switch i64 {tag}, label %{fallback} [ {string.Join(" ", arms)} ]");
+            Line($"switch {tagType} {tag}, label %{fallback} [ {string.Join(" ", arms)} ]");
+        }
+
+        /// <summary>
+        ///     A switch on an enum in a scalar's niche: a value the payload can
+        ///     take is the payload's case, unpacked on an edge of its own; each
+        ///     spare value is its case.
+        /// </summary>
+        void SwitchNiche(SwitchEnumInst switchEnum, NicheLayout niche) {
+            var enumType = (EnumType)switchEnum.Value.Type;
+            var value = Name(switchEnum.Value);
+
+            string fallback;
+            if (switchEnum.Default is { } defaultBlock) {
+                fallback = _labels[defaultBlock];
+            } else {
+                fallback = NewLabel("nocase");
+                _extra.Append(fallback).Append(":\n  unreachable\n");
+            }
+
+            var payloadTarget = fallback;
+            var arms = new List<string>();
+            foreach (var (caseIndex, target) in switchEnum.Cases) {
+                if (caseIndex != niche.Some) {
+                    arms.Add($"{niche.Llvm} {niche.ValueOf(enumType, caseIndex)}, label %{_labels[target]}");
+                    continue;
+                }
+
+                var edge = NewLabel("case");
+                var unpacked = Fresh();
+                _extra.Append(edge).Append(":\n")
+                    .Append(niche.Payload == SilType.Bool ? $"  {unpacked} = trunc i8 {value} to i1\n" : $"  {unpacked} = add i32 {value}, 0\n")
+                    .Append($"  br label %{_labels[target]}\n");
+                _incoming[target.Arguments[0]].Add((unpacked, edge));
+                payloadTarget = edge;
+            }
+
+            var spare = NewLabel("spare");
+            var isPayload = Fresh();
+            Line($"{isPayload} = icmp ult {niche.Llvm} {value}, {niche.Spare}");
+            Line($"br i1 {isPayload}, label %{payloadTarget}, label %{spare}");
+            _extra.Append(spare).Append(":\n").Append($"  switch {niche.Llvm} {value}, label %{fallback} [ {string.Join(" ", arms)} ]\n");
         }
 
         /// <summary>

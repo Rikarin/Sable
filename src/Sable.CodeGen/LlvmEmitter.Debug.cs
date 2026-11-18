@@ -339,23 +339,44 @@ public sealed partial class LlvmEmitter {
                 case EnumType enumType when IsNullable(enumType):
                     return Typedef(DisplayName(enumType), Type(enumType.Cases[SomeCase(enumType)].Payload!));
 
+                // In a Bool's niche: an enumeration of the byte's values, the
+                // payload's and the other cases'. In a Char's, the Char.
+                case EnumType enumType when Niche(enumType) is { } niche:
+                    if (niche.Payload != SilType.Bool) {
+                        return Typedef(DisplayName(enumType), Type(niche.Payload)!);
+                    }
+
+                    var values = new List<string> {
+                        Node($"!DIEnumerator(name: {Quote(enumType.Cases[niche.Some].Name + "(false)")}, value: 0)"),
+                        Node($"!DIEnumerator(name: {Quote(enumType.Cases[niche.Some].Name + "(true)")}, value: 1)"),
+                    };
+                    values.AddRange(enumType.Cases.Select((c, i) => (c, i)).Where(p => p.i != niche.Some)
+                        .Select(p => Node($"!DIEnumerator(name: {Quote(p.c.Name)}, value: {niche.ValueOf(enumType, p.i)})")));
+                    return Typedef(DisplayName(enumType), Node(
+                        $"!DICompositeType(tag: DW_TAG_enumeration_type, name: {Quote(DisplayName(enumType) + "$niche")}, size: 8, "
+                        + $"baseType: {Basic("uint8_t", 8, "DW_ATE_unsigned")}, elements: !{{{string.Join(", ", values)}}})"
+                    ));
+
                 case EnumType enumType: {
+                    var tagBits = TagBytes(enumType) * 8;
                     var tag = Node(
-                        $"!DICompositeType(tag: DW_TAG_enumeration_type, name: {Quote(DisplayName(enumType) + "$tag")}, size: 64, baseType: {Int64}, "
+                        $"!DICompositeType(tag: DW_TAG_enumeration_type, name: {Quote(DisplayName(enumType) + "$tag")}, size: {tagBits}, "
+                        + $"baseType: {Basic($"uint{tagBits}_t", tagBits, "DW_ATE_unsigned")}, "
                         + $"elements: !{{{string.Join(", ", enumType.Cases.Select((c, i) => Node($"!DIEnumerator(name: {Quote(c.Name)}, value: {i})")))}}})"
                     );
 
                     // Nothing but cases: the enumeration is the whole value.
-                    if (PayloadWords(enumType) == 0) {
+                    var (count, unit) = Area(enumType);
+                    if (count == 0) {
                         return Typedef(DisplayName(enumType), tag);
                     }
 
                     var payloads = enumType.Cases.Where(static c => c.Payload is not null && c.Payload != SilType.Unit)
                         .Select(c => Member(c.Name, Type(c.Payload!), Size(c.Payload!), 0));
-                    var union = Structure(DisplayName(enumType) + "$payload", PayloadWords(enumType) * 8, payloads, "DW_TAG_union_type");
+                    var union = Structure(DisplayName(enumType) + "$payload", count * unit, payloads, "DW_TAG_union_type");
                     var body = Structure(DisplayName(enumType) + (OptionalPayload(enumType) is null ? "$union" : "$optional"), Size(enumType), [
-                        Member("$tag", tag, 8, 0),
-                        Member("$payload", union, PayloadWords(enumType) * 8, 8),
+                        Member("$tag", tag, TagBytes(enumType), 0),
+                        Member("$payload", union, count * unit, AreaOffset(enumType)),
                     ]);
                     return Typedef(DisplayName(enumType), body);
                 }

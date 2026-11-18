@@ -240,11 +240,19 @@
   </Node>
 
   <Node Name="InvocationExpressionSyntax" Base="ExpressionSyntax" Kind="InvocationExpression"
-        Doc="`f(x)`, `f?(x)`, or `f(x) { ... }` with a trailing closure.">
+        Doc="`f(x)`, `f?(x)`, or `f(x) { ... }` with a trailing closure, and `onFail: { ... }` after it with more.">
     <Field Name="Expression" Type="ExpressionSyntax" />
     <Field Name="QuestionToken" Type="Token" Optional="true" />
     <Field Name="ArgumentList" Type="ArgumentListSyntax" Optional="true" />
     <Field Name="TrailingClosure" Type="BraceClosureExpressionSyntax" Optional="true" />
+    <Field Name="LabeledClosures" Type="List:LabeledClosureSyntax" />
+  </Node>
+
+  <Node Name="LabeledClosureSyntax" Base="SyntaxNode" Kind="LabeledClosure"
+        Doc="`onFail: { ... }`: a trailing closure after the first, labelled for its parameter.">
+    <Field Name="NameToken" Type="Token" />
+    <Field Name="ColonToken" Type="Token" />
+    <Field Name="Closure" Type="BraceClosureExpressionSyntax" />
   </Node>
 
   <Node Name="ArgumentListSyntax" Base="SyntaxNode" Kind="ArgumentList"

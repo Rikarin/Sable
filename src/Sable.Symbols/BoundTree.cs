@@ -401,6 +401,10 @@ public sealed class BoundTupleElementAccess(
     : BoundExpression(syntax, type) {
     public BoundExpression Receiver { get; } = receiver;
     public int Index { get; } = index;
+
+    /// <summary>An element of a tuple that can be written can be written: <c>pair.0 = 9</c>.</summary>
+    public override bool IsAssignable => Receiver.IsAssignable;
+
     public override IEnumerable<BoundNode> Children => Nodes(Receiver);
 }
 

@@ -680,7 +680,7 @@ public sealed class ImplicitMemberAccessExpressionSyntax : ExpressionSyntax
     public override void Accept(SyntaxVisitor visitor) => visitor.VisitImplicitMemberAccessExpression(this);
 }
 
-/// <summary>`f(x)`, `f?(x)`, or `f(x) { ... }` with a trailing closure.</summary>
+/// <summary>`f(x)`, `f?(x)`, or `f(x) { ... }` with a trailing closure, and `onFail: { ... }` after it with more.</summary>
 public sealed class InvocationExpressionSyntax : ExpressionSyntax
 {
     private ExpressionSyntax? _expression;
@@ -694,6 +694,7 @@ public sealed class InvocationExpressionSyntax : ExpressionSyntax
     public SyntaxToken QuestionToken => GetToken(1);
     public ArgumentListSyntax? ArgumentList => GetRedOptional(ref _argumentList, 2);
     public BraceClosureExpressionSyntax? TrailingClosure => GetRedOptional(ref _trailingClosure, 3);
+    public SyntaxList<LabeledClosureSyntax> LabeledClosures => GetList<LabeledClosureSyntax>(4);
 
     internal override SyntaxNode? GetNodeSlot(int index) => index switch
     {
@@ -704,6 +705,27 @@ public sealed class InvocationExpressionSyntax : ExpressionSyntax
     };
 
     public override void Accept(SyntaxVisitor visitor) => visitor.VisitInvocationExpression(this);
+}
+
+/// <summary>`onFail: { ... }`: a trailing closure after the first, labelled for its parameter.</summary>
+public sealed class LabeledClosureSyntax : SyntaxNode
+{
+    private BraceClosureExpressionSyntax? _closure;
+
+    internal LabeledClosureSyntax(GreenNode green, SyntaxNode? parent, int position)
+        : base(green, parent, position) { }
+
+    public SyntaxToken NameToken => GetToken(0);
+    public SyntaxToken ColonToken => GetToken(1);
+    public BraceClosureExpressionSyntax Closure => GetRed(ref _closure, 2);
+
+    internal override SyntaxNode? GetNodeSlot(int index) => index switch
+    {
+        2 => Closure,
+        _ => null,
+    };
+
+    public override void Accept(SyntaxVisitor visitor) => visitor.VisitLabeledClosure(this);
 }
 
 /// <summary>A parenthesised or bracketed argument list.</summary>
@@ -3452,6 +3474,7 @@ public abstract class SyntaxVisitor
     public virtual void VisitMemberAccessExpression(MemberAccessExpressionSyntax node) => DefaultVisit(node);
     public virtual void VisitImplicitMemberAccessExpression(ImplicitMemberAccessExpressionSyntax node) => DefaultVisit(node);
     public virtual void VisitInvocationExpression(InvocationExpressionSyntax node) => DefaultVisit(node);
+    public virtual void VisitLabeledClosure(LabeledClosureSyntax node) => DefaultVisit(node);
     public virtual void VisitArgumentList(ArgumentListSyntax node) => DefaultVisit(node);
     public virtual void VisitArgument(ArgumentSyntax node) => DefaultVisit(node);
     public virtual void VisitElementAccessExpression(ElementAccessExpressionSyntax node) => DefaultVisit(node);

@@ -2770,7 +2770,8 @@ public sealed partial class Binder {
             return null;
         }
 
-        if (syntax.ArgumentList is not { Arguments: [{ NameToken.IsNone: true } argument] } || syntax.TrailingClosure is not null) {
+        if (syntax.ArgumentList is not { Arguments: [{ NameToken.IsNone: true } argument] } || syntax.TrailingClosure is not null
+            || syntax.LabeledClosures.Count > 0) {
             _diagnostics.Error(
                 ErrorCode.ERR_NoMatchingOverload,
                 syntax.Span,
@@ -2806,6 +2807,13 @@ public sealed partial class Binder {
         if (syntax.TrailingClosure is { } trailing) {
             argumentSyntax.Add(trailing);
             labelBuilder.Add(null);
+        }
+
+        // 'both { 1 } onFail: { 2 }': the closures after the first carry
+        // their labels, as arguments in parentheses would.
+        foreach (var labeled in syntax.LabeledClosures) {
+            argumentSyntax.Add(labeled.Closure);
+            labelBuilder.Add(labeled.NameToken.Text);
         }
 
         var syntaxes = argumentSyntax.ToImmutable();

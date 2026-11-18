@@ -379,6 +379,27 @@ public sealed class StatementParserTests {
     }
 
     [Fact]
+    public void ParsesLabelledTrailingClosuresAfterTheFirst() {
+        var root = ParseRoot("both { 1 } onFail: { 2 } onDone: { 3 }");
+        var invocation = Assert.IsType<InvocationExpressionSyntax>(
+            Assert.IsType<ExpressionStatementSyntax>(root).Expression
+        );
+        Assert.NotNull(invocation.TrailingClosure);
+        Assert.Equal(["onFail", "onDone"], invocation.LabeledClosures.Select(static c => c.NameToken.Text));
+    }
+
+    [Fact]
+    public void ALabelledClosureOnTheNextLineIsAStatementOfItsOwn() {
+        // A new line ends the call, as it does before a lone brace.
+        var tree = SyntaxTree.ParseStatement("{\n    both { 1 }\n    onFail: { 2 }\n}");
+        var block = Assert.IsType<BlockSyntax>(tree.Root);
+        var invocation = Assert.IsType<InvocationExpressionSyntax>(
+            Assert.IsType<ExpressionStatementSyntax>(block.Statements[0]).Expression
+        );
+        Assert.Empty(invocation.LabeledClosures);
+    }
+
+    [Fact]
     public void ParsesCaptureList() {
         var root = ParseRoot("let c = [weak self, count = localCount] (x: Int) => x");
         var declaration = Assert.IsType<LocalDeclarationStatementSyntax>(root);

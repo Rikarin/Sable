@@ -601,7 +601,7 @@ internal sealed class Parser {
                 case SyntaxKind.OpenParenToken: {
                     var arguments = ParseArgumentList(SyntaxKind.OpenParenToken, SyntaxKind.CloseParenToken);
                     var trailing = TryParseTrailingClosure();
-                    expression = new InvocationExpressionGreen(expression, null, arguments, trailing);
+                    expression = new InvocationExpressionGreen(expression, null, arguments, trailing, ParseLabeledClosures(trailing));
                     continue;
                 }
 
@@ -609,7 +609,7 @@ internal sealed class Parser {
                 // closure; it has no parenthesised argument list.
                 case SyntaxKind.OpenBraceToken when CanTakeTrailingClosure(): {
                     var closure = ParseBraceClosure(null);
-                    expression = new InvocationExpressionGreen(expression, null, null, closure);
+                    expression = new InvocationExpressionGreen(expression, null, null, closure, ParseLabeledClosures(closure));
                     continue;
                 }
 
@@ -625,11 +625,13 @@ internal sealed class Parser {
                 case SyntaxKind.QuestionToken when Peek(1).Kind == SyntaxKind.OpenParenToken && !HasSpaceBeforeCurrent: {
                     var question = EatToken();
                     var arguments = ParseArgumentList(SyntaxKind.OpenParenToken, SyntaxKind.CloseParenToken);
+                    var trailing = TryParseTrailingClosure();
                     expression = new InvocationExpressionGreen(
                         expression,
                         question,
                         arguments,
-                        TryParseTrailingClosure()
+                        trailing,
+                        ParseLabeledClosures(trailing)
                     );
                     continue;
                 }
@@ -1828,6 +1830,27 @@ internal sealed class Parser {
 
     /// <summary>A brace right after an argument list is the call's last argument.</summary>
     GreenNode? TryParseTrailingClosure() => CanTakeTrailingClosure() ? ParseBraceClosure(null) : null;
+
+    /// <summary>
+    ///     <c>both { 1 } onFail: { 2 }</c>: after a trailing closure, more of
+    ///     them, each labelled for the parameter it is — on the line the one
+    ///     before ends on, as a new line starts a new statement.
+    /// </summary>
+    GreenList ParseLabeledClosures(GreenNode? trailing) {
+        if (trailing is null) {
+            return GreenList.Empty;
+        }
+
+        var closures = ImmutableArray.CreateBuilder<GreenNode>();
+        while (At(SyntaxKind.IdentifierToken) && Peek(1).Kind == SyntaxKind.ColonToken && Peek(2).Kind == SyntaxKind.OpenBraceToken
+               && !_noBrace && !AtStatementStart) {
+            var name = EatToken();
+            var colon = EatToken();
+            closures.Add(new LabeledClosureGreen(name, colon, ParseBraceClosure(null)));
+        }
+
+        return GreenList.Create(closures.ToImmutable());
+    }
 
     /// <remarks>
     ///     A brace on a new line is never a trailing closure: the line before

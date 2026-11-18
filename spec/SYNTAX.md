@@ -965,6 +965,14 @@ fn withLock<T>(_ l: Lock, _ body: () throws -> T) rethrows -> T { }
 withLock(mutex) {
     counter += 1
 }
+
+// After the first trailing closure, more, each with its parameter's label,
+// starting on the line the one before ends on
+attempt {
+    try fetch()
+} onFail: {
+    cached()
+}
 ```
 
 ### Braces: record literal, trailing closure, or body

@@ -69,6 +69,10 @@ public sealed partial class LanguageServer {
             try {
                 await _loading;
                 await DiagnoseAsync(round.Token);
+
+                // The library's names, for completion, once the first
+                // diagnostics are out of the way.
+                _ = _library.Ready;
             } catch (OperationCanceledException) when (!cancellation.IsCancellationRequested) {
                 // Superseded: the change that cancelled it starts the next round.
             } catch (Exception e) when (e is not OperationCanceledException and not OutOfMemoryException) {

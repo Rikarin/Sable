@@ -165,7 +165,7 @@ public sealed partial class LanguageServer {
                     visible.Add(symbol.Name);
                 }
 
-                AddImportable(context.Analysis, document, prefix, visible, rank, items);
+                AddImportable(context.Analysis, _library.Ready, document, prefix, visible, rank, items);
             }
 
             var id = Interlocked.Increment(ref _completions);
@@ -326,9 +326,11 @@ public sealed partial class LanguageServer {
     /// <summary>
     ///     The public types and functions of the compilation's other modules
     ///     that the file does not import, for a name of two letters or more:
-    ///     choosing one adds the import.
+    ///     choosing one adds the import. So are those of the library modules
+    ///     the compilation does not have, since nothing imports them yet,
+    ///     once the <see cref="LibraryIndex" /> is built.
     /// </summary>
-    static void AddImportable(Analysis analysis, Document document, string prefix, HashSet<string> visible, int rank, List<Offer> items) {
+    static void AddImportable(Analysis analysis, IReadOnlyList<LibraryIndex.Entry>? library, Document document, string prefix, HashSet<string> visible, int rank, List<Offer> items) {
         if (prefix.Length < 2 || document.Tree.Root is not CompilationUnitSyntax unit) {
             return;
         }
@@ -347,6 +349,14 @@ public sealed partial class LanguageServer {
                     && Matches(prefix, member.Name)) {
                     items.Add(new(member, rank++, module.Name));
                 }
+            }
+        }
+
+        var compiled = analysis.Compilation.Modules.Select(static m => m.Name).ToHashSet(StringComparer.Ordinal);
+        foreach (var (module, member) in library ?? []) {
+            if (!compiled.Contains(module) && module != own && !imported.Contains(module)
+                && !visible.Contains(member.Name) && Matches(prefix, member.Name)) {
+                items.Add(new(member, rank++, module));
             }
         }
     }

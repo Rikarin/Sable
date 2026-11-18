@@ -85,7 +85,11 @@ public sealed partial class LanguageServer {
         _channel = new(input, output);
         _options = options ?? new();
         _analyses = new(BuildAnalysis);
+        _library = new(_options.LibraryModules, _options.LibraryFor, Log);
     }
+
+    /// <summary>Every library module's public names, for what no file imports yet.</summary>
+    readonly LibraryIndex _library;
 
     /// <summary>How many analyses have been built, for tests of what waits for one.</summary>
     internal int AnalysesBuilt => Volatile.Read(ref _analysesBuilt);

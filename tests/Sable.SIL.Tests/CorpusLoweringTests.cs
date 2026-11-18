@@ -2,8 +2,7 @@ namespace Sable.SIL.Tests;
 
 /// <summary>
 ///     docs/04 §2.5: "SIL verifier is clean on the corpus". Every corpus file
-///     is lowered; what lowers must verify, before and after the passes, and
-///     what does not yet is reported by construct — never lowered wrong.
+///     lowers, whole, and verifies before and after the passes.
 /// </summary>
 public sealed class CorpusLoweringTests {
     public static TheoryData<string> Files {
@@ -26,7 +25,14 @@ public sealed class CorpusLoweringTests {
         var compilation = Compilation.Create([tree]);
         var (module, diagnostics) = SilGen.Lower(compilation);
 
-        Assert.All(diagnostics, static d => Assert.Equal(ErrorCode.ERR_NotLoweredYet, d.Code));
+        // docs/04 §2.5: everything in the corpus lowers. The examples import
+        // library modules this test does not bring (ExampleProgramTests builds
+        // and runs them whole), so for them what lowers is all that is held.
+        if (file.StartsWith("examples", StringComparison.Ordinal)) {
+            Assert.All(diagnostics, static d => Assert.Equal(ErrorCode.ERR_NotLoweredYet, d.Code));
+        } else {
+            Assert.True(diagnostics.Count == 0, string.Join("\n", diagnostics.Select(static d => d.Message)));
+        }
         Assert.Empty(SilVerifier.Verify(module));
 
         SilPassManager.Run(module, SilPassManager.Default);

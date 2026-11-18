@@ -7,18 +7,34 @@ namespace Sable.CodeGen.Tests;
 ///     compiled and run — natively and in the interpreter, which must agree —
 ///     and held to what they print. None of them needs a network.
 /// </summary>
-/// <remarks>
-///     <c>02-shapes.sab</c> joins them once a <c>some P</c> parameter lowers;
-///     until then <c>sable test</c> runs its <c>@test</c> through the same
-///     pipeline, and <c>CorpusLoweringTests</c> holds the rest of it to the
-///     verifier.
-/// </remarks>
 public sealed class ExampleProgramTests {
     [Fact]
     public void HelloGreetsEveryone() =>
         Assert.Equal(
             "hello, world\nhello, Sable\nhello, everyone\n",
             Run("01-hello.sab")
+        );
+
+    [Fact]
+    public void ShapesMeasureThemselves() =>
+        Assert.Equal(
+            """
+            Geometry: area 12.566370614359172
+            Geometry: area 12
+            Geometry: area 6
+            Geometry: area 4.141592653589793
+            total area 34.70796326794897
+            total perimeter 48.84955592153876
+            Square: area 4
+            Geometry: area 3.141592653589793
+            Square: area 1
+            Square: area 2.25, perimeter 6
+            Geometry: area 7, perimeter 11
+            42 within 200 is 42
+            42.5% of 200 is 85
+
+            """,
+            Run("02-shapes.sab")
         );
 
     [Fact]

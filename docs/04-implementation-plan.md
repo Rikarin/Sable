@@ -336,15 +336,37 @@ Order matters; each of these is a self-contained lowering:
       printing; JSON Pointer (RFC 6901); Merge Patch (RFC 7386); comparison,
       transforms and statistics. Its own suite of 237 checks passes natively
       and in the interpreter, which agree, with nothing leaked
-- [ ] SIL verifier is clean on the corpus — clean on everything that lowers,
-      before and after the passes, ownership included (every owned value
-      consumed exactly once on every path); 284 of the 334 `fn` declarations
-      in `tests/corpus` and `examples` lower so far — dictionaries, slices,
-      existentials, class inheritance, computed properties and, since Phase
-      3, the sized integers and inline layout among them — the rest waiting
-      on recursive generic unions, mutating requirements through
-      existentials, a few operators on enums, and async (Phase 5). Classes
-      are complete as docs/03 describes them (`tests/.../ClassTests.cs`):
+- [x] SIL verifier is clean on the corpus — every function in
+      `tests/corpus`, `tests/programs` and `examples` lowers, and the
+      verifier is clean before and after the passes, ownership included
+      (every owned value consumed exactly once on every path).
+      `CorpusLoweringTests` now fails on any construct that does not lower,
+      not only on what lowers wrong, and `tools/lowering-probe` lists type
+      errors and lowering gaps across the corpus (none). Closing the last
+      24 gaps and the examples' 47 type errors took:
+      - `==` and `!=` on enums, by case;
+      - `%` on floats (`frem`);
+      - untyped `throws` (an `any Error` box class), `throws(A | B)` (an
+        enum per union), `rethrows`, and the conversions between error
+        types at a handler, `From` included;
+      - thunks for a function used as a throwing function type;
+      - `some P` parameters, as anonymous generic parameters;
+      - user subscripts, getters and setters;
+      - `T[..k]` outside an inline layout, with its bound checked;
+      - local functions, capturing or not, recursive;
+      - `#file`, `#line`, `#column`, `#function` and `#module`;
+      - recursive unions, generic or not, a self-holding case boxed;
+      - structural unions as values (`F64 | String`: injection, `is`,
+        narrowed reads);
+      - static computed properties, and an initialiser assigning its type's
+        `let` fields.
+
+      Four corpus functions called `removeLast()` in a getter where they
+      meant to index. Now that `removeLast` is `mutating`, the binder
+      rejects them, and they read the element. The three examples were
+      rewritten against the library that exists: no `Files`, HTTP or JSON
+      module of their imagining. They run natively and interpreted, and
+      `ExampleProgramTests` checks their output. Classes are complete as docs/03 describes them (`tests/.../ClassTests.cs`):
       inheritance, overrides and `super`, `abstract` methods (a trapping
       vtable slot), protocol requirements with defaults in extensions
       (dispatch falls back to the default), stored properties with initial
@@ -1122,7 +1144,7 @@ to the state machine where tasks are many.
 
 ### 4.4 Exit criteria
 
-- [ ] Stdlib is self-hosted Sable, no C# in the shipping library — every
+- [x] Stdlib is self-hosted Sable, no C# in the shipping library — every
       module is Sable, and so are the primitives' members: `String`,
       `Char`, the numbers, `Bool`, `print`, `Runtime` and `Region.reset`
       are declared in `lib/Sable.Core`, over `@builtin`s (see "Sable.Core
@@ -1146,7 +1168,11 @@ to the state machine where tasks are many.
       compiler knows by sight, and the shells the binder desugars to
       (`Error`, `From`, `Optional`, `Dictionary`). The I128, U128 and F16 types no
       longer declare `toString`, `abs`, `min` and `max`: nothing could lower
-      them, and SIL has no such types yet
+      them, and SIL has no such types yet. Still thin, though not C#: the
+      built-in `[Key: Value]` dictionary is compiler-known as the arrays are,
+      its indexing and iteration lowered directly, and it has no members of
+      its own yet — no `count` or `remove` — since array extensions do not
+      reach it (`Sable.Collections.HashMap` is the Sable one with all of them)
 - [x] Reflection: hello-world binary grows < 50 KB with reflection off —
       it grows not at all (51,736 bytes either way): reflection is code
       synthesised per type a program reflects on, and nothing else

@@ -212,8 +212,13 @@ A member takes a shared setting with `.workspace`: `version: .workspace`,
 `dependencies: [.workspace("image")]`. A `package.sb` cannot import its
 workspace's file. Inheritance goes through these named references, so a
 member stays readable on its own. (Not built yet: `Workspace` has `members`
-and `exclude`; `shared` and `.workspace` wait on the manifest model learning
-inheritance, which `sable.toml` never had either.)
+and `exclude`; `shared` and `.workspace` are not in `Sable.Build` yet.
+`sable.toml` has the inheritance, as Cargo writes it: `[workspace.package]`
+and `[workspace.dependencies]` in the root, and `version.workspace = true` or
+`image = { workspace = true, features = [...] }` in a member, which may add
+features, `optional` and `when`; a shared path dependency is relative to the
+workspace. A member that inherits cannot be published until it writes its
+settings out, since a consumer has no workspace to take them from.)
 
 A package that is also its workspace's root has both files in one directory.
 
@@ -328,7 +333,8 @@ with both kinds is an error, so there is never a question which one applies.
 
 ### 5.2.10 Not built yet
 
-- Workspace inheritance: `shared` and `.workspace` (§5.2.3).
+- Workspace inheritance in `package.sb` and `workspace.sb`: `shared` and
+  `.workspace` (§5.2.3); `sable.toml` has it.
 - Per-target settings (`[targets.*]`: runtime profile, reflection); `when:`
   covers `os()` and `arch()` only. `sable build --target <triple>` builds for
   another machine, and `when:` is tested against that target.

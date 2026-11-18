@@ -43,11 +43,10 @@ public sealed partial class PackageGraph {
     static string ResolutionKey(Workspace workspace, IReadOnlyDictionary<string, LocalPackage> locals, ResolveOptions options) {
         var text = new StringBuilder(ResolutionVersion).Append('\n').Append(typeof(PackageGraph).Assembly.ManifestModule.ModuleVersionId).Append('\n');
         text.Append(workspace.Root).Append('\n');
-        var root = Path.Combine(workspace.Root, Workspace.ManifestName);
-        text.Append(File.Exists(root) ? File.ReadAllText(root) : "<no root manifest>").Append('\n');
+        text.Append(ManifestFiles.Text(workspace.Root)).Append('\n');
         text.Append(File.Exists(workspace.LockPath) ? File.ReadAllText(workspace.LockPath) : "<no lock>").Append('\n');
         foreach (var (name, package) in locals.OrderBy(static p => p.Key, StringComparer.Ordinal)) {
-            text.Append(name).Append(' ').Append(package.Directory).Append('\n').Append(File.ReadAllText(package.ManifestPath)).Append('\n');
+            text.Append(name).Append(' ').Append(package.Directory).Append('\n').Append(ManifestFiles.Text(package.Directory)).Append('\n');
         }
 
         var features = options.Features ?? FeatureRequest.Default;

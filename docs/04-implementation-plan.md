@@ -1206,9 +1206,11 @@ Full design in [05-toolchain.md](05-toolchain.md).
 - `sable` single binary: `new init build run test bench fmt doc check add
   update publish clean bindgen repl`
 - `sable.toml` manifest, `sable.lock`, semver resolution (PubGrub), workspaces,
-  feature flags, build scripts with a capability sandbox. The manifest moves
-  to `package.sb` — Sable, evaluated at compile time — per docs/05 §5.2; the
-  order of work is §5.2.10, after compile-time evaluation (#172)
+  feature flags, build scripts with a capability sandbox. The manifest is
+  `package.sb` (and `workspace.sb`) — Sable, evaluated in the interpreter
+  under docs/05 §5.2.4's rules to the canonical `sable.toml`, which is cached
+  by content and published in its place; `sable new`, `init`, `add` and
+  `remove` write and edit it through the syntax tree
 - Registry: content-addressed, immutable versions, signed, with a mirror story
 - **Incremental compilation** on a query-based engine (Salsa / `rustc`-style),
   with a fingerprint-keyed on-disk cache. Design for it in the symbol layer in

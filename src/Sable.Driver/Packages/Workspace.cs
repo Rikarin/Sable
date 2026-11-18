@@ -1,6 +1,6 @@
 namespace Sable.Driver.Packages;
 
-/// <summary>A package on disk: a directory with a <c>sable.toml</c> that has a <c>[package]</c> table.</summary>
+/// <summary>A package on disk: a directory with a manifest (<c>package.sb</c>, or the canonical <c>sable.toml</c>) that describes a package.</summary>
 public sealed class LocalPackage {
     public LocalPackage(string directory, Manifest manifest) {
         Directory = Path.GetFullPath(directory);
@@ -15,7 +15,7 @@ public sealed class LocalPackage {
     public string Name => Manifest.Package!.Name;
     public SemVersion Version => Manifest.Package!.Version;
 
-    public string ManifestPath => Path.Combine(Directory, Workspace.ManifestName);
+    public string ManifestPath => ManifestFiles.PathIn(Directory);
 
     /// <summary>The library's root file: <c>[lib] path</c>, else <c>src/lib.sb</c> when there is one.</summary>
     public string? LibraryFile =>
@@ -80,7 +80,8 @@ public sealed class LocalPackage {
 ///     <c>sable.lock</c> and one <c>target/</c>, at the workspace's root.
 /// </summary>
 public sealed class Workspace {
-    public const string ManifestName = "sable.toml";
+    /// <summary>The manifest a person writes (docs/05 §5.2); <see cref="ManifestFiles" /> finds either kind.</summary>
+    public const string ManifestName = ManifestFiles.PackageFile;
     public const string LockName = "sable.lock";
 
     Workspace(string root, Manifest manifest, IReadOnlyList<LocalPackage> members, LocalPackage? current) {
@@ -109,10 +110,10 @@ public sealed class Workspace {
 
     public string VendorDirectory => Path.Combine(Root, "vendor");
 
-    /// <summary>The nearest directory, from <paramref name="start" /> up, with a <c>sable.toml</c>.</summary>
+    /// <summary>The nearest directory, from <paramref name="start" /> up, with a manifest.</summary>
     public static string? FindManifestDirectory(string start) {
         for (var directory = new DirectoryInfo(Path.GetFullPath(start)); directory is not null; directory = directory.Parent) {
-            if (File.Exists(Path.Combine(directory.FullName, ManifestName))) {
+            if (ManifestFiles.Exists(directory.FullName)) {
                 return directory.FullName;
             }
         }
@@ -128,16 +129,15 @@ public sealed class Workspace {
     /// <exception cref="PackageException">There is no manifest, or a workspace does not hold together.</exception>
     public static Workspace Load(string start) {
         var nearest = FindManifestDirectory(start)
-            ?? throw new PackageException($"could not find {ManifestName} in '{Path.GetFullPath(start)}' or any directory above it; 'sable new' or 'sable init' makes one");
+            ?? throw new PackageException($"could not find {ManifestFiles.PackageFile} in '{Path.GetFullPath(start)}' or any directory above it; 'sable new' or 'sable init' makes one");
 
         var root = nearest;
         for (var directory = Directory.GetParent(nearest); directory is not null; directory = directory.Parent) {
-            var candidate = Path.Combine(directory.FullName, ManifestName);
-            if (!File.Exists(candidate)) {
+            if (!ManifestFiles.Exists(directory.FullName)) {
                 continue;
             }
 
-            var manifest = Manifest.Load(candidate);
+            var manifest = ManifestFiles.Load(directory.FullName);
             if (manifest.Workspace is not null && MemberDirectories(directory.FullName, manifest.Workspace).Contains(nearest)) {
                 root = directory.FullName;
                 break;
@@ -148,7 +148,7 @@ public sealed class Workspace {
     }
 
     static Workspace Open(string root, string current) {
-        var manifest = Manifest.Load(Path.Combine(root, ManifestName));
+        var manifest = ManifestFiles.Load(root);
         var members = new List<LocalPackage>();
         if (manifest.Package is not null) {
             members.Add(new(root, manifest));
@@ -160,13 +160,13 @@ public sealed class Workspace {
                     continue;
                 }
 
-                var member = Manifest.Load(Path.Combine(directory, ManifestName));
+                var member = ManifestFiles.Load(directory);
                 if (member.Package is null) {
-                    throw new PackageException($"{Path.Combine(directory, ManifestName)}: a workspace member needs a [package] table");
+                    throw new PackageException($"{ManifestFiles.PathIn(directory)}: a workspace member needs a package manifest");
                 }
 
                 if (member.Workspace is not null) {
-                    throw new PackageException($"{Path.Combine(directory, ManifestName)}: a workspace member cannot be a workspace itself");
+                    throw new PackageException($"{ManifestFiles.PathIn(directory)}: a workspace member cannot be a workspace itself");
                 }
 
                 members.Add(new(directory, member));
@@ -187,7 +187,7 @@ public sealed class Workspace {
         return [
             ..workspace.Members.SelectMany(m => Expand(root, m))
                 .Where(d => !excluded.Contains(d) && !excluded.Any(e => d.StartsWith(e + Path.DirectorySeparatorChar, StringComparison.Ordinal)))
-                .Where(static d => File.Exists(Path.Combine(d, ManifestName))),
+                .Where(static d => ManifestFiles.Exists(d)),
         ];
     }
 
@@ -220,9 +220,8 @@ public sealed class Workspace {
                 : [..package.Manifest.Dependencies, ..package.Manifest.BuildDependencies];
             foreach (var dependency in dependencies.Where(static d => d.Path is not null)) {
                 var directory = Path.GetFullPath(Path.Combine(package.Directory, dependency.Path!));
-                var manifestPath = Path.Combine(directory, ManifestName);
-                if (!File.Exists(manifestPath)) {
-                    throw new PackageException($"{package.ManifestPath}:{dependency.Line}: dependency '{dependency.Name}': there is no {ManifestName} in '{directory}'");
+                if (!ManifestFiles.Exists(directory)) {
+                    throw new PackageException($"{package.ManifestPath}:{dependency.Line}: dependency '{dependency.Name}': there is no {ManifestFiles.PackageFile} in '{directory}'");
                 }
 
                 if (locals.TryGetValue(dependency.Name, out var known)) {
@@ -233,7 +232,7 @@ public sealed class Workspace {
                     continue;
                 }
 
-                var local = new LocalPackage(directory, Manifest.Load(manifestPath));
+                var local = new LocalPackage(directory, ManifestFiles.Load(directory));
                 if (local.Name != dependency.Name) {
                     throw new PackageException($"{package.ManifestPath}:{dependency.Line}: dependency '{dependency.Name}': the package at '{dependency.Path}' is called '{local.Name}'");
                 }

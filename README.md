@@ -7,8 +7,7 @@
 **`Sable` is a placeholder name.** It is short, unclaimed in the major package
 registries, and the file extension `.sb` is free. Rename at will — the only
 places the name is load-bearing are the toolchain binary (`sable`), the manifest
-(`sable.toml` today; `package.sb` by design, docs/05 §5.2) and the module
-namespace root.
+(`package.sb`, docs/05 §5.2) and the module namespace root.
 
 ---
 

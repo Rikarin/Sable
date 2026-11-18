@@ -52,7 +52,7 @@ function task(command, args, cwd, scope, definition) {
 /** @type {vscode.TaskProvider} */
 const provider = {
   async provideTasks() {
-    const manifests = await vscode.workspace.findFiles("**/sable.toml", "**/{target,vendor,node_modules,.git}/**");
+    const manifests = await vscode.workspace.findFiles(sable.MANIFEST_GLOB, "**/{target,vendor,node_modules,.git}/**");
     const tasks = [];
     for (const manifest of manifests) {
       if (!sable.isPackage(manifest.fsPath)) {

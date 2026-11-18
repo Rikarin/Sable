@@ -22,9 +22,49 @@ public sealed record DependencySpec(
     bool Optional,
     bool DefaultFeatures,
     IReadOnlyList<string> Features,
-    int Line) {
+    int Line,
+    string? When = null) {
     /// <summary>What a resolver holds it to: the version written, or any version of a path dependency.</summary>
     public VersionReq Requirement => Version ?? VersionReq.Any;
+
+    /// <summary>
+    ///     Whether it applies to a build for this machine: always, unless its
+    ///     <c>when</c> names another operating system or architecture. The
+    ///     resolver and the lock file keep it either way.
+    /// </summary>
+    public bool AppliesHere => When is null || DependencyCondition.Holds(When);
+}
+
+/// <summary>
+///     A dependency's <c>when</c> (docs/05 §5.2.4): <c>os(macos|linux|windows)</c>
+///     or <c>arch(arm64|x64)</c>, applied to the target being built — today
+///     always this machine, since there is no cross-compilation.
+/// </summary>
+public static class DependencyCondition {
+    public static bool IsValid(string text) => Parse(text) is not null;
+
+    public static bool Holds(string text) =>
+        Parse(text) switch {
+            ("os", "macos") => OperatingSystem.IsMacOS(),
+            ("os", "linux") => OperatingSystem.IsLinux(),
+            ("os", "windows") => OperatingSystem.IsWindows(),
+            ("arch", "arm64") => System.Runtime.InteropServices.RuntimeInformation.OSArchitecture == System.Runtime.InteropServices.Architecture.Arm64,
+            ("arch", "x64") => System.Runtime.InteropServices.RuntimeInformation.OSArchitecture == System.Runtime.InteropServices.Architecture.X64,
+            _ => false,
+        };
+
+    static (string Kind, string Value)? Parse(string text) {
+        var open = text.IndexOf('(');
+        if (open <= 0 || !text.EndsWith(')')) {
+            return null;
+        }
+
+        var (kind, value) = (text[..open], text[(open + 1)..^1]);
+        return (kind, value) switch {
+            ("os", "macos" or "linux" or "windows") or ("arch", "arm64" or "x64") => (kind, value),
+            _ => null,
+        };
+    }
 }
 
 public sealed record BinTarget(string Name, string Path);
@@ -92,6 +132,29 @@ public sealed partial class Manifest {
     public IReadOnlyList<ManifestError> Warnings { get; init; } = [];
 
     public Profile ProfileFor(bool release) => release ? Release : Dev;
+
+    /// <summary>
+    ///     This manifest, read from the canonical TOML a <c>package.sb</c>
+    ///     evaluated to, as the file it came from: its warnings name that file,
+    ///     since the TOML's lines mean nothing to its author.
+    /// </summary>
+    internal Manifest Relocated(string file) => new() {
+        File = file,
+        Package = Package,
+        LibPath = LibPath,
+        Bins = Bins,
+        Dependencies = Dependencies,
+        DevDependencies = DevDependencies,
+        BuildDependencies = BuildDependencies,
+        Features = Features,
+        Dev = Dev,
+        Release = Release,
+        Workspace = Workspace,
+        Build = Build,
+        RegistryPath = RegistryPath,
+        Lints = Lints,
+        Warnings = [..Warnings.Select(w => w with { File = file, Line = 1 })],
+    };
 
     public sealed record PackageInfo(
         string Name,
@@ -347,7 +410,7 @@ public sealed partial class Manifest {
 
                         break;
                     case TomlTable detail:
-                        string[] known = ["version", "path", "git", "tag", "branch", "rev", "optional", "default-features", "features", "package", "registry"];
+                        string[] known = ["version", "path", "git", "tag", "branch", "rev", "optional", "default-features", "features", "package", "registry", "when"];
                         foreach (var key in detail.Keys.Where(k => !known.Contains(k))) {
                             Error(detail, key, $"{path}.{key}", "unknown key in a dependency");
                         }
@@ -364,6 +427,11 @@ public sealed partial class Manifest {
                             Error(detail, "git", $"{path}.git", "git dependencies are not supported yet: use a path or the registry");
                         }
 
+                        var when = String(detail, "when", $"{path}.when");
+                        if (when is not null && !DependencyCondition.IsValid(when)) {
+                            Error(detail, "when", $"{path}.when", $"'{when}' is not a condition: os(macos), os(linux), os(windows), arch(arm64) or arch(x64)");
+                        }
+
                         result.Add(new(
                             name,
                             version,
@@ -372,7 +440,8 @@ public sealed partial class Manifest {
                             Bool(detail, "optional", $"{path}.optional") ?? false,
                             Bool(detail, "default-features", $"{path}.default-features") ?? true,
                             Strings(detail, "features", $"{path}.features") ?? [],
-                            line));
+                            line,
+                            when));
                         break;
                     default:
                         Error(table, name, path, $"must be a version requirement or a table, not {value.Kind}");

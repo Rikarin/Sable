@@ -29,19 +29,20 @@ public static class PackageOperations {
         }
 
         string value;
+        string element;
         if (path is not null) {
             var directory = Path.GetFullPath(Path.Combine(member.Directory, path));
-            var manifestPath = Path.Combine(directory, Workspace.ManifestName);
-            if (!File.Exists(manifestPath)) {
-                throw new PackageException($"there is no {Workspace.ManifestName} in '{directory}'");
+            if (!ManifestFiles.Exists(directory)) {
+                throw new PackageException($"there is no {ManifestFiles.PackageFile} in '{directory}'");
             }
 
-            var target = Manifest.Load(manifestPath);
+            var target = ManifestFiles.Load(directory);
             if (target.Package?.Name != name) {
                 throw new PackageException($"the package at '{path}' is called '{target.Package?.Name}', not '{name}'");
             }
 
             var relative = Path.GetRelativePath(member.Directory, directory).Replace(Path.DirectorySeparatorChar, '/');
+            element = SableManifestEditor.Element(name, requirement?.Text, relative);
             value = requirement is null
                 ? $"{{ path = {TomlText.Quote(relative)} }}"
                 : $"{{ version = {TomlText.Quote(requirement.Text)}, path = {TomlText.Quote(relative)} }}";
@@ -60,10 +61,16 @@ public static class PackageOperations {
             }
 
             value = TomlText.Quote(requirement.Text);
+            element = SableManifestEditor.Element(name, requirement.Text, null);
         }
 
         var original = File.ReadAllText(member.ManifestPath);
-        ManifestEditor.SetDependency(member.ManifestPath, dev ? "dev-dependencies" : "dependencies", name, value);
+        if (member.ManifestPath.EndsWith(".sb", StringComparison.Ordinal)) {
+            var edited = SableManifestEditor.Set(original, member.ManifestPath, SableManifestEditor.FieldFor(dev), name, element);
+            SaveSable(member.ManifestPath, original, edited);
+        } else {
+            ManifestEditor.SetDependency(member.ManifestPath, dev ? "dev-dependencies" : "dependencies", name, value);
+        }
         try {
             PackageGraph.Resolve(Workspace.Load(member.Directory), environment);
         } catch {
@@ -77,12 +84,28 @@ public static class PackageOperations {
 
     /// <summary><c>sable remove &lt;pkg&gt;</c>: takes the dependency out of the manifest and the lock file.</summary>
     public static void Remove(PackageEnvironment environment, LocalPackage member, string name) {
-        if (!ManifestEditor.RemoveDependency(member.ManifestPath, name, DependencySections)) {
+        if (member.ManifestPath.EndsWith(".sb", StringComparison.Ordinal)) {
+            var original = File.ReadAllText(member.ManifestPath);
+            var edited = SableManifestEditor.Remove(original, member.ManifestPath, name)
+                ?? throw new PackageException($"{member.Name} has no dependency called '{name}'");
+            SaveSable(member.ManifestPath, original, edited);
+        } else if (!ManifestEditor.RemoveDependency(member.ManifestPath, name, DependencySections)) {
             throw new PackageException($"{member.Name} has no dependency called '{name}'");
         }
 
         PackageGraph.Resolve(Workspace.Load(member.Directory), environment);
         environment.Error.WriteLine($"    Removing {name} from {member.Name}");
+    }
+
+    /// <summary>Writes an edited <c>package.sb</c>, and puts the original back if it no longer evaluates.</summary>
+    static void SaveSable(string path, string original, string edited) {
+        File.WriteAllText(path, edited);
+        try {
+            ManifestFiles.Load(Path.GetDirectoryName(path)!);
+        } catch (ManifestException) {
+            File.WriteAllText(path, original);
+            throw;
+        }
     }
 
     /// <summary><c>sable update [pkg]</c>: re-resolves within the manifests' bounds, ignoring what the lock file chose. Returns the changes.</summary>
@@ -177,10 +200,30 @@ public static class PackageOperations {
             throw new PackageException($"{package.Name} has errors, so it cannot be published");
         }
 
-        var files = Files(package.Directory);
+        var files = Published(package.Directory);
         var archive = Registry.Pack(files);
         var entry = new IndexEntry(package.Name, package.Version, Registry.Checksum(archive), dependencies, manifest.Features, false, "", "");
         return new(package, files, archive, entry);
+    }
+
+    /// <summary>
+    ///     What a package publishes: its files, with a <c>package.sb</c>
+    ///     replaced by the canonical <c>sable.toml</c> it evaluates to
+    ///     (docs/05 §5.2.6), so that the registry and every consumer read data
+    ///     and never run Sable to learn what a package depends on.
+    /// </summary>
+    public static IReadOnlyDictionary<string, byte[]> Published(string directory) {
+        var files = new SortedDictionary<string, byte[]>(StringComparer.Ordinal);
+        foreach (var (path, bytes) in Files(directory)) {
+            files[path] = bytes;
+        }
+
+        if (files.Remove(ManifestFiles.PackageFile)) {
+            files[ManifestFiles.TomlFile] = Encoding.UTF8.GetBytes(ManifestEvaluator.Evaluate(Path.Combine(directory, ManifestFiles.PackageFile)));
+        }
+
+        files.Remove(ManifestFiles.WorkspaceFile);
+        return files;
     }
 
     /// <summary>The files a package publishes, by path relative to it with '/'.</summary>
@@ -197,7 +240,7 @@ public static class PackageOperations {
 
                 if (Directory.Exists(entry)) {
                     // A nested package is its own package.
-                    if (!File.Exists(Path.Combine(entry, Workspace.ManifestName))) {
+                    if (!ManifestFiles.Exists(entry)) {
                         Walk(entry, path);
                     }
 

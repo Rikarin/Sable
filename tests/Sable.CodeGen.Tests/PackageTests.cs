@@ -342,6 +342,6 @@ public sealed class PackageTests {
 
         var outside = Run(fixture.Home, "build");
         Assert.Equal(1, outside.ExitCode);
-        Assert.Contains("could not find sable.toml", outside.Errors, StringComparison.Ordinal);
+        Assert.Contains("could not find package.sb", outside.Errors, StringComparison.Ordinal);
     }
 }

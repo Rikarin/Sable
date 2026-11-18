@@ -109,9 +109,31 @@ function notFound(error) {
     : error;
 }
 
+/** The files a package's manifest may be in: Sable first (docs/05 §5.2), then the canonical TOML. */
+const MANIFESTS = ["package.sb", "sable.toml"];
+
+/** A glob for every package manifest in the workspace. */
+const MANIFEST_GLOB = "**/{package.sb,sable.toml}";
+
 /**
- * The directory of the nearest sable.toml with a [package] table, at or
- * above the file, inside the workspace; undefined for a loose file.
+ * The package manifest in a directory, if it has one.
+ * @param {string} directory
+ * @returns {string | undefined}
+ */
+function manifestIn(directory) {
+  for (const name of MANIFESTS) {
+    const manifest = path.join(directory, name);
+    if (fs.existsSync(manifest) && isPackage(manifest)) {
+      return manifest;
+    }
+  }
+
+  return undefined;
+}
+
+/**
+ * The directory of the nearest package manifest, at or above the file,
+ * inside the workspace; undefined for a loose file.
  * @param {vscode.Uri} uri
  * @returns {string | undefined}
  */
@@ -119,8 +141,7 @@ function packageRoot(uri) {
   const folder = vscode.workspace.getWorkspaceFolder(uri)?.uri.fsPath;
   let directory = path.dirname(uri.fsPath);
   for (;;) {
-    const manifest = path.join(directory, "sable.toml");
-    if (fs.existsSync(manifest) && isPackage(manifest)) {
+    if (manifestIn(directory)) {
       return directory;
     }
 
@@ -133,8 +154,16 @@ function packageRoot(uri) {
   }
 }
 
-/** @param {string} manifest */
+/**
+ * Whether a manifest describes a package: every package.sb does; a
+ * sable.toml when it has a [package] table (a workspace root's may not).
+ * @param {string} manifest
+ */
 function isPackage(manifest) {
+  if (path.basename(manifest) === "package.sb") {
+    return true;
+  }
+
   try {
     return /^\s*\[package\]\s*$/m.test(fs.readFileSync(manifest, "utf8"));
   } catch {
@@ -148,8 +177,18 @@ function isPackage(manifest) {
  * @returns {string | undefined}
  */
 function packageName(root) {
+  const manifest = manifestIn(root);
+  if (!manifest) {
+    return undefined;
+  }
+
   try {
-    const text = fs.readFileSync(path.join(root, "sable.toml"), "utf8");
+    const text = fs.readFileSync(manifest, "utf8");
+    if (path.basename(manifest) === "package.sb") {
+      // `name: "..."` in the Package { } record.
+      return text.match(/Package\s*\{[\s\S]*?\bname\s*:\s*"([^"]+)"/)?.[1]?.split("/").pop();
+    }
+
     const table = text.split(/^\s*\[/m).find((section) => section.startsWith("package]"));
     return table?.match(/^\s*name\s*=\s*"([^"]+)"/m)?.[1]?.split("/").pop();
   } catch {
@@ -157,4 +196,4 @@ function packageName(root) {
   }
 }
 
-module.exports = { binary, channel, run, stream, packageRoot, packageName, isPackage };
+module.exports = { binary, channel, run, stream, packageRoot, packageName, isPackage, manifestIn, MANIFEST_GLOB };

@@ -20,9 +20,11 @@ through `sable` too.
   (Terminal → Run Task → sable). Their diagnostics reach the Problems panel through `$sable`.
 - **Debugging** with lldb: Sable's formatters are loaded, so a `String` shows its text, a list its
   elements, and a union its case.
-- **Snippets**, highlighting for Sable code blocks in Markdown, and, with
-  [Even Better TOML](https://marketplace.visualstudio.com/items?itemName=tamasfe.even-better-toml),
-  completion and validation in `sable.toml`.
+- **Snippets**, and highlighting for Sable code blocks in Markdown.
+- **Manifests**: `package.sb` and `workspace.sb` are Sable, so they get the
+  same completion, hover and errors as any other file. (A canonical
+  `sable.toml` still gets completion and validation with
+  [Even Better TOML](https://marketplace.visualstudio.com/items?itemName=tamasfe.even-better-toml).)
 
 ## Requirements
 

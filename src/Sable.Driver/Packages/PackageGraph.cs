@@ -420,7 +420,7 @@ sealed class GraphSource(Workspace workspace, IReadOnlyDictionary<string, LocalP
 
         var directory = store.Present(name, version, Locked(name)?.Checksum)
             ?? throw new PackageException($"nothing is known of {name} {version}");
-        var manifest = Manifest.Load(Path.Combine(directory, Workspace.ManifestName));
+        var manifest = ManifestFiles.Load(directory);
         return new(
             [..manifest.Dependencies.Select(static d => d with { Path = null })],
             [..manifest.DevDependencies.Select(static d => d with { Path = null })],
@@ -458,11 +458,15 @@ sealed class GraphSource(Workspace workspace, IReadOnlyDictionary<string, LocalP
         decisions.Keys.Select(Split).Where(s => s.Name == name && s.Feature is not null).Select(static s => s.Feature!).ToHashSet(StringComparer.Ordinal);
 
     /// <summary>The dependencies a package has with the features chosen: its required ones, and the optional ones its features turn on.</summary>
-    List<string> EnabledDependencies(string name, SemVersion version, IReadOnlyDictionary<string, SemVersion> decisions, bool includeDev) {
+    List<string> EnabledDependencies(string name, SemVersion version, IReadOnlyDictionary<string, SemVersion> decisions, bool includeDev, bool forThisMachine = false) {
         var spec = Of(name, version);
-        var dependencies = spec.Normal.Where(d => !d.Optional || decisions.ContainsKey(d.Name)).Select(static d => d.Name);
+
+        // A dependency whose 'when' names another platform is resolved and
+        // locked, so the lock is the same on every machine, but not built.
+        bool Applies(DependencySpec d) => !forThisMachine || d.AppliesHere;
+        var dependencies = spec.Normal.Where(d => (!d.Optional || decisions.ContainsKey(d.Name)) && Applies(d)).Select(static d => d.Name);
         if (includeDev && _members.Contains(name)) {
-            dependencies = dependencies.Concat(spec.Dev.Select(static d => d.Name));
+            dependencies = dependencies.Concat(spec.Dev.Where(Applies).Select(static d => d.Name));
         }
 
         // An optional dependency counts only if one of this package's features turned it on.
@@ -482,8 +486,8 @@ sealed class GraphSource(Workspace workspace, IReadOnlyDictionary<string, LocalP
     public IReadOnlyDictionary<string, ResolvedPackage> Packages(IReadOnlyDictionary<string, SemVersion> decisions, string root, LockFile lockFile) {
         var result = new Dictionary<string, ResolvedPackage>(StringComparer.Ordinal);
         foreach (var (name, version) in Real(decisions, root)) {
-            var normal = EnabledDependencies(name, version, decisions, false);
-            var dev = EnabledDependencies(name, version, decisions, true).Except(normal).ToList();
+            var normal = EnabledDependencies(name, version, decisions, false, forThisMachine: true);
+            var dev = EnabledDependencies(name, version, decisions, true, forThisMachine: true).Except(normal).ToList();
             var features = FeaturesOf(name, decisions);
             if (locals.TryGetValue(name, out var local)) {
                 result[name] = new(local, true, null, features, normal, dev);
@@ -492,7 +496,7 @@ sealed class GraphSource(Workspace workspace, IReadOnlyDictionary<string, LocalP
 
             var checksum = lockFile.Find(name)?.Checksum;
             var directory = store.Fetch(name, version, checksum);
-            var package = new LocalPackage(directory, Manifest.Load(Path.Combine(directory, Workspace.ManifestName)));
+            var package = new LocalPackage(directory, ManifestFiles.Load(directory));
             if (package.Name != name || package.Version != version) {
                 throw new RegistryException($"the archive of {name} {version} holds {package.Name} {package.Version}");
             }

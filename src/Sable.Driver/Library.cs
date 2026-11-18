@@ -18,6 +18,10 @@ public static class Library {
     /// <summary>The library modules there are, by name.</summary>
     public static IReadOnlyCollection<string> ModuleNames => [..Modules.Value.Keys];
 
+    /// <summary>A library module's source, every file of it in order: what a cache of anything built from it hashes.</summary>
+    public static string Source(string module) =>
+        Modules.Value.TryGetValue(module, out var files) ? string.Join("\n", files.Select(static f => f.Text.Text)) : "";
+
     static IReadOnlyDictionary<string, IReadOnlyList<SyntaxTree>> Load() {
         var modules = new Dictionary<string, List<SyntaxTree>>(StringComparer.Ordinal);
         var assembly = typeof(Library).Assembly;

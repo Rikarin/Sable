@@ -292,6 +292,21 @@ public sealed partial class Compilation {
     // Declaration gathering
     // -----------------------------------------------------------------------
 
+    /// <summary>
+    ///     A package or workspace manifest (docs/05 §5.2), or the code the
+    ///     toolchain writes to evaluate one: these are evaluated on their own,
+    ///     and need no module declaration.
+    /// </summary>
+    public static bool IsManifestFile(SyntaxTree tree) =>
+        Path.GetFileName(tree.Text.FileName) is "package.sb" or "workspace.sb" || Path.GetFileName(tree.Text.FileName).StartsWith('<');
+
+    /// <summary>
+    ///     The module a manifest's declarations go in: one per directory, so
+    ///     that a workspace's manifests, compiled together in the editor, do
+    ///     not clash, and no package's code can see one.
+    /// </summary>
+    static string ManifestModule(SyntaxTree tree) => "Manifest:" + Path.GetDirectoryName(Path.GetFullPath(tree.Text.FileName));
+
     void DeclareAll() {
         foreach (var tree in SyntaxTrees) {
             if (tree.Root is not CompilationUnitSyntax unit) {
@@ -301,7 +316,7 @@ public sealed partial class Compilation {
             // "One module declaration per file, first non-trivia item"
             // (spec/SYNTAX.md §1). An empty file is let be; one that declares
             // something has to say where it belongs.
-            if (unit.Module is null && unit.Members.Count > 0) {
+            if (unit.Module is null && unit.Members.Count > 0 && !IsManifestFile(tree)) {
                 ReportDeclaration(
                     ErrorCode.ERR_NoModuleDeclaration,
                     new(unit.Members[0].Span.Start, 0),
@@ -309,9 +324,9 @@ public sealed partial class Compilation {
                 );
             }
 
-            var moduleName = unit.Module is null
-                ? string.Empty
-                : NameOf(unit.Module.Name);
+            var moduleName = unit.Module is not null ? NameOf(unit.Module.Name)
+                : IsManifestFile(tree) ? ManifestModule(tree)
+                : string.Empty;
 
             if (!_modules.TryGetValue(moduleName, out var module)) {
                 module = new(moduleName);

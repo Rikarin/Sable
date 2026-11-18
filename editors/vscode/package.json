@@ -28,6 +28,8 @@
   ],
   "main": "./src/extension.js",
   "activationEvents": [
+    "workspaceContains:**/package.sb",
+    "workspaceContains:**/workspace.sb",
     "workspaceContains:**/sable.toml"
   ],
   "contributes": {
@@ -348,7 +350,7 @@
               },
               "package": {
                 "type": "string",
-                "description": "The package directory (with sable.toml) to build and debug. Defaults to the workspace folder.",
+                "description": "The package directory (with package.sb) to build and debug. Defaults to the workspace folder.",
                 "default": "${workspaceFolder}"
               },
               "bin": {

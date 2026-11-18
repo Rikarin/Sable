@@ -36,7 +36,7 @@ function register(context) {
     /** @type {vscode.TestItem} */
     let item = packages.get(root);
     if (!item) {
-      item = controller.createTestItem(root, name, vscode.Uri.file(path.join(root, "sable.toml")));
+      item = controller.createTestItem(root, name, vscode.Uri.file(sable.manifestIn(root) ?? path.join(root, "package.sb")));
       packages.set(root, item);
       controller.items.add(item);
     }
@@ -75,7 +75,7 @@ function register(context) {
   }
 
   async function discoverAll() {
-    const manifests = await vscode.workspace.findFiles("**/sable.toml", "**/{target,vendor,node_modules,.git}/**");
+    const manifests = await vscode.workspace.findFiles(sable.MANIFEST_GLOB, "**/{target,vendor,node_modules,.git}/**");
     const roots = manifests.map((m) => m.fsPath).filter(sable.isPackage).map((m) => path.dirname(m));
     for (const [root, item] of packages) {
       if (!roots.includes(root)) {
@@ -100,13 +100,14 @@ function register(context) {
   const pending = new Map();
   context.subscriptions.push(
     vscode.workspace.onDidSaveTextDocument((document) => {
-      if (document.languageId !== "sable" && path.basename(document.fileName) !== "sable.toml") {
+      const isManifest = ["package.sb", "workspace.sb", "sable.toml"].includes(path.basename(document.fileName));
+      if (document.languageId !== "sable" && !isManifest) {
         return;
       }
 
       const root = sable.packageRoot(document.uri);
       if (!root || !packages.has(root)) {
-        if (path.basename(document.fileName) === "sable.toml") {
+        if (isManifest) {
           discoverAll();
         }
 

@@ -43,8 +43,8 @@ public static partial class Scaffold {
     /// <summary><c>sable init</c>: a package in an existing directory, named for it unless a name is given.</summary>
     public static void Init(string directory, string? name, bool library, PackageEnvironment environment) {
         directory = Path.GetFullPath(directory);
-        if (File.Exists(Path.Combine(directory, Workspace.ManifestName))) {
-            throw new PackageException($"'{directory}' already has a {Workspace.ManifestName}");
+        if (ManifestFiles.Exists(directory)) {
+            throw new PackageException($"'{directory}' already has a manifest ({Path.GetFileName(ManifestFiles.PathIn(directory))})");
         }
 
         name ??= NameFrom(Path.GetFileName(directory));
@@ -59,13 +59,15 @@ public static partial class Scaffold {
 
         var source = Path.Combine(directory, "src");
         Directory.CreateDirectory(source);
-        File.WriteAllText(Path.Combine(directory, Workspace.ManifestName), $"""
-            [package]
-            name = {TomlText.Quote(name)}
-            version = "0.1.0"
-            edition = "{Manifest.DefaultEdition}"
+        File.WriteAllText(Path.Combine(directory, ManifestFiles.PackageFile), $$"""
+            import Sable.Build
 
-            [dependencies]
+            let manifest = Package {
+                name: "{{name}}",
+                version: "0.1.0",
+                edition: {{Manifest.DefaultEdition}},
+                dependencies: [],
+            }
 
             """);
 
@@ -84,8 +86,6 @@ public static partial class Scaffold {
                     """
                 : $$"""
                     module {{module}}
-
-                    import Sable.IO
 
                     fn main() {
                         print("Hello, world!")

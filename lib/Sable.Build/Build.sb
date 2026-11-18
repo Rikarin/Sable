@@ -1,0 +1,486 @@
+module Sable.Build
+
+// What a package is, written in Sable (docs/05 §5.2). `p.sb` declares
+// `let manifest = Package { ... }`, and `workspace.sb` declares
+// `let workspace = Workspace { ... }`. The toolchain evaluates the file at
+// compile time and renders the value here as canonical TOML: the form the
+// resolver, the lock file and the registry read, so nothing outside the
+// toolchain has to run Sable to learn what a package depends on.
+
+// ---- The package --------------------------------------------------------
+
+/// A package: its identity, what it builds, what it needs, and how.
+public struct Package {
+    public var name: String
+    public var version: String
+    /// The year whose language the package is written in.
+    public var edition: Int = 2027
+    public var authors: String[>..] = []
+    public var license: String? = none
+    public var description: String? = none
+    public var repository: String? = none
+
+    /// The library and the executables. With none, `src/lib.sb` is the
+    /// library and `src/main.sb` the executable, when they exist.
+    public var targets: Target[>..] = []
+
+    public var dependencies: Dependency[>..] = []
+    public var devDependencies: Dependency[>..] = []
+    public var buildDependencies: Dependency[>..] = []
+
+    /// Each feature and what it turns on: other features, `dep:name` for an
+    /// optional dependency, `name/feature` for a dependency's feature.
+    public var features: [String: String[>..]] = [:]
+
+    public var profiles: Profile[>..] = []
+
+    /// Types reachable only through reflection, which the linker must keep.
+    public var reflect: String[>..] = []
+
+    /// Each lint's level: "allow", "warn" or "deny".
+    public var lints: [String: String] = [:]
+
+    /// A registry of this package's own, as a directory relative to it.
+    public var registry: String? = none
+
+    /// A build script, and what it may touch (docs/05 §5.6).
+    public var build: BuildScript? = none
+}
+
+/// Something a package builds.
+public struct Target {
+    var kind: TargetKind
+    var name: String
+    var path: String
+
+    /// The package's library, rooted at the file.
+    public static fn library(path: String) -> Target {
+        return Target { kind: .library, name: "", path: path }
+    }
+
+    /// An executable called `name`, whose `main` is in the file.
+    public static fn executable(_ name: String, path: String) -> Target {
+        return Target { kind: .executable, name: name, path: path }
+    }
+}
+
+enum TargetKind {
+    library,
+    executable
+}
+
+// ---- Dependencies -------------------------------------------------------
+
+/// A package this one uses, and where it comes from.
+public struct Dependency {
+    var name: String
+    var version: String?
+    var path: String?
+    var git: String?
+    var tag: String?
+    var optional: Bool
+    var defaultFeatures: Bool
+    var features: String[>..]
+    var condition: Condition?
+
+    /// A version from the registry: `"1.2"` means any 1.x from 1.2.
+    public static fn registry(_ name: String, _ version: String, features: String[>..] = [], defaultFeatures: Bool = true,
+        optional: Bool = false, when: Condition? = none) -> Dependency {
+        return Dependency {
+            name: name, version: version, path: none, git: none, tag: none,
+            optional: optional, defaultFeatures: defaultFeatures, features: features, condition: when,
+        }
+    }
+
+    /// A package in a directory, relative to this one; with a version, the
+    /// one the registry has when this package is published.
+    public static fn path(_ name: String, _ path: String, version: String? = none, features: String[>..] = [], defaultFeatures: Bool = true,
+        optional: Bool = false, when: Condition? = none) -> Dependency {
+        return Dependency {
+            name: name, version: version, path: path, git: none, tag: none,
+            optional: optional, defaultFeatures: defaultFeatures, features: features, condition: when,
+        }
+    }
+
+    /// A package in a git repository, at a tag.
+    public static fn git(_ name: String, _ url: String, tag: String, features: String[>..] = [], defaultFeatures: Bool = true,
+        optional: Bool = false, when: Condition? = none) -> Dependency {
+        return Dependency {
+            name: name, version: none, path: none, git: url, tag: tag,
+            optional: optional, defaultFeatures: defaultFeatures, features: features, condition: when,
+        }
+    }
+}
+
+/// When a dependency applies. A manifest may not ask which machine evaluates
+/// it — that would make the package different on each one — so the choice
+/// is data, applied to each target as it is built.
+public struct Condition {
+    var text: String
+
+    /// Only when building for the operating system.
+    public static fn os(_ os: OperatingSystem) -> Condition {
+        return Condition { text: "os(\(osName(os)))" }
+    }
+
+    /// Only when building for the architecture.
+    public static fn arch(_ arch: Architecture) -> Condition {
+        return Condition { text: "arch(\(archName(arch)))" }
+    }
+}
+
+public enum OperatingSystem {
+    macOS,
+    linux,
+    windows
+}
+
+public enum Architecture {
+    arm64,
+    x64
+}
+
+fn osName(_ os: OperatingSystem) -> String {
+    return match os {
+        case .macOS => "macos"
+        case .linux => "linux"
+        case .windows => "windows"
+    }
+}
+
+fn archName(_ arch: Architecture) -> String {
+    return match arch {
+        case .arm64 => "arm64"
+        case .x64 => "x64"
+    }
+}
+
+// ---- Profiles -----------------------------------------------------------
+
+/// How a build is compiled. Only what is given is set; the rest keeps the
+/// profile's defaults.
+public struct Profile {
+    var name: String
+    var optLevel: Int?
+    var debug: Bool?
+    var lto: Lto?
+    var codegenUnits: Int?
+    var panic: Panic?
+    var arcChecks: Bool?
+    var exclusivity: Exclusivity?
+    var overflowChecks: Bool?
+    var leakCheck: Bool?
+
+    /// `sable build --release`.
+    public static fn release(optLevel: Int? = none, debug: Bool? = none, lto: Lto? = none, codegenUnits: Int? = none, panic: Panic? = none,
+        arcChecks: Bool? = none, exclusivity: Exclusivity? = none, overflowChecks: Bool? = none,
+        leakCheck: Bool? = none) -> Profile {
+        return Profile {
+            name: "release", optLevel: optLevel, debug: debug, lto: lto, codegenUnits: codegenUnits, panic: panic,
+            arcChecks: arcChecks, exclusivity: exclusivity, overflowChecks: overflowChecks, leakCheck: leakCheck,
+        }
+    }
+
+    /// Every other build.
+    public static fn dev(optLevel: Int? = none, debug: Bool? = none, lto: Lto? = none, codegenUnits: Int? = none, panic: Panic? = none,
+        arcChecks: Bool? = none, exclusivity: Exclusivity? = none, overflowChecks: Bool? = none,
+        leakCheck: Bool? = none) -> Profile {
+        return Profile {
+            name: "dev", optLevel: optLevel, debug: debug, lto: lto, codegenUnits: codegenUnits, panic: panic,
+            arcChecks: arcChecks, exclusivity: exclusivity, overflowChecks: overflowChecks, leakCheck: leakCheck,
+        }
+    }
+}
+
+public enum Lto {
+    off,
+    thin,
+    fat
+}
+
+public enum Panic {
+    unwind,
+    abort
+}
+
+/// Whether overlapping access to a variable is checked at run time (docs/02 §2.3).
+public enum Exclusivity {
+    checked,
+    off
+}
+
+// ---- Build scripts ------------------------------------------------------
+
+/// A program run before the package compiles, sandboxed to what it declares.
+public struct BuildScript {
+    var path: String
+    var allowNet: Bool
+    var allowExec: String[>..]
+    var allowRead: String[>..]
+    var allowWrite: String[>..]
+
+    /// The script at `path`, allowed only what is listed. `$OUT_DIR` names
+    /// the directory a script writes its output to.
+    public static fn script(_ path: String, allowNet: Bool = false, allowExec: String[>..] = [], allowRead: String[>..] = [],
+        allowWrite: String[>..] = []) -> BuildScript {
+        return BuildScript { path: path, allowNet: allowNet, allowExec: allowExec, allowRead: allowRead, allowWrite: allowWrite }
+    }
+}
+
+// ---- Workspaces ---------------------------------------------------------
+
+/// The root of several packages built together: one lock file, one
+/// `target/`.
+public struct Workspace {
+    /// The member directories; a trailing `*` takes every directory there.
+    public var members: String[>..]
+    public var exclude: String[>..] = []
+}
+
+// ---- Rendering ----------------------------------------------------------
+
+/// The package as canonical TOML: what the toolchain reads and publishes.
+public fn renderManifest(_ p: Package) -> String {
+    var w = TomlWriter { lines: [] }
+    w.table("package")
+    w.string("name", p.name)
+    w.string("version", p.version)
+    w.string("edition", "\(p.edition)")
+    if !p.authors.isEmpty {
+        w.strings("authors", p.authors)
+    }
+    w.optionalString("license", p.license)
+    w.optionalString("description", p.description)
+    w.optionalString("repository", p.repository)
+
+    for target in p.targets {
+        match target.kind {
+            case .library => {
+                w.table("lib")
+                w.string("path", target.path)
+            }
+            case .executable => {
+                w.arrayTable("bin")
+                w.string("name", target.name)
+                w.string("path", target.path)
+            }
+        }
+    }
+
+    w.dependencies("dependencies", p.dependencies)
+    w.dependencies("dev-dependencies", p.devDependencies)
+    w.dependencies("build-dependencies", p.buildDependencies)
+
+    if !p.features.isEmpty {
+        w.table("features")
+        for (name, enables) in p.features {
+            w.strings(quoteKey(name), enables)
+        }
+    }
+
+    for profile in p.profiles {
+        w.profile(profile)
+    }
+
+    if !p.reflect.isEmpty {
+        w.table("reflect")
+        w.strings("include", p.reflect)
+    }
+
+    if !p.lints.isEmpty {
+        w.table("lints")
+        for (name, level) in p.lints {
+            w.string(quoteKey(name), level)
+        }
+    }
+
+    if let registry = p.registry {
+        w.table("registry")
+        w.string("path", registry)
+    }
+
+    if let build = p.build {
+        w.table("build")
+        w.string("script", build.path)
+        w.raw("allow-net", build.allowNet ? "true" : "false")
+        w.strings("allow-exec", build.allowExec)
+        w.strings("allow-read", build.allowRead)
+        w.strings("allow-write", build.allowWrite)
+    }
+
+    return w.text()
+}
+
+/// The workspace as canonical TOML.
+public fn renderManifest(_ workspace: Workspace) -> String {
+    var w = TomlWriter { lines: [] }
+    w.table("workspace")
+    w.strings("members", workspace.members)
+    if !workspace.exclude.isEmpty {
+        w.strings("exclude", workspace.exclude)
+    }
+    return w.text()
+}
+
+struct TomlWriter {
+    var lines: String[>..]
+
+    mutating fn table(_ name: String) {
+        if !lines.isEmpty {
+            lines.append("")
+        }
+        lines.append("[\(name)]")
+    }
+
+    mutating fn arrayTable(_ name: String) {
+        if !lines.isEmpty {
+            lines.append("")
+        }
+        lines.append("[[\(name)]]")
+    }
+
+    mutating fn raw(_ key: String, _ value: String) {
+        lines.append("\(key) = \(value)")
+    }
+
+    mutating fn string(_ key: String, _ value: String) {
+        raw(key, quote(value))
+    }
+
+    mutating fn optionalString(_ key: String, _ value: String?) {
+        if let present = value {
+            string(key, present)
+        }
+    }
+
+    mutating fn strings(_ key: String, _ values: String[>..]) {
+        raw(key, list(values))
+    }
+
+    mutating fn dependencies(_ section: String, _ all: Dependency[>..]) {
+        if all.isEmpty {
+            return
+        }
+
+        table(section)
+        for dependency in all {
+            var parts: String[>..] = []
+            if let version = dependency.version {
+                parts.append("version = \(quote(version))")
+            }
+            if let path = dependency.path {
+                parts.append("path = \(quote(path))")
+            }
+            if let git = dependency.git {
+                parts.append("git = \(quote(git))")
+            }
+            if let tag = dependency.tag {
+                parts.append("tag = \(quote(tag))")
+            }
+            if dependency.optional {
+                parts.append("optional = true")
+            }
+            if !dependency.defaultFeatures {
+                parts.append("default-features = false")
+            }
+            if !dependency.features.isEmpty {
+                parts.append("features = \(list(dependency.features))")
+            }
+            if let condition = dependency.condition {
+                parts.append("when = \(quote(condition.text))")
+            }
+            raw(quoteKey(dependency.name), "{ \(Runtime.joinStrings(parts, ", ")) }")
+        }
+    }
+
+    mutating fn profile(_ profile: Profile) {
+        table("profile.\(profile.name)")
+        if let level = profile.optLevel {
+            raw("opt-level", "\(level)")
+        }
+        if let debug = profile.debug {
+            raw("debug", debug ? "true" : "false")
+        }
+        if let lto = profile.lto {
+            match lto {
+                case .off => raw("lto", "false")
+                case .thin => string("lto", "thin")
+                case .fat => string("lto", "fat")
+            }
+        }
+        if let units = profile.codegenUnits {
+            raw("codegen-units", "\(units)")
+        }
+        if let panic = profile.panic {
+            match panic {
+                case .unwind => string("panic", "unwind")
+                case .abort => string("panic", "abort")
+            }
+        }
+        if let checks = profile.arcChecks {
+            raw("arc-checks", checks ? "true" : "false")
+        }
+        if let exclusivity = profile.exclusivity {
+            match exclusivity {
+                case .checked => string("exclusivity", "checked")
+                case .off => string("exclusivity", "unchecked")
+            }
+        }
+        if let checks = profile.overflowChecks {
+            raw("overflow-checks", checks ? "true" : "false")
+        }
+        if let check = profile.leakCheck {
+            raw("leak-check", check ? "true" : "false")
+        }
+    }
+
+    fn text() -> String {
+        return Runtime.joinStrings(lines, "\n") + "\n"
+    }
+}
+
+fn list(_ values: String[>..]) -> String {
+    var quoted: String[>..] = []
+    for value in values {
+        quoted.append(quote(value))
+    }
+    return "[" + Runtime.joinStrings(quoted, ", ") + "]"
+}
+
+/// A key as TOML writes it: bare when it can be, quoted otherwise.
+fn quoteKey(_ key: String) -> String {
+    var bare = !key.isEmpty
+    var i = 0
+    while i < key.count {
+        let c = key.at(index: i)
+        if !(c.isLetter || c.isDigit || c == '-' || c == '_') {
+            bare = false
+        }
+        i = i + 1
+    }
+    return bare ? key : quote(key)
+}
+
+/// A TOML basic string.
+fn quote(_ text: String) -> String {
+    var parts: String[>..] = []
+    var i = 0
+    while i < text.count {
+        let c = text.at(index: i)
+        if c == '"' {
+            parts.append("\\\"")
+        } else if c == '\\' {
+            parts.append("\\\\")
+        } else if c == '\n' {
+            parts.append("\\n")
+        } else if c == '\t' {
+            parts.append("\\t")
+        } else if c == '\r' {
+            parts.append("\\r")
+        } else {
+            parts.append(String.fromChar(c))
+        }
+        i = i + 1
+    }
+    return "\"" + Runtime.joinStrings(parts, "") + "\""
+}

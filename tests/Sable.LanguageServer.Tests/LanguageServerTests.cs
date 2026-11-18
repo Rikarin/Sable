@@ -188,6 +188,27 @@ public sealed class LanguageServerTests : IDisposable {
     }
 
     [Fact]
+    public async Task ManifestsAreCheckedEachOnItsOwn() {
+        // Two members' package.sb, each declaring `let manifest`: in modules
+        // of their own, so they neither clash nor reach the packages' code.
+        const string manifest = "import Sable.Build\n\nlet manifest = Package {\n    name: \"a\",\n    version: \"0.1.0\",\n}\n";
+        Directory.CreateDirectory(Path.Combine(_root, "a"));
+        Directory.CreateDirectory(Path.Combine(_root, "b"));
+        var first = Write("a/package.sb", manifest);
+        Write("b/package.sb", manifest.Replace("\"a\"", "\"b\"", StringComparison.Ordinal));
+        var wrong = manifest.Replace("version: \"0.1.0\"", "version: 1", StringComparison.Ordinal);
+        await using var client = new TestClient();
+        await client.InitializeAsync(_root);
+        await client.NotifyAsync("initialized", new { });
+        await client.OpenAsync(first, manifest);
+        await client.DiagnosticsAsync(first, static d => d.GetArrayLength() == 0);
+
+        await client.ChangeAsync(first, 2, manifest, 0, manifest.Length, wrong);
+        var errors = await client.DiagnosticsAsync(first, static d => d.GetArrayLength() > 0);
+        Assert.Contains(errors.EnumerateArray(), static d => d.GetString("message")!.Contains("String", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task AParseErrorIsPublished() {
         await using var client = new TestClient();
         await client.InitializeAsync();

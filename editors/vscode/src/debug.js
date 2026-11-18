@@ -28,7 +28,7 @@ function register(context) {
 
 /** @param {vscode.WorkspaceFolder | undefined} folder */
 function initialConfigurations(folder) {
-  const hasPackage = folder ? fs.existsSync(path.join(folder.uri.fsPath, "sable.toml")) : false;
+  const hasPackage = folder ? sable.manifestIn(folder.uri.fsPath) !== undefined : false;
   return [
     hasPackage
       ? { type: "sable", request: "launch", name: "Debug the package", args: [], cwd: "${workspaceFolder}" }
@@ -148,10 +148,10 @@ async function build(context, folder, configuration, token) {
     cwd = path.dirname(program);
   } else {
     const root = typeof configuration.package === "string" ? configuration.package
-      : typeof configuration.cwd === "string" && fs.existsSync(path.join(configuration.cwd, "sable.toml")) ? configuration.cwd
+      : typeof configuration.cwd === "string" && sable.manifestIn(configuration.cwd) ? configuration.cwd
         : folder?.uri.fsPath;
-    if (!root || !fs.existsSync(path.join(root, "sable.toml"))) {
-      throw new Error("no package to debug: set 'program' to a .sb file, or 'package' to a directory with a sable.toml");
+    if (!root || !sable.manifestIn(root)) {
+      throw new Error("no package to debug: set 'program' to a .sb file, or 'package' to a directory with a package.sb");
     }
 
     const bin = typeof configuration.bin === "string" ? configuration.bin : sable.packageName(root);

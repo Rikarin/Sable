@@ -107,4 +107,137 @@ public sealed class SubscriptAndLocalTests {
                 print(box[0])
             """
         );
+
+    // ---- Local functions --------------------------------------------------------
+
+    [Fact]
+    public void ALocalFunctionThatCapturesNothingIsAPlainFunction() =>
+        Prints(
+            "4\n120\n",
+            """
+            fn nested(_ n: Int) -> Int {
+                fn helper(_ x: Int) -> Int {
+                    return x + 1
+                }
+                return helper(n) + helper(n)
+            }
+
+            fn factorial(_ n: Int) -> Int {
+                fn go(_ k: Int, _ product: Int) -> Int {
+                    if k <= 1 {
+                        return product
+                    }
+                    return go(k - 1, product * k)
+                }
+                return go(n, 1)
+            }
+            """,
+            """
+                print(nested(1))
+                print(factorial(5))
+            """
+        );
+
+    [Fact]
+    public void ALocalFunctionCapturesWhatIsAroundIt() =>
+        // Locals by reference, as a closure does: 'bump' changes what 'helper' reads.
+        Prints(
+            "181\n15\n3\n",
+            """
+            fn outer(_ n: Int) -> Int {
+                var offset = 10
+                fn helper(_ x: Int) -> Int {
+                    return x + offset
+                }
+                fn bump() {
+                    offset = offset + 1
+                }
+                fn sum(_ k: Int) -> Int {
+                    if k <= 0 {
+                        return 0
+                    }
+                    return helper(k) + sum(k - 1)
+                }
+                fn fact(_ k: Int) -> Int {
+                    if k <= 1 {
+                        return 1
+                    }
+                    return k * fact(k - 1)
+                }
+                bump()
+                let f = (y: Int) => helper(y) * 2
+                return helper(n) + fact(5) + sum(2) + f(1)
+            }
+
+            struct S {
+                var x: Int
+                fn m(_ by: Int) -> Int {
+                    fn h() -> Int { return x + by }
+                    fn g() -> Int { return self.x * h() }
+                    return g()
+                }
+            }
+
+            fn repeated<T>(_ value: T, _ count: Int) -> T[>..] {
+                var items: T[>..] = []
+                fn add() {
+                    items.append(value)
+                }
+                var i = 0
+                while i < count {
+                    add()
+                    i = i + 1
+                }
+                return items
+            }
+            """,
+            """
+                print(outer(1))
+                print(S(x: 3).m(2))
+                print(repeated("a", 3).count)
+            """
+        );
+
+    [Fact]
+    public void ALocalFunctionThatCapturesCanThrowAndBePassedOn() =>
+        Prints(
+            "6\nnegative\n",
+            """
+            union Problem { Negative }
+
+            fn apply(_ f: (Int) -> Int, _ x: Int) -> Int { return f(x) }
+
+            fn checked(_ limit: Int, _ x: Int) throws(Problem) -> Int {
+                fn check(_ v: Int) throws(Problem) -> Int {
+                    if v < 0 {
+                        throw Problem.Negative
+                    }
+                    return v + limit
+                }
+                fn twice(_ v: Int) -> Int { return v * limit }
+                return try check(x) + apply(twice, 1) - limit
+            }
+            """,
+            """
+                do {
+                    print(try checked(2, 4))
+                    print(try checked(2, -1))
+                } catch {
+                    print("negative")
+                }
+            """
+        );
+
+    // ---- Compiler builtins ------------------------------------------------------
+
+    [Fact]
+    public void TheCompilerBuiltinsSayWhereTheyAre() =>
+        Prints(
+            "test.sab:5:50 in main of Test\nwhere\n",
+            "fn whereAmI() -> String { return #function }",
+            """
+                print(#file + ":" + #line.toString() + ":" + #column.toString() + " in " + #function + " of " + #module)
+                print(whereAmI().count > 0 ? "where" : "nowhere")
+            """
+        );
 }

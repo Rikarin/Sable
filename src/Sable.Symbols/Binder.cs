@@ -166,7 +166,7 @@ public sealed partial class Binder {
         // One graph serves all three flow checks.
         var graph = ControlFlowGraph.Build(bound, function.Parameters);
         CheckFlow(function, body, graph);
-        DefiniteAssignment.Analyze(graph, _diagnostics);
+        DefiniteAssignment.Analyze(graph, _diagnostics, function);
 
         PopScope();
         RestoreEffects(savedEffects);

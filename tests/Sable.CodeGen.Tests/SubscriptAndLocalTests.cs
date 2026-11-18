@@ -271,6 +271,132 @@ public sealed class SubscriptAndLocalTests {
         Assert.Equal("fatal error: inline array is full\n", run.Stderr);
     }
 
+    // ---- Recursive unions -------------------------------------------------------
+
+    [Fact]
+    public void ARecursiveUnionBoxesTheCaseThatHoldsItself() =>
+        Prints(
+            "10\n3\n",
+            """
+            union Expr {
+                Num(Int)
+                Add(Expr, Expr)
+                Neg(of: Expr)
+            }
+
+            fn eval(_ e: Expr) -> Int {
+                return match e {
+                    case .Num(let n) => n
+                    case .Add(let a, let b) => eval(a) + eval(b)
+                    case .Neg(let inner) => 0 - eval(inner)
+                }
+            }
+
+            fn size(_ e: Expr) -> Int {
+                if case .Add(.Num(let a), _) = e {
+                    return a
+                }
+                return 0
+            }
+            """,
+            """
+                let e = Expr.Add(Expr.Num(3), Expr.Add(Expr.Num(9), Expr.Neg(of: Expr.Num(2))))
+                let copy = e
+                print(eval(copy))
+                print(size(e))
+            """
+        );
+
+    [Fact]
+    public void IndirectBoxesACaseThatDoesNotNeedIt() =>
+        Prints(
+            "4\n7\nBig.Large(1, 2, 3, 4)\n",
+            """
+            union Big {
+                @indirect Large(Int, Int, Int, Int)
+                Small(Int)
+            }
+
+            fn last(_ b: Big) -> Int {
+                return match b {
+                    case .Large(_, _, _, let d) => d
+                    case .Small(let s) => s
+                }
+            }
+            """,
+            """
+                let b = Big.Large(1, 2, 3, 4)
+                print(last(b))
+                print(last(Big.Small(7)))
+                print(Mirror(of: b).description)
+            """
+        );
+
+    [Fact]
+    public void AGenericRecursiveUnion() =>
+        Prints(
+            "3\n3\n2\n3\nTree<Int>.Node(value: 1, left: Tree<Int>.Leaf, right: Tree<Int>.Leaf)\n",
+            """
+            union Tree<Value> {
+                Leaf
+                Node(value: Value, left: Tree<Value>, right: Tree<Value>)
+            }
+
+            fn depth<Value>(_ tree: Tree<Value>) -> Int {
+                return match tree {
+                    case .Leaf => 0
+                    case .Node(_, let left, let right) => {
+                        let l = depth(left)
+                        let r = depth(right)
+                        if l > r {
+                            return 1 + l
+                        }
+                        return 1 + r
+                    }
+                }
+            }
+
+            fn count<Value>(_ tree: Tree<Value>) -> Int {
+                return match tree {
+                    case .Leaf => 0
+                    case .Node(_, let left, let right) => 1 + count(left) + count(right)
+                }
+            }
+
+            fn sample() -> Tree<Int> {
+                return Tree.Node(
+                    value: 1,
+                    left: Tree.Node(value: 2, left: Tree.Node(value: 3, left: Tree.Leaf, right: Tree.Leaf), right: Tree.Leaf),
+                    right: Tree.Leaf)
+            }
+
+            union List {
+                Empty
+                Cons(head: String, tail: List?)
+            }
+
+            fn length(_ list: List?) -> Int {
+                guard let present = list else {
+                    return 0
+                }
+                return match present {
+                    case .Empty => 0
+                    case .Cons(_, let tail) => 1 + length(tail)
+                }
+            }
+            """,
+            """
+                let tree = sample()
+                print(depth(tree))
+                print(count(tree))
+                let words = Tree<String>.Node(value: "a", left: Tree.Leaf, right: Tree.Node(value: "b", left: Tree.Leaf, right: Tree.Leaf))
+                print(count(words))
+                let end: List? = none
+                print(length(List.Cons(head: "x", tail: List.Cons(head: "y", tail: List.Cons(head: "z", tail: end)))))
+                print(Mirror(of: Tree.Node(value: 1, left: Tree<Int>.Leaf, right: Tree.Leaf)).description)
+            """
+        );
+
     // ---- Compiler builtins ------------------------------------------------------
 
     [Fact]

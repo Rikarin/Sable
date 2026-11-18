@@ -1111,6 +1111,21 @@ public sealed partial class SilGen {
                     enumType.Cases.Add((unionCase.Name, payload));
                 }
 
+                // A case that holds the union by value — 'Node(left: Tree<T>, …)'
+                // — would make it infinitely large: its payload goes in a box,
+                // a counted allocation shared on copy (docs/03 §"Indirect
+                // cases"); '@indirect' asks for one anyway.
+                for (var i = 0; i < enumType.Cases.Count; i++) {
+                    if (enumType.Cases[i].Payload is not { } payload) {
+                        continue;
+                    }
+
+                    if (Holds(payload, enumType) || IsMarkedIndirect(named.OriginalDefinition, enumType.Cases[i].Name)) {
+                        enumType.Cases[i] = (enumType.Cases[i].Name, BoxType(payload));
+                        (_indirect.TryGetValue(enumType, out var boxed) ? boxed : _indirect[enumType] = []).Add(i);
+                    }
+                }
+
                 return HoldsItself(enumType) ? null : enumType;
             }
 
@@ -1735,6 +1750,40 @@ public sealed partial class SilGen {
 
         _module.Add(thunk);
         return (name, code);
+    }
+
+    /// <summary>The cases of each union whose payload is boxed, by index.</summary>
+    readonly Dictionary<EnumType, HashSet<int>> _indirect = new(ReferenceEqualityComparer.Instance);
+
+    /// <summary>True when a case's payload is in a box: the box's one field holds it.</summary>
+    internal bool IsIndirect(EnumType type, int index) => _indirect.TryGetValue(type, out var boxed) && boxed.Contains(index);
+
+    static bool IsMarkedIndirect(NamedTypeSymbol union, string caseName) =>
+        union.Members.OfType<UnionCaseSymbol>().FirstOrDefault(c => c.Name == caseName)?.DeclaringSyntax.FirstOrDefault()
+            is UnionCaseDeclarationSyntax declaration
+        && declaration.Attributes.Any(static a => a.Name.ToString().Trim() == "indirect");
+
+    /// <summary>True when a value of one type holds a value of another by value — through no reference.</summary>
+    static bool Holds(SilType part, NominalType type) {
+        var seen = new HashSet<SilType>();
+        bool Reaches(SilType at) {
+            if (ReferenceEquals(at, type)) {
+                return true;
+            }
+
+            if (!seen.Add(at)) {
+                return false;
+            }
+
+            return at switch {
+                StructType structType => structType.Fields.Any(f => Reaches(f.Type)),
+                TupleType tuple => tuple.Elements.Any(Reaches),
+                EnumType enumType => enumType.Cases.Any(c => c.Payload is { } payload && Reaches(payload)),
+                _ => false,
+            };
+        }
+
+        return Reaches(part);
     }
 
     /// <summary>True when a type contains itself by value — through no reference — and so has no size.</summary>
@@ -3161,16 +3210,34 @@ public sealed partial class SilGen {
                     Jump(new SwitchEnumInst(value, [(index, target)], failed));
                     _current = target;
 
+                    // An indirect case: the payload is borrowed out of its box
+                    // for as long as the sub-patterns look at it.
+                    if (payload is not null && !unionCase.Payload.IsEmpty && generator.IsIndirect(enumType, index)) {
+                        var boxed = Emit(new RefElementAddrInst(payload, 0));
+                        if (((ClassType)payload.Type).Fields[0].Type.IsTrivial) {
+                            PayloadPattern(unionCase, Emit(new LoadInst(boxed)), matched, failed);
+                            return;
+                        }
+
+                        var inner = Emit(new LoadBorrowInst(boxed));
+                        var innerMatched = function.AddBlock();
+                        var innerFailed = function.AddBlock();
+                        PayloadPattern(unionCase, inner, innerMatched, innerFailed);
+
+                        _current = innerMatched;
+                        Emit(new EndBorrowInst(inner));
+                        Branch(matched);
+
+                        _current = innerFailed;
+                        Emit(new EndBorrowInst(inner));
+                        Branch(failed);
+                        return;
+                    }
+
                     if (payload is null || unionCase.Payload.IsEmpty) {
                         Branch(matched);
-                    } else if (unionCase.Payload.Length == 1 && payloadType is not TupleType) {
-                        Pattern(unionCase.Payload[0], payload, matched, failed);
                     } else {
-                        Sequence(
-                            unionCase.Payload.Select((sub, i) => (sub, (Func<SilValue>)(() => Emit(new TupleExtractInst(payload, i))))),
-                            matched,
-                            failed
-                        );
+                        PayloadPattern(unionCase, payload, matched, failed);
                     }
 
                     return;
@@ -3191,6 +3258,19 @@ public sealed partial class SilGen {
                 default:
                     Fail(pattern.Syntax, $"the pattern '{Describe(pattern.Syntax)}'");
                     return;
+            }
+        }
+
+        /// <summary>A union case's sub-patterns, against its payload: one value, or a tuple of them.</summary>
+        void PayloadPattern(BoundUnionCasePattern unionCase, SilValue payload, SilBlock matched, SilBlock failed) {
+            if (unionCase.Payload.Length == 1 && payload.Type is not TupleType) {
+                Pattern(unionCase.Payload[0], payload, matched, failed);
+            } else {
+                Sequence(
+                    unionCase.Payload.Select((sub, i) => (sub, (Func<SilValue>)(() => Emit(new TupleExtractInst(payload, i))))),
+                    matched,
+                    failed
+                );
             }
         }
 
@@ -4353,11 +4433,20 @@ public sealed partial class SilGen {
                 return null;
             }
 
+            // An indirect case's payload is built as any other, then boxed.
+            var indirect = generator.IsIndirect(enumType, index);
+            var payloadType = indirect ? ((ClassType)enumType.Cases[index].Payload!).Fields[0].Type : enumType.Cases[index].Payload;
             SilValue? payload = values.Count switch {
                 0 => null,
-                1 when enumType.Cases[index].Payload is not TupleType => values[0],
-                _ => Emit(new TupleInst((TupleType)enumType.Cases[index].Payload!, [..values])),
+                1 when payloadType is not TupleType => values[0],
+                _ => Emit(new TupleInst((TupleType)payloadType!, [..values])),
             };
+
+            if (indirect && payload is not null) {
+                var box = Emit(new AllocRefInst((ClassType)enumType.Cases[index].Payload!));
+                Emit(new StoreInst(Owned(payload), Emit(new RefElementAddrInst(box, 0)), StoreKind.Assign));
+                payload = box;
+            }
 
             return Emit(new EnumInst(enumType, index, payload));
         }

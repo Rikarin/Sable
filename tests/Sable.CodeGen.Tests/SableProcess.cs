@@ -10,7 +10,7 @@ internal static class SableProcess {
         RunWithInput(directory, home, environment, "", arguments);
 
     public static Result RunWithInput(string directory, string home, IReadOnlyDictionary<string, string?>? environment, string input, params string[] arguments) {
-        var start = new ProcessStartInfo("dotnet") { WorkingDirectory = directory, RedirectStandardOutput = true, RedirectStandardError = true, RedirectStandardInput = true };
+        var start = new ProcessStartInfo("dotnet") { WorkingDirectory = directory, RedirectStandardOutput = true, RedirectStandardError = true, RedirectStandardInput = true }.Utf8();
         start.ArgumentList.Add(Path.Combine(AppContext.BaseDirectory, "sable.dll"));
         foreach (var argument in arguments) {
             start.ArgumentList.Add(argument);

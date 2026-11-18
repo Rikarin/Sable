@@ -36,3 +36,26 @@
 #include "tasks.c"
 #include "io.c"
 #include "process.c"
+
+// ---- Start-up --------------------------------------------------------------
+
+// What the runtime sets up before any Sable code runs. A program's start-up
+// calls it as the process starts, a constructor of the runtime's object; a
+// library's (LlvmEmitter's LibraryLifetime) calls it first too, since the
+// order in which one image's constructors run is the linker's: a library's
+// globals may be made before the runtime's own constructor has run.
+void sable_runtime_start(void) {
+    static bool started;
+    if (started) {
+        return;
+    }
+
+    started = true;
+    platform_start();
+    leaks_start();
+    tasks_start();
+}
+
+__attribute__((constructor)) static void sable_runtime_constructor(void) {
+    sable_runtime_start();
+}

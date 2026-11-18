@@ -145,6 +145,14 @@ public sealed record WorkspaceSpec(IReadOnlyList<string> Members, IReadOnlyList<
 /// </summary>
 public sealed record WorkspaceInheritance(string Directory, string File, WorkspaceSpec Workspace);
 
+/// <summary>
+///     <c>[targets.&lt;triple&gt;]</c> (docs/05 §5.2.10): what a build for that
+///     target is, beyond what <c>--target</c> says. The triple is matched by
+///     its operating system and architecture, as <c>--target</c> parses it.
+/// </summary>
+/// <param name="Reflection"><c>reflection</c>: false builds without reflection, as <c>--deny-reflection</c> does.</param>
+public sealed record TargetSettings(NativeTarget Target, bool Reflection);
+
 /// <summary><c>[build]</c>: a build script and what it may touch (docs/05 §5.6), run by <see cref="BuildScripts" />.</summary>
 public sealed record BuildSpec(string Script, bool AllowNet, IReadOnlyList<string> AllowExec, IReadOnlyList<string> AllowRead, IReadOnlyList<string> AllowWrite);
 
@@ -161,6 +169,12 @@ public sealed partial class Manifest {
 
     /// <summary><c>[lib] path</c>, when given.</summary>
     public string? LibPath { get; init; }
+
+    /// <summary>
+    ///     <c>[lib] kind</c>: <c>"static"</c> or <c>"dynamic"</c> builds the
+    ///     library as a native one C links, as well as Sable's; null for Sable's only.
+    /// </summary>
+    public LibraryKind? LibKind { get; init; }
 
     public IReadOnlyList<BinTarget> Bins { get; init; } = [];
     public IReadOnlyList<DependencySpec> Dependencies { get; init; } = [];
@@ -187,6 +201,13 @@ public sealed partial class Manifest {
     /// </summary>
     public IReadOnlyList<string> GeneratorInputs { get; init; } = [];
 
+    /// <summary><c>[targets.*]</c>: each target's settings, in the order written.</summary>
+    public IReadOnlyList<TargetSettings> Targets { get; init; } = [];
+
+    /// <summary>The settings for a build for <paramref name="target" />, if the manifest has any.</summary>
+    public TargetSettings? TargetSettingsFor(NativeTarget target) =>
+        Targets.FirstOrDefault(t => t.Target.Platform == target.Platform && t.Target.Arch == target.Arch);
+
     /// <summary>What was accepted but means nothing to this toolchain: unknown keys, settings not yet acted on.</summary>
     public IReadOnlyList<ManifestError> Warnings { get; init; } = [];
 
@@ -210,6 +231,7 @@ public sealed partial class Manifest {
         File = file,
         Package = Package,
         LibPath = LibPath,
+        LibKind = LibKind,
         Bins = Bins,
         Dependencies = Dependencies,
         DevDependencies = DevDependencies,
@@ -222,6 +244,7 @@ public sealed partial class Manifest {
         RegistryPath = RegistryPath,
         Lints = Lints,
         GeneratorInputs = GeneratorInputs,
+        Targets = Targets,
         Warnings = [..Warnings.Select(w => w with { File = file, Line = 1 })],
         InheritsFromWorkspace = InheritsFromWorkspace,
     };
@@ -298,8 +321,45 @@ public sealed partial class Manifest {
                     "has no effect yet: reflection is generated where a program asks for it, and nothing looks a type up by name (docs/04 §4.2)");
             }
 
-            if (root["targets"] is not null) {
-                Warn(root, "targets", "targets", "per-target settings (a runtime profile, reflection) are not built yet (docs/05 §5.2.10); ignored. To build for another machine, pass --target");
+            var targets = new List<TargetSettings>();
+            if (Table(root, "targets", "targets") is { } targetTable) {
+                foreach (var triple in targetTable.Keys) {
+                    if (Table(targetTable, triple, $"targets.{triple}") is not { } settings) {
+                        continue;
+                    }
+
+                    if (NativeTarget.Parse(triple, out var tripleError) is not { } parsed) {
+                        Error(targetTable, triple, $"targets.{triple}", tripleError ?? "not a target triple");
+                        continue;
+                    }
+
+                    var reflection = true;
+                    foreach (var key in settings.Keys) {
+                        switch (key) {
+                            case "reflection" when settings[key] is TomlBoolean { Value: var allowed }:
+                                reflection = allowed;
+                                break;
+                            case "reflection":
+                                Error(settings, key, $"targets.{triple}.reflection", "must be true or false");
+                                break;
+                            case "runtime" when String(settings, key, $"targets.{triple}.runtime") is { } profile:
+                                if (profile is not ("minimal" or "standard" or "full")) {
+                                    Error(settings, key, $"targets.{triple}.runtime", "must be \"minimal\", \"standard\" or \"full\"");
+                                } else if (profile != "full") {
+                                    Warn(settings, key, $"targets.{triple}.runtime", "runtime profiles are not built yet (docs/06 §6.1): the full runtime is linked");
+                                }
+
+                                break;
+                            case "runtime":
+                                break;
+                            default:
+                                Warn(settings, key, $"targets.{triple}.{key}", "unknown key, ignored");
+                                break;
+                        }
+                    }
+
+                    targets.Add(new(parsed, reflection));
+                }
             }
 
             // The workspace first: a package that is its own workspace's root
@@ -315,9 +375,24 @@ public sealed partial class Manifest {
             }
 
             string? libPath = null;
+            LibraryKind? libKind = null;
             if (Table(root, "lib", "lib") is { } lib) {
                 libPath = String(lib, "path", "lib.path");
-                foreach (var key in lib.Keys.Where(static k => k != "path")) {
+                switch (String(lib, "kind", "lib.kind")) {
+                    case null:
+                        break;
+                    case "static":
+                        libKind = LibraryKind.Static;
+                        break;
+                    case "dynamic":
+                        libKind = LibraryKind.Dynamic;
+                        break;
+                    default:
+                        Error(lib, "kind", "lib.kind", "must be \"static\" or \"dynamic\"");
+                        break;
+                }
+
+                foreach (var key in lib.Keys.Where(static k => k is not ("path" or "kind"))) {
                     Warn(lib, key, $"lib.{key}", "unknown key, ignored");
                 }
             }
@@ -394,7 +469,9 @@ public sealed partial class Manifest {
                 File = file,
                 Package = package,
                 LibPath = libPath,
+                LibKind = libKind,
                 Bins = bins,
+                Targets = targets,
                 Dependencies = dependencies,
                 DevDependencies = devDependencies,
                 BuildDependencies = buildDependencies,
@@ -876,11 +953,6 @@ public sealed partial class Manifest {
                         Warn(table, key, path, "unknown profile setting, ignored");
                         break;
                 }
-            }
-
-            // Arithmetic is always checked, so overflow-checks = false is recorded but has no effect yet.
-            if (!profile.OverflowChecks) {
-                Warn(table, "overflow-checks", $"profile.{defaults.Name}.overflow-checks", "integer overflow is always checked; 'false' has no effect yet");
             }
 
             return profile with { Recorded = recorded };

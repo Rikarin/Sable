@@ -110,7 +110,7 @@ public sealed class ReplTests {
     [InlineData("foo(1,", false)]
     public void KnowsWhenAnEntryIsComplete(string text, bool complete) => Assert.Equal(complete, ReplSession.IsComplete(text));
 
-    /// <summary>An earlier statement's effects are replayed from the journal, not carried out again.</summary>
+    /// <summary>An earlier statement's effects are not carried out again: the clock read stays read.</summary>
     [Fact]
     public void AStatementsEffectsHappenOnce() {
         var path = Path.Combine(Directory.CreateTempSubdirectory("sable-repl-").FullName, "log.txt");
@@ -131,7 +131,7 @@ public sealed class ReplTests {
         }
     }
 
-    /// <summary>A failed entry's effects happened, but are not replayed into the next one's.</summary>
+    /// <summary>A failed entry's effects happened, once, and are not carried out again by the next one.</summary>
     [Fact]
     public void AFailedEntrysEffectsAreNotReplayed() {
         var path = Path.Combine(Directory.CreateTempSubdirectory("sable-repl-").FullName, "log.txt");
@@ -145,6 +145,59 @@ public sealed class ReplTests {
         } finally {
             Directory.Delete(Path.GetDirectoryName(path)!, true);
         }
+    }
+
+    /// <summary>An entry's work is done once: the entries after it go on from what it left, not by running it again.</summary>
+    [Fact]
+    public void EarlierEntriesAreNotRunAgain() {
+        var session = new ReplSession();
+        Out(session, "var total = 0\nfor i in 0..<100_000 { total += i }");
+        Assert.True(session.LastSteps > 100_000, $"{session.LastSteps} steps");
+        Assert.Equal("res0: Int = 4999950000", Out(session, "total"));
+        Assert.True(session.LastSteps < 1_000, $"{session.LastSteps} steps");
+        Out(session, "total += 1");
+        Assert.True(session.LastSteps < 1_000, $"{session.LastSteps} steps");
+        Assert.Equal("res2: Int = 4999950001", Out(session, "total"));
+    }
+
+    /// <summary>Objects, and closures an entry made, outlive it: the next entries use the same ones.</summary>
+    [Fact]
+    public void ObjectsAndClosuresCarryOver() {
+        var session = new ReplSession();
+        Out(session, "class Counter {\n    var n = 0\n}");
+        Out(session, "let c = Counter()");
+        Out(session, "let d = c");
+        Out(session, "c.n += 2");
+        Assert.Equal("res1: Int = 2", Out(session, "d.n"));
+
+        Out(session, "var f: (Int) -> Int = { (x: Int) -> Int in x }");
+        Out(session, "let k = 3\nf = { (x: Int) -> Int in x * k }");
+        Out(session, "print(\"between\")");
+        Assert.Equal("res2: Int = 6", Out(session, "f(2)"));
+        Assert.Equal("first\nres3: Int = 1", Out(session, "{ () -> Int in\n    print(\"first\")\n    return 1\n}()"));
+    }
+
+    /// <summary>The bindings of an entry that fails are not kept: the name is free again.</summary>
+    [Fact]
+    public void AFailedEntrysBindingsAreForgotten() {
+        var session = new ReplSession();
+        Out(session, "let kept = 1");
+        Assert.True(session.Submit("let lost = 5\nlet xs = [1]\nprint(xs[3])").Failed);
+        Assert.Contains("S2002", session.Submit("lost").Output, StringComparison.Ordinal);
+        Out(session, "let lost = 7");
+        Assert.Equal("res0: Int = 8", Out(session, "lost + kept"));
+
+        var again = session.Submit("let kept = 2");
+        Assert.True(again.Failed);
+        Assert.Contains("S2000", again.Output, StringComparison.Ordinal);
+    }
+
+    /// <summary>A binding whose value needs a name the entry bound inside it lasts only for the entry, which still runs.</summary>
+    [Fact]
+    public void ABindingThatCannotBeKeptStillRuns() {
+        var session = new ReplSession();
+        Assert.Equal("4", Out(session, "let o: Int? = 3\nguard let v = o else { return }\nlet w = v + 1\nprint(w)"));
+        Assert.True(session.Submit("w").Failed);
     }
 
     /// <summary>What runs natively runs here: deep calls and long loops, past the interpreter's usual limits.</summary>

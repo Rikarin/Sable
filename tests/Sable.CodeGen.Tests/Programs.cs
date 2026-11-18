@@ -27,7 +27,7 @@ internal static class Programs {
             Assert.True(build.Succeeded, build.Output + "\n\n" + result.LlvmIr);
 
             // Every test program is held to freeing what it allocates.
-            var start = new ProcessStartInfo(executable) { RedirectStandardOutput = true, RedirectStandardError = true, RedirectStandardInput = true };
+            var start = new ProcessStartInfo(executable) { RedirectStandardOutput = true, RedirectStandardError = true, RedirectStandardInput = true }.Utf8();
             start.Environment["SABLE_CHECK_LEAKS"] = "1";
             foreach (var (name, value) in environment ?? new Dictionary<string, string>()) {
                 start.Environment[name] = value;

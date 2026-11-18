@@ -248,10 +248,11 @@ public sealed class ManifestTests {
             static e => e.Key == "target" && e.Message.Contains("when", StringComparison.Ordinal));
 
         // Warned about: accepted, with a word that nothing uses them yet.
-        var manifest = Parse(Package + "[build-dependencies]\nb = \"1\"\n[reflect]\ninclude = [\"Scene\"]\n[targets.wasm]\nx = 1\n");
+        var manifest = Parse(Package + "[build-dependencies]\nb = \"1\"\n[reflect]\ninclude = [\"Scene\"]\n[targets.wasm32-wasi]\nruntime = \"minimal\"\nx = 1\n");
         Assert.Contains(manifest.Warnings, static w => w.Key == "build-dependencies");
         Assert.Contains(manifest.Warnings, static w => w.Key == "reflect");
-        Assert.Contains(manifest.Warnings, static w => w.Key == "targets");
+        Assert.Contains(manifest.Warnings, static w => w.Key == "targets.wasm32-wasi.runtime");
+        Assert.Contains(manifest.Warnings, static w => w.Key == "targets.wasm32-wasi.x");
         Assert.Contains(Parse("[workspace]\nmembers = [\"a\"]\n[workspace.metadata]\nb = 1\n").Warnings,
             static w => w.Key == "workspace.metadata");
     }

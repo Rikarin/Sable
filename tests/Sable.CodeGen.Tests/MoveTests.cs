@@ -115,6 +115,115 @@ public sealed class MoveTests {
             ).Stdout
         );
 
+    /// <summary>
+    ///     A method that borrows 'self', called on a move-only field, borrows
+    ///     the field where it is — in a local, nested, or through an inout
+    ///     parameter — and the deinit still runs once, with the whole (#235).
+    /// </summary>
+    [Fact]
+    public void AMethodOnAMoveOnlyFieldBorrowsItInPlace() =>
+        Assert.Equal(
+            "opened 1\nhandle 1\nhandle 2\nopened 5\nhandle 5\nend\nclosed 5\nclosed 2\n",
+            AssertAgree(
+                Program(
+                    Handle + """
+
+                             @noncopy struct Box { var value: Handle }
+                             @noncopy struct Outer { var box: Box, var tag: Int }
+
+                             fn bump(_ b: inout Box) {
+                                 b.value.id = b.value.id + 1
+                                 print(b.value.describe())
+                             }
+                             """,
+                    """
+                        var box = Box { value: acquire(1) }
+                        print(box.value.describe())
+                        bump(&box)
+                        let outer = Outer { box: Box { value: acquire(5) }, tag: 0 }
+                        print(outer.box.value.describe())
+                        print("end")
+                    """
+                )
+            ).Stdout
+        );
+
+    /// <summary>
+    ///     A move-only field of an object is borrowed where it is too —
+    ///     through a temporary object, a variable, a parameter, value fields
+    ///     inside the object and another object — and the object lives until
+    ///     the borrow ends. An initialiser that stores a consumed parameter
+    ///     moves it in, so each resource is closed once.
+    /// </summary>
+    [Fact]
+    public void AMethodOnAMoveOnlyFieldOfAnObjectBorrowsItInPlace() =>
+        Assert.Equal(
+            "opened 3\nclosed 4\nclosed 3\nhandle 3\nopened 1\nopened 2\nhandle 1\nhandle 2\nhandle 1handle 2\n1\nfailed 2\nhandle 1\nend\nclosed 2\nclosed 1\n",
+            AssertAgree(
+                Program(
+                    Handle + """
+
+                             @noncopy struct Box { var value: Handle }
+                             class C {
+                                 var h: Handle
+                                 var box: Box
+                                 init(h: Handle, box: Box) { self.h = h; self.box = box }
+                             }
+                             class Outer {
+                                 var c: C
+                                 init(c: C) { self.c = c }
+                             }
+                             fn both(_ c: C) -> String { return c.h.describe() + c.box.value.describe() }
+                             fn checked(_ h: Handle) throws(String) -> Int {
+                                 if h.id > 1 { throw "failed \(h.id)" }
+                                 return h.id
+                             }
+                             """,
+                    """
+                        let first = C(h: acquire(3), box: Box { value: Handle { id: 4 } }).h.describe()
+                        print(first)
+                        let c = C(h: acquire(1), box: Box { value: acquire(2) })
+                        print(c.h.describe())
+                        print(c.box.value.describe())
+                        print(both(c))
+                        do {
+                            print(try checked(c.h))
+                            print(try checked(c.box.value))
+                        } catch {
+                            print(error)
+                        }
+                        let o = Outer(c: c)
+                        print(o.c.h.describe())
+                        print("end")
+                    """
+                )
+            ).Stdout
+        );
+
+    [Fact]
+    public void AMoveOnlyFieldOfAnObjectStillCannotBeMovedOut() =>
+        Rejects(
+            Handle + "\nclass C {\n    var h: Handle\n    init(h: Handle) { self.h = h }\n}\n",
+            """
+                let c = C(h: acquire(1))
+                let moved = c.h
+                print(moved.id)
+            """,
+            "cannot be moved out of a field or an element; move the whole value"
+        );
+
+    [Fact]
+    public void AMoveOnlyFieldStillCannotBeMovedOut() =>
+        Rejects(
+            Handle + "\n@noncopy struct Box { var value: Handle }\n",
+            """
+                let box = Box { value: acquire(1) }
+                let moved = box.value
+                print(moved.id)
+            """,
+            "cannot be moved out of a field or an element; move the whole value"
+        );
+
     [Fact]
     public void ExplicitMoveOfACopyableValue() =>
         Assert.Equal(

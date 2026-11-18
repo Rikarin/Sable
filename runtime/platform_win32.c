@@ -63,7 +63,7 @@ static char *from_wide(const wchar_t *wide) {
 
 // Standard streams pass bytes through as they are, as on POSIX: no '\n'
 // written as "\r\n", none read back. A console shows them as UTF-8.
-__attribute__((constructor)) static void sable_streams_start(void) {
+static void streams_start(void) {
     _setmode(_fileno(stdin), _O_BINARY);
     _setmode(_fileno(stdout), _O_BINARY);
     _setmode(_fileno(stderr), _O_BINARY);
@@ -141,7 +141,8 @@ static void *watch_stack(void) {
     return NULL;
 }
 
-__attribute__((constructor)) static void sable_watch_main_stack(void) {
+static void platform_start(void) {
+    streams_start();
     watch_stack();
     AddVectoredExceptionHandler(1, on_exception);
 }
@@ -203,6 +204,35 @@ static bool start_thread(void (*body)(void *argument), void *argument) {
 
     CloseHandle(thread);
     return true;
+}
+
+// ---- Memory ----------------------------------------------------------------
+
+// What VirtualAlloc gives starts on its allocation granularity, 64 KiB: a
+// slab no larger is aligned to its size as it comes. A larger one is found
+// by reserving twice the size, giving it back, and taking the aligned part
+// of it — which another thread may take first, so it is tried again.
+static void *map_slab(size_t size) {
+    for (int attempt = 0; attempt < 16; attempt++) {
+        char *reserved = VirtualAlloc(NULL, size * 2, MEM_RESERVE, PAGE_NOACCESS);
+        if (reserved == NULL) {
+            return NULL;
+        }
+
+        uintptr_t start = ((uintptr_t)reserved + size - 1) & ~(uintptr_t)(size - 1);
+        VirtualFree(reserved, 0, MEM_RELEASE);
+        void *slab = VirtualAlloc((void *)start, size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+        if (slab != NULL) {
+            return slab;
+        }
+    }
+
+    return NULL;
+}
+
+static void unmap_slab(void *slab, size_t size) {
+    (void)size;
+    VirtualFree(slab, 0, MEM_RELEASE);
 }
 
 // ---- Time (Sable.Time's floor) ------------------------------------------

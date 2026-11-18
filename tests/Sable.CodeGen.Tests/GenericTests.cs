@@ -351,4 +351,174 @@ public sealed class GenericTests {
                 )
             ).Stdout
         );
+
+    /// <summary>
+    ///     Polymorphic recursion, which no set of copies can compile: the
+    ///     copy that would ask for an endless series calls the one instance
+    ///     that serves every type instead, boxing its arguments and unboxing
+    ///     its result — with the witnesses of what a type parameter is
+    ///     constrained to (#105).
+    /// </summary>
+    [Fact]
+    public void PolymorphicRecursionRunsThroughOneInstanceForEveryType() =>
+        Assert.Equal(
+            "3\n5\n1\n2\n3\nw\n4\n32\n",
+            AssertAgree(
+                Program(
+                    """
+                    fn deep<T>(_ x: T, _ n: Int) -> Int {
+                        if n == 0 {
+                            return 0
+                        }
+                        return 1 + deep((x, x), n - 1)
+                    }
+
+                    fn wrap<T>(_ x: T, _ n: Int) -> T {
+                        if n == 0 {
+                            return x
+                        }
+                        let y = wrap((x, n), n - 1)
+                        print(y.1)
+                        return y.0
+                    }
+
+                    fn count<T>(_ xs: T, _ n: Int) -> Int {
+                        if n == 0 {
+                            return 0
+                        }
+                        return 1 + count([xs, xs], n - 1)
+                    }
+
+                    protocol Shape { fn area() -> Int }
+
+                    struct Sq: Shape {
+                        var side: Int
+                        fn area() -> Int { return side * side }
+                    }
+
+                    struct Two<A: Shape>: Shape {
+                        var a: A
+                        var b: A
+                        fn area() -> Int { return a.area() + b.area() }
+                    }
+
+                    fn total<T: Shape>(_ x: T, _ n: Int) -> Int {
+                        if n == 0 {
+                            return x.area()
+                        }
+                        return total(Two(a: x, b: x), n - 1)
+                    }
+                    """,
+                    """
+                        print(deep(1, 3))
+                        print(deep("s", 5))
+                        print(wrap("w", 3))
+                        print(count(1, 4))
+                        print(total(Sq(side: 2), 3))
+                    """
+                )
+            ).Stdout
+        );
+
+    /// <summary>
+    ///     A value generic parameter: the number each instance is given, read
+    ///     in the body, sizing an array, passed on to another generic type,
+    ///     and inferred from an argument's type (#158).
+    /// </summary>
+    [Fact]
+    public void AValueGenericParameterIsTheNumberEachInstanceIsGiven() =>
+        Assert.Equal(
+            "8\n6\nb\n3\n3\n",
+            AssertAgree(
+                Program(
+                    """
+                    struct Buf<T, N: Int> where N > 0, N <= 64 {
+                        var items: T[N]
+                        fn size() -> Int { return N * 2 }
+                    }
+
+                    struct Pair<N: Int> {
+                        var inner: Buf<String, N>
+                        fn total() -> Int { return inner.size() + N }
+                    }
+
+                    fn count<T, N: Int>(_ b: Buf<T, N>) -> Int { return N }
+                    """,
+                    """
+                        let b = Buf<Int, 4> { items: [1, 2, 3, 4] }
+                        print(b.size())
+                        let p = Pair<2> { inner: Buf<String, 2> { items: ["a", "b"] } }
+                        print(p.total())
+                        print(p.inner.items[1])
+                        let c = Buf<Int, 3> { items: [7, 8, 9] }
+                        print(count(c))
+                        print(c.items.count)
+                    """
+                )
+            ).Stdout
+        );
+
+    /// <summary>
+    ///     A protocol extension's methods that return, take or compute with an
+    ///     associated type, specialised for the conformer: Item is Int for
+    ///     Pair and T for Wrap&lt;T&gt;, whose own members need T known — also
+    ///     through a refining protocol and a generic caller (#233).
+    /// </summary>
+    [Fact]
+    public void AProtocolExtensionComputesWithAnAssociatedType() =>
+        Assert.Equal(
+            "2\ntrue\nfalse\n2\n2\npair: 2\nz\n9\n2\n",
+            AssertAgree(
+                Program(
+                    """
+                    protocol Container {
+                        associatedtype Item: Comparable
+                        fn first() -> Item
+                        fn second() -> Item
+                    }
+                    protocol Named: Container {
+                        fn label() -> String
+                    }
+                    fn larger<T: Comparable>(_ a: T, _ b: T) -> T { return a < b ? b : a }
+                    extension Container {
+                        fn bigger() -> Item {
+                            let a = first()
+                            let b = second()
+                            return a < b ? b : a
+                        }
+                        fn holds(_ x: Item) -> Bool { return x == first() || x == second() }
+                        fn both() -> Item[] { return [first(), second()] }
+                        fn viaGeneric() -> Item { return larger(first(), second()) }
+                    }
+                    extension Named {
+                        fn describe() -> String { return "\(label()): \(bigger())" }
+                    }
+                    struct Pair: Named {
+                        fn first() -> Int { return 1 }
+                        fn second() -> Int { return 2 }
+                        fn label() -> String { return "pair" }
+                    }
+                    struct Wrap<T: Comparable>: Container {
+                        alias Item = T
+                        var a: T
+                        var b: T
+                        fn first() -> T { return a }
+                        fn second() -> T { return b }
+                    }
+                    fn top<C: Container>(_ c: C) -> C.Item { return c.bigger() }
+                    """,
+                    """
+                        print(Pair().bigger())
+                        print(Pair().holds(2))
+                        print(Pair().holds(3))
+                        print(Pair().both().count)
+                        print(Pair().viaGeneric())
+                        print(Pair().describe())
+                        print(Wrap<String>(a: "z", b: "a").bigger())
+                        print(top(Wrap<Int>(a: 9, b: 3)))
+                        print(top(Pair()))
+                    """
+                )
+            ).Stdout
+        );
 }

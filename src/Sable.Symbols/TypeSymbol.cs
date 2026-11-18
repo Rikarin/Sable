@@ -144,6 +144,12 @@ public sealed class NamedTypeSymbol : TypeSymbol {
     public ImmutableArray<ConformanceRequirement> ConformanceRequirements { get; internal set; } = [];
 
     /// <summary>
+    ///     The <c>where N &gt; 0</c> predicates on this type's value generic
+    ///     parameters, checked for each set of numbers the type is given.
+    /// </summary>
+    public ImmutableArray<ExpressionSyntax> ValuePredicates { get; internal set; } = [];
+
+    /// <summary>
     ///     The protocols <c>@derive</c> conformed this generic type to. Each
     ///     holds of a construction only where its fields' types, substituted,
     ///     conform too (docs/06 §6.5); see <see cref="DerivedConformance" />.
@@ -337,6 +343,16 @@ public sealed class TypeParameterSymbol(
     /// </summary>
     public TypeSymbol? DefaultType { get; internal set; }
 
+    /// <summary>
+    ///     For a value generic parameter, <c>N: Int</c>, the integer type of
+    ///     its value: it stands for a number, given as <c>Buf&lt;Int, 4&gt;</c>,
+    ///     rather than a type. Null for a type parameter.
+    /// </summary>
+    public TypeSymbol? ValueType { get; internal set; }
+
+    /// <summary>True for a value generic parameter, <c>N: Int</c>.</summary>
+    public bool IsValue => ValueType is not null;
+
     public override string ToDisplayString() => Name;
 
     public override bool Equals(TypeSymbol? other) => ReferenceEquals(this, other);
@@ -403,7 +419,7 @@ public enum ArrayKind {
     Slice
 }
 
-public sealed class ArrayTypeSymbol(TypeSymbol elementType, ArrayKind arrayKind, int? capacity = null) : TypeSymbol {
+public sealed class ArrayTypeSymbol(TypeSymbol elementType, ArrayKind arrayKind, int? capacity = null, TypeParameterSymbol? capacityParameter = null) : TypeSymbol {
     public override SymbolKind Kind => SymbolKind.ArrayType;
     public override string Name => string.Empty;
     public override TypeKind TypeKind => TypeKind.Struct;
@@ -414,10 +430,13 @@ public sealed class ArrayTypeSymbol(TypeSymbol elementType, ArrayKind arrayKind,
     /// <summary>The <c>k</c> of <c>T[..k]</c> or <c>T[k]</c>, when it was written.</summary>
     public int? Capacity { get; } = capacity;
 
+    /// <summary>The value generic parameter <c>N</c> of <c>T[N]</c>, which an instance gives the count of.</summary>
+    public TypeParameterSymbol? CapacityParameter { get; } = capacityParameter;
+
     public override string ToDisplayString() =>
         ArrayKind switch {
-            ArrayKind.Fixed => $"{ElementType.ToSuffixedDisplayString()}[{Capacity}]",
-            ArrayKind.Inline => $"{ElementType.ToSuffixedDisplayString()}[..{Capacity}]",
+            ArrayKind.Fixed => $"{ElementType.ToSuffixedDisplayString()}[{CapacityParameter?.Name ?? Capacity?.ToString(System.Globalization.CultureInfo.InvariantCulture)}]",
+            ArrayKind.Inline => $"{ElementType.ToSuffixedDisplayString()}[..{CapacityParameter?.Name ?? Capacity?.ToString(System.Globalization.CultureInfo.InvariantCulture)}]",
             ArrayKind.Grow => $"{ElementType.ToSuffixedDisplayString()}[>..]",
             ArrayKind.GrowShrink => $"{ElementType.ToSuffixedDisplayString()}[>..<]",
             _ => $"{ElementType.ToSuffixedDisplayString()}[:]",
@@ -427,6 +446,7 @@ public sealed class ArrayTypeSymbol(TypeSymbol elementType, ArrayKind arrayKind,
         other is ArrayTypeSymbol array
         && array.ArrayKind == ArrayKind
         && array.Capacity == Capacity
+        && ReferenceEquals(array.CapacityParameter, CapacityParameter)
         && array.ElementType.Equals(ElementType);
 
     public override int GetHashCode() => HashCode.Combine(ElementType, ArrayKind, Capacity);
@@ -867,6 +887,30 @@ public sealed class OpaqueTypeSymbol(TypeSymbol constraint, Symbol? origin = nul
 }
 
 /// <summary>
+///     <c>T.Type</c>: the type of <c>T.self</c>, a type used as a value
+///     (SYNTAX.md §16). It has one value, the type itself, so it holds nothing
+///     at run time: code is generated for each type it is used with, and the
+///     value says nothing the type does not.
+/// </summary>
+public sealed class MetatypeTypeSymbol(TypeSymbol instanceType) : TypeSymbol {
+    public override SymbolKind Kind => SymbolKind.MetatypeType;
+    public override string Name => string.Empty;
+    public override TypeKind TypeKind => TypeKind.Struct;
+
+    /// <summary>The type this is the type of: <c>Int</c> for <c>Int.Type</c>.</summary>
+    public TypeSymbol InstanceType { get; } = instanceType;
+
+    public override bool IsError => InstanceType.IsError;
+
+    public override string ToDisplayString() => $"{InstanceType.ToSuffixedDisplayString()}.Type";
+
+    public override bool Equals(TypeSymbol? other) =>
+        other is MetatypeTypeSymbol metatype && metatype.InstanceType.Equals(InstanceType);
+
+    public override int GetHashCode() => HashCode.Combine(InstanceType, 0x7E7A);
+}
+
+/// <summary>
 ///     Stands in for a type that could not be resolved, so that binding continues
 ///     and one mistake does not cascade into a page of diagnostics.
 /// </summary>
@@ -884,6 +928,24 @@ public sealed class ErrorTypeSymbol(string name = "?") : TypeSymbol {
     public override bool Equals(TypeSymbol? other) => other is ErrorTypeSymbol;
 
     public override int GetHashCode() => 0x0E22;
+}
+
+/// <summary>
+///     <c>4</c> in <c>Buf&lt;Int, 4&gt;</c>: a value given to a value generic
+///     parameter, which stands in the type arguments where a type would.
+/// </summary>
+public sealed class ValueTypeArgumentSymbol(long value) : TypeSymbol {
+    public override SymbolKind Kind => SymbolKind.ValueTypeArgument;
+    public override string Name => ToDisplayString();
+    public override TypeKind TypeKind => TypeKind.Builtin;
+
+    public long Value { get; } = value;
+
+    public override string ToDisplayString() => Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+    public override bool Equals(TypeSymbol? other) => other is ValueTypeArgumentSymbol argument && argument.Value == Value;
+
+    public override int GetHashCode() => HashCode.Combine(Value, 0x7A1E);
 }
 
 /// <summary><c>P &amp; Q</c>: a value conforming to every part.</summary>

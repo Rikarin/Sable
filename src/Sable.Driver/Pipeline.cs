@@ -65,10 +65,19 @@ public static class Pipeline {
     ///     they leave; without it, a build with debug information keeps every
     ///     local in its slot.
     /// </param>
+    /// <param name="checkOverflow">
+    ///     Trap on integer overflow; a profile's <c>overflow-checks = false</c>
+    ///     turns it off, and the arithmetic wraps (<see cref="WrappingArithmetic" />).
+    /// </param>
     /// <param name="target">
     ///     What the program is built for, whose C calling convention its
     ///     <c>@extern</c> calls follow; the host when null. (What its files'
     ///     <c>#if os(...)</c> says is the parse's: <see cref="ParseOptionsFor(bool, NativeTarget)" />.)
+    /// </param>
+    /// <param name="library">
+    ///     Compile a library, which C calls through its <c>@export</c>
+    ///     functions: no entry point is looked for, and its globals are set up
+    ///     as it is loaded (<see cref="SilGen.LowerLibraryByFile" />).
     /// </param>
     public static CompileResult Compile(
         IReadOnlyList<SyntaxTree> program,
@@ -76,7 +85,10 @@ public static class Pipeline {
         bool checkExclusivity = true,
         BuildTimings? timings = null,
         bool optimised = false,
-        NativeTarget? target = null
+        NativeTarget? target = null,
+        bool checkOverflow = true,
+        bool library = false,
+        bool denyReflection = false
     ) {
         Compilation compilation;
         List<string> errors;
@@ -89,7 +101,7 @@ public static class Pipeline {
         }
 
         // The warnings go with whatever comes back, an error or the IR.
-        return CompileChecked(compilation, program, errors, debugDirectory, checkExclusivity, timings, optimised, target) with { Warnings = warnings };
+        return CompileChecked(compilation, program, errors, debugDirectory, checkExclusivity, timings, optimised, target, checkOverflow, library, denyReflection) with { Warnings = warnings };
     }
 
     /// <summary>The rest of <see cref="Compile(IReadOnlyList{SyntaxTree}, string?, bool, BuildTimings?, bool)" />, from a checked program.</summary>
@@ -101,7 +113,10 @@ public static class Pipeline {
         bool checkExclusivity,
         BuildTimings? timings,
         bool optimised,
-        NativeTarget? target
+        NativeTarget? target,
+        bool checkOverflow,
+        bool library,
+        bool denyReflection
     ) {
         if (errors.Count > 0) {
             return new(null, null, errors);
@@ -110,10 +125,14 @@ public static class Pipeline {
         SilModule module;
         IReadOnlyList<(Diagnostic Diagnostic, SyntaxTree? Tree)> lowering;
         using (BuildTimings.Of(timings, "sil")) {
-            (module, lowering) = SilGen.LowerByFile(compilation);
+            (module, lowering) = library ? SilGen.LowerLibraryByFile(compilation, denyReflection) : SilGen.LowerByFile(compilation, denyReflection);
         }
 
         module.CheckExclusivity = checkExclusivity;
+        if (!checkOverflow) {
+            WrappingArithmetic.Apply(module);
+        }
+
         errors.AddRange(Formatted(lowering, program));
         if (errors.Count > 0) {
             return new(module, null, errors);
@@ -126,7 +145,7 @@ public static class Pipeline {
             return new(module, null, [..problems.Select(static p => $"internal error: SIL verification failed: {p}")]);
         }
 
-        if (module.EntryPoint is null) {
+        if (module.EntryPoint is null && !library) {
             return new(module, null, ["error: no entry point: mark a function '@main' or name one 'main'"]);
         }
 

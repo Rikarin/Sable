@@ -86,6 +86,49 @@ public sealed class ExistentialTests {
             """
         );
 
+    /// <summary>
+    ///     A value of a generic type, boxed: the slots call the methods'
+    ///     instances for its type arguments — a struct's, a generic class's,
+    ///     and one inherited by a subclass that fixes them (#232).
+    /// </summary>
+    [Fact]
+    public void ExistentialsOfGenericTypes() =>
+        Prints(
+            "1\nG of s 2\nbase 3 10\nbase d 20\nG of 1 5\nbase true 10\n",
+            """
+            protocol P {
+                fn get() -> Int
+                fn name() -> String
+            }
+            struct G<T>: P {
+                var item: T
+                var n: Int
+                fn get() -> Int { return n }
+                fn name() -> String { return "G of \(item)" }
+            }
+            class Base<T>: P {
+                var v: T
+                init(v: T) { self.v = v }
+                open fn get() -> Int { return 10 }
+                fn name() -> String { return "base \(v)" }
+            }
+            class Derived: Base<String> {
+                init() { super.init(v: "d") }
+                override fn get() -> Int { return 20 }
+            }
+            fn show(_ p: any P) { print("\(p.name()) \(p.get())") }
+            """,
+            """
+                let x: any P = G<Int>(item: 4, n: 1)
+                print(x.get())
+                show(G<String>(item: "s", n: 2))
+                show(Base<Int>(v: 3))
+                show(Derived())
+                let xs: (any P)[>..] = [G<Int>(item: 1, n: 5), Base<Bool>(v: true)]
+                for p in xs { show(p) }
+            """
+        );
+
     [Fact]
     public void AValueBecomesAnExistentialThroughAsAndInsideAnOptional() =>
         Prints(
@@ -161,6 +204,194 @@ public sealed class ExistentialTests {
                     """
                 )
             ).Stdout
+        );
+
+    /// <summary>'any A &amp; B' has the slots of both, and converts to either.</summary>
+    [Fact]
+    public void ACompositionHasEveryPartsRequirements() =>
+        Prints(
+            "sq 4\n16\nsq\n",
+            """
+            protocol Named { fn name() -> String }
+            protocol Shape { fn area() -> Int }
+
+            struct Sq: Shape, Named {
+                var side: Int
+                fn area() -> Int { return side * side }
+                fn name() -> String { return "sq" }
+            }
+
+            fn both(_ x: any Shape & Named) -> String { return "\(x.name()) \(x.area())" }
+            fn justShape(_ x: any Shape & Named) -> any Shape { return x }
+            fn justNamed(_ x: any Shape & Named) -> any Named { return x }
+            """,
+            """
+                print(both(Sq(side: 2)))
+                print(justShape(Sq(side: 4)).area())
+                print(justNamed(Sq(side: 1)).name())
+            """
+        );
+
+    /// <summary>
+    ///     A property stored, and a mutating method called, through an
+    ///     existential: a copy made before keeps the value it had, a class's
+    ///     instance stays shared.
+    /// </summary>
+    [Fact]
+    public void AnExistentialIsChangedThroughItsSlotsAndCopiedOnWrite() =>
+        Prints(
+            "6\n6\n11\n23\n5\n",
+            """
+            protocol Sized {
+                var size: Int { get set }
+                mutating fn grow(by n: Int)
+            }
+
+            struct Box: Sized {
+                var size: Int
+                mutating fn grow(by n: Int) { size += n }
+            }
+
+            struct Temp: Sized {
+                var c: Int
+                var size: Int {
+                    get => c
+                    set { c = newValue * 10 }
+                }
+                mutating fn grow(by n: Int) { c += n }
+            }
+
+            class Counter: Sized {
+                var size: Int = 0
+                init() {}
+                fn grow(by n: Int) { size += n }
+            }
+            """,
+            """
+                var b: any Sized = Box(size: 1)
+                b.size = 5
+                b.size += 1
+                print(b.size)
+                let b2 = b
+                b.size = 9
+                b.grow(by: 2)
+                print(b2.size)
+                print(b.size)
+                var t: any Sized = Temp(c: 1)
+                t.size = 2
+                t.grow(by: 3)
+                print(t.size)
+                var k: any Sized = Counter()
+                let k2 = k
+                k.size = 4
+                k.grow(by: 1)
+                print(k2.size)
+            """
+        );
+
+    /// <summary>A generic type's property, computed and stored, written through an existential.</summary>
+    [Fact]
+    public void AGenericTypesPropertyIsWrittenThroughAnExistential() =>
+        Prints(
+            "6\n7\n2\n",
+            """
+            protocol Sized { var size: Int { get set } }
+
+            struct G<T>: Sized {
+                var t: T
+                var raw: Int
+                var size: Int {
+                    get => raw
+                    set { raw = newValue + 1 }
+                }
+            }
+
+            struct H<T>: Sized {
+                var t: T
+                var size: Int
+            }
+            """,
+            """
+                var g: any Sized = G<String>(t: "x", raw: 1)
+                g.size = 5
+                print(g.size)
+                var h: any Sized = H<Int>(t: 1, size: 2)
+                let h2 = h
+                h.size = 7
+                print(h.size)
+                print(h2.size)
+            """
+        );
+
+    /// <summary>
+    ///     'as?', 'as!', 'is' and a type pattern on an existential: to a
+    ///     concrete type, a class through its superclass's box, and another
+    ///     protocol, which the box's type may or may not conform to.
+    /// </summary>
+    [Fact]
+    public void AnExistentialIsCastAndTestedAsTheProgramRuns() =>
+        Prints(
+            "sq\nnot named\ntrue\nfalse\ntrue\n3\n9\nfalse\ntrue\ndog has area 7\nan animal\nsq has area 4\ntrue\ntrue\n7\nmatched dog\n",
+            """
+            protocol Named { fn name() -> String }
+            protocol Shape { fn area() -> Int }
+
+            struct Sq: Shape, Named {
+                var side: Int
+                fn area() -> Int { return side * side }
+                fn name() -> String { return "sq" }
+            }
+
+            struct Circle: Shape {
+                var r: Int
+                fn area() -> Int { return 3 * r * r }
+            }
+
+            class Animal: Named {
+                init() {}
+                fn name() -> String { return "animal" }
+            }
+
+            class Dog: Animal, Shape {
+                override init() {}
+                override fn name() -> String { return "dog" }
+                fn area() -> Int { return 7 }
+            }
+
+            fn describe(_ n: any Named) -> String {
+                if let s = n as? any Shape & Named { return "\(s.name()) has area \(s.area())" }
+                if let d = n as? Dog { return "a dog \(d.area())" }
+                if n is Animal { return "an animal" }
+                return "just \(n.name())"
+            }
+            """,
+            """
+                let s: any Shape = Sq(side: 3)
+                let c: any Shape = Circle(r: 1)
+                if let n = s as? any Named { print(n.name()) }
+                if let n = c as? any Named { print(n.name()) } else { print("not named") }
+                print(s is Sq)
+                print(c is Sq)
+                print(s is any Named)
+                if let q = s as? Sq { print(q.side) }
+                let q2 = s as! Sq
+                print(q2.area())
+                let circle = Circle(r: 2)
+                print(circle is Named)
+                print(circle is Shape)
+                let a: Animal = Dog()
+                print(describe(a))
+                print(describe(Animal()))
+                print(describe(Sq(side: 2)))
+                let n: any Named = a
+                print(n is Dog)
+                print(n is Shape)
+                if let shaped = n as? any Shape { print(shaped.area()) }
+                match n {
+                    case let d as Dog => print("matched \(d.name())")
+                    case _ => print("no")
+                }
+            """
         );
 }
 

@@ -107,6 +107,11 @@ public static class SyntaxFormatter {
                 AlignArrows(_matches.Pop());
             }
 
+            if (node is MatchCaseBlockSyntax { ColonToken.IsMissing: false } or SwitchCaseSyntax { ColonToken.IsMissing: false }
+                && !IsOneLineCase(node)) {
+                Outdent();
+            }
+
             if (line is not null) {
                 // Whatever a malformed tree left open closes with its line.
                 while (_groups.Count > 0) {
@@ -178,6 +183,12 @@ public static class SyntaxFormatter {
 
             Write(token.Text);
             _tokens++;
+
+            // A colon-form case's statements are indented from its 'case', as
+            // a block's are from its '{'; the case's end takes it back.
+            if (token.Kind == SyntaxKind.ColonToken && IsCaseColon(token, parent) && !IsOneLineCase(parent!)) {
+                Indent();
+            }
 
             if (parent is MatchArmSyntax arm && _matches.Count > 0) {
                 var offset = _builder.Length - token.Text.Length;
@@ -614,7 +625,8 @@ public static class SyntaxFormatter {
             // 'else if' is one line: the 'if' continues the 'else'.
             // An 'if' that gives a value stays where the value goes: 'let s = if c {'.
             (node is StatementSyntax && node.Kind != SyntaxKind.Block
-                                     && parentKind is not (SyntaxKind.ElseClause or SyntaxKind.LabeledStatement or SyntaxKind.IfExpression))
+                                     && parentKind is not (SyntaxKind.ElseClause or SyntaxKind.LabeledStatement or SyntaxKind.IfExpression)
+                                     && !(node.Parent is { } parent && IsCase(parent) && IsOneLineCase(parent)))
             || IsMember(node)
             || (node.Kind == SyntaxKind.Accessor && !IsPropertyArrow(node))
             || node.Kind is SyntaxKind.ImportDeclaration
@@ -705,6 +717,33 @@ public static class SyntaxFormatter {
             }
 
             return false;
+        }
+
+        static bool IsCase(SyntaxNode node) => node is MatchCaseBlockSyntax or SwitchCaseSyntax;
+
+        static bool IsCaseColon(SyntaxToken token, SyntaxNode? parent) =>
+            parent switch {
+                MatchCaseBlockSyntax block => token == block.ColonToken,
+                SwitchCaseSyntax switchCase => token == switchCase.ColonToken,
+                _ => false,
+            };
+
+        /// <summary>
+        ///     A colon-form case of one simple statement its author wrote on the
+        ///     case's line, which stays there: <c>case 200, 201: handleOk()</c>
+        ///     (SYNTAX.md), as a one-line body does.
+        /// </summary>
+        static bool IsOneLineCase(SyntaxNode node) {
+            var (colon, statements) = node switch {
+                MatchCaseBlockSyntax block => (block.ColonToken, block.Statements),
+                SwitchCaseSyntax switchCase => (switchCase.ColonToken, switchCase.Statements),
+                _ => default,
+            };
+            return statements is [var only]
+                   && !colon.IsMissing
+                   && !colon.TrailingTrivia.Any(static t => t.Kind == SyntaxKind.NewLineTrivia || t.IsComment)
+                   && IsSimple(only)
+                   && WrittenOnOneLine(only);
         }
 
         static bool IsSimpleBlock(BlockSyntax block) => block.Statements.Count == 1 && IsSimple(block.Statements[0]);

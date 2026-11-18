@@ -256,4 +256,105 @@ public sealed class IntegerTests {
         var execution = AssertAgree(Program("", body));
         Assert.StartsWith($"fatal error: {trap}\n  at test.sb:", execution.Stderr, StringComparison.Ordinal);
     }
+
+    const string Wrapping = """
+                                var x: U8 = 255
+                                x = x + 1
+                                print(x)
+                                var i = 9223372036854775807
+                                i = i + 1
+                                print(i)
+                                var m: I8 = -128
+                                print(-m)
+                                var p: I32 = 65536
+                                print(p * p)
+                                var u: U16 = 0
+                                u = u - 3
+                                print(u)
+                                var q: U128 = 0
+                                q = q - 1
+                                print(q)
+                                let big = 300
+                                print(big as U8)
+                                print(I16(70000 + big))
+                                var n = -9223372036854775807
+                                n = n - 2
+                                print(n * 3)
+                            """;
+
+    /// <summary>
+    ///     A profile's 'overflow-checks = false': what would trap on overflow
+    ///     keeps the low bits instead, natively at each level and in the
+    ///     interpreter alike, and 'as' wraps as 'unchecked as' does.
+    /// </summary>
+    [Fact]
+    public void WithoutOverflowChecksArithmeticWraps() {
+        const string expected = "0\n-9223372036854775808\n-128\n0\n65533\n340282366920938463463374607431768211455\n44\n4764\n9223372036854775805\n";
+        var source = Program("", Wrapping);
+        Assert.Equal(expected, InterpretWithoutOverflowChecks(source).Output);
+        if (!CanBuild) {
+            return;
+        }
+
+        foreach (var optimise in new[] { false, true }) {
+            var execution = BuildAndRunWithoutOverflowChecks(source, optimise);
+            Assert.Equal(0, execution.ExitCode);
+            Assert.Equal(expected, execution.Stdout);
+        }
+    }
+
+    /// <summary>What is not overflow traps whatever the profile says.</summary>
+    [Theory]
+    [InlineData("var z = 0\nprint(5 / z)", "division by zero")]
+    [InlineData("var s: U8 = 9\nprint(U8(1) << s)", "shift out of range")]
+    public void WithoutOverflowChecksOtherTrapsRemain(string body, string trap) {
+        var source = Program("", body);
+        Assert.Equal(trap, InterpretWithoutOverflowChecks(source).Trap?.Message);
+        if (CanBuild) {
+            var execution = BuildAndRunWithoutOverflowChecks(source, optimise: true);
+            Assert.StartsWith($"fatal error: {trap}", execution.Stderr, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void WithoutOverflowChecksTheSilSaysItWraps() {
+        const string body = "var x: U8 = 255\nx = x + 1\nprint(x)";
+        var wrapping = Pipeline.Compile([SyntaxTree.Parse(new SourceText(Program("", body), "test.sb"))], checkOverflow: false);
+        Assert.True(wrapping.Succeeded, string.Join("\n", wrapping.Errors));
+        Assert.Contains("wrapping_add_U8", wrapping.Sil!.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("call { i8, i1 } @llvm.uadd.with.overflow.i8(", wrapping.LlvmIr!, StringComparison.Ordinal);
+
+        var trapping = Pipeline.Compile(new SourceText(Program("", body), "test.sb"));
+        Assert.Contains("call { i8, i1 } @llvm.uadd.with.overflow.i8(", trapping.LlvmIr!, StringComparison.Ordinal);
+    }
+
+    static (string Output, SilTrap? Trap) InterpretWithoutOverflowChecks(string source) {
+        var result = Pipeline.Compile([SyntaxTree.Parse(new SourceText(source, "test.sb"))], checkOverflow: false);
+        Assert.True(result.Succeeded, string.Join("\n", result.Errors));
+        var interpreter = new SilInterpreter(result.Sil!);
+        try {
+            interpreter.Run(result.Sil!.EntryPoint!);
+            return (interpreter.Output.ToString(), null);
+        } catch (SilTrap trap) {
+            return (interpreter.Output.ToString(), trap);
+        }
+    }
+
+    static Execution BuildAndRunWithoutOverflowChecks(string source, bool optimise) {
+        var result = Pipeline.Compile([SyntaxTree.Parse(new SourceText(source, "test.sb"))], optimised: optimise, checkOverflow: false);
+        Assert.True(result.Succeeded, string.Join("\n", result.Errors));
+        var executable = Platform.Executable(Path.Combine(Path.GetTempPath(), $"sable-test-{Guid.NewGuid():N}"));
+        try {
+            var build = NativeBuild.Build(result.LlvmIr!, executable, optimise);
+            Assert.True(build.Succeeded, build.Output);
+            var start = new System.Diagnostics.ProcessStartInfo(executable) { RedirectStandardOutput = true, RedirectStandardError = true }.Utf8();
+            using var process = System.Diagnostics.Process.Start(start)!;
+            var stdout = process.StandardOutput.ReadToEndAsync();
+            var stderr = process.StandardError.ReadToEnd();
+            process.WaitForExit();
+            return new(stdout.Result, stderr, process.ExitCode);
+        } finally {
+            Platform.DeleteExecutable(executable);
+        }
+    }
 }

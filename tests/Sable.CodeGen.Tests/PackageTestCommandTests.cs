@@ -11,7 +11,7 @@ public sealed class PackageTestCommandTests {
     static readonly bool CanBuild = NativeBuild.IsAvailable();
 
     static (string Output, string Errors, int ExitCode) Sable(PackageFixture fixture, string directory, params string[] arguments) {
-        var start = new ProcessStartInfo("dotnet") { WorkingDirectory = directory, RedirectStandardOutput = true, RedirectStandardError = true };
+        var start = new ProcessStartInfo("dotnet") { WorkingDirectory = directory, RedirectStandardOutput = true, RedirectStandardError = true }.Utf8();
         start.ArgumentList.Add(Path.Combine(AppContext.BaseDirectory, "sable.dll"));
         foreach (var argument in arguments) {
             start.ArgumentList.Add(argument);

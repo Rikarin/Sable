@@ -15,6 +15,13 @@
 #ifndef SABLE_RUNTIME_PLATFORM_H
 #define SABLE_RUNTIME_PLATFORM_H
 
+// ---- Start-up --------------------------------------------------------------
+
+// What the system needs set up before any Sable code runs: the main
+// thread's stack watched, the standard streams' modes. Called once, by
+// sable_runtime_start.
+static void platform_start(void);
+
 // ---- Traps ---------------------------------------------------------------
 
 // With SABLE_BACKTRACE set, the frames of the calls that led to a trap, on
@@ -45,6 +52,14 @@ static void condition_wait(TaskCondition *condition);
 
 // Starts a thread, detached, with a stack of 8 MiB, running body(argument).
 static bool start_thread(void (*body)(void *argument), void *argument);
+
+// ---- Memory --------------------------------------------------------------
+
+// 'size' bytes of zeroed memory straight from the system, starting at a
+// multiple of 'size' (a power of two, a multiple of the page); NULL when
+// there is none. unmap_slab gives it back to the system.
+static void *map_slab(size_t size);
+static void unmap_slab(void *slab, size_t size);
 
 // ---- Time ----------------------------------------------------------------
 

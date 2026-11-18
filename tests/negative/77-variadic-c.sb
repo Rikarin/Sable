@@ -1,0 +1,16 @@
+module Negative.VariadicC
+
+// C's '...' is 'CVarArg...' after a fixed parameter, on an '@extern'
+// (SYNTAX.md §24, #176).
+
+@extern("c")
+fn printish(_ n: I32, _ args: CVarArg...) -> I32
+
+@extern("c")
+fn ints(_ n: I32, _ args: Int...) -> I32  //! S3224 the variadic arguments C takes are 'CVarArg...'
+
+@extern("c")
+fn nothingFixed(_ args: CVarArg...) -> I32  //! S3224 follows at least one fixed parameter
+
+@export("sable_sum")
+fn sum(_ n: I32, _ args: CVarArg...) -> I32 { return n }  //! S3224 with its parameters fixed

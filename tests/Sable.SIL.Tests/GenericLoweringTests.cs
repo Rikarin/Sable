@@ -234,7 +234,7 @@ public sealed class GenericLoweringTests {
         """
         fn deep<T>(_ x: T, _ n: Int) -> Int {
             if n == 0 { return 0 }
-            return deep((x, x), n - 1)
+            return 1 + deep((x, x), n - 1)
         }
         fn test() -> Int { return deep(1, 3) }
         """
@@ -244,10 +244,44 @@ public sealed class GenericLoweringTests {
         """
         fn there<T>(_ x: T, _ n: Int) -> Int {
             if n == 0 { return 0 }
-            return back([x], n - 1)
+            return 1 + back([x], n - 1)
         }
         fn back<T>(_ x: T, _ n: Int) -> Int { return there(x, n) }
         fn test() -> Int { return there(1, 3) }
+        """
+    )]
+    [InlineData(
+        // A result of the type parameter's, taken back out of its box as
+        // the type each call gives it.
+        """
+        fn wrap<T>(_ x: T, _ n: Int) -> T {
+            if n == 0 { return x }
+            let y = wrap((x, n), n - 1)
+            return y.0
+        }
+        fn test() -> Int { return wrap(3, 5) }
+        """
+    )]
+    public void PolymorphicRecursionIsCompiledOnceForEveryType(string source) {
+        // The copies for Int and for (Int, Int) are made as usual; the one
+        // that would ask for an endless series instead calls the instance
+        // that serves every type, which then calls itself.
+        Assert.Empty(LoweringErrors(source));
+        var module = Lower(source);
+        Assert.Contains(module.Functions, static f => f.Name.EndsWith("$polymorphic", StringComparison.Ordinal));
+        Assert.Equal(3L, Run(module, "test"));
+    }
+
+    [Theory]
+    [InlineData(
+        // A parameter that holds the type parameter without being it: each
+        // element would need a box of its own.
+        """
+        fn spread<T>(_ xs: T[], _ n: Int) -> Int {
+            if n == 0 { return 0 }
+            return spread([xs], n - 1)
+        }
+        fn test() -> Int { return spread([1], 3) }
         """
     )]
     [InlineData(
@@ -264,7 +298,7 @@ public sealed class GenericLoweringTests {
         fn test() -> Int { return Nest<Int> { inner: 1 }.depth(3) }
         """
     )]
-    public void PolymorphicRecursionIsReportedNotInstantiatedForever(string source) {
+    public void PolymorphicRecursionThatCannotBeBoxedIsReportedNotInstantiatedForever(string source) {
         var errors = LoweringErrors(source);
         Assert.Contains(errors, static e => e.Code == ErrorCode.ERR_EndlessInstantiation);
     }

@@ -462,6 +462,14 @@ public sealed class ClassType(string name) : NominalType(name) {
 
     public ClassType? Superclass { get; set; }
 
+    /// <summary>
+    ///     The protocols the class conforms to by its own declaration or its
+    ///     extensions', each by its qualified name, with those they refine: its
+    ///     metadata's conformance records (docs/06 §6.2). Its superclass's are
+    ///     its superclass's.
+    /// </summary>
+    public List<string> Conformances { get; } = [];
+
     /// <summary>The methods called through the vtable: each slot's name, and the function in it for this class.</summary>
     public List<(string Method, string Function)> VTable { get; } = [];
 
@@ -1240,6 +1248,13 @@ public sealed class SilModule {
     ///     it is entered (docs/05 §5.2).
     /// </summary>
     public bool IsLibrary { get; set; }
+
+    /// <summary>
+    ///     Built with <c>--deny-reflection</c> (docs/06 §6.1): the types'
+    ///     field descriptors carry no names, and <c>Mirror</c> and
+    ///     <c>TypeInfo</c> were refused (S3450).
+    /// </summary>
+    public bool DenyReflection { get; set; }
 
     /// <summary>Set when the module is one unit of a program compiled separately (<see cref="SilUnit" />).</summary>
     public SilUnitInfo? Unit { get; set; }

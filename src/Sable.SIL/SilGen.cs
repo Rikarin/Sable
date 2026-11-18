@@ -101,8 +101,10 @@ public sealed partial class SilGen {
     ///     in — null for one lowering cannot place — so that a program of many
     ///     files can say where.
     /// </summary>
-    public static (SilModule Module, IReadOnlyList<(Diagnostic Diagnostic, SyntaxTree? Tree)> Diagnostics) LowerByFile(Compilation compilation) {
-        var generator = new SilGen(compilation);
+    /// <param name="denyReflection">Built with <c>--deny-reflection</c>: <c>Mirror</c> and <c>TypeInfo</c> are refused (S3450).</param>
+    public static (SilModule Module, IReadOnlyList<(Diagnostic Diagnostic, SyntaxTree? Tree)> Diagnostics) LowerByFile(Compilation compilation, bool denyReflection = false) {
+        var generator = new SilGen(compilation) { _denyReflection = denyReflection };
+        generator._module.DenyReflection = denyReflection;
         generator.LowerAll();
         return (generator._module, generator.PlacedDiagnostics);
     }
@@ -146,14 +148,17 @@ public sealed partial class SilGen {
     ///     the initialiser the module then has, which the code generator
     ///     makes a constructor of the library (<see cref="SilModule.IsLibrary" />).
     /// </summary>
-    public static (SilModule Module, IReadOnlyList<(Diagnostic Diagnostic, SyntaxTree? Tree)> Diagnostics) LowerLibraryByFile(Compilation compilation) {
-        var generator = new SilGen(compilation) { _library = true };
+    public static (SilModule Module, IReadOnlyList<(Diagnostic Diagnostic, SyntaxTree? Tree)> Diagnostics) LowerLibraryByFile(Compilation compilation, bool denyReflection = false) {
+        var generator = new SilGen(compilation) { _library = true, _denyReflection = denyReflection };
         generator._module.IsLibrary = true;
+        generator._module.DenyReflection = denyReflection;
         generator.LowerAll();
         return (generator._module, generator.PlacedDiagnostics);
     }
 
     bool _library;
+
+    bool _denyReflection;
 
     /// <summary>
     ///     Lowers one unit of a program compiled separately: the functions of
@@ -162,9 +167,16 @@ public sealed partial class SilGen {
     ///     <see cref="SilModule.Unit" /> says which is which.
     /// </summary>
     /// <param name="program">The program's declarations, gathered once for all its units; gathered here when not given.</param>
-    public static (SilModule Module, IReadOnlyList<Diagnostic> Diagnostics) LowerUnit(Compilation compilation, SilUnit unit, SilProgram? program = null, FunctionSymbol? entryPoint = null) {
-        var generator = new SilGen(compilation) { _entryOverride = entryPoint, _unit = unit, _program = program };
+    public static (SilModule Module, IReadOnlyList<Diagnostic> Diagnostics) LowerUnit(
+        Compilation compilation,
+        SilUnit unit,
+        SilProgram? program = null,
+        FunctionSymbol? entryPoint = null,
+        bool denyReflection = false
+    ) {
+        var generator = new SilGen(compilation) { _entryOverride = entryPoint, _unit = unit, _program = program, _denyReflection = denyReflection };
         generator._module.Unit = new();
+        generator._module.DenyReflection = denyReflection;
         generator.LowerAll();
         return (generator._module, generator.Diagnostics);
     }
@@ -1481,6 +1493,8 @@ public sealed partial class SilGen {
                     classType.Fields.AddRange(superType.Fields);
                 }
 
+                classType.Conformances.AddRange(DeclaredProtocols(named.OriginalDefinition));
+
                 var members = TypeSubstitution.For(named);
                 foreach (var field in StoredFields(named.OriginalDefinition)) {
                     if (Lower(members.Apply(field.Type)) is not { } fieldType) {
@@ -2768,6 +2782,37 @@ public sealed partial class SilGen {
 
         var arguments = type.TypeArguments.Select(a => Lower(a)?.ToString() ?? a.ToDisplayString());
         return $"{name}$of${string.Join("$", arguments.Select(Sanitise))}";
+    }
+
+    /// <summary>
+    ///     The protocols a type declares it conforms to — where it is declared
+    ///     and in its extensions that hold for every instance — with those
+    ///     they refine, by qualified name: <c>M.Named</c>.
+    /// </summary>
+    static IEnumerable<string> DeclaredProtocols(NamedTypeSymbol type) {
+        var pending = new Queue<TypeSymbol>(type.BaseTypes);
+        foreach (var extension in type.Extensions.Where(static e => !e.IsConstrained)) {
+            foreach (var conformance in extension.Conformances) {
+                pending.Enqueue(conformance);
+            }
+        }
+
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        while (pending.Count > 0) {
+            if (pending.Dequeue() is not NamedTypeSymbol { TypeKind: TypeKind.Protocol } protocol) {
+                continue;
+            }
+
+            var name = $"{protocol.OriginalDefinition.ContainingSymbol?.Name}.{protocol.Name}";
+            if (!seen.Add(name)) {
+                continue;
+            }
+
+            yield return name;
+            foreach (var refined in protocol.BaseTypes) {
+                pending.Enqueue(refined);
+            }
+        }
     }
 
     internal static IEnumerable<FieldSymbol> StoredFields(NamedTypeSymbol type) =>

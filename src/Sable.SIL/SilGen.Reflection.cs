@@ -714,6 +714,15 @@ public sealed partial class SilGen {
             var type = Sub(argument.Type);
             var owner = OwnerOf(call.Function)?.Name;
 
+            // The embedded build (docs/06 §6.1) carries no reflection.
+            if (generator._denyReflection && owner is "Reflect" or "TypeInfo") {
+                generator.Report(
+                    ErrorCode.ERR_ReflectionDenied,
+                    call.Syntax.Span,
+                    $"'{owner}.{call.Function.Name}' reflects on '{type.ToDisplayString()}', and this program is built with --deny-reflection");
+                return null;
+            }
+
             if (owner == "TypeInfo" && call.Function.Name == "of") {
                 if (type is not NamedTypeSymbol named || LowerType(call.Type) is not StructType info) {
                     return Missing(call, $"the TypeInfo of '{type.ToDisplayString()}'");

@@ -46,7 +46,7 @@ typedef struct SableBlock {
     uint8_t bytes[];
 } SableBlock;
 
-static const SableMetadata sable_block_metadata = { NULL, "inline block", 0, NULL, NULL, 0, _Alignof(SableObject), NULL };
+static const SableMetadata sable_block_metadata = { NULL, "inline block", 0, NULL, NULL, 0, _Alignof(SableObject), NULL, NULL };
 
 static uint32_t read_unsigned(const uint8_t *p, int width) {
     uint32_t value = 0;

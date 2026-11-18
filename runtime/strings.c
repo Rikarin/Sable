@@ -13,7 +13,7 @@ typedef struct SableString {
     char bytes[];
 } SableString;
 
-const SableMetadata sable_string_metadata = { NULL, "String", 0, NULL, NULL, 0, _Alignof(SableObject), NULL };
+const SableMetadata sable_string_metadata = { NULL, "String", 0, NULL, NULL, 0, _Alignof(SableObject), NULL, NULL };
 
 static int64_t count_scalars(const char *bytes, int64_t length) {
     int64_t count = 0;

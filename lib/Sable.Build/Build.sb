@@ -37,6 +37,9 @@ public struct Package {
     /// Types reachable only through reflection, which the linker must keep.
     public var reflect: String[>..] = []
 
+    /// What a build for a given target is, beyond what `--target` says.
+    public var targetSettings: TargetSettings[>..] = []
+
     /// Each lint's level: "allow", "warn" or "deny".
     public var lints: [String: String] = [:]
 
@@ -229,6 +232,21 @@ public enum Exclusivity {
     off
 }
 
+// ---- Targets --------------------------------------------------------------
+
+/// A build for one target, named by its triple as `--target` takes it:
+/// `[targets."wasm32-wasi"]` in TOML.
+public struct TargetSettings {
+    var triple: String
+    var reflection: Bool
+
+    /// With `reflection: false`, the build carries no reflection, as
+    /// `--deny-reflection` asks: `Mirror` and `TypeInfo` are errors.
+    public static fn target(_ triple: String, reflection: Bool = true) -> TargetSettings {
+        return TargetSettings { triple: triple, reflection: reflection }
+    }
+}
+
 // ---- Build scripts ------------------------------------------------------
 
 /// A program run before the package compiles, sandboxed to what it declares.
@@ -311,6 +329,11 @@ public fn renderManifest(_ p: Package) -> String {
     if !p.reflect.isEmpty {
         w.table("reflect")
         w.strings("include", p.reflect)
+    }
+
+    for settings in p.targetSettings {
+        w.table("targets." + quoteKey(settings.triple))
+        w.raw("reflection", settings.reflection ? "true" : "false")
     }
 
     if !p.generatorInputs.isEmpty {

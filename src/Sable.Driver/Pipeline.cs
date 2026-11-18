@@ -79,7 +79,8 @@ public static class Pipeline {
         BuildTimings? timings = null,
         bool optimised = false,
         NativeTarget? target = null,
-        bool library = false
+        bool library = false,
+        bool denyReflection = false
     ) {
         Compilation compilation;
         List<string> errors;
@@ -92,7 +93,7 @@ public static class Pipeline {
         }
 
         // The warnings go with whatever comes back, an error or the IR.
-        return CompileChecked(compilation, program, errors, debugDirectory, checkExclusivity, timings, optimised, target, library) with { Warnings = warnings };
+        return CompileChecked(compilation, program, errors, debugDirectory, checkExclusivity, timings, optimised, target, library, denyReflection) with { Warnings = warnings };
     }
 
     /// <summary>The rest of <see cref="Compile(IReadOnlyList{SyntaxTree}, string?, bool, BuildTimings?, bool)" />, from a checked program.</summary>
@@ -105,7 +106,8 @@ public static class Pipeline {
         BuildTimings? timings,
         bool optimised,
         NativeTarget? target,
-        bool library
+        bool library,
+        bool denyReflection
     ) {
         if (errors.Count > 0) {
             return new(null, null, errors);
@@ -114,7 +116,7 @@ public static class Pipeline {
         SilModule module;
         IReadOnlyList<(Diagnostic Diagnostic, SyntaxTree? Tree)> lowering;
         using (BuildTimings.Of(timings, "sil")) {
-            (module, lowering) = library ? SilGen.LowerLibraryByFile(compilation) : SilGen.LowerByFile(compilation);
+            (module, lowering) = library ? SilGen.LowerLibraryByFile(compilation, denyReflection) : SilGen.LowerByFile(compilation, denyReflection);
         }
 
         module.CheckExclusivity = checkExclusivity;

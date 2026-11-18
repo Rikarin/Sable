@@ -262,6 +262,17 @@ static void find_components(const int64_t *first_edge, const int64_t *targets) {
 
 enum { CYCLES_SHOWN = 5, CYCLE_LENGTH_SHOWN = 8 };
 
+// One step of a cycle: the object's type, and the field by which it holds
+// the next, when its metadata names it.
+static void print_step(const SableObject *object, const SableObject *next) {
+    const SableField *field = field_holding(object->type, object, next);
+    if (field != NULL && field->name != NULL) {
+        fprintf(stderr, "%s.%s", type_name(object), field->name);
+    } else {
+        fprintf(stderr, "%s", type_name(object));
+    }
+}
+
 // One cycle through 'start', inside its component: the shortest way back,
 // found breadth first, written as the types along it.
 static void print_cycle(int64_t start, const int64_t *first_edge, const int64_t *targets) {
@@ -308,14 +319,23 @@ static void print_cycle(int64_t start, const int64_t *first_edge, const int64_t 
         path[length++] = v;
     }
 
-    fprintf(stderr, "  a reference cycle: %s", type_name(leaked[start]));
-    for (int64_t i = length - 1, shown = 1; i >= 0; i--, shown++) {
+    // Each step names the field that holds the next object, where the
+    // metadata's field descriptors say which: Test.Pet.toy -> Test.Toy.
+    fprintf(stderr, "  a reference cycle: ");
+    int64_t from = start;
+    for (int64_t i = length - 1, shown = 1; i >= -1; i--, shown++) {
+        int64_t to = i >= 0 ? path[i] : start;
+        if (shown > 1) {
+            fprintf(stderr, " -> ");
+        }
+
+        print_step(leaked[from], leaked[to]);
         if (shown == CYCLE_LENGTH_SHOWN && i > 0) {
             fprintf(stderr, " -> … (%lld more)", (long long)i);
             break;
         }
 
-        fprintf(stderr, " -> %s", type_name(leaked[path[i]]));
+        from = to;
     }
 
     fprintf(stderr, " -> %s\n", type_name(leaked[start]));

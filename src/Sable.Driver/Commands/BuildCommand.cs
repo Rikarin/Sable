@@ -16,7 +16,7 @@ public class BuildCommand : Command {
     public override string Usage => """
         usage: sable build [--release] [--features <a,b>] [-p <package>] [--bin <name>]
                sable build <file.sb> [-o <output>] [--emit sil|llvm-ir|obj|staticlib|dylib] [-O0] [-g] [--exclusivity=checked|unchecked]
-                                     [--target <triple>] [--sysroot <dir>]
+                                     [--target <triple>] [--sysroot <dir>] [--deny-reflection]
 
         Without a file, builds the package in this directory or the nearest above it (sable.toml).
 
@@ -38,6 +38,8 @@ public class BuildCommand : Command {
           --target <triple>  build for another machine: aarch64-unknown-linux-gnu, x86_64-apple-darwin,
                              x86_64-pc-windows-msvc, wasm32-wasi, ... (default: this one)
           --sysroot <dir>    where the target's C library is, for clang's link
+          --deny-reflection  carry no reflection: Mirror and TypeInfo are errors (S3450), and the
+                             runtime's field descriptors have no names
         """;
 
     /// <summary>What the command line asked for.</summary>
@@ -46,6 +48,9 @@ public class BuildCommand : Command {
         public NativeTarget? Target { get; init; }
 
         public string? Sysroot { get; init; }
+
+        /// <summary><c>--deny-reflection</c> (docs/06 §6.1).</summary>
+        public bool DenyReflection { get; init; }
 
         /// <summary>What clang is asked for.</summary>
         public NativeOptions Native => NativeOptions.Of(Optimise, Debug) with { Target = Target, Sysroot = Sysroot };
@@ -62,6 +67,7 @@ public class BuildCommand : Command {
         bool? exclusivity = null;
         string? triple = null;
         string? sysroot = null;
+        var denyReflection = false;
         var arguments = new List<string>();
 
         for (var i = 0; i < args.Count; i++) {
@@ -75,6 +81,7 @@ public class BuildCommand : Command {
                 case "--emit" when i + 1 < args.Count && !TakesProgramArguments: emit = args[++i]; break;
                 case "--target" when i + 1 < args.Count: triple = args[++i]; break;
                 case "--sysroot" when i + 1 < args.Count: sysroot = args[++i]; break;
+                case "--deny-reflection": denyReflection = true; break;
                 case "-O0": optimise = false; break;
                 case "-g": debug = true; break;
                 case "--exclusivity=checked": exclusivity = true; break;
@@ -99,7 +106,7 @@ public class BuildCommand : Command {
             return null;
         }
 
-        return new(input, output, emit, optimise, debug, exclusivity, arguments) { Target = target, Sysroot = sysroot };
+        return new(input, output, emit, optimise, debug, exclusivity, arguments) { Target = target, Sysroot = sysroot, DenyReflection = denyReflection };
     }
 
     public override int Run(IReadOnlyList<string> arguments) {
@@ -143,7 +150,8 @@ public class BuildCommand : Command {
             options.Exclusivity ?? (options.Debug || !options.Optimise),
             target: target,
             optimised: options.Optimise && !options.Debug,
-            library: LibraryKindOf(options.Emit) is not null
+            library: LibraryKindOf(options.Emit) is not null,
+            denyReflection: options.DenyReflection
         );
         Report(result.Warnings);
 

@@ -362,12 +362,16 @@ public sealed class HeapTests {
         var cycles = run.Stderr.Split('\n').Where(static l => l.StartsWith("  a reference cycle: ", StringComparison.Ordinal)).Order(StringComparer.Ordinal).ToList();
         Assert.Equal(
             [
-                "  a reference cycle: Test.Node -> Test.Node -> Test.Node",
-                "  a reference cycle: Test.Pet -> Test.Toy -> Test.Pet",
+                "  a reference cycle: Test.Node.next -> Test.Node.next -> Test.Node",
+                "  a reference cycle: Test.Pet.toy -> Test.Toy.pet -> Test.Pet",
             ],
-            cycles.Where(static c => !c.Contains('[', StringComparison.Ordinal)).Select(static c => c.Replace("Test.Toy -> Test.Pet -> Test.Toy", "Test.Pet -> Test.Toy -> Test.Pet", StringComparison.Ordinal))
+            cycles.Where(static c => !c.Contains('[', StringComparison.Ordinal)).Select(static c => c.Replace("Test.Toy.pet -> Test.Pet.toy -> Test.Toy", "Test.Pet.toy -> Test.Toy.pet -> Test.Pet", StringComparison.Ordinal))
         );
-        Assert.Single(cycles, static c => c.Contains("[Test.Node]", StringComparison.Ordinal));
+
+        // Each step names the field that holds the next object; an array's element has no name.
+        Assert.Single(cycles, static c => c.Contains("Test.Node.children -> [Test.Node] -> Test.Node.next", StringComparison.Ordinal)
+            || c.Contains("[Test.Node] -> Test.Node.next -> Test.Node.children -> [Test.Node]", StringComparison.Ordinal)
+            || c.Contains("Test.Node.next -> Test.Node.children -> [Test.Node]", StringComparison.Ordinal));
     }
 
     static string Before(string text, string marker) => text.IndexOf(marker, StringComparison.Ordinal) is var at and >= 0 ? text[..at] : text;

@@ -227,6 +227,9 @@ public enum ErrorCode {
     LNT_PluginFailed = 3398,
     LNT_UnknownLint = 3399,
 
+    // ---- Reflection and the runtime's profiles (S3450-S3459) ---------------
+    ERR_ReflectionDenied = 3450,
+
     // ---- Patterns and flow (S6000-S6999) ---------------------------------
     ERR_PatternTypeMismatch = 6000,
     ERR_UnknownUnionCase = 6001,

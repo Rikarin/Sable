@@ -3,10 +3,58 @@
 
 // ---- Objects -----------------------------------------------------------
 
+// What a type is to the runtime beyond what counting it needs (docs/06
+// §6.2): its kind, its stored fields and the protocols it conforms to. The
+// compiler emits one per class; the runtime's own objects have none. The
+// layout is shared with code that casts to a protocol (docs/06 §6.2,
+// "Conformance records"), so it only grows, at the end.
+enum {
+    SABLE_KIND_CLASS = 1,
+};
+
+// A stored field: where it is in an instance, and what it holds. The names
+// are null in a program built with --deny-reflection.
+enum {
+    SABLE_FIELD_DATA = 0,      // nothing the runtime follows
+    SABLE_FIELD_STRONG = 1,    // a strong reference to an object, or null
+    SABLE_FIELD_AGGREGATE = 2, // a value holding references: a struct, a union, a closure, ...
+    SABLE_FIELD_WEAK = 3,      // a weak or unowned reference: it keeps nothing alive
+};
+
+typedef struct SableField {
+    const char *name;
+    const char *type_name;
+    int64_t offset; // from the start of the object, its header's bytes among them
+    int64_t kind;   // SABLE_FIELD_*
+} SableField;
+
+// A protocol, identified by its descriptor's address, or — across images,
+// each of which has its own copy — by its name.
+typedef struct SableProtocol {
+    const char *name;
+} SableProtocol;
+
+// That a type conforms to a protocol: the record a dynamic cast looks up.
+// 'witnesses' is what code casting to 'any P' builds the existential from;
+// null where the compiler has not emitted one.
+typedef struct SableConformance {
+    const SableProtocol *protocol;
+    const void *witnesses;
+} SableConformance;
+
+typedef struct SableTypeInfo {
+    int64_t kind;
+    int64_t field_count;
+    const SableField *fields;
+    int64_t conformance_count;
+    const SableConformance *conformances;
+} SableTypeInfo;
+
 // What a counted object is (docs/06 §6.2): how to destroy what it holds,
 // and, for an array, how its elements are copied and destroyed; how large
-// and how aligned an instance is; and what it keeps alive. The compiler
-// emits one per class and per array element type; a class's vtable follows.
+// and how aligned an instance is; what it keeps alive; and, for a class,
+// what it is (SableTypeInfo). The compiler emits one per class and per
+// array element type; a class's vtable follows.
 typedef struct SableMetadata {
     void (*destroy)(void *object); // destroys the contents; not the memory
     const char *name;
@@ -18,7 +66,57 @@ typedef struct SableMetadata {
     // Calls sable_heap_visit with each strong reference an object holds —
     // for an array, an element holds. Null: none.
     void (*visit)(void *object);
+    const SableTypeInfo *info; // null for an array and the runtime's own objects
 } SableMetadata;
+
+// ---- Conformances -----------------------------------------------------------
+
+static bool same_protocol(const SableProtocol *a, const SableProtocol *b) {
+    return a == b || (a != NULL && b != NULL && a->name != NULL && b->name != NULL && strcmp(a->name, b->name) == 0);
+}
+
+// The record of the type's conformance to the protocol — its own, or one it
+// inherits from a superclass — or null when it does not conform. This is the
+// conformance registry: each class's metadata carries its records, so a
+// lookup walks the class and its superclasses, and no table is built as the
+// program starts.
+const SableConformance *sable_conformance(const SableMetadata *type, const SableProtocol *protocol) {
+    while (type != NULL && type->info != NULL && type->info->kind == SABLE_KIND_CLASS) {
+        for (int64_t i = 0; i < type->info->conformance_count; i++) {
+            if (same_protocol(type->info->conformances[i].protocol, protocol)) {
+                return &type->info->conformances[i];
+            }
+        }
+
+        // A class keeps its superclass where an array keeps its element copier.
+        type = (const SableMetadata *)(const void *)type->copy_element;
+    }
+
+    return NULL;
+}
+
+// Whether the object's dynamic type conforms to the protocol: 'x is P' on a class reference.
+bool sable_conforms(const void *object, const SableProtocol *protocol) {
+    return object != NULL && sable_conformance(*(const SableMetadata *const *)object, protocol) != NULL;
+}
+
+// The field of the object's type that holds 'target' at 'object', or null:
+// what names the edges of a reported reference cycle. Its superclasses'
+// fields are the class's own, at the same offsets.
+static const SableField *field_holding(const SableMetadata *type, const void *object, const void *target) {
+    if (type == NULL || type->info == NULL) {
+        return NULL;
+    }
+
+    for (int64_t i = 0; i < type->info->field_count; i++) {
+        const SableField *field = &type->info->fields[i];
+        if (field->kind == SABLE_FIELD_STRONG && *(const void *const *)((const char *)object + field->offset) == target) {
+            return field;
+        }
+    }
+
+    return NULL;
+}
 
 // The header of docs/06 §6.2: metadata, the strong count, and a word of
 // flags in its low byte with the unowned count above them.

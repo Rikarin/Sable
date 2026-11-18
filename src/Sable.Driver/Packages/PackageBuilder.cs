@@ -18,6 +18,9 @@ public sealed record BuildRequest(
 
     /// <summary>clang's <c>--sysroot</c> for the target (<c>--sysroot</c>).</summary>
     public string? Sysroot { get; init; }
+
+    /// <summary><c>--deny-reflection</c>: built without reflection, whatever the manifest says (docs/06 §6.1).</summary>
+    public bool DenyReflection { get; init; }
 }
 
 /// <summary>An executable a build made.</summary>
@@ -402,6 +405,7 @@ public static class PackageBuilder {
                         LinkInputs = graph.LinkInputs(member.Name),
                     },
                     Whole = profile.CodegenUnits == 1,
+                    DenyReflection = DeniesReflection(workspace, request),
                 };
                 var outcome = IncrementalBuild.Build(Units(graph, member.Name, bin, generated), buildSettings, executable, Path.Combine(output, "cache"), timings, environment.Error);
                 Report(environment, outcome.Warnings);
@@ -460,7 +464,8 @@ public static class PackageBuilder {
             profile.Exclusivity,
             optimised: profile.Optimise && !profile.Debug,
             target: request.Target,
-            library: true);
+            library: true,
+            denyReflection: DeniesReflection(graph.Workspace, request));
         Report(environment, result.Warnings);
         if (!result.Succeeded) {
             Report(environment, result.Errors);
@@ -486,6 +491,14 @@ public static class PackageBuilder {
         environment.Status.WriteLine($"       Built {Path.GetFileName(path)}");
         return true;
     }
+
+    /// <summary>
+    ///     Whether the build carries no reflection: <c>--deny-reflection</c>,
+    ///     or the root manifest's settings for the target built for
+    ///     (<c>[targets.&lt;triple&gt;] reflection = false</c>).
+    /// </summary>
+    static bool DeniesReflection(Workspace workspace, BuildRequest request) =>
+        request.DenyReflection || workspace.RootManifest.TargetSettingsFor(request.Target ?? NativeTarget.Host) is { Reflection: false };
 
     /// <summary><c>sable run</c>: builds the one binary there is (or the one asked for), runs it, and returns its exit code.</summary>
     public static int Run(Workspace workspace, PackageEnvironment environment, BuildRequest request, IReadOnlyList<string> arguments) {

@@ -253,7 +253,7 @@ public sealed partial class LlvmEmitter {
         }
 
         /// <summary>The name Sable gives the type, for a debugger to show.</summary>
-        static string DisplayName(SilType type) =>
+        public static string DisplayName(SilType type) =>
             type switch {
                 ArrayType array => $"[{DisplayName(array.Element)}]",
                 EnumType enumType when OptionalPayload(enumType) is { } payload => DisplayName(payload) + "?",

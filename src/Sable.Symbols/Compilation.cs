@@ -584,6 +584,7 @@ public sealed partial class Compilation {
         ) {
             IsOpen = modifiers.Any(SyntaxKind.OpenKeyword),
             IsSealed = modifiers.Any(SyntaxKind.SealedKeyword),
+            IsFinal = modifiers.Any(SyntaxKind.FinalKeyword),
             IsAbstract = modifiers.Any(SyntaxKind.AbstractKeyword),
             IsNoncopyable = typeKind is TypeKind.Struct or TypeKind.Union
                 && attributes.Any(static a => a.Name.ToString().Trim() == "noncopy"),
@@ -719,6 +720,7 @@ public sealed partial class Compilation {
             IsMutating = declaration.Modifiers.Any(SyntaxKind.MutatingKeyword),
             IsOverride = declaration.Modifiers.Any(SyntaxKind.OverrideKeyword),
             IsOpen = declaration.Modifiers.Any(SyntaxKind.OpenKeyword),
+            IsFinal = declaration.Modifiers.Any(SyntaxKind.FinalKeyword),
             IsAbstract = declaration.Body is null && declaration.ExpressionBody is null,
             Builtin = BuiltinOf(declaration)
         };
@@ -1028,6 +1030,8 @@ public sealed partial class Compilation {
             declaration.LetOrVarKeyword.Kind == SyntaxKind.VarKeyword
         ) {
             IsStatic = declaration.Modifiers.Any(SyntaxKind.StaticKeyword),
+            IsOverride = declaration.Modifiers.Any(SyntaxKind.OverrideKeyword),
+            IsFinal = declaration.Modifiers.Any(SyntaxKind.FinalKeyword),
             SetterAccessibility = SetterAccessibilityOf(declaration.Modifiers),
             IsLazy = declaration.Modifiers.Any(SyntaxKind.LazyKeyword),
             ReferenceKind = declaration.Modifiers.Any(SyntaxKind.WeakKeyword) ? ReferenceKind.Weak

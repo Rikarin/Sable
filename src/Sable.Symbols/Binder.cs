@@ -164,15 +164,41 @@ public sealed partial class Binder {
         var bound = BindBlock(body);
 
         // One graph serves all three flow checks.
-        var graph = ControlFlowGraph.Build(bound, function.Parameters);
+        var self = InitializedSelfOf(function);
+        var graph = ControlFlowGraph.Build(bound, function.Parameters, self);
         CheckFlow(function, body, graph);
-        DefiniteAssignment.Analyze(graph, _diagnostics, function);
+        DefiniteAssignment.Analyze(
+            graph,
+            _diagnostics,
+            function,
+            self,
+            function.DeclaringSyntax.FirstOrDefault() is InitDeclarationSyntax declaration ? declaration.InitKeyword.Span : body.Span
+        );
 
         PopScope();
         RestoreEffects(savedEffects);
         _containingSymbol = savedSymbol;
         _returnType = savedReturn;
         return bound;
+    }
+
+    /// <summary>
+    ///     For an initialiser of a struct, class or actor, the stored fields its
+    ///     body has to set: those without an initial value, as a record literal
+    ///     has to give them (S3028). A value with one unset would hold whatever
+    ///     bytes were there, and a reference field would be followed to nothing.
+    /// </summary>
+    static InitializedSelf? InitializedSelfOf(FunctionSymbol function) {
+        if (function is not { FunctionKind: FunctionKind.Initializer, ContainingSymbol: NamedTypeSymbol { TypeKind: TypeKind.Struct or TypeKind.Class or TypeKind.Actor } type }) {
+            return null;
+        }
+
+        var fields = type.Members
+            .OfType<FieldSymbol>()
+            .Where(static f => f is { IsStatic: false, IsComputed: false, HasInitializer: false })
+            .ToList();
+
+        return fields.Count == 0 ? null : new InitializedSelf(type, fields);
     }
 
     /// <summary>Checks that a function returns on every path, and warns on dead code.</summary>
@@ -251,8 +277,48 @@ public sealed partial class Binder {
             bound = Convert(bound, expected, value);
         }
 
+        // A stored field's initial value is stored before the initialiser's
+        // body runs, in declaration order, when the other fields may hold
+        // nothing yet: 'var x: Int = y' would read a 'y' not yet there. A
+        // lazy one is computed on its first read, from a finished instance.
+        // One written 'lazy' that cannot be (S3113) has said enough.
+        if (_containingSymbol is FieldSymbol { IsStatic: false, IsLazy: false } field
+            && !(field.DeclaringSyntax.FirstOrDefault() is FieldDeclarationSyntax declaration && declaration.Modifiers.Any(SyntaxKind.LazyKeyword))
+            && FirstSelfUse(bound) is var (use, what)) {
+            _diagnostics.Error(
+                ErrorCode.ERR_UseBeforeAssignment,
+                use.Syntax.Span,
+                $"{what} is used here before the instance exists: a field's initial value cannot use 'self'"
+            );
+        }
+
         PopScope();
         return bound;
+    }
+
+    /// <summary>The first place a bound tree uses self, explicitly or not, and how to name it.</summary>
+    static (BoundNode Node, string What)? FirstSelfUse(BoundNode node) {
+        switch (node) {
+            case BoundFieldAccess { Receiver: BoundSelfAccess, Field: var field }:
+                return (node, $"'{field.Name}'");
+
+            case BoundCall { Receiver: null, Function: { IsStatic: false, FunctionKind: FunctionKind.Ordinary, ContainingSymbol: NamedTypeSymbol or ExtensionSymbol } function }:
+                return (node, $"'{function.Name}'");
+
+            case BoundSelfAccess:
+                return (node, "'self'");
+
+            case BoundSuperAccess:
+                return (node, "'super'");
+        }
+
+        foreach (var child in node.Children) {
+            if (FirstSelfUse(child) is { } found) {
+                return found;
+            }
+        }
+
+        return null;
     }
 
     /// <summary>Binds a standalone statement, for tests and scripts.</summary>
@@ -3132,6 +3198,10 @@ public sealed partial class Binder {
                 wanted = variadic.ElementType;
             }
 
+            if (parameter.Modifier is ParameterModifier.InOut or ParameterModifier.Out) {
+                CheckWritableArgument(arguments[i], parameter);
+            }
+
             converted.Add(Convert(arguments[i], wanted, arguments[i].Syntax));
         }
 
@@ -4406,9 +4476,96 @@ public sealed partial class Binder {
 
         // 'as?' yields an optional; 'as' and 'as!' yield the type itself.
         var isOptional = syntax.QuestionOrBangToken.Kind == SyntaxKind.QuestionToken;
+        var isPlain = syntax.QuestionOrBangToken.IsNone;
+        var isUnchecked = !syntax.UncheckedKeyword.IsNone;
         var type = isOptional ? new OptionalTypeSymbol(target) : target;
 
-        return new BoundConversion(syntax, type, operand, ConversionKind.Explicit);
+        if (operand.HasError || target.IsError) {
+            return new BoundConversion(syntax, type, operand, ConversionKind.Explicit);
+        }
+
+        var source = operand.Type;
+
+        // Between two numeric types (spec/SYNTAX.md §16): 'as' traps on a
+        // value the target cannot hold, 'unchecked as' wraps or truncates.
+        // Either always gives a number, so neither has a '?' or '!' form.
+        if (Core.IsNumeric(source) && Core.IsNumeric(target)) {
+            if (!isPlain) {
+                return InvalidCast(
+                    syntax,
+                    operand,
+                    $"'{syntax.AsKeyword.Text}{syntax.QuestionOrBangToken.Text}' tests what a value is, and "
+                    + $"'{source.ToDisplayString()}' is always a number: convert it with 'as' or 'unchecked as'"
+                );
+            }
+
+            if (source.Equals(target)) {
+                return new BoundConversion(syntax, type, operand, ConversionKind.Identity);
+            }
+
+            return new BoundConversion(syntax, type, operand, ConversionKind.Explicit) { IsUnchecked = isUnchecked };
+        }
+
+        if (isUnchecked) {
+            return InvalidCast(
+                syntax,
+                operand,
+                $"'unchecked as' converts one numeric type to another, and '{source.ToDisplayString()}' "
+                + $"to '{target.ToDisplayString()}' is not that"
+            );
+        }
+
+        // Between classes, a cast goes up or down one line of inheritance; a
+        // downcast is checked as the program runs. Classes on different lines
+        // have no object in common, so the cast could never succeed.
+        var sourceClass = source is OptionalTypeSymbol optionalSource ? optionalSource.UnderlyingType : source;
+        if (sourceClass is NamedTypeSymbol { TypeKind: TypeKind.Class } && target is NamedTypeSymbol { TypeKind: TypeKind.Class }) {
+            var isUpcast = _conversions.Classify(sourceClass, target, false) is not null;
+            if (!isUpcast && _conversions.Classify(target, sourceClass, false) is null) {
+                return InvalidCast(
+                    syntax,
+                    operand,
+                    $"'{sourceClass.ToDisplayString()}' and '{target.ToDisplayString()}' are unrelated classes, "
+                    + "so no object is both and the cast can never succeed"
+                );
+            }
+
+            // Up the line, nothing needs checking: 'dog as Animal' is an upcast.
+            if (isUpcast && ReferenceEquals(sourceClass, source)) {
+                var upcast = Convert(operand, target, syntax);
+                return isOptional ? new BoundConversion(syntax, type, upcast, ConversionKind.OptionalWrap) : upcast;
+            }
+
+            return new BoundConversion(syntax, type, operand, ConversionKind.Explicit);
+        }
+
+        // A cast that always succeeds is the conversion the context would
+        // make anyway: 'dog as Animal', 'point as any Shape'.
+        if (isPlain && _conversions.Classify(source, target, IsLiteral(operand)) is not null) {
+            return Convert(operand, target, syntax);
+        }
+
+        // What a value is may be known only as the program runs: an
+        // existential, a type parameter, a union of types, an optional.
+        if (IsDynamicallyTyped(source) || IsDynamicallyTyped(target)) {
+            return new BoundConversion(syntax, type, operand, ConversionKind.Explicit);
+        }
+
+        return InvalidCast(
+            syntax,
+            operand,
+            $"'{source.ToDisplayString()}' cannot be cast to '{target.ToDisplayString()}'"
+        );
+    }
+
+    /// <summary>A type whose values may turn out, as the program runs, to be some other type.</summary>
+    static bool IsDynamicallyTyped(TypeSymbol type) =>
+        type is ExistentialTypeSymbol or OpaqueTypeSymbol or CompositionTypeSymbol or StructuralUnionTypeSymbol
+            or TypeParameterSymbol or OptionalTypeSymbol or NamedTypeSymbol { TypeKind: TypeKind.Protocol };
+
+    BoundExpression InvalidCast(CastExpressionSyntax syntax, BoundExpression operand, string message) {
+        _diagnostics.Error(ErrorCode.ERR_InvalidCast, syntax.Span, message);
+        return new BoundError(syntax, operand);
     }
 
     /// <summary>
@@ -4493,6 +4650,37 @@ public sealed partial class Binder {
         && _containingSymbol is FunctionSymbol { FunctionKind: FunctionKind.Initializer } initializer
         && initializer.ContainingSymbol is NamedTypeSymbol owner
         && ReferenceEquals(field.ContainingSymbol, owner.OriginalDefinition);
+
+    /// <summary>
+    ///     An <c>inout</c> or <c>out</c> argument is written by the callee, so it
+    ///     must be a place an assignment could write: <c>inc(&amp;n)</c> changes
+    ///     <c>n</c> as <c>n = n + 1</c> would, and is refused where that is.
+    /// </summary>
+    void CheckWritableArgument(BoundExpression argument, ParameterSymbol parameter) {
+        var place = argument is BoundUnaryOperator { OperatorKind: UnaryOperatorKind.AddressOf, Operand: var operand }
+            ? operand
+            : argument;
+
+        if (place.HasError) {
+            return;
+        }
+
+        var keyword = parameter.Modifier == ParameterModifier.Out ? "out" : "inout";
+
+        if (!place.IsAssignable && !InitialisesLetField(place)) {
+            _diagnostics.Error(
+                ErrorCode.ERR_NotAssignable,
+                argument.Syntax.Span,
+                $"an '{keyword}' argument is written by the call, so it must be a mutable binding"
+            );
+        } else if (place is BoundFieldAccess { Field.SetterAccessibility: { } setter } field && !IsAccessible(field.Field, setter)) {
+            _diagnostics.Error(
+                ErrorCode.ERR_NotAssignable,
+                argument.Syntax.Span,
+                $"'{field.Field.Name}' can be read here but not written: its setter is {setter.ToString().ToLowerInvariant()}"
+            );
+        }
+    }
 
     BoundExpression BindAssignment(AssignmentExpressionSyntax syntax) {
         var target = BindExpression(syntax.Left);

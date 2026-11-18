@@ -913,6 +913,12 @@ x is Drawable         // conformance/type test, narrows in the true branch
 x unchecked as I32    // explicit wrapping/truncating conversion
 ```
 
+`as` and `unchecked as` convert between numeric types. `unchecked as` never
+traps: an integer keeps its low bits, and a float goes toward zero and stops
+at the target's bounds (NaN gives 0). A cast that could never succeed — between
+unrelated types, or classes on different lines of inheritance — is an error
+(S3066).
+
 ### Literals
 
 ```sable

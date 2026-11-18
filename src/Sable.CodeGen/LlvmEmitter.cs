@@ -2483,6 +2483,11 @@ public sealed partial class LlvmEmitter {
                 return true;
             }
 
+            if (name.StartsWith("wrap_", StringComparison.Ordinal)) {
+                Wrap(builtin.Operands[0].Type, builtin.Type, operands[0], Result());
+                return true;
+            }
+
             var separator = name.LastIndexOf('_');
             if (separator < 0) {
                 return false;
@@ -2684,6 +2689,53 @@ public sealed partial class LlvmEmitter {
             }
 
             Line($"{result} = {(from == SilType.F32 ? "fpext" : "fptrunc")} {fromType} {value} to {toType}");
+        }
+
+        /// <summary>
+        ///     <c>unchecked as</c>: an integer keeps its low bits, extended by its
+        ///     own sign when it widens; a float to an integer goes toward zero
+        ///     and saturates at the target's bounds, NaN giving zero. The other
+        ///     conversions cannot fail, and are the checked ones.
+        /// </summary>
+        void Wrap(SilType from, SilType to, string value, string result) {
+            var fromType = Type(from);
+            var toType = Type(to);
+            var fromInteger = SilType.IntegerInfo(from);
+            var toInteger = SilType.IntegerInfo(to);
+
+            if (fromInteger is var (fromBits, fromSigned) && toInteger is var (toBits, _)) {
+                var op = toBits < fromBits ? "trunc" : toBits > fromBits ? (fromSigned ? "sext" : "zext") : "bitcast";
+                Line($"{result} = {op} {fromType} {value} to {toType}");
+                return;
+            }
+
+            if (fromInteger is null && toInteger is var (bits, signed)) {
+                // fptosi of a value out of range is poison, but 'select'
+                // passes on only the operand it picks. The bounds compared
+                // are powers of two, which a float holds exactly.
+                var (low, high) = Bounds(bits, signed);
+                var lowFloat = Hex((double)low);
+                var pastHighFloat = Hex((double)(high + 1));
+
+                // As an LLVM constant: the bits, read as signed.
+                var highBits = high >= BigInteger.One << (bits - 1) ? high - (BigInteger.One << bits) : high;
+                var truncated = Fresh();
+                var isNaN = Fresh();
+                var below = Fresh();
+                var above = Fresh();
+                var clampedHigh = Fresh();
+                var clamped = Fresh();
+                Line($"{truncated} = {(signed ? "fptosi" : "fptoui")} {fromType} {value} to {toType}");
+                Line($"{isNaN} = fcmp uno {fromType} {value}, {value}");
+                Line($"{below} = fcmp olt {fromType} {value}, {lowFloat}");
+                Line($"{above} = fcmp oge {fromType} {value}, {pastHighFloat}");
+                Line($"{clampedHigh} = select i1 {above}, {toType} {highBits}, {toType} {truncated}");
+                Line($"{clamped} = select i1 {below}, {toType} {low}, {toType} {clampedHigh}");
+                Line($"{result} = select i1 {isNaN}, {toType} 0, {toType} {clamped}");
+                return;
+            }
+
+            Convert(from, to, value, result);
         }
 
         static (BigInteger Low, BigInteger High) Bounds(int bits, bool signed) =>

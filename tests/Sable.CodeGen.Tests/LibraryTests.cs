@@ -59,6 +59,31 @@ fn main() {
 """).Stdout
         );
 
+    /// <summary>
+    ///     Characters order by scalar value, an instruction. Sable.Core's
+    ///     'operator &lt;' on Char is written 'lhs &lt; rhs', which used to bind to
+    ///     itself and never return — directly, through Comparable, and in a
+    ///     range's 'contains'.
+    /// </summary>
+    [Fact]
+    public void CharactersAreOrderedByScalar() =>
+        Assert.Equal(
+            "true false true true false\nz true false true\n",
+            AssertAgree("""
+module P
+fn larger<T: Comparable>(a: T, b: T) -> T {
+    return a < b ? b : a
+}
+@main
+fn main() {
+    let a = 'a'
+    let z = 'z'
+    print("\(a < z) \(z < a) \(a <= a) \(z > a) \(a >= z)")
+    print("\(larger(a, z)) \(('a'...'z').contains('q')) \(('a'...'z').contains('Q')) \('é' > 'z')")
+}
+""").Stdout
+        );
+
     [Fact]
     public void TextIsWrittenInSable() =>
         Assert.Equal(

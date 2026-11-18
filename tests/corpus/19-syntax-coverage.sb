@@ -46,7 +46,18 @@ fn first(_ values: Int?) -> Int {
     }
 }
 
+// A value generic parameter, given a number as a type argument.
+struct Ring<T, N: Int> where N > 0 {
+    var slots: T[N]
+}
+
+fn ringSize<T, N: Int>(_ ring: Ring<T, N>) -> Int {
+    return N
+}
+
 fn main() {
+    let ring = Ring<Int, 2> { slots: [1, 2] }
+    print(ringSize(ring))
     let small = Platform.pointerWidth / 4 + Reflection.typeName(1).count
     let size = if small > 10 { "big" } else { "small" }
     let total = both { 1 } onFail: { 2 }

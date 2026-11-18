@@ -1368,7 +1368,7 @@ In `src/Sable.Driver/Packages/`, with a command per file under `Commands/`.
 Deferred: build scripts (`[build]` is read and validated, and a build warns
 that it is not run — the capability sandbox needs runtime support), and with
 them `[build-dependencies]` (checked, not resolved or built, and warned
-about); git dependencies (refused with an error); workspace inheritance
+about); workspace inheritance
 (`version.workspace = true` and `{ workspace = true }` are refused,
 `[workspace.package]` and `[workspace.dependencies]` warned about); `[reflect]`
 and `[targets]` (accepted with a warning: nothing looks a type up by name

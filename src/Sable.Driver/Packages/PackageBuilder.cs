@@ -128,7 +128,9 @@ public static class PackageBuilder {
     }
 
     static string Describe(ResolvedPackage package, Workspace workspace) =>
-        package.IsLocal ? $"{package.Name} v{package.Version} ({workspace.Relative(package.Package.Directory)})" : $"{package.Name} v{package.Version}";
+        package.IsLocal ? $"{package.Name} v{package.Version} ({workspace.Relative(package.Package.Directory)})"
+        : package.Git is { } git ? $"{package.Name} v{package.Version} ({git.Url}#{git.ShortCommit})"
+        : $"{package.Name} v{package.Version}";
 
     static void Report(PackageEnvironment environment, IEnumerable<string> errors) {
         foreach (var error in errors) {

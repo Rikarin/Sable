@@ -913,7 +913,9 @@ internal sealed class Parser {
 
             case SyntaxKind.HashToken: {
                 var hash = EatToken();
-                return new BuiltinExpressionGreen(hash, EatIdentifier());
+
+                // '#module' is a builtin though 'module' is a keyword (spec/lexical.md §9).
+                return new BuiltinExpressionGreen(hash, At(SyntaxKind.ModuleKeyword) ? EatToken() : EatIdentifier());
             }
 
             case SyntaxKind.DotToken: {

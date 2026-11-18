@@ -166,7 +166,7 @@ public sealed partial class Binder {
         // One graph serves all three flow checks.
         var graph = ControlFlowGraph.Build(bound, function.Parameters);
         CheckFlow(function, body, graph);
-        DefiniteAssignment.Analyze(graph, _diagnostics);
+        DefiniteAssignment.Analyze(graph, _diagnostics, function);
 
         PopScope();
         RestoreEffects(savedEffects);
@@ -3613,7 +3613,7 @@ public sealed partial class Binder {
                     found.Substitution.Apply(resolved.ReturnType),
                     receiver,
                     converted.ToImmutable()
-                );
+                ) { Subscript = resolved, Substitution = found.Substitution };
             }
         }
 
@@ -3682,6 +3682,15 @@ public sealed partial class Binder {
         var elements = syntax.Elements
             .Select(e => BindExpression(e, expectedElement))
             .ToImmutableArray();
+
+        // 'T[..k]' holds at most k.
+        if (expectedType is ArrayTypeSymbol { ArrayKind: ArrayKind.Inline, Capacity: { } capacity } bounded && elements.Length > capacity) {
+            _diagnostics.Error(
+                ErrorCode.ERR_TypeMismatch,
+                syntax.Span,
+                $"'{bounded.ToDisplayString()}' holds at most {capacity} elements, and this literal has {elements.Length}"
+            );
+        }
 
         TypeSymbol elementType;
         if (expectedElement is not null) {

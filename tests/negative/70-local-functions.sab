@@ -1,0 +1,38 @@
+module Negative.LocalFunctions
+
+// A local function sees the function around it, as a closure does: what it
+// reads of it must have a value where the local function is declared.
+
+fn readsAVariableBeforeItIsAssigned() -> Int {
+    var x: Int
+    fn f() -> Int {
+        return x                        //! S6008 'x' is read here before anything assigns to it
+    }
+    x = 1
+    return f()
+}
+
+fn readsItsOwnVariableBeforeItIsAssigned() -> Int {
+    fn f() -> Int {
+        var y: Int
+        return y                        //! S6008 'y'
+    }
+    return f()
+}
+
+// Fine: what is assigned before the declaration, its own parameters and
+// itself.
+fn whatIsFine(_ n: Int) -> Int {
+    var total = n
+    fn add(_ x: Int) {
+        total = total + x
+    }
+    fn countdown(_ k: Int) -> Int {
+        if k <= 0 {
+            return 0
+        }
+        add(k)
+        return countdown(k - 1)
+    }
+    return countdown(n) + total
+}

@@ -23,11 +23,16 @@ namespace Sable.Symbols;
 ///     </para>
 /// </remarks>
 internal static class DefiniteAssignment {
-    public static void Analyze(ControlFlowGraph graph, DiagnosticBag diagnostics) {
+    /// <param name="owner">
+    ///     The function whose body this is. A local function reads the locals
+    ///     of the one around it, which were checked there, where it is
+    ///     declared; here only its own are.
+    /// </param>
+    public static void Analyze(ControlFlowGraph graph, DiagnosticBag diagnostics, Symbol? owner = null) {
         // Only locals are tracked: a parameter always has a value.
         var index = new Dictionary<LocalSymbol, int>();
         foreach (var (_, _, op) in graph.AllOps()) {
-            if (op.Symbol is LocalSymbol local && !index.ContainsKey(local)) {
+            if (op.Symbol is LocalSymbol local && !index.ContainsKey(local) && (owner is null || IsWithin(local, owner))) {
                 index[local] = index.Count;
             }
         }
@@ -81,6 +86,25 @@ internal static class DefiniteAssignment {
                 $"'{local.Name}' is read here before anything assigns to it"
             );
         }
+    }
+
+    /// <summary>
+    ///     A local of the function analysed, or of a closure in it — not of
+    ///     a function around it, nor of a local function in it, whose own
+    ///     analysis reports it.
+    /// </summary>
+    static bool IsWithin(LocalSymbol local, Symbol owner) {
+        for (var container = local.ContainingSymbol; container is not null; container = container.ContainingSymbol) {
+            if (ReferenceEquals(container, owner)) {
+                return true;
+            }
+
+            if (container is FunctionSymbol { FunctionKind: FunctionKind.Ordinary, Name.Length: > 0, ContainingSymbol: FunctionSymbol }) {
+                return false;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>What holds on entry to a block: the meet of what its reachable predecessors leave.</summary>

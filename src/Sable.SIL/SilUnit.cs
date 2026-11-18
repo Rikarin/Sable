@@ -125,7 +125,7 @@ public sealed class SilProgram {
 
     internal static bool IsDeclaration(SyntaxNode node) =>
         node is FunctionDeclarationSyntax or InitDeclarationSyntax or DeinitDeclarationSyntax or OperatorDeclarationSyntax
-            or AccessorSyntax or ClassDeclarationSyntax or FieldDeclarationSyntax or ConstDeclarationSyntax;
+            or AccessorSyntax or SubscriptDeclarationSyntax or ClassDeclarationSyntax or FieldDeclarationSyntax or ConstDeclarationSyntax;
 
     /// <summary>A file's declarations: all of them, bodies' included, for a file the unit owns; its outline for another.</summary>
     internal IEnumerable<SyntaxNode>? Declarations(SyntaxTree tree, bool owned) {

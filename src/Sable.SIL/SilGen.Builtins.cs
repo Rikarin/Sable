@@ -222,6 +222,15 @@ public sealed partial class SilGen {
                 return null;
             }
 
+            // 'T[..k]' grows within its bound, and no further.
+            if (name == "array_append" && Sub(operands[0].Type) is ArrayTypeSymbol { ArrayKind: ArrayKind.Inline, Capacity: { } capacity }) {
+                var bounded = Emit(new LoadBorrowInst(address));
+                var count = Emit(new BuiltinInst("array_count", SilType.Int, bounded));
+                Emit(new EndBorrowInst(bounded));
+                var full = Emit(new BuiltinInst("cmp_ge_Int", SilType.Bool, count, Emit(new IntegerLiteralInst(SilType.Int, capacity))));
+                Emit(new CondFailInst(full, "inline array is full"));
+            }
+
             var applied = Emit(new BuiltinInst(name, signature.Result, [..values]));
             EndAll(held);
             EndAll(borrows);

@@ -59,3 +59,26 @@ fn aSubscriptIndexIsChecked(_ s: Subscripted) -> Int {
 fn aSubscriptResultIsChecked(_ s: Subscripted) -> String {
     return s[0]                         //! S3004 expected 'String'
 }
+
+fn aGetOnlySubscriptIsNotWritten(_ s: Subscripted) {
+    var copy = s
+    copy[0] = 1                         //! S3010 must be a mutable binding
+}
+
+public struct Settable {
+    public var items: Int[>..]
+
+    subscript(index: Int) -> Int {
+        get => items[index]
+        set { items[index] = newValue }
+    }
+}
+
+fn aSubscriptOfALetIsNotWritten(_ s: Settable) {
+    s[0] = 1                            //! S3010 must be a mutable binding
+}
+
+fn aSubscriptOfAVarIsWritten(_ s: Settable) {
+    var copy = s
+    copy[0] = 1
+}

@@ -191,6 +191,22 @@ public sealed partial class SilGen {
                         var payload = block.AddArgument(payloadType, !payloadType.IsTrivial);
                         if (shape == Shape.Optional) {
                             parts.Add(new("some", ((OptionalTypeSymbol)type).UnderlyingType, _ => (payload, false)));
+                        } else if (IsIndirect(enumType, c)) {
+                            // A boxed payload: each part copied out of the box.
+                            var fields = PayloadOf((NamedTypeSymbol)type, caseName);
+                            for (var i = 0; i < fields.Count; i++) {
+                                var index = i;
+                                parts.Add(new(fields[i].Name, fields[i].Type, x => {
+                                        SilValue address = x.Emit(new RefElementAddrInst(payload, 0));
+                                        if (fields.Count > 1) {
+                                            address = x.Emit(new TupleElementAddrInst(address, index));
+                                        }
+
+                                        var part = x.Emit(new LoadInst(address));
+                                        return (part, !part.Type.IsTrivial);
+                                    }
+                                ));
+                            }
                         } else {
                             var fields = PayloadOf((NamedTypeSymbol)type, caseName);
                             for (var i = 0; i < fields.Count; i++) {

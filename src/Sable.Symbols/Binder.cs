@@ -1822,7 +1822,7 @@ public sealed partial class Binder {
     /// </summary>
     bool IsKnownSequence(TypeSymbol type) =>
         type.IsError || type is ArrayTypeSymbol || DictionaryTypes(type) is not null
-        || type is NamedTypeSymbol named && Core.IsRange(named);
+        || type is NamedTypeSymbol named && Core.IsAnyRange(named);
 
     /// <summary>How a loop goes through a sequence by its iterator.</summary>
     /// <param name="Iterator">The loop's own variable holding the iterator.</param>
@@ -1946,10 +1946,20 @@ public sealed partial class Binder {
             return new TupleTypeSymbol([key, value], [null, null]);
         }
 
-        if (sequence is NamedTypeSymbol named && Core.IsRange(named)) {
-            // Only an integer range enumerates; a range of anything else is a
-            // test of membership, not a sequence.
-            if (Core.IsInteger(named.TypeArguments[0])) {
+        if (sequence is NamedTypeSymbol named && Core.IsAnyRange(named)) {
+            // A range open at the start has no first value to count from.
+            if (!Core.IsCountableRange(named)) {
+                _diagnostics.Error(
+                    ErrorCode.ERR_NotIterable,
+                    syntax.Span,
+                    $"'{named.ToDisplayString()}' cannot be iterated: it has no lower bound to start from"
+                );
+                return ErrorTypeSymbol.Instance;
+            }
+
+            // A range of integers or characters counts through them; a range
+            // of anything else is a test of membership, not a sequence.
+            if (Core.IsInteger(named.TypeArguments[0]) || named.TypeArguments[0].Equals(Core.Char)) {
                 return named.TypeArguments[0];
             }
 
@@ -1957,7 +1967,7 @@ public sealed partial class Binder {
                 ErrorCode.ERR_NotIterable,
                 syntax.Span,
                 $"'{named.ToDisplayString()}' cannot be iterated: "
-                + "only a range of integers enumerates"
+                + "only a range of integers or characters enumerates"
             );
             return ErrorTypeSymbol.Instance;
         }
@@ -2971,6 +2981,32 @@ public sealed partial class Binder {
     ///     substitution, so a member of <c>Base&lt;Int&gt;</c> reached through
     ///     <c>Derived : Base&lt;Int&gt;</c> still reports Int.
     /// </remarks>
+    /// <summary>
+    ///     The first of a conditional extension's requirements the type does not
+    ///     meet, as written ('Bound == Int'), or null when it meets them all —
+    ///     read with the type's arguments for its parameters, and as the
+    ///     requirements in force here have it, so that inside the extension
+    ///     the type itself meets them.
+    /// </summary>
+    string? UnmetRequirement(ExtensionSymbol extension, NamedTypeSymbol type) {
+        var arguments = TypeSubstitution.For(type);
+        TypeSymbol Read(TypeSymbol t) => _conversions.Equivalence.Canonical(arguments.Apply(t));
+
+        foreach (var (left, right) in extension.SameTypeRequirements) {
+            if (!Read(left).Equals(Read(right))) {
+                return $"'{left.ToDisplayString()} == {right.ToDisplayString()}'";
+            }
+        }
+
+        foreach (var (subject, constraint) in extension.ConformanceRequirements) {
+            if (!Conversions.Satisfies(Read(subject), arguments.Apply(constraint), _conversions.Equivalence)) {
+                return $"'{subject.ToDisplayString()}: {constraint.ToDisplayString()}'";
+            }
+        }
+
+        return null;
+    }
+
     MemberLookup? LookupMember(TypeSymbol type, string name) {
         // After 'where T == Int' a T has Int's members.
         type = _conversions.Equivalence.Canonical(type);
@@ -3024,6 +3060,20 @@ public sealed partial class Binder {
                 }
 
                 var members = named.GetMembers(name).ToList();
+
+                // A conditional extension's members are the type's only where
+                // its arguments meet the extension's 'where' clause.
+                if (members.Any(static m => m.ContainingSymbol is ExtensionSymbol { IsConditional: true })) {
+                    var unmet = members
+                        .Select(m => (Member: m, Unmet: m.ContainingSymbol is ExtensionSymbol extension ? UnmetRequirement(extension, named) : null))
+                        .ToList();
+                    members = [..unmet.Where(static m => m.Unmet is null).Select(static m => m.Member)];
+                    if (members.Count == 0) {
+                        _unmetArrayRequirement = unmet[0].Unmet;
+                        return null;
+                    }
+                }
+
                 if (members.Count > 0) {
                     return new MemberLookup(members, named, substitution);
                 }
@@ -5017,17 +5067,33 @@ public sealed partial class Binder {
 
     /// <summary>
     ///     Binds <c>a..&lt;b</c> to a <c>Range&lt;T&gt;</c> and <c>a...b</c> to a
-    ///     <c>ClosedRange&lt;T&gt;</c>, both declared in Sable.Core; the
-    ///     one-sided forms are a <c>Range</c> with a bound missing.
+    ///     <c>ClosedRange&lt;T&gt;</c>; the one-sided forms to
+    ///     <c>PartialRangeUpTo</c> (<c>..&lt;b</c>), <c>PartialRangeThrough</c>
+    ///     (<c>...b</c>) and <c>PartialRangeFrom</c> (<c>a...</c>) — all
+    ///     declared in Sable.Core.
     /// </summary>
     BoundExpression BindRange(RangeExpressionSyntax syntax, TypeSymbol? expectedType) {
         var isInclusive = syntax.OperatorToken.Kind == SyntaxKind.DotDotDotToken;
-        var definition = isInclusive && syntax.Left is not null && syntax.Right is not null
-            ? Core.ClosedRange
-            : Core.Range;
+        var (definition, name) = (syntax.Left, syntax.Right) switch {
+            (not null, not null) => isInclusive ? (Core.ClosedRange, "ClosedRange") : (Core.Range, "Range"),
+            (null, not null) => isInclusive ? (Core.PartialRangeThrough, "PartialRangeThrough") : (Core.PartialRangeUpTo, "PartialRangeUpTo"),
+            _ => (Core.PartialRangeFrom, "PartialRangeFrom"),
+        };
+
+        // 'a..<' stops before an end it does not name: there is no such range.
+        if (syntax.Left is not null && syntax.Right is null && !isInclusive) {
+            _diagnostics.Error(
+                ErrorCode.ERR_HalfOpenRangeWithoutEnd,
+                syntax.OperatorToken.Span,
+                "'..<' stops before its upper bound, and this range has none; "
+                + "write the bound, or 'a...' for the values from 'a' on"
+            );
+            BindExpression(syntax.Left);
+            return new BoundError(syntax);
+        }
 
         var bound = expectedType is NamedTypeSymbol { TypeArguments.Length: 1 } expected
-            && Core.IsRange(expected)
+            && Core.IsAnyRange(expected)
                 ? expected.TypeArguments[0]
                 : null;
 
@@ -5057,7 +5123,7 @@ public sealed partial class Binder {
             _diagnostics.Error(
                 ErrorCode.ERR_NameNotFound,
                 syntax.Span,
-                $"no type named '{(isInclusive ? "ClosedRange" : "Range")}' is declared in Sable.Core"
+                $"no type named '{name}' is declared in Sable.Core"
             );
             return new BoundError(syntax);
         }

@@ -521,6 +521,14 @@ internal sealed class TypeBinder(Compilation compilation) {
     ///     <c>fn f&lt;T: Named&gt;(x: T)</c> say the same thing, so they end in
     ///     the same place: the parameter's constraint list.
     /// </remarks>
+    /// <summary>
+    ///     A named type's extension's <c>where</c> clause: requirements on the
+    ///     type's arguments that the extension's members need, which constrain
+    ///     the type's parameters only inside it — never the type itself.
+    /// </summary>
+    internal void BindExtensionWhereClause(WhereClauseSyntax clause, ExtensionSymbol extension, FileScope? scope) =>
+        BindWhereClause(clause, extension, scope);
+
     void BindWhereClause(WhereClauseSyntax? clause, Symbol context, FileScope? scope) {
         if (clause is null) {
             return;
@@ -545,8 +553,19 @@ internal sealed class TypeBinder(Compilation compilation) {
                     case NamedTypeSymbol type:
                         type.SameTypeRequirements = type.SameTypeRequirements.Add(requirement);
                         break;
+
+                    case ExtensionSymbol extension:
+                        extension.SameTypeRequirements = extension.SameTypeRequirements.Add(requirement);
+                        break;
                 }
 
+                continue;
+            }
+
+            // An extension's 'where Bound: Hashable' holds inside it, not on
+            // the type's parameter everywhere.
+            if (context is ExtensionSymbol conditional) {
+                conditional.ConformanceRequirements = conditional.ConformanceRequirements.Add(new(left, right));
                 continue;
             }
 

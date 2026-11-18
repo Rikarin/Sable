@@ -129,7 +129,30 @@ public sealed class CoreTypes {
     /// <inheritdoc cref="Range" />
     public NamedTypeSymbol? ClosedRange => _closedRange ??= DeclaredStruct("ClosedRange");
 
-    NamedTypeSymbol? _range, _closedRange;
+    /// <summary>
+    ///     The one-sided ranges: <c>PartialRangeUpTo</c> for <c>..&lt;b</c>,
+    ///     <c>PartialRangeThrough</c> for <c>...b</c> and
+    ///     <c>PartialRangeFrom</c> for <c>a...</c>, declared beside the others.
+    /// </summary>
+    public NamedTypeSymbol? PartialRangeUpTo => _upTo ??= DeclaredStruct("PartialRangeUpTo");
+
+    /// <inheritdoc cref="PartialRangeUpTo" />
+    public NamedTypeSymbol? PartialRangeThrough => _through ??= DeclaredStruct("PartialRangeThrough");
+
+    /// <inheritdoc cref="PartialRangeUpTo" />
+    public NamedTypeSymbol? PartialRangeFrom => _from ??= DeclaredStruct("PartialRangeFrom");
+
+    NamedTypeSymbol? _range, _closedRange, _upTo, _through, _from;
+
+    /// <summary>True for a range a loop can count through: one with a lower bound, <c>Range</c>, <c>ClosedRange</c> or <c>PartialRangeFrom</c>.</summary>
+    public bool IsCountableRange(TypeSymbol type) =>
+        IsRange(type) || type is NamedTypeSymbol { TypeArguments.Length: 1 } named && named.OriginalDefinition.Equals(PartialRangeFrom);
+
+    /// <summary>True for a range of any shape, one-sided ones included.</summary>
+    public bool IsAnyRange(TypeSymbol type) =>
+        IsCountableRange(type)
+        || type is NamedTypeSymbol { TypeArguments.Length: 1 } named
+        && (named.OriginalDefinition.Equals(PartialRangeUpTo) || named.OriginalDefinition.Equals(PartialRangeThrough));
 
     /// <summary>
     ///     <c>Sequence</c> and <c>AsyncSequence</c>, what <c>for</c> and

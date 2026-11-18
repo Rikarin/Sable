@@ -1171,8 +1171,14 @@ to the state machine where tasks are many.
       And `Range` and `ClosedRange` — what the binder
       makes of `a..<b` and `a...b` — are Sable (`lib/Sable.Core/Range.sb`:
       `lowerBound`, `upperBound`, `isEmpty`, `contains`, over a `Comparable`
-      bound), and lower as values: stored, passed, returned and iterated,
-      while a `for` over a range written in the loop still builds none.
+      bound, and `count` where the bound is an Int), as are the one-sided
+      `PartialRangeUpTo`, `PartialRangeThrough` and `PartialRangeFrom`
+      (`..<b`, `...b`, `a...`) and `stride(from:to:by:)`. They lower as
+      values: stored, passed, returned and iterated — a range of any integer
+      type or of characters counting in its own type — while a `for` over a
+      range written in the loop still builds none. An extension's `where`
+      clause (`extension Range where Bound == Int`) holds in its members and
+      decides on which constructions they are found.
       A `for` over anything but an array, a dictionary or a range goes
       through `Sequence` and `Iterator` (`lib/Sable.Core/Sequence.sb`) —
       `makeIterator()`, then `next()` until none — which `String` conforms

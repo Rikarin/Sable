@@ -148,6 +148,7 @@ public enum ErrorCode {
     ERR_BuiltinOutsideCore = 3081,
     ERR_MalformedBuiltin = 3082,
     ERR_MalformedArrayExtension = 3083,
+    ERR_HalfOpenRangeWithoutEnd = 3091,
     ERR_NotSupportedYet = 3099,
 
     // '@test' and '@bench' (docs/05 §5.1): what the harness can call.

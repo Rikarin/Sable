@@ -42,5 +42,43 @@ public sealed class ExtensionSymbol(
     /// </summary>
     public ImmutableArray<AliasSymbol> TypeParameterAliases { get; internal set; } = [];
 
+    /// <summary>
+    ///     What <c>extension Range where Bound == Int</c> asks of the extended
+    ///     type's arguments: in force in its members' bodies, and met by a
+    ///     type before those members are found on it.
+    /// </summary>
+    public ImmutableArray<SameTypeRequirement> SameTypeRequirements {
+        get {
+            BindWhereClause();
+            return _sameType;
+        }
+        internal set => _sameType = value;
+    }
+
+    /// <inheritdoc cref="SameTypeRequirements" />
+    public ImmutableArray<ConformanceRequirement> ConformanceRequirements {
+        get {
+            BindWhereClause();
+            return _conformances;
+        }
+        internal set => _conformances = value;
+    }
+
+    /// <summary>True when the extension's members are there only for some of the type's arguments.</summary>
+    public bool IsConditional => !SameTypeRequirements.IsEmpty || !ConformanceRequirements.IsEmpty;
+
+    ImmutableArray<SameTypeRequirement> _sameType = [];
+    ImmutableArray<ConformanceRequirement> _conformances = [];
+
+    /// <summary>Binds the <c>where</c> clause, the first time either list is asked for; null once it has.</summary>
+    internal Action? PendingWhereClause { get; set; }
+
+    void BindWhereClause() {
+        if (PendingWhereClause is { } bind) {
+            PendingWhereClause = null;
+            bind();
+        }
+    }
+
     public override string QualifiedName => ExtendedType.QualifiedName;
 }

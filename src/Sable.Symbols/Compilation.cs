@@ -1504,6 +1504,14 @@ public sealed partial class Compilation {
             extension.TypeParameterAliases = AliasTypeParameters(declaration, extension, extended);
             RecordDeclaration(declaration, extension);
 
+            // 'where Bound == Int': the members are the type's only where its
+            // arguments meet it. Bound when first asked for, and in any case.
+            if (declaration.WhereClause is { } where) {
+                var written = scope;
+                extension.PendingWhereClause = () => TypeBinder.BindExtensionWhereClause(where, extension, written);
+                TypeBinder.Defer(() => _ = extension.SameTypeRequirements);
+            }
+
             // ': P' on an extension is retroactive conformance.
             if (declaration.BaseTypes is { } baseTypes) {
                 var written = scope;

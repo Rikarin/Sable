@@ -97,6 +97,14 @@ public sealed class BoundFieldAccess(
     public FieldSymbol Field { get; } = field;
 
     /// <summary>
+    ///     '?.' to a field that is optional itself: the chain's result is the
+    ///     field's value, not that value wrapped again — 'user?.address' of
+    ///     an 'Address?' field is an 'Address?', as 'Address??' would be
+    ///     another '?.' away from its members.
+    /// </summary>
+    public bool FlattensChain { get; init; }
+
+    /// <summary>
     ///     Assignable when the field is mutable, the member has a setter if it is
     ///     computed, and the value it belongs to can be written through.
     /// </summary>

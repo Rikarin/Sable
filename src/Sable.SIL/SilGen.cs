@@ -3787,7 +3787,12 @@ public sealed partial class SilGen {
                 // 'x?.member' and 'x?.call()': reached through the optional.
                 case BoundFieldAccess { Receiver: { } chainedFrom, Type: OptionalTypeSymbol reached } chained
                     when IsChainedThrough(chainedFrom, chained.Field):
-                    return OptionalChain(chained, chainedFrom, through => new BoundFieldAccess(chained.Syntax, through, chained.Field, reached.UnderlyingType));
+                    return OptionalChain(
+                        chained,
+                        chainedFrom,
+                        through => new BoundFieldAccess(chained.Syntax, through, chained.Field, chained.FlattensChain ? reached : reached.UnderlyingType),
+                        flatten: chained.FlattensChain
+                    );
 
                 case BoundConversion { ConversionKind: ConversionKind.OptionalWrap, Operand: BoundCall { Receiver: { } chainedFrom } chainedCall }
                     when IsChainedThrough(chainedFrom, chainedCall.Function):
@@ -3825,6 +3830,37 @@ public sealed partial class SilGen {
                             Subscript = flatIndex.Subscript,
                             Substitution = flatIndex.Substitution,
                         },
+                        flatten: true
+                    );
+
+                // 'x?.next()' of a method that gives an optional: that optional,
+                // when there is an x.
+                case BoundCall { Receiver: { } chainedFrom, Type: OptionalTypeSymbol } flatCall
+                    when IsChainedThrough(chainedFrom, flatCall.Function)
+                    && flatCall.Syntax is InvocationExpressionSyntax { Expression: MemberAccessExpressionSyntax { OperatorToken.Kind: SyntaxKind.QuestionDotToken } }:
+                    return OptionalChain(
+                        expression,
+                        chainedFrom,
+                        through => new BoundCall(flatCall.Syntax, through, flatCall.Function, flatCall.Arguments, flatCall.Type) {
+                            Substitution = flatCall.Substitution,
+                        },
+                        flatten: true
+                    );
+
+                // 'f?(x)': the function called when there is one, its result
+                // wrapped — or, when it gives an optional, that one.
+                case BoundConversion { ConversionKind: ConversionKind.OptionalWrap, Operand: BoundIndirectCall { Callee: { Type: OptionalTypeSymbol } optionalCallee } wrappedCall }:
+                    return OptionalChain(
+                        expression,
+                        optionalCallee,
+                        through => new BoundIndirectCall(wrappedCall.Syntax, wrappedCall.Type, through, wrappedCall.Arguments)
+                    );
+
+                case BoundIndirectCall { Callee: { Type: OptionalTypeSymbol } optionalCallee, Type: OptionalTypeSymbol } flatIndirect:
+                    return OptionalChain(
+                        expression,
+                        optionalCallee,
+                        through => new BoundIndirectCall(flatIndirect.Syntax, flatIndirect.Type, through, flatIndirect.Arguments),
                         flatten: true
                     );
 
@@ -4175,6 +4211,11 @@ public sealed partial class SilGen {
         }
 
         SilValue? Assignment(BoundAssignment assignment) {
+            if (assignment.Target is BoundFieldAccess { Receiver: { } chainedFrom } chainedTarget
+                && IsChainedThrough(chainedFrom, chainedTarget.Field)) {
+                return ChainedAssignment(assignment, chainedTarget, chainedFrom);
+            }
+
             if (IsInlineMember(assignment.Target)
                 || assignment.Target is BoundIndexAccess { Receiver: var indexed } && IsInlineArray(indexed)) {
                 return InlineAssign(assignment.Target, assignment.Value);
@@ -5188,6 +5229,66 @@ public sealed partial class SilGen {
 
             _current = after;
             return result;
+        }
+
+        /// <summary>
+        ///     'a.next?.v = 9': when there is a next, its v is stored, and the
+        ///     value evaluated only then; when there is none, nothing is. An
+        ///     object is written where it is. A value is a copy once out of its
+        ///     optional, so the copy is stored, then wrapped and written back.
+        /// </summary>
+        SilValue? ChainedAssignment(BoundAssignment assignment, BoundFieldAccess target, BoundExpression chainedFrom) {
+            var unwrappedType = ((OptionalTypeSymbol)Sub(chainedFrom.Type)).UnderlyingType;
+            var writesBack = !unwrappedType.IsReferenceType;
+
+            var borrows = new List<SilValue>();
+            SilValue? place = null;
+            SilValue? value;
+            if (writesBack) {
+                place = Address(chainedFrom, borrows);
+                value = place is null ? null : Emit(new LoadInst(place));
+            } else {
+                value = Expression(chainedFrom);
+            }
+
+            if (value is not { Type: EnumType optional }) {
+                return value is null ? null : Missing(assignment, "this store through '?.'");
+            }
+
+            var some = optional.CaseIndex("Some");
+            var present = function.AddBlock();
+            var payload = Payload(present, optional.Cases[some].Payload!);
+            var absent = function.AddBlock();
+            var after = function.AddBlock();
+            Jump(new SwitchEnumInst(value, [(some, present)], absent));
+
+            _current = present;
+            var temporary = new LocalSymbol("$chained", Core.Module, null, true);
+            var slot = NewSlot(payload.Type, "$chained");
+            _slots[temporary] = slot;
+            BindLocal(temporary, payload, assignment.Syntax, declaration: true);
+            Destroy(value);
+
+            var through = new BoundLocalAccess(chainedFrom.Syntax, temporary, unwrappedType);
+            var store = new BoundAssignment(assignment.Syntax, new BoundFieldAccess(target.Syntax, through, target.Field, assignment.Value.Type), assignment.Value);
+            if (Expression(store) is null) {
+                return null;
+            }
+
+            if (writesBack) {
+                var updated = Emit(new LoadInst(slot));
+                Emit(new StoreInst(Emit(new EnumInst(optional, some, updated)), place!, StoreKind.Assign));
+            }
+
+            Branch(after);
+
+            _current = absent;
+            Destroy(value);
+            Branch(after);
+
+            _current = after;
+            EndAll(borrows);
+            return UnitValue.Instance;
         }
 
         /// <summary>'a ?? b': a's value when there is one; b, evaluated only then, when there is not.</summary>

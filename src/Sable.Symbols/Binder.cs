@@ -2352,6 +2352,11 @@ public sealed partial class Binder {
             return new BoundError(syntax, receiver);
         }
 
+        // 'x.count' of an 'x: String!' reaches the String it holds.
+        if (syntax.OperatorToken.Kind != SyntaxKind.QuestionDotToken) {
+            receiver = ImplicitlyUnwrapped(receiver);
+        }
+
         var receiverType = receiver.Type;
         var optionalChain = false;
 
@@ -2434,14 +2439,17 @@ public sealed partial class Binder {
         }
 
         // Reaching through an optional gives an optional: '?.' can produce
-        // nothing, and the type says so.
+        // nothing, and the type says so. A member that is optional already
+        // says so itself, and the chain gives it as it is.
         return member switch {
             BoundFieldAccess field => new BoundFieldAccess(
                 syntax,
                 field.Receiver,
                 field.Field,
-                new OptionalTypeSymbol(field.Type)
-            ),
+                field.Type is OptionalTypeSymbol ? field.Type : new OptionalTypeSymbol(field.Type)
+            ) {
+                FlattensChain = field.Type is OptionalTypeSymbol,
+            },
 
             // A call through the chain is optional too, which the group
             // carries until the call is bound.
@@ -2784,6 +2792,9 @@ public sealed partial class Binder {
             .ToImmutableArray();
 
         var callee = BindCallee(syntax.Expression, expectedType);
+        if (syntax.QuestionToken.IsNone) {
+            callee = ImplicitlyUnwrapped(callee);
+        }
 
         switch (callee) {
             case BoundFunctionGroup group:
@@ -2809,7 +2820,7 @@ public sealed partial class Binder {
                 }
 
                 var call = BindCallToValue(syntax, value, inner, arguments, syntaxes);
-                return call.HasError
+                return call.HasError || call.Type is OptionalTypeSymbol
                     ? call
                     : new BoundConversion(
                         syntax,
@@ -3264,7 +3275,8 @@ public sealed partial class Binder {
             Substitution = substitution,
         };
 
-        return group.IsOptionalChain
+        // A call through '?.' that gives an optional already gives that one.
+        return group.IsOptionalChain && result is not OptionalTypeSymbol
             ? new BoundConversion(syntax, new OptionalTypeSymbol(result), call, ConversionKind.OptionalWrap)
             : call;
     }
@@ -4576,9 +4588,28 @@ public sealed partial class Binder {
             };
         }
 
-        var value = BindExpression(syntax.Right, target.Type);
+        // 'a.next?.v = 9' stores a 'v' when there is a next, and nothing
+        // when there is not: the value is the field's own type, not the
+        // chain's optional one.
+        var stored = target.Type;
+        var throughChain = target is BoundFieldAccess { Receiver.Type: OptionalTypeSymbol } chainTarget
+            && syntax.Left is MemberAccessExpressionSyntax { OperatorToken.Kind: SyntaxKind.QuestionDotToken };
+        if (throughChain && !((BoundFieldAccess)target).FlattensChain && target.Type is OptionalTypeSymbol reached) {
+            stored = reached.UnderlyingType;
+        }
 
-        if (!target.HasError && !target.IsAssignable && !InitialisesLetField(target)) {
+        var value = BindExpression(syntax.Right, stored);
+
+        if (throughChain && syntax.OperatorToken.Kind != SyntaxKind.EqualsToken) {
+            _diagnostics.Error(
+                ErrorCode.ERR_NotAssignable,
+                syntax.OperatorToken.Span,
+                $"'{syntax.OperatorToken.Text}' through '?.' is not supported; unwrap with 'if let' first"
+            );
+            return new BoundError(syntax, target, value);
+        }
+
+        if (!target.HasError && !IsAssignableThroughChain(target) && !InitialisesLetField(target)) {
             _diagnostics.Error(
                 ErrorCode.ERR_NotAssignable,
                 syntax.Left.Span,
@@ -4621,8 +4652,22 @@ public sealed partial class Binder {
             }
         }
 
-        return new BoundAssignment(syntax, target, Convert(value, target.Type, syntax.Right));
+        return new BoundAssignment(syntax, target, Convert(value, stored, syntax.Right));
     }
+
+    /// <summary>
+    ///     Assignable as a place is, or — reached through '?.' — a mutable
+    ///     field of an object, which is written where it is, or of a value
+    ///     in a place the optional can be written back to.
+    /// </summary>
+    static bool IsAssignableThroughChain(BoundExpression target) =>
+        target.IsAssignable
+        || target is BoundFieldAccess {
+                Field: { IsMutable: true, IsStatic: false } field,
+                Receiver: { Type: OptionalTypeSymbol { UnderlyingType: var underlying } } receiver,
+            }
+            && (!field.IsComputed || field.HasSetter)
+            && (underlying.IsReferenceType || receiver.IsAssignable);
 
     static BinaryOperatorKind? CompoundOperatorKind(SyntaxKind kind) =>
         kind switch {
@@ -4707,6 +4752,9 @@ public sealed partial class Binder {
         }
 
         var operand = BindExpression(syntax.Operand);
+        if (syntax.OperatorToken.Kind is not (SyntaxKind.AmpersandToken or SyntaxKind.MoveKeyword)) {
+            operand = ImplicitlyUnwrapped(operand);
+        }
 
         var kind = syntax.OperatorToken.Kind switch {
             SyntaxKind.MinusToken => UnaryOperatorKind.Negate,
@@ -4871,6 +4919,13 @@ public sealed partial class Binder {
 
             var result = Convert(right, optional.UnderlyingType, right.Syntax);
             return new BoundBinaryOperator(syntax, optional.UnderlyingType, kind, left, result);
+        }
+
+        // 'x + 1' of an 'x: Int!' adds the Int it holds. '==' and '!=' keep
+        // the optional, so 'x == none' still asks whether there is one.
+        if (kind is not (BinaryOperatorKind.Equal or BinaryOperatorKind.NotEqual)) {
+            left = ImplicitlyUnwrapped(left);
+            right = ImplicitlyUnwrapped(right);
         }
 
         // A numeric literal on one side takes the other side's type.
@@ -5203,6 +5258,11 @@ public sealed partial class Binder {
             return expression;
         }
 
+        // A 'T!' where a T is wanted: unwrapped, then whatever takes it on.
+        if (conversion == ConversionKind.Explicit && expression.Type is OptionalTypeSymbol { IsImplicitlyUnwrapped: true }) {
+            return Convert(ImplicitlyUnwrapped(expression), target, syntax);
+        }
+
         // A promotion that needs a step first — an array literal taking a
         // kind, a value joining a union — takes that step, then wraps.
         if (conversion == ConversionKind.OptionalWrap
@@ -5241,6 +5301,15 @@ public sealed partial class Binder {
 
         return converted;
     }
+
+    /// <summary>
+    ///     A <c>T!</c> read as the <c>T</c> it holds, trapping when it holds
+    ///     none, as <c>x!</c> does; anything else as it is.
+    /// </summary>
+    static BoundExpression ImplicitlyUnwrapped(BoundExpression expression) =>
+        expression.Type is OptionalTypeSymbol { IsImplicitlyUnwrapped: true } optional
+            ? new BoundConversion(expression.Syntax, optional.UnderlyingType, expression, ConversionKind.Explicit)
+            : expression;
 
     /// <summary>
     ///     Turns a named function into a value of function type.

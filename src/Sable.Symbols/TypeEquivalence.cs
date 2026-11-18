@@ -153,7 +153,7 @@ internal sealed class TypeEquivalence {
             NamedTypeSymbol { IsConstructed: true } named =>
                 named.OriginalDefinition.Construct([..named.TypeArguments.Select(Canonical)]),
 
-            OptionalTypeSymbol optional => new OptionalTypeSymbol(Canonical(optional.UnderlyingType)),
+            OptionalTypeSymbol optional => new OptionalTypeSymbol(Canonical(optional.UnderlyingType), optional.IsImplicitlyUnwrapped),
 
             ArrayTypeSymbol array => new ArrayTypeSymbol(Canonical(array.ElementType), array.ArrayKind),
 

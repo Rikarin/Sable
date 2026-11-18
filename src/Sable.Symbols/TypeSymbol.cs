@@ -367,14 +367,22 @@ public sealed class ArrayTypeSymbol(TypeSymbol elementType, ArrayKind arrayKind,
     public override int GetHashCode() => HashCode.Combine(ElementType, ArrayKind, Capacity);
 }
 
-public sealed class OptionalTypeSymbol(TypeSymbol underlyingType) : TypeSymbol {
+public sealed class OptionalTypeSymbol(TypeSymbol underlyingType, bool isImplicitlyUnwrapped = false) : TypeSymbol {
     public override SymbolKind Kind => SymbolKind.OptionalType;
     public override string Name => string.Empty;
     public override TypeKind TypeKind => TypeKind.Union;
 
     public TypeSymbol UnderlyingType { get; } = underlyingType;
 
-    public override string ToDisplayString() => $"{UnderlyingType.ToSuffixedDisplayString()}?";
+    /// <summary>
+    ///     <c>T!</c>: an optional that is used as the <c>T</c> it holds
+    ///     wherever a <c>T</c> is wanted, trapping when it holds none
+    ///     (SYNTAX.md §4, for interop). It is the same type as <c>T?</c> —
+    ///     equal to it, and stored the same — only read differently.
+    /// </summary>
+    public bool IsImplicitlyUnwrapped { get; } = isImplicitlyUnwrapped;
+
+    public override string ToDisplayString() => $"{UnderlyingType.ToSuffixedDisplayString()}{(IsImplicitlyUnwrapped ? "!" : "?")}";
 
     public override bool Equals(TypeSymbol? other) =>
         other is OptionalTypeSymbol optional && optional.UnderlyingType.Equals(UnderlyingType);

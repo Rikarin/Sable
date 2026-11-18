@@ -72,7 +72,7 @@ public sealed class TypeSubstitution {
                 var underlying = Apply(optional.UnderlyingType);
                 return underlying.Equals(optional.UnderlyingType)
                     ? optional
-                    : new OptionalTypeSymbol(underlying);
+                    : new OptionalTypeSymbol(underlying, optional.IsImplicitlyUnwrapped);
             }
 
             case ReferenceTypeSymbol reference: {

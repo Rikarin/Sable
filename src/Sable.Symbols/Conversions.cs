@@ -38,6 +38,15 @@ internal sealed class Conversions(CoreTypes core) {
             return ConversionKind.Identity;
         }
 
+        // A 'T!' is the T it holds wherever a T, or what a T converts to, is
+        // wanted: unwrapped, as 'x!' would be, and the binder takes the step
+        // from the T after.
+        if (source is OptionalTypeSymbol { IsImplicitlyUnwrapped: true } unwrapped
+            && target is not OptionalTypeSymbol
+            && Classify(unwrapped.UnderlyingType, target, false) is not null) {
+            return ConversionKind.Explicit;
+        }
+
         // 'Never' is the bottom type: an expression that does not return fits
         // anywhere.
         if (source.Equals(core.Never)) {

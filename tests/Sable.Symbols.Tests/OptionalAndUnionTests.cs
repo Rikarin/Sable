@@ -228,4 +228,66 @@ public sealed class OptionalAndUnionTests {
         );
         Assert.Equal(ErrorCode.ERR_TypeMismatch, error.Code);
     }
+
+    // ---- Chains and T! (#152) -----------------------------------------------
+
+    [Fact]
+    public void AChainThroughAnOptionalMemberGivesOneOptional() =>
+        AssertClean(
+            """
+            struct Address { var city: String }
+            struct User { var address: Address? }
+            fn city(_ user: User?) -> String {
+                let reached: Address? = user?.address
+                return user?.address?.city ?? "unknown"
+            }
+            """
+        );
+
+    [Fact]
+    public void AStoreThroughAChainTakesTheFieldsType() {
+        var error = Assert.Single(
+            ErrorsIn(
+                """
+                class Node { var v: Int, var next: Node?, init() { v = 0; next = none } }
+                fn f(_ a: Node) {
+                    a.next?.v = 9
+                    a.next?.v = "nine"
+                }
+                """
+            )
+        );
+        Assert.Equal(ErrorCode.ERR_TypeMismatch, error.Code);
+        Assert.Contains("expected 'Int'", error.Message);
+    }
+
+    [Fact]
+    public void AStoreThroughAChainNeedsAMutableField() =>
+        Assert.Contains(
+            ErrorsIn(
+                """
+                class Node { let v: Int, var next: Node?, init() { v = 0; next = none } }
+                fn f(_ a: Node) { a.next?.v = 9 }
+                """
+            ),
+            static e => e.Code == ErrorCode.ERR_NotAssignable
+        );
+
+    [Fact]
+    public void AnImplicitlyUnwrappedOptionalIsShownAsWritten() {
+        var error = Assert.Single(ErrorsIn("fn f(_ x: Int!) { let s: String = x }"));
+        Assert.Contains("'Int!'", error.Message);
+    }
+
+    [Fact]
+    public void AnImplicitlyUnwrappedOptionalIsAnOptionalToo() =>
+        AssertClean(
+            """
+            fn f(_ x: Int!) -> Int? {
+                let y: Int? = x
+                if let z = x { return z }
+                return x ?? 0
+            }
+            """
+        );
 }

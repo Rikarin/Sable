@@ -488,7 +488,7 @@ internal sealed class TypeBinder(Compilation compilation) {
                 return new OptionalTypeSymbol(BindType(optional.ElementType, context, scope));
 
             case ImplicitlyUnwrappedTypeSyntax unwrapped:
-                return new OptionalTypeSymbol(BindType(unwrapped.ElementType, context, scope));
+                return new OptionalTypeSymbol(BindType(unwrapped.ElementType, context, scope), isImplicitlyUnwrapped: true);
 
             case ReferenceTypeSyntax reference: {
                 var referenced = BindType(reference.ElementType, context, scope);

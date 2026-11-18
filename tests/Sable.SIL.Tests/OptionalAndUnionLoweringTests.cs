@@ -195,4 +195,115 @@ public sealed class OptionalAndUnionLoweringTests {
         Assert.Equal(8L, Run(module, "count"));
         Assert.Equal(202L, Run(module, "outer"));
     }
+
+    // ---- Chains (#152) ------------------------------------------------------
+
+    const string Chains = """
+                          struct Address { var city: String }
+                          struct Point { var x: Int, var y: Int }
+                          class User {
+                              var address: Address?
+                              init(address: Address?) { self.address = address }
+                              fn lookup() -> Address? { return address }
+                          }
+                          class Node {
+                              var v: Int
+                              var next: Node?
+                              init(v: Int, next: Node?) { self.v = v; self.next = next }
+                          }
+                          fn half(_ x: Int) -> Int? { return x % 2 == 0 ? x / 2 : none }
+                          """;
+
+    [Fact]
+    public void AChainReachesThroughAnOptionalMember() {
+        var module = Lower(
+            Chains + """
+
+                     fn city(_ user: User?) -> Int { return (user?.address?.city ?? "").count }
+                     fn byCall(_ user: User?) -> Int { return (user?.lookup()?.city ?? "").count }
+                     fn present() -> Int { return city(User(address: Address { city: "Prague" })) }
+                     fn noAddress() -> Int { return city(User(address: none)) + 10 * byCall(User(address: none)) }
+                     fn noUser() -> Int { return city(none) + byCall(none) }
+                     fn called() -> Int { return byCall(User(address: Address { city: "Brno" })) }
+                     """
+        );
+
+        Assert.Equal(6L, Run(module, "present"));
+        Assert.Equal(0L, Run(module, "noAddress"));
+        Assert.Equal(0L, Run(module, "noUser"));
+        Assert.Equal(4L, Run(module, "called"));
+    }
+
+    [Fact]
+    public void AnOptionalFunctionIsCalledWhenThereIsOne() {
+        var module = Lower(
+            Chains + """
+
+                     fn some() -> Int {
+                         let f: ((Int) -> Int)? = (x: Int) => x * 2
+                         return f?(21) ?? 0
+                     }
+                     fn nothing() -> Int {
+                         let g: (() -> Int)? = none
+                         return g?() ?? 7
+                     }
+                     fn optionalResult(_ n: Int) -> Int {
+                         let h: ((Int) -> Int?)? = half
+                         return h?(n) ?? -1
+                     }
+                     """
+        );
+
+        Assert.Equal(42L, Run(module, "some"));
+        Assert.Equal(7L, Run(module, "nothing"));
+        Assert.Equal(4L, Run(module, "optionalResult", 8L));
+        Assert.Equal(-1L, Run(module, "optionalResult", 7L));
+    }
+
+    [Fact]
+    public void AStoreThroughAChainHappensWhenThereIsSomethingToStoreIn() {
+        var module = Lower(
+            Chains + """
+
+                     fn objects() -> Int {
+                         let a = Node(v: 1, next: Node(v: 2, next: none))
+                         a.next?.v = 9
+                         a.next?.next?.v = 5
+                         let first = a.next?.v ?? 0
+                         a.next?.next = Node(v: 3, next: none)
+                         return first * 10 + (a.next?.next?.v ?? 0)
+                     }
+                     fn values() -> Int {
+                         var p: Point? = Point { x: 1, y: 2 }
+                         p?.x = 10
+                         var q: Point? = none
+                         q?.x = 10
+                         return (p?.x ?? 0) + (q?.x ?? 0) + (p?.y ?? 0)
+                     }
+                     """
+        );
+
+        Assert.Equal(93L, Run(module, "objects"));
+        Assert.Equal(12L, Run(module, "values"));
+    }
+
+    [Fact]
+    public void AnImplicitlyUnwrappedOptionalIsUsedAsWhatItHolds() {
+        var module = Lower(
+            """
+            fn add(_ x: Int!) -> Int { return x + 1 }
+            fn length(_ s: String!) -> Int { return s.count }
+            fn take(_ n: Int) -> Int { return n * 2 }
+            fn pass(_ x: Int!) -> Int { return take(x) }
+            fn absent(_ x: Int!) -> Bool { return x == none }
+            fn some() -> Int { return add(3) + length("four") + pass(5) }
+            fn nothing() -> Int { return add(none) }
+            fn checked() -> Bool { return absent(none) }
+            """
+        );
+
+        Assert.Equal(18L, Run(module, "some"));
+        Assert.Equal(true, Run(module, "checked"));
+        Assert.Equal("unwrapped a none", Assert.Throws<SilTrap>(() => new SilInterpreter(module).Run("M.nothing")).Message);
+    }
 }

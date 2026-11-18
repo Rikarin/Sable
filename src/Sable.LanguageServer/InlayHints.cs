@@ -12,8 +12,11 @@ namespace Sable.LanguageServer;
 ///     refer into (docs/02 §2.4, docs/04 §3.3) — the <c>roots(0, 1)</c> of
 ///     its SIL, by SIL name, with the parameter names the indices count.
 /// </summary>
-internal sealed class RootSummaries(long generation, IReadOnlyDictionary<string, (IReadOnlyList<int> Roots, IReadOnlyList<string> Parameters)> functions) {
+internal sealed class RootSummaries(long generation, string key, IReadOnlyDictionary<string, (IReadOnlyList<int> Roots, IReadOnlyList<string> Parameters)> functions) {
     public long Generation { get; } = generation;
+
+    /// <summary>The package whose compilation they were computed from.</summary>
+    public string Key { get; } = key;
 
     /// <summary>The names a function's result is rooted in, or null when root inference said nothing about it.</summary>
     public IReadOnlyList<string>? RootsOf(FunctionSymbol function) {
@@ -65,7 +68,7 @@ internal sealed class RootSummaries(long generation, IReadOnlyDictionary<string,
             // A program the lowering cannot take yet has no summaries to show.
         }
 
-        return new(analysis.Snapshot.Generation, functions);
+        return new(analysis.Snapshot.Generation, analysis.Key, functions);
     }
 }
 
@@ -76,7 +79,7 @@ public sealed partial class LanguageServer {
     /// <summary>The root summaries of an analysis's snapshot, computed once per snapshot asked about.</summary>
     Task<RootSummaries> RootSummariesAsync(Analysis analysis) {
         lock (_rootsLock) {
-            if (_roots is { IsCompletedSuccessfully: true } done && done.Result.Generation == analysis.Snapshot.Generation) {
+            if (_roots is { IsCompletedSuccessfully: true } done && done.Result.Generation == analysis.Snapshot.Generation && done.Result.Key == analysis.Key) {
                 return done;
             }
 
@@ -105,7 +108,7 @@ public sealed partial class LanguageServer {
         var start = document.Lines.OffsetOf(range.Start);
         var end = document.Lines.OffsetOf(range.End);
 
-        var analysis = await AnalysisOfAsync(snapshot);
+        var analysis = await AnalysisOfAsync(snapshot, document);
         var members = Analysis.MembersOf(document.Tree.Root)
             .Where(m => m.Span.End >= start && m.Span.Start <= end)
             .ToList();

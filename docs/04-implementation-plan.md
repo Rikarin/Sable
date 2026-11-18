@@ -1381,8 +1381,15 @@ merge; the cache has no garbage collection; there is no network registry.
 `sable lsp` (`src/Sable.LanguageServer`, `src/Sable.Driver/Commands/LspCommand.cs`):
 JSON-RPC 2.0 over stdio with `Content-Length` framing, System.Text.Json and
 nothing else. The workspace is the open documents plus the `.sb` files under
-the root, compiled together with the library modules they import (the
-library's trees are shared, parsed once). Edits are incremental
+the root (less `target/`, `vendor/` and hidden directories). Each package
+under the root — found by its manifest, `package.sb` or `sable.toml`, and
+resolved as `sable check` resolves it — is a compilation of its own: its
+files, parsed with the features it is built with by default, and every
+library file of every package it depends on (path, registry or vendored,
+with theirs), so the members of a workspace are compiled apart. Files in no
+package are one loose program, as before. Each compilation has the library
+modules its trees import (the library's trees are shared, parsed once). A
+change to a manifest or to `sable.lock` reads the packages again. Edits are incremental
 (`TextDocumentSyncKind.Incremental`) and reparsed by the incremental parser;
 positions are UTF-16 columns, as the protocol defaults to. The message loop
 applies document changes in order; each request runs on the thread pool

@@ -1,7 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.3.0
 
+- A Coverage profile in the Test Explorer (VS Code 1.88 or later): the selected tests run with
+  `sable test --coverage`, and each file's lines and branches are shown from its `lcov.info`.
 - Every folder of a multi-root workspace: `sable.path` and `${workspaceFolder}` are the folder's.
 - `sable.inlayHints.enable` and `sable.lints.enable`, to turn off the server's inlay hints and lints.
 - Tests of the extension's own code, run under node against a stand-in for VS Code.

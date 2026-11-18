@@ -268,6 +268,9 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
 
     public int Retains { get; private set; }
 
+    /// <summary>How many times each coverage counter ran (<see cref="Coverage" />), as the native runtime writes them.</summary>
+    public Dictionary<int, long> CoverageCounts { get; } = [];
+
     public int Releases { get; private set; }
 
     // =======================================================================
@@ -1138,8 +1141,11 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
 
     object? Perform(BuiltinInst builtin, object?[] operands, int depth) {
         switch (builtin.Name) {
-            // Counted by the native runtime only: interpreted, a block runs uncounted.
+            // Counted as the native runtime counts it, so that a program
+            // interpreted reports the coverage it would natively.
             case Coverage.Builtin:
+                var counter = Convert.ToInt32(operands[0], System.Globalization.CultureInfo.InvariantCulture);
+                CoverageCounts[counter] = CoverageCounts.GetValueOrDefault(counter) + 1;
                 return null;
 
             case "array_empty":

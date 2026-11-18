@@ -133,8 +133,9 @@ public sealed partial class SilGen {
     ///     rather than at '@main': what a test or bench build does, whose
     ///     harness is the entry point of a program that may have its own.
     /// </summary>
-    public static (SilModule Module, IReadOnlyList<Diagnostic> Diagnostics) Lower(Compilation compilation, FunctionSymbol entryPoint) {
-        var generator = new SilGen(compilation) { _entryOverride = entryPoint };
+    /// <param name="markDecisions">Marks the source's decisions and their outcomes, for branch coverage (<see cref="SilDecision" />).</param>
+    public static (SilModule Module, IReadOnlyList<Diagnostic> Diagnostics) Lower(Compilation compilation, FunctionSymbol entryPoint, bool markDecisions = false) {
+        var generator = new SilGen(compilation) { _entryOverride = entryPoint, _markDecisions = markDecisions };
         generator.LowerAll();
         return (generator._module, generator.Diagnostics);
     }
@@ -4740,8 +4741,10 @@ public sealed partial class SilGen {
                     var after = function.AddBlock();
                     Branch(header);
 
+                    // The loop's 'break' goes to after too.
+                    var decision = loop.Syntax is WhileStatementSyntax written ? Decide(written.WhileKeyword.SpanStart, "while", "true", "false") : null;
                     _current = header;
-                    Condition(loop.Condition, body, after);
+                    Condition(loop.Condition, Mark(body, decision, 0), Land(after, decision, 1));
 
                     _current = body;
                     InLoop(loop, after, header, () => Statement(loop.Body));
@@ -4765,8 +4768,10 @@ public sealed partial class SilGen {
                         Branch(test);
                     }
 
+                    // The body is entered first, and the loop's 'break' goes to after.
+                    var decision = loop.Syntax is RepeatStatementSyntax written ? Decide(written.WhileKeyword.SpanStart, "while", "true", "false") : null;
                     _current = test;
-                    Condition(loop.Condition, body, after);
+                    Condition(loop.Condition, Land(body, decision, 0), Land(after, decision, 1));
 
                     _current = after;
                     return;
@@ -4898,11 +4903,16 @@ public sealed partial class SilGen {
 
         void If(BoundIf ifStatement) {
             var after = function.AddBlock();
+            var decision = ifStatement.Syntax switch {
+                IfStatementSyntax written => Decide(written.IfKeyword.SpanStart, "if", "true", "false"),
+                GuardStatementSyntax written => Decide(written.GuardKeyword.SpanStart, "guard", "true", "false"),
+                _ => null,
+            };
 
             // 'guard c else { body }': the body runs when c is false.
             if (ifStatement.Syntax is GuardStatementSyntax) {
                 var elseBody = function.AddBlock();
-                Condition(ifStatement.Condition, after, elseBody);
+                Condition(ifStatement.Condition, Land(after, decision, 0), Mark(elseBody, decision, 1));
                 _current = elseBody;
                 Statement(ifStatement.Consequence);
                 if (_current is not null) {
@@ -4915,7 +4925,8 @@ public sealed partial class SilGen {
 
             var consequence = function.AddBlock();
             var alternative = ifStatement.Alternative is null ? after : function.AddBlock();
-            Condition(ifStatement.Condition, consequence, alternative);
+            Condition(ifStatement.Condition, Mark(consequence, decision, 0),
+                ifStatement.Alternative is null ? Land(after, decision, 1) : Mark(alternative, decision, 1));
 
             _current = consequence;
             Statement(ifStatement.Consequence);
@@ -5187,6 +5198,17 @@ public sealed partial class SilGen {
             var bodies = switchStatement.Cases.Select(_ => function.AddBlock()).ToList();
             SilBlock? defaultBody = null;
 
+            // An outcome per case, and one for none when there is no 'default'.
+            var defaultIndex = switchStatement.Cases.IndexOf(switchStatement.Cases.FirstOrDefault(static c => c.Values.IsEmpty)!);
+            var decision = switchStatement.Syntax is SwitchStatementSyntax written
+                ? Decide(written.SwitchKeyword.SpanStart, "switch", [
+                    ..switchStatement.Cases.Select(c => c.Syntax is SwitchCaseSyntax caseSyntax && !c.Values.IsEmpty
+                        ? "case " + string.Join(", ", caseSyntax.Values.Select(TextOf))
+                        : "default"),
+                    ..(defaultIndex >= 0 ? Array.Empty<string>() : ["no case"]),
+                ])
+                : null;
+
             Hold(subject);
             for (var i = 0; i < switchStatement.Cases.Length; i++) {
                 var switchCase = switchStatement.Cases[i];
@@ -5201,14 +5223,14 @@ public sealed partial class SilGen {
                     }
 
                     var next = function.AddBlock();
-                    Jump(new CondBranchInst(equal, Destroying(subject, bodies[i]), [], next, []));
+                    Jump(new CondBranchInst(equal, Destroying(subject, Land(bodies[i], decision, i)), [], next, []));
                     _current = next;
                 }
             }
 
             Unhold(subject);
             Destroy(subject);
-            Branch(defaultBody ?? after);
+            Branch(defaultBody is null ? Land(after, decision, switchStatement.Cases.Length) : Land(defaultBody, decision, defaultIndex));
 
             _loops.Add(new(null, after, null, _scopes.Count, _temporaries.Count));
             for (var i = 0; i < switchStatement.Cases.Length; i++) {
@@ -5356,17 +5378,20 @@ public sealed partial class SilGen {
         /// <summary>Evaluates a condition and branches on it, short-circuiting '&amp;&amp;', '||' and '!'.</summary>
         void Condition(BoundExpression condition, SilBlock whenTrue, SilBlock whenFalse) {
             switch (condition) {
+                // Its outcomes: the right side run, or skipped.
                 case BoundBinaryOperator { OperatorKind: BinaryOperatorKind.LogicalAnd } conjunction: {
-                    var right = function.AddBlock();
-                    Condition(conjunction.Left, right, whenFalse);
+                    var decision = conjunction.Syntax is BinaryExpressionSyntax written ? Decide(written.OperatorToken.SpanStart, "&&", "right side run", "right side skipped") : null;
+                    var right = Mark(function.AddBlock(), decision, 0);
+                    Condition(conjunction.Left, right, Land(whenFalse, decision, 1));
                     _current = right;
                     Condition(conjunction.Right, whenTrue, whenFalse);
                     return;
                 }
 
                 case BoundBinaryOperator { OperatorKind: BinaryOperatorKind.LogicalOr } disjunction: {
-                    var right = function.AddBlock();
-                    Condition(disjunction.Left, whenTrue, right);
+                    var decision = disjunction.Syntax is BinaryExpressionSyntax written ? Decide(written.OperatorToken.SpanStart, "||", "right side run", "right side skipped") : null;
+                    var right = Mark(function.AddBlock(), decision, 0);
+                    Condition(disjunction.Left, Land(whenTrue, decision, 1), right);
                     _current = right;
                     Condition(disjunction.Right, whenTrue, whenFalse);
                     return;
@@ -5389,9 +5414,10 @@ public sealed partial class SilGen {
                         return;
                     }
 
-                    var bound = function.AddBlock();
+                    var decision = Decide(binding.Syntax.Span.Start, "let", "some", "none");
+                    var bound = Mark(function.AddBlock(), decision, 0);
                     var payload = Payload(bound, optionalType.Cases[some].Payload!);
-                    Jump(new SwitchEnumInst(optional, [(some, bound)], Destroying(optional, whenFalse)));
+                    Jump(new SwitchEnumInst(optional, [(some, bound)], Destroying(optional, Land(whenFalse, decision, 1))));
                     _current = bound;
                     BindLocal(local, payload, binding.Syntax);
                     Destroy(optional);
@@ -5402,8 +5428,9 @@ public sealed partial class SilGen {
                 // 'if case .Circle(let r) = shape'.
                 case BoundConditionBinding { Pattern: { } pattern } binding: {
                     if (Expression(binding.Source) is { } value) {
+                        var decision = Decide(binding.Syntax.Span.Start, "case", "matched", "not matched");
                         Hold(value);
-                        Pattern(pattern, value, Destroying(value, whenTrue), Destroying(value, whenFalse));
+                        Pattern(pattern, value, Destroying(value, Land(whenTrue, decision, 0)), Destroying(value, Land(whenFalse, decision, 1)));
                         Unhold(value);
                     }
 
@@ -6107,7 +6134,8 @@ public sealed partial class SilGen {
                     var whenFalse = function.AddBlock();
                     var after = function.AddBlock();
                     var result = after.AddArgument(type);
-                    Condition(conditional.Condition, whenTrue, whenFalse);
+                    var decision = conditional.Syntax is ConditionalExpressionSyntax written ? Decide(written.QuestionToken.SpanStart, "?:", "true", "false") : null;
+                    Condition(conditional.Condition, Mark(whenTrue, decision, 0), Mark(whenFalse, decision, 1));
 
                     _current = whenTrue;
                     if (Expression(conditional.WhenTrue) is { } yes) {
@@ -7872,9 +7900,10 @@ public sealed partial class SilGen {
             }
 
             var some = optional.CaseIndex("Some");
-            var present = function.AddBlock();
+            var decision = coalesce.Syntax is BinaryExpressionSyntax written ? Decide(written.OperatorToken.SpanStart, "??", "value", "fallback") : null;
+            var present = Mark(function.AddBlock(), decision, 0);
             var payload = Payload(present, optional.Cases[some].Payload!);
-            var absent = function.AddBlock();
+            var absent = Mark(function.AddBlock(), decision, 1);
             var after = function.AddBlock();
             var result = after.AddArgument(type);
             Jump(new SwitchEnumInst(value, [(some, present)], absent));
@@ -8377,9 +8406,22 @@ public sealed partial class SilGen {
             var after = function.AddBlock();
             var result = producesValue ? after.AddArgument(resultType!) : null;
 
-            foreach (var arm in match.Arms) {
+            // An outcome per arm: chosen, its guard if any having held.
+            var decision = match.Syntax is MatchExpressionSyntax written
+                ? Decide(written.MatchKeyword.SpanStart, "match", [
+                    ..match.Arms.Select(a => a.Syntax is MatchArmSyntax armSyntax && !a.IsDefault
+                        ? string.Join(", ", armSyntax.Patterns.Select(TextOf)) + (armSyntax.WhereClause is { } where ? " " + TextOf(where) : "")
+                        : "default"),
+                ])
+                : null;
+
+            for (var index = 0; index < match.Arms.Length; index++) {
+                var arm = match.Arms[index];
                 var body = function.AddBlock();
                 var nextArm = function.AddBlock();
+                if (arm.Guard is null) {
+                    Mark(body, decision, index);
+                }
 
                 Hold(subject);
                 if (arm.IsDefault) {
@@ -8394,7 +8436,7 @@ public sealed partial class SilGen {
 
                 _current = body;
                 if (arm.Guard is { } guard) {
-                    var guarded = function.AddBlock();
+                    var guarded = Mark(function.AddBlock(), decision, index);
                     Condition(guard, guarded, nextArm);
                     _current = guarded;
                 }
@@ -8459,7 +8501,8 @@ public sealed partial class SilGen {
             void Branches(BoundIf branch) {
                 var consequence = function.AddBlock();
                 var alternative = function.AddBlock();
-                Condition(branch.Condition, consequence, alternative);
+                var decision = branch.Syntax is IfStatementSyntax written ? Decide(written.IfKeyword.SpanStart, "if", "true", "false") : null;
+                Condition(branch.Condition, Mark(consequence, decision, 0), Mark(alternative, decision, 1));
 
                 _current = consequence;
                 Arm(branch.Consequence);
@@ -8554,7 +8597,16 @@ public sealed partial class SilGen {
                 return Missing(tryExpression, $"a 'try' of type '{tryExpression.Type.ToDisplayString()}'");
             }
 
-            var handler = function.AddBlock();
+            // Its outcomes: a value, or an error caught, which only the
+            // handler's own edges reach.
+            var decision = tryExpression.Syntax is TryExpressionSyntax written
+                ? Decide(written.TryKeyword.SpanStart, tryExpression.TryKind switch {
+                    TryKind.Optional => "try?",
+                    TryKind.Force => "try!",
+                    _ => "catch",
+                }, "value", "error")
+                : null;
+            var handler = Mark(function.AddBlock(), decision, 1);
             var error = handler.AddArgument(errorType);
             var after = function.AddBlock();
             var result = resultType == SilType.Unit ? null : after.AddArgument(resultType);
@@ -8564,6 +8616,7 @@ public sealed partial class SilGen {
             _handlers.RemoveAt(_handlers.Count - 1);
 
             if (value is not null && _current is not null) {
+                Enter(decision, 0);
                 if (tryExpression.TryKind == TryKind.Optional) {
                     var optional = (EnumType)resultType;
                     Branch(after, Emit(new EnumInst(optional, optional.CaseIndex("Some"), value is UnitValue ? null : value)));

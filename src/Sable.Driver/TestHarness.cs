@@ -100,7 +100,8 @@ public static class TestHarness {
         }
 
         var entry = harness[^1].Root.DescendantNodes().OfType<FunctionDeclarationSyntax>().First(static f => f.Identifier.Text == EntryName);
-        var (module, lowering) = SilGen.Lower(compilation, (FunctionSymbol)compilation.GetDeclaredSymbol(entry)!);
+        // Measured, the decisions are marked as they are lowered, for branch coverage.
+        var (module, lowering) = SilGen.Lower(compilation, (FunctionSymbol)compilation.GetDeclaredSymbol(entry)!, markDecisions: coverage is not null);
         module.CheckExclusivity = checkExclusivity;
         if (lowering.Count > 0) {
             return new(module, null, [..lowering.Select(d => Format(d, primary.Text))]);

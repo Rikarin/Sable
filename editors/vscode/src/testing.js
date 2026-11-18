@@ -1,7 +1,8 @@
 // @ts-check
 // The Test Explorer: each package's @test functions, as `sable test --list`
-// lists them, run by `sable test <names> --exact`, or debugged one at a
-// time in the harness `sable test -g --harness-out` builds.
+// lists them, run by `sable test <names> --exact`, debugged one at a time
+// in the harness `sable test -g --harness-out` builds, or run with
+// `--coverage` to show what of the package they ran (coverage.js).
 "use strict";
 
 const vscode = require("vscode");
@@ -9,6 +10,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const sable = require("./sable");
+const coverage = require("./coverage");
 
 /** `Module.name: test (path:line)`, a line of `sable test --list`. */
 const LISTED = /^(\S+): test \((.+):(\d+)\)$/;
@@ -127,6 +129,13 @@ function register(context) {
 
   controller.createRunProfile("Run", vscode.TestRunProfileKind.Run, (request, token) => runTests(controller, packages, request, token), true);
   controller.createRunProfile("Debug", vscode.TestRunProfileKind.Debug, (request, token) => debugTests(controller, packages, request, token), true);
+
+  // Coverage needs VS Code 1.88's API; an older one has the other two profiles.
+  if (coverage.isSupported()) {
+    /** @type {any} */
+    const profile = controller.createRunProfile("Coverage", vscode.TestRunProfileKind.Coverage, (request, token) => runTests(controller, packages, request, token, true), true);
+    profile.loadDetailedCoverage = async (/** @type {unknown} */ _run, /** @type {unknown} */ file) => coverage.details(file);
+  }
 }
 
 /**
@@ -230,12 +239,15 @@ async function debugTests(controller, packages, request, token) {
 }
 
 /**
+ * Runs the selected tests, each package's in one `sable test`; measuring
+ * coverage, it then reports the files of the package the tests ran.
  * @param {vscode.TestController} controller
  * @param {Map<string, vscode.TestItem>} packages
  * @param {vscode.TestRunRequest} request
  * @param {vscode.CancellationToken} token
+ * @param {boolean} [measure] Run with `--coverage`, and report it.
  */
-async function runTests(controller, packages, request, token) {
+async function runTests(controller, packages, request, token, measure = false) {
   const run = controller.createTestRun(request);
   const excluded = new Set(request.exclude?.map((t) => t.id) ?? []);
 
@@ -291,7 +303,10 @@ async function runTests(controller, packages, request, token) {
       }
 
       const args = all ? ["test"] : ["test", ...byName.keys(), "--exact"];
-      await runPackage(run, root, args, byName, token);
+      const output = await runPackage(run, root, measure ? [...args, "--coverage"] : args, byName, token);
+      if (measure && !token.isCancellationRequested) {
+        coverage.report(run, root, output);
+      }
     }
   } finally {
     run.end();
@@ -305,6 +320,7 @@ async function runTests(controller, packages, request, token) {
  * @param {string[]} args
  * @param {Map<string, vscode.TestItem>} byName
  * @param {vscode.CancellationToken} token
+ * @returns {Promise<string>} What it printed.
  */
 async function runPackage(run, root, args, byName, token) {
   const reported = new Set();
@@ -372,7 +388,7 @@ async function runPackage(run, root, args, byName, token) {
   } catch (error) {
     const message = new vscode.TestMessage(error instanceof Error ? error.message : String(error));
     byName.forEach((test) => run.errored(test, message));
-    return;
+    return transcript;
   }
 
   if (buffer) {
@@ -409,6 +425,8 @@ async function runPackage(run, root, args, byName, token) {
       run.errored(test, new vscode.TestMessage(why));
     }
   }
+
+  return transcript;
 }
 
 module.exports = { register };

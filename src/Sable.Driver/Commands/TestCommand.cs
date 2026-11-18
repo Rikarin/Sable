@@ -32,8 +32,8 @@ public sealed class TestCommand : HarnessCommand {
                              over 60 s is said to be)
           --in-process       run the tests one after another in one process, the first failure ending it
           --harness-out <p>  build the harness to p, with '-g' to debug it ('<p> --run-test <name>'), and run nothing
-          --coverage         count the lines of the package's code the tests run: a summary per file,
-                             and target/coverage/lcov.info for a coverage viewer
+          --coverage         count the lines and branches of the package's code the tests run: a
+                             summary per file, and target/coverage/lcov.info for a coverage viewer
         """;
 
     int _jobs;
@@ -86,50 +86,63 @@ public sealed class TestCommand : HarnessCommand {
             return Run(executable, arguments);
         }
 
-        // Each test process appends its counts to one file, which is then read.
+        // Each test process appends its counts to one file, which is then
+        // read. The file is named to those processes alone, not set in this
+        // process's environment, which every command running here shares.
         var counts = Path.Combine(Path.GetTempPath(), $"sable-coverage-{Guid.NewGuid():N}.txt");
-        var before = Environment.GetEnvironmentVariable("SABLE_COVERAGE");
-        Environment.SetEnvironmentVariable("SABLE_COVERAGE", counts);
         try {
-            var code = Run(executable, arguments);
+            var code = Run(executable, arguments, new Dictionary<string, string> { ["SABLE_COVERAGE"] = counts });
             if (!arguments.Contains("--list")) {
                 Report(counters, Coverage.ReadCounts(counts));
             }
 
             return code;
         } finally {
-            Environment.SetEnvironmentVariable("SABLE_COVERAGE", before);
             File.Delete(counts);
         }
     }
 
-    int Run(string executable, IReadOnlyList<string> arguments) =>
+    int Run(string executable, IReadOnlyList<string> arguments, IReadOnlyDictionary<string, string>? environment = null) =>
         TestRunner.Handles(arguments)
-            ? TestRunner.Run(executable, arguments, _jobs, _timeout, Console.Out, Console.Error)
-            : base.Execute(executable, arguments);
+            ? TestRunner.Run(executable, arguments, _jobs, _timeout, Console.Out, Console.Error, environment)
+            : Execute(executable, arguments, environment);
 
     /// <summary>
-    ///     The lines of each measured file the tests ran: the share of them,
-    ///     the lines that never ran, and an LCOV file of the whole for a
-    ///     coverage viewer.
+    ///     The lines and branches of each measured file the tests ran: the
+    ///     share of each, the lines that never ran, the decisions some of
+    ///     whose outcomes never happened, and an LCOV file of the whole for
+    ///     a coverage viewer.
     /// </summary>
     void Report(CoverageMap counters, IReadOnlyDictionary<int, long> counts) {
         var files = counters.Lines(counts);
+        var branches = counters.Branches(counts);
         var lcov = Path.Combine(ProgramDirectory, "target", "coverage", "lcov.info");
         Directory.CreateDirectory(Path.GetDirectoryName(lcov)!);
-        File.WriteAllText(lcov, Coverage.Lcov(files));
+        File.WriteAllText(lcov, Coverage.Lcov(files, branches));
 
         var total = files.Values.Sum(static f => f.Count);
         var hit = files.Values.Sum(static f => f.Values.Count(static c => c > 0));
+        var outcomes = branches.Values.Sum(static f => f.Sum(static d => d.Outcomes.Count));
+        var happened = branches.Values.Sum(static f => f.Sum(static d => d.Outcomes.Count(static o => o.Count > 0)));
         Console.Out.WriteLine();
         Console.Out.WriteLine(string.Create(CultureInfo.InvariantCulture,
-            $"coverage: {Percent(hit, total)} of lines ({hit} of {total}); {Path.GetRelativePath(Directory.GetCurrentDirectory(), lcov)}"));
+            $"coverage: {Percent(hit, total)} of lines ({hit} of {total}), {Percent(happened, outcomes)} of branches ({happened} of {outcomes}); {Path.GetRelativePath(Directory.GetCurrentDirectory(), lcov)}"));
         foreach (var (file, lines) in files) {
             var ran = lines.Values.Count(static c => c > 0);
             var missed = Ranges([..lines.Where(static l => l.Value == 0).Select(static l => l.Key)]);
+            var decisions = branches.GetValueOrDefault(file) ?? [];
+            var fileOutcomes = decisions.Sum(static d => d.Outcomes.Count);
+            var fileHappened = decisions.Sum(static d => d.Outcomes.Count(static o => o.Count > 0));
             var name = Path.IsPathRooted(file) ? Path.GetRelativePath(ProgramDirectory, file) : file;
             Console.Out.WriteLine(string.Create(CultureInfo.InvariantCulture,
-                $"  {name}: {Percent(ran, lines.Count)} ({ran} of {lines.Count}){(missed.Length > 0 ? $", not run: {missed}" : "")}"));
+                $"  {name}: {Percent(ran, lines.Count)} ({ran} of {lines.Count}){(missed.Length > 0 ? $", not run: {missed}" : "")}; branches {Percent(fileHappened, fileOutcomes)} ({fileHappened} of {fileOutcomes})"));
+
+            // A decision made but not every way: the line ran, yet some of
+            // it did not. One never made is on a line not run, said above.
+            foreach (var decision in decisions.Where(static d => d.Reached && d.Missed.Any())) {
+                Console.Out.WriteLine(string.Create(CultureInfo.InvariantCulture,
+                    $"    {decision.Line}:{decision.Column} '{decision.Kind}' never: {string.Join(", ", decision.Missed)}"));
+            }
         }
     }
 

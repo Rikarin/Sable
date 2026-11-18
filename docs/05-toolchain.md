@@ -13,7 +13,7 @@ sable new <name> [--lib|--bin]     scaffold a package
 sable init                         scaffold in the current directory
 sable build [--release] [--target] compile
 sable run [-- args...]             build and execute
-sable test [filter] [--doc] [-j n] [--timeout s]  run @test functions and doc examples
+sable test [filter] [--doc] [-j n] [--timeout s] [--coverage]  run @test functions and doc examples
 sable bench [filter]               run @bench functions, compare to baseline
 sable check                        type-check only, no codegen (fast)
 sable fix [--check]                apply the fixes the lints suggest
@@ -47,6 +47,20 @@ object a line on standard output — `severity`, `code`, `message`, `file`,
 `line`, `column`, `rendered` — for editors and CI), `-j <n>` and
 `--offline`; and `sable -V` prints the version. None of them changes what a
 build produces.
+
+`sable test --coverage` counts what of the package's own code (not
+`tests/`, dependencies or the library) the tests run: each line, and each
+outcome of every decision — both ways of an `if`, `guard`, `while` and
+`?:`; each arm of a `match` and case of a `switch` (and none, without a
+`default`); the right side of `&&` and `||` run or skipped; an `if let`
+holding a value or not; `??` and `try?` giving the value or the fallback.
+It prints the share of lines and of branches run per file, the lines never
+run, and each decision some of whose outcomes never happened
+(`12:5 'if' never: true`), and writes `target/coverage/lcov.info` — `DA`
+records for lines, `BRDA`/`BRF`/`BRH` for branches, numbered by decision
+within a line — which genhtml and editors read. The counters go into the
+code before the optimiser, so `--release` counts the same, and the SIL
+interpreter counts as native code does.
 
 `sable bindgen` writes Sable source, not `.sbi` (which waits on the
 interface file format of §5.4): a module of `@extern("c")` functions,

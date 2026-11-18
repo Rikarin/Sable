@@ -17,6 +17,10 @@ through `sable` too.
 - **The Test Explorer**: each package's `@test` functions, listed by `sable test --list` and run
   from the gutter, with failures (and the values that differ) shown where the test is; or debugged,
   in a harness built with debug information (the Debug profile).
+- **Test coverage** (the Coverage profile, in VS Code 1.88 or later): the selected tests run with
+  `sable test --coverage`, and each file of the package shows which lines they ran, and which
+  outcomes of the decisions on a line (an `if` either way, each `match` arm, the right side of `&&`)
+  happened, from `target/coverage/lcov.info`.
 - **Tasks** for `build`, `check`, `run`, `test`, `bench`, `fmt` and `clean` in every package
   (Terminal → Run Task → sable). Their diagnostics reach the Problems panel through `$sable`.
 - **Debugging** with lldb: Sable's formatters are loaded, so a `String` shows its text, a list its

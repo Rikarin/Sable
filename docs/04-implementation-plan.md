@@ -1768,6 +1768,37 @@ separately compiled builds (lldb reads DWARF from the cached objects
 through the debug map; `sable clean` removes them); `sable test` and
 `sable bench` still compile whole.
 
+### Source generators, as implemented
+
+docs/08 (`tests/Sable.CodeGen.Tests/SourceGeneratorTests.cs`,
+`tests/Sable.LanguageServer.Tests/GeneratorTests.cs`). The files under a
+package's `generators/` directory are one program, compiled with
+`Sable.Generators` (`lib/Sable.Generators`), a `main` the compiler writes,
+and a public thunk per module that calls each `@generator` function
+(`Generators/SourceGenerators.cs`). Before compiling, the program's
+signatures, imports and effects are checked, using the manifest's effect
+check. The compiled SIL is kept in memory, keyed by the program's text and
+the toolchain.
+
+Each top-level type that carries a generator's attribute becomes a request.
+A request is lines of fields describing the declaration as written, which
+the program reads from standard input in the interpreter. The program
+prints each run's files and messages as records. A run is cached on the
+generator program and the request's text, and the requests the cache does
+not have go through one interpreter run. When a run traps, it is reported at
+its attribute, and the rest go on from the next request.
+
+`PackageGenerators` runs this for every package a target compiles, with the
+generators of the package itself and of its direct dependencies (and its
+dev-dependencies for `sable test`). It writes the output to
+`target/generated/<package>/<generator>/` and removes files that are no
+longer written. `PackageBuilder` puts each generated file right after the
+file it was written for, and into that file's unit in an incremental build.
+The language server runs a member's generators on its documents for each
+analysis, compiles their output as dependency files, and shows their
+messages on the attribute. Dependencies' generated files come from disk,
+and each `generators/` directory is a project of its own.
+
 ### Not built in Phase 5
 
 Of docs/05 §5.1's commands, all but two exist (with `debug`, `lint` and

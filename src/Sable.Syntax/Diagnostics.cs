@@ -191,6 +191,13 @@ public enum ErrorCode {
     ERR_MalformedForeign = 3223,
     ERR_NotACType = 3224,
 
+    // ---- Source generators (S3230-S3239): docs/08.
+    ERR_GeneratorRule = 3230,
+    ERR_GeneratorFailed = 3231,
+    ERR_GeneratorReported = 3232,
+    WRN_GeneratorReported = 3233,
+    ERR_GeneratedFileInvalid = 3234,
+
     // ---- Lints (S3300-S3399): reported by Sable.Symbols' Lints, which
     // 'sable check' runs, never by compiling. Their severity is configured.
     LNT_UnusedLocal = 3300,

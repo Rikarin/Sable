@@ -42,17 +42,35 @@ public static class LanguageProjects {
         return projects;
     }
 
-    /// <summary>Every member of a workspace: its default features, and its dependencies' files with theirs.</summary>
+    /// <summary>
+    ///     Every member of a workspace: its default features, and its
+    ///     dependencies' files with theirs — what their generators wrote among
+    ///     them. A member's own generators run as it is edited (docs/08 §8.7),
+    ///     and its <c>generators/</c> directory is a project of its own: the
+    ///     generator program is not part of the package.
+    /// </summary>
     static IEnumerable<LanguageProject> Of(Workspace workspace, PackageEnvironment environment) {
         // Resolved as 'sable check' resolves, so the editor and the command agree.
         var graph = PackageGraph.ResolveCached(workspace, environment, new());
         foreach (var member in workspace.Members) {
             var own = graph.Packages[member.Name];
+            var generated = PackageGenerators.Run(graph, member.Name, dev: true, optimise: false);
             yield return new(
                 member.Name,
                 member.Directory,
                 [..own.Features.Order(StringComparer.Ordinal)],
-                [..Dependencies(graph, member.Name).SelectMany(static p => p.Package.LibrarySources().Select(f => new LanguageProjectFile(f, [..p.Features.Order(StringComparer.Ordinal)])))]);
+                [
+                    ..Dependencies(graph, member.Name).SelectMany(p => p.Package.LibrarySources()
+                        .SelectMany(f => (IEnumerable<string>)[f, ..generated.For(f)])
+                        .Select(f => new LanguageProjectFile(f, [..p.Features.Order(StringComparer.Ordinal)]))),
+                ]) {
+                Generate = trees => PackageGenerators.ForEditor(graph, member.Name, trees),
+            };
+
+            var generators = Path.Combine(member.Directory, Generators.SourceGenerators.DirectoryName);
+            if (Directory.Exists(generators)) {
+                yield return new($"{member.Name} generators", generators, [], []);
+            }
         }
     }
 

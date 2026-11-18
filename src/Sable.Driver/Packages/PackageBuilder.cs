@@ -48,22 +48,31 @@ public static class PackageBuilder {
         }
     }
 
+
     /// <summary>
     ///     The trees of one target: the binary's entry file first (where the
     ///     entry point is looked for), then the package's library files, then
     ///     its dependencies' — each parsed with its own package's features, and
     ///     <c>DEBUG</c> or <c>RELEASE</c> as <paramref name="optimise" /> says.
+    ///     Each file is followed by what the generators wrote for it (docs/08).
     /// </summary>
-    public static IReadOnlyList<SyntaxTree> Program(PackageGraph graph, string member, BinTarget? bin, bool optimise = false, BuildTimings? timings = null) {
+    public static IReadOnlyList<SyntaxTree> Program(
+        PackageGraph graph,
+        string member,
+        BinTarget? bin,
+        bool optimise = false,
+        BuildTimings? timings = null,
+        GeneratedSources? generated = null
+    ) {
         using var _ = BuildTimings.Of(timings, "parse");
         var trees = new List<SyntaxTree>();
         var own = graph.Packages[member];
         if (bin is not null) {
-            trees.Add(Parse(graph, own, bin.Path, optimise));
+            trees.AddRange(ParseWithGenerated(graph, own, bin.Path, optimise, generated));
         }
 
         foreach (var package in graph.Closure(member)) {
-            trees.AddRange(package.Package.LibrarySources().Select(file => Parse(graph, package, file, optimise)));
+            trees.AddRange(package.Package.LibrarySources().SelectMany(file => ParseWithGenerated(graph, package, file, optimise, generated)));
         }
 
         return trees;
@@ -76,26 +85,43 @@ public static class PackageBuilder {
     ///     its dev-dependencies' among them.
     ///     The harness supplies the entry point, so no binary's entry file is in it.
     /// </summary>
-    public static IReadOnlyList<SyntaxTree> TestProgram(PackageGraph graph, string member, bool optimise = false) {
+    public static IReadOnlyList<SyntaxTree> TestProgram(PackageGraph graph, string member, bool optimise = false, GeneratedSources? generated = null) {
         var own = graph.Packages[member];
-        var extra = new[] { "tests", "benches" }
-            .Select(d => Path.Combine(own.Package.Directory, d))
-            .Where(Directory.Exists)
-            .SelectMany(static d => Directory.GetFiles(d, "*.sb", SearchOption.AllDirectories))
-            .Select(Path.GetFullPath)
-            .Order(StringComparer.Ordinal)
-            .Select(file => Parse(graph, own, file, optimise))
-            .ToList();
         return [
-            ..own.Package.LibrarySources().Select(file => Parse(graph, own, file, optimise)),
-            ..extra,
-            ..graph.Closure(member, dev: true).Where(p => p.Name != member).SelectMany(p => p.Package.LibrarySources().Select(file => Parse(graph, p, file, optimise))),
+            ..own.Package.LibrarySources().SelectMany(file => ParseWithGenerated(graph, own, file, optimise, generated)),
+            ..TestFiles(own).SelectMany(file => ParseWithGenerated(graph, own, file, optimise, generated)),
+            ..graph.Closure(member, dev: true).Where(p => p.Name != member)
+                .SelectMany(p => p.Package.LibrarySources().SelectMany(file => ParseWithGenerated(graph, p, file, optimise, generated))),
         ];
     }
 
-    static SyntaxTree Parse(PackageGraph graph, ResolvedPackage package, string file, bool optimise) {
+    /// <summary>The files under a package's <c>tests/</c> and <c>benches/</c>, sorted.</summary>
+    internal static IReadOnlyList<string> TestFiles(ResolvedPackage package) => [
+        ..new[] { "tests", "benches" }
+            .Select(d => Path.Combine(package.Package.Directory, d))
+            .Where(Directory.Exists)
+            .SelectMany(static d => Directory.GetFiles(d, "*.sb", SearchOption.AllDirectories))
+            .Select(Path.GetFullPath)
+            .Order(StringComparer.Ordinal),
+    ];
+
+    internal static SyntaxTree Parse(PackageGraph graph, ResolvedPackage package, string file, bool optimise) =>
+        Parse(SourceOf(graph, package, file), optimise);
+
+    static SyntaxTree Parse(SourceFile source, bool optimise) =>
+        SyntaxTree.Parse(new SourceText(File.ReadAllText(source.Path), source.Name), Pipeline.ParseOptionsFor(optimise, source.Options));
+
+    /// <summary>A file, then what the generators wrote for it.</summary>
+    static IEnumerable<SyntaxTree> ParseWithGenerated(PackageGraph graph, ResolvedPackage package, string file, bool optimise, GeneratedSources? generated) =>
+        WithGenerated(graph, package, file, generated).Select(source => Parse(source, optimise));
+
+    /// <summary>A file of a package, then each file the generators wrote for it, as the package's.</summary>
+    static IEnumerable<SourceFile> WithGenerated(PackageGraph graph, ResolvedPackage package, string file, GeneratedSources? generated) {
         var source = SourceOf(graph, package, file);
-        return SyntaxTree.Parse(new SourceText(File.ReadAllText(file), source.Name), Pipeline.ParseOptionsFor(optimise, source.Options));
+        yield return source;
+        foreach (var path in generated?.For(file) ?? []) {
+            yield return source with { Path = path, Name = Path.GetRelativePath(graph.Workspace.Root, path).Replace(Path.DirectorySeparatorChar, '/') };
+        }
     }
 
     /// <summary>A file of a package, with the name its diagnostics give it and the features it is parsed with.</summary>
@@ -115,16 +141,34 @@ public static class PackageBuilder {
     /// <summary>
     ///     A binary's units of separate compilation, in the order of
     ///     <see cref="Program" />: its entry file, then each package's library,
-    ///     its own first.
+    ///     its own first. What the generators wrote is in the unit of the file
+    ///     it was written for.
     /// </summary>
-    public static IReadOnlyList<UnitPlan> Units(PackageGraph graph, string member, BinTarget bin) {
+    public static IReadOnlyList<UnitPlan> Units(PackageGraph graph, string member, BinTarget bin, GeneratedSources? generated = null) {
         var own = graph.Packages[member];
-        var units = new List<UnitPlan> { new($"bin {member}/{bin.Name}", [SourceOf(graph, own, bin.Path)]) };
+        var units = new List<UnitPlan> { new($"bin {member}/{bin.Name}", [..WithGenerated(graph, own, bin.Path, generated)]) };
         foreach (var package in graph.Closure(member)) {
-            units.Add(new($"lib {package.Name}-{package.Version}", [..package.Package.LibrarySources().Select(file => SourceOf(graph, package, file))]));
+            units.Add(new($"lib {package.Name}-{package.Version}", [..package.Package.LibrarySources().SelectMany(file => WithGenerated(graph, package, file, generated))]));
         }
 
         return units;
+    }
+
+    /// <summary>
+    ///     Runs the generators for a member's target and says what they
+    ///     reported; null, having said why, when they failed.
+    /// </summary>
+    static GeneratedSources? Generate(PackageGraph graph, string member, PackageEnvironment environment, List<string> reported, bool optimise, BuildTimings? timings = null) {
+        var generated = PackageGenerators.Run(graph, member, dev: false, optimise, timings);
+        Report(environment, generated.Warnings);
+        reported.AddRange(generated.Warnings);
+        if (generated.Errors.Count == 0) {
+            return generated;
+        }
+
+        Report(environment, generated.Errors);
+        reported.AddRange(generated.Errors);
+        return null;
     }
 
     static string Describe(ResolvedPackage package, Workspace workspace) =>
@@ -152,12 +196,18 @@ public static class PackageBuilder {
             }
 
             targets.AddRange(member.Bins);
+            if (Generate(graph, member.Name, environment, reported, optimise: false) is not { } generated) {
+                failed = true;
+                continue;
+            }
+
+            // The lints look at this member's own files, each once: the
+            // library with the library target, a binary's entry file with it.
+            // What the generators wrote is not linted: nobody wrote it by hand.
+            var ownLibrary = member.LibrarySources().Select(f => SourceOf(graph, resolved, f).Name).ToHashSet(StringComparer.Ordinal);
             foreach (var target in targets) {
-                var program = Program(graph, member.Name, target);
-                // The lints look at this member's own files, each once: the
-                // library with the library target, a binary's entry file with it.
-                var ownLibrary = member.LibrarySources().Count;
-                IReadOnlyList<SyntaxTree> linted = target is null ? [..program.Skip(program.Count - ownLibrary)] : [program[0]];
+                var program = Program(graph, member.Name, target, generated: generated);
+                IReadOnlyList<SyntaxTree> linted = target is null ? [..program.Where(t => ownLibrary.Contains(t.Text.FileName))] : [program[0]];
                 var (errors, warnings) = Pipeline.CheckAndLint(program, member.Manifest.Lints, linted);
                 Report(environment, errors);
                 Report(environment, warnings);
@@ -219,8 +269,15 @@ public static class PackageBuilder {
             }
 
             environment.Error.WriteLine($"   Compiling {Describe(graph.Packages[member.Name], workspace)}");
+            var reported = new List<string>();
+            if (Generate(graph, member.Name, environment, reported, profile.Optimise, timings) is not { } generated) {
+                DiagnosticDocs.WriteHint(environment.Error, reported);
+                environment.Error.WriteLine($"error: could not compile {member.Name}");
+                return null;
+            }
+
             if (bins.Count == 0) {
-                var (errors, warnings) = Pipeline.Diagnose(Program(graph, member.Name, null, profile.Optimise));
+                var (errors, warnings) = Pipeline.Diagnose(Program(graph, member.Name, null, profile.Optimise, generated: generated));
                 Report(environment, warnings);
                 if (errors.Count > 0) {
                     Report(environment, errors);
@@ -245,7 +302,7 @@ public static class PackageBuilder {
                     Native = profile.Native,
                     Whole = profile.CodegenUnits == 1,
                 };
-                var outcome = IncrementalBuild.Build(Units(graph, member.Name, bin), buildSettings, executable, Path.Combine(output, "cache"), timings, environment.Error);
+                var outcome = IncrementalBuild.Build(Units(graph, member.Name, bin, generated), buildSettings, executable, Path.Combine(output, "cache"), timings, environment.Error);
                 Report(environment, outcome.Warnings);
                 if (!outcome.Succeeded) {
                     Report(environment, outcome.Errors);

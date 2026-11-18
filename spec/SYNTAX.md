@@ -1243,6 +1243,7 @@ an optimised one; never both.
 | `@packed` / `@align(16)` | struct | Layout control |
 | `@test` / `@bench` | fn | Collected by `sable test` / `sable bench` |
 | `@main` | fn, type | Program entry point |
+| `@generator("name")` | fn in `generators/` | A source generator, run for types marked `@name` (docs/08) |
 | `@discardable` | fn | Result may be ignored without `_ =` |
 | `@MainActor` | any | Main-executor isolation |
 | `@frozen` | struct, union | ABI-stable layout; no new cases/fields ever |

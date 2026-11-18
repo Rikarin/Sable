@@ -13,7 +13,19 @@ namespace Sable.LanguageServer;
 /// <param name="Directory">Its root: a file under it is its, unless a package nested deeper has it.</param>
 /// <param name="Features">The features it is built with by default.</param>
 /// <param name="Dependencies">Every file of every package it depends on, transitively, that a build compiles with it.</param>
-public sealed record LanguageProject(string Name, string Directory, IReadOnlyList<string> Features, IReadOnlyList<LanguageProjectFile> Dependencies);
+public sealed record LanguageProject(string Name, string Directory, IReadOnlyList<string> Features, IReadOnlyList<LanguageProjectFile> Dependencies) {
+    /// <summary>
+    ///     Runs the package's source generators (docs/08 §8.7) over its
+    ///     documents as they are: what they write, and what they report. None
+    ///     for a package that has no generators it can see.
+    /// </summary>
+    public Func<IReadOnlyList<SyntaxTree>, GeneratedTrees>? Generate { get; init; }
+}
+
+/// <summary>What a package's generators wrote, as trees, and what they reported, by the tree it is about.</summary>
+public sealed record GeneratedTrees(IReadOnlyList<SyntaxTree> Trees, IReadOnlyList<(Diagnostic Diagnostic, SyntaxTree Tree)> Diagnostics) {
+    public static readonly GeneratedTrees None = new([], []);
+}
 
 /// <summary>A dependency's file, and the features its package is built with.</summary>
 public sealed record LanguageProjectFile(string Path, IReadOnlyList<string> Features);

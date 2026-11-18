@@ -447,6 +447,11 @@ A build script that wants more than it declared fails rather than being
 silently permitted. `cargo` not having this is a known supply-chain weakness and
 there is no reason to repeat it.
 
+A build script is for code that comes from outside the program, such as a
+schema file, a C header or a shader. Code that comes from the program's own
+declarations is written by a source generator (docs/08). A generator can read
+the declarations but cannot read, write or run anything.
+
 ## 5.7 Formatting and linting
 
 - `sable fmt` has **no options**. One style, enforced, settled by argument once

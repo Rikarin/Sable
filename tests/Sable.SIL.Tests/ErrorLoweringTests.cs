@@ -49,6 +49,36 @@ public sealed class ErrorLoweringTests {
                           """;
 
     [Fact]
+    public void AnErrorNoCatchMatchesLeavesTheDo() {
+        var module = Lower(
+            Errors + """
+
+            fn partial(_ n: Int) throws(IoError) -> Int {
+                do {
+                    return try read(n)
+                } catch .Denied {
+                    return -1
+                }
+            }
+
+            fn outer(_ n: Int) -> Int {
+                do {
+                    return try partial(n)
+                } catch .NotFound(let p) {
+                    return p * 100
+                } catch .Denied {
+                    return -2
+                }
+            }
+            """
+        );
+
+        Assert.Equal(5L, Run(module, "outer", 5L));
+        Assert.Equal(-1L, Run(module, "outer", 0L));
+        Assert.Equal(-300L, Run(module, "outer", -3L));
+    }
+
+    [Fact]
     public void BareThrowsBoxesTheErrorAndACatchUnboxesIt() {
         var module = Lower(
             Errors + """

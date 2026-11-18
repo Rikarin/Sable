@@ -107,6 +107,13 @@ public sealed partial class Binder {
     TypeSymbol? _thrownInBody;
 
     /// <summary>
+    ///     True when the innermost <c>do</c> body throws something that did not
+    ///     come from a closure parameter — which a <c>rethrows</c> function may
+    ///     not let out, should its catches not take it.
+    /// </summary>
+    bool _threwOwnError;
+
+    /// <summary>
     ///     What the closure body just bound can let out, which is what its
     ///     function type claims. Written by <c>BindClosureBody</c>, read by the
     ///     caller that builds the type.
@@ -577,6 +584,7 @@ public sealed partial class Binder {
         // One 'do' body may call several throwing functions. When they do not
         // agree, what reaches the catches is the union of them.
         _thrownInBody = Union(_thrownInBody, thrown);
+        _threwOwnError |= !viaParameter;
 
         if (_tryDepth > 0) {
             _threwInTry = true;
@@ -880,20 +888,25 @@ public sealed partial class Binder {
     BoundStatement BindDo(DoStatementSyntax statement) {
         var saved = SaveEffects();
         var savedThrown = _thrownInBody;
+        var savedOwn = _threwOwnError;
         if (statement.Catches.Count > 0) {
             _catchDepth++;
         }
 
         _thrownInBody = null;
+        _threwOwnError = false;
 
         var body = BindBlock(statement.Body);
 
         // The catches match what the body can actually throw; failing that,
         // what the enclosing function declares; failing that, anything.
-        var errorType = _thrownInBody ?? _declaredThrows ?? Core.AnyError;
+        var thrownByBody = _thrownInBody;
+        var threwOwn = _threwOwnError;
+        var errorType = thrownByBody ?? _declaredThrows ?? Core.AnyError;
 
         RestoreEffects(saved);
         _thrownInBody = savedThrown;
+        _threwOwnError = savedOwn;
         var catches = ImmutableArray.CreateBuilder<BoundCatch>();
 
         foreach (var clause in statement.Catches) {
@@ -921,7 +934,91 @@ public sealed partial class Binder {
             catches.Add(new(clause, pattern, guard, clauseBody, errorLocal));
         }
 
+        if (thrownByBody is not null && statement.Catches.Count > 0) {
+            CheckUncaught(statement, catches, thrownByBody, threwOwn);
+        }
+
         return Record(statement, new BoundDo(statement, body, catches.ToImmutable()));
+    }
+
+    /// <summary>
+    ///     Checks where an error goes when the catches of a <c>do</c> do not
+    ///     take every error its body throws.
+    /// </summary>
+    /// <remarks>
+    ///     The catches are tried in order and an error none of them matches
+    ///     leaves the <c>do</c>, as in Swift. So what they miss is thrown again
+    ///     from the <c>do</c> itself, and has to have somewhere to go like any
+    ///     other throw: an enclosing <c>do</c>, or the function's
+    ///     <c>throws</c>. Whether they miss anything is the same usefulness
+    ///     question a <c>match</c> asks of its arms — a guarded catch can fail,
+    ///     so it covers nothing.
+    /// </remarks>
+    void CheckUncaught(
+        DoStatementSyntax statement,
+        IReadOnlyList<BoundCatch> catches,
+        TypeSymbol thrown,
+        bool threwOwn
+    ) {
+        if (thrown.IsError) {
+            return;
+        }
+
+        var checker = new Exhaustiveness(Core);
+        var rows = new List<Exhaustiveness.Pat>();
+        foreach (var clause in catches) {
+            if (clause.Guard is not null) {
+                continue;
+            }
+
+            if (clause.Pattern is null) {
+                return;
+            }
+
+            rows.Add(checker.Lower(clause.Pattern));
+        }
+
+        var missing = checker.Missing(rows, thrown);
+        if (missing.Count == 0 || checker.GaveUp || checker.HasErrors) {
+            return;
+        }
+
+        // A wildcard as the witness means no unguarded catch matched anything
+        // in particular, which reads better said plainly.
+        var witness = missing is ["_"] ? "every error"
+            : missing.Count == 1 ? $"'{missing[0]}'"
+            : $"'{string.Join("', '", missing.Take(3))}'" + (missing.Count > 3 ? " and more" : string.Empty);
+        var span = statement.DoKeyword.Span;
+
+        // What escapes is part of what this body throws, for an enclosing
+        // 'do' to match and a closure's type to claim.
+        _thrownInBody = Union(_thrownInBody, thrown);
+        _threwOwnError |= threwOwn;
+
+        if (_rethrows && _catchDepth == 0) {
+            if (threwOwn) {
+                _diagnostics.Error(
+                    ErrorCode.ERR_RethrowsThrowsItsOwn,
+                    span,
+                    $"the catches do not cover {witness}, so that error leaves this 'do', and a "
+                    + "'rethrows' function may only throw what one of its own closure parameters throws"
+                );
+            }
+
+            return;
+        }
+
+        if (!CanThrowHere()) {
+            _diagnostics.Error(
+                ErrorCode.ERR_ThrowsNotDeclared,
+                span,
+                $"the catches do not cover {witness}, so that error has nowhere to go: "
+                + "add a catch for it, or declare 'throws'"
+            );
+            return;
+        }
+
+        CheckErrorFits(thrown, span, $"this 'do', whose catches do not cover {witness},");
     }
 
     // -----------------------------------------------------------------------
@@ -1071,6 +1168,7 @@ public sealed partial class Binder {
     BoundStatement BindThrow(ThrowStatementSyntax statement) {
         var value = BindExpression(statement.Expression, _declaredThrows);
         _thrownInBody = Union(_thrownInBody, value.Type);
+        _threwOwnError = true;
 
         if (!value.HasError && CanThrowHere() && !(_rethrows && _catchDepth == 0)) {
             CheckErrorFits(value.Type, statement.Expression.Span, "this");

@@ -72,6 +72,7 @@ static uint32_t unowned_count(const SableObject *object) {
 }
 
 _Noreturn void sable_trap(const char *message);
+_Noreturn static void trap_here(const char *message);
 static void sable_weak_object_died(SableObject *object);
 
 static int64_t live_objects;
@@ -374,7 +375,7 @@ static int64_t access_count, access_capacity;
 void sable_access_begin(void *storage, int32_t modify) {
     for (int64_t i = 0; i < access_count; i++) {
         if (accesses[i].storage == storage && (modify || accesses[i].modify)) {
-            sable_trap("overlapping accesses to the same storage");
+            trap_here("overlapping accesses to the same storage");
         }
     }
 
@@ -591,7 +592,7 @@ void sable_unowned_release(void *pointer) {
 void sable_unowned_load(void *pointer) {
     SableObject *object = pointer;
     if (object->flags & SABLE_DEINITED) {
-        sable_trap("read an unowned reference to an object that is gone");
+        trap_here("read an unowned reference to an object that is gone");
     }
 
     sable_retain(object);
@@ -768,11 +769,125 @@ __attribute__((noinline)) static void print_backtrace(void) {
     }
 }
 
-_Noreturn void sable_trap(const char *message) {
+// Where the compiled code is: set just before a call into the runtime that
+// can trap (an index checked here, an unowned reference read), so that the
+// trap can say which line made the call. A trap the compiled code makes
+// itself passes its place to sable_trap_at instead. One task runs at a time,
+// so one variable serves them all.
+const char *sable_trap_site;
+
+// A trap with the place in the source it happened at, as 'file:line:column',
+// or none: the message on one line, and the place on the next.
+_Noreturn void sable_trap_at(const char *message, const char *site) {
     fflush(stdout);
     fprintf(stderr, "fatal error: %s\n", message);
+    if (site != NULL) {
+        fprintf(stderr, "  at %s\n", site);
+    }
+
     print_backtrace();
     abort();
+}
+
+// A trap that has no place in the source: one the whole program reaches —
+// memory run out, an object kept alive by its own deinit, every task waiting.
+_Noreturn void sable_trap(const char *message) {
+    sable_trap_at(message, NULL);
+}
+
+// A trap in a runtime function the compiled code called: at the call.
+_Noreturn static void trap_here(const char *message) {
+    sable_trap_at(message, sable_trap_site);
+}
+
+// ---- Stack overflow ------------------------------------------------------
+
+// Recursion that runs off the end of a thread's stack touches the guard page
+// below it, and the system sends SIGSEGV (SIGBUS on some). A handler can
+// only run on a stack that is still there, so each thread is given a small
+// one of its own (sigaltstack). The handler tells an overflow from any other
+// bad access by where it was: at the low end of the thread's stack, which
+// each thread notes as it starts.
+#include <signal.h>
+#include <unistd.h>
+
+static _Thread_local char *stack_low;
+
+enum { SIGNAL_STACK = 64 * 1024, GUARD_SLACK = 64 * 1024, FRAME_SLACK = 1 << 20 };
+
+// The lowest address of the calling thread's stack.
+static char *thread_stack_low(void) {
+#if defined(__APPLE__)
+    pthread_t self = pthread_self();
+    return (char *)pthread_get_stackaddr_np(self) - pthread_get_stacksize_np(self);
+#else
+    pthread_attr_t attributes;
+    void *low = NULL;
+    size_t size = 0;
+    if (pthread_getattr_np(pthread_self(), &attributes) == 0) {
+        pthread_attr_getstack(&attributes, &low, &size);
+        pthread_attr_destroy(&attributes);
+    }
+
+    return low;
+#endif
+}
+
+static void on_fault(int signal_number, siginfo_t *info, void *context) {
+    (void)context;
+    char *address = info->si_addr;
+
+    // Just below the stack — a frame larger than the guard page reaches
+    // further — or in its last few pages.
+    if (stack_low != NULL && address >= stack_low - FRAME_SLACK && address < stack_low + GUARD_SLACK) {
+        // What the program printed before is its output, as before any trap.
+        fflush(stdout);
+        static const char message[] = "fatal error: stack overflow: calls nested too deeply\n";
+        ssize_t written = write(STDERR_FILENO, message, sizeof message - 1);
+        (void)written;
+        signal(SIGABRT, SIG_DFL);
+        abort();
+    }
+
+    // Not an overflow: what the signal does without a handler, as the
+    // faulting instruction runs again.
+    signal(signal_number, SIG_DFL);
+}
+
+// Gives the calling thread a stack for the handler, and notes where its own
+// stack ends. The returned memory is the thread's to free as it ends.
+static void *watch_stack(void) {
+    stack_low = thread_stack_low();
+    stack_t alternate = { 0 };
+    alternate.ss_sp = malloc(SIGNAL_STACK);
+    alternate.ss_size = SIGNAL_STACK;
+    if (alternate.ss_sp != NULL) {
+        sigaltstack(&alternate, NULL);
+    }
+
+    return alternate.ss_sp;
+}
+
+// The thread is ending: its handler stack goes with it.
+static void unwatch_stack(void *memory) {
+    if (memory == NULL) {
+        return;
+    }
+
+    stack_t off = { 0 };
+    off.ss_flags = SS_DISABLE;
+    sigaltstack(&off, NULL);
+    free(memory);
+}
+
+__attribute__((constructor)) static void sable_watch_main_stack(void) {
+    watch_stack();
+    struct sigaction action = { 0 };
+    action.sa_sigaction = on_fault;
+    action.sa_flags = SA_SIGINFO | SA_ONSTACK;
+    sigemptyset(&action.sa_mask);
+    sigaction(SIGSEGV, &action, NULL);
+    sigaction(SIGBUS, &action, NULL);
 }
 
 // ---- Strings -----------------------------------------------------------
@@ -1070,7 +1185,7 @@ int64_t sable_string_count(const SableString *s) {
 
 int32_t sable_string_at(const SableString *s, int64_t index) {
     if (index < 0 || index >= s->count) {
-        sable_trap("string index out of range");
+        trap_here("string index out of range");
     }
 
     int64_t width;
@@ -1079,7 +1194,7 @@ int32_t sable_string_at(const SableString *s, int64_t index) {
 
 SableString *sable_string_slice(const SableString *s, int64_t from, int64_t to) {
     if (from < 0 || to > s->count || from > to) {
-        sable_trap("string slice out of range");
+        trap_here("string slice out of range");
     }
 
     // Of an ASCII string, scalars are bytes: nothing to count.
@@ -1471,7 +1586,7 @@ int64_t sable_array_count(const SableArray *array) {
 
 void *sable_array_element(const SableArray *array, int64_t index) {
     if (array == NULL || index < 0 || index >= array->count) {
-        sable_trap("array index out of range");
+        trap_here("array index out of range");
     }
 
     return array->elements + index * array->header.type->element_size;
@@ -1528,7 +1643,7 @@ void *sable_array_append_slot(SableArray **slot, const SableMetadata *type) {
 
 void *sable_array_mutable_element(SableArray **slot, const SableMetadata *type, int64_t index) {
     if (*slot == NULL || index < 0 || index >= (*slot)->count) {
-        sable_trap("array index out of range");
+        trap_here("array index out of range");
     }
 
     SableArray *array = unique(slot, type, 0);
@@ -1538,7 +1653,7 @@ void *sable_array_mutable_element(SableArray **slot, const SableMetadata *type, 
 // The last element, moved out: the caller loads it, and owns it.
 void *sable_array_remove_last(SableArray **slot, const SableMetadata *type) {
     if (*slot == NULL || (*slot)->count == 0) {
-        sable_trap("removeLast of an empty array");
+        trap_here("removeLast of an empty array");
     }
 
     SableArray *array = unique(slot, type, 0);
@@ -1549,7 +1664,7 @@ void *sable_array_remove_last(SableArray **slot, const SableMetadata *type) {
 SableArray *sable_array_slice(const SableArray *array, int64_t from, int64_t to, const SableMetadata *type) {
     int64_t count = sable_array_count(array);
     if (from < 0 || to > count || from > to) {
-        sable_trap("array slice out of range");
+        trap_here("array slice out of range");
     }
 
     if (from == to) {
@@ -1813,7 +1928,7 @@ uint8_t *sable_inline_at(const SableInlineSlot *s, uint8_t *array, int64_t index
     const uint8_t *elements;
     int64_t count = array_count(s, array, &elements);
     if (index < 0 || index >= count) {
-        sable_trap("array index out of range");
+        trap_here("array index out of range");
     }
 
     int64_t size = s->element_kind == INLINE_STRUCT ? s->layout->fixed_size : s->element_width;
@@ -1972,14 +2087,14 @@ static SableBlock *splice(SableBlock **slot, const SableInlineLayout *layout, in
         }
 
         if (link.target >= at && link.target < at + removed && removed > 0) {
-            sable_trap("a relative reference's target was replaced");
+            trap_here("a relative reference's target was replaced");
         }
 
         int64_t from = link.at >= at + removed ? link.at + delta : link.at;
         int64_t to = link.target >= at + removed ? link.target + delta : link.target;
         int64_t offset = to - from;
         if ((link.width == 2 && (offset < INT16_MIN || offset > INT16_MAX)) || (link.width == 1 && (offset < INT8_MIN || offset > INT8_MAX))) {
-            sable_trap("a relative reference no longer fits its width");
+            trap_here("a relative reference no longer fits its width");
         }
 
         write_unsigned(block->bytes + from, link.width, (uint32_t)offset);
@@ -2011,7 +2126,7 @@ void sable_inline_append_at(SableBlock **slot, const SableInlineLayout *root, co
     const uint8_t *elements;
     int64_t count = array_count(s, array, &elements);
     if (s->kind == INLINE_BOUNDED && count >= s->capacity) {
-        sable_trap("inline array is full");
+        trap_here("inline array is full");
     }
 
     int64_t end = array_end - (*slot)->bytes;
@@ -2061,7 +2176,7 @@ void sable_inline_append_at(SableBlock **slot, const SableInlineLayout *root, co
 void sable_inline_assign_bytes(SableBlock **slot, const SableInlineLayout *root, const SableInlineSlot *s,
     uint8_t *array, const uint8_t *bytes, int64_t count) {
     if (s->kind == INLINE_BOUNDED && count > s->capacity) {
-        sable_trap("too many bytes for the inline array");
+        trap_here("too many bytes for the inline array");
     }
 
     int64_t at = array - (*slot)->bytes;
@@ -2116,16 +2231,16 @@ uint8_t *sable_inline_ref_get(const uint8_t *field, int32_t width) {
 void sable_inline_ref_set(SableBlock **slot, uint8_t *field, int32_t width, const uint8_t *target) {
     SableBlock *block = *slot;
     if (target < block->bytes || target >= block->bytes + block->length) {
-        sable_trap("a relative reference must point into its own block");
+        trap_here("a relative reference must point into its own block");
     }
 
     int64_t offset = target - field;
     if (offset == 0) {
-        sable_trap("a relative reference cannot point at itself");
+        trap_here("a relative reference cannot point at itself");
     }
 
     if ((width == 2 && (offset < INT16_MIN || offset > INT16_MAX)) || (width == 1 && (offset < INT8_MIN || offset > INT8_MAX))) {
-        sable_trap("a relative reference does not fit its width");
+        trap_here("a relative reference does not fit its width");
     }
 
     write_unsigned(field, width, (uint32_t)offset);
@@ -2458,6 +2573,7 @@ static void free_task(SableTask *task) {
 
 static void *task_thread(void *argument) {
     SableTask *self = argument;
+    void *signal_stack = watch_stack();
     pthread_mutex_lock(&task_lock);
     while (current_task != self) {
         pthread_cond_wait(&self->wake, &task_lock);
@@ -2486,6 +2602,7 @@ static void *task_thread(void *argument) {
     }
 
     pthread_mutex_unlock(&task_lock);
+    unwatch_stack(signal_stack);
     return NULL;
 }
 
@@ -2581,7 +2698,7 @@ int64_t sable_io_argument_count(void) {
 
 SableString *sable_io_argument(int64_t index) {
     if (index < 0 || index >= sable_io_argument_count()) {
-        sable_trap("argument index out of range");
+        trap_here("argument index out of range");
     }
 
     return make_ctext(saved_argv[index + 1]);

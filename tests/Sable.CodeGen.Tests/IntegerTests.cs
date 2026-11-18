@@ -61,7 +61,7 @@ public sealed class IntegerTests {
     [InlineData("let x: U8 = 1\nprint(x << U8(8))", "shift out of range")]
     public void EachWidthTrapsAtItsOwnLimits(string body, string trap) {
         var execution = AssertAgree(Program("", body));
-        Assert.Equal($"fatal error: {trap}\n", execution.Stderr);
+        Assert.StartsWith($"fatal error: {trap}\n  at test.sb:", execution.Stderr, StringComparison.Ordinal);
     }
 
     [Theory]
@@ -69,7 +69,7 @@ public sealed class IntegerTests {
     [InlineData("print(300 as U8)", "Int does not fit in U8")]
     public void AsTrapsWhereTheValueDoesNotFit(string body, string trap) {
         var execution = AssertAgree(Program("", body));
-        Assert.Equal($"fatal error: {trap}\n", execution.Stderr);
+        Assert.StartsWith($"fatal error: {trap}\n  at test.sb:", execution.Stderr, StringComparison.Ordinal);
     }
 
     /// <summary>

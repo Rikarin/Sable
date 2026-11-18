@@ -4,7 +4,21 @@ using System.Text;
 namespace Sable.SIL;
 
 /// <summary>A program stopped where the language says it must: overflow, division by zero, unreachable code.</summary>
-public sealed class SilTrap(string message) : Exception(message);
+/// <param name="message">Why, as the native program says it after <c>fatal error: </c>.</param>
+/// <param name="located">
+///     False for a trap with no place in the source — calls nested too
+///     deeply, an object kept alive by its deinit, every task waiting — which
+///     the native program reports without one too.
+/// </param>
+public sealed class SilTrap(string message, bool located = true) : Exception(message) {
+    /// <summary>Where it happened, as <c>file:line:column</c>: the instruction that trapped, when it has a place.</summary>
+    public string? Site { get; internal set; }
+
+    internal bool Located => located;
+
+    /// <summary>What the native program writes to standard error as it stops: the message, and the place on the next line.</summary>
+    public string Report => Site is null ? $"fatal error: {Message}\n" : $"fatal error: {Message}\n  at {Site}\n";
+}
 
 /// <summary>
 ///     Runs SIL directly, so that tests can check what lowered code
@@ -289,7 +303,7 @@ public sealed partial class SilInterpreter(SilModule module, int stepLimit = 10_
                     var function = module.Find(deinit) ?? throw new SilTrap($"call to undefined @{deinit}");
                     Call(function, [instance], depth + 1);
                     if (counted.Strong != 1) {
-                        throw new SilTrap("an object outlived its deinit");
+                        throw new SilTrap("an object outlived its deinit", located: false);
                     }
                 }
 
@@ -497,9 +511,24 @@ public sealed partial class SilInterpreter(SilModule module, int stepLimit = 10_
 
     object? Call(SilFunction function, IReadOnlyList<object?> arguments, int depth) {
         if (depth > depthLimit) {
-            throw new SilTrap("stack overflow: calls nested too deeply");
+            throw new SilTrap("stack overflow: calls nested too deeply", located: false);
         }
 
+        SilInstruction? current = null;
+        try {
+            return Run(function, arguments, depth, ref current);
+        } catch (SilTrap trap) when (trap is { Site: null, Located: true }) {
+            // The innermost call that sees it says where: the instruction
+            // that trapped, as the native program's trap does.
+            if (current?.Location is { } at && function.SourceFile is { } file) {
+                trap.Site = $"{file}:{at.Line}:{at.Column}";
+            }
+
+            throw;
+        }
+    }
+
+    object? Run(SilFunction function, IReadOnlyList<object?> arguments, int depth, ref SilInstruction? current) {
         var values = new Dictionary<SilValue, object?>();
         var block = function.Entry;
         IReadOnlyList<object?> incoming = arguments;
@@ -511,8 +540,9 @@ public sealed partial class SilInterpreter(SilModule module, int stepLimit = 10_
 
             SilBlock? next = null;
             foreach (var instruction in block.Instructions) {
+                current = instruction;
                 if (++_steps > stepLimit) {
-                    throw new SilTrap("step limit reached");
+                    throw new SilTrap("step limit reached", located: false);
                 }
 
                 object? Get(SilValue value) => values[value];

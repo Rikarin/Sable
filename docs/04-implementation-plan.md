@@ -723,6 +723,19 @@ looked up one byte before its return address, because a call that never
 returns leaves that address past the end of its caller. Under LTO most of a
 small program is inlined into `main`, so expect few frames.
 
+Every trap says where it happened, on the line after its message:
+`fatal error: array index out of range` then `  at main.sb:12:15`. A trap
+the compiled code makes passes its place to `sable_trap_at`; before a call
+into the runtime that can trap (a string index, an unowned read, an access
+check) the compiled code stores the call's place in `sable_trap_site`, a
+store on the slow path only. The interpreter reports the same place: the
+innermost instruction that trapped. Traps that belong to no line — memory
+run out, every task waiting — have no place. Running off the end of a stack
+is a trap too, not a bare SIGSEGV: every thread has a small signal stack
+(`sigaltstack`), and a fault at the low end of the thread's stack prints
+`fatal error: stack overflow: calls nested too deeply`, as the interpreter's
+depth limit does, and exits as a trap does.
+
 ### 4.2 Reflection
 
 - **Static metadata** for every type: size, alignment, field offsets, name,

@@ -109,7 +109,7 @@ public sealed class AsyncTests {
                 print(await failing.value)
             """));
         Assert.Equal("before\n", execution.Stdout);
-        Assert.Equal("fatal error: array index out of range\n", execution.Stderr);
+        Assert.Equal("fatal error: array index out of range\n  at test.sb:7:16\n", execution.Stderr);
     }
 
     [Theory]

@@ -124,6 +124,8 @@ public sealed partial class LlvmEmitter {
                                 declare void @sable_print_f64(double)
                                 declare void @sable_print_bool(i1 zeroext)
                                 declare void @sable_trap(ptr) noreturn cold
+                                declare void @sable_trap_at(ptr, ptr) noreturn cold
+                                @sable_trap_site = external global ptr
                                 declare ptr @sable_alloc(ptr, i64)
                                 declare void @sable_retain(ptr)
                                 declare void @sable_release(ptr)
@@ -1149,12 +1151,28 @@ public sealed partial class LlvmEmitter {
             var ok = NewLabel("ok");
             Line($"br i1 {condition}, label %{trap}, label %{ok}");
             _extra.Append(trap).Append(":\n")
-                .Append("  call void @sable_trap(ptr ").Append(module.TrapMessage(message)).Append(')').Append(_dbg).Append('\n')
+                .Append("  call void @sable_trap_at(ptr ").Append(module.TrapMessage(message)).Append(", ptr ").Append(_site).Append(')').Append(_dbg).Append('\n')
                 .Append("  unreachable\n");
             Continue(ok);
         }
 
+        /// <summary>
+        ///     The current instruction's place in the source, for a trap to
+        ///     report: a constant string, or <c>null</c> when it has none.
+        /// </summary>
+        string _site = "null";
+
+        /// <summary>
+        ///     Before a call into the runtime that can trap: tells it where the
+        ///     call is, so that its trap names the line (the runtime's
+        ///     <c>sable_trap_site</c>).
+        /// </summary>
+        void SiteForRuntime() => Line($"store ptr {_site}, ptr @sable_trap_site");
+
         void Instruction(SilInstruction instruction) {
+            _site = instruction.Location is { } at && function.SourceFile is { } file
+                ? module.TrapMessage($"{file}:{at.Line}:{at.Column}")
+                : "null";
             // A slot is made where the function starts, whatever line declared its variable.
             if (_scope is not null && instruction.Location is { } location && instruction is not AllocStackInst) {
                 _dbg = $", !dbg {Debug!.Location(location.Line, location.Column, _scope)}";
@@ -1326,6 +1344,7 @@ public sealed partial class LlvmEmitter {
                     var name = Fresh();
                     _names[unowned] = name;
                     Line($"{name} = load ptr, ptr {Name(unowned.Address)}");
+                    SiteForRuntime();
                     Line($"call void @sable_unowned_load(ptr {name})");
                     return;
                 }
@@ -1798,6 +1817,10 @@ public sealed partial class LlvmEmitter {
                 if (module._checkExclusivity) {
                     var call = builtin.Name == "access_end" ? "sable_access_end" : "sable_access_begin";
                     var kind = builtin.Name == "access_end" ? "" : $", i32 {(builtin.Name == "access_begin_modify" ? 1 : 0)}";
+                    if (builtin.Name != "access_end") {
+                        SiteForRuntime();
+                    }
+
                     Line($"call void @{call}(ptr {operands[0]}{kind})");
                 }
 
@@ -1944,10 +1967,12 @@ public sealed partial class LlvmEmitter {
                     return;
 
                 case "string_at":
+                    SiteForRuntime();
                     Line($"{Result()} = call i32 @sable_string_at(ptr {operands[0]}, i64 {operands[1]})");
                     return;
 
                 case "string_slice":
+                    SiteForRuntime();
                     Line($"{Result()} = call ptr @sable_string_slice(ptr {operands[0]}, i64 {operands[1]}, i64 {operands[2]})");
                     return;
 
@@ -2004,6 +2029,7 @@ public sealed partial class LlvmEmitter {
                     return;
 
                 case "io_argument":
+                    SiteForRuntime();
                     Line($"{Result()} = call ptr @sable_io_argument(i64 {operands[0]})");
                     return;
 
@@ -2176,6 +2202,7 @@ public sealed partial class LlvmEmitter {
                 }
 
                 case "array_slice":
+                    SiteForRuntime();
                     Line($"{Result()} = call ptr @sable_array_slice(ptr {operands[0]}, i64 {operands[1]}, i64 {operands[2]}, ptr {module.ArrayMetadata((ArrayType)builtin.Type)})");
                     return;
 
@@ -2382,6 +2409,7 @@ public sealed partial class LlvmEmitter {
                     return;
 
                 case "inline_at":
+                    SiteForRuntime();
                     Line($"{Result()} = call ptr @sable_inline_at(ptr {module.InlineArrayGlobal((InlineArrayType)Pointee(builtin.Operands[0]))}, ptr {operands[0]}, i64 {operands[1]})");
                     return;
 
@@ -2419,20 +2447,24 @@ public sealed partial class LlvmEmitter {
                         Line($"{measured} = sub i64 {end}, {start}");
                         var arrayEnd = Fresh();
                         Line($"{arrayEnd} = call ptr {module.ArraySkipFunction(array)}(ptr {operands[1]})");
+                        SiteForRuntime();
                         Line($"call void @sable_inline_append_at(ptr {operands[0]}, ptr {module.InlineLayoutGlobal(RootOf(builtin.Operands[0]))}, ptr {module.InlineArrayGlobal(array)}, ptr {operands[1]}, ptr {arrayEnd}, ptr {pointer}, i64 {measured})");
                     } else {
                         var arrayEnd = Fresh();
                         Line($"{arrayEnd} = call ptr {module.ArraySkipFunction(array)}(ptr {operands[1]})");
+                        SiteForRuntime();
                         Line($"call void @sable_inline_append_at(ptr {operands[0]}, ptr {module.InlineLayoutGlobal(RootOf(builtin.Operands[0]))}, ptr {module.InlineArrayGlobal(array)}, ptr {operands[1]}, ptr {arrayEnd}, ptr {pointer}, i64 {size})");
                     }
                     return;
                 }
 
                 case "inline_assign_string":
+                    SiteForRuntime();
                     Line($"call void @sable_inline_assign_string(ptr {operands[0]}, ptr {module.InlineLayoutGlobal(RootOf(builtin.Operands[0]))}, ptr {module.InlineArrayGlobal((InlineArrayType)Pointee(builtin.Operands[1]))}, ptr {operands[1]}, ptr {operands[2]})");
                     return;
 
                 case "inline_assign":
+                    SiteForRuntime();
                     Line($"call void @sable_inline_assign(ptr {operands[0]}, ptr {module.InlineLayoutGlobal(RootOf(builtin.Operands[0]))}, ptr {module.InlineLayoutGlobal((StructType)Pointee(builtin.Operands[1]))}, ptr {operands[1]}, ptr {BytesOf(builtin.Operands[2], operands[2])})");
                     return;
 
@@ -2445,6 +2477,7 @@ public sealed partial class LlvmEmitter {
                     return;
 
                 case "inline_ref_set":
+                    SiteForRuntime();
                     Line($"call void @sable_inline_ref_set(ptr {operands[0]}, ptr {operands[1]}, i32 {((RelativeReferenceType)Pointee(builtin.Operands[1])).Width}, ptr {operands[2]})");
                     return;
 
@@ -2875,6 +2908,7 @@ public sealed partial class LlvmEmitter {
 
             Continue(slow);
             var called = Fresh();
+            SiteForRuntime();
             Line($"{called} = call ptr @sable_array_remove_last(ptr {slot}, ptr {module.ArrayMetadata(arrayType)})");
             Line($"br label %{done}");
 
@@ -2943,6 +2977,7 @@ public sealed partial class LlvmEmitter {
 
             Continue(slow);
             var copied = Fresh();
+            SiteForRuntime();
             Line($"{copied} = call ptr @sable_array_mutable_element(ptr {slot}, ptr {module.ArrayMetadata(arrayType)}, i64 {index})");
             Line($"br label %{done}");
 

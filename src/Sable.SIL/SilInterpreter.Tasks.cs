@@ -22,7 +22,7 @@ public sealed partial class SilInterpreter {
     void SwitchAway() {
         var self = Current;
         if (!_runQueue.TryDequeue(out var next)) {
-            throw new SilTrap("every task is waiting: the program cannot go on");
+            throw new SilTrap("every task is waiting: the program cannot go on", located: false);
         }
 
         _currentTask = next;
@@ -60,7 +60,7 @@ public sealed partial class SilInterpreter {
 
                         task.Waiters.Clear();
                         if (!_runQueue.TryDequeue(out var next)) {
-                            _taskFailure ??= new SilTrap("every task is waiting: the program cannot go on");
+                            _taskFailure ??= new SilTrap("every task is waiting: the program cannot go on", located: false);
                             next = _mainTask!;
                         }
 

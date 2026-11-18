@@ -133,7 +133,7 @@ public sealed class WeakTests {
             )
         );
         Assert.Equal("parent gone\nstill here\n", execution.Stdout);
-        Assert.Equal("fatal error: read an unowned reference to an object that is gone\n", execution.Stderr);
+        Assert.Equal("fatal error: read an unowned reference to an object that is gone\n  at test.sb:18:9\n", execution.Stderr);
     }
 
     [Theory]

@@ -326,7 +326,7 @@ public sealed class LoweringTests {
             """
             sil @M.max : $(Int, Int) -> Int loc "file0.sb":2 {
             bb0(%0 : $Int var "a", %1 : $Int var "b"):
-              %2 = builtin "cmp_gt_Int"(%0, %1) : $Bool loc 2:37
+              %2 = builtin "cmp_gt_Int"(%0, %1) : $Bool loc 2:44
               cond_br %2, bb1, bb2 loc 2:37
             bb1:
               br bb3(%0) loc 2:37

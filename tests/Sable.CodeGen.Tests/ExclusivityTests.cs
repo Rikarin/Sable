@@ -100,7 +100,7 @@ public sealed class ExclusivityTests {
     public void TwoReferencesToOneObjectTrapAsTheProgramRuns() {
         var execution = AssertAgree(Program(Declarations, "    let box = Box(1)\n    both(box, Box(2))\n    print(box.value)\n    both(box, box)\n    print(\"unreachable\")"));
         Assert.Equal("2\n", execution.Stdout);
-        Assert.Equal("fatal error: overlapping accesses to the same storage\n", execution.Stderr);
+        Assert.Equal("fatal error: overlapping accesses to the same storage\n  at test.sb:30:5\n", execution.Stderr);
     }
 
     [Fact]

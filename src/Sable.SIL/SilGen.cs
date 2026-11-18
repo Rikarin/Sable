@@ -4571,6 +4571,24 @@ public sealed partial class SilGen {
 
         /// <summary>Lowers an expression to an owned value — or a trivial one, or <see cref="UnitValue" />.</summary>
         SilValue? Expression(BoundExpression expression) {
+            // An expression that can trap — an index, arithmetic, an unwrap, a cast —
+            // is where its instructions are, so that the trap names its
+            // column; what follows is back where the statement was.
+            if (expression is BoundIndexAccess or BoundBinaryOperator or BoundUnaryOperator or BoundConversion { ConversionKind: ConversionKind.Explicit }
+                && _location is not null) {
+                var around = _location;
+                Locate(expression.Syntax);
+                try {
+                    return ExpressionHere(expression);
+                } finally {
+                    _location = around;
+                }
+            }
+
+            return ExpressionHere(expression);
+        }
+
+        SilValue? ExpressionHere(BoundExpression expression) {
             if (UsesLent(expression)) {
                 return null;
             }

@@ -78,4 +78,23 @@ public sealed class PropertyTests {
     [Fact]
     public void FieldOutsideAnAccessorIsJustAName() =>
         Assert.Contains(ErrorsIn("fn f() -> Int { return field }"), static e => e.Code == ErrorCode.ERR_NameNotFound);
+
+    [Theory]
+    [InlineData("struct S { var n: Int { get } }")]
+    [InlineData("struct S { var n: Int { get => 1\n    set } }")]
+    [InlineData("struct S { fn f() -> Int }")]
+    [InlineData("class C { fn g() }")]
+    [InlineData("struct S { subscript(i: Int) -> Int { get } }")]
+    [InlineData("struct S { }\nextension S { fn f() }")]
+    [InlineData("fn free() -> Int")]
+    public void AMemberWithNoBodyIsReported(string source) =>
+        Assert.Contains(ErrorsIn(source), static e => e.Code == ErrorCode.ERR_MissingBody);
+
+    [Theory]
+    [InlineData("protocol P { var n: Int { get }\n    fn f() -> Int\n    subscript(i: Int) -> Int { get } }")]
+    [InlineData("abstract class Shape { abstract fn area() -> Int }")]
+    [InlineData("struct S { var n: Int = 0 { get\n    set => field = newValue } }")]
+    public void ARequirementOrSuppliedBodyIsNot(string source) =>
+        Assert.DoesNotContain(ErrorsIn(source), static e => e.Code == ErrorCode.ERR_MissingBody);
 }
+

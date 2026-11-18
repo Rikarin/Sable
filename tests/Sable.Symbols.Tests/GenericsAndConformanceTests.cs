@@ -20,8 +20,9 @@ public sealed class GenericsAndConformanceTests {
     /// <summary>The type of the last binding's initialiser in 'probe'.</summary>
     static string TypeOfLast(string source) {
         var compilation = Compile(source);
+        // The functions it calls are signatures alone: what inference needs.
         var errors = compilation.GetAllDiagnostics()
-            .Where(static d => d.Severity == DiagnosticSeverity.Error)
+            .Where(static d => d.Severity == DiagnosticSeverity.Error && d.Code != ErrorCode.ERR_MissingBody)
             .ToList();
         Assert.True(errors.Count == 0, string.Join("\n", errors.Select(static e => e.Message)));
 

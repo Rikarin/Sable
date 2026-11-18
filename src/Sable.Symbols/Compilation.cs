@@ -708,6 +708,10 @@ public sealed partial class Compilation {
             function.IsAbstract = false;
         }
 
+        if (declaration.Body is null && declaration.ExpressionBody is null) {
+            RequireBody(declaration, declaration.Identifier.Span, declaration.Attributes, declaration.Modifiers, container, $"'{name}'");
+        }
+
         if (declaration.TypeParameters is { } typeParameters) {
             function.TypeParameters = [
                 ..typeParameters.Parameters.Select((parameter, i) =>
@@ -958,7 +962,42 @@ public sealed partial class Compilation {
             }
         }
 
+        // Each accessor has a body, unless the property is a requirement or
+        // something supplies one: a builtin, the compiler, or 'field'.
+        foreach (var accessor in declaration.Accessors?.Accessors ?? []) {
+            if (accessor is { Body: null, ExpressionBody: null }
+                && !(field.BackingField is not null && accessor.Keyword.Kind is SyntaxKind.GetKeyword or SyntaxKind.SetKeyword)) {
+                RequireBody(declaration, accessor.Keyword.Span, declaration.Attributes, declaration.Modifiers, container, $"the '{accessor.Keyword.Text}' of '{name}'");
+            }
+        }
+
         AddTo(container, field);
+    }
+
+    /// <summary>
+    ///     Reports a member written without a body where nothing gives it
+    ///     one: a protocol's requirement has none, and neither does an
+    ///     'abstract' method, or one whose body the compiler or a foreign
+    ///     library supplies.
+    /// </summary>
+    void RequireBody(SyntaxNode declaration, TextSpan at, SyntaxList<AttributeSyntax> attributes, SyntaxTokenList modifiers, Symbol container, string what) {
+        // A declaration the parser could not make sense of may have lost
+        // the body it was written with; that error has been given.
+        if (declaration.DescendantTokens().Any(static t => t.IsMissing && t.Kind != SyntaxKind.GetKeyword)) {
+            return;
+        }
+
+        if (container is NamedTypeSymbol { TypeKind: TypeKind.Protocol }
+            || modifiers.Any(SyntaxKind.AbstractKeyword)
+            || attributes.Any(static a => a.Name.ToString().Trim() is "builtin" or "intrinsic" or "extern")) {
+            return;
+        }
+
+        ReportDeclaration(
+            ErrorCode.ERR_MissingBody,
+            at,
+            $"{what} needs a body: only a protocol's requirements, 'abstract' methods and '@builtin', '@intrinsic' or '@extern' declarations go without"
+        );
     }
 
     /// <summary>What a property's backing field is called: a name no source can write.</summary>
@@ -1160,6 +1199,12 @@ public sealed partial class Compilation {
         var scope = CurrentScope;
         function.ReturnTypeResolver = () =>
             TypeBinder.BindType(declaration.ReturnClause.Type, function, scope);
+
+        foreach (var accessor in declaration.Accessors?.Accessors ?? []) {
+            if (accessor is { Body: null, ExpressionBody: null }) {
+                RequireBody(declaration, accessor.Keyword.Span, declaration.Attributes, declaration.Modifiers, container, $"the '{accessor.Keyword.Text}' of this subscript");
+            }
+        }
 
         RecordDeclaration(declaration, function);
         AddTo(container, function);

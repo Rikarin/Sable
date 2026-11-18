@@ -20,7 +20,7 @@ fn afterTheSecond(_ n: Int) -> Int {
     return n
 }
 
-fn missingBody() -> Int
+fn missingBody() -> Int   //! S3112 needs a body
 
 fn afterTheThird(_ n: Int) -> Int {
     return n

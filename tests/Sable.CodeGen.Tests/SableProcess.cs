@@ -6,7 +6,10 @@ namespace Sable.CodeGen.Tests;
 internal static class SableProcess {
     public sealed record Result(string Output, string Errors, int ExitCode);
 
-    public static Result Run(string directory, string home, IReadOnlyDictionary<string, string?>? environment, params string[] arguments) {
+    public static Result Run(string directory, string home, IReadOnlyDictionary<string, string?>? environment, params string[] arguments) =>
+        RunWithInput(directory, home, environment, "", arguments);
+
+    public static Result RunWithInput(string directory, string home, IReadOnlyDictionary<string, string?>? environment, string input, params string[] arguments) {
         var start = new ProcessStartInfo("dotnet") { WorkingDirectory = directory, RedirectStandardOutput = true, RedirectStandardError = true, RedirectStandardInput = true };
         start.ArgumentList.Add(Path.Combine(AppContext.BaseDirectory, "sable.dll"));
         foreach (var argument in arguments) {
@@ -25,6 +28,7 @@ internal static class SableProcess {
         }
 
         using var process = Process.Start(start)!;
+        process.StandardInput.Write(input);
         process.StandardInput.Close();
         var output = process.StandardOutput.ReadToEndAsync();
         var errors = process.StandardError.ReadToEnd();

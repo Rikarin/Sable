@@ -156,8 +156,10 @@ public static class PackageBuilder {
                 var program = Program(graph, member.Name, target);
                 // The lints look at this member's own files, each once: the
                 // library with the library target, a binary's entry file with it.
+                // Program puts the member's library first and its dependencies'
+                // after, which are theirs to lint.
                 var ownLibrary = member.LibrarySources().Count;
-                IReadOnlyList<SyntaxTree> linted = target is null ? [..program.Skip(program.Count - ownLibrary)] : [program[0]];
+                IReadOnlyList<SyntaxTree> linted = target is null ? [..program.Take(ownLibrary)] : [program[0]];
                 var (errors, warnings) = Pipeline.CheckAndLint(program, member.Manifest.Lints, linted);
                 Report(environment, errors);
                 Report(environment, warnings);

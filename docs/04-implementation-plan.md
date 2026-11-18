@@ -1529,18 +1529,24 @@ VS Code's own test host.
   `test`, `bench` and `debug` ends with a note naming `sable explain` and the
   codes in it that have a page, as rustc's does; `sable lint` points at it
   under each warning.
-- **`sable doc [paths] [--std] [--out dir] [--json]`**: HTML (index with a
+- **`sable doc [paths] [--std] [-p member] [--out dir] [--json] [--open]`**: HTML (index with a
   filter box, a page per module and per type, signatures rendered from the
   symbols with type names linked, `///` and `//!` comments as light Markdown)
   or a JSON symbol graph (symbols, `memberOf`/`conformsTo`/`extends` edges).
   Tested on the whole standard library: every public declaration appears and
-  every link resolves. Not yet: `--open`, doc tests, search beyond the index.
+  every link resolves. In a package, with no paths, it documents the
+  package's library as a build compiles it — with its dependencies, not its
+  `tests/` — into `target/doc` at the workspace root; `--open` opens it in
+  `$BROWSER` or the system's browser. Not yet: doc tests, search beyond the
+  index.
 - **`sable repl`**: `ReplSession` (separate from the console) keeps imports,
   declarations and the statements that ran, and runs each entry as the next
   statement of a `main` that replays them, under the SIL interpreter; an
   expression is bound to `resN` and shown with its type; `:type`, `:reset`,
   `:help`, `:quit`. Replay re-runs side effects (I/O, clocks); a smarter
-  scheme would snapshot the interpreter's state instead.
+  scheme would snapshot the interpreter's state instead. In a package the
+  session is compiled with the package's library and its dependencies, so
+  `import` takes their modules (`--no-package` for a session without).
 - **Lints** (`src/Sable.Symbols/Lints/`): `Lint` over a file's
   `SemanticModel` and bound bodies, `LintConfiguration` (levels by name,
   `FromTable` for a `[lints]` table), `@allow(name)`/`@warn(name)` on any
@@ -1551,8 +1557,9 @@ VS Code's own test host.
   `Lints.Run(compilation, configuration)`. `sable check` runs them over the
   package's own files (not its dependencies'), at the levels of the
   manifest's `[lints]` table, once the package type-checks; a lint at
-  `error` fails the check. `sable lint <paths>` lints loose files with levels
-  given on the command line. Plugin loading of third-party lints is not
+  `error` fails the check. `sable lint` does the same without the rest of
+  the check, with levels from the command line over the manifest's; `sable
+  lint <paths>` lints loose files with levels given on the command line. Plugin loading of third-party lints is not
   built.
 
 ### Debugging, as implemented
@@ -1607,7 +1614,9 @@ lldb loads after `settings set target.load-script-from-symbol-file true`;
 Linux has no such place — lldb does not read `.debug_gdb_scripts` — so it is
 imported by hand there. `sable debug <file.sb> [--batch] [-o <command>]… [--
 <arguments>]` builds with `-g` into a temporary directory and starts lldb
-(`$LLDB`, else `lldb`) with the plugin loaded.
+(`$LLDB`, else `lldb`) with the plugin loaded; in a package, `sable debug
+[--bin name] [-p member]` builds the binary with the dev profile, as `sable
+run` would, and debugs that.
 `tests/Sable.CodeGen.Tests/DebuggerFormatterTests.cs` drives the real lldb;
 it passes vacuously where lldb cannot trace a process — as in the emulated
 x64 container on an arm64 Mac, where lldb 21 launches the program but it

@@ -228,8 +228,26 @@ public sealed class BoundBinaryOperator(
     /// <summary>The <c>operator</c> member, when the operator was overloaded.</summary>
     public FunctionSymbol? Method { get; } = method;
 
+    /// <summary>
+    ///     <c>==</c> or <c>!=</c> that compares its operands part by part:
+    ///     two tuples element by element, two optionals by what they hold.
+    /// </summary>
+    public StructuralComparison? Structural { get; init; }
+
     public override IEnumerable<BoundNode> Children => Nodes(Left, Right);
 }
+
+/// <summary>
+///     How two values compare part by part: <see cref="Equal" /> is the
+///     comparison written over two stand-ins, which lowering gives the parts
+///     — the tuples themselves, or the values two optionals hold.
+/// </summary>
+/// <remarks>
+///     The comparison is bound as source would be, so each part compares
+///     with its own '==' — a built-in, a type's own operator, or another
+///     tuple's — and a part with none is reported as the operator would be.
+/// </remarks>
+public sealed record StructuralComparison(LocalSymbol Left, LocalSymbol Right, BoundExpression Equal);
 
 public enum UnaryOperatorKind {
     Negate,

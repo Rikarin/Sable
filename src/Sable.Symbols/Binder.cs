@@ -2907,6 +2907,11 @@ public sealed partial class Binder {
                 return BindCallToGroup(syntax, group, arguments, labels, syntaxes, expectedType);
             }
 
+            // 'm(3)' on a value whose type declares 'operator ()'.
+            case BoundExpression value when !value.HasError
+                && BindOperatorCall(syntax, "()", value, arguments, labels, syntaxes) is { } called:
+                return called;
+
             default:
                 if (!callee.HasError) {
                     _diagnostics.Error(
@@ -3745,12 +3750,64 @@ public sealed partial class Binder {
             }
         }
 
+        // Or with 'operator []', the alternative form (SYNTAX.md §13).
+        if (BindOperatorCall(syntax, "[]", receiver, indices, [], default) is { } indexed) {
+            return indexed;
+        }
+
         _diagnostics.Error(
             ErrorCode.ERR_NotIndexable,
             syntax.Span,
             $"'{receiver.Type.ToDisplayString()}' cannot be indexed"
         );
         return new BoundError(syntax, [receiver, ..indices]);
+    }
+
+    /// <summary>
+    ///     <c>m["x"]</c> and <c>m(3)</c> on a type that declares
+    ///     <c>operator []</c> or <c>operator ()</c>: a call to it, with the
+    ///     value first, as a binary operator's left operand is. Null when the
+    ///     type declares no such operator.
+    /// </summary>
+    BoundExpression? BindOperatorCall(
+        SyntaxNode syntax,
+        string symbol,
+        BoundExpression receiver,
+        ImmutableArray<BoundExpression> arguments,
+        ImmutableArray<string?> labels,
+        ImmutableArray<ExpressionSyntax> syntaxes
+    ) {
+        if (receiver.Type is not NamedTypeSymbol named) {
+            return null;
+        }
+
+        ImmutableArray<FunctionSymbol> candidates = [
+            ..named.OriginalDefinition.Members.OfType<FunctionSymbol>()
+                .Where(f => f.FunctionKind == FunctionKind.Operator && f.Name == symbol && f.Parameters.Length >= 1)
+        ];
+        if (candidates.IsEmpty) {
+            return null;
+        }
+
+        var substitution = TypeSubstitution.For(named);
+        ImmutableArray<BoundExpression> all = [receiver, ..arguments];
+        ImmutableArray<string?> allLabels = labels.IsEmpty ? [] : [null, ..labels];
+        if (ResolveOverload(candidates, all, allLabels, syntax, substitution) is not { } resolved) {
+            return new BoundError(syntax, all.ToArray());
+        }
+
+        var converted = ImmutableArray.CreateBuilder<BoundExpression>(all.Length);
+        for (var i = 0; i < all.Length && i < resolved.Parameters.Length; i++) {
+            var wanted = substitution.Apply(resolved.Parameters[i].Type);
+            var argument = all[i] is BoundUnboundClosure && !syntaxes.IsDefault
+                ? BindExpression(syntaxes[i - 1], wanted)
+                : all[i];
+            converted.Add(Convert(argument, wanted, argument.Syntax));
+        }
+
+        return new BoundCall(syntax, null, resolved, converted.ToImmutable(), substitution.Apply(resolved.ReturnType)) {
+            Substitution = substitution,
+        };
     }
 
     /// <summary>An index has a type too, and it is the one the receiver wants.</summary>
@@ -4896,11 +4953,17 @@ public sealed partial class Binder {
         BinaryOperatorKind kind,
         BoundExpression left,
         BoundExpression right,
-        SyntaxToken operatorToken
+        SyntaxToken operatorToken,
+        string? symbolOverride = null
     ) {
         if (left.HasError || right.HasError) {
             return new BoundError(syntax, left, right);
         }
+
+        // 'm += n' is 'm = m + n': the operator it looks for is '+'
+        // (SYNTAX.md §13 — compound assignment derives from the binary one).
+        var symbol = symbolOverride
+            ?? (CompoundOperatorKind(operatorToken.Kind) is null ? operatorToken.Text : operatorToken.Text[..^1]);
 
         // After 'where T == Int' a T is an Int, operators and all.
         left = AsCanonical(left);
@@ -4949,7 +5012,7 @@ public sealed partial class Binder {
                 or BinaryOperatorKind.GreaterThan or BinaryOperatorKind.GreaterThanOrEqual
             && left.Type.Equals(Core.String) && right.Type.Equals(Core.String);
         if (!IsBuiltinOperand(left.Type) || !IsBuiltinOperand(right.Type) || stringOrdering) {
-            if (FindUserOperator(operatorToken.Text, left.Type, right.Type) is { } own) {
+            if (FindUserOperator(symbol, left.Type, right.Type) is { } own) {
                 return new BoundBinaryOperator(syntax, UserResultType(own, left.Type), BinaryOperatorKind.UserDefined, left, right, own);
             }
 
@@ -4963,7 +5026,7 @@ public sealed partial class Binder {
                 return new BoundBinaryOperator(syntax, Core.Bool, kind, left, right, basis);
             }
 
-            if (ReportUnmetDerivedOperator(derivedFrom ?? operatorToken.Text, left.Type, syntax)) {
+            if (ReportUnmetDerivedOperator(derivedFrom ?? symbol, left.Type, syntax)) {
                 return new BoundError(syntax, left, right);
             }
         }
@@ -4982,12 +5045,17 @@ public sealed partial class Binder {
                 : new BoundBinaryOperator(syntax, Core.Bool, kind, left, right, order);
         }
 
+        if (kind is BinaryOperatorKind.Equal or BinaryOperatorKind.NotEqual
+            && StructuralEquality(syntax, kind, left, right, operatorToken) is { } structural) {
+            return structural;
+        }
+
         var type = ResultTypeOf(kind, left.Type, right.Type);
         if (type is not null) {
             return new BoundBinaryOperator(syntax, type, kind, left, right);
         }
 
-        if (FindUserOperator(operatorToken.Text, left.Type, right.Type) is { } method) {
+        if (FindUserOperator(symbol, left.Type, right.Type) is { } method) {
             return new BoundBinaryOperator(
                 syntax,
                 method.ReturnType,
@@ -5001,10 +5069,90 @@ public sealed partial class Binder {
         _diagnostics.Error(
             ErrorCode.ERR_OperatorNotDefined,
             syntax.Span,
-            $"'{operatorToken.Text}' is not defined for "
+            $"'{symbol}' is not defined for "
             + $"'{left.Type.ToDisplayString()}' and '{right.Type.ToDisplayString()}'"
         );
         return new BoundError(syntax, left, right);
+    }
+
+    /// <summary>
+    ///     <c>==</c> and <c>!=</c> on what has no comparison of its own but
+    ///     is made of parts that do: two tuples, element by element, and two
+    ///     optionals — or an optional and a value — of a type whose '==' is
+    ///     not built in, by what they hold. Null when neither applies.
+    /// </summary>
+    BoundExpression? StructuralEquality(
+        SyntaxNode syntax,
+        BinaryOperatorKind kind,
+        BoundExpression left,
+        BoundExpression right,
+        SyntaxToken operatorToken
+    ) {
+        // 'x == none' asks only whether there is a value.
+        if (IsNone(left) || IsNone(right)) {
+            return null;
+        }
+
+        TypeSymbol compared;
+        if (left.Type is TupleTypeSymbol && right.Type is TupleTypeSymbol) {
+            // Tuples of different types do not compare: '==' is not defined
+            // for them, as for any two different types.
+            if (!_conversions.HasImplicitConversion(right.Type, left.Type, IsLiteral(right))) {
+                return null;
+            }
+
+            compared = left.Type;
+            right = Convert(right, compared, right.Syntax);
+        } else {
+            var payload = (left.Type as OptionalTypeSymbol)?.UnderlyingType ?? (right.Type as OptionalTypeSymbol)?.UnderlyingType;
+            if (payload is null || IsBuiltinOperand(payload)) {
+                return null;
+            }
+
+            bool Holds(TypeSymbol type) => type.Equals(payload) || type is OptionalTypeSymbol optional && optional.UnderlyingType.Equals(payload);
+            if (!Holds(left.Type) || !Holds(right.Type)) {
+                return null;
+            }
+
+            compared = payload;
+        }
+
+        if (right.HasError) {
+            return new BoundError(syntax, left, right);
+        }
+
+        var leftPart = new LocalSymbol("$left", _containingSymbol, null, false) { TypeResolver = () => compared };
+        var rightPart = new LocalSymbol("$right", _containingSymbol, null, false) { TypeResolver = () => compared };
+        var leftAccess = new BoundLocalAccess(syntax, leftPart);
+        var rightAccess = new BoundLocalAccess(syntax, rightPart);
+
+        BoundExpression equal;
+        if (compared is TupleTypeSymbol tuple) {
+            BoundExpression? all = null;
+            for (var i = 0; i < tuple.ElementTypes.Length; i++) {
+                var element = BindBinaryOperator(
+                    syntax,
+                    BinaryOperatorKind.Equal,
+                    new BoundTupleElementAccess(syntax, tuple.ElementTypes[i], leftAccess, i),
+                    new BoundTupleElementAccess(syntax, tuple.ElementTypes[i], rightAccess, i),
+                    operatorToken,
+                    "=="
+                );
+                all = all is null ? element : new BoundBinaryOperator(syntax, Core.Bool, BinaryOperatorKind.LogicalAnd, all, element);
+            }
+
+            equal = all ?? new BoundLiteral(syntax, Core.Bool, true);
+        } else {
+            equal = BindBinaryOperator(syntax, BinaryOperatorKind.Equal, leftAccess, rightAccess, operatorToken, "==");
+        }
+
+        if (equal.HasError) {
+            return new BoundError(syntax, left, right);
+        }
+
+        return new BoundBinaryOperator(syntax, Core.Bool, kind, left, right) {
+            Structural = new StructuralComparison(leftPart, rightPart, equal),
+        };
     }
 
     TypeSymbol? ResultTypeOf(
@@ -5041,6 +5189,13 @@ public sealed partial class Binder {
 
             // 'T → T?' is implicit (docs/03 §3.7), so comparing an optional with
             // a value of its type is comparing two optionals.
+            // A struct or a class compares only with an '==' of its own (or
+            // derived), which was looked for already: there is no built-in
+            // one to fall back on, so it is not left for lowering to find.
+            BinaryOperatorKind.Equal or BinaryOperatorKind.NotEqual
+                when left is NamedTypeSymbol { TypeKind: TypeKind.Struct or TypeKind.Class or TypeKind.Actor } && !IsBuiltinOperand(left) =>
+                null,
+
             BinaryOperatorKind.Equal or BinaryOperatorKind.NotEqual =>
                 left.Equals(right)
                 || (left is OptionalTypeSymbol leftOptional

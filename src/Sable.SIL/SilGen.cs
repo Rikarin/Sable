@@ -811,6 +811,11 @@ public sealed partial class SilGen {
             { FunctionKind: FunctionKind.Accessor, ContainingSymbol: FunctionSymbol { FunctionKind: FunctionKind.Subscript } subscript } =>
                 $"{owner}.{SubscriptName(subscript)}.{symbol.Name}",
             { FunctionKind: FunctionKind.Subscript } => $"{owner}.{SubscriptName(symbol)}.get",
+
+            // 'operator []' and 'operator ()' are named in words: brackets
+            // would end the name where SIL text is read back.
+            { FunctionKind: FunctionKind.Operator, Name: "[]" } => $"{owner}.operator$index",
+            { FunctionKind: FunctionKind.Operator, Name: "()" } => $"{owner}.operator$call",
             _ => $"{owner}.{symbol.Name}",
         };
         if (symbol.FunctionKind == FunctionKind.Subscript || symbol.ContainingSymbol is FunctionSymbol { FunctionKind: FunctionKind.Subscript }) {
@@ -5377,6 +5382,25 @@ public sealed partial class SilGen {
                 return answer;
             }
 
+            // '(a, b) == (c, d)': the tuples given to the comparison bound
+            // over them, which compares element by element.
+            if (binary.Structural is { } byElement && Sub(binary.Left.Type) is TupleTypeSymbol) {
+                if (Expression(binary.Left) is not { } leftTuple) {
+                    return null;
+                }
+
+                BindLocal(byElement.Left, leftTuple, binary.Syntax, declaration: true);
+                if (Expression(binary.Right) is not { } rightTuple) {
+                    return null;
+                }
+
+                BindLocal(byElement.Right, rightTuple, binary.Syntax, declaration: true);
+                var same = Expression(byElement.Equal);
+                return same is null || binary.OperatorKind == BinaryOperatorKind.Equal
+                    ? same
+                    : Emit(new BuiltinInst("not_Bool", SilType.Bool, same));
+            }
+
             // 'a + b + c' on strings: one string of the three, not one for each '+'.
             if (IsStringConcat(binary) && IsStringConcat(binary.Left)) {
                 var operands = new List<BoundExpression>();
@@ -5423,7 +5447,7 @@ public sealed partial class SilGen {
             if (binary.OperatorKind is BinaryOperatorKind.Equal or BinaryOperatorKind.NotEqual
                 && left.Type is EnumType { Cases: [("Some", { } payloadType), ("None", null)] } optional
                 && right.Type == left.Type) {
-                var equal = OptionalEquals(optional, payloadType, left, right, binary);
+                var equal = OptionalEquals(optional, payloadType, left, right, binary, binary.Structural);
                 End(right);
                 End(left);
                 return equal is null || binary.OperatorKind == BinaryOperatorKind.Equal
@@ -5439,6 +5463,22 @@ public sealed partial class SilGen {
                 End(right);
                 End(left);
                 return compared;
+            }
+
+            // 'a === b': the one object, whatever class each is seen as.
+            if (binary.OperatorKind is BinaryOperatorKind.ReferenceEqual or BinaryOperatorKind.ReferenceNotEqual
+                && left.Type is ClassType leftClass && right.Type is ClassType rightClass) {
+                // Seen as the same class: the subclass's side as its base.
+                // Two classes neither derives from never share an object.
+                SilValue same = leftClass == rightClass ? Emit(new BuiltinInst("ref_identical", SilType.Bool, left, right))
+                    : rightClass.IsSubclassOf(leftClass) ? Emit(new BuiltinInst("ref_identical", SilType.Bool, left, Emit(new UpcastInst(right, leftClass))))
+                    : leftClass.IsSubclassOf(rightClass) ? Emit(new BuiltinInst("ref_identical", SilType.Bool, Emit(new UpcastInst(left, rightClass)), right))
+                    : Emit(new IntegerLiteralInst(SilType.Bool, 0));
+                End(right);
+                End(left);
+                return binary.OperatorKind == BinaryOperatorKind.ReferenceEqual
+                    ? same
+                    : Emit(new BuiltinInst("not_Bool", SilType.Bool, same));
             }
 
             var op = binary.OperatorKind switch {
@@ -5513,9 +5553,15 @@ public sealed partial class SilGen {
             };
 
         /// <summary>Two optionals of a comparable type compared: by case, and then by value.</summary>
-        SilValue? OptionalEquals(EnumType optional, SilType payloadType, SilValue left, SilValue right, BoundNode at) {
+        /// <remarks>
+        ///     Two values held compare by their built-in comparison or, where
+        ///     there is none, by the one the binder bound over stand-ins for
+        ///     them (<paramref name="byPayload" />): a type's own '==', or a
+        ///     tuple's element by element.
+        /// </remarks>
+        SilValue? OptionalEquals(EnumType optional, SilType payloadType, SilValue left, SilValue right, BoundNode at, StructuralComparison? byPayload = null) {
             var compare = $"cmp_eq_{payloadType}";
-            if (SilBuiltins.Find(compare) is null) {
+            if (SilBuiltins.Find(compare) is null && byPayload is null) {
                 return Missing(at, $"comparing optionals of {payloadType}");
             }
 
@@ -5534,7 +5580,17 @@ public sealed partial class SilGen {
             var differ = function.AddBlock();
             Jump(new SwitchEnumInst(right, [(some, bothSome)], differ));
             _current = bothSome;
-            Branch(after, Emit(new BuiltinInst(compare, SilType.Bool, leftValue, rightValue)));
+            if (SilBuiltins.Find(compare) is not null) {
+                Branch(after, Emit(new BuiltinInst(compare, SilType.Bool, leftValue, rightValue)));
+            } else {
+                BindLocal(byPayload!.Left, Owned(leftValue), at.Syntax, declaration: true);
+                BindLocal(byPayload.Right, Owned(rightValue), at.Syntax, declaration: true);
+                if (Expression(byPayload.Equal) is not { } same) {
+                    return null;
+                }
+
+                Branch(after, same);
+            }
             _current = differ;
             Branch(after, Emit(new IntegerLiteralInst(SilType.Bool, 0)));
 

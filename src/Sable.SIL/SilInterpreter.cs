@@ -850,6 +850,9 @@ public sealed partial class SilInterpreter(SilModule module, int stepLimit = 10_
             case "string_concat_many":
                 return Allocate(new HeapString(string.Concat(operands.Select(o => Text(o).Value))));
 
+            case "ref_identical":
+                return ReferenceEquals(Alive((HeapObject)operands[0]!), Alive((HeapObject)operands[1]!));
+
             case "string_count":
                 return (long)Text(operands[0]).Scalars.Count;
 

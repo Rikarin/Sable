@@ -2951,8 +2951,10 @@ public sealed partial class Binder {
                 var constructed = namedType;
                 if (namedType is { TypeArguments.IsEmpty: true, TypeParameters.IsEmpty: false }) {
                     var map = new Dictionary<TypeParameterSymbol, TypeSymbol>();
+                    var fromContext = false;
                     if (Expand(expectedType) is NamedTypeSymbol { IsConstructed: true } wanted
                         && ReferenceEquals(wanted.OriginalDefinition, namedType.OriginalDefinition)) {
+                        fromContext = true;
                         for (var i = 0; i < namedType.TypeParameters.Length; i++) {
                             map[namedType.TypeParameters[i]] = wanted.TypeArguments[i];
                         }
@@ -2968,6 +2970,20 @@ public sealed partial class Binder {
 
                     if (map.Count == namedType.TypeParameters.Length) {
                         constructed = namedType.Construct([..namedType.TypeParameters.Select(p => map[p])]);
+
+                        // Arguments written in a type were checked where the
+                        // type was bound; ones inferred from the initialiser's
+                        // arguments have to meet the same constraints and
+                        // 'where' clause, or 'Box(t: notAShape)' makes a Box
+                        // whose methods call what its T does not have.
+                        if (!fromContext) {
+                            _compilation.TypeBinder.CheckTypeArguments(
+                                namedType,
+                                constructed.TypeArguments,
+                                syntax.Span,
+                                _containingSymbol
+                            );
+                        }
                     }
                 }
 
@@ -5017,6 +5033,12 @@ public sealed partial class Binder {
                 : new BoundBinaryOperator(syntax, Core.Bool, kind, left, right, order);
         }
 
+        // 'x == none' asks only which case x is, so any optional compares.
+        if (kind is BinaryOperatorKind.Equal or BinaryOperatorKind.NotEqual
+            && (IsNone(left) && right.Type is OptionalTypeSymbol || IsNone(right) && left.Type is OptionalTypeSymbol)) {
+            return new BoundBinaryOperator(syntax, Core.Bool, kind, left, right);
+        }
+
         var type = ResultTypeOf(kind, left.Type, right.Type);
         if (type is not null) {
             return new BoundBinaryOperator(syntax, type, kind, left, right);
@@ -5076,12 +5098,15 @@ public sealed partial class Binder {
 
             // 'T → T?' is implicit (docs/03 §3.7), so comparing an optional with
             // a value of its type is comparing two optionals.
+            // Only what has an equality of its own compares without an '==':
+            // an unconstrained 'T' does not, whatever it is made at the call.
             BinaryOperatorKind.Equal or BinaryOperatorKind.NotEqual =>
-                left.Equals(right)
-                || (left is OptionalTypeSymbol leftOptional
-                    && leftOptional.UnderlyingType.Equals(right))
-                || (right is OptionalTypeSymbol rightOptional
-                    && rightOptional.UnderlyingType.Equals(left))
+                (left.Equals(right)
+                 || (left is OptionalTypeSymbol leftOptional
+                     && leftOptional.UnderlyingType.Equals(right))
+                 || (right is OptionalTypeSymbol rightOptional
+                     && rightOptional.UnderlyingType.Equals(left)))
+                && HasBuiltinEquality(left is OptionalTypeSymbol { UnderlyingType: var underlying } ? underlying : left)
                     ? Core.Bool
                     : null,
 
@@ -5131,6 +5156,19 @@ public sealed partial class Binder {
 
     /// <summary>Looks for an <c>operator</c> member on either operand's type.</summary>
     /// <summary>A type the built-in operators are defined on: what never looks for one of its own.</summary>
+    /// <summary>
+    ///     True for a type '==' compares without an operator of its own: the
+    ///     scalars, and an enum or union whose cases carry nothing, which are
+    ///     equal when they are the same case.
+    /// </summary>
+    bool HasBuiltinEquality(TypeSymbol type) =>
+        type.IsError
+        || Core.IsNumeric(type) || type.Equals(Core.String) || type.Equals(Core.Bool) || type.Equals(Core.Char)
+        || type is NamedTypeSymbol { TypeKind: TypeKind.Enum }
+        || type is NamedTypeSymbol { TypeKind: TypeKind.Union } union
+        && union.Members.OfType<UnionCaseSymbol>().All(static c => !c.HasPayload)
+        || type is TupleTypeSymbol tuple && tuple.ElementTypes.All(HasBuiltinEquality);
+
     bool IsBuiltinOperand(TypeSymbol type) =>
         Core.IsNumeric(type) || type.Equals(Core.String) || type.Equals(Core.Bool) || type.Equals(Core.Char)
         || type is OptionalTypeSymbol || type.IsError;

@@ -363,4 +363,56 @@ public sealed class GenericsAndConformanceTests {
             }
             """
         );
+
+    // ---- Constraints on inferred and 'where' arguments ---------------------
+
+    const string Shapes = """
+                          protocol Shape { fn area() -> Int }
+                          struct Square: Shape { var side: Int; fn area() -> Int { return side * side } }
+                          struct NotShape { var v: Int }
+                          struct Box<T: Shape> { var t: T }
+                          struct Holder<T> where T: Shape { var t: T }
+                          struct Pair<A, B> where A == B { var a: A; var b: B }
+
+                          """;
+
+    /// <summary>A type argument inferred from an initialiser meets the same constraints as one written.</summary>
+    [Fact]
+    public void AnInferredTypeArgumentMeetsItsConstraints() {
+        var error = Assert.Single(Errors(Shapes + "fn probe() { let b = Box(t: NotShape(v: 1)) }"));
+        Assert.Equal(ErrorCode.ERR_DoesNotConform, error.Code);
+        Assert.Contains("'NotShape' does not conform to 'Shape'", error.Message);
+
+        AssertClean(Shapes + "fn probe() { let b = Box(t: Square(side: 2)) }");
+    }
+
+    [Fact]
+    public void AWhereClauseOnATypeIsChecked() {
+        Assert.Contains(Errors(Shapes + "fn probe() { let h = Holder(t: NotShape(v: 1)) }"), static e => e.Code == ErrorCode.ERR_DoesNotConform);
+        Assert.Contains(Errors(Shapes + "fn probe(_ h: Holder<Int>) { }"), static e => e.Code == ErrorCode.ERR_DoesNotConform);
+        AssertClean(Shapes + "fn probe() { let h = Holder(t: Square(side: 2)) }");
+    }
+
+    [Fact]
+    public void ASameTypeRequirementOnATypeIsChecked() {
+        var inferred = Assert.Single(Errors(Shapes + "fn probe() { let p = Pair(a: 1, b: \"s\") }"));
+        Assert.Equal(ErrorCode.ERR_DoesNotConform, inferred.Code);
+        Assert.Contains("'A == B'", inferred.Message);
+
+        Assert.Contains(Errors(Shapes + "fn probe(_ p: Pair<Int, String>) { }"), static e => e.Code == ErrorCode.ERR_DoesNotConform);
+        AssertClean(Shapes + "fn probe(_ q: Pair<Int, Int>) { let p = Pair(a: 1, b: 2) }");
+
+        // Inside a declaration that makes them one, two parameters are.
+        AssertClean(Shapes + "fn probe<X, Y>(_ x: X, _ y: Y) where X == Y { let p = Pair(a: x, b: y) }");
+    }
+
+    /// <summary>'==' on an unconstrained type parameter has nothing to call.</summary>
+    [Fact]
+    public void AnUnconstrainedTypeParameterHasNoEquality() {
+        var error = Assert.Single(Errors("fn eq<T>(_ a: T, _ b: T) -> Bool { return a == b }"));
+        Assert.Equal(ErrorCode.ERR_OperatorNotDefined, error.Code);
+
+        AssertClean("fn eq<T: Equatable>(_ a: T, _ b: T) -> Bool { return a == b }");
+        AssertClean("fn some<T>(_ a: T?) -> Bool { return a != none }");
+    }
 }

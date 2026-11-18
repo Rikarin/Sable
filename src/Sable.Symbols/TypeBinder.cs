@@ -421,16 +421,39 @@ internal sealed class TypeBinder(Compilation compilation) {
 
     /// <summary>
     ///     Checks that a constructed type's arguments meet the declaration's
-    ///     constraints.
+    ///     constraints and its <c>where</c> clause, as understood inside
+    ///     <paramref name="context" />.
     /// </summary>
-    void CheckTypeArguments(
+    /// <remarks>
+    ///     The same check serves arguments written, <c>Box&lt;Circle&gt;</c>,
+    ///     and arguments inferred from an initialiser's, <c>Box(t: circle)</c>.
+    ///     A requirement is read with the arguments in place of the
+    ///     parameters, so <c>where A == B</c> on <c>Pair&lt;Int, String&gt;</c>
+    ///     asks whether Int is String; and as the context's own requirements
+    ///     have it, so <c>Pair&lt;X, Y&gt;</c> is fine inside a function that
+    ///     says <c>where X == Y</c>.
+    /// </remarks>
+    internal void CheckTypeArguments(
         NamedTypeSymbol definition,
         ImmutableArray<TypeSymbol> arguments,
-        TextSpan span
+        TextSpan span,
+        Symbol? context = null
     ) {
+        if (arguments.Any(TypeSubstitution.ContainsError)) {
+            return;
+        }
+
+        var map = new Dictionary<TypeParameterSymbol, TypeSymbol>();
+        for (var i = 0; i < arguments.Length && i < definition.TypeParameters.Length; i++) {
+            map[definition.TypeParameters[i]] = arguments[i];
+        }
+
+        var substitution = new TypeSubstitution(map);
+        var equivalence = TypeEquivalence.ForSymbol(context);
+
         for (var i = 0; i < arguments.Length && i < definition.TypeParameters.Length; i++) {
             foreach (var constraint in definition.TypeParameters[i].Constraints) {
-                if (Conversions.Satisfies(arguments[i], constraint)) {
+                if (Conversions.Satisfies(arguments[i], substitution.Apply(constraint), equivalence)) {
                     continue;
                 }
 
@@ -443,6 +466,35 @@ internal sealed class TypeBinder(Compilation compilation) {
                     + $"'{definition.TypeParameters[i].Name}'"
                 );
             }
+        }
+
+        foreach (var (left, right) in definition.SameTypeRequirements) {
+            var leftType = substitution.Apply(left);
+            var rightType = substitution.Apply(right);
+            if (equivalence.AreSame(leftType, rightType)) {
+                continue;
+            }
+
+            _diagnostics.Error(
+                ErrorCode.ERR_DoesNotConform,
+                span,
+                $"'{definition.Name}' requires '{left.ToDisplayString()} == {right.ToDisplayString()}', "
+                + $"and here they are '{leftType.ToDisplayString()}' and '{rightType.ToDisplayString()}'"
+            );
+        }
+
+        foreach (var (subject, constraint) in definition.ConformanceRequirements) {
+            var subjectType = substitution.Apply(subject);
+            if (Conversions.Satisfies(subjectType, substitution.Apply(constraint), equivalence)) {
+                continue;
+            }
+
+            _diagnostics.Error(
+                ErrorCode.ERR_DoesNotConform,
+                span,
+                $"'{subjectType.ToDisplayString()}' does not conform to '{constraint.ToDisplayString()}', "
+                + $"which '{definition.Name}' requires of '{subject.ToDisplayString()}'"
+            );
         }
     }
 
@@ -801,7 +853,7 @@ internal sealed class TypeBinder(Compilation compilation) {
                 }
 
                 // Constraints bind later than this, so the check waits.
-                DeferLate(() => CheckTypeArguments(named, arguments, span));
+                DeferLate(() => CheckTypeArguments(named, arguments, span, context));
                 return named.Construct(arguments);
             }
 

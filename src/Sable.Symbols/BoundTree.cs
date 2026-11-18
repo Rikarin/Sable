@@ -97,6 +97,14 @@ public sealed class BoundFieldAccess(
     public FieldSymbol Field { get; } = field;
 
     /// <summary>
+    ///     '?.' to a field that is optional itself: the chain's result is the
+    ///     field's value, not that value wrapped again — 'user?.address' of
+    ///     an 'Address?' field is an 'Address?', as 'Address??' would be
+    ///     another '?.' away from its members.
+    /// </summary>
+    public bool FlattensChain { get; init; }
+
+    /// <summary>
     ///     Assignable when the field is mutable, the member has a setter if it is
     ///     computed, and the value it belongs to can be written through.
     /// </summary>
@@ -220,8 +228,26 @@ public sealed class BoundBinaryOperator(
     /// <summary>The <c>operator</c> member, when the operator was overloaded.</summary>
     public FunctionSymbol? Method { get; } = method;
 
+    /// <summary>
+    ///     <c>==</c> or <c>!=</c> that compares its operands part by part:
+    ///     two tuples element by element, two optionals by what they hold.
+    /// </summary>
+    public StructuralComparison? Structural { get; init; }
+
     public override IEnumerable<BoundNode> Children => Nodes(Left, Right);
 }
+
+/// <summary>
+///     How two values compare part by part: <see cref="Equal" /> is the
+///     comparison written over two stand-ins, which lowering gives the parts
+///     — the tuples themselves, or the values two optionals hold.
+/// </summary>
+/// <remarks>
+///     The comparison is bound as source would be, so each part compares
+///     with its own '==' — a built-in, a type's own operator, or another
+///     tuple's — and a part with none is reported as the operator would be.
+/// </remarks>
+public sealed record StructuralComparison(LocalSymbol Left, LocalSymbol Right, BoundExpression Equal);
 
 public enum UnaryOperatorKind {
     Negate,
@@ -315,6 +341,13 @@ public enum ConversionKind {
     ///     is wanted — a <c>ref</c> result, a reference parameter.
     /// </summary>
     Reference,
+
+    /// <summary>
+    ///     An array of any kind as a slice, <c>T[:]</c>: the same elements
+    ///     (SYNTAX.md §11). It ranks overloads; the bound tree records it as
+    ///     <see cref="Identity" />, since every kind is stored alike.
+    /// </summary>
+    ArrayView,
 }
 
 public sealed class BoundConversion(

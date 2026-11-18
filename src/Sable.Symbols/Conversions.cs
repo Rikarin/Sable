@@ -38,6 +38,22 @@ internal sealed class Conversions(CoreTypes core) {
             return ConversionKind.Identity;
         }
 
+        // A 'T!' is the T it holds wherever a T, or what a T converts to, is
+        // wanted: unwrapped, as 'x!' would be, and the binder takes the step
+        // from the T after.
+        if (source is OptionalTypeSymbol { IsImplicitlyUnwrapped: true } unwrapped
+            && target is not OptionalTypeSymbol
+            && Classify(unwrapped.UnderlyingType, target, false) is not null) {
+            return ConversionKind.Explicit;
+        }
+
+        // Every kind of array can be viewed as a slice of its elements.
+        if (source is ArrayTypeSymbol { ArrayKind: not ArrayKind.Slice } array
+            && target is ArrayTypeSymbol { ArrayKind: ArrayKind.Slice } slice
+            && array.ElementType.Equals(slice.ElementType)) {
+            return ConversionKind.ArrayView;
+        }
+
         // 'Never' is the bottom type: an expression that does not return fits
         // anywhere.
         if (source.Equals(core.Never)) {
@@ -74,9 +90,19 @@ internal sealed class Conversions(CoreTypes core) {
             if (sourceIsLiteral && IsLiteralCompatible(source, optional.UnderlyingType)) {
                 return ConversionKind.OptionalWrap;
             }
+
+            // Promotion composes with what gets a value to the underlying
+            // type: '[9]' for an 'Int[>..]?' takes its kind and then wraps,
+            // '"x"' for an '(Int | String)?' joins the union and then wraps.
+            // The binder builds the two steps; an optional is never wrapped
+            // again, so 'T?' does not drift into 'T??'.
+            if (source is not OptionalTypeSymbol
+                && Classify(source, optional.UnderlyingType, sourceIsLiteral) is not null) {
+                return ConversionKind.OptionalWrap;
+            }
         }
 
-        if (target is StructuralUnionTypeSymbol union) {
+        if (StructuralUnionTypeSymbol.Of(target) is { } union) {
             foreach (var unionCase in union.Cases) {
                 if (source.Equals(unionCase)) {
                     return ConversionKind.UnionInjection;
@@ -240,6 +266,7 @@ internal sealed class Conversions(CoreTypes core) {
         kind switch {
             ConversionKind.Identity => 0,
             ConversionKind.LiteralTyping => 1,
+            ConversionKind.ArrayView => 1,
             ConversionKind.Upcast => 2,
             ConversionKind.OptionalWrap => 3,
             ConversionKind.UnionInjection => 4,

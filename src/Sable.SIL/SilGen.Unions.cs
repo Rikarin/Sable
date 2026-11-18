@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using Sable.Symbols;
 
 namespace Sable.SIL;
@@ -14,9 +15,10 @@ public sealed partial class SilGen {
     sealed partial class FunctionLowering {
         /// <summary>
         ///     A read of a binding of union type that a test has narrowed to
-        ///     one of its members: the binding as declared, and which member.
+        ///     one of its members, or to a union of some of them: the binding
+        ///     as declared, and which members are left.
         /// </summary>
-        (BoundExpression Whole, int Case)? NarrowedUnion(BoundExpression expression) {
+        (BoundExpression Whole, ImmutableArray<int> Cases)? NarrowedUnion(BoundExpression expression) {
             var (whole, declared) = expression switch {
                 BoundLocalAccess { IsNarrowed: true } local =>
                     ((BoundExpression)new BoundLocalAccess(local.Syntax, local.Local), local.Local.Type),
@@ -25,19 +27,34 @@ public sealed partial class SilGen {
                 _ => (null, null),
             };
 
-            if (whole is null || Sub(declared!) is not StructuralUnionTypeSymbol union) {
+            if (whole is null || StructuralUnionTypeSymbol.Of(Sub(declared!)) is not { } union) {
                 return null;
             }
 
-            var index = union.Cases.IndexOf(Sub(expression.Type));
-            return index < 0 ? null : (whole, index);
+            // 'if v is Int { return }' leaves an 'Int | String | Vec3' as a
+            // 'String | Vec3': each of those is a case of the declared union.
+            var narrowed = Sub(expression.Type);
+            ImmutableArray<int> cases = narrowed is StructuralUnionTypeSymbol left
+                ? [..left.Cases.Select(c => union.Cases.IndexOf(c))]
+                : [union.Cases.IndexOf(narrowed)];
+            return cases.Contains(-1) ? null : (whole, cases);
         }
 
-        /// <summary>The narrowed binding's value: its payload, which the test has said is there.</summary>
-        SilValue? NarrowedRead(BoundExpression expression, BoundExpression whole, int index) {
+        /// <summary>
+        ///     The narrowed binding's value: its payload, which the test has
+        ///     said is there — or, narrowed to several members, the value
+        ///     moved to the smaller union's case for the member it holds.
+        /// </summary>
+        SilValue? NarrowedRead(BoundExpression expression, BoundExpression whole, ImmutableArray<int> cases) {
             if (Borrow(whole) is not { Type: EnumType union } value) {
                 return Missing(expression, $"a read of '{expression.Type.ToDisplayString()}' narrowed from '{whole.Type.ToDisplayString()}'");
             }
+
+            if (cases.Length > 1) {
+                return NarrowedToUnion(expression, value, union, cases);
+            }
+
+            var index = cases[0];
 
             var present = function.AddBlock();
             var payload = Payload(present, union.Cases[index].Payload!);
@@ -54,9 +71,43 @@ public sealed partial class SilGen {
             return result;
         }
 
+        SilValue? NarrowedToUnion(BoundExpression expression, SilValue value, EnumType union, ImmutableArray<int> cases) {
+            if (LowerType(expression.Type) is not EnumType smaller) {
+                End(value);
+                return Missing(expression, $"the union '{expression.Type.ToDisplayString()}'");
+            }
+
+            var joined = function.AddBlock();
+            var result = joined.AddArgument(smaller);
+            var targets = new List<(int, SilBlock)>();
+            var blocks = new List<SilBlock>();
+            foreach (var index in cases) {
+                var block = function.AddBlock();
+                targets.Add((index, block));
+                blocks.Add(block);
+            }
+
+            var absent = function.AddBlock();
+            Jump(new SwitchEnumInst(value, targets, absent));
+
+            for (var i = 0; i < cases.Length; i++) {
+                _current = blocks[i];
+                var payload = Payload(blocks[i], union.Cases[cases[i]].Payload!);
+                Branch(joined, Emit(new EnumInst(smaller, i, Owned(payload))));
+            }
+
+            _current = absent;
+            Emit(new CondFailInst(Emit(new IntegerLiteralInst(SilType.Bool, 1)), "a narrowed union held another case"));
+            Jump(new UnreachableInst());
+
+            _current = joined;
+            End(value);
+            return result;
+        }
+
         /// <summary>A value where a union of its type is wanted: the case for its type, carrying it.</summary>
         SilValue? Inject(BoundConversion conversion) {
-            if (Sub(conversion.Type) is not StructuralUnionTypeSymbol union || LowerType(conversion.Type) is not EnumType enumType) {
+            if (StructuralUnionTypeSymbol.Of(Sub(conversion.Type)) is not { } union || LowerType(conversion.Type) is not EnumType enumType) {
                 return Missing(conversion, $"a value of the union '{conversion.Type.ToDisplayString()}'");
             }
 

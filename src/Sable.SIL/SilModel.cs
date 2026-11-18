@@ -1214,6 +1214,11 @@ public static class SilBuiltins {
             return operands.Count >= 2 && operands.All(static o => o == SilType.String) ? new([..operands], SilType.String) : null;
         }
 
+        // 'a === b': whether two references are to the one object.
+        if (name == "ref_identical") {
+            return operands is [ClassType, ClassType] ? new([operands[0], operands[1]], SilType.Bool) : null;
+        }
+
         // 'x is Dog': whether the object is of the class named, or a subclass of it.
         if (name.StartsWith("class_is:", StringComparison.Ordinal)) {
             return operands is [ClassType] ? new([operands[0]], SilType.Bool) : null;

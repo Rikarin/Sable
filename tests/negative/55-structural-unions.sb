@@ -52,12 +52,42 @@ fn comparingAUnionToOneSide(_ v: Int | String) -> Bool {
     return v == 1                       //! S3009
 }
 
-fn thereIsNoNoneType(_ n: Int?) -> Int | None {   //! S2001 no type named 'None'
-    return n                            //! S3004
+fn noneIsTheAbsentCase(_ n: Int?) -> Int | None {
+    return n
 }
 
-fn aUnionOfProtocols(_ v: any Named | Point) -> Int {
+fn noneMakesTheWholeUnionOptional(_ v: Int | String | None) -> Int {
+    if v != none { return 1 }
     return 0
+}
+
+fn neverAddsNoCase(_ v: Int | Never) -> Int {
+    return v
+}
+
+fn anOptionalCaseIsSubsumed(_ v: Int | Int?) -> Int? {
+    return v
+}
+
+fn anOpenExistentialIsNotACase(_ v: any Named | Point) -> Int {   //! S3150 'any Named'
+    return 0
+}
+
+fn anyErrorIsTheException(_ v: any Error | Point) -> Int {
+    return 0
+}
+
+fn aFailedTestNarrowsWhatFollows(_ v: Int | String) -> String {
+    if v is Int { return "" }
+    return v
+}
+
+fn butNotPastALoopItBreaksOutOf(_ v: Int | String) -> String {
+    while true {
+        if v is Int { break }
+        return v
+    }
+    return v                            //! S3004 expected 'String'
 }
 
 fn aUnionInAnArray(_ xs: (Int | String)[]) -> Int {

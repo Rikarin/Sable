@@ -169,6 +169,7 @@ public enum ErrorCode {
     ERR_PropertyObservers = 3140,
     ERR_ConvenienceMustDelegate = 3141,
     ERR_EnumCaseValue = 3142,
+    ERR_OpenExistentialInUnion = 3150,
     ERR_ConstGenericPredicate = 3160,
     ERR_SelfRequirementOnExistential = 3161,
 

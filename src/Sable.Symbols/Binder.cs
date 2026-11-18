@@ -1185,6 +1185,11 @@ public sealed partial class Binder {
     BoundBlock BindBlock(BlockSyntax block) {
         PushScope();
 
+        // What a 'guard', or an 'if' that leaves, establishes for the rest
+        // of a block ends with it: a 'break' out of a loop's body is a way
+        // past the test with it false.
+        PushNarrowing([]);
+
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
         var gapStart = block.OpenBraceToken.Span.End;
         foreach (var statement in block.Statements) {
@@ -1196,6 +1201,7 @@ public sealed partial class Binder {
         CaptureScopeInGap(block, gapStart, block.CloseBraceToken.IsMissing ? block.Span.End : block.CloseBraceToken.Span.Start);
 
         var locals = _locals[^1].Values.OfType<LocalSymbol>().ToImmutableArray();
+        PopNarrowing();
         PopScope();
 
         return Record(block, new BoundBlock(block, locals, statements.ToImmutable()));
@@ -1559,7 +1565,28 @@ public sealed partial class Binder {
             PopNarrowing();
         }
 
+        // 'if v is Int { return … }': the only way on is with the test
+        // false, so what that establishes holds for the rest of the block,
+        // as after a 'guard'. Likewise the other way round, past an 'else'
+        // that leaves.
+        var consequenceExits = FlowAnalysis.AlwaysExits(consequence);
+        var alternativeExits = alternative is not null && FlowAnalysis.AlwaysExits(alternative);
+        if (consequenceExits != alternativeExits) {
+            KeepNarrowings(NarrowingsWhen(condition, !consequenceExits));
+        }
+
         return Record(statement, new BoundIf(statement, condition, consequence, alternative));
+    }
+
+    /// <summary>Narrowings that hold from here to the end of the enclosing block.</summary>
+    void KeepNarrowings(Dictionary<Symbol, TypeSymbol> narrowings) {
+        foreach (var (symbol, type) in narrowings) {
+            if (_narrowed.Count == 0) {
+                PushNarrowing([]);
+            }
+
+            _narrowed[^1][symbol] = type;
+        }
     }
 
     /// <summary>
@@ -1693,13 +1720,7 @@ public sealed partial class Binder {
 
         // What the guard established holds for the rest of the enclosing
         // block, because the only way past it is with the condition true.
-        foreach (var (symbol, type) in NarrowingsWhen(condition, true)) {
-            if (_narrowed.Count == 0) {
-                PushNarrowing([]);
-            }
-
-            _narrowed[^1][symbol] = type;
-        }
+        KeepNarrowings(NarrowingsWhen(condition, true));
 
         return Record(statement, new BoundIf(statement, condition, body, null));
     }
@@ -1740,6 +1761,16 @@ public sealed partial class Binder {
                 case BoundTypeTest test when whenTrue:
                     if (BindingOf(test.Operand) is { } tested) {
                         into[tested] = test.TestedType;
+                    }
+
+                    return;
+
+                // 'v is Int' failing on an 'Int | String' leaves a String:
+                // a union's other cases are what it can still hold.
+                case BoundTypeTest test
+                    when StructuralUnionTypeSymbol.Of(test.Operand.Type) is { } union && union.Cases.Contains(test.TestedType):
+                    if (BindingOf(test.Operand) is { } excluded) {
+                        into[excluded] = StructuralUnionTypeSymbol.Create(union.Cases.Where(c => !c.Equals(test.TestedType)));
                     }
 
                     return;
@@ -2933,6 +2964,11 @@ public sealed partial class Binder {
             }
         }
 
+        // 'x.count' of an 'x: String!' reaches the String it holds.
+        if (syntax.OperatorToken.Kind != SyntaxKind.QuestionDotToken) {
+            receiver = ImplicitlyUnwrapped(receiver);
+        }
+
         var receiverType = receiver.Type;
         var optionalChain = false;
 
@@ -3036,14 +3072,17 @@ public sealed partial class Binder {
         }
 
         // Reaching through an optional gives an optional: '?.' can produce
-        // nothing, and the type says so.
+        // nothing, and the type says so. A member that is optional already
+        // says so itself, and the chain gives it as it is.
         return member switch {
             BoundFieldAccess field => new BoundFieldAccess(
                 syntax,
                 field.Receiver,
                 field.Field,
-                new OptionalTypeSymbol(field.Type)
-            ),
+                field.Type is OptionalTypeSymbol ? field.Type : new OptionalTypeSymbol(field.Type)
+            ) {
+                FlattensChain = field.Type is OptionalTypeSymbol,
+            },
 
             // A call through the chain is optional too, which the group
             // carries until the call is bound.
@@ -3489,6 +3528,9 @@ public sealed partial class Binder {
             .ToImmutableArray();
 
         var callee = BindCallee(syntax.Expression, expectedType);
+        if (syntax.QuestionToken.IsNone) {
+            callee = ImplicitlyUnwrapped(callee);
+        }
 
         switch (callee) {
             case BoundFunctionGroup group:
@@ -3514,7 +3556,7 @@ public sealed partial class Binder {
                 }
 
                 var call = BindCallToValue(syntax, value, inner, arguments, syntaxes);
-                return call.HasError
+                return call.HasError || call.Type is OptionalTypeSymbol
                     ? call
                     : new BoundConversion(
                         syntax,
@@ -3650,6 +3692,11 @@ public sealed partial class Binder {
                 };
                 return BindCallToGroup(syntax, group, arguments, labels, syntaxes, expectedType);
             }
+
+            // 'm(3)' on a value whose type declares 'operator ()'.
+            case BoundExpression value when !value.HasError
+                && BindOperatorCall(syntax, "()", value, arguments, labels, syntaxes) is { } called:
+                return called;
 
             default:
                 if (!callee.HasError) {
@@ -4107,7 +4154,8 @@ public sealed partial class Binder {
             Substitution = substitution,
         };
 
-        return group.IsOptionalChain
+        // A call through '?.' that gives an optional already gives that one.
+        return group.IsOptionalChain && result is not OptionalTypeSymbol
             ? new BoundConversion(syntax, new OptionalTypeSymbol(result), call, ConversionKind.OptionalWrap)
             : call;
     }
@@ -4684,6 +4732,12 @@ public sealed partial class Binder {
         ImmutableArray<BoundExpression> indices
     ) {
         if (receiver.Type is ArrayTypeSymbol array) {
+            // 'xs[1..<3]', 'xs[2...]', 'xs[..<2]': the elements in the range,
+            // as a slice (SYNTAX.md §11).
+            if (indices is [{ Type: NamedTypeSymbol { TypeArguments: [var bound] } range }] && Core.IsRange(range) && bound.Equals(Core.Int)) {
+                return new BoundIndexAccess(syntax, new ArrayTypeSymbol(array.ElementType, ArrayKind.Slice), receiver, indices);
+            }
+
             indices = CheckIndices(indices, Core.Int, syntax);
             return new BoundIndexAccess(syntax, array.ElementType, receiver, indices);
         }
@@ -4726,12 +4780,64 @@ public sealed partial class Binder {
             }
         }
 
+        // Or with 'operator []', the alternative form (SYNTAX.md §13).
+        if (BindOperatorCall(syntax, "[]", receiver, indices, [], default) is { } indexed) {
+            return indexed;
+        }
+
         _diagnostics.Error(
             ErrorCode.ERR_NotIndexable,
             syntax.Span,
             $"'{receiver.Type.ToDisplayString()}' cannot be indexed"
         );
         return new BoundError(syntax, [receiver, ..indices]);
+    }
+
+    /// <summary>
+    ///     <c>m["x"]</c> and <c>m(3)</c> on a type that declares
+    ///     <c>operator []</c> or <c>operator ()</c>: a call to it, with the
+    ///     value first, as a binary operator's left operand is. Null when the
+    ///     type declares no such operator.
+    /// </summary>
+    BoundExpression? BindOperatorCall(
+        SyntaxNode syntax,
+        string symbol,
+        BoundExpression receiver,
+        ImmutableArray<BoundExpression> arguments,
+        ImmutableArray<string?> labels,
+        ImmutableArray<ExpressionSyntax> syntaxes
+    ) {
+        if (receiver.Type is not NamedTypeSymbol named) {
+            return null;
+        }
+
+        ImmutableArray<FunctionSymbol> candidates = [
+            ..named.OriginalDefinition.Members.OfType<FunctionSymbol>()
+                .Where(f => f.FunctionKind == FunctionKind.Operator && f.Name == symbol && f.Parameters.Length >= 1)
+        ];
+        if (candidates.IsEmpty) {
+            return null;
+        }
+
+        var substitution = TypeSubstitution.For(named);
+        ImmutableArray<BoundExpression> all = [receiver, ..arguments];
+        ImmutableArray<string?> allLabels = labels.IsEmpty ? [] : [null, ..labels];
+        if (ResolveOverload(candidates, all, allLabels, syntax, substitution) is not { } resolved) {
+            return new BoundError(syntax, all.ToArray());
+        }
+
+        var converted = ImmutableArray.CreateBuilder<BoundExpression>(all.Length);
+        for (var i = 0; i < all.Length && i < resolved.Parameters.Length; i++) {
+            var wanted = substitution.Apply(resolved.Parameters[i].Type);
+            var argument = all[i] is BoundUnboundClosure && !syntaxes.IsDefault
+                ? BindExpression(syntaxes[i - 1], wanted)
+                : all[i];
+            converted.Add(Convert(argument, wanted, argument.Syntax));
+        }
+
+        return new BoundCall(syntax, null, resolved, converted.ToImmutable(), substitution.Apply(resolved.ReturnType)) {
+            Substitution = substitution,
+        };
     }
 
     /// <summary>An index has a type too, and it is the one the receiver wants.</summary>
@@ -4789,6 +4895,7 @@ public sealed partial class Binder {
             return BindFlags(syntax, flags);
         }
 
+        expectedType = TheCaseOf(expectedType, static t => t is ArrayTypeSymbol);
         var expectedElement = expectedType is ArrayTypeSymbol expectedArray
             ? expectedArray.ElementType
             : null;
@@ -4835,6 +4942,13 @@ public sealed partial class Binder {
                 );
                 elementType = ErrorTypeSymbol.Instance;
                 break;
+            }
+
+            // The first element said what the array holds; the others that
+            // differ get there by a conversion — '[j, true]' of a 'Json'
+            // puts the Bool in the union — and the array holds what it made.
+            if (!elementType.IsError) {
+                elements = [..elements.Select(e => Convert(e, elementType, e.Syntax))];
             }
         }
 
@@ -5327,6 +5441,20 @@ public sealed partial class Binder {
             _ => type,
         };
 
+    /// <summary>
+    ///     Where a union is expected, the one case of it a literal could be:
+    ///     '["a", 1.5]' for a 'Json' is its 'Json[]', so the elements are
+    ///     bound expecting a Json each. The expected type itself otherwise.
+    /// </summary>
+    static TypeSymbol? TheCaseOf(TypeSymbol? expected, Func<TypeSymbol, bool> fits) {
+        if (StructuralUnionTypeSymbol.Of(expected) is not { } union) {
+            return expected;
+        }
+
+        var candidates = union.Cases.Where(fits).Take(2).ToList();
+        return candidates.Count == 1 ? candidates[0] : expected;
+    }
+
     /// <summary>Binds <c>["a": 1]</c> and the empty <c>[:]</c>.</summary>
     BoundExpression BindDictionary(
         DictionaryExpressionSyntax syntax,
@@ -5335,6 +5463,7 @@ public sealed partial class Binder {
         TypeSymbol? expectedKey = null;
         TypeSymbol? expectedValue = null;
 
+        expectedType = TheCaseOf(expectedType, t => t is NamedTypeSymbol named && named.OriginalDefinition.Equals(Core.Dictionary));
         if (expectedType is NamedTypeSymbol wanted
             && wanted.OriginalDefinition.Equals(Core.Dictionary)
             && wanted.TypeArguments.Length == 2) {
@@ -5529,12 +5658,18 @@ public sealed partial class Binder {
     }
 
     BoundExpression BindCast(CastExpressionSyntax syntax) {
-        var operand = BindExpression(syntax.Expression);
         var target = _compilation.TypeBinder.BindType(syntax.Type, _containingSymbol, _scope);
+
+        // A plain 'as' says what type a value is to have, so the operand is
+        // bound expecting it: 'none as Int?' is that type's none, and
+        // '[1] as Int[>..]?' an array of that kind. A number is bound as it
+        // is written, so that 'as' to another number stays the checked
+        // conversion below, even for a literal.
+        var isPlain = syntax.QuestionOrBangToken.IsNone;
+        var operand = BindExpression(syntax.Expression, isPlain && !Core.IsNumeric(target) ? target : null);
 
         // 'as?' yields an optional; 'as' and 'as!' yield the type itself.
         var isOptional = syntax.QuestionOrBangToken.Kind == SyntaxKind.QuestionToken;
-        var isPlain = syntax.QuestionOrBangToken.IsNone;
         var isUnchecked = !syntax.UncheckedKeyword.IsNone;
         var type = isOptional ? new OptionalTypeSymbol(target) : target;
 
@@ -5626,7 +5761,7 @@ public sealed partial class Binder {
     /// <summary>A type whose values may turn out, as the program runs, to be some other type.</summary>
     static bool IsDynamicallyTyped(TypeSymbol type) =>
         type is ExistentialTypeSymbol or OpaqueTypeSymbol or CompositionTypeSymbol or StructuralUnionTypeSymbol
-            or TypeParameterSymbol or OptionalTypeSymbol or NamedTypeSymbol { TypeKind: TypeKind.Protocol };
+            or RecursiveUnionTypeSymbol or TypeParameterSymbol or OptionalTypeSymbol or NamedTypeSymbol { TypeKind: TypeKind.Protocol };
 
     BoundExpression InvalidCast(CastExpressionSyntax syntax, BoundExpression operand, string message) {
         _diagnostics.Error(ErrorCode.ERR_InvalidCast, syntax.Span, message);
@@ -5766,9 +5901,39 @@ public sealed partial class Binder {
             };
         }
 
-        var value = BindExpression(syntax.Right, target.Type);
+        // 'a.next?.v = 9' stores a 'v' when there is a next, and nothing
+        // when there is not: the value is the field's own type, not the
+        // chain's optional one.
+        var stored = target.Type;
+        var throughChain = target is BoundFieldAccess { Receiver.Type: OptionalTypeSymbol } chainTarget
+            && syntax.Left is MemberAccessExpressionSyntax { OperatorToken.Kind: SyntaxKind.QuestionDotToken };
+        if (throughChain && !((BoundFieldAccess)target).FlattensChain && target.Type is OptionalTypeSymbol reached) {
+            stored = reached.UnderlyingType;
+        }
 
-        if (!target.HasError && !target.IsAssignable && !InitialisesLetField(target)) {
+        var value = BindExpression(syntax.Right, stored);
+
+        if (throughChain && syntax.OperatorToken.Kind != SyntaxKind.EqualsToken) {
+            _diagnostics.Error(
+                ErrorCode.ERR_NotAssignable,
+                syntax.OperatorToken.Span,
+                $"'{syntax.OperatorToken.Text}' through '?.' is not supported; unwrap with 'if let' first"
+            );
+            return new BoundError(syntax, target, value);
+        }
+
+        // 'xs[1..<3]' is the elements in the range, read out: there is no
+        // place in the array that is all of them to store to.
+        if (target is BoundIndexAccess { Subscript: null, Indices: [var rangeIndex] } && Core.IsRange(rangeIndex.Type)) {
+            _diagnostics.Error(
+                ErrorCode.ERR_NotAssignable,
+                syntax.Left.Span,
+                "a range of an array's elements is read as a slice, and cannot be stored to; store each element"
+            );
+            return new BoundError(syntax, target, value);
+        }
+
+        if (!target.HasError && !IsAssignableThroughChain(target) && !InitialisesLetField(target)) {
             _diagnostics.Error(
                 ErrorCode.ERR_NotAssignable,
                 syntax.Left.Span,
@@ -5813,8 +5978,22 @@ public sealed partial class Binder {
             }
         }
 
-        return new BoundAssignment(syntax, target, Convert(value, target.Type, syntax.Right));
+        return new BoundAssignment(syntax, target, Convert(value, stored, syntax.Right));
     }
+
+    /// <summary>
+    ///     Assignable as a place is, or — reached through '?.' — a mutable
+    ///     field of an object, which is written where it is, or of a value
+    ///     in a place the optional can be written back to.
+    /// </summary>
+    static bool IsAssignableThroughChain(BoundExpression target) =>
+        target.IsAssignable
+        || target is BoundFieldAccess {
+                Field: { IsMutable: true, IsStatic: false } field,
+                Receiver: { Type: OptionalTypeSymbol { UnderlyingType: var underlying } } receiver,
+            }
+            && (!field.IsComputed || field.HasSetter)
+            && (underlying.IsReferenceType || receiver.IsAssignable);
 
     static BinaryOperatorKind? CompoundOperatorKind(SyntaxKind kind) =>
         kind switch {
@@ -5899,6 +6078,9 @@ public sealed partial class Binder {
         }
 
         var operand = BindExpression(syntax.Operand);
+        if (syntax.OperatorToken.Kind is not (SyntaxKind.AmpersandToken or SyntaxKind.MoveKeyword)) {
+            operand = ImplicitlyUnwrapped(operand);
+        }
 
         var kind = syntax.OperatorToken.Kind switch {
             SyntaxKind.MinusToken => UnaryOperatorKind.Negate,
@@ -6052,11 +6234,17 @@ public sealed partial class Binder {
         BinaryOperatorKind kind,
         BoundExpression left,
         BoundExpression right,
-        SyntaxToken operatorToken
+        SyntaxToken operatorToken,
+        string? symbolOverride = null
     ) {
         if (left.HasError || right.HasError) {
             return new BoundError(syntax, left, right);
         }
+
+        // 'm += n' is 'm = m + n': the operator it looks for is '+'
+        // (SYNTAX.md §13 — compound assignment derives from the binary one).
+        var symbol = symbolOverride
+            ?? (CompoundOperatorKind(operatorToken.Kind) is null ? operatorToken.Text : operatorToken.Text[..^1]);
 
         // After 'where T == Int' a T is an Int, operators and all.
         left = AsCanonical(left);
@@ -6075,6 +6263,13 @@ public sealed partial class Binder {
 
             var result = Convert(right, optional.UnderlyingType, right.Syntax);
             return new BoundBinaryOperator(syntax, optional.UnderlyingType, kind, left, result);
+        }
+
+        // 'x + 1' of an 'x: Int!' adds the Int it holds. '==' and '!=' keep
+        // the optional, so 'x == none' still asks whether there is one.
+        if (kind is not (BinaryOperatorKind.Equal or BinaryOperatorKind.NotEqual)) {
+            left = ImplicitlyUnwrapped(left);
+            right = ImplicitlyUnwrapped(right);
         }
 
         // A numeric literal on one side takes the other side's type.
@@ -6105,7 +6300,7 @@ public sealed partial class Binder {
                 or BinaryOperatorKind.GreaterThan or BinaryOperatorKind.GreaterThanOrEqual
             && left.Type.Equals(Core.String) && right.Type.Equals(Core.String);
         if (!IsBuiltinOperand(left.Type) || !IsBuiltinOperand(right.Type) || stringOrdering) {
-            if (FindUserOperator(operatorToken.Text, left.Type, right.Type) is { } own) {
+            if (FindUserOperator(symbol, left.Type, right.Type) is { } own) {
                 return new BoundBinaryOperator(syntax, UserResultType(own, left.Type), BinaryOperatorKind.UserDefined, left, right, own);
             }
 
@@ -6119,7 +6314,7 @@ public sealed partial class Binder {
                 return new BoundBinaryOperator(syntax, Core.Bool, kind, left, right, basis);
             }
 
-            if (ReportUnmetDerivedOperator(derivedFrom ?? operatorToken.Text, left.Type, syntax)) {
+            if (ReportUnmetDerivedOperator(derivedFrom ?? symbol, left.Type, syntax)) {
                 return new BoundError(syntax, left, right);
             }
         }
@@ -6144,12 +6339,17 @@ public sealed partial class Binder {
             return new BoundBinaryOperator(syntax, Core.Bool, kind, left, right);
         }
 
+        if (kind is BinaryOperatorKind.Equal or BinaryOperatorKind.NotEqual
+            && StructuralEquality(syntax, kind, left, right, operatorToken) is { } structural) {
+            return structural;
+        }
+
         var type = ResultTypeOf(kind, left.Type, right.Type);
         if (type is not null) {
             return new BoundBinaryOperator(syntax, type, kind, left, right);
         }
 
-        if (FindUserOperator(operatorToken.Text, left.Type, right.Type) is { } method) {
+        if (FindUserOperator(symbol, left.Type, right.Type) is { } method) {
             return new BoundBinaryOperator(
                 syntax,
                 method.ReturnType,
@@ -6163,10 +6363,90 @@ public sealed partial class Binder {
         _diagnostics.Error(
             ErrorCode.ERR_OperatorNotDefined,
             syntax.Span,
-            $"'{operatorToken.Text}' is not defined for "
+            $"'{symbol}' is not defined for "
             + $"'{left.Type.ToDisplayString()}' and '{right.Type.ToDisplayString()}'"
         );
         return new BoundError(syntax, left, right);
+    }
+
+    /// <summary>
+    ///     <c>==</c> and <c>!=</c> on what has no comparison of its own but
+    ///     is made of parts that do: two tuples, element by element, and two
+    ///     optionals — or an optional and a value — of a type whose '==' is
+    ///     not built in, by what they hold. Null when neither applies.
+    /// </summary>
+    BoundExpression? StructuralEquality(
+        SyntaxNode syntax,
+        BinaryOperatorKind kind,
+        BoundExpression left,
+        BoundExpression right,
+        SyntaxToken operatorToken
+    ) {
+        // 'x == none' asks only whether there is a value.
+        if (IsNone(left) || IsNone(right)) {
+            return null;
+        }
+
+        TypeSymbol compared;
+        if (left.Type is TupleTypeSymbol && right.Type is TupleTypeSymbol) {
+            // Tuples of different types do not compare: '==' is not defined
+            // for them, as for any two different types.
+            if (!_conversions.HasImplicitConversion(right.Type, left.Type, IsLiteral(right))) {
+                return null;
+            }
+
+            compared = left.Type;
+            right = Convert(right, compared, right.Syntax);
+        } else {
+            var payload = (left.Type as OptionalTypeSymbol)?.UnderlyingType ?? (right.Type as OptionalTypeSymbol)?.UnderlyingType;
+            if (payload is null || IsBuiltinOperand(payload)) {
+                return null;
+            }
+
+            bool Holds(TypeSymbol type) => type.Equals(payload) || type is OptionalTypeSymbol optional && optional.UnderlyingType.Equals(payload);
+            if (!Holds(left.Type) || !Holds(right.Type)) {
+                return null;
+            }
+
+            compared = payload;
+        }
+
+        if (right.HasError) {
+            return new BoundError(syntax, left, right);
+        }
+
+        var leftPart = new LocalSymbol("$left", _containingSymbol, null, false) { TypeResolver = () => compared };
+        var rightPart = new LocalSymbol("$right", _containingSymbol, null, false) { TypeResolver = () => compared };
+        var leftAccess = new BoundLocalAccess(syntax, leftPart);
+        var rightAccess = new BoundLocalAccess(syntax, rightPart);
+
+        BoundExpression equal;
+        if (compared is TupleTypeSymbol tuple) {
+            BoundExpression? all = null;
+            for (var i = 0; i < tuple.ElementTypes.Length; i++) {
+                var element = BindBinaryOperator(
+                    syntax,
+                    BinaryOperatorKind.Equal,
+                    new BoundTupleElementAccess(syntax, tuple.ElementTypes[i], leftAccess, i),
+                    new BoundTupleElementAccess(syntax, tuple.ElementTypes[i], rightAccess, i),
+                    operatorToken,
+                    "=="
+                );
+                all = all is null ? element : new BoundBinaryOperator(syntax, Core.Bool, BinaryOperatorKind.LogicalAnd, all, element);
+            }
+
+            equal = all ?? new BoundLiteral(syntax, Core.Bool, true);
+        } else {
+            equal = BindBinaryOperator(syntax, BinaryOperatorKind.Equal, leftAccess, rightAccess, operatorToken, "==");
+        }
+
+        if (equal.HasError) {
+            return new BoundError(syntax, left, right);
+        }
+
+        return new BoundBinaryOperator(syntax, Core.Bool, kind, left, right) {
+            Structural = new StructuralComparison(leftPart, rightPart, equal),
+        };
     }
 
     TypeSymbol? ResultTypeOf(
@@ -6463,6 +6743,30 @@ public sealed partial class Binder {
             return expression;
         }
 
+        // An array as a slice of it: the same value, with the slice's type.
+        if (conversion == ConversionKind.ArrayView) {
+            var viewed = new BoundConversion(syntax, target, expression, ConversionKind.Identity);
+            if (syntax == expression.Syntax) {
+                _bound[syntax] = viewed;
+            }
+
+            return viewed;
+        }
+
+        // A 'T!' where a T is wanted: unwrapped, then whatever takes it on.
+        if (conversion == ConversionKind.Explicit && expression.Type is OptionalTypeSymbol { IsImplicitlyUnwrapped: true }) {
+            return Convert(ImplicitlyUnwrapped(expression), target, syntax);
+        }
+
+        // A promotion that needs a step first — an array literal taking a
+        // kind, a value joining a union — takes that step, then wraps.
+        if (conversion == ConversionKind.OptionalWrap
+            && target is OptionalTypeSymbol promoted
+            && _conversions.Classify(expression.Type, promoted.UnderlyingType, IsLiteral(expression))
+                is not (null or ConversionKind.Identity)) {
+            expression = Convert(expression, promoted.UnderlyingType, syntax);
+        }
+
         // 'c ? a : b' refers to whichever place it picks: each arm becomes a reference.
         if (conversion == ConversionKind.Reference && expression is BoundConditional choice) {
             var whenTrue = Convert(choice.WhenTrue, target, choice.WhenTrue.Syntax);
@@ -6492,6 +6796,15 @@ public sealed partial class Binder {
 
         return converted;
     }
+
+    /// <summary>
+    ///     A <c>T!</c> read as the <c>T</c> it holds, trapping when it holds
+    ///     none, as <c>x!</c> does; anything else as it is.
+    /// </summary>
+    static BoundExpression ImplicitlyUnwrapped(BoundExpression expression) =>
+        expression.Type is OptionalTypeSymbol { IsImplicitlyUnwrapped: true } optional
+            ? new BoundConversion(expression.Syntax, optional.UnderlyingType, expression, ConversionKind.Explicit)
+            : expression;
 
     /// <summary>
     ///     Turns a named function into a value of function type.
@@ -7115,7 +7428,7 @@ public sealed partial class Binder {
         foreach (var pattern in patterns.SelectMany(Alternatives)) {
             type = (type, pattern) switch {
                 (OptionalTypeSymbol optional, BoundLiteralPattern { Value: null }) => optional.UnderlyingType,
-                (StructuralUnionTypeSymbol union, BoundTypeTestPattern test) when union.Cases.Any(c => c.Equals(test.TestedType)) =>
+                (_, BoundTypeTestPattern test) when StructuralUnionTypeSymbol.Of(type) is { } union && union.Cases.Any(c => c.Equals(test.TestedType)) =>
                     StructuralUnionTypeSymbol.Create(union.Cases.Where(c => !c.Equals(test.TestedType))),
                 _ => type,
             };

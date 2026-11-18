@@ -72,7 +72,7 @@ public sealed class TypeSubstitution {
                 var underlying = Apply(optional.UnderlyingType);
                 return underlying.Equals(optional.UnderlyingType)
                     ? optional
-                    : new OptionalTypeSymbol(underlying);
+                    : new OptionalTypeSymbol(underlying, optional.IsImplicitlyUnwrapped);
             }
 
             case ReferenceTypeSymbol reference: {
@@ -104,7 +104,7 @@ public sealed class TypeSubstitution {
             }
 
             case StructuralUnionTypeSymbol union:
-                return new StructuralUnionTypeSymbol(union.Cases.Select(Apply));
+                return StructuralUnionTypeSymbol.Create(union.Cases.Select(Apply));
 
             case CompositionTypeSymbol composition:
                 return new CompositionTypeSymbol(composition.Parts.Select(Apply));
@@ -209,8 +209,9 @@ public sealed class TypeSubstitution {
                 return true;
             }
 
+            // A slice takes any kind of array, so only the elements say what it is of.
             case ArrayTypeSymbol array when argument is ArrayTypeSymbol otherArray:
-                return array.ArrayKind == otherArray.ArrayKind
+                return (array.ArrayKind == otherArray.ArrayKind || array.ArrayKind == ArrayKind.Slice)
                     && Unify(array.ElementType, otherArray.ElementType, inferrable, into);
 
             case OptionalTypeSymbol optional when argument is OptionalTypeSymbol otherOptional:

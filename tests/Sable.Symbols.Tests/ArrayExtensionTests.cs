@@ -140,7 +140,10 @@ public sealed class ArrayExtensionTests {
             """
         );
 
-        AssertError("extension<T> T[>..] { fn me() -> T[:] { return self } }", "S3004", "T[:]");
+        // Self is a grow-only array: another kind is not it, though a slice
+        // views any kind (SYNTAX.md §11).
+        AssertError("extension<T> T[>..] { fn me() -> T[>..<] { return self } }", "S3004", "T[>..<]");
+        AssertClean("extension<T> T[>..] { fn me() -> T[:] { return self } }");
         AssertError("extension<T> T[>..] { fn grow(_ t: T) { self.append(t) } }", "S3041", "'append' is mutating");
     }
 

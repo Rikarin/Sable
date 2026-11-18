@@ -1104,6 +1104,10 @@ public sealed partial class SilGen {
                 $"{owner}.{SubscriptName(subscript)}.{symbol.Name}",
             { FunctionKind: FunctionKind.Subscript } => $"{owner}.{SubscriptName(symbol)}.get",
 
+            // 'operator []' and 'operator ()' are named in words: brackets
+            // would end the name where SIL text is read back.
+            { FunctionKind: FunctionKind.Operator, Name: "[]" } => $"{owner}.operator$index",
+            { FunctionKind: FunctionKind.Operator, Name: "()" } => $"{owner}.operator$call",
             // 'fn Drawable.render()' beside 'fn Printable.render()': 'M.Shape.Drawable.render'.
             { ExplicitProtocol: NamedTypeSymbol protocol } => $"{owner}.{protocol.Name}.{symbol.Name}",
             _ => $"{owner}.{symbol.Name}",
@@ -1345,6 +1349,11 @@ public sealed partial class SilGen {
             // 'A | B': an enum with a case for each.
             case StructuralUnionTypeSymbol union:
                 return LowerUnion(union);
+
+            // 'alias Json = … | Json[]': the same, named for the alias, so
+            // the cases that mention it find it while it is being made.
+            case RecursiveUnionTypeSymbol { Union: { } union } recursive:
+                return LowerRecursiveUnion(recursive, union);
 
             // 'any P': a closure per requirement, sharing one box with the value.
             case ExistentialTypeSymbol { Constraint: NamedTypeSymbol { TypeKind: TypeKind.Protocol } protocol }:
@@ -1653,10 +1662,39 @@ public sealed partial class SilGen {
 
         var enumType = Begin(union, new EnumType(name));
         foreach (var lowered in cases) {
-            enumType.Cases.Add((Sanitise(lowered.ToString()), lowered));
+            enumType.Cases.Add((UnionCaseName(lowered), lowered));
         }
 
         _unions.Add(enumType);
+        return HoldsItself(enumType) ? null : enumType;
+    }
+
+    /// <summary>
+    ///     A union's case is named for the type it carries — but a name must
+    ///     start with a letter to be read back, and an array's or a tuple's
+    ///     starts with a bracket.
+    /// </summary>
+    static string UnionCaseName(SilType payload) {
+        var name = Sanitise(payload.ToString());
+        return char.IsLetter(name[0]) ? name : "_" + name;
+    }
+
+    EnumType? LowerRecursiveUnion(RecursiveUnionTypeSymbol recursive, StructuralUnionTypeSymbol union) {
+        var name = "Union$" + Sanitise($"{recursive.Alias.ContainingSymbol?.Name}.{recursive.Alias.Name}");
+        if (_module.FindType(name) is EnumType existing) {
+            return existing;
+        }
+
+        var enumType = Begin(recursive, new EnumType(name));
+        _unions.Add(enumType);
+        foreach (var member in union.Cases) {
+            if (Lower(member) is not { } lowered || enumType.Cases.Exists(c => Equals(c.Payload, lowered))) {
+                return null;
+            }
+
+            enumType.Cases.Add((UnionCaseName(lowered), lowered));
+        }
+
         return HoldsItself(enumType) ? null : enumType;
     }
 
@@ -4542,8 +4580,8 @@ public sealed partial class SilGen {
             }
 
             // A binding a test narrowed out of a union: the case's payload (SilGen.Unions.cs).
-            if (NarrowedUnion(expression) is var (whole, unionCase)) {
-                return NarrowedRead(expression, whole, unionCase);
+            if (NarrowedUnion(expression) is var (whole, unionCases)) {
+                return NarrowedRead(expression, whole, unionCases);
             }
 
             switch (expression) {
@@ -4570,7 +4608,12 @@ public sealed partial class SilGen {
                 // 'x?.member' and 'x?.call()': reached through the optional.
                 case BoundFieldAccess { Receiver: { } chainedFrom, Type: OptionalTypeSymbol reached } chained
                     when IsChainedThrough(chainedFrom, chained.Field):
-                    return OptionalChain(chained, chainedFrom, through => new BoundFieldAccess(chained.Syntax, through, chained.Field, reached.UnderlyingType));
+                    return OptionalChain(
+                        chained,
+                        chainedFrom,
+                        through => new BoundFieldAccess(chained.Syntax, through, chained.Field, chained.FlattensChain ? reached : reached.UnderlyingType),
+                        flatten: chained.FlattensChain
+                    );
 
                 case BoundConversion { ConversionKind: ConversionKind.OptionalWrap, Operand: BoundCall { Receiver: { } chainedFrom } chainedCall }
                     when IsChainedThrough(chainedFrom, chainedCall.Function):
@@ -4608,6 +4651,37 @@ public sealed partial class SilGen {
                             Subscript = flatIndex.Subscript,
                             Substitution = flatIndex.Substitution,
                         },
+                        flatten: true
+                    );
+
+                // 'x?.next()' of a method that gives an optional: that optional,
+                // when there is an x.
+                case BoundCall { Receiver: { } chainedFrom, Type: OptionalTypeSymbol } flatCall
+                    when IsChainedThrough(chainedFrom, flatCall.Function)
+                    && flatCall.Syntax is InvocationExpressionSyntax { Expression: MemberAccessExpressionSyntax { OperatorToken.Kind: SyntaxKind.QuestionDotToken } }:
+                    return OptionalChain(
+                        expression,
+                        chainedFrom,
+                        through => new BoundCall(flatCall.Syntax, through, flatCall.Function, flatCall.Arguments, flatCall.Type) {
+                            Substitution = flatCall.Substitution,
+                        },
+                        flatten: true
+                    );
+
+                // 'f?(x)': the function called when there is one, its result
+                // wrapped — or, when it gives an optional, that one.
+                case BoundConversion { ConversionKind: ConversionKind.OptionalWrap, Operand: BoundIndirectCall { Callee: { Type: OptionalTypeSymbol } optionalCallee } wrappedCall }:
+                    return OptionalChain(
+                        expression,
+                        optionalCallee,
+                        through => new BoundIndirectCall(wrappedCall.Syntax, wrappedCall.Type, through, wrappedCall.Arguments)
+                    );
+
+                case BoundIndirectCall { Callee: { Type: OptionalTypeSymbol } optionalCallee, Type: OptionalTypeSymbol } flatIndirect:
+                    return OptionalChain(
+                        expression,
+                        optionalCallee,
+                        through => new BoundIndirectCall(flatIndirect.Syntax, flatIndirect.Type, through, flatIndirect.Arguments),
                         flatten: true
                     );
 
@@ -4999,6 +5073,11 @@ public sealed partial class SilGen {
         }
 
         SilValue? Assignment(BoundAssignment assignment) {
+            if (assignment.Target is BoundFieldAccess { Receiver: { } chainedFrom } chainedTarget
+                && IsChainedThrough(chainedFrom, chainedTarget.Field)) {
+                return ChainedAssignment(assignment, chainedTarget, chainedFrom);
+            }
+
             if (IsInlineMember(assignment.Target)
                 || assignment.Target is BoundIndexAccess { Receiver: var indexed } && IsInlineArray(indexed)) {
                 return InlineAssign(assignment.Target, assignment.Value);
@@ -5825,7 +5904,13 @@ public sealed partial class SilGen {
 
         /// <summary>'x is Dog': whether the object is of the class, or a subclass of it.</summary>
         SilValue? TypeTest(BoundTypeTest test) {
-            if (Sub(test.Operand.Type) is StructuralUnionTypeSymbol union) {
+            // A value already known to be of the type: a union's binding that
+            // an earlier test, failing, narrowed down to this one case.
+            if (Sub(test.Operand.Type).Equals(Sub(test.TestedType))) {
+                return Emit(new IntegerLiteralInst(SilType.Bool, 1));
+            }
+
+            if (StructuralUnionTypeSymbol.Of(Sub(test.Operand.Type)) is { } union) {
                 return UnionTypeTest(test, union);
             }
 
@@ -6055,6 +6140,10 @@ public sealed partial class SilGen {
                     : Missing(index, $"indexing '{index.Receiver.Type.ToDisplayString()}'");
             }
 
+            if (index.Indices is [var rangeIndex] && Core.IsRange(Sub(rangeIndex.Type)) && !IsInlineArray(index.Receiver)) {
+                return RangeRead(index, rangeIndex);
+            }
+
             if (IsInlineArray(index.Receiver)) {
                 return InlineRead(index);
             }
@@ -6092,6 +6181,48 @@ public sealed partial class SilGen {
             var element = Emit(new BuiltinInst("array_get", arrayType.Element, array, position));
             End(array);
             return element;
+        }
+
+        /// <summary>
+        ///     'xs[1..<3]': the elements in the range, as a slice — copied,
+        ///     for now, as 'slice(from:to:)' does, trapping where the range
+        ///     is not within the array. A range written in place may leave out
+        ///     a bound: the start, or the array's count.
+        /// </summary>
+        SilValue? RangeRead(BoundIndexAccess index, BoundExpression rangeIndex) {
+            if (Borrow(index.Receiver) is not { Type: ArrayType arrayType } array) {
+                return null;
+            }
+
+            SilValue? from, to;
+            bool inclusive;
+            if (rangeIndex is BoundRange written) {
+                from = written.Lower is { } lower ? Expression(lower) : Emit(new IntegerLiteralInst(SilType.Int, 0));
+                to = written.Upper is { } upper ? Expression(upper) : Emit(new BuiltinInst("array_count", SilType.Int, array));
+                inclusive = written.IsInclusive && written.Upper is not null;
+            } else {
+                if (Expression(rangeIndex) is not { Type: StructType rangeType } range) {
+                    End(array);
+                    return null;
+                }
+
+                from = Emit(new StructExtractInst(range, rangeType.FieldIndex("lowerBound")));
+                to = Emit(new StructExtractInst(range, rangeType.FieldIndex("upperBound")));
+                inclusive = ReferenceEquals(((NamedTypeSymbol)Sub(rangeIndex.Type)).OriginalDefinition, Core.ClosedRange);
+            }
+
+            if (from is null || to is null) {
+                End(array);
+                return null;
+            }
+
+            if (inclusive) {
+                to = Emit(new BuiltinInst("add_Int", SilType.Int, to, Emit(new IntegerLiteralInst(SilType.Int, 1))));
+            }
+
+            var slice = Emit(new BuiltinInst("array_slice", arrayType, array, from, to));
+            End(array);
+            return slice;
         }
 
         /// <summary>A member reached through '?.': the receiver is optional, and the member is not the optional's own.</summary>
@@ -6133,6 +6264,66 @@ public sealed partial class SilGen {
 
             _current = after;
             return result;
+        }
+
+        /// <summary>
+        ///     'a.next?.v = 9': when there is a next, its v is stored, and the
+        ///     value evaluated only then; when there is none, nothing is. An
+        ///     object is written where it is. A value is a copy once out of its
+        ///     optional, so the copy is stored, then wrapped and written back.
+        /// </summary>
+        SilValue? ChainedAssignment(BoundAssignment assignment, BoundFieldAccess target, BoundExpression chainedFrom) {
+            var unwrappedType = ((OptionalTypeSymbol)Sub(chainedFrom.Type)).UnderlyingType;
+            var writesBack = !unwrappedType.IsReferenceType;
+
+            var borrows = new List<SilValue>();
+            SilValue? place = null;
+            SilValue? value;
+            if (writesBack) {
+                place = Address(chainedFrom, borrows);
+                value = place is null ? null : Emit(new LoadInst(place));
+            } else {
+                value = Expression(chainedFrom);
+            }
+
+            if (value is not { Type: EnumType optional }) {
+                return value is null ? null : Missing(assignment, "this store through '?.'");
+            }
+
+            var some = optional.CaseIndex("Some");
+            var present = function.AddBlock();
+            var payload = Payload(present, optional.Cases[some].Payload!);
+            var absent = function.AddBlock();
+            var after = function.AddBlock();
+            Jump(new SwitchEnumInst(value, [(some, present)], absent));
+
+            _current = present;
+            var temporary = new LocalSymbol("$chained", Core.Module, null, true);
+            var slot = NewSlot(payload.Type, "$chained");
+            _slots[temporary] = slot;
+            BindLocal(temporary, payload, assignment.Syntax, declaration: true);
+            Destroy(value);
+
+            var through = new BoundLocalAccess(chainedFrom.Syntax, temporary, unwrappedType);
+            var store = new BoundAssignment(assignment.Syntax, new BoundFieldAccess(target.Syntax, through, target.Field, assignment.Value.Type), assignment.Value);
+            if (Expression(store) is null) {
+                return null;
+            }
+
+            if (writesBack) {
+                var updated = Emit(new LoadInst(slot));
+                Emit(new StoreInst(Emit(new EnumInst(optional, some, updated)), place!, StoreKind.Assign));
+            }
+
+            Branch(after);
+
+            _current = absent;
+            Destroy(value);
+            Branch(after);
+
+            _current = after;
+            EndAll(borrows);
+            return UnitValue.Instance;
         }
 
         /// <summary>'a ?? b': a's value when there is one; b, evaluated only then, when there is not.</summary>
@@ -6221,6 +6412,25 @@ public sealed partial class SilGen {
                 return answer;
             }
 
+            // '(a, b) == (c, d)': the tuples given to the comparison bound
+            // over them, which compares element by element.
+            if (binary.Structural is { } byElement && Sub(binary.Left.Type) is TupleTypeSymbol) {
+                if (Expression(binary.Left) is not { } leftTuple) {
+                    return null;
+                }
+
+                BindLocal(byElement.Left, leftTuple, binary.Syntax, declaration: true);
+                if (Expression(binary.Right) is not { } rightTuple) {
+                    return null;
+                }
+
+                BindLocal(byElement.Right, rightTuple, binary.Syntax, declaration: true);
+                var same = Expression(byElement.Equal);
+                return same is null || binary.OperatorKind == BinaryOperatorKind.Equal
+                    ? same
+                    : Emit(new BuiltinInst("not_Bool", SilType.Bool, same));
+            }
+
             // 'a + b + c' on strings: one string of the three, not one for each '+'.
             if (IsStringConcat(binary) && IsStringConcat(binary.Left)) {
                 var operands = new List<BoundExpression>();
@@ -6267,7 +6477,7 @@ public sealed partial class SilGen {
             if (binary.OperatorKind is BinaryOperatorKind.Equal or BinaryOperatorKind.NotEqual
                 && left.Type is EnumType { Cases: [("Some", { } payloadType), ("None", null)] } optional
                 && right.Type == left.Type) {
-                var equal = OptionalEquals(optional, payloadType, left, right, binary);
+                var equal = OptionalEquals(optional, payloadType, left, right, binary, binary.Structural);
                 End(right);
                 End(left);
                 return equal is null || binary.OperatorKind == BinaryOperatorKind.Equal
@@ -6283,6 +6493,22 @@ public sealed partial class SilGen {
                 End(right);
                 End(left);
                 return compared;
+            }
+
+            // 'a === b': the one object, whatever class each is seen as.
+            if (binary.OperatorKind is BinaryOperatorKind.ReferenceEqual or BinaryOperatorKind.ReferenceNotEqual
+                && left.Type is ClassType leftClass && right.Type is ClassType rightClass) {
+                // Seen as the same class: the subclass's side as its base.
+                // Two classes neither derives from never share an object.
+                SilValue same = leftClass == rightClass ? Emit(new BuiltinInst("ref_identical", SilType.Bool, left, right))
+                    : rightClass.IsSubclassOf(leftClass) ? Emit(new BuiltinInst("ref_identical", SilType.Bool, left, Emit(new UpcastInst(right, leftClass))))
+                    : leftClass.IsSubclassOf(rightClass) ? Emit(new BuiltinInst("ref_identical", SilType.Bool, Emit(new UpcastInst(left, rightClass)), right))
+                    : Emit(new IntegerLiteralInst(SilType.Bool, 0));
+                End(right);
+                End(left);
+                return binary.OperatorKind == BinaryOperatorKind.ReferenceEqual
+                    ? same
+                    : Emit(new BuiltinInst("not_Bool", SilType.Bool, same));
             }
 
             var op = binary.OperatorKind switch {
@@ -6445,9 +6671,15 @@ public sealed partial class SilGen {
             };
 
         /// <summary>Two optionals of a comparable type compared: by case, and then by value.</summary>
-        SilValue? OptionalEquals(EnumType optional, SilType payloadType, SilValue left, SilValue right, BoundNode at) {
+        /// <remarks>
+        ///     Two values held compare by their built-in comparison or, where
+        ///     there is none, by the one the binder bound over stand-ins for
+        ///     them (<paramref name="byPayload" />): a type's own '==', or a
+        ///     tuple's element by element.
+        /// </remarks>
+        SilValue? OptionalEquals(EnumType optional, SilType payloadType, SilValue left, SilValue right, BoundNode at, StructuralComparison? byPayload = null) {
             var compare = $"cmp_eq_{payloadType}";
-            if (SilBuiltins.Find(compare) is null) {
+            if (SilBuiltins.Find(compare) is null && byPayload is null) {
                 return Missing(at, $"comparing optionals of {payloadType}");
             }
 
@@ -6466,7 +6698,17 @@ public sealed partial class SilGen {
             var differ = function.AddBlock();
             Jump(new SwitchEnumInst(right, [(some, bothSome)], differ));
             _current = bothSome;
-            Branch(after, Emit(new BuiltinInst(compare, SilType.Bool, leftValue, rightValue)));
+            if (SilBuiltins.Find(compare) is not null) {
+                Branch(after, Emit(new BuiltinInst(compare, SilType.Bool, leftValue, rightValue)));
+            } else {
+                BindLocal(byPayload!.Left, Owned(leftValue), at.Syntax, declaration: true);
+                BindLocal(byPayload.Right, Owned(rightValue), at.Syntax, declaration: true);
+                if (Expression(byPayload.Equal) is not { } same) {
+                    return null;
+                }
+
+                Branch(after, same);
+            }
             _current = differ;
             Branch(after, Emit(new IntegerLiteralInst(SilType.Bool, 0)));
 

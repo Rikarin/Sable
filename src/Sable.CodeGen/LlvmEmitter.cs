@@ -1910,6 +1910,10 @@ public sealed partial class LlvmEmitter {
                     Line($"{Result()} = call ptr @sable_string_concat(ptr {operands[0]}, ptr {operands[1]})");
                     return;
 
+                case "ref_identical":
+                    Line($"{Result()} = icmp eq ptr {operands[0]}, {operands[1]}");
+                    return;
+
                 // The pieces in an array in the frame, joined by one call.
                 case "string_concat_many": {
                     var pieces = Scratch($"[{operands.Length} x ptr]");

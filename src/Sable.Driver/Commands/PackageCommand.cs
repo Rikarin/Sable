@@ -28,6 +28,32 @@ public abstract class PackageCommand : Command {
 
     protected static Workspace LoadWorkspace() => Workspace.Load(Directory.GetCurrentDirectory());
 
+    /// <summary>
+    ///     The registry a command talks to: <c>--registry</c>'s, else the
+    ///     workspace's here (its <c>[registry] path</c>), else
+    ///     <c>$SABLE_REGISTRY</c>'s, else <c>~/.sable/registry</c>.
+    /// </summary>
+    protected static IRegistry RegistryHere(string? location) =>
+        location is not null ? Environment.Open(location)
+        : Environment.RegistryFor(Workspace.FindManifestDirectory(Directory.GetCurrentDirectory()) is null ? null : LoadWorkspace());
+
+    /// <summary>Takes <c>--registry &lt;location&gt;</c> out of the arguments; false when it has no value.</summary>
+    protected static bool TakeRegistry(List<string> arguments, out string? location) {
+        location = null;
+        var at = arguments.IndexOf("--registry");
+        if (at < 0) {
+            return true;
+        }
+
+        if (at + 1 >= arguments.Count) {
+            return false;
+        }
+
+        location = arguments[at + 1];
+        arguments.RemoveRange(at, 2);
+        return true;
+    }
+
     /// <summary>The member a command acts on: <c>-p</c>'s, the current one, or the only one.</summary>
     protected static LocalPackage Member(Workspace workspace, string? name) =>
         name is not null ? workspace.Member(name)

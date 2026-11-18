@@ -1,5 +1,7 @@
 using System.Diagnostics;
 using System.Text;
+using Sable.CodeGen;
+using Sable.Symbols;
 
 namespace Sable.Driver.Packages;
 
@@ -206,7 +208,7 @@ public static class PackageOperations {
 
         var files = Published(package.Directory);
         var archive = Registry.Pack(files);
-        var entry = new IndexEntry(package.Name, package.Version, Registry.Checksum(archive), dependencies, manifest.Features, false, "", "");
+        var entry = new IndexEntry(package.Name, package.Version, Registry.Checksum(archive), dependencies, manifest.Features, false, "", "", manifest.Package?.Description);
         return new(package, files, archive, entry);
     }
 
@@ -276,22 +278,44 @@ public static class PackageOperations {
     }
 
     /// <summary>
-    ///     <c>sable publish</c>: refuses a dirty git tree unless allowed, then
-    ///     uploads the package, signed with the key at <see cref="PackageEnvironment.KeyPath" />
-    ///     (made on first publish). With <paramref name="dryRun" />, shows what
-    ///     would be uploaded and uploads nothing.
+    ///     <c>sable publish</c> (docs/05 §5.5): refuses a dirty git tree, a
+    ///     commit without a tag for the version, and failing tests, unless
+    ///     told otherwise; then uploads the package, signed with the key at
+    ///     <see cref="PackageEnvironment.KeyPath" /> (made on first publish).
+    ///     With <paramref name="dryRun" />, shows what would be uploaded and
+    ///     uploads nothing.
     /// </summary>
-    public static PublishPlan Publish(Workspace workspace, PackageEnvironment environment, LocalPackage package, bool dryRun, bool allowDirty = false) {
+    /// <param name="registry">Where to publish; by default the workspace's registry.</param>
+    public static PublishPlan Publish(
+        Workspace workspace,
+        PackageEnvironment environment,
+        LocalPackage package,
+        bool dryRun,
+        bool allowDirty = false,
+        bool verify = true,
+        bool allowUntagged = false,
+        IRegistry? registry = null) {
         if (!allowDirty && DirtyFiles(package.Directory) is { Count: > 0 } dirty) {
             throw new PackageException($"the working tree has uncommitted changes ({string.Join(", ", dirty.Take(5))}{(dirty.Count > 5 ? ", …" : "")}); commit them, or pass --allow-dirty");
         }
 
-        var registry = environment.RegistryFor(workspace);
+        // The version published is a version in the history: a tag on the commit.
+        if (!allowUntagged && Tags(package.Directory) is { } tags && !tags.Any(t => VersionTags(package).Contains(t))) {
+            throw new PackageException(
+                $"the commit being published has no tag for {package.Version} ({(tags.Count == 0 ? "it has none" : $"it has {string.Join(", ", tags)}")}); " +
+                $"tag it with 'git tag {VersionTags(package)[0]}', or pass --allow-untagged");
+        }
+
+        registry ??= environment.RegistryFor(workspace);
         if (registry.Entry(package.Name, package.Version) is not null) {
             throw new RegistryException($"{package.Name} {package.Version} is already published, and a published version never changes: publish a new version");
         }
 
         var plan = Plan(workspace, environment, package);
+        if (verify) {
+            Test(workspace, environment, package);
+        }
+
         environment.Out.Write(Describe(plan));
 
         if (dryRun) {
@@ -301,8 +325,86 @@ public static class PackageOperations {
 
         using var key = Registry.LoadOrCreateKey(environment.KeyPath, environment.Status);
         var entry = registry.Publish(plan.Entry, plan.Archive, key);
-        environment.Status.WriteLine($"   Published {package.Name} v{package.Version} to {registry.Directory}");
+        environment.Status.WriteLine($"   Published {package.Name} v{package.Version} to {registry.Location}");
         return plan with { Entry = entry };
+    }
+
+    /// <summary>The tag names that mark a version: <c>v1.2.0</c>, <c>1.2.0</c>, and for a workspace's member <c>name-v1.2.0</c> or <c>name@1.2.0</c>.</summary>
+    static IReadOnlyList<string> VersionTags(LocalPackage package) {
+        var name = LocalPackage.BinaryName(package.Name);
+        return [$"v{package.Version}", $"{package.Version}", $"{name}-v{package.Version}", $"{name}@{package.Version}", $"{package.Name}@{package.Version}"];
+    }
+
+    /// <summary>The tags on the commit checked out in <paramref name="directory" />; null when it is not in a git repository.</summary>
+    static IReadOnlyList<string>? Tags(string directory) =>
+        Git(directory, "rev-parse", "--is-inside-work-tree") is null
+            ? null
+            : Git(directory, "tag", "--points-at", "HEAD") is { } output
+                ? [..output.Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(static t => t.Trim())]
+                : [];
+
+    /// <summary>What git prints, or null when it fails or is not there.</summary>
+    static string? Git(string directory, params string[] arguments) {
+        try {
+            var start = new ProcessStartInfo("git") { RedirectStandardOutput = true, RedirectStandardError = true, WorkingDirectory = directory };
+            foreach (var argument in arguments) {
+                start.ArgumentList.Add(argument);
+            }
+
+            using var process = Process.Start(start);
+            if (process is null) {
+                return null;
+            }
+
+            var output = process.StandardOutput.ReadToEndAsync();
+            process.StandardError.ReadToEnd();
+            process.WaitForExit();
+            return process.ExitCode == 0 ? output.Result : null;
+        } catch (System.ComponentModel.Win32Exception) {
+            return null;
+        }
+    }
+
+    /// <summary>
+    ///     Builds and runs the package's tests, as <c>sable test</c> does;
+    ///     refuses the publish when they fail (docs/05 §5.5). A package
+    ///     without tests passes.
+    /// </summary>
+    static void Test(Workspace workspace, PackageEnvironment environment, LocalPackage package) {
+        var graph = PackageBuilder.Resolve(workspace, environment, new(Package: package.Name));
+        var result = TestHarness.Compile(PackageBuilder.TestProgram(graph, package.Name), TestKind.Test, out var tests);
+        if (!result.Succeeded) {
+            throw new PackageException($"the tests of {package.Name} do not compile, so it is not published:\n\n{string.Join("\n\n", result.Errors)}");
+        }
+
+        if (tests.Count == 0) {
+            return;
+        }
+
+        if (!NativeBuild.IsAvailable()) {
+            throw new PackageException($"cannot run the tests of {package.Name}: there is no '{NativeBuild.CompilerPath}' to build them; set CC, or pass --no-verify");
+        }
+
+        var directory = Directory.CreateTempSubdirectory("sable-publish-");
+        try {
+            var executable = Path.Combine(directory.FullName, "tests");
+            var build = NativeBuild.Build(result.LlvmIr!, executable, NativeOptions.Of(false, false) with { LinkArguments = graph.LinkArguments(package.Name) });
+            if (!build.Succeeded) {
+                throw new PackageException($"internal error: the tests of {package.Name} did not build:\n{build.Output}");
+            }
+
+            environment.Status.WriteLine($"     Testing {package.Name} v{package.Version}: {tests.Count} test(s)");
+            var start = new ProcessStartInfo(executable) { RedirectStandardOutput = true, RedirectStandardError = true };
+            using var process = Process.Start(start) ?? throw new PackageException($"could not run the tests of {package.Name}");
+            var output = process.StandardOutput.ReadToEndAsync();
+            var errors = process.StandardError.ReadToEnd();
+            process.WaitForExit();
+            if (process.ExitCode != 0) {
+                throw new PackageException($"the tests of {package.Name} fail, so it is not published (--no-verify skips them):\n{output.Result}{errors}".TrimEnd());
+            }
+        } finally {
+            directory.Delete(true);
+        }
     }
 
     /// <summary>Files git reports as changed under <paramref name="directory" />; none when git is not there or this is not a repository.</summary>
@@ -328,15 +430,15 @@ public static class PackageOperations {
     }
 
     /// <summary><c>sable yank &lt;pkg&gt;@&lt;version&gt; [--undo]</c>.</summary>
-    public static void Yank(Workspace? workspace, PackageEnvironment environment, string name, SemVersion version, bool undo) {
-        var registry = workspace is null ? new Registry(environment.RegistryDirectory) : environment.RegistryFor(workspace);
+    public static void Yank(Workspace? workspace, PackageEnvironment environment, string name, SemVersion version, bool undo, IRegistry? registry = null) {
+        registry ??= environment.RegistryFor(workspace);
         if (!File.Exists(environment.KeyPath)) {
             throw new PackageException($"there is no publishing key at {environment.KeyPath}; only the package's owner may yank it");
         }
 
         using var key = Registry.LoadOrCreateKey(environment.KeyPath);
         registry.Yank(name, version, key, !undo);
-        environment.Error.WriteLine($"{(undo ? "   Unyanked" : "      Yanked")} {name} v{version}");
+        environment.Status.WriteLine($"{(undo ? "   Unyanked" : "      Yanked")} {name} v{version}");
     }
 
     /// <summary>

@@ -45,8 +45,20 @@ public sealed record PackageEnvironment(string RegistryDirectory, string CacheDi
         new(Path.Combine(home, "registry"), Path.Combine(home, "cache"), Path.Combine(home, "key"), output ?? TextWriter.Null, error ?? TextWriter.Null);
 
     /// <summary>The registry a workspace uses: its <c>[registry] path</c>, else this environment's.</summary>
-    public Registry RegistryFor(Workspace workspace) =>
-        new(workspace.RootManifest.RegistryPath is { } path ? Path.GetFullPath(Path.Combine(workspace.Root, path)) : RegistryDirectory) { Offline = Offline };
+    public IRegistry RegistryFor(Workspace? workspace) =>
+        workspace?.RootManifest.RegistryPath is { } path
+            ? Open(HttpRegistry.IsUrl(path) ? path : Path.GetFullPath(Path.Combine(workspace.Root, path)))
+            : Open(RegistryDirectory);
+
+    /// <summary>
+    ///     The registry at <paramref name="location" />: a network registry for
+    ///     an <c>http://</c> or <c>https://</c> URL, with the token
+    ///     <c>sable login</c> kept for it; else a directory.
+    /// </summary>
+    public IRegistry Open(string location) =>
+        HttpRegistry.IsUrl(location)
+            ? new HttpRegistry(location, Credentials.Token(Home, location), Offline)
+            : new Registry(location) { Offline = Offline };
 }
 
 /// <summary>Which features to turn on in the packages being built (<c>--features</c>, <c>--no-default-features</c>, <c>--all-features</c>).</summary>
@@ -240,7 +252,7 @@ public sealed partial class PackageGraph {
 }
 
 /// <summary>Finds a registry package's source: in <c>vendor/</c>, in the cache, or fetched from the registry into the cache.</summary>
-sealed class SourceStore(Workspace workspace, PackageEnvironment environment, Registry registry, LockFile? previous) {
+sealed class SourceStore(Workspace workspace, PackageEnvironment environment, IRegistry registry, LockFile? previous) {
     public const string ChecksumFile = ".sable-checksum";
 
     static string DirectoryName(string name, SemVersion version) => $"{name.Replace('/', '~')}-{version}";
@@ -261,7 +273,12 @@ sealed class SourceStore(Workspace workspace, PackageEnvironment environment, Re
         }
 
         var cached = CacheDirectory(name, version);
-        return Holds(cached, checksum) ? cached : null;
+        if (!Holds(cached, checksum)) {
+            return null;
+        }
+
+        PackageCache.MarkUsed(cached);
+        return cached;
     }
 
     /// <summary>The checksum the lock file has for a version, if it locks that version.</summary>
@@ -300,6 +317,7 @@ sealed class SourceStore(Workspace workspace, PackageEnvironment environment, Re
 
         Directory.CreateDirectory(Path.GetDirectoryName(target)!);
         Directory.Move(temporary, target);
+        PackageCache.MarkUsed(target);
         return target;
     }
 }
@@ -311,7 +329,7 @@ sealed class SourceStore(Workspace workspace, PackageEnvironment environment, Re
 ///     its package at the same version and on whatever the feature turns on:
 ///     so features are resolved, and unified, by PubGrub like anything else.
 /// </summary>
-sealed class GraphSource(Workspace workspace, IReadOnlyDictionary<string, LocalPackage> locals, Registry registry, LockFile? previous, SourceStore store) : IPackageSource {
+sealed class GraphSource(Workspace workspace, IReadOnlyDictionary<string, LocalPackage> locals, IRegistry registry, LockFile? previous, SourceStore store) : IPackageSource {
     /// <summary>A version's dependencies and features, from whichever place knows them.</summary>
     sealed record Spec(IReadOnlyList<DependencySpec> Normal, IReadOnlyList<DependencySpec> Dev, IReadOnlyDictionary<string, IReadOnlyList<string>> Features);
 

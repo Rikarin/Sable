@@ -1370,11 +1370,18 @@ In `src/Sable.Driver/Packages/`, with a command per file under `Commands/`.
   packages are unpacked into `~/.sable/cache`; `vendor` copies them into
   `vendor/`, which builds read first; with the cache or `vendor/` holding
   what the lock names, nothing reads the registry.
+- **Network registry** (docs/05 §5.5, "As built"). The registry may be a URL:
+  `HttpRegistry` speaks a small HTTP protocol, and `RegistryServer` (`sable
+  registry serve`) serves it over a directory registry. Reading is open and
+  checked by the client as before; writing takes a token (`sable login`)
+  and the owner's signature. Owners are keys, several per package (`sable
+  owner`); names are namespaced `org/name`, unprefixed ones reserved for the
+  standard ecosystem's tokens. `publish` also wants a tag for the version
+  and passing tests; `search`, `install`/`uninstall` and `cache list|gc|clean`
+  exist.
 
-Deferred: build scripts (`[build]` is read and validated, and a build warns
-that it is not run — the capability sandbox needs runtime support), and with
-them `[build-dependencies]` (checked, not resolved or built, and warned
-about); git dependencies (refused with an error); workspace inheritance
+Deferred: `[build-dependencies]` (checked, not resolved or built, and warned
+about: a build script imports only the standard library); git dependencies (refused with an error); workspace inheritance
 (`version.workspace = true` and `{ workspace = true }` are refused,
 `[workspace.package]` and `[workspace.dependencies]` warned about); `[reflect]`
 and `[targets]` (accepted with a warning: nothing looks a type up by name
@@ -1785,8 +1792,8 @@ the foreign-function interface passes — integers, floats, `Bool` and structs
 of them — and lists the rest; pointers and C strings wait for the library
 half (`Sable.Interop`, #74). `sable toolchain` installs from a build, as
 there are no released toolchains to download. Build scripts (§5.6) run in
-the interpreter's sandbox, without build-dependencies yet; the registry is a
-directory, not a network service.
+the interpreter's sandbox, without build-dependencies yet; the network
+registry has a reference server, not a deployment.
 
 ### Exit criteria
 - [x] Cold build of a 100-package graph < 60 s; warm incremental < 1 s
@@ -1796,8 +1803,10 @@ directory, not a network service.
       p95 5.2–9.4 ms on 205k lines, typing into function bodies while the
       server rebuilds in the background (`tools/Sable.LspBench`)
 - [ ] A third party publishes a package without talking to the team — the
-      tooling is there (`sable new`, `publish`, a signed registry, `explain`,
-      `doc`); what is missing is a network registry and a third party
+      tooling is there (`sable new`, `login`, `publish`, a signed network
+      registry and its server, `explain`, `doc`), and a test runs the whole
+      path against a local server; what is missing is a deployed registry
+      and a third party
 
 ---
 

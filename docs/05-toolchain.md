@@ -23,6 +23,12 @@ sable remove <pkg>
 sable update [pkg]                 re-resolve within semver bounds
 sable tree                         print the resolved dependency graph
 sable publish [--dry-run]          publish to the registry
+sable search <query>               search the registry
+sable login / logout               keep or forget a network registry's token
+sable owner [<pkg>] [--add|--remove <key>]  who may publish a package
+sable install <pkg>[@<ver>]        build a package's binaries into ~/.sable/bin
+sable cache <list|gc|clean>        the package cache, and collecting it
+sable registry <serve|token>       run a network registry, issue its tokens
 sable clean                        remove the target directory
 sable bindgen <header.h>           generate .sbi from a C header
 sable repl                         interactive, backed by the const evaluator
@@ -444,6 +450,51 @@ Clang runs on units in parallel; lowering is still one unit at a time.
   adopt a language whose builds require a network call to a startup's server.
 - Namespacing: `org/package`, with unprefixed names reserved for the standard
   ecosystem.
+
+**As built.** A registry is a directory or a URL (`$SABLE_REGISTRY`, a
+manifest's `[registry] path`, or `--registry`). A directory registry is a
+private or local one: `index/<name>.json` (the owners' keys, every key that
+ever owned it, and each version with its checksum, dependencies and ECDSA
+P-256 signature) and `blobs/<sha256>.tar`. A network registry serves the same
+files, and an API for writing:
+
+```
+GET  config.json                     {"api": "v1"}: is it there
+GET  index/<org>/<name>.json         the index, as a directory keeps it
+GET  blobs/<sha256>.tar              an archive
+GET  api/v1/search?q=&limit=         {"packages": [{name, version, description}]}
+GET  api/v1/me                       {"user"}: whom the token stands for
+PUT  api/v1/packages                 {name, entry (signed), archive (base64)}
+POST api/v1/yank                     {name, version, yanked, key, signature}
+POST api/v1/owners                   {name, action: add|remove, owner, key, signature}
+```
+
+Writing takes `Authorization: Bearer <token>` (`sable login` keeps it in
+`~/.sable/credentials.json`, mode 0600), which says who may write to the
+server and under which namespaces: a user publishes `user/…` and the `org/…`
+its token names; only a token of the standard ecosystem publishes an
+unprefixed name. The package's own key says who owns the package, and signs
+every version, yank and owner change — the last two over text naming the
+state they change, so a request cannot be replayed. The client verifies
+every entry and archive as it does a directory's, so the server is trusted
+to keep packages, not to vouch for them; the server checks besides that an
+archive's `sable.toml` is the package and version its entry claims.
+`sable registry serve --root <dir>` is the reference server, and `sable
+registry token` issues its tokens (only their hashes are kept).
+
+`publish` refuses a dirty tree (`--allow-dirty`), a commit without a tag for
+the version — `v1.2.0`, `1.2.0`, or a member's `name-v1.2.0` —
+(`--allow-untagged`), and failing tests (`--no-verify`). `search`,
+`install` (a package's binaries, built with the release profile, into
+`~/.sable/bin`), `uninstall`, `owner` and `cache list|gc|clean` (packages no
+build used, and evaluated manifests, in `--max-age` days) exist.
+
+What a real deployment needs beyond this: TLS in front of the server (it
+speaks plain HTTP), a store that is backed up and served from more than one
+machine (it is a directory), sign-up and token management for third parties
+(tokens are issued by hand), a policy for who holds the standard ecosystem's
+token and org names, rate limits, and a mirror (`vendor/` covers offline
+builds, not a second registry).
 
 ## 5.6 Build scripts
 

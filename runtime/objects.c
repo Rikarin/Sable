@@ -74,8 +74,11 @@ static bool tracking;
 
 // What ARC did: the counts the benchmarks track, and what the ARC passes are
 // measured by. Retains and releases count only those that touch a count —
-// not null, not immortal.
-static int64_t allocations, retains, releases;
+// not null, not immortal. The two are the program's to count too: compiled
+// code retains and releases inline, calling here only for an object's last
+// release (sable_release_last), and keeps these counts as the runtime does.
+static int64_t allocations;
+int64_t sable_retains, sable_releases;
 
 // The small blocks' slabs (memory.c): how many are held now and were at
 // most, and how many were given back to the system.
@@ -96,7 +99,7 @@ SABLE_AT_EXIT(sable_report) {
     if (getenv("SABLE_STATS") != NULL) {
         fflush(stdout);
         fprintf(stderr, "sable: allocations %lld, retains %lld, releases %lld\n",
-            (long long)allocations, (long long)retains, (long long)releases);
+            (long long)allocations, (long long)sable_retains, (long long)sable_releases);
         fprintf(stderr, "sable: slabs %lld held, %lld at most, %lld given back\n",
             (long long)slabs_held, (long long)slabs_most, (long long)slabs_returned);
     }

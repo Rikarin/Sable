@@ -1037,6 +1037,25 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             case "string_hash":
                 return StringHash(Encoding.UTF8.GetBytes(Text(operands[0]).Value));
 
+            // Scalar by scalar, as the runtime's byte search finds the same place.
+            case "string_find": {
+                var text = Text(operands[0]).Scalars;
+                var part = Text(operands[1]).Scalars;
+                var from = Math.Max(0L, (long)operands[2]!);
+                for (var i = from; i + part.Count <= text.Count; i++) {
+                    var k = 0;
+                    while (k < part.Count && text[(int)i + k] == part[k]) {
+                        k++;
+                    }
+
+                    if (k == part.Count) {
+                        return i;
+                    }
+                }
+
+                return -1L;
+            }
+
             // UTF-8's byte order is the scalars' order, as the runtime compares.
             case "string_compare":
                 return (long)Math.Sign(Encoding.UTF8.GetBytes(Text(operands[0]).Value).AsSpan()
@@ -1844,6 +1863,12 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
         checked {
             return (name, operands) switch {
                 ("add_Int", [long a, long b]) => Wrap(() => a + b),
+                ("wrapping_add_Int", [long a, long b]) => unchecked(a + b),
+                ("wrapping_sub_Int", [long a, long b]) => unchecked(a - b),
+                ("wrapping_mul_Int", [long a, long b]) => unchecked(a * b),
+                ("overflow_at_add_Int", [long a, long b, long i, long m]) => Overflows(() => a + b) ? Math.Min(m, i) : m,
+                ("overflow_at_sub_Int", [long a, long b, long i, long m]) => Overflows(() => a - b) ? Math.Min(m, i) : m,
+                ("overflow_at_mul_Int", [long a, long b, long i, long m]) => Overflows(() => a * b) ? Math.Min(m, i) : m,
                 ("sub_Int", [long a, long b]) => Wrap(() => a - b),
                 ("mul_Int", [long a, long b]) => Wrap(() => a * b),
                 ("div_Int", [long a, long b]) => b == 0 ? throw new SilTrap("division by zero") : Wrap(() => a / b),
@@ -2015,6 +2040,15 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
         }
 
         return text.ToString();
+    }
+
+    static bool Overflows(Func<long> operation) {
+        try {
+            _ = checked(operation());
+            return false;
+        } catch (OverflowException) {
+            return true;
+        }
     }
 
     static object Wrap(Func<long> operation) {

@@ -650,6 +650,15 @@ public sealed class BuiltinInst(string name, SilType type, params SilValue[] ope
 
     /// <summary>The same operation, differently made: <c>inline_new</c> on the stack.</summary>
     public void Rename(string name) => Name = name;
+
+    /// <summary>
+    ///     <c>builtin [in_bounds]</c>: an element access whose index a pass has
+    ///     proved in range — once, before a loop (<see cref="VersionLoops" />)
+    ///     — so that it is not checked again: no compare, no trap, nothing to
+    ///     stop LLVM vectorising the loop.
+    /// </summary>
+    public bool InBounds { get; set; }
+
     public override SilType Type { get; } = type;
     public override bool HasResult => Type != SilType.Unit;
     public override string Opcode => "builtin";
@@ -1579,6 +1588,14 @@ public static class SilBuiltins {
             Binary(op, SilType.Bool, SilType.Bool);
         }
 
+        // Int arithmetic whose overflow is checked later (VersionLoops): the
+        // result, wrapped; and, given the iteration and the first iteration
+        // that overflowed so far (Int.max for none), that first iteration.
+        foreach (var op in new[] { "add", "sub", "mul" }) {
+            Add($"wrapping_{op}_Int", SilType.Int, SilType.Int, SilType.Int);
+            Add($"overflow_at_{op}_Int", SilType.Int, SilType.Int, SilType.Int, SilType.Int, SilType.Int);
+        }
+
         foreach (var type in SilType.Numbers.Concat([SilType.Bool, SilType.Char, SilType.String])) {
             Binary("cmp_eq", type, SilType.Bool);
             Binary("cmp_ne", type, SilType.Bool);
@@ -1627,6 +1644,8 @@ public static class SilBuiltins {
         Add("string_hash", SilType.Int, SilType.String);
         Add("string_join", SilType.String, new ArrayType(SilType.String), SilType.String);
         Add("string_compare", SilType.Int, SilType.String, SilType.String);
+        // Where a part next occurs in a text, at or after a scalar position: a scalar index, or -1.
+        Add("string_find", SilType.Int, SilType.String, SilType.String, SilType.Int);
         Add("string_from_Char", SilType.String, SilType.Char);
         foreach (var number in SilType.Numbers) {
             Add($"string_from_{number}", SilType.String, number);

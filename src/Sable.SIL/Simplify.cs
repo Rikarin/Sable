@@ -304,8 +304,10 @@ public sealed class Simplify : ISilPass {
         };
 
     /// <summary>A builtin that neither traps nor has an effect: comparison, logic, floating-point arithmetic, wrapping.</summary>
-    static bool Pure(string name) =>
+    internal static bool Pure(string name) =>
         name.StartsWith("cmp_", StringComparison.Ordinal)
+        || name.StartsWith("wrapping_", StringComparison.Ordinal)
+        || name.StartsWith("overflow_at_", StringComparison.Ordinal)
         || name.StartsWith("and_", StringComparison.Ordinal)
         || name.StartsWith("or_", StringComparison.Ordinal)
         || name.StartsWith("xor_", StringComparison.Ordinal)
@@ -315,5 +317,5 @@ public sealed class Simplify : ISilPass {
         || name.StartsWith("wrap_", StringComparison.Ordinal)
         || name is "add_F64" or "sub_F64" or "mul_F64" or "div_F64" or "rem_F64" or "neg_F64" or "abs_F64"
             or "add_F32" or "sub_F32" or "mul_F32" or "div_F32" or "rem_F32" or "neg_F32" or "abs_F32"
-            or "string_count" or "string_compare" or "string_hash" or "string_contains" or "string_index_of";
+            or "string_count" or "string_compare" or "string_hash" or "string_contains" or "string_index_of" or "string_find";
 }

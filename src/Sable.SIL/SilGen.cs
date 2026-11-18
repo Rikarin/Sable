@@ -131,7 +131,7 @@ public sealed partial class SilGen {
             foreach (var accessor in Declarations(tree).OfType<AccessorSyntax>()) {
                 if (accessor.Keyword.Kind != SyntaxKind.GetKeyword
                     || (_unit is null || _unit.Owns(tree) ? model.GetAccessorSymbol(accessor) : model.GetAccessorDeclaration(accessor))
-                        is not { ContainingSymbol: FieldSymbol { IsStatic: false } field } getter
+                        is not { ContainingSymbol: FieldSymbol field } getter
                     || !IsLowerable(getter)) {
                     continue;
                 }
@@ -969,11 +969,16 @@ public sealed partial class SilGen {
                     return existing;
                 }
 
+                // 'Void?' — what 'try?' makes of a call that returns nothing —
+                // has nothing to carry: whether there was a value is all of it.
                 var enumType = Begin(type, new EnumType(name));
-                enumType.Cases.Add(("Some", wrapped));
+                enumType.Cases.Add(("Some", wrapped == SilType.Unit ? null : wrapped));
                 enumType.Cases.Add(("None", null));
                 return HoldsItself(enumType) ? null : enumType;
             }
+
+            case StructuralUnionTypeSymbol union:
+                return LowerStructuralUnion(union);
 
             case NamedTypeSymbol { IsGenericDefinition: false, TypeKind: TypeKind.Struct } named when named.OriginalDefinition.IsInlineLayout:
                 return LowerInline(named);
@@ -1496,6 +1501,10 @@ public sealed partial class SilGen {
         if (requirement is FieldSymbol computed
             && FindField(concrete, computed.Name) is { IsComputed: true } own && GetterOf(own) is { } getter) {
             requirement = getter;
+        } else if (requirement is FieldSymbol { IsComputed: true } defaulted
+                   && FindField(concrete, defaulted.Name) is null && GetterOf(defaulted) is { } defaultGetter) {
+            // None of its own: the getter the protocol gives by default.
+            requirement = defaultGetter;
         }
 
         if (requirement is FieldSymbol field) {
@@ -1534,7 +1543,10 @@ public sealed partial class SilGen {
         if (implementation is not null && !IsGeneric(implementation) && _names.TryGetValue(implementation, out var implementationName)) {
             target = implementationName;
             targetType = _module.Find(target)?.Type ?? SignatureOf(implementation, at, TypeSubstitution.Empty);
-        } else if ((implementation is { ContainingSymbol: ExtensionSymbol } ? implementation : implementation is null ? method : null) is { } fallback
+        } else if ((implementation is { ContainingSymbol: ExtensionSymbol }
+                    || (implementation is { FunctionKind: FunctionKind.Accessor } && Owner(implementation) is { TypeKind: TypeKind.Protocol })
+                        ? implementation
+                        : implementation is null ? method : null) is { } fallback
                    && _declarations.ContainsKey(fallback) && Owner(fallback)!.SelfTypeParameter is { } self
                    && Instance(fallback, new(new() { [self] = concrete }), at) is { } instance) {
             // The protocol's default, for this type: an instance with Self bound.
@@ -2105,6 +2117,11 @@ public sealed partial class SilGen {
                 return Hold(Emit(new LoadBorrowInst(place)));
             }
 
+            // A narrowed read is the payload, taken out: a value of its own.
+            if (NarrowedUnion(expression) is not null) {
+                return Expression(expression) is { } payload ? Hold(payload) : null;
+            }
+
             switch (expression) {
                 case BoundParameterAccess access when _parameters.TryGetValue(access.Parameter, out var parameter) && parameter.Type is not AddressType:
                     return parameter;
@@ -2313,13 +2330,66 @@ public sealed partial class SilGen {
             }
 
             if (handler.Type != error.Type) {
-                Fail(at, $"an error of type {error.Type} converted to {handler.Type}");
-                return;
+                if (ConvertError(error, handler.Type, at) is not { } converted) {
+                    Fail(at, $"an error of type {error.Type} converted to {handler.Type}");
+                    return;
+                }
+
+                error = converted;
             }
 
             DestroyTemporaries(handler.Temporaries);
             RunDefers(handler.Scopes);
             Branch(handler.Block, Owned(error));
+        }
+
+        /// <summary>
+        ///     An error on its way to a handler of another type: converted by
+        ///     the handler type's <c>From</c> conformance (docs/03 §3.6), its
+        ///     static <c>from</c> called with the error, which is then done with.
+        /// </summary>
+        SilValue? ConvertError(SilValue error, SilType wanted, SyntaxNode at) {
+            TypeSymbol? SymbolOf(SilType type) =>
+                generator._types.FirstOrDefault(entry => entry.Value is { } lowered && lowered == type).Key;
+
+            if (SymbolOf(wanted) is not NamedTypeSymbol target || SymbolOf(error.Type) is not { } source) {
+                return null;
+            }
+
+            var members = TypeSubstitution.For(target);
+            var from = target.OriginalDefinition.GetMembers("from")
+                .OfType<FunctionSymbol>()
+                .FirstOrDefault(f => f is { IsStatic: true, Parameters.Length: 1, TypeParameters.IsEmpty: true }
+                    && members.Apply(f.Parameters[0].Type).Equals(source)
+                    && members.Apply(f.ReturnType).Equals(target));
+            if (from is null) {
+                return null;
+            }
+
+            string name;
+            FunctionType? type;
+            if (IsGeneric(from)) {
+                if (generator.Instance(from, members, at) is not { } instance) {
+                    return null;
+                }
+
+                (name, type) = instance;
+            } else {
+                if (!generator._names.TryGetValue(from, out var plainName)) {
+                    return null;
+                }
+
+                name = plainName;
+                type = generator._module.Find(name)?.Type ?? generator.SignatureOf(from, at, TypeSubstitution.Empty);
+            }
+
+            if (type is null || type.Result != wanted) {
+                return null;
+            }
+
+            var converted = Emit(new ApplyInst(Emit(new FunctionRefInst(name, type)), wanted, error));
+            Destroy(error);
+            return converted;
         }
 
         /// <summary>The function's own throw, as a handler.</summary>
@@ -3068,9 +3138,17 @@ public sealed partial class SilGen {
                 return null;
             }
 
+            // A binding a test narrowed out of a union: the case's payload (SilGen.Unions.cs).
+            if (NarrowedUnion(expression) is var (whole, unionCase)) {
+                return NarrowedRead(expression, whole, unionCase);
+            }
+
             switch (expression) {
                 case BoundLiteral literal:
                     return Literal(literal, literal.Type);
+
+                case BoundConversion { ConversionKind: ConversionKind.UnionInjection } injection:
+                    return Inject(injection);
 
                 case BoundInterpolatedString interpolated:
                     return Interpolation(interpolated);
@@ -3198,6 +3276,10 @@ public sealed partial class SilGen {
 
                 case BoundFieldAccess { Field.Builtin: not null } builtin:
                     return BuiltinProperty(builtin);
+
+                // 'F64.pi': a static property's getter, called with nothing.
+                case BoundFieldAccess { Field: { IsComputed: true, IsStatic: true } } access when generator.GetterOf(access.Field) is { } staticGetter:
+                    return Expression(new BoundCall(access.Syntax, null, staticGetter, [], access.Type));
 
                 case BoundFieldAccess { Receiver: { } receiver, Field.IsComputed: true } access:
                     return ComputedProperty(access, receiver);
@@ -3909,7 +3991,7 @@ public sealed partial class SilGen {
                 ? Literal(literal, ((OptionalTypeSymbol)conversion.Type).UnderlyingType)
                 : Expression(conversion.Operand);
 
-            return inner is null ? null : Emit(new EnumInst(optional, optional.CaseIndex("Some"), inner));
+            return inner is null ? null : Emit(new EnumInst(optional, optional.CaseIndex("Some"), inner is UnitValue ? null : inner));
         }
 
         SilValue? Unwrap(BoundConversion conversion) {
@@ -4022,6 +4104,10 @@ public sealed partial class SilGen {
 
         /// <summary>'x is Dog': whether the object is of the class, or a subclass of it.</summary>
         SilValue? TypeTest(BoundTypeTest test) {
+            if (Sub(test.Operand.Type) is StructuralUnionTypeSymbol union) {
+                return UnionTypeTest(test, union);
+            }
+
             if (LowerType(test.TestedType) is not ClassType target || Borrow(test.Operand) is not { Type: ClassType } value) {
                 return Missing(test, $"'is {test.TestedType.ToDisplayString()}' on '{test.Operand.Type.ToDisplayString()}'");
             }
@@ -4569,7 +4655,7 @@ public sealed partial class SilGen {
             if (value is not null && _current is not null) {
                 if (tryExpression.TryKind == TryKind.Optional) {
                     var optional = (EnumType)resultType;
-                    Branch(after, Emit(new EnumInst(optional, optional.CaseIndex("Some"), value)));
+                    Branch(after, Emit(new EnumInst(optional, optional.CaseIndex("Some"), value is UnitValue ? null : value)));
                 } else if (result is null) {
                     Branch(after);
                 } else {
@@ -4895,16 +4981,32 @@ public sealed partial class SilGen {
 
             Jump(new TryApplyInst(reference, type.Result, [..arguments], normal, errorBlock));
 
+            // Already off the temporaries: a borrow of a place is ended, an
+            // access closed, a temporary destroyed.
+            void Release(SilValue borrow) {
+                switch (borrow) {
+                    case AccessMarker marker:
+                        Emit(new BuiltinInst("access_end", SilType.Unit, marker.Address));
+                        break;
+                    case LoadBorrowInst borrowed:
+                        Emit(new EndBorrowInst(borrowed));
+                        break;
+                    default:
+                        Destroy(borrow);
+                        break;
+                }
+            }
+
             _current = errorBlock;
             for (var i = borrows.Count - 1; i >= 0; i--) {
-                Destroy(borrows[i]);
+                Release(borrows[i]);
             }
 
             RouteError(error, at);
 
             _current = normal;
             for (var i = borrows.Count - 1; i >= 0; i--) {
-                Destroy(borrows[i]);
+                Release(borrows[i]);
             }
 
             return result ?? (SilValue)UnitValue.Instance;

@@ -571,4 +571,125 @@ public sealed class LanguageTests {
                 }
                 """).Stdout
         );
+
+    // ---- Structural unions, error conversion, static properties --------------
+
+    [Fact]
+    public void AStructuralUnionHoldsOneOfItsTypesAndNarrows() =>
+        Prints(
+            "number 2.5\ntext wide\n42\nnumber 1\ntext 7\n",
+            """
+            alias Width = F64 | String
+
+            fn describe(_ w: Width) -> String {
+                if w is F64 { return "number \(w)" }
+                if w is String { return "text " + w }
+                return "neither"
+            }
+
+            fn size(_ w: Width) -> F64 {
+                if w is String { return w.toF64() ?? 0 }
+                if w is F64 { return w }
+                return 0
+            }
+            """,
+            """
+                print(describe(2.5))
+                print(describe("wide"))
+                let held: Width = "42"
+                print(size(held))
+                let widths: Width[>..] = [1.0, "7"]
+                for w in widths { print(describe(w)) }
+            """
+        );
+
+    const string Layers = """
+                          union StoreError {
+                              Down(shard: Int)
+                          }
+
+                          union AppError {
+                              Missing(key: String)
+                              Store(cause: StoreError)
+                          }
+
+                          extension AppError: From<StoreError> {
+                              static fn from(_ e: StoreError) -> AppError => .Store(cause: e)
+                          }
+
+                          fn load(_ shard: Int) throws(StoreError) -> String {
+                              if shard > 2 { throw .Down(shard: shard) }
+                              return "row \(shard)"
+                          }
+
+                          fn fetch(_ shard: Int) throws(AppError) -> String {
+                              if shard < 0 { throw .Missing(key: "negative") }
+                              return try load(shard)
+                          }
+
+                          fn report(_ shard: Int) -> String {
+                              do {
+                                  return try fetch(shard)
+                              } catch .Missing(let key) {
+                                  return "missing \(key)"
+                              } catch .Store(let cause) {
+                                  return match cause {
+                                      case .Down(let s) => "shard \(s) down"
+                                  }
+                              }
+                          }
+                          """;
+
+    [Fact]
+    public void ATryConvertsAnErrorThroughFrom() =>
+        Prints("row 1\nmissing negative\nshard 5 down\n", Layers, "    print(report(1))\n    print(report(-1))\n    print(report(5))");
+
+    [Fact]
+    public void TryQuestionOnACallThatGivesNothing() =>
+        Prints(
+            "tried row 1\ndone\n",
+            Layers + "\nfn attempt(_ shard: Int) throws(StoreError) {\n    let row = try load(shard)\n    print(\"tried \" + row)\n}",
+            "    try? attempt(1)\n    try? attempt(7)\n    print(\"done\")"
+        );
+
+    [Fact]
+    public void AThrowingCallOnAMoveOnlyValueEndsItsBorrowOnBothEdges() =>
+        Prints(
+            "closed a\nclosed \na\nclosed bb\nclosed a\nfailed\n",
+            """
+            union E {
+                Bad(code: Int)
+            }
+
+            @noncopy
+            struct Handle {
+                let name: String
+
+                fn read() throws(E) -> String {
+                    if name.count > 1 { throw E.Bad(code: name.count) }
+                    return name
+                }
+
+                deinit { print("closed \(name)") }
+            }
+
+            fn readBoth(_ first: String, _ second: String) throws(E) -> String {
+                using let a = Handle { name: first }
+                using let b = Handle { name: second }
+                return try a.read() + try b.read()
+            }
+            """,
+            """
+                print((try? readBoth("", "a")) ?? "failed")
+                print((try? readBoth("a", "bb")) ?? "failed")
+            """
+        );
+
+    [Fact]
+    public void AStaticComputedPropertyIsItsGetter() =>
+        Prints(
+            "6.283185307179586\n3\n",
+            "struct Dice {\n    static var faces: Int { get { return 3 } }\n}",
+            "    print(2 * F64.pi)\n    print(Dice.faces)"
+        );
 }

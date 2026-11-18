@@ -147,4 +147,36 @@ public sealed class ComputedPropertyTests {
                 )
             ).Stdout
         );
+
+    /// <summary>A property the protocol computes by default, read through an existential of a type that leaves it alone.</summary>
+    [Fact]
+    public void ADefaultGetterIsReadThroughAnExistential() =>
+        Assert.Equal(
+            "Square of 2: 4\nround\n",
+            AssertAgree(
+                Program(
+                    """
+                    protocol Shape {
+                        var area: Int { get }
+                        var summary: String { get => "\(Reflect.typeName(self)) of \(area)" }
+                    }
+
+                    struct Square: Shape {
+                        var side: Int
+                        var area: Int { get => side * side }
+                        var summary: String { get => "Square of \(side): \(area)" }
+                    }
+
+                    struct Circle: Shape {
+                        var area: Int { get => 3 }
+                    }
+                    """,
+                    """
+                        let shapes: (any Shape)[>..] = [Square { side: 2 }, Circle {}]
+                        print(shapes[0].summary)
+                        print(shapes[1].summary == "Circle of 3" ? "round" : shapes[1].summary)
+                    """
+                )
+            ).Stdout
+        );
 }

@@ -322,6 +322,34 @@ public sealed class BindingTests {
         );
     }
 
+    const string Holders = """
+                           class Box {
+                               let size: Int
+                               init(size: Int) { self.size = size }
+                               fn grow() { self.size = size + 1 }
+                           }
+
+                           actor Keeper {
+                               private let limit: Int
+                               init(limit: Int) { self.limit = limit }
+                           }
+                           """;
+
+    [Fact]
+    public void AnInitialiserGivesALetFieldItsValue() {
+        // The method's assignment is refused; the initialisers' are not.
+        var refused = Assert.Single(ErrorsIn("", Holders));
+        Assert.Equal(ErrorCode.ERR_NotAssignable, refused.Code);
+        Assert.Equal(TestSource.Probe("", Holders).IndexOf("self.size = size + 1", StringComparison.Ordinal), refused.Span.Start);
+    }
+
+    [Fact]
+    public void AnArrayOfLeadingDotsTakesItsTypeFromThePayload() =>
+        AssertClean(
+            "let g = Shape.Group(parts: [.Dot(size: 1), .Group(parts: [])])\nlet h: Shape = .Group(parts: [.Dot(size: 2)])",
+            "union Shape {\n    Dot(size: Int)\n    Group(parts: Shape[>..])\n}"
+        );
+
     [Fact]
     public void AssignmentChecksTheType() =>
         Assert.Contains(

@@ -79,6 +79,10 @@ public sealed class FormatterRuleTests {
             "fn f() {\n    if a &&\n        b {\n        g()\n    }\n}\n");
 
     [Fact]
+    public void AnInoutArgumentIsSpacedLikeAnyOther() =>
+        AssertFormats("fn f() {\n    g(&a,&b, into:&c)\n}\n", "fn f() {\n    g(&a, &b, into: &c)\n}\n");
+
+    [Fact]
     public void KeepsABlankLineAfterAComment() =>
         AssertFormats("module M\n\n// note\n\nfn f() { }\n", "module M\n\n// note\n\nfn f() { }\n");
 }

@@ -95,10 +95,13 @@ public sealed class DeriveTests {
     ///     them is the language's own — but has no hash or order of its own.
     /// </summary>
     [Fact]
-    public void OptionalAndArrayFieldsAreEquatableButNotHashable() {
+    public void OptionalAndArrayFieldsAreEquatableAndAnOptionalHashableWhereItsValueIs() {
         AssertClean("@derive(Equatable) struct Holder { var count: Int?, var tags: String[>..], var grid: Int[>..][>..]? }");
 
-        var error = Single("@derive(Hashable) struct Holder { var count: Int? }", ErrorCode.ERR_DerivedFieldDoesNotConform);
+        // 'Int?' is Hashable through Optional's conditional conformance; an
+        // optional of what is not, is not.
+        AssertClean("@derive(Hashable) struct Holder { var count: Int? }");
+        var error = Single("struct Opaque { var n: Int }\n@derive(Hashable) struct Holder { var count: Opaque? }", ErrorCode.ERR_DerivedFieldDoesNotConform);
         Assert.Contains("field 'count'", error.Message);
         Assert.Contains("'Hashable'", error.Message);
 

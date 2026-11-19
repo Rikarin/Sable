@@ -125,3 +125,60 @@ extension Optional {
         return .Err(error)
     }
 }
+
+// ---- Conformances -------------------------------------------------------------
+//
+// An optional is what it holds is, where that is: an 'Int?' is Equatable,
+// Hashable, Comparable and Debug, so generic code can take one. ('==' on two
+// optionals written out is the compiler's, as it is on two Ints; these are
+// what a 'T: Equatable' finds when T is an optional.)
+
+extension Optional: Equatable where Wrapped: Equatable {
+    /// Two optionals are equal when both hold nothing, or both hold values
+    /// that are equal.
+    public operator == (lhs: Wrapped?, rhs: Wrapped?) -> Bool {
+        if let left = lhs {
+            if let right = rhs {
+                return left == right
+            }
+            return false
+        }
+        return rhs == none
+    }
+}
+
+extension Optional: Hashable where Wrapped: Hashable {
+    /// Whether it holds a value, and the value if it does: 'none' and a
+    /// value hash apart.
+    public fn hash(into hasher: inout Hasher) {
+        if let value = self {
+            hasher.combine(true)
+            hasher.combine(value)
+        } else {
+            hasher.combine(false)
+        }
+    }
+}
+
+extension Optional: Comparable where Wrapped: Comparable {
+    /// 'none' comes before every value; two values are in their own order.
+    public operator < (lhs: Wrapped?, rhs: Wrapped?) -> Bool {
+        if let right = rhs {
+            if let left = lhs {
+                return left < right
+            }
+            return true
+        }
+        return false
+    }
+}
+
+extension Optional: Debug where Wrapped: Debug {
+    /// What it holds, as Debug says it, or "none".
+    public fn debugDescription() -> String {
+        if let value = self {
+            return value.debugDescription()
+        }
+        return "none"
+    }
+}

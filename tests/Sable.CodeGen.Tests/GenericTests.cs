@@ -628,4 +628,44 @@ public sealed class GenericTests {
                 )
             ).Stdout
         );
+
+    /// <summary>
+    ///     'T?' meets a constraint where its T does, through Sable.Core's
+    ///     conditional conformances of Optional: generic code given one
+    ///     calls the Optional extension's '==', '<', 'hash' and
+    ///     'debugDescription', and so does an 'any Debug' holding one.
+    /// </summary>
+    [Fact]
+    public void AnOptionalMeetsAConstraintWhereWhatItHoldsDoes() =>
+        Assert.Equal(
+            "false true\nnone \"a\"\ntrue true false\nnothing 2\nnone13\n3 none\n",
+            AssertAgree(
+                Program(
+                    """
+                    fn same<T: Equatable>(_ a: T, _ b: T) -> Bool { return a == b }
+                    fn smaller<T: Comparable>(_ a: T, _ b: T) -> T { return a < b ? a : b }
+                    fn describe<T: Debug>(_ a: T) -> String { return a.debugDescription() }
+                    fn hashOf<T: Hashable>(_ a: T) -> Int { return a.hashValue }
+                    """,
+                    """
+                        let x: Int? = 3
+                        let n: Int? = none
+                        let s: String? = "a"
+                        print("\(same(x, n)) \(same(n, n))")
+                        print("\(describe(n)) \(describe(s))")
+                        let three: Int? = 3
+                        print("\(smaller(x, n) == none) \(hashOf(x) == hashOf(three)) \(hashOf(x) == hashOf(n))")
+                        var d: [Int?: String] = [:]
+                        d[x] = "three"
+                        d[n] = "nothing"
+                        print("\(d[n] ?? "?") \(d.count)")
+                        let xs: Int?[>..] = [3, none, 1]
+                        let sorted = xs.sorted()
+                        print(describe(sorted[0]) + describe(sorted[1]) + describe(sorted[2]))
+                        let boxed: (any Debug)[>..] = [x, n]
+                        print("\(boxed[0].debugDescription()) \(boxed[1].debugDescription())")
+                    """
+                )
+            ).Stdout
+        );
 }

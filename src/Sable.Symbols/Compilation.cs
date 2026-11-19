@@ -1679,6 +1679,9 @@ public sealed partial class Compilation {
                             CheckCoherence(extended, bound, written, baseType.Span);
                             extended.BaseTypes = extended.BaseTypes.Add(bound);
                             extension.Conformances = extension.Conformances.Add(bound);
+                            if (extended.ExtendedOptional is not null) {
+                                RegisterOptionalConformance(extension, bound);
+                            }
                         }
                     }
                 );
@@ -1696,6 +1699,30 @@ public sealed partial class Compilation {
         }
 
         CurrentScope = null;
+    }
+
+    /// <summary>
+    ///     Gives a protocol, and those it refines, an extension of Optional
+    ///     that conforms optionals to it, so that <c>T?</c> is found to conform
+    ///     (<see cref="Conversions.Satisfies" />).
+    /// </summary>
+    static void RegisterOptionalConformance(ExtensionSymbol extension, TypeSymbol conformance) {
+        var registered = new HashSet<NamedTypeSymbol>();
+        var pending = new Stack<NamedTypeSymbol>(CompositionTypeSymbol.PartsOf(conformance).OfType<NamedTypeSymbol>());
+        while (pending.Count > 0) {
+            var protocol = pending.Pop().OriginalDefinition;
+            if (protocol.TypeKind != TypeKind.Protocol || !registered.Add(protocol)) {
+                continue;
+            }
+
+            if (!protocol.OptionalConformances.Contains(extension)) {
+                protocol.OptionalConformances = protocol.OptionalConformances.Add(extension);
+            }
+
+            foreach (var refined in protocol.BaseTypes.OfType<NamedTypeSymbol>()) {
+                pending.Push(refined);
+            }
+        }
     }
 
     /// <summary>

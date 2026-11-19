@@ -161,6 +161,18 @@ public sealed class NamedTypeSymbol : TypeSymbol {
     public ImmutableArray<NamedTypeSymbol> ArrayConformers { get; internal set; } = [];
 
     /// <summary>
+    ///     For a protocol, the extensions of Sable.Core's Optional that conform
+    ///     optionals to it, directly or through a protocol that refines it:
+    ///     <c>extension Optional: Equatable where Wrapped: Equatable</c>.
+    /// </summary>
+    /// <remarks>
+    ///     <c>T?</c> is a type of its own, not the Optional it desugars to, so
+    ///     as with arrays each protocol keeps the extensions that give it to
+    ///     optionals; a <c>T?</c> conforms where one of them holds of its T.
+    /// </remarks>
+    public ImmutableArray<ExtensionSymbol> OptionalConformances { get; internal set; } = [];
+
+    /// <summary>
     ///     For an array extension that declares conformances, what an array
     ///     of its kind has by a name, from every array extension: the
     ///     witnesses its conformances may be met by.

@@ -997,4 +997,25 @@ public sealed class GenericsAndConformanceTests {
             }
             """
         );
+
+    // ---- Optionals' conditional conformances --------------------------------
+
+    const string OverOptionals = """
+                                 struct Plain { var x: Int }
+                                 fn same<T: Equatable>(_ a: T, _ b: T) -> Bool { return a == b }
+                                 fn describe<T: Debug>(_ a: T) -> String { return a.debugDescription() }
+                                 fn key<K: Hashable>(_ k: K) -> Int { return k.hashValue }
+                                 fn least<C: Comparable>(_ a: C, _ b: C) -> C { return a < b ? a : b }
+
+                                 """;
+
+    [Fact]
+    public void AnOptionalConformsWhereWhatItHoldsDoes() {
+        AssertClean(OverOptionals + "fn probe(_ x: Int?, _ s: String?) { let a = same(x, x); let b = describe(s); let c = key(x); let d = least(s, s) }");
+        AssertClean(OverOptionals + "fn probe(_ x: Int??) { let a = same(x, x) }");
+
+        var error = Assert.Single(Errors(OverOptionals + "fn probe(_ p: Plain?) { let a = same(p, p) }"));
+        Assert.Contains("'T' would be 'Plain?', which is not 'Equatable'", error.Message);
+        Assert.Contains(Errors(OverOptionals + "fn probe(_ p: Plain?) { let a = key(p) }"), static e => e.Code == ErrorCode.ERR_NoMatchingOverload);
+    }
 }

@@ -3008,6 +3008,11 @@ public sealed partial class SilGen {
             // A method of a generic type, 'G<Int>' boxed as 'any P': its
             // instance for the type arguments the boxed value has.
             (target, targetType) = generic;
+        } else if (implementation is { ContainingSymbol: ExtensionSymbol { ExtendedType.ExtendedOptional: not null }, TypeParameters.IsEmpty: true }
+                   && Instance(implementation, TypeSubstitution.For(concrete), at) is { } optionalWitness) {
+            // An 'Int?' boxed as 'any Debug': the Optional extension's member,
+            // for what the optional holds.
+            (target, targetType) = optionalWitness;
         } else if ((implementation is { ContainingSymbol: ExtensionSymbol }
                     || (implementation is { FunctionKind: FunctionKind.Accessor } && Owner(implementation) is { TypeKind: TypeKind.Protocol })
                         ? implementation
@@ -7136,9 +7141,21 @@ public sealed partial class SilGen {
         ///     the operand turned out to be; the operator itself otherwise.
         /// </summary>
         FunctionSymbol? OperatorWitness(FunctionSymbol method, TypeSymbol operand) =>
-            OwnerOf(method) is { TypeKind: TypeKind.Protocol } && Sub(operand) is NamedTypeSymbol concrete
+            OwnerOf(method) is { TypeKind: TypeKind.Protocol } && Nominal(Sub(operand)) is { } concrete
                 ? Implementation(concrete, method)
                 : method;
+
+        /// <summary>
+        ///     The named type whose members a type has: itself, or for
+        ///     <c>T?</c> the Optional of Sable.Core's extensions, which give an
+        ///     optional its conformances.
+        /// </summary>
+        NamedTypeSymbol? Nominal(TypeSymbol type) =>
+            type switch {
+                NamedTypeSymbol named => named,
+                OptionalTypeSymbol optional => Core.Optional.Construct([optional.UnderlyingType]),
+                _ => null,
+            };
 
         /// <summary>
         ///     'a == b' through an operator the program declares: a call to it.
@@ -7182,6 +7199,7 @@ public sealed partial class SilGen {
             // operands' — from what an operand refers to, when it is passed
             // by reference.
             var owner = Sub(first.Type) is ReferenceTypeSymbol reference ? reference.ReferencedType : Sub(first.Type);
+            owner = owner is OptionalTypeSymbol && OwnerOf(callee) is { ExtendedOptional: not null } ? Nominal(owner)! : owner;
             var call = new BoundCall(binary.Syntax, null, callee, [first, second], resultType) {
                 Substitution = OwnerOf(callee) is { IsGenericDefinition: true } ? TypeSubstitution.For(owner) : TypeSubstitution.Empty,
             };
@@ -9286,6 +9304,7 @@ public sealed partial class SilGen {
             return self switch {
                 NamedTypeSymbol concrete => Implementation(concrete, call.Function),
                 ArrayTypeSymbol array => generator.ArrayImplementation(array, call.Function),
+                OptionalTypeSymbol optional => Implementation(Nominal(optional)!, call.Function),
                 _ => null,
             };
         }
@@ -9334,7 +9353,12 @@ public sealed partial class SilGen {
 
             // A value of any type goes into an existential with no
             // requirements; one with some needs a type with witnesses.
+            // An optional's witnesses are its Optional extensions' members.
             var concrete = Sub(conversion.Operand.Type);
+            if (concrete is OptionalTypeSymbol optional) {
+                concrete = Nominal(optional)!;
+            }
+
             if (concrete is not NamedTypeSymbol && generator.ExistentialSlots(layout).Count > 0) {
                 return Missing(conversion, $"the conversion to '{conversion.Type.ToDisplayString()}'");
             }

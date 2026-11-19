@@ -145,6 +145,39 @@ public sealed class RangeLoweringTests {
     }
 
     /// <summary>
+    ///     <c>for _ in …</c> takes each element in a variable no one names,
+    ///     over every kind of range, an array and a sequence alike (#253).
+    /// </summary>
+    [Fact]
+    public void AWildcardForRunsOncePerElementOfEveryKindOfSequence() {
+        var module = Lower("""
+                           fn count(_ a: Int, _ b: Int, _ s: String) -> Int {
+                               let xs: Int[>..] = [1, 2, 3]
+                               var n = 0
+                               for _ in 0..<2 { n += 1 }
+                               for _ in 0...1 { n += 1 }
+                               for _ in a..<b { n += 1 }
+                               for _ in a...b { n += 1 }
+                               let r = a..<b
+                               for _ in r { n += 1 }
+                               let c = a...b
+                               for _ in c { n += 1 }
+                               for _ in xs { n += 1 }
+                               for _ in s { n += 1 }
+                               for _ in 0..<5 where n > 0 { n += 1 }
+                               for _ in a... {
+                                   n += 1
+                                   break
+                               }
+                               return n
+                           }
+                           """);
+
+        // 2 + 2 + 2 + 3 + 2 + 3 + 3 + 2 + 5 + 1
+        Assert.Equal(25L, Run(module, "count", 1L, 3L, "ab"));
+    }
+
+    /// <summary>
     ///     <c>for i in a... { }</c> counts up from <c>a</c> with no bound,
     ///     until the loop is left — and past <c>Int.max</c> it traps.
     /// </summary>

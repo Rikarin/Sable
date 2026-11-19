@@ -47,6 +47,33 @@ public static class SilPassManager {
     public static IReadOnlyList<ISilPass> Optimising { get; } = [new Devirtualise(), new Inliner(), new Simplify(), ..Default, new VersionLoops(), new Simplify()];
 
     /// <summary>
+    ///     The passes a build at a profile's <c>opt-level</c> runs (docs/05
+    ///     §5.2.5): clang's level, <c>0</c> to <c>3</c>, <c>s</c> or <c>z</c>.
+    /// </summary>
+    /// <remarks>
+    ///     <list type="bullet">
+    ///         <item><c>0</c>: <see cref="Default" />, the ARC passes alone; every call stays a call.</item>
+    ///         <item>
+    ///             <c>1</c>: those, after devirtualising and tidying the blocks;
+    ///             nothing is inlined, so a backtrace still names every frame
+    ///             SIL wrote, and nothing is duplicated.
+    ///         </item>
+    ///         <item><c>2</c> and <c>3</c>: <see cref="Optimising" />. What <c>3</c> adds is LLVM's.</item>
+    ///         <item><c>s</c>: <see cref="Optimising" /> without loop versioning, which copies a loop for its fast path.</item>
+    ///         <item><c>z</c>: without the inliner too, which copies callees into every caller.</item>
+    ///     </list>
+    /// </remarks>
+    public static IReadOnlyList<ISilPass> ForLevel(string optLevel) =>
+        optLevel switch {
+            "0" => Default,
+            "1" => [new Devirtualise(), new Simplify(), ..Default],
+            "2" or "3" => Optimising,
+            "s" => [new Devirtualise(), new Inliner(), new Simplify(), ..Default, new Simplify()],
+            "z" => [new Devirtualise(), new Simplify(), ..Default, new Simplify()],
+            _ => throw new ArgumentOutOfRangeException(nameof(optLevel), optLevel, "an opt-level is 0, 1, 2, 3, s or z"),
+        };
+
+    /// <summary>
     ///     Drops every function the entry point cannot reach: through calls
     ///     and function values, the globals' initialiser, the deinits and
     ///     vtables of the classes it makes, and every type's deinit.

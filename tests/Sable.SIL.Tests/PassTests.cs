@@ -13,6 +13,24 @@ public sealed class PassTests {
         module.Functions.Where(static f => !f.Name.StartsWith("Sable.Core.", StringComparison.Ordinal))
             .Sum(static f => f.Blocks.Sum(static b => b.Instructions.OfType<T>().Count()));
 
+    /// <summary>
+    ///     An opt-level's passes: 0 the ARC passes alone, 1 without inlining,
+    ///     2 and 3 everything, s without loop versioning, z without the inliner
+    ///     either; anything else is not a level.
+    /// </summary>
+    [Fact]
+    public void EachOptLevelHasItsPasses() {
+        Assert.Same(SilPassManager.Default, SilPassManager.ForLevel("0"));
+        Assert.Same(SilPassManager.Optimising, SilPassManager.ForLevel("2"));
+        Assert.Same(SilPassManager.Optimising, SilPassManager.ForLevel("3"));
+        Assert.Equal(["Devirtualise", "Simplify"], SilPassManager.ForLevel("1").Take(2).Select(static p => p.GetType().Name));
+        Assert.DoesNotContain(SilPassManager.ForLevel("1"), static p => p is Inliner or VersionLoops);
+        Assert.Contains(SilPassManager.ForLevel("s"), static p => p is Inliner);
+        Assert.DoesNotContain(SilPassManager.ForLevel("s"), static p => p is VersionLoops);
+        Assert.DoesNotContain(SilPassManager.ForLevel("z"), static p => p is Inliner or VersionLoops);
+        Assert.Throws<ArgumentOutOfRangeException>(() => SilPassManager.ForLevel("4"));
+    }
+
     [Fact]
     public void ALoopsLocalsBecomeBlockArguments() {
         var module = Lowered(

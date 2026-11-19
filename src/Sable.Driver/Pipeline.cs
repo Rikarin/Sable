@@ -65,6 +65,15 @@ public static class Pipeline {
     ///     they leave; without it, a build with debug information keeps every
     ///     local in its slot.
     /// </param>
+    /// <param name="optLevel">
+    ///     The profile's <c>opt-level</c>, which picks the SIL passes
+    ///     (<see cref="SilPassManager.ForLevel" />); when null, <c>2</c> for an
+    ///     optimised build and <c>0</c> for another.
+    /// </param>
+    /// <param name="checkArc">
+    ///     A profile's <c>arc-checks</c>: compiled code's retains and releases
+    ///     trap on an object whose deinit has run (<see cref="SilModule.CheckArc" />).
+    /// </param>
     /// <param name="checkOverflow">
     ///     Trap on integer overflow; a profile's <c>overflow-checks = false</c>
     ///     turns it off, and the arithmetic wraps (<see cref="WrappingArithmetic" />).
@@ -88,7 +97,9 @@ public static class Pipeline {
         NativeTarget? target = null,
         bool checkOverflow = true,
         bool library = false,
-        bool denyReflection = false
+        bool denyReflection = false,
+        string? optLevel = null,
+        bool checkArc = false
     ) {
         Compilation compilation;
         List<string> errors;
@@ -101,7 +112,8 @@ public static class Pipeline {
         }
 
         // The warnings go with whatever comes back, an error or the IR.
-        return CompileChecked(compilation, program, errors, debugDirectory, checkExclusivity, timings, optimised, target, checkOverflow, library, denyReflection) with { Warnings = warnings };
+        var level = optLevel ?? (optimised ? "2" : "0");
+        return CompileChecked(compilation, program, errors, debugDirectory, checkExclusivity, timings, level, target, checkOverflow, library, denyReflection, checkArc) with { Warnings = warnings };
     }
 
     /// <summary>The rest of <see cref="Compile(IReadOnlyList{SyntaxTree}, string?, bool, BuildTimings?, bool)" />, from a checked program.</summary>
@@ -112,11 +124,12 @@ public static class Pipeline {
         string? debugDirectory,
         bool checkExclusivity,
         BuildTimings? timings,
-        bool optimised,
+        string optLevel,
         NativeTarget? target,
         bool checkOverflow,
         bool library,
-        bool denyReflection
+        bool denyReflection,
+        bool checkArc
     ) {
         if (errors.Count > 0) {
             return new(null, null, errors);
@@ -129,6 +142,7 @@ public static class Pipeline {
         }
 
         module.CheckExclusivity = checkExclusivity;
+        module.CheckArc = checkArc;
         if (!checkOverflow) {
             WrappingArithmetic.Apply(module);
         }
@@ -149,13 +163,14 @@ public static class Pipeline {
             return new(module, null, ["error: no entry point: mark a function '@main' or name one 'main'"]);
         }
 
-        // The SIL passes, each followed by the verifier. An unoptimised debug
-        // build keeps every local in its slot, where the debug information
-        // says it is.
-        if (debugDirectory is null || optimised) {
+        // The SIL passes the opt-level asks for, each followed by the
+        // verifier. An unoptimised debug build keeps every local in its slot,
+        // where the debug information says it is; an optimised one runs them
+        // as any other, and the debugger sees what they leave.
+        if (debugDirectory is null || optLevel != "0") {
             try {
                 using var _ = BuildTimings.Of(timings, "passes");
-                SilPassManager.Run(module, optimised ? SilPassManager.Optimising : SilPassManager.Default);
+                SilPassManager.Run(module, SilPassManager.ForLevel(optLevel));
             } catch (SilPassException failure) {
                 return new(module, null, [$"internal error: {failure.Message}"]);
             }

@@ -324,6 +324,18 @@ void sable_retain(void *pointer) {
 
 void sable_release_last(void *pointer);
 
+// With a profile's arc-checks, compiled code's retain and release call this
+// for an object whose count is already zero: its deinit has run, and the
+// reference counted outlived it. Counting it would write what may be freed
+// memory, so the program stops instead. operation is 0 for a retain, 1 for
+// a release.
+_Noreturn void sable_arc_dead(void *pointer, int32_t operation) {
+    (void)pointer;
+    sable_trap(operation == 0
+        ? "retain of an object whose deinit has run"
+        : "release of an object whose deinit has run");
+}
+
 void sable_release(void *pointer) {
     SableObject *object = pointer;
     if (object == NULL || (object->flags & SABLE_IMMORTAL)) {

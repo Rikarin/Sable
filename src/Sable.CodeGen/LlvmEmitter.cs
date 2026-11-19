@@ -147,7 +147,7 @@ public sealed partial class LlvmEmitter {
         output.Append(IntrinsicDeclarations);
         output.Append(MathDeclarations);
         output.Append('\n');
-        output.Append(Counting);
+        output.Append(RetainAndRelease(module.CheckArc));
         output.Append('\n');
         output.Append(functions);
         output.Append(ForeignFunctions(module));
@@ -242,6 +242,86 @@ public sealed partial class LlvmEmitter {
                               ret void
                             }
                             """;
+
+    /// <summary>
+    ///     <see cref="Counting" /> with a profile's <c>arc-checks</c>: a retain
+    ///     or release of an object whose count is already zero — whose deinit
+    ///     has run, so that the reference outlived it — calls the runtime's
+    ///     <c>sable_arc_dead</c>, which traps, rather than counting what may
+    ///     be freed memory. (The runtime's own retains and releases, compiled
+    ///     once for every program, do not check.)
+    /// </summary>
+    /// <summary>The definitions of <c>@sable.retain</c> and <c>@sable.release</c> every module carries: checked under <c>arc-checks</c>.</summary>
+    public static string RetainAndRelease(bool checkArc) => checkArc ? CheckedCounting : Counting;
+
+    const string CheckedCounting = """
+                                   @sable_retains = external global i64
+                                   @sable_releases = external global i64
+                                   declare void @sable_release_last(ptr) cold
+                                   declare void @sable_arc_dead(ptr, i32) cold noreturn
+
+                                   define internal void @sable.retain(ptr %object) alwaysinline nounwind {
+                                   entry:
+                                     %none = icmp eq ptr %object, null
+                                     br i1 %none, label %done, label %present
+                                   present:
+                                     %flagsField = getelementptr inbounds { ptr, i32, i32 }, ptr %object, i32 0, i32 2
+                                     %flags = load i32, ptr %flagsField
+                                     %immortalBit = and i32 %flags, 1
+                                     %immortal = icmp ne i32 %immortalBit, 0
+                                     br i1 %immortal, label %done, label %check
+                                   check:
+                                     %strongField = getelementptr inbounds { ptr, i32, i32 }, ptr %object, i32 0, i32 1
+                                     %strong = load i32, ptr %strongField
+                                     %dead = icmp eq i32 %strong, 0
+                                     br i1 %dead, label %deinited, label %count, !prof !{!"branch_weights", i32 1, i32 1000}
+                                   deinited:
+                                     call void @sable_arc_dead(ptr %object, i32 0)
+                                     unreachable
+                                   count:
+                                     %more = add i32 %strong, 1
+                                     store i32 %more, ptr %strongField
+                                     %retains = load i64, ptr @sable_retains
+                                     %retainsMore = add i64 %retains, 1
+                                     store i64 %retainsMore, ptr @sable_retains
+                                     br label %done
+                                   done:
+                                     ret void
+                                   }
+
+                                   define internal void @sable.release(ptr %object) alwaysinline nounwind {
+                                   entry:
+                                     %none = icmp eq ptr %object, null
+                                     br i1 %none, label %done, label %present
+                                   present:
+                                     %flagsField = getelementptr inbounds { ptr, i32, i32 }, ptr %object, i32 0, i32 2
+                                     %flags = load i32, ptr %flagsField
+                                     %immortalBit = and i32 %flags, 1
+                                     %immortal = icmp ne i32 %immortalBit, 0
+                                     br i1 %immortal, label %done, label %check
+                                   check:
+                                     %strongField = getelementptr inbounds { ptr, i32, i32 }, ptr %object, i32 0, i32 1
+                                     %strong = load i32, ptr %strongField
+                                     %dead = icmp eq i32 %strong, 0
+                                     br i1 %dead, label %deinited, label %count, !prof !{!"branch_weights", i32 1, i32 1000}
+                                   deinited:
+                                     call void @sable_arc_dead(ptr %object, i32 1)
+                                     unreachable
+                                   count:
+                                     %releases = load i64, ptr @sable_releases
+                                     %releasesMore = add i64 %releases, 1
+                                     store i64 %releasesMore, ptr @sable_releases
+                                     %less = sub i32 %strong, 1
+                                     store i32 %less, ptr %strongField
+                                     %gone = icmp eq i32 %less, 0
+                                     br i1 %gone, label %last, label %done, !prof !{!"branch_weights", i32 1, i32 1000}
+                                   last:
+                                     call void @sable_release_last(ptr %object)
+                                     br label %done
+                                   done:
+                                     ret void
+                                   }
+                                   """;
 
     /// <summary>
     ///     The LLVM intrinsics (and the two libm functions) the numeric

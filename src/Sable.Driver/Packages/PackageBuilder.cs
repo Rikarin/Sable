@@ -362,6 +362,10 @@ public static class PackageBuilder {
             environment.Error.WriteLine($"warning: {warning}");
         }
 
+        foreach (var unmet in profile.UnmetFor(request.Target ?? NativeTarget.Host)) {
+            environment.Error.WriteLine($"warning: {unmet}");
+        }
+
         foreach (var member in members) {
             var bins = member.Bins.Where(b => request.Bin is null || b.Name == request.Bin).ToList();
             if (request.Bin is not null && bins.Count == 0) {
@@ -381,7 +385,7 @@ public static class PackageBuilder {
             }
 
             var reported = new List<string>();
-            if (Generate(graph, member.Name, environment, reported, profile.Optimise, timings) is not { } generated) {
+            if (Generate(graph, member.Name, environment, reported, !profile.DebugAssertions, timings) is not { } generated) {
                 DiagnosticDocs.WriteHint(environment.Error, reported);
                 environment.Error.WriteLine($"error: could not compile {member.Name}");
                 return null;
@@ -400,7 +404,7 @@ public static class PackageBuilder {
             }
 
             if (bins.Count == 0) {
-                var (errors, warnings) = Pipeline.Diagnose(Program(graph, member.Name, null, profile.Optimise, generated: generated, target: request.Target));
+                var (errors, warnings) = Pipeline.Diagnose(Program(graph, member.Name, null, !profile.DebugAssertions, generated: generated, target: request.Target));
                 Report(environment, warnings);
                 if (errors.Count > 0) {
                     Report(environment, errors);
@@ -429,7 +433,9 @@ public static class PackageBuilder {
                         LinkArguments = graph.LinkArguments(member.Name),
                         LinkInputs = graph.LinkInputs(member.Name),
                     },
-                    Whole = profile.CodegenUnits == 1,
+                    Whole = profile.CodegenUnits == 1 || !profile.Incremental,
+                    ArcChecks = profile.ArcChecks,
+                    DebugAssertions = profile.DebugAssertions,
                     OverflowChecks = profile.OverflowChecks,
                     DenyReflection = DeniesReflection(workspace, request),
                 };
@@ -465,7 +471,7 @@ public static class PackageBuilder {
     ///     <c>target/&lt;profile&gt;/</c>, named for the package with
     ///     <c>-</c> made <c>_</c>, as C's linkers take names: the library and its
     ///     dependencies compiled whole, with no entry point
-    ///     (<see cref="Pipeline.Compile(IReadOnlyList{SyntaxTree}, string?, bool, BuildTimings?, bool, NativeTarget?, bool, bool, bool)" />),
+    ///     (<see cref="Pipeline.Compile(IReadOnlyList{SyntaxTree}, string?, bool, BuildTimings?, bool, NativeTarget?, bool, bool, bool, string?, bool)" />),
     ///     and linked with the runtime. Not cached between builds, as a
     ///     binary's units are.
     /// </summary>
@@ -485,10 +491,12 @@ public static class PackageBuilder {
         }
 
         var result = Pipeline.Compile(
-            Program(graph, member.Name, null, profile.Optimise, generated: generated, target: request.Target),
+            Program(graph, member.Name, null, !profile.DebugAssertions, generated: generated, target: request.Target),
             profile.Debug ? member.Directory : null,
             profile.Exclusivity,
-            optimised: profile.Optimise && !profile.Debug,
+            optimised: profile.Optimise,
+            optLevel: profile.OptLevel,
+            checkArc: profile.ArcChecks,
             target: request.Target,
             checkOverflow: profile.OverflowChecks,
             library: true,

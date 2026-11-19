@@ -183,8 +183,9 @@ public sealed class ManifestTests {
 
     /// <summary>
     ///     Every profile setting means what it says: each opt-level its own
-    ///     clang level, and lto, codegen-units, strip and rpath acted on. What
-    ///     cannot be acted on — unwinding, ARC checks — is warned about.
+    ///     clang level, and lto, codegen-units, strip, rpath, arc-checks,
+    ///     debug-assertions and incremental acted on. What cannot be acted on —
+    ///     unwinding, a count of codegen units — is warned about.
     /// </summary>
     [Fact]
     public void ProfileSettingsReachTheNativeBuild() {
@@ -202,11 +203,15 @@ public sealed class ManifestTests {
             rpath = true
             panic = "unwind"
             arc-checks = true
+            debug-assertions = true
 
             [profile.dev]
             opt-level = 1
             lto = false
             strip = true
+            codegen-units = 16
+            incremental = false
+            arc-checks = false
             """);
 
         Assert.Equal(
@@ -217,7 +222,17 @@ public sealed class ManifestTests {
         Assert.Equal(new NativeOptions { OptLevel = "1", DebugInfo = true, Lto = LtoMode.Off, Strip = StripMode.Symbols }, manifest.Dev.Native);
         Assert.True(manifest.Dev.Optimise);
         Assert.Contains(manifest.Warnings, static w => w is { Line: 12, Key: "profile.release.panic" });
-        Assert.Contains(manifest.Warnings, static w => w is { Line: 13, Key: "profile.release.arc-checks" });
+        Assert.True(manifest.Release.ArcChecks);
+        Assert.True(manifest.Release.DebugAssertions);
+        Assert.False(manifest.Dev.ArcChecks);
+        Assert.False(manifest.Dev.DebugAssertions);
+        Assert.False(manifest.Dev.Incremental);
+        Assert.True(Profile.Dev.DebugAssertions);
+        Assert.False(Profile.Release.DebugAssertions);
+        Assert.Equal(
+            ["profile.release.panic", "profile.dev.codegen-units"],
+            manifest.Warnings.Where(static w => w.Key.StartsWith("profile.", StringComparison.Ordinal)).Select(static w => w.Key)
+        );
 
         foreach (var (level, expected) in new[] { ("0", "0"), ("2", "2"), ("3", "3"), ("\"s\"", "s") }) {
             Assert.Equal(expected, Parse($"[package]\nname = \"a\"\nversion = \"1.0.0\"\n[profile.release]\nopt-level = {level}\n").Release.OptLevel);

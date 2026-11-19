@@ -388,6 +388,45 @@ with both kinds is an error, so there is never a question which one applies.
   rather than ordinary code's: the manifest evaluator runs the interpreter
   directly, under its own rules (§5.2.4).
 
+### 5.2.11 Build profiles
+
+`[profile.dev]` is every build but `--release`, `[profile.release]` that
+one; `package.sb` writes them as `.dev(...)` and `.release(...)`. A value
+the compiler cannot use is an error naming the key; a setting it cannot
+act on is a warning the build prints, never taken silently.
+
+| Setting | Default (dev / release) | What the build does |
+|---|---|---|
+| `opt-level` | `0` / `3` | clang's `-O0`…`-O3`, `-Os`, `-Oz`, and the SIL passes below |
+| `debug` | `true` / `false` | DWARF (`-g`) at any level; optimised, the SIL passes still run |
+| `lto` | `"fat"` | `-flto` or `-flto=thin` in an optimised build, the runtime compiled to bitcode with it so that its small functions inline; on Linux and Windows through lld, and without, where clang cannot link with lld (a warning when the profile wrote `lto`) |
+| `codegen-units` | — | `1` compiles the program whole even in a dev build; the units are otherwise the packages, so another count is warned about |
+| `incremental` | `true` | `false` compiles the program whole each time, keeping no unit's object; an unchanged build is still skipped |
+| `panic` | `"abort"` | a trap always aborts; `"unwind"` is warned about |
+| `strip` | `"none"` | `"debuginfo"` or `"symbols"`: the link's `--strip-debug`/`--strip-all` on Linux, `-S`/`-S -x` on macOS; a warning on Windows |
+| `rpath` | `false` | the executable looks for shared libraries beside itself (`$ORIGIN`, `@executable_path`); a warning on Windows, which does already |
+| `exclusivity` | `"checked"` / `"unchecked"` | keeps or drops the dynamic exclusivity checks (docs/02 §2.3) |
+| `overflow-checks` | `true` | `false`: integer `+ - *`, negation, `abs` and `as` wrap rather than trap |
+| `arc-checks` | `true` / `false` | compiled code's retain and release trap on an object whose count is already zero — whose deinit has run — rather than count freed memory |
+| `debug-assertions` | unoptimised | `DEBUG` rather than `RELEASE` for `#if` (SYNTAX.md §21) in every package's files |
+| `leak-check` | `false` | `sable run` reports what the program leaves alive |
+
+The SIL passes each opt-level runs (`SilPassManager.ForLevel`):
+
+| Level | SIL passes |
+|---|---|
+| `0` | the ARC passes (slot promotion, copy forwarding, borrowing, stack promotion); none at all with debug information, so every local stays in its slot |
+| `1` | devirtualisation and block merging, then the ARC passes: nothing inlined or duplicated, every call a frame |
+| `2`, `3` | all of them: devirtualisation, inlining, the ARC passes, loop versioning; `3` differs in LLVM's passes only |
+| `s` | as `2` without loop versioning, which copies a loop for its fast path |
+| `z` | as `s` without the inliner, which copies a callee into every caller |
+
+An optimised program compiled package by package (`lto = "thin"` or off)
+runs only the ARC passes, on each unit: inlining and devirtualisation need
+the whole program. A dev build with debug information, compiled so, runs
+none. A single file's `sable build` takes the same levels as `-O0` to
+`-O3`, `-Os` and `-Oz` (`-O2` by default), and `-g` alone builds at `-O0`.
+
 ### Deliberate departures from Cargo
 
 - **`reflect:`** is new and necessary: reflection reachability has to be

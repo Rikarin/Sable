@@ -49,6 +49,22 @@ public sealed class CorpusLoweringTests {
         Assert.Empty(SilVerifier.Verify(module));
     }
 
+    /// <summary>
+    ///     And what the other opt-levels make of it: <c>1</c> without inlining,
+    ///     <c>s</c> without loop versioning, <c>z</c> without either
+    ///     (<see cref="SilPassManager.ForLevel" />).
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(Files))]
+    public void WhatLowersVerifiesAtEveryOptLevel(string file) {
+        foreach (var level in new[] { "1", "s", "z" }) {
+            var tree = SyntaxTree.Parse(new SourceText(File.ReadAllText(Path.Combine(Root, file)), Path.GetFileName(file)));
+            var (module, _) = SilGen.Lower(Compilation.Create([tree]));
+            SilPassManager.Run(module, SilPassManager.ForLevel(level));
+            Assert.Empty(SilVerifier.Verify(module));
+        }
+    }
+
     static string Root {
         get {
             var directory = new DirectoryInfo(AppContext.BaseDirectory);

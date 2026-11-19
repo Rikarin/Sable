@@ -112,6 +112,55 @@ public sealed class GenericLoweringTests {
         Assert.Equal(8L, Run(module, "test"));
     }
 
+    /// <summary>
+    ///     <c>hashValue</c> on an <c>Outcome</c>, whose <c>get()</c> throws
+    ///     its <c>E</c>, and on a union of the program's own like it: the
+    ///     extension's getter, not a call to <c>get()</c> that nothing
+    ///     could catch (#266).
+    /// </summary>
+    [Fact]
+    public void HashValueOnAUnionWithAThrowingGetIsTheExtensionsProperty() {
+        var module = Lower(
+            """
+            union Two<T, E> {
+                A(T)
+                B(E)
+
+                fn get() throws(E) -> T {
+                    match self {
+                        case .A(let value)   => { return value }
+                        case .B(let failure) => { throw failure }
+                    }
+                }
+            }
+            extension Two: Hashable where T: Hashable, E: Hashable {
+                fn hash(into hasher: inout Hasher) {
+                    if case .A(let value) = self {
+                        hasher.write(0)
+                        hasher.combine(value)
+                    }
+                    if case .B(let failure) = self {
+                        hasher.write(1)
+                        hasher.combine(failure)
+                    }
+                }
+            }
+            fn outcome() -> Bool {
+                let o: Outcome<Int, Int> = .Ok(7)
+                let e: Outcome<Int, Int> = .Err(7)
+                return o.hashValue == o.hashValue && o.hashValue != e.hashValue
+            }
+            fn own() -> Bool {
+                let a: Two<Int, Int> = .A(7)
+                let b: Two<Int, Int> = .B(7)
+                return a.hashValue == a.hashValue && a.hashValue != b.hashValue
+            }
+            """
+        );
+        Assert.Equal(true, Run(module, "outcome"));
+        Assert.Equal(true, Run(module, "own"));
+    }
+
     [Fact]
     public void AGenericFunctionIsLoweredOncePerTypeArgument() {
         var module = Lower(

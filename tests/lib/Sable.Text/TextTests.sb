@@ -80,3 +80,66 @@ fn templates() {
 fn escapingHtml() {
     assertEqual(escapedHtml("<a href=\"x\">&</a>"), "&lt;a href=&quot;x&quot;&gt;&amp;&lt;/a&gt;")
 }
+
+@test
+fn theDeprecatedHelpersKeepTheirEdgeCases() {
+    assertEqual(reversed("aé"), "éa")
+    assert(contains("haystack", "st") && !contains("haystack", "x"), "contains")
+    assertEqual(replacing("abc", "", with: "-"), "abc")
+    assertEqual(splitting("a,b", by: "").count, 1)
+    assertEqual(occurrences(of: "", within: "abc"), 0)
+    assert(find("hello", "l", from: 9) == none, "past the end")
+    assert(findLast("hello", "z") == none, "not there")
+}
+
+@test
+fn templatesLeaveWhatTheyCannotFill() {
+    assertEqual(format("{0}{1}{0}", ["a", "b"]), "aba")
+    assertEqual(format("{5} {} {x", ["a"]), "{5} a {x")
+    assertEqual(format("{}{}", ["a"]), "a{}")
+    assertEqual(format("{12", []), "{12")
+    assertEqual(format("}} {", []), "} {")
+}
+
+@test
+fn escapingEachCharacter() {
+    assertEqual(escapedHtml("plain"), "plain")
+    assertEqual(escapedHtml("'"), "&#39;")
+    assertEqual(escapedHtml(">"), "&gt;")
+    assertEqual(escapedHtml("\"x\""), "&quot;x&quot;")
+}
+
+@test
+fn integersInEveryRadixAndSign() {
+    assertEqual(formatted(-255, radix: 16), "-ff")
+    assertEqual(formatted(10, radix: 1), "10")
+    assertEqual(formatted(10, radix: 37), "10")
+    assertEqual(formatted(0), "0")
+    assertEqual(formatted(-5, width: 4), "  -5")
+    assertEqual(parseInt("+7") ?? 0, 7)
+    assertEqual(parseInt("Zz", radix: 36) ?? 0, 1295)
+    assertEqual(parseInt("10", radix: 99) ?? 0, 10)
+    assert(parseInt("") == none && parseInt("-") == none, "no digits")
+    assert(parseInt("9223372036854775808") == none, "too big")
+    assertEqual(parseInt("-9223372036854775808") ?? 0, -9223372036854775807 - 1)
+    assert(parseInt("99999999999999999999") == none, "far too big")
+    assert(parseInt("1!") == none, "not a digit")
+}
+
+@test
+fn floatsToFixedDecimals() {
+    assertEqual(formatted(0.0 / 0.0, decimals: 2), "nan")
+    assertEqual(formatted(1.0 / 0.0, decimals: 2), "inf")
+    assertEqual(formatted(-1.0 / 0.0, decimals: 2), "-inf")
+    assertEqual(formatted(-0.0, decimals: 1), "-0.0")
+    assertEqual(formatted(2.5, decimals: -1), "2")
+    assertEqual(formatted(0.001, decimals: 1), "0.0")
+    assertEqual(formatted(1e22, decimals: 0), "10000000000000000000000")
+    assertEqual(formatted(0.125, decimals: 2), "0.12")
+    assertEqual(formatted(0.375, decimals: 2), "0.38")
+    assertEqual(formatted(9.995, decimals: 2), "9.99")
+    assertEqual(formatted(0.5, decimals: 0), "0")
+    assertEqual(formatted(1.5, decimals: 0), "2")
+    assertEqual(formatted(99.96, decimals: 1), "100.0")
+    assertEqual(formatted(1.0e-5, decimals: 7), "0.0000100")
+}

@@ -58,7 +58,7 @@ public fn assertEqualText(_ left: String, _ right: String) {
         fail(differenceReport(left.debugDescription(), right.debugDescription()))
         return
     }
-    fail(lineDiff(lines(left), lines(right)))
+    fail(lineDiff(left.lines(), right.lines()))
 }
 
 /// Fails the test unless the two differ.
@@ -76,7 +76,7 @@ public fn differenceReport(_ left: String, _ right: String) -> String {
     while at < left.count && at < right.count && left.at(at) == right.at(at) {
         at = at + 1
     }
-    return "the values differ\n   left: \(left)\n  right: \(right)\n         \(repeating(" ", at))^ first difference at character \(at)"
+    return "the values differ\n   left: \(left)\n  right: \(right)\n         \(" ".repeated(at))^ first difference at character \(at)"
 }
 
 /// A diff of two lists of lines: '-' for the left's, '+' for the right's,

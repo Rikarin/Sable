@@ -1,225 +1,140 @@
 module Sable.Text
 
-// Working with text (docs/06): searching, slicing, building, padding —
-// written in Sable over the core String. Positions count Unicode scalars,
-// as String does.
+// Working with text (docs/06): escaping, templates, and numbers written and
+// read in a radix — written in Sable over the core String.
 //
-// Each helper that builds a string collects its pieces and joins them once:
-// a '+' per piece copies everything so far again, which is quadratic. And
-// each that searches forwards asks the runtime (Runtime.findString), which
-// compares sixteen bytes at a time; findLast compares in place, scalar by
-// scalar, rather than slicing a copy at every position.
+// Searching, splitting, replacing, padding, trimming and case are String's
+// own members now (Sable.Core's String+Search, String+Case and
+// String+Transform), which take a Char, a String, a CharSet or a closure and
+// work in String.Index rather than by counting scalars. The free functions
+// that did those things here are kept, deprecated, for the code that calls
+// them: each says which member to use, and is written over it. Their
+// positions are still scalar counts, as they always were.
 
 /// The string, n times over.
+@deprecated("use text.repeated(times)")
 public fn repeating(_ text: String, _ times: Int) -> String {
-    var copies: String[>..] = []
-    var i = 0
-    while i < times {
-        copies.append(text)
-        i = i + 1
-    }
-    return joined(copies, separator: "")
+    return text.repeated(times)
 }
 
 /// The parts, with the separator between each two.
+@deprecated("use parts.joined(separator:)")
 public fn joined(_ parts: String[>..], separator: String) -> String {
-    // In the runtime, at once: a '+' per part copies everything so far again.
-    return Runtime.joinStrings(parts, separator)
+    return parts.joined(separator: separator)
 }
 
 /// The text, its scalars in reverse order.
+@deprecated("use text.reversed()")
 public fn reversed(_ text: String) -> String {
-    var scalars: String[>..] = []
-    var i = text.count - 1
-    while i >= 0 {
-        scalars.append(String.fromChar(text.at(i)))
-        i = i - 1
-    }
-    return joined(scalars, separator: "")
-}
-
-/// Whether the part occurs in the text starting at the position.
-fn occursAt(_ text: String, _ part: String, _ position: Int) -> Bool {
-    if position < 0 || position + part.count > text.count {
-        return false
-    }
-    var k = 0
-    while k < part.count {
-        if text.at(position + k) != part.at(k) {
-            return false
-        }
-        k = k + 1
-    }
-    return true
+    return text.reversed()
 }
 
 /// Whether the text begins with the prefix.
+@deprecated("use text.hasPrefix(start)")
 public fn hasPrefix(_ text: String, _ start: String) -> Bool {
-    return start.count <= text.count && text.slice(from: 0, to: start.count) == start
+    return text.hasPrefix(start)
 }
 
 /// Whether the text ends with the suffix.
+@deprecated("use text.hasSuffix(end)")
 public fn hasSuffix(_ text: String, _ end: String) -> Bool {
-    return end.count <= text.count && text.slice(from: text.count - end.count, to: text.count) == end
+    return text.hasSuffix(end)
 }
 
-/// Where the first occurrence of the part starts, or none.
+/// Where the first occurrence of the part starts, as a scalar count, or none.
+@deprecated("use text.firstIndex(of: part), a String.Index")
 public fn find(_ text: String, _ part: String) -> Int? {
-    return find(text, part, from: 0)
+    return scalarPosition(text, text.firstIndex(of: part))
 }
 
 /// Whether the part occurs in the text.
+@deprecated("use text.contains(part)")
 public fn contains(_ text: String, _ part: String) -> Bool {
-    return find(text, part) != none
+    return text.contains(part)
 }
 
-/// The text with every occurrence of the part replaced, left to right.
+/// The text with every occurrence of the part replaced, left to right; an
+/// empty part replaces nothing.
+@deprecated("use text.replacing(part, with: replacement)")
 public fn replacing(_ text: String, _ part: String, with replacement: String) -> String {
-    if part.count == 0 {
-        return text
-    }
-    var pieces: String[>..] = []
-    var start = 0
-    var at = Runtime.findString(text, part, 0)
-    while at >= 0 {
-        pieces.append(text.slice(from: start, to: at))
-        pieces.append(replacement)
-        start = at + part.count
-        at = Runtime.findString(text, part, start)
-    }
-    if pieces.count == 0 {
-        return text
-    }
-    pieces.append(text.slice(from: start, to: text.count))
-    return joined(pieces, separator: "")
+    return part.isEmpty ? text : text.replacing(part, with: replacement)
 }
 
-/// The text split at every occurrence of the separator; empty parts kept.
+/// The text split at every occurrence of the separator; empty parts kept,
+/// and an empty separator splits nothing.
+@deprecated("use text.split(separator)")
 public fn splitting(_ text: String, by separator: String) -> String[>..] {
-    var parts: String[>..] = []
-    if separator.count == 0 {
-        parts.append(text)
-        return parts
+    if separator.isEmpty {
+        return [text]
     }
-    var start = 0
-    var at = Runtime.findString(text, separator, 0)
-    while at >= 0 {
-        parts.append(text.slice(from: start, to: at))
-        start = at + separator.count
-        at = Runtime.findString(text, separator, start)
-    }
-    parts.append(text.slice(from: start, to: text.count))
-    return parts
+    return text.split(separator)
 }
 
 /// The text padded on the left with the fill to the width; longer text as it is.
+@deprecated("use text.paddedStart(toWidth: width, with: fill)")
 public fn paddedLeft(_ text: String, to width: Int, with fill: Char) -> String {
-    return text.count >= width ? text : repeating(String.fromChar(fill), width - text.count) + text
+    return text.paddedStart(toWidth: width, with: fill)
 }
 
 /// The text padded on the right with the fill to the width; longer text as it is.
+@deprecated("use text.paddedEnd(toWidth: width, with: fill)")
 public fn paddedRight(_ text: String, to width: Int, with fill: Char) -> String {
-    return text.count >= width ? text : text + repeating(String.fromChar(fill), width - text.count)
+    return text.paddedEnd(toWidth: width, with: fill)
 }
 
 /// ASCII letters in upper case; everything else as it is.
+@deprecated("use text.asciiUppercased(), or text.uppercased() for every script")
 public fn uppercased(_ text: String) -> String {
-    return shiftingAscii(text, from: 97, to: 122, by: -32)
+    return text.asciiUppercased()
 }
 
 /// ASCII letters in lower case; everything else as it is.
+@deprecated("use text.asciiLowercased(), or text.lowercased() for every script")
 public fn lowercased(_ text: String) -> String {
-    return shiftingAscii(text, from: 65, to: 90, by: 32)
-}
-
-/// The text with each scalar from 'low' to 'high' moved by 'shift': runs
-/// that need no change are kept whole, as slices, and text that needs none
-/// is given back as it is.
-fn shiftingAscii(_ text: String, from low: Int, to high: Int, by shift: Int) -> String {
-    var pieces: String[>..] = []
-    var start = 0
-    var i = 0
-    while i < text.count {
-        let code = text.at(i).codePoint
-        if code >= low && code <= high {
-            if start < i {
-                pieces.append(text.slice(from: start, to: i))
-            }
-            pieces.append(String.fromChar(Char.fromCodePoint(code + shift)!))
-            start = i + 1
-        }
-        i = i + 1
-    }
-    if pieces.count == 0 {
-        return text
-    }
-    pieces.append(text.slice(from: start, to: text.count))
-    return joined(pieces, separator: "")
+    return text.asciiLowercased()
 }
 
 /// The text's lines, without their endings ("\n" or "\r\n"); a last empty
 /// line — what a final newline leaves — is not one.
+@deprecated("use text.lines()")
 public fn lines(_ text: String) -> String[>..] {
-    var result: String[>..] = []
-    if text.count == 0 {
-        return result
-    }
-    for line in text.split('\n') {
-        if line.count > 0 && line.at(line.count - 1) == '\r' {
-            result.append(line.slice(from: 0, to: line.count - 1))
-        } else {
-            result.append(line)
-        }
-    }
-    if result[result.count - 1].count == 0 {
-        result.removeLast()
-    }
-    return result
+    return text.lines()
 }
 
 /// The text without the whitespace it starts with.
+@deprecated("use text.trimmedStart()")
 public fn trimmedStart(_ text: String) -> String {
-    var start = 0
-    while start < text.count && text.at(start).isWhitespace {
-        start = start + 1
-    }
-    return text.slice(from: start, to: text.count)
+    return text.trimmedStart()
 }
 
 /// The text without the whitespace it ends with.
+@deprecated("use text.trimmedEnd()")
 public fn trimmedEnd(_ text: String) -> String {
-    var end = text.count
-    while end > 0 && text.at(end - 1).isWhitespace {
-        end = end - 1
-    }
-    return text.slice(from: 0, to: end)
+    return text.trimmedEnd()
 }
 
 /// Whether the text is empty or nothing but whitespace.
+@deprecated("use text.isBlank")
 public fn isBlank(_ text: String) -> Bool {
-    var i = 0
-    while i < text.count {
-        if !text.at(i).isWhitespace {
-            return false
-        }
-        i = i + 1
-    }
-    return true
+    return text.isBlank
 }
 
 /// The text without the prefix, when it starts with it; otherwise as it is.
+@deprecated("use text.trimmingPrefix(start)")
 public fn removingPrefix(_ text: String, _ start: String) -> String {
-    return hasPrefix(text, start) ? text.slice(from: start.count, to: text.count) : text
+    return text.trimmingPrefix(start)
 }
 
 /// The text without the suffix, when it ends with it; otherwise as it is.
+@deprecated("use text.trimmingSuffix(end)")
 public fn removingSuffix(_ text: String, _ end: String) -> String {
-    return hasSuffix(text, end) ? text.slice(from: 0, to: text.count - end.count) : text
+    return text.trimmingSuffix(end)
 }
 
-/// Where the part next occurs at or after the position, or none.
+/// Where the part next occurs at or after the scalar position, as a scalar
+/// count, or none.
+@deprecated("use part.firstMatch(in: text, from: index), with a String.Index")
 public fn find(_ text: String, _ part: String, from start: Int) -> Int? {
-    // In the runtime, sixteen bytes at a time.
     let at = Runtime.findString(text, part, start)
     if at < 0 {
         return none
@@ -227,30 +142,26 @@ public fn find(_ text: String, _ part: String, from start: Int) -> Int? {
     return at
 }
 
-/// Where the last occurrence of the part starts, or none.
+/// Where the last occurrence of the part starts, as a scalar count, or none.
+@deprecated("use text.lastIndex(of: part), a String.Index")
 public fn findLast(_ text: String, _ part: String) -> Int? {
-    var i = text.count - part.count
-    while i >= 0 {
-        if occursAt(text, part, i) {
-            return i
-        }
-        i = i - 1
-    }
-    return none
+    return scalarPosition(text, text.lastIndex(of: part))
 }
 
-/// How many times the part occurs, not overlapping, counted left to right.
+/// How many times the part occurs, not overlapping, counted left to right;
+/// an empty part, none.
+@deprecated("use text.count(of: part)")
 public fn occurrences(of part: String, within text: String) -> Int {
-    if part.count == 0 {
-        return 0
+    return part.isEmpty ? 0 : text.count(of: part)
+}
+
+/// The index as the number of scalars before it, as the deprecated
+/// functions above give positions.
+fn scalarPosition(_ text: String, _ index: String.Index?) -> Int? {
+    if let found = index {
+        return text.distance(from: text.startIndex, to: found)
     }
-    var count = 0
-    var at = Runtime.findString(text, part, 0)
-    while at >= 0 {
-        count = count + 1
-        at = Runtime.findString(text, part, at + part.count)
-    }
-    return count
+    return none
 }
 
 /// The text made safe to place in HTML, as content or inside a quoted
@@ -343,9 +254,9 @@ public fn formatted(_ value: Int, radix: Int = 10, width: Int = 0, fill: Char = 
     }
     let sign = value < 0 ? "-" : ""
     if fill == '0' {
-        return sign + paddedLeft(digits, to: width - sign.count, with: '0')
+        return sign + digits.paddedStart(toWidth: width - sign.count, with: '0')
     }
-    return paddedLeft(sign + digits, to: width, with: fill)
+    return (sign + digits).paddedStart(toWidth: width, with: fill)
 }
 
 /// The integer the text spells in the radix — 2 to 36, others taken as 10 —

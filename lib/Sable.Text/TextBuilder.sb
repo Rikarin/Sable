@@ -17,6 +17,6 @@ public class TextBuilder {
     }
 
     public fn build() -> String {
-        return joined(pieces, separator: "")
+        return pieces.joined()
     }
 }

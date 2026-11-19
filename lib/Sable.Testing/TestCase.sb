@@ -66,7 +66,7 @@ fn parseTestOptions() -> TestOptions? {
         } else if argument == "--run-test" && i + 1 < count {
             options.only = Runtime.argument(i + 1)
             i = i + 1
-        } else if hasPrefix(argument, "--") {
+        } else if argument.hasPrefix("--") {
             Runtime.writeError("unknown option '\(argument)'\nusage: <harness> [filter...] [--list] [--exact] [--show-output] [--in-process] [--run-test <name>]\n")
             return none
         } else {
@@ -84,7 +84,7 @@ fn selected(_ name: String, _ filters: String[>..], _ exact: Bool) -> Bool {
         return true
     }
     for filter in filters {
-        if exact ? name == filter : contains(name, filter) {
+        if exact ? name == filter : name.contains(filter) {
             return true
         }
     }
@@ -223,10 +223,10 @@ public fn verdict(_ test: TestCase, _ status: Int, _ errors: String) -> String? 
     if status == 0 {
         return "the test was to trap\(trapWanted(expected)), and it returned"
     }
-    if status < 0 || contains(errors, failureMarker) {
+    if status < 0 || errors.contains(failureMarker) {
         return ""
     }
-    if expected.count > 0 && !contains(errors, expected) {
+    if expected.count > 0 && !errors.contains(expected) {
         return "the test trapped, but not with '\(expected)'"
     }
     return none
@@ -249,7 +249,7 @@ fn failureReport(_ test: TestCase, _ status: Int, _ output: String, _ errors: St
     }
     // An assertion's own trap says nothing its report has not.
     var shown = errors
-    if contains(errors, failureMarker) {
+    if errors.contains(failureMarker) {
         shown = withoutAssertionTrap(errors)
     }
     if shown.count > 0 {
@@ -258,7 +258,7 @@ fn failureReport(_ test: TestCase, _ status: Int, _ output: String, _ errors: St
     if why.count > 0 {
         report.append("\n    \(why)")
     }
-    if !contains(errors, failureMarker) {
+    if !errors.contains(failureMarker) {
         report.append("\n    (exit status \(status))")
     }
     return report.build()
@@ -269,12 +269,12 @@ fn failureReport(_ test: TestCase, _ status: Int, _ output: String, _ errors: St
 fn withoutAssertionTrap(_ errors: String) -> String {
     let kept = TextBuilder()
     var afterTrap = false
-    for line in lines(errors) {
+    for line in errors.lines() {
         if line == "fatal error: 'try!' caught an error" {
             afterTrap = true
             continue
         }
-        if afterTrap && hasPrefix(line, "  at ") {
+        if afterTrap && line.hasPrefix("  at ") {
             afterTrap = false
             continue
         }
@@ -287,7 +287,7 @@ fn withoutAssertionTrap(_ errors: String) -> String {
 fn indented(_ text: String) -> String {
     let report = TextBuilder()
     var first = true
-    for line in lines(text) {
+    for line in text.lines() {
         if !first {
             report.append("\n")
         }

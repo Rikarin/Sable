@@ -2446,15 +2446,16 @@ public sealed partial class LlvmEmitter {
                 return;
             }
 
-            // An integer written as bytes: the array made unique and the last
-            // byte's index checked, as writing that byte would, then one store.
+            // An integer written as bytes: the slice made the only reference to
+            // its run and the last byte's index checked, as writing that byte
+            // would, then one store.
             if (builtin.Name.StartsWith("bytes_store_", StringComparison.Ordinal)) {
                 var integer = Type(builtin.Operands[2].Type);
                 var width = SilType.IntegerInfo(builtin.Operands[2].Type)!.Value.Bits / 8;
                 NegativeOffsetTraps(operands[1]);
                 var lastIndex = Fresh();
                 Line($"{lastIndex} = add i64 {operands[1]}, {width - 1}");
-                var last = MutableElement(operands[0], lastIndex, (ArrayType)((AddressType)builtin.Operands[0].Type).Pointee);
+                var last = SliceMutableElement(operands[0], lastIndex, (SliceType)((AddressType)builtin.Operands[0].Type).Pointee);
                 var first = Fresh();
                 Line($"{first} = getelementptr inbounds i8, ptr {last}, i64 {1 - width}");
                 Line($"store {integer} {operands[2]}, ptr {first}, align 1");

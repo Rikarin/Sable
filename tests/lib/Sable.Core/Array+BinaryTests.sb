@@ -116,6 +116,32 @@ fn aWriteLeavesACopyAsItWas() {
     assertEqual(bytes.readU32(at: 0, endian: .Big), 0)
 }
 
+@test
+fn writesWorkOnAFixedArray() {
+    var bytes: U8[] = [0, 0, 0, 0]
+    bytes.writeU32(0x0102_0304, at: 0, endian: .Big)
+    assertEqual(bytes[0], 0x01)
+    assertEqual(bytes[3], 0x04)
+    assertEqual(bytes.readU32(at: 0, endian: .Little), 0x0403_0201)
+}
+
+@test
+fn writesToASliceLandInTheSliceFromItsOwnStart() {
+    let bytes = sample()
+    var slice = bytes.slice(from: 3, to: 9)
+    slice.writeU16(0xABCD, at: 1, endian: .Big)
+    assertEqual(slice[1], 0xAB)
+    assertEqual(slice[2], 0xCD)
+    assertEqual(slice.readU16(at: 0, endian: .Big), 0x04AB)
+    assertEqual(bytes[4], 0x05)
+}
+
+@test(traps: "array index out of range")
+fn aWriteOfASliceStopsAtTheSlicesEnd() {
+    var slice = sample().slice(from: 0, to: 4)
+    slice.writeU32(1, at: 1, endian: .Little)
+}
+
 @test(traps: "array index out of range")
 fn aWritePastTheEndTraps() {
     var bytes: U8[>..] = [0, 0, 0]

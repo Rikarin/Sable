@@ -4,9 +4,9 @@ module Sable.Core
 // either byte order (.NET's BinaryPrimitives, Rust's from_le_bytes). Each
 // is one range check and one unaligned load or store of the platform's
 // order, byte-swapped when the order asked for is the other one; a float
-// is its bits. Reads are of any bytes (every array kind views as U8[:]);
-// writes are into a grow-only array, which is made the only reference to
-// its buffer first, as any write to an element is.
+// is its bits. Reads and writes are of any bytes (every array kind views
+// as U8[:]); a write makes the bytes the only reference to their buffer
+// first, as any write to an element does.
 
 extension U8[:] {
     @builtin("bytes_load_U16")
@@ -69,9 +69,7 @@ extension U8[:] {
     public fn readF64(at offset: Int, endian: Endian) -> F64 {
         return F64.fromBits(self.readU64(at: offset, endian: endian))
     }
-}
 
-extension U8[>..] {
     @builtin("bytes_store_U16")
     mutating fn storeU16(at offset: Int, _ value: U16)
 
@@ -82,7 +80,7 @@ extension U8[>..] {
     mutating fn storeU64(at offset: Int, _ value: U64)
 
     /// Writes the U16 over the two bytes from the offset; traps unless both
-    /// are in the array (writing never grows it).
+    /// are in the bytes (writing never grows them).
     ///
     /// ```sable
     /// var bytes: U8[>..] = [0, 0, 0]
@@ -99,7 +97,7 @@ extension U8[>..] {
     }
 
     /// Writes the U32 over the four bytes from the offset; traps unless all
-    /// are in the array.
+    /// are in the bytes.
     public mutating fn writeU32(_ value: U32, at offset: Int, endian: Endian) {
         self.storeU32(at: offset, endian == Endian.native ? value : value.byteSwapped)
     }
@@ -110,7 +108,7 @@ extension U8[>..] {
     }
 
     /// Writes the U64 over the eight bytes from the offset; traps unless all
-    /// are in the array.
+    /// are in the bytes.
     public mutating fn writeU64(_ value: U64, at offset: Int, endian: Endian) {
         self.storeU64(at: offset, endian == Endian.native ? value : value.byteSwapped)
     }

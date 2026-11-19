@@ -2007,11 +2007,12 @@ public static class SilBuiltins {
         // An integer read from, or written to, bytes at an offset, in the
         // platform's order (little-endian everywhere): one range check and
         // one unaligned load or store, rather than a byte at a time. A read
-        // is of any slice of bytes; a write, of a grow-only array, made the
-        // only reference to its buffer first.
+        // is of any slice of bytes; a write, of a slice in its place (any
+        // array is viewed as one for a mutating slice member), made the only
+        // reference to its run first.
         foreach (var unsigned in new[] { SilType.U16, SilType.U32, SilType.U64 }) {
             Add($"bytes_load_{unsigned}", unsigned, new SliceType(SilType.U8), SilType.Int);
-            Add($"bytes_store_{unsigned}", SilType.Unit, SilType.Address(new ArrayType(SilType.U8)), SilType.Int, unsigned);
+            Add($"bytes_store_{unsigned}", SilType.Unit, SilType.Address(new SliceType(SilType.U8)), SilType.Int, unsigned);
         }
 
         // A float's bits as the unsigned integer of its width, and back: the

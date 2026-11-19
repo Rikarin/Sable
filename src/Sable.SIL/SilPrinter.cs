@@ -146,15 +146,50 @@ public static class SilPrinter {
         return builder.ToString();
     }
 
+    /// <summary>
+    ///     The blocks in the order they are printed: as the function has them,
+    ///     except that a block waits until every block that dominates it has
+    ///     been printed. A value is then always printed before its uses, which
+    ///     the parser needs for an instruction whose meaning depends on its
+    ///     operand's type ('struct_extract' finds its field by the struct's).
+    ///     A pass can break the order the function has: promoting a slot to a
+    ///     value hands a block the value of one created after it, as the
+    ///     block an 'if let' binds in is created after the one it leads to. Where
+    ///     the function's order is already so, it is kept as it is.
+    /// </summary>
+    static List<SilBlock> InDominanceOrder(SilFunction function) {
+        if (function.Blocks.Count == 0) {
+            return [];
+        }
+
+        var dominators = SilVerifier.Dominators(function);
+        var printed = new HashSet<SilBlock>();
+        var ordered = new List<SilBlock>(function.Blocks.Count);
+        var waiting = new List<SilBlock>(function.Blocks);
+        while (waiting.Count > 0) {
+            var next = waiting.FindIndex(block =>
+                !dominators.TryGetValue(block, out var above) || above.All(d => d == block || printed.Contains(d)));
+
+            // Dominance has no cycles, so some block is always ready; this is a guard.
+            next = next < 0 ? 0 : next;
+            ordered.Add(waiting[next]);
+            printed.Add(waiting[next]);
+            waiting.RemoveAt(next);
+        }
+
+        return ordered;
+    }
+
     static void Print(SilFunction function, StringBuilder builder) {
         var names = new Dictionary<SilValue, string>();
         var blocks = new Dictionary<SilBlock, string>();
+        var ordered = InDominanceOrder(function);
 
-        for (var i = 0; i < function.Blocks.Count; i++) {
-            blocks[function.Blocks[i]] = $"bb{i}";
+        for (var i = 0; i < ordered.Count; i++) {
+            blocks[ordered[i]] = $"bb{i}";
         }
 
-        foreach (var block in function.Blocks) {
+        foreach (var block in ordered) {
             foreach (var argument in block.Arguments) {
                 names[argument] = $"%{names.Count}";
             }
@@ -186,7 +221,7 @@ public static class SilPrinter {
 
         builder.Append(" {\n");
 
-        foreach (var block in function.Blocks) {
+        foreach (var block in ordered) {
             builder.Append(blocks[block]);
             if (block.Arguments.Count > 0) {
                 var isEntry = block == function.Blocks[0];

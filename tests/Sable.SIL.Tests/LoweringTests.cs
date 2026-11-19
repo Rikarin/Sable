@@ -130,6 +130,28 @@ public sealed class LoweringTests {
         Assert.Equal(2_432_902_008_176_640_000L, Run(module, "factorial", 20L));
     }
 
+    /// <summary>
+    ///     An 'if let' of a struct, its field read in the body: once the
+    ///     binding's slot is promoted, the body reads a value of the binding
+    ///     block, which was created after it. Printed in the function's order,
+    ///     the 'struct_extract' came before its operand, and the text did not
+    ///     parse back; blocks now print after the blocks that dominate them.
+    /// </summary>
+    [Fact]
+    public void AnIfLetOfAStructRoundTripsOncePromoted() {
+        Lower(
+            """
+            struct Pair { let first: Int, let second: Int }
+            fn pick(_ p: Pair?) -> Int {
+                if let found = p {
+                    return found.second
+                }
+                return -1
+            }
+            """
+        );
+    }
+
     [Fact]
     public void CoalescingAssignmentStoresAnOptional() {
         // 'x ??= 5' computes 'x ?? 5', an Int, and stores it back as an Int?.

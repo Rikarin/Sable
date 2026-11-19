@@ -291,7 +291,9 @@ let squares: some Sequence<Int> = { () -> some Sequence<Int> in
   by value. The body runs a step at a time, as `next()` asks for each
   element; each `makeIterator()` starts it afresh. An `inout` or `out`
   parameter is an error (S3483) — the call has returned before the body runs.
-- **Throwing.** A `throws` generator's error comes out of `next()`.
+- **Throwing.** An error would come out of `next()`, and `Iterator`'s
+  `next()` does not throw, so a generator cannot be `throws` (S3484): its body
+  catches what it calls, or yields what each step made of it (`Outcome<T, E>`).
 - **`defer`.** A `defer` runs as its scope is left, which may be when the
   generator finishes or when its iterator is dropped before it does — C#'s
   `finally` on `Dispose`. A `defer` body cannot `yield` (S3481).
@@ -311,7 +313,10 @@ async fn lines(_ f: File) -> some AsyncSequence<String> {
 sequence of what it yields, and `return` with a value in a generator (S3482).
 The sequence and its iterator are structs the compiler writes: the iterator
 holds the arguments, the body's variables and where it stopped, so iterating
-one costs no allocation.
+one costs no allocation, and a copy of an iterator goes on from where the
+original was, on its own. A body with a `defer` keeps that state in one
+object instead, whose last iterator's going runs the defers still pending; its
+copies share it.
 
 ### Overloading
 

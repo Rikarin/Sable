@@ -114,7 +114,7 @@ public static partial class SilVerifier {
     /// <summary>The fields of a class that must be stored before its object is used.</summary>
     static HashSet<int> Required(ClassType type) {
         var required = new HashSet<int>();
-        for (var i = 0; i < type.Fields.Count; i++) {
+        for (var i = 0; i < (type.EmptyFrom ?? type.Fields.Count); i++) {
             if (type.Fields[i].Type is { IsTrivial: false } and not WeakStorageType) {
                 required.Add(i);
             }

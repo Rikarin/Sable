@@ -254,6 +254,7 @@ public enum ErrorCode {
     ERR_YieldInDefer = 3481,
     ERR_ReturnValueInGenerator = 3482,
     ERR_InoutParameterInGenerator = 3483,
+    ERR_ThrowingGenerator = 3484,
     ERR_AlignTooLarge = 3510,
     ERR_AttributeArgumentNotConstant = 3511,
     ERR_NotPolymorphic = 3512,

@@ -4769,7 +4769,8 @@ public sealed partial class Binder {
             MarkThrows(syntax.Span, $"'{resolved.Name}'", substitution.Apply(thrown));
         }
 
-        if (resolved.IsAsync) {
+        // An async generator's call only captures its arguments: what waits is 'next()'.
+        if (resolved.IsAsync && !IsGenerator(resolved)) {
             MarkAsync(syntax.Span, $"'{resolved.Name}'");
         } else if (CrossesIntoActor(resolved)) {
             MarkAsync(syntax.Span, $"'{resolved.Name}', isolated to {(OnMainActor(resolved) ? "the main actor" : "its actor")},");

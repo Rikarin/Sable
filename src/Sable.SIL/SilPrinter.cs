@@ -66,6 +66,10 @@ public static class SilPrinter {
                         builder.Append(" deinit @").Append(deinit);
                     }
 
+                    if (classType.EmptyFrom is { } emptyFrom) {
+                        builder.Append(" empty_from ").Append(emptyFrom);
+                    }
+
                     builder.Append('\n');
                     break;
             }

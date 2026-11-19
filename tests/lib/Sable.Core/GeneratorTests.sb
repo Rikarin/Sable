@@ -1,0 +1,94 @@
+module GeneratorTests
+
+// Generators (SYNTAX.md §5) used through Sequence's algorithms and lazy views
+// (Sequence+Algorithms.sb, LazySequence.sb): a generator's sequence is a
+// Sequence like any other. Run with
+//     tools/stdlib-coverage.sh Sable.Core
+
+import Sable.Testing
+
+fn text(_ values: Int[:]) -> String {
+    return values.map { "\($0)" }.joined(separator: ",")
+}
+
+fn evens(upTo n: Int) -> some Sequence<Int> {
+    var i = 0
+    while i <= n {
+        yield i
+        i += 2
+    }
+}
+
+fn naturals() -> some Sequence<Int> {
+    var i = 1
+    while true {
+        yield i
+        i += 1
+    }
+}
+
+fn words(_ text: String) -> some Sequence<String> {
+    var current = ""
+    for c in text {
+        if c == ' ' {
+            if !current.isEmpty {
+                yield current
+            }
+            current = ""
+        } else {
+            current = current + "\(c)"
+        }
+    }
+    if !current.isEmpty {
+        yield current
+    }
+}
+
+@test
+fn mapAndFilterGoThroughAGenerator() {
+    assertEqualText(text(evens(upTo: 8).map { $0 * 10 }), "0,20,40,60,80")
+    assertEqualText(text(evens(upTo: 8).filter { $0 % 4 == 0 }), "0,4,8")
+}
+
+@test
+fn reduceAndCountGoThroughAGenerator() {
+    assertEqual(evens(upTo: 10).reduce(0, { $0 + $1 }), 30)
+    assertEqual(evens(upTo: 10).count(where: { $0 > 4 }), 3)
+    assert(evens(upTo: 10).contains(6))
+    assert(!evens(upTo: 10).contains(7))
+}
+
+@test
+fn anEndlessGeneratorIsAskedOnlyForWhatIsTaken() {
+    assertEqualText(text(naturals().prefix(4)), "1,2,3,4")
+    assertEqual(naturals().first(where: { $0 * $0 > 50 }) ?? -1, 8)
+}
+
+@test
+fn lazyViewsOverAGeneratorStayLazy() {
+    let squares = naturals().lazy.map { $0 * $0 }.filter { $0 % 2 == 1 }
+    assertEqual(squares.first(where: { $0 > 30 }) ?? -1, 49)
+}
+
+@test
+fn eachIterationOfAGeneratorStartsAfresh() {
+    let s = evens(upTo: 4)
+    assertEqualText(text(s.toArray()), "0,2,4")
+    assertEqualText(text(s.toArray()), "0,2,4")
+}
+
+@test
+fn aGeneratorOfStringsSortsAndJoins() {
+    let sorted = words("pear  apple fig").sorted(by: { $0 < $1 })
+    assertEqualText(sorted.joined(separator: " "), "apple fig pear")
+}
+
+@test
+fn generatorsZipAndEnumerate() {
+    var pairs = ""
+    for (i, w) in words("a b c").enumerated() {
+        pairs = pairs + "\(i)\(w)"
+    }
+    assertEqualText(pairs, "0a1b2c")
+    assert(evens(upTo: 4).elementsEqual([0, 2, 4]))
+}

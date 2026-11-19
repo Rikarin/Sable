@@ -47,6 +47,14 @@ public sealed partial class Binder {
         return false;
     }
 
+    /// <summary>True for a declared function whose body yields: its call runs nothing, so neither waits nor throws.</summary>
+    static bool IsGenerator(FunctionSymbol function) =>
+        function.DeclaringSyntax.FirstOrDefault() switch {
+            FunctionDeclarationSyntax { Body: { } body } => Yields(body),
+            AccessorSyntax { Body: { } body } => Yields(body),
+            _ => false,
+        };
+
     /// <summary>
     ///     Starts binding a body: when it yields, the generator its result
     ///     makes it — or, when its result makes it none, why not, for each
@@ -91,6 +99,17 @@ public sealed partial class Binder {
                     + "a generator's body runs as its elements are asked for, after the call has returned, so it takes its arguments by value"
                 );
             }
+        }
+
+        // 'next()' is what would throw, and Iterator's does not: an error
+        // from the body has nowhere to go but the body's own 'catch'.
+        if (function.ThrownType is { } thrown && !thrown.Equals(Core.Never)) {
+            _diagnostics.Error(
+                ErrorCode.ERR_ThrowingGenerator,
+                function.DeclaringSyntax.FirstOrDefault() is FunctionDeclarationSyntax { ThrowsSpec: { } spec } ? spec.Span : body.Span,
+                $"{what} yields, so its errors would come out of its iterator's 'next()', which an Iterator's does not let out: "
+                + "catch them in the body, or yield what each step made of them ('Outcome<T, E>')"
+            );
         }
 
         var generator = _compilation.DeclareGenerator(function, kind, element);

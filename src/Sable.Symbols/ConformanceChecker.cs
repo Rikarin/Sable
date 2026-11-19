@@ -1183,7 +1183,7 @@ internal static class ConformanceChecker {
         // A conformance failure belongs to the type, but an override mistake
         // belongs to the member that made it. A missing requirement can be
         // written in, as a stub.
-        var diagnostic = Diagnostic.Error(code, at.Location ?? default, message).WithRelated(related);
+        var diagnostic = Diagnostic.Error(code, at.Location ?? default, message).WithRelated(related).AnchoredAt(at.DeclaringSyntax.FirstOrDefault());
         if (missing is not null && at is NamedTypeSymbol type) {
             diagnostic = QuickFixes.Stub(diagnostic, type, missing);
         }

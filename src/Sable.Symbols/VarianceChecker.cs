@@ -82,14 +82,14 @@ internal static class VarianceChecker {
                     return;
                 }
 
-                diagnostics.Error(
+                diagnostics.Add(Diagnostic.Error(
                     ErrorCode.ERR_VarianceViolation,
                     member.Location ?? owner.Location ?? default,
                     $"'{parameter.Name}' is declared "
                     + $"'{(parameter.Variance == VarianceKind.Out ? "out" : "in")}', so it may "
                     + $"not appear in {Describe(position)} position of "
                     + $"'{owner.Name}.{member.Name}'"
-                );
+                ).AnchoredAt(member.DeclaringSyntax.FirstOrDefault() ?? owner.DeclaringSyntax.FirstOrDefault()));
                 return;
             }
 

@@ -77,7 +77,18 @@ internal sealed class TypeBinder(Compilation compilation) {
             : type;
 
     /// <summary>Defers work that must see every signature, not just this one's.</summary>
-    internal void DeferLate(Action force) => _late.Add(force);
+    /// <remarks>
+    ///     It runs with the anchor it was deferred under, so what it reports
+    ///     is placed in the file that asked for it.
+    /// </remarks>
+    internal void DeferLate(Action force) {
+        var anchor = _diagnostics.Anchor;
+        _late.Add(() => {
+                using var _ = _diagnostics.AnchoredAt(anchor);
+                force();
+            }
+        );
+    }
 
     // -----------------------------------------------------------------------
     // Signature binding
@@ -170,6 +181,7 @@ internal sealed class TypeBinder(Compilation compilation) {
                 }
 
                 if (function is { IsRethrows: true, ThrownType: null }) {
+                    using var _ = _diagnostics.AnchoredAt(declaration);
                     _diagnostics.Error(
                         ErrorCode.ERR_RethrowsWithoutThrowingParameter,
                         declaration.ThrowsSpec!.Span,
@@ -184,6 +196,7 @@ internal sealed class TypeBinder(Compilation compilation) {
 
         // What a signature names, a caller has to be able to name too.
         DeferLate(() => {
+                using var _ = _diagnostics.AnchoredAt(declaration);
                 if (declaration.ReturnClause is { } clause) {
                     CheckExposure(function, function.ReturnType, clause.Type.Span, "its result type");
                 }
@@ -743,6 +756,8 @@ internal sealed class TypeBinder(Compilation compilation) {
             return;
         }
 
+        using var _ = _diagnostics.AnchoredAt(clause);
+
         foreach (var item in clause.Constraints) {
             // 'where N > 0': a predicate over a type's value generic
             // parameters, evaluated for each set of arguments it is given.
@@ -977,6 +992,13 @@ internal sealed class TypeBinder(Compilation compilation) {
     // -----------------------------------------------------------------------
 
     public TypeSymbol BindType(TypeSyntax syntax, Symbol context, FileScope? scope) {
+        // A type may be bound lazily, from another file's pass: what it
+        // reports is the file's the syntax is in.
+        using var _ = _diagnostics.AnchoredAt(syntax);
+        return BindTypeCore(syntax, context, scope);
+    }
+
+    TypeSymbol BindTypeCore(TypeSyntax syntax, Symbol context, FileScope? scope) {
         switch (syntax) {
             case SimpleNameTypeSyntax simple:
                 return BindSimpleName(simple, context, scope);

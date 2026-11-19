@@ -48,13 +48,14 @@ internal static class CycleChecker {
         }
 
         var path = string.Join(" → ", cycle.Select(static step => $"{step.From.Name}.{step.Field.Name}")) + $" → {type.Name}";
+        // At the field, unless the class inherits it: then at the class.
+        var at = ReferenceEquals(cycle[0].Field.ContainingSymbol, type) && cycle[0].Field.Location is not null ? cycle[0].Field : (Symbol)type;
         diagnostics.Add(Diagnostic.Warning(
             ErrorCode.WRN_StrongReferenceCycle,
-            // At the field, unless the class inherits it: then at the class.
-            (ReferenceEquals(cycle[0].Field.ContainingSymbol, type) ? cycle[0].Field.Location : null) ?? type.Location ?? default,
+            at.Location ?? default,
             $"'{type.Name}' is in a strong reference cycle ({path}): objects linked this way keep one another alive "
             + "and are never freed; make one of these references 'weak' or 'unowned'"
-        ));
+        ).AnchoredAt(at.DeclaringSyntax.FirstOrDefault()));
     }
 
     static bool IsClass(TypeSymbol type) => type.TypeKind is TypeKind.Class or TypeKind.Actor;

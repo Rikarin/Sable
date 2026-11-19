@@ -164,6 +164,21 @@ public sealed class DiagnosticsTests : IDisposable {
     }
 
     [Fact]
+    public async Task ALateCheckIsReportedInItsOwnFileOnly() {
+        // A variance error is found by a check run after every file is
+        // declared. The other file has a token at the very same offset, with
+        // the same name under the span: it used to be reported there too.
+        var wrong = Write("wrong.sb", "module App\n\npublic protocol Producer<out T> {\n    fn accept(_ value: T)\n}\n");
+        var right = Write("right.sb", "module App\n\npublic protocol Taker<T>        {\n    fn accept(_ value: T)\n}\n");
+        await using var client = new TestClient();
+        await client.InitializeAsync(_root);
+        await client.NotifyAsync("initialized", new { });
+
+        await client.DiagnosticsAsync(wrong, static d => Has(d, "S3047"));
+        await client.DiagnosticsAsync(right, static d => d.GetArrayLength() == 0);
+    }
+
+    [Fact]
     public async Task AFileNobodyOpenedIsDiagnosed() {
         var closed = Write("closed.sb", "module App\n\nfn f() -> Int {\n    let s: String = 1\n    return 2\n}\n");
         var moved = Write("moved.sb", Moved);

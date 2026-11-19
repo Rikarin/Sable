@@ -307,6 +307,18 @@ public sealed record Diagnostic(
     /// </summary>
     public ImmutableArray<DiagnosticLocation> Related { get; init; } = [];
 
+    /// <summary>
+    ///     A node of the file the span is in, when whoever reported it knew
+    ///     one. A span is an offset into one file, and several files' offsets
+    ///     overlap: a diagnostic reported away from its file's own pass — a
+    ///     late check, a lazily bound signature — is placed by this.
+    /// </summary>
+    public SyntaxNode? Anchor { get; init; }
+
+    /// <summary>The same diagnostic, in the file of <paramref name="node" />, unless it already knows its own.</summary>
+    public Diagnostic AnchoredAt(SyntaxNode? node) =>
+        Anchor is not null || node is null ? this : this with { Anchor = node };
+
     /// <summary>The same diagnostic, saying another place is part of it.</summary>
     public Diagnostic WithRelated(DiagnosticLocation? location) =>
         location is null ? this : this with { Related = Related.Add(location) };
@@ -393,9 +405,34 @@ public sealed class DiagnosticBag : IReadOnlyCollection<Diagnostic> {
         public void Dispose() => _bag._suppressed--;
     }
 
+    /// <summary>
+    ///     The node of the file being reported about, if any: a diagnostic
+    ///     added without an anchor of its own takes this one.
+    /// </summary>
+    public SyntaxNode? Anchor { get; private set; }
+
+    /// <summary>
+    ///     Anchors what is added, until the returned handle is disposed, to
+    ///     <paramref name="node" />'s file. With none, the anchor stays as it is.
+    /// </summary>
+    public Anchoring AnchoredAt(SyntaxNode? node) => new(this, node);
+
+    public readonly struct Anchoring : IDisposable {
+        readonly DiagnosticBag _bag;
+        readonly SyntaxNode? _previous;
+
+        internal Anchoring(DiagnosticBag bag, SyntaxNode? node) {
+            _bag = bag;
+            _previous = bag.Anchor;
+            bag.Anchor = node ?? bag.Anchor;
+        }
+
+        public void Dispose() => _bag.Anchor = _previous;
+    }
+
     public void Add(Diagnostic diagnostic) {
         if (_suppressed == 0) {
-            _items.Add(diagnostic);
+            _items.Add(diagnostic.AnchoredAt(Anchor));
         }
     }
 

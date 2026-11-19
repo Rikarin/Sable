@@ -263,7 +263,8 @@ public sealed partial class Compilation {
     ///     span is an offset into one file, and several files' offsets overlap.
     ///     Parse and body diagnostics know their file, and so do most from
     ///     declaring (<see cref="FileOf" />); those from lazily bound
-    ///     signatures and late checks do not yet, and come without one.
+    ///     signatures and late checks when they were reported with an anchor
+    ///     (<see cref="Diagnostic.Anchor" />); the rest come without one.
     /// </summary>
     public IReadOnlyList<(Diagnostic Diagnostic, SyntaxTree? Tree)> GetAllDiagnosticsByFile() {
         var all = new List<(Diagnostic, SyntaxTree?)>();
@@ -279,7 +280,7 @@ public sealed partial class Compilation {
 
         TypeBinder.ForceAll();
         all.AddRange(_declarationDiagnostics.Select(d => (d, FileOf(d))));
-        all.AddRange(TypeBinder.Diagnostics.Select(static d => (d, (SyntaxTree?)null)));
+        all.AddRange(TypeBinder.Diagnostics.Select(d => (d, FileOf(d))));
         return all;
     }
 
@@ -316,8 +317,29 @@ public sealed partial class Compilation {
     /// </summary>
     public SyntaxTree? FileOf(Diagnostic diagnostic) {
         lock (_files) {
-            return _files.GetValueOrDefault(diagnostic);
+            if (_files.GetValueOrDefault(diagnostic) is { } known) {
+                return known;
+            }
         }
+
+        // Reported away from its file's pass, but with a node of that file.
+        if (diagnostic.Anchor is { } anchor && TreeOfRoot(anchor) is { } tree && diagnostic.Span.End <= tree.Text.Length) {
+            return tree;
+        }
+
+        return null;
+    }
+
+    /// <summary>The trees by their roots: which file a node is in.</summary>
+    Dictionary<SyntaxNode, SyntaxTree>? _treesByRoot;
+
+    SyntaxTree? TreeOfRoot(SyntaxNode node) {
+        while (node.Parent is { } parent) {
+            node = parent;
+        }
+
+        var trees = LazyInitializer.EnsureInitialized(ref _treesByRoot, () => SyntaxTrees.ToDictionary(static SyntaxNode (t) => t.Root, static t => t, ReferenceEqualityComparer.Instance));
+        return trees.GetValueOrDefault(node);
     }
 
     // -----------------------------------------------------------------------

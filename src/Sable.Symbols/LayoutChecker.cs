@@ -26,13 +26,13 @@ internal static class LayoutChecker {
         foreach (var field in StoredFields(type)) {
             path.Add($"{type.Name}.{field.Name}");
             if (Reaches(field.Type, type.OriginalDefinition, path, visiting)) {
-                diagnostics.Error(
+                diagnostics.Add(Diagnostic.Error(
                     ErrorCode.ERR_InfiniteSize,
                     field.Location ?? type.Location ?? default,
                     $"'{type.Name}' contains itself by value ({string.Join(" → ", path)} → {type.Name}), "
                     + "so it would have no finite size; hold it through a class, an array, "
                     + "or a union case instead"
-                );
+                ).AnchoredAt(field.DeclaringSyntax.FirstOrDefault() ?? type.DeclaringSyntax.FirstOrDefault()));
                 return;
             }
 

@@ -1,31 +1,40 @@
 module Sable.Collections
 
-/// Distinct values, by hash; iteration is in insertion order.
+/// Distinct values, by hash: a `[Element: Bool]` underneath, so iteration
+/// is in insertion order and every operation is a dictionary's.
 public class HashSet<Element: Hashable> {
-    var map: HashMap<Element, Bool> = HashMap<Element, Bool>()
+    var map: [Element: Bool] = [:]
 
     public init() { }
 
+    /// How many values it holds.
     public var count: Int => map.count
 
+    /// Whether it holds no values.
     public var isEmpty: Bool => map.count == 0
 
     /// Adds the value; true if it was not there before.
+    @discardable
     public fn insert(_ value: Element) -> Bool {
-        let before = map.count
-        map.set(value, true)
-        return map.count > before
+        return map.insert(true, forKey: value)
     }
 
+    /// Whether the value is in the set.
     public fn contains(_ value: Element) -> Bool {
         return map.contains(value)
     }
 
+    /// Removes the value; true if it was there.
+    @discardable
     public fn remove(_ value: Element) -> Bool {
-        return map.remove(value)
+        if let _ = map.remove(value) {
+            return true
+        }
+        return false
     }
 
+    /// The values, in the order they were first added.
     public fn elements() -> Element[>..] {
-        return map.allKeys()
+        return map.keys()
     }
 }

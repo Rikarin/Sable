@@ -33,7 +33,7 @@ fn lookupUnwrapped(_ d: [String: Int]) -> Int {
 }
 
 fn theKeyTypeIsChecked(_ d: [String: Int]) -> Int? {
-    return d[1]                         //! S3004 expected 'String'
+    return d[1]                         //! S3007 'key' takes 'String'
 }
 
 fn builtinsHaveTypes() -> String {
@@ -46,4 +46,15 @@ fn aLineIsAnInt() -> String {
 
 fn anUnknownBuiltin() -> String {
     return #nothing                     //! S2002 no compiler builtin
+}
+
+struct Plain { var n: Int }
+
+fn aKeyMustBeHashable(_ d: [Plain: Int]) -> Int { //! S3023 does not conform to 'Hashable'
+    return 0
+}
+
+fn anInferredKeyMustBeHashableToo() -> Int {
+    let d = [Plain { n: 1 }: 1]         //! S3023 does not conform to 'Hashable'
+    return d.count
 }

@@ -301,40 +301,6 @@ SableString *sable_string_concat_many(int64_t n, SableString *const *pieces) {
     return s;
 }
 
-// A hash of the bytes, eight at a time, never negative: what Sable.Core's
-// String.hash() gives. The interpreter computes exactly this
-// (SilInterpreter.StringHash), so the two print the same.
-int64_t sable_string_hash(const SableString *s) {
-    const uint64_t multiplier = 0x9E3779B97F4A7C15ull;
-    const unsigned char *bytes = (const unsigned char *)s->bytes;
-    uint64_t h = 0x243F6A8885A308D3ull ^ (uint64_t)s->length;
-    int64_t i = 0;
-    for (; i + 8 <= s->length; i += 8) {
-        uint64_t word = 0;
-        for (int b = 0; b < 8; b++) {
-            word |= (uint64_t)bytes[i + b] << (8 * b);
-        }
-
-        h = (h ^ word) * multiplier;
-        h ^= h >> 29;
-    }
-
-    if (i < s->length) {
-        uint64_t tail = 0;
-        for (int shift = 0; i < s->length; i++, shift += 8) {
-            tail |= (uint64_t)bytes[i] << shift;
-        }
-
-        h = (h ^ tail) * multiplier;
-        h ^= h >> 29;
-    }
-
-    h ^= h >> 32;
-    h *= 0xD6E8FEB86659FD93ull;
-    h ^= h >> 32;
-    return (int64_t)(h & INT64_MAX);
-}
-
 // Eight bytes from 'p' as one number whose order is the bytes' order: the
 // first byte the most significant.
 static inline uint64_t load_ordered(const char *p) {

@@ -1,0 +1,67 @@
+module OrderedDictionaryTests
+
+// OrderedDictionary (Sable.Collections), tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Collections
+
+import Sable.Collections
+import Sable.Testing
+
+fn letters() -> OrderedDictionary<String, Int> {
+    let d = OrderedDictionary<String, Int>()
+    d.set("a", 1)
+    d.set("b", 2)
+    d.set("c", 3)
+    return d
+}
+
+@test
+fn anEmptyOneHasNothing() {
+    let d = OrderedDictionary<String, Int>()
+    assert(d.isEmpty)
+    assertEqual(d.count, 0)
+    assert(d.get("a") == none)
+    assert(!d.contains("a"))
+    assert(d.index(of: "a") == none)
+    assert(d.remove("a") == none)
+}
+
+@test
+fn keysKeepTheOrderTheyWereAddedIn() {
+    let d = letters()
+    assertEqual(d.count, 3)
+    assert(!d.isEmpty)
+    assert(d.keys() == ["a", "b", "c"])
+    assert(d.values() == [1, 2, 3])
+    assertEqual(d.key(at: 1), "b")
+    assertEqual(d.value(at: 2), 3)
+    assertEqual(d.index(of: "c") ?? -1, 2)
+}
+
+@test
+fn settingAKeyThatIsThereKeepsItsPlace() {
+    let d = letters()
+    d.set("a", 10)
+    assertEqual(d.get("a") ?? -1, 10)
+    assert(d.keys() == ["a", "b", "c"])
+    assert(d.contains("a"))
+}
+
+@test
+fn removingAKeyClosesUpTheOrder() {
+    let d = letters()
+    assertEqual(d.remove("a") ?? -1, 1)
+    assert(d.keys() == ["b", "c"])
+    assertEqual(d.index(of: "c") ?? -1, 1)
+    assertEqual(d.get("c") ?? -1, 3)
+    assert(!d.contains("a"))
+}
+
+@test
+fn removeAllEmptiesIt() {
+    let d = letters()
+    d.removeAll()
+    assert(d.isEmpty)
+    assert(d.get("b") == none)
+    d.set("z", 26)
+    assertEqual(d.index(of: "z") ?? -1, 0)
+}

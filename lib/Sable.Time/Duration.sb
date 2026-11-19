@@ -69,8 +69,8 @@ public struct Duration: Comparable, Hashable {
         return a.totalNanoseconds < b.totalNanoseconds
     }
 
-    public fn hash() -> Int {
-        return totalNanoseconds.hash()
+    public fn hash(into hasher: inout Hasher) {
+        hasher.combine(totalNanoseconds)
     }
 
     /// In the largest unit that keeps it at least one, to three decimals:

@@ -1,10 +1,8 @@
 module MapString
 
-// HashMap<String, Int> against .NET's Dictionary<string, long>: 200,000
+// [String: Int] against .NET's Dictionary<string, long>: 200,000
 // distinct keys made by interpolation, inserted, looked up five times over,
 // half removed, and counted again.
-
-import Sable.Collections
 
 @main
 fn main() {
@@ -16,10 +14,10 @@ fn main() {
         i = i + 1
     }
 
-    let map = HashMap<String, Int>()
+    var map: [String: Int] = [:]
     i = 0
     while i < n {
-        map.set(keys[i], i)
+        map[keys[i]] = i
         i = i + 1
     }
 
@@ -27,7 +25,7 @@ fn main() {
     var round = 0
     while round < 5 {
         for key in keys {
-            sum = sum + (map.get(key) ?? 0)
+            sum = sum + (map[key] ?? 0)
         }
         round = round + 1
     }

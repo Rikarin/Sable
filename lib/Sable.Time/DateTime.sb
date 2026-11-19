@@ -111,8 +111,9 @@ public struct DateTime: Comparable, Hashable {
         return a.nanosecond < b.nanosecond
     }
 
-    public fn hash() -> Int {
-        return (secondsSinceEpoch * 31 + nanosecond).hash()
+    public fn hash(into hasher: inout Hasher) {
+        hasher.combine(secondsSinceEpoch)
+        hasher.combine(nanosecond)
     }
 }
 

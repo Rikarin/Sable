@@ -323,5 +323,5 @@ public sealed class Simplify : ISilPass {
         || name.StartsWith(SilBuiltins.WrappingPrefix, StringComparison.Ordinal)
         || name is "add_F64" or "sub_F64" or "mul_F64" or "div_F64" or "rem_F64" or "neg_F64" or "abs_F64"
             or "add_F32" or "sub_F32" or "mul_F32" or "div_F32" or "rem_F32" or "neg_F32" or "abs_F32"
-            or "string_count" or "string_compare" or "string_hash" or "string_contains" or "string_index_of" or "string_find";
+            or "string_count" or "string_compare" or "string_hash" or "hash_seed" or "float_bits_F64" or "string_contains" or "string_index_of" or "string_find";
 }

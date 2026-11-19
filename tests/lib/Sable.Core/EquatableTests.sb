@@ -1,0 +1,78 @@
+module EquatableTests
+
+// Equatable, Comparable and Hashable (Sable.Core) and the primitives'
+// conformances, tested with '@test' through generic code — which calls the
+// conformances rather than the built-in operators: run with
+//     tools/stdlib-coverage.sh Sable.Core
+
+import Sable.Testing
+
+fn same<T: Equatable>(_ a: T, _ b: T) -> Bool { return a == b }
+
+fn before<T: Comparable>(_ a: T, _ b: T) -> Bool { return a < b }
+
+fn hashOf<T: Hashable>(_ value: T) -> Int {
+    var hasher = Hasher(seed: 99)
+    hasher.combine(value)
+    return hasher.finalize()
+}
+
+/// Two different values of a type: equal to themselves, ordered, and
+/// hashed equal to an equal value and (for these) apart from each other.
+fn check<T: Comparable & Hashable>(_ low: T, _ high: T) -> Bool {
+    return same(low, low) && !same(low, high) && before(low, high) && !before(high, low)
+        && hashOf(low) == hashOf(low) && hashOf(low) != hashOf(high)
+}
+
+@test
+fn signedIntegersConform() {
+    assert(check(-1, 1))
+    assert(check(I8(-1), I8(1)))
+    assert(check(I16(-300), I16(300)))
+    assert(check(I32(-70000), I32(70000)))
+    assert(check(I64(-1), I64(5)))
+    assert(check(I128(-1), I128(1) << 100))
+}
+
+@test
+fn unsignedIntegersConform() {
+    assert(check(U8(1), U8(255)))
+    assert(check(U16(1), U16(65535)))
+    assert(check(U32(1), U32(4000000000)))
+    assert(check(U64(1), U64(2)))
+    assert(check(UInt(1), UInt(2)))
+    assert(check(U128(1), U128(1) << 64))
+}
+
+@test
+fn floatsConform() {
+    assert(check(F16(0.5), F16(1.5)))
+    assert(check(F32(0.25), F32(2.5)))
+    assert(check(-1.5, 1.5))
+    assertEqual(hashOf(0.0), hashOf(-0.0))
+}
+
+@test
+fn stringsConformByScalar() {
+    assert(check("abc", "abd"))
+    assert(check("ab", "abc"))
+    assert(before("z", "é"), "UTF-8's byte order is the scalars' order")
+}
+
+@test
+fn charactersConform() {
+    assert(check('a', 'b'))
+}
+
+@test
+fn booleansAreEquatableAndHashable() {
+    assert(same(true, true))
+    assert(!same(true, false))
+    assert(hashOf(true) != hashOf(false))
+}
+
+@test
+fn hashValueIsTheSameForEqualValues() {
+    assertEqual(42.hashValue, 42.hashValue)
+    assertEqual("text".hashValue, "te\("xt")".hashValue)
+}

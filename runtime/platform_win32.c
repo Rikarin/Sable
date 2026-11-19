@@ -9,11 +9,13 @@
 #define NOMINMAX
 
 #include <windows.h>
+#include <bcrypt.h>
 #include <dbghelp.h>
 #include <fcntl.h>
 #include <io.h>
 #include <shellapi.h>
 
+#pragma comment(lib, "bcrypt")
 #pragma comment(lib, "dbghelp")
 #pragma comment(lib, "shell32")
 
@@ -685,4 +687,10 @@ static char *executable_path(int argc, char **argv) {
 
         free(path);
     }
+}
+
+// ---- Randomness ----------------------------------------------------------
+
+static bool random_bytes(void *buffer, size_t length) {
+    return BCryptGenRandom(NULL, (PUCHAR)buffer, (ULONG)length, BCRYPT_USE_SYSTEM_PREFERRED_RNG) == 0;
 }

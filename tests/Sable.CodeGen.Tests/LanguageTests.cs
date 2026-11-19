@@ -766,7 +766,7 @@ public sealed class LanguageTests {
     [Fact]
     public void AnEnumIsANamedIntegerAndAFlagsEnumASetOfThem() =>
         Prints(
-            "East North\n9 1 Active Closed\n11 16\ntrue false true\ntrue All 3 3 Execute\nNone true\nread only everything 3\n1 2 4\nfalse true Color.Blue 2\n",
+            "East North\n9 1 Active Closed\n11 16\ntrue false true\ntrue All 3 3 Execute\nNone true\nread only everything 3\n1 2 4\nfalse true Color.Blue true\n",
             """
             enum Direction { North, South, East, West }
 
@@ -814,6 +814,6 @@ public sealed class LanguageTests {
                 print("\(empty) \(empty == Permissions.None)")
                 print("\(describe(.Read)) \(describe(q)) \(describe(p))")
                 print("\(Style.Bold as Int) \(Style.Italic as Int) \(Style.Underline as Int)")
-                print("\(Color.Red == Color.Green) \(Color.Red < Color.Blue) \(Color.Blue.debugDescription()) \(Color.Green.hash())")
+                print("\(Color.Red == Color.Green) \(Color.Red < Color.Blue) \(Color.Blue.debugDescription()) \(Color.Green.hashValue == Color.Green.hashValue)")
             """);
 }

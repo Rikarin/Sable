@@ -9,6 +9,7 @@
 #include <signal.h>
 #include <spawn.h>
 #include <sys/mman.h>
+#include <sys/random.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -519,4 +520,10 @@ static char *executable_path(int argc, char **argv) {
     }
 
     return strdup(argv[0]);
+}
+
+// ---- Randomness ----------------------------------------------------------
+
+static bool random_bytes(void *buffer, size_t length) {
+    return getentropy(buffer, length) == 0;
 }

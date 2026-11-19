@@ -2057,10 +2057,11 @@ public sealed partial class Binder {
 
     /// <summary>
     ///     A type 'for' goes through directly, with no iterator: an array, a
-    ///     dictionary, a range — and an error, already reported.
+    ///     range — and an error, already reported. A dictionary is a
+    ///     Sequence of its entries, like any other.
     /// </summary>
     bool IsKnownSequence(TypeSymbol type) =>
-        type.IsError || type is ArrayTypeSymbol || DictionaryTypes(type) is not null
+        type.IsError || type is ArrayTypeSymbol
         || type is NamedTypeSymbol named && Core.IsAnyRange(named);
 
     /// <summary>How a loop goes through a sequence by its iterator.</summary>
@@ -2159,18 +2160,6 @@ public sealed partial class Binder {
     }
 
     /// <summary>What a <c>for … in</c> yields, for the sequences understood so far.</summary>
-    /// <summary>
-    ///     A dictionary's key and value types: a <c>[Key: Value]</c>'s, or,
-    ///     inside <c>extension Dictionary</c>, where <c>self</c> is the type
-    ///     itself, its parameters.
-    /// </summary>
-    (TypeSymbol Key, TypeSymbol Value)? DictionaryTypes(TypeSymbol type) =>
-        type is NamedTypeSymbol named && named.OriginalDefinition.Equals(Core.Dictionary)
-            ? named.TypeArguments is [var key, var value] ? (key, value)
-            : named.TypeArguments.IsEmpty && named.TypeParameters is [var keyParameter, var valueParameter] ? (keyParameter, valueParameter)
-            : null
-            : null;
-
     TypeSymbol ElementTypeOf(TypeSymbol sequence, SyntaxNode syntax) {
         if (sequence.IsError) {
             return ErrorTypeSymbol.Instance;
@@ -2178,11 +2167,6 @@ public sealed partial class Binder {
 
         if (sequence is ArrayTypeSymbol array) {
             return array.ElementType;
-        }
-
-        // A dictionary yields its entries, each key with its value.
-        if (DictionaryTypes(sequence) is var (key, value)) {
-            return new TupleTypeSymbol([key, value], [null, null]);
         }
 
         if (sequence is NamedTypeSymbol named && Core.IsAnyRange(named)) {
@@ -5096,11 +5080,6 @@ public sealed partial class Binder {
             return new BoundIndexAccess(syntax, array.ElementType, receiver, indices);
         }
 
-        if (DictionaryTypes(receiver.Type) is var (key, value)) {
-            indices = CheckIndices(indices, key, syntax);
-            return new BoundIndexAccess(syntax, new OptionalTypeSymbol(value), receiver, indices);
-        }
-
         // A type may declare its own indexing with 'subscript'.
         if (LookupMember(receiver.Type, "subscript") is { } found) {
             var group = new BoundFunctionGroup(syntax, receiver, [..found.Members.OfType<FunctionSymbol>()]) {
@@ -5817,9 +5796,9 @@ public sealed partial class Binder {
         TypeSymbol? expectedKey = null;
         TypeSymbol? expectedValue = null;
 
-        expectedType = TheCaseOf(expectedType, t => t is NamedTypeSymbol named && named.OriginalDefinition.Equals(Core.Dictionary));
+        expectedType = TheCaseOf(expectedType, Core.IsDictionary);
         if (expectedType is NamedTypeSymbol wanted
-            && wanted.OriginalDefinition.Equals(Core.Dictionary)
+            && Core.IsDictionary(wanted)
             && wanted.TypeArguments.Length == 2) {
             expectedKey = wanted.TypeArguments[0];
             expectedValue = wanted.TypeArguments[1];
@@ -5854,9 +5833,19 @@ public sealed partial class Binder {
             return new BoundError(syntax);
         }
 
+        if (Core.Dictionary is not { } dictionary) {
+            _diagnostics.Error(ErrorCode.ERR_NotAType, syntax.Span, "a dictionary needs Sable.Core's 'Dictionary', which is not here");
+            return new BoundError(syntax);
+        }
+
+        // Its key must be Hashable, as '[Key: Value]' written out asks: a
+        // key type the context gave was checked where it was written.
+        if (expectedKey is null) {
+            _compilation.TypeBinder.CheckTypeArguments(dictionary, [keyType, valueType], syntax.Span, _containingSymbol);
+        }
         return Record(
             syntax,
-            new BoundDictionary(syntax, Core.Dictionary.Construct([keyType, valueType]), entries.ToImmutable())
+            new BoundDictionary(syntax, dictionary.Construct([keyType, valueType]), entries.ToImmutable())
         );
     }
 

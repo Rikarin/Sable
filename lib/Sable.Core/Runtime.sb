@@ -140,8 +140,15 @@ public struct Runtime {
     // and ordering by the UTF-8 bytes, and joining, in one call rather than
     // a call per scalar or a copy per part.
 
+    /// The text's UTF-8 bytes hashed under a key (folded multiplies): what a
+    /// Hasher folds a string in with.
     @builtin("string_hash")
-    public static fn hashString(text: String) -> Int
+    public static fn hashString(text: String, key: Int) -> Int
+
+    /// The seed every Hasher starts from: random for each run of the
+    /// program, unless SABLE_DETERMINISTIC_HASHING=1 fixes it.
+    @builtin("hash_seed")
+    public static fn hashSeed() -> Int
 
     /// Where the part next occurs in the text at or after the scalar
     /// position: its scalar index, or -1. Natively a vectorised byte search.

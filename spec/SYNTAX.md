@@ -142,7 +142,7 @@ T[..]  T[..64]      // inline capacity, resizable within it
 T[>..]              // grow-only array
 T[>..<]             // grow/shrink array
 T[:]                // slice view
-[K: V]              // dictionary
+[K: V]              // dictionary (Dictionary<K, V>, K: Hashable), in insertion order
 (A, B, C)           // tuple
 (label: A, b: B)    // labelled tuple
 (A, B) -> C         // function type

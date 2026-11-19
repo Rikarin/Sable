@@ -65,8 +65,8 @@ public sealed class CoreTypes {
         From = DeclareGeneric("From", TypeKind.Protocol, "Source");
 
         // 'Optional<T>' exists so that 'T?' has a nominal form to desugar to.
+        // ('[K: V]' desugars to Dictionary, which is Sable: see Dictionary below.)
         Optional = DeclareGeneric("Optional", TypeKind.Union, "Wrapped");
-        Dictionary = DeclareGeneric("Dictionary", TypeKind.Struct, "Key", "Value");
 
         Integers = [I8, I16, I32, I64, I128, Int, U8, U16, U32, U64, U128, UInt];
         Floats = [F16, F32, F64];
@@ -187,7 +187,19 @@ public sealed class CoreTypes {
         && (named.OriginalDefinition.Equals(Range) || named.OriginalDefinition.Equals(ClosedRange));
 
     public NamedTypeSymbol Optional { get; }
-    public NamedTypeSymbol Dictionary { get; }
+
+    /// <summary>
+    ///     <c>Dictionary&lt;Key, Value&gt;</c>, what <c>[Key: Value]</c> names:
+    ///     a hash table declared in <c>lib/Sable.Core/Dictionary.sb</c>, null
+    ///     only in a compilation that brings a Sable.Core of its own without it.
+    /// </summary>
+    public NamedTypeSymbol? Dictionary => _dictionary ??= DeclaredStruct("Dictionary");
+
+    NamedTypeSymbol? _dictionary;
+
+    /// <summary>True for a <c>[Key: Value]</c> of some key and value.</summary>
+    public bool IsDictionary(TypeSymbol type) =>
+        type is NamedTypeSymbol named && Dictionary is { } dictionary && named.OriginalDefinition.Equals(dictionary);
 
     public ImmutableArray<NamedTypeSymbol> Integers { get; }
     public ImmutableArray<NamedTypeSymbol> Floats { get; }

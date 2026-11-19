@@ -31,7 +31,7 @@ public sealed class DeriveTests {
             struct Point { var x: Int, var y: Int }
             fn same<T: Equatable>(_ a: T, _ b: T) -> Bool { return a == b }
             fn probe(_ p: Point, _ q: Point) -> Bool {
-                let h: Int = p.hash()
+                let h: Int = p.hashValue
                 let d: String = p.debugDescription()
                 return same(p, q) && p != q && p < q && p >= q
             }
@@ -62,7 +62,7 @@ public sealed class DeriveTests {
             """
             @derive(Equatable, Hashable, Comparable, Debug)
             union Token { Number(Int), Word(count: Int), End }
-            fn probe(_ a: Token, _ b: Token) -> Bool { return a == b || a < b || a.hash() == 0 }
+            fn probe(_ a: Token, _ b: Token) -> Bool { return a == b || a < b || a.hashValue == 0 }
             """
         );
 
@@ -154,7 +154,7 @@ public sealed class DeriveTests {
                 var cents: Int
                 operator == (a: Money, b: Money) -> Bool { return a.cents == b.cents }
             }
-            fn probe(_ m: Money) -> Bool { return m == m && m.hash() == 0 }
+            fn probe(_ m: Money) -> Bool { return m == m && m.hashValue == 0 }
             """
         );
 
@@ -173,7 +173,7 @@ public sealed class DeriveTests {
             $$"""
               {{Pair}}
               fn probe(_ p: Pair<Int, Bool>, _ q: Pair<Pair<Int, Int>, Int>) -> Bool {
-                  return p == p && same(p, p) && same(q, q) && q.hash() == 0
+                  return p == p && same(p, p) && same(q, q) && q.hashValue == 0
               }
               """
         );
@@ -207,7 +207,10 @@ public sealed class DeriveTests {
         var error = Single(
             $$"""
               {{Pair}}
-              fn probe(_ p: Pair<Opaque, Int>) -> Int { return p.hash() }
+              fn probe(_ p: Pair<Opaque, Int>) {
+                  var h = Hasher()
+                  p.hash(into: &h)
+              }
               """,
             ErrorCode.ERR_DoesNotConform
         );
@@ -244,7 +247,7 @@ public sealed class DeriveTests {
             """
             @derive(Equatable, Hashable, Comparable, Debug)
             enum Color { Red, Green, Blue }
-            fn probe() -> Bool { return Color.Red < Color.Blue && Color.Red != Color.Green && Color.Red.hash() > 0 }
+            fn probe() -> Bool { return Color.Red < Color.Blue && Color.Red != Color.Green && Color.Red.hashValue != 0 }
             """
         );
 

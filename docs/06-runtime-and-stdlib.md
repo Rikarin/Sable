@@ -103,7 +103,7 @@ typedef struct { int64_t kind;                                    // 1: a class
 
 - **Field descriptors**: every stored field — the superclass's first, at
   the same offsets — with its name, its type's name as Sable writes it
-  (`Zoo.Animal?`, `Sable.Collections.HashMap<String, Int>`), its offset from
+  (`Zoo.Animal?`, `Sable.Collections.Deque<String>`), its offset from
   the start of the object, and what it holds. The leak report reads them.
 - **Conformance records**: one per protocol the class declares — where it
   is declared, in an extension that holds for every instance, and every
@@ -241,6 +241,50 @@ Sable.Interop       C FFI helpers, CString, CVarArg, callback shims
 Sable.Reflect       the reflection surface described above
 ```
 
+### Dictionaries and hashing
+
+`[Key: Value]` is `Sable.Core`'s `Dictionary<Key: Hashable, Value>`
+(`lib/Sable.Core/Dictionary.sb`), a struct written in Sable that the
+compiler knows only by name: `[K: V]` binds to it (its key checked for
+`Hashable` as `Dictionary<K, V>` written out would be), `["a": 1]` calls its
+`init(dictionaryLiteral:)`, `d[k]` its subscript, and `for (k, v) in d` goes
+through its `Sequence` conformance like any other type's. There is one hashed
+map; `Sable.Collections.HashMap` is gone, and `HashSet` is a dictionary to
+`Bool` underneath.
+
+- **Layout.** An array of entries (key, value, the key's full hash) in the
+  order keys were added, none where one was removed, and beside it an index:
+  a power of two of `Int` slots, at most half of them used, each empty (-1),
+  left by a removal (-2), or the entry's position with the top 31 bits of its
+  hash above it. A probe starts where the hash's bottom bits say and moves
+  one slot at a time, comparing the stored hash bits before any key —
+  SwissTable's metadata filter, without its SIMD groups, which Sable has no
+  primitive for. Growing drops removed entries and rebuilds the index from
+  the stored hashes; no key is hashed twice.
+- **Order.** Iteration is in insertion order, and the language guarantees
+  it: removing a key keeps the others' order, setting an existing key keeps
+  its place, and a key removed and added again goes last. It does not depend
+  on hashes, so a native program and the interpreter agree whatever the seed.
+- **Value semantics.** A dictionary is a value; its arrays are shared until
+  one copy changes (copy on write), as an array's elements are.
+- **Hashing.** `Hashable` is `fn hash(into hasher: inout Hasher)`, which
+  feeds a value's parts to a `Hasher` (`lib/Sable.Core/Hasher.sb`);
+  `@derive(Hashable)` writes it field by field (a union's case first, then
+  its payload), and `hashValue` is a protocol extension. A `Hasher` starts
+  from a seed that is random per process (`sable_hash_seed`, from the
+  system's secure random source as the runtime starts), so that keys chosen
+  to collide in one run collide in no other; `SABLE_DETERMINISTIC_HASHING=1`
+  fixes it, natively and in the interpreter alike, and `Hasher(seed:)` takes
+  one of the caller's. A word is mixed in with one 64×64→128-bit multiply
+  whose halves are folded together, under the seed (foldhash's
+  construction, which Rust's hashbrown uses by default); a string's bytes
+  are hashed the same way in the runtime, sixteen to a multiply
+  (`sable_string_hash`), which the interpreter computes identically. That
+  resists flooding as long as the seed stays secret — the level of .NET's
+  randomised hashing rather than SipHash's keyed-PRF guarantee, which costs
+  about 40% on string-keyed maps (`map-string`, measured) and was not
+  taken.
+
 `Sable.Core` reaches the runtime through `@builtin("name")`: a bodiless
 declaration, allowed only in `Sable.Core`, whose calls are the named SIL
 builtin applied in place — `String.count`, `print`, `Runtime.readFile`'s
@@ -252,7 +296,7 @@ perform, at no cost over the compiler doing it by special case
 
 Each module is a directory of `lib/` (`lib/Sable.Collections/`), its files
 all declaring `module Sable.Collections`, and each holds **one public type**,
-named after it: `Stack.sb`, `HashMap.sb`. Helpers private to a type live in
+named after it: `Stack.sb`, `Deque.sb`. Helpers private to a type live in
 its file; a family that is one concept shares one (`Sequence.sb` has
 `Iterator`, `Sequence` and their async forms; `Channel.sb` has
 `ChannelIterator`); free functions are in a file named for what they do

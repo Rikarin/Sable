@@ -624,7 +624,7 @@ public sealed partial class SilGen {
             return null;
         }
 
-        var owner = field.ContainingSymbol is NamedTypeSymbol named ? $"{named.ContainingSymbol?.Name}.{named.Name}" : field.ContainingSymbol?.Name;
+        var owner = field.ContainingSymbol is NamedTypeSymbol named ? QualifiedName(named) : field.ContainingSymbol?.Name;
         var name = $"{owner}.{field.Name}";
         _globalsByField[field] = (name, type);
         _module.Globals.Add((name, type));
@@ -1410,13 +1410,44 @@ public sealed partial class SilGen {
     }
 
     /// <summary>
+    ///     A declaration's name after the module's and every type's it is
+    ///     nested in: <c>App.Outer.Inner</c>, <c>Sable.Core.String.Index</c>.
+    ///     Two modules may each nest a type of one name in a type of one
+    ///     name, which the container alone would give one name. A type
+    ///     nested in an extension is of the module the extension is written
+    ///     in, which may not be the extended type's.
+    /// </summary>
+    internal static string QualifiedName(Symbol symbol) {
+        if (symbol is NamedTypeSymbol type) {
+            symbol = type.OriginalDefinition;
+        }
+
+        return symbol.ContainingSymbol switch {
+            NamedTypeSymbol container => $"{QualifiedName(container)}.{symbol.Name}",
+            ExtensionSymbol { DeclaringModule: { } module } extension => $"{module.Name}.{NestedName(extension.ExtendedType)}.{symbol.Name}",
+            ExtensionSymbol extension => $"{QualifiedName(extension.ExtendedType)}.{symbol.Name}",
+            var container => $"{container?.Name}.{symbol.Name}",
+        };
+
+        // The type's name after those of the types it is nested in, with no module.
+        static string NestedName(NamedTypeSymbol type) {
+            type = type.OriginalDefinition;
+            return type.ContainingSymbol switch {
+                NamedTypeSymbol container => $"{NestedName(container)}.{type.Name}",
+                ExtensionSymbol extension => $"{NestedName(extension.ExtendedType)}.{type.Name}",
+                _ => type.Name,
+            };
+        }
+    }
+
+    /// <summary>
     ///     <c>Module.name</c>, <c>Module.Type.name</c> for a member, and the
     ///     parameter types after it when the name is overloaded:
     ///     <c>M.area$Int$Int</c>.
     /// </summary>
     static string Mangle(FunctionSymbol symbol, bool overloaded) {
         var owner = Owner(symbol) is { } type
-            ? $"{type.ContainingSymbol?.Name}.{type.Name}"
+            ? QualifiedName(type)
             : symbol.ContainingSymbol?.Name;
 
         var name = symbol switch {
@@ -1585,7 +1616,7 @@ public sealed partial class SilGen {
     /// <summary>Enters a named type before its members, so that they may refer to it.</summary>
     T Begin<T>(TypeSymbol symbol, T type) where T : NominalType {
         if (symbol is NamedTypeSymbol { IsConstructed: true } constructed) {
-            type.DisplayName = $"{constructed.OriginalDefinition.ContainingSymbol?.Name}.{constructed.Name}<{string.Join(", ", constructed.TypeArguments.Select(static a => a.ToDisplayString()))}>";
+            type.DisplayName = $"{QualifiedName(constructed)}<{string.Join(", ", constructed.TypeArguments.Select(static a => a.ToDisplayString()))}>";
         }
 
         _types[symbol] = type;
@@ -2020,7 +2051,7 @@ public sealed partial class SilGen {
     }
 
     EnumType? LowerRecursiveUnion(RecursiveUnionTypeSymbol recursive, StructuralUnionTypeSymbol union) {
-        var name = "Union$" + Sanitise($"{recursive.Alias.ContainingSymbol?.Name}.{recursive.Alias.Name}");
+        var name = "Union$" + Sanitise(QualifiedName(recursive.Alias));
         if (_module.FindType(name) is EnumType existing) {
             return existing;
         }
@@ -3467,7 +3498,7 @@ public sealed partial class SilGen {
 
     /// <summary><c>M.Point</c>; a constructed type adds its arguments: <c>M.Box$of$Int</c>.</summary>
     string TypeName(NamedTypeSymbol type) {
-        var name = $"{type.OriginalDefinition.ContainingSymbol?.Name}.{type.Name}";
+        var name = QualifiedName(type);
         if (!type.IsConstructed) {
             return name;
         }
@@ -3495,7 +3526,7 @@ public sealed partial class SilGen {
                 continue;
             }
 
-            var name = $"{protocol.OriginalDefinition.ContainingSymbol?.Name}.{protocol.Name}";
+            var name = QualifiedName(protocol);
             if (!seen.Add(name)) {
                 continue;
             }

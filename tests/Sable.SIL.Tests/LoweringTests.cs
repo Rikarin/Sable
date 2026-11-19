@@ -57,6 +57,36 @@ public sealed class LoweringTests {
         Assert.Equal(6765L, Run(module, "fib", 20L));
     }
 
+    /// <summary>
+    ///     A nested type is named after its module and every type it is
+    ///     nested in, as are its members: <c>M.Outer.Inner</c>, and
+    ///     Sable.Core's <c>String.Index</c> is <c>Sable.Core.String.Index</c>
+    ///     (#267).
+    /// </summary>
+    [Fact]
+    public void ANestedTypesNameStartsWithItsModule() {
+        var module = Lower(
+            """
+            struct Outer {
+                struct Inner {
+                    let x: Int
+                    fn doubled() -> Int { return x * 2 }
+                }
+            }
+            fn test() -> Int {
+                return Outer.Inner(x: 4).doubled() + String.Index(utf8Offset: 1).utf8Offset
+            }
+            """
+        );
+
+        Assert.Equal(9L, Run(module, "test"));
+        Assert.NotNull(module.FindType("M.Outer.Inner"));
+        Assert.Null(module.FindType("Outer.Inner"));
+        Assert.NotNull(module.Find("M.Outer.Inner.doubled"));
+        Assert.NotNull(module.FindType("Sable.Core.String.Index"));
+        Assert.DoesNotContain(module.Functions, static f => f.Name.StartsWith("String.", StringComparison.Ordinal));
+    }
+
     [Fact]
     public void ALoopComputesTheGreatestCommonDivisor() {
         var module = Lower(

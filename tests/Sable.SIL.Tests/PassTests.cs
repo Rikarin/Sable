@@ -9,11 +9,8 @@ public sealed class PassTests {
     }
 
     /// <summary>How many of an instruction the program's own functions have: Sable.Core's, lowered with it, are not counted.</summary>
-    // A type nested in a Core type ('String.Index') is not named under
-    // Sable.Core, so the library's functions are known by their file too.
     static int Count<T>(SilModule module) =>
-        module.Functions.Where(static f => !f.Name.StartsWith("Sable.Core.", StringComparison.Ordinal)
-                && f.SourceFile?.StartsWith("lib/", StringComparison.Ordinal) != true)
+        module.Functions.Where(static f => !f.Name.StartsWith("Sable.Core.", StringComparison.Ordinal))
             .Sum(static f => f.Blocks.Sum(static b => b.Instructions.OfType<T>().Count()));
 
     [Fact]

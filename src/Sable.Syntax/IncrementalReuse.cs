@@ -15,8 +15,11 @@ internal enum MemberContext {
     Enum
 }
 
-/// <summary>The first and last token indices a member's parse read.</summary>
-internal readonly record struct TokenExtent(int Lowest, int Highest);
+/// <summary>
+///     The first and last token indices a member's parse read, and how deeply
+///     nested that parse began: the nesting limit makes the depth an input too.
+/// </summary>
+internal readonly record struct TokenExtent(int Lowest, int Highest, int Nesting);
 
 /// <summary>
 ///     The green nodes an incremental parse may reuse, keyed by the token index
@@ -34,6 +37,15 @@ internal readonly record struct TokenExtent(int Lowest, int Highest);
 ///         (<see cref="TokenExtent" />), and those are what must be unchanged.
 ///     </para>
 ///     <para>
+///         Tokens are the only input a member's parse may have. One that began
+///         with something handed over from before it — attributes already read,
+///         tokens the member list skipped after the member before made no
+///         progress, half of a split token — or that ran into the nesting limit
+///         (reported once per file) depended on more, and the parser records no
+///         extent for it, so it is never offered. A member is offered back only
+///         where the new parse is in that same clean state, at the same nesting.
+///     </para>
+///     <para>
 ///         The context is recorded because a union body and a type body read a
 ///         bare identifier differently; a node is only offered back to the same kind
 ///         of member list it came from.
@@ -44,24 +56,27 @@ internal sealed class IncrementalReuse {
 
     /// <param name="Behind">How many tokens before its first the member's parse read.</param>
     /// <param name="Ahead">How many tokens past its first the member's parse read.</param>
-    private readonly record struct Entry(GreenNode Node, int TokenCount, MemberContext Context, int Behind, int Ahead);
+    /// <param name="Nesting">How deeply nested the member's parse began.</param>
+    private readonly record struct Entry(GreenNode Node, int TokenCount, MemberContext Context, int Behind, int Ahead, int Nesting);
 
     public int Count => _entries.Count;
 
     /// <summary>
-    ///     The member to reuse at a token index, with the tokens its parse read
-    ///     as counts from that index: <paramref name="behind" /> before it and
+    ///     The member to reuse at a token index, parsed in the same context and
+    ///     at the same nesting, with the tokens its parse read as counts from
+    ///     that index: <paramref name="behind" /> before it and
     ///     <paramref name="ahead" /> after it.
     /// </summary>
     public bool TryGet(
         int tokenIndex,
         MemberContext context,
+        int nesting,
         out GreenNode node,
         out int tokenCount,
         out int behind,
         out int ahead
     ) {
-        if (_entries.TryGetValue(tokenIndex, out var entry) && entry.Context == context) {
+        if (_entries.TryGetValue(tokenIndex, out var entry) && entry.Context == context && entry.Nesting == nesting) {
             node = entry.Node;
             tokenCount = entry.TokenCount;
             behind = entry.Behind;
@@ -247,8 +262,9 @@ internal sealed class IncrementalReuse {
             return;
         }
 
-        // A member with no note of what it read (none should be without
-        // one) is not known to be safe.
+        // A member with no note of what it read is not known to be safe: the
+        // parser notes none for one whose parse depended on more than its
+        // tokens (Parser.ParseMembers).
         if (!_extents.TryGetValue(child, out var extent)) {
             return;
         }
@@ -264,7 +280,7 @@ internal sealed class IncrementalReuse {
         // Entirely inside the untouched prefix: indices are unchanged.
         if (highest < prefixCount) {
             if (SameTokens(lowest, highest)) {
-                _entries[startIndex] = new(child, tokenCount, context, behind, ahead);
+                _entries[startIndex] = new(child, tokenCount, context, behind, ahead, extent.Nesting);
             }
 
             return;
@@ -274,7 +290,7 @@ internal sealed class IncrementalReuse {
         if (lowest >= oldSuffixStart) {
             var shift = newSuffixStart - oldSuffixStart;
             if (SameTokens(lowest + shift, highest + shift)) {
-                _entries[startIndex + shift] = new(child, tokenCount, context, behind, ahead);
+                _entries[startIndex + shift] = new(child, tokenCount, context, behind, ahead, extent.Nesting);
             }
         }
     }

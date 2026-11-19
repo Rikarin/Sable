@@ -37,16 +37,34 @@ public static class FrontEndCheck {
             features.Add(node.Kind.ToString());
         }
 
+        // The source's own diagnostics first: its bodies, and the program's
+        // declarations and signatures (Sable.Core's among them, which the
+        // source can extend). Sable.Core's bodies are most of the program,
+        // and binding them costs many times what the source's do, so they are
+        // bound only for a source that has no error of its own and goes on:
+        // a source with one stops here either way.
         var compilation = Compilation.Create([tree]);
-        var diagnostics = compilation.GetAllDiagnostics();
-        foreach (var diagnostic in diagnostics) {
+        var model = compilation.GetSemanticModel(tree);
+        var own = new List<Diagnostic>(model.GetDiagnostics());
+        own.AddRange(compilation.GetDiagnostics());
+        foreach (var diagnostic in own) {
             features.Add(diagnostic.Id);
         }
 
         // The semantic model is what the editor asks, of broken code above all.
-        var model = compilation.GetSemanticModel(tree);
         foreach (var node in tree.Root.DescendantNodes()) {
             model.GetSymbolOf(node);
+        }
+
+        if (own.Any(static d => d.Severity == DiagnosticSeverity.Error)) {
+            return features;
+        }
+
+        // Everything, Sable.Core's bodies too, as a build would check it
+        // before lowering: what the source declares can reach into them.
+        var diagnostics = compilation.GetAllDiagnostics();
+        foreach (var diagnostic in diagnostics) {
+            features.Add(diagnostic.Id);
         }
 
         if (diagnostics.Any(static d => d.Severity == DiagnosticSeverity.Error)) {

@@ -668,4 +668,50 @@ public sealed class VerifierTests {
         Assert.Contains(problems, p => p.Contains("M.File: its deinit @M.File.deinit is (Int) -> (), not (M.File) -> ()", StringComparison.Ordinal));
         Assert.Contains(problems, p => p.Contains("M.Other: its deinit @M.Missing is not a function the module defines", StringComparison.Ordinal));
     }
+
+    /// <summary>
+    ///     The dominators, worked out on random control flow, are those of the
+    ///     definition: a block dominates another when, without it, the other
+    ///     cannot be reached from the entry. Unreachable blocks have none.
+    /// </summary>
+    [Fact]
+    public void DominatorsAreThoseOfTheDefinition() {
+        var random = new Random(7);
+        for (var trial = 0; trial < 300; trial++) {
+            var function = new SilFunction("f", new FunctionType([SilType.Bool], SilType.Unit));
+            var count = random.Next(1, 25);
+            var blocks = Enumerable.Range(0, count).Select(_ => function.AddBlock()).ToList();
+            var condition = blocks[0].AddArgument(SilType.Bool);
+            foreach (var block in blocks) {
+                // Never back to the entry, which the verifier forbids.
+                SilBlock Target() => blocks[random.Next(1, count)];
+                block.Append<SilInstruction>(count == 1 || random.Next(5) == 0 ? new ReturnInst(null)
+                    : random.Next(2) == 0 ? new BranchInst(Target())
+                    : new CondBranchInst(condition, Target(), [], Target(), []));
+            }
+
+            var dominators = SilVerifier.Dominators(function);
+            var reachable = Reached(blocks[0], null);
+            Assert.Equal(reachable.Count, dominators.Count);
+            foreach (var block in reachable) {
+                var expected = blocks.Where(d => d == block || !Reached(blocks[0], d).Contains(block)).ToHashSet();
+                Assert.True(expected.SetEquals(dominators[block]), $"trial {trial}: bb{blocks.IndexOf(block)}'s dominators");
+            }
+        }
+
+        static HashSet<SilBlock> Reached(SilBlock entry, SilBlock? without) {
+            var seen = new HashSet<SilBlock>();
+            var pending = new Stack<SilBlock>([entry]);
+            while (pending.Count > 0) {
+                var block = pending.Pop();
+                if (block != without && seen.Add(block)) {
+                    foreach (var successor in block.Successors) {
+                        pending.Push(successor);
+                    }
+                }
+            }
+
+            return seen;
+        }
+    }
 }

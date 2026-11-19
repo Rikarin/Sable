@@ -5543,7 +5543,8 @@ public sealed partial class Binder {
             .Select(static e => e.NameToken.IsNone ? null : e.NameToken.Text)
             .ToImmutableArray();
 
-        var type = new TupleTypeSymbol([..elements.Select(static e => e.Type)], names);
+        // '()' is the unit value, of the unit type 'Void' (TypeBinder).
+        TypeSymbol type = elements.IsEmpty ? Core.Void : new TupleTypeSymbol([..elements.Select(static e => e.Type)], names);
         return new BoundTuple(syntax, type, elements);
     }
 

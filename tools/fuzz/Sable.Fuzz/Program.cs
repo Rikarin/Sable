@@ -66,7 +66,7 @@ switch (command) {
                     failed = true;
                     break;
                 case (Runner.Outcome.Hung, _):
-                    Console.WriteLine($"{file}: hangs\nsignature: hang: no answer within {target.Limit.TotalSeconds}s");
+                    Console.WriteLine($"{file}: hangs\nsignature: timeout: no answer within {target.Limit.TotalSeconds}s");
                     return 3;
                 case (Runner.Outcome.Stopped, _):
                     return 1;

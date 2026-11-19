@@ -61,6 +61,11 @@ signature() {
         | cut -c1-200
 }
 
+# When a file was last written, in seconds since the epoch: GNU's stat, or BSD's.
+modified() {
+    stat -c %Y "$1" 2>/dev/null || stat -f %m "$1"
+}
+
 # Every process under a pid, deepest first.
 descendants() {
     local child

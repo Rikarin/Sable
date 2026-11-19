@@ -58,7 +58,14 @@
 # dictionaries come from the lexer's own tables.
 #
 # A target's engine stops at a hang (and libFuzzer at any failure); the
-# script starts it again, from the corpus, until the deadline. Ctrl-C (or
+# script starts it again, from the corpus, until the deadline. The deadline
+# is held from outside as well: libFuzzer checks -max_total_time only
+# between inputs, and only once it has run its whole corpus, so an engine
+# still running FUZZ_GRACE (default 2m) past the deadline is killed. Its
+# input on the go, if it had been running longer than the target's limit,
+# is kept as a timeout; if not, the overrun is itself the failure. Replaying
+# and minimising what was found stops FUZZ_TRIAGE (default 10m) after that,
+# so that the summary is always written in good time. Ctrl-C (or
 # SIGTERM) stops a run early, as overnight.sh's: what is in progress is
 # dropped and the results so far are summarised. Each .NET process is capped
 # at FUZZ_HEAP (default 4 GB) of managed heap; an input that needs more is a
@@ -86,6 +93,8 @@ for target in "${targets[@]}"; do
     esac
 done
 deadline=$(( $(date +%s) + $(seconds_of "$duration") ))
+grace=$(seconds_of "${FUZZ_GRACE:-2m}")
+triage_until=$(( deadline + grace + $(seconds_of "${FUZZ_TRIAGE:-10m}") ))
 
 out="$root/artifacts/fuzz/$(date +%Y%m%d-%H%M%S)"
 corpora=${FUZZ_CORPUS:-$root/artifacts/fuzz-corpus}
@@ -168,21 +177,39 @@ stopped() { [ -e "$out/.stop" ]; }
 
 hash_of() { git hash-object "$1"; }
 
+# Seconds a triage step may take: at most the given number, and none past
+# the time triage has after the deadline. 0 or less when none is left, which
+# means do not start ('timeout 0' would be no limit at all).
+within() {
+    local left=$(( triage_until - $(date +%s) ))
+    echo $(( left < $1 ? left : $1 ))
+}
+
+# A number of seconds for 'timeout', never 0: a step started as time runs
+# out gets a second, not for ever.
+at_least_one() { echo $(( $1 < 1 ? 1 : $1 )); }
+
 # What a failing input is, and the smallest one that fails the same way:
 # replayed in a process of its own, minimised, and added to failures.tsv.
+# One kept as timeout-* is a timeout, whatever replaying it says.
 triage() {
-    local name=$1 file=$2
-    local replay="$file.replay.txt" what status
-    if [ "$name" = frombytes ]; then
-        ASAN_OPTIONS=detect_leaks=0 timeout 60 "$out/frombytes/replay" "$file" > "$replay" 2>&1
+    local name=$1 file=$2 limit=$3
+    local replay="$file.replay.txt" what="" status budget
+    if [ "$(within 600)" -le 0 ]; then
+        # No time left: recorded, with the engine's notes beside it, not replayed.
+        status=-1
+        what="not replayed, out of time"
+    elif [ "$name" = frombytes ]; then
+        ASAN_OPTIONS=detect_leaks=0 timeout "$(at_least_one "$(within 60)")" "$out/frombytes/replay" "$file" > "$replay" 2>&1
         status=$?
         what=$(signature "$replay")
-        if [ "$fuzzer_engine" = libfuzzer ] && [ "$status" -ne 0 ] && [ "$status" -ne 124 ]; then
-            ASAN_OPTIONS=detect_leaks=0 timeout 300 "$out/frombytes/fuzzer" -minimize_crash=1 -max_total_time=120 \
+        budget=$(within 300)
+        if [ "$fuzzer_engine" = libfuzzer ] && [ "$status" -ne 0 ] && [ "$status" -ne 124 ] && [ "$budget" -gt 0 ]; then
+            ASAN_OPTIONS=detect_leaks=0 timeout "$budget" "$out/frombytes/fuzzer" -minimize_crash=1 -max_total_time=120 \
                 -exact_artifact_path="$file.min" "$file" > "$file.min.log" 2>&1
         fi
     else
-        timeout 600 "$bin/Sable.Fuzz" "$name" replay "$file" > "$replay" 2>&1
+        timeout "$(at_least_one "$(within 600)")" "$bin/Sable.Fuzz" "$name" replay "$file" > "$replay" 2>&1
         status=$?
         # -a throughout: the replay ends with the input, and one with a NUL
         # in it makes grep call the whole file binary and print no line.
@@ -191,17 +218,28 @@ triage() {
             # Not an exception: the process is gone. Name it by the frame that repeats.
             what="stack overflow: $(grep -a -m1 -E '^\s+at ' "$replay" | sed -E 's/^[[:space:]]+at //; s/\(.*//' | cut -c1-150)"
         fi
-        if [ "$status" -eq 1 ]; then
-            timeout 600 "$bin/Sable.Fuzz" "$name" minimise "$file" "$file.min" 120 > "$file.min.log" 2>&1
+        budget=$(within 600)
+        if [ "$status" -eq 1 ] && [ "$budget" -gt 0 ]; then
+            timeout "$budget" "$bin/Sable.Fuzz" "$name" minimise "$file" "$file.min" 120 > "$file.min.log" 2>&1
         fi
     fi
     if [ -z "$what" ]; then
         if [ "$status" -eq 0 ]; then
-            what="does not fail when replayed (exit $status of the run that found it)"
+            what="does not fail when replayed"
+        elif [ "$status" -eq 124 ]; then
+            what="no answer when replayed, in the time triage had left"
         else
             what="exit $status when replayed (see $(basename "$replay"))"
         fi
     fi
+    case "$(basename "$file")" in
+        timeout-*)
+            case "$what" in
+                timeout:*) ;;
+                "does not fail when replayed") what="timeout: over ${limit}s under the engine, but not when replayed" ;;
+                *) what="timeout: $what" ;;
+            esac ;;
+    esac
     echo "$name	$file	$what" >> "$out/failures.tsv"
     echo "$(date +%H:%M) $name: $(basename "$file"): $what"
 }
@@ -263,25 +301,32 @@ fuzz() {
     while [ "$(date +%s)" -lt "$deadline" ] && ! stopped; do
         local left=$(( deadline - $(date +%s) ))
         local log="$dir/run-$round.log"
-        local before status
+        local before status ran
         before=$(ls "$crashes")
+        # The engine is given the time left, and killed (its .NET process
+        # with it: timeout signals its whole process group) if it is still
+        # running FUZZ_GRACE past that.
+        local hard=(timeout -k 10 $(( left + grace )))
         case "$engine" in
             libfuzzer)
                 local command=()
                 if [ "$name" = frombytes ]; then
                     command=(env ASAN_OPTIONS=detect_leaks=0 "$out/frombytes/fuzzer")
                 else
-                    command=("$LIBFUZZER_DOTNET" --target_path="$bin/Sable.Fuzz" --target_arg="$name" -dict="$dir/dict")
+                    command=(env SABLE_FUZZ_CURRENT="$crashes/.current" "$LIBFUZZER_DOTNET" --target_path="$bin/Sable.Fuzz" --target_arg="$name" -dict="$dir/dict")
                 fi
-                "${command[@]}" -max_len="$length" -timeout="$limit" -rss_limit_mb=0 -max_total_time="$left" \
+                "${hard[@]}" "${command[@]}" -max_len="$length" -timeout="$limit" -rss_limit_mb=0 -max_total_time="$left" \
                     -artifact_prefix="$crashes/" -print_final_stats=1 "$corpus" "$dir/seeds" > "$log" 2>&1
                 status=$?
-                executions=$(( executions + $(grep -m1 'stat::number_of_executed_units' "$log" | awk '{ print $2 }' || echo 0) + 0 )) ;;
+                # Its final count, or, killed before it could give one, the last it printed.
+                ran=$(grep -a -m1 'stat::number_of_executed_units' "$log" | awk '{ print $2 }')
+                [ -n "$ran" ] || ran=$(grep -a -o -E '^#[0-9]+' "$log" | tail -1 | tr -d '#') ;;
             in-process)
-                "$bin/Sable.Fuzz" "$name" fuzz "$left" "$corpus" "$crashes" "$dir/seeds" > "$log" 2>&1
+                "${hard[@]}" "$bin/Sable.Fuzz" "$name" fuzz "$left" "$corpus" "$crashes" "$dir/seeds" > "$log" 2>&1
                 status=$?
-                executions=$(( executions + $(grep '^#execs: ' "$log" | tail -1 | awk '{ print $2 }' || echo 0) + 0 )) ;;
+                ran=$(grep -a '^#execs: ' "$log" | tail -1 | awk '{ print $2 }') ;;
         esac
+        executions=$(( executions + ${ran:-0} ))
 
         echo "$engine engine; $executions inputs run; corpus of $(find "$corpus" -type f | wc -l | tr -d ' ') in $corpus" > "$dir/about"
         if stopped; then
@@ -298,12 +343,42 @@ fuzz() {
         round=$((round + 1))
         echo "$round" > "$dir/rounds"
 
-        # The in-process loop died with an input on the go: that input is the crash.
-        if [ -e "$crashes/.current" ]; then
-            local died
-            died="$crashes/crash-$(hash_of "$crashes/.current")"
-            mv "$crashes/.current" "$died"
-            { echo "the process died (exit $status) on this input; the end of its log:"; tail -20 "$log"; } > "$died.txt"
+        # Killed at the hard deadline: still running FUZZ_GRACE past the time it was given.
+        local overran=0
+        if { [ "$status" -eq 124 ] || [ "$status" -eq 137 ]; } && [ "$(date +%s)" -ge $(( deadline + grace )) ]; then
+            overran=1
+        fi
+
+        # The input on the go when the engine ended. Under libFuzzer it is
+        # only a record, as libFuzzer keeps what fails itself.
+        local current="$crashes/.current" kept=""
+        if [ -e "$current" ]; then
+            local age=$(( $(date +%s) - $(modified "$current") ))
+            if [ "$overran" -eq 1 ] && [ "$age" -ge "$limit" ]; then
+                # Running past the target's limit and never stopped by the
+                # engine: a hang it did not see, kept as libFuzzer keeps one.
+                kept="$crashes/timeout-$(hash_of "$current")"
+                mv "$current" "$kept"
+                { echo "still running after ${age}s (the limit is ${limit}s) when the engine was killed, ${grace}s past the deadline; the end of its log:"; tail -20 "$log"; } > "$kept.txt"
+            elif [ "$overran" -eq 1 ] || [ "$engine" = libfuzzer ]; then
+                rm -f "$current"
+            else
+                # The in-process loop died with an input on the go: that input is the crash.
+                kept="$crashes/crash-$(hash_of "$current")"
+                mv "$current" "$kept"
+                { echo "the process died (exit $status) on this input; the end of its log:"; tail -20 "$log"; } > "$kept.txt"
+            fi
+        fi
+
+        if [ "$overran" -eq 1 ] && [ -z "$kept" ]; then
+            # No input to blame: the engine itself would not stop. libFuzzer
+            # runs its whole corpus before it looks at the clock.
+            local doing="fuzzing"
+            if [ "$engine" = libfuzzer ] && ! grep -a -q 'INITED' "$log"; then
+                doing="running its corpus of $(sed -n 's/.*seed corpus: files: \([0-9]*\).*/\1/p' "$log" | head -1) inputs, $ran of them run"
+            fi
+            echo "$name	$log	overran: the engine was still running ${grace}s past the deadline, and was killed" >> "$out/failures.tsv"
+            echo "$(date +%H:%M) $name: the engine was still running ${grace}s past the deadline ($doing), and was killed; see $log"
         fi
 
         # What this run found: each failing input, not the notes kept beside it.
@@ -313,7 +388,7 @@ fuzz() {
             case "$(basename "$path")" in
                 *.*) continue ;;
             esac
-            echo "$before" | grep -qxF "$(basename "$path")" || triage "$name" "$path"
+            echo "$before" | grep -qxF "$(basename "$path")" || triage "$name" "$path" "$limit"
         done
 
         if [ "$status" -ne 0 ] && [ "$(ls "$crashes")" = "$before" ] && [ "$(date +%s)" -lt "$deadline" ]; then
@@ -327,8 +402,9 @@ fuzz() {
 
 # On Ctrl-C or SIGTERM: say so, then stop every engine. A script without job
 # control starts its background jobs ignoring SIGINT, and what they run
-# inherits that, so the engines are sent SIGTERM directly — the engines, not
-# what is under them: libFuzzer reaps its .NET process itself.
+# inherits that, so the engines are sent SIGTERM directly: what each target
+# runs, which is 'timeout' with the engine under it (or a triage step), and
+# 'timeout' passes the signal on.
 stop() {
     if stopped; then
         return

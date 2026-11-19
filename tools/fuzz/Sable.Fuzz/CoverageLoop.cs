@@ -65,11 +65,19 @@ public sealed unsafe class CoverageLoop(Target target, string corpus, IReadOnlyL
             File.Delete(Current);
         }
 
-        // The corpus so far, then the seeds, smallest first: each kept only if it shows something new.
+        // The corpus so far, then the seeds, smallest first: each kept only if
+        // it shows something new. A corpus grows night by night, so reading it
+        // is held to the deadline too: what is not read by then waits for the next run.
         var inputs = new[] { corpus }.Concat(seeds).Where(Directory.Exists)
             .SelectMany(static d => Directory.GetFiles(d).Where(static f => !Path.GetFileName(f).StartsWith('.')))
             .Select(static f => (Path: f, Size: new FileInfo(f).Length)).OrderBy(static f => f.Size).ToList();
+        var read = 0;
         foreach (var (path, _) in inputs) {
+            if (DateTime.UtcNow >= deadline) {
+                break;
+            }
+
+            read++;
             var data = File.ReadAllBytes(path);
             if (data.Length > target.MaxLength) {
                 data = data[..target.MaxLength];
@@ -87,7 +95,7 @@ public sealed unsafe class CoverageLoop(Target target, string corpus, IReadOnlyL
             _pool.Add("\n"u8.ToArray());
         }
 
-        Console.WriteLine($"{target.Name}: {inputs.Count} inputs read, {_pool.Count} kept; {_edges} edges");
+        Console.WriteLine($"{target.Name}: {read} of {inputs.Count} inputs read, {_pool.Count} kept; {_edges} edges");
         var report = DateTime.UtcNow + TimeSpan.FromSeconds(30);
         while (DateTime.UtcNow < deadline) {
             var parent = _pool[_random.Next(_pool.Count)];

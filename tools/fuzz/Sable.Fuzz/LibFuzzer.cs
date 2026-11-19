@@ -14,6 +14,15 @@ namespace Sable.Fuzz;
 ///     sees its child go. A hang is libFuzzer's <c>-timeout</c>, after which
 ///     libFuzzer exits and leaves this process running the hung input, so a
 ///     watchdog ends it once its parent has gone.
+///     <para>
+///         libFuzzer's <c>-timeout</c> is not the whole of it: it reads its
+///         corpus before it fuzzes, and checks <c>-max_total_time</c> only
+///         after, so tools/fuzz/coverage.sh stops the engine at a hard
+///         deadline of its own. To tell what was running then — an input
+///         libFuzzer did not see hang, or one the deadline merely cut short —
+///         each input is written, before it runs, to the file
+///         <c>SABLE_FUZZ_CURRENT</c> names when it names one.
+///     </para>
 /// </remarks>
 static partial class LibFuzzer {
     [LibraryImport("libc", EntryPoint = "getppid")]
@@ -31,7 +40,15 @@ static partial class LibFuzzer {
         }) { IsBackground = true, Name = "libFuzzer watchdog" };
         watchdog.Start();
 
-        SharpFuzz.Fuzzer.LibFuzzer.Run(data => target.Run(data));
+        var current = Environment.GetEnvironmentVariable("SABLE_FUZZ_CURRENT");
+        if (string.IsNullOrEmpty(current)) {
+            SharpFuzz.Fuzzer.LibFuzzer.Run(data => target.Run(data));
+        } else {
+            SharpFuzz.Fuzzer.LibFuzzer.Run(data => {
+                File.WriteAllBytes(current, data);
+                target.Run(data);
+            });
+        }
         return 0;
     }
 }

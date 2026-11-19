@@ -1281,7 +1281,12 @@ stack. A generator that throws gives a sequence whose `Failure` is its error:
 the resume function throws, the iterator's `next()` passes the error on, and
 the throwing path stores the finished state, after the defers pending have
 run, as a return does; the generator's own call, which only captures, does
-not throw. This is the transform the stackless state machine of §2.2 item 4
+not throw. A generator in a protocol's extension is generic over a `Self`
+of its sequence's and iterator's own, not the protocol's: a requirement
+called on the iterator (`makeIterator()`, `next()`) binds the protocol's
+Self to the iterator, and the body's Self, its associated types read through
+it, is the conformer the call names, so each call site's opaque result is
+specialised for its conformer. This is the transform the stackless state machine of §2.2 item 4
 would build on.
 
 ### Throwing iteration, as implemented

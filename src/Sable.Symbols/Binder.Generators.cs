@@ -146,7 +146,7 @@ public sealed partial class Binder {
             );
         }
 
-        var value = Convert(BindExpression(statement.Expression, generator.Element), generator.Element, statement.Expression);
+        var value = Convert(BindExpression(statement.Expression, generator.BodyElement), generator.BodyElement, statement.Expression);
         return Record(statement, new BoundYield(statement, value));
     }
 }

@@ -183,7 +183,7 @@ public sealed partial class Binder {
 
         // A generator's body throws what its 'next()' does.
         if (_generator is { } generating) {
-            _declaredThrows = generating.Next.ThrownType;
+            _declaredThrows = generating.BodyThrown;
         }
 
         PushScope();
@@ -6115,7 +6115,7 @@ public sealed partial class Binder {
         _loopDepth = 0;
         _switchCases = [];
         _openTypeParameters = [];
-        _declaredThrows = _generator is { } generating ? generating.Next.ThrownType : symbol.ThrownType;
+        _declaredThrows = _generator is { } generating ? generating.BodyThrown : symbol.ThrownType;
         _rethrows = symbol.IsRethrows;
         _inAsyncContext = symbol.IsAsync;
         SeedRethrowSources(symbol);

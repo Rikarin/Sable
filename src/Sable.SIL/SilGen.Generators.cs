@@ -87,7 +87,7 @@ public sealed partial class SilGen {
     ///     body, lowered here, decides.
     /// </summary>
     StructType? LowerGeneratorType(NamedTypeSymbol named, GeneratorSymbols generator) {
-        var substitution = TypeSubstitution.For(named);
+        var substitution = WithAssociatedTypes(generator.Function, generator.BodySubstitution(named));
         var structType = Begin(named, new StructType(TypeName(named)));
         if (CapturedOf(generator, named, substitution) is not { } captured) {
             return null;

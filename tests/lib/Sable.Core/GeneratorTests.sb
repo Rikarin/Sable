@@ -92,3 +92,25 @@ fn generatorsZipAndEnumerate() {
     assertEqualText(pairs, "0a1b2c")
     assert(evens(upTo: 4).elementsEqual([0, 2, 4]))
 }
+
+extension Sequence {
+    /// The elements in runs of two, each pair summed by the closure.
+    fn pairedUp(_ combine: (Element, Element) -> Element) throws(Failure) -> some Sequence<Element> {
+        var held: Element? = none
+        for try e in self {
+            if let first = held {
+                yield combine(first, e)
+                held = none
+            } else {
+                held = e
+            }
+        }
+    }
+}
+
+@test
+fn aGeneratorInAProtocolsExtensionServesEveryConformer() throws {
+    assertEqualText(text([1, 2, 3, 4].pairedUp { $0 + $1 }.toArray()), "3,7")
+    assertEqualText(text(evens(upTo: 6).pairedUp { $0 * $1 }.toArray()), "0,24")
+    assertEqualText(words("a b c d").pairedUp { $0 + $1 }.joined(separator: " "), "ab cd")
+}

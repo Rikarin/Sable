@@ -211,6 +211,82 @@ public sealed class GeneratorTests {
         );
 
     [Fact]
+    public void AProtocolExtensionsOpaqueResultIsSpecialisedForEachConformer() =>
+        Assert.Equal(
+            "1\n3\n5\na\nc\n0\n4\n1\n3\ncaught E.Bad\n2\n16\n",
+            AssertAgree(
+                """
+                    module Test
+
+                    union E: Error { Bad }
+
+                    extension Sequence {
+                        fn everyOther() throws(Failure) -> some Sequence<Element> {
+                            var keep = true
+                            for try e in self {
+                                if keep {
+                                    yield e
+                                }
+                                keep = !keep
+                            }
+                        }
+                    }
+
+                    extension Sequence where Failure == Never {
+                        fn firstTwo() -> some Collection {
+                            return self.prefix(2)
+                        }
+                    }
+
+                    protocol Shape {
+                        fn area() -> Int
+                    }
+
+                    extension Shape {
+                        fn scaled() -> some Shape {
+                            return Square(side: self.area())
+                        }
+                    }
+
+                    struct Square: Shape {
+                        let side: Int
+                        fn area() -> Int {
+                            return side * side
+                        }
+                    }
+
+                    fn failing() throws(E) -> some Sequence<Int> {
+                        yield 1
+                        yield 2
+                        yield 3
+                        throw .Bad
+                    }
+
+                    fn main() {
+                        for x in [1, 2, 3, 4, 5].everyOther() {
+                            print(x)
+                        }
+                        for s in ["a", "b", "c"].everyOther() {
+                            print(s)
+                        }
+                        for x in (0..<6).everyOther().everyOther() {
+                            print(x)
+                        }
+                        do {
+                            for try x in failing().everyOther() {
+                                print(x)
+                            }
+                        } catch {
+                            print("caught \(error)")
+                        }
+                        print([7, 8, 9].firstTwo().count)
+                        print(Square(side: 2).scaled().area())
+                    }
+                """
+            ).Stdout
+        );
+
+    [Fact]
     public void DefersRunWhenTheBodyEndsAndWhenItsIteratorIsDropped() =>
         Assert.Equal(
             "open a\na 0\nstep 0 done\na 1\nstep 1 done\na 2\nstep 2 done\nend of a\nclose a\nfree a\n--\nopen b\nb 0\nstep 0 done\nclose b\nfree b\n--\nopen c\nc 0\nstep 0 done\nc 1\ndropping\nstep 1 done\nclose c\nfree c\nd made\ne never started\n",

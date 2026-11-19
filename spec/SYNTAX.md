@@ -285,6 +285,16 @@ for x in evens(upTo: 6) { print(x) }    // 0 2 4 6
 let squares: some Sequence<Int> = { () -> some Sequence<Int> in
     for i in 0..<10 { yield i * i }
 }()
+
+extension Sequence {                     // for every sequence, each its own
+    fn everyOther() throws(Failure) -> some Sequence<Element> {
+        var keep = true
+        for try e in self {
+            if keep { yield e }
+            keep = !keep
+        }
+    }
+}
 ```
 
 - **Lazy.** Calling it runs nothing: it captures its arguments (and `self`)

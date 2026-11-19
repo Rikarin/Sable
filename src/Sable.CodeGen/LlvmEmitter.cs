@@ -315,6 +315,10 @@ public sealed partial class LlvmEmitter {
                                 declare ptr @sable_array_append_slot(ptr nocapture, ptr)
                                 declare ptr @sable_array_mutable_element(ptr nocapture, ptr, i64)
                                 declare ptr @sable_array_remove_last(ptr nocapture, ptr)
+                                declare i64 @sable_array_capacity(ptr)
+                                declare void @sable_array_reserve(ptr nocapture, ptr, i64)
+                                declare void @sable_array_rotate(ptr nocapture, ptr, i64, i64, i64)
+                                declare void @sable_slice_rotate(ptr nocapture, ptr, i64, i64, i64)
                                 declare ptr @sable_slice_mutable_element(ptr nocapture, ptr, i64)
                                 declare void @sable_slice_make_unique(ptr nocapture, ptr)
                                 declare ptr @sable_array_of_slice(ptr, i64, i64, ptr)
@@ -2831,6 +2835,21 @@ public sealed partial class LlvmEmitter {
                     Line($"call void @sable_slice_make_unique(ptr {operands[0]}, ptr {module.ArrayMetadata(new ArrayType(unique.Element))})");
                     return;
 
+                // Unique already — the loop's 'array_make_unique' made it so —
+                // the element written where it is, its index checked against
+                // the slice's count, as an array's is: no call per element.
+                case "array_set_unique" when builtin.Operands[0].Type is AddressType { Pointee: SliceType unique }: {
+                    var elementType = Type(unique.Element);
+                    var slice = Fresh();
+                    Line($"{slice} = load {Type(unique)}, ptr {operands[0]}");
+                    var element = SliceElement(slice, operands[1], unique, check: !builtin.InBounds);
+                    var old = Fresh();
+                    Line($"{old} = load {elementType}, ptr {element}, !tbaa {TbaaElement}");
+                    Line($"store {elementType} {operands[2]}, ptr {element}, !tbaa {TbaaElement}");
+                    Own(false, unique.Element, old);
+                    return;
+                }
+
                 case "array_set" or "array_set_unique" when builtin.Operands[0].Type is AddressType { Pointee: SliceType written }: {
                     var elementType = Type(written.Element);
                     var element = SliceMutableElement(operands[0], operands[1], written);
@@ -2879,6 +2898,25 @@ public sealed partial class LlvmEmitter {
                 case "array_element_addr": {
                     var arrayType = (ArrayType)((AddressType)builtin.Operands[0].Type).Pointee;
                     _names[builtin] = MutableElement(operands[0], operands[1], arrayType);
+                    return;
+                }
+
+                case "array_capacity":
+                    Line($"{Result()} = call i64 @sable_array_capacity(ptr {operands[0]})");
+                    return;
+
+                case "array_rotate": {
+                    var pointee = ((AddressType)builtin.Operands[0].Type).Pointee;
+                    var element = pointee is SliceType rotated ? rotated.Element : ((ArrayType)pointee).Element;
+                    var function = pointee is SliceType ? "sable_slice_rotate" : "sable_array_rotate";
+                    SiteForRuntime();
+                    Line($"call void @{function}(ptr {operands[0]}, ptr {module.ArrayMetadata(new ArrayType(element))}, i64 {operands[1]}, i64 {operands[2]}, i64 {operands[3]})");
+                    return;
+                }
+
+                case "array_reserve": {
+                    var arrayType = (ArrayType)((AddressType)builtin.Operands[0].Type).Pointee;
+                    Line($"call void @sable_array_reserve(ptr {operands[0]}, ptr {module.ArrayMetadata(arrayType)}, i64 {operands[1]})");
                     return;
                 }
 

@@ -94,6 +94,71 @@ void *sable_array_mutable_element(SableArray **slot, const SableMetadata *type, 
     return array->elements + index * type->element_size;
 }
 
+int64_t sable_array_capacity(const SableArray *array) {
+    return array == NULL ? 0 : array->capacity;
+}
+
+// Room for at least 'minimum' elements in all, so that appends up to it do
+// not grow the buffer; the array made the only reference to its buffer.
+// Asking for less than it has changes nothing.
+void sable_array_reserve(SableArray **slot, const SableMetadata *type, int64_t minimum) {
+    if (minimum <= 0) {
+        return;
+    }
+
+    SableArray *array = unique(slot, type, 0);
+    if (array->capacity < minimum) {
+        int64_t old = array->capacity * type->element_size;
+        array->capacity = minimum;
+        array->elements = buffer_resize(array->elements, old, minimum * type->element_size);
+    }
+}
+
+// The 'length' elements at 'base' rotated left by 'by' (0 < by < length):
+// the shorter side kept aside, the longer moved over in one go, and the
+// shorter put back after it. A permutation of the bytes, so no element is
+// retained or released.
+static void rotate_elements(char *base, int64_t length, int64_t by, int64_t size) {
+    int64_t left = by * size, right = (length - by) * size;
+    int64_t aside = left < right ? left : right;
+    char *scratch = buffer_alloc(aside);
+    if (left <= right) {
+        memcpy(scratch, base, (size_t)left);
+        memmove(base, base + left, (size_t)right);
+        memcpy(base + right, scratch, (size_t)left);
+    } else {
+        memcpy(scratch, base + left, (size_t)right);
+        memmove(base + right, base, (size_t)left);
+        memcpy(base, scratch, (size_t)right);
+    }
+    buffer_free(scratch, aside);
+}
+
+// How far left a rotation of 'length' elements by 'by' moves them, 'by'
+// taken round the length (a negative one rotates right); the range checked
+// against 'count' first.
+static int64_t rotation(int64_t from, int64_t to, int64_t by, int64_t count) {
+    if (from < 0 || to > count || from > to) {
+        trap_here("array slice out of range");
+    }
+
+    int64_t length = to - from;
+    return length == 0 ? 0 : ((by % length) + length) % length;
+}
+
+// Elements [from, to) of the array at '*slot' rotated left by 'by', in place,
+// the array made the only reference to its buffer first: 'insert(at:)' and
+// 'remove(at:)' move the elements after the place with one memmove.
+void sable_array_rotate(SableArray **slot, const SableMetadata *type, int64_t from, int64_t to, int64_t by) {
+    int64_t shift = rotation(from, to, by, sable_array_count(*slot));
+    if (shift == 0) {
+        return;
+    }
+
+    SableArray *array = unique(slot, type, 0);
+    rotate_elements(array->elements + from * type->element_size, to - from, shift, type->element_size);
+}
+
 // The last element, moved out: the caller loads it, and owns it.
 void *sable_array_remove_last(SableArray **slot, const SableMetadata *type) {
     if (*slot == NULL || (*slot)->count == 0) {
@@ -182,6 +247,19 @@ void *sable_slice_mutable_element(SableSlice *slice, const SableMetadata *type, 
 
     sable_slice_make_unique(slice, type);
     return slice->buffer->elements + (slice->start + index) * type->element_size;
+}
+
+// Elements [from, to) of the slice at '*slice' rotated left by 'by', in place,
+// the slice made the only reference to its run first.
+void sable_slice_rotate(SableSlice *slice, const SableMetadata *type, int64_t from, int64_t to, int64_t by) {
+    int64_t shift = rotation(from, to, by, slice->count);
+    if (shift == 0) {
+        return;
+    }
+
+    sable_slice_make_unique(slice, type);
+    char *base = slice->buffer->elements + (slice->start + from) * type->element_size;
+    rotate_elements(base, to - from, shift, type->element_size);
 }
 
 static void copy_string_element(void *destination, const void *source) {

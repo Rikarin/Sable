@@ -1669,6 +1669,49 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                 return copy;
             }
 
+            case "array_rotate": {
+                var address = (IReference)operands[0]!;
+                var (from, to, by) = ((long)operands[1]!, (long)operands[2]!, (long)operands[3]!);
+                var (_, _, count) = ElementsOf(address.Peek());
+                if (from < 0 || to > count || from > to) {
+                    throw new SilTrap("array slice out of range");
+                }
+
+                var length = (int)(to - from);
+                var shift = length == 0 ? 0 : (int)(((by % length) + length) % length);
+                if (shift == 0) {
+                    return null;
+                }
+
+                // Made the only reference to the elements first, as a write is.
+                HeapArray buffer;
+                var start = 0;
+                if (address.Peek() is SliceValue) {
+                    var unique = UniqueSlice(builtin.Operands[0], address);
+                    (buffer, start) = (unique.Buffer!, unique.Start);
+                } else {
+                    buffer = Unique(builtin.Operands[0], address);
+                }
+
+                var at = start + (int)from;
+                var moved = buffer.Elements.GetRange(at, shift);
+                buffer.Elements.RemoveRange(at, shift);
+                buffer.Elements.InsertRange(at + length - shift, moved);
+                return null;
+            }
+
+            case "array_capacity":
+                return operands[0] is HeapArray held ? (long)Alive(held).Elements.Capacity : 0L;
+
+            case "array_reserve": {
+                var minimum = (long)operands[1]!;
+                if (minimum > 0) {
+                    Unique(builtin.Operands[0], (IReference)operands[0]!).Elements.EnsureCapacity((int)minimum);
+                }
+
+                return null;
+            }
+
             case "array_clear": {
                 var address = (IReference)operands[0]!;
                 var old = address.Peek();

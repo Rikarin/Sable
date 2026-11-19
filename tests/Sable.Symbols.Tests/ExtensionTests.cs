@@ -42,6 +42,26 @@ public sealed class ExtensionTests {
               """
         );
 
+    /// <summary>
+    ///     A property and methods of one name, as String's 'count' and
+    ///     'count(of:)': read, the name is the property; called, the methods.
+    ///     Before, every plain read was an overload group with nothing to
+    ///     choose from it (S3008).
+    /// </summary>
+    [Fact]
+    public void APropertyAndMethodsMayShareANameAddedByExtensions() =>
+        AssertClean(
+            $$"""
+              {{Point}}
+              extension Point { var size: Int => x + y }
+              extension Point {
+                  fn size(of n: Int) -> Int { return n * x }
+                  fn size(scaled n: Int) -> Int { return n * y }
+              }
+              fn probe(_ p: Point) -> Int { return p.size + p.size(of: 2) + p.size(scaled: 3) }
+              """
+        );
+
     // ---- Where the members land -------------------------------------------
 
     [Fact]

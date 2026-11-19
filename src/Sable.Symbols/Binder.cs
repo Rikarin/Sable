@@ -3412,6 +3412,15 @@ public sealed partial class Binder {
             instanceMembers = callable;
         }
 
+        // A property and methods may share a name, as String's 'count' and
+        // 'count(of:)' do: called, the name is the methods; otherwise, the
+        // property. Left together, every plain 'text.count' would be an
+        // overload group with no call to choose from it.
+        if (instanceMembers.Any(static m => m is FunctionSymbol) && instanceMembers.Any(static m => m is not FunctionSymbol)) {
+            var called = syntax.Parent is InvocationExpressionSyntax invocation && invocation.Expression == syntax;
+            instanceMembers = [..instanceMembers.Where(m => m is FunctionSymbol == called)];
+        }
+
         var member = BindMemberGroup(syntax, receiver, instanceMembers, found.Owner, found.Substitution);
 
         if (!optionalChain) {

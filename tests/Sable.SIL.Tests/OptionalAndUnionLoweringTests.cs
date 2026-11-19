@@ -441,4 +441,47 @@ public sealed class OptionalAndUnionLoweringTests {
         Assert.Equal(7L, Run(module, "calls", true));
         Assert.Equal(-1L, Run(module, "calls", false));
     }
+
+    // ---- A union case whose one field is a tuple (#275) ---------------------
+
+    [Fact]
+    public void ACaseWhoseOneFieldIsATupleCarriesTheTupleItself() {
+        var module = Lower(
+            """
+            union H {
+                Some(value: (Bool, Int))
+                Pair(a: Int, b: Int)
+            }
+            union Box<T> {
+                Full(T)
+                Empty
+            }
+            fn second() -> Int {
+                let h = H.Some(value: (true, 1))
+                if case .Some(let v) = h {
+                    return v.1
+                }
+                return -1
+            }
+            fn spread() -> Int {
+                let h = H.Some(value: (false, 7))
+                return match h {
+                    case .Some(let v) => v.0 ? 0 : v.1
+                    case .Pair(let a, let b) => a + b
+                }
+            }
+            fn generic() -> Int {
+                let b: Box<(Int, Int)> = .Full((2, 3))
+                if case .Full(let t) = b {
+                    return t.0 * t.1
+                }
+                return -1
+            }
+            """
+        );
+
+        Assert.Equal(1L, Run(module, "second"));
+        Assert.Equal(7L, Run(module, "spread"));
+        Assert.Equal(6L, Run(module, "generic"));
+    }
 }

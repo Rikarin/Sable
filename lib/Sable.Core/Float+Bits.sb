@@ -1,0 +1,41 @@
+module Sable.Core
+
+// A float's bits, as the unsigned integer of its width, and the float some
+// bits are: the IEEE 754 encoding, unchanged — sign, exponent and
+// significand, a NaN's payload and the sign of a zero kept. What writing a
+// float to bytes and reading it back is (Array+Binary.sb).
+
+extension F64 {
+    /// The float's IEEE 754 bits.
+    ///
+    /// ```sable
+    /// assert(1.0.bits == 0x3FF0_0000_0000_0000)
+    /// assert(F64.fromBits(0x3FF0_0000_0000_0000) == 1.0)
+    /// ```
+    @builtin("bitcast_F64_U64")
+    public var bits: U64 { get }
+
+    /// The float whose IEEE 754 bits these are.
+    @builtin("bitcast_U64_F64")
+    public static fn fromBits(_ bits: U64) -> F64
+}
+
+extension F32 {
+    /// The float's IEEE 754 bits.
+    @builtin("bitcast_F32_U32")
+    public var bits: U32 { get }
+
+    /// The float whose IEEE 754 bits these are.
+    @builtin("bitcast_U32_F32")
+    public static fn fromBits(_ bits: U32) -> F32
+}
+
+extension F16 {
+    /// The float's IEEE 754 bits.
+    @builtin("bitcast_F16_U16")
+    public var bits: U16 { get }
+
+    /// The float whose IEEE 754 bits these are.
+    @builtin("bitcast_U16_F16")
+    public static fn fromBits(_ bits: U16) -> F16
+}

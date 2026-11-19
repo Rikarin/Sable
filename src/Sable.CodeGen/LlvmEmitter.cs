@@ -141,6 +141,7 @@ public sealed partial class LlvmEmitter {
         }
 
         output.Append(Declarations);
+        output.Append(MathDeclarations);
         output.Append('\n');
         output.Append(Counting);
         output.Append('\n');
@@ -2348,6 +2349,22 @@ public sealed partial class LlvmEmitter {
                 var name = Fresh();
                 _names[builtin] = name;
                 return name;
+            }
+
+            if (FloatFunctions.Find(builtin.Name) is var (elementary, floatType)) {
+                Line($"{Result()} = {MathCall(elementary, floatType, operands)}");
+                return;
+            }
+
+            if (builtin.Name.StartsWith("byte_swap_", StringComparison.Ordinal)) {
+                var swapped = Type(builtin.Type);
+                Line($"{Result()} = call {swapped} @llvm.bswap.{swapped}({swapped} {operands[0]})");
+                return;
+            }
+
+            if (builtin.Name.StartsWith("bitcast_", StringComparison.Ordinal)) {
+                Line($"{Result()} = bitcast {Type(builtin.Operands[0].Type)} {operands[0]} to {Type(builtin.Type)}");
+                return;
             }
 
             if (Numeric(builtin, operands, Result)) {

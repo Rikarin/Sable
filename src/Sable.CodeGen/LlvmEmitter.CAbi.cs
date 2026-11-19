@@ -299,7 +299,7 @@ public sealed partial class LlvmEmitter {
 
             // The runtime's own functions are declared already, one the module
             // exports is defined here, and a C symbol is declared once.
-            if (!Declarations.Contains($"@{symbol}(", StringComparison.Ordinal) && !module.Exports.ContainsValue(symbol) && declared.Add(symbol)) {
+            if (!Declarations.Contains($"@{symbol}(", StringComparison.Ordinal) && !MathDeclarations.Contains($"@{symbol}(", StringComparison.Ordinal) && !module.Exports.ContainsValue(symbol) && declared.Add(symbol)) {
                 text.Append($"declare {cResult} @\"{symbol}\"({string.Join(", ", cParameters)})\n");
             }
 

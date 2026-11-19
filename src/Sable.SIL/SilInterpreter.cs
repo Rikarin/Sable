@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Globalization;
 using System.Numerics;
 using System.Text;
@@ -1679,8 +1680,35 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             return null;
         }
 
-        return Numeric(builtin.Name, operands) ?? Builtin(builtin.Name, operands);
+        if (FloatFunctions.Find(builtin.Name) is var (function, type)) {
+            return Libm.Call(function, type, operands);
+        }
+
+        return ByteOrder(builtin.Name, operands) ?? Numeric(builtin.Name, operands) ?? Builtin(builtin.Name, operands);
     }
+
+    /// <summary>
+    ///     An integer's bytes reversed, and a float's bits as an integer and
+    ///     back, on the values as the interpreter holds them (see <see cref="Numeric" />).
+    /// </summary>
+    static object? ByteOrder(string name, object?[] operands) =>
+        (name, operands) switch {
+            ("byte_swap_I16", [long x]) => (long)BinaryPrimitives.ReverseEndianness((short)x),
+            ("byte_swap_U16", [long x]) => (long)BinaryPrimitives.ReverseEndianness((ushort)x),
+            ("byte_swap_I32", [long x]) => (long)BinaryPrimitives.ReverseEndianness((int)x),
+            ("byte_swap_U32", [long x]) => (long)BinaryPrimitives.ReverseEndianness((uint)x),
+            ("byte_swap_I64" or "byte_swap_Int", [long x]) => BinaryPrimitives.ReverseEndianness(x),
+            ("byte_swap_U64" or "byte_swap_UInt", [ulong x]) => BinaryPrimitives.ReverseEndianness(x),
+            ("byte_swap_I128", [Int128 x]) => BinaryPrimitives.ReverseEndianness(x),
+            ("byte_swap_U128", [UInt128 x]) => BinaryPrimitives.ReverseEndianness(x),
+            ("bitcast_F64_U64", [double x]) => BitConverter.DoubleToUInt64Bits(x),
+            ("bitcast_U64_F64", [ulong x]) => BitConverter.UInt64BitsToDouble(x),
+            ("bitcast_F32_U32", [float x]) => (long)BitConverter.SingleToUInt32Bits(x),
+            ("bitcast_U32_F32", [long x]) => BitConverter.UInt32BitsToSingle((uint)x),
+            ("bitcast_F16_U16", [Half x]) => (long)BitConverter.HalfToUInt16Bits(x),
+            ("bitcast_U16_F16", [long x]) => BitConverter.UInt16BitsToHalf((ushort)x),
+            _ => null,
+        };
 
     /// <summary>
     ///     The sized integers, F32 and F16, as the native code computes them:

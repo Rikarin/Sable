@@ -147,4 +147,43 @@ public sealed class SliceLoweringTests {
         Assert.Equal(1, interpreter.Allocations);
         Assert.Equal(0, interpreter.LiveObjects);
     }
+
+    /// <summary>
+    ///     A mutating member of <c>Element[:]</c> called on an array is given
+    ///     the array viewed whole, in a slot of its own, and the array is put
+    ///     back from it after the call with <c>array_of_slice</c>: the buffer
+    ///     itself, changed in place, with nothing copied.
+    /// </summary>
+    [Fact]
+    public void AMutatingSliceMemberViewsTheArrayAndPutsItBack() {
+        var module = Lower(
+            """
+            extension<Element> Element[:] {
+                mutating fn swapPair(_ i: Int, _ j: Int) {
+                    let held = self[i]
+                    self[i] = self[j]
+                    self[j] = held
+                }
+            }
+
+            fn swapped() -> Int {
+                var xs: Int[>..] = [1, 2, 3]
+                var k = 0
+                while k < 5 {
+                    xs.swapPair(0, xs.count - 1)
+                    k = k + 1
+                }
+                return xs[0] * 100 + xs[2]
+            }
+            """
+        );
+
+        var text = SilPrinter.Print(module);
+        Assert.Contains("builtin \"array_of_slice\"", text, StringComparison.Ordinal);
+
+        var interpreter = new SilInterpreter(module);
+        Assert.Equal(301L, interpreter.Run("M.swapped"));
+        Assert.Equal(1, interpreter.Allocations);
+        Assert.Equal(0, interpreter.LiveObjects);
+    }
 }

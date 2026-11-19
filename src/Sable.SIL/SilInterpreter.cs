@@ -1648,6 +1648,27 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                 return new SliceValue(buffer, start + (int)from, (int)(to - from));
             }
 
+            // A slice as an array again: the buffer itself when the slice is
+            // the whole of it, else a copy of its run.
+            case "array_of_slice": {
+                var (buffer, start, count) = ElementsOf(operands[0]);
+                if (buffer is null || count == 0) {
+                    return null;
+                }
+
+                if (start == 0 && count == buffer.Elements.Count) {
+                    Retain(buffer.Type, buffer);
+                    return buffer;
+                }
+
+                var copy = Allocate(new HeapArray(buffer.Type, [..buffer.Elements.Skip(start).Take(count)]));
+                foreach (var element in copy.Elements) {
+                    Retain(buffer.Type.Element, element);
+                }
+
+                return copy;
+            }
+
             case "array_clear": {
                 var address = (IReference)operands[0]!;
                 var old = address.Peek();

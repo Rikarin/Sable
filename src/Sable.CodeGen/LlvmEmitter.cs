@@ -317,6 +317,7 @@ public sealed partial class LlvmEmitter {
                                 declare ptr @sable_array_remove_last(ptr nocapture, ptr)
                                 declare ptr @sable_slice_mutable_element(ptr nocapture, ptr, i64)
                                 declare void @sable_slice_make_unique(ptr nocapture, ptr)
+                                declare ptr @sable_array_of_slice(ptr, i64, i64, ptr)
                                 declare ptr @sable_region_create()
                                 declare void @sable_region_reset(ptr)
                                 declare void @sable_region_push(ptr)
@@ -2909,6 +2910,20 @@ public sealed partial class LlvmEmitter {
                     var count = Count(operands[0]);
                     Line($"call void @sable_retain(ptr {operands[0]})");
                     _names[builtin] = MakeSlice((SliceType)builtin.Type, operands[0], "0", count);
+                    return;
+                }
+
+                // A slice as an array again: its buffer, retained, when it is the
+                // whole of it, else a copy of its run (the runtime decides).
+                case "array_of_slice" when builtin.Operands[0].Type is ArrayType:
+                    Line($"call void @sable_retain(ptr {operands[0]})");
+                    _names[builtin] = operands[0];
+                    return;
+
+                case "array_of_slice": {
+                    var slice = (SliceType)builtin.Operands[0].Type;
+                    var (buffer, start, count) = (SlicePart(operands[0], slice, 0), SlicePart(operands[0], slice, 1), SlicePart(operands[0], slice, 2));
+                    Line($"{Result()} = call ptr @sable_array_of_slice(ptr {buffer}, i64 {start}, i64 {count}, ptr {module.ArrayMetadata(new ArrayType(slice.Element))})");
                     return;
                 }
 

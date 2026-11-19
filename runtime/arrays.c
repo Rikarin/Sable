@@ -145,6 +145,36 @@ void sable_slice_make_unique(SableSlice *slice, const SableMetadata *type) {
     slice->start = 0;
 }
 
+// A slice as an array again: the buffer itself, retained, when the slice is
+// the whole of it — what a mutating member of 'Element[:]' hands back to the
+// array it was called on, which costs nothing — else a copy of its run.
+SableArray *sable_array_of_slice(SableArray *buffer, int64_t start, int64_t count, const SableMetadata *type) {
+    if (buffer == NULL || count == 0) {
+        return NULL;
+    }
+
+    if (start == 0 && count == buffer->count) {
+        sable_retain(buffer);
+        return buffer;
+    }
+
+    int64_t size = type->element_size;
+    SableArray *copy = sable_alloc(type, (int64_t)sizeof(SableArray));
+    copy->capacity = count;
+    copy->count = count;
+    copy->elements = buffer_alloc(count * size);
+    for (int64_t i = 0; i < count; i++) {
+        const char *source = buffer->elements + (start + i) * size;
+        if (type->copy_element != NULL) {
+            type->copy_element(copy->elements + i * size, source);
+        } else {
+            memcpy(copy->elements + i * size, source, (size_t)size);
+        }
+    }
+
+    return copy;
+}
+
 void *sable_slice_mutable_element(SableSlice *slice, const SableMetadata *type, int64_t index) {
     if (index < 0 || index >= slice->count) {
         trap_here("array index out of range");

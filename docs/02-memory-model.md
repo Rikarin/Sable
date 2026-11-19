@@ -377,7 +377,13 @@ stored and returned, and it outlives the array it was taken from rather than
 being checked against it. The array copies its buffer on its next write while
 a slice shares it, and a write through a slice copies the slice's run, so
 neither sees the other's changes — the copy-on-write the array kinds already
-have, not a borrow that freezes the array. An index or a range is checked
+have, not a borrow that freezes the array. A `mutating` member of `T[:]`
+(`swapAt`, `reverse`, `sort`) called on an array is the exception that
+changes it: the array lends itself whole for the call, as an `inout`
+argument would, so the member writes the array's own buffer in place and
+the array has it back, changed, with nothing copied (a buffer it shared
+with another copy is copied by the first write, as the array's own write
+would). An index or a range is checked
 against the slice's own count and traps outside it, whatever lies beyond in
 the buffer. An array field of an `@inline_layout` struct is bytes in its block,
 laid out for the block, so passing one as a slice copies its elements out once.

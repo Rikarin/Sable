@@ -15,16 +15,23 @@ internal enum MemberContext {
     Enum
 }
 
+/// <summary>The first and last token indices a member's parse read.</summary>
+internal readonly record struct TokenExtent(int Lowest, int Highest);
+
 /// <summary>
 ///     The green nodes an incremental parse may reuse, keyed by the token index
 ///     they start at in the new stream.
 /// </summary>
 /// <remarks>
 ///     <para>
-///         Reuse is only offered for whole members. A member is a self-contained
-///         parse — its result does not depend on anything around it — so dropping its
-///         old green node straight into the new tree gives exactly what reparsing it
-///         would have given, for free.
+///         Reuse is only offered for whole members. A member's parse depends on
+///         nothing but the tokens it read, so while every one of those is unchanged,
+///         dropping its old green node straight into the new tree gives exactly what
+///         reparsing it would have given, for free. Those are mostly its own, but
+///         not only: deciding whether <c>e&lt;r</c> names a record's type can look for
+///         its <c>&gt;</c> past the member's closing brace and into the next member,
+///         and a statement looks back at the token before it. The parser notes the tokens each member read
+///         (<see cref="TokenExtent" />), and those are what must be unchanged.
 ///     </para>
 ///     <para>
 ///         The context is recorded because a union body and a type body read a
@@ -35,19 +42,37 @@ internal enum MemberContext {
 internal sealed class IncrementalReuse {
     readonly Dictionary<int, Entry> _entries = [];
 
-    private readonly record struct Entry(GreenNode Node, int TokenCount, MemberContext Context);
+    /// <param name="Behind">How many tokens before its first the member's parse read.</param>
+    /// <param name="Ahead">How many tokens past its first the member's parse read.</param>
+    private readonly record struct Entry(GreenNode Node, int TokenCount, MemberContext Context, int Behind, int Ahead);
 
     public int Count => _entries.Count;
 
-    public bool TryGet(int tokenIndex, MemberContext context, out GreenNode node, out int tokenCount) {
+    /// <summary>
+    ///     The member to reuse at a token index, with the tokens its parse read
+    ///     as counts from that index: <paramref name="behind" /> before it and
+    ///     <paramref name="ahead" /> after it.
+    /// </summary>
+    public bool TryGet(
+        int tokenIndex,
+        MemberContext context,
+        out GreenNode node,
+        out int tokenCount,
+        out int behind,
+        out int ahead
+    ) {
         if (_entries.TryGetValue(tokenIndex, out var entry) && entry.Context == context) {
             node = entry.Node;
             tokenCount = entry.TokenCount;
+            behind = entry.Behind;
+            ahead = entry.Ahead;
             return true;
         }
 
         node = null!;
         tokenCount = 0;
+        behind = 0;
+        ahead = 0;
         return false;
     }
 
@@ -60,17 +85,20 @@ internal sealed class IncrementalReuse {
     int[] _diagnosticPositions = [];
 
     ImmutableArray<GreenToken> _oldTokens;
+    IReadOnlyDictionary<GreenNode, TokenExtent> _extents = null!;
     int _newTokenCount;
     int[] _reflagged = [];
 
     public static IncrementalReuse Build(
         GreenNode oldRoot,
         ImmutableArray<GreenToken> oldTokens,
+        IReadOnlyDictionary<GreenNode, TokenExtent> oldExtents,
         IReadOnlyList<Diagnostic> oldDiagnostics,
         in IncrementalLexResult lexResult
     ) {
         var reuse = new IncrementalReuse {
             _oldTokens = oldTokens,
+            _extents = oldExtents,
             _newTokenCount = lexResult.Tokens.Length,
             _reflagged = lexResult.ReflaggedIndices,
             // Members that produced a diagnostic are never reused, so that the
@@ -219,45 +247,57 @@ internal sealed class IncrementalReuse {
             return;
         }
 
+        // A member with no note of what it read (none should be without
+        // one) is not known to be safe.
+        if (!_extents.TryGetValue(child, out var extent)) {
+            return;
+        }
+
         var tokenCount = endIndex - startIndex;
 
+        // Every token the parse read, its own and the one after it at least.
+        var lowest = Math.Min(extent.Lowest, startIndex);
+        var highest = Math.Max(extent.Highest, endIndex);
+        var behind = startIndex - lowest;
+        var ahead = highest - startIndex;
+
         // Entirely inside the untouched prefix: indices are unchanged.
-        if (endIndex <= prefixCount) {
-            if (SameTokens(startIndex, tokenCount)) {
-                _entries[startIndex] = new(child, tokenCount, context);
+        if (highest < prefixCount) {
+            if (SameTokens(lowest, highest)) {
+                _entries[startIndex] = new(child, tokenCount, context, behind, ahead);
             }
 
             return;
         }
 
         // Entirely inside the reused suffix: shift into new-stream indices.
-        if (startIndex >= oldSuffixStart) {
-            var newStart = startIndex - oldSuffixStart + newSuffixStart;
-            if (SameTokens(newStart, tokenCount)) {
-                _entries[newStart] = new(child, tokenCount, context);
+        if (lowest >= oldSuffixStart) {
+            var shift = newSuffixStart - oldSuffixStart;
+            if (SameTokens(lowest + shift, highest + shift)) {
+                _entries[startIndex + shift] = new(child, tokenCount, context, behind, ahead);
             }
         }
     }
 
     /// <summary>
-    ///     True when the new stream holds the very same tokens the member was
-    ///     parsed from — and the same one after it.
+    ///     True when no token from <paramref name="first" /> to
+    ///     <paramref name="last" />, new-stream indices, had its flag changed:
+    ///     the copied tokens there are the very ones the member was parsed from.
     /// </summary>
     /// <remarks>
     ///     Text alone is not enough. Whether a token ends a statement depends on
     ///     the line after it and on brackets far before it (spec/lexical.md §4),
     ///     and an edit elsewhere can change that. The incremental lexer lists
-    ///     the copied tokens whose flag changed; none may fall inside the
-    ///     member, nor be the token after it, since a member ends where its
-    ///     last token's flag and the next token say it does.
+    ///     the copied tokens whose flag changed; none may be among those the
+    ///     member's parse read, nor be the token after it, since a member ends
+    ///     where its last token's flag and the next token say it does.
     /// </remarks>
-    bool SameTokens(int newStart, int count) {
-        var last = newStart + count;
+    bool SameTokens(int first, int last) {
         if (last >= _newTokenCount) {
             last = _newTokenCount - 1;
         }
 
-        var index = Array.BinarySearch(_reflagged, newStart);
+        var index = Array.BinarySearch(_reflagged, first);
         if (index < 0) {
             index = ~index;
         }

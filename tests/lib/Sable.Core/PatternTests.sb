@@ -1,0 +1,107 @@
+module PatternTests
+
+// The Pattern protocol and its conformances (Sable.Core), tested with
+// '@test' through the protocol's own requirements: run with
+//     tools/stdlib-coverage.sh Sable.Core
+
+import Sable.Testing
+
+fn at(_ offset: Int) -> String.Index {
+    return String.Index(utf8Offset: offset)
+}
+
+fn firstOffset(_ pattern: some Pattern, _ text: String, from: Int) -> Int {
+    if let range = pattern.firstMatch(in: text, from: at(from)) {
+        return range.lowerBound.utf8Offset
+    }
+    return -1
+}
+
+fn lastOffset(_ pattern: some Pattern, _ text: String, before: Int) -> Int {
+    if let range = pattern.lastMatch(in: text, before: at(before)) {
+        return range.lowerBound.utf8Offset
+    }
+    return -1
+}
+
+fn endOffset(_ pattern: some Pattern, _ text: String, startingAt: Int) -> Int {
+    if let end = pattern.matchEnd(in: text, startingAt: at(startingAt)) {
+        return end.utf8Offset
+    }
+    return -1
+}
+
+fn startOffset(_ pattern: some Pattern, _ text: String, endingAt: Int) -> Int {
+    if let start = pattern.matchStart(in: text, endingAt: at(endingAt)) {
+        return start.utf8Offset
+    }
+    return -1
+}
+
+@test
+fn aStringMatchesItsBytes() {
+    let text = "aéaé"
+    assertEqual(firstOffset("aé", text, from: 0), 0)
+    assertEqual(firstOffset("aé", text, from: 1), 3)
+    assertEqual(firstOffset("aé", text, from: 4), -1)
+    assertEqual(lastOffset("aé", text, before: 6), 3)
+    assertEqual(lastOffset("aé", text, before: 5), 0)
+    assertEqual(lastOffset("aé", text, before: 2), -1)
+    assertEqual(endOffset("aé", text, startingAt: 3), 6)
+    assertEqual(endOffset("aé", text, startingAt: 1), -1)
+    assertEqual(endOffset("aé", text, startingAt: 5), -1)
+    assertEqual(startOffset("aé", text, endingAt: 3), 0)
+    assertEqual(startOffset("aé", text, endingAt: 1), -1)
+    assertEqual(startOffset("éa", text, endingAt: 1), -1)
+}
+
+@test
+fn aCharacterMatchesItself() {
+    let text = "xéyé"
+    assertEqual(firstOffset('é', text, from: 0), 1)
+    assertEqual(firstOffset('é', text, from: 2), 4)
+    assertEqual(lastOffset('é', text, before: 4), 1)
+    assertEqual(endOffset('é', text, startingAt: 1), 3)
+    assertEqual(endOffset('é', text, startingAt: 0), -1)
+    assertEqual(endOffset('é', text, startingAt: 6), -1)
+    assertEqual(startOffset('é', text, endingAt: 6), 4)
+    assertEqual(startOffset('é', text, endingAt: 4), -1)
+    assertEqual(startOffset('é', text, endingAt: 0), -1)
+}
+
+@test
+fn aSetMatchesAnyOfItsCharacters() {
+    let chars = CharSet("é,")
+    let text = "a,bé"
+    assertEqual(firstOffset(chars, text, from: 0), 1)
+    assertEqual(firstOffset(chars, text, from: 2), 3)
+    assertEqual(lastOffset(chars, text, before: 3), 1)
+    assertEqual(lastOffset(chars, text, before: 1), -1)
+    assertEqual(endOffset(chars, text, startingAt: 3), 5)
+    assertEqual(endOffset(chars, text, startingAt: 0), -1)
+    assertEqual(endOffset(chars, text, startingAt: 5), -1)
+    assertEqual(startOffset(chars, text, endingAt: 2), 1)
+    assertEqual(startOffset(chars, text, endingAt: 1), -1)
+    assertEqual(startOffset(chars, text, endingAt: 0), -1)
+}
+
+@test
+fn aTestMatchesWhatItAccepts() {
+    let text = "ab1é2"
+    assertEqual(text.firstIndex(where: { c in c.isDigit })!.utf8Offset, 2)
+    assertEqual(text.lastIndex(where: { c in c.isDigit })!.utf8Offset, 5)
+    assert(text.hasPrefix(CharSet.asciiLetters), "a chars as a prefix")
+    assertEqual(text.trimmingPrefix(CharSet("a")), "b1é2")
+    assertEqual(text.trimmingSuffix(CharSet("2")), "ab1é")
+    assertEqual(text.trimmingSuffix(CharSet("x")), text)
+    assertEqual(text.split(where: { c in c == 'é' }).count, 2)
+    assertEqual(text.replacing(where: { c in c.isLetter }, with: ""), "12")
+}
+
+@test
+fn aTestAtEitherEnd() {
+    assert("1ab".hasPrefix(where: { c in c.isDigit }), "a digit first")
+    assert(!"a1".hasPrefix(where: { c in c.isDigit }) && !"".hasPrefix(where: { c in c.isDigit }), "no digit first")
+    assert("ab2".hasSuffix(where: { c in c.isDigit }), "a digit last")
+    assert(!"2a".hasSuffix(where: { c in c.isDigit }) && !"".hasSuffix(where: { c in c.isDigit }), "no digit last")
+}

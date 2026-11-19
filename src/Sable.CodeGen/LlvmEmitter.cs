@@ -310,8 +310,6 @@ public sealed partial class LlvmEmitter {
                                 declare zeroext i1 @sable_string_to_f32(ptr, ptr)
                                 declare zeroext i1 @sable_char_is_digit(i32)
                                 declare zeroext i1 @sable_char_from_int(i64, ptr)
-                                declare zeroext i1 @sable_char_is_letter(i32)
-                                declare zeroext i1 @sable_char_is_whitespace(i32)
                                 declare i64 @sable_array_count(ptr)
                                 declare ptr @sable_array_element(ptr, i64)
                                 declare ptr @sable_array_append_slot(ptr nocapture, ptr)
@@ -420,6 +418,15 @@ public sealed partial class LlvmEmitter {
                                 declare i64 @sable_string_cursor_end(ptr)
                                 declare i32 @sable_string_cursor_scalar(ptr, i64)
                                 declare i64 @sable_string_cursor_next(ptr, i64)
+                                declare i64 @sable_string_cursor_previous(ptr, i64)
+                                declare i32 @sable_string_index_scalar(ptr, i64)
+                                declare i64 @sable_string_index_after(ptr, i64)
+                                declare i64 @sable_string_index_before(ptr, i64)
+                                declare ptr @sable_string_utf8_slice(ptr, i64, i64)
+                                declare i64 @sable_string_utf8_find(ptr, ptr, i64)
+                                declare i64 @sable_string_utf8_find_last(ptr, ptr, i64)
+                                declare i64 @sable_utf8_validate(ptr, i64, i64)
+                                declare ptr @sable_string_from_utf8_unchecked(ptr, i64, i64)
                                 declare void @llvm.dbg.declare(metadata, metadata, metadata)
                                 declare void @llvm.dbg.value(metadata, metadata, metadata)
 
@@ -2718,6 +2725,67 @@ public sealed partial class LlvmEmitter {
                     Line($"{Result()} = call i64 @sable_string_cursor_next(ptr {operands[0]}, i64 {operands[1]})");
                     return;
 
+                case "string_cursor_previous":
+                    Line($"{Result()} = call i64 @sable_string_cursor_previous(ptr {operands[0]}, i64 {operands[1]})");
+                    return;
+
+                // The UTF-8 length is the header's: no call.
+                case "string_utf8_count": {
+                    var field = Fresh();
+                    Line($"{field} = getelementptr inbounds %SableStringHeader, ptr {operands[0]}, i32 0, i32 1");
+                    Line($"{Result()} = load i64, ptr {field}, !tbaa {TbaaHeader}");
+                    return;
+                }
+
+                // A byte of the text, read in place after the length is
+                // checked, as an array's element is: what the Unicode tables,
+                // kept as string literals, are read with, many times a lookup.
+                case "string_utf8_at": {
+                    var field = Fresh();
+                    var length = Fresh();
+                    var outside = Fresh();
+                    var bytes = Fresh();
+                    var at = Fresh();
+                    Line($"{field} = getelementptr inbounds %SableStringHeader, ptr {operands[0]}, i32 0, i32 1");
+                    Line($"{length} = load i64, ptr {field}, !tbaa {TbaaHeader}");
+                    Line($"{outside} = icmp uge i64 {operands[1]}, {length}");
+                    TrapIf(outside, "string index out of range");
+                    Line($"{bytes} = getelementptr inbounds %SableStringHeader, ptr {operands[0]}, i64 1");
+                    Line($"{at} = getelementptr inbounds i8, ptr {bytes}, i64 {operands[1]}");
+                    Line($"{Result()} = load i8, ptr {at}");
+                    return;
+                }
+
+                case "string_index_scalar":
+                    SiteForRuntime();
+                    Line($"{Result()} = call i32 @sable_string_index_scalar(ptr {operands[0]}, i64 {operands[1]})");
+                    return;
+
+                case "string_index_after" or "string_index_before":
+                    SiteForRuntime();
+                    Line($"{Result()} = call i64 @sable_{builtin.Name}(ptr {operands[0]}, i64 {operands[1]})");
+                    return;
+
+                case "string_utf8_slice":
+                    SiteForRuntime();
+                    Line($"{Result()} = call ptr @sable_string_utf8_slice(ptr {operands[0]}, i64 {operands[1]}, i64 {operands[2]})");
+                    return;
+
+                case "string_utf8_find" or "string_utf8_find_last":
+                    Line($"{Result()} = call i64 @sable_{builtin.Name}(ptr {operands[0]}, ptr {operands[1]}, i64 {operands[2]})");
+                    return;
+
+                // A slice of bytes, to the runtime as its buffer, start and count.
+                case "utf8_validate" or "string_from_utf8_unchecked": {
+                    var type = (SliceType)builtin.Operands[0].Type;
+                    var buffer = SlicePart(operands[0], type, 0);
+                    var start = SlicePart(operands[0], type, 1);
+                    var count = SlicePart(operands[0], type, 2);
+                    var result = builtin.Name == "utf8_validate" ? "i64 @sable_utf8_validate" : "ptr @sable_string_from_utf8_unchecked";
+                    Line($"{Result()} = call {result}(ptr {buffer}, i64 {start}, i64 {count})");
+                    return;
+                }
+
                 case "io_write" or "io_write_error":
                     Line($"call void @sable_{builtin.Name}(ptr {operands[0]})");
                     return;
@@ -2825,7 +2893,7 @@ public sealed partial class LlvmEmitter {
                     return;
                 }
 
-                case "char_is_digit" or "char_is_letter" or "char_is_whitespace":
+                case "char_is_digit":
                     Line($"{Result()} = call zeroext i1 @sable_{builtin.Name}(i32 {operands[0]})");
                     return;
 

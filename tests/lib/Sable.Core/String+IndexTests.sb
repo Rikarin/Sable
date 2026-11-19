@@ -1,0 +1,148 @@
+module StringIndexTests
+
+// String.Index and the members that take one (Sable.Core), tested with
+// '@test': run with
+//     tools/stdlib-coverage.sh Sable.Core
+
+import Sable.Testing
+
+@test
+fn indicesAreUtf8Offsets() {
+    let text = "aé€😀"
+    assertEqual(text.utf8Count, 10)
+    assertEqual(text.count, 4)
+    assertEqual(text.startIndex.utf8Offset, 0)
+    assertEqual(text.endIndex.utf8Offset, 10)
+    assertEqual(text.index(after: text.startIndex).utf8Offset, 1)
+    assertEqual(text.index(atScalar: 2).utf8Offset, 3)
+    assertEqual(text.index(atScalar: 3).utf8Offset, 6)
+    assertEqual(text.index(atScalar: 4), text.endIndex)
+}
+
+@test
+fn readingAtAnIndex() {
+    let text = "aé€😀"
+    assertEqual(text[text.startIndex], 'a')
+    assertEqual(text[text.index(atScalar: 1)], 'é')
+    assertEqual(text[text.index(atScalar: 2)], '€')
+    assertEqual(text[text.index(before: text.endIndex)], Char.fromCodePoint(0x1F600)!)
+}
+
+@test
+fn steppingForwardsAndBack() {
+    let text = "aé€😀"
+    var index = text.endIndex
+    var backwards = ""
+    while index > text.startIndex {
+        index = text.index(before: index)
+        backwards = backwards + String.fromChar(text[index])
+    }
+    assertEqual(backwards, "😀€éa")
+    let third = text.index(text.startIndex, offsetBy: 2)
+    assertEqual(text[third], '€')
+    assertEqual(text.index(third, offsetBy: -2), text.startIndex)
+    assertEqual(text.index(third, offsetBy: 0), third)
+}
+
+@test
+fn distancesCountScalars() {
+    let text = "aé€😀"
+    assertEqual(text.distance(from: text.startIndex, to: text.endIndex), 4)
+    assertEqual(text.distance(from: text.endIndex, to: text.startIndex), -4)
+    assertEqual(text.distance(from: text.endIndex, to: text.endIndex), 0)
+}
+
+@test
+fn slicingByIndices() {
+    let text = "naïve café"
+    let space = text.firstIndex(of: ' ')!
+    assertEqual(text[text.startIndex..<space], "naïve")
+    assertEqual(text[text.index(after: space)...], "café")
+    assertEqual(text[..<space], "naïve")
+    assertEqual(text[space..<space], "")
+}
+
+@test
+fn indicesCompareAndHashByOffset() {
+    let a = String.Index(utf8Offset: 3)
+    let b = String.Index(utf8Offset: 5)
+    assert(a < b && !(b < a), "ordered by offset")
+    assert(a == String.Index(utf8Offset: 3) && a != b, "equal by offset")
+    assertEqual(a.hash(), 3)
+}
+
+@test
+fn indexedPairsEachScalarWithItsIndex() {
+    var seen = ""
+    for pair in "aé!".indexed() {
+        seen = seen + "\(pair.0.utf8Offset)\(pair.1)"
+    }
+    assertEqual(seen, "0a1é3!")
+    assertEqual("".indexed().count, 0)
+}
+
+@test
+fn scalarBoundaries() {
+    let text = "aé"
+    assert(text.isScalarBoundary(utf8Offset: 0), "the start")
+    assert(text.isScalarBoundary(utf8Offset: 1), "where é starts")
+    assert(!text.isScalarBoundary(utf8Offset: 2), "inside é")
+    assert(text.isScalarBoundary(utf8Offset: 3), "the end")
+    assert(!text.isScalarBoundary(utf8Offset: 4), "past the end")
+    assert(!text.isScalarBoundary(utf8Offset: -1), "before the start")
+}
+
+@test(traps: "string index not on a character boundary")
+fn readingInsideAScalarTraps() {
+    let text = "aé"
+    let _ = text[String.Index(utf8Offset: 2)]
+}
+
+@test(traps: "string index out of range")
+fn readingAtTheEndTraps() {
+    let text = "ab"
+    let _ = text[text.endIndex]
+}
+
+@test(traps: "string index out of range")
+fn steppingPastTheEndTraps() {
+    let text = "ab"
+    let _ = text.index(after: text.endIndex)
+}
+
+@test(traps: "string index out of range")
+fn steppingBackFromTheStartTraps() {
+    let text = "ab"
+    let _ = text.index(before: text.startIndex)
+}
+
+@test(traps: "string index not on a character boundary")
+fn steppingBackFromInsideAScalarTraps() {
+    let text = "é"
+    let _ = text.index(before: String.Index(utf8Offset: 1))
+}
+
+@test(traps: "string index not on a character boundary")
+fn slicingInsideAScalarTraps() {
+    let text = "éa"
+    let _ = text[String.Index(utf8Offset: 1)...]
+}
+
+@test(traps: "string slice out of range")
+fn slicingBackwardsTraps() {
+    let text = "abc"
+    let _ = text[String.Index(utf8Offset: 2)..<String.Index(utf8Offset: 1)]
+}
+
+@test
+fn anAsciiSliceIsAscii() {
+    let text = "hello world"
+    let piece = text[String.Index(utf8Offset: 6)...]
+    assertEqual(piece, "world")
+    assertEqual(piece.count, 5)
+}
+
+@test
+fn anIndexDescribesItsOffset() {
+    assertEqual(String.Index(utf8Offset: 3).debugDescription(), "String.Index(utf8Offset: 3)")
+}

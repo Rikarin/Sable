@@ -1,0 +1,307 @@
+module Sable.Core
+
+// Searching a string, and what is built on it: splitting, replacing,
+// counting, prefixes. Each takes a Pattern — a Char, a String, a CharSet —
+// or, in its 'where:' form, a closure that tests a character. Positions are
+// String.Index, so each search is linear in the text it looks through,
+// whatever the text; a String pattern is found sixteen bytes at a time.
+//
+// After an empty match, the next search starts a scalar later: an empty
+// pattern matches once between each two scalars and at both ends, as in
+// Rust and .NET.
+
+extension String {
+    // ---- Finding ----------------------------------------------------------
+
+    /// Whether the pattern occurs in the string.
+    ///
+    /// ```sable
+    /// assert("hello, world".contains("o, w"))
+    /// assert("hello".contains('l'))
+    /// assert(!"hello".contains(CharSet.asciiDigits))
+    /// ```
+    public fn contains(_ pattern: some Pattern) -> Bool {
+        return pattern.firstMatch(in: self, from: self.startIndex) != none
+    }
+
+    /// Whether a character the test accepts occurs in the string.
+    public fn contains(where test: @escaping (Char) -> Bool) -> Bool {
+        return self.contains(CharPredicate { test: test })
+    }
+
+    /// Whether the string begins with the pattern.
+    public fn hasPrefix(_ pattern: some Pattern) -> Bool {
+        return pattern.matchEnd(in: self, startingAt: self.startIndex) != none
+    }
+
+    /// Whether the string ends with the pattern.
+    public fn hasSuffix(_ pattern: some Pattern) -> Bool {
+        return pattern.matchStart(in: self, endingAt: self.endIndex) != none
+    }
+
+    /// Whether the string's first character is one the test accepts.
+    public fn hasPrefix(where test: @escaping (Char) -> Bool) -> Bool {
+        return self.hasPrefix(CharPredicate { test: test })
+    }
+
+    /// Whether the string's last character is one the test accepts.
+    public fn hasSuffix(where test: @escaping (Char) -> Bool) -> Bool {
+        return self.hasSuffix(CharPredicate { test: test })
+    }
+
+    /// Where the pattern first occurs, or none.
+    ///
+    /// ```sable
+    /// let text = "a→b→c"
+    /// let arrow = text.firstIndex(of: '→')!
+    /// assert(text[..<arrow] == "a")
+    /// ```
+    public fn firstIndex(of pattern: some Pattern) -> String.Index? {
+        if let range = pattern.firstMatch(in: self, from: self.startIndex) {
+            return range.lowerBound
+        }
+        return none
+    }
+
+    /// Where the first character the test accepts is, or none.
+    public fn firstIndex(where test: @escaping (Char) -> Bool) -> String.Index? {
+        return self.firstIndex(of: CharPredicate { test: test })
+    }
+
+    /// Where the pattern last occurs, or none.
+    public fn lastIndex(of pattern: some Pattern) -> String.Index? {
+        if let range = pattern.lastMatch(in: self, before: self.endIndex) {
+            return range.lowerBound
+        }
+        return none
+    }
+
+    /// Where the last character the test accepts is, or none.
+    public fn lastIndex(where test: @escaping (Char) -> Bool) -> String.Index? {
+        return self.lastIndex(of: CharPredicate { test: test })
+    }
+
+    /// The first match of the pattern, or none.
+    public fn firstRange(of pattern: some Pattern) -> Range<String.Index>? {
+        return pattern.firstMatch(in: self, from: self.startIndex)
+    }
+
+    /// The last match of the pattern, or none.
+    public fn lastRange(of pattern: some Pattern) -> Range<String.Index>? {
+        return pattern.lastMatch(in: self, before: self.endIndex)
+    }
+
+    /// Every match of the pattern, left to right, none overlapping.
+    ///
+    /// ```sable
+    /// let text = "abcabc"
+    /// let found = text.ranges(of: "bc")
+    /// assert(found.count == 2 && found[1].lowerBound.utf8Offset == 4)
+    /// ```
+    public fn ranges(of pattern: some Pattern) -> Range<String.Index>[>..] {
+        var found: Range<String.Index>[>..] = []
+        var from = 0
+        while from <= self.utf8Count {
+            if let range = pattern.firstMatch(in: self, from: String.Index(utf8Offset: from)) {
+                found.append(range)
+                from = self.offsetPast(range)
+            } else {
+                break
+            }
+        }
+        return found
+    }
+
+    /// How many times the pattern occurs, none overlapping, counted left to
+    /// right: "aaaa" has "aa" twice.
+    public fn count(of pattern: some Pattern) -> Int {
+        var count = 0
+        var from = 0
+        while from <= self.utf8Count {
+            if let range = pattern.firstMatch(in: self, from: String.Index(utf8Offset: from)) {
+                count = count + 1
+                from = self.offsetPast(range)
+            } else {
+                break
+            }
+        }
+        return count
+    }
+
+    /// How many characters the test accepts.
+    public fn count(where test: @escaping (Char) -> Bool) -> Int {
+        var count = 0
+        for character in self {
+            if test(character) {
+                count = count + 1
+            }
+        }
+        return count
+    }
+
+    // ---- Replacing --------------------------------------------------------
+
+    /// The string with the pattern's matches replaced, left to right, at most
+    /// 'maxCount' of them; the string itself when there are none.
+    ///
+    /// ```sable
+    /// assert("a-b-c".replacing('-', with: "+") == "a+b+c")
+    /// assert("a-b-c".replacing("-", with: "", maxCount: 1) == "ab-c")
+    /// ```
+    public fn replacing(_ pattern: some Pattern, with replacement: String, maxCount: Int = 9223372036854775807) -> String {
+        var pieces: String[>..] = []
+        var start = 0
+        var from = 0
+        var replaced = 0
+        while replaced < maxCount && from <= self.utf8Count {
+            if let range = pattern.firstMatch(in: self, from: String.Index(utf8Offset: from)) {
+                pieces.append(self.utf8Slice(start, range.lowerBound.utf8Offset))
+                pieces.append(replacement)
+                start = range.upperBound.utf8Offset
+                from = self.offsetPast(range)
+                replaced = replaced + 1
+            } else {
+                break
+            }
+        }
+        if replaced == 0 {
+            return self
+        }
+        pieces.append(self.utf8Slice(start, self.utf8Count))
+        return Runtime.joinStrings(pieces, "")
+    }
+
+    /// The string with each character the test accepts replaced.
+    public fn replacing(where test: @escaping (Char) -> Bool, with replacement: String) -> String {
+        return self.replacing(CharPredicate { test: test }, with: replacement)
+    }
+
+    // ---- Splitting --------------------------------------------------------
+
+    /// The runs between the pattern's matches, left to right, cut at most
+    /// 'maxSplits' times — the last run is the rest — and without the empty
+    /// runs when 'omittingEmpty' (which a cut does not count).
+    ///
+    /// ```sable
+    /// assert("a,b,,c".split(",") == ["a", "b", "", "c"])
+    /// assert("a,b,,c".split(",", omittingEmpty: true) == ["a", "b", "c"])
+    /// assert("k=v=w".split('=', maxSplits: 1) == ["k", "v=w"])
+    /// ```
+    public fn split(_ separator: some Pattern, maxSplits: Int = 9223372036854775807, omittingEmpty: Bool = false) -> String[>..] {
+        var parts: String[>..] = []
+        var start = 0
+        var from = 0
+        var splits = 0
+        while splits < maxSplits && from <= self.utf8Count {
+            if let range = separator.firstMatch(in: self, from: String.Index(utf8Offset: from)) {
+                let end = range.lowerBound.utf8Offset
+                if !omittingEmpty || end > start {
+                    parts.append(self.utf8Slice(start, end))
+                    splits = splits + 1
+                }
+                start = range.upperBound.utf8Offset
+                from = self.offsetPast(range)
+            } else {
+                break
+            }
+        }
+        if !omittingEmpty || start < self.utf8Count {
+            parts.append(self.utf8Slice(start, self.utf8Count))
+        }
+        return parts
+    }
+
+    /// The runs between the characters the test accepts, as `split` makes them.
+    public fn split(maxSplits: Int = 9223372036854775807, omittingEmpty: Bool = false, where test: @escaping (Char) -> Bool) -> String[>..] {
+        return self.split(CharPredicate { test: test }, maxSplits: maxSplits, omittingEmpty: omittingEmpty)
+    }
+
+    /// The runs between white space, none of them empty: the words, as
+    /// Rust's split_whitespace has them.
+    public fn splitWhitespace() -> String[>..] {
+        return self.split(CharPredicate { test: { c in c.isWhitespace } }, omittingEmpty: true)
+    }
+
+    /// The string before the pattern's first match and the string after it;
+    /// none when it does not occur.
+    ///
+    /// ```sable
+    /// let pair = "key=value=more".splitOnce('=')!
+    /// assert(pair.0 == "key" && pair.1 == "value=more")
+    /// ```
+    public fn splitOnce(_ separator: some Pattern) -> (String, String)? {
+        if let range = separator.firstMatch(in: self, from: self.startIndex) {
+            return (self.utf8Slice(0, range.lowerBound.utf8Offset), self.utf8Slice(range.upperBound.utf8Offset, self.utf8Count))
+        }
+        return none
+    }
+
+    /// The string before the pattern's last match and the string after it;
+    /// none when it does not occur.
+    public fn splitLastOnce(_ separator: some Pattern) -> (String, String)? {
+        if let range = separator.lastMatch(in: self, before: self.endIndex) {
+            return (self.utf8Slice(0, range.lowerBound.utf8Offset), self.utf8Slice(range.upperBound.utf8Offset, self.utf8Count))
+        }
+        return none
+    }
+
+    /// The string's lines, without their endings ("\n" or "\r\n"); a last
+    /// empty line — what a final line break leaves — is not one.
+    ///
+    /// ```sable
+    /// assert("one\r\ntwo\n\nthree\n".lines() == ["one", "two", "", "three"])
+    /// ```
+    public fn lines() -> String[>..] {
+        var result: String[>..] = []
+        var start = 0
+        let size = self.utf8Count
+        while start < size {
+            var end = Runtime.findUtf8(self, "\n", start)
+            let next = end < 0 ? size : end + 1
+            if end < 0 {
+                end = size
+            }
+            if end > start && self.utf8Byte(end - 1) == 0x0D {
+                end = end - 1
+            }
+            result.append(self.utf8Slice(start, end))
+            start = next
+        }
+        return result
+    }
+
+    // ---- Prefixes and suffixes --------------------------------------------
+
+    /// The string without the pattern's match at its start, when it begins
+    /// with one; otherwise the string itself.
+    ///
+    /// ```sable
+    /// assert("v1.2".trimmingPrefix("v") == "1.2")
+    /// assert("1.2".trimmingPrefix("v") == "1.2")
+    /// ```
+    public fn trimmingPrefix(_ start: some Pattern) -> String {
+        if let after = start.matchEnd(in: self, startingAt: self.startIndex) {
+            return self.utf8Slice(after.utf8Offset, self.utf8Count)
+        }
+        return self
+    }
+
+    /// The string without the pattern's match at its end, when it ends with
+    /// one; otherwise the string itself.
+    public fn trimmingSuffix(_ end: some Pattern) -> String {
+        if let before = end.matchStart(in: self, endingAt: self.endIndex) {
+            return self.utf8Slice(0, before.utf8Offset)
+        }
+        return self
+    }
+
+    /// Where the next search after a match starts: the match's end, or a
+    /// scalar past it when it is empty, so an empty match is not found again.
+    fn offsetPast(_ range: Range<String.Index>) -> Int {
+        let end = range.upperBound.utf8Offset
+        if end > range.lowerBound.utf8Offset {
+            return end
+        }
+        return end < self.utf8Count ? self.offsetAfter(end) : end + 1
+    }
+}

@@ -1,0 +1,125 @@
+module Sable.Core
+
+// New strings from a string: trimmed, padded, repeated, reversed, and
+// strings joined. Each builds its result once — a '+' per piece copies
+// everything so far again, which is quadratic.
+
+extension String {
+    /// The string without the white space it starts with.
+    public fn trimmedStart() -> String {
+        return self.trimmedStart(where: { c in c.isWhitespace })
+    }
+
+    /// The string without the white space it ends with.
+    public fn trimmedEnd() -> String {
+        return self.trimmedEnd(where: { c in c.isWhitespace })
+    }
+
+    /// The string without the characters the test accepts at either end.
+    ///
+    /// ```sable
+    /// assert("--a-b--".trimmed(where: { c in c == '-' }) == "a-b")
+    /// ```
+    public fn trimmed(where test: (Char) -> Bool) -> String {
+        let start = self.firstOffset(notMatching: test)
+        let end = self.lastOffset(notMatching: test)
+        return end <= start ? "" : self.utf8Slice(start, end)
+    }
+
+    /// The string without the characters the test accepts at its start.
+    public fn trimmedStart(where test: (Char) -> Bool) -> String {
+        return self.utf8Slice(self.firstOffset(notMatching: test), self.utf8Count)
+    }
+
+    /// The string without the characters the test accepts at its end.
+    public fn trimmedEnd(where test: (Char) -> Bool) -> String {
+        return self.utf8Slice(0, self.lastOffset(notMatching: test))
+    }
+
+    /// Whether the string is empty or nothing but white space.
+    public var isBlank: Bool => self.firstOffset(notMatching: { c in c.isWhitespace }) == self.utf8Count
+
+    /// The string with the fill before it, as many times as make it 'width'
+    /// characters (scalars) long; a string that long already, as it is.
+    ///
+    /// ```sable
+    /// assert("42".paddedStart(toWidth: 5, with: '0') == "00042")
+    /// assert("hello".paddedStart(toWidth: 3) == "hello")
+    /// ```
+    public fn paddedStart(toWidth width: Int, with fill: Char = ' ') -> String {
+        let missing = width - self.count
+        return missing <= 0 ? self : String.fromChar(fill).repeated(missing) + self
+    }
+
+    /// The string with the fill after it, as many times as make it 'width'
+    /// characters (scalars) long; a string that long already, as it is.
+    public fn paddedEnd(toWidth width: Int, with fill: Char = ' ') -> String {
+        let missing = width - self.count
+        return missing <= 0 ? self : self + String.fromChar(fill).repeated(missing)
+    }
+
+    /// The string, 'times' times over; empty for none, or fewer.
+    ///
+    /// ```sable
+    /// assert("ab".repeated(3) == "ababab")
+    /// ```
+    public fn repeated(_ times: Int) -> String {
+        var copies: String[>..] = []
+        var i = 0
+        while i < times {
+            copies.append(self)
+            i = i + 1
+        }
+        return Runtime.joinStrings(copies, "")
+    }
+
+    /// The string's scalars in reverse order.
+    public fn reversed() -> String {
+        var scalars: String[>..] = []
+        var offset = self.utf8Count
+        while offset > 0 {
+            let previous = self.offsetBefore(offset)
+            scalars.append(self.utf8Slice(previous, offset))
+            offset = previous
+        }
+        return Runtime.joinStrings(scalars, "")
+    }
+
+    /// Where the first character the test refuses starts; the end when it
+    /// accepts them all.
+    fn firstOffset(notMatching test: (Char) -> Bool) -> Int {
+        var offset = 0
+        let end = self.utf8Count
+        while offset < end && test(self.scalar(at: offset)) {
+            offset = self.offsetAfter(offset)
+        }
+        return offset
+    }
+
+    /// Where the last character the test refuses ends; 0 when it accepts
+    /// them all.
+    fn lastOffset(notMatching test: (Char) -> Bool) -> Int {
+        var offset = self.utf8Count
+        while offset > 0 {
+            let previous = self.offsetBefore(offset)
+            if !test(self.scalar(at: previous)) {
+                return offset
+            }
+            offset = previous
+        }
+        return 0
+    }
+}
+
+extension String[:] {
+    /// The strings, with the separator between each two.
+    ///
+    /// ```sable
+    /// let parts: String[>..] = ["a", "b", "c"]
+    /// assert(parts.joined(separator: ", ") == "a, b, c")
+    /// ```
+    public fn joined(separator: String = "") -> String {
+        // In the runtime, at once: a '+' per part copies everything so far again.
+        return Runtime.joinStrings(self.toArray(), separator)
+    }
+}

@@ -1,0 +1,96 @@
+module StringCaseTests
+
+// String's case mappings and comparisons (Sable.Core), tested with '@test':
+// run with
+//     tools/stdlib-coverage.sh Sable.Core
+
+import Sable.Testing
+
+@test
+fn uppercasedUsesTheFullMappings() {
+    assertEqual("Straße".uppercased(), "STRASSE")
+    assertEqual("ǆemal".uppercased(), "ǄEMAL")
+    assertEqual("hello, wörld".uppercased(), "HELLO, WÖRLD")
+    assertEqual("ﬁx".uppercased(), "FIX")
+    assertEqual("".uppercased(), "")
+}
+
+@test
+fn lowercasedUsesTheFullMappings() {
+    assertEqual("HELLO, WÖRLD".lowercased(), "hello, wörld")
+    assertEqual("İ".lowercased(), "i\u{307}")
+    assertEqual("ÀB".lowercased(), "àb")
+}
+
+@test
+fn textWithNothingToChangeIsGivenBack() {
+    assertEqual("ALREADY 1".uppercased(), "ALREADY 1")
+    assertEqual("already 1".lowercased(), "already 1")
+    assertEqual("中文".uppercased(), "中文")
+}
+
+@test
+fn aFinalSigmaIsLowercasedToTheFinalForm() {
+    assertEqual("ΟΔΟΣ".lowercased(), "οδος")
+    assertEqual("ΟΔΟΣ ΟΔΟΣ".lowercased(), "οδος οδος")
+    assertEqual("ΣΑΣ".lowercased(), "σας")
+    assertEqual("Σ".lowercased(), "σ")
+    assertEqual("ΑΣ'".lowercased(), "ας'")
+    assertEqual("ΑΣ'Α".lowercased(), "ασ'α")
+    assertEqual("'Σ".lowercased(), "'σ")
+    assertEqual("1Σ".lowercased(), "1σ")
+}
+
+@test
+fn asciiCaseChangesOnlyAsciiLetters() {
+    assertEqual("Héllo".asciiUppercased(), "HéLLO")
+    assertEqual("HÉLLO".asciiLowercased(), "hÉllo")
+    assertEqual("123".asciiUppercased(), "123")
+}
+
+@test
+fn caseFoldingMakesCaseVariantsTheSame() {
+    assertEqual("HeLLo Σ".caseFolded(), "hello σ")
+    assertEqual("already".caseFolded(), "already")
+}
+
+@test
+fn equalityIgnoringCase() {
+    assert("Hello".equals("hELLO", ignoringCase: true), "ASCII")
+    assert("ΟΔΟΣ".equals("οδος", ignoringCase: true), "Greek, with a final sigma")
+    assert("\u{212A}elvin".equals("kelvin", ignoringCase: true), "the Kelvin sign")
+    assert(!"Hello".equals("hELLO", ignoringCase: false), "with case")
+    assert("Hello".equals("Hello", ignoringCase: false), "the same")
+    assert(!"Hello".equals("Hell", ignoringCase: true), "a prefix is not equal")
+}
+
+@test
+fn comparingWithNoOptionsIsByScalar() {
+    assert("abc".compare("abd", options: []) < 0, "c before d")
+    assert("b".compare("abc", options: []) > 0, "b after a")
+    assertEqual("same".compare("same", options: []), 0)
+}
+
+@test
+fn comparingIgnoringCase() {
+    assert("ABC".compare("abd", options: .IgnoringCase) < 0, "c before d")
+    assertEqual("ABC".compare("abc", options: .IgnoringCase), 0)
+    assert("abc".compare("AB", options: .IgnoringCase) > 0, "longer after")
+    assert("ab".compare("ABC", options: .IgnoringCase) < 0, "shorter before")
+}
+
+@test
+fn comparingNumerically() {
+    assert("file9".compare("file10", options: .Numeric) < 0, "9 before 10")
+    assert("file9".compare("file10", options: []) > 0, "but '9' after '1'")
+    assertEqual("file007".compare("file7", options: .Numeric), 0)
+    assert("file10b".compare("file10a", options: .Numeric) > 0, "the rest decides")
+    assert("v2.10".compare("v2.9", options: .Numeric) > 0, "each run of digits")
+    assert("12".compare("13", options: .Numeric) < 0, "equal lengths, digit by digit")
+    assert("0".compare("00", options: .Numeric) == 0, "zeros are zero")
+}
+
+@test
+fn comparingNumericallyAndIgnoringCase() {
+    assert("FILE9".compare("file10", options: [.Numeric, .IgnoringCase]) < 0, "both at once")
+}

@@ -29,7 +29,7 @@ public sealed class BuiltinTests {
         Assert.Equal("string_count", count.Builtin);
         Assert.False(count.IsAbstract);
 
-        var trimmed = compilation.Core.String.GetMembers("trimmed").OfType<FunctionSymbol>().Single();
+        var trimmed = compilation.Core.String.GetMembers("trimmed").OfType<FunctionSymbol>().Single(static f => f.Parameters.IsEmpty);
         Assert.Equal("string_trimmed", trimmed.Builtin);
         Assert.False(trimmed.IsAbstract);
 

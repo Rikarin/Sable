@@ -1,0 +1,106 @@
+module Sable.Core
+
+/// A Unicode scalar's general category (UAX #44): what kind of character it
+/// is, as `Char.generalCategory` gives it. The cases are in the standard's
+/// order, letters first; a scalar no version of Unicode has assigned yet is
+/// `Unassigned`.
+///
+/// ```sable
+/// assert('A'.generalCategory == .UppercaseLetter)
+/// assert('€'.generalCategory == .CurrencySymbol)
+/// assert(GeneralCategory.UppercaseLetter.isLetter)
+/// ```
+@derive(Equatable, Hashable, Debug)
+public enum GeneralCategory: U8 {
+    /// Lu: an upper-case letter, 'A'.
+    UppercaseLetter
+    /// Ll: a lower-case letter, 'a'.
+    LowercaseLetter
+    /// Lt: a digraph whose first part is upper case, 'ǅ'.
+    TitlecaseLetter
+    /// Lm: a modifier letter, 'ʰ'.
+    ModifierLetter
+    /// Lo: another letter, as of a script without case, 'א'.
+    OtherLetter
+    /// Mn: a mark that takes no width of its own, as a combining accent.
+    NonspacingMark
+    /// Mc: a mark that takes width.
+    SpacingMark
+    /// Me: a mark that encloses its base, as U+20DD COMBINING ENCLOSING CIRCLE.
+    EnclosingMark
+    /// Nd: a decimal digit, of any script.
+    DecimalNumber
+    /// Nl: a number made of letters, 'Ⅻ'.
+    LetterNumber
+    /// No: another number, '½' or '²'.
+    OtherNumber
+    /// Pc: a connector, '_'.
+    ConnectorPunctuation
+    /// Pd: a dash, '-'.
+    DashPunctuation
+    /// Ps: an opening bracket, '('.
+    OpenPunctuation
+    /// Pe: a closing bracket, ')'.
+    ClosePunctuation
+    /// Pi: an opening quotation mark, '«'.
+    InitialPunctuation
+    /// Pf: a closing quotation mark, '»'.
+    FinalPunctuation
+    /// Po: other punctuation, '!'.
+    OtherPunctuation
+    /// Sm: a mathematical symbol, '+'.
+    MathSymbol
+    /// Sc: a currency symbol, '$'.
+    CurrencySymbol
+    /// Sk: a modifier symbol, '^'.
+    ModifierSymbol
+    /// So: another symbol, '©'.
+    OtherSymbol
+    /// Zs: a space, ' '.
+    SpaceSeparator
+    /// Zl: U+2028 LINE SEPARATOR.
+    LineSeparator
+    /// Zp: U+2029 PARAGRAPH SEPARATOR.
+    ParagraphSeparator
+    /// Cc: a C0 or C1 control code, '\n'.
+    Control
+    /// Cf: a format character, as U+200D ZERO WIDTH JOINER.
+    Format
+    /// Cs: a surrogate code point, which no Char is.
+    Surrogate
+    /// Co: a private-use character.
+    PrivateUse
+    /// Cn: not assigned a character.
+    Unassigned
+
+    /// The standard's two-letter abbreviation: "Lu" for UppercaseLetter.
+    public var abbreviation: String {
+        get {
+            let codes = "LuLlLtLmLoMnMcMeNdNlNoPcPdPsPePiPfPoSmScSkSoZsZlZpCcCfCsCoCn"
+            let at = Int(self as U8) * 2
+            return codes.slice(from: at, to: at + 2)
+        }
+    }
+
+    /// Whether it is a letter: L, any of the five.
+    public var isLetter: Bool => Int(self as U8) <= 4
+
+    /// Whether it is a mark: M.
+    public var isMark: Bool => self as U8 >= 5 && self as U8 <= 7
+
+    /// Whether it is a number: N.
+    public var isNumber: Bool => self as U8 >= 8 && self as U8 <= 10
+
+    /// Whether it is punctuation: P.
+    public var isPunctuation: Bool => self as U8 >= 11 && self as U8 <= 17
+
+    /// Whether it is a symbol: S.
+    public var isSymbol: Bool => self as U8 >= 18 && self as U8 <= 21
+
+    /// Whether it is a separator: Z.
+    public var isSeparator: Bool => self as U8 >= 22 && self as U8 <= 24
+
+    /// Whether it is a control, format, surrogate, private-use or
+    /// unassigned code point: C.
+    public var isOther: Bool => self as U8 >= 25
+}

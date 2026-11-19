@@ -1,0 +1,222 @@
+module StringSearchTests
+
+// String's searches, splitting and replacing (Sable.Core), tested with
+// '@test': run with
+//     tools/stdlib-coverage.sh Sable.Core
+
+import Sable.Testing
+
+fn assertParts(_ actual: String[>..], _ expected: String[>..]) {
+    assertEqual("\(actual.count): " + actual.joined(separator: "|"), "\(expected.count): " + expected.joined(separator: "|"))
+}
+
+fn offset(_ index: String.Index?) -> Int {
+    if let found = index {
+        return found.utf8Offset
+    }
+    return -1
+}
+
+@test
+fn containsFindsEachKindOfPattern() {
+    let text = "hello, wörld"
+    assert(text.contains("o, w"), "a string")
+    assert(text.contains('ö'), "a character")
+    assert(text.contains(CharSet(",;")), "a set")
+    assert(text.contains(where: { c in c.isPunctuation }), "a test")
+    assert(!text.contains("world"), "not a string that is not there")
+    assert(!text.contains('z'), "nor a character")
+    assert(!text.contains(where: { c in c.isDigit }), "nor what no character passes")
+    assert(text.contains(""), "the empty string is everywhere")
+    assert("".contains(""), "even in the empty string")
+    assert(!"".contains('a'), "nothing is in the empty string")
+}
+
+@test
+fn prefixesAndSuffixes() {
+    let text = "café au lait"
+    assert(text.hasPrefix("café") && text.hasPrefix('c') && text.hasPrefix(""), "prefixes")
+    assert(!text.hasPrefix("lait") && !text.hasPrefix('a') && !"".hasPrefix('a'), "not prefixes")
+    assert(text.hasSuffix("lait") && text.hasSuffix('t') && text.hasSuffix(""), "suffixes")
+    assert(!text.hasSuffix("café") && !text.hasSuffix('l') && !"".hasSuffix('a'), "not suffixes")
+    assert(!"ab".hasPrefix("abc") && !"ab".hasSuffix("abc"), "a pattern longer than the text")
+    assert("é".hasSuffix('é') && !"é".hasSuffix('e'), "a suffix of more than one byte")
+    assert(text.hasPrefix(CharSet.asciiLetters) && text.hasSuffix(CharSet.asciiLetters), "a set at either end")
+    assert(!text.hasPrefix(CharSet.asciiDigits) && !text.hasSuffix(CharSet.asciiDigits), "a set at neither end")
+}
+
+@test
+fn firstAndLastIndices() {
+    let text = "a→b→c"
+    assertEqual(offset(text.firstIndex(of: '→')), 1)
+    assertEqual(offset(text.lastIndex(of: '→')), 5)
+    assertEqual(offset(text.firstIndex(of: "b→")), 4)
+    assertEqual(offset(text.lastIndex(of: "→")), 5)
+    assertEqual(offset(text.firstIndex(where: { c in c == 'c' })), 8)
+    assertEqual(offset(text.lastIndex(where: { c in c.isAsciiLetter })), 8)
+    assertEqual(offset(text.lastIndex(where: { c in c == 'a' })), 0)
+    assertEqual(offset(text.firstIndex(of: 'z')), -1)
+    assertEqual(offset(text.lastIndex(of: 'z')), -1)
+    assertEqual(offset(text.lastIndex(where: { c in c.isDigit })), -1)
+    assertEqual(offset(text.firstIndex(where: { c in c.isDigit })), -1)
+    assertEqual(offset("".lastIndex(of: "")), 0)
+    assertEqual(offset("ab".lastIndex(of: "abc")), -1)
+}
+
+@test
+fn rangesOfMatches() {
+    let text = "abcabc"
+    let first = text.firstRange(of: "bc")!
+    assertEqual(first.lowerBound.utf8Offset, 1)
+    assertEqual(first.upperBound.utf8Offset, 3)
+    let last = text.lastRange(of: "bc")!
+    assertEqual(last.lowerBound.utf8Offset, 4)
+    let all = text.ranges(of: "bc")
+    assertEqual(all.count, 2)
+    assertEqual(all[1].lowerBound.utf8Offset, 4)
+    assert(text.firstRange(of: "x") == none && text.lastRange(of: "x") == none, "no match, no range")
+    assertEqual("aaaa".ranges(of: "aa").count, 2)
+}
+
+@test
+fn anEmptyPatternMatchesBetweenEveryTwoScalars() {
+    assertEqual("aé".ranges(of: "").count, 3)
+    assertEqual("aé".count(of: ""), 3)
+    assertEqual("aé".replacing("", with: "-"), "-a-é-")
+    assertParts("ab".split(""), ["", "a", "b", ""])
+}
+
+@test
+fn countingMatches() {
+    assertEqual("banana".count(of: "an"), 2)
+    assertEqual("banana".count(of: 'a'), 3)
+    assertEqual("aaaa".count(of: "aa"), 2)
+    assertEqual("banana".count(of: "x"), 0)
+    assertEqual("a1b22c".count(where: { c in c.isDigit }), 3)
+    assertEqual("a1b22c".count(of: CharSet.asciiDigits), 3)
+    assertEqual("banana".count, 6)
+}
+
+@test
+fn replacingEveryMatch() {
+    assertEqual("a-b-c".replacing('-', with: "+"), "a+b+c")
+    assertEqual("a--b".replacing("--", with: "—"), "a—b")
+    assertEqual("aaa".replacing("a", with: "aa"), "aaaaaa")
+    assertEqual("nothing".replacing("x", with: "y"), "nothing")
+    assertEqual("x1y22".replacing(where: { c in c.isDigit }, with: "#"), "x#y##")
+    assertEqual("".replacing("a", with: "b"), "")
+}
+
+@test
+fn replacingAtMostSoMany() {
+    assertEqual("a-b-c".replacing("-", with: "", maxCount: 1), "ab-c")
+    assertEqual("a-b-c".replacing("-", with: "", maxCount: 0), "a-b-c")
+    assertEqual("a-b-c".replacing("-", with: "", maxCount: 5), "abc")
+}
+
+@test
+fn splittingKeepsEmptyRunsUnlessAskedNot() {
+    assertParts("a,b,,c".split(","), ["a", "b", "", "c"])
+    assertParts(",a,".split(','), ["", "a", ""])
+    assertParts("a,b,,c".split(",", omittingEmpty: true), ["a", "b", "c"])
+    assertEqual(",,".split(",", omittingEmpty: true).count, 0)
+    assertEqual("".split(",").count, 1)
+    assertEqual("".split(",", omittingEmpty: true).count, 0)
+    assertParts("a::b".split("::"), ["a", "b"])
+}
+
+@test
+fn splittingAtMostSoManyTimes() {
+    assertParts("k=v=w".split('=', maxSplits: 1), ["k", "v=w"])
+    assertParts("k=v=w".split('=', maxSplits: 0), ["k=v=w"])
+    assertParts("==k=v".split('=', maxSplits: 1, omittingEmpty: true), ["k", "v"])
+}
+
+@test
+fn splittingWhereATestAccepts() {
+    assertParts("a1b22c".split(where: { c in c.isDigit }), ["a", "b", "", "c"])
+    assertParts("a1b22c".split(omittingEmpty: true, where: { c in c.isDigit }), ["a", "b", "c"])
+    assertParts("a1b22c".split(maxSplits: 1, where: { c in c.isDigit }), ["a", "b22c"])
+}
+
+@test
+fn splittingAtWhiteSpace() {
+    assertParts("  the\tquick\u{3000}brown \n fox ".splitWhitespace(), ["the", "quick", "brown", "fox"])
+    assertEqual("   ".splitWhitespace().count, 0)
+}
+
+@test
+fn splittingOnce() {
+    let pair = "key=value=more".splitOnce('=')!
+    assertEqual(pair.0, "key")
+    assertEqual(pair.1, "value=more")
+    let last = "key=value=more".splitLastOnce("=")!
+    assertEqual(last.0, "key=value")
+    assertEqual(last.1, "more")
+    assert("plain".splitOnce('=') == none, "no separator, no pair")
+    assert("plain".splitLastOnce('=') == none, "nor from the end")
+}
+
+@test
+fn linesDropTheirEndings() {
+    assertParts("one\r\ntwo\n\nthree\n".lines(), ["one", "two", "", "three"])
+    assertParts("one".lines(), ["one"])
+    assertParts("\n".lines(), [""])
+    assertEqual("".lines().count, 0)
+    assertParts("a\r".lines(), ["a"])
+}
+
+@test
+fn trimmingAPrefixOrSuffix() {
+    assertEqual("v1.2".trimmingPrefix("v"), "1.2")
+    assertEqual("1.2".trimmingPrefix("v"), "1.2")
+    assertEqual("vv1".trimmingPrefix('v'), "v1")
+    assertEqual("file.txt".trimmingSuffix(".txt"), "file")
+    assertEqual("file.txt".trimmingSuffix(".md"), "file.txt")
+    assertEqual("a1".trimmingSuffix(CharSet.asciiDigits), "a")
+}
+
+@test
+fn searchesAreLinearOnLongText() {
+    // A quadratic search would take seconds here.
+    var parts: String[>..] = []
+    var i = 0
+    while i < 20000 {
+        parts.append("é,")
+        i = i + 1
+    }
+    let text = parts.joined()
+    assertEqual(text.split(',').count, 20001)
+    assertEqual(text.count(of: 'é'), 20000)
+    assertEqual(text.replacing(",", with: "").count, 20000)
+    assertEqual(text.lastIndex(of: 'é')!.utf8Offset, 59997)
+}
+
+@bench
+fn findingAStringInLongText(_ b: Bencher) {
+    var parts: String[>..] = []
+    var i = 0
+    while i < 4096 {
+        parts.append("lorem ipsum dolor sit amet ")
+        i = i + 1
+    }
+    parts.append("needle")
+    let text = parts.joined()
+    b.iterate(() => {
+        let _ = text.firstIndex(of: "needle")
+    })
+}
+
+@bench
+fn splittingLongText(_ b: Bencher) {
+    var parts: String[>..] = []
+    var i = 0
+    while i < 4096 {
+        parts.append("field,")
+        i = i + 1
+    }
+    let text = parts.joined()
+    b.iterate(() => {
+        let _ = text.split(",")
+    })
+}

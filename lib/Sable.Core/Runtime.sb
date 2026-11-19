@@ -148,6 +148,38 @@ public struct Runtime {
     @builtin("string_find")
     public static fn findString(text: String, part: String, from: Int) -> Int
 
+    /// Where the part next occurs in the text at or after the UTF-8 offset:
+    /// its UTF-8 offset, or -1. Natively a vectorised byte search, with no
+    /// scalars counted.
+    @builtin("string_utf8_find")
+    public static fn findUtf8(text: String, part: String, from: Int) -> Int
+
+    /// Where the last occurrence of the part that ends at or before the
+    /// UTF-8 offset starts: its UTF-8 offset, or -1.
+    @builtin("string_utf8_find_last")
+    public static fn findLastUtf8(text: String, part: String, before: Int) -> Int
+
+    /// Where the first ill-formed UTF-8 sequence in the bytes starts, or -1
+    /// when they are all well-formed: no overlong forms, no surrogates,
+    /// nothing past U+10FFFF, nothing cut short. Natively, ASCII is passed
+    /// over sixteen bytes at a time. Sable.Text's codecs are written over it.
+    @builtin("utf8_validate")
+    public static fn validateUtf8(bytes: U8[:]) -> Int
+
+    /// The bytes as a string when they are well-formed UTF-8 — checked, then
+    /// copied, in two passes over them — or none.
+    public static fn decodeUtf8(bytes: U8[:]) -> String? {
+        if Runtime.validateUtf8(bytes) >= 0 {
+            return none
+        }
+        return Runtime.stringFromValidUtf8(bytes)
+    }
+
+    // Bytes already validated, as a string: never to be given bytes that
+    // are not, which the runtime's indexing assumes well-formed.
+    @builtin("string_from_utf8_unchecked")
+    static fn stringFromValidUtf8(_ bytes: U8[:]) -> String
+
     @builtin("string_join")
     public static fn joinStrings(parts: String[>..], separator: String) -> String
 

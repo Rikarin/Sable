@@ -1823,11 +1823,31 @@ public static class SilBuiltins {
         Add("string_contains", SilType.Bool, SilType.String, SilType.Char);
         Add("string_index_of", SilType.Int, SilType.String, SilType.Char);
 
-        // Walking a string's scalars from a cursor, which only these read:
-        // a byte offset natively, a scalar index in the interpreter.
+        // Walking a string's scalars from a cursor, a byte offset the
+        // iterator keeps good, so these do not check it.
         Add("string_cursor_end", SilType.Int, SilType.String);
         Add("string_cursor_scalar", SilType.Char, SilType.String, SilType.Int);
         Add("string_cursor_next", SilType.Int, SilType.String, SilType.Int);
+        Add("string_cursor_previous", SilType.Int, SilType.String, SilType.Int);
+
+        // A String.Index is a byte offset too, but one a program holds, so
+        // these trap on one out of range or inside a scalar's bytes.
+        Add("string_utf8_count", SilType.Int, SilType.String);
+        Add("string_utf8_at", SilType.U8, SilType.String, SilType.Int);
+        Add("string_index_scalar", SilType.Char, SilType.String, SilType.Int);
+        Add("string_index_after", SilType.Int, SilType.String, SilType.Int);
+        Add("string_index_before", SilType.Int, SilType.String, SilType.Int);
+        Add("string_utf8_slice", SilType.String, SilType.String, SilType.Int, SilType.Int);
+
+        // Where a part next occurs at or after a byte offset, or last ends at
+        // or before one: a byte offset, or -1.
+        Add("string_utf8_find", SilType.Int, SilType.String, SilType.String, SilType.Int);
+        Add("string_utf8_find_last", SilType.Int, SilType.String, SilType.String, SilType.Int);
+
+        // Bytes as text: where the first ill-formed UTF-8 starts (-1 for
+        // none), and bytes known to be well-formed made a string.
+        Add("utf8_validate", SilType.Int, new SliceType(SilType.U8));
+        Add("string_from_utf8_unchecked", SilType.String, new SliceType(SilType.U8));
         Add("string_trimmed", SilType.String, SilType.String);
         Add("string_split", new ArrayType(SilType.String), SilType.String, SilType.Char);
         Add("string_hash", SilType.Int, SilType.String);
@@ -1883,8 +1903,6 @@ public static class SilBuiltins {
         Add("char_to_Int", SilType.Int, SilType.Char);
         Add("char_from_Int", SilType.Tuple([SilType.Bool, SilType.Char]), SilType.Int);
         Add("char_is_digit", SilType.Bool, SilType.Char);
-        Add("char_is_letter", SilType.Bool, SilType.Char);
-        Add("char_is_whitespace", SilType.Bool, SilType.Char);
 
         // sin, exp, pow, …: libm's, for F64 and F32.
         foreach (var (name, signature) in FloatFunctions.Signatures()) {

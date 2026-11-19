@@ -1,9 +1,14 @@
 module Sable.Core
 
-// String's own members (docs/06 §6.4). A string is UTF-8, indexed by
-// Unicode scalar: 'count' scalars, 'at' one of them, 'slice' a run of
-// them. What only the runtime can do is a '@builtin', applied where it is
-// called; the rest is Sable over those.
+// String's own members (docs/06 §6.4). A string is UTF-8, and these count
+// by Unicode scalar: 'count' scalars, 'at' one of them, 'slice' a run of
+// them. Finding scalar n of text that is not ASCII means counting to it, so
+// 'at' and 'slice' are O(n) there (the runtime remembers where it last was,
+// which keeps a loop over n linear); a String.Index (String+Index.sb) is a
+// byte offset, and constant time everywhere. What only the runtime can do
+// is a '@builtin', applied where it is called; the rest is Sable over
+// those. Searching, case, trimming and the like are in String+Search,
+// String+Case and String+Transform.
 
 extension String {
     /// How many Unicode scalars the string has.
@@ -13,11 +18,17 @@ extension String {
     /// Whether the string has no scalars.
     public var isEmpty: Bool => self.count == 0
 
-    /// The scalar at the index, counting from 0; out of range traps.
+    /// Whether every scalar is ASCII: then each is one byte, and the
+    /// scalar-numbered members below are constant time.
+    public var isAscii: Bool => self.utf8Count == self.count
+
+    /// The scalar at the index, counting from 0; out of range traps. O(n)
+    /// unless the string is ASCII, where reading at a String.Index is not.
     @builtin("string_at")
     public fn at(index: Int) -> Char
 
-    /// The scalars from 'from' up to, not including, 'to'.
+    /// The scalars from 'from' up to, not including, 'to'. O(n) to find
+    /// unless the string is ASCII, where slicing by String.Index is not.
     @builtin("string_slice")
     public fn slice(from: Int, to: Int) -> String
 
@@ -29,9 +40,10 @@ extension String {
     @builtin("string_contains")
     public fn contains(character: Char) -> Bool
 
-    /// Where the character first occurs, or none.
+    /// Where the character first occurs, counted in scalars, or none.
+    /// `firstIndex(of:)` gives a String.Index instead.
     public fn indexOf(character: Char) -> Int? {
-        let index = self.firstIndex(character)
+        let index = self.firstScalarIndex(character)
         if index < 0 {
             return none
         }
@@ -40,9 +52,10 @@ extension String {
 
     /// Where the character first occurs, or -1.
     @builtin("string_index_of")
-    fn firstIndex(_ character: Char) -> Int
+    fn firstScalarIndex(_ character: Char) -> Int
 
-    /// The string without the whitespace that begins and ends it.
+    /// The string without the white space — Unicode's White_Space, as
+    /// `Char.isWhitespace` has it — that begins and ends it.
     @builtin("string_trimmed")
     public fn trimmed() -> String
 
@@ -122,4 +135,8 @@ extension String {
     /// Whether the text is an F64, and the F64 when it is.
     @builtin("string_to_F64")
     fn parseF64() -> (Bool, F64)
+
+    /// The byte at the offset of the UTF-8 encoding; out of range traps.
+    @builtin("string_utf8_at")
+    fn utf8Byte(_ offset: Int) -> U8
 }

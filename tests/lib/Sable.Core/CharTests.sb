@@ -1,0 +1,290 @@
+module CharTests
+
+// Char's properties, case mappings, digits and encodings (Sable.Core), tested
+// with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Core
+// Every scalar's properties and mappings were checked once against the
+// Unicode Character Database the tables are made from; these pin examples
+// from each table and each branch.
+
+import Sable.Testing
+
+fn scalar(_ code: Int) -> Char {
+    return Char.fromCodePoint(code)!
+}
+
+@test
+fn lettersAreLettersInEveryScript() {
+    for c in ['a', 'Z', 'é', 'Ж', 'ω', '中', 'א', 'ǅ', 'ʰ'] {
+        assert(c.isLetter, "\(c) is a letter")
+    }
+    for c in ['1', '_', ' ', '-', '٣', '€', 'Ⅻ'] {
+        assert(!c.isLetter, "\(c) is not a letter")
+    }
+}
+
+@test
+fn alphabeticTakesInLetterNumbersAndVowelSigns() {
+    assert('Ⅻ'.isAlphabetic, "a Roman numeral is alphabetic")
+    assert(scalar(0x093E).isAlphabetic, "a Devanagari vowel sign is alphabetic")
+    assert('q'.isAlphabetic && 'Q'.isAlphabetic, "ASCII letters are alphabetic")
+    assert(!'7'.isAlphabetic && !'!'.isAlphabetic, "digits and punctuation are not")
+    assert('7'.isAlphanumeric && 'Ⅻ'.isAlphanumeric && '٣'.isAlphanumeric, "numbers are alphanumeric")
+    assert(!'-'.isAlphanumeric, "a dash is not alphanumeric")
+}
+
+@test
+fn numericCoversTheDigitsAndNumbersOfEveryScript() {
+    for c in ['0', '9', '٣', '੫', 'Ⅻ', '½', '²'] {
+        assert(c.isNumeric, "\(c) is numeric")
+    }
+    assert(!'a'.isNumeric && !'.'.isNumeric, "letters and points are not")
+    assert('5'.isDigit && !'٣'.isDigit, "isDigit is ASCII's")
+}
+
+@test
+fn caseIsUnicodesUppercaseAndLowercaseProperties() {
+    assert('A'.isUppercase && !'a'.isUppercase, "ASCII")
+    assert('Ж'.isUppercase && 'ж'.isLowercase, "Cyrillic")
+    assert('Ⅻ'.isUppercase, "a Roman numeral is Other_Uppercase")
+    assert('ª'.isLowercase, "the feminine ordinal is Other_Lowercase")
+    assert(!'ǅ'.isUppercase && !'ǅ'.isLowercase && 'ǅ'.isCased, "a title-case digraph is cased, neither upper nor lower")
+    assert(!'中'.isCased && !'1'.isCased, "uncased scalars")
+}
+
+@test
+fn caseIgnorableScalarsAreThoseAWordsCaseLooksPast() {
+    assert('\''.isCaseIgnorable && '.'.isCaseIgnorable && ':'.isCaseIgnorable, "ASCII apostrophe, period, colon")
+    assert(scalar(0x0301).isCaseIgnorable, "a combining acute accent")
+    assert(scalar(0x00AD).isCaseIgnorable, "a soft hyphen")
+    assert(!'a'.isCaseIgnorable && !'-'.isCaseIgnorable && !'Ж'.isCaseIgnorable, "letters and dashes are not")
+}
+
+@test
+fn whitespaceIsUnicodesWhiteSpaceProperty() {
+    for code in [0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x20, 0x85, 0xA0, 0x1680, 0x2000, 0x2007, 0x200A, 0x2028, 0x2029, 0x202F, 0x205F, 0x3000] {
+        assert(scalar(code).isWhitespace, "U+\(code) is white space")
+    }
+    for code in [0x08, 0x0E, 0x1F, 0x21, 0x200B, 0x180E, 0xFEFF, 0x2060] {
+        assert(!scalar(code).isWhitespace, "U+\(code) is not white space")
+    }
+}
+
+@test
+fn punctuationSymbolsAndControls() {
+    assert('!'.isPunctuation && '«'.isPunctuation && '_'.isPunctuation && '-'.isPunctuation, "punctuation")
+    assert(!'+'.isPunctuation && !'a'.isPunctuation, "not punctuation")
+    assert('+'.isSymbol && '$'.isSymbol && '€'.isSymbol && '©'.isSymbol && '^'.isSymbol, "symbols")
+    assert(!'!'.isSymbol, "not a symbol")
+    assert('\n'.isControl && scalar(0x7F).isControl && scalar(0x9F).isControl, "controls")
+    assert(!' '.isControl && !scalar(0xA0).isControl && !scalar(0x200D).isControl, "not controls")
+}
+
+@test
+fn generalCategoryCoversEachKind() {
+    assertEqual('A'.generalCategory, GeneralCategory.UppercaseLetter)
+    assertEqual('a'.generalCategory, GeneralCategory.LowercaseLetter)
+    assertEqual('ǅ'.generalCategory, GeneralCategory.TitlecaseLetter)
+    assertEqual('ʰ'.generalCategory, GeneralCategory.ModifierLetter)
+    assertEqual('中'.generalCategory, GeneralCategory.OtherLetter)
+    assertEqual(scalar(0x0301).generalCategory, GeneralCategory.NonspacingMark)
+    assertEqual(scalar(0x093E).generalCategory, GeneralCategory.SpacingMark)
+    assertEqual(scalar(0x20DD).generalCategory, GeneralCategory.EnclosingMark)
+    assertEqual('٣'.generalCategory, GeneralCategory.DecimalNumber)
+    assertEqual('Ⅻ'.generalCategory, GeneralCategory.LetterNumber)
+    assertEqual('½'.generalCategory, GeneralCategory.OtherNumber)
+    assertEqual('_'.generalCategory, GeneralCategory.ConnectorPunctuation)
+    assertEqual('-'.generalCategory, GeneralCategory.DashPunctuation)
+    assertEqual('('.generalCategory, GeneralCategory.OpenPunctuation)
+    assertEqual(')'.generalCategory, GeneralCategory.ClosePunctuation)
+    assertEqual('«'.generalCategory, GeneralCategory.InitialPunctuation)
+    assertEqual('»'.generalCategory, GeneralCategory.FinalPunctuation)
+    assertEqual('!'.generalCategory, GeneralCategory.OtherPunctuation)
+    assertEqual('+'.generalCategory, GeneralCategory.MathSymbol)
+    assertEqual('$'.generalCategory, GeneralCategory.CurrencySymbol)
+    assertEqual('^'.generalCategory, GeneralCategory.ModifierSymbol)
+    assertEqual('©'.generalCategory, GeneralCategory.OtherSymbol)
+    assertEqual(' '.generalCategory, GeneralCategory.SpaceSeparator)
+    assertEqual(scalar(0x2028).generalCategory, GeneralCategory.LineSeparator)
+    assertEqual(scalar(0x2029).generalCategory, GeneralCategory.ParagraphSeparator)
+    assertEqual('\t'.generalCategory, GeneralCategory.Control)
+    assertEqual(scalar(0x200D).generalCategory, GeneralCategory.Format)
+    assertEqual(scalar(0xE000).generalCategory, GeneralCategory.PrivateUse)
+    assertEqual(scalar(0x0378).generalCategory, GeneralCategory.Unassigned)
+}
+
+@test
+fn generalCategoryAtTheEndsOfTheCodeSpace() {
+    assertEqual(scalar(0).generalCategory, GeneralCategory.Control)
+    assertEqual(scalar(0x10FFFF).generalCategory, GeneralCategory.Unassigned)
+    assertEqual(scalar(0x10FFFD).generalCategory, GeneralCategory.PrivateUse)
+    assertEqual(scalar(0x1F600).generalCategory, GeneralCategory.OtherSymbol)
+}
+
+@test
+fn asciiClassesAskOnlyAboutAscii() {
+    assert('a'.isAscii && scalar(0x7F).isAscii && !'é'.isAscii, "isAscii")
+    assert('7'.isAsciiDigit && !'٣'.isAsciiDigit, "isAsciiDigit")
+    assert('f'.isAsciiHexDigit && 'F'.isAsciiHexDigit && '0'.isAsciiHexDigit && !'g'.isAsciiHexDigit && !'G'.isAsciiHexDigit, "isAsciiHexDigit")
+    assert('e'.isHexDigit && !'x'.isHexDigit, "isHexDigit")
+    assert('q'.isAsciiLetter && 'Q'.isAsciiLetter && !'é'.isAsciiLetter && !'@'.isAsciiLetter && !'['.isAsciiLetter, "isAsciiLetter")
+    assert('Q'.isAsciiUppercase && !'q'.isAsciiUppercase && 'q'.isAsciiLowercase && !'Q'.isAsciiLowercase, "ASCII case")
+    assert('q'.isAsciiAlphanumeric && '3'.isAsciiAlphanumeric && !'-'.isAsciiAlphanumeric, "isAsciiAlphanumeric")
+    assert('!'.isAsciiPunctuation && '~'.isAsciiPunctuation && '@'.isAsciiPunctuation && !'a'.isAsciiPunctuation && !' '.isAsciiPunctuation && !'«'.isAsciiPunctuation, "isAsciiPunctuation")
+    assert('~'.isAsciiGraphic && !' '.isAsciiGraphic && !scalar(0x7F).isAsciiGraphic, "isAsciiGraphic")
+    assert(' '.isAsciiWhitespace && '\t'.isAsciiWhitespace && '\n'.isAsciiWhitespace && '\r'.isAsciiWhitespace && scalar(0x0C).isAsciiWhitespace, "ASCII white space")
+    assert(!scalar(0x0B).isAsciiWhitespace && !scalar(0xA0).isAsciiWhitespace, "not the vertical tab, nor the no-break space")
+    assert(scalar(0).isAsciiControl && scalar(0x1F).isAsciiControl && scalar(0x7F).isAsciiControl && !scalar(0x85).isAsciiControl, "isAsciiControl")
+}
+
+@test
+fn uppercasedUsesTheFullMappings() {
+    assertEqual('a'.uppercased(), "A")
+    assertEqual('A'.uppercased(), "A")
+    assertEqual('ß'.uppercased(), "SS")
+    assertEqual('ŉ'.uppercased(), "ʼN")
+    assertEqual('ﬀ'.uppercased(), "FF")
+    assertEqual('ǅ'.uppercased(), "Ǆ")
+    assertEqual('ж'.uppercased(), "Ж")
+    assertEqual('1'.uppercased(), "1")
+    assertEqual('中'.uppercased(), "中")
+}
+
+@test
+fn lowercasedUsesTheFullMappings() {
+    assertEqual('A'.lowercased(), "a")
+    assertEqual('İ'.lowercased(), "i\u{307}")
+    assertEqual('Ж'.lowercased(), "ж")
+    assertEqual('Σ'.lowercased(), "σ")
+    assertEqual('ǅ'.lowercased(), "ǆ")
+    assertEqual('a'.lowercased(), "a")
+}
+
+@test
+fn simpleMappingsAreOneScalarEach() {
+    assertEqual('ß'.simpleUppercase, 'ß')
+    assertEqual('ā'.simpleUppercase, 'Ā')
+    assertEqual('Ā'.simpleLowercase, 'ā')
+    assertEqual('ȁ'.simpleUppercase, 'Ȁ')
+    assertEqual('ÿ'.simpleUppercase, 'Ÿ')
+    assertEqual('Ÿ'.simpleLowercase, 'ÿ')
+    assertEqual('ω'.simpleUppercase, 'Ω')
+    assertEqual(scalar(0x10428).simpleUppercase, scalar(0x10400))
+    assertEqual('z'.simpleUppercase, 'Z')
+    assertEqual('Z'.simpleLowercase, 'z')
+    assertEqual('1'.simpleLowercase, '1')
+    assertEqual('中'.simpleLowercase, '中')
+}
+
+@test
+fn caseFoldingMakesCaseVariantsTheSame() {
+    assertEqual('K'.caseFolded, 'k')
+    assertEqual(scalar(0x212A).caseFolded, 'k')
+    assertEqual('Σ'.caseFolded, 'σ')
+    assertEqual('ς'.caseFolded, 'σ')
+    assertEqual('ẞ'.caseFolded, 'ß')
+    assertEqual('1'.caseFolded, '1')
+}
+
+@test
+fn asciiCaseChangesOnlyAsciiLetters() {
+    assertEqual('a'.asciiUppercased(), 'A')
+    assertEqual('é'.asciiUppercased(), 'é')
+    assertEqual('Z'.asciiLowercased(), 'z')
+    assertEqual('[', '['.asciiLowercased())
+    assertEqual('@'.asciiUppercased(), '@')
+}
+
+@test
+fn digitValuesInARadix() {
+    assertEqual('0'.digitValue() ?? -1, 0)
+    assertEqual('9'.digitValue() ?? -1, 9)
+    assertEqual('a'.digitValue(radix: 16) ?? -1, 10)
+    assertEqual('F'.digitValue(radix: 16) ?? -1, 15)
+    assertEqual('z'.digitValue(radix: 36) ?? -1, 35)
+    assert('a'.digitValue() == none, "a is no decimal digit")
+    assert('2'.digitValue(radix: 2) == none, "2 is no binary digit")
+    assert('٣'.digitValue() == none, "only ASCII digits have values")
+    assert('-'.digitValue(radix: 36) == none, "a dash is no digit")
+}
+
+@test(traps: "unreachable")
+fn aDigitValueInRadixOneTraps() {
+    let _ = '0'.digitValue(radix: 1)
+}
+
+@test(traps: "unreachable")
+fn aDigitValueInRadixThirtySevenTraps() {
+    let _ = '0'.digitValue(radix: 37)
+}
+
+@test
+fn digitsFromValues() {
+    assertEqual(Char.fromDigit(7) ?? '?', '7')
+    assertEqual(Char.fromDigit(11, radix: 16) ?? '?', 'b')
+    assertEqual(Char.fromDigit(35, radix: 36) ?? '?', 'z')
+    assert(Char.fromDigit(10) == none, "10 is no decimal digit")
+    assert(Char.fromDigit(-1) == none, "nor is -1")
+}
+
+@test(traps: "unreachable")
+fn aDigitInRadixOneTraps() {
+    let _ = Char.fromDigit(0, radix: 1)
+}
+
+@test(traps: "unreachable")
+fn aDigitInRadixThirtySevenTraps() {
+    let _ = Char.fromDigit(0, radix: 37)
+}
+
+@test
+fn encodedLengths() {
+    assertEqual('a'.utf8Length, 1)
+    assertEqual('é'.utf8Length, 2)
+    assertEqual('€'.utf8Length, 3)
+    assertEqual(scalar(0x1F600).utf8Length, 4)
+    assertEqual('€'.utf16Length, 1)
+    assertEqual(scalar(0x1F600).utf16Length, 2)
+}
+
+@test
+fn encodingToUtf8AddsTheBytes() {
+    var bytes: U8[>..] = []
+    'a'.encodeUtf8(into: &bytes)
+    'é'.encodeUtf8(into: &bytes)
+    '€'.encodeUtf8(into: &bytes)
+    scalar(0x1F600).encodeUtf8(into: &bytes)
+    assert(bytes == [0x61, 0xC3, 0xA9, 0xE2, 0x82, 0xAC, 0xF0, 0x9F, 0x98, 0x80], "the UTF-8 bytes")
+}
+
+@test
+fn encodingToUtf16AddsTheCodeUnits() {
+    var units: U16[>..] = []
+    'a'.encodeUtf16(into: &units)
+    '€'.encodeUtf16(into: &units)
+    scalar(0x1F600).encodeUtf16(into: &units)
+    assert(units == [0x61, 0x20AC, 0xD83D, 0xDE00], "the UTF-16 code units")
+}
+
+@test
+fn codePointsAndScalars() {
+    assertEqual('A'.codePoint, 65)
+    assertEqual('A'.code, 65)
+    assert(Char.fromCodePoint(0xD800) == none, "a surrogate is no scalar")
+    assert(Char.fromCodePoint(0x110000) == none, "nor is a code past U+10FFFF")
+    assert(Char.fromCodePoint(-1) == none, "nor a negative one")
+}
+
+@test
+fn aClosedRangeOfCharactersCounts() {
+    var letters = ""
+    for c in 'a'...'e' {
+        letters = letters + String.fromChar(c)
+    }
+    assertEqual(letters, "abcde")
+}
+
+@test
+fn theUnicodeVersionIsNamed() {
+    assertEqual(unicodeVersion, "16.0.0")
+}

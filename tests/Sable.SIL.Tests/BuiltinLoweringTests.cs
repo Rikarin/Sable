@@ -37,7 +37,7 @@ public sealed class BuiltinLoweringTests {
         Assert.Equal(["print_String", "string_trimmed", "string_count"], builtins);
 
         // Nothing is generated for a builtin member: there is nothing to call.
-        Assert.DoesNotContain(module.Functions, static f => f.Name.Contains("trimmed", StringComparison.Ordinal) || f.Name.Contains(".print", StringComparison.Ordinal));
+        Assert.DoesNotContain(module.Functions, static f => f.Name.EndsWith("String.trimmed", StringComparison.Ordinal) || f.Name.Contains(".print", StringComparison.Ordinal));
         Assert.Equal(3L, new SilInterpreter(module).Run("M.tidy", "  abc "));
     }
 

@@ -1,0 +1,86 @@
+module Sable.Core
+
+// Reading the tables of UnicodeTables.sb, which tools/unicode-tables.py
+// generates and describes: fixed-width records of base-32 digits, '0' for 0
+// to 'O' for 31, a dozen to a line. Each lookup is a binary search on the
+// code point a record starts with — a dozen steps for the largest table —
+// and Char's members answer ASCII without one.
+
+/// The number the digits from byte 'at' of the table write.
+fn unicodeNumber(_ table: String, _ at: Int, _ width: Int) -> Int {
+    var value = 0
+    var i = 0
+    while i < width {
+        value = value * 32 + Int(table.utf8Byte(at + i)) - 48
+        i = i + 1
+    }
+    return value
+}
+
+/// Where record r of a table of records 'width' digits wide starts.
+fn unicodeRecord(_ record: Int, _ width: Int) -> Int {
+    return record * width + record / unicodeRecordsPerLine
+}
+
+/// The last of the table's records whose code point (its first five digits)
+/// is at or below the code, or -1 when even the first is above it.
+fn unicodeSearch(_ table: String, count: Int, width: Int, _ code: Int) -> Int {
+    var low = 0
+    var high = count
+    while low < high {
+        let middle = (low + high) / 2
+        if unicodeNumber(table, unicodeRecord(middle, width), 5) <= code {
+            low = middle + 1
+        } else {
+            high = middle
+        }
+    }
+    return low - 1
+}
+
+/// Whether a property, as a table of where it turns on and off, holds for
+/// the code: an odd number of those at or below it, so the last is an on.
+fn unicodeHas(_ table: String, count: Int, _ code: Int) -> Bool {
+    return unicodeSearch(table, count: count, width: 5, code) % 2 == 0
+}
+
+/// The code a simple mapping, as runs of (first, length, offset, stride),
+/// maps the code to: itself when no run covers it.
+fn unicodeMapped(_ table: String, count: Int, _ code: Int) -> Int {
+    let record = unicodeSearch(table, count: count, width: 14, code)
+    if record < 0 {
+        return code
+    }
+    let at = unicodeRecord(record, 14)
+    let start = unicodeNumber(table, at, 5)
+    let length = unicodeNumber(table, at + 5, 3)
+    let stride = unicodeNumber(table, at + 13, 1)
+    let step = code - start
+    if step >= length * stride || step % stride != 0 {
+        return code
+    }
+    return code + unicodeNumber(table, at + 8, 5) - 1048576
+}
+
+/// The scalars a mapping to more than one, as records of (code, three
+/// scalars, 0 for none), maps the code to; none when it has no such mapping.
+fn unicodeSpecial(_ table: String, count: Int, _ code: Int) -> String? {
+    let record = unicodeSearch(table, count: count, width: 20, code)
+    if record < 0 {
+        return none
+    }
+    let at = unicodeRecord(record, 20)
+    if unicodeNumber(table, at, 5) != code {
+        return none
+    }
+    var scalars: String[>..] = []
+    var k = 1
+    while k <= 3 {
+        let scalar = unicodeNumber(table, at + k * 5, 5)
+        if scalar != 0 {
+            scalars.append(String.fromChar(Char.fromCodePoint(scalar)!))
+        }
+        k = k + 1
+    }
+    return Runtime.joinStrings(scalars, "")
+}

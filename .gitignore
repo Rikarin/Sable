@@ -21,3 +21,6 @@ TestResults/
 *.trx
 *.coverage
 coverage/
+
+# Unicode Character Database files tools/unicode-tables.py reads (downloaded by hand; see there)
+tools/unicode/*.txt

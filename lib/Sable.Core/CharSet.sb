@@ -1,0 +1,170 @@
+module Sable.Core
+
+/// A set of characters, to search a string for any of them at once — .NET's
+/// SearchValues, Rust's char-slice pattern. An ASCII character is a bit of
+/// a 128-bit map, tested without decoding the text it is found in; others
+/// are kept as ranges of code points.
+///
+/// ```sable
+/// let separators = CharSet(",;")
+/// assert("a,b;c".split(separators) == ["a", "b", "c"])
+/// assert("x = 1".firstIndex(of: CharSet.asciiDigits)!.utf8Offset == 4)
+/// assert(CharSet.whitespace.contains('\u{3000}'))
+/// ```
+public struct CharSet: Pattern {
+    // ASCII's 128 characters, one bit each: 0 to 63 in 'low', 64 to 127 in 'high'.
+    var low: U64
+    var high: U64
+
+    // The rest, as inclusive ranges of code points: first, last, first, last…
+    var ranges: Int[>..]
+
+    /// The set of the string's characters.
+    public init(_ characters: String) {
+        self.low = 0
+        self.high = 0
+        self.ranges = []
+        for character in characters {
+            self.insert(character)
+        }
+    }
+
+    /// The set of the characters from 'first' to 'last', both included.
+    public static fn range(_ first: Char, _ last: Char) -> CharSet {
+        var result = CharSet("")
+        result.insert(from: first, through: last)
+        return result
+    }
+
+    /// The ASCII digits, '0' to '9'.
+    public static var asciiDigits: CharSet => CharSet.range('0', '9')
+
+    /// The ASCII letters, 'a' to 'z' and 'A' to 'Z'.
+    public static var asciiLetters: CharSet => CharSet.range('a', 'z').union(CharSet.range('A', 'Z'))
+
+    /// The ASCII letters and digits.
+    public static var asciiAlphanumerics: CharSet => CharSet.asciiLetters.union(CharSet.asciiDigits)
+
+    /// Unicode's White_Space characters, as `Char.isWhitespace` has them.
+    public static var whitespace: CharSet {
+        get {
+            var result = CharSet("\t\n\u{0B}\u{0C}\r \u{85}\u{A0}\u{1680}\u{2028}\u{2029}\u{202F}\u{205F}\u{3000}")
+            result.insert(from: '\u{2000}', through: '\u{200A}')
+            return result
+        }
+    }
+
+    /// Whether the set has no characters.
+    public var isEmpty: Bool => low == 0 && high == 0 && ranges.count == 0
+
+    /// Whether the character is in the set.
+    public fn contains(_ character: Char) -> Bool {
+        let code = character.codePoint
+        if code < 128 {
+            return self.hasAscii(code)
+        }
+        var i = 0
+        while i < ranges.count {
+            if code >= ranges[i] && code <= ranges[i + 1] {
+                return true
+            }
+            i = i + 2
+        }
+        return false
+    }
+
+    /// Adds the character.
+    public mutating fn insert(_ character: Char) {
+        self.insert(from: character, through: character)
+    }
+
+    /// Adds the characters from 'first' to 'last', both included.
+    public mutating fn insert(from first: Char, through last: Char) {
+        var code = first.codePoint
+        while code <= last.codePoint && code < 128 {
+            if code < 64 {
+                low = low | (1 as U64) << U64(code)
+            } else {
+                high = high | (1 as U64) << U64(code - 64)
+            }
+            code = code + 1
+        }
+        if code <= last.codePoint {
+            ranges.append(code)
+            ranges.append(last.codePoint)
+        }
+    }
+
+    /// The characters of both sets.
+    public fn union(_ other: CharSet) -> CharSet {
+        var result = self
+        result.low = result.low | other.low
+        result.high = result.high | other.high
+        for code in other.ranges {
+            result.ranges.append(code)
+        }
+        return result
+    }
+
+    fn hasAscii(_ code: Int) -> Bool {
+        if code < 64 {
+            return ((low >> U64(code)) & 1) == 1
+        }
+        return ((high >> U64(code - 64)) & 1) == 1
+    }
+
+    // A byte below 0x80 is a whole ASCII character, tested on the map
+    // without decoding; a scalar's other bytes are 0x80 and above, so the
+    // map never matches inside one.
+
+    public fn firstMatch(in text: String, from start: String.Index) -> Range<String.Index>? {
+        var offset = start.utf8Offset
+        let end = text.utf8Count
+        let hasRanges = ranges.count > 0
+        while offset < end {
+            let byte = Int(text.utf8Byte(offset))
+            if byte < 0x80 {
+                if self.hasAscii(byte) {
+                    return String.Index(utf8Offset: offset)..<String.Index(utf8Offset: offset + 1)
+                }
+                offset = offset + 1
+            } else {
+                let next = text.offsetAfter(offset)
+                if hasRanges && self.contains(text.scalar(at: offset)) {
+                    return String.Index(utf8Offset: offset)..<String.Index(utf8Offset: next)
+                }
+                offset = next
+            }
+        }
+        return none
+    }
+
+    public fn lastMatch(in text: String, before end: String.Index) -> Range<String.Index>? {
+        var offset = end.utf8Offset
+        while offset > 0 {
+            let previous = text.offsetBefore(offset)
+            if self.contains(text.scalar(at: previous)) {
+                return String.Index(utf8Offset: previous)..<String.Index(utf8Offset: offset)
+            }
+            offset = previous
+        }
+        return none
+    }
+
+    public fn matchEnd(in text: String, startingAt start: String.Index) -> String.Index? {
+        if start.utf8Offset < text.utf8Count && self.contains(text[start]) {
+            return text.index(after: start)
+        }
+        return none
+    }
+
+    public fn matchStart(in text: String, endingAt end: String.Index) -> String.Index? {
+        if end.utf8Offset > 0 {
+            let previous = text.index(before: end)
+            if self.contains(text[previous]) {
+                return previous
+            }
+        }
+        return none
+    }
+}

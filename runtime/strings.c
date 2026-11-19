@@ -502,6 +502,160 @@ int64_t sable_string_cursor_next(const SableString *s, int64_t cursor) {
     return cursor + width;
 }
 
+// ---- Byte positions
+//
+// A String.Index is a byte offset: where a scalar starts, or the length.
+// Reading at one, or stepping from one, is then constant time whatever the
+// text, where a scalar index must be counted to. An index is a plain number
+// a program can carry from one string to another, so each of these checks
+// that it is in range and on a scalar's first byte, and traps if not, rather
+// than decode from the middle of a scalar or past the end.
+
+static bool is_boundary(const SableString *s, int64_t offset) {
+    return offset >= 0 && offset <= s->length && (offset == s->length || !is_continuation(s->bytes[offset]));
+}
+
+static void check_scalar_start(const SableString *s, int64_t offset) {
+    if (offset < 0 || offset >= s->length) {
+        trap_here("string index out of range");
+    }
+
+    if (is_continuation(s->bytes[offset])) {
+        trap_here("string index not on a character boundary");
+    }
+}
+
+int64_t sable_string_utf8_count(const SableString *s) {
+    return s->length;
+}
+
+int32_t sable_string_index_scalar(const SableString *s, int64_t offset) {
+    check_scalar_start(s, offset);
+    int64_t width;
+    return decode(s->bytes + offset, &width);
+}
+
+int64_t sable_string_index_after(const SableString *s, int64_t offset) {
+    check_scalar_start(s, offset);
+    int64_t width;
+    decode(s->bytes + offset, &width);
+    return offset + width;
+}
+
+int64_t sable_string_index_before(const SableString *s, int64_t offset) {
+    if (offset <= 0 || offset > s->length) {
+        trap_here("string index out of range");
+    }
+
+    if (!is_boundary(s, offset)) {
+        trap_here("string index not on a character boundary");
+    }
+
+    do {
+        offset--;
+    } while (is_continuation(s->bytes[offset]));
+    return offset;
+}
+
+// Where the scalar before the cursor starts: the iterator's step back, its
+// cursor known to be good.
+int64_t sable_string_cursor_previous(const SableString *s, int64_t cursor) {
+    do {
+        cursor--;
+    } while (cursor > 0 && is_continuation(s->bytes[cursor]));
+    return cursor;
+}
+
+// The bytes from one index up to another, as a string of their own.
+SableString *sable_string_utf8_slice(const SableString *s, int64_t from, int64_t to) {
+    if (from < 0 || to > s->length || from > to) {
+        trap_here("string slice out of range");
+    }
+
+    if (!is_boundary(s, from) || !is_boundary(s, to)) {
+        trap_here("string index not on a character boundary");
+    }
+
+    return s->count == s->length ? make_counted(s->bytes + from, to - from, to - from) : make_string(s->bytes + from, to - from);
+}
+
+// Where 'part' next starts in 'text' at or after byte 'from' (taken as 0
+// when negative): a byte offset, or -1. The vectorised find_bytes, with no
+// scalars counted, which is what makes String's own search linear.
+int64_t sable_string_utf8_find(const SableString *text, const SableString *part, int64_t from) {
+    if (from < 0) {
+        from = 0;
+    }
+
+    if (from > text->length) {
+        return -1;
+    }
+
+    if (part->length == 0) {
+        return from;
+    }
+
+    const char *found = find_bytes(text->bytes + from, text->length - from, part->bytes, part->length);
+    return found == NULL ? -1 : found - text->bytes;
+}
+
+// Where the last occurrence of 'part' that ends at or before byte 'to'
+// starts: a byte offset, or -1. Searched backwards on the needle's first
+// byte with memrchr where there is one; a match is rare enough that the
+// compare after it is not the cost.
+int64_t sable_string_utf8_find_last(const SableString *text, const SableString *part, int64_t to) {
+    if (to > text->length) {
+        to = text->length;
+    }
+
+    int64_t start = to - part->length;
+    if (start < 0) {
+        return -1;
+    }
+
+    if (part->length == 0) {
+        return to;
+    }
+
+    for (int64_t i = start; i >= 0; i--) {
+        if (text->bytes[i] == part->bytes[0] && memcmp(text->bytes + i, part->bytes, (size_t)part->length) == 0) {
+            return i;
+        }
+    }
+
+    return -1;
+}
+
+// ---- Validating UTF-8
+//
+// Where the first ill-formed sequence in the bytes starts, or -1 when there
+// is none: no overlong forms, no surrogates, nothing past U+10FFFF, nothing
+// cut short (utf8_sequence, above). Sixteen ASCII bytes are passed over at
+// once, the common run, so ASCII text is checked at memory speed.
+static int64_t first_invalid_utf8(const uint8_t *bytes, int64_t length) {
+    int64_t i = 0;
+    while (i < length) {
+        if (i + 16 <= length && !any16((sable_mask16)(load16((const char *)bytes + i) & (uint8_t)0x80))) {
+            i += 16;
+            continue;
+        }
+
+        if (bytes[i] < 0x80) {
+            i++;
+            continue;
+        }
+
+        int width = utf8_sequence(bytes, i, length);
+        if (width == 0) {
+            return i;
+        }
+
+        i += width;
+    }
+
+    return -1;
+}
+
 int64_t sable_string_index_of(const SableString *s, int32_t scalar) {
     int64_t index = 0;
     for (int64_t i = 0; i < s->length; index++) {
@@ -520,20 +674,33 @@ bool sable_string_contains(const SableString *s, int32_t scalar) {
     return sable_string_index_of(s, scalar) >= 0;
 }
 
-// The whitespace the runtime knows: ASCII's.
-static bool is_space(int c) {
-    return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\v' || c == '\f';
+// Unicode's White_Space property (PropList.txt, 16.0): the scalars
+// Char.isWhitespace, generated from the same file, answers true for.
+// Trimming is the runtime's, so it keeps its own copy of this short list.
+static bool is_white_space(int32_t c) {
+    return (c >= 0x09 && c <= 0x0D) || c == 0x20 || c == 0x85 || c == 0xA0 || c == 0x1680
+        || (c >= 0x2000 && c <= 0x200A) || c == 0x2028 || c == 0x2029 || c == 0x202F || c == 0x205F || c == 0x3000;
 }
 
 SableString *sable_string_trimmed(const SableString *s) {
     int64_t start = 0;
     int64_t end = s->length;
-    while (start < end && is_space(s->bytes[start])) {
-        start++;
+    int64_t width;
+    while (start < end && is_white_space(decode(s->bytes + start, &width))) {
+        start += width;
     }
 
-    while (end > start && is_space(s->bytes[end - 1])) {
-        end--;
+    while (end > start) {
+        int64_t last = end - 1;
+        while (is_continuation(s->bytes[last])) {
+            last--;
+        }
+
+        if (!is_white_space(decode(s->bytes + last, &width))) {
+            break;
+        }
+
+        end = last;
     }
 
     return make_string(s->bytes + start, end - start);
@@ -906,14 +1073,6 @@ bool sable_char_from_int(int64_t code, int32_t *out) {
 
 bool sable_char_is_digit(int32_t c) {
     return c >= '0' && c <= '9';
-}
-
-bool sable_char_is_letter(int32_t c) {
-    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
-}
-
-bool sable_char_is_whitespace(int32_t c) {
-    return is_space(c);
 }
 
 void sable_print_int(int64_t value) {

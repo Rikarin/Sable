@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.Globalization;
 using System.Numerics;
 using System.Text;
+using System.Text.Unicode;
 
 namespace Sable.SIL;
 
@@ -287,10 +288,18 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
 
     sealed class HeapString(string value) : Counted {
         List<Rune>? _scalars;
+        byte[]? _utf8;
         public string Value { get; } = value;
 
         /// <summary>The string's scalars, decoded once: indexing by scalar is then constant time, as it is natively for ASCII.</summary>
         public List<Rune> Scalars => _scalars ??= [..Value.EnumerateRunes()];
+
+        /// <summary>
+        ///     The string's UTF-8 bytes, encoded once: what a cursor or a
+        ///     String.Index counts in, as natively, so an index means the same
+        ///     place in both.
+        /// </summary>
+        public byte[] Utf8 => _utf8 ??= Encoding.UTF8.GetBytes(Value);
     }
 
     sealed class HeapObject(ClassType type) : Counted {
@@ -1267,14 +1276,107 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
 
             // The cursor is a scalar index here, a byte offset natively;
             // nothing but these three reads it.
-            case "string_cursor_end":
-                return (long)Text(operands[0]).Scalars.Count;
+            // A cursor, as natively, is a byte offset.
+            case "string_cursor_end" or "string_utf8_count":
+                return (long)Text(operands[0]).Utf8.Length;
 
             case "string_cursor_scalar":
-                return Text(operands[0]).Scalars[(int)(long)operands[1]!];
+                return DecodeUtf8(Text(operands[0]).Utf8, (int)(long)operands[1]!).Scalar;
 
-            case "string_cursor_next":
-                return (long)operands[1]! + 1;
+            case "string_cursor_next": {
+                var at = (int)(long)operands[1]!;
+                return (long)(at + DecodeUtf8(Text(operands[0]).Utf8, at).Width);
+            }
+
+            case "string_cursor_previous": {
+                var bytes = Text(operands[0]).Utf8;
+                var at = (int)(long)operands[1]! - 1;
+                while (at > 0 && IsContinuation(bytes[at])) {
+                    at--;
+                }
+
+                return (long)at;
+            }
+
+            case "string_utf8_at": {
+                var bytes = Text(operands[0]).Utf8;
+                var at = (long)operands[1]!;
+                return at >= 0 && at < bytes.Length ? (long)bytes[at] : throw new SilTrap("string index out of range");
+            }
+
+            case "string_index_scalar":
+                return DecodeUtf8(Text(operands[0]).Utf8, ScalarStart(Text(operands[0]).Utf8, (long)operands[1]!)).Scalar;
+
+            case "string_index_after": {
+                var bytes = Text(operands[0]).Utf8;
+                var at = ScalarStart(bytes, (long)operands[1]!);
+                return (long)(at + DecodeUtf8(bytes, at).Width);
+            }
+
+            case "string_index_before": {
+                var bytes = Text(operands[0]).Utf8;
+                var at = (long)operands[1]!;
+                if (at <= 0 || at > bytes.Length) {
+                    throw new SilTrap("string index out of range");
+                }
+
+                if (!IsBoundary(bytes, at)) {
+                    throw new SilTrap("string index not on a character boundary");
+                }
+
+                do {
+                    at--;
+                } while (IsContinuation(bytes[at]));
+
+                return at;
+            }
+
+            case "string_utf8_slice": {
+                var bytes = Text(operands[0]).Utf8;
+                var (from, to) = ((long)operands[1]!, (long)operands[2]!);
+                if (from < 0 || to > bytes.Length || from > to) {
+                    throw new SilTrap("string slice out of range");
+                }
+
+                if (!IsBoundary(bytes, from) || !IsBoundary(bytes, to)) {
+                    throw new SilTrap("string index not on a character boundary");
+                }
+
+                return Allocate(new HeapString(Encoding.UTF8.GetString(bytes, (int)from, (int)(to - from))));
+            }
+
+            case "string_utf8_find": {
+                var text = Text(operands[0]).Utf8;
+                var from = Math.Max(0L, (long)operands[2]!);
+                if (from > text.Length) {
+                    return -1L;
+                }
+
+                var found = text.AsSpan((int)from).IndexOf(Text(operands[1]).Utf8);
+                return found < 0 ? -1L : from + found;
+            }
+
+            case "string_utf8_find_last": {
+                var text = Text(operands[0]).Utf8;
+                var part = Text(operands[1]).Utf8;
+                var to = Math.Min((long)operands[2]!, text.Length);
+                return to - part.Length < 0 ? -1L : part.Length == 0 ? to : (long)text.AsSpan(0, (int)to).LastIndexOf(part);
+            }
+
+            case "utf8_validate": {
+                var bytes = BytesOf(operands[0]);
+                var valid = Utf8.IsValid(bytes);
+                if (valid) {
+                    return -1L;
+                }
+
+                // .NET's decoder stops at the first ill-formed sequence, as the runtime's check does.
+                Utf8.ToUtf16(bytes, new char[bytes.Length], out var read, out _, replaceInvalidSequences: false);
+                return (long)read;
+            }
+
+            case "string_from_utf8_unchecked":
+                return Allocate(new HeapString(Encoding.UTF8.GetString(BytesOf(operands[0]))));
 
             case "string_trimmed": {
                 var scalars = Text(operands[0]).Scalars;
@@ -1572,12 +1674,6 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
 
             case "char_is_digit":
                 return (Rune)operands[0]! is { Value: >= '0' and <= '9' };
-
-            case "char_is_letter":
-                return (Rune)operands[0]! is { Value: >= 'a' and <= 'z' or >= 'A' and <= 'Z' };
-
-            case "char_is_whitespace":
-                return IsWhitespace((Rune)operands[0]!);
 
             case "array_count":
                 return (long)ElementsOf(operands[0]).Count;
@@ -2168,7 +2264,40 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
     }
 
     /// <summary>The whitespace the runtime knows: ASCII's.</summary>
-    static bool IsWhitespace(Rune c) => c.Value is ' ' or '\t' or '\n' or '\r' or '\v' or '\f';
+    /// <summary>Unicode's White_Space (PropList.txt, 16.0), as the runtime's trimming has it.</summary>
+    static bool IsWhitespace(Rune c) =>
+        c.Value is >= 0x09 and <= 0x0D or 0x20 or 0x85 or 0xA0 or 0x1680 or >= 0x2000 and <= 0x200A or 0x2028 or 0x2029 or 0x202F or 0x205F or 0x3000;
+
+    static bool IsContinuation(byte b) => (b & 0xC0) == 0x80;
+
+    /// <summary>Whether the byte offset is where a scalar starts, or the end.</summary>
+    static bool IsBoundary(byte[] bytes, long at) => at >= 0 && at <= bytes.Length && (at == bytes.Length || !IsContinuation(bytes[at]));
+
+    /// <summary>The offset, checked to be where a scalar starts, as a String.Index must be to read there.</summary>
+    static int ScalarStart(byte[] bytes, long at) {
+        if (at < 0 || at >= bytes.Length) {
+            throw new SilTrap("string index out of range");
+        }
+
+        return IsContinuation(bytes[at]) ? throw new SilTrap("string index not on a character boundary") : (int)at;
+    }
+
+    /// <summary>The scalar whose well-formed UTF-8 starts at the offset, and how many bytes it takes.</summary>
+    static (Rune Scalar, int Width) DecodeUtf8(byte[] bytes, int at) {
+        Rune.DecodeFromUtf8(bytes.AsSpan(at), out var scalar, out var width);
+        return (scalar, width);
+    }
+
+    /// <summary>A slice of bytes, or an array of them, as the bytes.</summary>
+    static byte[] BytesOf(object? value) {
+        var (buffer, start, count) = ElementsOf(value);
+        var bytes = new byte[count];
+        for (var i = 0; i < count; i++) {
+            bytes[i] = (byte)(long)buffer!.Elements[start + i]!;
+        }
+
+        return bytes;
+    }
 
     /// <summary>
     ///     A string's hash, from its UTF-8 bytes: <c>sable_string_hash</c>

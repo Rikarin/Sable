@@ -1,0 +1,71 @@
+module StringTransformTests
+
+// String's trimming, padding, repeating, reversing and joining (Sable.Core),
+// tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Core
+
+import Sable.Testing
+
+@test
+fn trimmingRemovesUnicodeWhiteSpace() {
+    assertEqual("  a b \t\n".trimmed(), "a b")
+    assertEqual("\u{3000}\u{A0}word\u{2003}".trimmed(), "word")
+    assertEqual("\u{85}x\u{2029}".trimmed(), "x")
+    assertEqual("   ".trimmed(), "")
+    assertEqual("é".trimmed(), "é")
+}
+
+@test
+fn trimmingOneEnd() {
+    assertEqual("\u{3000} a ".trimmedStart(), "a ")
+    assertEqual(" a \u{3000}".trimmedEnd(), " a")
+    assertEqual("   ".trimmedStart(), "")
+    assertEqual("   ".trimmedEnd(), "")
+}
+
+@test
+fn trimmingWhatATestAccepts() {
+    assertEqual("--a-b--".trimmed(where: { c in c == '-' }), "a-b")
+    assertEqual("----".trimmed(where: { c in c == '-' }), "")
+    assertEqual("12ab34".trimmedStart(where: { c in c.isDigit }), "ab34")
+    assertEqual("12ab34".trimmedEnd(where: { c in c.isDigit }), "12ab")
+    assertEqual("".trimmed(where: { c in c.isDigit }), "")
+}
+
+@test
+fn blankStrings() {
+    assert("".isBlank && " \t\n".isBlank && "\u{3000}".isBlank, "blank")
+    assert(!" a ".isBlank, "not blank")
+}
+
+@test
+fn paddingToAWidth() {
+    assertEqual("42".paddedStart(toWidth: 5, with: '0'), "00042")
+    assertEqual("42".paddedEnd(toWidth: 4), "42  ")
+    assertEqual("hello".paddedStart(toWidth: 3), "hello")
+    assertEqual("hello".paddedEnd(toWidth: 5), "hello")
+    assertEqual("é".paddedStart(toWidth: 3, with: '·'), "··é")
+}
+
+@test
+fn repeating() {
+    assertEqual("ab".repeated(3), "ababab")
+    assertEqual("ab".repeated(0), "")
+    assertEqual("ab".repeated(-1), "")
+}
+
+@test
+fn reversingScalars() {
+    assertEqual("aé€😀".reversed(), "😀€éa")
+    assertEqual("".reversed(), "")
+}
+
+@test
+fn joiningStrings() {
+    let parts: String[>..] = ["a", "b", "c"]
+    assertEqual(parts.joined(separator: ", "), "a, b, c")
+    assertEqual(parts.joined(), "abc")
+    assertEqual(parts[1...].joined(separator: "-"), "b-c")
+    let empty: String[>..] = []
+    assertEqual(empty.joined(separator: ","), "")
+}

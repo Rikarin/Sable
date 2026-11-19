@@ -271,6 +271,24 @@ static void destroy_string_element(void *element) {
     sable_release(*(void **)element);
 }
 
+// ---- Bytes as text (first_invalid_utf8 and make_string are in strings.c)
+
+// A slice of bytes reaches the runtime as its buffer (null when empty),
+// where the slice starts in it, and how many bytes it has.
+static const uint8_t *slice_bytes(const SableArray *buffer, int64_t start) {
+    return buffer == NULL ? NULL : (const uint8_t *)buffer->elements + start;
+}
+
+int64_t sable_utf8_validate(const SableArray *buffer, int64_t start, int64_t count) {
+    return count == 0 ? -1 : first_invalid_utf8(slice_bytes(buffer, start), count);
+}
+
+// Bytes already known to be well-formed UTF-8, as a string: what
+// String.fromUtf8 makes once it has validated them.
+SableString *sable_string_from_utf8_unchecked(const SableArray *buffer, int64_t start, int64_t count) {
+    return count == 0 ? make_counted("", 0, 0) : make_string((const char *)slice_bytes(buffer, start), count);
+}
+
 static const SableMetadata string_array_metadata = {
     sable_array_destroy, "[String]", sizeof(void *), copy_string_element, destroy_string_element,
     sizeof(SableArray), _Alignof(SableArray), NULL, NULL,

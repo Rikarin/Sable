@@ -1,19 +1,311 @@
 module Sable.Core
 
-// Char's own members: a Unicode scalar, its classes and its code point.
+// Char's own members: a Unicode scalar, its properties and case, and its
+// encodings. The properties are Unicode's (UnicodeTables.sb, generated from
+// the Character Database of the version 'unicodeVersion' names); each
+// answers an ASCII scalar without a table, and the 'isAscii…' family asks
+// only about ASCII, as protocols and file formats do.
 
 extension Char {
-    /// Whether the scalar is a decimal digit, '0' to '9'.
+    // ---- Classification ---------------------------------------------------
+
+    /// Whether the scalar is an ASCII decimal digit, '0' to '9'. For the
+    /// digits of every script, `isNumeric` or `generalCategory`.
     @builtin("char_is_digit")
     public var isDigit: Bool { get }
 
-    /// Whether the scalar is a letter, in any script.
-    @builtin("char_is_letter")
-    public var isLetter: Bool { get }
+    /// Whether the scalar is a letter, in any script: general category L.
+    ///
+    /// ```sable
+    /// assert('é'.isLetter && 'Ж'.isLetter && '中'.isLetter)
+    /// assert(!'1'.isLetter && !'_'.isLetter)
+    /// ```
+    public var isLetter: Bool {
+        get {
+            if self.codePoint < 0x80 {
+                return self.isAsciiLetter
+            }
+            return self.generalCategory.isLetter
+        }
+    }
 
-    /// Whether the scalar is white space: a space, a tab, a line break and their kin.
-    @builtin("char_is_whitespace")
-    public var isWhitespace: Bool { get }
+    /// Whether the scalar has Unicode's Alphabetic property: the letters,
+    /// and the letter-like numbers and marks that spell words ('Ⅻ', the
+    /// vowel signs of Indic scripts).
+    public var isAlphabetic: Bool {
+        get {
+            if self.codePoint < 0x80 {
+                return self.isAsciiLetter
+            }
+            return unicodeHas(alphabeticTable, count: alphabeticTableCount, self.codePoint)
+        }
+    }
+
+    /// Whether the scalar is alphabetic or numeric, as an identifier's
+    /// characters mostly are.
+    public var isAlphanumeric: Bool => self.isAlphabetic || self.isNumeric
+
+    /// Whether the scalar is a number of any kind: general category N, the
+    /// digits of every script, 'Ⅻ', '½' and '²'.
+    public var isNumeric: Bool {
+        get {
+            if self.codePoint < 0x80 {
+                return self.isDigit
+            }
+            return self.generalCategory.isNumber
+        }
+    }
+
+    /// Whether the scalar is upper case: Unicode's Uppercase property.
+    public var isUppercase: Bool {
+        get {
+            if self.codePoint < 0x80 {
+                return self.isAsciiUppercase
+            }
+            return unicodeHas(uppercaseTable, count: uppercaseTableCount, self.codePoint)
+        }
+    }
+
+    /// Whether the scalar is lower case: Unicode's Lowercase property.
+    public var isLowercase: Bool {
+        get {
+            if self.codePoint < 0x80 {
+                return self.isAsciiLowercase
+            }
+            return unicodeHas(lowercaseTable, count: lowercaseTableCount, self.codePoint)
+        }
+    }
+
+    /// Whether the scalar is cased: upper case, lower case or title case
+    /// ('ǅ') — a letter with a case mapping, or one that is a case form.
+    public var isCased: Bool => self.isUppercase || self.isLowercase || self.generalCategory == .TitlecaseLetter
+
+    /// Whether the scalar is Case_Ignorable: passed over when looking for the
+    /// cased letters around another, as lower-casing a final sigma does (an
+    /// apostrophe, a combining mark, a modifier letter).
+    public var isCaseIgnorable: Bool {
+        get {
+            let code = self.codePoint
+            if code < 0x80 {
+                return code == 0x27 || code == 0x2E || code == 0x3A || code == 0x5E || code == 0x60
+            }
+            return unicodeHas(caseIgnorableTable, count: caseIgnorableTableCount, code)
+        }
+    }
+
+    /// Whether the scalar is white space: Unicode's White_Space property —
+    /// a space, a tab, a line break, and their kin from other scripts and
+    /// typography (U+00A0 NO-BREAK SPACE, U+2003 EM SPACE, U+3000).
+    public var isWhitespace: Bool {
+        get {
+            if self.codePoint < 0x80 {
+                return self.codePoint == 0x20 || self.codePoint >= 0x09 && self.codePoint <= 0x0D
+            }
+            return unicodeHas(whiteSpaceTable, count: whiteSpaceTableCount, self.codePoint)
+        }
+    }
+
+    /// Whether the scalar is punctuation: general category P.
+    public var isPunctuation: Bool => self.generalCategory.isPunctuation
+
+    /// Whether the scalar is a symbol — mathematical, currency, modifier or
+    /// other: general category S.
+    public var isSymbol: Bool => self.generalCategory.isSymbol
+
+    /// Whether the scalar is a control code: general category Cc, U+0000 to
+    /// U+001F and U+007F to U+009F.
+    public var isControl: Bool {
+        get {
+            let code = self.codePoint
+            return code < 0x20 || code >= 0x7F && code <= 0x9F
+        }
+    }
+
+    /// Whether the scalar is a hexadecimal digit: '0' to '9', 'a' to 'f',
+    /// 'A' to 'F'.
+    public var isHexDigit: Bool => self.isAsciiHexDigit
+
+    /// The scalar's general category, from Unicode's tables.
+    ///
+    /// ```sable
+    /// assert('a'.generalCategory == .LowercaseLetter)
+    /// assert('٣'.generalCategory == .DecimalNumber)
+    /// assert(Char.fromCodePoint(0x0378)!.generalCategory == .Unassigned)
+    /// ```
+    public var generalCategory: GeneralCategory {
+        get {
+            let record = unicodeSearch(generalCategoryTable, count: generalCategoryTableCount, width: 6, self.codePoint)
+            let category = unicodeNumber(generalCategoryTable, unicodeRecord(record, 6) + 5, 1)
+            return U8(category) as GeneralCategory
+        }
+    }
+
+    // ---- ASCII ------------------------------------------------------------
+
+    /// Whether the scalar is ASCII: below U+0080.
+    public var isAscii: Bool => self.codePoint < 0x80
+
+    /// Whether the scalar is an ASCII decimal digit, '0' to '9'.
+    public var isAsciiDigit: Bool => self.isDigit
+
+    /// Whether the scalar is an ASCII hexadecimal digit, of either case.
+    public var isAsciiHexDigit: Bool {
+        get {
+            let code = self.codePoint
+            return code >= 0x30 && code <= 0x39 || code >= 0x41 && code <= 0x46 || code >= 0x61 && code <= 0x66
+        }
+    }
+
+    /// Whether the scalar is an ASCII letter, 'a' to 'z' or 'A' to 'Z'.
+    public var isAsciiLetter: Bool => self.isAsciiUppercase || self.isAsciiLowercase
+
+    /// Whether the scalar is an ASCII upper-case letter, 'A' to 'Z'.
+    public var isAsciiUppercase: Bool => self.codePoint >= 0x41 && self.codePoint <= 0x5A
+
+    /// Whether the scalar is an ASCII lower-case letter, 'a' to 'z'.
+    public var isAsciiLowercase: Bool => self.codePoint >= 0x61 && self.codePoint <= 0x7A
+
+    /// Whether the scalar is an ASCII letter or digit.
+    public var isAsciiAlphanumeric: Bool => self.isAsciiLetter || self.isDigit
+
+    /// Whether the scalar is ASCII punctuation or a symbol: the printable
+    /// characters that are neither letters, digits nor the space —
+    /// '!' to '/', ':' to '@', '[' to '`' and '{' to '~'.
+    public var isAsciiPunctuation: Bool => self.isAsciiGraphic && !self.isAsciiAlphanumeric
+
+    /// Whether the scalar is printable ASCII other than the space: '!' to '~'.
+    public var isAsciiGraphic: Bool => self.codePoint >= 0x21 && self.codePoint <= 0x7E
+
+    /// Whether the scalar is ASCII white space as WHATWG's Infra standard has
+    /// it: a space, a tab, a line feed, a form feed or a carriage return —
+    /// not the vertical tab.
+    public var isAsciiWhitespace: Bool {
+        get {
+            let code = self.codePoint
+            return code == 0x20 || code == 0x09 || code == 0x0A || code == 0x0C || code == 0x0D
+        }
+    }
+
+    /// Whether the scalar is an ASCII control code: U+0000 to U+001F, or U+007F.
+    public var isAsciiControl: Bool => self.codePoint < 0x20 || self.codePoint == 0x7F
+
+    // ---- Case -------------------------------------------------------------
+
+    /// The scalar in upper case: Unicode's full mapping, which may be more
+    /// than one scalar ('ß' is "SS", 'ŉ' is "ʼN"). A scalar without case is
+    /// itself. The same everywhere: no language's own rules.
+    ///
+    /// ```sable
+    /// assert('a'.uppercased() == "A")
+    /// assert('ß'.uppercased() == "SS")
+    /// assert('1'.uppercased() == "1")
+    /// ```
+    public fn uppercased() -> String {
+        if let special = unicodeSpecial(upperSpecialTable, count: upperSpecialTableCount, self.codePoint) {
+            return special
+        }
+        return String.fromChar(self.simpleUppercase)
+    }
+
+    /// The scalar in lower case: Unicode's full mapping, which may be more
+    /// than one scalar ('İ' is "i̇"). A capital sigma is 'σ' here; in a
+    /// word's last place, `String.lowercased()` makes it 'ς'.
+    public fn lowercased() -> String {
+        if let special = unicodeSpecial(lowerSpecialTable, count: lowerSpecialTableCount, self.codePoint) {
+            return special
+        }
+        return String.fromChar(self.simpleLowercase)
+    }
+
+    /// The scalar's simple upper-case mapping: always one scalar, so 'ß' is
+    /// itself. What .NET's ToUpperInvariant gives.
+    public var simpleUppercase: Char {
+        get {
+            let code = self.codePoint
+            if code < 0x80 {
+                return self.asciiUppercased()
+            }
+            return Char.fromCodePoint(unicodeMapped(upperMappingTable, count: upperMappingTableCount, code))!
+        }
+    }
+
+    /// The scalar's simple lower-case mapping: always one scalar.
+    public var simpleLowercase: Char {
+        get {
+            let code = self.codePoint
+            if code < 0x80 {
+                return self.asciiLowercased()
+            }
+            return Char.fromCodePoint(unicodeMapped(lowerMappingTable, count: lowerMappingTableCount, code))!
+        }
+    }
+
+    /// The scalar case-folded: Unicode's simple case folding, under which
+    /// two scalars that differ only in case are the same ('K', 'k' and
+    /// U+212A KELVIN SIGN are all 'k'). What comparing while ignoring case
+    /// compares.
+    public var caseFolded: Char {
+        get {
+            let code = self.codePoint
+            if code < 0x80 {
+                return self.asciiLowercased()
+            }
+            return Char.fromCodePoint(unicodeMapped(foldingTable, count: foldingTableCount, code))!
+        }
+    }
+
+    /// The scalar with an ASCII lower-case letter made upper case; every
+    /// other scalar as it is.
+    public fn asciiUppercased() -> Char {
+        return self.isAsciiLowercase ? Char.fromCodePoint(self.codePoint - 32)! : self
+    }
+
+    /// The scalar with an ASCII upper-case letter made lower case; every
+    /// other scalar as it is.
+    public fn asciiLowercased() -> Char {
+        return self.isAsciiUppercase ? Char.fromCodePoint(self.codePoint + 32)! : self
+    }
+
+    // ---- Digits -----------------------------------------------------------
+
+    /// The digit's value in the radix, 2 to 36: '0' to '9', then 'a' to 'z'
+    /// of either case for 10 to 35. None when the scalar is not a digit of
+    /// the radix; a radix outside 2 to 36 traps.
+    ///
+    /// ```sable
+    /// assert('7'.digitValue() == 7)
+    /// assert('f'.digitValue(radix: 16) == 15)
+    /// assert('9'.digitValue(radix: 8) == none)
+    /// ```
+    public fn digitValue(radix: Int = 10) -> Int? {
+        if radix < 2 || radix > 36 {
+            unreachable()
+        }
+        let code = self.codePoint
+        let value = code >= 0x30 && code <= 0x39 ? code - 0x30
+            : code >= 0x61 && code <= 0x7A ? code - 0x61 + 10
+            : code >= 0x41 && code <= 0x5A ? code - 0x41 + 10
+            : 99
+        if value >= radix {
+            return none
+        }
+        return value
+    }
+
+    /// The digit for the value in the radix, 2 to 36: '0' to '9', then
+    /// lower-case letters. None when the value is not below the radix, or
+    /// negative; a radix outside 2 to 36 traps.
+    public static fn fromDigit(_ value: Int, radix: Int = 10) -> Char? {
+        if radix < 2 || radix > 36 {
+            unreachable()
+        }
+        if value < 0 || value >= radix {
+            return none
+        }
+        return Char.fromCodePoint(value < 10 ? 0x30 + value : 0x61 + value - 10)
+    }
+
+    // ---- Code points and encodings ----------------------------------------
 
     /// The scalar's code point, as an Int: what decoding and writing '\u'
     /// escapes work in.
@@ -22,6 +314,57 @@ extension Char {
 
     /// The scalar's code point, as the 21 bits it needs.
     public var code: U32 => U32(self.codePoint)
+
+    /// How many bytes the scalar takes in UTF-8: 1 to 4.
+    public var utf8Length: Int {
+        get {
+            let code = self.codePoint
+            return code < 0x80 ? 1 : code < 0x800 ? 2 : code < 0x10000 ? 3 : 4
+        }
+    }
+
+    /// How many code units the scalar takes in UTF-16: 2, a surrogate pair,
+    /// past U+FFFF, else 1.
+    public var utf16Length: Int => self.codePoint < 0x10000 ? 1 : 2
+
+    /// Adds the scalar's UTF-8 encoding to the bytes.
+    ///
+    /// ```sable
+    /// var bytes: U8[>..] = []
+    /// '€'.encodeUtf8(into: &bytes)
+    /// assert(bytes == [0xE2, 0x82, 0xAC])
+    /// ```
+    public fn encodeUtf8(into bytes: inout U8[>..]) {
+        let code = self.codePoint
+        if code < 0x80 {
+            bytes.append(U8(code))
+        } else if code < 0x800 {
+            bytes.append(U8(0xC0 | code >> 6))
+            bytes.append(U8(0x80 | code & 0x3F))
+        } else if code < 0x10000 {
+            bytes.append(U8(0xE0 | code >> 12))
+            bytes.append(U8(0x80 | code >> 6 & 0x3F))
+            bytes.append(U8(0x80 | code & 0x3F))
+        } else {
+            bytes.append(U8(0xF0 | code >> 18))
+            bytes.append(U8(0x80 | code >> 12 & 0x3F))
+            bytes.append(U8(0x80 | code >> 6 & 0x3F))
+            bytes.append(U8(0x80 | code & 0x3F))
+        }
+    }
+
+    /// Adds the scalar's UTF-16 encoding to the code units: one, or a
+    /// surrogate pair past U+FFFF.
+    public fn encodeUtf16(into units: inout U16[>..]) {
+        let code = self.codePoint
+        if code < 0x10000 {
+            units.append(U16(code))
+        } else {
+            let rest = code - 0x10000
+            units.append(U16(0xD800 | rest >> 10))
+            units.append(U16(0xDC00 | rest & 0x3FF))
+        }
+    }
 
     /// The scalar with this code point, or none when it is not one: past
     /// U+10FFFF, negative, or a surrogate.

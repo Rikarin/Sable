@@ -1,0 +1,71 @@
+module StringTests
+
+// String's own members, by scalar position (Sable.Core), tested with
+// '@test': run with
+//     tools/stdlib-coverage.sh Sable.Core
+
+import Sable.Testing
+
+@test
+fn countingAndReadingScalars() {
+    let text = "aé€"
+    assertEqual(text.count, 3)
+    assertEqual(text.at(1), 'é')
+    assertEqual(text.slice(from: 1, to: 3), "é€")
+    assert("".isEmpty && !text.isEmpty, "isEmpty")
+}
+
+@test
+fn findingACharacterByScalarPosition() {
+    assert("aé€".contains(character: '€'), "contains")
+    assertEqual("aé€".indexOf(character: '€') ?? -1, 2)
+    assert("abc".indexOf(character: 'z') == none, "none when absent")
+}
+
+@test
+fn trimmedRemovesUnicodeWhiteSpaceAtBothEnds() {
+    assertEqual("\u{3000} hi\u{A0}\n".trimmed(), "hi")
+    assertEqual("\u{2028}".trimmed(), "")
+    assertEqual("é \u{2003}é".trimmed(), "é \u{2003}é")
+}
+
+@test
+fn splittingAtACharacter() {
+    let parts = "a,b,,c".split(separator: ',')
+    assertEqual(parts.count, 4)
+    assertEqual(parts[2], "")
+    assertEqual("x→y".split(separator: '→').count, 2)
+}
+
+@test
+fn joiningAndBuilding() {
+    assertEqual("ab".appending("cd"), "abcd")
+    assertEqual(String.fromChar('é'), "é")
+}
+
+@test
+fn parsingNumbers() {
+    assertEqual("42".toInt() ?? 0, 42)
+    assert("4x".toInt() == none, "not a number")
+    assertEqual("2.5".toF64() ?? 0.0, 2.5)
+    assert("inf".toF64() == none && "1e999".toF64() == none, "no infinities")
+    assert("x".toF64() == none, "not a number")
+    assertEqual("-8".toI8() ?? 0, -8)
+    assertEqual("300".toI16() ?? 0, 300)
+    assertEqual("70000".toI32() ?? 0, 70000)
+    assertEqual("-5".toI64() ?? 0, -5)
+    assertEqual("255".toU8() ?? 0, 255)
+    assertEqual("65535".toU16() ?? 0, 65535)
+    assertEqual("7".toU32() ?? 0, 7)
+    assertEqual("8".toU64() ?? 0, 8)
+    assertEqual("9".toUInt() ?? 0, 9)
+}
+
+@test
+fn iteratingScalarsInOrder() {
+    var seen = ""
+    for c in "aé😀" {
+        seen = seen + "[\(c)]"
+    }
+    assertEqual(seen, "[a][é][😀]")
+}

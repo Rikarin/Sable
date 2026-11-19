@@ -1,0 +1,262 @@
+module Sable.Core
+
+// Case: a string's letters made upper or lower case by Unicode's full
+// mappings, and strings compared with case set aside. Text with nothing to
+// change is given back as it is; text that has some keeps its unchanged
+// runs whole, as slices, and is joined once.
+
+extension String {
+    /// How two strings are compared (`compare(_:options:)`).
+    @flags
+    public enum CompareOptions {
+        /// Letters that differ only in case are the same: each scalar is
+        /// compared case-folded (`Char.caseFolded`).
+        IgnoringCase
+
+        /// A run of ASCII digits is compared as the number it writes, so
+        /// "file9" comes before "file10" — the order a person sorts names in.
+        Numeric
+    }
+
+    /// The string in upper case, by Unicode's full mappings: 'ß' is "SS",
+    /// so the result may be longer. The same everywhere: no language's own
+    /// rules, such as Turkish dotted 'i'.
+    ///
+    /// ```sable
+    /// assert("Straße".uppercased() == "STRASSE")
+    /// assert("ǆemal".uppercased() == "ǄEMAL")
+    /// ```
+    public fn uppercased() -> String {
+        return self.mappingCase(upper: true)
+    }
+
+    /// The string in lower case, by Unicode's full mappings, with a capital
+    /// sigma at a word's end made the final 'ς' (Unicode's Final_Sigma).
+    ///
+    /// ```sable
+    /// assert("ΟΔΟΣ".lowercased() == "οδος")
+    /// assert("ÀB".lowercased() == "àb")
+    /// ```
+    public fn lowercased() -> String {
+        return self.mappingCase(upper: false)
+    }
+
+    /// The string with its ASCII letters in upper case, and every other
+    /// scalar as it is: for protocols and file formats, which mean ASCII.
+    public fn asciiUppercased() -> String {
+        return self.shiftingAscii(low: 0x61, high: 0x7A, by: -32)
+    }
+
+    /// The string with its ASCII letters in lower case, and every other
+    /// scalar as it is.
+    public fn asciiLowercased() -> String {
+        return self.shiftingAscii(low: 0x41, high: 0x5A, by: 32)
+    }
+
+    /// The string case-folded, scalar by scalar (`Char.caseFolded`): two
+    /// strings that differ only in case fold to the same one.
+    public fn caseFolded() -> String {
+        var pieces: String[>..] = []
+        var start = 0
+        var offset = 0
+        let end = self.utf8Count
+        while offset < end {
+            let next = self.offsetAfter(offset)
+            let scalar = self.scalar(at: offset)
+            let folded = scalar.caseFolded
+            if folded != scalar {
+                pieces.append(self.utf8Slice(start, offset))
+                pieces.append(String.fromChar(folded))
+                start = next
+            }
+            offset = next
+        }
+        return self.joiningChanged(pieces, from: start)
+    }
+
+    /// Whether the strings are equal, scalar by scalar, or — ignoring case —
+    /// equal once both are case-folded.
+    ///
+    /// ```sable
+    /// assert("Hello".equals("hELLO", ignoringCase: true))
+    /// assert(!"Hello".equals("hELLO", ignoringCase: false))
+    /// ```
+    public fn equals(_ other: String, ignoringCase: Bool) -> Bool {
+        if !ignoringCase {
+            return self == other
+        }
+        return self.compare(other, options: .IgnoringCase) == 0
+    }
+
+    /// Negative, zero or positive as the string orders before, with or after
+    /// the other: scalar by scalar, as `<` does, unless the options say to
+    /// ignore case or to compare runs of digits as numbers.
+    ///
+    /// ```sable
+    /// assert("file9".compare("file10", options: .Numeric) < 0)
+    /// assert("file9".compare("file10", options: []) > 0)
+    /// assert("ABC".compare("abd", options: .IgnoringCase) < 0)
+    /// ```
+    public fn compare(_ other: String, options: String.CompareOptions) -> Int {
+        let ignoringCase = options.contains(.IgnoringCase)
+        let numeric = options.contains(.Numeric)
+        if !ignoringCase && !numeric {
+            return Runtime.compareStrings(self, other)
+        }
+        var left = 0
+        var right = 0
+        let leftEnd = self.utf8Count
+        let rightEnd = other.utf8Count
+        while left < leftEnd && right < rightEnd {
+            var a = self.scalar(at: left)
+            var b = other.scalar(at: right)
+            if numeric && a.isDigit && b.isDigit {
+                let leftDigits = self.digitRunEnd(left)
+                let rightDigits = other.digitRunEnd(right)
+                let order = String.compareDigits(self, left, leftDigits, other, right, rightDigits)
+                if order != 0 {
+                    return order
+                }
+                left = leftDigits
+                right = rightDigits
+                continue
+            }
+            if ignoringCase {
+                a = a.caseFolded
+                b = b.caseFolded
+            }
+            if a != b {
+                return a < b ? -1 : 1
+            }
+            left = self.offsetAfter(left)
+            right = other.offsetAfter(right)
+        }
+        return left < leftEnd ? 1 : right < rightEnd ? -1 : 0
+    }
+
+    // ---- Helpers ----------------------------------------------------------
+
+    /// The string in upper or lower case, each scalar by its full mapping.
+    fn mappingCase(upper: Bool) -> String {
+        var pieces: String[>..] = []
+        var start = 0
+        var offset = 0
+        let end = self.utf8Count
+        while offset < end {
+            let next = self.offsetAfter(offset)
+            let scalar = self.scalar(at: offset)
+            var mapped = ""
+            var changed = false
+            if scalar.codePoint < 0x80 {
+                changed = upper ? scalar.isAsciiLowercase : scalar.isAsciiUppercase
+                if changed {
+                    mapped = String.fromChar(upper ? scalar.asciiUppercased() : scalar.asciiLowercased())
+                }
+            } else if !upper && scalar == 'Σ' {
+                // Final_Sigma: a sigma after a cased letter, and not before
+                // one, ends a word; case-ignorable scalars between are passed over.
+                changed = true
+                mapped = self.endsWord(sigmaAt: offset) ? "ς" : "σ"
+            } else {
+                mapped = upper ? scalar.uppercased() : scalar.lowercased()
+                changed = mapped != String.fromChar(scalar)
+            }
+            if changed {
+                pieces.append(self.utf8Slice(start, offset))
+                pieces.append(mapped)
+                start = next
+            }
+            offset = next
+        }
+        return self.joiningChanged(pieces, from: start)
+    }
+
+    /// Whether the capital sigma at the offset is a word's last letter.
+    fn endsWord(sigmaAt offset: Int) -> Bool {
+        var before = offset
+        var casedBefore = false
+        while before > 0 {
+            before = self.offsetBefore(before)
+            let scalar = self.scalar(at: before)
+            if !scalar.isCaseIgnorable {
+                casedBefore = scalar.isCased
+                break
+            }
+        }
+        if !casedBefore {
+            return false
+        }
+        var after = self.offsetAfter(offset)
+        while after < self.utf8Count {
+            let scalar = self.scalar(at: after)
+            if !scalar.isCaseIgnorable {
+                return !scalar.isCased
+            }
+            after = self.offsetAfter(after)
+        }
+        return true
+    }
+
+    /// The pieces of a changed string joined, with what is left from 'start'
+    /// — or the string itself, when nothing changed.
+    fn joiningChanged(_ pieces: String[>..], from start: Int) -> String {
+        if pieces.count == 0 {
+            return self
+        }
+        var all = pieces
+        all.append(self.utf8Slice(start, self.utf8Count))
+        return Runtime.joinStrings(all, "")
+    }
+
+    /// The string with each byte from 'low' to 'high' moved by 'shift' —
+    /// ASCII letters, which are their own bytes.
+    fn shiftingAscii(low: Int, high: Int, by shift: Int) -> String {
+        var pieces: String[>..] = []
+        var start = 0
+        var offset = 0
+        let end = self.utf8Count
+        while offset < end {
+            let byte = Int(self.utf8Byte(offset))
+            if byte >= low && byte <= high {
+                pieces.append(self.utf8Slice(start, offset))
+                pieces.append(String.fromChar(Char.fromCodePoint(byte + shift)!))
+                start = offset + 1
+            }
+            offset = offset + 1
+        }
+        return self.joiningChanged(pieces, from: start)
+    }
+
+    /// Where the run of ASCII digits from the offset ends.
+    fn digitRunEnd(_ offset: Int) -> Int {
+        var end = offset
+        while end < self.utf8Count && self.utf8Byte(end) >= 0x30 && self.utf8Byte(end) <= 0x39 {
+            end = end + 1
+        }
+        return end
+    }
+
+    /// Two runs of digits compared as numbers: leading zeros passed over,
+    /// then the longer is the greater, then digit by digit.
+    static fn compareDigits(_ a: String, _ aStart: Int, _ aEnd: Int, _ b: String, _ bStart: Int, _ bEnd: Int) -> Int {
+        var i = aStart
+        var j = bStart
+        while i < aEnd - 1 && a.utf8Byte(i) == 0x30 {
+            i = i + 1
+        }
+        while j < bEnd - 1 && b.utf8Byte(j) == 0x30 {
+            j = j + 1
+        }
+        if aEnd - i != bEnd - j {
+            return aEnd - i < bEnd - j ? -1 : 1
+        }
+        while i < aEnd {
+            if a.utf8Byte(i) != b.utf8Byte(j) {
+                return a.utf8Byte(i) < b.utf8Byte(j) ? -1 : 1
+            }
+            i = i + 1
+            j = j + 1
+        }
+        return 0
+    }
+}

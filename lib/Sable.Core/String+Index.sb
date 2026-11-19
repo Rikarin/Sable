@@ -1,0 +1,172 @@
+module Sable.Core
+
+// Positions in a string that cost nothing to use. A String is UTF-8, a
+// scalar one to four bytes, so the scalar numbered n is found by counting
+// from the start: 'at(n)' and 'slice' are O(n) on text that is not ASCII. A
+// String.Index is instead where a scalar's bytes start — what a search
+// gives, and what reading, stepping and slicing take in constant time (a
+// slice copies its own bytes, and no more).
+
+extension String {
+    /// A position in a string: the offset of a scalar's first UTF-8 byte, or
+    /// the string's end. Indices come from the string they are used with —
+    /// its `startIndex`, `endIndex`, a search, or a step from another — and
+    /// one of another string, or one inside a scalar's bytes, traps.
+    ///
+    /// ```sable
+    /// let text = "naïve café"
+    /// let space = text.firstIndex(of: ' ')!
+    /// assert(text[text.startIndex..<space] == "naïve")
+    /// assert(text[text.index(after: space)] == 'c')
+    /// ```
+    public struct Index: Comparable, Hashable, Debug {
+        /// The offset, in bytes of the UTF-8 encoding, from the string's start.
+        public let utf8Offset: Int
+
+        /// The index at this UTF-8 offset; whether it is a scalar's start is
+        /// checked when it is used.
+        public init(utf8Offset: Int) {
+            self.utf8Offset = utf8Offset
+        }
+
+        public operator == (lhs: String.Index, rhs: String.Index) -> Bool {
+            return lhs.utf8Offset == rhs.utf8Offset
+        }
+
+        public operator < (lhs: String.Index, rhs: String.Index) -> Bool {
+            return lhs.utf8Offset < rhs.utf8Offset
+        }
+
+        public fn hash() -> Int {
+            return utf8Offset
+        }
+
+        /// The index as its offset: "String.Index(utf8Offset: 3)".
+        public fn debugDescription() -> String {
+            return "String.Index(utf8Offset: \(utf8Offset))"
+        }
+    }
+
+    /// Where the first scalar is: the end, in an empty string.
+    public var startIndex: String.Index => String.Index(utf8Offset: 0)
+
+    /// The position past the last scalar.
+    public var endIndex: String.Index => String.Index(utf8Offset: self.utf8Count)
+
+    /// How many bytes the string's UTF-8 encoding takes: its size, where
+    /// `count` is its scalars.
+    @builtin("string_utf8_count")
+    public var utf8Count: Int { get }
+
+    /// The scalar at the index, in constant time. The end, or an index not
+    /// at a scalar's start, traps.
+    public subscript(index: String.Index) -> Char {
+        get => self.scalar(at: index.utf8Offset)
+    }
+
+    /// The scalars of the range, as a string of their own: a copy of their
+    /// bytes, found without counting. A bound not at a scalar's start traps.
+    public subscript(range: Range<String.Index>) -> String {
+        get => self.utf8Slice(range.lowerBound.utf8Offset, range.upperBound.utf8Offset)
+    }
+
+    /// The scalars from the index to the end.
+    public subscript(range: PartialRangeFrom<String.Index>) -> String {
+        get => self.utf8Slice(range.lowerBound.utf8Offset, self.utf8Count)
+    }
+
+    /// The scalars from the start up to, not including, the index.
+    public subscript(range: PartialRangeUpTo<String.Index>) -> String {
+        get => self.utf8Slice(0, range.upperBound.utf8Offset)
+    }
+
+    /// The position of the scalar after the one at the index; stepping past
+    /// the end traps.
+    public fn index(after index: String.Index) -> String.Index {
+        return String.Index(utf8Offset: self.offsetAfter(index.utf8Offset))
+    }
+
+    /// The position of the scalar before the index; stepping back from the
+    /// start traps.
+    public fn index(before index: String.Index) -> String.Index {
+        return String.Index(utf8Offset: self.offsetBefore(index.utf8Offset))
+    }
+
+    /// The index the distance away, in scalars, forwards or, when negative,
+    /// back: O(distance). Stepping past either end traps.
+    public fn index(_ index: String.Index, offsetBy distance: Int) -> String.Index {
+        var offset = index.utf8Offset
+        var left = distance
+        while left > 0 {
+            offset = self.offsetAfter(offset)
+            left = left - 1
+        }
+        while left < 0 {
+            offset = self.offsetBefore(offset)
+            left = left + 1
+        }
+        return String.Index(utf8Offset: offset)
+    }
+
+    /// The index of scalar number n, counting from 0 — `count` for the end:
+    /// O(n), as `at` is. Out of range traps.
+    public fn index(atScalar n: Int) -> String.Index {
+        return self.index(self.startIndex, offsetBy: n)
+    }
+
+    /// How many scalars lie from one index to the other: negative when the
+    /// second comes first. O(the distance).
+    public fn distance(from start: String.Index, to end: String.Index) -> Int {
+        if end < start {
+            return 0 - self.distance(from: end, to: start)
+        }
+        var offset = start.utf8Offset
+        var count = 0
+        while offset < end.utf8Offset {
+            offset = self.offsetAfter(offset)
+            count = count + 1
+        }
+        return count
+    }
+
+    /// Each scalar with its index, from the first.
+    ///
+    /// ```sable
+    /// var seen = ""
+    /// for (index, character) in "aé!".indexed() {
+    ///     seen = seen + "\(index.utf8Offset)\(character)"
+    /// }
+    /// assert(seen == "0a1é3!")
+    /// ```
+    public fn indexed() -> (String.Index, Char)[>..] {
+        var pairs: (String.Index, Char)[>..] = []
+        var offset = 0
+        let end = self.utf8Count
+        while offset < end {
+            pairs.append((String.Index(utf8Offset: offset), self.scalar(at: offset)))
+            offset = self.offsetAfter(offset)
+        }
+        return pairs
+    }
+
+    /// Whether the UTF-8 offset is where a scalar starts, or the end: an
+    /// index the string can be read or cut at.
+    public fn isScalarBoundary(utf8Offset offset: Int) -> Bool {
+        if offset == self.utf8Count {
+            return true
+        }
+        return offset >= 0 && offset < self.utf8Count && (self.utf8Byte(offset) & 0xC0) != 0x80
+    }
+
+    @builtin("string_index_scalar")
+    fn scalar(at offset: Int) -> Char
+
+    @builtin("string_index_after")
+    fn offsetAfter(_ offset: Int) -> Int
+
+    @builtin("string_index_before")
+    fn offsetBefore(_ offset: Int) -> Int
+
+    @builtin("string_utf8_slice")
+    fn utf8Slice(_ from: Int, _ to: Int) -> String
+}

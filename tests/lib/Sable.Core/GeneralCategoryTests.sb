@@ -1,0 +1,36 @@
+module GeneralCategoryTests
+
+// GeneralCategory (Sable.Core), tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Core
+
+import Sable.Testing
+
+@test
+fn eachCategoryHasTheStandardsAbbreviation() {
+    assertEqual(GeneralCategory.UppercaseLetter.abbreviation, "Lu")
+    assertEqual(GeneralCategory.OtherLetter.abbreviation, "Lo")
+    assertEqual(GeneralCategory.DecimalNumber.abbreviation, "Nd")
+    assertEqual(GeneralCategory.OtherPunctuation.abbreviation, "Po")
+    assertEqual(GeneralCategory.SpaceSeparator.abbreviation, "Zs")
+    assertEqual(GeneralCategory.Unassigned.abbreviation, "Cn")
+}
+
+@test
+fn eachCategoryIsInOneMajorClass() {
+    var classes = ""
+    for code in 0...29 {
+        let category = U8(code) as GeneralCategory
+        let major = category.isLetter ? "L" : category.isMark ? "M" : category.isNumber ? "N"
+            : category.isPunctuation ? "P" : category.isSymbol ? "S" : category.isSeparator ? "Z" : category.isOther ? "C" : "?"
+        assertEqual(major, category.abbreviation.slice(from: 0, to: 1))
+        classes = classes + major
+    }
+    assertEqual(classes, "LLLLLMMMNNNPPPPPPPSSSSZZZCCCCC")
+}
+
+@test
+fn categoriesCompareAndDescribeThemselves() {
+    assert(GeneralCategory.Control == GeneralCategory.Control, "equal to itself")
+    assert(GeneralCategory.Control != GeneralCategory.Format, "different cases differ")
+    assertEqual("\(GeneralCategory.MathSymbol)", "MathSymbol")
+}

@@ -181,6 +181,11 @@ public sealed partial class Binder {
         (_generator, _notGenerator) = StartGenerator(function, function.ReturnType, body);
         _deferDepth = 0;
 
+        // A generator's body throws what its 'next()' does.
+        if (_generator is { } generating) {
+            _declaredThrows = generating.Next.ThrownType;
+        }
+
         PushScope();
         foreach (var parameter in function.Parameters) {
             Declare(parameter.Name, parameter);
@@ -710,6 +715,20 @@ public sealed partial class Binder {
         TypeSymbol thrown,
         bool viaParameter = false
     ) {
+        // What the requirements in force make Never cannot throw: a loop
+        // over S, where S.Failure == Never, needs no 'try'.
+        if (ThrowsNothing(thrown)) {
+            return;
+        }
+
+        // Said as what it is: over S, an 'S.Iter.Failure' is the S.Failure it must be.
+        thrown = _conversions.Equivalence.Canonical(thrown);
+
+        // 'rethrows(E)' lets E out too, from wherever it comes.
+        if (_rethrows && !viaParameter && FitsRethrownAlso(thrown)) {
+            viaParameter = true;
+        }
+
         // In a 'rethrows' function the error has to come from one of the
         // closures the caller handed over. Anything else would let an error
         // out of a signature the caller reads as non-throwing.
@@ -739,11 +758,56 @@ public sealed partial class Binder {
             return;
         }
 
+        // A loop's 'next()' is marked by 'for try', which goes after 'for'.
+        if (_iterating is { } loop) {
+            var at = loop.AwaitKeyword.IsNone ? loop.Pattern.Span.Start : loop.AwaitKeyword.Span.Start;
+            _diagnostics.Add(QuickFixes.MissingTry(Diagnostic.Error(
+                ErrorCode.ERR_MustUseTry,
+                loop.Sequence.Span,
+                $"'{loop.Sequence.ToString().Trim()}' can throw '{thrown.ToDisplayString()}' as it is gone through, so the loop needs 'for try'"
+            ), new TextSpan(at, 0)));
+            return;
+        }
+
         _diagnostics.Add(QuickFixes.MissingTry(Diagnostic.Error(
             ErrorCode.ERR_MustUseTry,
             span,
             $"{what} can throw, so the expression needs 'try'"
         ), span));
+    }
+
+    /// <summary>The loop whose <c>next()</c> is being bound without <c>for try</c>; null elsewhere.</summary>
+    ForStatementSyntax? _iterating;
+
+    /// <summary>True for an error type that has no values once the requirements in force are read: Never.</summary>
+    bool ThrowsNothing(TypeSymbol thrown) {
+        if (thrown.Equals(Core.Never)) {
+            return true;
+        }
+
+        var canonical = _conversions.Equivalence.Canonical(thrown);
+        return canonical.Equals(Core.Never)
+               || canonical is StructuralUnionTypeSymbol union && union.Cases.All(c => _conversions.Equivalence.Canonical(c).Equals(Core.Never));
+    }
+
+    /// <summary>
+    ///     True when what is thrown is all the enclosing <c>rethrows(E)</c>
+    ///     function's E — or nothing — so it may leave it.
+    /// </summary>
+    bool FitsRethrownAlso(TypeSymbol thrown) {
+        if (EnclosingFunction() is not { RethrownAlso: { } also }) {
+            return false;
+        }
+
+        var allowed = _conversions.Equivalence.Canonical(also);
+        var allowedCases = allowed is StructuralUnionTypeSymbol allowedUnion ? allowedUnion.Cases : [allowed];
+        var canonical = _conversions.Equivalence.Canonical(thrown);
+        var cases = canonical is StructuralUnionTypeSymbol union ? union.Cases : [canonical];
+        return cases.All(c => {
+                var one = _conversions.Equivalence.Canonical(c);
+                return one.Equals(Core.Never) || allowedCases.Any(a => a.Equals(one));
+            }
+        );
     }
 
     /// <summary>
@@ -1376,11 +1440,12 @@ public sealed partial class Binder {
         _thrownInBody = Union(_thrownInBody, value.Type);
         _threwOwnError = true;
 
+        var rethrownAlso = _rethrows && !value.HasError && FitsRethrownAlso(value.Type);
         if (!value.HasError && CanThrowHere() && !(_rethrows && _catchDepth == 0)) {
             CheckErrorFits(value.Type, statement.Expression.Span, "this");
         }
 
-        if (_rethrows && _catchDepth == 0) {
+        if (_rethrows && _catchDepth == 0 && !rethrownAlso) {
             _diagnostics.Error(
                 ErrorCode.ERR_RethrowsThrowsItsOwn,
                 statement.ThrowKeyword.Span,
@@ -2064,6 +2129,18 @@ public sealed partial class Binder {
         var throughIterator = isAwait || !IsKnownSequence(sequence.Type);
         var iteration = throughIterator ? BindIteration(statement, sequence, isAwait) : null;
 
+        // An array or a range is gone through without an iterator, and
+        // throws nothing.
+        if (!throughIterator && !statement.TryKeyword.IsNone && !sequence.Type.IsError) {
+            _diagnostics.Add(
+                Diagnostic.Warning(
+                    ErrorCode.WRN_NothingThrowsHere,
+                    statement.TryKeyword.Span,
+                    $"going through '{sequence.Type.ToDisplayString()}' cannot throw, so the loop needs no 'try'"
+                )
+            );
+        }
+
         // A sequence that cannot be gone through has been reported; its
         // elements are of no type.
         TypeSymbol ElementType() =>
@@ -2205,12 +2282,59 @@ public sealed partial class Binder {
             TypeResolver = () => makeIterator.Type
         };
 
-        // 'for await' awaits each value, as 'await iterator.next()' would.
+        // 'for await' awaits each value, as 'await iterator.next()' would,
+        // and 'for try' marks it as 'try iterator.next()' would: a sequence
+        // whose Failure is not Never throws as it is gone through.
         if (isAwait) {
             _awaitDepth++;
         }
 
+        var isTry = !statement.TryKeyword.IsNone;
+        var outerThrew = _threwInTry;
+        var outerThrown = _thrownInBody;
+        var outerIterating = _iterating;
+        if (isTry) {
+            _threwInTry = false;
+            _thrownInBody = null;
+            _tryDepth++;
+            _iterating = null;
+        } else {
+            _iterating = statement;
+        }
+
         var next = BindIterationCall(statement.Sequence, new BoundLocalAccess(statement.Sequence, iterator, makeIterator.Type), "next");
+
+        _iterating = outerIterating;
+        if (isTry) {
+            _tryDepth--;
+            var threw = _threwInTry;
+            var thrown = _thrownInBody;
+            _threwInTry = outerThrew || (threw && _tryDepth > 0);
+            _thrownInBody = Union(outerThrown, thrown);
+
+            if (!threw && !next.HasError) {
+                _diagnostics.Add(
+                    Diagnostic.Warning(
+                        ErrorCode.WRN_NothingThrowsHere,
+                        statement.TryKeyword.Span,
+                        $"going through '{sequence.Type.ToDisplayString()}' cannot throw, so the loop needs no 'try'"
+                    )
+                );
+            } else if (threw && !CanThrowHere()) {
+                _diagnostics.Error(
+                    ErrorCode.ERR_ThrowsNotDeclared,
+                    statement.TryKeyword.Span,
+                    "this loop's errors have nowhere to go: declare 'throws', or catch them"
+                );
+            } else if (thrown is not null) {
+                CheckErrorFits(thrown, statement.Sequence.Span, "this loop");
+            }
+
+            // As 'try iterator.next()': where an error leaves the loop.
+            if (threw) {
+                next = new BoundTry(statement.Sequence, next.Type, next, TryKind.Propagate, null);
+            }
+        }
 
         if (isAwait) {
             _awaitDepth--;
@@ -4495,7 +4619,7 @@ public sealed partial class Binder {
         arguments = bound.ToImmutable();
 
         if (type.IsRethrows) {
-            if (RethrownBy(arguments) is { } rethrown) {
+            if (RethrownBy(arguments) is { } rethrown && !ThrowsNothing(rethrown)) {
                 MarkThrows(
                     syntax.Span,
                     "this call",
@@ -4752,18 +4876,25 @@ public sealed partial class Binder {
             );
         }
 
-        if (resolved.IsRethrows) {
+        if (IsGenerator(resolved)) {
+            // A generator's call only captures its arguments: what throws is 'next()'.
+        } else if (resolved.IsRethrows) {
             // Not what the signature says it may throw, but what these
             // arguments actually can: 'withLock(m) { 1 }' does not throw.
-            if (RethrownBy(arguments) is { } rethrown) {
+            // A 'rethrows(E)' throws E as well, here what E is for this
+            // call: 'xs.map { … }' over an array throws nothing.
+            var also = resolved.RethrownAlso is { } own ? substitution.Apply(own) : null;
+            var rethrown = RethrownBy(arguments);
+            if (TypeBinder.ErrorUnion(also, rethrown is null ? null : substitution.Apply(rethrown)) is { } thrownHere && !ThrowsNothing(thrownHere)) {
                 MarkThrows(
                     syntax.Span,
                     $"'{resolved.Name}'",
-                    substitution.Apply(rethrown),
-                    PassesOwnParameter(arguments)
+                    thrownHere,
+                    (rethrown is null || ThrowsNothing(rethrown) || PassesOwnParameter(arguments))
+                    && (also is null || ThrowsNothing(also) || FitsRethrownAlso(also))
                 );
             }
-        } else if (resolved.ThrownType is { } thrown && !substitution.Apply(thrown).Equals(Core.Never)) {
+        } else if (resolved.ThrownType is { } thrown && !ThrowsNothing(substitution.Apply(thrown))) {
             // 'throws(E)' with E inferred as Never, from a closure that
             // cannot throw, cannot throw either.
             MarkThrows(syntax.Span, $"'{resolved.Name}'", substitution.Apply(thrown));
@@ -5984,7 +6115,7 @@ public sealed partial class Binder {
         _loopDepth = 0;
         _switchCases = [];
         _openTypeParameters = [];
-        _declaredThrows = symbol.ThrownType;
+        _declaredThrows = _generator is { } generating ? generating.Next.ThrownType : symbol.ThrownType;
         _rethrows = symbol.IsRethrows;
         _inAsyncContext = symbol.IsAsync;
         SeedRethrowSources(symbol);

@@ -239,6 +239,13 @@ internal sealed class Conversions(CoreTypes core) {
             return AssociatedTypes.ConstraintsOf(source, context).Any(c => Satisfies(c, constraint, context));
         }
 
+        // Never has no values, so it is whatever a protocol asks: a
+        // sequence that cannot fail has Never for its Failure, an Error.
+        if (source is NamedTypeSymbol { TypeKind: TypeKind.Builtin, Name: "Never", TypeArguments.IsEmpty: true }
+            && constraint is NamedTypeSymbol { TypeKind: TypeKind.Protocol }) {
+            return true;
+        }
+
         if (source is OpaqueTypeSymbol sourceOpaque) {
             return Satisfies(sourceOpaque.Constraint, constraint, context);
         }

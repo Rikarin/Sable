@@ -54,9 +54,9 @@ extension Dictionary: Collection, FromSequence<(Key, Value)> {
 
     /// A dictionary of the pairs, each key with its value; a key that comes
     /// again keeps the last value given it.
-    public static fn from<S: Sequence>(_ elements: S) -> [Key: Value] where S.Element == (Key, Value) {
+    public static fn from<S: Sequence>(_ elements: S) throws(S.Failure) -> [Key: Value] where S.Element == (Key, Value) {
         var dictionary: [Key: Value] = [:]
-        for (key, value) in elements {
+        for try (key, value) in elements {
             dictionary[key] = value
         }
         return dictionary

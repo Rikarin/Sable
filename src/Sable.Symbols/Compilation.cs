@@ -1034,13 +1034,17 @@ public sealed partial class Compilation {
             }
 
             if (function.IsRethrows) {
-                return TypeBinder.RethrownType(function.Parameters.Select(static p => p.Type));
+                return TypeBinder.RethrownType(function.Parameters.Select(static p => p.Type), function.RethrownAlso);
             }
 
             return spec.ErrorType is { } errorType
                 ? TypeBinder.BindType(errorType, function, scope)
                 : Core.AnyError;
         };
+
+        if (function.IsRethrows && declaration.ThrowsSpec?.ErrorType is { } also) {
+            function.RethrownAlsoResolver = () => TypeBinder.BindType(also, function, scope);
+        }
 
         RecordDeclaration(declaration, function);
         return function;
@@ -1634,12 +1638,13 @@ public sealed partial class Compilation {
             ];
         }
 
+        if (declaration.DefaultType is { } fallback) {
+            parameter.DefaultTypeResolver = () => TypeBinder.BindType(fallback, protocol, scope);
+        }
+
         TypeBinder.Defer(() => {
                 _ = parameter.Constraints;
-
-                if (declaration.DefaultType is { } fallback) {
-                    parameter.DefaultType = TypeBinder.BindType(fallback, protocol, scope);
-                }
+                _ = parameter.DefaultType;
             }
         );
 

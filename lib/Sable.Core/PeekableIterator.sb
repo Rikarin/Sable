@@ -25,20 +25,20 @@ public struct PeekableIterator<Base: Iterator>: Iterator {
     var hasPeeked: Bool
 
     /// The next element, without taking it: 'next()' gives it after.
-    public mutating fn peek() -> Base.Element? {
+    public mutating fn peek() throws(Base.Failure) -> Base.Element? {
         if !hasPeeked {
-            peeked = base.next()
+            peeked = try base.next()
             hasPeeked = true
         }
         return peeked
     }
 
     /// The next element, taken.
-    public mutating fn next() -> Base.Element? {
+    public mutating fn next() throws(Base.Failure) -> Base.Element? {
         if hasPeeked {
             hasPeeked = false
             return peeked
         }
-        return base.next()
+        return try base.next()
     }
 }

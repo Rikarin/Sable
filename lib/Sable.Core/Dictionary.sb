@@ -71,7 +71,7 @@ public struct Dictionary<Key: Hashable, Value>: Sequence {
     /// assert(byLength[4]! == ["pear", "kiwi", "plum"])
     /// assert(byLength.keys() == [3, 4, 5])
     /// ```
-    public init<S: Sequence>(grouping values: S, by keyFor: (S.Element) -> Key) where Value == S.Element[>..] {
+    public init<S: Sequence>(grouping values: S, by keyFor: (S.Element) -> Key) where Value == S.Element[>..], S.Failure == Never {
         for value in values {
             self[keyFor(value), default: []].append(value)
         }

@@ -11,20 +11,20 @@ public struct ChainSequence<First: Sequence, Second: Sequence>: Sequence where S
     }
 }
 
-/// Gives one iterator's elements, then another's.
+/// Gives one iterator's elements, then another's; it throws what either does.
 public struct ChainIterator<First: Iterator, Second: Iterator>: Iterator where Second.Element == First.Element {
     var first: First
     var second: Second
     var onFirst: Bool
 
     /// The next element of the first, or once it is done, of the second.
-    public mutating fn next() -> First.Element? {
+    public mutating fn next() throws(First.Failure | Second.Failure) -> First.Element? {
         if onFirst {
-            if let element = first.next() {
+            if let element = try first.next() {
                 return element
             }
             onFirst = false
         }
-        return second.next()
+        return try second.next()
     }
 }

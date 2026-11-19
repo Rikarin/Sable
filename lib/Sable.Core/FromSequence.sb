@@ -8,14 +8,16 @@ module Sable.Core
 /// assert(squares[2] == 9)
 /// ```
 public protocol FromSequence<Element> {
-    /// One made of the sequence's elements, in order.
-    static fn from<S: Sequence>(_ elements: S) -> Self where S.Element == Element
+    /// One made of the sequence's elements, in order; what going through
+    /// them throws, it throws.
+    static fn from<S: Sequence>(_ elements: S) throws(S.Failure) -> Self where S.Element == Element
 }
 
 extension Sequence {
     /// The elements, made into whatever is wanted of them: an array, a
-    /// dictionary of pairs, a string of characters.
-    public fn collect<C: FromSequence<Element>>() -> C {
-        return C.from(self)
+    /// dictionary of pairs, a string of characters. What going through
+    /// them throws, it throws.
+    public fn collect<C: FromSequence<Element>>() throws(Failure) -> C {
+        return try C.from(self)
     }
 }

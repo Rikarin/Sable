@@ -9,7 +9,8 @@ module Sable.Core
 
 /// A sequence whose elements stay put, to be read any number of times at
 /// the positions it gives out: from 'startIndex' up to, not including,
-/// 'endIndex', each after the one before.
+/// 'endIndex', each after the one before. Going through one cannot fail:
+/// its Failure is Never.
 ///
 /// ```sable
 /// fn middle<C: Collection>(_ items: C) -> C.Element? {
@@ -23,7 +24,7 @@ module Sable.Core
 /// }
 /// assert(middle([1, 2, 3]) == 2)
 /// ```
-public protocol Collection: Sequence {
+public protocol Collection: Sequence where Failure == Never {
     /// A position of an element, ordered as the elements are.
     associatedtype Index: Comparable
 

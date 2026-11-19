@@ -1530,8 +1530,10 @@ public sealed partial class SilGen {
         }
 
         // 'throws(E)' with E as Never cannot throw: it is an ordinary function.
+        // Nor does a generator's call, which only captures: its 'next()' throws.
         SilType? thrown = null;
-        if (symbol.ThrownType is { } thrownSymbol && !Substitute(substitution, thrownSymbol).Equals(Core.Never)) {
+        var isGeneratorCall = _compilation.GetGenerator(symbol) is { } yielding && ReferenceEquals(yielding.Function, symbol);
+        if (symbol.ThrownType is { } thrownSymbol && !isGeneratorCall && !Substitute(substitution, thrownSymbol).Equals(Core.Never)) {
             if (Lower(thrownSymbol) is not { } thrownType) {
                 return Unsupported<FunctionType>(at, $"'{symbol.Name}', which throws '{thrownSymbol.ToDisplayString()}'");
             }
@@ -3879,8 +3881,7 @@ public sealed partial class SilGen {
     }
 
     T? Unsupported<T>(SyntaxNode at, string what) where T : class {
-        _diagnostics.Error(ErrorCode.ERR_NotLoweredYet, at.Span, $"SIL lowering does not handle {what} yet");
-        return null;
+        _diagnostics.Error(ErrorCode.ERR_NotLoweredYet, at.Span, $"SIL lowering does not handle {what} yet");        return null;
     }
 
     // =======================================================================
@@ -5701,7 +5702,18 @@ public sealed partial class SilGen {
 
                 // 'if let x = e': matched when e holds a value, which x then is.
                 case BoundConditionBinding { Local: { } local } binding: {
-                    if (Expression(binding.Source) is not { } optional || SlotFor(local, binding.Syntax) is null) {
+                    // The slot ends with its scope before the source runs: in
+                    // 'while let x = try it.next()', an error from the second
+                    // 'next()' leaves with the first x still in the slot.
+                    if (SlotFor(local, binding.Syntax) is not { } bindingSlot) {
+                        return;
+                    }
+
+                    if (!_boxed.Contains(local)) {
+                        EndsWithScope(bindingSlot);
+                    }
+
+                    if (Expression(binding.Source) is not { } optional) {
                         return;
                     }
 
@@ -9210,14 +9222,27 @@ public sealed partial class SilGen {
             return thrown.Count > 0;
         }
 
+        /// <summary>True for an error type that, here, has no values: Never, or a union of nothing else.</summary>
+        bool ThrowsNothing(TypeSymbol thrown) =>
+            thrown.Equals(Core.Never) || thrown is StructuralUnionTypeSymbol union && union.Cases.All(c => c.Equals(Core.Never));
+
         void CollectThrown(BoundNode node, List<TypeSymbol> into) {
             switch (node) {
                 // A 'rethrows' callee throws what its arguments do, not all its signature allows.
+                // So does a 'rethrows(E)' one, and E as well.
                 case BoundCall { Function.IsRethrows: true } rethrowing:
                     if (RethrownBy(rethrowing) is { } rethrown) {
                         into.Add(Sub(rethrowing.Substitution.Apply(rethrown)));
                     }
 
+                    if (rethrowing.Function.RethrownAlso is { } also) {
+                        into.Add(Sub(rethrowing.Substitution.Apply(also)));
+                    }
+
+                    break;
+
+                // A generator's call captures; its 'next()' is what throws.
+                case BoundCall call when generator._compilation.GetGenerator(call.Function) is { } yielding && ReferenceEquals(yielding.Function, call.Function):
                     break;
 
                 case BoundCall { Function.ThrownType: { } thrown } call:
@@ -9604,7 +9629,10 @@ public sealed partial class SilGen {
                 : Emit(new FunctionRefInst(name, type));
             // A 'rethrows' callee given functions that throw nothing throws
             // nothing: the binder asked for no 'try', and nothing handles it.
-            return Invoke(code, type, arguments, borrows, call.Syntax, cannotThrow: callee.IsRethrows && RethrownBy(call) is null);
+            // Nor does a 'rethrows(E)' one whose E is Never here.
+            return Invoke(code, type, arguments, borrows, call.Syntax,
+                cannotThrow: callee.IsRethrows && RethrownBy(call) is null
+                             && (callee.RethrownAlso is not { } also || ThrowsNothing(Sub(call.Substitution.Apply(also)))));
         }
 
         /// <summary>

@@ -116,6 +116,6 @@ fn aLazyViewIsASequenceGenericCodeTakes() {
     assertEqualText(text(collected), "6,7")
 }
 
-fn total<S: Sequence>(_ values: S) -> Int where S.Element == Int {
+fn total<S: Sequence>(_ values: S) -> Int where S.Element == Int, S.Failure == Never {
     return values.reduce(0) { $0 + $1 }
 }

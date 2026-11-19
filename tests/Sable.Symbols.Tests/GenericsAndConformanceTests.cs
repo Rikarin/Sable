@@ -942,7 +942,7 @@ public sealed class GenericsAndConformanceTests {
                           }
                           struct Bag<T> {
                               var items: T[>..]
-                              init<S: Sequence>(from s: S) where S.Element == T {
+                              init<S: Sequence>(from s: S) where S.Element == T, S.Failure == Never {
                                   items = []
                                   for x in s { items.append(x) }
                               }

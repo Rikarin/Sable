@@ -300,7 +300,7 @@ module.exports = grammar({
     while_statement: ($) => seq("while", field("condition", $._condition), field("body", $.block)),
     repeat_statement: ($) => seq("repeat", field("body", $.block), "while", field("condition", $._expression)),
     for_statement: ($) =>
-      seq("for", optional("await"), field("pattern", $._pattern), "in", field("sequence", $._expression), optional(seq("where", $._expression)), field("body", $.block)),
+      seq("for", optional("try"), optional("await"), field("pattern", $._pattern), "in", field("sequence", $._expression), optional(seq("where", $._expression)), field("body", $.block)),
 
     defer_statement: ($) => seq("defer", $.block),
     do_statement: ($) => prec.right(seq("do", $.block, repeat($.catch_clause))),

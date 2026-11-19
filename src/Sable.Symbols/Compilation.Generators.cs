@@ -118,7 +118,7 @@ public sealed partial class Compilation {
     }
 
     /// <summary>The generator a function's body makes it, made once: its types and their members.</summary>
-    internal GeneratorSymbols DeclareGenerator(FunctionSymbol function, GeneratorKind kind, TypeSymbol element) {
+    internal GeneratorSymbols DeclareGenerator(FunctionSymbol function, GeneratorKind kind, TypeSymbol element, TypeSymbol? thrown) {
         lock (_generatorLock) {
             if (_generators.TryGetValue(function, out var existing)) {
                 return existing;
@@ -150,7 +150,7 @@ public sealed partial class Compilation {
             };
             var optional = new OptionalTypeSymbol(element);
             next.ReturnTypeResolver = () => optional;
-            next.ThrownTypeResolver = () => function.ThrownType;
+            next.ThrownTypeResolver = () => thrown;
             iterator.AddMember(next);
 
             NamedTypeSymbol? sequence = null;

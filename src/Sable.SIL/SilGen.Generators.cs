@@ -192,7 +192,7 @@ public sealed partial class SilGen {
         }
 
         SilType? thrown = null;
-        if (function.ThrownType is { } thrownSymbol && !Substitute(substitution, thrownSymbol).Equals(Core.Never)
+        if (generator.Next.ThrownType is { } thrownSymbol && !Substitute(substitution, thrownSymbol).Equals(Core.Never)
             && (thrown = Lower(Substitute(substitution, thrownSymbol))) is null) {
             return false;
         }
@@ -243,12 +243,30 @@ public sealed partial class SilGen {
             var leave = entry.Append(new IntegerLiteralInst(SilType.Bool, 1));
             var (values, copies) = CapturedValues(entry, self, box.Fields, captured);
             var callee = entry.Append(new FunctionRefInst(resume.Name, resume.Type));
-            var none = entry.Append(new ApplyInst(callee, result, [self, leave, ..values]));
-            if (!result.IsTrivial) {
-                entry.Append(new DestroyValueInst(none));
+            var done = entry;
+            SilValue none;
+            if (thrown is null) {
+                none = entry.Append(new ApplyInst(callee, result, [self, leave, ..values]));
+            } else {
+                // Leaving runs only defers and returns, so it never throws;
+                // the resume function's type says it may.
+                done = deinit.AddBlock();
+                none = done.AddArgument(result);
+                var failed = deinit.AddBlock();
+                var error = failed.AddArgument(thrown);
+                entry.Append(new TryApplyInst(callee, result, [self, leave, ..values], done, failed));
+                if (!thrown.IsTrivial) {
+                    failed.Append(new DestroyValueInst(error));
+                }
+
+                failed.Append(new UnreachableInst());
             }
-            Destroy(entry, copies);
-            entry.Append(new ReturnInst(null));
+
+            if (!result.IsTrivial) {
+                done.Append(new DestroyValueInst(none));
+            }
+            Destroy(done, copies);
+            done.Append(new ReturnInst(null));
             box.Deinit = deinit.Name;
         }
 

@@ -53,9 +53,9 @@ extension<Element> Element[]: MutableCollection { }
 
 extension<Element> Element[>..]: MutableCollection, RangeReplaceableCollection, FromSequence<Element> {
     /// An array of the sequence's elements, in order.
-    public static fn from<S: Sequence>(_ elements: S) -> Element[>..] where S.Element == Element {
+    public static fn from<S: Sequence>(_ elements: S) throws(S.Failure) -> Element[>..] where S.Element == Element {
         var array: Element[>..] = []
-        for element in elements {
+        for try element in elements {
             array.append(element)
         }
         return array
@@ -64,9 +64,9 @@ extension<Element> Element[>..]: MutableCollection, RangeReplaceableCollection, 
 
 extension<Element> Element[>..<]: MutableCollection, RangeReplaceableCollection, FromSequence<Element> {
     /// An array of the sequence's elements, in order.
-    public static fn from<S: Sequence>(_ elements: S) -> Element[>..<] where S.Element == Element {
+    public static fn from<S: Sequence>(_ elements: S) throws(S.Failure) -> Element[>..<] where S.Element == Element {
         var array: Element[>..<] = []
-        for element in elements {
+        for try element in elements {
             array.append(element)
         }
         return array

@@ -181,6 +181,25 @@ public sealed class FunctionSymbol : Symbol {
     /// </summary>
     public bool IsRethrows { get; internal set; }
 
+    /// <summary>
+    ///     For <c>rethrows(E)</c>, E: what it throws of its own besides what its
+    ///     closures do — a Sequence algorithm's <c>rethrows(Failure)</c>, what
+    ///     the sequence it goes through throws. Null for plain <c>rethrows</c>.
+    /// </summary>
+    public TypeSymbol? RethrownAlso {
+        get {
+            if (RethrownAlsoResolver is { } resolve) {
+                RethrownAlsoResolver = null;
+                _rethrownAlso = resolve();
+            }
+
+            return _rethrownAlso;
+        }
+    }
+
+    TypeSymbol? _rethrownAlso;
+    internal Func<TypeSymbol?>? RethrownAlsoResolver { get; set; }
+
     /// <summary>The <c>where A == B</c> requirements on this function's parameters.</summary>
     public ImmutableArray<SameTypeRequirement> SameTypeRequirements { get; internal set; } = [];
 

@@ -412,7 +412,28 @@ public sealed class TypeParameterSymbol(
     ///     What an <c>associatedtype</c> falls back to when a conformer does not
     ///     name it, as in <c>associatedtype Index: Comparable = Int</c>.
     /// </summary>
-    public TypeSymbol? DefaultType { get; internal set; }
+    public TypeSymbol? DefaultType {
+        get {
+            // Bound when first read, as the constraints are: 'some Sequence<Int>'
+            // reads Failure's default where it is written, which may be before
+            // the protocol's file has been through.
+            if (DefaultTypeResolver is { } resolve) {
+                DefaultTypeResolver = null;
+                _defaultType = resolve();
+            }
+
+            return _defaultType;
+        }
+        internal set {
+            DefaultTypeResolver = null;
+            _defaultType = value;
+        }
+    }
+
+    TypeSymbol? _defaultType;
+
+    /// <summary>Binds <see cref="DefaultType" /> when it is first read; null once it is.</summary>
+    internal Func<TypeSymbol?>? DefaultTypeResolver { get; set; }
 
     /// <summary>
     ///     For a value generic parameter, <c>N: Int</c>, the integer type of

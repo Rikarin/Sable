@@ -25,17 +25,17 @@ public struct Zip2Sequence<First: Sequence, Second: Sequence>: Sequence {
     }
 }
 
-/// Gives two iterators' elements in pairs.
+/// Gives two iterators' elements in pairs; it throws what either does.
 public struct Zip2Iterator<First: Iterator, Second: Iterator>: Iterator {
     var first: First
     var second: Second
 
     /// The next pair, or none once either is done.
-    public mutating fn next() -> (First.Element, Second.Element)? {
-        guard let a = first.next() else {
+    public mutating fn next() throws(First.Failure | Second.Failure) -> (First.Element, Second.Element)? {
+        guard let a = try first.next() else {
             return none
         }
-        guard let b = second.next() else {
+        guard let b = try second.next() else {
             return none
         }
         return (a, b)

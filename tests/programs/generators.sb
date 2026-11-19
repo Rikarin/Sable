@@ -64,7 +64,7 @@ class Names {
     }
 }
 
-fn total<S: Sequence>(_ s: S) -> Int where S.Element == Int {
+fn total<S: Sequence>(_ s: S) -> Int where S.Element == Int, S.Failure == Never {
     var t = 0
     for x in s {
         t += x

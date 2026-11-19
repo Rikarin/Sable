@@ -112,8 +112,8 @@ internal sealed class TypeBinder(Compilation compilation) {
     ///     <c>(_ body: () throws(IoError) -> T) rethrows</c> throws
     ///     <c>IoError</c> and nothing wider.
     /// </remarks>
-    internal static TypeSymbol? RethrownType(IEnumerable<TypeSymbol> parameterTypes) {
-        TypeSymbol? thrown = null;
+    internal static TypeSymbol? RethrownType(IEnumerable<TypeSymbol> parameterTypes, TypeSymbol? also = null) {
+        TypeSymbol? thrown = also;
 
         foreach (var parameterType in parameterTypes) {
             var type = parameterType is OptionalTypeSymbol optional
@@ -124,12 +124,40 @@ internal sealed class TypeBinder(Compilation compilation) {
                 continue;
             }
 
-            thrown = thrown is null
-                ? one
-                : StructuralUnionTypeSymbol.Create([thrown, one]);
+            thrown = ErrorUnion(thrown, one);
         }
 
         return thrown;
+    }
+
+    /// <summary>
+    ///     What either of two error types may be: their union, where
+    ///     <c>any Error</c> takes in every other and Never adds nothing.
+    /// </summary>
+    internal static TypeSymbol? ErrorUnion(TypeSymbol? left, TypeSymbol? right) {
+        if (left is null) {
+            return right;
+        }
+
+        if (right is null || IsNever(right)) {
+            return left;
+        }
+
+        if (IsNever(left)) {
+            return right;
+        }
+
+        if (IsAnyError(left) || IsAnyError(right)) {
+            return IsAnyError(left) ? left : right;
+        }
+
+        return StructuralUnionTypeSymbol.Create([left, right]);
+
+        static bool IsNever(TypeSymbol type) =>
+            type is NamedTypeSymbol { TypeKind: TypeKind.Builtin, Name: "Never", TypeArguments.IsEmpty: true };
+
+        static bool IsAnyError(TypeSymbol type) =>
+            type is ExistentialTypeSymbol { Constraint: NamedTypeSymbol { Name: "Error" } };
     }
 
     /// <summary>
@@ -138,10 +166,42 @@ internal sealed class TypeBinder(Compilation compilation) {
     /// </summary>
     public TypeSymbol BindReturnType(TypeSyntax syntax, FunctionSymbol function, FileScope? scope) {
         var type = BindType(syntax, function, scope);
-        return type is OpaqueTypeSymbol { Origin: null } opaque
-            ? opaque.WithOrigin(function)
-            : type;
+        if (type is not OpaqueTypeSymbol { Origin: null } opaque) {
+            return type;
+        }
+
+        // A generator's sequence fails as its body does: in
+        // 'fn f() throws(E) -> some Sequence<Int>', Failure is E — unless
+        // the result says what it is.
+        if (Binder.IsGenerator(function)
+            && opaque.Constraint is NamedTypeSymbol { TypeKind: TypeKind.Protocol } protocol
+            && IndexOfFailure(protocol) is var failure and >= 0
+            && failure < opaque.Arguments.Length
+            && failure >= WrittenArguments(syntax)) {
+            var arguments = opaque.Arguments.SetItem(failure, function.ThrownType ?? compilation.Core.Never);
+            opaque = new OpaqueTypeSymbol(opaque.Constraint, arguments: arguments);
+        }
+
+        return opaque.WithOrigin(function);
     }
+
+    /// <summary>Where a protocol's Failure is among its associated types; -1 when it has none.</summary>
+    internal static int IndexOfFailure(NamedTypeSymbol protocol) {
+        var associated = protocol.OriginalDefinition.AssociatedTypes;
+        for (var i = 0; i < associated.Length; i++) {
+            if (associated[i].Name == "Failure") {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
+    /// <summary>How many associated types a <c>some P&lt;…&gt;</c> writes.</summary>
+    internal static int WrittenArguments(TypeSyntax syntax) =>
+        syntax is OpaqueTypeSyntax { ConstraintType: SimpleNameTypeSyntax { TypeArgumentList: { } list } }
+            ? list.Arguments.Count
+            : 0;
 
     public void BindFunctionSignature(
         FunctionSymbol function,
@@ -166,13 +226,17 @@ internal sealed class TypeBinder(Compilation compilation) {
             }
 
             if (function.IsRethrows) {
-                return RethrownType(function.Parameters.Select(static p => p.Type));
+                return RethrownType(function.Parameters.Select(static p => p.Type), function.RethrownAlso);
             }
 
             return spec.ErrorType is { } errorType
                 ? BindType(errorType, function, scope)
                 : compilation.Core.AnyError; // bare 'throws' is 'throws(any Error)'
         };
+
+        if (function.IsRethrows && declaration.ThrowsSpec?.ErrorType is { } also) {
+            function.RethrownAlsoResolver = () => BindType(also, function, scope);
+        }
 
         Defer(() => {
                 // Constraints first: a signature may mention 'T.Associated',
@@ -186,7 +250,7 @@ internal sealed class TypeBinder(Compilation compilation) {
                     _ = parameter.Type;
                 }
 
-                if (function is { IsRethrows: true, ThrownType: null }) {
+                if (function is { IsRethrows: true, ThrownType: null, RethrownAlso: null }) {
                     using var _ = _diagnostics.AnchoredAt(declaration);
                     _diagnostics.Error(
                         ErrorCode.ERR_RethrowsWithoutThrowingParameter,
@@ -1134,7 +1198,7 @@ internal sealed class TypeBinder(Compilation compilation) {
 
                 TypeSymbol? thrown = null;
                 if (rethrows) {
-                    thrown = RethrownType(parameterTypes);
+                    thrown = RethrownType(parameterTypes, function.ThrowsSpec!.ErrorType is { } also ? BindType(also, context, scope) : null);
                     if (thrown is null) {
                         _diagnostics.Error(
                             ErrorCode.ERR_RethrowsWithoutThrowingParameter,
@@ -1474,7 +1538,15 @@ internal sealed class TypeBinder(Compilation compilation) {
                     );
                 }
 
-                s_primaryArguments = arguments;
+                // What it does not say of an associated type with a default is
+                // that default, as a generic type's omitted parameter would be:
+                // 'some Sequence<Int>' fails with Never.
+                var filled = arguments.ToBuilder();
+                while (filled.Count < associated && protocol.AssociatedTypes[filled.Count].DefaultType is { } fallback) {
+                    filled.Add(fallback);
+                }
+
+                s_primaryArguments = filled.ToImmutable();
                 return protocol;
             }
 

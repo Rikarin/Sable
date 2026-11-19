@@ -1,31 +1,40 @@
 module Sable.Core
 
 // The iteration protocols: what 'for x in s' asks of a type that is not an
-// array, a dictionary or a range, which the compiler knows by sight. The
-// loop is
+// array or a range, which the compiler knows by sight. The loop is
 //
 //     var iterator = s.makeIterator()
 //     while let x = iterator.next() { ... }
 //
 // and 'for await' the same over 'makeAsyncIterator()', awaiting each 'next()'.
+// A sequence whose Failure is not Never throws as it is gone through: its
+// loop is 'for try', each 'next()' a 'try'.
 
 /// Gives the values of a sequence one at a time, then none.
 public protocol Iterator {
     /// What it gives.
     associatedtype Element
 
-    /// The next value, or none once there are no more; after that, none again.
-    mutating fn next() -> Element?
+    /// What it may throw instead of giving the next value: Never, unless its
+    /// 'next()' says otherwise.
+    associatedtype Failure: Error = Never
+
+    /// The next value, or none once there are no more; after that, none
+    /// again. Once it has thrown, none.
+    mutating fn next() throws(Failure) -> Element?
 }
 
 /// Values that a 'for' loop can go through, by the iterator it makes.
 /// Generic code constrains its elements, 'where S.Element == Int'. A
-/// conformer need only make its iterator: its Element is the iterator's.
+/// conformer need only make its iterator: its Element and Failure are the
+/// iterator's. Going through one whose Failure is not Never may throw, so
+/// generic code either lets that out, 'throws(S.Failure)' and 'for try', or
+/// asks for one that cannot, 'where S.Failure == Never'.
 ///
 /// ```sable
-/// fn total<S: Sequence>(_ values: S) -> Int where S.Element == Int {
+/// fn total<S: Sequence>(_ values: S) throws(S.Failure) -> Int where S.Element == Int {
 ///     var sum = 0
-///     for value in values {
+///     for try value in values {
 ///         sum += value
 ///     }
 ///     return sum
@@ -36,8 +45,11 @@ public protocol Sequence {
     /// What it gives.
     associatedtype Element
 
+    /// What going through it may throw: its iterator's.
+    associatedtype Failure: Error = Never
+
     /// What goes through it: an iterator of its elements.
-    associatedtype Iter: Iterator where Iter.Element == Element
+    associatedtype Iter: Iterator where Iter.Element == Element, Iter.Failure == Failure
 
     /// An iterator positioned at the first value.
     fn makeIterator() -> Iter
@@ -49,17 +61,26 @@ public protocol AsyncIterator {
     /// What it gives.
     associatedtype Element
 
-    /// The next value, waiting for it, or none once there are no more.
-    mutating fn next() async -> Element?
+    /// What it may throw instead of giving the next value: Never, unless its
+    /// 'next()' says otherwise.
+    associatedtype Failure: Error = Never
+
+    /// The next value, waiting for it, or none once there are no more. Once
+    /// it has thrown, none.
+    mutating fn next() async throws(Failure) -> Element?
 }
 
-/// Values that a 'for await' loop can go through, by the iterator it makes.
+/// Values that a 'for await' loop can go through, by the iterator it makes;
+/// one whose Failure is not Never, 'for try await'.
 public protocol AsyncSequence {
     /// What it gives.
     associatedtype Element
 
+    /// What going through it may throw: its iterator's.
+    associatedtype Failure: Error = Never
+
     /// What goes through it: an iterator of its elements.
-    associatedtype Iter: AsyncIterator where Iter.Element == Element
+    associatedtype Iter: AsyncIterator where Iter.Element == Element, Iter.Failure == Failure
 
     /// An iterator positioned at the first value.
     fn makeAsyncIterator() -> Iter

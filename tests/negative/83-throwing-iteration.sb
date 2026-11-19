@@ -1,0 +1,76 @@
+module Negative.ThrowingIteration
+
+// A sequence whose Failure is not Never throws as it is gone through: its
+// loop is 'for try', in a body that lets the error out or catches it. A
+// generator declared 'throws(E)' is such a sequence. One that cannot fail
+// needs no 'try', and a generic one is either let out or constrained.
+
+union ReadError: Error { Broken }
+
+union OtherError: Error { Other }
+
+fn lines() throws(ReadError) -> some Sequence<String> {
+    yield "one"
+    throw .Broken
+}
+
+fn missingTry() throws(ReadError) {
+    for line in lines() { //! S3032 so the loop needs 'for try'
+        print(line)
+    }
+}
+
+fn nowhereToGo() {
+    for try line in lines() { //! S3033 this loop's errors have nowhere to go
+        print(line)
+    }
+}
+
+fn wrongError() throws(OtherError) {
+    for try line in lines() { //! S3054 throws 'ReadError', and this function throws 'OtherError'
+        print(line)
+    }
+}
+
+fn caught() {
+    do {
+        for try line in lines() {
+            print(line)
+        }
+    } catch {
+        print("failed")
+    }
+}
+
+fn needless() {
+    for try n in [1, 2, 3] { //! S3036 cannot throw, so the loop needs no 'try'
+        print(n)
+    }
+}
+
+fn generic<S: Sequence>(_ values: S) where S.Element == Int {
+    for value in values { //! S3032 so the loop needs 'for try'
+        print(value)
+    }
+}
+
+fn letOut<S: Sequence>(_ values: S) throws(S.Failure) where S.Element == Int {
+    for try value in values {
+        print(value)
+    }
+}
+
+fn constrained<S: Sequence>(_ values: S) where S.Element == Int, S.Failure == Never {
+    for value in values {
+        print(value)
+    }
+}
+
+fn callers() throws(ReadError) {
+    constrained([1, 2])
+    letOut(0..<3)
+    try letOut(lines().lazy.map { $0.count })
+    constrained(lines().lazy.map { $0.count }) //! S3007 it requires 'S.Failure == Never'
+    let counts = try lines().map { $0.count }
+    let all = lines().map { $0.count } //! S3032 'map' can throw
+}

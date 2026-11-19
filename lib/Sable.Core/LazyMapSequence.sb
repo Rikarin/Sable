@@ -18,8 +18,8 @@ public struct LazyMapIterator<Base: Iterator, T>: Iterator {
     let transform: (Base.Element) -> T
 
     /// The next element, transformed, or none past the last.
-    public mutating fn next() -> T? {
-        guard let element = base.next() else {
+    public mutating fn next() throws(Base.Failure) -> T? {
+        guard let element = try base.next() else {
             return none
         }
         return transform(element)

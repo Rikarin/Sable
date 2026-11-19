@@ -4,8 +4,12 @@ module Sable.Core
 // searched, counted, ordered, grouped. Each answer is computed at once and
 // given as an array (or a value); '.lazy' gives the transforming ones as
 // views that do their work as they are gone through. Every closure here
-// may throw, and then so does the call (rethrows); nothing is boxed, as
-// each is monomorphised for the sequence and the closure it is given.
+// may throw, and then so does the call; so may going through the sequence,
+// when its Failure is not Never, and then so does the call too:
+// 'rethrows(Failure)', or 'throws(Failure)' where there is no closure. Over
+// an array, a range or any collection, and with closures that do not
+// throw, nothing does. Nothing is boxed, as each is monomorphised for the
+// sequence and the closure it is given.
 
 extension Sequence {
     /// The elements, each transformed, in order.
@@ -14,18 +18,18 @@ extension Sequence {
     /// let squares = [1, 2, 3].map { $0 * $0 }
     /// assert(squares[2] == 9)
     /// ```
-    public fn map<T>(_ transform: (Element) throws -> T) rethrows -> T[>..] {
+    public fn map<T>(_ transform: (Element) throws -> T) rethrows(Failure) -> T[>..] {
         var result: T[>..] = []
-        for element in self {
+        for try element in self {
             result.append(try transform(element))
         }
         return result
     }
 
     /// The elements for which the closure is true, in order.
-    public fn filter(_ isIncluded: (Element) throws -> Bool) rethrows -> Element[>..] {
+    public fn filter(_ isIncluded: (Element) throws -> Bool) rethrows(Failure) -> Element[>..] {
         var result: Element[>..] = []
-        for element in self {
+        for try element in self {
             if try isIncluded(element) {
                 result.append(element)
             }
@@ -34,9 +38,9 @@ extension Sequence {
     }
 
     /// The transformed elements that are not none, in order.
-    public fn compactMap<T>(_ transform: (Element) throws -> T?) rethrows -> T[>..] {
+    public fn compactMap<T>(_ transform: (Element) throws -> T?) rethrows(Failure) -> T[>..] {
         var result: T[>..] = []
-        for element in self {
+        for try element in self {
             if let value = try transform(element) {
                 result.append(value)
             }
@@ -46,10 +50,10 @@ extension Sequence {
 
     /// The elements of the sequences the closure makes of each element, one
     /// sequence after another.
-    public fn flatMap<S: Sequence>(_ transform: (Element) throws -> S) rethrows -> S.Element[>..] {
+    public fn flatMap<S: Sequence>(_ transform: (Element) throws -> S) rethrows(Failure | S.Failure) -> S.Element[>..] {
         var result: S.Element[>..] = []
-        for element in self {
-            for inner in try transform(element) {
+        for try element in self {
+            for try inner in try transform(element) {
                 result.append(inner)
             }
         }
@@ -62,9 +66,9 @@ extension Sequence {
     /// ```sable
     /// assert([1, 2, 3, 4].reduce(0) { $0 + $1 } == 10)
     /// ```
-    public fn reduce<R>(_ initial: R, _ next: (R, Element) throws -> R) rethrows -> R {
+    public fn reduce<R>(_ initial: R, _ next: (R, Element) throws -> R) rethrows(Failure) -> R {
         var result = initial
-        for element in self {
+        for try element in self {
             result = try next(result, element)
         }
         return result
@@ -79,24 +83,24 @@ extension Sequence {
     /// let counts = ["a", "b", "a"].reduce(into: empty) { $0[$1, default: 0] += 1 }
     /// assert(counts["a"] == 2)
     /// ```
-    public fn reduce<R>(into initial: R, _ update: (inout R, Element) throws -> Void) rethrows -> R {
+    public fn reduce<R>(into initial: R, _ update: (inout R, Element) throws -> Void) rethrows(Failure) -> R {
         var result = initial
-        for element in self {
+        for try element in self {
             try update(&result, element)
         }
         return result
     }
 
     /// Calls the closure with each element, in order.
-    public fn forEach(_ body: (Element) throws -> Void) rethrows {
-        for element in self {
+    public fn forEach(_ body: (Element) throws -> Void) rethrows(Failure) {
+        for try element in self {
             try body(element)
         }
     }
 
     /// The first element for which the closure is true, or none.
-    public fn first(where predicate: (Element) throws -> Bool) rethrows -> Element? {
-        for element in self {
+    public fn first(where predicate: (Element) throws -> Bool) rethrows(Failure) -> Element? {
+        for try element in self {
             if try predicate(element) {
                 return element
             }
@@ -105,8 +109,8 @@ extension Sequence {
     }
 
     /// Whether the closure is true for some element.
-    public fn contains(where predicate: (Element) throws -> Bool) rethrows -> Bool {
-        for element in self {
+    public fn contains(where predicate: (Element) throws -> Bool) rethrows(Failure) -> Bool {
+        for try element in self {
             if try predicate(element) {
                 return true
             }
@@ -115,8 +119,8 @@ extension Sequence {
     }
 
     /// Whether the closure is true for every element: true when there are none.
-    public fn allSatisfy(_ predicate: (Element) throws -> Bool) rethrows -> Bool {
-        for element in self {
+    public fn allSatisfy(_ predicate: (Element) throws -> Bool) rethrows(Failure) -> Bool {
+        for try element in self {
             if !(try predicate(element)) {
                 return false
             }
@@ -125,9 +129,9 @@ extension Sequence {
     }
 
     /// How many elements the closure is true for.
-    public fn count(where predicate: (Element) throws -> Bool) rethrows -> Int {
+    public fn count(where predicate: (Element) throws -> Bool) rethrows(Failure) -> Int {
         var count = 0
-        for element in self {
+        for try element in self {
             if try predicate(element) {
                 count += 1
             }
@@ -137,9 +141,9 @@ extension Sequence {
 
     /// The least element, as the closure orders them ('a' before 'b' when it
     /// is true), or none when there are none; the first of equals.
-    public fn min(by areInIncreasingOrder: (Element, Element) throws -> Bool) rethrows -> Element? {
+    public fn min(by areInIncreasingOrder: (Element, Element) throws -> Bool) rethrows(Failure) -> Element? {
         var least: Element? = none
-        for element in self {
+        for try element in self {
             if let current = least {
                 if try areInIncreasingOrder(element, current) {
                     least = element
@@ -153,9 +157,9 @@ extension Sequence {
 
     /// The greatest element, as the closure orders them, or none when there
     /// are none; the last of equals.
-    public fn max(by areInIncreasingOrder: (Element, Element) throws -> Bool) rethrows -> Element? {
+    public fn max(by areInIncreasingOrder: (Element, Element) throws -> Bool) rethrows(Failure) -> Element? {
         var greatest: Element? = none
-        for element in self {
+        for try element in self {
             if let current = greatest {
                 if !(try areInIncreasingOrder(element, current)) {
                     greatest = element
@@ -169,9 +173,9 @@ extension Sequence {
 
     /// The element whose key is least, or none; the first of equals. Each
     /// key is computed once.
-    public fn min<K: Comparable>(byKey key: (Element) throws -> K) rethrows -> Element? {
+    public fn min<K: Comparable>(byKey key: (Element) throws -> K) rethrows(Failure) -> Element? {
         var least: (element: Element, key: K)? = none
-        for element in self {
+        for try element in self {
             let candidate = try key(element)
             if let current = least {
                 if candidate < current.key {
@@ -189,9 +193,9 @@ extension Sequence {
 
     /// The element whose key is greatest, or none; the last of equals. Each
     /// key is computed once.
-    public fn max<K: Comparable>(byKey key: (Element) throws -> K) rethrows -> Element? {
+    public fn max<K: Comparable>(byKey key: (Element) throws -> K) rethrows(Failure) -> Element? {
         var greatest: (element: Element, key: K)? = none
-        for element in self {
+        for try element in self {
             let candidate = try key(element)
             if let current = greatest {
                 if !(candidate < current.key) {
@@ -210,16 +214,16 @@ extension Sequence {
     /// The elements, in the order the closure says ('a' before 'b' when it is
     /// true). The sort is stable: equal elements keep their order. It takes
     /// O(n log n) comparisons.
-    public fn sorted(by areInIncreasingOrder: (Element, Element) throws -> Bool) rethrows -> Element[>..] {
-        var elements = self.toArray()
+    public fn sorted(by areInIncreasingOrder: (Element, Element) throws -> Bool) rethrows(Failure) -> Element[>..] {
+        var elements = try self.toArray()
         try elements.sort(by: areInIncreasingOrder)
         return elements
     }
 
     /// The elements, ordered by their keys, each computed once; stable.
-    public fn sorted<K: Comparable>(byKey key: (Element) throws -> K) rethrows -> Element[>..] {
+    public fn sorted<K: Comparable>(byKey key: (Element) throws -> K) rethrows(Failure) -> Element[>..] {
         var keyed: (key: K, element: Element)[>..] = []
-        for element in self {
+        for try element in self {
             keyed.append((key: try key(element), element: element))
         }
         keyed.sort(by: { $0.key < $1.key })
@@ -237,9 +241,9 @@ extension Sequence {
     /// let byParity = [1, 2, 3, 4, 5].grouped(by: { $0 % 2 })
     /// assert(byParity[1]?.count == 3)
     /// ```
-    public fn grouped<K: Hashable>(by key: (Element) throws -> K) rethrows -> [K: Element[>..]] {
+    public fn grouped<K: Hashable>(by key: (Element) throws -> K) rethrows(Failure) -> [K: Element[>..]] {
         var groups: [K: Element[>..]] = [:]
-        for element in self {
+        for try element in self {
             let k = try key(element)
             if var group = groups[k] {
                 group.append(element)
@@ -252,9 +256,9 @@ extension Sequence {
     }
 
     /// How many elements have each key.
-    public fn counted<K: Hashable>(by key: (Element) throws -> K) rethrows -> [K: Int] {
+    public fn counted<K: Hashable>(by key: (Element) throws -> K) rethrows(Failure) -> [K: Int] {
         var counts: [K: Int] = [:]
-        for element in self {
+        for try element in self {
             let k = try key(element)
             counts[k] = (counts[k] ?? 0) + 1
         }
@@ -262,10 +266,10 @@ extension Sequence {
     }
 
     /// The elements, the first with each key kept and the rest left out.
-    public fn distinct<K: Hashable>(byKey key: (Element) throws -> K) rethrows -> Element[>..] {
+    public fn distinct<K: Hashable>(byKey key: (Element) throws -> K) rethrows(Failure) -> Element[>..] {
         var seen: [K: Bool] = [:]
         var result: Element[>..] = []
-        for element in self {
+        for try element in self {
             let k = try key(element)
             if seen[k] == none {
                 seen[k] = true
@@ -278,11 +282,11 @@ extension Sequence {
     /// The elements in arrays of 'size', in order; the last may be shorter.
     /// A size of less than one traps, as an array's 'chunks(of:)' does: an
     /// array's gives slices of itself instead of copies.
-    public fn chunks(of size: Int) -> Element[>..][>..] {
+    public fn chunks(of size: Int) throws(Failure) -> Element[>..][>..] {
         precondition(size >= 1, "a chunk's size must be at least 1, not \(size)")
         var chunks: Element[>..][>..] = []
         var chunk: Element[>..] = []
-        for element in self {
+        for try element in self {
             chunk.append(element)
             if chunk.count == size {
                 chunks.append(chunk)
@@ -298,11 +302,11 @@ extension Sequence {
     /// Every run of 'size' elements in a row, each starting one on from the
     /// last: none when there are fewer. A size of less than one traps, as an
     /// array's 'windows(of:)' does, which gives slices of itself.
-    public fn windows(of size: Int) -> Element[>..][>..] {
+    public fn windows(of size: Int) throws(Failure) -> Element[>..][>..] {
         precondition(size >= 1, "a window's size must be at least 1, not \(size)")
         var windows: Element[>..][>..] = []
         var elements: Element[>..] = []
-        for element in self {
+        for try element in self {
             elements.append(element)
         }
         var start = 0
@@ -320,10 +324,10 @@ extension Sequence {
     }
 
     /// The elements the closure is true for, and those it is not, each in order.
-    public fn partitioned(by belongsInFirst: (Element) throws -> Bool) rethrows -> (matching: Element[>..], rest: Element[>..]) {
+    public fn partitioned(by belongsInFirst: (Element) throws -> Bool) rethrows(Failure) -> (matching: Element[>..], rest: Element[>..]) {
         var matching: Element[>..] = []
         var rest: Element[>..] = []
-        for element in self {
+        for try element in self {
             if try belongsInFirst(element) {
                 matching.append(element)
             } else {
@@ -334,12 +338,12 @@ extension Sequence {
     }
 
     /// The first 'n' elements, or all of them when there are fewer.
-    public fn prefix(_ n: Int) -> Element[>..] {
+    public fn prefix(_ n: Int) throws(Failure) -> Element[>..] {
         var result: Element[>..] = []
         if n <= 0 {
             return result
         }
-        for element in self {
+        for try element in self {
             result.append(element)
             if result.count == n {
                 break
@@ -349,9 +353,9 @@ extension Sequence {
     }
 
     /// The elements from the first, up to the first for which the closure is false.
-    public fn prefix(while predicate: (Element) throws -> Bool) rethrows -> Element[>..] {
+    public fn prefix(while predicate: (Element) throws -> Bool) rethrows(Failure) -> Element[>..] {
         var result: Element[>..] = []
-        for element in self {
+        for try element in self {
             if !(try predicate(element)) {
                 break
             }
@@ -361,10 +365,10 @@ extension Sequence {
     }
 
     /// The elements after the first 'n'.
-    public fn dropFirst(_ n: Int) -> Element[>..] {
+    public fn dropFirst(_ n: Int) throws(Failure) -> Element[>..] {
         var result: Element[>..] = []
         var skipped = 0
-        for element in self {
+        for try element in self {
             if skipped < n {
                 skipped += 1
             } else {
@@ -375,10 +379,10 @@ extension Sequence {
     }
 
     /// The elements from the first for which the closure is false.
-    public fn drop(while predicate: (Element) throws -> Bool) rethrows -> Element[>..] {
+    public fn drop(while predicate: (Element) throws -> Bool) rethrows(Failure) -> Element[>..] {
         var result: Element[>..] = []
         var dropping = true
-        for element in self {
+        for try element in self {
             if dropping && (try predicate(element)) {
                 continue
             }
@@ -389,9 +393,9 @@ extension Sequence {
     }
 
     /// The last 'n' elements, or all of them when there are fewer.
-    public fn suffix(_ n: Int) -> Element[>..] {
+    public fn suffix(_ n: Int) throws(Failure) -> Element[>..] {
         var elements: Element[>..] = []
-        for element in self {
+        for try element in self {
             elements.append(element)
         }
         var result: Element[>..] = []
@@ -407,9 +411,9 @@ extension Sequence {
     }
 
     /// The elements but the last 'n'.
-    public fn dropLast(_ n: Int) -> Element[>..] {
+    public fn dropLast(_ n: Int) throws(Failure) -> Element[>..] {
         var result: Element[>..] = []
-        for element in self {
+        for try element in self {
             result.append(element)
         }
         var dropped = 0
@@ -423,10 +427,10 @@ extension Sequence {
     /// The runs of elements between those the closure says separate them,
     /// the separators left out; empty runs are kept, so there is always one
     /// more run than separators.
-    public fn split(where isSeparator: (Element) throws -> Bool) rethrows -> Element[>..][>..] {
+    public fn split(where isSeparator: (Element) throws -> Bool) rethrows(Failure) -> Element[>..][>..] {
         var runs: Element[>..][>..] = []
         var run: Element[>..] = []
-        for element in self {
+        for try element in self {
             if try isSeparator(element) {
                 runs.append(run)
                 run = []
@@ -439,9 +443,9 @@ extension Sequence {
     }
 
     /// The elements with the separator between each two.
-    public fn interspersed(with separator: Element) -> Element[>..] {
+    public fn interspersed(with separator: Element) throws(Failure) -> Element[>..] {
         var result: Element[>..] = []
-        for element in self {
+        for try element in self {
             if !result.isEmpty {
                 result.append(separator)
             }
@@ -451,9 +455,9 @@ extension Sequence {
     }
 
     /// The elements, in an array of their own.
-    public fn toArray() -> Element[>..] {
+    public fn toArray() throws(Failure) -> Element[>..] {
         var result: Element[>..] = []
-        for element in self {
+        for try element in self {
             result.append(element)
         }
         return result
@@ -461,12 +465,12 @@ extension Sequence {
 
     /// Whether the two give equal elements, as the closure says, in the same
     /// order, and as many.
-    public fn elementsEqual<S: Sequence>(_ other: S, by areEquivalent: (Element, S.Element) throws -> Bool) rethrows -> Bool {
+    public fn elementsEqual<S: Sequence>(_ other: S, by areEquivalent: (Element, S.Element) throws -> Bool) rethrows(Failure | S.Failure) -> Bool {
         var mine = self.makeIterator()
         var theirs = other.makeIterator()
         while true {
-            let a = mine.next()
-            let b = theirs.next()
+            let a = try mine.next()
+            let b = try theirs.next()
             if let x = a, let y = b {
                 if !(try areEquivalent(x, y)) {
                     return false
@@ -479,10 +483,10 @@ extension Sequence {
 
     /// Whether the sequence begins with the other's elements, as the closure
     /// compares them.
-    public fn starts<S: Sequence>(with beginning: S, by areEquivalent: (Element, S.Element) throws -> Bool) rethrows -> Bool {
+    public fn starts<S: Sequence>(with beginning: S, by areEquivalent: (Element, S.Element) throws -> Bool) rethrows(Failure | S.Failure) -> Bool {
         var mine = self.makeIterator()
-        for wanted in beginning {
-            guard let element = mine.next() else {
+        for try wanted in beginning {
+            guard let element = try mine.next() else {
                 return false
             }
             if !(try areEquivalent(element, wanted)) {
@@ -495,15 +499,15 @@ extension Sequence {
     /// Whether the sequence comes before the other in dictionary order, as
     /// the closure orders elements: at the first that differ, or by being a
     /// prefix of it.
-    public fn lexicographicallyPrecedes<S: Sequence>(_ other: S, by areInIncreasingOrder: (Element, Element) throws -> Bool) rethrows -> Bool
+    public fn lexicographicallyPrecedes<S: Sequence>(_ other: S, by areInIncreasingOrder: (Element, Element) throws -> Bool) rethrows(Failure | S.Failure) -> Bool
         where S.Element == Element {
         var mine = self.makeIterator()
         var theirs = other.makeIterator()
         while true {
-            guard let b = theirs.next() else {
+            guard let b = try theirs.next() else {
                 return false
             }
-            guard let a = mine.next() else {
+            guard let a = try mine.next() else {
                 return true
             }
             if try areInIncreasingOrder(a, b) {
@@ -538,8 +542,8 @@ extension Sequence {
 
 extension Sequence where Element: Equatable {
     /// Whether an element equal to this one is in the sequence.
-    public fn contains(_ element: Element) -> Bool {
-        for candidate in self {
+    public fn contains(_ element: Element) throws(Failure) -> Bool {
+        for try candidate in self {
             if candidate == element {
                 return true
             }
@@ -548,35 +552,35 @@ extension Sequence where Element: Equatable {
     }
 
     /// Whether the two give equal elements in the same order, and as many.
-    public fn elementsEqual<S: Sequence>(_ other: S) -> Bool where S.Element == Element {
-        return self.elementsEqual(other, by: { $0 == $1 })
+    public fn elementsEqual<S: Sequence>(_ other: S) throws(Failure | S.Failure) -> Bool where S.Element == Element {
+        return try self.elementsEqual(other, by: { $0 == $1 })
     }
 
     /// Whether the sequence begins with the other's elements.
-    public fn starts<S: Sequence>(with beginning: S) -> Bool where S.Element == Element {
-        return self.starts(with: beginning, by: { $0 == $1 })
+    public fn starts<S: Sequence>(with beginning: S) throws(Failure | S.Failure) -> Bool where S.Element == Element {
+        return try self.starts(with: beginning, by: { $0 == $1 })
     }
 }
 
 extension Sequence where Element: Comparable {
     /// The least element, or none when there are none.
-    public fn min() -> Element? {
-        return self.min(by: { $0 < $1 })
+    public fn min() throws(Failure) -> Element? {
+        return try self.min(by: { $0 < $1 })
     }
 
     /// The greatest element, or none when there are none.
-    public fn max() -> Element? {
-        return self.max(by: { $0 < $1 })
+    public fn max() throws(Failure) -> Element? {
+        return try self.max(by: { $0 < $1 })
     }
 
     /// The elements in increasing order; stable.
-    public fn sorted() -> Element[>..] {
-        return self.sorted(by: { $0 < $1 })
+    public fn sorted() throws(Failure) -> Element[>..] {
+        return try self.sorted(by: { $0 < $1 })
     }
 
     /// Whether the sequence comes before the other in dictionary order.
-    public fn lexicographicallyPrecedes<S: Sequence>(_ other: S) -> Bool where S.Element == Element {
-        return self.lexicographicallyPrecedes(other, by: { $0 < $1 })
+    public fn lexicographicallyPrecedes<S: Sequence>(_ other: S) throws(Failure | S.Failure) -> Bool where S.Element == Element {
+        return try self.lexicographicallyPrecedes(other, by: { $0 < $1 })
     }
 }
 
@@ -590,9 +594,9 @@ extension Sequence where Element: AdditiveArithmetic {
     /// let empty: Int[>..] = []
     /// assert(empty.sum() == 0)
     /// ```
-    public fn sum() -> Element {
+    public fn sum() throws(Failure) -> Element {
         var total = Element.zero
-        for element in self {
+        for try element in self {
             total = total + element
         }
         return total
@@ -608,9 +612,9 @@ extension Sequence where Element: Numeric {
     /// let empty: U8[>..] = []
     /// assert(empty.product() == 1)
     /// ```
-    public fn product() -> Element {
+    public fn product() throws(Failure) -> Element {
         var total = Element.one
-        for element in self {
+        for try element in self {
             total = total * element
         }
         return total
@@ -619,17 +623,17 @@ extension Sequence where Element: Numeric {
 
 extension Sequence where Element: Hashable {
     /// The elements, each kept the first time it comes and left out after.
-    public fn distinct() -> Element[>..] {
-        return self.distinct(byKey: { $0 })
+    public fn distinct() throws(Failure) -> Element[>..] {
+        return try self.distinct(byKey: { $0 })
     }
 }
 
 extension Sequence where Element: Sequence {
     /// The elements of each inner sequence, one sequence after another.
-    public fn joined() -> Element.Element[>..] {
+    public fn joined() throws(Failure | Element.Failure) -> Element.Element[>..] {
         var result: Element.Element[>..] = []
-        for inner in self {
-            for element in inner {
+        for try inner in self {
+            for try element in inner {
                 result.append(element)
             }
         }
@@ -639,9 +643,9 @@ extension Sequence where Element: Sequence {
 
 extension Sequence where Element == String {
     /// The strings, one after another, with the separator between each two.
-    public fn joined(separator: String) -> String {
+    public fn joined(separator: String) throws(Failure) -> String {
         var parts: String[>..] = []
-        for part in self {
+        for try part in self {
             parts.append(part)
         }
         return Runtime.joinStrings(parts, separator)

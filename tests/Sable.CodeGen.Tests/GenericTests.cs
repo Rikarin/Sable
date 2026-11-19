@@ -600,7 +600,7 @@ public sealed class GenericTests {
 
                     struct Bag<T> {
                         var items: T[>..] = []
-                        init<S: Sequence>(from s: S) where S.Element == T {
+                        init<S: Sequence>(from s: S) where S.Element == T, S.Failure == Never {
                             for x in s { items.append(x) }
                         }
                     }

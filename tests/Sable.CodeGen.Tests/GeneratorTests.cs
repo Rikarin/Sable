@@ -157,7 +157,7 @@ public sealed class GeneratorTests {
                         }
                     }
 
-                    extension Sequence {
+                    extension Sequence where Failure == Never {
                         fn everyOther() -> some Sequence<Element> {
                             var keep = true
                             for x in self {

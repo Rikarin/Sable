@@ -70,6 +70,17 @@ public sealed class CommandTests {
     }
 
     [Fact]
+    public async Task ALoopOverASequenceThatCanThrowGetsForTry() {
+        const string Text = "module App\n\nfn lines() throws -> some Sequence<String> {\n    yield \"a\"\n}\n\nfn f() throws {\n    for line in lines() {\n        print(line)\n    }\n}\n";
+        await using var client = new TestClient();
+        await client.InitializeAsync();
+        const string uri = "file:///tmp/fix-for-try.sb";
+        await client.OpenAsync(uri, Text);
+        var fixedText = await FixAsync(client, uri, Text, "S3032", "Add 'try'");
+        Assert.Contains("    for try line in lines() {", fixedText, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task AMatchGetsItsMissingCases() {
         const string Text = "module App\n\nunion Shape { Circle(F64), Rect(F64, F64), Empty }\n\nfn f(_ s: Shape) -> Int {\n    return match s {\n        case .Empty => 0\n    }\n}\n";
         await using var client = new TestClient();

@@ -173,10 +173,23 @@ public sealed class AddressType(SilType pointee) : SilType {
 ///     <c>@owned</c>: then the caller hands it over, and the callee must
 ///     consume it. An initialiser's are owned, since it usually stores them.
 /// </remarks>
-public sealed class FunctionType(ImmutableArray<SilType> parameters, SilType result, SilType? thrown = null, ImmutableArray<bool> owned = default)
+public sealed class FunctionType(ImmutableArray<SilType> parameters, SilType result, SilType? thrown = null, ImmutableArray<bool> owned = default, bool isAsync = false)
     : SilType {
     public ImmutableArray<SilType> Parameters { get; } = parameters;
     public SilType Result { get; } = result;
+
+    /// <summary>
+    ///     An <c>async</c> function: one that may suspend. Lowering and the
+    ///     passes treat a call to one as any other call; <see cref="AsyncLowering" />,
+    ///     last, makes each such function a coroutine — a frame on its task's
+    ///     slab and a resume function — and each call to one the start of a
+    ///     frame and the polling of it.
+    /// </summary>
+    public bool IsAsync { get; } = isAsync;
+
+    /// <summary>The same, async or not.</summary>
+    public FunctionType WithAsync(bool isAsync) =>
+        isAsync == IsAsync ? this : new(Parameters, Result, Thrown, Owned.IsEmpty ? default : Owned, isAsync);
 
     /// <summary>The error a <c>throws(E)</c> function may throw, or null when it cannot.</summary>
     public SilType? Thrown { get; } = thrown;
@@ -188,7 +201,8 @@ public sealed class FunctionType(ImmutableArray<SilType> parameters, SilType res
 
     public override string ToString() {
         var parameters = string.Join(", ", Parameters.Select((p, i) => IsOwned(i) ? $"@owned {p}" : p.ToString()));
-        return Thrown is null ? $"({parameters}) -> {Result}" : $"({parameters}) throws({Thrown}) -> {Result}";
+        var effects = (IsAsync ? " async" : "") + (Thrown is null ? "" : $" throws({Thrown})");
+        return $"({parameters}){effects} -> {Result}";
     }
 }
 
@@ -202,7 +216,7 @@ public sealed class ThickFunctionType(FunctionType signature) : SilType {
     public FunctionType Signature { get; } = signature;
 
     public FunctionType Implementation =>
-        new([..Signature.Parameters, Object], Signature.Result, Signature.Thrown, Signature.Owned.IsEmpty ? default : [..Signature.Owned, false]);
+        new([..Signature.Parameters, Object], Signature.Result, Signature.Thrown, Signature.Owned.IsEmpty ? default : [..Signature.Owned, false], Signature.IsAsync);
 
     public override bool IsTrivial => false;
     public override string ToString() => $"@thick {Signature}";
@@ -528,6 +542,15 @@ public sealed class ClassType(string name) : NominalType(name) {
     ///     stored first: a generator's frame, whose slots fill as its body runs.
     /// </summary>
     public int? EmptyFrom { get; set; }
+
+    /// <summary>
+    ///     An async function's frame (<see cref="AsyncLowering" />): made on
+    ///     its task's frame slab, not the heap, and given back by
+    ///     <c>async_frame_free</c> once its function has finished — never
+    ///     counted. Its fields hold what the function keeps while it is
+    ///     suspended, as bits: they are never destroyed with it.
+    /// </summary>
+    public bool IsCoroutineFrame { get; init; }
 
     /// <summary>
     ///     The protocols the class conforms to by its own declaration or its
@@ -1009,9 +1032,13 @@ public sealed class UpcastInst(SilValue value, ClassType type) : SilInstruction(
 ///     method for the class the object actually is, from its vtable.
 /// </summary>
 public sealed class ClassMethodInst(SilValue reference, string method, FunctionType type) : SilInstruction(reference) {
+    FunctionType _type = type;
     public SilValue Reference => Operands[0];
     public string Method { get; } = method;
-    public override SilType Type { get; } = type;
+    public override SilType Type => _type;
+
+    /// <summary>The method seen with another signature: an async one's, as the start of its frame (<see cref="AsyncLowering" />).</summary>
+    internal void Retype(FunctionType type) => _type = type;
     public override string Opcode => "class_method";
 }
 
@@ -1107,8 +1134,12 @@ public sealed class GlobalAddrInst(string global, SilType type) : SilInstruction
 
 /// <summary><c>function_ref @f : $(Int) -&gt; Int</c>: a function as a value.</summary>
 public sealed class FunctionRefInst(string function, FunctionType type) : SilInstruction {
+    FunctionType _type = type;
     public string Function { get; } = function;
-    public override SilType Type { get; } = type;
+    public override SilType Type => _type;
+
+    /// <summary>The function seen with another signature: its own, once <see cref="AsyncLowering" /> has changed it.</summary>
+    internal void Retype(FunctionType type) => _type = type;
     public override string Opcode => "function_ref";
 }
 
@@ -1257,7 +1288,7 @@ public sealed record SilDecision(SilLocation At, string Kind, IReadOnlyList<stri
 
 /// <summary>A SIL function: a signature and blocks, the first of which is the entry.</summary>
 public sealed class SilFunction(string name, FunctionType type) {
-    public string Name { get; } = name;
+    public string Name { get; internal set; } = name;
 
     /// <summary>The module the function belongs to, once it is added to one.</summary>
     public SilModule? Module { get; internal set; }
@@ -1268,7 +1299,7 @@ public sealed class SilFunction(string name, FunctionType type) {
     ///     of its interface (docs/02 §2.4). Printed as <c>roots(0, 1)</c>.
     /// </summary>
     public IReadOnlyList<int>? ResultRoots { get; set; }
-    public FunctionType Type { get; } = type;
+    public FunctionType Type { get; internal set; } = type;
     public List<SilBlock> Blocks { get; } = [];
 
     /// <summary>The decisions of its source that lowering marked, for branch coverage: each kept though its blocks may be gone, as code never reached.</summary>
@@ -1415,6 +1446,21 @@ public sealed class SilModule {
     }
 
     public SilFunction? Find(string name) => _byName.GetValueOrDefault(name);
+
+    /// <summary>Gives a function of the module another name, which it is then found by.</summary>
+    internal void Rename(SilFunction function, string name) {
+        _byName.Remove(function.Name);
+        function.Name = name;
+        _byName[name] = function;
+    }
+
+    /// <summary>
+    ///     Set once <see cref="AsyncLowering" /> has made the async functions
+    ///     coroutines: what runs the module — the interpreter, the code
+    ///     generator — needs it done, and done once. The verifier no longer
+    ///     holds the module to ownership after it.
+    /// </summary>
+    public bool AsyncLowered { get; set; }
 
     public SilFunction Add(SilFunction function) {
         Functions.Add(function);

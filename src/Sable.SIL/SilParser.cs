@@ -616,6 +616,7 @@ public sealed class SilParser {
 
             Expect(")");
 
+            var isAsync = Accept("async");
             SilType? thrown = null;
             if (Accept("throws")) {
                 Expect("(");
@@ -624,10 +625,10 @@ public sealed class SilParser {
             }
 
             if (Accept("->")) {
-                return new FunctionType(parts.ToImmutable(), ParseTypeBody(), thrown, owned.ToImmutable());
+                return new FunctionType(parts.ToImmutable(), ParseTypeBody(), thrown, owned.ToImmutable(), isAsync);
             }
 
-            if (thrown is not null || owned.Contains(true)) {
+            if (thrown is not null || isAsync || owned.Contains(true)) {
                 throw Error("'throws' and '@owned' belong to a function type");
             }
 

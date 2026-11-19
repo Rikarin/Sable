@@ -14,6 +14,7 @@
 #include <fcntl.h>
 #include <io.h>
 #include <shellapi.h>
+#include <psapi.h>
 
 #pragma comment(lib, "bcrypt")
 #pragma comment(lib, "dbghelp")
@@ -148,65 +149,6 @@ static void platform_start(void) {
     AddVectoredExceptionHandler(1, on_exception);
 }
 
-// ---- Tasks' threads -------------------------------------------------------
-
-// A slim reader-writer lock, held exclusively, and condition variables.
-struct TaskCondition {
-    CONDITION_VARIABLE condition;
-};
-
-static SRWLOCK task_lock = SRWLOCK_INIT;
-
-static void lock_tasks(void) {
-    AcquireSRWLockExclusive(&task_lock);
-}
-
-static void condition_init(TaskCondition *condition) {
-    InitializeConditionVariable(&condition->condition);
-}
-
-static void condition_destroy(TaskCondition *condition) {
-    (void)condition;
-}
-
-static void condition_signal(TaskCondition *condition) {
-    WakeConditionVariable(&condition->condition);
-}
-
-static void condition_wait(TaskCondition *condition) {
-    SleepConditionVariableSRW(&condition->condition, &task_lock, INFINITE, 0);
-}
-
-typedef struct {
-    void (*body)(void *argument);
-    void *argument;
-} ThreadStart;
-
-static DWORD WINAPI thread_entry(void *start) {
-    ThreadStart what = *(ThreadStart *)start;
-    free(start);
-    what.body(what.argument);
-    return 0;
-}
-
-static bool start_thread(void (*body)(void *argument), void *argument) {
-    ThreadStart *start = malloc(sizeof(ThreadStart));
-    if (start == NULL) {
-        return false;
-    }
-
-    start->body = body;
-    start->argument = argument;
-    HANDLE thread = CreateThread(NULL, 8u << 20, thread_entry, start, STACK_SIZE_PARAM_IS_A_RESERVATION, NULL);
-    if (thread == NULL) {
-        free(start);
-        return false;
-    }
-
-    CloseHandle(thread);
-    return true;
-}
-
 // ---- Memory ----------------------------------------------------------------
 
 // What VirtualAlloc gives starts on its allocation granularity, 64 KiB: a
@@ -234,6 +176,16 @@ static void *map_slab(size_t size) {
 static void unmap_slab(void *slab, size_t size) {
     (void)size;
     VirtualFree(slab, 0, MEM_RELEASE);
+}
+
+// Kernel32's own name for it, which needs no psapi library to link.
+static int64_t peak_memory(void) {
+    PROCESS_MEMORY_COUNTERS counters;
+    if (!K32GetProcessMemoryInfo(GetCurrentProcess(), &counters, sizeof counters)) {
+        return 0;
+    }
+
+    return (int64_t)counters.PeakWorkingSetSize;
 }
 
 // ---- Time (Sable.Time's floor) ------------------------------------------

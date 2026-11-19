@@ -91,6 +91,7 @@ public sealed partial class LlvmEmitter {
     HashSet<string>? _reachable;
 
     string EmitModule(SilModule module) {
+        AsyncLowering.Run(module);
         _module = module;
         _pointerBytes = _arch == "wasm32" ? 4 : 8;
         _checkExclusivity = module.CheckExclusivity;
@@ -495,14 +496,17 @@ public sealed partial class LlvmEmitter {
                                 declare { i64, i1 } @llvm.umul.with.overflow.i64(i64, i64)
                                 declare ptr @sable_inline_new(ptr)
                                 declare zeroext i1 @sable_class_is(ptr, ptr)
-                                declare ptr @sable_task_spawn(ptr, ptr)
-                                declare void @sable_task_wait(ptr)
+                                declare ptr @sable_task_spawn(ptr, ptr, ptr)
+                                declare zeroext i1 @sable_task_wait(ptr)
                                 declare void @sable_task_release(ptr)
                                 declare void @sable_task_cancel(ptr)
                                 declare zeroext i1 @sable_task_is_cancelled()
-                                declare void @sable_task_yield()
-                                declare void @sable_task_sleep(i64)
+                                declare zeroext i1 @sable_task_yield()
+                                declare zeroext i1 @sable_task_sleep(i64)
                                 declare void @sable_tasks_drain()
+                                declare void @sable_task_run_until_main()
+                                declare ptr @sable_frame_alloc(i64)
+                                declare void @sable_frame_free(ptr)
                                 declare void @sable_coverage_hit(i64)
                                 declare void @sable_array_make_unique(ptr nocapture, ptr)
                                 @sable_empty_array_count = internal constant %SableArrayHeader zeroinitializer
@@ -2061,6 +2065,13 @@ public sealed partial class LlvmEmitter {
                     var name = Fresh();
                     _names[alloc] = name;
                     var size = $"ptrtoint (ptr getelementptr ({ObjectType(alloc.ClassType)}, ptr null, i32 1) to i64)";
+
+                    // An async function's frame: on its task's slab, never counted (AsyncLowering).
+                    if (alloc.ClassType.IsCoroutineFrame) {
+                        Line($"{name} = call ptr @sable_frame_alloc(i64 {size})");
+                        return;
+                    }
+
                     if (alloc.OnStack) {
                         // In the frame: the header made there, freed with it.
                         // Aligned as the heap's blocks are, which the layout assumes.
@@ -2613,34 +2624,51 @@ public sealed partial class LlvmEmitter {
             }
 
             switch (builtin.Name) {
+                // A task: its root frame's start and resume functions, and what the start is given.
                 case "task_spawn": {
                     var handle = Fresh();
-                    Line($"{handle} = call ptr @sable_task_spawn(ptr {operands[0]}, ptr {operands[1]})");
+                    Line($"{handle} = call ptr @sable_task_spawn(ptr {operands[0]}, ptr {operands[1]}, ptr {operands[2]})");
                     Line($"{Result()} = ptrtoint ptr {handle} to i64");
                     return;
                 }
 
-                case "task_wait" or "task_release" or "task_cancel": {
+                case "task_release" or "task_cancel": {
                     var handle = Fresh();
                     Line($"{handle} = inttoptr i64 {operands[0]} to ptr");
                     Line($"call void @sable_{builtin.Name}(ptr {handle})");
                     return;
                 }
 
-                case "task_yield":
-                    Line("call void @sable_task_yield()");
+                // The places a task waits (AsyncLowering): each says whether it must suspend.
+                case "async_wait": {
+                    var handle = Fresh();
+                    Line($"{handle} = inttoptr i64 {operands[0]} to ptr");
+                    Line($"{Result()} = call zeroext i1 @sable_task_wait(ptr {handle})");
+                    return;
+                }
+
+                case "async_yield":
+                    Line($"{Result()} = call zeroext i1 @sable_task_yield()");
+                    return;
+
+                case "async_sleep":
+                    Line($"{Result()} = call zeroext i1 @sable_task_sleep(i64 {operands[0]})");
+                    return;
+
+                case "async_frame_free":
+                    Line($"call void @sable_frame_free(ptr {operands[0]})");
                     return;
 
                 case "task_is_cancelled":
                     Line($"{Result()} = call zeroext i1 @sable_task_is_cancelled()");
                     return;
 
-                case "task_sleep":
-                    Line($"call void @sable_task_sleep(i64 {operands[0]})");
-                    return;
-
                 case "task_drain":
                     Line("call void @sable_tasks_drain()");
+                    return;
+
+                case "task_run_until_main":
+                    Line("call void @sable_task_run_until_main()");
                     return;
 
                 case Coverage.Builtin:

@@ -49,6 +49,14 @@ public sealed class SilTrap(string message, bool located = true) : Exception(mes
 /// </remarks>
 public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10_000_000, int depthLimit = 2_000) {
     long _steps;
+
+    // What runs a module needs its async functions made coroutines first.
+    readonly bool _asyncLowered = LowerAsync(module);
+
+    static bool LowerAsync(SilModule module) {
+        AsyncLowering.Run(module);
+        return true;
+    }
     readonly Dictionary<StringLiteralInst, HeapString> _literals = [];
 
     /// <summary>
@@ -871,7 +879,7 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                         var address = (IReference)Get(load.Address)!;
 
                         // Empty storage for an array is the empty array.
-                        var loaded = load.Type is ArrayType ? address.Peek() : address.Get();
+                        var loaded = load.Type is ArrayType || address is Field { Instance.Type.IsCoroutineFrame: true } ? address.Peek() : address.Get();
                         switch (load.Kind) {
                             case LoadKind.Copy:
                                 Retain(load.Type, loaded);
@@ -888,7 +896,7 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                     case StoreInst store: {
                         var address = (IReference)Get(store.Address)!;
                         var old = address.Peek();
-                        if (!store.Value.Type.IsTrivial && store.Kind == StoreKind.Init && old is not null) {
+                        if (!store.Value.Type.IsTrivial && store.Kind == StoreKind.Init && old is not null && address is not Field { Instance.Type.IsCoroutineFrame: true }) {
                             throw new SilTrap("store [init] into storage that holds a value");
                         }
 
@@ -981,7 +989,7 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                         break;
 
                     case AllocRefInst alloc:
-                        values[alloc] = Allocate(new HeapObject(alloc.ClassType), alloc.OnStack);
+                        values[alloc] = alloc.ClassType.IsCoroutineFrame ? PushFrame(alloc.ClassType) : Allocate(new HeapObject(alloc.ClassType), alloc.OnStack);
                         break;
 
                     case RefElementAddrInst element:
@@ -1854,7 +1862,7 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             return Inline(builtin, operands, depth);
         }
 
-        if (builtin.Name.StartsWith("task_", StringComparison.Ordinal)) {
+        if (builtin.Name.StartsWith("task_", StringComparison.Ordinal) || builtin.Name.StartsWith("async_", StringComparison.Ordinal)) {
             return Task(builtin.Name, operands);
         }
 

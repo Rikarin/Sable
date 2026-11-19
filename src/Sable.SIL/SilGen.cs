@@ -1492,10 +1492,10 @@ public sealed partial class SilGen {
     FunctionType? SignatureOf(FunctionSymbol symbol, SyntaxNode at, TypeSubstitution substitution) {
         SilType? Lower(TypeSymbol type) => this.Lower(Substitute(substitution, type));
 
-        // An async function is an ordinary one: a task suspends only where
-        // it waits, in the runtime, with its whole stack (docs/04 §5). A
-        // 'rethrows' one throws what its function parameters throw, together:
-        // the binder has made that its thrown type.
+        // An async function is lowered as an ordinary one, its type marked
+        // async: AsyncLowering makes it a coroutine once every pass has run.
+        // A 'rethrows' one throws what its function parameters throw,
+        // together: the binder has made that its thrown type.
         var parameters = ImmutableArray.CreateBuilder<SilType>();
 
         // 'self' comes first: by value, or by address when the method may change it.
@@ -1549,7 +1549,8 @@ public sealed partial class SilGen {
             && (symbol.FunctionKind == FunctionKind.Initializer
                 || i >= selfCount && symbol.Parameters[i - selfCount].Modifier == ParameterModifier.Consuming)).ToImmutableArray();
 
-        return new FunctionType(parameters.ToImmutable(), result, thrown, owned);
+        // A generator's call only captures: only its 'next()' may wait.
+        return new FunctionType(parameters.ToImmutable(), result, thrown, owned, symbol.IsAsync && !isGeneratorCall);
     }
 
     /// <summary>The type a member's <c>self</c> is: its owner, constructed with the type arguments in force.</summary>
@@ -1754,7 +1755,7 @@ public sealed partial class SilGen {
                     return null;
                 }
 
-                return new ThickFunctionType(new FunctionType(parameters.ToImmutable(), result, thrown));
+                return new ThickFunctionType(new FunctionType(parameters.ToImmutable(), result, thrown, isAsync: functionType.IsAsync));
             }
 
             case OptionalTypeSymbol optional: {
@@ -2359,8 +2360,9 @@ public sealed partial class SilGen {
 
     /// <summary>
     ///     A function value as a function type that throws where it does not,
-    ///     or throws another error: code that calls it, converting what it
-    ///     throws. Its context is a box holding the function converted.
+    ///     or throws another error, or is async where it is not: code that
+    ///     calls it, converting what it throws — async, a frame that never
+    ///     suspends. Its context is a box holding the function converted.
     /// </summary>
     internal (string Name, FunctionType Type)? ConversionThunk(ThickFunctionType from, ThickFunctionType to) {
         var name = $"$convert${Sanitise(from.ToString())}$to${Sanitise(to.ToString())}";
@@ -2371,7 +2373,7 @@ public sealed partial class SilGen {
 
         var source = from.Signature;
         if (!source.Parameters.SequenceEqual(to.Signature.Parameters) || source.Result != to.Signature.Result
-            || source.Thrown is not null && to.Signature.Thrown is null) {
+            || source.Thrown is not null && to.Signature.Thrown is null || source.IsAsync && !to.Signature.IsAsync) {
             return null;
         }
 
@@ -2865,7 +2867,7 @@ public sealed partial class SilGen {
 
         // A slot's function: the requirement's own parameters, then the box —
         // where it is, for one that changes the value.
-        ThickFunctionType? Slot(IEnumerable<TypeSymbol> parameters, TypeSymbol result, TypeSymbol? thrown, bool changes, TypeSubstitution arguments) {
+        ThickFunctionType? Slot(IEnumerable<TypeSymbol> parameters, TypeSymbol result, TypeSymbol? thrown, bool changes, TypeSubstitution arguments, bool isAsync = false) {
             var lowered = new List<SilType>();
             foreach (var parameter in parameters) {
                 if (Lower(arguments.Apply(parameter)) is not { } type) {
@@ -2885,7 +2887,7 @@ public sealed partial class SilGen {
             }
 
             lowered.Add(changes ? new AddressType(root) : root);
-            return new ThickFunctionType(new FunctionType([..lowered], resultType, thrownType));
+            return new ThickFunctionType(new FunctionType([..lowered], resultType, thrownType, isAsync: isAsync));
         }
 
         foreach (var named in protocols) {
@@ -2906,7 +2908,7 @@ public sealed partial class SilGen {
                         case FunctionSymbol { IsStatic: false, FunctionKind: FunctionKind.Ordinary, TypeParameters.IsEmpty: true } method
                             when seen.Add(SlotName(method)) && !method.Parameters.Any(p => MentionsSelf(p.Type) || p.Modifier != ParameterModifier.None)
                                  && !MentionsSelf(method.ReturnType): {
-                            if (Slot(method.Parameters.Select(static p => p.Type), method.ReturnType, method.ThrownType, method.IsMutating, arguments) is { } thick) {
+                            if (Slot(method.Parameters.Select(static p => p.Type), method.ReturnType, method.ThrownType, method.IsMutating, arguments, method.IsAsync) is { } thick) {
                                 layout.Fields.Add((SlotName(method), thick));
                                 slots.Add((SlotName(method), method));
                             }
@@ -2915,7 +2917,7 @@ public sealed partial class SilGen {
                         }
 
                         case FieldSymbol { IsStatic: false } field when seen.Add(GetterSlot(field)) && !MentionsSelf(field.Type): {
-                            if (Slot([], field.Type, null, false, arguments) is { } getter) {
+                            if (Slot([], field.Type, null, false, arguments, field.IsAsyncGetter) is { } getter) {
                                 layout.Fields.Add((GetterSlot(field), getter));
                                 slots.Add((GetterSlot(field), field));
                             }

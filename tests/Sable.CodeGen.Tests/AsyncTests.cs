@@ -1,11 +1,14 @@
+using System.Globalization;
+using System.Text.RegularExpressions;
 using static Sable.CodeGen.Tests.Programs;
 
 namespace Sable.CodeGen.Tests;
 
 /// <summary>
-///     async and await (docs/02 §2.7, docs/04 §5): tasks scheduled
-///     cooperatively, one at a time, switching only where one waits — so
-///     the interleaving is deterministic, and the interpreter's is the
+///     async and await (docs/02 §2.7, docs/04 §5): async functions are
+///     state machines whose frames are on their task's slab, and tasks are
+///     run by one executor, one at a time, switching only where one waits —
+///     so the interleaving is deterministic, and the interpreter's is the
 ///     native one. Actors serialise by construction; calls into one from
 ///     outside it await.
 /// </summary>
@@ -164,9 +167,8 @@ public sealed class AsyncTests {
         );
 
     /// <summary>
-    ///     A task is given a thread only when it first runs, and a finished
-    ///     task's thread runs the next: twenty thousand tasks, which would be
-    ///     twenty thousand threads, run on a few (#185).
+    ///     A task is a frame on a slab of its own, not a thread: twenty
+    ///     thousand tasks run on the program's one thread (#185, #276).
     /// </summary>
     [Fact]
     public void ManyTasksDoNotNeedAThreadEach() =>
@@ -238,4 +240,93 @@ public sealed class AsyncTests {
                     print("got \(got + zero)")
                 """)).Stdout
         );
+
+    /// <summary>
+    ///     An await chain, recursive so that nothing inlines it, each level
+    ///     waiting while another task runs: what each suspends and resumes
+    ///     with, every value live across an await, is kept in frames on the
+    ///     task's slab, so a thousand rounds allocate no more than ten (#276).
+    /// </summary>
+    static string AwaitChain(int rounds) =>
+        AsyncProgram(
+            """
+            fn chain(_ depth: Int, _ label: String) async -> Int {
+                if depth == 0 {
+                    await Task.yield()
+                    return label.count
+                }
+                let below = await chain(depth - 1, label)
+                return below + depth
+            }
+            """,
+            $$"""
+                let other = Task.spawn {
+                    var turns = 0
+                    for _ in 0..<{{rounds}} {
+                        await Task.yield()
+                        turns += 1
+                    }
+                    return turns
+                }
+                var total = 0
+                for round in 0..<{{rounds}} {
+                    total += await chain(6, "chain")
+                }
+                print("\(total) \(await other.value)")
+            """);
+
+    [Fact]
+    public void AnAwaitAllocatesNothing() {
+        Assert.Equal("260 10\n", AssertAgree(AwaitChain(10)).Stdout);
+        Assert.Equal("26000 1000\n", AssertAgree(AwaitChain(1000), stepLimit: 50_000_000).Stdout);
+        if (!CanBuild) {
+            return;
+        }
+
+        static (string Allocations, string Chunks) Counts(string stats) =>
+            (Regex.Match(stats, @"allocations (\d+),").Groups[1].Value, Regex.Match(stats, @"frame chunks (\d+)").Groups[1].Value);
+
+        var stats = new Dictionary<string, string> { ["SABLE_STATS"] = "1" };
+        var few = Counts(BuildAndRun(AwaitChain(10), environment: stats).Stderr);
+        var many = Counts(BuildAndRun(AwaitChain(1000), environment: stats).Stderr);
+        Assert.NotEqual("", few.Allocations);
+        Assert.Equal(few, many);
+        Assert.Equal("0", many.Chunks);
+    }
+
+    /// <summary>
+    ///     A sleeping task is its frames and a timer: a hundred thousand of
+    ///     them, each sleeping a second, take about a second and little memory
+    ///     each — a thread each would be 800 GB of stacks (#185, #276).
+    /// </summary>
+    [Fact]
+    [Trait("Category", "Timing")]
+    public void AHundredThousandSleepingTasksTakeASecondInBoundedMemory() {
+        if (!CanBuild) {
+            return;
+        }
+
+        var run = BuildAndRun(
+            AsyncProgram("import Sable.Time", """
+                    let start = Instant.now()
+                    var tasks: Task<Int>[>..] = []
+                    for i in 0..<100_000 {
+                        tasks.append(Task.spawn {
+                            await Clock.sleep(Duration.seconds(1))
+                            return i % 2
+                        })
+                    }
+                    var odd = 0
+                    for task in tasks {
+                        odd += await task.value
+                    }
+                    let took = start.elapsed
+                    print(odd)
+                    print(took >= Duration.seconds(1) && took < Duration.milliseconds(1500))
+                """),
+            environment: new Dictionary<string, string> { ["SABLE_STATS"] = "1" });
+        Assert.Equal("50000\ntrue\n", run.Stdout);
+        var peak = long.Parse(Regex.Match(run.Stderr, @"peak memory (\d+) KiB").Groups[1].Value, CultureInfo.InvariantCulture);
+        Assert.InRange(peak, 1, 256 * 1024);
+    }
 }

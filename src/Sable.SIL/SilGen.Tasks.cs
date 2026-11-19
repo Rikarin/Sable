@@ -5,10 +5,11 @@ namespace Sable.SIL;
 /// <summary>
 ///     Tasks (docs/02 §2.7): <c>Task&lt;T&gt;</c> is a class holding the
 ///     runtime's handle, the body to run and, once run, its result. A thunk
-///     per result type runs the body on the task's own stack and stores what
-///     it gives. The runtime schedules tasks cooperatively; nothing else about
-///     async needs the compiler, since an async function is an ordinary one
-///     that may reach a point where its task waits.
+///     per result type, async, runs the body and stores what it gives: it is
+///     the root of the task's frames. Lowering marks where a task waits —
+///     <c>task_wait</c>, <c>task_yield</c>, <c>task_sleep</c> — and treats an
+///     async call as any other; <see cref="AsyncLowering" /> makes the waits
+///     and the calls suspension points, after the passes.
 /// </summary>
 public sealed partial class SilGen {
     const int TaskHandle = 0, TaskResult = 1, TaskBody = 2;
@@ -27,7 +28,7 @@ public sealed partial class SilGen {
         var task = _module.AddType(new ClassType(name));
         task.Fields.Add(("handle", SilType.Int));
         task.Fields.Add(("result", optional));
-        task.Fields.Add(("body", new ThickFunctionType(new FunctionType([], result))));
+        task.Fields.Add(("body", new ThickFunctionType(new FunctionType([], result, isAsync: true))));
 
         // Its deinit gives the runtime's task back.
         var deinit = new SilFunction($"$task.deinit${Sanitise(result.ToString())}", new FunctionType([task], SilType.Unit));
@@ -40,7 +41,7 @@ public sealed partial class SilGen {
         task.Deinit = deinit.Name;
 
         // Run on the task: the body called, its result kept, the task's reference given back.
-        var run = new SilFunction(TaskRunName(task), new FunctionType([task], SilType.Unit, null, [true]));
+        var run = new SilFunction(TaskRunName(task), RunType(task));
         var block = run.AddBlock();
         var owned = block.AddArgument(task);
         var body = block.Append(new LoadInst(block.Append(new RefElementAddrInst(owned, TaskBody))));
@@ -57,6 +58,9 @@ public sealed partial class SilGen {
     }
 
     static string TaskRunName(ClassType task) => $"$task.run${task.Name}";
+
+    /// <summary>What runs a task: async, the root of its task's frames, given the task to keep its result in.</summary>
+    static FunctionType RunType(ClassType task) => new([task], SilType.Unit, null, [true], isAsync: true);
 
     sealed partial class FunctionLowering {
         /// <summary>'Task.spawn { … }': a task made, its body kept in it, the runtime given it to run.</summary>
@@ -76,7 +80,7 @@ public sealed partial class SilGen {
 
             // The runtime holds a reference of its own until the task has run.
             var lent = Emit(new CopyValueInst(made));
-            var run = Emit(new FunctionRefInst(TaskRunName(task), new FunctionType([task], SilType.Unit, null, [true])));
+            var run = Emit(new FunctionRefInst(TaskRunName(task), RunType(task)));
             var handle = Emit(new BuiltinInst("task_spawn", SilType.Int, run, lent));
             Emit(new StoreInst(handle, Emit(new RefElementAddrInst(made, TaskHandle)), StoreKind.Assign));
             return made;

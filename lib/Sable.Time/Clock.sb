@@ -1,11 +1,12 @@
 module Sable.Time
 
 public struct Clock {
-    /// Waits at least this long, and every task with it: it does not await,
-    /// so no other task may run. In a task, 'await sleep(duration)'
-    /// (Sable.Concurrency) waits while the others run.
-    public static fn sleep(_ duration: Duration) {
-        Runtime.sleep(duration.totalNanoseconds)
+    /// Waits at least this long, off the run queue: every other task runs
+    /// meanwhile, and the program waits only when none can — two tasks that
+    /// each sleep a second take a second between them. 'Runtime.sleep'
+    /// waits without letting any task run.
+    public static async fn sleep(_ duration: Duration) {
+        await Task.sleep(nanoseconds: duration.totalNanoseconds)
     }
 
     /// How long the body took to run.

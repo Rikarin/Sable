@@ -372,7 +372,7 @@ fn main() {
                 import Sable.Time
 
                 @main
-                fn main() {
+                fn main() async {
                     let d = Duration.seconds(90) + Duration.milliseconds(250)
                     print(d.toString())
                     print(Duration.milliseconds(1500).toString())
@@ -404,9 +404,9 @@ fn main() {
                     print(isLeapYear(1900))
                     print(daysInMonth(2024, 2))
                     let start = Instant.now()
-                    Clock.sleep(Duration.milliseconds(20))
+                    await Clock.sleep(Duration.milliseconds(20))
                     print(start.elapsed >= Duration.milliseconds(20))
-                    let took = Clock.measure({ Clock.sleep(Duration.milliseconds(5)) })
+                    let took = Clock.measure({ Runtime.sleep(nanoseconds: 5_000_000) })
                     print(took >= Duration.milliseconds(5))
                     print(DateTime.now().year >= 2026)
                 }

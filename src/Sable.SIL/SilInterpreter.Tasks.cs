@@ -1,39 +1,70 @@
 namespace Sable.SIL;
 
 /// <summary>
-///     Tasks, interpreted as the runtime runs them: one at a time, handed the
-///     turn at the same points in the same order — so the interpreter's
-///     interleaving is the native one. As natively, a task is given a thread
-///     only when it first runs, a thread whose task finished runs the next
-///     task that has not begun itself or waits to be given one, and a
-///     sleeping task is off the run queue until its time comes.
+///     Tasks, interpreted as the runtime runs them (runtime/tasks.c): one
+///     executor, on one thread, that resumes each task that can go on, in the
+///     same order — so the interpreter's interleaving is the native one. A
+///     task is its root frame, made from its start function when it first
+///     runs and polled by its resume function each time it is resumed
+///     (<see cref="AsyncLowering" />); its frames come from a slab of its own.
 /// </summary>
 public sealed partial class SilInterpreter {
-    sealed class InterpretedTask(SilFunction? function = null, object? context = null) {
-        public SilFunction? Function => function;
+    sealed class InterpretedTask(string? start = null, string? resume = null, object? context = null) {
+        public string? Start => start;
+        public string? Resume => resume;
         public object? Context => context;
-        public SemaphoreSlim Wake { get; } = new(0);
-        public bool Started, Done, Cancelled;
-        public long Deadline;
-        public List<InterpretedTask> Waiters { get; } = [];
-    }
 
-    /// <summary>A thread that runs tasks: the one it runs, or none while it waits for one.</summary>
-    sealed class Worker {
-        public SemaphoreSlim Wake { get; } = new(0);
-        public InterpretedTask? Task;
+        /// <summary>The root frame, once the task has begun.</summary>
+        public HeapObject? Frame;
+
+        public bool Done, Cancelled, Sleeping;
+        public long Deadline, SleepTicket;
+        public List<InterpretedTask> Waiters { get; } = [];
+
+        /// <summary>The task's frames, the most recent last: pushed and popped as its calls begin and end.</summary>
+        public Stack<HeapObject> Frames { get; } = new();
     }
 
     readonly Queue<InterpretedTask> _runQueue = new();
-    readonly List<InterpretedTask> _sleepers = []; // by deadline, the earliest first
-    readonly Stack<Worker> _idleWorkers = new();
-    readonly Dictionary<long, InterpretedTask> _tasks = [];
-    InterpretedTask? _mainTask, _currentTask;
-    Exception? _taskFailure;
 
-    InterpretedTask Current => _currentTask ??= _mainTask ??= new InterpretedTask { Started = true };
+    // The sleepers, by deadline and then by when they began to sleep; a
+    // ticket that is no longer the task's is one it has left (cancelled).
+    readonly PriorityQueue<(InterpretedTask Task, long Ticket), (long Deadline, long Ticket)> _sleepers = new();
+    readonly Dictionary<long, InterpretedTask> _tasks = [];
+    InterpretedTask? _currentTask;
+    long _nextHandle, _nextTicket;
+
+    /// <summary>The entry's own task: what runs when no task does, and an async entry point's frames' owner.</summary>
+    readonly InterpretedTask _mainTask = new();
+
+    InterpretedTask Current => _currentTask ??= _mainTask;
+
+    /// <summary>The most frames a task has held at once, and how many it holds now, across tasks: what the slab tests see.</summary>
+    public int MostFrames { get; private set; }
 
     static long Monotonic() => System.Diagnostics.Stopwatch.GetTimestamp() * (1_000_000_000L / System.Diagnostics.Stopwatch.Frequency);
+
+    /// <summary>A frame for the running task, on its slab.</summary>
+    HeapObject PushFrame(ClassType type) {
+        var frame = new HeapObject(type);
+        var frames = Current.Frames;
+        frames.Push(frame);
+        MostFrames = Math.Max(MostFrames, frames.Count);
+        return frame;
+    }
+
+    /// <summary>A frame given back: the most recent of its task's, as a slab's must be.</summary>
+    void PopFrame(InterpretedTask task, HeapObject frame) {
+        if (!task.Frames.TryPeek(out var top) || !ReferenceEquals(top, frame)) {
+            throw new SilTrap("an async frame freed out of order", located: false);
+        }
+
+        task.Frames.Pop();
+        frame.Freed = true;
+    }
+
+    bool SleepersDue(long now) =>
+        _sleepers.TryPeek(out _, out var key) && key.Deadline <= now;
 
     /// <summary>Every sleeper whose time has come, queued in the order of their deadlines.</summary>
     void WakeSleepers() {
@@ -42,15 +73,32 @@ public sealed partial class SilInterpreter {
         }
 
         var now = Monotonic();
-        while (_sleepers.Count > 0 && _sleepers[0].Deadline <= now) {
-            _runQueue.Enqueue(_sleepers[0]);
-            _sleepers.RemoveAt(0);
+        while (SleepersDue(now)) {
+            var (task, ticket) = _sleepers.Dequeue();
+            if (task.Sleeping && task.SleepTicket == ticket) {
+                task.Sleeping = false;
+                _runQueue.Enqueue(task);
+            }
         }
+    }
+
+    /// <summary>True while a sleeper is still asleep: the stale entries of those woken early are dropped.</summary>
+    bool AnySleeping() {
+        while (_sleepers.TryPeek(out var entry, out _)) {
+            if (entry.Task.Sleeping && entry.Task.SleepTicket == entry.Ticket) {
+                return true;
+            }
+
+            _sleepers.Dequeue();
+        }
+
+        return false;
     }
 
     /// <summary>Nothing is queued: waits for the earliest sleeper.</summary>
     void WaitForSleeper() {
-        var left = _sleepers[0].Deadline - Monotonic();
+        _sleepers.TryPeek(out _, out var key);
+        var left = key.Deadline - Monotonic();
         if (left > 0) {
             Thread.Sleep(TimeSpan.FromTicks((left + 99) / 100));
         }
@@ -58,140 +106,115 @@ public sealed partial class SilInterpreter {
         WakeSleepers();
     }
 
-    /// <summary>The task to run next: the first queued, once the sleepers due are.</summary>
-    InterpretedTask NextTask() {
-        WakeSleepers();
-        while (_runQueue.Count == 0 && _sleepers.Count > 0) {
-            WaitForSleeper();
-        }
-
-        return _runQueue.TryDequeue(out var next)
-            ? next
-            : throw new SilTrap("every task is waiting: the program cannot go on", located: false);
-    }
-
     /// <summary>
-    ///     Makes the task the running one: its thread woken, or, for one that
-    ///     has not begun, an idle thread given it, or a new one started for
-    ///     it. The caller touches nothing shared after this.
+    ///     The executor: resumes each task queued, in turn, until none can go
+    ///     on — or, with <paramref name="until" />, until that task can.
     /// </summary>
-    void Resume(InterpretedTask next) {
-        _currentTask = next;
-        if (next.Started) {
-            next.Wake.Release();
-            return;
-        }
-
-        next.Started = true;
-        if (_idleWorkers.TryPop(out var idle)) {
-            idle.Task = next;
-            idle.Wake.Release();
-            return;
-        }
-
-        var worker = new Worker { Task = next };
-
-        // Each SIL call is a .NET call here: a task's thread needs the room
-        // the entry's has (see Run).
-        new Thread(() => Work(worker), 64 * 1024 * 1024) { IsBackground = true }.Start();
-    }
-
-    void SwitchAway() {
-        var self = Current;
-        var next = NextTask();
-        if (next != self) {
-            Resume(next);
-            self.Wake.Wait();
-        }
-
-        if (_taskFailure is { } failure) {
-            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
-        }
-    }
-
-    /// <summary>
-    ///     Runs tasks: the one it was started for, then, as each finishes, the
-    ///     next if it has not begun; otherwise it hands over and waits to be
-    ///     given one. A trap in a task ends the program: the turn goes to the
-    ///     entry's task, which reports it.
-    /// </summary>
-    void Work(Worker self) {
-        var task = self.Task!;
+    void RunTasks(InterpretedTask? until) {
         while (true) {
-            try {
-                if (_taskFailure is null) {
-                    Call(task.Function!, [task.Context], 0);
+            WakeSleepers();
+            if (!_runQueue.TryDequeue(out var task)) {
+                if (AnySleeping()) {
+                    WaitForSleeper();
+                    continue;
                 }
-            } catch (Exception exception) {
-                _taskFailure ??= exception;
+
+                if (until is null) {
+                    return;
+                }
+
+                throw new SilTrap("every task is waiting: the program cannot go on", located: false);
             }
 
-            // Finished: its waiters go on, and the turn passes.
+            if (ReferenceEquals(task, until)) {
+                return;
+            }
+
+            Step(task);
+        }
+    }
+
+    /// <summary>Resumes a task until it finishes or waits: its root frame made first, the first time.</summary>
+    void Step(InterpretedTask task) {
+        var previous = _currentTask;
+        _currentTask = task;
+        try {
+            if (task.Frame is null) {
+                var start = module.Find(task.Start!) ?? throw new SilTrap($"call to undefined @{task.Start}");
+                task.Frame = (HeapObject)Call(start, [task.Context], 0)!;
+            }
+
+            var resume = module.Find(task.Resume!) ?? throw new SilTrap($"call to undefined @{task.Resume}");
+            if (!(bool)Call(resume, [task.Frame], 0)!) {
+                return;
+            }
+
+            // Finished: its frame goes, and whoever waits for it may go on.
+            PopFrame(task, task.Frame);
+            task.Frame = null;
             task.Done = true;
             foreach (var waiter in task.Waiters) {
                 _runQueue.Enqueue(waiter);
             }
 
             task.Waiters.Clear();
-            InterpretedTask? next = null;
-            if (_taskFailure is null) {
-                try {
-                    next = NextTask();
-                } catch (SilTrap trap) {
-                    _taskFailure = trap;
-                }
-            }
-
-            if (next is null) {
-                _currentTask = _mainTask!;
-                _mainTask!.Wake.Release();
-                return;
-            }
-
-            if (!next.Started) {
-                next.Started = true;
-                _currentTask = task = next;
-                continue;
-            }
-
-            // Idle before handing over: whoever runs next may give this thread a task.
-            self.Task = null;
-            _idleWorkers.Push(self);
-            Resume(next);
-            self.Wake.Wait();
-            task = self.Task!;
+        } finally {
+            _currentTask = previous;
         }
+    }
+
+    bool Yield() {
+        WakeSleepers();
+        if (_runQueue.Count == 0) {
+            return false;
+        }
+
+        _runQueue.Enqueue(Current);
+        return true;
     }
 
     object? Task(string name, object?[] operands) {
         switch (name) {
             case "task_spawn": {
-                var function = module.Find((string)operands[0]!) ?? throw new SilTrap($"call to undefined @{operands[0]}");
-                var task = new InterpretedTask(function, operands[1]);
-                var handle = (long)_tasks.Count + 1;
+                var task = new InterpretedTask((string)operands[0]!, (string)operands[1]!, operands[2]);
+                var handle = ++_nextHandle;
                 _tasks[handle] = task;
-                _ = Current;
                 _runQueue.Enqueue(task);
                 return handle;
             }
 
-            case "task_wait": {
+            // Whether the running task must wait for this one: if so, it is
+            // among its waiters, and resumed once it has finished.
+            case "async_wait": {
                 var task = _tasks[(long)operands[0]!];
-                while (!task.Done) {
-                    task.Waiters.Add(Current);
-                    SwitchAway();
+                if (task.Done) {
+                    return false;
                 }
 
-                return null;
+                task.Waiters.Add(Current);
+                return true;
             }
 
-            case "task_yield":
-                WakeSleepers();
-                if (_runQueue.Count > 0) {
-                    _runQueue.Enqueue(Current);
-                    SwitchAway();
+            case "async_yield":
+                return Yield();
+
+            // A cancelled task does not sleep.
+            case "async_sleep": {
+                var nanoseconds = (long)operands[0]!;
+                if (nanoseconds <= 0 || Current.Cancelled) {
+                    return Yield();
                 }
 
+                var self = Current;
+                self.Deadline = Monotonic() + nanoseconds;
+                self.Sleeping = true;
+                self.SleepTicket = ++_nextTicket;
+                _sleepers.Enqueue((self, self.SleepTicket), (self.Deadline, self.SleepTicket));
+                return true;
+            }
+
+            case "async_frame_free":
+                PopFrame(Current, (HeapObject)operands[0]!);
                 return null;
 
             // Marked, and woken now if it sleeps, as a sleeper whose time has come would be.
@@ -199,7 +222,8 @@ public sealed partial class SilInterpreter {
                 var task = _tasks[(long)operands[0]!];
                 if (!task.Done && !task.Cancelled) {
                     task.Cancelled = true;
-                    if (_sleepers.Remove(task)) {
+                    if (task.Sleeping) {
+                        task.Sleeping = false;
                         _runQueue.Enqueue(task);
                     }
                 }
@@ -210,36 +234,18 @@ public sealed partial class SilInterpreter {
             case "task_is_cancelled":
                 return Current.Cancelled;
 
-            // A cancelled task does not sleep.
-            case "task_sleep": {
-                var nanoseconds = (long)operands[0]!;
-                if (nanoseconds <= 0 || Current.Cancelled) {
-                    return Task("task_yield", []);
-                }
-
-                var self = Current;
-                self.Deadline = Monotonic() + nanoseconds;
-                var at = _sleepers.FindIndex(s => s.Deadline > self.Deadline);
-                _sleepers.Insert(at < 0 ? _sleepers.Count : at, self);
-                SwitchAway();
+            // The program no longer holds it: once it has finished, nothing does.
+            case "task_release":
+                _tasks.Remove((long)operands[0]!);
                 return null;
-            }
+
+            case "task_run_until_main":
+                RunTasks(_mainTask);
+                return null;
 
             case "task_drain":
-                while (true) {
-                    WakeSleepers();
-                    if (_runQueue.Count == 0 && _sleepers.Count == 0) {
-                        return null;
-                    }
-
-                    if (_runQueue.Count == 0) {
-                        WaitForSleeper();
-                        continue;
-                    }
-
-                    _runQueue.Enqueue(Current);
-                    SwitchAway();
-                }
+                RunTasks(null);
+                return null;
 
             default:
                 return null;

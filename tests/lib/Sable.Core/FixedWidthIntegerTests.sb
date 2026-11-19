@@ -293,9 +293,20 @@ fn absDiffIsTheDistance() {
     assertEqual((10 as U8).absDiff(3), 7)
 }
 
-@test(traps: "integer overflow")
-fn absDiffTrapsWhereTheDistanceDoesNotFit() {
-    assertEqual(I8.min.absDiff(I8.max), 0)
+@test
+fn absDiffHoldsADistanceTheTypeDoesNot() {
+    assertEqual(I8.min.absDiff(I8.max), 255)
+    assertEqual(Int.max.absDiff(Int.min), UInt.max)
+    assertEqual((-3 as I16).absDiff(-10), 7)
+}
+
+@test
+fn theMagnitudeIsTheDistanceFromZeroUnsigned() {
+    assertEqual(I8.min.magnitude, 128)
+    assertEqual((-5).magnitude, 5)
+    assertEqual(I128.min.magnitude, U128.max / 2 + 1)
+    assertEqual((200 as U8).magnitude, 200)
+    assertEqual(Int.max.magnitude, 9223372036854775807)
 }
 
 @test

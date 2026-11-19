@@ -3,6 +3,9 @@ module Sable.Core
 /// The integer Sable uses unless told otherwise: 64 bits, signed, on every target. Its arithmetic traps on overflow; FixedWidthInteger gives it
 /// the forms that do not, and its bit operations.
 extension Int: FixedWidthInteger, SignedInteger {
+    /// The type of its distance from zero.
+    public alias Magnitude = UInt
+
     /// 0.
     public static var zero: Int => 0
 

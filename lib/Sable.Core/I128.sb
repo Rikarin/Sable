@@ -3,6 +3,9 @@ module Sable.Core
 /// A 128-bit signed integer. Its arithmetic traps on overflow; FixedWidthInteger gives it
 /// the forms that do not, and its bit operations.
 extension I128: FixedWidthInteger, SignedInteger {
+    /// The type of its distance from zero.
+    public alias Magnitude = U128
+
     /// 0.
     public static var zero: I128 => 0
 

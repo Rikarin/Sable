@@ -102,15 +102,18 @@ extension FixedWidthInteger {
         }
     }
 
-    /// The distance between the two. It traps where that does not fit the
-    /// type, as a signed type's least and greatest values' does not.
+    /// The distance between the two, as the unsigned type of the width,
+    /// which holds every such distance (Rust's 'abs_diff').
     ///
     /// ```sable
     /// assert(3.absDiff(10) == 7)
-    /// assert((10 as U8).absDiff(3) == 7)
+    /// assert(I8.min.absDiff(I8.max) == 255)
     /// ```
-    public fn absDiff(_ other: Self) -> Self {
-        return self < other ? other - self : self - other
+    public fn absDiff(_ other: Self) -> Magnitude {
+        // The difference's low bits are the distance's, which is less
+        // than 2^width, though the difference may not fit the type itself.
+        let difference = self < other ? other.wrappingSub(self) : self.wrappingSub(other)
+        return Magnitude.fromWideBitPattern(difference.wideBitPattern)
     }
 
     /// The value halfway between the two, rounded toward zero, as if

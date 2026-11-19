@@ -3,6 +3,9 @@ module Sable.Core
 /// A 16-bit signed integer. Its arithmetic traps on overflow; FixedWidthInteger gives it
 /// the forms that do not, and its bit operations.
 extension I16: FixedWidthInteger, SignedInteger {
+    /// The type of its distance from zero.
+    public alias Magnitude = U16
+
     /// 0.
     public static var zero: I16 => 0
 

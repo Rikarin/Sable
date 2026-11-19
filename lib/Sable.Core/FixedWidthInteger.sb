@@ -24,6 +24,10 @@ module Sable.Core
 /// assert(low == 4 && overflowed)
 /// ```
 public protocol FixedWidthInteger: BinaryInteger {
+    /// The unsigned integer of the type's width, which holds the distance
+    /// from zero of every value: U8 for an I8, a U8 itself.
+    associatedtype Magnitude: UnsignedInteger
+
     /// The least value of the type.
     static var min: Self { get }
 
@@ -171,6 +175,16 @@ extension FixedWidthInteger {
 
     /// How many one bits come below the lowest zero bit.
     public var trailingOneCount: Int => (~self).trailingZeroCount
+
+    /// The distance from zero, as the unsigned type of the width, which
+    /// holds it for every value: a signed type's least value too (Rust's
+    /// 'unsigned_abs', Swift's 'magnitude').
+    ///
+    /// ```sable
+    /// assert(I8.min.magnitude == 128)
+    /// assert((-5).magnitude == 5)
+    /// ```
+    public var magnitude: Magnitude => Magnitude.fromWideBitPattern(self.wrappingAbs().wideBitPattern)
 
     /// The whole product, at twice the width, as its high half and its low
     /// half's bits.

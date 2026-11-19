@@ -3,6 +3,9 @@ module Sable.Core
 /// An 8-bit unsigned integer: a byte. Its arithmetic traps on overflow; FixedWidthInteger gives it
 /// the forms that do not, and its bit operations.
 extension U8: FixedWidthInteger, UnsignedInteger {
+    /// The type of its distance from zero.
+    public alias Magnitude = U8
+
     /// 0.
     public static var zero: U8 => 0
 

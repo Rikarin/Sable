@@ -1,0 +1,28 @@
+module Sable.Core
+
+/// A sequence's elements, each with its offset from the first: what
+/// 'enumerated()' makes. Its elements are '(offset: Int, element: …)'.
+public struct EnumeratedSequence<Base: Sequence>: Sequence {
+    let base: Base
+
+    /// An iterator from the first element, at offset 0.
+    public fn makeIterator() -> EnumeratedIterator<Base.Iter> {
+        return EnumeratedIterator<Base.Iter> { base: base.makeIterator(), offset: 0 }
+    }
+}
+
+/// Gives a sequence's elements with their offsets.
+public struct EnumeratedIterator<Base: Iterator>: Iterator {
+    var base: Base
+    var offset: Int
+
+    /// The next element and its offset, or none past the last.
+    public mutating fn next() -> (offset: Int, element: Base.Element)? {
+        guard let element = base.next() else {
+            return none
+        }
+        let current = offset
+        offset += 1
+        return (offset: current, element: element)
+    }
+}

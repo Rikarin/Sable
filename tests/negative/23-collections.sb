@@ -55,15 +55,15 @@ fn appendingToAFixedArray(_ xs: Int[]) {
 }
 
 fn appendingTheWrongElement(_ xs: Int[>..]) {
-    xs.append("one")                    //! S3007 cannot be called
+    xs.append("one")                    //! S3007 no overload of 'append'
 }
 
 fn iteratingAPoint(_ p: Point) {
     for part in p { }                   //! S3013 cannot be iterated
 }
 
-fn arrayCountIsNotAMethod(_ xs: Int[]) -> Int {
-    return xs.count()                   //! S3006 is not callable
+fn arrayCountTakesAClosureWhenCalled(_ xs: Int[]) -> Int {
+    return xs.count()                   //! S3007 it needs 1 argument
 }
 
 fn aSliceIsReadOnly(_ xs: Int[>..]) -> Int {
@@ -77,7 +77,7 @@ fn countIsAProperty(_ xs: Int[>..]) -> Int {
 }
 
 fn containsChecksTheElement(_ xs: Int[>..]) -> Bool {
-    return xs.contains("one")           //! S3007 cannot be called
+    return xs.contains("one")           //! S3007 no overload of 'contains'
 }
 
 fn removeLastGivesAnElement(_ xs: Int[>..]) -> String {
@@ -96,9 +96,10 @@ fn removingFromAParameter(_ xs: Int[>..]) -> Int {
     return xs.removeLast()              //! S3041 is mutating
 }
 
-// 'contains' is an array's where its element is Equatable.
+// 'contains(_:)' is a sequence's where its element is Equatable, and
+// 'contains(where:)' takes a closure.
 fn containsNeedsAnEquatableElement(_ points: Point[>..], _ p: Point) -> Bool {
-    return points.contains(p)           //! S3023 only where 'Element: Equatable'
+    return points.contains(p)           //! S3007 needs the label 'where:'
 }
 
 // A grow-only array's members are not a fixed array's.

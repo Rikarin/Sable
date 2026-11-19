@@ -7,6 +7,22 @@ import Sable.Collections
 import Sable.Testing
 
 @test
+fn aHashMapIsGoneThroughInTheOrderItsKeysWereSet() {
+    let map = HashMap<String, Int>()
+    map.set("b", 2)
+    map.set("a", 1)
+    map.set("c", 3)
+    let _ = map.remove("a")
+    map.set("b", 20)
+    var seen: String[>..] = []
+    for (key, value) in map {
+        seen.append("\(key)=\(value)")
+    }
+    assertEqualText(seen.joined(separator: ","), "b=20,c=3")
+    assertEqual(HashMap<String, Int>().toArray().count, 0)
+}
+
+@test
 fn hashMapSetsGetsAndRemoves() {
     let map = HashMap<String, Int>()
     var i = 0

@@ -1,0 +1,41 @@
+module Sable.Core
+
+/// Every so many of a sequence's elements, from the first: what
+/// '.lazy.striding(by:)' makes.
+public struct LazyStrideSequence<Base: Sequence>: LazySequenceProtocol {
+    let base: Base
+    let step: Int
+
+    /// An iterator from the first element.
+    public fn makeIterator() -> LazyStrideIterator<Base.Iter> {
+        return LazyStrideIterator<Base.Iter> { base: base.makeIterator(), step: step, started: false }
+    }
+}
+
+/// Gives an iterator's first element, then every 'step'-th after it.
+public struct LazyStrideIterator<Base: Iterator>: Iterator {
+    var base: Base
+    let step: Int
+    var started: Bool
+
+    /// The first element, then the one 'step' on from the last given; none
+    /// once there is none there. A step that is not positive gives the
+    /// first alone.
+    public mutating fn next() -> Base.Element? {
+        if !started {
+            started = true
+            return base.next()
+        }
+        if step <= 0 {
+            return none
+        }
+        var skipped = 1
+        while skipped < step {
+            guard let _ = base.next() else {
+                return none
+            }
+            skipped += 1
+        }
+        return base.next()
+    }
+}

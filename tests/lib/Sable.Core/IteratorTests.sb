@@ -1,0 +1,139 @@
+module IteratorTests
+
+// The iterators of Sable.Core's own sequences — arrays, ranges, strings,
+// dictionaries, strides — as generic code sees them, and the iterator
+// adapters (PeekableIterator): run with
+//     tools/stdlib-coverage.sh Sable.Core
+
+import Sable.Testing
+
+fn text(_ values: Int[>..]) -> String {
+    return values.map { "\($0)" }.joined(separator: ",")
+}
+
+// Through the protocol, so that the iterator is made and used, rather than
+// the compiler's own counting loop over an array or a range.
+fn elements<S: Sequence>(_ values: S) -> S.Element[>..] {
+    var result: S.Element[>..] = []
+    var iterator = values.makeIterator()
+    while let value = iterator.next() {
+        result.append(value)
+    }
+    // Done is done: none again after the last.
+    if let _ = iterator.next() {
+        result = []
+    }
+    return result
+}
+
+fn sizeOf<C: RandomAccessCollection>(_ items: C) -> Int {
+    return items.distance(from: items.startIndex, to: items.endIndex)
+}
+
+@test
+fn everyKindOfArrayIsASequence() {
+    let grow: Int[>..] = [1, 2, 3]
+    let shrink: Int[>..<] = [4, 5]
+    let fixed: Int[] = [6, 7]
+    assertEqualText(text(elements(grow)), "1,2,3")
+    assertEqualText(text(elements(shrink)), "4,5")
+    assertEqualText(text(elements(fixed)), "6,7")
+    assertEqualText(text(elements(grow.slice(from: 1, to: 3))), "2,3")
+    let empty: Int[>..] = []
+    assertEqual(elements(empty).count, 0)
+}
+
+@test
+fn anArrayIsARandomAccessCollection() {
+    let values: Int[>..] = [10, 20, 30, 40]
+    assertEqual(sizeOf(values), 4)
+    assertEqual(values.index(1, offsetBy: 2), 3)
+    assertEqual(values.index(before: 3), 2)
+    assertEqual(values.startIndex, 0)
+    assertEqual(values.endIndex, 4)
+}
+
+@test
+fn aRangeOfIntegersIsACollection() {
+    assertEqualText(text(elements(2..<5)), "2,3,4")
+    assertEqual(elements(5..<2).count, 0)
+    assertEqual(sizeOf(3..<7), 4)
+    assertEqual(sizeOf(7..<3), 0)
+    let range = 3..<7
+    assertEqual(range[range.index(range.startIndex, offsetBy: 2)], 5)
+    assertEqual(range.index(after: 3), 4)
+    assertEqual(range.index(before: 4), 3)
+    assertEqualText(text(range.reversed().toArray()), "6,5,4,3")
+    assertEqualText(text((0..<10).filter { $0 % 4 == 0 }), "0,4,8")
+}
+
+@test
+fn aClosedRangeOfIntegersIsASequence() {
+    assertEqualText(text(elements(2...4)), "2,3,4")
+    assertEqualText(text(elements(4...4)), "4")
+    assertEqual(elements(5...4).count, 0)
+    assertEqual((1...4).reduce(0) { $0 + $1 }, 10)
+}
+
+@test
+fn aClosedRangeUpToTheLargestIntegerEnds() {
+    let top = 9223372036854775807
+    assertEqual(elements((top - 1)...top).count, 2)
+}
+
+@test
+fn aStringIsASequenceOfItsCharacters() {
+    let characters = elements("héllo")
+    assertEqual(characters.count, 5)
+    assert(characters[1] == 'é')
+    assertEqual(elements("").count, 0)
+}
+
+@test
+fn aDictionaryIsASequenceOfItsEntries() {
+    let ages: [String: Int] = ["ann": 31, "bo": 40]
+    var total = 0
+    var names: String[>..] = []
+    for (name, age) in elements(ages) {
+        total += age
+        names.append(name)
+    }
+    assertEqual(total, 71)
+    assertEqualText(names.sorted().joined(separator: ","), "ann,bo")
+    let empty: [String: Int] = [:]
+    assertEqual(elements(empty).count, 0)
+}
+
+@test
+fn aDictionaryIsMadeFromPairs() {
+    let pairs: (String, Int)[>..] = [("a", 1), ("b", 2), ("a", 3)]
+    let made: [String: Int] = pairs.collect()
+    assertEqual(made.count, 2)
+    assertEqual(made["a"] ?? -1, 3)
+    assertEqual(made["b"] ?? -1, 2)
+}
+
+@test
+fn aStrideIsASequence() {
+    assertEqualText(text(elements(stride(from: 0, to: 7, by: 3))), "0,3,6")
+    assertEqualText(text(elements(stride(from: 6, through: 0, by: -3))), "6,3,0")
+}
+
+@test
+fn peekLooksWithoutTaking() {
+    var iterator = [1, 2].makeIterator().peekable()
+    assertEqual(iterator.peek() ?? -1, 1)
+    assertEqual(iterator.peek() ?? -1, 1)
+    assertEqual(iterator.next() ?? -1, 1)
+    assertEqual(iterator.next() ?? -1, 2)
+    assert(iterator.peek() == none, "nothing is left to look at")
+    assert(iterator.next() == none, "nothing is left to take")
+}
+
+@test
+fn peekableWithoutPeekingIsTheIterator() {
+    var iterator = (1..<3).makeIterator().peekable()
+    assertEqual(iterator.next() ?? -1, 1)
+    assertEqual(iterator.next() ?? -1, 2)
+    assert(iterator.next() == none, "done")
+}

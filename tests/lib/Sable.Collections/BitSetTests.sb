@@ -7,6 +7,22 @@ import Sable.Collections
 import Sable.Testing
 
 @test
+fn aBitSetIsGoneThroughAscending() {
+    let members = BitSet()
+    let _ = members.insert(130)
+    let _ = members.insert(3)
+    let _ = members.insert(64)
+    let _ = members.insert(0)
+    let _ = members.insert(63)
+    var seen: String[>..] = []
+    for member in members {
+        seen.append("\(member)")
+    }
+    assertEqualText(seen.joined(separator: ","), "0,3,63,64,130")
+    assertEqual(BitSet().toArray().count, 0)
+}
+
+@test
 fn bitSetAlgebra() {
     let a = BitSet([1, 2, 3, 64, 200])
     let b = BitSet([2, 3, 4])

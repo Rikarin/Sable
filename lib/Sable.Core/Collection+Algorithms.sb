@@ -1,0 +1,86 @@
+module Sable.Core
+
+// What a collection can be asked beyond what a sequence can: by position,
+// and, for one that goes both ways, from the end.
+
+extension Collection {
+    /// Whether it holds no elements.
+    public var isEmpty: Bool => !(startIndex < endIndex)
+
+    /// The first element, or none when it is empty.
+    public var first: Element? => startIndex < endIndex ? self[startIndex] : none
+
+    /// The position of the first element the closure is true for, or none.
+    public fn firstIndex(where predicate: (Element) throws -> Bool) rethrows -> Index? {
+        var position = startIndex
+        while position < endIndex {
+            if try predicate(self[position]) {
+                return position
+            }
+            position = index(after: position)
+        }
+        return none
+    }
+}
+
+extension Collection where Element: Equatable {
+    /// The position of the first element equal to this one, or none.
+    public fn firstIndex(of element: Element) -> Index? {
+        return self.firstIndex(where: { $0 == element })
+    }
+}
+
+extension BidirectionalCollection {
+    /// The last element, or none when it is empty.
+    public var last: Element? => startIndex < endIndex ? self[index(before: endIndex)] : none
+
+    /// The position of the last element the closure is true for, or none.
+    public fn lastIndex(where predicate: (Element) throws -> Bool) rethrows -> Index? {
+        var position = endIndex
+        while startIndex < position {
+            position = index(before: position)
+            if try predicate(self[position]) {
+                return position
+            }
+        }
+        return none
+    }
+
+    /// The elements from the last to the first, read in place.
+    ///
+    /// ```sable
+    /// var backwards: Int[>..] = []
+    /// for x in [1, 2, 3].reversed() {
+    ///     backwards.append(x)
+    /// }
+    /// assert(backwards[0] == 3)
+    /// ```
+    public fn reversed() -> ReversedCollection<Self> {
+        return ReversedCollection<Self> { base: self }
+    }
+}
+
+extension BidirectionalCollection where Element: Equatable {
+    /// The position of the last element equal to this one, or none.
+    public fn lastIndex(of element: Element) -> Index? {
+        return self.lastIndex(where: { $0 == element })
+    }
+}
+
+extension MutableCollection {
+    /// The elements at the two positions, swapped.
+    public mutating fn swapAt(_ i: Index, _ j: Index) {
+        let held = self[i]
+        self[i] = self[j]
+        self[j] = held
+    }
+}
+
+extension RangeReplaceableCollection {
+    /// The sequence's elements, added at the end in order.
+    public mutating fn append<S: Sequence>(contentsOf elements: S) where S.Element == Element {
+        for element in elements {
+            self.append(element: element)
+        }
+    }
+}

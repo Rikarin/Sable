@@ -1,0 +1,158 @@
+module CollectionTests
+
+// The collection protocols (Sable.Core) and what a collection can be asked
+// beyond a sequence (Collection+Algorithms.sb): run with
+//     tools/stdlib-coverage.sh Sable.Core
+
+import Sable.Testing
+
+fn text(_ values: Int[>..]) -> String {
+    return values.map { "\($0)" }.joined(separator: ",")
+}
+
+// A collection of the program's own, whose positions are not its offsets:
+// the even numbers from 'low' up to 'high', reached by twos.
+struct Evens: BidirectionalCollection {
+    let low: Int
+    let high: Int
+
+    var startIndex: Int => low
+    var endIndex: Int => high
+    var count: Int => (high - low) / 2
+
+    fn index(after position: Int) -> Int => position + 2
+    fn index(before position: Int) -> Int => position - 2
+
+    subscript(position: Int) -> Int {
+        get => position
+    }
+
+    fn makeIterator() -> ArrayIterator<Int> {
+        var values: Int[>..] = []
+        var position = low
+        while position < high {
+            values.append(position)
+            position += 2
+        }
+        return values.makeIterator()
+    }
+}
+
+fn middle<C: Collection>(_ items: C) -> C.Element? {
+    var position = items.startIndex
+    var steps = items.count / 2
+    while steps > 0 && position < items.endIndex {
+        position = items.index(after: position)
+        steps -= 1
+    }
+    return position < items.endIndex ? items[position] : none
+}
+
+fn backwards<C: BidirectionalCollection>(_ items: C) -> C.Element[>..] {
+    var result: C.Element[>..] = []
+    var position = items.endIndex
+    while items.startIndex < position {
+        position = items.index(before: position)
+        result.append(items[position])
+    }
+    return result
+}
+
+fn incremented<C: MutableCollection>(_ items: inout C) where C.Element == Int {
+    var position = items.startIndex
+    while position < items.endIndex {
+        items[position] = items[position] + 1
+        position = items.index(after: position)
+    }
+}
+
+fn counting<C: RangeReplaceableCollection>(to n: Int) -> C where C.Element == Int {
+    var made = C()
+    var i = 1
+    while i <= n {
+        made.append(element: i)
+        i += 1
+    }
+    return made
+}
+
+@test
+fn aCollectionIsReadByPosition() {
+    assertEqual(middle(Evens { low: 0, high: 10 }) ?? -1, 4)
+    assertEqual(middle([7, 8, 9]) ?? -1, 8)
+    let empty: Int[>..] = []
+    assert(middle(empty) == none, "an empty collection has no middle")
+}
+
+@test
+fn aBidirectionalCollectionGoesBackwards() {
+    assertEqualText(text(backwards(Evens { low: 2, high: 8 })), "6,4,2")
+    assertEqualText(text(backwards([1, 2, 3])), "3,2,1")
+}
+
+@test
+fn aMutableCollectionIsChangedInPlace() {
+    var values: Int[>..] = [1, 2, 3]
+    incremented(&values)
+    assertEqualText(text(values), "2,3,4")
+}
+
+@test
+fn aRangeReplaceableCollectionIsMadeAndGrown() {
+    let grown: Int[>..] = counting(to: 3)
+    assertEqualText(text(grown), "1,2,3")
+    let shrinking: Int[>..<] = counting(to: 2)
+    assertEqual(shrinking.count, 2)
+}
+
+@test
+fn isEmptyFirstAndLast() {
+    let evens = Evens { low: 2, high: 8 }
+    assert(!evens.isEmpty)
+    assertEqual(evens.first ?? -1, 2)
+    assertEqual(evens.last ?? -1, 6)
+    let empty = Evens { low: 4, high: 4 }
+    assert(empty.isEmpty)
+    assert(empty.first == none, "an empty collection has no first")
+    assert(empty.last == none, "an empty collection has no last")
+}
+
+@test
+fn firstIndexAndLastIndex() {
+    let values: Int[>..] = [3, 1, 4, 1, 5]
+    assertEqual(values.firstIndex(of: 1) ?? -1, 1)
+    assertEqual(values.lastIndex(of: 1) ?? -1, 3)
+    assertEqual(values.firstIndex(where: { $0 > 3 }) ?? -1, 2)
+    assertEqual(values.lastIndex(where: { $0 < 4 }) ?? -1, 3)
+    assert(values.firstIndex(of: 9) == none, "nine is not there")
+    assert(values.lastIndex(where: { $0 > 9 }) == none, "nothing is over nine")
+    assertEqual(Evens { low: 0, high: 10 }.firstIndex(of: 6) ?? -1, 6)
+}
+
+@test
+fn swapAtSwapsTwoElements() {
+    var values: Int[>..] = [1, 2, 3]
+    values.swapAt(0, 2)
+    assertEqualText(text(values), "3,2,1")
+    values.swapAt(1, 1)
+    assertEqualText(text(values), "3,2,1")
+}
+
+@test
+fn appendContentsOfAddsASequence() {
+    var values: Int[>..] = [1]
+    values.append(contentsOf: Evens { low: 0, high: 4 })
+    values.append(contentsOf: stride(from: 9, through: 7, by: -1))
+    assertEqualText(text(values), "1,0,2,9,8,7")
+}
+
+@test
+fn reversedReadsBackwardsWithoutCopying() {
+    assertEqualText(text(Evens { low: 0, high: 6 }.reversed().toArray()), "4,2,0")
+    var count = 0
+    let nothing = Evens { low: 0, high: 0 }
+    for _ in nothing.reversed() {
+        count += 1
+    }
+    assertEqual(count, 0)
+}

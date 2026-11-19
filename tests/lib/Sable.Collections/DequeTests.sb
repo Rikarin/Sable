@@ -7,6 +7,40 @@ import Sable.Collections
 import Sable.Testing
 
 @test
+fn aDequeIsGoneThroughFrontToBack() {
+    let deque = Deque<Int>()
+    var i = 0
+    while i < 6 {
+        deque.append(i)
+        i = i + 1
+    }
+    let _ = deque.removeFirst()
+    let _ = deque.removeFirst()
+    deque.append(6)
+    deque.append(7)
+    deque.prepend(1)
+    var seen: String[>..] = []
+    for value in deque {
+        seen.append("\(value)")
+    }
+    assertEqualText(seen.joined(separator: ","), "1,2,3,4,5,6,7")
+    assertEqual(deque.reduce(0) { $0 + $1 }, 28)
+    assertEqual(Deque<Int>().toArray().count, 0)
+}
+
+@test
+fn aDequesIteratorKeepsWhatItWasMadeFrom() {
+    let deque = Deque<Int>()
+    deque.append(1)
+    deque.append(2)
+    var iterator = deque.makeIterator()
+    deque.append(3)
+    assertEqual(iterator.next() ?? -1, 1)
+    assertEqual(iterator.next() ?? -1, 2)
+    assert(iterator.next() == none, "the third came after")
+}
+
+@test
 fn dequeGrowsAtBothEnds() {
     let deque = Deque<Int>()
     var i = 0

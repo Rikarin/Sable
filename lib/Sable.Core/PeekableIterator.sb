@@ -1,0 +1,44 @@
+module Sable.Core
+
+extension Iterator {
+    /// This iterator, able to look at its next element without taking it.
+    ///
+    /// ```sable
+    /// var digits = [1, 2].makeIterator().peekable()
+    /// assert(digits.peek() == 1)
+    /// assert(digits.next() == 1)
+    /// assert(digits.next() == 2)
+    /// ```
+    public fn peekable() -> PeekableIterator<Self> {
+        return PeekableIterator<Self> { base: self, peeked: none, hasPeeked: false }
+    }
+}
+
+/// An iterator that can look at its next element without taking it: what
+/// 'peekable()' makes.
+public struct PeekableIterator<Base: Iterator>: Iterator {
+    var base: Base
+
+    // The element looked at and not yet taken, when 'hasPeeked'; none there
+    // means the base is done.
+    var peeked: Base.Element?
+    var hasPeeked: Bool
+
+    /// The next element, without taking it: 'next()' gives it after.
+    public mutating fn peek() -> Base.Element? {
+        if !hasPeeked {
+            peeked = base.next()
+            hasPeeked = true
+        }
+        return peeked
+    }
+
+    /// The next element, taken.
+    public mutating fn next() -> Base.Element? {
+        if hasPeeked {
+            hasPeeked = false
+            return peeked
+        }
+        return base.next()
+    }
+}

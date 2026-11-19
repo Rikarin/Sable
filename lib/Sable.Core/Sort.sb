@@ -1,0 +1,56 @@
+module Sable.Core
+
+// The sort 'sorted(by:)' and its kin are made of: a merge sort, stable and
+// O(n log n) comparisons whatever the order it is given, by runs that
+// double in length, so it needs no recursion and one buffer.
+
+/// The elements, in the order the closure says ('a' before 'b' when it is
+/// true), equal elements keeping theirs.
+fn mergeSorted<Element>(_ elements: Element[>..], _ areInIncreasingOrder: (Element, Element) throws -> Bool) rethrows -> Element[>..] {
+    let count = elements.count
+    if count < 2 {
+        return elements
+    }
+
+    var source = elements
+    var target = elements
+    var width = 1
+    while width < count {
+        var start = 0
+        while start < count {
+            let middle = start + width < count ? start + width : count
+            let end = start + 2 * width < count ? start + 2 * width : count
+            var left = start
+            var right = middle
+            var position = start
+            while left < middle && right < end {
+                // The right one goes first only when it is strictly less:
+                // that keeps equal elements in their order.
+                if try areInIncreasingOrder(source[right], source[left]) {
+                    target[position] = source[right]
+                    right += 1
+                } else {
+                    target[position] = source[left]
+                    left += 1
+                }
+                position += 1
+            }
+            while left < middle {
+                target[position] = source[left]
+                left += 1
+                position += 1
+            }
+            while right < end {
+                target[position] = source[right]
+                right += 1
+                position += 1
+            }
+            start += 2 * width
+        }
+        let done = target
+        target = source
+        source = done
+        width *= 2
+    }
+    return source
+}

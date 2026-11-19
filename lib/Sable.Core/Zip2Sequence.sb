@@ -1,0 +1,43 @@
+module Sable.Core
+
+/// The two sequences' elements in pairs, the first of each, then the second
+/// of each, until either runs out.
+///
+/// ```sable
+/// var total = 0
+/// for (count, price) in zip([1, 2, 3], [10, 20]) {
+///     total += count * price
+/// }
+/// assert(total == 50)
+/// ```
+public fn zip<First: Sequence, Second: Sequence>(_ first: First, _ second: Second) -> Zip2Sequence<First, Second> {
+    return Zip2Sequence<First, Second> { first: first, second: second }
+}
+
+/// What 'zip(_:_:)' makes: two sequences' elements in pairs.
+public struct Zip2Sequence<First: Sequence, Second: Sequence>: Sequence {
+    let first: First
+    let second: Second
+
+    /// An iterator from the first pair.
+    public fn makeIterator() -> Zip2Iterator<First.Iter, Second.Iter> {
+        return Zip2Iterator<First.Iter, Second.Iter> { first: first.makeIterator(), second: second.makeIterator() }
+    }
+}
+
+/// Gives two iterators' elements in pairs.
+public struct Zip2Iterator<First: Iterator, Second: Iterator>: Iterator {
+    var first: First
+    var second: Second
+
+    /// The next pair, or none once either is done.
+    public mutating fn next() -> (First.Element, Second.Element)? {
+        guard let a = first.next() else {
+            return none
+        }
+        guard let b = second.next() else {
+            return none
+        }
+        return (a, b)
+    }
+}

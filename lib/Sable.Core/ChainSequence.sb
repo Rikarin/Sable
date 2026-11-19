@@ -1,0 +1,30 @@
+module Sable.Core
+
+/// One sequence's elements, then another's: what 'chained(with:)' makes.
+public struct ChainSequence<First: Sequence, Second: Sequence>: Sequence where Second.Element == First.Element {
+    let first: First
+    let second: Second
+
+    /// An iterator from the first sequence's first element.
+    public fn makeIterator() -> ChainIterator<First.Iter, Second.Iter> {
+        return ChainIterator<First.Iter, Second.Iter> { first: first.makeIterator(), second: second.makeIterator(), onFirst: true }
+    }
+}
+
+/// Gives one iterator's elements, then another's.
+public struct ChainIterator<First: Iterator, Second: Iterator>: Iterator where Second.Element == First.Element {
+    var first: First
+    var second: Second
+    var onFirst: Bool
+
+    /// The next element of the first, or once it is done, of the second.
+    public mutating fn next() -> First.Element? {
+        if onFirst {
+            if let element = first.next() {
+                return element
+            }
+            onFirst = false
+        }
+        return second.next()
+    }
+}

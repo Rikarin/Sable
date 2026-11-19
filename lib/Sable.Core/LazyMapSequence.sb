@@ -1,0 +1,27 @@
+module Sable.Core
+
+/// A sequence's elements, each transformed as it is reached: what
+/// '.lazy.map' makes.
+public struct LazyMapSequence<Base: Sequence, T>: LazySequenceProtocol {
+    let base: Base
+    let transform: (Base.Element) -> T
+
+    /// An iterator from the first element.
+    public fn makeIterator() -> LazyMapIterator<Base.Iter, T> {
+        return LazyMapIterator<Base.Iter, T> { base: base.makeIterator(), transform: transform }
+    }
+}
+
+/// Gives an iterator's elements, transformed.
+public struct LazyMapIterator<Base: Iterator, T>: Iterator {
+    var base: Base
+    let transform: (Base.Element) -> T
+
+    /// The next element, transformed, or none past the last.
+    public mutating fn next() -> T? {
+        guard let element = base.next() else {
+            return none
+        }
+        return transform(element)
+    }
+}

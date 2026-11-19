@@ -7,6 +7,26 @@ import Sable.Collections
 import Sable.Testing
 
 @test
+fn aQueueIsGoneThroughFromTheFront() {
+    let queue = Queue<Int>()
+    queue.enqueue(1)
+    queue.enqueue(2)
+    queue.enqueue(3)
+    let _ = queue.dequeue()
+    queue.enqueue(4)
+    queue.enqueue(5)
+
+    // Some of them have moved to be dequeued, some have not.
+    var seen: String[>..] = []
+    for value in queue {
+        seen.append("\(value)")
+    }
+    assertEqualText(seen.joined(separator: ","), "2,3,4,5")
+    assertEqual(queue.count, 4)
+    assertEqual(Queue<Int>().toArray().count, 0)
+}
+
+@test
 fn queueIsFirstInFirstOut() {
     let queue = Queue<String>()
     queue.enqueue("a")

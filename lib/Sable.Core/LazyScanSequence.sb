@@ -1,0 +1,30 @@
+module Sable.Core
+
+/// The running results of a closure over a sequence's elements: what
+/// '.lazy.scan' makes.
+public struct LazyScanSequence<Base: Sequence, R>: LazySequenceProtocol {
+    let base: Base
+    let initial: R
+    let next: (R, Base.Element) -> R
+
+    /// An iterator from the first result.
+    public fn makeIterator() -> LazyScanIterator<Base.Iter, R> {
+        return LazyScanIterator<Base.Iter, R> { base: base.makeIterator(), result: initial, combine: next }
+    }
+}
+
+/// Gives the running results of a closure over an iterator's elements.
+public struct LazyScanIterator<Base: Iterator, R>: Iterator {
+    var base: Base
+    var result: R
+    let combine: (R, Base.Element) -> R
+
+    /// The result with the next element taken in, or none past the last.
+    public mutating fn next() -> R? {
+        guard let element = base.next() else {
+            return none
+        }
+        result = combine(result, element)
+        return result
+    }
+}

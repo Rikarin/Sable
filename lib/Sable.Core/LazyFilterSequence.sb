@@ -1,0 +1,29 @@
+module Sable.Core
+
+/// A sequence's elements for which a closure is true, each tested as it is
+/// reached: what '.lazy.filter' makes.
+public struct LazyFilterSequence<Base: Sequence>: LazySequenceProtocol {
+    let base: Base
+    let isIncluded: (Base.Element) -> Bool
+
+    /// An iterator from the first element that passes.
+    public fn makeIterator() -> LazyFilterIterator<Base.Iter> {
+        return LazyFilterIterator<Base.Iter> { base: base.makeIterator(), isIncluded: isIncluded }
+    }
+}
+
+/// Gives an iterator's elements for which a closure is true.
+public struct LazyFilterIterator<Base: Iterator>: Iterator {
+    var base: Base
+    let isIncluded: (Base.Element) -> Bool
+
+    /// The next element that passes, or none past the last.
+    public mutating fn next() -> Base.Element? {
+        while let element = base.next() {
+            if isIncluded(element) {
+                return element
+            }
+        }
+        return none
+    }
+}

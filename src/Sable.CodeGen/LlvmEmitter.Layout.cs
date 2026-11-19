@@ -95,7 +95,7 @@ public sealed partial class LlvmEmitter {
                 offset += Size(parts[i]);
             }
 
-            return new($"{{ {string.Join(", ", parts.Select(Type))} }}", slots, offsets, RoundUp(offset, align), align, false);
+            return new($"{{ {string.Join(", ", parts.Select(PartType))} }}", slots, offsets, RoundUp(offset, align), align, false);
         }
 
         var elements = new List<string>();
@@ -108,7 +108,7 @@ public sealed partial class LlvmEmitter {
 
             slots[i] = elements.Count;
             offsets[i] = at;
-            elements.Add(Type(parts[i]));
+            elements.Add(PartType(parts[i]));
             end = at + Size(parts[i]);
         }
 

@@ -584,6 +584,13 @@ public sealed partial class LlvmEmitter {
         };
 
     /// <summary>
+    ///     A value's LLVM type as a part of an aggregate: a unit part is the
+    ///     empty struct, which takes no storage, where LLVM allows no
+    ///     <c>void</c>.
+    /// </summary>
+    static string PartType(SilType type) => type == SilType.Unit ? "{}" : Type(type);
+
+    /// <summary>
     ///     What a struct is laid out as: its fields, after a hidden byte for one
     ///     with a deinit — set when a value is made, so that storage left empty
     ///     by a move, all zeros, is not mistaken for a value to deinit.
@@ -713,6 +720,7 @@ public sealed partial class LlvmEmitter {
             _ when type == SilType.F16 => 2,
             _ when SilType.IntegerInfo(type) is var (bits, _) => bits / 8,
             _ when type == SilType.Int || type == SilType.F64 => 8,
+            _ when type == SilType.Unit => 1,
             StructType { IsInline: true } => PointerBytes,
             StructType structType => LayoutOf(structType).Align,
             TupleType tuple => LayoutOf(tuple).Align,
@@ -1747,7 +1755,7 @@ public sealed partial class LlvmEmitter {
                         _dbg = EntryLocation;
                     }
 
-                    Line($"{name} = alloca {Type(alloc.ElementType)}{StorageAlign(alloc.ElementType)}");
+                    Line($"{name} = alloca {PartType(alloc.ElementType)}{StorageAlign(alloc.ElementType)}");
 
                     // Storage for something with references starts empty: all zeros.
                     if (!alloc.ElementType.IsTrivial) {
@@ -1758,7 +1766,8 @@ public sealed partial class LlvmEmitter {
                     // though a debugger shows it only in the block declaring it.
                     // One a closure captures lives in a box, which the slot
                     // points to: the variable is the value inside it.
-                    if (_scope is not null && alloc.VariableName is { } variable) {
+                    // A unit variable has no storage for a debugger to show.
+                    if (_scope is not null && alloc.VariableName is { } variable && alloc.ElementType != SilType.Unit) {
                         var line = alloc.Location?.Line ?? function.Line;
                         var scope = ScopeNode(alloc.Location?.Scope ?? 0);
 
@@ -1783,6 +1792,14 @@ public sealed partial class LlvmEmitter {
                 }
 
                 case DeallocStackInst:
+                    return;
+
+                // A unit value takes no storage: nothing to read or write.
+                case LoadInst unitLoad when unitLoad.Type == SilType.Unit:
+                    _names[unitLoad] = "zeroinitializer";
+                    return;
+
+                case StoreInst unitStore when unitStore.Value.Type == SilType.Unit:
                     return;
 
                 case LoadInst load: {
@@ -2042,7 +2059,7 @@ public sealed partial class LlvmEmitter {
                     Line($"{current} = insertvalue {type} {(LayoutOf(made.StructType).Explicit ? "zeroinitializer" : "poison")}, i1 true, 0");
                     for (var i = 0; i < made.Operands.Count; i++) {
                         var next = Fresh();
-                        Line($"{next} = insertvalue {type} {current}, {Type(made.Operands[i].Type)} {Name(made.Operands[i])}, {FieldSlot(made.StructType, i)}");
+                        Line($"{next} = insertvalue {type} {current}, {PartType(made.Operands[i].Type)} {Name(made.Operands[i])}, {FieldSlot(made.StructType, i)}");
                         current = next;
                     }
 
@@ -2057,6 +2074,11 @@ public sealed partial class LlvmEmitter {
                     _names[instruction] = Aggregate(Type(instruction.Type), instruction.Operands, layout.Explicit ? layout.Slots : null);
                     return;
                 }
+
+                // A unit part takes no storage: there is nothing to read.
+                case StructExtractInst or TupleExtractInst when instruction.Type == SilType.Unit:
+                    _names[instruction] = "zeroinitializer";
+                    return;
 
                 case StructExtractInst extract: {
                     var name = Fresh();
@@ -2178,7 +2200,7 @@ public sealed partial class LlvmEmitter {
             var current = slots is null ? "poison" : "zeroinitializer";
             for (var i = 0; i < parts.Count; i++) {
                 var next = Fresh();
-                Line($"{next} = insertvalue {type} {current}, {Type(parts[i].Type)} {Name(parts[i])}, {slots?[i] ?? i}");
+                Line($"{next} = insertvalue {type} {current}, {PartType(parts[i].Type)} {Name(parts[i])}, {slots?[i] ?? i}");
                 current = next;
             }
 

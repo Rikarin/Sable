@@ -199,6 +199,7 @@ public enum SyntaxKind : ushort {
     WhereKeyword = 481,
     WhileKeyword = 482,
     RefKeyword = 483, // out of alphabetical order; the range check is numeric
+    YieldKeyword = 484, // likewise
 
     // ---- Contextual keywords ---------------------------------------------
     AssociatedtypeKeyword = 600,
@@ -348,6 +349,7 @@ public enum SyntaxKind : ushort {
     LabeledStatement = 1330,
     EmptyStatement = 1331,
     DeclarationStatement = 1332,
+    YieldStatement = 1333,
 
     // ---- Declaration nodes (1400-1499) ------------------------------------
     CompilationUnit = 1400,

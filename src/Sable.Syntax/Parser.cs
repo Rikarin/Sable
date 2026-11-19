@@ -770,7 +770,7 @@ internal sealed class Parser {
     static bool StartsStatement(SyntaxKind kind) =>
         kind is SyntaxKind.LetKeyword or SyntaxKind.VarKeyword or SyntaxKind.IfKeyword
             or SyntaxKind.GuardKeyword or SyntaxKind.WhileKeyword or SyntaxKind.RepeatKeyword
-            or SyntaxKind.ForKeyword or SyntaxKind.ReturnKeyword or SyntaxKind.ThrowKeyword
+            or SyntaxKind.ForKeyword or SyntaxKind.ReturnKeyword or SyntaxKind.ThrowKeyword or SyntaxKind.YieldKeyword
             or SyntaxKind.BreakKeyword or SyntaxKind.ContinueKeyword or SyntaxKind.DoKeyword
             or SyntaxKind.DeferKeyword or SyntaxKind.FnKeyword;
 
@@ -2743,6 +2743,15 @@ internal sealed class Parser {
                 var throwKeyword = EatToken();
                 return new ThrowStatementGreen(
                     throwKeyword,
+                    ParseExpression(),
+                    TryEatToken(SyntaxKind.SemicolonToken)
+                );
+            }
+
+            case SyntaxKind.YieldKeyword: {
+                var yieldKeyword = EatToken();
+                return new YieldStatementGreen(
+                    yieldKeyword,
                     ParseExpression(),
                     TryEatToken(SyntaxKind.SemicolonToken)
                 );

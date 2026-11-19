@@ -523,6 +523,13 @@ public sealed class ClassType(string name) : NominalType(name) {
     public ClassType? Superclass { get; set; }
 
     /// <summary>
+    ///     The first field that may be left empty when the object is made —
+    ///     all zeros, holding nothing — or null when every field must be
+    ///     stored first: a generator's frame, whose slots fill as its body runs.
+    /// </summary>
+    public int? EmptyFrom { get; set; }
+
+    /// <summary>
     ///     The protocols the class conforms to by its own declaration or its
     ///     extensions', each by its qualified name, with those they refine: its
     ///     metadata's conformance records (docs/06 §6.2). Its superclass's are

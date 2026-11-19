@@ -99,6 +99,10 @@ internal static class AssociatedTypes {
             case TypeParameterSymbol parameter:
                 return parameter.Constraints;
 
+            // 'some Sequence<Int>' is a Sequence, and what its arguments say.
+            case OpaqueTypeSymbol opaque:
+                return [opaque.Constraint];
+
             case DependentMemberTypeSymbol member: {
                 var constraints = member.Associated.Constraints;
                 if (constraints.IsEmpty
@@ -146,6 +150,11 @@ internal static class AssociatedTypes {
         // Inside a protocol, 'Self.Item' is just 'Item'.
         if (IsProtocolSelf(baseType)) {
             return associated;
+        }
+
+        // 'some Sequence<Int>' says its Element is an Int.
+        if (baseType is OpaqueTypeSymbol opaque && opaque.ArgumentFor(associated) is { } argument) {
+            return argument;
         }
 
         if (baseType is NamedTypeSymbol { TypeKind: not TypeKind.Protocol } conformer

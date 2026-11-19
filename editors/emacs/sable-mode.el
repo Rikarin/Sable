@@ -46,7 +46,7 @@ Use `:json-false' for off."
   '(;; Control flow.
     "if" "else" "guard" "match" "switch" "case" "default" "fallthrough"
     "while" "repeat" "for" "in" "break" "continue"
-    "return" "throw" "try" "catch" "await" "defer" "do" "where"
+    "return" "throw" "yield" "try" "catch" "await" "defer" "do" "where"
     ;; Declarations.
     "fn" "let" "var" "const" "struct" "class" "actor" "union" "enum" "protocol"
     "extension" "alias" "associatedtype" "init" "deinit" "subscript" "operator"
@@ -64,7 +64,7 @@ Use `:json-false' for off."
 (defconst sable--constants '("true" "false" "none" "self" "Self" "super")
   "Words that name a value.")
 
-(defconst sable--reserved '("macro" "yield" "trait" "impl" "become" "effect" "handler")
+(defconst sable--reserved '("macro" "trait" "impl" "become" "effect" "handler")
   "Words reserved for later, which are errors today.")
 
 (defconst sable--builtin-types

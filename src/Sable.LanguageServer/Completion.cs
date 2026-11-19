@@ -110,7 +110,7 @@ public sealed partial class LanguageServer {
 
     static readonly string[] Keywords = [
         "let", "var", "fn", "if", "else", "guard", "while", "repeat", "for", "in", "match", "case", "return",
-        "throw", "try", "await", "break", "continue", "defer", "do", "catch", "struct", "class", "actor",
+        "throw", "yield", "try", "await", "break", "continue", "defer", "do", "catch", "struct", "class", "actor",
         "union", "enum", "protocol", "extension", "import", "module", "public", "private", "internal",
         "static", "mutating", "init", "self", "Self", "true", "false", "none", "region", "unsafe", "async",
         "throws", "is", "as", "where", "move", "ref", "inout", "consuming", "borrowing", "alias", "const",

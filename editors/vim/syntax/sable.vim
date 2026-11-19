@@ -18,7 +18,7 @@ syn case match
 " Keywords, as the VS Code grammar groups them.
 syn keyword sableConditional if else guard match switch case default fallthrough
 syn keyword sableRepeat      while repeat for in break continue
-syn keyword sableFlow        return throw try catch await defer do where
+syn keyword sableFlow        return throw yield try catch await defer do where
 syn keyword sableStorage     fn let var const struct class actor union enum protocol extension alias associatedtype
 syn keyword sableStorage     init deinit subscript operator region
 syn keyword sableInclude     module import
@@ -29,7 +29,7 @@ syn keyword sableBoolean     true false
 syn keyword sableNone        none
 syn keyword sableSelf        self Self super
 syn keyword sableOperatorWord is as
-syn keyword sableReserved    macro yield trait impl become effect handler
+syn keyword sableReserved    macro trait impl become effect handler
 syn keyword sableBuiltinType Int UInt I8 I16 I32 I64 U8 U16 U32 U64 F32 F64 Bool Char String Never Void
 
 " Declared names.

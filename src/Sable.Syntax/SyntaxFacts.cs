@@ -93,6 +93,7 @@ public static class SyntaxFacts {
             ["weak"] = SyntaxKind.WeakKeyword,
             ["where"] = SyntaxKind.WhereKeyword,
             ["while"] = SyntaxKind.WhileKeyword,
+            ["yield"] = SyntaxKind.YieldKeyword,
 
             // Contextual
             ["associatedtype"] = SyntaxKind.AssociatedtypeKeyword,
@@ -106,7 +107,7 @@ public static class SyntaxFacts {
         }.ToFrozenDictionary(StringComparer.Ordinal);
 
     static readonly FrozenSet<string> FutureReserved =
-        new[] { "yield", "trait", "impl", "become", "effect", "handler" }
+        new[] { "trait", "impl", "become", "effect", "handler" }
             .ToFrozenSet(StringComparer.Ordinal);
 
     /// <summary>Maps an identifier spelling to its keyword kind, or Identifier.</summary>
@@ -121,7 +122,7 @@ public static class SyntaxFacts {
     public static bool IsKeyword(SyntaxKind kind) => IsReservedKeyword(kind) || IsContextualKeyword(kind);
 
     public static bool IsReservedKeyword(SyntaxKind kind) =>
-        kind >= SyntaxKind.AbstractKeyword && kind <= SyntaxKind.RefKeyword;
+        kind >= SyntaxKind.AbstractKeyword && kind <= SyntaxKind.YieldKeyword;
 
     public static bool IsContextualKeyword(SyntaxKind kind) =>
         kind >= SyntaxKind.AssociatedtypeKeyword && kind <= SyntaxKind.UncheckedKeyword;

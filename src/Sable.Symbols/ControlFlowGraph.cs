@@ -310,6 +310,11 @@ internal sealed class ControlFlowGraph {
                     Jump(_returnTarget);
                     return;
 
+                // The body pauses with the value, and goes on from here when asked for the next.
+                case BoundYield yieldStatement:
+                    Expression(yieldStatement.Value);
+                    return;
+
                 case BoundThrow throwStatement:
                     Expression(throwStatement.Value);
                     if (_throwTargets.Count == 0 && _nestedBodies == 0) {

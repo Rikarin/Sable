@@ -293,6 +293,7 @@ Statement         = Declaration
                   | DeferStatement
                   | ReturnStatement
                   | ThrowStatement
+                  | YieldStatement
                   | BreakStatement
                   | ContinueStatement
                   | FallthroughStatement
@@ -351,6 +352,8 @@ DeferStatement    = "defer" Block ;
 
 ReturnStatement   = "return" [ Expression ] NL ;
 ThrowStatement    = "throw" Expression NL ;
+YieldStatement    = "yield" Expression NL ;         (* only in a generator's body:
+                                                 SYNTAX.md §5, "Generators" *)
 BreakStatement    = "break" [ Identifier ] NL ;
 ContinueStatement = "continue" [ Identifier ] NL ;
 FallthroughStatement = "fallthrough" NL ;

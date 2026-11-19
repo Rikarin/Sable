@@ -292,6 +292,7 @@ public sealed partial class SilGen {
         AddDerived(functions);
         AddLazy(functions);
         AddInheritedInitializers(functions);
+        AddGenerators(functions);
         CheckBuiltins();
 
         // Overloads: functions of one name in one container (counted once per
@@ -805,6 +806,18 @@ public sealed partial class SilGen {
     const int MaxInstanceDepth = 200;
 
     void LowerBody(FunctionSymbol symbol, SyntaxNode syntax, SemanticModel model, string name, FunctionType type, TypeSubstitution substitution) {
+        // A generator's call, its 'makeIterator()' and 'next()': code no source spells.
+        if (_compilation.GetGenerator(symbol) is not null) {
+            var before = _diagnostics.Count;
+            try {
+                LowerGeneratorPart(symbol, syntax, model.SyntaxTree.Text, name, type, substitution);
+            } finally {
+                Place(before, model.SyntaxTree);
+            }
+
+            return;
+        }
+
         if ((_compilation.GetDerivedBody(symbol) ?? _compilation.GetLazyBody(symbol) ?? _compilation.GetInheritedInitializerBody(symbol)
                 ?? model.GetBoundNode(syntax)) is not BoundBlock body) {
             return;
@@ -976,33 +989,21 @@ public sealed partial class SilGen {
     /// <summary>A type with these type arguments in force, a <c>some P</c> parameter's type among them.</summary>
     /// <remarks>A <c>some P</c> result or local is what it hides: code is generated for the concrete type.</remarks>
     internal static TypeSymbol Substitute(TypeSubstitution substitution, TypeSymbol type) {
-        if (type is OpaqueTypeSymbol { Origin: null } opaque) {
+        TypeSymbol? StandsFor(OpaqueTypeSymbol opaque) {
             foreach (var parameter in substitution.Parameters) {
                 if (s_opaqueOf.TryGetValue(parameter, out var standsFor) && standsFor.Equals(opaque)) {
                     return substitution.Lookup(parameter)!;
                 }
             }
+
+            return null;
         }
 
-        return Reveal(substitution.Apply(type));
-    }
-
-    /// <summary>
-    ///     The concrete type behind a <c>some P</c> result or local — itself
-    ///     perhaps another's result — or the type unchanged.
-    /// </summary>
-    /// <remarks>
-    ///     Functions that return only each other's results hide nothing
-    ///     concrete; the chain is followed until it repeats, and then the
-    ///     opaque type is left as it is, which nothing lowers.
-    /// </remarks>
-    static TypeSymbol Reveal(TypeSymbol type) {
-        var seen = new HashSet<Symbol>(ReferenceEqualityComparer.Instance);
-        while (type is OpaqueTypeSymbol { Origin: { } origin, HiddenType: { } hidden } && seen.Add(origin)) {
-            type = hidden;
+        if (type is OpaqueTypeSymbol { Origin: null } opaque && StandsFor(opaque) is { } argument) {
+            return argument;
         }
 
-        return type;
+        return TypeSubstitution.Reveal(substitution.Apply(type), StandsFor);
     }
 
     static bool IsGeneric(FunctionSymbol symbol) => TypeParametersOf(symbol).Any();
@@ -1628,7 +1629,7 @@ public sealed partial class SilGen {
         // A 'some P' result or local is laid out as what it hides; inside an
         // optional or an array, too.
         if (type is OpaqueTypeSymbol { Origin: not null } opaque) {
-            return Reveal(opaque) is var hidden && hidden is not OpaqueTypeSymbol ? Lower(hidden) : null;
+            return TypeSubstitution.Reveal(opaque) is var hidden && hidden is not OpaqueTypeSymbol ? Lower(hidden) : null;
         }
 
         if (type.Equals(Core.Int)) {
@@ -1771,6 +1772,10 @@ public sealed partial class SilGen {
                 enumType.Cases.Add(("None", null));
                 return HoldsItself(enumType) ? null : enumType;
             }
+
+            // A generator's sequence or iterator: what it captured, and the body's state.
+            case NamedTypeSymbol { IsGenericDefinition: false, TypeKind: TypeKind.Struct } named when _compilation.GetGenerator(named) is { } generator:
+                return LowerGeneratorType(named, generator);
 
             case NamedTypeSymbol { IsGenericDefinition: false, TypeKind: TypeKind.Struct } named when named.OriginalDefinition.IsInlineLayout:
                 return LowerInline(named);
@@ -3985,6 +3990,14 @@ public sealed partial class SilGen {
             var parameterTypes = function.Type.Parameters;
             var next = 0;
 
+            // A generator's body is given the iterator it keeps its state in, first.
+            if (Generator is not null) {
+                _iterator = _entry.AddArgument(parameterTypes[next++]);
+                if (Generator.Boxed) {
+                    _leave = _entry.AddArgument(parameterTypes[next++]);
+                }
+            }
+
             // Initialising an object: it comes first, already allocated.
             _initializing = symbol.FunctionKind == FunctionKind.Initializer && function.Type.Result == SilType.Unit
                 && parameterTypes.Length > 0 && parameterTypes[0] is ClassType;
@@ -4083,7 +4096,7 @@ public sealed partial class SilGen {
                     Return(null);
                 } else if (symbol.FunctionKind == FunctionKind.Initializer) {
                     Return(TakeSelf());
-                } else if (function.Type.Result == SilType.Unit) {
+                } else if (function.Type.Result == SilType.Unit || Generator is not null) {
                     Return(null);
                 } else {
                     Jump(new UnreachableInst());
@@ -4107,6 +4120,11 @@ public sealed partial class SilGen {
                     Emit(new ApplyInst(Emit(new FunctionRefInst(GlobalsDeinit, unit)), SilType.Unit));
                 }
 
+                // A generator that has finished stays finished.
+                if (Generator is not null) {
+                    StoreState(GeneratorDone);
+                }
+
                 Jump(new ReturnInst(returnBlock.Arguments.Count == 0 ? null : returnBlock.Arguments[0]));
             }
 
@@ -4115,7 +4133,15 @@ public sealed partial class SilGen {
                 WriteBackInoutParameters();
                 DestroyOwnedParameters();
                 Deallocate();
+                if (Generator is not null) {
+                    StoreState(GeneratorDone);
+                }
+
                 Jump(new ThrowInst(throwBlock.Arguments[0]));
+            }
+
+            if (Generator is not null && !_failed) {
+                Split();
             }
 
             if (_failed) {
@@ -4751,6 +4777,11 @@ public sealed partial class SilGen {
             DestroyTemporaries(0);
             RunDefers(0);
 
+            // A generator's ends: no more elements.
+            if (Generator is not null && _current is not null) {
+                value ??= NoMoreElements();
+            }
+
             if (_returnBlock is null) {
                 _returnBlock = function.AddBlock();
                 if (function.Type.Result != SilType.Unit) {
@@ -4981,6 +5012,10 @@ public sealed partial class SilGen {
 
                     return;
                 }
+
+                case BoundYield yieldStatement:
+                    Yield(yieldStatement);
+                    return;
 
                 case BoundThrow throwStatement:
                     if (Expression(throwStatement.Value) is { } error) {
@@ -5270,6 +5305,16 @@ public sealed partial class SilGen {
             var counter = NewSlot(type);
             Emit(new StoreInst(lower, counter, StoreKind.Init));
 
+            // In a generator the body may pause, and only what is in a slot
+            // is there when it resumes: the bound too.
+            AllocStackInst? bound = null;
+            if (Generator is not null && upper is not null) {
+                bound = NewSlot(type);
+                Emit(new StoreInst(upper, bound, StoreKind.Init));
+            }
+
+            SilValue Upper() => bound is null ? upper! : Emit(new LoadInst(bound));
+
             var header = function.AddBlock();
             var body = function.AddBlock();
             var step = function.AddBlock();
@@ -5282,7 +5327,7 @@ public sealed partial class SilGen {
             } else {
                 var current = Emit(new LoadInst(counter));
                 var compare = isInclusive ? $"cmp_le_{type}" : $"cmp_lt_{type}";
-                var inside = Emit(new BuiltinInst(compare, SilType.Bool, current, upper));
+                var inside = Emit(new BuiltinInst(compare, SilType.Bool, current, Upper()));
                 Jump(new CondBranchInst(inside, body, [], after, []));
             }
 
@@ -5311,7 +5356,7 @@ public sealed partial class SilGen {
             var last = Emit(new LoadInst(counter));
             var more = function.AddBlock();
             if (isInclusive && upper is not null) {
-                var atEnd = Emit(new BuiltinInst($"cmp_eq_{type}", SilType.Bool, last, upper));
+                var atEnd = Emit(new BuiltinInst($"cmp_eq_{type}", SilType.Bool, last, Upper()));
                 Jump(new CondBranchInst(atEnd, after, [], more, []));
             } else {
                 Branch(more);
@@ -5373,7 +5418,7 @@ public sealed partial class SilGen {
             // The loop walks a copy of the array that nothing else can change,
             // so each element stays alive and as it is while it is the loop's:
             // the variable holds it unretained, read in place.
-            if (!elementType.IsTrivial && !_boxed.Contains(loop.Element) && closure is null && !Moves(loop.Body, loop.Element)
+            if (!elementType.IsTrivial && !_boxed.Contains(loop.Element) && closure is null && Generator is null && !Moves(loop.Body, loop.Element)
                 && elementType is not NominalType { IsNoncopyable: true } && SlotFor(loop.Element, loop.Syntax) is { } elementSlot) {
                 elementSlot.Unmanaged = true;
                 var lent = Emit(new LoadBorrowInst(array));
@@ -9984,6 +10029,10 @@ public sealed partial class SilGen {
         ///     copy of each value captured by value — and the two put together.
         /// </summary>
         SilValue? Closure(BoundClosure closureExpression) {
+            if (generator._compilation.GetGenerator(closureExpression.Symbol) is { } yielding && ReferenceEquals(yielding.Function, closureExpression.Symbol)) {
+                return GeneratorClosure(closureExpression, yielding);
+            }
+
             if (LowerType(closureExpression.Type) is not ThickFunctionType thick) {
                 return Missing(closureExpression, $"a closure of type '{closureExpression.Type.ToDisplayString()}'");
             }

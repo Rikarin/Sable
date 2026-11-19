@@ -1258,6 +1258,29 @@ wait on (an I/O reactor), and no parallelism (a work-stealing pool, and
 with it atomic counts) — all `Sable.Concurrency`'s, along with the switch
 to the state machine where many tasks wait at once.
 
+### Generators, as implemented
+
+A generator (SYNTAX.md §5) is split as a coroutine in SIL
+(`src/Sable.SIL/SilGen.Generators.cs`). The binder gives its result two
+types (`Compilation.Generators.cs`): a sequence, a struct of what the call
+captured (`self`, the arguments, a closure's context), and an iterator. The
+body is lowered once, as an ordinary function — its *resume* function — and
+then made resumable: every slot it allocated (every local, a loop's counter,
+the array a loop walks, a range's bound) becomes a field of the iterator, a
+`yield` stores the state to resume at and returns the element, and the entry
+branches on the state. Nothing but slots may live across a yield, which
+lowering checks. Storage that holds nothing is all zeros, so the iterator
+starts with every slot's field empty, and copying or dropping it copies or
+drops exactly what the body holds: no allocation, and a generator over a
+range, specialised, inlines to a loop (`GeneratorLoweringTests`). A body with
+a `defer` keeps its state in an object instead, whose deinit resumes the body
+to leave it from where it stopped — `return` there, running the pending
+defers — when the last iterator holding it goes. An async generator is the
+same with an async `next()`, which, as any async function, runs on its task's
+stack. Not yet: a generator that throws (`Iterator.next()` does not; S3484), a
+generator in a protocol's extension, and one with a `some P` parameter. This is
+the transform the stackless state machine of §2.2 item 4 would build on.
+
 ### 4.4 Exit criteria
 
 - [x] Stdlib is self-hosted Sable, no C# in the shipping library — every

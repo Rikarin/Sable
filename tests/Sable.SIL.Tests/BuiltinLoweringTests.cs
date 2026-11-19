@@ -128,6 +128,48 @@ public sealed class BuiltinLoweringTests {
     }
 
     /// <summary>
+    ///     A static builtin declared outside Sable.Core, in a standard
+    ///     library module, as Sable.Math declares F64's and F32's elementary
+    ///     functions: it witnesses a protocol's static requirement, and a
+    ///     generic call through the requirement is the type's builtin, applied
+    ///     to the arguments, once monomorphised.
+    /// </summary>
+    [Fact]
+    public void AStaticBuiltinWitnessIsTheBuiltinOnceMonomorphised() {
+        var (module, diagnostics) = Lower(
+            """
+            module Sable.Probe
+            public protocol Powers {
+                static fn power(_ x: Self, _ y: Self) -> Self
+            }
+            extension F64: Powers {
+                @builtin("math_pow_F64")
+                public static fn power(_ x: F64, _ y: F64) -> F64
+            }
+            extension F32: Powers {
+                @builtin("math_pow_F32")
+                public static fn power(_ x: F32, _ y: F32) -> F32
+            }
+            public fn power<T: Powers>(_ x: T, _ y: T) -> T => T.power(x, y)
+            """,
+            """
+            module M
+            import Sable.Probe
+            fn probe() -> F64 { return power(2.0, 10.0) + F64(power(2.0 as F32, 3.0)) + F64.power(3.0, 2.0) }
+            """
+        );
+        Assert.Empty(diagnostics);
+        foreach (var type in new[] { "F64", "F32" }) {
+            var instance = module.Functions.Single(f => f.Name.EndsWith($"power$of${type}", StringComparison.Ordinal));
+            Assert.Equal([$"math_pow_{type}"], BuiltinsOf(instance));
+            Assert.Empty(instance.Blocks.SelectMany(static b => b.Instructions).OfType<ApplyInst>());
+        }
+
+        Assert.Contains("math_pow_F64", BuiltinsOf(module.Find("M.probe")!));
+        Assert.Equal(1024.0 + 8.0 + 9.0, new SilInterpreter(module).Run("M.probe"));
+    }
+
+    /// <summary>
     ///     A family is checked against each built-in type that conforms to
     ///     its protocol, as any builtin is against its one.
     /// </summary>

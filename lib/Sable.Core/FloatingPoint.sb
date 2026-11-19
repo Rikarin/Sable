@@ -67,6 +67,11 @@ public protocol FloatingPoint: SignedNumeric, Comparable, Hashable {
     /// unsigned integers of any width go through it.
     static fn rounding(wideMagnitude value: U128) -> Self
 
+    /// The value nearest the F64, rounded once: 'wideValue' back, exact
+    /// for an F64 and for any value the type holds. What is computed in
+    /// F64 for every width (Sable.Math's sinPi) is rounded to the type by it.
+    static fn rounding(wideValue value: F64) -> Self
+
     /// The quotient, rounded. Dividing by zero gives an infinity, or NaN
     /// for zero over zero; it never traps.
     operator / (lhs: Self, rhs: Self) -> Self
@@ -144,6 +149,15 @@ extension FloatingPoint {
     /// The built-in floats' conversion: as 'F64(n)' does it, rounded once.
     @builtin("convert_U128_Self")
     public static fn rounding(wideMagnitude value: U128) -> Self
+
+    /// The built-in floats' narrowing: as 'F32(x)' does it, rounded once.
+    ///
+    /// ```sable
+    /// assert(F32.rounding(wideValue: 0.1) == 0.1 as F32)
+    /// assert(F64.rounding(wideValue: 0.1) == 0.1)
+    /// ```
+    @builtin("convert_F64_Self")
+    public static fn rounding(wideValue value: F64) -> Self
 
     /// The float nearest the integer, rounded once, from an integer of any
     /// width: one too large for the type is an infinity.

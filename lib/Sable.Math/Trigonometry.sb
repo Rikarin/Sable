@@ -1,74 +1,73 @@
 module Sable.Math
 
-// The trigonometric functions, of F64 and of F32: the sine and its kin of
-// an angle in radians, the inverse functions, the same of an angle given in
-// half-turns (sinPi), and conversion between degrees and radians. Those
-// libm has are its own (F64's and F32's methods, in Sable.Core); sinPi and
-// the rest are reduced here exactly, so that sinPi(1.0) is 0 where
-// sin(pi) cannot be.
+// The trigonometric functions, of any float with the elementary functions
+// (ElementaryFunctions.sb): the sine and its kin of an angle in radians,
+// the inverse functions, the same of an angle given in half-turns (sinPi),
+// and conversion between degrees and radians. Those libm has are its own;
+// sinPi and the rest are reduced here exactly, in F64, and rounded to the
+// type, so that sinPi(1.0) is 0 where sin(pi) cannot be.
 
 /// The sine of an angle in radians.
 ///
 /// ```sable
 /// assert(sin(0.0) == 0.0)
 /// ```
-public fn sin(_ x: F64) -> F64 => x.sin()
-
-/// The sine of an angle in radians.
-public fn sin(_ x: F32) -> F32 => x.sin()
+public fn sin<T: ElementaryFunctions>(_ x: T) -> T => T.sin(x)
 
 /// The cosine of an angle in radians.
-public fn cos(_ x: F64) -> F64 => x.cos()
-
-/// The cosine of an angle in radians.
-public fn cos(_ x: F32) -> F32 => x.cos()
+public fn cos<T: ElementaryFunctions>(_ x: T) -> T => T.cos(x)
 
 /// The tangent of an angle in radians.
-public fn tan(_ x: F64) -> F64 => x.tan()
-
-/// The tangent of an angle in radians.
-public fn tan(_ x: F32) -> F32 => x.tan()
+public fn tan<T: ElementaryFunctions>(_ x: T) -> T => T.tan(x)
 
 /// The angle in [-pi/2, pi/2] whose sine x is; NaN outside [-1, 1].
-public fn asin(_ x: F64) -> F64 => x.asin()
-
-/// The angle in [-pi/2, pi/2] whose sine x is; NaN outside [-1, 1].
-public fn asin(_ x: F32) -> F32 => x.asin()
+public fn asin<T: ElementaryFunctions>(_ x: T) -> T => T.asin(x)
 
 /// The angle in [0, pi] whose cosine x is; NaN outside [-1, 1].
-public fn acos(_ x: F64) -> F64 => x.acos()
-
-/// The angle in [0, pi] whose cosine x is; NaN outside [-1, 1].
-public fn acos(_ x: F32) -> F32 => x.acos()
+public fn acos<T: ElementaryFunctions>(_ x: T) -> T => T.acos(x)
 
 /// The angle in [-pi/2, pi/2] whose tangent x is.
-public fn atan(_ x: F64) -> F64 => x.atan()
-
-/// The angle in [-pi/2, pi/2] whose tangent x is.
-public fn atan(_ x: F32) -> F32 => x.atan()
+public fn atan<T: ElementaryFunctions>(_ x: T) -> T => T.atan(x)
 
 /// The angle in [-pi, pi] from the positive x axis to the point (x, y),
 /// its quadrant taken from both signs: atan2(1.0, -1.0) is 3pi/4.
-public fn atan2(_ y: F64, _ x: F64) -> F64 => y.atan2(x)
-
-/// The angle in [-pi, pi] from the positive x axis to the point (x, y).
-public fn atan2(_ y: F32, _ x: F32) -> F32 => y.atan2(x)
+public fn atan2<T: ElementaryFunctions>(_ y: T, _ x: T) -> T => T.atan2(y: y, x: x)
 
 /// The sine and the cosine of an angle in radians, together.
-public fn sinCos(_ x: F64) -> (sin: F64, cos: F64) => (sin: x.sin(), cos: x.cos())
-
-/// The sine and the cosine of an angle in radians, together.
-public fn sinCos(_ x: F32) -> (sin: F32, cos: F32) => (sin: x.sin(), cos: x.cos())
+public fn sinCos<T: ElementaryFunctions>(_ x: T) -> (sin: T, cos: T) => (sin: T.sin(x), cos: T.cos(x))
 
 /// The sine of x half-turns, sin(pi * x), with no error from pi's
 /// rounding: exactly 0 at every integer (+0.0 for a positive one, -0.0
 /// for a negative one), exactly ±1 halfway between. NaN for an infinity.
+/// Computed as an F64 and rounded to the type.
 ///
 /// ```sable
 /// assert(sinPi(1.0) == 0.0)
 /// assert(sinPi(0.5) == 1.0)
 /// ```
-public fn sinPi(_ x: F64) -> F64 {
+public fn sinPi<T: ElementaryFunctions>(_ x: T) -> T => T.rounding(wideValue: wideSinPi(x.wideValue))
+
+/// The cosine of x half-turns, cos(pi * x), with no error from pi's
+/// rounding: exactly ±1 at every integer, +0.0 halfway between. NaN for
+/// an infinity. Computed as an F64 and rounded to the type.
+public fn cosPi<T: ElementaryFunctions>(_ x: T) -> T => T.rounding(wideValue: wideCosPi(x.wideValue))
+
+/// The tangent of x half-turns, tan(pi * x): exactly 0 at every integer,
+/// and an infinity halfway between (+inf after an even integer, -inf after
+/// an odd one), as IEEE 754's tanPi. Computed as an F64 and rounded to the type.
+public fn tanPi<T: ElementaryFunctions>(_ x: T) -> T {
+    let wide = x.wideValue
+    return T.rounding(wideValue: wideSinPi(wide) / wideCosPi(wide))
+}
+
+/// An angle in degrees, in radians: computed as an F64 and rounded to the type.
+public fn degreesToRadians<T: ElementaryFunctions>(_ degrees: T) -> T => T.rounding(wideValue: degrees.wideValue * F64.pi / 180.0)
+
+/// An angle in radians, in degrees: computed as an F64 and rounded to the type.
+public fn radiansToDegrees<T: ElementaryFunctions>(_ radians: T) -> T => T.rounding(wideValue: radians.wideValue * 180.0 / F64.pi)
+
+// sin(pi * x) of an F64, which sinPi of any float rounds.
+fn wideSinPi(_ x: F64) -> F64 {
     // sin is odd: work on |x| reduced to [0, 2), where each piece below is
     // a difference Sterbenz's lemma makes exact, and put the sign back —
     // the sign bit's, so that -0.0 keeps its sign.
@@ -76,15 +75,15 @@ public fn sinPi(_ x: F64) -> F64 {
     let y = (negative ? -x : x) % 2.0
     var s = 0.0
     if y <= 0.25 {
-        s = (F64.pi * y).sin()
+        s = F64.sin(F64.pi * y)
     } else if y <= 0.75 {
-        s = (F64.pi * (0.5 - y)).cos()
+        s = F64.cos(F64.pi * (0.5 - y))
     } else if y <= 1.25 {
-        s = (F64.pi * (1.0 - y)).sin()
+        s = F64.sin(F64.pi * (1.0 - y))
     } else if y <= 1.75 {
-        s = -(F64.pi * (y - 1.5)).cos()
+        s = -F64.cos(F64.pi * (y - 1.5))
     } else if y < 2.0 {
-        s = -(F64.pi * (2.0 - y)).sin()
+        s = -F64.sin(F64.pi * (2.0 - y))
     } else {
         // Only a NaN or an infinity is not below 2 after the remainder.
         return y
@@ -92,48 +91,20 @@ public fn sinPi(_ x: F64) -> F64 {
     return negative ? -s : s
 }
 
-/// The sine of x half-turns, sin(pi * x): computed as an F64 and rounded.
-public fn sinPi(_ x: F32) -> F32 => F32(sinPi(F64(x)))
-
-/// The cosine of x half-turns, cos(pi * x), with no error from pi's
-/// rounding: exactly ±1 at every integer, +0.0 halfway between. NaN for
-/// an infinity.
-public fn cosPi(_ x: F64) -> F64 {
-    // cos is even: work on |x| reduced to [0, 2), as sinPi does.
+// cos(pi * x) of an F64, which cosPi of any float rounds.
+fn wideCosPi(_ x: F64) -> F64 {
+    // cos is even: work on |x| reduced to [0, 2), as wideSinPi does.
     let y = (x < 0.0 ? -x : x) % 2.0
     if y <= 0.25 {
-        return (F64.pi * y).cos()
+        return F64.cos(F64.pi * y)
     } else if y <= 0.75 {
-        return (F64.pi * (0.5 - y)).sin()
+        return F64.sin(F64.pi * (0.5 - y))
     } else if y <= 1.25 {
-        return -(F64.pi * (1.0 - y)).cos()
+        return -F64.cos(F64.pi * (1.0 - y))
     } else if y <= 1.75 {
-        return (F64.pi * (y - 1.5)).sin()
+        return F64.sin(F64.pi * (y - 1.5))
     } else if y < 2.0 {
-        return (F64.pi * (2.0 - y)).cos()
+        return F64.cos(F64.pi * (2.0 - y))
     }
     return y
 }
-
-/// The cosine of x half-turns, cos(pi * x): computed as an F64 and rounded.
-public fn cosPi(_ x: F32) -> F32 => F32(cosPi(F64(x)))
-
-/// The tangent of x half-turns, tan(pi * x): exactly 0 at every integer,
-/// and an infinity halfway between (+inf after an even integer, -inf after
-/// an odd one), as IEEE 754's tanPi.
-public fn tanPi(_ x: F64) -> F64 => sinPi(x) / cosPi(x)
-
-/// The tangent of x half-turns, tan(pi * x): computed as an F64 and rounded.
-public fn tanPi(_ x: F32) -> F32 => F32(tanPi(F64(x)))
-
-/// An angle in degrees, in radians.
-public fn degreesToRadians(_ degrees: F64) -> F64 => degrees * F64.pi / 180.0
-
-/// An angle in degrees, in radians: computed as an F64 and rounded.
-public fn degreesToRadians(_ degrees: F32) -> F32 => F32(degreesToRadians(F64(degrees)))
-
-/// An angle in radians, in degrees.
-public fn radiansToDegrees(_ radians: F64) -> F64 => radians * 180.0 / F64.pi
-
-/// An angle in radians, in degrees: computed as an F64 and rounded.
-public fn radiansToDegrees(_ radians: F32) -> F32 => F32(radiansToDegrees(F64(radians)))

@@ -8745,7 +8745,7 @@ public sealed partial class SilGen {
                 return callee.Name == "append" ? InlineAppend(call) : InlineArrayMember(inlineArray, callee.Name, call);
             }
 
-            // Sable.Core's @builtin members: the builtin, here (SilGen.Builtins.cs).
+            // The standard library's @builtin members: the builtin, here (SilGen.Builtins.cs).
             if (callee.Builtin is not null) {
                 return BuiltinCall(call, callee);
             }

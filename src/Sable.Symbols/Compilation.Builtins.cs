@@ -3,7 +3,7 @@ using Sable.Syntax;
 namespace Sable.Symbols;
 
 /// <summary>
-///     <c>@builtin("name")</c>: how <c>Sable.Core</c> declares, in Sable, a
+///     <c>@builtin("name")</c>: how the standard library declares, in Sable, a
 ///     member whose body is one of SIL's builtins.
 /// </summary>
 /// <remarks>
@@ -29,9 +29,11 @@ namespace Sable.Symbols;
 ///         checks what can be told from the declaration alone.
 ///     </para>
 ///     <para>
-///         Only <c>Sable.Core</c> may do this. A builtin assumes what its
-///         signature says and nothing checks it at run time, so anywhere else
-///         it would be a way round the type system.
+///         Only the standard library may do this: <c>Sable.Core</c> and the
+///         other modules named <c>Sable.*</c>, as <c>Sable.Math</c> declares
+///         F64's <c>sin</c> to be libm's. A builtin assumes what its signature
+///         says and nothing checks it at run time, so anywhere else it would
+///         be a way round the type system.
 ///     </para>
 /// </remarks>
 public sealed partial class Compilation {
@@ -129,7 +131,7 @@ public sealed partial class Compilation {
         return NameOf(attribute);
     }
 
-    /// <summary>The one <c>@builtin</c> attribute in a list, or null; reports one outside Sable.Core.</summary>
+    /// <summary>The one <c>@builtin</c> attribute in a list, or null; reports one outside the standard library.</summary>
     AttributeSyntax? BuiltinAttributeOf(SyntaxList<AttributeSyntax> attributes) {
         AttributeSyntax? found = null;
         foreach (var attribute in attributes) {
@@ -149,11 +151,11 @@ public sealed partial class Compilation {
             return null;
         }
 
-        if (CurrentScope?.Module.Name != CoreLibrary.ModuleName) {
+        if (!CoreLibrary.IsStandardLibrary(CurrentScope?.Module.Name)) {
             ReportDeclaration(
                 ErrorCode.ERR_BuiltinOutsideCore,
                 found.Span,
-                "only Sable.Core may declare a '@builtin': a builtin trusts its operands, so elsewhere it would sidestep the checks the language makes"
+                "only the standard library (Sable.Core and the Sable.* modules) may declare a '@builtin': a builtin trusts its operands, so elsewhere it would sidestep the checks the language makes"
             );
             return null;
         }

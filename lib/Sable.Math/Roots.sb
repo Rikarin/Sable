@@ -1,15 +1,12 @@
 module Sable.Math
 
-// Roots, of F64 and of F32: the cube root and the hypotenuse are libm's
-// (F64's and F32's methods, in Sable.Core); the nth root is a power, with
-// IEEE 754's rootn's signs; the estimates of a reciprocal are, on a target
-// without an instruction for one, the reciprocal itself.
+// Roots, of any float with the elementary functions (ElementaryFunctions.sb):
+// the cube root and the hypotenuse are libm's; the nth root is a power,
+// with IEEE 754's rootn's signs; the estimates of a reciprocal are, on a
+// target without an instruction for one, the reciprocal itself.
 
 /// The cube root, negative for a negative x: cbrt(-27.0) is -3.0.
-public fn cbrt(_ x: F64) -> F64 => x.cbrt()
-
-/// The cube root, negative for a negative x.
-public fn cbrt(_ x: F32) -> F32 => x.cbrt()
+public fn cbrt<T: ElementaryFunctions>(_ x: T) -> T => T.cbrt(x)
 
 /// sqrt(x² + y²), without overflowing or underflowing on the way: +inf if
 /// either is infinite, even when the other is NaN.
@@ -17,16 +14,17 @@ public fn cbrt(_ x: F32) -> F32 => x.cbrt()
 /// ```sable
 /// assert(hypot(3.0, 4.0) == 5.0)
 /// ```
-public fn hypot(_ x: F64, _ y: F64) -> F64 => x.hypot(y)
-
-/// sqrt(x² + y²), without overflowing or underflowing on the way.
-public fn hypot(_ x: F32, _ y: F32) -> F32 => x.hypot(y)
+public fn hypot<T: ElementaryFunctions>(_ x: T, _ y: T) -> T => T.hypot(x, y)
 
 /// The nth root of x, x^(1/n), as IEEE 754's rootn: a negative x has an
 /// odd root (rootN(-8.0, 3) is -2.0) but no even one (NaN); n = 0 is NaN;
 /// a negative n is the reciprocal of the root. Square and cube roots are
 /// libm's, exact where they can be; other roots are pow(|x|, 1.0 / n).
-public fn rootN(_ x: F64, _ n: Int) -> F64 {
+/// Computed as an F64 and rounded to the type.
+public fn rootN<T: ElementaryFunctions>(_ x: T, _ n: Int) -> T => T.rounding(wideValue: wideRootN(x.wideValue, n))
+
+// The nth root of an F64, which rootN of any float rounds.
+fn wideRootN(_ x: F64, _ n: Int) -> F64 {
     if n == 0 {
         return 0.0 / 0.0
     }
@@ -37,7 +35,7 @@ public fn rootN(_ x: F64, _ n: Int) -> F64 {
         return x.squareRoot()
     }
     if n == 3 {
-        return x.cbrt()
+        return F64.cbrt(x)
     }
 
     // The sign bit's, so that -0.0 has odd roots of -0.0 and -inf.
@@ -46,21 +44,12 @@ public fn rootN(_ x: F64, _ n: Int) -> F64 {
     if negative && even && x != 0.0 {
         return 0.0 / 0.0
     }
-    let root = (negative ? -x : x).pow(1.0 / F64(n))
+    let root = F64.pow(negative ? -x : x, 1.0 / F64(n))
     return negative && !even ? -root : root
 }
 
-/// The nth root of x, as IEEE 754's rootn: computed as an F64 and rounded.
-public fn rootN(_ x: F32, _ n: Int) -> F32 => F32(rootN(F64(x), n))
-
 /// An estimate of 1 / x: on every target Sable has, 1 / x itself.
-public fn reciprocalEstimate(_ x: F64) -> F64 => 1.0 / x
-
-/// An estimate of 1 / x: on every target Sable has, 1 / x itself.
-public fn reciprocalEstimate(_ x: F32) -> F32 => 1.0 / x
+public fn reciprocalEstimate<T: ElementaryFunctions>(_ x: T) -> T => T.rounding(wideValue: 1.0) / x
 
 /// An estimate of 1 / sqrt(x): on every target Sable has, 1 / sqrt(x) itself.
-public fn reciprocalSqrtEstimate(_ x: F64) -> F64 => 1.0 / x.squareRoot()
-
-/// An estimate of 1 / sqrt(x): on every target Sable has, 1 / sqrt(x) itself.
-public fn reciprocalSqrtEstimate(_ x: F32) -> F32 => 1.0 / x.squareRoot()
+public fn reciprocalSqrtEstimate<T: ElementaryFunctions>(_ x: T) -> T => T.rounding(wideValue: 1.0) / x.squareRoot()

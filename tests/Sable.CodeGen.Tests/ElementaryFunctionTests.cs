@@ -3,10 +3,11 @@ using static Sable.CodeGen.Tests.Programs;
 namespace Sable.CodeGen.Tests;
 
 /// <summary>
-///     A float's elementary functions (<c>sin</c>, <c>exp</c>, <c>pow</c>, …),
-///     its bits, and an integer's bytes swapped: native code calls libm (or
-///     LLVM's intrinsic, which is libm too), the interpreter calls the same
-///     libm, and the two must print the same digits — the shortest that
+///     A float's elementary functions (Sable.Math's <c>sin</c>, <c>exp</c>,
+///     <c>pow</c>, …, generic over <c>ElementaryFunctions</c>), its bits,
+///     and an integer's bytes swapped: native code calls libm (or LLVM's
+///     intrinsic, which is libm too), the interpreter calls the same libm,
+///     and the two must print the same digits — the shortest that
 ///     round-trip, so the same bits.
 /// </summary>
 public sealed class ElementaryFunctionTests {
@@ -20,15 +21,15 @@ public sealed class ElementaryFunctionTests {
     public void EveryUnaryFunctionAgreesWithLibmOnSpecialValues() {
         var execution = AssertAgree(
             Program(
-                "",
+                "import Sable.Math",
                 Specials + """
                                for x in xs {
-                                   print("\(x): \(x.squareRoot()) \(x.cbrt()) \(x.sin()) \(x.cos()) \(x.tan()) \(x.asin()) \(x.acos()) \(x.atan())")
-                                   print("  \(x.sinh()) \(x.cosh()) \(x.tanh()) \(x.asinh()) \(x.acosh()) \(x.atanh())")
-                                   print("  \(x.exp()) \(x.exp2()) \(x.expm1()) \(x.log()) \(x.log2()) \(x.log10()) \(x.log1p())")
-                                   print("  \(x.gamma()) \(x.logGamma()) \(x.erf()) \(x.erfc())")
+                                   print("\(x): \(x.squareRoot()) \(cbrt(x)) \(sin(x)) \(cos(x)) \(tan(x)) \(asin(x)) \(acos(x)) \(atan(x))")
+                                   print("  \(sinh(x)) \(cosh(x)) \(tanh(x)) \(asinh(x)) \(acosh(x)) \(atanh(x))")
+                                   print("  \(exp(x)) \(exp2(x)) \(expm1(x)) \(log(x)) \(log2(x)) \(log10(x)) \(log1p(x))")
+                                   print("  \(gamma(x)) \(logGamma(x)) \(erf(x)) \(erfc(x))")
                                    let f = F32(x)
-                                   print("  \(f.squareRoot()) \(f.sin()) \(f.cos()) \(f.tan()) \(f.exp()) \(f.log()) \(f.cbrt()) \(f.erf()) \(f.gamma())")
+                                   print("  \(f.squareRoot()) \(sin(f)) \(cos(f)) \(tan(f)) \(exp(f)) \(log(f)) \(cbrt(f)) \(erf(f)) \(gamma(f))")
                                }
                            """
             )
@@ -41,11 +42,11 @@ public sealed class ElementaryFunctionTests {
     public void EveryBinaryFunctionAgreesWithLibmOnSpecialValues() =>
         AssertAgree(
             Program(
-                "",
+                "import Sable.Math",
                 Specials + """
                                for y in xs {
                                    for x in xs {
-                                       print("\(y) \(x): \(y.atan2(x)) \(y.pow(x)) \(y.hypot(x)) \(F32(y).pow(F32(x))) \(F32(y).atan2(F32(x)))")
+                                       print("\(y) \(x): \(atan2(y, x)) \(pow(y, x)) \(hypot(y, x)) \(pow(F32(y), F32(x))) \(atan2(F32(y), F32(x)))")
                                    }
                                }
                            """
@@ -58,23 +59,23 @@ public sealed class ElementaryFunctionTests {
             "1.4142135623730951\n1.0\n0.0\n1024.0\n24.0\n-2.0\n3.141592653589793\n5.0\n-0.0\n1.0\n-inf\nnan\n1.0\n1e-10\n1e-10\n1.4142135\n",
             AssertAgree(
                 Program(
-                    "",
+                    "import Sable.Math",
                     """
                         print(2.0.squareRoot())
-                        print(0.0.exp())
-                        print(1.0.log())
-                        print(2.0.pow(10.0))
-                        print(5.0.gamma())
-                        print((-8.0).cbrt())
-                        print(0.0.atan2(-1.0))
-                        print(3.0.hypot(4.0))
-                        print((-0.0).sin())
-                        print(F64.fromBits(0x7FF0_0000_0000_0000).erf())
-                        print(0.0.log())
-                        print((-1.0).log())
-                        print((0.0 / 0.0).pow(0.0))
-                        print(1e-10.log1p() + 5e-21)
-                        print(1e-10.expm1() - 5e-21)
+                        print(exp(0.0))
+                        print(log(1.0))
+                        print(pow(2.0, 10.0))
+                        print(gamma(5.0))
+                        print(cbrt(-8.0))
+                        print(atan2(0.0, -1.0))
+                        print(hypot(3.0, 4.0))
+                        print(sin(-0.0))
+                        print(erf(F64.fromBits(0x7FF0_0000_0000_0000)))
+                        print(log(0.0))
+                        print(log(-1.0))
+                        print(pow(0.0 / 0.0, 0.0))
+                        print(log1p(1e-10) + 5e-21)
+                        print(expm1(1e-10) - 5e-21)
                         let two: F32 = 2.0
                         print(two.squareRoot())
                     """
@@ -113,19 +114,20 @@ public sealed class ElementaryFunctionTests {
         var result = Pipeline.Compile(
             new SourceText(
                 Program(
-                    "",
+                    "import Sable.Math",
                     """
                         let x = F64(Runtime.argumentCount())
                         let f = F32(x)
-                        print(x.sin() + x.cbrt() + x.pow(x) + x.atan2(x))
-                        print(f.sin() + f.tan())
+                        print(sin(x) + cbrt(x) + pow(x, x) + atan2(x, x))
+                        print(sin(f) + tan(f))
                         let u = U32(x)
                         print(u.byteSwapped)
                         print(x.bits)
                     """
                 ),
                 "test.sb"
-            )
+            ),
+            optimised: true
         );
         Assert.True(result.Succeeded, string.Join("\n", result.Errors));
         var ir = result.LlvmIr!;
@@ -137,6 +139,10 @@ public sealed class ElementaryFunctionTests {
         Assert.Contains("call float @tanf(float", ir, StringComparison.Ordinal);
         Assert.Contains("call i32 @llvm.bswap.i32(i32", ir, StringComparison.Ordinal);
         Assert.Contains("bitcast double", ir, StringComparison.Ordinal);
+
+        // Optimised, the generic functions are monomorphised and inlined to
+        // the call itself: no function of Sable.Math's is called for them.
+        Assert.DoesNotContain("@\"sable.Sable.Math.", ir, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -150,10 +156,10 @@ public sealed class ElementaryFunctionTests {
             "2.0\n2.0\n",
             BuildAndRun(
                 Program(
-                    "@extern(\"c\") fn cbrt(_ x: F64) -> F64",
+                    "import Sable.Math\n@extern(\"c\") fn cbrt(_ x: F64) -> F64",
                     """
                         print(cbrt(8.0))
-                        print(8.0.cbrt())
+                        print(F64.cbrt(8.0))
                     """
                 )
             ).Stdout

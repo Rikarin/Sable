@@ -1,0 +1,104 @@
+module Sable.Math
+
+/// A float with the elementary functions: the trigonometric and hyperbolic
+/// functions and their inverses, exponentials, logarithms, powers, roots,
+/// and the gamma and error functions. F64 and F32 conform, each function
+/// C's of the same name in the platform's libm (sinf for an F32), called
+/// natively through LLVM's intrinsic where it has one and by the
+/// interpreter in the same libm, so the two agree to the bit.
+///
+/// The requirements are static, as `F64.sin(x)`; the module's functions of
+/// the same name, generic over this protocol, are how they are called:
+/// `sin(x)`. None traps: outside its domain a function gives NaN, and past
+/// the greatest finite value an infinity.
+///
+/// ```sable
+/// fn norm<T: ElementaryFunctions>(_ x: T, _ y: T) -> T => hypot(x, y)
+///
+/// assert(norm(3.0, 4.0) == 5.0)
+/// assert(norm(3.0 as F32, 4.0) == 5.0)
+/// ```
+public protocol ElementaryFunctions: BinaryFloatingPoint {
+    /// The sine of an angle in radians.
+    static fn sin(_ x: Self) -> Self
+
+    /// The cosine of an angle in radians.
+    static fn cos(_ x: Self) -> Self
+
+    /// The tangent of an angle in radians.
+    static fn tan(_ x: Self) -> Self
+
+    /// The angle in [-pi/2, pi/2] whose sine x is; NaN outside [-1, 1].
+    static fn asin(_ x: Self) -> Self
+
+    /// The angle in [0, pi] whose cosine x is; NaN outside [-1, 1].
+    static fn acos(_ x: Self) -> Self
+
+    /// The angle in [-pi/2, pi/2] whose tangent x is.
+    static fn atan(_ x: Self) -> Self
+
+    /// The angle in [-pi, pi] from the positive x axis to the point (x, y),
+    /// as C's atan2(y, x).
+    static fn atan2(y: Self, x: Self) -> Self
+
+    /// The hyperbolic sine.
+    static fn sinh(_ x: Self) -> Self
+
+    /// The hyperbolic cosine.
+    static fn cosh(_ x: Self) -> Self
+
+    /// The hyperbolic tangent, in [-1, 1].
+    static fn tanh(_ x: Self) -> Self
+
+    /// The inverse hyperbolic sine.
+    static fn asinh(_ x: Self) -> Self
+
+    /// The inverse hyperbolic cosine; NaN below 1.
+    static fn acosh(_ x: Self) -> Self
+
+    /// The inverse hyperbolic tangent; NaN outside [-1, 1], an infinity at ±1.
+    static fn atanh(_ x: Self) -> Self
+
+    /// e to the power x.
+    static fn exp(_ x: Self) -> Self
+
+    /// 2 to the power x.
+    static fn exp2(_ x: Self) -> Self
+
+    /// e to the power x, less 1, without the loss of exp(x) - 1 where x is small.
+    static fn expm1(_ x: Self) -> Self
+
+    /// The natural logarithm; -inf at zero, NaN below it.
+    static fn log(_ x: Self) -> Self
+
+    /// The base-2 logarithm; -inf at zero, NaN below it.
+    static fn log2(_ x: Self) -> Self
+
+    /// The base-10 logarithm; -inf at zero, NaN below it.
+    static fn log10(_ x: Self) -> Self
+
+    /// The natural logarithm of 1 + x, without the loss of log(1 + x) where x is small.
+    static fn log1p(_ x: Self) -> Self
+
+    /// x to the power y, with C's pow's special cases.
+    static fn pow(_ x: Self, _ y: Self) -> Self
+
+    /// The cube root, negative for a negative x.
+    static fn cbrt(_ x: Self) -> Self
+
+    /// sqrt(x² + y²), without the overflow or underflow of computing it so.
+    static fn hypot(_ x: Self, _ y: Self) -> Self
+
+    /// The gamma function, (n - 1)! at a positive integer n.
+    static fn gamma(_ x: Self) -> Self
+
+    /// The natural logarithm of the gamma function's magnitude.
+    static fn logGamma(_ x: Self) -> Self
+
+    /// The error function, in [-1, 1].
+    static fn erf(_ x: Self) -> Self
+
+    /// The complementary error function, 1 - erf(x), without the loss of
+    /// that difference where erf(x) is near 1.
+    static fn erfc(_ x: Self) -> Self
+}

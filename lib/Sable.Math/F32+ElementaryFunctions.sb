@@ -1,0 +1,117 @@
+module Sable.Math
+
+// F32's elementary functions (ElementaryFunctions.sb): each is libm's,
+// the C function of the same name with an 'f' (sinf), called natively through LLVM's
+// intrinsic where it has one and by the interpreter in the same libm, so
+// the two agree to the bit. A program calls them through the module's
+// generic functions: sin(x), which is F32.sin(x) for an F32.
+
+extension F32: ElementaryFunctions {
+    /// The sine of an angle in radians.
+    @builtin("math_sin_F32")
+    public static fn sin(_ x: F32) -> F32
+
+    /// The cosine of an angle in radians.
+    @builtin("math_cos_F32")
+    public static fn cos(_ x: F32) -> F32
+
+    /// The tangent of an angle in radians.
+    @builtin("math_tan_F32")
+    public static fn tan(_ x: F32) -> F32
+
+    /// The angle in [-pi/2, pi/2] whose sine x is; NaN outside [-1, 1].
+    @builtin("math_asin_F32")
+    public static fn asin(_ x: F32) -> F32
+
+    /// The angle in [0, pi] whose cosine x is; NaN outside [-1, 1].
+    @builtin("math_acos_F32")
+    public static fn acos(_ x: F32) -> F32
+
+    /// The angle in [-pi/2, pi/2] whose tangent x is.
+    @builtin("math_atan_F32")
+    public static fn atan(_ x: F32) -> F32
+
+    /// The angle in [-pi, pi] of the point (x, y), as C's atan2(y, x).
+    @builtin("math_atan2_F32")
+    public static fn atan2(y: F32, x: F32) -> F32
+
+    /// The hyperbolic sine.
+    @builtin("math_sinh_F32")
+    public static fn sinh(_ x: F32) -> F32
+
+    /// The hyperbolic cosine.
+    @builtin("math_cosh_F32")
+    public static fn cosh(_ x: F32) -> F32
+
+    /// The hyperbolic tangent, in [-1, 1].
+    @builtin("math_tanh_F32")
+    public static fn tanh(_ x: F32) -> F32
+
+    /// The inverse hyperbolic sine.
+    @builtin("math_asinh_F32")
+    public static fn asinh(_ x: F32) -> F32
+
+    /// The inverse hyperbolic cosine; NaN below 1.
+    @builtin("math_acosh_F32")
+    public static fn acosh(_ x: F32) -> F32
+
+    /// The inverse hyperbolic tangent; NaN outside [-1, 1], an infinity at ±1.
+    @builtin("math_atanh_F32")
+    public static fn atanh(_ x: F32) -> F32
+
+    /// e to the power x.
+    @builtin("math_exp_F32")
+    public static fn exp(_ x: F32) -> F32
+
+    /// 2 to the power x.
+    @builtin("math_exp2_F32")
+    public static fn exp2(_ x: F32) -> F32
+
+    /// e to the power x, less 1.
+    @builtin("math_expm1_F32")
+    public static fn expm1(_ x: F32) -> F32
+
+    /// The natural logarithm.
+    @builtin("math_log_F32")
+    public static fn log(_ x: F32) -> F32
+
+    /// The base-2 logarithm.
+    @builtin("math_log2_F32")
+    public static fn log2(_ x: F32) -> F32
+
+    /// The base-10 logarithm.
+    @builtin("math_log10_F32")
+    public static fn log10(_ x: F32) -> F32
+
+    /// The natural logarithm of 1 + x.
+    @builtin("math_log1p_F32")
+    public static fn log1p(_ x: F32) -> F32
+
+    /// x to the power y.
+    @builtin("math_pow_F32")
+    public static fn pow(_ x: F32, _ y: F32) -> F32
+
+    /// The cube root.
+    @builtin("math_cbrt_F32")
+    public static fn cbrt(_ x: F32) -> F32
+
+    /// sqrt(x² + y²), without overflowing or underflowing on the way.
+    @builtin("math_hypot_F32")
+    public static fn hypot(_ x: F32, _ y: F32) -> F32
+
+    /// The gamma function (C's tgamma).
+    @builtin("math_gamma_F32")
+    public static fn gamma(_ x: F32) -> F32
+
+    /// The natural logarithm of the gamma function's magnitude (C's lgamma).
+    @builtin("math_logGamma_F32")
+    public static fn logGamma(_ x: F32) -> F32
+
+    /// The error function.
+    @builtin("math_erf_F32")
+    public static fn erf(_ x: F32) -> F32
+
+    /// The complementary error function.
+    @builtin("math_erfc_F32")
+    public static fn erfc(_ x: F32) -> F32
+}

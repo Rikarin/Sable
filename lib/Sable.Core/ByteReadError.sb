@@ -1,0 +1,12 @@
+module Sable.Core
+
+/// Why a ByteReader could not read what it was asked for. Each says where
+/// in the bytes the read began.
+public union ByteReadError {
+    /// The read needed more bytes than were left.
+    EndOfData(at: Int, needed: Int, remaining: Int)
+
+    /// A variable-length integer ran past the ten bytes a U64 takes, or
+    /// its last byte held bits beyond 64.
+    VarIntTooLong(at: Int)
+}

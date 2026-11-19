@@ -1,0 +1,446 @@
+module Sable.Core
+
+// What the numbers' conformances to Formattable share (Int+Formatting.sb and
+// the rest): an integer's digits in a radix, a float's digits in each
+// notation, and the sign, grouping and padding around both.
+//
+// A float's digits are decimal digits with a point: 'digits' most
+// significant first, without leading or trailing zeros, standing for
+// 0.digits × 10^point ("" for zero). With no precision they are the shortest
+// that read back as the same float, which the runtime already writes; with
+// one they are the exact binary value's, rounded to nearest with ties to
+// even there, worked out here in decimal arithmetic rather than asked of
+// the platform's printf, so every platform and the interpreter agree.
+
+/// The sign a number is written with: '-' for a negative one, and for
+/// another what the spec says.
+fn signText(_ negative: Bool, _ spec: FormatSpec) -> String {
+    if negative {
+        return "-"
+    }
+    return spec.sign == .Always ? "+" : spec.sign == .Space ? " " : ""
+}
+
+/// The digits with the separator between each group of 'size' of them,
+/// counted from the right; as they are without a separator.
+fn grouped(_ digits: String, _ size: Int, _ separator: Char?) -> String {
+    if let mark = separator {
+        if digits.count <= size {
+            return digits
+        }
+        var pieces: String[>..] = []
+        var start = digits.count % size
+        if start == 0 {
+            start = size
+        }
+        pieces.append(digits.slice(from: 0, to: start))
+        while start < digits.count {
+            pieces.append(digits.slice(from: start, to: start + size))
+            start = start + size
+        }
+        return Runtime.joinStrings(pieces, String.fromChar(mark))
+    }
+    return digits
+}
+
+/// A number under the spec: its sign, a marker ('0x'), its whole digits
+/// grouped, then the rest (a fraction, an exponent, '%'). With '0' the whole
+/// digits take leading zeros up to the width, grouped with them, as "0,001"
+/// is; otherwise the fill pads it, on the left unless the spec says not.
+fn laidOut(_ negative: Bool, _ marker: String, _ whole: String, _ rest: String, _ size: Int, _ spec: FormatSpec) -> String {
+    let sign = signText(negative, spec)
+    var digits = whole
+    if spec.zeroPadded {
+        let room = spec.width - sign.count - marker.count - rest.count
+        // The fewest digits that, grouped, fill the room.
+        var count = whole.count
+        let marks = spec.separator == none ? 0 : 1
+        while count + marks * ((count - 1) / size) < room {
+            count = count + 1
+        }
+        digits = zeros(count - whole.count) + whole
+    }
+    return spec.aligned(sign + marker + grouped(digits, size, spec.separator) + rest, numeric: true)
+}
+
+/// A string of that many zeros.
+fn zeros(_ count: Int) -> String {
+    if count <= 0 {
+        return ""
+    }
+    var pieces: String[>..] = []
+    var i = 0
+    while i < count {
+        pieces.append("0")
+        i = i + 1
+    }
+    return Runtime.joinStrings(pieces, "")
+}
+
+// ---- Integers ---------------------------------------------------------------
+
+/// An integer under the spec, from its sign and its distance from zero —
+/// which every integer type's fits. A float's kind writes it as an F64 would
+/// be; a precision means nothing to it.
+fn formatInteger(_ magnitude: U128, _ negative: Bool, _ spec: FormatSpec) -> String {
+    let kind = spec.kind
+    if kind == .Exponent || kind == .UpperExponent || kind == .Fixed || kind == .General || kind == .UpperGeneral || kind == .Percent {
+        let value = F64(magnitude)
+        return formatFloat(negative ? 0.0 - value : value, "\(value)", spec)
+    }
+    var radix = 10
+    var marker = ""
+    if kind == .Hex || kind == .UpperHex {
+        radix = 16
+        marker = "0x"
+    } else if kind == .Octal {
+        radix = 8
+        marker = "0o"
+    } else if kind == .Binary {
+        radix = 2
+        marker = "0b"
+    }
+    let digits = radix == 10 ? "\(magnitude)" : radixDigits(magnitude, radix, kind == .UpperHex)
+    return laidOut(negative, spec.alternate ? marker : "", digits, "", radix == 10 ? 3 : 4, spec)
+}
+
+/// The magnitude's digits in a radix that is a power of two: a shift and a
+/// mask a digit, least first, then turned around.
+fn radixDigits(_ magnitude: U128, _ radix: Int, _ upper: Bool) -> String {
+    let symbols = upper ? "0123456789ABCDEF" : "0123456789abcdef"
+    let bits = radix == 16 ? 4 : radix == 8 ? 3 : 1
+    let mask = U128(radix - 1)
+    var backwards: String[>..] = []
+    var rest = magnitude
+    while true {
+        let digit = Int(rest & mask)
+        backwards.append(symbols.slice(from: digit, to: digit + 1))
+        rest = rest >> U128(bits)
+        if rest == 0 {
+            break
+        }
+    }
+    var pieces: String[>..] = []
+    var i = backwards.count - 1
+    while i >= 0 {
+        pieces.append(backwards[i])
+        i = i - 1
+    }
+    return Runtime.joinStrings(pieces, "")
+}
+
+/// A signed integer's distance from zero: the least one's too, which its
+/// own type cannot hold.
+fn magnitudeOf(_ value: I128) -> U128 {
+    return value < 0 ? ~(value unchecked as U128) + 1 : U128(value)
+}
+
+// ---- Floats -----------------------------------------------------------------
+
+/// A float under the spec. 'shortest' is what the runtime writes it as: its
+/// shortest digits that read back as the same value of its own type, which
+/// for an F32 are fewer than for the F64 it widens to exactly.
+fn formatFloat(_ value: F64, _ shortest: String, _ spec: FormatSpec) -> String {
+    let kind = spec.kind
+    let upper = kind == .UpperExponent || kind == .UpperGeneral
+    // The sign bit's sign: -0.0 keeps its '-', as what rounds to zero from
+    // below does.
+    let negative = value < 0.0 || value == 0.0 && 1.0 / value < 0.0
+    if value != value || value - value != 0.0 {
+        let word = value != value ? "nan" : "inf"
+        let sign = value != value ? "" : signText(negative, spec)
+        return spec.aligned(sign + (upper ? asciiUppercased(word) : word), numeric: true)
+    }
+    let magnitude = negative ? 0.0 - value : value
+    let (whole, rest) = floatParts(magnitude, shortest, spec)
+    return laidOut(negative, "", whole, rest, 3, spec)
+}
+
+/// A finite, non-negative float's text under the spec, as its whole digits
+/// and what follows them.
+fn floatParts(_ magnitude: F64, _ shortest: String, _ spec: FormatSpec) -> (String, String) {
+    let kind = spec.kind
+    let exponentMark = kind == .UpperExponent || kind == .UpperGeneral ? "E" : "e"
+    if let precision = spec.precision {
+        if kind == .Exponent || kind == .UpperExponent {
+            let (exact, point) = exactDecimal(magnitude)
+            let (digits, at) = roundedDecimal(exact, point, precision + 1 - point)
+            return scientificParts(digits, at, precision, exponentMark)
+        }
+        if kind == .General || kind == .UpperGeneral {
+            return generalParts(magnitude, precision < 1 ? 1 : precision, spec.alternate, exponentMark)
+        }
+        if kind == .Percent {
+            let (exact, point) = exactDecimal(magnitude)
+            let (digits, at) = roundedDecimal(exact, point + 2, precision)
+            return withPercent(fixedParts(digits, at, precision))
+        }
+        let (exact, point) = exactDecimal(magnitude)
+        let (digits, at) = roundedDecimal(exact, point, precision)
+        return fixedParts(digits, at, precision)
+    }
+    let (digits, point) = shortestDecimal(shortest)
+    let natural = digits.count - point
+    if kind == .Exponent || kind == .UpperExponent {
+        return scientificParts(digits, point, digits.count < 1 ? 0 : digits.count - 1, exponentMark)
+    }
+    if kind == .Fixed {
+        return fixedParts(digits, point, natural < 1 ? 1 : natural)
+    }
+    if kind == .Percent {
+        return withPercent(fixedParts(digits, point + 2, natural - 2 < 0 ? 0 : natural - 2))
+    }
+    // As the runtime writes it: plain from 1e-4 up to 1e16, scientific
+    // outside, and a point always, so a whole float reads as one; 'g' drops
+    // the point and the zeros after it.
+    let exponent = digits.count == 0 ? 0 : point - 1
+    let (whole, rest) = exponent < -4 || exponent >= 16
+        ? scientificParts(digits, point, digits.count < 1 ? 0 : digits.count - 1, exponentMark)
+        : fixedParts(digits, point, natural < 1 ? 1 : natural)
+    if kind == .General || kind == .UpperGeneral {
+        return (whole, withoutTrailingZeros(rest))
+    }
+    return (whole, rest)
+}
+
+/// 'g' with a precision, as C's "%g" writes it: the digits rounded to that
+/// many, then plain when the exponent is from -4 to one below the precision,
+/// scientific otherwise, and the fraction's trailing zeros dropped unless '#'.
+fn generalParts(_ magnitude: F64, _ precision: Int, _ alternate: Bool, _ exponentMark: String) -> (String, String) {
+    let (exact, point) = exactDecimal(magnitude)
+    let (digits, at) = roundedDecimal(exact, point, precision - point)
+    let exponent = digits.count == 0 ? 0 : at - 1
+    let (whole, rest) = exponent < -4 || exponent >= precision
+        ? scientificParts(digits, at, precision - 1, exponentMark)
+        : fixedParts(digits, at, precision - 1 - exponent)
+    return (whole, alternate ? rest : withoutTrailingZeros(rest))
+}
+
+/// The parts with '%' after them.
+fn withPercent(_ parts: (String, String)) -> (String, String) {
+    let (whole, rest) = parts
+    return (whole, rest + "%")
+}
+
+/// A fraction without its trailing zeros, and without its point when none
+/// are left; an exponent after it stays.
+fn withoutTrailingZeros(_ rest: String) -> String {
+    var end = rest.count
+    var exponentStart = rest.count
+    var i = 0
+    while i < rest.count {
+        let c = rest.at(i)
+        if c == 'e' || c == 'E' {
+            exponentStart = i
+            end = i
+            break
+        }
+        i = i + 1
+    }
+    while end > 0 && rest.at(end - 1) == '0' {
+        end = end - 1
+    }
+    if end > 0 && rest.at(end - 1) == '.' {
+        end = end - 1
+    }
+    return rest.slice(from: 0, to: end) + rest.slice(from: exponentStart, to: rest.count)
+}
+
+/// The digits in plain notation with exactly 'places' after the point: the
+/// whole part ("0" when there is none) and the point with the fraction.
+fn fixedParts(_ digits: String, _ point: Int, _ places: Int) -> (String, String) {
+    var whole = "0"
+    if point > 0 {
+        whole = point <= digits.count ? digits.slice(from: 0, to: point) : digits + zeros(point - digits.count)
+    }
+    if places <= 0 {
+        return (whole, "")
+    }
+    // The fraction: zeros up to the first digit, the digits after the point,
+    // then zeros to the places.
+    let leading = point < 0 ? (0 - point < places ? 0 - point : places) : 0
+    let from = point < 0 ? 0 : point
+    var taken = ""
+    if from < digits.count && leading < places {
+        let to = from + places - leading < digits.count ? from + places - leading : digits.count
+        taken = digits.slice(from: from, to: to)
+    }
+    return (whole, "." + zeros(leading) + taken + zeros(places - leading - taken.count))
+}
+
+/// The digits in scientific notation, with exactly 'places' after the point:
+/// the first digit, then the point, the rest and the exponent, signed and of
+/// two digits at least, as "1.5e-07" and "1e+20" are.
+fn scientificParts(_ digits: String, _ point: Int, _ places: Int, _ mark: String) -> (String, String) {
+    let first = digits.count == 0 ? "0" : digits.slice(from: 0, to: 1)
+    let exponent = digits.count == 0 ? 0 : point - 1
+    var fraction = ""
+    if places > 0 {
+        let taken = digits.count > 1 ? digits.slice(from: 1, to: digits.count < places + 1 ? digits.count : places + 1) : ""
+        fraction = "." + taken + zeros(places - taken.count)
+    }
+    let size = exponent < 0 ? 0 - exponent : exponent
+    let written = size < 10 ? "0\(size)" : "\(size)"
+    return (first, fraction + mark + (exponent < 0 ? "-" : "+") + written)
+}
+
+/// The shortest digits and point of what the runtime writes a float as:
+/// "1.5e-07", "-100.0", "0.0001" — its sign aside, which the caller has
+/// taken already; never nan or inf here.
+fn shortestDecimal(_ text: String) -> (String, Int) {
+    var mantissaEnd = text.count
+    var exponent = 0
+    let signed = text.count > 0 && text.at(0) == '-'
+    var i = 0
+    while i < text.count {
+        if text.at(i) == 'e' {
+            mantissaEnd = i
+            exponent = text.slice(from: i + 1, to: text.count).toInt() ?? 0
+            break
+        }
+        i = i + 1
+    }
+    let first = signed ? 1 : 0
+    var whole = mantissaEnd - first
+    var pieces: String[>..] = []
+    var start = first
+    i = first
+    while i < mantissaEnd {
+        if text.at(i) == '.' {
+            whole = i - first
+            pieces.append(text.slice(from: start, to: i))
+            start = i + 1
+        }
+        i = i + 1
+    }
+    pieces.append(text.slice(from: start, to: mantissaEnd))
+    return normalizedDecimal(Runtime.joinStrings(pieces, ""), whole + exponent)
+}
+
+/// Digits and a point, the digits' leading zeros moved into the point and
+/// their trailing zeros dropped: the same value, written once.
+fn normalizedDecimal(_ digits: String, _ point: Int) -> (String, Int) {
+    var start = 0
+    while start < digits.count && digits.at(start) == '0' {
+        start = start + 1
+    }
+    if start == digits.count {
+        return ("", 0)
+    }
+    var end = digits.count
+    while digits.at(end - 1) == '0' {
+        end = end - 1
+    }
+    return (digits.slice(from: start, to: end), point - start)
+}
+
+/// The digits rounded to the place 10^-places — kept up to there, and the
+/// rest rounded to nearest with ties to even — with the point, which a carry
+/// out of the first digit moves up one.
+fn roundedDecimal(_ digits: String, _ point: Int, _ places: Int) -> (String, Int) {
+    let kept = point + places
+    if kept >= digits.count {
+        return (digits, point)
+    }
+    if kept < 0 {
+        return ("", 0)
+    }
+    let first = digits.at(kept).codePoint - 48
+    let sticky = kept + 1 < digits.count
+    let odd = kept > 0 && (digits.at(kept - 1).codePoint - 48) % 2 == 1
+    if first < 5 || first == 5 && !sticky && !odd {
+        return normalizedDecimal(digits.slice(from: 0, to: kept), point)
+    }
+    // Up by one in the last kept digit: the nines before it become zeros,
+    // which trimming drops, and a run of nothing but nines becomes "1".
+    var last = kept - 1
+    while last >= 0 && digits.at(last) == '9' {
+        last = last - 1
+    }
+    if last < 0 {
+        return ("1", point + 1)
+    }
+    let bumped = Char.fromCodePoint(digits.at(last).codePoint + 1)!
+    return normalizedDecimal(digits.slice(from: 0, to: last) + String.fromChar(bumped), point)
+}
+
+/// A finite, non-negative float's exact value as decimal digits and a point.
+/// value = mantissa × 2^exponent, the mantissa a whole number below 2^53;
+/// the decimal digits are the mantissa times 2^exponent or, for a negative
+/// exponent, times 5^-exponent with the point -exponent places to the left.
+fn exactDecimal(_ value: F64) -> (String, Int) {
+    if value == 0.0 {
+        return ("", 0)
+    }
+    // Halving and doubling a double are exact, so finding them is too.
+    var x = value
+    var exponent = 0
+    while x >= 9007199254740992.0 {
+        x = x / 2.0
+        exponent = exponent + 1
+    }
+    while F64(Int(x)) != x {
+        x = x * 2.0
+        exponent = exponent - 1
+    }
+    // Limbs of nine decimal digits, least first.
+    var limbs: Int[>..] = []
+    var m = Int(x)
+    while m > 0 {
+        limbs.append(m % 1000000000)
+        m = m / 1000000000
+    }
+    var left = exponent < 0 ? 0 - exponent : exponent
+    while left > 0 {
+        let step = exponent > 0 ? (left < 20 ? left : 20) : (left < 13 ? left : 13)
+        limbs = limbsTimes(limbs, smallPower(exponent > 0 ? 2 : 5, step))
+        left = left - step
+    }
+    var pieces: String[>..] = ["\(limbs[limbs.count - 1])"]
+    var i = limbs.count - 2
+    while i >= 0 {
+        let limb = "\(limbs[i])"
+        pieces.append(zeros(9 - limb.count) + limb)
+        i = i - 1
+    }
+    let digits = Runtime.joinStrings(pieces, "")
+    return normalizedDecimal(digits, digits.count + (exponent < 0 ? exponent : 0))
+}
+
+/// The limbs (base 10^9, least first) times a factor small enough that a
+/// limb times it, plus a carry, fits an Int.
+fn limbsTimes(_ limbs: Int[>..], _ factor: Int) -> Int[>..] {
+    var result: Int[>..] = []
+    var carry = 0
+    for limb in limbs {
+        let product = limb * factor + carry
+        result.append(product % 1000000000)
+        carry = product / 1000000000
+    }
+    while carry > 0 {
+        result.append(carry % 1000000000)
+        carry = carry / 1000000000
+    }
+    return result
+}
+
+/// base^exponent, for one that fits an Int.
+fn smallPower(_ base: Int, _ exponent: Int) -> Int {
+    var result = 1
+    var i = 0
+    while i < exponent {
+        result = result * base
+        i = i + 1
+    }
+    return result
+}
+
+/// ASCII letters in upper case: 'nan' as 'NAN'.
+fn asciiUppercased(_ text: String) -> String {
+    var pieces: String[>..] = []
+    for c in text {
+        let code = c.codePoint
+        pieces.append(code >= 97 && code <= 122 ? String.fromChar(Char.fromCodePoint(code - 32)!) : String.fromChar(c))
+    }
+    return Runtime.joinStrings(pieces, "")
+}

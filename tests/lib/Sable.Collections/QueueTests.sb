@@ -17,3 +17,17 @@ fn queueIsFirstInFirstOut() {
     assertEqual(queue.dequeue() ?? "", "c")
     assert(queue.dequeue() == none)
 }
+
+@test
+fn countCoversBothHalves() {
+    let queue = Queue<Int>()
+    assert(queue.isEmpty)
+    assertEqual(queue.count, 0)
+    queue.enqueue(1)
+    queue.enqueue(2)
+    queue.enqueue(3)
+    assertEqual(queue.dequeue() ?? 0, 1)
+    queue.enqueue(4)
+    assertEqual(queue.count, 3)
+    assert(!queue.isEmpty)
+}

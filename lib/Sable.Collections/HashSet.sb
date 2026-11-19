@@ -4,10 +4,13 @@ module Sable.Collections
 public class HashSet<Element: Hashable> {
     var map: HashMap<Element, Bool> = HashMap<Element, Bool>()
 
+    /// An empty set.
     public init() { }
 
+    /// How many values it holds.
     public var count: Int => map.count
 
+    /// Whether it holds no values.
     public var isEmpty: Bool => map.count == 0
 
     /// Adds the value; true if it was not there before.
@@ -17,14 +20,17 @@ public class HashSet<Element: Hashable> {
         return map.count > before
     }
 
+    /// Whether the value is in the set.
     public fn contains(_ value: Element) -> Bool {
         return map.contains(value)
     }
 
+    /// Takes the value out; true if it was there.
     public fn remove(_ value: Element) -> Bool {
         return map.remove(value)
     }
 
+    /// The values, in the order they were first added.
     public fn elements() -> Element[>..] {
         return map.allKeys()
     }

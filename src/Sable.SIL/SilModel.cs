@@ -1045,7 +1045,7 @@ public static class SharedStorage {
             LoadUnownedInst unowned => (unowned.Address, false),
             StoreUnownedInst unowned => (unowned.Address, true),
             // An array changed where it is: its count, its buffer, an element.
-            BuiltinInst { Name: "array_append" or "array_set" or "array_set_unique" or "array_make_unique" or "array_remove_last" or "array_clear" or "array_element_addr" } array
+            BuiltinInst { Name: "array_append" or "array_set" or "array_set_unique" or "array_make_unique" or "array_remove_last" or "array_clear" or "array_reserve" or "array_rotate" or "array_element_addr" } array
                 => (array.Operands[0], true),
             _ => null,
         };
@@ -1480,7 +1480,7 @@ public static class SilBuiltins {
     ///     count work on an array alone.
     /// </summary>
     public static readonly ImmutableArray<string> ArrayOperations =
-        ["array_empty", "array_count", "array_get", "array_get_borrowed", "array_append", "array_set_unique", "array_element_addr", "array_make_unique", "array_set", "array_remove_last", "array_clear", "array_slice", "slice_of", "region_alloc"];
+        ["array_empty", "array_count", "array_get", "array_get_borrowed", "array_append", "array_set_unique", "array_element_addr", "array_make_unique", "array_set", "array_remove_last", "array_clear", "array_slice", "slice_of", "array_of_slice", "array_capacity", "array_reserve", "array_rotate", "region_alloc"];
 
     /// <summary>
     ///     The prefix of the wrapping forms of integer arithmetic
@@ -1609,6 +1609,22 @@ public static class SilBuiltins {
             case "array_clear" when Element(0, true, arrayOnly: true) is not null:
                 return new([operands[0]], SilType.Unit);
 
+            // How many elements the buffer has room for, before an append
+            // must grow it.
+            case "array_capacity" when Element(0, false, arrayOnly: true) is not null:
+                return new([operands[0]], SilType.Int);
+
+            // Room for at least so many elements in all, the array made the
+            // only reference to its buffer.
+            case "array_reserve" when Element(0, true, arrayOnly: true) is not null:
+                return new([operands[0], SilType.Int], SilType.Unit);
+
+            // The elements [from, to) of an array or a slice rotated left by
+            // the third operand, in place: moved, not copied, so no element
+            // is retained or released. The range is checked, as a slice's.
+            case "array_rotate" when Element(0, true) is not null:
+                return new([operands[0], SilType.Int, SilType.Int, SilType.Int], SilType.Unit);
+
             // Elements [from, to) of an array or a slice, as a slice: a view
             // that shares the buffer, the range checked against the count.
             case "array_slice" when Element(0, false) is { } element:
@@ -1617,6 +1633,14 @@ public static class SilBuiltins {
             // The whole of an array, as a slice: 'sum(xs)' of a 'sum(_: Int[:])'.
             case "slice_of" when Element(0, false, arrayOnly: true) is { } element:
                 return new([operands[0]], new SliceType(element));
+
+            // A slice as an array again: its buffer, when the slice is the
+            // whole of it, else a copy of its run. What a mutating member of
+            // 'Element[:]' hands back to the array it was called on, and
+            // 'toArray()'; an array, as a member of 'Element[:]' sees one, is
+            // the whole of its buffer.
+            case "array_of_slice" when Element(0, false) is { } element:
+                return new([operands[0]], new ArrayType(element));
 
             default:
                 return null;
@@ -1821,6 +1845,7 @@ public static class SilBuiltins {
         // Parsing gives whether it worked, and the value when it did.
         Add("string_to_Int", SilType.Tuple([SilType.Bool, SilType.Int]), SilType.String);
         Add("string_to_F64", SilType.Tuple([SilType.Bool, SilType.F64]), SilType.String);
+        Add("string_to_F32", SilType.Tuple([SilType.Bool, SilType.F32]), SilType.String);
 
         // The runtime's calls (Sable.IO's floor). Those that can fail give a
         // value either way; 'io_succeeded' then says whether the last one did.
@@ -1866,6 +1891,36 @@ public static class SilBuiltins {
         Add("char_is_digit", SilType.Bool, SilType.Char);
         Add("char_is_letter", SilType.Bool, SilType.Char);
         Add("char_is_whitespace", SilType.Bool, SilType.Char);
+
+        // sin, exp, pow, …: libm's, for F64 and F32.
+        foreach (var (name, signature) in FloatFunctions.Signatures()) {
+            table[name] = signature;
+        }
+
+        // An integer with its bytes in the other order (LLVM's bswap): what
+        // a value read from, or written to, bytes of the other endianness is.
+        foreach (var integer in SilType.Integers) {
+            if (SilType.IntegerInfo(integer)!.Value.Bits >= 16) {
+                Unary("byte_swap", integer);
+            }
+        }
+
+        // An integer read from, or written to, bytes at an offset, in the
+        // platform's order (little-endian everywhere): one range check and
+        // one unaligned load or store, rather than a byte at a time. A read
+        // is of any slice of bytes; a write, of a grow-only array, made the
+        // only reference to its buffer first.
+        foreach (var unsigned in new[] { SilType.U16, SilType.U32, SilType.U64 }) {
+            Add($"bytes_load_{unsigned}", unsigned, new SliceType(SilType.U8), SilType.Int);
+            Add($"bytes_store_{unsigned}", SilType.Unit, SilType.Address(new ArrayType(SilType.U8)), SilType.Int, unsigned);
+        }
+
+        // A float's bits as the unsigned integer of its width, and back: the
+        // same bits, not the same number (a NaN's payload is kept).
+        foreach (var (real, bits) in new[] { (SilType.F64, SilType.U64), (SilType.F32, SilType.U32), (SilType.F16, SilType.U16) }) {
+            Add($"bitcast_{real}_{bits}", bits, real);
+            Add($"bitcast_{bits}_{real}", real, bits);
+        }
 
         return table;
     }

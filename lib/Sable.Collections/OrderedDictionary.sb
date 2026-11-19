@@ -11,9 +11,13 @@ public class OrderedDictionary<Key: Hashable, Value> {
     var orderedValues: Value[>..] = []
     var positions: HashMap<Key, Int> = HashMap<Key, Int>()
 
+    /// An empty dictionary.
     public init() { }
 
+    /// How many keys it holds.
     public var count: Int => orderedKeys.count
+
+    /// Whether it holds no keys.
     public var isEmpty: Bool => orderedKeys.count == 0
 
     /// The value for the key, or none.
@@ -24,6 +28,7 @@ public class OrderedDictionary<Key: Hashable, Value> {
         return none
     }
 
+    /// Whether the dictionary holds the key.
     public fn contains(_ key: Key) -> Bool {
         return positions.contains(key)
     }

@@ -200,6 +200,10 @@ public enum ErrorCode {
     // Globals and statics whose initial values need each other (S3411).
     ERR_GlobalInitializationCycle = 3411,
 
+    // A default value that leaves itself off a call it makes, so would be
+    // put in without end (S3412).
+    ERR_DefaultValueCycle = 3412,
+
     // ---- Compile-time evaluation (S3220-S3222): 'const', 'const fn' and
     // 'comptime' (SYNTAX.md §21).
     ERR_NotConstant = 3220,
@@ -243,6 +247,12 @@ public enum ErrorCode {
     ERR_AlignTooLarge = 3510,
     ERR_AttributeArgumentNotConstant = 3511,
     ERR_NotPolymorphic = 3512,
+
+    // ---- Format specs in interpolation (S3660-S3669) -------------------------
+    ERR_FormatSpecMalformed = 3660,
+    ERR_FormatKindNotForType = 3661,
+    ERR_FormatOptionNotForType = 3662,
+    ERR_FormatSpecNeedsFormattable = 3663,
 
     // ---- Patterns and flow (S6000-S6999) ---------------------------------
     ERR_PatternTypeMismatch = 6000,

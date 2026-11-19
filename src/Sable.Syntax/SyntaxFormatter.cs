@@ -907,6 +907,7 @@ public static class SyntaxFormatter {
                 // Nothing inside an interpolated string takes added whitespace.
                 SyntaxKind.InterpolatedTextToken
                     or SyntaxKind.InterpolationStartToken
+                    or SyntaxKind.InterpolationFormatToken
                     or SyntaxKind.InterpolationEndToken
                     or SyntaxKind.InterpolatedStringEndToken => true,
 
@@ -970,6 +971,7 @@ public static class SyntaxFormatter {
                 SyntaxKind.InterpolatedStringStartToken
                     or SyntaxKind.InterpolatedTextToken
                     or SyntaxKind.InterpolationStartToken
+                    or SyntaxKind.InterpolationFormatToken
                     or SyntaxKind.InterpolationEndToken => true,
 
                 SyntaxKind.DotToken or SyntaxKind.QuestionDotToken => true,

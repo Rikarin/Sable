@@ -1,0 +1,423 @@
+module NumberParsingTests
+
+// The numbers' Parsable conformances (Int+Parsing.sb and the rest) and what
+// they share (NumberParsing.sb): radixes, styles and overflow for integers,
+// rounding and words for floats, and parse ∘ format = id for both. Run with
+//     tools/stdlib-coverage.sh Sable.Core
+
+import Sable.Testing
+
+/// Why the text is not an Int in the radix under the styles, or none when it is one.
+fn intError(_ text: String, radix: Int = 10, styles: NumberStyles = .Sign) -> ParseError? {
+    do {
+        let _ = try Int.parse(text, radix: radix, styles: styles)
+        return none
+    } catch {
+        return error
+    }
+}
+
+/// Why the text is not an F64 under the styles, or none.
+fn floatError(_ text: String, styles: NumberStyles = .Sign) -> ParseError? {
+    do {
+        let _ = try F64.parse(text, styles: styles)
+        return none
+    } catch {
+        return error
+    }
+}
+
+/// A pseudo-random sequence, the same every run: xorshift64.
+struct Lcg {
+    var state: U64
+
+    mutating fn next() -> U64 {
+        self.state = self.state ^ (self.state << 13)
+        self.state = self.state ^ (self.state >> 7)
+        self.state = self.state ^ (self.state << 17)
+        return self.state
+    }
+}
+
+// ---- Integers ----------------------------------------------------------------
+
+@test
+fn decimalIntegersParse() {
+    assertEqual(try! Int.parse("0"), 0)
+    assertEqual(try! Int.parse("42"), 42)
+    assertEqual(try! Int.parse("-42"), -42)
+    assertEqual(try! Int.parse("+42"), 42)
+    assertEqual(try! Int.parse("007"), 7)
+}
+
+@test
+fn eachTypeParsesItsExtremes() {
+    assertEqual(try! I8.parse("-128"), -128)
+    assertEqual(try! I8.parse("127"), 127)
+    assertEqual(try! I16.parse("-32768"), -32768)
+    assertEqual(try! I32.parse("2147483647"), 2147483647)
+    assertEqual(try! I64.parse("-9223372036854775808"), -9223372036854775808)
+    assertEqual(try! Int.parse("9223372036854775807"), 9223372036854775807)
+    let least: I128 = -170141183460469231731687303715884105728
+    assertEqual(try! I128.parse("-170141183460469231731687303715884105728"), least)
+    assertEqual(try! U8.parse("255"), 255)
+    assertEqual(try! U16.parse("65535"), 65535)
+    assertEqual(try! U32.parse("4294967295"), 4294967295)
+    let greatest: U64 = 18446744073709551615
+    assertEqual(try! U64.parse("18446744073709551615"), greatest)
+    let greatestUInt: UInt = 18446744073709551615
+    assertEqual(try! UInt.parse("18446744073709551615"), greatestUInt)
+    let greatest128: U128 = 340282366920938463463374607431768211455
+    assertEqual(try! U128.parse("340282366920938463463374607431768211455"), greatest128)
+}
+
+@test
+fn oneOutsideATypeIsOverflowOrUnderflow() {
+    do {
+        let _ = try I8.parse("128")
+        fail("128 is no I8")
+    } catch {
+        assertEqual(error, .Overflow)
+    }
+    do {
+        let _ = try I8.parse("-129")
+        fail("-129 is no I8")
+    } catch {
+        assertEqual(error, .Underflow)
+    }
+    do {
+        let _ = try U8.parse("256")
+        fail("256 is no U8")
+    } catch {
+        assertEqual(error, .Overflow)
+    }
+    do {
+        let _ = try U32.parse("-1")
+        fail("-1 is no U32")
+    } catch {
+        assertEqual(error, .Underflow)
+    }
+    assertEqual(intError("9223372036854775808") ?? .Empty, .Overflow)
+    assertEqual(intError("-9223372036854775809") ?? .Empty, .Underflow)
+}
+
+@test
+fn everyNarrowTypeChecksItsRange() {
+    assert((try? I16.parse("32768")) == none)
+    assert((try? I32.parse("-2147483649")) == none)
+    assert((try? I64.parse("9223372036854775808")) == none)
+    assert((try? I128.parse("170141183460469231731687303715884105728")) == none)
+    assert((try? U16.parse("65536")) == none)
+    assert((try? U64.parse("18446744073709551616")) == none)
+    assert((try? UInt.parse("-1")) == none)
+    assert((try? U128.parse("-1")) == none)
+}
+
+@test
+fn negativeZeroIsZeroForAnUnsignedType() {
+    assertEqual(try! U8.parse("-0"), 0)
+    assertEqual(try! Int.parse("-0"), 0)
+}
+
+@test
+fn aNumberPastEveryTypeOverflows() {
+    assertEqual(intError("340282366920938463463374607431768211456") ?? .Empty, .Overflow)
+    assertEqual(intError("-999999999999999999999999999999999999999999") ?? .Empty, .Underflow)
+    assert((try? U128.parse("340282366920938463463374607431768211456")) == none)
+}
+
+@test
+fn aStrayScalarIsReportedWhereItIs() {
+    assertEqual(intError("12x4") ?? .Empty, .InvalidDigit(at: 2))
+    assertEqual(intError(" 1") ?? .Empty, .InvalidDigit(at: 0))
+    assertEqual(intError("1 ") ?? .Empty, .InvalidDigit(at: 1))
+    assertEqual(intError("1_000") ?? .Empty, .InvalidDigit(at: 1))
+    assertEqual(intError("٣") ?? .Empty, .InvalidDigit(at: 0))
+    // Checked before a magnitude too large is: the letter is the error.
+    assertEqual(intError("99999999999999999999999999999999999999999x") ?? .Empty, .InvalidDigit(at: 41))
+}
+
+@test
+fn aTextWithoutDigitsIsEmptyOrWantsOne() {
+    assertEqual(intError("") ?? .Overflow, .Empty)
+    assertEqual(intError("-") ?? .Empty, .InvalidDigit(at: 1))
+    assertEqual(intError("   ", styles: .Whitespace) ?? .Overflow, .Empty)
+}
+
+@test
+fn aSignNeedsItsStyle() {
+    assertEqual(intError("-1", styles: .None) ?? .Empty, .InvalidDigit(at: 0))
+    assertEqual(try! Int.parse("1", radix: 10, styles: .None), 1)
+}
+
+@test
+fn anyRadixFromTwoToThirtySix() {
+    assertEqual(try! Int.parse("ff", radix: 16), 255)
+    assertEqual(try! Int.parse("FF", radix: 16), 255)
+    assertEqual(try! Int.parse("-101", radix: 2), -5)
+    assertEqual(try! Int.parse("777", radix: 8), 511)
+    assertEqual(try! Int.parse("zz", radix: 36), 1295)
+    assertEqual(try! Int.parse("Zz", radix: 36), 1295)
+    assertEqual(intError("2", radix: 2) ?? .Empty, .InvalidDigit(at: 0))
+    assertEqual(intError("g", radix: 16) ?? .Empty, .InvalidDigit(at: 0))
+}
+
+@test(traps: "unreachable")
+fn aRadixOutsideTwoToThirtySixTraps() {
+    let _ = try? Int.parse("1", radix: 37)
+}
+
+@test
+fn thePrefixOfTheRadixIsAllowedWithItsStyle() {
+    assertEqual(try! Int.parse("0xff", radix: 16, styles: .Prefix), 255)
+    assertEqual(try! Int.parse("-0XFF", radix: 16, styles: [.Prefix, .Sign]), -255)
+    assertEqual(try! Int.parse("0o17", radix: 8, styles: .Prefix), 15)
+    assertEqual(try! Int.parse("0b101", radix: 2, styles: .Prefix), 5)
+    assertEqual(try! Int.parse("ff", radix: 16, styles: .Prefix), 255)
+    // Another radix's prefix is no prefix: 0b1 is a hexadecimal number.
+    assertEqual(try! Int.parse("0b1", radix: 16, styles: .Prefix), 177)
+    assertEqual(intError("0xff", radix: 16) ?? .Empty, .InvalidDigit(at: 1))
+    assertEqual(intError("0x", radix: 16, styles: .Prefix) ?? .Empty, .InvalidDigit(at: 2))
+}
+
+@test
+fn separatorsGoBetweenDigits() {
+    assertEqual(try! Int.parse("1_000_000", radix: 10, styles: .Separators), 1000000)
+    assertEqual(try! Int.parse("1,000,000", radix: 10, styles: .Thousands), 1000000)
+    assertEqual(try! Int.parse("ff_ff", radix: 16, styles: .Separators), 65535)
+    assertEqual(intError("_1", styles: .Separators) ?? .Empty, .InvalidDigit(at: 0))
+    assertEqual(intError("1_", styles: .Separators) ?? .Empty, .InvalidDigit(at: 1))
+    assertEqual(intError("1__0", styles: .Separators) ?? .Empty, .InvalidDigit(at: 2))
+    assertEqual(intError("1,000", styles: .Separators) ?? .Empty, .InvalidDigit(at: 1))
+}
+
+@test
+fn whiteSpaceIsAllowedWithItsStyle() {
+    assertEqual(try! Int.parse("  42\t\n", radix: 10, styles: .Whitespace), 42)
+    assertEqual(try! Int.parse(" 42", radix: 10, styles: .LeadingWhite), 42)
+    assertEqual(intError("42 ", styles: .LeadingWhite) ?? .Empty, .InvalidDigit(at: 2))
+    assertEqual(intError(" -0x_ff ", radix: 16, styles: .Any) ?? .Empty, .InvalidDigit(at: 4))
+}
+
+@test
+fn everythingTogether() {
+    assertEqual(try! Int.parse(" -0xff_ff ", radix: 16, styles: .Any), -65535)
+    let n = try! U16.parse("\t0b1111_0000\n", radix: 2, styles: .Any)
+    assertEqual(n, 240)
+}
+
+@test
+fn integersRoundTripInEveryRadix() {
+    var random = Lcg { state: 42 }
+    var i = 0
+    while i < 500 {
+        let bits = random.next()
+        let n = Int(bits unchecked as I64)
+        assertEqual(try! Int.parse("\(n)"), n)
+        assertEqual(try! Int.parse("\(n:x)", radix: 16), n)
+        assertEqual(try! Int.parse("\(n:#b)", radix: 2, styles: [.Sign, .Prefix]), n)
+        assertEqual(try! Int.parse("\(n:_o)", radix: 8, styles: [.Sign, .Separators]), n)
+        assertEqual(try! Int.parse("\(n:,)", radix: 10, styles: [.Sign, .Thousands]), n)
+        assertEqual(try! U64.parse("\(bits)"), bits)
+        let small = n unchecked as I8
+        assertEqual(try! I8.parse("\(small)"), small)
+        i = i + 1
+    }
+}
+
+// ---- Floats ------------------------------------------------------------------
+
+@test
+fn decimalFloatsParse() {
+    assertEqual(try! F64.parse("1.5"), 1.5)
+    assertEqual(try! F64.parse("-1.5"), -1.5)
+    assertEqual(try! F64.parse("+.5"), 0.5)
+    assertEqual(try! F64.parse("5."), 5.0)
+    assertEqual(try! F64.parse("2e3"), 2000.0)
+    assertEqual(try! F64.parse("2E-3"), 0.002)
+    assertEqual(try! F64.parse("1e+2"), 100.0)
+    assertEqual(try! F64.parse("0.1"), 0.1)
+    assertEqual(try! F64.parse("007.50"), 7.5)
+}
+
+@test
+fn floatsRoundToNearestTiesToEven() {
+    // 2^53 + 1 lies halfway between two F64s: to the even one, 2^53.
+    assertEqual(try! F64.parse("9007199254740993"), 9007199254740992.0)
+    // A little past halfway: up.
+    assertEqual(try! F64.parse("9007199254740993.0000000001"), 9007199254740994.0)
+    assertEqual(try! F64.parse("2.2250738585072011e-308"), 2.225073858507201e-308)
+    assertEqual(try! F64.parse("4.9e-324"), 5e-324)
+    assertEqual(try! F64.parse("1e-400"), 0.0)
+}
+
+@test
+fn aFloatTooLargeIsAnInfinity() {
+    let inf = try! F64.parse("1e400")
+    assert(inf > 1.7976931348623157e308)
+    assertEqual(try! F64.parse("-1e400"), 0.0 - inf)
+}
+
+@test
+fn theWordsAreInfinityAndNaN() {
+    let inf = try! F64.parse("inf")
+    assert(inf > 1.7976931348623157e308)
+    assertEqual(try! F64.parse("Infinity"), inf)
+    assertEqual(try! F64.parse("-INF"), 0.0 - inf)
+    let nan = try! F64.parse("NaN")
+    assert(nan != nan)
+    assertEqual(floatError("infinite") ?? .Empty, .InvalidDigit(at: 0))
+    assertEqual(floatError("nope") ?? .Empty, .InvalidDigit(at: 0))
+}
+
+@test
+fn aFloatsTextIsChecked() {
+    assertEqual(floatError("") ?? .Overflow, .Empty)
+    assertEqual(floatError(".") ?? .Empty, .InvalidDigit(at: 1))
+    assertEqual(floatError("-") ?? .Empty, .InvalidDigit(at: 1))
+    assertEqual(floatError("1e") ?? .Empty, .InvalidDigit(at: 2))
+    assertEqual(floatError("1e+") ?? .Empty, .InvalidDigit(at: 3))
+    assertEqual(floatError("1.2.3") ?? .Empty, .InvalidDigit(at: 3))
+    assertEqual(floatError("1x") ?? .Empty, .InvalidDigit(at: 1))
+    assertEqual(floatError("0x1p3") ?? .Empty, .InvalidDigit(at: 1))
+    assertEqual(floatError("-1", styles: .None) ?? .Empty, .InvalidDigit(at: 0))
+    assertEqual(floatError(" 1") ?? .Empty, .InvalidDigit(at: 0))
+}
+
+@test
+fn aFloatsStyles() {
+    assertEqual(try! F64.parse(" 1_000.5 ", styles: .Any), 1000.5)
+    assertEqual(try! F64.parse("1,234,567.25", styles: .Thousands), 1234567.25)
+    assertEqual(try! F64.parse("1.000_5e1_0", styles: .Separators), 1.0005e10)
+    assertEqual(floatError("1.0,5", styles: .Thousands) ?? .Empty, .InvalidDigit(at: 3))
+    assertEqual(floatError("1_.5", styles: .Separators) ?? .Empty, .InvalidDigit(at: 1))
+    assertEqual(floatError("1._5", styles: .Separators) ?? .Empty, .InvalidDigit(at: 2))
+}
+
+@test
+fn anF32IsRoundedOnce() {
+    let x: F32 = 0.1
+    assertEqual(try! F32.parse("0.1"), x)
+    let even: F32 = 16777216.0
+    assertEqual(try! F32.parse("16777217"), even)
+    // Just past the midpoint between 1 and the F32 after it: as an F64 it
+    // is the midpoint itself, which would then round down to 1.
+    let up: F32 = 1.00000012
+    assertEqual(try! F32.parse("1.000000059604644775390626"), up)
+    let inf = try! F32.parse("1e39")
+    assert(F64(inf) > 1e300)
+    assertEqual(try! F32.parse(" -2_5 ", styles: .Any), -25.0)
+    let nan = try! F32.parse("nan")
+    assert(nan != nan)
+}
+
+@test
+fn anF16IsRoundedAsIfOnce() {
+    let tenth: F16 = 0.1
+    assertEqual(try! F16.parse("0.1"), tenth)
+    // 2049 lies halfway between the F16s 2048 and 2050: to the even one.
+    let even: F16 = 2048.0
+    assertEqual(try! F16.parse("2049"), even)
+    // A hair past it is 2049 exactly as an F64; the decimal says up.
+    let up: F16 = 2050.0
+    assertEqual(try! F16.parse("2049.0000000000000000001"), up)
+    let down: F16 = 2048.0
+    assertEqual(try! F16.parse("2048.9999999999999999999"), down)
+    assertEqual(try! F16.parse("-2049.0000000000000000001"), 0.0 - up)
+    let greatest: F16 = 65504.0
+    assertEqual(try! F16.parse("65519"), greatest)
+    assertEqual(try! F16.parse("65519.99999999999999999"), greatest)
+    let inf = try! F16.parse("65520")
+    assert(F64(inf) > 1e300)
+    assert(F64(try! F16.parse("-65520.000000000000000001")) < -1e300)
+    assert(F64(try! F16.parse("1e10")) > 1e300)
+    assertEqual(try! F16.parse("1_0", styles: .Separators), 10.0)
+    let nan = try! F16.parse("NAN")
+    assert(nan != nan)
+}
+
+@test
+fn floatsRoundTripThroughTheirShortestDigits() {
+    var random = Lcg { state: 7 }
+    var i = 0
+    while i < 500 {
+        let mantissa = F64(Int((random.next() >> 11) unchecked as I64))
+        let scale = Int((random.next() >> 58) unchecked as I64) - 32
+        var x = mantissa
+        var k = 0
+        while k < (scale < 0 ? 0 - scale : scale) {
+            x = scale < 0 ? x / 1e10 : x * 1e10
+            k = k + 1
+        }
+        assertEqual(try! F64.parse("\(x)"), x)
+        assertEqual(try! F64.parse("\(x:.16e)"), x)
+        assertEqual(try! F64.parse("\(0.0 - x:,f)", styles: [.Sign, .Thousands]), 0.0 - x)
+        let narrow = F32(x / 1e300 * 1e300)
+        if F64(narrow) - F64(narrow) == 0.0 {
+            assertEqual(try! F32.parse("\(narrow)"), narrow)
+            assertEqual(try! F32.parse("\(narrow:.8e)"), narrow)
+        }
+        i = i + 1
+    }
+}
+
+@test
+fn everyF16RoundTrips() {
+    var i = 0
+    while i < 65504 {
+        let x = F16(F64(i) / 16.0)
+        assertEqual(try! F16.parse("\(x)"), x)
+        i = i + 7
+    }
+}
+
+// ---- toX, the sugar ------------------------------------------------------------
+
+@test
+fn theToHelpersAreParseOrNone() {
+    assertEqual("42".toInt() ?? 0, 42)
+    assert("4x".toInt() == none)
+    assertEqual("-128".toI8() ?? 0, -128)
+    assert("128".toI8() == none)
+    assertEqual("32767".toI16() ?? 0, 32767)
+    assertEqual("-5".toI32() ?? 0, -5)
+    assertEqual("5".toI64() ?? 0, 5)
+    assertEqual("255".toU8() ?? 0, 255)
+    assertEqual("65535".toU16() ?? 0, 65535)
+    assertEqual("4294967295".toU32() ?? 0, 4294967295)
+    let greatest: U64 = 18446744073709551615
+    assertEqual("18446744073709551615".toU64() ?? 0, greatest)
+    let greatestUInt: UInt = 18446744073709551615
+    assertEqual("18446744073709551615".toUInt() ?? 0, greatestUInt)
+    assertEqual("2.5e1".toF64() ?? 0.0, 25.0)
+}
+
+@test
+fn toF64IsNoneForWhatIsNotFinite() {
+    assert("1e400".toF64() == none)
+    assert("inf".toF64() == none)
+    assert("nan".toF64() == none)
+    assert("x".toF64() == none)
+}
+
+// ---- Benchmarks ----------------------------------------------------------------
+
+@bench
+fn parsingIntegers(_ b: Bencher) {
+    b.iterate(() => {
+        var total = 0
+        for text in ["0", "42", "-9223372036854775808", "123456789", "-17"] {
+            total = total + (try! Int.parse(text)) % 7
+        }
+    })
+}
+
+@bench
+fn parsingFloats(_ b: Bencher) {
+    b.iterate(() => {
+        var total = 0.0
+        for text in ["0.1", "-2.5e-3", "1234.5678", "1e300", "7"] {
+            total = total + (try! F64.parse(text))
+        }
+    })
+}

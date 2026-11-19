@@ -14,3 +14,25 @@ fn hashSetKeepsOneOfEach() {
     assert(seen.insert(6))
     assertEqual(seen.elements().count, 2)
 }
+
+@test
+fn anEmptySetContainsNothing() {
+    let members = HashSet<String>()
+    assert(members.isEmpty)
+    assertEqual(members.count, 0)
+    assert(!members.contains("a"))
+    assert(!members.remove("a"))
+}
+
+@test
+fn removeTakesOutAMember() {
+    let members = HashSet<String>()
+    let _ = members.insert("a")
+    let _ = members.insert("b")
+    assert(members.contains("a"))
+    assert(members.remove("a"))
+    assert(!members.contains("a"))
+    assertEqual(members.count, 1)
+    assert(!members.isEmpty)
+    assert(members.elements() == ["b"])
+}

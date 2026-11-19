@@ -184,10 +184,12 @@ triage() {
     else
         timeout 600 "$bin/Sable.Fuzz" "$name" replay "$file" > "$replay" 2>&1
         status=$?
-        what=$(grep -m1 '^signature: ' "$replay" | cut -c12-)
-        if [ -z "$what" ] && grep -q 'Stack overflow' "$replay"; then
+        # -a throughout: the replay ends with the input, and one with a NUL
+        # in it makes grep call the whole file binary and print no line.
+        what=$(grep -a -m1 '^signature: ' "$replay" | cut -c12-)
+        if [ -z "$what" ] && grep -a -q 'Stack overflow' "$replay"; then
             # Not an exception: the process is gone. Name it by the frame that repeats.
-            what="stack overflow: $(grep -m1 -E '^\s+at ' "$replay" | sed -E 's/^[[:space:]]+at //; s/\(.*//' | cut -c1-150)"
+            what="stack overflow: $(grep -a -m1 -E '^\s+at ' "$replay" | sed -E 's/^[[:space:]]+at //; s/\(.*//' | cut -c1-150)"
         fi
         if [ "$status" -eq 1 ]; then
             timeout 600 "$bin/Sable.Fuzz" "$name" minimise "$file" "$file.min" 120 > "$file.min.log" 2>&1

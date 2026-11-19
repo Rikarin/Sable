@@ -1,0 +1,34 @@
+module Sable.Core
+
+/// How a format spec writes a value: the letter that ends the spec, or
+/// nothing for the value's own way.
+public enum FormatKind {
+    /// Nothing said: an integer in decimal, a float in its shortest digits
+    /// that read back as the same value, text as it is.
+    Automatic
+    /// `d`: an integer in decimal.
+    Decimal
+    /// `x`: an integer in hexadecimal, with lower-case letters.
+    Hex
+    /// `X`: an integer in hexadecimal, with upper-case letters.
+    UpperHex
+    /// `o`: an integer in octal.
+    Octal
+    /// `b`: an integer in binary.
+    Binary
+    /// `e`: a float in scientific notation, `1.5e+03`.
+    Exponent
+    /// `E`: a float in scientific notation with an upper-case `E`.
+    UpperExponent
+    /// `f`: a float in plain decimal notation, never with an exponent.
+    Fixed
+    /// `g`: a float in plain notation or scientific, whichever its size suits,
+    /// with the trailing zeros of its fraction dropped.
+    General
+    /// `G`: as `g`, with an upper-case `E`.
+    UpperGeneral
+    /// `%`: a float times a hundred, in plain notation, then `%`.
+    Percent
+    /// `?`: the value as `Debug` describes it, the way source writes it.
+    Debug
+}

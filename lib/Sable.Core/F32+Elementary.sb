@@ -1,0 +1,133 @@
+module Sable.Core
+
+// An F32's elementary functions: each is C's of the same name with an 'f'
+// (sinf) in the platform's libm, called natively through LLVM's intrinsic
+// where it has one, and by the interpreter in the same libm, so the two
+// agree to the bit. None traps: outside its domain a function gives NaN,
+// and past the largest F32 an infinity. Sable.Math has each as a function
+// too.
+
+extension F32 {
+    /// The square root; NaN for a negative number, and -0.0 for -0.0.
+    @builtin("math_sqrt_F32")
+    public fn squareRoot() -> F32
+
+    /// The cube root, negative for a negative number: (-8.0).cbrt() is -2.0.
+    @builtin("math_cbrt_F32")
+    public fn cbrt() -> F32
+
+    /// The sine of an angle in radians.
+    ///
+    /// ```sable
+    /// let zero: F32 = 0.0
+    /// assert(zero.sin() == zero)
+    /// ```
+    @builtin("math_sin_F32")
+    public fn sin() -> F32
+
+    /// The cosine of an angle in radians.
+    @builtin("math_cos_F32")
+    public fn cos() -> F32
+
+    /// The tangent of an angle in radians.
+    @builtin("math_tan_F32")
+    public fn tan() -> F32
+
+    /// The angle in [-pi/2, pi/2] whose sine this is; NaN outside [-1, 1].
+    @builtin("math_asin_F32")
+    public fn asin() -> F32
+
+    /// The angle in [0, pi] whose cosine this is; NaN outside [-1, 1].
+    @builtin("math_acos_F32")
+    public fn acos() -> F32
+
+    /// The angle in [-pi/2, pi/2] whose tangent this is.
+    @builtin("math_atan_F32")
+    public fn atan() -> F32
+
+    /// The angle in [-pi, pi] of the point (x, self): self is y, as in
+    /// C's atan2(y, x), so the quadrant comes from both signs.
+    @builtin("math_atan2_F32")
+    public fn atan2(_ x: F32) -> F32
+
+    /// The hyperbolic sine.
+    @builtin("math_sinh_F32")
+    public fn sinh() -> F32
+
+    /// The hyperbolic cosine.
+    @builtin("math_cosh_F32")
+    public fn cosh() -> F32
+
+    /// The hyperbolic tangent, in [-1, 1].
+    @builtin("math_tanh_F32")
+    public fn tanh() -> F32
+
+    /// The inverse hyperbolic sine.
+    @builtin("math_asinh_F32")
+    public fn asinh() -> F32
+
+    /// The inverse hyperbolic cosine; NaN below 1.
+    @builtin("math_acosh_F32")
+    public fn acosh() -> F32
+
+    /// The inverse hyperbolic tangent; NaN outside [-1, 1], an infinity at ±1.
+    @builtin("math_atanh_F32")
+    public fn atanh() -> F32
+
+    /// e to the power of this.
+    @builtin("math_exp_F32")
+    public fn exp() -> F32
+
+    /// 2 to the power of this.
+    @builtin("math_exp2_F32")
+    public fn exp2() -> F32
+
+    /// e to the power of this, less 1: exact where exp() - 1.0 would lose
+    /// the digits of a small number.
+    @builtin("math_expm1_F32")
+    public fn expm1() -> F32
+
+    /// The natural logarithm; -inf at zero, NaN below it.
+    @builtin("math_log_F32")
+    public fn log() -> F32
+
+    /// The base-2 logarithm; -inf at zero, NaN below it.
+    @builtin("math_log2_F32")
+    public fn log2() -> F32
+
+    /// The base-10 logarithm; -inf at zero, NaN below it.
+    @builtin("math_log10_F32")
+    public fn log10() -> F32
+
+    /// The natural logarithm of 1 plus this: exact where (1.0 + x).log()
+    /// would lose the digits of a small number.
+    @builtin("math_log1p_F32")
+    public fn log1p() -> F32
+
+    /// This to the power of the exponent, with C's pow's special cases:
+    /// anything to the power 0 is 1, even NaN, and 1 to any power is 1.
+    @builtin("math_pow_F32")
+    public fn pow(_ exponent: F32) -> F32
+
+    /// The length of the hypotenuse, sqrt(self² + other²), without the
+    /// overflow or underflow of computing it so.
+    @builtin("math_hypot_F32")
+    public fn hypot(_ other: F32) -> F32
+
+    /// The gamma function, (n - 1)! at a positive integer n.
+    @builtin("math_gamma_F32")
+    public fn gamma() -> F32
+
+    /// The natural logarithm of the gamma function's magnitude.
+    @builtin("math_logGamma_F32")
+    public fn logGamma() -> F32
+
+    /// The error function, in [-1, 1].
+    @builtin("math_erf_F32")
+    public fn erf() -> F32
+
+    /// The complementary error function, 1 - erf(x), exact where that
+    /// difference would lose the digits of a large x's.
+    @builtin("math_erfc_F32")
+    public fn erfc() -> F32
+}

@@ -96,6 +96,12 @@ public sealed class CoreTypes {
     /// <summary><c>InlineLayout</c>: what every <c>@inline_layout</c> struct conforms to (<c>InlineLayout.sb</c>).</summary>
     public NamedTypeSymbol? InlineLayout => Declared("InlineLayout", TypeKind.Protocol);
 
+    /// <summary><c>Formattable</c>: what an interpolation writes a value through (<c>Formattable.sb</c>).</summary>
+    public NamedTypeSymbol? Formattable => Declared("Formattable", TypeKind.Protocol);
+
+    /// <summary><c>FormatSpec</c>: what an interpolation's format spec becomes (<c>FormatSpec.sb</c>).</summary>
+    public NamedTypeSymbol? FormatSpec => Declared("FormatSpec", TypeKind.Struct);
+
     NamedTypeSymbol? Declared(string name, TypeKind kind) =>
         Module.GetType(name) is { } type && type.TypeKind == kind ? type : null;
 
@@ -133,25 +139,26 @@ public sealed class CoreTypes {
     ///     <c>Range&lt;Bound&gt;</c>, what <c>a..&lt;b</c> makes, and
     ///     <c>ClosedRange&lt;Bound&gt;</c>, what <c>a...b</c> makes: declared in
     ///     <c>lib/Sable.Core/Range.sb</c> and <c>ClosedRange.sb</c>, so null only in a compilation that
-    ///     brings a Sable.Core of its own without them.
+    ///     brings a Sable.Core of its own without them, or with one not
+    ///     generic over a single bound.
     /// </summary>
-    public NamedTypeSymbol? Range => _range ??= DeclaredStruct("Range");
+    public NamedTypeSymbol? Range => _range ??= DeclaredRange("Range");
 
     /// <inheritdoc cref="Range" />
-    public NamedTypeSymbol? ClosedRange => _closedRange ??= DeclaredStruct("ClosedRange");
+    public NamedTypeSymbol? ClosedRange => _closedRange ??= DeclaredRange("ClosedRange");
 
     /// <summary>
     ///     The one-sided ranges: <c>PartialRangeUpTo</c> for <c>..&lt;b</c>,
     ///     <c>PartialRangeThrough</c> for <c>...b</c> and
     ///     <c>PartialRangeFrom</c> for <c>a...</c>, declared beside the others.
     /// </summary>
-    public NamedTypeSymbol? PartialRangeUpTo => _upTo ??= DeclaredStruct("PartialRangeUpTo");
+    public NamedTypeSymbol? PartialRangeUpTo => _upTo ??= DeclaredRange("PartialRangeUpTo");
 
     /// <inheritdoc cref="PartialRangeUpTo" />
-    public NamedTypeSymbol? PartialRangeThrough => _through ??= DeclaredStruct("PartialRangeThrough");
+    public NamedTypeSymbol? PartialRangeThrough => _through ??= DeclaredRange("PartialRangeThrough");
 
     /// <inheritdoc cref="PartialRangeUpTo" />
-    public NamedTypeSymbol? PartialRangeFrom => _from ??= DeclaredStruct("PartialRangeFrom");
+    public NamedTypeSymbol? PartialRangeFrom => _from ??= DeclaredRange("PartialRangeFrom");
 
     NamedTypeSymbol? _range, _closedRange, _upTo, _through, _from;
 
@@ -179,6 +186,14 @@ public sealed class CoreTypes {
 
     NamedTypeSymbol? DeclaredStruct(string name) =>
         Module.GetType(name) is { TypeKind: TypeKind.Struct } type ? type : null;
+
+    /// <summary>
+    ///     A range type is a struct of one bound, <c>Range&lt;Bound&gt;</c>: a
+    ///     Sable.Core that declares a <c>Range</c> of some other shape has no
+    ///     range the operators can make, just as one declaring none has not.
+    /// </summary>
+    NamedTypeSymbol? DeclaredRange(string name) =>
+        DeclaredStruct(name) is { TypeParameters.Length: 1 } type ? type : null;
 
     NamedTypeSymbol? DeclaredProtocol(string name) =>
         Module.GetType(name) is { TypeKind: TypeKind.Protocol } type ? type : null;

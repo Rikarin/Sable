@@ -1,0 +1,82 @@
+module SpecialFunctionsTests
+
+// SpecialFunctions (Sable.Math), tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Math
+// Reference values are correctly rounded (mpmath, 60 digits). libm's gamma
+// and error functions are held to a little more than its others: two
+// units in the last place.
+
+import Sable.Math
+import Sable.Testing
+import FloatAssertions
+
+@test
+fn gammaExtendsTheFactorial() {
+    assertSame(gamma(1.0), 1.0)
+    assertSame(gamma(5.0), 24.0)
+    assertSame(gamma(11.0), 3628800.0)
+    assertWithin(gamma(0.5), 1.772453850905516, ulps: 2)
+    assertWithin(gamma(4.5), 11.631728396567448, ulps: 2)
+    assertWithin(gamma(-1.5), 2.363271801207355, ulps: 2)
+    assertWithin(gamma(30.0), 8.841761993739702e30, ulps: 2)
+}
+
+@test
+fn gammaHasPolesAtZeroAndNaNAtNegativeIntegers() {
+    assertSame(gamma(0.0), inf)
+    assertSame(gamma(-0.0), -inf)
+    assertSame(gamma(-1.0), nan)
+    assertSame(gamma(-inf), nan)
+    assertSame(gamma(inf), inf)
+    assertSame(gamma(172.0), inf)
+    assertSame(gamma(nan), nan)
+}
+
+@test
+fn logGammaStaysFinitePastWhereGammaOverflows() {
+    assertSame(logGamma(1.0), 0.0)
+    assertSame(logGamma(2.0), 0.0)
+    assertWithin(logGamma(0.5), 0.5723649429247001, ulps: 2)
+    assertWithin(logGamma(10.0), 12.801827480081469, ulps: 2)
+    assertWithin(logGamma(100.0), 359.1342053695754, ulps: 2)
+    assertWithin(logGamma(-0.5), 1.2655121234846454, ulps: 2)
+    assertSame(logGamma(0.0), inf)
+    assertSame(logGamma(-1.0), inf)
+    assertSame(logGamma(-inf), inf)
+}
+
+@test
+fn erfIsOddAndBounded() {
+    assertWithin(erf(1.0), 0.8427007929497149, ulps: 2)
+    assertWithin(erf(-0.5), -0.5204998778130465, ulps: 2)
+    assertWithin(erf(1e-8), 1.1283791670955126e-8, ulps: 2)
+    assertWithin(erf(3.0), 0.9999779095030014, ulps: 2)
+    assertSame(erf(-0.0), -0.0)
+    assertSame(erf(inf), 1.0)
+    assertSame(erf(-inf), -1.0)
+    assertSame(erf(nan), nan)
+}
+
+@test
+fn erfcKeepsTheDigitsOfItsTail() {
+    assertWithin(erfc(1.0), 0.15729920705028513, ulps: 2)
+    assertWithin(erfc(-0.5), 1.5204998778130465, ulps: 2)
+    assertWithin(erfc(5.0), 1.537459794428035e-12, ulps: 2)
+    assertWithin(erfc(20.0), 5.395865611607901e-176, ulps: 2)
+    assertSame(erfc(-inf), 2.0)
+    assertSame(erfc(inf), 0.0)
+}
+
+@test
+fn theF32FunctionsAreWithinTwoUlpsOfTheTrueValues() {
+    let half: F32 = 0.5
+    let one: F32 = 1.0
+    let five: F32 = 5.0
+    let ten: F32 = 10.0
+    assertWithin(gamma(half), 1.7724539, ulps: 2)
+    assertSame(gamma(five), 24.0)
+    assertWithin(logGamma(ten), 12.801827, ulps: 2)
+    assertWithin(erf(one), 0.8427008, ulps: 2)
+    assertWithin(erfc(one), 0.1572992, ulps: 2)
+    assertSame(erf(inf32), 1.0)
+}

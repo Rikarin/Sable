@@ -1,0 +1,139 @@
+module ArrayTests
+
+// The array family's own members (Sable.Core, Array.sb), tested with
+// '@test': run with
+//     tools/stdlib-coverage.sh Sable.Core
+
+import Sable.Testing
+
+@test
+fn countAndIsEmptyDescribeTheElements() {
+    let empty: Int[>..] = []
+    let three: Int[>..] = [1, 2, 3]
+    assertEqual(empty.count, 0)
+    assert(empty.isEmpty)
+    assertEqual(three.count, 3)
+    assert(!three.isEmpty)
+}
+
+@test
+fn sliceViewsARunOfTheElements() {
+    let xs: Int[>..] = [1, 2, 3, 4]
+    let middle = xs.slice(from: 1, to: 3)
+    assert(middle == [2, 3])
+    assertEqual(xs.slice(from: 2, to: 2).count, 0)
+}
+
+@test
+fn firstAndLastAreNoneForAnEmptyArray() {
+    let empty: String[>..] = []
+    assert(empty.first == none)
+    assert(empty.last == none)
+}
+
+@test
+fn firstAndLastAreTheEnds() {
+    let xs: String[>..] = ["a", "b", "c"]
+    assertEqual(xs.first ?? "", "a")
+    assertEqual(xs.last ?? "", "c")
+    let one: Int[] = [7]
+    assertEqual(one.first ?? 0, 7)
+    assertEqual(one.last ?? 0, 7)
+}
+
+@test
+fn toArrayOfAWholeArrayIsAnEqualCopy() {
+    var xs: Int[>..] = [1, 2, 3]
+    var copy = xs.toArray()
+    copy.append(4)
+    xs[0] = 9
+    assert(xs == [9, 2, 3])
+    assert(copy == [1, 2, 3, 4])
+}
+
+@test
+fn toArrayOfASliceCopiesItsRun() {
+    let words: String[>..] = ["a", "b", "c", "d"]
+    var run = words[1..<3].toArray()
+    run.append("e")
+    assert(run == ["b", "c", "e"])
+    assertEqual(words[2...].toArray().count, 2)
+    let nothing: Int[>..] = []
+    assertEqual(nothing.toArray().count, 0)
+}
+
+@test
+fn containsFindsAnEqualElement() {
+    let xs: String[>..] = ["pear", "fig"]
+    assert(xs.contains(element: "fig"))
+    assert(!xs.contains(element: "kiwi"))
+}
+
+@test
+fn appendContentsOfAddsEveryElementInOrder() {
+    var grow: Int[>..] = [1]
+    grow.append(contentsOf: [2, 3])
+    grow.append(contentsOf: grow[0..<2])
+    assert(grow == [1, 2, 3, 1, 2])
+    var shrink: String[>..<] = []
+    shrink.append(contentsOf: ["x", "y"])
+    assertEqual(shrink.count, 2)
+    assertEqual(shrink.removeLast(), "y")
+}
+
+@test
+fn reserveCapacityMakesRoomWithoutChangingTheElements() {
+    var xs: Int[>..] = [1, 2]
+    xs.reserveCapacity(100)
+    assert(xs.capacity >= 100)
+    assert(xs == [1, 2])
+    let before = xs.capacity
+    xs.reserveCapacity(10)
+    assertEqual(xs.capacity, before)
+    var shrink: Int[>..<] = []
+    assertEqual(shrink.capacity, 0)
+    shrink.reserveCapacity(8)
+    assert(shrink.capacity >= 8)
+}
+
+@test
+fn reserveCapacityOfAnArrayCopyLeavesTheOriginal() {
+    let xs: Int[>..] = [1, 2, 3]
+    var ys = xs
+    ys.reserveCapacity(64)
+    ys.append(4)
+    assert(xs == [1, 2, 3])
+    assert(ys == [1, 2, 3, 4])
+}
+
+@test
+fn bytesReadAsUtf8Text() {
+    let bytes: U8[>..] = [0x68, 0xC3, 0xA9, 0xE2, 0x82, 0xAC, 0xF0, 0x9F, 0x98, 0x80]
+    assertEqualText(bytes.toString(), "hé€😀")
+}
+
+@test
+fn bytesThatAreNotUtf8ReadAsReplacements() {
+    let lone: U8[>..] = [0x41, 0xFF, 0x42]
+    assertEqualText(lone.toString(), "A\u{FFFD}B")
+    let cut: U8[>..] = [0x41, 0xE2, 0x82]
+    assertEqualText(cut.toString(), "A\u{FFFD}")
+}
+
+@test(traps: "array index out of range")
+fn indexingPastTheEndTraps() {
+    let xs: Int[>..] = [1, 2]
+    let _ = xs[2]
+}
+
+@test(traps: "array slice out of range")
+fn slicingPastTheEndTraps() {
+    let xs: Int[>..] = [1, 2]
+    let _ = xs.slice(from: 1, to: 3)
+}
+
+@test(traps: "removeLast of an empty array")
+fn removeLastOfAnEmptyArrayTraps() {
+    var xs: Int[>..] = []
+    let _ = xs.removeLast()
+}

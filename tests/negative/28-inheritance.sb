@@ -135,3 +135,13 @@ public class KeepsTheSignatures: Base {
 public final class Leaf { }
 
 public class UnderALeaf: Leaf { }       //! S3044 is final
+
+// Found by the compiler fuzzer (SABLE_FUZZ_SEED=12345): an initialiser
+// written without a body, which a subclass's implicit initialiser calls
+// through 'super', has nothing to run.
+public open class Node {
+    var value: Int
+    init(value: Int)                    //! S3112 needs a body
+}
+
+public class Branch: Node { }

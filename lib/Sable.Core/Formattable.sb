@@ -1,0 +1,24 @@
+module Sable.Core
+
+/// Values that write themselves as text under a format spec: what an
+/// interpolation writes. `"\(x)"` is `x.format(FormatSpec())`, and
+/// `"\(x:>8.2)"` passes the spec after the colon, which the compiler has
+/// checked (see `FormatSpec`).
+///
+/// A type of the program's own conforms by writing itself, and may honour
+/// as much of the spec as it means something for; `spec.padded` does the
+/// width, fill and alignment.
+///
+/// ```sable
+/// struct Meters: Formattable {
+///     var value: F64
+///     fn format(_ spec: FormatSpec) -> String {
+///         return spec.padded(self.value.format(FormatSpec()) + " m")
+///     }
+/// }
+/// assert("[\(Meters { value: 2.5 }:>7)]" == "[  2.5 m]")
+/// ```
+public protocol Formattable {
+    /// The value as text, as the spec asks.
+    fn format(_ spec: FormatSpec) -> String
+}

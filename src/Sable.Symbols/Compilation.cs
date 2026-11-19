@@ -1464,6 +1464,13 @@ public sealed partial class Compilation {
             function.ReturnTypeResolver = () => type;
         }
 
+        // Outside a protocol an initialiser is code: one written without a
+        // body would be called (by 'Node(value: 1)', or by a subclass's
+        // implicit initialiser through 'super') with nothing to run.
+        if (declaration.Body is null) {
+            RequireBody(declaration, declaration.InitKeyword.Span, declaration.Attributes, declaration.Modifiers, type, "'init'");
+        }
+
         RecordDeclaration(declaration, function);
         type.AddMember(function);
     }

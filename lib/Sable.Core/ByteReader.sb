@@ -1,0 +1,171 @@
+module Sable.Core
+
+/// A cursor over bytes that binary data is read from, value by value
+/// (Rust's io::Cursor, .NET's SequenceReader and BinaryReader): integers
+/// and floats in the reader's byte order, runs of bytes (views, with no
+/// copy), UTF-8 text, and LEB128 variable-length integers. A read that
+/// cannot be made throws a ByteReadError and moves nothing, so the reader
+/// is where it was.
+///
+/// ```sable
+/// let bytes: U8[>..] = [0xCA, 0xFE, 0xAC, 0x02]
+/// var reader = ByteReader(bytes, endian: .Big)
+/// assert(try! reader.readU16() == 0xCAFE)
+/// assert(try! reader.readVarUInt() == 300)
+/// assert(reader.isAtEnd)
+/// ```
+public struct ByteReader {
+    let bytes: U8[:]
+    var cursor: Int
+
+    /// The order multi-byte values are read in.
+    public var endian: Endian
+
+    /// A reader at the start of the bytes, reading in the byte order given:
+    /// little-endian unless told otherwise.
+    public init(_ bytes: U8[:], endian: Endian = .Little) {
+        self.bytes = bytes
+        cursor = 0
+        self.endian = endian
+    }
+
+    /// How many bytes the reader reads from, in all.
+    public var count: Int => bytes.count
+
+    /// Where the next read begins: how many bytes have been read or skipped.
+    public var position: Int => cursor
+
+    /// How many bytes are left to read.
+    public var remaining: Int => bytes.count - cursor
+
+    /// Whether every byte has been read.
+    public var isAtEnd: Bool => cursor == bytes.count
+
+    /// Moves to the offset, from the start: anywhere from 0 to the end.
+    public mutating fn seek(to offset: Int) throws(ByteReadError) {
+        if offset < 0 || offset > bytes.count {
+            throw ByteReadError.EndOfData(at: offset, needed: 0, remaining: 0)
+        }
+        cursor = offset
+    }
+
+    /// Moves past the next 'count' bytes, reading nothing.
+    public mutating fn skip(_ count: Int) throws(ByteReadError) {
+        let _ = try self.take(count)
+    }
+
+    /// The next byte, without reading it: none at the end.
+    public fn peekU8() -> U8? {
+        if cursor < bytes.count {
+            return bytes[cursor]
+        }
+        return none
+    }
+
+    /// Reads one byte.
+    public mutating fn readU8() throws(ByteReadError) -> U8 {
+        return bytes[try self.take(1)]
+    }
+
+    /// Reads one byte, as the I8 whose two's complement it is.
+    public mutating fn readI8() throws(ByteReadError) -> I8 {
+        return bytes[try self.take(1)] unchecked as I8
+    }
+
+    /// Reads a U16, in the reader's order.
+    public mutating fn readU16() throws(ByteReadError) -> U16 {
+        return bytes.readU16(at: try self.take(2), endian: endian)
+    }
+
+    /// Reads an I16, two's complement, in the reader's order.
+    public mutating fn readI16() throws(ByteReadError) -> I16 {
+        return bytes.readI16(at: try self.take(2), endian: endian)
+    }
+
+    /// Reads a U32, in the reader's order.
+    public mutating fn readU32() throws(ByteReadError) -> U32 {
+        return bytes.readU32(at: try self.take(4), endian: endian)
+    }
+
+    /// Reads an I32, two's complement, in the reader's order.
+    public mutating fn readI32() throws(ByteReadError) -> I32 {
+        return bytes.readI32(at: try self.take(4), endian: endian)
+    }
+
+    /// Reads a U64, in the reader's order.
+    public mutating fn readU64() throws(ByteReadError) -> U64 {
+        return bytes.readU64(at: try self.take(8), endian: endian)
+    }
+
+    /// Reads an I64, two's complement, in the reader's order.
+    public mutating fn readI64() throws(ByteReadError) -> I64 {
+        return bytes.readI64(at: try self.take(8), endian: endian)
+    }
+
+    /// Reads an F32 from its IEEE 754 bits, in the reader's order.
+    public mutating fn readF32() throws(ByteReadError) -> F32 {
+        return bytes.readF32(at: try self.take(4), endian: endian)
+    }
+
+    /// Reads an F64 from its IEEE 754 bits, in the reader's order.
+    public mutating fn readF64() throws(ByteReadError) -> F64 {
+        return bytes.readF64(at: try self.take(8), endian: endian)
+    }
+
+    /// Reads the next 'count' bytes: a view of them, sharing the bytes the
+    /// reader reads, with no copy.
+    public mutating fn readBytes(_ count: Int) throws(ByteReadError) -> U8[:] {
+        let start = try self.take(count)
+        return bytes.slice(from: start, to: start + count)
+    }
+
+    /// Reads 'byteCount' bytes as UTF-8 text; a byte that cannot begin a
+    /// scalar, or a sequence cut short, reads as U+FFFD.
+    public mutating fn readUtf8(byteCount: Int) throws(ByteReadError) -> String {
+        return (try self.readBytes(byteCount)).toString()
+    }
+
+    /// Reads an unsigned LEB128 variable-length integer, as
+    /// ByteBuffer.writeVarUInt writes one. More than ten bytes, or a tenth
+    /// with bits past the 64th, is VarIntTooLong; the bytes running out
+    /// first is EndOfData.
+    public mutating fn readVarUInt() throws(ByteReadError) -> U64 {
+        var result: U64 = 0
+        var shift: U64 = 0
+        var at = cursor
+        while at < bytes.count {
+            let byte = bytes[at]
+            at = at + 1
+
+            // The tenth byte holds the 64th bit alone.
+            if shift == 63 && byte > 1 {
+                throw ByteReadError.VarIntTooLong(at: cursor)
+            }
+            result = result | U64(byte & 0x7F) << shift
+            if byte < 0x80 {
+                cursor = at
+                return result
+            }
+            shift = shift + 7
+        }
+        throw ByteReadError.EndOfData(at: cursor, needed: at - cursor + 1, remaining: bytes.count - cursor)
+    }
+
+    /// Reads a ZigZag-encoded variable-length integer, as
+    /// ByteBuffer.writeVarInt writes one.
+    public mutating fn readVarInt() throws(ByteReadError) -> I64 {
+        let zigzag = try self.readVarUInt()
+        return I64(zigzag >> 1) ^ -I64(zigzag & 1)
+    }
+
+    // The offset of the next 'count' bytes, moving past them; EndOfData,
+    // and no move, when fewer are left (or 'count' is negative).
+    mutating fn take(_ count: Int) throws(ByteReadError) -> Int {
+        if count < 0 || count > bytes.count - cursor {
+            throw ByteReadError.EndOfData(at: cursor, needed: count, remaining: bytes.count - cursor)
+        }
+        let start = cursor
+        cursor = cursor + count
+        return start
+    }
+}

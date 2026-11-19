@@ -1,0 +1,232 @@
+module ByteReaderTests
+
+// ByteReader (Sable.Core), tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Core
+
+import Sable.Testing
+
+// What a read that should have failed gave instead, or how it failed.
+fn failure(_ error: ByteReadError) -> String {
+    return match error {
+        case .EndOfData(let at, let needed, let remaining) => "end of data at \(at): needed \(needed), \(remaining) left"
+        case .VarIntTooLong(let at)                        => "varint too long at \(at)"
+        default                                            => "another error"
+    }
+}
+
+@test
+fn aReaderStartsAtTheStart() {
+    let bytes: U8[>..] = [1, 2, 3]
+    let reader = ByteReader(bytes)
+    assertEqual(reader.position, 0)
+    assertEqual(reader.count, 3)
+    assertEqual(reader.remaining, 3)
+    assert(!reader.isAtEnd, "three bytes to read")
+    assert(reader.endian == .Little, "little-endian unless told otherwise")
+}
+
+@test
+fn valuesAreReadInTheReadersOrder() throws(ByteReadError) {
+    let bytes: U8[>..] = [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E]
+    var big = ByteReader(bytes, endian: .Big)
+    assertEqual(try big.readU16(), 0x0102)
+    assertEqual(try big.readU32(), 0x0304_0506)
+    assertEqual(try big.readU64(), 0x0708_090A_0B0C_0D0E)
+    assert(big.isAtEnd, "every byte read")
+
+    var little = ByteReader(bytes)
+    assertEqual(try little.readU16(), 0x0201)
+    assertEqual(try little.readU32(), 0x0605_0403)
+    assertEqual(try little.readU64(), 0x0E0D_0C0B_0A09_0807)
+}
+
+@test
+fn whatABufferWritesAReaderReadsBack() throws(ByteReadError) {
+    var buffer = ByteBuffer(endian: .Big)
+    buffer.writeU8(200)
+    buffer.writeI8(-100)
+    buffer.writeI16(-30000)
+    buffer.writeI32(-2_000_000_000)
+    buffer.writeI64(-9_000_000_000_000)
+    buffer.writeF32(-0.5)
+    buffer.writeF64(F64.pi)
+    buffer.writeVarUInt(0xFFFF_FFFF_FFFF_FFFF)
+    buffer.writeVarInt(-123_456_789)
+    buffer.writeUtf8("naïve ☃")
+
+    var reader = ByteReader(buffer.bytes, endian: .Big)
+    assertEqual(try reader.readU8(), 200)
+    assertEqual(try reader.readI8(), -100)
+    assertEqual(try reader.readI16(), -30000)
+    assertEqual(try reader.readI32(), -2_000_000_000)
+    assertEqual(try reader.readI64(), -9_000_000_000_000)
+    assertEqual(try reader.readF32(), -0.5)
+    assertEqual(try reader.readF64(), F64.pi)
+    assertEqual(try reader.readVarUInt(), 0xFFFF_FFFF_FFFF_FFFF)
+    assertEqual(try reader.readVarInt(), -123_456_789)
+    assertEqual(try reader.readUtf8(byteCount: reader.remaining), "naïve ☃")
+    assert(reader.isAtEnd, "every byte read")
+}
+
+@test
+fn readBytesIsAViewOfTheNextBytes() throws(ByteReadError) {
+    let bytes: U8[>..] = [1, 2, 3, 4, 5]
+    var reader = ByteReader(bytes)
+    try reader.skip(1)
+    let run = try reader.readBytes(3)
+    assertEqual(run.count, 3)
+    assertEqual(run[0], 2)
+    assertEqual(run[2], 4)
+    assertEqual(reader.position, 4)
+    assertEqual((try reader.readBytes(0)).count, 0)
+}
+
+@test
+fn peekLooksWithoutReading() throws(ByteReadError) {
+    let bytes: U8[>..] = [7]
+    var reader = ByteReader(bytes)
+    assertEqual(reader.peekU8() ?? 0, 7)
+    assertEqual(reader.position, 0)
+    let _ = try reader.readU8()
+    assert(reader.peekU8() == none, "nothing left to peek at")
+}
+
+@test
+fn seekMovesAnywhereFromStartToEnd() throws(ByteReadError) {
+    let bytes: U8[>..] = [10, 20, 30]
+    var reader = ByteReader(bytes)
+    try reader.seek(to: 2)
+    assertEqual(try reader.readU8(), 30)
+    try reader.seek(to: 0)
+    assertEqual(try reader.readU8(), 10)
+    try reader.seek(to: 3)
+    assert(reader.isAtEnd, "the end is a place to seek to")
+}
+
+@test
+fn seekingOutsideTheBytesFailsAndStays() {
+    let bytes: U8[>..] = [10, 20, 30]
+    var reader = ByteReader(bytes)
+    do {
+        try reader.seek(to: 4)
+        fail("seeking past the end worked")
+    } catch {
+        assertEqual(failure(error), "end of data at 4: needed 0, 0 left")
+    }
+    do {
+        try reader.seek(to: -1)
+        fail("seeking before the start worked")
+    } catch {
+        assertEqual(failure(error), "end of data at -1: needed 0, 0 left")
+    }
+    assertEqual(reader.position, 0)
+}
+
+@test
+fn aReadPastTheEndFailsAndMovesNothing() throws(ByteReadError) {
+    let bytes: U8[>..] = [1, 2, 3]
+    var reader = ByteReader(bytes)
+    let _ = try reader.readU8()
+    do {
+        let _ = try reader.readU32()
+        fail("a U32 was read from two bytes")
+    } catch {
+        assertEqual(failure(error), "end of data at 1: needed 4, 2 left")
+    }
+    assertEqual(reader.position, 1)
+    assertEqual(try reader.readU16(), 0x0302)
+}
+
+@test
+fn everyReadFailsAtTheEnd() {
+    let bytes: U8[>..] = []
+    var reader = ByteReader(bytes)
+    var failures = 0
+    if (try? reader.readU8()) == none { failures = failures + 1 }
+    if (try? reader.readI8()) == none { failures = failures + 1 }
+    if (try? reader.readI16()) == none { failures = failures + 1 }
+    if (try? reader.readI32()) == none { failures = failures + 1 }
+    if (try? reader.readI64()) == none { failures = failures + 1 }
+    if (try? reader.readF32()) == none { failures = failures + 1 }
+    if (try? reader.readF64()) == none { failures = failures + 1 }
+    if (try? reader.readUtf8(byteCount: 1)) == none { failures = failures + 1 }
+    if (try? reader.skip(1)) == none { failures = failures + 1 }
+    assertEqual(failures, 9)
+}
+
+@test
+fn aNegativeCountFails() {
+    let bytes: U8[>..] = [1, 2]
+    var reader = ByteReader(bytes)
+    do {
+        let _ = try reader.readBytes(-1)
+        fail("read -1 bytes")
+    } catch {
+        assertEqual(failure(error), "end of data at 0: needed -1, 2 left")
+    }
+}
+
+@test
+fn aVarIntCutShortIsEndOfData() {
+    let bytes: U8[>..] = [0x05, 0x80, 0x80]
+    var reader = ByteReader(bytes)
+    do {
+        assertEqual(try reader.readVarUInt(), 5)
+        let _ = try reader.readVarUInt()
+        fail("a cut-short varint was read")
+    } catch {
+        assertEqual(failure(error), "end of data at 1: needed 3, 2 left")
+    }
+    assertEqual(reader.position, 1)
+}
+
+@test
+fn aVarIntPastSixtyFourBitsIsTooLong() {
+    let eleven: U8[>..] = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x01]
+    var reader = ByteReader(eleven)
+    do {
+        let _ = try reader.readVarUInt()
+        fail("an eleven-byte varint was read")
+    } catch {
+        assertEqual(failure(error), "varint too long at 0")
+    }
+
+    let tooWide: U8[>..] = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x02]
+    var wide = ByteReader(tooWide)
+    do {
+        let _ = try wide.readVarInt()
+        fail("a 65-bit varint was read")
+    } catch {
+        assertEqual(failure(error), "varint too long at 0")
+    }
+    assertEqual(wide.position, 0)
+}
+
+@test
+fn theWidestVarIntsReadBack() throws(ByteReadError) {
+    var buffer = ByteBuffer()
+    buffer.writeVarInt(9_223_372_036_854_775_807)
+    buffer.writeVarInt(-9_223_372_036_854_775_808)
+    buffer.writeVarUInt(0)
+    var reader = ByteReader(buffer.bytes)
+    assertEqual(try reader.readVarInt(), 9_223_372_036_854_775_807)
+    assertEqual(try reader.readVarInt(), -9_223_372_036_854_775_808)
+    assertEqual(try reader.readVarUInt(), 0)
+}
+
+@bench
+fn readAThousandMixedValues() {
+    var buffer = ByteBuffer()
+    var i = 0
+    while i < 1000 {
+        buffer.writeU32(U32(i))
+        buffer.writeVarUInt(U64(i * 37))
+        i = i + 1
+    }
+    var reader = ByteReader(buffer.bytes)
+    var total: U64 = 0
+    while !reader.isAtEnd {
+        total = total + U64(try! reader.readU32()) + (try! reader.readVarUInt())
+    }
+    assert(total > 0)
+}

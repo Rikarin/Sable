@@ -218,7 +218,9 @@ But it is split into packages so that a binary pays only for what it uses.
 ```
 Sable.Core          ── always linked, no dependencies
   primitives, Optional, Outcome, String, the array family,
-  Comparable/Equatable/Hashable/Iterable, MemoryLayout, unsafe pointers
+  Comparable/Equatable/Hashable/Iterable, MemoryLayout, unsafe pointers,
+  Formattable/FormatSpec (what "\(x:spec)" writes through) and
+  Parsable/ParseError/NumberStyles (text back to values)
 
 Sable.Collections   List Dictionary Set Deque OrderedDictionary
                     PriorityQueue BitSet InlineArray SmallVec

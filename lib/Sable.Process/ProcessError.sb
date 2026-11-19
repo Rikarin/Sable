@@ -4,4 +4,11 @@ module Sable.Process
 public union ProcessError: Error {
     /// Nothing by that name could be started: not a path, and not on PATH.
     NotFound(program: String),
+
+    /// What could not be run.
+    public fn description() -> String {
+        return match self {
+            case .NotFound(let program) => "no program '\(program)' could be started"
+        }
+    }
 }

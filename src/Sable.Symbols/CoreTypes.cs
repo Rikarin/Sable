@@ -49,12 +49,6 @@ public sealed class CoreTypes {
         Void = Primitive("Void");
         Never = Primitive("Never");
 
-        // Every thrown value conforms to Error; bare 'throws' means
-        // 'throws(any Error)', per SYNTAX.md §18.
-        Error = new("Error", TypeKind.Protocol, Module, accessibility: Accessibility.Public);
-        Module.AddMember(Error);
-        AnyError = new ExistentialTypeSymbol(Error);
-
         // What may cross an isolation boundary (SYNTAX.md §19, docs/02 §2.7):
         // a marker, which a type meets by what it is made of, not by saying so.
         Sendable = new("Sendable", TypeKind.Protocol, Module, accessibility: Accessibility.Public);
@@ -126,11 +120,31 @@ public sealed class CoreTypes {
     public NamedTypeSymbol Region { get; }
     public NamedTypeSymbol Void { get; }
     public NamedTypeSymbol Never { get; }
-    public NamedTypeSymbol Error { get; }
     public NamedTypeSymbol Sendable { get; }
 
+    /// <summary>
+    ///     <c>Error</c>, what is thrown: declared in Sable, in
+    ///     <c>lib/Sable.Core/Error.sb</c>, with its requirements; bare
+    ///     <c>throws</c> means <c>throws(any Error)</c>, per SYNTAX.md §18.
+    /// </summary>
+    /// <remarks>
+    ///     Found once the core is declared, as <see cref="Sequence" /> is. A
+    ///     Sable.Core brought from disk without one gets a marker protocol in
+    ///     its place, so that 'throws' still means something.
+    /// </remarks>
+    public NamedTypeSymbol Error => _error ??= DeclaredProtocol("Error") ?? MarkerError();
+
     /// <summary>What a bare <c>throws</c> means.</summary>
-    public TypeSymbol AnyError { get; }
+    public TypeSymbol AnyError => _anyError ??= new ExistentialTypeSymbol(Error);
+
+    NamedTypeSymbol? _error;
+    TypeSymbol? _anyError;
+
+    NamedTypeSymbol MarkerError() {
+        var marker = new NamedTypeSymbol("Error", TypeKind.Protocol, Module, accessibility: Accessibility.Public);
+        Module.AddMember(marker);
+        return marker;
+    }
 
     /// <summary><c>From&lt;Source&gt;</c>: the conversion a <c>try</c> applies between error types.</summary>
     public NamedTypeSymbol From { get; }

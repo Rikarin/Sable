@@ -161,6 +161,18 @@ public sealed class NamedTypeSymbol : TypeSymbol {
     public ImmutableArray<NamedTypeSymbol> ArrayConformers { get; internal set; } = [];
 
     /// <summary>
+    ///     For a protocol, the extensions of Sable.Core's Optional that conform
+    ///     optionals to it, directly or through a protocol that refines it:
+    ///     <c>extension Optional: Equatable where Wrapped: Equatable</c>.
+    /// </summary>
+    /// <remarks>
+    ///     <c>T?</c> is a type of its own, not the Optional it desugars to, so
+    ///     as with arrays each protocol keeps the extensions that give it to
+    ///     optionals; a <c>T?</c> conforms where one of them holds of its T.
+    /// </remarks>
+    public ImmutableArray<ExtensionSymbol> OptionalConformances { get; internal set; } = [];
+
+    /// <summary>
     ///     For an array extension that declares conformances, what an array
     ///     of its kind has by a name, from every array extension: the
     ///     witnesses its conformances may be met by.
@@ -672,9 +684,24 @@ public sealed class FunctionTypeSymbol(
     /// </summary>
     public bool IsRethrows { get; init; }
 
+    /// <summary>
+    ///     Which parameters are <c>inout</c>: <c>(inout Int) -&gt; ()</c> is
+    ///     given the caller's Int where it is, to change. Empty when none is.
+    /// </summary>
+    public ImmutableArray<bool> InOutParameters { get; init; } = [];
+
+    /// <summary>Whether parameter <paramref name="index" /> is <c>inout</c>.</summary>
+    public bool IsInOut(int index) => index < InOutParameters.Length && InOutParameters[index];
+
+    /// <summary>Which of these parameters are <c>inout</c>, empty when none is.</summary>
+    public static ImmutableArray<bool> InOutOf(IEnumerable<bool> inOut) {
+        var all = inOut.ToImmutableArray();
+        return all.Contains(true) ? all : [];
+    }
+
     public override string ToDisplayString() {
         var prefix = IsAsync ? "async " : string.Empty;
-        var parameters = string.Join(", ", ParameterTypes.Select(static t => t.ToDisplayString()));
+        var parameters = string.Join(", ", ParameterTypes.Select((t, i) => (IsInOut(i) ? "inout " : string.Empty) + t.ToDisplayString()));
         var throws = IsRethrows
             ? " rethrows"
             : ThrownType is null
@@ -713,7 +740,7 @@ public sealed class FunctionTypeSymbol(
         }
 
         for (var i = 0; i < ParameterTypes.Length; i++) {
-            if (!ParameterTypes[i].Equals(function.ParameterTypes[i])) {
+            if (!ParameterTypes[i].Equals(function.ParameterTypes[i]) || IsInOut(i) != function.IsInOut(i)) {
                 return false;
             }
         }

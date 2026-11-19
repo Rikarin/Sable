@@ -2,9 +2,15 @@ module Sable.Serialize
 
 // JSON Pointer (RFC 6901).
 
-public union PointerError {
+/// Why a JSON pointer found nothing: an Error, so a bare 'throws' can throw it.
+public union PointerError: Error {
     Malformed(pointer: String)
     NotFound(pointer: String, at: String)
+
+    /// The pointer, and why it found nothing: 'describePointerError' of it.
+    public fn description() -> String {
+        return describePointerError(self)
+    }
 }
 
 public fn describePointerError(_ error: PointerError) -> String {

@@ -138,3 +138,72 @@ fn questionDotStillReachesWhatItHolds() {
     assertEqual(text?.count ?? -1, 3)
     assertEqual(text.map({ t in t.count }) ?? -1, 3)
 }
+
+// ---- Conformances -------------------------------------------------------------
+
+fn equal<T: Equatable>(_ a: T, _ b: T) -> Bool {
+    return a == b
+}
+
+fn least<T: Comparable>(_ a: T, _ b: T) -> T {
+    return b < a ? b : a
+}
+
+fn described<T: Debug>(_ value: T) -> String {
+    return value.debugDescription()
+}
+
+struct Opaque {
+    var id: Int
+}
+
+@test
+fn anOptionalOfSomethingEquatableIsEquatable() {
+    assert(equal(held(2), held(2)))
+    assert(!equal(held(2), held(3)))
+    assert(!equal(held(2), nothing()))
+    assert(!equal(nothing(), held(2)))
+    assert(equal(nothing(), nothing()))
+    assertEqual(held(4), held(4))
+}
+
+@test
+fn anOptionalOfSomethingHashableHashesWhatItHolds() {
+    assertEqual(held(5).hashValue, held(5).hashValue)
+    assert(held(0).hashValue != nothing().hashValue, "none hashes apart from a value")
+    var names: [Int?: String] = [:]
+    names[held(1)] = "one"
+    names[nothing()] = "none"
+    names[held(1)] = "uno"
+    assertEqual(names.count, 2)
+    assertEqual(names[held(1)] ?? "", "uno")
+    assertEqual(names[nothing()] ?? "", "none")
+}
+
+@test
+fn noneComesBeforeEveryValue() {
+    assert(equal(least(held(1), nothing()), nothing()))
+    assert(equal(least(nothing(), held(1)), nothing()))
+    assert(equal(least(held(3), held(2)), held(2)))
+    assert(equal(least(nothing(), nothing()), nothing()))
+    let sorted = [held(3), nothing(), held(1)].sorted()
+    assert(equal(sorted[0], nothing()))
+    assert(equal(sorted[2], held(3)))
+}
+
+@test
+fn anOptionalSaysWhatItHoldsOrNone() {
+    assertEqual(described(held(7)), "7")
+    assertEqual(described(nothing()), "none")
+    let name: String? = "ann"
+    assertEqual(described(name), "\"ann\"")
+}
+
+@test
+fn anOptionalOfWhatConformsToNothingStillComparesWithNone() {
+    // 'Opaque?' is not Equatable, as Opaque is not, so a generic function
+    // over Equatables does not take it; it still compares with 'none'.
+    let absent: Opaque? = none
+    assert(absent == none)
+    assertEqual(absent?.id ?? -1, -1)
+}

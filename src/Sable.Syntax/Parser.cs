@@ -1681,9 +1681,17 @@ internal sealed class Parser {
                     simple = false;
                 }
 
+                // '(inout Int) -> ()': a function type's parameter it may
+                // change in place. A tuple's element cannot be, which the
+                // binder says.
+                var modifier = TryEatToken(SyntaxKind.InoutKeyword);
+                if (modifier is not null) {
+                    simple = false;
+                }
+
                 var type = ParseType();
                 inner ??= type;
-                items.Add(new TupleTypeElementGreen(name, colon, type));
+                items.Add(new TupleTypeElementGreen(name, colon, modifier, type));
 
                 var comma = TryEatToken(SyntaxKind.CommaToken);
                 if (comma is null) {
@@ -2069,7 +2077,7 @@ internal sealed class Parser {
         if (!At(SyntaxKind.OpenParenToken)) {
             return new ClosureSignatureGreen(
                 null,
-                GreenList.Create([new ClosureParameterGreen(EatIdentifier(), null, null)]),
+                GreenList.Create([new ClosureParameterGreen(EatIdentifier(), null, null, null)]),
                 null,
                 null,
                 null
@@ -2096,8 +2104,9 @@ internal sealed class Parser {
     GreenNode ParseClosureParameter() {
         var identifier = EatIdentifier();
         var colon = TryEatToken(SyntaxKind.ColonToken);
+        var modifier = colon is null ? null : TryEatToken(SyntaxKind.InoutKeyword);
         var type = colon is null ? null : ParseType();
-        return new ClosureParameterGreen(identifier, colon, type);
+        return new ClosureParameterGreen(identifier, colon, modifier, type);
     }
 
     GreenNode ParseBraceClosure(GreenNode? captures) =>
@@ -2148,6 +2157,7 @@ internal sealed class Parser {
                 case SyntaxKind.SomeKeyword:
                 case SyntaxKind.AnyKeyword:
                 case SyntaxKind.RefKeyword:
+                case SyntaxKind.InoutKeyword:
                 case SyntaxKind.CapitalSelfKeyword:
                     continue;
 

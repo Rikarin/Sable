@@ -83,6 +83,29 @@ public sealed class OptionalAndUnionTests {
     [Fact]
     public void AnyErrorIsAUnionCase() => AssertClean("struct Oops {}\nfn f(_ v: Oops | any Error) {}");
 
+    /// <summary>
+    ///     Error is Sable.Core's, with requirements: 'any Error' reaches them,
+    ///     and is an 'any Debug'; a conformer needs write none of them.
+    /// </summary>
+    [Fact]
+    public void AnyErrorReachesErrorsRequirements() {
+        var compilation = Compilation.Create("module M\nunion Boom: Error { Bang }");
+        Assert.Equal(CoreLibrary.ModuleName, compilation.Core.Error.ContainingSymbol?.Name);
+        Assert.Contains(compilation.Core.Error.GetMembers("source"), static m => m is FieldSymbol);
+
+        AssertClean(
+            """
+            union Boom: Error { Bang }
+            fn f(_ e: any Error) -> String {
+                let d: any Debug = e
+                let s: (any Error)? = e.source
+                return e.description() + d.debugDescription() + Boom.Bang.description()
+            }
+            fn g() throws { throw Boom.Bang }
+            """
+        );
+    }
+
     [Fact]
     public void ADeclaredNoneIsThatType() =>
         AssertClean(

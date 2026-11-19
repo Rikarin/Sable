@@ -256,7 +256,7 @@ PrimaryType       = QualifiedName [ GenericArgs ]
                   | "Self" ;
 
 TupleType         = "(" [ TupleTypeElem { "," TupleTypeElem } ] ")" ;
-TupleTypeElem     = [ Identifier ":" ] Type ;
+TupleTypeElem     = [ Identifier ":" ] [ "inout" ] Type ;   (* "inout": a function type's parameter only *)
 
 FunctionType      = [ "async" ] TupleType [ ThrowsSpec ] "->" Type ;
 
@@ -504,7 +504,7 @@ ClosureExpr       = [ CaptureList ] ClosureSignature "=>" ( Expression | Block )
 ClosureSignature  = "(" [ ClosureParams ] ")" [ "->" Type ]
                   | Identifier ;
 ClosureParams     = ClosureParam { "," ClosureParam } ;
-ClosureParam      = Identifier [ ":" Type ] ;
+ClosureParam      = Identifier [ ":" [ "inout" ] Type ] ;
 ClosureHeader     = [ "(" ] ClosureParams [ ")" ] [ "->" Type ] "in" ;
 
 CaptureList       = "[" CaptureItem { "," CaptureItem } "]" ;

@@ -580,4 +580,92 @@ public sealed class GenericTests {
         Assert.Contains("sil @Test.larger$polymorphic : $(any$Test.Shape, any$Test.Shape) -> any$Test.Shape", sil, StringComparison.Ordinal);
         Assert.DoesNotContain("sil @Test.describe$of$", sil, StringComparison.Ordinal);
     }
+
+    /// <summary>
+    ///     An initialiser with type parameters of its own is specialised for
+    ///     each set of them, and infers its type's parameters through its
+    ///     'where' clause: 'Groups(grouping:by:)' makes V an array of E.
+    /// </summary>
+    [Fact]
+    public void AnInitializerWithItsOwnTypeParameters() =>
+        Assert.Equal(
+            "2\n3 1\n2 0\n[3, 1] [2]\n",
+            AssertAgree(
+                Program(
+                    """
+                    struct Counter {
+                        var count: Int
+                        init<Element>(counting values: Element[:]) { count = values.count }
+                    }
+
+                    struct Bag<T> {
+                        var items: T[>..] = []
+                        init<S: Sequence>(from s: S) where S.Element == T {
+                            for x in s { items.append(x) }
+                        }
+                    }
+
+                    struct Groups<K: Hashable, V> {
+                        var table: [K: V] = [:]
+                        init<E>(grouping values: E[:], by key: (E) -> K) where V == E[>..] {
+                            for v in values {
+                                table[key(v), default: []].append(v)
+                            }
+                        }
+                    }
+                    """,
+                    """
+                        let words: String[>..] = ["a", "b", "c"]
+                        print(Counter(counting: words[0..<2]).count)
+                        let b = Bag(from: 1...3)
+                        let s = Bag<String>(from: words[2..<3])
+                        print("\(b.items.count) \(s.items.count)")
+                        let numbers: Int[>..] = [3, 2, 1]
+                        let g = Groups(grouping: numbers[0..<3], by: { (n: Int) -> Int in n % 2 })
+                        print("\(g.table.count) \(g.table.keys()[1])")
+                        print("\(g.table[1]!) \(g.table[0]!)")
+                    """
+                )
+            ).Stdout
+        );
+
+    /// <summary>
+    ///     'T?' meets a constraint where its T does, through Sable.Core's
+    ///     conditional conformances of Optional: generic code given one
+    ///     calls the Optional extension's '==', '<', 'hash' and
+    ///     'debugDescription', and so does an 'any Debug' holding one.
+    /// </summary>
+    [Fact]
+    public void AnOptionalMeetsAConstraintWhereWhatItHoldsDoes() =>
+        Assert.Equal(
+            "false true\nnone \"a\"\ntrue true false\nnothing 2\nnone13\n3 none\n",
+            AssertAgree(
+                Program(
+                    """
+                    fn same<T: Equatable>(_ a: T, _ b: T) -> Bool { return a == b }
+                    fn smaller<T: Comparable>(_ a: T, _ b: T) -> T { return a < b ? a : b }
+                    fn describe<T: Debug>(_ a: T) -> String { return a.debugDescription() }
+                    fn hashOf<T: Hashable>(_ a: T) -> Int { return a.hashValue }
+                    """,
+                    """
+                        let x: Int? = 3
+                        let n: Int? = none
+                        let s: String? = "a"
+                        print("\(same(x, n)) \(same(n, n))")
+                        print("\(describe(n)) \(describe(s))")
+                        let three: Int? = 3
+                        print("\(smaller(x, n) == none) \(hashOf(x) == hashOf(three)) \(hashOf(x) == hashOf(n))")
+                        var d: [Int?: String] = [:]
+                        d[x] = "three"
+                        d[n] = "nothing"
+                        print("\(d[n] ?? "?") \(d.count)")
+                        let xs: Int?[>..] = [3, none, 1]
+                        let sorted = xs.sorted()
+                        print(describe(sorted[0]) + describe(sorted[1]) + describe(sorted[2]))
+                        let boxed: (any Debug)[>..] = [x, n]
+                        print("\(boxed[0].debugDescription()) \(boxed[1].debugDescription())")
+                    """
+                )
+            ).Stdout
+        );
 }

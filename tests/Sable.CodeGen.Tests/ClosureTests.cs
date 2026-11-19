@@ -288,4 +288,54 @@ public sealed class ClosureTests {
                 print(g())
                 print(h())
             """);
+
+    /// <summary>
+    ///     A function type's parameter may be inout: a closure, a function or
+    ///     '$0' given the caller's storage changes it where it is, called
+    ///     with '&' as a declared function is.
+    /// </summary>
+    [Fact]
+    public void AFunctionTypeWithAnInoutParameter() =>
+        Prints(
+            "2\n7\n11\n101\n42 42 42\n3 6\n",
+            """
+            fn apply(_ change: (inout Int) -> ()) -> Int {
+                var n = 1
+                change(&n)
+                return n
+            }
+
+            fn bump(_ x: inout Int) {
+                x += 10
+            }
+
+            fn fold<R>(_ start: R, _ xs: Int[>..], _ f: (inout R, Int) -> Void) -> R {
+                var r = start
+                for x in xs {
+                    f(&r, x)
+                }
+                return r
+            }
+
+            struct P {
+                var a: Int
+            }
+            """,
+            """
+                print(apply { (v: inout Int) in v += 1 })
+                print(apply { $0 *= 7 })
+                print(apply(bump))
+                let k = 100
+                print(apply { v in v += k })
+                let f: (inout Int) -> () = { (v: inout Int) in v = 42 }
+                var m = 0
+                f(&m)
+                var p = P(a: 3)
+                f(&p.a)
+                var arr: Int[>..] = [1, 2]
+                f(&arr[1])
+                print("\(m) \(p.a) \(arr[1])")
+                let parts = fold([] as String[>..], [1, 2, 3], { (acc: inout String[>..], x: Int) in acc.append("\(x)") })
+                print("\(parts.count) \(fold(0, [1, 2, 3], { $0 += $1 }))")
+            """);
 }

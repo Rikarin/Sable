@@ -10,7 +10,7 @@ module Sable.Text
 ///     assert(error.validUpTo == 1 && error.errorLength == 2)
 /// }
 /// ```
-public struct Utf8Error: Equatable, Debug {
+public struct Utf8Error: Equatable, Error {
     /// How many bytes from the start are well-formed: where the first
     /// ill-formed sequence begins.
     public let validUpTo: Int
@@ -28,6 +28,11 @@ public struct Utf8Error: Equatable, Debug {
 
     public operator == (lhs: Utf8Error, rhs: Utf8Error) -> Bool {
         return lhs.validUpTo == rhs.validUpTo && lhs.errorLength == rhs.errorLength
+    }
+
+    /// What is wrong with the bytes, as Debug writes it.
+    public fn description() -> String {
+        return debugDescription()
     }
 
     /// "invalid UTF-8 at byte 3 (2 bytes)", or "incomplete UTF-8 at byte 3".

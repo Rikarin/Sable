@@ -462,26 +462,30 @@ internal sealed class TupleTypeElementGreen : GreenNode
 {
     private readonly GreenToken? _nameToken;
     private readonly GreenToken? _colonToken;
+    private readonly GreenToken? _modifierToken;
     private readonly GreenNode? _type;
 
-    public TupleTypeElementGreen(GreenToken? nameToken, GreenToken? colonToken, GreenNode? type)
+    public TupleTypeElementGreen(GreenToken? nameToken, GreenToken? colonToken, GreenToken? modifierToken, GreenNode? type)
         : base(SyntaxKind.TupleTypeElement, 0)
     {
         _nameToken = nameToken;
         _colonToken = colonToken;
+        _modifierToken = modifierToken;
         _type = type;
         FullWidth = (nameToken?.FullWidth ?? 0)
                     + (colonToken?.FullWidth ?? 0)
+                    + (modifierToken?.FullWidth ?? 0)
                     + (type?.FullWidth ?? 0);
     }
 
-    public override int SlotCount => 3;
+    public override int SlotCount => 4;
 
     public override GreenNode? GetSlot(int index) => index switch
     {
         0 => _nameToken,
         1 => _colonToken,
-        2 => _type,
+        2 => _modifierToken,
+        3 => _type,
         _ => null,
     };
 
@@ -1930,26 +1934,30 @@ internal sealed class ClosureParameterGreen : GreenNode
 {
     private readonly GreenToken? _identifier;
     private readonly GreenToken? _colonToken;
+    private readonly GreenToken? _modifierToken;
     private readonly GreenNode? _type;
 
-    public ClosureParameterGreen(GreenToken? identifier, GreenToken? colonToken, GreenNode? type)
+    public ClosureParameterGreen(GreenToken? identifier, GreenToken? colonToken, GreenToken? modifierToken, GreenNode? type)
         : base(SyntaxKind.ClosureParameter, 0)
     {
         _identifier = identifier;
         _colonToken = colonToken;
+        _modifierToken = modifierToken;
         _type = type;
         FullWidth = (identifier?.FullWidth ?? 0)
                     + (colonToken?.FullWidth ?? 0)
+                    + (modifierToken?.FullWidth ?? 0)
                     + (type?.FullWidth ?? 0);
     }
 
-    public override int SlotCount => 3;
+    public override int SlotCount => 4;
 
     public override GreenNode? GetSlot(int index) => index switch
     {
         0 => _identifier,
         1 => _colonToken,
-        2 => _type,
+        2 => _modifierToken,
+        3 => _type,
         _ => null,
     };
 

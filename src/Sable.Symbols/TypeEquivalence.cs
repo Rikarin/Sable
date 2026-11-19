@@ -306,7 +306,7 @@ internal sealed class TypeEquivalence {
                     Canonical(function.ReturnType),
                     function.IsAsync,
                     function.ThrownType is null ? null : Canonical(function.ThrownType)
-                ) { IsRethrows = function.IsRethrows },
+                ) { IsRethrows = function.IsRethrows, InOutParameters = function.InOutParameters },
 
             StructuralUnionTypeSymbol union => StructuralUnionTypeSymbol.Create(union.Cases.Select(Canonical)),
 

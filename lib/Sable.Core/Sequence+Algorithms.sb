@@ -70,6 +70,23 @@ extension Sequence {
         return result
     }
 
+    /// The closure applied to a result it changes in place, and each
+    /// element in turn, starting from 'initial': a result that is an array
+    /// or a dictionary grows where it is rather than being copied each time.
+    ///
+    /// ```sable
+    /// let empty: [String: Int] = [:]
+    /// let counts = ["a", "b", "a"].reduce(into: empty) { $0[$1, default: 0] += 1 }
+    /// assert(counts["a"] == 2)
+    /// ```
+    public fn reduce<R>(into initial: R, _ update: (inout R, Element) throws -> Void) rethrows -> R {
+        var result = initial
+        for element in self {
+            try update(&result, element)
+        }
+        return result
+    }
+
     /// Calls the closure with each element, in order.
     public fn forEach(_ body: (Element) throws -> Void) rethrows {
         for element in self {

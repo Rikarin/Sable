@@ -1,0 +1,91 @@
+module ErrorTests
+
+// Error (Sable.Core), what is thrown, tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Core
+
+import Sable.Testing
+
+union Boom: Error {
+    Bang
+    Fizzle(Int)
+}
+
+struct Context: Error {
+    var cause: any Error
+    var doing: String
+
+    var source: (any Error)? => cause
+
+    fn description() -> String {
+        return "while \(doing)"
+    }
+}
+
+union NotAnError {
+    Odd(Int)
+}
+
+fn fail(_ error: Boom) throws {
+    throw error
+}
+
+fn failWithContext() throws {
+    do {
+        try fail(.Fizzle(2))
+    } catch {
+        throw Context(cause: error, doing: "fizzling")
+    }
+}
+
+fn failWithAnything() throws {
+    throw NotAnError.Odd(3)
+}
+
+fn told<E: Error>(_ error: E) -> String {
+    return error.description()
+}
+
+@test
+fn anErrorWithNothingOfItsOwnDescribesItsValue() {
+    assertEqual(Boom.Bang.description(), "Boom.Bang")
+    assertEqual(Boom.Fizzle(4).debugDescription(), "Boom.Fizzle(4)")
+    assert(Boom.Bang.source == none)
+}
+
+@test
+fn anErrorCaughtAsAnyErrorStillSaysWhatItSays() {
+    do {
+        try failWithContext()
+    } catch {
+        assertEqual(error.description(), "while fizzling")
+        assertEqual(error.source?.description() ?? "", "Boom.Fizzle(2)")
+        assert(error.source?.source == none, "the chain ends at the first error")
+    }
+}
+
+@test
+fn aGenericFunctionReachesTheErrorsOwnRequirements() {
+    assertEqual(told(Boom.Bang), "Boom.Bang")
+    assertEqual(told(Context(cause: Boom.Bang, doing: "testing")), "while testing")
+}
+
+@test
+fn anyErrorIsAnyDebug() {
+    do {
+        try fail(.Bang)
+    } catch {
+        let debug: any Debug = error
+        assertEqual(debug.debugDescription(), "Boom.Bang")
+    }
+}
+
+@test
+fn somethingThrownThatIsNoErrorIsDescribedByWhatItIs() {
+    do {
+        try failWithAnything()
+    } catch {
+        assertEqual(error.description(), "NotAnError.Odd(3)")
+        assertEqual(error.debugDescription(), "NotAnError.Odd(3)")
+        assert(error.source == none)
+    }
+}

@@ -932,4 +932,90 @@ public sealed class GenericsAndConformanceTests {
         var errors = Compilation.Create(source).GetAllDiagnostics().Where(static d => d.Severity == DiagnosticSeverity.Error).ToList();
         Assert.True(errors.Count == 0, string.Join("\n", errors.Select(static e => $"{e.Id}: {e.Message}")));
     }
+
+    // ---- Initialisers with type parameters of their own ----------------------
+
+    const string Groups = """
+                          struct Counter {
+                              var count: Int
+                              init<Element>(counting values: Element[:]) { count = values.count }
+                          }
+                          struct Bag<T> {
+                              var items: T[>..]
+                              init<S: Sequence>(from s: S) where S.Element == T {
+                                  items = []
+                                  for x in s { items.append(x) }
+                              }
+                          }
+                          struct Groups<K: Hashable, V> {
+                              var keys: K[>..] = []
+                              var values: V[>..] = []
+                              init<E>(grouping values: E[:], by key: (E) -> K) where V == E[>..] { }
+                          }
+                          struct Plain { var x: Int }
+
+                          """;
+
+    [Fact]
+    public void AnInitializersOwnTypeParameterIsInScope() =>
+        Assert.Equal(
+            "Counter",
+            TypeOfLast(Groups + "fn probe(_ words: String[>..]) { let c = Counter(counting: words[0..<2]) }")
+        );
+
+    [Fact]
+    public void AnInitializerInfersItsTypesParametersThroughItsWhereClause() {
+        Assert.Equal("Bag<Int>", TypeOfLast(Groups + "fn probe(_ xs: Int[>..]) { let b = Bag(from: xs) }"));
+        Assert.Equal(
+            "Groups<Bool, Int[>..]>",
+            TypeOfLast(Groups + "fn probe(_ xs: Int[>..]) { let g = Groups(grouping: xs[0..<1], by: { (x: Int) -> Bool in x > 0 }) }")
+        );
+    }
+
+    [Fact]
+    public void AnInitializersInferredArgumentsMeetTheirConstraints() {
+        var error = Assert.Single(Errors(Groups + "fn probe(_ xs: Int[>..]) { let g = Groups(grouping: xs[0..<1], by: { (x: Int) -> Plain in Plain(x: x) }) }"));
+        Assert.Equal(ErrorCode.ERR_DoesNotConform, error.Code);
+        Assert.Contains("'Plain' does not conform to 'Hashable'", error.Message);
+
+        var wrong = Assert.Single(Errors(Groups + "fn probe(_ xs: Int[>..]) { let b = Bag<String>(from: xs) }"));
+        Assert.Contains("'S.Element == T'", wrong.Message);
+    }
+
+    [Fact]
+    public void AnEmptyArrayTakesTheArrayASameTypeRequirementMakesAParameter() =>
+        AssertClean(
+            """
+            struct W<V> {
+                var v: V? = none
+                fn take(_ x: V) { }
+                init<E>(_ e: E) where V == E[>..] {
+                    take([])
+                    var d: [Int: V] = [:]
+                    d[1, default: []].append(e)
+                }
+            }
+            """
+        );
+
+    // ---- Optionals' conditional conformances --------------------------------
+
+    const string OverOptionals = """
+                                 struct Plain { var x: Int }
+                                 fn same<T: Equatable>(_ a: T, _ b: T) -> Bool { return a == b }
+                                 fn describe<T: Debug>(_ a: T) -> String { return a.debugDescription() }
+                                 fn key<K: Hashable>(_ k: K) -> Int { return k.hashValue }
+                                 fn least<C: Comparable>(_ a: C, _ b: C) -> C { return a < b ? a : b }
+
+                                 """;
+
+    [Fact]
+    public void AnOptionalConformsWhereWhatItHoldsDoes() {
+        AssertClean(OverOptionals + "fn probe(_ x: Int?, _ s: String?) { let a = same(x, x); let b = describe(s); let c = key(x); let d = least(s, s) }");
+        AssertClean(OverOptionals + "fn probe(_ x: Int??) { let a = same(x, x) }");
+
+        var error = Assert.Single(Errors(OverOptionals + "fn probe(_ p: Plain?) { let a = same(p, p) }"));
+        Assert.Contains("'T' would be 'Plain?', which is not 'Equatable'", error.Message);
+        Assert.Contains(Errors(OverOptionals + "fn probe(_ p: Plain?) { let a = key(p) }"), static e => e.Code == ErrorCode.ERR_NoMatchingOverload);
+    }
 }

@@ -129,7 +129,9 @@ internal sealed class Conversions(CoreTypes core) {
             && (from.ThrownType is null || to.ThrownType is not null)) {
             var parametersMatch = true;
             for (var i = 0; i < from.ParameterTypes.Length; i++) {
-                if (from.ParameterTypes[i].Equals(to.ParameterTypes[i])) {
+                // 'inout' is how the argument is passed: '(Int) -> ()' does
+                // not take an Int where it is.
+                if (from.ParameterTypes[i].Equals(to.ParameterTypes[i]) && from.IsInOut(i) == to.IsInOut(i)) {
                     continue;
                 }
 
@@ -238,6 +240,12 @@ internal sealed class Conversions(CoreTypes core) {
             return Compilation.ArrayConformance(array, wanted, context) is not null;
         }
 
+        // 'extension Optional: Equatable where Wrapped: Equatable' conforms
+        // an 'Int?', whose Int is.
+        if (source is OptionalTypeSymbol optional && constraint is NamedTypeSymbol { TypeKind: TypeKind.Protocol } conformed) {
+            return OptionalConformance(optional, conformed, context) is not null;
+        }
+
         // 'extension Box: P where T: P' conforms a Box<T> only where its T
         // does; inside the extension, its own requirements say so.
         if (source is NamedTypeSymbol named
@@ -246,6 +254,26 @@ internal sealed class Conversions(CoreTypes core) {
         }
 
         return IsDerivedFrom(source, constraint);
+    }
+
+    /// <summary>
+    ///     The extension of Optional that conforms this optional to the
+    ///     protocol, and the substitution its members are seen through; null
+    ///     when none does, or none holds of what the optional holds.
+    /// </summary>
+    internal static (ExtensionSymbol Extension, TypeSubstitution Substitution)? OptionalConformance(
+        OptionalTypeSymbol optional,
+        NamedTypeSymbol protocol,
+        TypeEquivalence? context = null
+    ) {
+        foreach (var extension in protocol.OriginalDefinition.OptionalConformances) {
+            var substitution = TypeSubstitution.For(extension.ExtendedType.Construct([optional.UnderlyingType]));
+            if (extension.Unmet(substitution, context) is null) {
+                return (extension, substitution);
+            }
+        }
+
+        return null;
     }
 
     /// <summary>

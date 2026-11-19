@@ -68,6 +68,20 @@ public sealed class ClosureTests {
     public void AClosureTakesItsShapeFromWhatIsWritten(string body, string expected) =>
         Assert.Equal(expected, TypeOfLast(body));
 
+    [Theory]
+    [InlineData("let f = (v: inout Int, by: Int) => { v += by }", "(inout Int, Int) -> Void")]
+    [InlineData("let f: (inout Int) -> () = { $0 += 1 }", "(inout Int) -> Void")]
+    [InlineData("let f: (inout Int) -> () = { v in v = 2 }", "(inout Int) -> Void")]
+    public void AClosuresParameterMayBeInout(string body, string expected) =>
+        Assert.Equal(expected, TypeOfLast(body));
+
+    [Fact]
+    public void AnInoutClosureIsCalledWithAPlaceItMayChange() {
+        AssertClean("var n = 1\nlet f: (inout Int) -> () = { $0 += 1 }\nf(&n)");
+        Assert.Contains(ErrorsIn("let n = 1\nlet f: (inout Int) -> () = { $0 += 1 }\nf(&n)"), static e => e.Code == ErrorCode.ERR_NotAssignable);
+        Assert.Contains(ErrorsIn("let f: (inout Int) -> () = { (v: Int) in print(v) }"), static e => e.Code == ErrorCode.ERR_TypeMismatch);
+    }
+
     [Fact]
     public void AnOmittedReturnTypeComesFromTheBody() =>
         Assert.Equal(

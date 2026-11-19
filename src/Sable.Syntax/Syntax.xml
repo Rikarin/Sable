@@ -130,9 +130,10 @@
   </Node>
 
   <Node Name="TupleTypeElementSyntax" Base="SyntaxNode" Kind="TupleTypeElement"
-        Doc="One element of a tuple type, with an optional label.">
+        Doc="One element of a tuple type, with an optional label; as a function type's parameter, `inout` before its type.">
     <Field Name="NameToken" Type="Token" Optional="true" />
     <Field Name="ColonToken" Type="Token" Optional="true" />
+    <Field Name="ModifierToken" Type="Token" Optional="true" />
     <Field Name="Type" Type="TypeSyntax" />
   </Node>
 
@@ -458,9 +459,11 @@
     <Field Name="ReturnType" Type="TypeSyntax" Optional="true" />
   </Node>
 
-  <Node Name="ClosureParameterSyntax" Base="SyntaxNode" Kind="ClosureParameter">
+  <Node Name="ClosureParameterSyntax" Base="SyntaxNode" Kind="ClosureParameter"
+        Doc="A closure's parameter: a name, and its type after a colon, `inout` before it when the closure changes it in place.">
     <Field Name="Identifier" Type="Token" />
     <Field Name="ColonToken" Type="Token" Optional="true" />
+    <Field Name="ModifierToken" Type="Token" Optional="true" />
     <Field Name="Type" Type="TypeSyntax" Optional="true" />
   </Node>
 

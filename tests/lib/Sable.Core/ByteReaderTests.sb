@@ -230,3 +230,9 @@ fn readAThousandMixedValues() {
     }
     assert(total > 0)
 }
+
+@test
+fn aReadErrorIsAnErrorThatSaysWhatWentWrong() {
+    assertEqual(ByteReadError.EndOfData(at: 2, needed: 4, remaining: 1).description(), "4 bytes wanted at 2, and 1 left")
+    assertEqual(ByteReadError.VarIntTooLong(at: 5).description(), "the integer at 5 is longer than a U64")
+}

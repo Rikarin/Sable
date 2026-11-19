@@ -184,7 +184,7 @@ public enum ErrorCode {
     ERR_ConstGenericPredicateFails = 3421,
     ERR_SelfRequirementOnExistential = 3161,
 
-    // Ownership, escape and isolation checks (S3200-S3207).
+    // Ownership, escape and isolation checks (S3200-S3208).
     ERR_IntegerDoesNotFit = 3200,
     ERR_ConstantOverflow = 3201,
     ERR_OutNotAssigned = 3202,
@@ -193,6 +193,7 @@ public enum ErrorCode {
     ERR_Escapes = 3205,
     ERR_ActorStateFromOutside = 3206,
     ERR_NotSendable = 3207,
+    ERR_MisplacedInOut = 3208,
 
     // A type declared ': Sendable' that holds something that is not (S3410).
     ERR_DeclaredSendableIsNot = 3410,

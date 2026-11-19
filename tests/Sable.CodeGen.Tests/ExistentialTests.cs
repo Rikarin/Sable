@@ -487,4 +487,68 @@ public sealed class ComputedPropertyTests {
                 )
             ).Stdout
         );
+
+    /// <summary>
+    ///     'any Error' reaches Error's requirements — Sable.Core's, with their
+    ///     defaults — through its object's vtable, filled by the box of the
+    ///     error's type: its own 'description' and 'source', or the defaults;
+    ///     a thrown value that is no Error gets the base class's. It is an
+    ///     'any Debug' too.
+    /// </summary>
+    [Fact]
+    public void AnyErrorReachesErrorsRequirements() =>
+        Assert.Equal(
+            "while fizzling\nBoom.Fizzle(2)\ntrue\nContext(cause: Boom.Fizzle(2), doing: \"fizzling\")\nBoom.Bang\nNotAnError.Odd(3) true\nBoom.Bang while testing\n",
+            AssertAgree(Program(
+            """
+            union Boom: Error {
+                Bang
+                Fizzle(Int)
+            }
+
+            struct Context: Error {
+                var cause: any Error
+                var doing: String
+                var source: (any Error)? => cause
+                fn description() -> String { return "while \(doing)" }
+            }
+
+            union NotAnError { Odd(Int) }
+
+            fn fail(_ error: Boom) throws { throw error }
+
+            fn failWithContext() throws {
+                do {
+                    try fail(.Fizzle(2))
+                } catch {
+                    throw Context(cause: error, doing: "fizzling")
+                }
+            }
+
+            fn failWithAnything() throws { throw NotAnError.Odd(3) }
+
+            fn told<E: Error>(_ error: E) -> String { return error.description() }
+            """,
+            """
+                do {
+                    try failWithContext()
+                } catch {
+                    print(error.description())
+                    print(error.source?.description() ?? "")
+                    print(error.source?.source == none)
+                    print(error.debugDescription())
+                }
+                do {
+                    try fail(.Bang)
+                } catch {
+                    let debug: any Debug = error
+                    print(debug.debugDescription())
+                }
+                do {
+                    try failWithAnything()
+                } catch {
+                    print("\(error.description()) \(error.source == none)")
+                }
+                print(told(Boom.Bang) + " " + told(Context(cause: Boom.Bang, doing: "testing")))
+            """)).Stdout);
 }

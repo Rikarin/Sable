@@ -105,3 +105,12 @@ fn aParseErrorDescribesItselfAsSourceWritesIt() {
     assertEqual(ParseError.Overflow.debugDescription(), "ParseError.Overflow")
     assertEqual(ParseError.Underflow.debugDescription(), "ParseError.Underflow")
 }
+
+@test
+fn aParseErrorIsAnErrorThatSaysWhatWentWrong() {
+    assertEqual(ParseError.Empty.description(), "the text is empty")
+    assertEqual(ParseError.InvalidDigit(at: 2).description(), "not a digit at 2")
+    assertEqual(ParseError.Invalid(at: 0).description(), "not a value at 0")
+    assertEqual(ParseError.Overflow.description(), "the number is too large")
+    assertEqual(ParseError.Underflow.description(), "the number is too small")
+}

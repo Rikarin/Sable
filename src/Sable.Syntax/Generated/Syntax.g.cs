@@ -349,7 +349,7 @@ public sealed class TupleTypeSyntax : TypeSyntax
     public override void Accept(SyntaxVisitor visitor) => visitor.VisitTupleType(this);
 }
 
-/// <summary>One element of a tuple type, with an optional label.</summary>
+/// <summary>One element of a tuple type, with an optional label; as a function type's parameter, `inout` before its type.</summary>
 public sealed class TupleTypeElementSyntax : SyntaxNode
 {
     private TypeSyntax? _type;
@@ -359,11 +359,12 @@ public sealed class TupleTypeElementSyntax : SyntaxNode
 
     public SyntaxToken NameToken => GetToken(0);
     public SyntaxToken ColonToken => GetToken(1);
-    public TypeSyntax Type => GetRed(ref _type, 2);
+    public SyntaxToken ModifierToken => GetToken(2);
+    public TypeSyntax Type => GetRed(ref _type, 3);
 
     internal override SyntaxNode? GetNodeSlot(int index) => index switch
     {
-        2 => Type,
+        3 => Type,
         _ => null,
     };
 
@@ -1325,6 +1326,7 @@ public sealed class ClosureSignatureSyntax : SyntaxNode
     public override void Accept(SyntaxVisitor visitor) => visitor.VisitClosureSignature(this);
 }
 
+/// <summary>A closure's parameter: a name, and its type after a colon, `inout` before it when the closure changes it in place.</summary>
 public sealed class ClosureParameterSyntax : SyntaxNode
 {
     private TypeSyntax? _type;
@@ -1334,11 +1336,12 @@ public sealed class ClosureParameterSyntax : SyntaxNode
 
     public SyntaxToken Identifier => GetToken(0);
     public SyntaxToken ColonToken => GetToken(1);
-    public TypeSyntax? Type => GetRedOptional(ref _type, 2);
+    public SyntaxToken ModifierToken => GetToken(2);
+    public TypeSyntax? Type => GetRedOptional(ref _type, 3);
 
     internal override SyntaxNode? GetNodeSlot(int index) => index switch
     {
-        2 => Type,
+        3 => Type,
         _ => null,
     };
 

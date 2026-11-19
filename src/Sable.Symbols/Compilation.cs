@@ -1473,11 +1473,24 @@ public sealed partial class Compilation {
             FunctionKind.Initializer
         );
 
+        // 'init<S: Sequence>(contentsOf s: S) where S.Element == T': an
+        // initialiser's own parameters, inferred at the call from its
+        // arguments as a generic function's are.
+        if (declaration.TypeParameters is { } typeParameters) {
+            function.TypeParameters = [
+                ..typeParameters.Parameters.Select((parameter, i) =>
+                    new TypeParameterSymbol(parameter.Identifier.Text, function, parameter, i)
+                )
+            ];
+        }
+
         function.Parameters = [
             ..declaration.Parameters.Parameters.Select((parameter, i) =>
                 DeclareParameter(parameter, function, i)
             )
         ];
+
+        TypeBinder.BindInitializerConstraints(function, declaration);
 
         // A protocol's 'init(seed: Int)' is a requirement, met by the
         // conformer's own initialiser, and it makes a Self: through a T it
@@ -1697,6 +1710,9 @@ public sealed partial class Compilation {
                             CheckCoherence(extended, bound, written, baseType.Span);
                             extended.BaseTypes = extended.BaseTypes.Add(bound);
                             extension.Conformances = extension.Conformances.Add(bound);
+                            if (extended.ExtendedOptional is not null) {
+                                RegisterOptionalConformance(extension, bound);
+                            }
                         }
                     }
                 );
@@ -1714,6 +1730,30 @@ public sealed partial class Compilation {
         }
 
         CurrentScope = null;
+    }
+
+    /// <summary>
+    ///     Gives a protocol, and those it refines, an extension of Optional
+    ///     that conforms optionals to it, so that <c>T?</c> is found to conform
+    ///     (<see cref="Conversions.Satisfies" />).
+    /// </summary>
+    static void RegisterOptionalConformance(ExtensionSymbol extension, TypeSymbol conformance) {
+        var registered = new HashSet<NamedTypeSymbol>();
+        var pending = new Stack<NamedTypeSymbol>(CompositionTypeSymbol.PartsOf(conformance).OfType<NamedTypeSymbol>());
+        while (pending.Count > 0) {
+            var protocol = pending.Pop().OriginalDefinition;
+            if (protocol.TypeKind != TypeKind.Protocol || !registered.Add(protocol)) {
+                continue;
+            }
+
+            if (!protocol.OptionalConformances.Contains(extension)) {
+                protocol.OptionalConformances = protocol.OptionalConformances.Add(extension);
+            }
+
+            foreach (var refined in protocol.BaseTypes.OfType<NamedTypeSymbol>()) {
+                pending.Push(refined);
+            }
+        }
     }
 
     /// <summary>

@@ -2965,13 +2965,20 @@ public sealed partial class SilGen {
             }
         }
 
-        // None of its own: the default an extension of the protocol gives.
+        // None of its own: the default an extension of the protocol gives —
+        // the one with the requirement's labels and type parameters, where
+        // the extension overloads the name ('clamping(wideValue:)' beside
+        // the generic 'clamping(_:)').
         if (Owner(requirement) is { TypeKind: TypeKind.Protocol } protocol) {
-            return protocol.OriginalDefinition.Members.OfType<FunctionSymbol>().FirstOrDefault(f =>
-                f.ContainingSymbol is ExtensionSymbol
-                && f.Name == requirement.Name
-                && f.IsStatic == requirement.IsStatic
-                && f.Parameters.Length == requirement.Parameters.Length);
+            return protocol.OriginalDefinition.Members.OfType<FunctionSymbol>()
+                .Where(f =>
+                    f.ContainingSymbol is ExtensionSymbol
+                    && f.Name == requirement.Name
+                    && f.IsStatic == requirement.IsStatic
+                    && f.Parameters.Length == requirement.Parameters.Length)
+                .OrderBy(f => !SameLabels(f, requirement))
+                .ThenBy(f => f.TypeParameters.Length != requirement.TypeParameters.Length)
+                .FirstOrDefault();
         }
 
         return null;

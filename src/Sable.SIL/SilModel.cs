@@ -1872,10 +1872,11 @@ public static class SilBuiltins {
             }
         }
 
-        // An integer to its own type, which a builtin family converting
-        // through U128 meets in U128 itself: the value.
-        foreach (var integer in SilType.Integers) {
-            table[$"wrap_{integer}_{integer}"] = new([integer], integer);
+        // A number to its own type, which a builtin family converting
+        // through U128 or F64 meets in U128 or F64 itself: the value.
+        foreach (var number in SilType.Numbers) {
+            table[$"wrap_{number}_{number}"] = new([number], number);
+            table[$"convert_{number}_{number}"] = new([number], number);
         }
 
         Unary("not", SilType.Bool);

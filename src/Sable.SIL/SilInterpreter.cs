@@ -1688,7 +1688,7 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
     ///     its width, a float's in .NET's IEEE operations of its own width.
     /// </summary>
     static object? NumericIntrinsic(string name, object?[] operands) {
-        if (name.StartsWith("wrap_", StringComparison.Ordinal) && name.Split('_') is [_, var from, var to] && from == to) {
+        if (name.Split('_') is ["wrap" or "convert", var from, var to] && from == to) {
             return operands[0];
         }
 

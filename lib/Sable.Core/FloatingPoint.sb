@@ -54,8 +54,18 @@ public protocol FloatingPoint: SignedNumeric, Comparable, Hashable {
     /// The square root of 2, rounded to the type.
     static var sqrt2: Self { get }
 
-    /// The value nearest the integer.
-    static fn converting(_ value: Int) -> Self
+    /// The value as an F64, which holds every F16, F32 and F64 exactly:
+    /// conversions from floats of any width go through it (see the
+    /// integers' 'exactly' and 'clamping').
+    var wideValue: F64 { get }
+
+    /// The value nearest the integer, rounded once: conversions from
+    /// signed integers of any width go through it (see 'converting').
+    static fn rounding(wideInteger value: I128) -> Self
+
+    /// The value nearest the integer, rounded once: conversions from
+    /// unsigned integers of any width go through it.
+    static fn rounding(wideMagnitude value: U128) -> Self
 
     /// The quotient, rounded. Dividing by zero gives an infinity, or NaN
     /// for zero over zero; it never traps.
@@ -123,9 +133,47 @@ public protocol FloatingPoint: SignedNumeric, Comparable, Hashable {
 }
 
 extension FloatingPoint {
-    /// The built-in floats' conversion: as 'F64(n)' does it.
-    @builtin("convert_Int_Self")
-    public static fn converting(_ value: Int) -> Self
+    /// The built-in floats' widening, exact: as 'F64(x)' does it.
+    @builtin("convert_Self_F64")
+    public var wideValue: F64 { get }
+
+    /// The built-in floats' conversion: as 'F64(n)' does it, rounded once.
+    @builtin("convert_I128_Self")
+    public static fn rounding(wideInteger value: I128) -> Self
+
+    /// The built-in floats' conversion: as 'F64(n)' does it, rounded once.
+    @builtin("convert_U128_Self")
+    public static fn rounding(wideMagnitude value: U128) -> Self
+
+    /// The float nearest the integer, rounded once, from an integer of any
+    /// width: one too large for the type is an infinity.
+    ///
+    /// ```sable
+    /// assert(F64.converting(3) == 3.0)
+    /// assert(F32.converting(16777217) == 16777216.0)
+    /// assert(F16.converting(U64.max) == F16.infinity)
+    /// ```
+    public static fn converting<Source: BinaryInteger>(_ source: Source) -> Self {
+        if Source.isSigned {
+            return Self.rounding(wideInteger: I128.fromWideBitPattern(source.wideBitPattern))
+        }
+        return Self.rounding(wideMagnitude: source.wideBitPattern)
+    }
+
+    /// The float equal to the integer, or none where the type cannot hold
+    /// it exactly.
+    ///
+    /// ```sable
+    /// assert(F32.exactly(16777216) == 16777216.0)
+    /// assert(F32.exactly(16777217) == none)
+    /// ```
+    public static fn exactly<Source: FixedWidthInteger>(_ source: Source) -> Self? {
+        let value = Self.converting(source)
+        guard let back = Source.exactly(value), back == source else {
+            return none
+        }
+        return value
+    }
 
     /// The built-in floats' quotient: the instruction.
     @builtin("div_Self")

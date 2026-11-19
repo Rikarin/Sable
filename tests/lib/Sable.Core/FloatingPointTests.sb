@@ -187,7 +187,27 @@ fn tauIsTwoPi() {
 fn convertingAnIntGivesTheNearestValue() {
     assertEqual(F64.converting(3), 3.0)
     assertEqual(F32.converting(16777217), 16777216.0)
-    assertEqual(F16.converting(-2), -2.0)
+    assertEqual(F16.converting(-2 as I8), -2.0)
+    assertEqual(F16.converting(U64.max), F16.infinity)
+    assertEqual(F64.converting(U128.max), 3.402823669209385e38)
+    assertEqual(F32.converting(I128.min), -1.7014118e38)
+}
+
+@test
+fn anIntegerIsExactlyAFloatOnlyWhereTheTypeHoldsIt() {
+    assertEqual(F32.exactly(16777216) ?? 0.0, 16777216.0)
+    assert(F32.exactly(16777217) == none, "2^24 + 1 needs 25 bits")
+    assertEqual(F64.exactly(-5 as I8) ?? 0.0, -5.0)
+    assert(F16.exactly(U64.max) == none, "an F16 is infinite there")
+    assert(F64.exactly(Int.max) == none, "2^63 - 1 needs 63 bits")
+    assertEqual(F64.exactly(Int.min) ?? 0.0, -9223372036854775808.0)
+}
+
+@test
+fn theWideValueIsTheFloatAsAnF64() {
+    assertEqual((0.1 as F32).wideValue, 0.10000000149011612)
+    assertEqual((1.5 as F16).wideValue, 1.5)
+    assertEqual((0.1).wideValue, 0.1)
 }
 
 // ---- classification -----------------------------------------------------

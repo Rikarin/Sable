@@ -32,6 +32,34 @@ public sealed class GenericLoweringTests {
         return result;
     }
 
+    /// <summary>
+    ///     Where a protocol's extension overloads a requirement's name, the
+    ///     requirement's default is the overload with its labels, not the
+    ///     first of the name: 'make(seed:)', not the generic 'make(_:)'.
+    /// </summary>
+    [Fact]
+    public void ARequirementsDefaultIsTheOverloadWithItsLabels() {
+        var module = Lower(
+            """
+            protocol Seeded {
+                static var origin: Self { get }
+                static fn make(seed: Int) -> Self
+            }
+            extension Seeded {
+                static fn make<T: Seeded>(_ other: T) -> Self { return Self.origin }
+                static fn make(seed: Int) -> Self { return Self.origin }
+            }
+            struct Box: Seeded {
+                var n: Int
+                static var origin: Box => Box { n: 3 }
+            }
+            fn build<T: Seeded>(_ type: T.Type) -> T { return T.make(seed: 5) }
+            fn test() -> Int { return build(Box.self).n }
+            """
+        );
+        Assert.Equal(3L, Run(module, "test"));
+    }
+
     [Fact]
     public void AGenericFunctionIsLoweredOncePerTypeArgument() {
         var module = Lower(

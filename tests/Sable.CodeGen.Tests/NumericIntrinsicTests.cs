@@ -171,6 +171,30 @@ public sealed class NumericIntrinsicTests {
             ).Stdout
         );
 
+    /// <summary>
+    ///     A 128-bit integer converts to an F16 without compiler-rt's
+    ///     '__floattihf', which not every C library links: rounded once,
+    ///     and an infinity of its sign past the F16's range.
+    /// </summary>
+    [Fact]
+    public void A128BitIntegerBecomesAHalfRoundedOnce() =>
+        Assert.Equal(
+            "65500.0 inf -inf 2052.0\n131073.0 inf 0.0 -65500.0\n",
+            AssertAgree(
+                Program(
+                    "",
+                    """
+                        let a: I128 = 65504
+                        let b: I128 = 131073
+                        let c: I128 = -170141183460469231731687303715884105728
+                        let d: U128 = 2051
+                        print("\(F16(a)) \(F16(b)) \(F16(c)) \(F16(d))")
+                        print("\(F32(b)) \(F16(U128.max)) \(F16(I128.zero)) \(F16(-a))")
+                    """
+                )
+            ).Stdout
+        );
+
     /// <summary>Natively, each builtin is the LLVM intrinsic it names, at the type's width.</summary>
     [Theory]
     [InlineData("let x: I8 = 3\nprint(x.leadingZeroCount)", "call i8 @llvm.ctlz.i8(")]

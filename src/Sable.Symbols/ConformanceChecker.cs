@@ -822,9 +822,17 @@ internal static class ConformanceChecker {
 
         TypeSymbol Expected(TypeSymbol type) => rename.Apply(arguments.Apply(SubstituteSelf(type, protocol, conformer)));
 
+        // A default from a protocol's extension writes Self for the
+        // conformer too: 'static fn make(seed: Int) -> Self' meets the
+        // requirement of that signature for whichever type conforms.
+        TypeSymbol Actual(TypeSymbol type) =>
+            candidate.ContainingSymbol is ExtensionSymbol { ExtendedType: { TypeKind: TypeKind.Protocol } owner }
+                ? SubstituteSelf(type, owner, conformer)
+                : type;
+
         for (var i = 0; i < requirement.Parameters.Length; i++) {
             var expected = Expected(requirement.Parameters[i].Type);
-            var actual = candidate.Parameters[i].Type;
+            var actual = Actual(candidate.Parameters[i].Type);
             if (!expected.Equals(actual) && !expected.IsError && !actual.IsError) {
                 return false;
             }
@@ -837,13 +845,13 @@ internal static class ConformanceChecker {
                 return false;
             }
 
-            if (!Expected(allowed).Equals(thrown) && !thrown.IsError) {
+            if (!Expected(allowed).Equals(Actual(thrown)) && !thrown.IsError) {
                 return false;
             }
         }
 
         var expectedReturn = Expected(requirement.ReturnType);
-        return expectedReturn.Equals(candidate.ReturnType)
+        return expectedReturn.Equals(Actual(candidate.ReturnType))
             || expectedReturn.IsError
             || candidate.ReturnType.IsError;
     }

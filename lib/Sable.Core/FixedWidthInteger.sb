@@ -82,9 +82,18 @@ public protocol FixedWidthInteger: BinaryInteger {
     /// The high half of the product at twice the width; 'wrappingMul' is
     /// the low half (see 'multipliedFullWidth').
     fn multipliedHigh(by other: Self) -> Self
+
+    /// The value's integer part, as 'unchecked as' gives it: toward zero,
+    /// stopping at the type's bounds, NaN giving 0. Conversions from
+    /// floats of any width go through it (see 'exactly' and 'clamping').
+    static fn fromWideValue(_ value: F64) -> Self
 }
 
 extension FixedWidthInteger {
+    /// The built-in integers' conversion from a float: as 'unchecked as' does it.
+    @builtin("wrap_F64_Self")
+    public static fn fromWideValue(_ value: F64) -> Self
+
     /// The built-in integers' count: LLVM's 'ctlz'.
     @builtin("count_leading_zeros_Self")
     public var leadingZeroCount: Int { get }

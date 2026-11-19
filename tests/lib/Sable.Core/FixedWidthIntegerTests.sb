@@ -372,3 +372,37 @@ fn clampingStopsAtTheBoundTheValueIsPast() {
     assertEqual(I8.clamping(100), 100)
     assertEqual(I8.clamping(-1000), -128)
 }
+
+/// Generic over the float, so that the conversion is reached through the protocol.
+fn wholeBytes<F: FloatingPoint>(_ value: F) -> U8? {
+    return U8.exactly(value)
+}
+
+@test
+fn aFloatIsExactlyAnIntegerOnlyWithoutAFractionAndInRange() {
+    assertEqual(I32.exactly(42.0) ?? 0, 42)
+    assertEqual(I8.exactly(-128.0) ?? 0, -128)
+    assertEqual(U64.exactly(-0.0) ?? 1, 0)
+    assert(I32.exactly(2.5) == none, "2.5 has a fraction")
+    assert(I8.exactly(128.0) == none, "128 does not fit an I8")
+    assert(I8.exactly(-129.0) == none, "-129 does not fit an I8")
+    assert(U8.exactly(-1.0) == none, "-1 does not fit a U8")
+    assert(Int.exactly(9223372036854775808.0) == none, "2^63 does not fit an Int")
+    assertEqual(Int.exactly(-9223372036854775808.0) ?? 0, Int.min)
+    assert(Int.exactly(F64.nan) == none, "NaN is no integer")
+    assert(Int.exactly(F64.infinity) == none, "infinity is no integer")
+    assertEqual(wholeBytes(200.0 as F32) ?? 0, 200)
+    assertEqual(wholeBytes(7.0 as F16) ?? 0, 7)
+}
+
+@test
+fn aFloatClampsTowardZeroAndToTheBounds() {
+    assertEqual(I8.clamping(-2.9), -2)
+    assertEqual(I8.clamping(2.9 as F32), 2)
+    assertEqual(U8.clamping(300.0), 255)
+    assertEqual(U8.clamping(-5.0), 0)
+    assertEqual(Int.clamping(F64.nan), 0)
+    assertEqual(Int.clamping(F64.infinity), Int.max)
+    assertEqual(U128.clamping(F64.greatestFiniteMagnitude), U128.max)
+    assertEqual(I16.clamping(-F16.infinity), I16.min)
+}

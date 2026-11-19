@@ -3311,11 +3311,11 @@ public sealed partial class LlvmEmitter {
         /// <summary>
         ///     The numeric protocols' builtins (SilBuiltins.IsNumericIntrinsic),
         ///     at every width: each an LLVM intrinsic or a few instructions.
-        ///     Also an integer converted to its own type, which is itself.
+        ///     Also a number converted to its own type, which is itself.
         /// </summary>
         bool NumericIntrinsic(BuiltinInst builtin, string[] operands, Func<string> Result) {
             var name = builtin.Name;
-            if (name.StartsWith("wrap_", StringComparison.Ordinal) && builtin.Operands[0].Type == builtin.Type) {
+            if ((name.StartsWith("wrap_", StringComparison.Ordinal) || name.StartsWith("convert_", StringComparison.Ordinal)) && builtin.Operands[0].Type == builtin.Type) {
                 _names[builtin] = operands[0];
                 return true;
             }
@@ -3771,6 +3771,35 @@ public sealed partial class LlvmEmitter {
                 Line($"{outside} = or i1 {under}, {over}");
                 TrapIf(outside, $"{from} does not fit in {to}");
                 Line($"{result} = trunc i129 {wide} to {toType}");
+                return;
+            }
+
+            // A 128-bit integer to a half is a call to compiler-rt's
+            // '__floattihf', which not every C library has. An F16 overflows
+            // past 65520, so a value of up to 2^17 either way goes through an
+            // i32 and a float, both exact, and is rounded once; any other is
+            // as far past the F16's greatest value, an infinity of its sign.
+            if (fromInteger is (128, var signedWide) && to == SilType.F16) {
+                var small = Fresh();
+                var narrow = Fresh();
+                var asFloat = Fresh();
+                var rounded = Fresh();
+                var negative = Fresh();
+                var infinite = Fresh();
+                if (signedWide) {
+                    var biased = Fresh();
+                    Line($"{biased} = add i128 {value}, 131072");
+                    Line($"{small} = icmp ule i128 {biased}, 262144");
+                } else {
+                    Line($"{small} = icmp ule i128 {value}, 131072");
+                }
+
+                Line($"{narrow} = trunc i128 {value} to i32");
+                Line($"{asFloat} = {(signedWide ? "sitofp" : "uitofp")} i32 {narrow} to float");
+                Line($"{rounded} = fptrunc float {asFloat} to half");
+                Line($"{negative} = icmp slt i128 {value}, 0");
+                Line($"{infinite} = select i1 {(signedWide ? negative : "false")}, half 0xHFC00, half 0xH7C00");
+                Line($"{result} = select i1 {small}, half {rounded}, half {infinite}");
                 return;
             }
 

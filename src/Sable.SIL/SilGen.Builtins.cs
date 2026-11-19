@@ -4,7 +4,7 @@ using Sable.Syntax;
 namespace Sable.SIL;
 
 /// <summary>
-///     <c>@builtin("name")</c> (Compilation.Builtins.cs): a <c>Sable.Core</c>
+///     <c>@builtin("name")</c> (Compilation.Builtins.cs): a standard library
 ///     member whose body is a SIL builtin, lowered where it is used.
 /// </summary>
 /// <remarks>

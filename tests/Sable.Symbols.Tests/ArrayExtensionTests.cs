@@ -287,7 +287,7 @@ public sealed class ArrayExtensionTests {
     [InlineData("extension<T> (T, T) { }", "S3031", "array type")]
     [InlineData("extension<T> T[:] { var n: Int = 0 }", "S3029", "stored properties")]
     [InlineData("extension<T> T[:] { init() { } }", "S3030", "initialiser")]
-    [InlineData("extension<T> T[:] { @builtin(\"array_count\") var n: Int { get } }", "S3081", "only Sable.Core")]
+    [InlineData("extension<T> T[:] { @builtin(\"array_count\") var n: Int { get } }", "S3081", "only the standard library")]
     public void MisuseIsReported(string source, string id, string fragment) => AssertError(source, id, fragment);
 
     [Fact]

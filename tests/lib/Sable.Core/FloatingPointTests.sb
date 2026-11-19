@@ -210,6 +210,25 @@ fn theWideValueIsTheFloatAsAnF64() {
     assertEqual((0.1).wideValue, 0.1)
 }
 
+/// Generic, so that 'rounding(wideValue:)' is reached through the protocol.
+fn third<T: FloatingPoint>(_ type: T.Type) -> T {
+    return T.rounding(wideValue: 1.0 / 3.0)
+}
+
+@test
+fn roundingAWideValueGivesTheNearestFloat() {
+    assertEqual(F64.rounding(wideValue: 0.1), 0.1)
+    assertEqual(F32.rounding(wideValue: 0.1), 0.1 as F32)
+    assertEqual(F16.rounding(wideValue: 0.1), 0.1 as F16)
+    assertEqual(third(F32.self), 0.33333334)
+    assertEqual(third(F64.self), 0.3333333333333333)
+    assertEqual(F32.rounding(wideValue: 1e300), F32.infinity)
+    assertEqual(F16.rounding(wideValue: -1e10), -F16.infinity)
+    assert(F32.rounding(wideValue: F64.nan).isNaN, "NaN stays NaN")
+    assertEqual(F32.rounding(wideValue: -0.0).isSignMinus, true)
+    assertEqual(F32.rounding(wideValue: (0.1 as F32).wideValue), 0.1 as F32)
+}
+
 // ---- classification -----------------------------------------------------
 
 @test

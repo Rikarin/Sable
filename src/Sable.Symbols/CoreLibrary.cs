@@ -57,6 +57,16 @@ public static class CoreLibrary {
     public static bool Contains(SyntaxTree tree) =>
         tree.Text.FileName.StartsWith("lib/Sable.Core/", StringComparison.Ordinal) && TreesFor(tree.Options).Contains(tree);
 
+    /// <summary>
+    ///     True for a module of the standard library: <c>Sable.Core</c> and
+    ///     the others of <c>lib/</c>, every one named <c>Sable.*</c>, a
+    ///     namespace programs leave to it. What only the library may do
+    ///     (<c>@builtin</c>) is allowed by this name, as Sable.Core's own
+    ///     files are recognised by theirs (<see cref="IsBroughtBy" />).
+    /// </summary>
+    public static bool IsStandardLibrary(string? module) =>
+        module is not null && (module == ModuleName || module.StartsWith("Sable.", StringComparison.Ordinal));
+
     /// <summary>The module a file declares (<c>module A.B</c>), or null when it declares none.</summary>
     public static string? ModuleOf(SyntaxTree tree) =>
         tree.Root is CompilationUnitSyntax { Module: { } declaration } ? declaration.Name.ToString().Trim() : null;

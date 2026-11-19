@@ -232,7 +232,9 @@ Sable.Collections   List Dictionary Set Deque OrderedDictionary
 Sable.Text          UTF-8/16/32, ASCII and Latin-1 codecs, normalisation,
                     formatting, Regex (a compiled NFA/DFA hybrid),
                     TextBuilder
-Sable.Math          BigInt, Decimal, SIMD<T, N>, Matrix, Quaternion,
+Sable.Math          the elementary functions (sin, exp, pow, gamma, …),
+                    generic over ElementaryFunctions; integer math;
+                    BigInt, Decimal, SIMD<T, N>, Matrix, Quaternion,
                     Random (PCG + ChaCha), statistics
 Sable.IO            File Directory Path Stream MemoryMappedFile stdio
 Sable.Serialize     Encoder/Decoder protocols, conformance synthesis via
@@ -294,11 +296,17 @@ map; `Sable.Collections.HashMap` is gone, and `HashSet` is a dictionary to
   taken.
 
 `Sable.Core` reaches the runtime through `@builtin("name")`: a bodiless
-declaration, allowed only in `Sable.Core`, whose calls are the named SIL
-builtin applied in place — `String.count`, `print`, `Runtime.readFile`'s
-floor — so the library is Sable down to the operations only the runtime can
-perform, at no cost over the compiler doing it by special case
-(docs/04, "Sable.Core in Sable").
+declaration, allowed only in the standard library (`Sable.Core` and the
+other `Sable.*` modules), whose calls are the named SIL builtin applied in
+place — `String.count`, `print`, `Runtime.readFile`'s floor — so the
+library is Sable down to the operations only the runtime can perform, at no
+cost over the compiler doing it by special case (docs/04, "Sable.Core in
+Sable"). Outside the core, `Sable.Math` declares the elementary functions
+this way: its `ElementaryFunctions` protocol's static requirements
+(`static fn sin(_ x: Self) -> Self`, …) are libm's for F64 and F32
+(`math_sin_F64`, through LLVM's intrinsic where it has one), and its free
+functions are generic over it, written once — `sin(x)` is `T.sin(x)`,
+monomorphised to the call to libm. Floats have no `x.sin()` method.
 
 A builtin whose name has a `Self` segment is a **family**, declared once in
 a protocol's extension as the default of one of its requirements: each use

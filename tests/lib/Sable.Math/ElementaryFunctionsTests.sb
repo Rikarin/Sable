@@ -1,0 +1,49 @@
+module ElementaryFunctionsTests
+
+// ElementaryFunctions (Sable.Math): the protocol F64 and F32 conform to,
+// whose static requirements the module's generic functions call. Each
+// function's values are tested in its own file (TrigonometryTests.sb, …);
+// these test the protocol itself. Run with
+//     tools/stdlib-coverage.sh Sable.Math
+
+import Sable.Math
+import Sable.Testing
+import FloatAssertions
+
+/// Written once over the protocol, for every float that conforms.
+fn polar<T: ElementaryFunctions>(_ x: T, _ y: T) -> (radius: T, angle: T) {
+    return (radius: hypot(x, y), angle: atan2(y, x))
+}
+
+@test
+fn genericCodeOverTheProtocolComputesAtEachWidth() {
+    let wide = polar(3.0, 4.0)
+    assertSame(wide.radius, 5.0)
+    assertWithin(wide.angle, 0.9272952180016122, ulps: 1)
+    let three: F32 = 3.0
+    let four: F32 = 4.0
+    let narrow = polar(three, four)
+    assertSame(narrow.radius, 5.0)
+    assertWithin(narrow.angle, 0.9272952, ulps: 1)
+}
+
+@test
+fn theStaticRequirementsAreTheFunctions() {
+    assertSame(F64.sin(1.0), sin(1.0))
+    assertSame(F64.atan2(y: 1.0, x: -1.0), atan2(1.0, -1.0))
+    assertSame(F64.pow(2.0, 10.0), 1024.0)
+    assertSame(F64.hypot(3.0, 4.0), 5.0)
+    let half: F32 = 0.5
+    assertSame(F32.exp(half), exp(half))
+    assertSame(F32.atan2(y: half, x: -half), atan2(half, -half))
+    assertSame(F32.pow(half, 2.0), 0.25)
+}
+
+@test
+fn anF32FunctionIsWithinAnUlpOfTheF64OneRounded() {
+    // sinf is libm's own, at F32's width; the F64 sine of the same
+    // argument, rounded once, is the true value's nearest F32.
+    let x: F32 = 100.0
+    assertWithin(sin(x), F32.rounding(wideValue: sin(x.wideValue)), ulps: 1)
+    assertWithin(cos(x), F32.rounding(wideValue: cos(x.wideValue)), ulps: 1)
+}

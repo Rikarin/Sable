@@ -49,8 +49,43 @@ public sealed class BuiltinTests {
             }
             """
         );
-        Assert.Contains("only Sable.Core", error.Message);
+        Assert.Contains("only the standard library", error.Message);
     }
+
+    [Fact]
+    public void AStandardLibraryModuleMayDeclareOne() =>
+        // Sable.Math declares F64's 'sin' to be libm's this way: a static
+        // function, the builtin applied to its arguments.
+        Assert.Empty(
+            ErrorsIn(
+                """
+                module Sable.Probe
+                public protocol Sine {
+                    static fn sine(_ x: Self) -> Self
+                }
+                extension F64: Sine {
+                    @builtin("math_sin_F64")
+                    public static fn sine(_ x: F64) -> F64
+                }
+                """
+            )
+        );
+
+    [Theory]
+    [InlineData("Sabled")]
+    [InlineData("SableCore")]
+    [InlineData("My.Sable.Core")]
+    public void AModuleOutsideTheSableNamespaceMayNot(string module) =>
+        Single(
+            ErrorCode.ERR_BuiltinOutsideCore,
+            $$"""
+              module {{module}}
+              extension F64 {
+                  @builtin("math_sin_F64")
+                  public static fn sine(_ x: F64) -> F64
+              }
+              """
+        );
 
     [Theory]
     [InlineData("@builtin public fn a() -> String", "one string literal")]

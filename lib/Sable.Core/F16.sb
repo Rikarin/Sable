@@ -48,19 +48,6 @@ extension F16: BinaryFloatingPoint {
     /// 5: the bits of the exponent.
     public static var exponentBitCount: Int => 5
 
-    /// The value's bits, as IEEE 754 lays them out: the sign, the
-    /// exponent, the significand.
-    ///
-    /// ```sable
-    /// assert((1.0 as F16).bits == 0x3C00)
-    /// ```
-    @builtin("bits_F16")
-    public var bits: U16 { get }
-
-    /// The F16 whose bits these are.
-    @builtin("from_bits_F16")
-    public static fn fromBits(_ bits: U16) -> F16
-
     /// The number in decimal: the fewest digits that read back as the same
     /// value.
     @builtin("string_from_F16")

@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Globalization;
 using System.Numerics;
 using System.Text;
@@ -1525,9 +1526,6 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             case "string_from_Char":
                 return Allocate(new HeapString(((Rune)operands[0]!).ToString()));
 
-            case "string_scientific_F64" or "string_fixed_F64":
-                return Allocate(new HeapString(FormatAt((double)operands[0]!, (long)operands[1]!, builtin.Name == "string_fixed_F64")));
-
             case var _ when builtin.Name.StartsWith("string_from_", StringComparison.Ordinal) && builtin.Name != "string_from_Char":
                 return Allocate(new HeapString(Format(operands[0])));
 
@@ -1545,6 +1543,15 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                     && double.IsFinite(value)
                     ? new object?[] { true, value }
                     : new object?[] { false, 0.0 };
+            }
+
+            // To the nearest float in one rounding, as strtof does, not through a double.
+            case "string_to_F32": {
+                var text = Text(operands[0]).Value;
+                return IsDecimal(text) && float.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var value)
+                    && float.IsFinite(value)
+                    ? new object?[] { true, value }
+                    : new object?[] { false, 0f };
             }
 
             case "cmp_eq_String":
@@ -1651,6 +1658,70 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                 return new SliceValue(buffer, start + (int)from, (int)(to - from));
             }
 
+            // A slice as an array again: the buffer itself when the slice is
+            // the whole of it, else a copy of its run.
+            case "array_of_slice": {
+                var (buffer, start, count) = ElementsOf(operands[0]);
+                if (buffer is null || count == 0) {
+                    return null;
+                }
+
+                if (start == 0 && count == buffer.Elements.Count) {
+                    Retain(buffer.Type, buffer);
+                    return buffer;
+                }
+
+                var copy = Allocate(new HeapArray(buffer.Type, [..buffer.Elements.Skip(start).Take(count)]));
+                foreach (var element in copy.Elements) {
+                    Retain(buffer.Type.Element, element);
+                }
+
+                return copy;
+            }
+
+            case "array_rotate": {
+                var address = (IReference)operands[0]!;
+                var (from, to, by) = ((long)operands[1]!, (long)operands[2]!, (long)operands[3]!);
+                var (_, _, count) = ElementsOf(address.Peek());
+                if (from < 0 || to > count || from > to) {
+                    throw new SilTrap("array slice out of range");
+                }
+
+                var length = (int)(to - from);
+                var shift = length == 0 ? 0 : (int)(((by % length) + length) % length);
+                if (shift == 0) {
+                    return null;
+                }
+
+                // Made the only reference to the elements first, as a write is.
+                HeapArray buffer;
+                var start = 0;
+                if (address.Peek() is SliceValue) {
+                    var unique = UniqueSlice(builtin.Operands[0], address);
+                    (buffer, start) = (unique.Buffer!, unique.Start);
+                } else {
+                    buffer = Unique(builtin.Operands[0], address);
+                }
+
+                var at = start + (int)from;
+                var moved = buffer.Elements.GetRange(at, shift);
+                buffer.Elements.RemoveRange(at, shift);
+                buffer.Elements.InsertRange(at + length - shift, moved);
+                return null;
+            }
+
+            case "array_capacity":
+                return operands[0] is HeapArray held ? (long)Alive(held).Elements.Capacity : 0L;
+
+            case "array_reserve": {
+                var minimum = (long)operands[1]!;
+                if (minimum > 0) {
+                    Unique(builtin.Operands[0], (IReference)operands[0]!).Elements.EnsureCapacity((int)minimum);
+                }
+
+                return null;
+            }
+
             case "array_clear": {
                 var address = (IReference)operands[0]!;
                 var old = address.Peek();
@@ -1682,7 +1753,45 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             return null;
         }
 
-        return NumericIntrinsic(builtin.Name, operands) ?? Numeric(builtin.Name, operands) ?? Builtin(builtin.Name, operands);
+        if (builtin.Name.StartsWith("bytes_load_", StringComparison.Ordinal)) {
+            var width = BytesWidth(builtin.Type);
+            var (buffer, start, count) = ElementsOf(operands[0]);
+            var at = (long)operands[1]!;
+            if (buffer is null || at < 0 || at > count - width) {
+                throw new SilTrap("array index out of range");
+            }
+
+            ulong value = 0;
+            for (var i = 0; i < width; i++) {
+                value |= (ulong)(long)buffer.Elements[start + (int)at + i]! << (8 * i);
+            }
+
+            return width == 8 ? value : (long)value;
+        }
+
+        if (builtin.Name.StartsWith("bytes_store_", StringComparison.Ordinal)) {
+            // The last byte's index checked, and the array made unique, as a
+            // write of that byte would; then every byte written.
+            var width = BytesWidth(builtin.Operands[2].Type);
+            var at = (long)operands[1]!;
+            if (at < 0 || at > long.MaxValue - width) {
+                throw new SilTrap("array index out of range");
+            }
+
+            var (array, last) = Writable(builtin.Operands[0], (IReference)operands[0]!, at + width - 1);
+            var value = operands[2] is ulong wide ? wide : (ulong)(long)operands[2]!;
+            for (var i = 0; i < width; i++) {
+                array.Elements[last - width + 1 + i] = (long)(byte)(value >> (8 * i));
+            }
+
+            return null;
+        }
+
+        if (FloatFunctions.Find(builtin.Name) is var (function, type)) {
+            return Libm.Call(function, type, operands);
+        }
+
+        return NumericIntrinsic(builtin.Name, operands) ?? ByteOrder(builtin.Name, operands) ?? Numeric(builtin.Name, operands) ?? Builtin(builtin.Name, operands);
     }
 
     /// <summary>
@@ -1774,22 +1883,6 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
 
     /// <summary>A float's intrinsic, at its own width: F16 through the float or double that holds its every value exactly.</summary>
     static object? FloatIntrinsic(string op, SilType type, int bits, object?[] operands) {
-        if (op == "from_bits") {
-            return bits switch {
-                16 => BitConverter.UInt16BitsToHalf((ushort)Wide(operands[0])),
-                32 => BitConverter.UInt32BitsToSingle((uint)Wide(operands[0])),
-                _ => BitConverter.UInt64BitsToDouble((ulong)operands[0]!),
-            };
-        }
-
-        if (op == "bits") {
-            return operands[0] switch {
-                Half h => (long)BitConverter.HalfToUInt16Bits(h),
-                float f => (long)BitConverter.SingleToUInt32Bits(f),
-                _ => (object)BitConverter.DoubleToUInt64Bits((double)operands[0]!),
-            };
-        }
-
         var x = Real(operands[0]);
         var y = operands.Length > 1 && op != "scale" ? Real(operands[1]) : 0.0;
         object Of(double value) => RealOf(value, type);
@@ -1824,6 +1917,24 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                 return null;
         }
     }
+
+    /// <summary>How many bytes a 'bytes_load_' or 'bytes_store_' reads or writes.</summary>
+    static int BytesWidth(SilType type) => SilType.IntegerInfo(type)!.Value.Bits / 8;
+
+    /// <summary>
+    ///     An integer's bytes reversed, and a float's bits as an integer and
+    ///     back, on the values as the interpreter holds them (see <see cref="Numeric" />).
+    /// </summary>
+    static object? ByteOrder(string name, object?[] operands) =>
+        (name, operands) switch {
+            ("bitcast_F64_U64", [double x]) => BitConverter.DoubleToUInt64Bits(x),
+            ("bitcast_U64_F64", [ulong x]) => BitConverter.UInt64BitsToDouble(x),
+            ("bitcast_F32_U32", [float x]) => (long)BitConverter.SingleToUInt32Bits(x),
+            ("bitcast_U32_F32", [long x]) => BitConverter.UInt32BitsToSingle((uint)x),
+            ("bitcast_F16_U16", [Half x]) => (long)BitConverter.HalfToUInt16Bits(x),
+            ("bitcast_U16_F16", [long x]) => BitConverter.UInt16BitsToHalf((ushort)x),
+            _ => null,
+        };
 
     /// <summary>
     ///     The sized integers, F32 and F16, as the native code computes them:
@@ -2325,71 +2436,6 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
                 _ => throw new SilTrap($"builtin \"{name}\" cannot take these operands"),
             };
         }
-    }
-
-    /// <summary>
-    ///     A finite double's digits at a precision, as C's printf writes them
-    ///     natively ('%.*e' or '%.*f'): rounded from the exact binary value,
-    ///     a tie to the even digit. Worked out in BigInteger, as .NET's own
-    ///     formatting rounds a tie away from zero.
-    /// </summary>
-    static string FormatAt(double value, long requested, bool fixedPoint) {
-        var digits = (int)Math.Clamp(requested, 0, 1100);
-        var negative = double.IsNegative(value);
-        var bits = BitConverter.DoubleToInt64Bits(Math.Abs(value));
-        var exponentBits = (int)(bits >> 52) & 0x7FF;
-        var mantissa = (BigInteger)(bits & 0xFFFFFFFFFFFFF);
-        if (exponentBits != 0) {
-            mantissa += BigInteger.One << 52;
-        }
-
-        // The value is numerator / denominator exactly.
-        var power = (exponentBits == 0 ? 1 : exponentBits) - 1075;
-        var numerator = power >= 0 ? mantissa << power : mantissa;
-        var denominator = power >= 0 ? BigInteger.One : BigInteger.One << -power;
-
-        // Divided and rounded to the nearest integer, a tie to the even one.
-        static BigInteger Rounded(BigInteger n, BigInteger d) {
-            var quotient = BigInteger.DivRem(n, d, out var remainder);
-            var twice = remainder * 2;
-            return twice > d || twice == d && !quotient.IsEven ? quotient + 1 : quotient;
-        }
-
-        var sign = negative ? "-" : "";
-        if (fixedPoint) {
-            var scaled = Rounded(numerator * BigInteger.Pow(10, digits), denominator).ToString(CultureInfo.InvariantCulture);
-            if (digits == 0) {
-                return sign + scaled;
-            }
-
-            scaled = scaled.PadLeft(digits + 1, '0');
-            return $"{sign}{scaled[..^digits]}.{scaled[^digits..]}";
-        }
-
-        // The decimal exponent of the leading digit, then the digits, which
-        // may round up to one more of them.
-        var exponent = mantissa.IsZero ? 0 : (int)Math.Floor(BigInteger.Log10(numerator) - BigInteger.Log10(denominator));
-        BigInteger Significand(int at) =>
-            at - digits >= 0
-                ? Rounded(numerator, denominator * BigInteger.Pow(10, at - digits))
-                : Rounded(numerator * BigInteger.Pow(10, digits - at), denominator);
-
-        // The logarithm is a double's, and may be one off either way.
-        var significand = Significand(exponent);
-        var limit = BigInteger.Pow(10, digits + 1);
-        while (!mantissa.IsZero && significand < limit / 10) {
-            exponent--;
-            significand = Significand(exponent);
-        }
-
-        while (significand >= limit) {
-            exponent++;
-            significand = Significand(exponent);
-        }
-
-        var text = significand.ToString(CultureInfo.InvariantCulture).PadLeft(digits + 1, '0');
-        var fraction = digits == 0 ? "" : "." + text[1..];
-        return $"{sign}{text[0]}{fraction}e{(exponent < 0 ? '-' : '+')}{Math.Abs(exponent):00}";
     }
 
     /// <summary>

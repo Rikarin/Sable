@@ -1,0 +1,205 @@
+module TrigonometryTests
+
+// Trigonometry (Sable.Math), tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Math
+// Reference values are correctly rounded (mpmath, 60 digits); libm is held
+// to within one unit in the last place of them.
+
+import Sable.Math
+import Sable.Testing
+import FloatAssertions
+
+@test
+fn sineCosineAndTangentAreWithinAnUlpOfTheTrueValues() {
+    assertWithin(sin(1.0), 0.8414709848078965, ulps: 1)
+    assertWithin(sin(-2.5), -0.5984721441039565, ulps: 1)
+    assertWithin(sin(100.0), -0.5063656411097588, ulps: 1)
+    assertWithin(cos(1.0), 0.5403023058681398, ulps: 1)
+    assertWithin(cos(-2.5), -0.8011436155469337, ulps: 1)
+    assertWithin(cos(100.0), 0.8623188722876839, ulps: 1)
+    assertWithin(tan(1.0), 1.5574077246549023, ulps: 1)
+    assertWithin(tan(-2.5), 0.7470222972386603, ulps: 1)
+    assertWithin(tan(1.5), 14.101419947171719, ulps: 1)
+}
+
+@test
+fn theInverseFunctionsAreWithinAnUlpOfTheTrueValues() {
+    assertWithin(asin(0.5), 0.5235987755982989, ulps: 1)
+    assertWithin(asin(-0.9), -1.1197695149986342, ulps: 1)
+    assertWithin(acos(0.5), 1.0471975511965979, ulps: 1)
+    assertWithin(acos(-0.9), 2.6905658417935308, ulps: 1)
+    assertWithin(atan(-3.0), -1.2490457723982544, ulps: 1)
+    assertWithin(atan(1e10), 1.5707963266948965, ulps: 1)
+    assertWithin(atan2(-2.0, 3.0), -0.5880026035475675, ulps: 1)
+    assertWithin(atan2(0.5, 0.25), 1.1071487177940904, ulps: 1)
+}
+
+@test
+fn theInverseFunctionsGiveTheExactAnglesAtTheirEnds() {
+    assertSame(asin(1.0), F64.pi / 2.0)
+    assertSame(acos(-1.0), F64.pi)
+    assertSame(acos(1.0), 0.0)
+    assertSame(atan(1.0), F64.pi / 4.0)
+    assertSame(atan(inf), F64.pi / 2.0)
+    assertSame(atan(-inf), -F64.pi / 2.0)
+}
+
+@test
+fn atan2TakesItsQuadrantFromBothSigns() {
+    assertSame(atan2(1.0, -1.0), 2.356194490192345)
+    assertSame(atan2(0.0, -1.0), F64.pi)
+    assertSame(atan2(-0.0, -1.0), -F64.pi)
+    assertSame(atan2(0.0, -0.0), F64.pi)
+    assertSame(atan2(-0.0, 0.0), -0.0)
+    assertSame(atan2(inf, inf), F64.pi / 4.0)
+    assertSame(atan2(-inf, -inf), -2.356194490192345)
+    assertSame(atan2(1.0, -inf), F64.pi)
+    assertSame(atan2(nan, 1.0), nan)
+}
+
+@test
+fn theFunctionsKeepTheSignOfZeroAndGiveNaNOutsideTheirDomain() {
+    assertSame(sin(-0.0), -0.0)
+    assertSame(tan(-0.0), -0.0)
+    assertSame(cos(-0.0), 1.0)
+    assertSame(asin(-0.0), -0.0)
+    assertSame(atan(-0.0), -0.0)
+    assertSame(sin(inf), nan)
+    assertSame(cos(-inf), nan)
+    assertSame(tan(inf), nan)
+    assertSame(asin(1.5), nan)
+    assertSame(acos(-1.5), nan)
+    assertSame(sin(nan), nan)
+}
+
+@test
+fn theF32FunctionsAreWithinAnUlpOfTheTrueValues() {
+    let one: F32 = 1.0
+    let half: F32 = 0.5
+    assertWithin(sin(one), 0.84147096, ulps: 1)
+    assertWithin(cos(one), 0.5403023, ulps: 1)
+    assertWithin(tan(one), 1.5574077, ulps: 1)
+    assertWithin(asin(half), 0.5235988, ulps: 1)
+    assertWithin(acos(half), 1.0471976, ulps: 1)
+    assertWithin(atan(one), 0.7853982, ulps: 1)
+    assertWithin(atan2(one, -one), 2.3561945, ulps: 1)
+    assertSame(sin(inf32), nan32)
+}
+
+@test
+fn sinCosGivesBoth() {
+    let both = sinCos(1.0)
+    assertSame(both.sin, sin(1.0))
+    assertSame(both.cos, cos(1.0))
+    let small: F32 = 0.5
+    let pair = sinCos(small)
+    assertSame(pair.sin, sin(small))
+    assertSame(pair.cos, cos(small))
+}
+
+@test
+fn sinPiIsExactAtIntegersAndHalves() {
+    assertSame(sinPi(0.0), 0.0)
+    assertSame(sinPi(-0.0), -0.0)
+    assertSame(sinPi(1.0), 0.0)
+    assertSame(sinPi(-1.0), -0.0)
+    assertSame(sinPi(2.0), 0.0)
+    assertSame(sinPi(1e17), 0.0)
+    assertSame(sinPi(0.5), 1.0)
+    assertSame(sinPi(1.5), -1.0)
+    assertSame(sinPi(-0.5), -1.0)
+    assertSame(sinPi(2.5), 1.0)
+}
+
+@test
+fn sinPiIsWithinAnUlpBetween() {
+    assertWithin(sinPi(0.1), 0.30901699437494745, ulps: 1)
+    assertWithin(sinPi(1.0 / 3.0), 0.8660254037844386, ulps: 1)
+    assertWithin(sinPi(0.25), 0.7071067811865476, ulps: 1)
+    assertWithin(sinPi(0.75), 0.7071067811865476, ulps: 1)
+    assertWithin(sinPi(1.25), -0.7071067811865476, ulps: 1)
+    assertWithin(sinPi(1.75), -0.7071067811865476, ulps: 1)
+    assertWithin(sinPi(2.3), 0.8090169943749471, ulps: 2)
+    assertWithin(sinPi(-2.3), -0.8090169943749471, ulps: 2)
+}
+
+@test
+fn sinPiOfAnInfinityOrNaNIsNaN() {
+    assertSame(sinPi(inf), nan)
+    assertSame(sinPi(-inf), nan)
+    assertSame(sinPi(nan), nan)
+    assertSame(cosPi(inf), nan)
+    assertSame(tanPi(nan), nan)
+}
+
+@test
+fn cosPiIsExactAtIntegersAndHalves() {
+    assertSame(cosPi(0.0), 1.0)
+    assertSame(cosPi(-0.0), 1.0)
+    assertSame(cosPi(1.0), -1.0)
+    assertSame(cosPi(-3.0), -1.0)
+    assertSame(cosPi(2.0), 1.0)
+    assertSame(cosPi(0.5), 0.0)
+    assertSame(cosPi(-0.5), 0.0)
+    assertSame(cosPi(1.5), 0.0)
+}
+
+@test
+fn cosPiIsWithinAnUlpBetween() {
+    assertWithin(cosPi(0.1), 0.9510565162951535, ulps: 1)
+    assertWithin(cosPi(0.25), 0.7071067811865476, ulps: 1)
+    assertWithin(cosPi(0.6), -0.30901699437494734, ulps: 2)
+    assertWithin(cosPi(1.25), -0.7071067811865476, ulps: 1)
+    assertWithin(cosPi(1.75), 0.7071067811865476, ulps: 1)
+    assertWithin(cosPi(-3.7), 0.5877852522924736, ulps: 2)
+}
+
+@test
+fn tanPiIsZeroAtIntegersAndInfiniteAtHalves() {
+    assertSame(tanPi(0.0), 0.0)
+    assertSame(tanPi(-0.0), -0.0)
+    assertSame(tanPi(1.0), -0.0)
+    assertSame(tanPi(-1.0), 0.0)
+    assertSame(tanPi(2.0), 0.0)
+    assertSame(tanPi(-2.0), -0.0)
+    assertSame(tanPi(0.5), inf)
+    assertSame(tanPi(1.5), -inf)
+    assertSame(tanPi(-0.5), -inf)
+    assertWithin(tanPi(0.25), 1.0, ulps: 1)
+    assertWithin(tanPi(0.2), 0.7265425280053609, ulps: 2)
+}
+
+@test
+fn theF32HalfTurnFunctionsAreRoundedFromF64() {
+    let tenth: F32 = 0.2
+    let one: F32 = 1.0
+    let half: F32 = 0.5
+    assertWithin(tanPi(tenth), 0.72654253, ulps: 1)
+    assertSame(sinPi(one), 0.0)
+    assertSame(sinPi(half), 1.0)
+    assertSame(cosPi(half), 0.0)
+    assertSame(cosPi(one), -1.0)
+}
+
+@test
+fn degreesAndRadiansConvert() {
+    assertWithin(degreesToRadians(30.0), 0.5235987755982989, ulps: 1)
+    assertSame(degreesToRadians(180.0), F64.pi)
+    assertWithin(radiansToDegrees(1.0), 57.29577951308232, ulps: 1)
+    assertSame(radiansToDegrees(F64.pi), 180.0)
+    let right: F32 = 90.0
+    assertWithin(degreesToRadians(right), 1.5707964, ulps: 1)
+    let angle: F32 = 1.5707964
+    assertWithin(radiansToDegrees(angle), 90.0, ulps: 1)
+}
+
+@bench
+fn sinPiOfAThousandAngles() {
+    var total = 0.0
+    var i = 0
+    while i < 1000 {
+        total = total + sinPi(F64(i) * 0.001)
+        i = i + 1
+    }
+    assert(total > 0.0)
+}

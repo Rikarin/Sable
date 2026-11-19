@@ -1,10 +1,11 @@
 module Sable.Core
 
-// A float's text at a precision, fixed or scientific, and in hexadecimal
-// both ways: the primitives formatting and parsing are built on. Decimal
-// digits are the runtime's (C's printf, correctly rounded from the exact
-// binary value); hexadecimal is exact, and written and read here from the
-// bits. A narrower float goes through its F64, which holds it exactly.
+// A float's text at a precision — fixed, scientific or general, as C's
+// printf's %f, %e and %g write it — and in hexadecimal both ways. The
+// decimal digits are NumberFormatting.sb's, the exact binary value's
+// rounded to nearest with a tie to even, which Formattable's conformances
+// use too; hexadecimal is exact, written and read here from the bits. A
+// narrower float goes through its F64, which holds it exactly.
 
 extension FloatingPoint {
     /// The value in decimal, with exactly that many digits after the point,
@@ -21,7 +22,12 @@ extension FloatingPoint {
         if !self.isFinite {
             return self.toSpecialString()
         }
-        return self.wideValue.fixedText(digits)
+        let wide = self.wideValue
+        let places = digits.max(other: 0)
+        let (exact, point) = exactDecimal(wide.abs())
+        let (rounded, at) = roundedDecimal(exact, point, places)
+        let (whole, rest) = fixedParts(rounded, at, places)
+        return (wide.isSignMinus ? "-" : "") + whole + rest
     }
 
     /// The value in scientific notation, one digit before the point and
@@ -37,7 +43,12 @@ extension FloatingPoint {
         if !self.isFinite {
             return self.toSpecialString()
         }
-        return self.wideValue.scientificText(digits)
+        let wide = self.wideValue
+        let places = digits.max(other: 0)
+        let (exact, point) = exactDecimal(wide.abs())
+        let (rounded, at) = roundedDecimal(exact, point, places + 1 - point)
+        let (whole, rest) = scientificParts(rounded, at, places, "e")
+        return (wide.isSignMinus ? "-" : "") + whole + rest
     }
 
     /// The value to that many significant digits (at least one), as C's
@@ -55,18 +66,9 @@ extension FloatingPoint {
         if !self.isFinite {
             return self.toSpecialString()
         }
-        let precision = significantDigits.max(other: 1)
-        let scientific = self.toScientificString(precision - 1)
-        // The power of ten, after the 'e', decides the form.
-        var at = scientific.count - 1
-        while scientific.at(index: at) != 'e' {
-            at = at - 1
-        }
-        let exponent = scientific.slice(from: at + 1, to: scientific.count).toInt() ?? 0
-        if exponent >= -4 && exponent < precision {
-            return withoutTrailingZeros(self.toFixedString(precision - 1 - exponent))
-        }
-        return withoutTrailingZeros(scientific.slice(from: 0, to: at)) + scientific.slice(from: at, to: scientific.count)
+        let wide = self.wideValue
+        let (whole, rest) = generalParts(wide.abs(), significantDigits.max(other: 1), false, "e")
+        return (wide.isSignMinus ? "-" : "") + whole + rest
     }
 
     /// The value in hexadecimal, exactly, as C's '%a' writes it: the
@@ -234,23 +236,6 @@ extension FloatingPoint {
         }
         return Self.rounding(wideMagnitude: rounded).scaled(byPowerOfTwo: power + dropped)
     }
-}
-
-/// Decimal digits with the zeros at the end of their fraction left off,
-/// and the point too where nothing is left after it: "1.500" is "1.5",
-/// "2.000" is "2", and "1200" stays as it is.
-fn withoutTrailingZeros(_ text: String) -> String {
-    if !text.contains(character: '.') {
-        return text
-    }
-    var end = text.count
-    while text.at(index: end - 1) == '0' {
-        end = end - 1
-    }
-    if text.at(index: end - 1) == '.' {
-        end = end - 1
-    }
-    return text.slice(from: 0, to: end)
 }
 
 /// The value of a hexadecimal digit, or none.

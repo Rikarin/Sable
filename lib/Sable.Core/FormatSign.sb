@@ -1,0 +1,12 @@
+module Sable.Core
+
+/// Which numbers a format spec writes a sign for: `-`, `+` and a space.
+public enum FormatSign {
+    /// Only a negative number, with `-`: what is written when nothing is said.
+    Negative
+    /// Every number: `+` before one that is not negative, `-` before one that is.
+    Always
+    /// A space before a number that is not negative, so a column of them lines
+    /// up with the negative ones.
+    Space
+}

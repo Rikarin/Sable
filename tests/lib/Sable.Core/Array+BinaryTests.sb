@@ -1,0 +1,129 @@
+module ArrayBinaryTests
+
+// Reading and writing binary values in bytes (Sable.Core), tested with
+// '@test': run with
+//     tools/stdlib-coverage.sh Sable.Core
+
+import Sable.Testing
+
+fn sample() -> U8[>..] {
+    return [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09]
+}
+
+@test
+fn readsTakeTheByteOrderAsked() {
+    let bytes = sample()
+    assertEqual(bytes.readU16(at: 0, endian: .Little), 0x0201)
+    assertEqual(bytes.readU16(at: 0, endian: .Big), 0x0102)
+    assertEqual(bytes.readU32(at: 1, endian: .Little), 0x0504_0302)
+    assertEqual(bytes.readU32(at: 1, endian: .Big), 0x0203_0405)
+    assertEqual(bytes.readU64(at: 1, endian: .Little), 0x0908_0706_0504_0302)
+    assertEqual(bytes.readU64(at: 1, endian: .Big), 0x0203_0405_0607_0809)
+}
+
+@test
+fn signedReadsAreTwosComplement() {
+    let bytes: U8[>..] = [0xFF, 0xFE, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x80]
+    assertEqual(bytes.readI16(at: 0, endian: .Big), -2)
+    assertEqual(bytes.readI16(at: 0, endian: .Little), -257)
+    assertEqual(bytes.readI32(at: 0, endian: .Big), -65_537)
+    assertEqual(bytes.readI32(at: 2, endian: .Little), -1)
+    assertEqual(bytes.readI64(at: 1, endian: .Little), -9_151_314_442_816_847_874)
+    assertEqual(bytes.readI64(at: 1, endian: .Big), -72_057_594_037_928_064)
+}
+
+@test
+fn floatsAreReadFromTheirBits() {
+    let bytes: U8[>..] = [0x3F, 0xF8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+    assertEqual(bytes.readF64(at: 0, endian: .Big), 1.5)
+    assertEqual(bytes.readF32(at: 0, endian: .Big), 1.9375)
+    let little: U8[>..] = [0x00, 0x00, 0xC0, 0x3F]
+    assertEqual(little.readF32(at: 0, endian: .Little), 1.5)
+}
+
+@test
+fn readsWorkOnASliceFromItsOwnStart() {
+    let slice = sample().slice(from: 3, to: 9)
+    assertEqual(slice.readU16(at: 0, endian: .Big), 0x0405)
+    assertEqual(slice.readU32(at: 2, endian: .Big), 0x0607_0809)
+}
+
+@test
+fn readsAtEveryUnalignedOffsetAgree() {
+    let bytes = sample()
+    var offset = 0
+    while offset + 4 <= bytes.count {
+        let byByte = U32(bytes[offset]) | U32(bytes[offset + 1]) << 8 | U32(bytes[offset + 2]) << 16 | U32(bytes[offset + 3]) << 24
+        assertEqual(bytes.readU32(at: offset, endian: .Little), byByte)
+        offset = offset + 1
+    }
+}
+
+@test(traps: "array index out of range")
+fn aReadPastTheEndTraps() {
+    let _ = sample().readU32(at: 6, endian: .Little)
+}
+
+@test(traps: "array index out of range")
+fn aReadAtANegativeOffsetTraps() {
+    let _ = sample().readU16(at: -1, endian: .Little)
+}
+
+@test(traps: "array index out of range")
+fn aReadOfASliceStopsAtTheSlicesEnd() {
+    let _ = sample().slice(from: 0, to: 4).readU64(at: 0, endian: .Little)
+}
+
+@test
+fn writesPutTheBytesInTheOrderAsked() {
+    var bytes: U8[>..] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    bytes.writeU16(0x0102, at: 0, endian: .Big)
+    bytes.writeU32(0x0304_0506, at: 2, endian: .Little)
+    assertEqual(bytes[0], 0x01)
+    assertEqual(bytes[1], 0x02)
+    assertEqual(bytes[2], 0x06)
+    assertEqual(bytes[5], 0x03)
+    bytes.writeU64(0x1122_3344_5566_7788, at: 1, endian: .Big)
+    assertEqual(bytes[1], 0x11)
+    assertEqual(bytes[8], 0x88)
+    assertEqual(bytes[9], 0)
+}
+
+@test
+fn everyValueSurvivesTheRoundTrip() {
+    var bytes: U8[>..] = [0, 0, 0, 0, 0, 0, 0, 0, 0]
+    bytes.writeI16(-12345, at: 1, endian: .Big)
+    assertEqual(bytes.readI16(at: 1, endian: .Big), -12345)
+    bytes.writeI32(-2_000_000_000, at: 3, endian: .Little)
+    assertEqual(bytes.readI32(at: 3, endian: .Little), -2_000_000_000)
+    bytes.writeI64(-5, at: 1, endian: .Big)
+    assertEqual(bytes.readI64(at: 1, endian: .Big), -5)
+    bytes.writeF32(-0.1, at: 0, endian: .Little)
+    assertEqual(bytes.readF32(at: 0, endian: .Little), -0.1)
+    bytes.writeF64(F64.pi, at: 1, endian: .Big)
+    assertEqual(bytes.readF64(at: 1, endian: .Big), F64.pi)
+    assertEqual(bytes[1], 0x40)
+}
+
+@test
+fn aWriteLeavesACopyAsItWas() {
+    var bytes = sample()
+    let copy = bytes
+    let view = bytes.slice(from: 0, to: 4)
+    bytes.writeU32(0, at: 0, endian: .Little)
+    assertEqual(copy.readU32(at: 0, endian: .Big), 0x0102_0304)
+    assertEqual(view.readU32(at: 0, endian: .Big), 0x0102_0304)
+    assertEqual(bytes.readU32(at: 0, endian: .Big), 0)
+}
+
+@test(traps: "array index out of range")
+fn aWritePastTheEndTraps() {
+    var bytes: U8[>..] = [0, 0, 0]
+    bytes.writeU32(1, at: 0, endian: .Little)
+}
+
+@test(traps: "array index out of range")
+fn aWriteAtANegativeOffsetTraps() {
+    var bytes: U8[>..] = [0, 0, 0, 0]
+    bytes.writeU16(1, at: -1, endian: .Little)
+}

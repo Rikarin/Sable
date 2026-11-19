@@ -5,8 +5,15 @@ module Sable.Core
 // write them after, and is for every array of its kind whatever the element:
 // 'Element[>..]' every grow-only array, 'Element[..]' every inline capacity.
 // What 'Element[:]' declares, every kind has, as every array can be viewed
-// as a slice. What only the runtime can do is a '@builtin', applied where it
+// as a slice; a 'mutating' member of it changes the array it is called on,
+// in place. What only the runtime can do is a '@builtin', applied where it
 // is called; the rest is Sable over those, monomorphised per element.
+//
+// This file has what every array is and holds; the rest is by feature:
+// Array+Search.sb (finding elements), Array+Reorder.sb (moving them in
+// place), Array+Sort.sb and Array+Split.sb. A grow-only array grows at its
+// end and nowhere else (docs/03 §3.9): inserting and removing in the middle
+// are List's (Sable.Collections).
 
 extension<Element> Element[:] {
     /// How many elements the array holds.
@@ -20,6 +27,45 @@ extension<Element> Element[:] {
     /// sharing the array's buffer, with no copy.
     @builtin("array_slice")
     public fn slice(from: Int, to: Int) -> Element[:]
+
+    /// The first element, or none when there are none.
+    ///
+    /// ```sable
+    /// let xs: Int[>..] = [4, 5]
+    /// assert(xs.first == 4)
+    /// ```
+    public var first: Element? {
+        get {
+            if self.count == 0 {
+                return none
+            }
+            return self[0]
+        }
+    }
+
+    /// The last element, or none when there are none.
+    public var last: Element? {
+        get {
+            if self.count == 0 {
+                return none
+            }
+            return self[self.count - 1]
+        }
+    }
+
+    /// The elements in a grow-only array of their own. A value like any
+    /// other copy: it shares the buffer while neither changes, so taking
+    /// the whole of an array copies nothing; a slice of part of one is
+    /// copied out.
+    ///
+    /// ```sable
+    /// let xs: Int[>..] = [1, 2, 3, 4]
+    /// var tail = xs[2...].toArray()
+    /// tail.append(5)
+    /// assert(tail == [3, 4, 5])
+    /// ```
+    @builtin("array_of_slice")
+    public fn toArray() -> Element[>..]
 }
 
 extension<Element: Equatable> Element[:] {
@@ -39,6 +85,36 @@ extension<Element> Element[>..] {
     @builtin("array_append")
     public mutating fn append(element: Element)
 
+    /// How many elements the array has room for before an append must
+    /// grow its buffer: never less than the count.
+    @builtin("array_capacity")
+    public var capacity: Int { get }
+
+    /// Room for at least 'minimumCapacity' elements in all, so that
+    /// appending up to that many grows nothing; asking for less than the
+    /// array has room for changes nothing.
+    ///
+    /// ```sable
+    /// var xs: Int[>..] = []
+    /// xs.reserveCapacity(100)
+    /// assert(xs.capacity >= 100)
+    /// ```
+    @builtin("array_reserve")
+    public mutating fn reserveCapacity(_ minimumCapacity: Int)
+
+    /// Every element of 'other', added at the end in order.
+    ///
+    /// ```sable
+    /// var xs: Int[>..] = [1]
+    /// xs.append(contentsOf: [2, 3])
+    /// assert(xs == [1, 2, 3])
+    /// ```
+    public mutating fn append(contentsOf other: Element[:]) {
+        for element in other {
+            self.append(element)
+        }
+    }
+
     /// The last element, taken out; an empty array traps.
     @builtin("array_remove_last")
     public mutating fn removeLast() -> Element
@@ -52,6 +128,23 @@ extension<Element> Element[>..<] {
     /// The element, added at the end.
     @builtin("array_append")
     public mutating fn append(element: Element)
+
+    /// How many elements the array has room for before an append must
+    /// grow its buffer: never less than the count.
+    @builtin("array_capacity")
+    public var capacity: Int { get }
+
+    /// Room for at least 'minimumCapacity' elements in all, so that
+    /// appending up to that many grows nothing.
+    @builtin("array_reserve")
+    public mutating fn reserveCapacity(_ minimumCapacity: Int)
+
+    /// Every element of 'other', added at the end in order.
+    public mutating fn append(contentsOf other: Element[:]) {
+        for element in other {
+            self.append(element)
+        }
+    }
 
     /// The last element, taken out; an empty array traps.
     @builtin("array_remove_last")

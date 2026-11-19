@@ -1,0 +1,132 @@
+module Sable.Core
+
+// Integers and floats read from, and written to, bytes at an offset, in
+// either byte order (.NET's BinaryPrimitives, Rust's from_le_bytes). Each
+// is one range check and one unaligned load or store of the platform's
+// order, byte-swapped when the order asked for is the other one; a float
+// is its bits. Reads are of any bytes (every array kind views as U8[:]);
+// writes are into a grow-only array, which is made the only reference to
+// its buffer first, as any write to an element is.
+
+extension U8[:] {
+    @builtin("bytes_load_U16")
+    fn loadU16(at offset: Int) -> U16
+
+    @builtin("bytes_load_U32")
+    fn loadU32(at offset: Int) -> U32
+
+    @builtin("bytes_load_U64")
+    fn loadU64(at offset: Int) -> U64
+
+    /// The U16 in the two bytes from the offset; traps unless both are in
+    /// the bytes, as indexing does.
+    ///
+    /// ```sable
+    /// let bytes: U8[>..] = [0x12, 0x34]
+    /// assert(bytes.readU16(at: 0, endian: .Big) == 0x1234)
+    /// assert(bytes.readU16(at: 0, endian: .Little) == 0x3412)
+    /// ```
+    public fn readU16(at offset: Int, endian: Endian) -> U16 {
+        let raw = self.loadU16(at: offset)
+        return endian == Endian.native ? raw : raw.byteSwapped
+    }
+
+    /// The I16 in the two bytes from the offset, two's complement.
+    public fn readI16(at offset: Int, endian: Endian) -> I16 {
+        return self.readU16(at: offset, endian: endian) unchecked as I16
+    }
+
+    /// The U32 in the four bytes from the offset; traps unless all are in
+    /// the bytes.
+    public fn readU32(at offset: Int, endian: Endian) -> U32 {
+        let raw = self.loadU32(at: offset)
+        return endian == Endian.native ? raw : raw.byteSwapped
+    }
+
+    /// The I32 in the four bytes from the offset, two's complement.
+    public fn readI32(at offset: Int, endian: Endian) -> I32 {
+        return self.readU32(at: offset, endian: endian) unchecked as I32
+    }
+
+    /// The U64 in the eight bytes from the offset; traps unless all are in
+    /// the bytes.
+    public fn readU64(at offset: Int, endian: Endian) -> U64 {
+        let raw = self.loadU64(at: offset)
+        return endian == Endian.native ? raw : raw.byteSwapped
+    }
+
+    /// The I64 in the eight bytes from the offset, two's complement.
+    public fn readI64(at offset: Int, endian: Endian) -> I64 {
+        return self.readU64(at: offset, endian: endian) unchecked as I64
+    }
+
+    /// The F32 whose IEEE 754 bits are the four bytes from the offset.
+    public fn readF32(at offset: Int, endian: Endian) -> F32 {
+        return F32.fromBits(self.readU32(at: offset, endian: endian))
+    }
+
+    /// The F64 whose IEEE 754 bits are the eight bytes from the offset.
+    public fn readF64(at offset: Int, endian: Endian) -> F64 {
+        return F64.fromBits(self.readU64(at: offset, endian: endian))
+    }
+}
+
+extension U8[>..] {
+    @builtin("bytes_store_U16")
+    mutating fn storeU16(at offset: Int, _ value: U16)
+
+    @builtin("bytes_store_U32")
+    mutating fn storeU32(at offset: Int, _ value: U32)
+
+    @builtin("bytes_store_U64")
+    mutating fn storeU64(at offset: Int, _ value: U64)
+
+    /// Writes the U16 over the two bytes from the offset; traps unless both
+    /// are in the array (writing never grows it).
+    ///
+    /// ```sable
+    /// var bytes: U8[>..] = [0, 0, 0]
+    /// bytes.writeU16(0x1234, at: 1, endian: .Big)
+    /// assert(bytes[1] == 0x12 && bytes[2] == 0x34)
+    /// ```
+    public mutating fn writeU16(_ value: U16, at offset: Int, endian: Endian) {
+        self.storeU16(at: offset, endian == Endian.native ? value : value.byteSwapped)
+    }
+
+    /// Writes the I16 over the two bytes from the offset, two's complement.
+    public mutating fn writeI16(_ value: I16, at offset: Int, endian: Endian) {
+        self.writeU16(value unchecked as U16, at: offset, endian: endian)
+    }
+
+    /// Writes the U32 over the four bytes from the offset; traps unless all
+    /// are in the array.
+    public mutating fn writeU32(_ value: U32, at offset: Int, endian: Endian) {
+        self.storeU32(at: offset, endian == Endian.native ? value : value.byteSwapped)
+    }
+
+    /// Writes the I32 over the four bytes from the offset, two's complement.
+    public mutating fn writeI32(_ value: I32, at offset: Int, endian: Endian) {
+        self.writeU32(value unchecked as U32, at: offset, endian: endian)
+    }
+
+    /// Writes the U64 over the eight bytes from the offset; traps unless all
+    /// are in the array.
+    public mutating fn writeU64(_ value: U64, at offset: Int, endian: Endian) {
+        self.storeU64(at: offset, endian == Endian.native ? value : value.byteSwapped)
+    }
+
+    /// Writes the I64 over the eight bytes from the offset, two's complement.
+    public mutating fn writeI64(_ value: I64, at offset: Int, endian: Endian) {
+        self.writeU64(value unchecked as U64, at: offset, endian: endian)
+    }
+
+    /// Writes the F32's IEEE 754 bits over the four bytes from the offset.
+    public mutating fn writeF32(_ value: F32, at offset: Int, endian: Endian) {
+        self.writeU32(value.bits, at: offset, endian: endian)
+    }
+
+    /// Writes the F64's IEEE 754 bits over the eight bytes from the offset.
+    public mutating fn writeF64(_ value: F64, at offset: Int, endian: Endian) {
+        self.writeU64(value.bits, at: offset, endian: endian)
+    }
+}

@@ -1,0 +1,27 @@
+module Sable.Core
+
+extension Bool: Parsable {
+    /// `true` or `false`, as `format` writes them, and nothing else: no other
+    /// case, no white space. `.Invalid` at the first scalar that is neither's.
+    ///
+    /// ```sable
+    /// assert(try! Bool.parse("false") == false)
+    /// ```
+    public static fn parse(_ text: String) throws(ParseError) -> Bool {
+        if text.isEmpty {
+            throw .Empty
+        }
+        if text == "true" {
+            return true
+        }
+        if text == "false" {
+            return false
+        }
+        let word = text.at(0) == 't' ? "true" : "false"
+        var i = 0
+        while i < text.count && i < word.count && text.at(i) == word.at(i) {
+            i = i + 1
+        }
+        throw .Invalid(at: i)
+    }
+}

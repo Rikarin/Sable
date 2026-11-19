@@ -6,15 +6,21 @@ module Sable.Collections
 public class Stack<Element> {
     var items: Element[>..] = []
 
+    /// An empty stack.
     public init() { }
 
+    /// How many elements it holds.
     public var count: Int => items.count
+
+    /// Whether it holds no elements.
     public var isEmpty: Bool => items.count == 0
 
+    /// Adds the element on top.
     public fn push(_ item: Element) {
         items.append(item)
     }
 
+    /// Takes the top element off and gives it back, or none when empty.
     public fn pop() -> Element? {
         if items.count == 0 {
             return none
@@ -22,6 +28,7 @@ public class Stack<Element> {
         return items.removeLast()
     }
 
+    /// The top element, left where it is, or none when empty.
     public fn peek() -> Element? {
         if items.count == 0 {
             return none

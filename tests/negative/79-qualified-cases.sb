@@ -1,0 +1,48 @@
+module Negative.QualifiedCases
+
+// A case pattern's qualifier names the type being matched: a case of another
+// type is a mismatch, even one of the same name, and no cascade follows it.
+// (Found by the frontend fuzzer: two 'Code' cases of different payloads were
+// once taken for one, and the exhaustiveness check crashed on the arity.)
+
+union Block { Code(language: String, lines: Int), Rule }
+union Inline { Code(value: String), Text }
+enum Light { Red, Green }
+enum Paint { Red, Blue }
+
+fn theInputsOwnTypeIsFine(_ inline: Inline) -> Int {
+    return match inline {
+        case Inline.Code(let v) => 1
+        case Inline.Text => 2
+    }
+}
+
+fn aCaseOfAnotherUnion(_ inline: Inline) -> Int {
+    return match inline {
+        case .Code(let v) => 1
+        case Block.Code(let language, let lines) => lines //! S6000 'Block.Code' is a case of 'Block', not of 'Inline'
+        case .Text => 3
+    }
+}
+
+fn aCaseOfAnotherUnionFirst(_ inline: Inline) -> Int {
+    return match inline {
+        case Block.Code(_, _) => 1 //! S6000 'Block.Code' is a case of 'Block', not of 'Inline'
+        case .Code(_) => 2
+    }
+}
+
+fn aCaseOfAnotherEnum(_ light: Light) -> Int {
+    return match light {
+        case Paint.Red => 1 //! S6000 'Paint.Red' is a case of 'Paint', not of 'Light'
+        case .Green => 2
+    }
+}
+
+fn aCaseAgainstAStructuralUnion(_ x: Block | Inline) -> Int {
+    return match x {
+        case Inline.Code(let v) => 1 //! S6000 'Inline.Code' is a case of 'Inline', not of 'Block | Inline'
+        case Block.Code(let language, let lines) => lines //! S6000 'Block.Code' is a case of 'Block', not of 'Block | Inline'
+        default => 3
+    }
+}

@@ -1,0 +1,29 @@
+module Sable.Core
+
+/// Values that can be read back from text: Rust's `FromStr`, .NET's
+/// `IParsable`. What `parse` takes is what the type's `Formattable` writes
+/// with nothing said, so `T.parse("\(x)")` is `x` again.
+///
+/// ```sable
+/// let n = try! Int.parse("-42")
+/// assert(n == -42)
+/// let b: Bool = try! "true".parse()
+/// assert(b)
+/// ```
+public protocol Parsable {
+    /// The value the whole text writes, or why it is not one.
+    static fn parse(_ text: String) throws(ParseError) -> Self
+}
+
+extension String {
+    /// The value of the type the text writes, or why it is not one:
+    /// `T.parse(self)`, for when the type comes from the context.
+    ///
+    /// ```sable
+    /// let port: U16 = try! "8080".parse()
+    /// assert(port == 8080)
+    /// ```
+    public fn parse<T: Parsable>() throws(ParseError) -> T {
+        return try T.parse(self)
+    }
+}

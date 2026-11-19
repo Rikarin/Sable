@@ -147,4 +147,48 @@ public sealed class InterpolationTests {
         var once = SyntaxFormatter.Format(source);
         Assert.Equal(once, SyntaxFormatter.Format(once));
     }
+
+    static InterpolationSyntax OnlyHole(string source) =>
+        Assert.Single(Parse(source).Contents.OfType<InterpolationSyntax>());
+
+    [Fact]
+    public void AColonAfterTheExpressionStartsAFormatSpec() {
+        var hole = OnlyHole("\"\\(price:>10.2)\"");
+        Assert.Equal(SyntaxKind.IdentifierName, hole.Expression.Kind);
+        Assert.Equal(SyntaxKind.InterpolationFormatToken, hole.FormatToken.Kind);
+        Assert.Equal(":>10.2", hole.FormatToken.Text);
+        Assert.Equal(">10.2", hole.FormatToken.Value);
+    }
+
+    [Fact]
+    public void AFormatSpecIsTextNotTokens() {
+        // What would lex as an unfinished char literal, or a number run into
+        // a letter, is the binder's to read; the parser says nothing of it.
+        Assert.Equal(":`^8", OnlyHole("\"\\(x:`^8) \"").FormatToken.Text);
+        Assert.Equal("08x", OnlyHole("\"\\(n:08x)\"").FormatToken.Value);
+        Assert.Equal(" d", OnlyHole("\"\\(n: d)\"").FormatToken.Value);
+    }
+
+    [Fact]
+    public void ATernarysColonIsTheExpressions() {
+        var plain = OnlyHole("\"\\(ok ? a : b)\"");
+        Assert.Equal(SyntaxKind.ConditionalExpression, plain.Expression.Kind);
+        Assert.True(plain.FormatToken.IsNone);
+
+        var formatted = OnlyHole("\"\\(ok ? a : b:x)\"");
+        Assert.Equal(SyntaxKind.ConditionalExpression, formatted.Expression.Kind);
+        Assert.Equal("x", formatted.FormatToken.Value);
+    }
+
+    [Fact]
+    public void AHoleWithoutASpecHasNoFormatToken() =>
+        Assert.True(OnlyHole("\"\\(f(a: 1))\"").FormatToken.IsNone);
+
+    [Fact]
+    public void FormattingLeavesAFormatSpecAlone() {
+        const string source = """fn f() { print("\(x :>8) \(y:+.2) \(z: d)") }""";
+        var formatted = SyntaxFormatter.Format(source);
+        Assert.Contains("\"\\(x:>8) \\(y:+.2) \\(z: d)\"", formatted, StringComparison.Ordinal);
+        Assert.Equal(formatted, SyntaxFormatter.Format(formatted));
+    }
 }

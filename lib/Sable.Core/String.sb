@@ -55,112 +55,69 @@ extension String {
     public static fn fromChar(character: Char) -> String
 
     // ---- Parsing ---------------------------------------------------------
-    // Decimal, with an optional sign; none when the text is not a number of
-    // the type, or does not fit it. The runtime parses Int and F64; the
-    // narrower types are an Int that fits.
+    // Sugar over each type's Parsable.parse: decimal, with an optional sign;
+    // none when the text is not a number of the type, or does not fit it.
 
-    /// The integer the text writes, or none.
+    /// The integer the text writes, or none: `try? Int.parse(self)`.
     public fn toInt() -> Int? {
-        let (parsed, value) = self.parseInt()
-        if parsed {
-            return value
-        }
-        return none
+        return try? Int.parse(self)
     }
 
-    /// The number the text writes, or none.
+    /// The number the text writes, or none — for an infinity or NaN too, as
+    /// for a number too large for an F64, which `F64.parse` rounds to one.
     public fn toF64() -> F64? {
-        let (parsed, value) = self.parseF64()
-        if parsed {
-            return value
+        if let value = try? F64.parse(self) {
+            if value - value == 0.0 {
+                return value
+            }
         }
         return none
     }
 
+    /// The integer the text writes, or none: `try? I8.parse(self)`.
     public fn toI8() -> I8? {
-        if let value = self.toInt() {
-            if value >= -128 && value <= 127 {
-                return I8(value)
-            }
-        }
-        return none
+        return try? I8.parse(self)
     }
 
+    /// The integer the text writes, or none: `try? I16.parse(self)`.
     public fn toI16() -> I16? {
-        if let value = self.toInt() {
-            if value >= -32768 && value <= 32767 {
-                return I16(value)
-            }
-        }
-        return none
+        return try? I16.parse(self)
     }
 
+    /// The integer the text writes, or none: `try? I32.parse(self)`.
     public fn toI32() -> I32? {
-        if let value = self.toInt() {
-            if value >= -2147483648 && value <= 2147483647 {
-                return I32(value)
-            }
-        }
-        return none
+        return try? I32.parse(self)
     }
 
+    /// The integer the text writes, or none: `try? I64.parse(self)`.
     public fn toI64() -> I64? {
-        if let value = self.toInt() {
-            return I64(value)
-        }
-        return none
+        return try? I64.parse(self)
     }
 
+    /// The integer the text writes, or none: `try? U8.parse(self)`.
     public fn toU8() -> U8? {
-        if let value = self.toInt() {
-            if value >= 0 && value <= 255 {
-                return U8(value)
-            }
-        }
-        return none
+        return try? U8.parse(self)
     }
 
+    /// The integer the text writes, or none: `try? U16.parse(self)`.
     public fn toU16() -> U16? {
-        if let value = self.toInt() {
-            if value >= 0 && value <= 65535 {
-                return U16(value)
-            }
-        }
-        return none
+        return try? U16.parse(self)
     }
 
+    /// The integer the text writes, or none: `try? U32.parse(self)`.
     public fn toU32() -> U32? {
-        if let value = self.toInt() {
-            if value >= 0 && value <= 4294967295 {
-                return U32(value)
-            }
-        }
-        return none
+        return try? U32.parse(self)
     }
 
-    /// Up to Int's largest: the runtime parses no wider.
+    /// The integer the text writes, or none: `try? U64.parse(self)`.
     public fn toU64() -> U64? {
-        if let value = self.toInt() {
-            if value >= 0 {
-                return U64(value)
-            }
-        }
-        return none
+        return try? U64.parse(self)
     }
 
-    /// Up to Int's largest: the runtime parses no wider.
+    /// The integer the text writes, or none: `try? UInt.parse(self)`.
     public fn toUInt() -> UInt? {
-        if let value = self.toInt() {
-            if value >= 0 {
-                return UInt(value)
-            }
-        }
-        return none
+        return try? UInt.parse(self)
     }
-
-    /// Whether the text is an Int, and the Int when it is.
-    @builtin("string_to_Int")
-    fn parseInt() -> (Bool, Int)
 
     /// Whether the text is an F64, and the F64 when it is.
     @builtin("string_to_F64")

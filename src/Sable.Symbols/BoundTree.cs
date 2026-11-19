@@ -52,10 +52,39 @@ public sealed class BoundLiteral(SyntaxNode syntax, TypeSymbol type, object? val
 public sealed class BoundInterpolatedString(
     SyntaxNode syntax,
     TypeSymbol type,
-    ImmutableArray<BoundExpression> parts)
+    ImmutableArray<BoundExpression> parts,
+    ImmutableArray<BoundFormatSpec?> formats)
     : BoundExpression(syntax, type) {
     public ImmutableArray<BoundExpression> Parts { get; } = parts;
-    public override IEnumerable<BoundNode> Children => Parts;
+
+    /// <summary>Each hole's format spec, <c>\(x:08x)</c>, in step with <see cref="Parts" />: null for a hole without one.</summary>
+    public ImmutableArray<BoundFormatSpec?> Formats { get; } = formats;
+
+    public override IEnumerable<BoundNode> Children => [..Parts, ..Formats.OfType<BoundFormatSpec>()];
+}
+
+/// <summary>
+///     A hole's format spec: the <c>FormatSpec</c> value the hole is written
+///     with, and the spec as the compiler read it.
+/// </summary>
+public sealed class BoundFormatSpec(SyntaxNode syntax, BoundExpression value, FormatSpecifier specifier)
+    : BoundExpression(syntax, value.Type) {
+    public BoundExpression Value { get; } = value;
+    public FormatSpecifier Specifier { get; } = specifier;
+    public override IEnumerable<BoundNode> Children => [Value];
+}
+
+/// <summary>
+///     A value as an interpolation writes it without a format spec — or with
+///     <c>?</c>, as <c>Debug</c> describes it — for a hole whose spec is only
+///     a width to pad it to: what the lowering pads, for a type that is not
+///     <c>Formattable</c>. Made by the lowering, never by the binder.
+/// </summary>
+public sealed class BoundHoleText(SyntaxNode syntax, TypeSymbol type, BoundExpression value, bool debug)
+    : BoundExpression(syntax, type) {
+    public BoundExpression Value { get; } = value;
+    public bool Debug { get; } = debug;
+    public override IEnumerable<BoundNode> Children => [Value];
 }
 
 public sealed class BoundLocalAccess(
@@ -1078,9 +1107,15 @@ public sealed class BoundOrPattern(
     public override IEnumerable<BoundNode> Children => Nodes(Left, Right);
 }
 
-public sealed class BoundErrorPattern(SyntaxNode syntax)
+/// <summary>
+///     A pattern that did not bind. <paramref name="nested" /> are the
+///     sub-patterns bound anyway, so the names they declare count as written
+///     and the error is reported once.
+/// </summary>
+public sealed class BoundErrorPattern(SyntaxNode syntax, ImmutableArray<BoundPattern> nested = default)
     : BoundPattern(syntax, ErrorTypeSymbol.Instance) {
-    public override IEnumerable<BoundNode> Children => [];
+    public ImmutableArray<BoundPattern> Nested { get; } = nested.IsDefault ? [] : nested;
+    public override IEnumerable<BoundNode> Children => Nested;
 }
 
 // ---------------------------------------------------------------------------

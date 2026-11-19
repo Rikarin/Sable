@@ -1,0 +1,37 @@
+module Sable.Math
+
+// The gamma and error functions, of F64 and of F32: C99's tgamma, lgamma,
+// erf and erfc, from libm (F64's and F32's methods, in Sable.Core).
+
+/// The gamma function, which extends the factorial: gamma(n) is (n - 1)!
+/// at a positive integer n. A pole (±inf) at 0, NaN at a negative integer
+/// and at -inf, and +inf past where it overflows (a little above 171).
+///
+/// ```sable
+/// assert(gamma(5.0) == 24.0)
+/// ```
+public fn gamma(_ x: F64) -> F64 => x.gamma()
+
+/// The gamma function, which extends the factorial.
+public fn gamma(_ x: F32) -> F32 => x.gamma()
+
+/// The natural logarithm of |gamma(x)|, which stays finite far past where
+/// gamma overflows: +inf at 0 and at every negative integer.
+public fn logGamma(_ x: F64) -> F64 => x.logGamma()
+
+/// The natural logarithm of |gamma(x)|.
+public fn logGamma(_ x: F32) -> F32 => x.logGamma()
+
+/// The error function, 2/sqrt(pi) times the integral of e^(-t²) from 0 to
+/// x: odd, in [-1, 1], ±1 at the infinities.
+public fn erf(_ x: F64) -> F64 => x.erf()
+
+/// The error function.
+public fn erf(_ x: F32) -> F32 => x.erf()
+
+/// The complementary error function, 1 - erf(x), without the loss of
+/// that difference where erf(x) is near 1: in [0, 2].
+public fn erfc(_ x: F64) -> F64 => x.erfc()
+
+/// The complementary error function, 1 - erf(x).
+public fn erfc(_ x: F32) -> F32 => x.erfc()

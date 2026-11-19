@@ -1,0 +1,144 @@
+module FormatSpecTests
+
+// FormatSpec (Sable.Core): the text form a spec is read from, at run time as
+// the compiler reads it after an interpolation's colon, and the padding it
+// does. Run with
+//     tools/stdlib-coverage.sh Sable.Core
+
+import Sable.Testing
+
+fn spec(_ text: String) -> FormatSpec {
+    return try! FormatSpec.parse(text)
+}
+
+fn parseError(_ text: String) -> ParseError? {
+    do {
+        let _ = try FormatSpec.parse(text)
+        return none
+    } catch {
+        return error
+    }
+}
+
+@test
+fn anEmptySpecSaysNothing() {
+    assertEqual(spec(""), FormatSpec())
+    assertEqual(FormatSpec().debugDescription(), "FormatSpec()")
+}
+
+@test
+fn everyPartIsReadInOrder() {
+    let read = spec("*^+#012_.3e")
+    assertEqual(read.fill, '*')
+    assert(read.alignment == .Center)
+    assert(read.sign == .Always)
+    assert(read.alternate)
+    assert(read.zeroPadded)
+    assertEqual(read.width, 12)
+    assert(read.separator == '_')
+    assert(read.precision == 3)
+    assert(read.kind == .Exponent)
+    assertEqual(read.debugDescription(), "FormatSpec(fill: '*', alignment: .Center, sign: .Always, alternate: true, zeroPadded: true, width: 12, separator: '_', precision: 3, kind: .Exponent)")
+}
+
+@test
+fn anAlignmentAloneHasASpaceForFill() {
+    let read = spec("<8")
+    assertEqual(read.fill, ' ')
+    assert(read.alignment == .Left)
+    assertEqual(read.width, 8)
+    assert(spec(">").alignment == .Right)
+    assert(spec("^").alignment == .Center)
+}
+
+@test
+fn aFillIsAnyScalarBeforeAnAlignment() {
+    assertEqual(spec("é>3").fill, 'é')
+    assertEqual(spec("0<5").fill, '0')
+    assert(!spec("0<5").zeroPadded)
+    assertEqual(spec("<<2").fill, '<')
+}
+
+@test
+fn eachSignIsRead() {
+    assert(spec("+").sign == .Always)
+    assert(spec("-").sign == .Negative)
+    assert(spec(" ").sign == .Space)
+}
+
+@test
+fn aCommaSeparatorIsRead() {
+    assert(spec(",").separator == ',')
+    assert(spec("").separator == none)
+}
+
+@test
+fn eachKindLetterIsRead() {
+    assert(spec("d").kind == .Decimal)
+    assert(spec("x").kind == .Hex)
+    assert(spec("X").kind == .UpperHex)
+    assert(spec("o").kind == .Octal)
+    assert(spec("b").kind == .Binary)
+    assert(spec("e").kind == .Exponent)
+    assert(spec("E").kind == .UpperExponent)
+    assert(spec("f").kind == .Fixed)
+    assert(spec("g").kind == .General)
+    assert(spec("G").kind == .UpperGeneral)
+    assert(spec("%").kind == .Percent)
+    assert(spec("?").kind == .Debug)
+}
+
+@test
+fn aPrecisionOfZeroIsKept() {
+    assert(spec(".0").precision == 0)
+    assertEqual(spec(".0").debugDescription(), "FormatSpec(precision: 0)")
+}
+
+@test
+fn aPointWithoutDigitsIsRefused() {
+    assertEqual(parseError(".x") ?? .Empty, .InvalidDigit(at: 1))
+    assertEqual(parseError("8.") ?? .Empty, .InvalidDigit(at: 2))
+}
+
+@test
+fn aScalarOutOfPlaceIsRefusedWhereItIs() {
+    assertEqual(parseError("08q") ?? .Empty, .Invalid(at: 2))
+    assertEqual(parseError("xx") ?? .Empty, .Invalid(at: 1))
+    assertEqual(parseError(".2+") ?? .Empty, .Invalid(at: 2))
+}
+
+@test
+fn aWidthPastAnIntOverflows() {
+    assertEqual(parseError("99999999999999999999") ?? .Empty, .Overflow)
+    assertEqual(spec("9223372036854775807").width, 9223372036854775807)
+}
+
+@test
+fn paddedPutsTextOnTheLeftUnlessTold() {
+    var plain = FormatSpec()
+    plain.width = 5
+    assertEqual(plain.padded("ab"), "ab   ")
+    assertEqual(spec(">5").padded("ab"), "   ab")
+    assertEqual(spec("*^6").padded("ab"), "**ab**")
+    assertEqual(spec("*^5").padded("ab"), "*ab**")
+}
+
+@test
+fn paddedLeavesTextAsWideAsTheWidthAlone() {
+    assertEqual(spec("3").padded("abc"), "abc")
+    assertEqual(spec("2").padded("abc"), "abc")
+    assertEqual(FormatSpec().padded(""), "")
+}
+
+@test
+fn paddedCountsScalarsNotBytes() {
+    assertEqual(spec(">4").padded("é😀"), "  é😀")
+}
+
+@test
+fn specsAreEqualFieldByField() {
+    assertEqual(spec(">8"), spec(" >8"))
+    assertNotEqual(spec(">8"), spec("<8"))
+    assertNotEqual(spec(".2"), spec(".3"))
+    assertNotEqual(spec(","), spec("_"))
+}

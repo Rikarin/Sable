@@ -1,0 +1,19 @@
+module Sable.Core
+
+extension Char: Parsable {
+    /// The one scalar the text is, as `format` writes it: `.Empty` for no
+    /// scalar, `.Invalid(at: 1)` for more than one.
+    ///
+    /// ```sable
+    /// assert(try! Char.parse("é") == 'é')
+    /// ```
+    public static fn parse(_ text: String) throws(ParseError) -> Char {
+        if text.isEmpty {
+            throw .Empty
+        }
+        if text.count > 1 {
+            throw .Invalid(at: 1)
+        }
+        return text.at(0)
+    }
+}

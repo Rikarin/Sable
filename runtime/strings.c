@@ -679,28 +679,6 @@ SableString *sable_string_from_f64(double value) {
     return make_cstring(text);
 }
 
-// A finite double's digits at a precision, correctly rounded from its exact
-// binary value, as printf writes them: 'digits' after the point, in
-// scientific form (%.*e, "1.250e+03") or fixed (%.*f, "1250.000"). The
-// numeric protocols' formatting is built on these (FloatingPoint+Text.sb);
-// a narrower float comes widened, which is exact. The precision is held to
-// what a double's exact expansion needs, 1074 places after the point, and
-// the buffer is as long as that is.
-static SableString *format_f64_at(const char *format, double value, int64_t digits) {
-    int precision = digits < 0 ? 0 : digits > 1100 ? 1100 : (int)digits;
-    char text[1500];
-    snprintf(text, sizeof text, format, precision, value);
-    return make_cstring(text);
-}
-
-SableString *sable_string_scientific_f64(double value, int64_t digits) {
-    return format_f64_at("%.*e", value, digits);
-}
-
-SableString *sable_string_fixed_f64(double value, int64_t digits) {
-    return format_f64_at("%.*f", value, digits);
-}
-
 // F32 the same way, against a float: 1.1, not 1.10000002.
 static void format_f32(float value, char *text, size_t size) {
     if (format_special(value, text, size)) {
@@ -820,10 +798,10 @@ bool sable_string_to_int(const SableString *s, int64_t *out) {
     return true;
 }
 
-// A decimal number — sign, digits, fraction, exponent — and nothing else: no
-// infinities, NaN, hex or surrounding space, which strtod would also take —
-// that is finite as a double.
-bool sable_string_to_f64(const SableString *s, double *out) {
+// Whether the string is a decimal number — sign, digits, fraction, exponent —
+// and nothing else: no infinities, NaN, hex or surrounding space, which
+// strtod and strtof would also take.
+static bool is_decimal(const SableString *s) {
     const char *b = s->bytes;
     int64_t n = s->length, i = 0, digits = 0;
     if (i < n && (b[i] == '+' || b[i] == '-')) {
@@ -864,17 +842,45 @@ bool sable_string_to_f64(const SableString *s, double *out) {
         }
     }
 
-    if (i != n) {
+    return i == n;
+}
+
+// A decimal number that is finite as a double, rounded to the nearest one.
+bool sable_string_to_f64(const SableString *s, double *out) {
+    if (!is_decimal(s)) {
         return false;
     }
 
-    char *text = malloc((size_t)n + 1);
-    memcpy(text, b, (size_t)n);
-    text[n] = '\0';
+    char *text = malloc((size_t)s->length + 1);
+    memcpy(text, s->bytes, (size_t)s->length);
+    text[s->length] = '\0';
     double value = strtod(text, NULL);
     free(text);
 
     // Too large for a double does not fit, as for sable_string_to_int.
+    if (isinf(value)) {
+        return false;
+    }
+
+    *out = value;
+    return true;
+}
+
+// The same for a float, rounded once, from the decimal digits to the nearest
+// float: through a double it would be rounded twice, and a decimal just past
+// a midpoint between two floats can land on the midpoint as a double and
+// then go the wrong way.
+bool sable_string_to_f32(const SableString *s, float *out) {
+    if (!is_decimal(s)) {
+        return false;
+    }
+
+    char *text = malloc((size_t)s->length + 1);
+    memcpy(text, s->bytes, (size_t)s->length);
+    text[s->length] = '\0';
+    float value = strtof(text, NULL);
+    free(text);
+
     if (isinf(value)) {
         return false;
     }

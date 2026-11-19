@@ -1,0 +1,19 @@
+module Sable.Core
+
+// Byte order: which end of a multi-byte integer comes first in memory, in
+// a file or on the wire. Reading and writing binary data (Array+Binary.sb,
+// Sable.IO's ByteBuffer and ByteReader) takes one; an integer's own bytes
+// are reversed by FixedWidthInteger's 'byteSwapped', LLVM's bswap.
+
+/// The order of a multi-byte value's bytes: Little puts the least
+/// significant byte first (x86-64, ARM64, WebAssembly, most file formats),
+/// Big the most significant (network byte order, Java's class files).
+@derive(Equatable, Debug)
+public enum Endian {
+    Little
+    Big
+
+    /// The order of the platform the program is compiled for. Every
+    /// target Sable has is little-endian.
+    public static var native: Endian => .Little
+}

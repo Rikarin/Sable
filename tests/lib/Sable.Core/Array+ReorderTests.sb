@@ -1,0 +1,214 @@
+module ArrayReorderTests
+
+// Moving an array's elements in place (Sable.Core, Array+Reorder.sb),
+// tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Core
+
+import Sable.Testing
+
+@test
+fn swapAtExchangesTwoElements() {
+    var xs: String[>..] = ["a", "b", "c"]
+    xs.swapAt(0, 2)
+    assert(xs == ["c", "b", "a"])
+    xs.swapAt(1, 1)
+    assert(xs == ["c", "b", "a"])
+}
+
+@test
+fn swapAtChangesTheArrayItIsCalledOnOnly() {
+    var xs: Int[>..] = [1, 2]
+    let kept = xs
+    xs.swapAt(0, 1)
+    assert(xs == [2, 1])
+    assert(kept == [1, 2])
+}
+
+@test(traps: "array index out of range")
+fn swapAtOutsideTheArrayTraps() {
+    var xs: Int[>..] = [1, 2]
+    xs.swapAt(0, 2)
+}
+
+@test
+fn reversePutsTheElementsInTheOppositeOrder() {
+    var even: Int[>..] = [1, 2, 3, 4]
+    even.reverse()
+    assert(even == [4, 3, 2, 1])
+    var odd: Int[] = [1, 2, 3]
+    odd.reverse()
+    assert(odd == [3, 2, 1])
+    var empty: Int[>..] = []
+    empty.reverse()
+    assertEqual(empty.count, 0)
+}
+
+@test
+fn reversedLeavesTheArrayAsItWas() {
+    let xs: String[>..] = ["x", "y", "z"]
+    assert(xs.reversed() == ["z", "y", "x"])
+    assert(xs == ["x", "y", "z"])
+    assert(xs[1...].reversed() == ["z", "y"])
+}
+
+@test
+fn rotateLeftBringsAnElementToTheFront() {
+    var xs: Int[>..] = [1, 2, 3, 4, 5]
+    xs.rotate(left: 2)
+    assert(xs == [3, 4, 5, 1, 2])
+    xs.rotate(left: 0)
+    assert(xs == [3, 4, 5, 1, 2])
+    xs.rotate(left: 5)
+    assert(xs == [3, 4, 5, 1, 2])
+    xs.rotate(left: 7)
+    assert(xs == [5, 1, 2, 3, 4])
+}
+
+@test
+fn rotateRightAndNegativeCountsGoTheOtherWay() {
+    var xs: Int[>..] = [1, 2, 3, 4, 5]
+    xs.rotate(right: 1)
+    assert(xs == [5, 1, 2, 3, 4])
+    xs.rotate(left: -1)
+    assert(xs == [4, 5, 1, 2, 3])
+    var empty: Int[>..] = []
+    empty.rotate(left: 3)
+    assertEqual(empty.count, 0)
+}
+
+@test
+fn rotateARangeLeavesTheRestWhereItIs() {
+    var xs: String[>..] = ["a", "b", "c", "d", "e"]
+    xs.rotate(from: 1, to: 4, left: 1)
+    assert(xs == ["a", "c", "d", "b", "e"])
+    xs.rotate(from: 1, to: 4, left: -1)
+    assert(xs == ["a", "b", "c", "d", "e"])
+    xs.rotate(from: 3, to: 3, left: 2)
+    xs.rotate(from: 0, to: 2, left: 2)
+    assert(xs == ["a", "b", "c", "d", "e"])
+}
+
+@test(traps: "array slice out of range")
+fn rotateARangePastTheEndTraps() {
+    var xs: Int[>..] = [1, 2, 3]
+    xs.rotate(from: 2, to: 4, left: 1)
+}
+
+@test(traps: "array slice out of range")
+fn rotateARangeTheWrongWayRoundTraps() {
+    var xs: Int[>..] = [1, 2, 3]
+    xs.rotate(from: 2, to: 1, left: 1)
+}
+
+@test
+fn fillSetsEveryElement() {
+    var xs: String[>..] = ["a", "b", "c"]
+    xs.fill("z")
+    assert(xs == ["z", "z", "z"])
+}
+
+@test
+fn copyFromSetsEachElementFromTheSource() {
+    var xs: Int[>..] = [0, 0, 0]
+    let source: Int[>..] = [9, 7, 8, 9, 6]
+    xs.copy(from: source[1..<4])
+    assert(xs == [7, 8, 9])
+}
+
+@test(traps: "array index out of range")
+fn copyFromAShorterSourceTraps() {
+    var xs: Int[>..] = [0, 0, 0]
+    xs.copy(from: [1, 2])
+}
+
+@test(traps: "array index out of range")
+fn copyFromALongerSourceTraps() {
+    var xs: Int[>..] = [0, 0]
+    xs.copy(from: [1, 2, 3])
+}
+
+@test
+fn partitionPutsThoseThatPassAfterThoseThatFail() {
+    var xs: Int[>..] = [1, 8, 3, 6, 5, 2, 9]
+    let p = xs.partition(by: (x: Int) => x > 4)
+    assertEqual(p, 3)
+    var i = 0
+    while i < xs.count {
+        assertEqual(xs[i] > 4, i >= p)
+        i = i + 1
+    }
+    assert(xs.sorted() == [1, 2, 3, 5, 6, 8, 9])
+}
+
+@test
+fn partitionOfAllOrNoneIsAtAnEnd() {
+    var xs: Int[>..] = [1, 2, 3]
+    assertEqual(xs.partition(by: (x: Int) => x > 9), 3)
+    assertEqual(xs.partition(by: (x: Int) => x > 0), 0)
+    var empty: Int[>..] = []
+    assertEqual(empty.partition(by: (x: Int) => x > 0), 0)
+}
+
+@test
+fn selectNthPutsTheSortedElementInPlace() {
+    var i = 0
+    while i < 9 {
+        var xs: Int[>..] = [9, 1, 8, 2, 7, 3, 6, 4, 5]
+        xs.selectNth(i)
+        assertEqual(xs[i], i + 1)
+        var j = 0
+        while j < xs.count {
+            assertEqual(xs[j] < xs[i], j < i)
+            j = j + 1
+        }
+        i = i + 1
+    }
+}
+
+@test
+fn selectNthHandlesRunsAndDuplicates() {
+    var sorted: Int[>..] = []
+    var reversed: Int[>..] = []
+    var same: Int[>..] = []
+    var i = 0
+    while i < 100 {
+        sorted.append(i)
+        reversed.append(99 - i)
+        same.append(4)
+        i = i + 1
+    }
+    sorted.selectNth(30)
+    reversed.selectNth(70)
+    same.selectNth(50)
+    assertEqual(sorted[30], 30)
+    assertEqual(reversed[70], 70)
+    assertEqual(same[50], 4)
+}
+
+@test
+fn selectNthByUsesTheOrderGiven() {
+    var words: String[>..] = ["ccc", "a", "dddd", "bb"]
+    words.selectNth(0, by: (a: String, b: String) => b.count < a.count)
+    assertEqual(words[0], "dddd")
+    var one: Int[>..] = [5]
+    one.selectNth(0)
+    assertEqual(one[0], 5)
+}
+
+@test(traps: "array index out of range")
+fn selectNthOutsideTheArrayTraps() {
+    var xs: Int[>..] = [3, 1, 2]
+    xs.selectNth(3)
+}
+
+@test
+fn reorderingChangesAFieldOfAnObjectInPlace() {
+    let holder = Holder()
+    holder.values.reverse()
+    holder.values.swapAt(0, 1)
+    assert(holder.values == [2, 3, 1])
+}
+
+class Holder {
+    var values: Int[>..] = [1, 2, 3]
+}

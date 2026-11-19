@@ -142,6 +142,7 @@ public sealed partial class LlvmEmitter {
 
         output.Append(Declarations);
         output.Append(IntrinsicDeclarations);
+        output.Append(MathDeclarations);
         output.Append('\n');
         output.Append(Counting);
         output.Append('\n');
@@ -354,11 +355,10 @@ public sealed partial class LlvmEmitter {
                                 declare ptr @sable_string_from_char(i32)
                                 declare ptr @sable_string_from_int(i64)
                                 declare ptr @sable_string_from_f64(double)
-                                declare ptr @sable_string_scientific_f64(double, i64)
-                                declare ptr @sable_string_fixed_f64(double, i64)
                                 declare ptr @sable_string_from_bool(i1 zeroext)
                                 declare zeroext i1 @sable_string_to_int(ptr, ptr)
                                 declare zeroext i1 @sable_string_to_f64(ptr, ptr)
+                                declare zeroext i1 @sable_string_to_f32(ptr, ptr)
                                 declare zeroext i1 @sable_char_is_digit(i32)
                                 declare zeroext i1 @sable_char_from_int(i64, ptr)
                                 declare zeroext i1 @sable_char_is_letter(i32)
@@ -368,8 +368,13 @@ public sealed partial class LlvmEmitter {
                                 declare ptr @sable_array_append_slot(ptr nocapture, ptr)
                                 declare ptr @sable_array_mutable_element(ptr nocapture, ptr, i64)
                                 declare ptr @sable_array_remove_last(ptr nocapture, ptr)
+                                declare i64 @sable_array_capacity(ptr)
+                                declare void @sable_array_reserve(ptr nocapture, ptr, i64)
+                                declare void @sable_array_rotate(ptr nocapture, ptr, i64, i64, i64)
+                                declare void @sable_slice_rotate(ptr nocapture, ptr, i64, i64, i64)
                                 declare ptr @sable_slice_mutable_element(ptr nocapture, ptr, i64)
                                 declare void @sable_slice_make_unique(ptr nocapture, ptr)
+                                declare ptr @sable_array_of_slice(ptr, i64, i64, ptr)
                                 declare ptr @sable_region_create()
                                 declare void @sable_region_reset(ptr)
                                 declare void @sable_region_push(ptr)
@@ -1629,6 +1634,13 @@ public sealed partial class LlvmEmitter {
         string NewLabel(string stem) => $"{stem}{_extraBlocks++}";
 
         /// <summary>Branches to a trap with this message when the condition holds, and carries on otherwise.</summary>
+        /// <summary>An offset into bytes below zero traps, as an index out of range.</summary>
+        void NegativeOffsetTraps(string offset) {
+            var negative = Fresh();
+            Line($"{negative} = icmp slt i64 {offset}, 0");
+            TrapIf(negative, "array index out of range");
+        }
+
         void TrapIf(string condition, string message) {
             var trap = NewLabel("trap");
             var ok = NewLabel("ok");
@@ -2403,6 +2415,47 @@ public sealed partial class LlvmEmitter {
                 return name;
             }
 
+            if (FloatFunctions.Find(builtin.Name) is var (elementary, floatType)) {
+                Line($"{Result()} = {MathCall(elementary, floatType, operands)}");
+                return;
+            }
+
+            // Bytes read as an integer: the last byte's index checked as an
+            // element's would be, and a negative offset refused, so that all
+            // of them are in the slice; then one load, aligned or not.
+            if (builtin.Name.StartsWith("bytes_load_", StringComparison.Ordinal)) {
+                var integer = Type(builtin.Type);
+                var width = SilType.IntegerInfo(builtin.Type)!.Value.Bits / 8;
+                NegativeOffsetTraps(operands[1]);
+                var lastIndex = Fresh();
+                Line($"{lastIndex} = add i64 {operands[1]}, {width - 1}");
+                var last = SliceElement(operands[0], lastIndex, (SliceType)builtin.Operands[0].Type);
+                var first = Fresh();
+                Line($"{first} = getelementptr inbounds i8, ptr {last}, i64 {1 - width}");
+                Line($"{Result()} = load {integer}, ptr {first}, align 1");
+                return;
+            }
+
+            // An integer written as bytes: the array made unique and the last
+            // byte's index checked, as writing that byte would, then one store.
+            if (builtin.Name.StartsWith("bytes_store_", StringComparison.Ordinal)) {
+                var integer = Type(builtin.Operands[2].Type);
+                var width = SilType.IntegerInfo(builtin.Operands[2].Type)!.Value.Bits / 8;
+                NegativeOffsetTraps(operands[1]);
+                var lastIndex = Fresh();
+                Line($"{lastIndex} = add i64 {operands[1]}, {width - 1}");
+                var last = MutableElement(operands[0], lastIndex, (ArrayType)((AddressType)builtin.Operands[0].Type).Pointee);
+                var first = Fresh();
+                Line($"{first} = getelementptr inbounds i8, ptr {last}, i64 {1 - width}");
+                Line($"store {integer} {operands[2]}, ptr {first}, align 1");
+                return;
+            }
+
+            if (builtin.Name.StartsWith("bitcast_", StringComparison.Ordinal)) {
+                Line($"{Result()} = bitcast {Type(builtin.Operands[0].Type)} {operands[0]} to {Type(builtin.Type)}");
+                return;
+            }
+
             if (NumericIntrinsic(builtin, operands, Result)) {
                 return;
             }
@@ -2783,22 +2836,22 @@ public sealed partial class LlvmEmitter {
                     Line($"{Result()} = call ptr @sable_string_from_f64(double {operands[0]})");
                     return;
 
-                case "string_scientific_F64" or "string_fixed_F64":
-                    Line($"{Result()} = call ptr @sable_{(builtin.Name == "string_fixed_F64" ? "string_fixed_f64" : "string_scientific_f64")}(double {operands[0]}, i64 {operands[1]})");
-                    return;
-
                 case "string_from_Bool":
                     Line($"{Result()} = call ptr @sable_string_from_bool(i1 zeroext {operands[0]})");
                     return;
 
-                case "string_to_Int" or "string_to_F64": {
-                    var target = builtin.Name == "string_to_Int" ? "i64" : "double";
+                case "string_to_Int" or "string_to_F64" or "string_to_F32": {
+                    var (target, function) = builtin.Name switch {
+                        "string_to_Int" => ("i64", "sable_string_to_int"),
+                        "string_to_F32" => ("float", "sable_string_to_f32"),
+                        _ => ("double", "sable_string_to_f64"),
+                    };
                     var slot = Scratch(target);
                     var ok = Fresh();
                     var value = Fresh();
                     var partial = Fresh();
                     Line($"store {target} zeroinitializer, ptr {slot}");
-                    Line($"{ok} = call zeroext i1 @sable_{(target == "i64" ? "string_to_int" : "string_to_f64")}(ptr {operands[0]}, ptr {slot})");
+                    Line($"{ok} = call zeroext i1 @{function}(ptr {operands[0]}, ptr {slot})");
                     Line($"{value} = load {target}, ptr {slot}");
                     Line($"{partial} = insertvalue {{ i1, {target} }} poison, i1 {ok}, 0");
                     Line($"{Result()} = insertvalue {{ i1, {target} }} {partial}, {target} {value}, 1");
@@ -2891,6 +2944,21 @@ public sealed partial class LlvmEmitter {
                     Line($"call void @sable_slice_make_unique(ptr {operands[0]}, ptr {module.ArrayMetadata(new ArrayType(unique.Element))})");
                     return;
 
+                // Unique already — the loop's 'array_make_unique' made it so —
+                // the element written where it is, its index checked against
+                // the slice's count, as an array's is: no call per element.
+                case "array_set_unique" when builtin.Operands[0].Type is AddressType { Pointee: SliceType unique }: {
+                    var elementType = Type(unique.Element);
+                    var slice = Fresh();
+                    Line($"{slice} = load {Type(unique)}, ptr {operands[0]}");
+                    var element = SliceElement(slice, operands[1], unique, check: !builtin.InBounds);
+                    var old = Fresh();
+                    Line($"{old} = load {elementType}, ptr {element}, !tbaa {TbaaElement}");
+                    Line($"store {elementType} {operands[2]}, ptr {element}, !tbaa {TbaaElement}");
+                    Own(false, unique.Element, old);
+                    return;
+                }
+
                 case "array_set" or "array_set_unique" when builtin.Operands[0].Type is AddressType { Pointee: SliceType written }: {
                     var elementType = Type(written.Element);
                     var element = SliceMutableElement(operands[0], operands[1], written);
@@ -2942,6 +3010,25 @@ public sealed partial class LlvmEmitter {
                     return;
                 }
 
+                case "array_capacity":
+                    Line($"{Result()} = call i64 @sable_array_capacity(ptr {operands[0]})");
+                    return;
+
+                case "array_rotate": {
+                    var pointee = ((AddressType)builtin.Operands[0].Type).Pointee;
+                    var element = pointee is SliceType rotated ? rotated.Element : ((ArrayType)pointee).Element;
+                    var function = pointee is SliceType ? "sable_slice_rotate" : "sable_array_rotate";
+                    SiteForRuntime();
+                    Line($"call void @{function}(ptr {operands[0]}, ptr {module.ArrayMetadata(new ArrayType(element))}, i64 {operands[1]}, i64 {operands[2]}, i64 {operands[3]})");
+                    return;
+                }
+
+                case "array_reserve": {
+                    var arrayType = (ArrayType)((AddressType)builtin.Operands[0].Type).Pointee;
+                    Line($"call void @sable_array_reserve(ptr {operands[0]}, ptr {module.ArrayMetadata(arrayType)}, i64 {operands[1]})");
+                    return;
+                }
+
                 case "array_remove_last": {
                     var arrayType = (ArrayType)((AddressType)builtin.Operands[0].Type).Pointee;
                     var element = LastSlot(operands[0], arrayType);
@@ -2970,6 +3057,20 @@ public sealed partial class LlvmEmitter {
                     var count = Count(operands[0]);
                     Line($"call void @sable_retain(ptr {operands[0]})");
                     _names[builtin] = MakeSlice((SliceType)builtin.Type, operands[0], "0", count);
+                    return;
+                }
+
+                // A slice as an array again: its buffer, retained, when it is the
+                // whole of it, else a copy of its run (the runtime decides).
+                case "array_of_slice" when builtin.Operands[0].Type is ArrayType:
+                    Line($"call void @sable_retain(ptr {operands[0]})");
+                    _names[builtin] = operands[0];
+                    return;
+
+                case "array_of_slice": {
+                    var slice = (SliceType)builtin.Operands[0].Type;
+                    var (buffer, start, count) = (SlicePart(operands[0], slice, 0), SlicePart(operands[0], slice, 1), SlicePart(operands[0], slice, 2));
+                    Line($"{Result()} = call ptr @sable_array_of_slice(ptr {buffer}, i64 {start}, i64 {count}, ptr {module.ArrayMetadata(new ArrayType(slice.Element))})");
                     return;
                 }
 
@@ -3440,14 +3541,6 @@ public sealed partial class LlvmEmitter {
                         Line($"{Result()} = select i1 {isStuck}, {t} {operands[0]}, {t} {value}");
                         return true;
                     }
-
-                    case "bits":
-                        Line($"{Result()} = bitcast {t} {operands[0]} to {bitsType}");
-                        return true;
-
-                    case "from_bits":
-                        Line($"{Result()} = bitcast {bitsType} {operands[0]} to {t}");
-                        return true;
                 }
 
                 return false;

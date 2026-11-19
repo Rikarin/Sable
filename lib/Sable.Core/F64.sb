@@ -48,29 +48,6 @@ extension F64: BinaryFloatingPoint {
     /// 11: the bits of the exponent.
     public static var exponentBitCount: Int => 11
 
-    /// The value's bits, as IEEE 754 lays them out: the sign, the
-    /// exponent, the significand.
-    ///
-    /// ```sable
-    /// assert((1.0 as F64).bits == 0x3FF0000000000000)
-    /// ```
-    @builtin("bits_F64")
-    public var bits: U64 { get }
-
-    /// The F64 whose bits these are.
-    @builtin("from_bits_F64")
-    public static fn fromBits(_ bits: U64) -> F64
-
-    /// Its digits with that many after the point, as C's '%.*f' writes
-    /// them: what 'toFixedString' is (FloatingPoint+Text.sb).
-    @builtin("string_fixed_F64")
-    fn fixedText(_ digits: Int) -> String
-
-    /// Its digits in scientific form with that many after the point, as
-    /// C's '%.*e' writes them: what 'toScientificString' is.
-    @builtin("string_scientific_F64")
-    fn scientificText(_ digits: Int) -> String
-
     /// The number in decimal: the fewest digits that read back as the same
     /// value.
     @builtin("string_from_F64")

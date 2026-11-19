@@ -1,0 +1,14 @@
+module Sable.Core
+
+extension String: Parsable {
+    /// The text itself: every text is a string, the empty one too. So generic
+    /// code that parses a `T: Parsable` takes strings as they are.
+    ///
+    /// ```sable
+    /// let s: String = try! "as is".parse()
+    /// assert(s == "as is")
+    /// ```
+    public static fn parse(_ text: String) throws(ParseError) -> String {
+        return text
+    }
+}

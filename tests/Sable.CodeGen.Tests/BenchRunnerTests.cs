@@ -9,8 +9,10 @@ namespace Sable.CodeGen.Tests;
 ///     <c>@bench</c> functions, its report and its baselines. Times are not
 ///     held to anything; the shape of what is printed is, and the arithmetic
 ///     of the statistics and the comparison, on fixed numbers, natively and
-///     interpreted.
+///     interpreted. The command prints to the console, which other tests
+///     take over to read it: so not at the same time as those.
 /// </summary>
+[Collection("Console")]
 public sealed class BenchRunnerTests {
     const string Benches = """
         module Speed

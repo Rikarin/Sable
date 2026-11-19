@@ -1,0 +1,14 @@
+module Sable.Core
+
+extension Char: Formattable {
+    /// The scalar itself, or with `?` in single quotes as a literal is
+    /// written; padded to the spec's width as text is.
+    ///
+    /// ```sable
+    /// assert('a'.format(try! FormatSpec.parse("^3")) == " a ")
+    /// assert('a'.format(try! FormatSpec.parse("?")) == "'a'")
+    /// ```
+    public fn format(_ spec: FormatSpec) -> String {
+        return spec.padded(spec.kind == .Debug ? self.debugDescription() : String.fromChar(self))
+    }
+}

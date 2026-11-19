@@ -1,0 +1,16 @@
+module Sable.Core
+
+extension UInt: Formattable {
+    /// The number as the spec says: in decimal, or in the radix of `x`, `X`,
+    /// `o` or `b` (`#` writes its `0x`); with a sign, separators and
+    /// padding as asked. A float's kind writes it as an F64 would be.
+    ///
+    /// ```sable
+    /// let n: UInt = 42
+    /// assert(n.format(try! FormatSpec.parse("#010b")) == "0b00101010")
+    /// assert(n.format(try! FormatSpec.parse("X")) == "2A")
+    /// ```
+    public fn format(_ spec: FormatSpec) -> String {
+        return formatInteger(U128(self), false, spec)
+    }
+}

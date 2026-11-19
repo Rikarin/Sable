@@ -46,7 +46,10 @@ public sealed class ArrayMemberLoweringTests {
 
         // Nothing is called for them, and nothing made.
         Assert.Empty(Instructions(module, "M.churn").OfType<ApplyInst>());
-        Assert.DoesNotContain(module.Functions, static f => f.Name.Contains("append", StringComparison.Ordinal) || f.Name.Contains("count", StringComparison.Ordinal));
+        // Nothing beyond what any program has: the library's own types may
+        // have members named so (ByteBuffer.count), but none is made for these.
+        var always = Lower("module M\nfn idle() { }").Functions.Select(static f => f.Name).ToHashSet(StringComparer.Ordinal);
+        Assert.DoesNotContain(module.Functions, f => !always.Contains(f.Name) && (f.Name.Contains("append", StringComparison.Ordinal) || f.Name.Contains("count", StringComparison.Ordinal)));
 
         Assert.Equal(9 * 100 + (9 + 2) * 10 + 0L, new SilInterpreter(module).Run("M.churn", 10L));
     }

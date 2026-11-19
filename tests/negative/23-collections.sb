@@ -55,7 +55,7 @@ fn appendingToAFixedArray(_ xs: Int[]) {
 }
 
 fn appendingTheWrongElement(_ xs: Int[>..]) {
-    xs.append("one")                    //! S3007 cannot be called
+    xs.append("one")                    //! S3007 no overload of 'append'
 }
 
 fn iteratingAPoint(_ p: Point) {

@@ -1532,6 +1532,11 @@ public sealed partial class SilGen {
             return substitution.Apply(array);
         }
 
+        // An optional's member: self is the optional, of what it wraps.
+        if (owner.ExtendedOptional is { } optional) {
+            return substitution.Apply(optional);
+        }
+
         return owner.TypeParameters.IsEmpty
             ? owner
             : owner.Construct([..owner.TypeParameters.Select(p => substitution.Apply(p))]);
@@ -9180,6 +9185,7 @@ public sealed partial class SilGen {
                     : null;
             var receiver = receiverOf is null ? TypeSubstitution.Empty
                 : OwnerOf(callee) is { ExtendedArray: not null } carrier ? Compilation.MatchArray(carrier, receiverOf) ?? TypeSubstitution.Empty
+                : OwnerOf(callee) is { ExtendedOptional: not null } && receiverOf is OptionalTypeSymbol optional ? TypeSubstitution.For(Core.Optional.Construct([optional.UnderlyingType]))
                 : TypeSubstitution.For(receiverOf is NamedTypeSymbol named && ConstructedOwner(named, callee) is { } owner ? owner : receiverOf);
             // A local function sees the type parameters around it as this
             // instance has them.

@@ -137,6 +137,22 @@ public sealed class NamedTypeSymbol : TypeSymbol {
     /// </remarks>
     public ArrayTypeSymbol? ExtendedArray { get; internal set; }
 
+    /// <summary>
+    ///     For <c>Optional</c>, the shell <c>T?</c> desugars to: <c>Wrapped?</c>,
+    ///     in terms of its own parameter. Null for every other type.
+    /// </summary>
+    /// <remarks>
+    ///     As with <see cref="ExtendedArray" />, the shell is never a value's
+    ///     type: <c>Optional&lt;Int&gt;</c> is written for <c>Int?</c> and binds
+    ///     to it, inside <c>extension Optional</c> <c>self</c> is a
+    ///     <c>Wrapped?</c>, and outside its members are looked up on the optional.
+    /// </remarks>
+    public OptionalTypeSymbol? ExtendedOptional { get; internal set; }
+
+    /// <summary>What <c>self</c> is in a member of the type: the array or optional it stands for, or the type with its own parameters.</summary>
+    internal TypeSymbol ExtendedSelf =>
+        ExtendedArray ?? ExtendedOptional ?? (TypeSymbol)TypeBinder.OwnConstruction(this);
+
     /// <summary>The <c>where A == B</c> requirements on this type's parameters.</summary>
     public ImmutableArray<SameTypeRequirement> SameTypeRequirements { get; internal set; } = [];
 

@@ -1,0 +1,140 @@
+module OptionalTests
+
+// Optional (Sable.Core), the members of 'T?', tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Core
+
+import Sable.Testing
+
+fn held(_ value: Int) -> Int? {
+    return value
+}
+
+fn nothing() -> Int? {
+    return none
+}
+
+@test
+fn isSomeAndIsNoneSayWhatItHolds() {
+    assert(held(1).isSome)
+    assert(!held(1).isNone)
+    assert(nothing().isNone)
+    assert(!nothing().isSome)
+}
+
+@test
+fn mapTransformsAValue() {
+    assertEqual(held(3).map({ v in v * 2 }) ?? -1, 6)
+    assertEqual(held(3).map({ v in "n\(v)" }) ?? "", "n3")
+}
+
+@test
+fn mapOfNothingIsNothing() {
+    var called = false
+    let result = nothing().map({ v in
+        called = true
+        return v
+    })
+    assert(result == none)
+    assert(!called, "the transform does not run")
+}
+
+@test
+fn flatMapChainsStepsThatMayGiveNothing() {
+    let text: String? = "42"
+    assertEqual(text.flatMap({ t in t.toInt() }) ?? -1, 42)
+    let bad: String? = "x"
+    assert(bad.flatMap({ t in t.toInt() }) == none)
+    let absent: String? = none
+    assert(absent.flatMap({ t in t.toInt() }) == none)
+}
+
+@test
+fn filterKeepsOnlyWhatMeetsTheCondition() {
+    assertEqual(held(8).filter({ v in v > 5 }) ?? -1, 8)
+    assert(held(2).filter({ v in v > 5 }) == none)
+    assert(nothing().filter({ v in true }) == none)
+}
+
+@test
+fn unwrapOrGivesTheFallbackOnlyForNothing() {
+    assertEqual(held(4).unwrap(or: 9), 4)
+    assertEqual(nothing().unwrap(or: 9), 9)
+}
+
+@test
+fn unwrapOrElseRunsTheClosureOnlyForNothing() {
+    var runs = 0
+    assertEqual(held(4).unwrap(orElse: {
+        runs = runs + 1
+        return 9
+    }), 4)
+    assertEqual(runs, 0)
+    assertEqual(nothing().unwrap(orElse: {
+        runs = runs + 1
+        return 9
+    }), 9)
+    assertEqual(runs, 1)
+}
+
+@test
+fn expectGivesTheValue() {
+    assertEqual(held(7).expect("there is one"), 7)
+}
+
+@test(traps: "the port is a number")
+fn expectOfNothingStopsWithTheMessage() {
+    let port = "eighty".toInt().expect("the port is a number")
+    print(port)
+}
+
+@test
+fn takeLeavesNothingBehind() {
+    var pending: Int? = 5
+    assertEqual(pending.take() ?? -1, 5)
+    assert(pending == none)
+    assert(pending.take() == none)
+}
+
+@test
+fn replaceGivesWhatWasThere() {
+    var slot: String? = none
+    assert(slot.replace(with: "a") == none)
+    assertEqual(slot.replace(with: "b") ?? "", "a")
+    assertEqual(slot ?? "", "b")
+}
+
+@test
+fn zipPairsTwoValues() {
+    let letter: String? = "a"
+    let pair = held(1).zip(letter)
+    assertEqual(pair.map({ p in p.0 }) ?? -1, 1)
+    assertEqual(pair.map({ p in p.1 }) ?? "", "a")
+}
+
+@test
+fn zipWithNothingOnEitherSideIsNothing() {
+    let letter: String? = "a"
+    let absent: String? = none
+    assert(nothing().zip(letter) == none)
+    assert(held(1).zip(absent) == none)
+}
+
+@test
+fn okOrMakesAnOutcome() {
+    assertEqual(held(3).okOr("missing"), Outcome<Int, String>.Ok(3))
+    assertEqual(nothing().okOr("missing"), Outcome<Int, String>.Err("missing"))
+}
+
+@test
+fn optionalIsAnotherSpellingOfTheQuestionMark() {
+    let spelled: Optional<Int> = 3
+    let suffixed: Int? = spelled
+    assertEqual(suffixed.map({ v in v + 1 }) ?? -1, 4)
+}
+
+@test
+fn questionDotStillReachesWhatItHolds() {
+    let text: String? = "abc"
+    assertEqual(text?.count ?? -1, 3)
+    assertEqual(text.map({ t in t.count }) ?? -1, 3)
+}

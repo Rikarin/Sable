@@ -1,0 +1,127 @@
+module Sable.Core
+
+// 'T?' is the compiler's (SYNTAX.md §4): 'Optional<T>', a union of
+// 'Some(T)' and 'None', written 'none'. What it can do is here, reached
+// with '.' on the optional itself — 'name.map(f)' — where '?.' reaches what
+// it holds. The API follows Swift's Optional and Rust's Option.
+
+extension Optional {
+    /// Whether it holds a value.
+    public var isSome: Bool => self != none
+
+    /// Whether it holds nothing.
+    public var isNone: Bool => self == none
+
+    /// What it holds, transformed; none when it holds nothing.
+    ///
+    /// ```sable
+    /// let count: Int? = 3
+    /// assert(count.map({ c in c * 2 }) == 6)
+    /// ```
+    public fn map<U>(_ transform: (Wrapped) -> U) -> U? {
+        if let value = self {
+            return transform(value)
+        }
+        return none
+    }
+
+    /// What it holds, transformed by something that may itself give
+    /// nothing; none when it holds nothing.
+    ///
+    /// ```sable
+    /// let text: String? = "42"
+    /// assert(text.flatMap({ t in t.toInt() }) == 42)
+    /// ```
+    public fn flatMap<U>(_ transform: (Wrapped) -> U?) -> U? {
+        if let value = self {
+            return transform(value)
+        }
+        return none
+    }
+
+    /// What it holds, if that meets the condition; none otherwise.
+    public fn filter(_ isIncluded: (Wrapped) -> Bool) -> Wrapped? {
+        if let value = self {
+            if isIncluded(value) {
+                return value
+            }
+        }
+        return none
+    }
+
+    /// What it holds, or the fallback when it holds nothing. As '??', but a
+    /// method, for the end of a chain.
+    public fn unwrap(or fallback: Wrapped) -> Wrapped {
+        if let value = self {
+            return value
+        }
+        return fallback
+    }
+
+    /// What it holds, or what the closure makes when it holds nothing: the
+    /// closure runs only then.
+    public fn unwrap(orElse makeFallback: () -> Wrapped) -> Wrapped {
+        if let value = self {
+            return value
+        }
+        return makeFallback()
+    }
+
+    /// What it holds; when it holds nothing, the program stops with the
+    /// message, at the caller's line. For a value the caller knows is there.
+    ///
+    /// ```sable
+    /// let port = "8080".toInt().expect("the port is a number")
+    /// ```
+    public fn expect(_ message: String, file: String = #file, line: Int = #line, column: Int = #column) -> Wrapped {
+        if let value = self {
+            return value
+        }
+        Runtime.trap(message, trapSite(file, line, column))
+    }
+
+    /// What it held, leaving none in its place.
+    ///
+    /// ```sable
+    /// var pending: Int? = 5
+    /// assert(pending.take() == 5)
+    /// assert(pending == none)
+    /// ```
+    public mutating fn take() -> Wrapped? {
+        let old = self
+        self = none
+        return old
+    }
+
+    /// What it held, the value put in its place.
+    public mutating fn replace(with value: Wrapped) -> Wrapped? {
+        let old = self
+        self = value
+        return old
+    }
+
+    /// Both values, paired, when both hold one; none otherwise.
+    ///
+    /// ```sable
+    /// let x: Int? = 1
+    /// let y: String? = "a"
+    /// assert(x.zip(y).map({ p in p.1 }) == "a")
+    /// ```
+    public fn zip<U>(_ other: U?) -> (Wrapped, U)? {
+        if let value = self {
+            if let otherValue = other {
+                return (value, otherValue)
+            }
+        }
+        return none
+    }
+
+    /// The value as a success, or the error as a failure when it holds
+    /// nothing: from 'T?' to 'Outcome<T, E>'.
+    public fn okOr<E>(_ error: E) -> Outcome<Wrapped, E> {
+        if let value = self {
+            return .Ok(value)
+        }
+        return .Err(error)
+    }
+}

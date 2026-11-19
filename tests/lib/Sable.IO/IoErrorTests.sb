@@ -1,0 +1,36 @@
+module IoErrorTests
+
+// IoError (Sable.IO), tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.IO
+
+import Sable.IO
+import Sable.Testing
+
+fn isAnError<T>(_ value: T) -> Bool where T: Error {
+    return true
+}
+
+fn failToRead(_ path: String) throws {
+    throw IoError.NotFound(path: path)
+}
+
+@test
+fn anIoErrorIsAnError() {
+    assert(isAnError(IoError.NotFound(path: "a.txt")))
+}
+
+@test
+fn aBareThrowsCarriesAnIoError() {
+    var path = ""
+    do {
+        try failToRead("missing.txt")
+    } catch let error as IoError {
+        path = match error {
+            case .NotFound(let p) => p
+            default               => "another case"
+        }
+    } catch {
+        path = "another error"
+    }
+    assertEqual(path, "missing.txt")
+}

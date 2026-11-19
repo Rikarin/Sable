@@ -64,7 +64,7 @@ public sealed partial class SilGen {
     }
 
     /// <summary>The receiver of a member of the type: the type, or the array an array extension extends.</summary>
-    static TypeSymbol SelfOf(NamedTypeSymbol owner) => owner.ExtendedArray ?? (TypeSymbol)owner;
+    static TypeSymbol SelfOf(NamedTypeSymbol owner) => owner.ExtendedArray ?? owner.ExtendedOptional ?? (TypeSymbol)owner;
 
     /// <summary>
     ///     An array extension's parameters, each as Int: the array builtins

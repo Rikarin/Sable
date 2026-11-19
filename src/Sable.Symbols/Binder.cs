@@ -615,7 +615,7 @@ public sealed partial class Binder {
     ///     its own parameters as its arguments, <c>Nest&lt;T&gt;</c>, so that it is
     ///     the same type its signatures write — or, in an array extension, the array.
     /// </summary>
-    static TypeSymbol SelfTypeOf(NamedTypeSymbol type) => type.ExtendedArray ?? (TypeSymbol)TypeBinder.OwnConstruction(type);
+    static TypeSymbol SelfTypeOf(NamedTypeSymbol type) => type.ExtendedSelf;
 
     NamedTypeSymbol? EnclosingType() {
         for (var symbol = _containingSymbol; symbol is not null; symbol = symbol.ContainingSymbol) {
@@ -3281,6 +3281,19 @@ public sealed partial class Binder {
         var optionalChain = false;
 
         if (receiverType is OptionalTypeSymbol optional) {
+            // The optional's own members, lib/Sable.Core/Optional.sb's, are
+            // reached with '.': 'p.map(f)' maps the optional, where 'p?.map'
+            // would map what it holds.
+            if (syntax.OperatorToken.Kind != SyntaxKind.QuestionDotToken
+                && LookupMember(optional, name) is { } own) {
+                var ownMembers = own.Members.Where(static m => !IsStaticMember(m)).ToList();
+                if (ownMembers.Count > 0) {
+                    return CheckAccessible(ownMembers[0], syntax.Name)
+                        ? BindMemberGroup(syntax, receiver, ownMembers, own.Owner, own.Substitution)
+                        : new BoundError(syntax, receiver);
+                }
+            }
+
             // Optionality is in the type system, so reaching through it is
             // written down: 'p?.x', not 'p.x'. docs/03 §3.7.
             if (syntax.OperatorToken.Kind != SyntaxKind.QuestionDotToken) {
@@ -3673,6 +3686,10 @@ public sealed partial class Binder {
                 }
 
                 return null;
+
+            // An optional's members are Optional's, its Wrapped what it holds.
+            case OptionalTypeSymbol optional:
+                return LookupMemberCore(Core.Optional.Construct([optional.UnderlyingType]), name, outer, visited, selfType);
 
             case OpaqueTypeSymbol opaque:
                 return LookupMemberCore(opaque.Constraint, name, outer, visited, selfType);
@@ -5437,7 +5454,7 @@ public sealed partial class Binder {
         var returnType =
             returnTypeSyntax is { } declaredReturn
                 ? _compilation.TypeBinder.BindType(declaredReturn, symbol, _scope)
-                : expected is not null && !IsOpen(expected.ReturnType)
+                : expected is not null && !MentionsOpen(expected.ReturnType)
                     ? expected.ReturnType
                     : null;
 
@@ -5799,6 +5816,21 @@ public sealed partial class Binder {
     /// <summary>True for a type inference has not settled yet.</summary>
     bool IsOpen(TypeSymbol type) => type is TypeParameterSymbol parameter && _openTypeParameters.Contains(parameter);
 
+    /// <summary>
+    ///     True for a type with one inference has not settled in it: a
+    ///     closure for <c>(T) -&gt; U?</c> gives what its body gives, from which
+    ///     U is inferred, as one for <c>(T) -&gt; U</c> does.
+    /// </summary>
+    bool MentionsOpen(TypeSymbol type) =>
+        type switch {
+            TypeParameterSymbol => IsOpen(type),
+            NamedTypeSymbol named => named.TypeArguments.Any(MentionsOpen),
+            OptionalTypeSymbol optional => MentionsOpen(optional.UnderlyingType),
+            ArrayTypeSymbol array => MentionsOpen(array.ElementType),
+            TupleTypeSymbol tuple => tuple.ElementTypes.Any(MentionsOpen),
+            FunctionTypeSymbol function => function.ParameterTypes.Any(MentionsOpen) || MentionsOpen(function.ReturnType),
+            _ => false,
+        };
 
     /// <summary>Looks through an alias or an optional for a function type.</summary>
     static TypeSymbol? Expand(TypeSymbol? type) =>

@@ -65,7 +65,9 @@ public sealed class CoreTypes {
         From = DeclareGeneric("From", TypeKind.Protocol, "Source");
 
         // 'Optional<T>' exists so that 'T?' has a nominal form to desugar to.
+        // Its members, though, are lib/Sable.Core/Optional.sb's, on 'T?' itself.
         Optional = DeclareGeneric("Optional", TypeKind.Union, "Wrapped");
+        Optional.ExtendedOptional = new OptionalTypeSymbol(Optional.TypeParameters[0]);
         Dictionary = DeclareGeneric("Dictionary", TypeKind.Struct, "Key", "Value");
 
         Integers = [I8, I16, I32, I64, I128, Int, U8, U16, U32, U64, U128, UInt];

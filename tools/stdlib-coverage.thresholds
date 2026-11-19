@@ -71,7 +71,6 @@ lib/Sable.Process/Process.sb                       0   0   # raise me: no tests 
 lib/Sable.Serialize/Difference.sb                  0   0   # raise me: no tests yet
 lib/Sable.Serialize/JsonValue.sb                   0   0   # raise me: no tests yet
 lib/Sable.Serialize/MergePatch.sb                  0   0   # raise me: no tests yet
-lib/Sable.Serialize/ParseError.sb                  0   0   # raise me: no tests yet
 lib/Sable.Serialize/ParseOptions.sb                0  70   # raise me: no tests yet
 lib/Sable.Serialize/Parser.sb                      0   0   # raise me: no tests yet
 lib/Sable.Serialize/Pointer.sb                     0   0   # raise me: no tests yet

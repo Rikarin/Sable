@@ -1119,7 +1119,7 @@ internal sealed class TypeBinder(Compilation compilation) {
 
                 // Inside a protocol 'Self' is the conforming type, which is
                 // not known yet; everywhere else it is the type itself.
-                return enclosing.SelfTypeParameter ?? (TypeSymbol)OwnConstruction(enclosing);
+                return enclosing.SelfTypeParameter ?? enclosing.ExtendedSelf;
             }
 
             default:
@@ -1357,6 +1357,12 @@ internal sealed class TypeBinder(Compilation compilation) {
 
                 // Constraints bind later than this, so the check waits.
                 DeferLate(() => CheckTypeArguments(named, arguments, span, context));
+
+                // 'Optional<Int>' is another spelling of 'Int?'.
+                if (named.ExtendedOptional is not null) {
+                    return new OptionalTypeSymbol(arguments[0]);
+                }
+
                 return named.Construct(arguments);
             }
 

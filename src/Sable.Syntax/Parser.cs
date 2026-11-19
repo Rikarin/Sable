@@ -277,6 +277,9 @@ internal sealed class Parser {
     int _nesting;
     bool _reportedTooDeep;
 
+    /// <summary>How many times the parse has reached the nesting limit, so that a member knows whether its own did.</summary>
+    int _tooDeepCount;
+
     static GreenNode MissingExpression() => new IdentifierNameGreen(CreateMissing(SyntaxKind.IdentifierToken));
 
     /// <summary>
@@ -303,6 +306,7 @@ internal sealed class Parser {
     ///     then finds its own closing bracket and unwinds normally.
     /// </summary>
     void SkipTooDeep() {
+        _tooDeepCount++;
         if (!_reportedTooDeep) {
             _reportedTooDeep = true;
             ReportUnexpected(
@@ -3224,16 +3228,27 @@ internal sealed class Parser {
         var pending = leading;
 
         while (!At(terminator) && !At(SyntaxKind.EndOfFile)) {
-            // An untouched member from the previous tree can be dropped
-            // straight in: its green node is position-independent.
-            if (pending.SlotCount == 0
+            // Whether this member's parse starts from nothing but tokens:
+            // attributes already read, text skipped after a member before it
+            // made no progress, or the second half of a split token are all
+            // handed over from what came before, and what the member makes of
+            // its tokens can depend on them. The leftover attributes, say,
+            // make the member list skip the next token silently, where a
+            // member that read the same attributes itself would not.
+            var clean = pending.SlotCount == 0
                 && _skipped.Count == 0
+                && (_split is null || !_split.ContainsKey(_index));
+
+            // An untouched member from the previous tree can be dropped
+            // straight in: its green node is position-independent. Only one
+            // parsed from the same clean start, at the same nesting, is offered.
+            if (clean
                 && _reuse is not null
-                && _reuse.TryGet(_index, context, out var reused, out var tokenCount, out var behind, out var ahead)
+                && _reuse.TryGet(_index, context, _nesting, out var reused, out var tokenCount, out var behind, out var ahead)
                 && _index + tokenCount < _tokens.Length) {
                 // The old parse read these tokens, which are the same ones,
                 // so this parse would have read them too.
-                var translated = new TokenExtent(_index - behind, _index + ahead);
+                var translated = new TokenExtent(_index - behind, _index + ahead, _nesting);
                 NoteRead(translated.Lowest);
                 NoteRead(translated.Highest);
                 _memberExtents[reused] = translated;
@@ -3248,20 +3263,30 @@ internal sealed class Parser {
             // the token before it. So the reads are noted, member by member
             // (the enclosing member's include its members'), and kept for the
             // next incremental parse.
+            // A member that did not start clean, or that reached the nesting
+            // limit (reported only the first time, so whether it says so
+            // depends on every member before it), has no note, and is never
+            // reused. Nor may anything else carried from member to member
+            // reach into it: the statement-end error's position is the
+            // member's own.
             var outerLowest = _lowestRead;
             var outerHighest = _highestRead;
+            var outerStatementEnd = _statementEndReportedAt;
+            var tooDeepBefore = _tooDeepCount;
             _lowestRead = int.MaxValue;
             _highestRead = -1;
+            _statementEndReportedAt = -1;
 
             var before = _index;
             var member = parseMember(pending);
             items.Add(member);
-            if (_highestRead >= 0) {
-                _memberExtents[member] = new(_lowestRead, _highestRead);
+            if (clean && _tooDeepCount == tooDeepBefore && _highestRead >= 0) {
+                _memberExtents[member] = new(_lowestRead, _highestRead, _nesting);
             }
 
             _lowestRead = Math.Min(outerLowest, _lowestRead);
             _highestRead = Math.Max(outerHighest, _highestRead);
+            _statementEndReportedAt = outerStatementEnd;
 
             pending = GreenList.Empty;
             if (_index == before) {

@@ -496,6 +496,51 @@ public sealed class IncrementalTests {
         var restored = deleted.WithChange(TextChange.Insert(at, "<"));
         Assert.Equal(StrictDump(SyntaxTree.Parse(restored.Text.Text)), StrictDump(restored));
     }
+
+    /// <summary>
+    ///     Attributes at the top of a file are read before the members are, and
+    ///     handed to the first; when no declaration follows them, the member
+    ///     list skips the next token without a word. The same attributes after
+    ///     another member are read by a member of their own, and the token after
+    ///     them is reported. So the member after that token was parsed from
+    ///     state carried over, not just from its tokens, and must not be reused
+    ///     once something comes before the attributes. Found by the
+    ///     coverage-guided parser fuzzer
+    ///     (crash-1eff0e9a860a8f54f892b466f1e9475f942952b5), minimised.
+    /// </summary>
+    [Theory]
+    [InlineData("// other programs d=> v \n     @main\n ne    UInt:on F32: C�", 0, 18, "\0 }\nexA ")]
+    [InlineData("@main\nne\nx: Int\ny: Int\n", 0, 0, "fn f() {}\n")]
+    public void AMemberAfterSilentlySkippedTextIsReparsed(string source, int start, int length, string replacement) {
+        var tree = SyntaxTree.Parse(source);
+        var change = new TextChange(new TextSpan(start, length), replacement);
+        AssertSameAsFullParse(tree, change);
+
+        var edited = tree.WithChange(change);
+        Assert.Equal(StrictDump(SyntaxTree.Parse(edited.Text.Text)), StrictDump(edited));
+
+        // And back.
+        var undone = edited.WithChange(new TextChange(new TextSpan(start, replacement.Length), source.Substring(start, length)));
+        Assert.Equal(StrictDump(SyntaxTree.Parse(source)), StrictDump(undone));
+    }
+
+    /// <summary>
+    ///     The nesting limit is reported once per file, so whether a member
+    ///     too deep says so depends on every member before it. One that reached
+    ///     the limit is never reused.
+    /// </summary>
+    [Fact]
+    public void AMemberPastTheNestingLimitIsReparsed() {
+        static string Deep(string name) => $"let {name} = {new string('(', 300)}1{new string(')', 300)}\n";
+
+        var first = Deep("a");
+        var source = first + "let m = 1\n" + Deep("b") + "let c = 1\n";
+        var tree = SyntaxTree.Parse(source);
+
+        // 'a' no longer goes too deep, so 'b' is now the one to say so.
+        var change = new TextChange(new TextSpan(0, first.Length), "let a = 1\n");
+        AssertSameAsFullParse(tree, change);
+    }
 }
 
 /// <summary>

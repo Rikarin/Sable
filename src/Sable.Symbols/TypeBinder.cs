@@ -636,6 +636,19 @@ internal sealed class TypeBinder(Compilation compilation) {
             }
         );
 
+    /// <summary>
+    ///     An associated type's <c>where</c> clause: a requirement of the
+    ///     protocol's, as if written on the protocol, so <c>associatedtype
+    ///     Iter: Iterator where Iter.Element == Element</c> holds of every
+    ///     conformer, and through every type the protocol constrains.
+    /// </summary>
+    public void BindAssociatedTypeWhereClause(NamedTypeSymbol protocol, WhereClauseSyntax clause, FileScope? scope) =>
+        Defer(() => BindWhereClause(clause, protocol, scope));
+
+    /// <summary>An array extension's conformances, checked once every signature is bound.</summary>
+    public void DeferConformanceCheck(NamedTypeSymbol carrier) =>
+        DeferLate(() => ConformanceChecker.Check(carrier, _diagnostics, compilation.Core));
+
     /// <summary>A named type's extension's <c>where</c> clause, kept on the extension.</summary>
     public void BindExtensionWhereClause(ExtensionSymbol extension, ExtensionDeclarationSyntax declaration, FileScope? scope) =>
         Defer(() => BindWhereClause(declaration.WhereClause, extension, scope));
@@ -1175,9 +1188,16 @@ internal sealed class TypeBinder(Compilation compilation) {
         // An alias the file imported stands for the module it names:
         // 'M.Vector' after 'import Sable.Math as M'.
         var full = Compilation.NameOf(syntax.Left);
+
+        // A generic parameter in scope is nearer than any module: inside
+        // 'struct Chain<First: Sequence>', 'First.Element' is the parameter's,
+        // even where a module is called First.
+        var nearer = syntax.Left is SimpleNameTypeSyntax { TypeArgumentList: null } simple
+                     && Lookup(simple.Identifier.Text, context, scope, simple.Span, report: false) is TypeParameterSymbol;
+
         // 'T.Type' where a module is also called T, and declares no 'Type':
         // the metatype of the type, below.
-        if (compilation.ResolveModule(full, scope) is { } module
+        if (!nearer && compilation.ResolveModule(full, scope) is { } module
             && !(syntax.Right is { Identifier.Text: "Type", TypeArgumentList: null } && !module.GetMembers("Type").Any())) {
             full = module.Name;
             var member = module.GetMembers(syntax.Right.Identifier.Text).FirstOrDefault();
@@ -1222,6 +1242,12 @@ internal sealed class TypeBinder(Compilation compilation) {
                 ? [(TypeSymbol)left.ContainingSymbol!]
                 : AssociatedTypes.ConstraintsOf(left);
 
+            // 'extension Sequence where Element: Sequence' makes an
+            // Element.Element: what the declarations around require counts.
+            if (AssociatedTypes.Find(constraints, wanted) is null) {
+                constraints = AssociatedTypes.ConstraintsOf(left, TypeEquivalence.ForSymbol(context));
+            }
+
             if (AssociatedTypes.Find(constraints, wanted) is { } associated) {
                 return AssociatedTypes.Member(left, associated);
             }
@@ -1242,6 +1268,15 @@ internal sealed class TypeBinder(Compilation compilation) {
         }
 
         var nested = named.GetMembers(syntax.Right.Identifier.Text).FirstOrDefault();
+
+        // 'Three.Element' where Three says what Element is by its witnesses,
+        // or by a requirement, rather than by an alias.
+        if (nested is null && named.TypeKind != TypeKind.Protocol
+            && AssociatedTypes.Find(named.BaseTypes, syntax.Right.Identifier.Text) is { } inferred
+            && AssociatedTypes.Member(named, inferred) is var resolved and not DependentMemberTypeSymbol) {
+            return resolved;
+        }
+
         if (nested is null) {
             return Error(
                 ErrorCode.ERR_TypeNotFound,
@@ -1392,6 +1427,13 @@ internal sealed class TypeBinder(Compilation compilation) {
 
                     if (Match(type.AssociatedTypes, name) is { } associated) {
                         return associated;
+                    }
+
+                    // A protocol's members speak of what the protocols it
+                    // refines declare as well: Collection's subscript gives
+                    // Sequence's Element.
+                    if (type.TypeKind == TypeKind.Protocol && AssociatedTypes.Find([type], name) is { } inherited) {
+                        return inherited;
                     }
 
                     if (type.SelfTypeParameter is { } self

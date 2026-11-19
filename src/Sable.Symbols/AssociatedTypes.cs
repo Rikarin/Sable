@@ -34,6 +34,22 @@ internal static class AssociatedTypes {
         }
     }
 
+    /// <summary>Every protocol a protocol refines, through every level, by its definition: not itself.</summary>
+    public static IEnumerable<NamedTypeSymbol> RefinedProtocols(NamedTypeSymbol protocol) {
+        var seen = new HashSet<NamedTypeSymbol> { protocol.OriginalDefinition };
+        var pending = new Stack<NamedTypeSymbol>();
+        pending.Push(protocol.OriginalDefinition);
+
+        while (pending.Count > 0) {
+            foreach (var refined in pending.Pop().BaseTypes) {
+                if (refined is NamedTypeSymbol { TypeKind: TypeKind.Protocol } parent && seen.Add(parent.OriginalDefinition)) {
+                    yield return parent.OriginalDefinition;
+                    pending.Push(parent.OriginalDefinition);
+                }
+            }
+        }
+    }
+
     /// <summary>The associated type called <paramref name="name" /> that these constraints provide, or null.</summary>
     public static TypeParameterSymbol? Find(IEnumerable<TypeSymbol> constraints, string name) {
         foreach (var constraint in constraints) {
@@ -76,6 +92,10 @@ internal static class AssociatedTypes {
 
     public static ImmutableArray<TypeSymbol> ConstraintsOf(TypeSymbol type) {
         switch (type) {
+            // A protocol's Self is whatever conforms to it.
+            case TypeParameterSymbol parameter when IsProtocolSelf(parameter):
+                return [(NamedTypeSymbol)parameter.ContainingSymbol!, ..parameter.Constraints];
+
             case TypeParameterSymbol parameter:
                 return parameter.Constraints;
 
@@ -133,6 +153,16 @@ internal static class AssociatedTypes {
             // 'alias Item = T' names the conformer's own parameter, so
             // Tagged<String> binds Item to String.
             return TypeSubstitution.For(conformer).Apply(bound);
+        }
+
+        // An array says what an associated type is in the extension that
+        // conforms it: 'alias Iter = ArrayIterator<Element>', its element
+        // read in.
+        if (baseType is ArrayTypeSymbol array
+            && associated.ContainingSymbol is NamedTypeSymbol { TypeKind: TypeKind.Protocol } protocol
+            && Compilation.ArrayConformance(array, protocol) is var (carrier, substitution)
+            && ConformanceChecker.ResolveAssociated(carrier, associated) is { } given) {
+            return substitution.Apply(given);
         }
 
         return new DependentMemberTypeSymbol(baseType, associated);

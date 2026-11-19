@@ -3434,6 +3434,7 @@ public sealed class AssociatedTypeDeclarationSyntax : DeclarationSyntax
 {
     private BaseTypeListSyntax? _baseTypes;
     private TypeSyntax? _defaultType;
+    private WhereClauseSyntax? _whereClause;
 
     internal AssociatedTypeDeclarationSyntax(GreenNode green, SyntaxNode? parent, int position)
         : base(green, parent, position) { }
@@ -3445,11 +3446,13 @@ public sealed class AssociatedTypeDeclarationSyntax : DeclarationSyntax
     public BaseTypeListSyntax? BaseTypes => GetRedOptional(ref _baseTypes, 4);
     public SyntaxToken EqualsToken => GetToken(5);
     public TypeSyntax? DefaultType => GetRedOptional(ref _defaultType, 6);
+    public WhereClauseSyntax? WhereClause => GetRedOptional(ref _whereClause, 7);
 
     internal override SyntaxNode? GetNodeSlot(int index) => index switch
     {
         4 => BaseTypes,
         6 => DefaultType,
+        7 => WhereClause,
         _ => null,
     };
 

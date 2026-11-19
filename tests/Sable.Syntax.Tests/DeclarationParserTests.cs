@@ -279,6 +279,29 @@ public sealed class DeclarationParserTests {
     }
 
     [Fact]
+    public void ParsesAnAssociatedTypesWhereClause() {
+        var declaration = ParseMember<ProtocolDeclarationSyntax>(
+            """
+            protocol Sequence {
+                associatedtype Element
+                associatedtype Iter: Iterator where Iter.Element == Element
+                associatedtype Slice: Sequence = Self where Slice.Element == Element, Slice.Element: Equatable
+                fn makeIterator() -> Iter
+            }
+            """
+        );
+
+        Assert.Equal(4, declaration.Members.Count);
+        var iter = Assert.IsType<AssociatedTypeDeclarationSyntax>(declaration.Members[1]);
+        Assert.NotNull(iter.BaseTypes);
+        Assert.Single(iter.WhereClause!.Constraints);
+
+        var slice = Assert.IsType<AssociatedTypeDeclarationSyntax>(declaration.Members[2]);
+        Assert.NotNull(slice.DefaultType);
+        Assert.Equal(2, slice.WhereClause!.Constraints.Count);
+    }
+
+    [Fact]
     public void ParsesProtocolWithSelfConstraint() {
         var declaration = ParseMember<ProtocolDeclarationSyntax>(
             "protocol Drawable where Self: Sized { fn draw(into ctx: inout Context) }"

@@ -55,12 +55,16 @@ public sealed class ArrayExtensionTests {
         string[] Names(ArrayKind kind, TypeSymbol? element = null) =>
             [..model.GetMembersOf(new ArrayTypeSymbol(element ?? compilation.Core.Int, kind)).Select(static m => m.Name).Order(StringComparer.Ordinal)];
 
-        string[] everyArray = ["contains", "count", "isEmpty", "slice"];
-        string[] growing = ["append", "clear", "contains", "count", "isEmpty", "removeLast", "slice"];
+        // Every array is a RandomAccessCollection, by the slice's extension.
+        string[] collection = ["distance", "endIndex", "index", "index", "index", "makeIterator", "startIndex"];
+        string[] everyArray = [..new[] { "contains", "count", "isEmpty", "slice" }.Concat(collection).Order(StringComparer.Ordinal)];
+        string[] growing = [..new[] { "append", "clear", "contains", "count", "isEmpty", "removeLast", "slice" }.Concat(collection).Order(StringComparer.Ordinal)];
         Assert.Equal(everyArray, Names(ArrayKind.Slice));
         Assert.Equal(everyArray, Names(ArrayKind.Fixed));
-        Assert.Equal(growing, Names(ArrayKind.Grow));
-        Assert.Equal(growing, Names(ArrayKind.GrowShrink));
+        // A growable array off the heap can also be made from a sequence.
+        string[] made = [..growing.Append("from").Order(StringComparer.Ordinal)];
+        Assert.Equal(made, Names(ArrayKind.Grow));
+        Assert.Equal(made, Names(ArrayKind.GrowShrink));
         Assert.Equal(growing, Names(ArrayKind.Inline));
 
         // Bytes read as text; and 'contains' is only where the element is Equatable.
@@ -97,7 +101,7 @@ public sealed class ArrayExtensionTests {
             "S3004",
             "expected 'String'"
         );
-        AssertError("fn f(_ xs: Int[>..]) -> Bool { return xs.contains(\"one\") }", "S3007", "cannot be called");
+        AssertError("fn f(_ xs: Int[>..]) -> Bool { return xs.contains(\"one\") }", "S3007", "no overload of 'contains'");
     }
 
     [Fact]
@@ -112,10 +116,17 @@ public sealed class ArrayExtensionTests {
     [Fact]
     public void ContainsNeedsAnEquatableElement() {
         AssertClean("fn f(_ xs: Int[], _ cs: Char[:]) -> Bool { return xs.contains(1) || cs.contains('a') }");
+        // The array's own and every equatable sequence's are not there; what
+        // is, every sequence's 'contains(where:)', takes a closure.
         AssertError(
             "struct P { var x: Int }\nfn f(_ ps: P[>..], _ p: P) -> Bool { return ps.contains(p) }",
-            "S3023",
-            "'P[>..]' has 'contains' only where 'Element: Equatable', and 'P' does not conform"
+            "S3007",
+            "'contains' cannot be called with these arguments: argument 1 needs the label 'where:'"
+        );
+        AssertError(
+            "struct P { var x: Int }\nfn f(_ ps: P[:], _ p: P) -> Bool { return ps.isEmpty && ps.slice(from: 0, to: 0).contains(element: p) }",
+            "S3007",
+            "labelled 'element', and the parameter is 'where'"
         );
     }
 
@@ -231,7 +242,7 @@ public sealed class ArrayExtensionTests {
     [InlineData("extension<T> Int[>..] { }", "S3083", "'T' is not in 'Int[>..]'")]
     [InlineData("extension<T> T[8] { }", "S3083", "every size")]
     [InlineData("extension<T> T[..4] { }", "S3083", "every size")]
-    [InlineData("extension<T> T[>..]: Equatable { }", "S3083", "not conformances")]
+    [InlineData("extension<T> T[>..]: Int { }", "S3083", "'Int' is not one")]
     [InlineData("struct Box<T> { var t: T }\nextension<T> Box<T> { }", "S3083", "'extension Box<T>'")]
     [InlineData("extension<T> (T, T) { }", "S3031", "array type")]
     [InlineData("extension<T> T[:] { var n: Int = 0 }", "S3029", "stored properties")]

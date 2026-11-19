@@ -1231,6 +1231,7 @@
     <Field Name="BaseTypes" Type="BaseTypeListSyntax" Optional="true" />
     <Field Name="EqualsToken" Type="Token" Optional="true" />
     <Field Name="DefaultType" Type="TypeSyntax" Optional="true" />
+    <Field Name="WhereClause" Type="WhereClauseSyntax" Optional="true" />
   </Node>
 
   <Node Name="UnionCaseDeclarationSyntax" Base="DeclarationSyntax" Kind="UnionCaseDeclaration"

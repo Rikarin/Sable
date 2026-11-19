@@ -5435,8 +5435,9 @@ internal sealed class AssociatedTypeDeclarationGreen : GreenNode
     private readonly GreenNode? _baseTypes;
     private readonly GreenToken? _equalsToken;
     private readonly GreenNode? _defaultType;
+    private readonly GreenNode? _whereClause;
 
-    public AssociatedTypeDeclarationGreen(GreenList? attributes, GreenList? modifiers, GreenToken? associatedTypeKeyword, GreenToken? identifier, GreenNode? baseTypes, GreenToken? equalsToken, GreenNode? defaultType)
+    public AssociatedTypeDeclarationGreen(GreenList? attributes, GreenList? modifiers, GreenToken? associatedTypeKeyword, GreenToken? identifier, GreenNode? baseTypes, GreenToken? equalsToken, GreenNode? defaultType, GreenNode? whereClause)
         : base(SyntaxKind.AssociatedTypeDeclaration, 0)
     {
         _attributes = attributes;
@@ -5446,16 +5447,18 @@ internal sealed class AssociatedTypeDeclarationGreen : GreenNode
         _baseTypes = baseTypes;
         _equalsToken = equalsToken;
         _defaultType = defaultType;
+        _whereClause = whereClause;
         FullWidth = (attributes?.FullWidth ?? 0)
                     + (modifiers?.FullWidth ?? 0)
                     + (associatedTypeKeyword?.FullWidth ?? 0)
                     + (identifier?.FullWidth ?? 0)
                     + (baseTypes?.FullWidth ?? 0)
                     + (equalsToken?.FullWidth ?? 0)
-                    + (defaultType?.FullWidth ?? 0);
+                    + (defaultType?.FullWidth ?? 0)
+                    + (whereClause?.FullWidth ?? 0);
     }
 
-    public override int SlotCount => 7;
+    public override int SlotCount => 8;
 
     public override GreenNode? GetSlot(int index) => index switch
     {
@@ -5466,6 +5469,7 @@ internal sealed class AssociatedTypeDeclarationGreen : GreenNode
         4 => _baseTypes,
         5 => _equalsToken,
         6 => _defaultType,
+        7 => _whereClause,
         _ => null,
     };
 

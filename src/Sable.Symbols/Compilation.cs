@@ -1066,7 +1066,8 @@ public sealed partial class Compilation {
             return;
         }
 
-        var name = binding.Identifier.Text;
+        // 'var `lazy`' declares 'lazy', as 'fn `yield`()' does 'yield'.
+        var name = binding.Identifier.Value as string ?? binding.Identifier.Text;
         if (name.Length == 0) {
             return;
         }
@@ -1529,6 +1530,12 @@ public sealed partial class Compilation {
             }
         }
 
+        // A protocol's 'subscript(i: Index) -> Element { get }' is a
+        // requirement, which a conformer has to meet, as a method's is.
+        function.IsAbstract = container is NamedTypeSymbol { TypeKind: TypeKind.Protocol }
+                              && declaration.Accessors is { } accessors
+                              && accessors.Accessors.All(static a => a.Body is null && a.ExpressionBody is null);
+
         RecordDeclaration(declaration, function);
         AddTo(container, function);
     }
@@ -1579,6 +1586,10 @@ public sealed partial class Compilation {
                 }
             }
         );
+
+        if (declaration.WhereClause is { } clause) {
+            TypeBinder.BindAssociatedTypeWhereClause(protocol, clause, scope);
+        }
 
         protocol.AssociatedTypes = protocol.AssociatedTypes.Add(parameter);
         RecordDeclaration(declaration, parameter);

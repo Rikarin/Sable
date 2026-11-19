@@ -11,8 +11,8 @@ extension<T> Int[>..] { }                   //! S3083 'T' is not in 'Int[>..]'
 // Every size of the array, so no size is written.
 extension<T> T[8] { }                       //! S3083 every size
 
-// Members, not conformances.
-extension<T> T[>..<]: Equatable { }         //! S3083 not conformances
+// An array conforms to protocols, and to nothing else.
+extension<T> T[>..<]: Int { }               //! S3083 is not one
 
 // A named type's parameters go after its name.
 extension<T> Box<T> { }                     //! S3083 written after its name

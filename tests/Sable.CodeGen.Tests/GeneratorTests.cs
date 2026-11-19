@@ -287,6 +287,71 @@ public sealed class GeneratorTests {
         );
 
     [Fact]
+    public void AGeneratorsSomeParameterIsAGenericOne() =>
+        Assert.Equal(
+            "2\n4\n6\n0\n2\n20\n1a\n1b\n2a\n2b\nx1\nx2\nfailed\n",
+            AssertAgree(
+                """
+                    module Test
+
+                    union E: Error { Bad }
+
+                    fn doubled(_ s: some Sequence<Int>) -> some Sequence<Int> {
+                        for x in s {
+                            yield x * 2
+                        }
+                    }
+
+                    fn pairs(_ a: some Sequence<Int>, _ b: some Sequence<String>) -> some Sequence<String> {
+                        for x in a {
+                            for y in b {
+                                yield "\(x)\(y)"
+                            }
+                        }
+                    }
+
+                    struct Prefixer {
+                        let lead: String
+
+                        fn prefixed(_ s: some Sequence<Int, E>) throws(E) -> some Sequence<String> {
+                            for try x in s {
+                                yield lead + "\(x)"
+                            }
+                        }
+                    }
+
+                    fn failing() throws(E) -> some Sequence<Int> {
+                        yield 1
+                        yield 2
+                        throw .Bad
+                    }
+
+                    fn main() {
+                        for x in doubled([1, 2, 3]) {
+                            print(x)
+                        }
+                        for x in doubled(0..<2) {
+                            print(x)
+                        }
+                        for x in doubled(doubled([5])) {
+                            print(x)
+                        }
+                        for p in pairs([1, 2], ["a", "b"]) {
+                            print(p)
+                        }
+                        do {
+                            for try s in Prefixer(lead: "x").prefixed(failing()) {
+                                print(s)
+                            }
+                        } catch {
+                            print("failed")
+                        }
+                    }
+                """
+            ).Stdout
+        );
+
+    [Fact]
     public void DefersRunWhenTheBodyEndsAndWhenItsIteratorIsDropped() =>
         Assert.Equal(
             "open a\na 0\nstep 0 done\na 1\nstep 1 done\na 2\nstep 2 done\nend of a\nclose a\nfree a\n--\nopen b\nb 0\nstep 0 done\nclose b\nfree b\n--\nopen c\nc 0\nstep 0 done\nc 1\ndropping\nstep 1 done\nclose c\nfree c\nd made\ne never started\n",

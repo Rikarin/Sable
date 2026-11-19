@@ -4779,6 +4779,16 @@ public sealed partial class Binder {
             }
 
             converted.Add(Convert(arguments[i], wanted, arguments[i].Syntax));
+
+            // A 'some P' parameter is a generic one, bound to its argument's
+            // type: a generator's sequence holds what it was given, so its
+            // result is known at the call as a generic one's would be.
+            if (parameter.Type is OpaqueTypeSymbol { Origin: null } opaque
+                && resolved.OpaqueTypeParameters.FirstOrDefault(t => opaque.Equals(t.OpaqueParameter)) is { } standsFor
+                && substitution.Lookup(standsFor) is null
+                && !arguments[i].Type.IsError) {
+                substitution = Combine(substitution, new(new Dictionary<TypeParameterSymbol, TypeSymbol> { [standsFor] = arguments[i].Type }));
+            }
         }
 
         // The parameters the call leaves off take their defaults, so every

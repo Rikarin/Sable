@@ -399,6 +399,13 @@ public sealed class TypeParameterSymbol(
     /// <summary>Binds <see cref="Constraints" /> when they are first read; null once they are.</summary>
     internal Func<ImmutableArray<TypeSymbol>>? ConstraintsResolver { get; set; }
 
+    /// <summary>
+    ///     For the type parameter a function's <c>some P</c> parameter stands
+    ///     for (<see cref="FunctionSymbol.OpaqueTypeParameters" />), that
+    ///     <c>some P</c>; null for any other.
+    /// </summary>
+    public OpaqueTypeSymbol? OpaqueParameter { get; init; }
+
     /// <summary>Variance, from <c>out T</c> or <c>in T</c>.</summary>
     public VarianceKind Variance { get; internal set; } = VarianceKind.None;
 

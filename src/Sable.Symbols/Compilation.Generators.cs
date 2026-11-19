@@ -278,8 +278,10 @@ public sealed partial class Compilation {
         var parameters = new List<TypeParameterSymbol>();
         for (var current = (Symbol?)function; current is not null; current = current.ContainingSymbol) {
             switch (current) {
+                // A 'some P' parameter is a generic one: the sequence holds
+                // what the call was given, of whatever type that is.
                 case FunctionSymbol enclosing:
-                    parameters.InsertRange(0, enclosing.TypeParameters);
+                    parameters.InsertRange(0, [..enclosing.TypeParameters, ..enclosing.OpaqueTypeParameters]);
                     continue;
 
                 case FieldSymbol:

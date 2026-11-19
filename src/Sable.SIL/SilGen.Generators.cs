@@ -143,14 +143,6 @@ public sealed partial class SilGen {
         }
 
         foreach (var parameter in function.Parameters) {
-            if (parameter.Type is OpaqueTypeSymbol { Origin: null }) {
-                if (at is not null) {
-                    Unsupported<object>(at, $"a generator with a 'some' parameter ('{parameter.Name}'); write it as a generic parameter");
-                }
-
-                return null;
-            }
-
             if (Lower(Substitute(substitution, parameter.Type)) is not { } type) {
                 return null;
             }

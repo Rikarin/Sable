@@ -486,7 +486,11 @@ PrimaryExpr       = Literal
                   | TryExpr
                   | "unsafe" Block
                   | Type "." "self"
+                  | CalledType "(" [ ArgumentList ] ")"   (* its initialiser *)
                   | "#" Identifier ;                (* compiler builtins: #file, #line *)
+
+CalledType        = "[" Type ":" Type "]"                   (* [String: Int]()   *)
+                  | PostfixType "[" ">" ".." [ "<" ] "]" ;  (* Int[>..]()        *)
 
 TupleExpr         = "(" [ TupleElem { "," TupleElem } ] ")" ;
 TupleElem         = [ Identifier ":" ] Expression ;

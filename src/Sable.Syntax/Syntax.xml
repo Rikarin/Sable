@@ -421,7 +421,7 @@
   </Node>
 
   <Node Name="TypeExpressionSyntax" Base="ExpressionSyntax" Kind="TypeExpression"
-        Doc="A type written where an expression goes, which only `.self` may follow: `Token[&gt;..].self`, `Int?.self`, `(Int) -&gt; Bool.self`.">
+        Doc="A type written where an expression goes, which only `.self` may follow: `Token[&gt;..].self`, `Int?.self`, `(Int) -&gt; Bool.self`; or a call, for a dictionary type or a growable array's: `[String: Int]()`, `Int[&gt;..]()`.">
     <Field Name="Type" Type="TypeSyntax" />
   </Node>
 

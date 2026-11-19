@@ -1241,7 +1241,7 @@ public sealed class FieldInitializerSyntax : SyntaxNode
     public override void Accept(SyntaxVisitor visitor) => visitor.VisitFieldInitializer(this);
 }
 
-/// <summary>A type written where an expression goes, which only `.self` may follow: `Token[&gt;..].self`, `Int?.self`, `(Int) -&gt; Bool.self`.</summary>
+/// <summary>A type written where an expression goes, which only `.self` may follow: `Token[&gt;..].self`, `Int?.self`, `(Int) -&gt; Bool.self`; or a call, for a dictionary type or a growable array's: `[String: Int]()`, `Int[&gt;..]()`.</summary>
 public sealed class TypeExpressionSyntax : ExpressionSyntax
 {
     private TypeSyntax? _type;

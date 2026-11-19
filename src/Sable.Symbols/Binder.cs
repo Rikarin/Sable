@@ -4322,9 +4322,11 @@ public sealed partial class Binder {
             }
 
             // 'T(seed: 4)' for T: Makeable: the protocol's initialiser
-            // requirement, met by whatever T turns out to be.
+            // requirement, met by whatever T turns out to be. 'Int[>..]()' is
+            // RangeReplaceableCollection's 'init()', as a growable array meets it.
             case BoundTypeExpression typeExpression
-                when AssociatedTypes.IsAbstract(typeExpression.ReferencedType): {
+                when AssociatedTypes.IsAbstract(typeExpression.ReferencedType)
+                     || typeExpression.ReferencedType is ArrayTypeSymbol: {
                 var found = LookupMember(typeExpression.ReferencedType, "init");
                 var requirements = found is { } lookup
                     ? lookup.Members.OfType<FunctionSymbol>().Where(static f => f.FunctionKind == FunctionKind.Initializer).ToImmutableArray()

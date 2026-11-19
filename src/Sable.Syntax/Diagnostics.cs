@@ -440,9 +440,14 @@ public sealed class DiagnosticBag : IReadOnlyCollection<Diagnostic> {
         public void Dispose() => _bag.Anchor = _previous;
     }
 
+    /// <summary>How many errors were held back while suppressed: whether a speculative parse went wrong.</summary>
+    public int SuppressedErrors { get; private set; }
+
     public void Add(Diagnostic diagnostic) {
         if (_suppressed == 0) {
             _items.Add(diagnostic.AnchoredAt(Anchor));
+        } else if (diagnostic.Severity == DiagnosticSeverity.Error) {
+            SuppressedErrors++;
         }
     }
 

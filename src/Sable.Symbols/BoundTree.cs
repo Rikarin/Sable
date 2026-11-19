@@ -651,6 +651,13 @@ public sealed class BoundThrow(SyntaxNode syntax, BoundExpression value)
     public override IEnumerable<BoundNode> Children => Nodes(Value);
 }
 
+/// <summary><c>yield value</c>: a generator's next element, given as the body pauses.</summary>
+public sealed class BoundYield(SyntaxNode syntax, BoundExpression value)
+    : BoundStatement(syntax) {
+    public BoundExpression Value { get; } = value;
+    public override IEnumerable<BoundNode> Children => Nodes(Value);
+}
+
 public sealed class BoundBreak(SyntaxNode syntax, string? label) : BoundStatement(syntax) {
     public string? Label { get; } = label;
     public override IEnumerable<BoundNode> Children => [];

@@ -571,7 +571,7 @@
 					<key>name</key>
 					<string>keyword.control.flow.sable</string>
 					<key>match</key>
-					<string>\b(return|throw|try|catch|await|defer|do|where)\b(?:[?!])?</string>
+					<string>\b(return|throw|yield|try|catch|await|defer|do|where)\b(?:[?!])?</string>
 				</dict>
 				<dict>
 					<key>name</key>
@@ -613,7 +613,7 @@
 					<key>name</key>
 					<string>invalid.illegal.reserved.sable</string>
 					<key>match</key>
-					<string>\b(macro|yield|trait|impl|become|effect|handler)\b</string>
+					<string>\b(macro|trait|impl|become|effect|handler)\b</string>
 				</dict>
 			</array>
 		</dict>

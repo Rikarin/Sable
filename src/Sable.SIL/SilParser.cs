@@ -386,6 +386,10 @@ public sealed class SilParser {
         if (Accept("deinit")) {
             type.Deinit = Expect(TokenKind.Global, "the deinit function").Text;
         }
+
+        if (Accept("empty_from")) {
+            type.EmptyFrom = int.Parse(Expect(TokenKind.Number, "the first field that may start empty").Text, CultureInfo.InvariantCulture);
+        }
     }
 
     void ParseEnum() {

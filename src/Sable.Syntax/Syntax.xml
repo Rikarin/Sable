@@ -845,6 +845,13 @@
     <Field Name="SemicolonToken" Type="Token" Optional="true" />
   </Node>
 
+  <Node Name="YieldStatementSyntax" Base="StatementSyntax" Kind="YieldStatement"
+        Doc="`yield value`: a generator's next element.">
+    <Field Name="YieldKeyword" Type="Token" />
+    <Field Name="Expression" Type="ExpressionSyntax" />
+    <Field Name="SemicolonToken" Type="Token" Optional="true" />
+  </Node>
+
   <Node Name="BreakStatementSyntax" Base="StatementSyntax" Kind="BreakStatement">
     <Field Name="BreakKeyword" Type="Token" />
     <Field Name="Label" Type="Token" Optional="true" />

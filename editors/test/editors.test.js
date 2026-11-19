@@ -252,7 +252,7 @@ test("the tree-sitter grammar names only rules it defines", () => {
 
 test("the tree-sitter grammar has every keyword of the VS Code grammar", () => {
   const { strings } = readTreeSitterGrammar();
-  const reserved = new Set(["macro", "yield", "trait", "impl", "become", "effect", "handler"]);
+  const reserved = new Set(["macro", "trait", "impl", "become", "effect", "handler"]);
   const builtinTypes = new Set(["Int", "UInt", "I8", "I16", "I32", "I64", "U8", "U16", "U32", "U64", "F32", "F64", "Bool", "Char", "String", "Never", "Void"]);
   const missing = grammarWords().filter((w) => !reserved.has(w) && !builtinTypes.has(w) && !strings.has(w));
   assert.deepEqual(missing, []);

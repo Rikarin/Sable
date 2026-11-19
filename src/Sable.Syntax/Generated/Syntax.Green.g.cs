@@ -3741,6 +3741,38 @@ internal sealed class ThrowStatementGreen : GreenNode
         new ThrowStatementSyntax(this, parent, position);
 }
 
+/// <summary>Green node for <see cref="YieldStatementSyntax"/>.</summary>
+internal sealed class YieldStatementGreen : GreenNode
+{
+    private readonly GreenToken? _yieldKeyword;
+    private readonly GreenNode? _expression;
+    private readonly GreenToken? _semicolonToken;
+
+    public YieldStatementGreen(GreenToken? yieldKeyword, GreenNode? expression, GreenToken? semicolonToken)
+        : base(SyntaxKind.YieldStatement, 0)
+    {
+        _yieldKeyword = yieldKeyword;
+        _expression = expression;
+        _semicolonToken = semicolonToken;
+        FullWidth = (yieldKeyword?.FullWidth ?? 0)
+                    + (expression?.FullWidth ?? 0)
+                    + (semicolonToken?.FullWidth ?? 0);
+    }
+
+    public override int SlotCount => 3;
+
+    public override GreenNode? GetSlot(int index) => index switch
+    {
+        0 => _yieldKeyword,
+        1 => _expression,
+        2 => _semicolonToken,
+        _ => null,
+    };
+
+    public override SyntaxNode CreateRed(SyntaxNode? parent, int position) =>
+        new YieldStatementSyntax(this, parent, position);
+}
+
 /// <summary>Green node for <see cref="BreakStatementSyntax"/>.</summary>
 internal sealed class BreakStatementGreen : GreenNode
 {

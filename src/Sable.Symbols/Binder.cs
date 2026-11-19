@@ -177,6 +177,9 @@ public sealed partial class Binder {
         _rethrows = function.IsRethrows;
         _inAsyncContext = function.IsAsync;
         SeedRethrowSources(function);
+        var savedGenerator = (_generator, _notGenerator, _deferDepth);
+        (_generator, _notGenerator) = StartGenerator(function, function.ReturnType, body);
+        _deferDepth = 0;
 
         PushScope();
         foreach (var parameter in function.Parameters) {
@@ -203,6 +206,7 @@ public sealed partial class Binder {
 
         PopScope();
         RestoreEffects(savedEffects);
+        (_generator, _notGenerator, _deferDepth) = savedGenerator;
         _containingSymbol = savedSymbol;
         _returnType = savedReturn;
         return bound;
@@ -246,7 +250,8 @@ public sealed partial class Binder {
             return;
         }
 
-        if (function.ReturnType.Equals(Core.Void) || function.ReturnType.IsError) {
+        // A generator ends when its body does: it returns nothing.
+        if (function.ReturnType.Equals(Core.Void) || function.ReturnType.IsError || _generator is not null || _notGenerator is not null) {
             return;
         }
 
@@ -276,6 +281,8 @@ public sealed partial class Binder {
         _rethrows = function.IsRethrows;
         _inAsyncContext = function.IsAsync;
         SeedRethrowSources(function);
+        var savedGenerator = (_generator, _notGenerator, _deferDepth);
+        (_generator, _notGenerator, _deferDepth) = (null, null, 0);
 
         PushScope();
         foreach (var parameter in function.Parameters) {
@@ -290,6 +297,7 @@ public sealed partial class Binder {
 
         PopScope();
         RestoreEffects(savedEffects);
+        (_generator, _notGenerator, _deferDepth) = savedGenerator;
         _containingSymbol = savedSymbol;
         _returnType = savedReturn;
 
@@ -1193,12 +1201,10 @@ public sealed partial class Binder {
             ForStatementSyntax forStatement => BindForEach(forStatement),
             ReturnStatementSyntax returnStatement => BindReturn(returnStatement),
             ThrowStatementSyntax throwStatement => BindThrow(throwStatement),
+            YieldStatementSyntax yieldStatement => BindYield(yieldStatement),
             BreakStatementSyntax breakStatement => BindBreak(breakStatement),
             ContinueStatementSyntax continueStatement => BindContinue(continueStatement),
-            DeferStatementSyntax defer => Record(
-                defer,
-                new BoundDefer(defer, BindStatement(defer.Body))
-            ),
+            DeferStatementSyntax defer => BindDefer(defer),
             GuardStatementSyntax guard => BindGuard(guard),
             LabeledStatementSyntax labeled => BindLabeled(labeled),
             DeclarationStatementSyntax declaration => BindDeclarationStatement(declaration),
@@ -1558,7 +1564,7 @@ public sealed partial class Binder {
             local.HiddenType = initializer is BoundConversion { ConversionKind: ConversionKind.Existential } opened
                 ? opened.Operand.Type
                 : initializer.Type;
-            type = new OpaqueTypeSymbol(opaque.Constraint, local);
+            type = opaque.WithOrigin(local);
         }
 
         local.TypeResolver = () => type;
@@ -2334,6 +2340,20 @@ public sealed partial class Binder {
             return Record(statement, new BoundReturn(statement, BindExpression(returned)));
         }
 
+        // A generator's 'return' ends it; what it gives, it yields.
+        if (_generator is not null) {
+            if (statement.Expression is { } given) {
+                _diagnostics.Error(
+                    ErrorCode.ERR_ReturnValueInGenerator,
+                    given.Span,
+                    "a generator gives its elements by 'yield', and 'return' only ends it: write 'yield' for the value, then 'return'"
+                );
+                BindExpression(given);
+            }
+
+            return Record(statement, new BoundReturn(statement, null));
+        }
+
         if (statement.Expression is null) {
             if (!_returnType.Equals(Core.Void) && !_returnType.IsError) {
                 _diagnostics.Error(
@@ -2377,17 +2397,26 @@ public sealed partial class Binder {
     ///     and nowhere else (see <see cref="Conversions.Classify" />).
     /// </remarks>
     BoundExpression ConvertResult(BoundExpression value, SyntaxNode syntax) {
-        if (_returnType is not OpaqueTypeSymbol { Origin: { } origin } opaque || !ReferenceEquals(origin, _containingSymbol)) {
+        if (_returnType is not OpaqueTypeSymbol { Origin: { } origin } opaque || !IsOwnResult(origin)) {
             return Convert(value, _returnType, syntax);
         }
 
-        var converted = Convert(value, new OpaqueTypeSymbol(opaque.Constraint), syntax);
+        var converted = Convert(value, opaque.WithOrigin(null), syntax);
         return converted switch {
             { HasError: true } => converted,
             BoundConversion conversion => new BoundConversion(conversion.Syntax, opaque, conversion.Operand, conversion.ConversionKind),
             _ => new BoundConversion(syntax, opaque, converted, ConversionKind.Existential),
         };
     }
+
+    /// <summary>
+    ///     True when the body being bound gives the <c>some P</c> of this origin:
+    ///     its function's own result, or, in a getter, its property's type.
+    /// </summary>
+    bool IsOwnResult(Symbol origin) =>
+        ReferenceEquals(origin, _containingSymbol)
+        || origin is FieldSymbol && _containingSymbol is FunctionSymbol { FunctionKind: FunctionKind.Accessor, Name: "get" } getter
+        && ReferenceEquals(getter.ContainingSymbol, origin);
 
     /// <summary>
     ///     The concrete type each function returning <c>some P</c> has returned
@@ -2417,6 +2446,8 @@ public sealed partial class Binder {
             // What the first return gives is the type the result hides.
             if (opaque.Origin is FunctionSymbol origin && ReferenceEquals(origin, _containingSymbol)) {
                 origin.HiddenResultType = value.Type;
+            } else if (opaque.Origin is FieldSymbol property && IsOwnResult(property)) {
+                property.HiddenType = value.Type;
             }
 
             return;
@@ -3854,7 +3885,7 @@ public sealed partial class Binder {
                     // 'b.first()' for B: Bag is a B.Item, not any bag's Item.
                     if (AssociatedTypes.IsAbstract(selfType)
                         && !AssociatedTypes.IsProtocolSelf(selfType)
-                        || selfType is ArrayTypeSymbol) {
+                        || selfType is ArrayTypeSymbol or OpaqueTypeSymbol) {
                         foreach (var associated in AssociatedTypes.All(named)) {
                             map[associated] = AssociatedTypes.Member(selfType, associated);
                         }
@@ -4738,7 +4769,8 @@ public sealed partial class Binder {
             MarkThrows(syntax.Span, $"'{resolved.Name}'", substitution.Apply(thrown));
         }
 
-        if (resolved.IsAsync) {
+        // An async generator's call only captures its arguments: what waits is 'next()'.
+        if (resolved.IsAsync && !IsGenerator(resolved)) {
             MarkAsync(syntax.Span, $"'{resolved.Name}'");
         } else if (CrossesIntoActor(resolved)) {
             MarkAsync(syntax.Span, $"'{resolved.Name}', isolated to {(OnMainActor(resolved) ? "the main actor" : "its actor")},");
@@ -5936,6 +5968,19 @@ public sealed partial class Binder {
         _containingSymbol = symbol;
         _returnType = returnType;
         _inferringReturn = inferring;
+        var savedGenerator = (_generator, _notGenerator, _deferDepth);
+        (_generator, _notGenerator, _deferDepth) = (null, null, 0);
+
+        // A closure whose result is 'some Sequence<T>' and whose body yields
+        // is a generator, its result its own.
+        if (Yields(body)) {
+            if (!inferring && returnType is OpaqueTypeSymbol { Origin: null } closureOpaque) {
+                _returnType = returnType = closureOpaque.WithOrigin(symbol);
+            }
+
+            (_generator, _notGenerator) = StartGenerator(symbol, inferring ? Core.Void : returnType, body);
+        }
+
         _loopDepth = 0;
         _switchCases = [];
         _openTypeParameters = [];
@@ -6054,6 +6099,7 @@ public sealed partial class Binder {
         _openTypeParameters = savedOpen;
         _loopDepth = savedLoopDepth;
         _switchCases = savedSwitchCases;
+        (_generator, _notGenerator, _deferDepth) = savedGenerator;
         _inferringReturn = savedInferring;
         _returnType = savedReturn;
         _containingSymbol = savedSymbol;
@@ -6062,7 +6108,7 @@ public sealed partial class Binder {
 
     /// <summary>A closure with a result returns on every path, like anything else.</summary>
     void CheckClosureFlow(SyntaxNode body, BoundBlock bound) {
-        if (_returnType.Equals(Core.Void) || _returnType.IsError) {
+        if (_returnType.Equals(Core.Void) || _returnType.IsError || _generator is not null || _notGenerator is not null) {
             return;
         }
 

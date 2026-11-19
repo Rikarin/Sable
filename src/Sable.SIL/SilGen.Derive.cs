@@ -18,6 +18,31 @@ public sealed partial class SilGen {
         }
     }
 
+    /// <summary>
+    ///     Each generator's <c>makeIterator()</c> and <c>next()</c>, which the
+    ///     compilation made as it bound the generator's body: lowered where the
+    ///     generator is declared, from its body.
+    /// </summary>
+    void AddGenerators(List<(FunctionSymbol Symbol, SyntaxNode Syntax, SemanticModel Model)> functions) {
+        foreach (var (symbol, syntax, model) in functions.ToList()) {
+            if (!syntax.DescendantNodes().OfType<YieldStatementSyntax>().Any()) {
+                continue;
+            }
+
+            // Binding the body is what makes the generator.
+            _ = model.GetBoundNode(syntax);
+            if (_compilation.GetGenerator(symbol) is not { } generator || !ReferenceEquals(generator.Function, symbol)) {
+                continue;
+            }
+
+            if (generator.MakeIterator is { } makeIterator) {
+                functions.Add((makeIterator, syntax, model));
+            }
+
+            functions.Add((generator.Next, syntax, model));
+        }
+    }
+
     /// <summary>The initialisers a subclass inherits, which the compilation wrote: lowered where the class is declared.</summary>
     void AddInheritedInitializers(List<(FunctionSymbol Symbol, SyntaxNode Syntax, SemanticModel Model)> functions) {
         foreach (var (init, inherited) in _compilation.InheritedInitializers) {

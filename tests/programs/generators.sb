@@ -1,0 +1,121 @@
+module Programs.Generators
+
+fn words(_ text: String) -> some Sequence<String> {
+    var current = ""
+    for c in text {
+        if c == ' ' {
+            if !current.isEmpty {
+                yield current
+            }
+            current = ""
+        } else {
+            current = current + "\(c)"
+        }
+    }
+    if !current.isEmpty {
+        yield current
+    }
+}
+
+fn pairs(_ items: String[]) -> some Sequence<String> {
+    for a in items {
+        for b in items {
+            if a != b {
+                yield "\(a)\(b)"
+            }
+        }
+    }
+}
+
+fn repeated<T>(_ value: T, times: Int) -> some Sequence<T> {
+    for _ in 0..<times {
+        yield value
+    }
+}
+
+fn countdown(from n: Int) -> some Iterator<Int> {
+    var i = n
+    while i > 0 {
+        yield i
+        i -= 1
+    }
+}
+
+struct Grid {
+    let width: Int
+    let height: Int
+
+    fn cells() -> some Sequence<(Int, Int)> {
+        for y in 0..<height {
+            for x in 0..<width {
+                yield (x, y)
+            }
+        }
+    }
+}
+
+class Names {
+    var names: String[] = ["ann", "bob"]
+
+    fn shouted() -> some Sequence<String> {
+        for n in names {
+            yield n.uppercased()
+        }
+    }
+}
+
+fn total<S: Sequence>(_ s: S) -> Int where S.Element == Int {
+    var t = 0
+    for x in s {
+        t += x
+    }
+    return t
+}
+
+fn main() {
+    for w in words("the quick  brown fox") {
+        print(w)
+    }
+    var line = ""
+    for p in pairs(["a", "b", "c"]) {
+        line = line + p + " "
+    }
+    print(line)
+    for s in repeated("hi", times: 2) {
+        print(s)
+    }
+    print(total(repeated(7, times: 3)))
+    var it = countdown(from: 3)
+    while let x = it.next() {
+        print(x)
+    }
+    print(it.next() == none)
+    var cells = 0
+    let grid = Grid { width: 3, height: 2 }
+    for (x, y) in grid.cells() {
+        cells += x + y
+    }
+    print(cells)
+    for n in Names().shouted() {
+        print(n)
+    }
+    // Leaving early drops the iterator part-way.
+    for w in words("one two three") {
+        if w == "two" {
+            break
+        }
+        print(w)
+    }
+    // A copy goes on from where the original was, on its own.
+    let s = words("x y z")
+    var a = s.makeIterator()
+    print(a.next()!)
+    var b = a
+    print(a.next()!)
+    print(b.next()!)
+    print(b.next()!)
+    print(a.next()!)
+    // Each makeIterator starts afresh.
+    var c = s.makeIterator()
+    print(c.next()!)
+}

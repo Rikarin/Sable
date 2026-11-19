@@ -21,6 +21,12 @@ namespace Sable.Symbols;
 ///     </para>
 /// </remarks>
 internal sealed class TypeBinder(Compilation compilation) {
+    /// <summary>True while the constraint of a <c>some</c> is bound: its protocol may be given its associated types.</summary>
+    [ThreadStatic] static bool s_primaryWanted;
+
+    /// <summary>The associated types the constraint of the <c>some</c> being bound gave its protocol.</summary>
+    [ThreadStatic] static ImmutableArray<TypeSymbol> s_primaryArguments;
+
     readonly DiagnosticBag _diagnostics = new();
     readonly List<Action> _forcers = [];
     readonly List<Action> _late = [];
@@ -133,7 +139,7 @@ internal sealed class TypeBinder(Compilation compilation) {
     public TypeSymbol BindReturnType(TypeSyntax syntax, FunctionSymbol function, FileScope? scope) {
         var type = BindType(syntax, function, scope);
         return type is OpaqueTypeSymbol { Origin: null } opaque
-            ? new OpaqueTypeSymbol(opaque.Constraint, function)
+            ? opaque.WithOrigin(function)
             : type;
     }
 
@@ -380,8 +386,12 @@ internal sealed class TypeBinder(Compilation compilation) {
     public void BindFieldType(FieldSymbol field, FieldDeclarationSyntax declaration) {
         var scope = compilation.CurrentScope;
 
+        // A computed property's 'some P' is the property's own: the type its
+        // getter returns, hidden, as a function's result is.
         field.TypeResolver = () => declaration.Declarator.TypeAnnotation is { } annotation
-            ? BindType(annotation.Type, field, scope)
+            ? BindType(annotation.Type, field, scope) is var annotated && annotated is OpaqueTypeSymbol { Origin: null } opaque && field.IsComputed
+                ? opaque.WithOrigin(field)
+                : annotated
             // Without an annotation the type comes from the initial value, read
             // off its form: members are declared before expressions are bound.
             : declaration.Declarator.Initializer is { } initializer && InferFromSyntax(initializer.Value, field, scope) is { } inferred
@@ -1151,9 +1161,24 @@ internal sealed class TypeBinder(Compilation compilation) {
             }
 
             case OpaqueTypeSyntax opaque: {
-                var constraint = BindType(opaque.ConstraintType, context, scope);
+                // 'some Sequence<Int>': the arguments are the protocol's
+                // associated types, in the order it declares them.
+                var wanted = s_primaryWanted;
+                var given = s_primaryArguments;
+                s_primaryWanted = true;
+                s_primaryArguments = default;
+                TypeSymbol constraint;
+                ImmutableArray<TypeSymbol> arguments;
+                try {
+                    constraint = BindType(opaque.ConstraintType, context, scope);
+                    arguments = s_primaryArguments.IsDefault ? [] : s_primaryArguments;
+                } finally {
+                    s_primaryWanted = wanted;
+                    s_primaryArguments = given;
+                }
+
                 return RequireProtocol(constraint, "some", opaque.ConstraintType.Span)
-                    ? new OpaqueTypeSymbol(constraint)
+                    ? new OpaqueTypeSymbol(constraint, arguments: arguments)
                     : ErrorTypeSymbol.Instance;
             }
 
@@ -1380,6 +1405,10 @@ internal sealed class TypeBinder(Compilation compilation) {
         FileScope? scope,
         TextSpan span
     ) {
+        // Only the name a 'some' is written with may give a protocol's
+        // associated types; the names inside its arguments may not.
+        var primaryWanted = s_primaryWanted;
+        s_primaryWanted = false;
         var arguments = argumentList is null
             ? ImmutableArray<TypeSymbol>.Empty
             : [..argumentList.Arguments.Select(a => BindType(a, context, scope))];
@@ -1430,6 +1459,23 @@ internal sealed class TypeBinder(Compilation compilation) {
                 }
 
                 return new TypeSubstitution(map).Apply(alias.AliasedType);
+            }
+
+            // 'some Sequence<Int>': a protocol's associated types, in order.
+            case NamedTypeSymbol { TypeKind: TypeKind.Protocol, TypeParameters.IsEmpty: true } protocol
+                when !arguments.IsEmpty && primaryWanted: {
+                var associated = protocol.AssociatedTypes.Length;
+                if (arguments.Length > associated) {
+                    return Error(
+                        ErrorCode.ERR_WrongTypeArgumentCount,
+                        span,
+                        $"'{protocol.Name}' has {associated} associated type(s), which 'some {protocol.Name}<…>' names in order, "
+                        + $"but {arguments.Length} were given"
+                    );
+                }
+
+                s_primaryArguments = arguments;
+                return protocol;
             }
 
             case NamedTypeSymbol named: {

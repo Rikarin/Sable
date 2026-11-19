@@ -2463,6 +2463,27 @@ public sealed class ThrowStatementSyntax : StatementSyntax
     public override void Accept(SyntaxVisitor visitor) => visitor.VisitThrowStatement(this);
 }
 
+/// <summary>`yield value`: a generator's next element.</summary>
+public sealed class YieldStatementSyntax : StatementSyntax
+{
+    private ExpressionSyntax? _expression;
+
+    internal YieldStatementSyntax(GreenNode green, SyntaxNode? parent, int position)
+        : base(green, parent, position) { }
+
+    public SyntaxToken YieldKeyword => GetToken(0);
+    public ExpressionSyntax Expression => GetRed(ref _expression, 1);
+    public SyntaxToken SemicolonToken => GetToken(2);
+
+    internal override SyntaxNode? GetNodeSlot(int index) => index switch
+    {
+        1 => Expression,
+        _ => null,
+    };
+
+    public override void Accept(SyntaxVisitor visitor) => visitor.VisitYieldStatement(this);
+}
+
 public sealed class BreakStatementSyntax : StatementSyntax
 {
     internal BreakStatementSyntax(GreenNode green, SyntaxNode? parent, int position)
@@ -3688,6 +3709,7 @@ public abstract class SyntaxVisitor
     public virtual void VisitDeferStatement(DeferStatementSyntax node) => DefaultVisit(node);
     public virtual void VisitReturnStatement(ReturnStatementSyntax node) => DefaultVisit(node);
     public virtual void VisitThrowStatement(ThrowStatementSyntax node) => DefaultVisit(node);
+    public virtual void VisitYieldStatement(YieldStatementSyntax node) => DefaultVisit(node);
     public virtual void VisitBreakStatement(BreakStatementSyntax node) => DefaultVisit(node);
     public virtual void VisitContinueStatement(ContinueStatementSyntax node) => DefaultVisit(node);
     public virtual void VisitFallthroughStatement(FallthroughStatementSyntax node) => DefaultVisit(node);

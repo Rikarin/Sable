@@ -64,6 +64,7 @@ public sealed class StatementParserTests {
     [InlineData("return", SyntaxKind.ReturnStatement)]
     [InlineData("return x", SyntaxKind.ReturnStatement)]
     [InlineData("throw .NotFound(id)", SyntaxKind.ThrowStatement)]
+    [InlineData("yield i * i", SyntaxKind.YieldStatement)]
     [InlineData("break", SyntaxKind.BreakStatement)]
     [InlineData("break outer", SyntaxKind.BreakStatement)]
     [InlineData("continue outer", SyntaxKind.ContinueStatement)]
@@ -87,6 +88,23 @@ public sealed class StatementParserTests {
         Assert.Equal(2, block.Statements.Count);
         Assert.Equal(SyntaxKind.ReturnStatement, block.Statements[0].Kind);
         Assert.Null(Assert.IsType<ReturnStatementSyntax>(block.Statements[0]).Expression);
+    }
+
+    [Fact]
+    public void YieldTakesTheExpressionAfterIt() {
+        var tree = SyntaxTree.ParseStatement("{\n    yield a + b\n    f()\n}");
+        Assert.False(tree.HasErrors, tree.FormatDiagnostics());
+
+        var block = Assert.IsType<BlockSyntax>(tree.Root);
+        Assert.Equal(2, block.Statements.Count);
+        Assert.IsType<BinaryExpressionSyntax>(Assert.IsType<YieldStatementSyntax>(block.Statements[0]).Expression);
+    }
+
+    [Fact]
+    public void YieldIsAKeywordButStillAMemberName() {
+        var tree = SyntaxTree.ParseStatement("await Task.yield()");
+        Assert.False(tree.HasErrors, tree.FormatDiagnostics());
+        Assert.Equal(SyntaxKind.YieldKeyword, SyntaxFacts.KeywordKind("yield"));
     }
 
     [Theory]

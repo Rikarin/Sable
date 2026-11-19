@@ -89,7 +89,7 @@ ref        region     repeat     required   rethrows   return     sealed
 self
 Self       some       static     struct     subscript  super      switch
 throw      throws     true       try        typealias  union      unowned
-unsafe     using      var        weak       where      while
+unsafe     using      var        weak       where      while      yield
 ```
 
 `typealias` declares nothing: Sable spells it `alias`, which also gives a
@@ -111,7 +111,7 @@ set  willSet  comptime  unchecked
 ### Reserved for future use
 
 ```
-yield  trait  impl  where_clause  become  do_notation  effect  handler
+trait  impl  where_clause  become  do_notation  effect  handler
 ```
 
 ## 6. Literals

@@ -1,0 +1,76 @@
+module Negative.Generators
+
+// A body that yields is a generator: its result names the sequence it
+// gives, it takes its arguments by value, its 'return' takes no value, and a
+// 'defer' in it cannot yield.
+
+fn evens(upTo n: Int) -> some Sequence<Int> {
+    var i = 0
+    while i <= n {
+        yield i
+        i += 2
+    }
+}
+
+fn notASequence() -> Int {
+    yield 1 //! S3480 its result must be 'some Sequence<T>'
+    return 2
+}
+
+fn nothing() {
+    yield 1 //! S3480 but it returns nothing
+}
+
+fn unnamed() -> some Sequence {
+    yield 1 //! S3480 its result must name what it yields
+}
+
+async fn notAwaited() -> some Sequence<Int> {
+    yield 1 //! S3480 its result must be 'some AsyncSequence<T>'
+}
+
+fn waited() -> some AsyncSequence<Int> {
+    yield 1 //! S3480 'waited' is not async
+}
+
+fn deferred() -> some Sequence<Int> {
+    defer {
+        yield 0 //! S3481 cannot give an element then
+    }
+    yield 1
+}
+
+fn returned() -> some Sequence<Int> {
+    yield 1
+    return 2 //! S3482 'return' only ends it
+}
+
+fn changes(_ n: inout Int) -> some Sequence<Int> { //! S3483 takes its arguments by value
+    yield n
+}
+
+fn failing() throws -> some Sequence<Int> { //! S3484 an Iterator's does not let out
+    yield 1
+}
+
+fn wrongElement() -> some Sequence<Int> {
+    yield "one" //! S3004 expected 'Int' but found 'String'
+}
+
+fn closures() {
+    let squares = { () -> some Sequence<Int> in
+        for i in 0..<3 {
+            yield i * i
+        }
+    }
+    let wrong = { () -> Int in
+        yield 1 //! S3480 this closure yields
+        return 1
+    }
+}
+
+struct Counter {
+    init() {
+        yield 1 //! S3480 'init' is not a function
+    }
+}

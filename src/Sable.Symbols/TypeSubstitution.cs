@@ -289,6 +289,21 @@ public sealed class TypeSubstitution {
         }
     }
 
+    /// <summary>True when a type is, or is built from, <paramref name="parameter" />.</summary>
+    public static bool Mentions(TypeSymbol type, TypeParameterSymbol parameter) =>
+        type switch {
+            TypeParameterSymbol p => ReferenceEquals(p, parameter),
+            DependentMemberTypeSymbol member => Mentions(member.BaseType, parameter),
+            ArrayTypeSymbol array => Mentions(array.ElementType, parameter),
+            OptionalTypeSymbol optional => Mentions(optional.UnderlyingType, parameter),
+            ReferenceTypeSymbol reference => Mentions(reference.ReferencedType, parameter),
+            TupleTypeSymbol tuple => tuple.ElementTypes.Any(e => Mentions(e, parameter)),
+            NamedTypeSymbol named => named.TypeArguments.Any(a => Mentions(a, parameter)),
+            FunctionTypeSymbol function => function.ParameterTypes.Any(p => Mentions(p, parameter)) || Mentions(function.ReturnType, parameter),
+            MetatypeTypeSymbol metatype => Mentions(metatype.InstanceType, parameter),
+            _ => false,
+        };
+
     /// <summary>True when a type is, or is built from, an error type.</summary>
     public static bool ContainsError(TypeSymbol type) =>
         type switch {

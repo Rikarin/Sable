@@ -61,6 +61,22 @@ public struct Dictionary<Key: Hashable, Value>: Sequence {
         }
     }
 
+    /// The values grouped by the key each one gives: each key with the
+    /// values that gave it, in the order they came; the keys in the order
+    /// they were first given.
+    ///
+    /// ```sable
+    /// let words: String[>..] = ["fig", "pear", "kiwi", "plum", "apple"]
+    /// let byLength = Dictionary(grouping: words, by: { $0.count })
+    /// assert(byLength[4]! == ["pear", "kiwi", "plum"])
+    /// assert(byLength.keys() == [3, 4, 5])
+    /// ```
+    public init<S: Sequence>(grouping values: S, by keyFor: (S.Element) -> Key) where Value == S.Element[>..] {
+        for value in values {
+            self[keyFor(value), default: []].append(value)
+        }
+    }
+
     // ---- Size ---------------------------------------------------------------
 
     /// How many keys it holds.

@@ -56,6 +56,35 @@ public sealed class SubscriptAndLocalTests {
             """
         );
 
+    /// <summary>
+    ///     A mutating method on what a subscript gives reads it with the
+    ///     getter, changes the copy and hands it to the setter, working out
+    ///     the indices once; '[]' takes the type the subscript says.
+    /// </summary>
+    [Fact]
+    public void AMutatingMethodOnASubscriptWritesBack() =>
+        Prints(
+            "[1, 2] [3]\n3\n",
+            """
+            final class Counter {
+                var n = 0
+                fn next(_ key: String) -> String {
+                    n += 1
+                    return key
+                }
+            }
+            """,
+            """
+                var d: [String: Int[>..]] = [:]
+                let counter = Counter()
+                d[counter.next("a"), default: []].append(1)
+                d[counter.next("a"), default: []].append(2)
+                d[counter.next("b"), default: []].append(3)
+                print("\(d["a"]!) \(d["b"]!)")
+                print(counter.n)
+            """
+        );
+
     [Fact]
     public void ASubscriptWithAnExpressionBodyAndAGenericOwner() =>
         Prints(

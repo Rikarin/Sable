@@ -4428,7 +4428,7 @@ public sealed partial class Binder {
                                && outer.IsEmpty
                                && group.Candidates.All(c => c.IsStatic && ReferenceEquals(c.ContainingSymbol is ExtensionSymbol e ? e.ExtendedType : c.ContainingSymbol, bare))
             ? bare.TypeParameters
-            : [];
+            : InitializerOwnerTypeParameters(group, outer);
 
         try {
             return BindResolvedCall(syntax, group, arguments, labels, syntaxes, expectedType, outer);
@@ -4436,6 +4436,22 @@ public sealed partial class Binder {
             _ownerTypeParameters = savedOwner;
         }
     }
+
+    /// <summary>
+    ///     The parameters of a generic type made bare by an initialiser with
+    ///     type parameters of its own: <c>Groups(grouping: xs, by: f)</c>
+    ///     infers Groups' K and V along with the initialiser's E, through its
+    ///     arguments and its <c>where</c> clause, as a generic function's are.
+    /// </summary>
+    static ImmutableArray<TypeParameterSymbol> InitializerOwnerTypeParameters(BoundFunctionGroup group, TypeSubstitution outer) =>
+        outer.IsEmpty
+        && group.Receiver is null
+        && group.Candidates.Any(static c => !c.TypeParameters.IsEmpty)
+        && group.Candidates.All(static c => c.FunctionKind == FunctionKind.Initializer)
+        && group.Candidates[0].ContainingSymbol is NamedTypeSymbol { IsConstructed: false, TypeParameters.IsEmpty: false, TypeKind: not TypeKind.Protocol } type
+        && group.Candidates.All(c => ReferenceEquals(c.ContainingSymbol, type))
+            ? type.TypeParameters
+            : [];
 
     BoundExpression BindResolvedCall(
         SyntaxNode syntax,
@@ -4666,6 +4682,13 @@ public sealed partial class Binder {
             && result is NamedTypeSymbol { TypeArguments.IsEmpty: true, TypeParameters.IsEmpty: false } definition
             && definition.TypeParameters.All(p => substitution.Lookup(p) is not null)) {
             result = definition.Construct([..definition.TypeParameters.Select(p => substitution.Lookup(p)!)]);
+
+            // Inferred with the initialiser's own parameters, as in
+            // 'Groups(grouping: xs, by: f)': they meet the type's
+            // constraints as ones inferred before the call do.
+            if (!_ownerTypeParameters.IsEmpty) {
+                _compilation.TypeBinder.CheckTypeArguments(definition, ((NamedTypeSymbol)result).TypeArguments, syntax.Span, _containingSymbol);
+            }
         }
 
         ReportUnmetDerivation(resolved, group.Receiver?.Type, syntax);
@@ -4862,6 +4885,8 @@ public sealed partial class Binder {
             InferFromContext(outer.Apply(function.ReturnType), expectedType, inferrable, map);
         }
 
+        InferFromSameTypeRequirements(function, outer, inferrable, map);
+
         foreach (var (wanted, argument) in literals) {
             // A float literal where an integer one decided: both are floats.
             if (wanted is TypeParameterSymbol parameter && map.TryGetValue(parameter, out var earlier)
@@ -4887,6 +4912,40 @@ public sealed partial class Binder {
         }
 
         return new(map);
+    }
+
+    /// <summary>
+    ///     What a <c>where A == B</c> says of a parameter the arguments left
+    ///     open, once the other side is known: <c>init&lt;E&gt;(grouping: E[:])
+    ///     where Value == E[&gt;..]</c> makes Value from E.
+    /// </summary>
+    static void InferFromSameTypeRequirements(
+        FunctionSymbol function,
+        TypeSubstitution outer,
+        ImmutableArray<TypeParameterSymbol> inferrable,
+        Dictionary<TypeParameterSymbol, TypeSymbol> map
+    ) {
+        if (function.SameTypeRequirements.IsEmpty) {
+            return;
+        }
+
+        // Each pass may settle what the next needs: 'where A == B, B == E[>..]'.
+        for (var pass = 0; pass < function.SameTypeRequirements.Length; pass++) {
+            var before = map.Count;
+            foreach (var (left, right) in function.SameTypeRequirements) {
+                var known = Combine(outer, new(new Dictionary<TypeParameterSymbol, TypeSymbol>(map)));
+                var (l, r) = (known.Apply(left), known.Apply(right));
+                if (l is TypeParameterSymbol lp && inferrable.Contains(lp) && !map.ContainsKey(lp)) {
+                    TypeSubstitution.Unify(l, r, inferrable, map);
+                } else if (r is TypeParameterSymbol rp && inferrable.Contains(rp) && !map.ContainsKey(rp)) {
+                    TypeSubstitution.Unify(r, l, inferrable, map);
+                }
+            }
+
+            if (map.Count == before) {
+                return;
+            }
+        }
     }
 
     /// <summary>
@@ -5201,7 +5260,8 @@ public sealed partial class Binder {
             var leftType = substitution.Apply(left);
             var rightType = substitution.Apply(right);
 
-            if (ContainsUninferred(leftType, candidate) || ContainsUninferred(rightType, candidate)) {
+            if (ContainsUninferred(leftType, candidate) || ContainsUninferred(rightType, candidate)
+                || ContainsOwnerParameter(leftType) || ContainsOwnerParameter(rightType)) {
                 continue;
             }
 
@@ -5216,7 +5276,7 @@ public sealed partial class Binder {
         // 'where C.Item: Comparable' holds only when what C became says so.
         foreach (var (subject, constraint) in candidate.ConformanceRequirements) {
             var subjectType = substitution.Apply(subject);
-            if (ContainsUninferred(subjectType, candidate)) {
+            if (ContainsUninferred(subjectType, candidate) || ContainsOwnerParameter(subjectType)) {
                 continue;
             }
 
@@ -5271,6 +5331,10 @@ public sealed partial class Binder {
     }
 
     /// <summary>True when a type still names one of the candidate's own, uninferred, parameters.</summary>
+    /// <summary>Whether a type still names a parameter of the type a bare call infers (<see cref="_ownerTypeParameters" />).</summary>
+    bool ContainsOwnerParameter(TypeSymbol type) =>
+        !_ownerTypeParameters.IsEmpty && _ownerTypeParameters.Any(p => TypeSubstitution.Mentions(type, p));
+
     static bool ContainsUninferred(TypeSymbol type, FunctionSymbol candidate) =>
         type switch {
             TypeParameterSymbol parameter => candidate.TypeParameters.Contains(parameter),
@@ -5339,12 +5403,15 @@ public sealed partial class Binder {
 
     BoundExpression BindElementAccess(ElementAccessExpressionSyntax syntax) {
         var receiver = BindExpression(syntax.Expression);
+
+        // '[]' and 'none' are no particular type until the subscript chosen
+        // says which: 'groups[key, default: []]'. They are bound once it is.
         var indices = syntax.ArgumentList.Arguments
-            .Select(a => BindExpression(a.Expression))
+            .Select(a => IsClosure(a.Expression) && receiver.Type is not ArrayTypeSymbol ? new BoundUnboundClosure(a.Expression) : BindExpression(a.Expression))
             .ToImmutableArray();
 
         if (receiver.HasError) {
-            return new BoundError(syntax, [receiver, ..indices]);
+            return new BoundError(syntax, [receiver, ..BindUnbound(indices)]);
         }
 
         // 'd?[k]' indexes through an optional and gives an optional back.
@@ -5387,6 +5454,8 @@ public sealed partial class Binder {
         ImmutableArray<BoundExpression> indices
     ) {
         if (receiver.Type is ArrayTypeSymbol array) {
+            indices = BindUnbound(indices);
+
             // 'xs[1..<3]', 'xs[2...]', 'xs[..<2]': the elements in the range,
             // as a slice (SYNTAX.md §11).
             if (indices is [{ Type: NamedTypeSymbol { TypeArguments: [var bound] } range }] && Core.IsAnyRange(range) && bound.Equals(Core.Int)) {
@@ -5407,18 +5476,16 @@ public sealed partial class Binder {
                 var resolved = ResolveOverload(group.Candidates, indices, [], syntax, found.Substitution);
 
                 if (resolved is null) {
-                    return new BoundError(syntax, [receiver, ..indices]);
+                    return new BoundError(syntax, [receiver, ..BindUnbound(indices)]);
                 }
 
                 var converted = ImmutableArray.CreateBuilder<BoundExpression>(indices.Length);
                 for (var i = 0; i < indices.Length && i < resolved.Parameters.Length; i++) {
-                    converted.Add(
-                        Convert(
-                            indices[i],
-                            found.Substitution.Apply(resolved.Parameters[i].Type),
-                            indices[i].Syntax
-                        )
-                    );
+                    var wanted = found.Substitution.Apply(resolved.Parameters[i].Type);
+                    var index = indices[i] is BoundUnboundClosure unbound
+                        ? BindExpression(unbound.Syntax as ExpressionSyntax ?? throw new InvalidOperationException(), wanted)
+                        : indices[i];
+                    converted.Add(Convert(index, wanted, index.Syntax));
                 }
 
                 return new BoundIndexAccess(
@@ -5431,7 +5498,7 @@ public sealed partial class Binder {
         }
 
         // Or with 'operator []', the alternative form (SYNTAX.md §13).
-        if (BindOperatorCall(syntax, "[]", receiver, indices, [], default) is { } indexed) {
+        if (BindOperatorCall(syntax, "[]", receiver, indices, [], [..syntax.ArgumentList.Arguments.Select(static a => a.Expression)]) is { } indexed) {
             return indexed;
         }
 
@@ -5440,8 +5507,12 @@ public sealed partial class Binder {
             syntax.Span,
             $"'{receiver.Type.ToDisplayString()}' cannot be indexed"
         );
-        return new BoundError(syntax, [receiver, ..indices]);
+        return new BoundError(syntax, [receiver, ..BindUnbound(indices)]);
     }
+
+    /// <summary>Indices left unbound for a subscript's parameters to type, bound with none, where there is no subscript.</summary>
+    ImmutableArray<BoundExpression> BindUnbound(ImmutableArray<BoundExpression> indices) =>
+        [..indices.Select(i => i is BoundUnboundClosure { Syntax: ExpressionSyntax unbound } ? BindExpression(unbound) : i)];
 
     /// <summary>
     ///     <c>m["x"]</c> and <c>m(3)</c> on a type that declares
@@ -5546,6 +5617,13 @@ public sealed partial class Binder {
         }
 
         expectedType = TheCaseOf(expectedType, static t => t is ArrayTypeSymbol);
+
+        // A parameter a 'where Value == E[>..]' makes an array is that array.
+        if (expectedType is TypeParameterSymbol or DependentMemberTypeSymbol
+            && _conversions.Equivalence.Canonical(expectedType) is ArrayTypeSymbol same) {
+            expectedType = same;
+        }
+
         var expectedElement = expectedType is ArrayTypeSymbol expectedArray
             ? expectedArray.ElementType
             : null;

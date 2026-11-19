@@ -393,6 +393,30 @@ fn modifyWithADefaultAddsTheKeyFirst() {
 // ---- Merging and transforming -------------------------------------------------
 
 @test
+fn groupingPutsEachValueUnderItsKeyInOrder() {
+    let words: String[>..] = ["apple", "bean", "avocado", "beet", "cherry"]
+    let byLength = Dictionary(grouping: words, by: { (word: String) -> Int in word.count })
+    assert(byLength.keys() == [5, 4, 7, 6])
+    assert((byLength[4] ?? []) == ["bean", "beet"])
+    assert((byLength[5] ?? []) == ["apple"])
+    assert(byLength[3] == none)
+}
+
+@test
+fn groupingNothingIsEmpty() {
+    let nothing: Int[>..] = []
+    let groups: [Bool: Int[>..]] = Dictionary(grouping: nothing, by: { (n: Int) -> Bool in n > 0 })
+    assert(groups.isEmpty)
+}
+
+@test
+fn groupingTakesAnySequence() {
+    let parity = Dictionary(grouping: 1...7, by: { (n: Int) -> Bool in n % 2 == 0 })
+    assert((parity[true] ?? []) == [2, 4, 6])
+    assert((parity[false] ?? []) == [1, 3, 5, 7])
+}
+
+@test
 fn mergeCombinesWhatBothHave() {
     var a: [String: Int] = ["x": 1, "y": 2]
     let b: [String: Int] = ["y": 10, "z": 20]

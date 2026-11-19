@@ -580,4 +580,52 @@ public sealed class GenericTests {
         Assert.Contains("sil @Test.larger$polymorphic : $(any$Test.Shape, any$Test.Shape) -> any$Test.Shape", sil, StringComparison.Ordinal);
         Assert.DoesNotContain("sil @Test.describe$of$", sil, StringComparison.Ordinal);
     }
+
+    /// <summary>
+    ///     An initialiser with type parameters of its own is specialised for
+    ///     each set of them, and infers its type's parameters through its
+    ///     'where' clause: 'Groups(grouping:by:)' makes V an array of E.
+    /// </summary>
+    [Fact]
+    public void AnInitializerWithItsOwnTypeParameters() =>
+        Assert.Equal(
+            "2\n3 1\n2 0\n[3, 1] [2]\n",
+            AssertAgree(
+                Program(
+                    """
+                    struct Counter {
+                        var count: Int
+                        init<Element>(counting values: Element[:]) { count = values.count }
+                    }
+
+                    struct Bag<T> {
+                        var items: T[>..] = []
+                        init<S: Sequence>(from s: S) where S.Element == T {
+                            for x in s { items.append(x) }
+                        }
+                    }
+
+                    struct Groups<K: Hashable, V> {
+                        var table: [K: V] = [:]
+                        init<E>(grouping values: E[:], by key: (E) -> K) where V == E[>..] {
+                            for v in values {
+                                table[key(v), default: []].append(v)
+                            }
+                        }
+                    }
+                    """,
+                    """
+                        let words: String[>..] = ["a", "b", "c"]
+                        print(Counter(counting: words[0..<2]).count)
+                        let b = Bag(from: 1...3)
+                        let s = Bag<String>(from: words[2..<3])
+                        print("\(b.items.count) \(s.items.count)")
+                        let numbers: Int[>..] = [3, 2, 1]
+                        let g = Groups(grouping: numbers[0..<3], by: { (n: Int) -> Int in n % 2 })
+                        print("\(g.table.count) \(g.table.keys()[1])")
+                        print("\(g.table[1]!) \(g.table[0]!)")
+                    """
+                )
+            ).Stdout
+        );
 }

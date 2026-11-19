@@ -212,17 +212,7 @@ public sealed partial class Compilation {
     }
 
     static bool Mentions(TypeSymbol type, TypeParameterSymbol parameter) =>
-        type switch {
-            TypeParameterSymbol p => ReferenceEquals(p, parameter),
-            ArrayTypeSymbol array => Mentions(array.ElementType, parameter),
-            OptionalTypeSymbol optional => Mentions(optional.UnderlyingType, parameter),
-            ReferenceTypeSymbol reference => Mentions(reference.ReferencedType, parameter),
-            TupleTypeSymbol tuple => tuple.ElementTypes.Any(e => Mentions(e, parameter)),
-            NamedTypeSymbol named => named.TypeArguments.Any(a => Mentions(a, parameter)),
-            FunctionTypeSymbol function => function.ParameterTypes.Any(p => Mentions(p, parameter)) || Mentions(function.ReturnType, parameter),
-            MetatypeTypeSymbol metatype => Mentions(metatype.InstanceType, parameter),
-            _ => false,
-        };
+        TypeSubstitution.Mentions(type, parameter);
 
     /// <summary>
     ///     The members an array has by this name, from its kind's extensions or

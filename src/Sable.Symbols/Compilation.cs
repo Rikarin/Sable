@@ -1451,11 +1451,24 @@ public sealed partial class Compilation {
             FunctionKind.Initializer
         );
 
+        // 'init<S: Sequence>(contentsOf s: S) where S.Element == T': an
+        // initialiser's own parameters, inferred at the call from its
+        // arguments as a generic function's are.
+        if (declaration.TypeParameters is { } typeParameters) {
+            function.TypeParameters = [
+                ..typeParameters.Parameters.Select((parameter, i) =>
+                    new TypeParameterSymbol(parameter.Identifier.Text, function, parameter, i)
+                )
+            ];
+        }
+
         function.Parameters = [
             ..declaration.Parameters.Parameters.Select((parameter, i) =>
                 DeclareParameter(parameter, function, i)
             )
         ];
+
+        TypeBinder.BindInitializerConstraints(function, declaration);
 
         // A protocol's 'init(seed: Int)' is a requirement, met by the
         // conformer's own initialiser, and it makes a Self: through a T it

@@ -201,6 +201,27 @@ internal sealed class TypeBinder(Compilation compilation) {
     }
 
     /// <summary>
+    ///     An initialiser's own type parameters' constraints and its
+    ///     <c>where</c> clause, which may also mention its type's parameters:
+    ///     <c>init&lt;S: Sequence&gt;(_ s: S) where S.Element == Element</c>.
+    /// </summary>
+    public void BindInitializerConstraints(FunctionSymbol function, InitDeclarationSyntax declaration) {
+        if (declaration.TypeParameters is null && declaration.WhereClause is null) {
+            return;
+        }
+
+        var scope = compilation.CurrentScope;
+        Defer(() => {
+                BindTypeParameterConstraints(function.TypeParameters, function, scope);
+                BindWhereClause(declaration.WhereClause, function, scope);
+                foreach (var parameter in function.Parameters) {
+                    _ = parameter.Type;
+                }
+            }
+        );
+    }
+
+    /// <summary>
     ///     Reports a declaration whose signature names a type less visible
     ///     than the declaration itself: a public function returning an
     ///     internal type could be called from where its result cannot be

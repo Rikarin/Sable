@@ -6779,9 +6779,59 @@ public sealed partial class SilGen {
                     return Emit(new BuiltinInst("array_element_addr", SilType.Address(elementType), array, index));
                 }
 
+                // Part of what a subscript gives: 'groups[key, default: []].append(v)'.
+                case BoundIndexAccess { Subscript: { } subscript } subscripted when AsArrayIndexing(subscripted) is null
+                    && generator.SubscriptSetter(SubscriptWitness(subscript, subscripted.Receiver)) is { } subscriptSetter:
+                    return SubscriptForWriteBack(subscripted, subscriptSetter, borrows);
+
+                case BoundIndexAccess subscripted when AsArrayIndexing(subscripted) is { } arrayIndexing:
+                    return Address(arrayIndexing, borrows);
+
                 default:
                     return Missing(target, $"storing to '{Describe(target.Syntax)}'");
             }
+        }
+
+        /// <summary>
+        ///     What a subscript gives has no address to change part of it at,
+        ///     as a computed property's has not: it is read, by the getter,
+        ///     into a slot of its own, which is changed instead, and handed to
+        ///     the setter once the caller ends <paramref name="borrows" />. The
+        ///     indices are worked out once, for both.
+        /// </summary>
+        SilValue? SubscriptForWriteBack(BoundIndexAccess subscripted, FunctionSymbol setter, List<SilValue> borrows) {
+            var indices = ImmutableArray.CreateBuilder<BoundExpression>(subscripted.Indices.Length);
+            foreach (var index in subscripted.Indices) {
+                if (Expression(index) is not { } value) {
+                    return null;
+                }
+
+                var indexSlot = NewSlot(value.Type, "$index");
+                Emit(new StoreInst(Owned(value), indexSlot, StoreKind.Init));
+                var indexLocal = new LocalSymbol("$index", Core.Module, null, true);
+                _slots[indexLocal] = indexSlot;
+                indices.Add(new BoundLocalAccess(index.Syntax, indexLocal, index.Type));
+            }
+
+            var read = new BoundIndexAccess(subscripted.Syntax, subscripted.Type, subscripted.Receiver, indices.ToImmutable()) {
+                Subscript = subscripted.Subscript,
+                Substitution = subscripted.Substitution,
+            };
+            if (Expression(read) is not { } current) {
+                return null;
+            }
+
+            var slot = NewSlot(current.Type, "$subscript");
+            Emit(new StoreInst(Owned(current), slot, StoreKind.Init));
+            var temporary = new LocalSymbol("$subscript", Core.Module, null, true);
+            _slots[temporary] = slot;
+
+            var taken = new BoundUnaryOperator(subscripted.Syntax, subscripted.Type, UnaryOperatorKind.Move, new BoundLocalAccess(subscripted.Syntax, temporary, subscripted.Type));
+            var setterCall = new BoundCall(subscripted.Syntax, subscripted.Receiver, setter, [..indices, taken]) {
+                Substitution = subscripted.Substitution
+            };
+            borrows.Add(new WriteBack(() => Expression(setterCall)));
+            return slot;
         }
 
         SilValue? Literal(BoundLiteral literal, TypeSymbol type) {

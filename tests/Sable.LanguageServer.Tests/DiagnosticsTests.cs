@@ -208,6 +208,35 @@ public sealed class DiagnosticsTests : IDisposable {
     }
 
     [Fact]
+    public async Task AChangeUnderAHiddenFolderIsNotTakenIn() {
+        // The client watches every *.sb under the folder, so it reports the
+        // files of a git worktree under .claude/ or a build's target/ too.
+        // Taken in, each such change added a copy of the repository's files
+        // to the workspace, one change at a time, and started a round over
+        // all of them: the server compiled without end while agents worked.
+        var closed = Write("closed.sb", "module App\n\nfn f() -> Int {\n    let s: String = 1\n    return 2\n}\n");
+        const string Broken = "module Copy\n\nfn g() -> Int {\n    let s: String = 1\n    return 2\n}\n";
+        var hidden = Write(".claude/worktrees/agent/lib/copy.sb", Broken);
+        var output = Write("target/debug/out.sb", Broken);
+        await using var client = new TestClient();
+        await client.InitializeAsync(_root);
+        await client.NotifyAsync("initialized", new { });
+        await client.DiagnosticsAsync(closed, static d => d.GetArrayLength() > 0);
+        var built = client.Server.AnalysesBuilt;
+
+        await client.NotifyAsync("workspace/didChangeWatchedFiles", new { changes = new[] { new { uri = hidden, type = 2 }, new { uri = output, type = 1 } } });
+
+        // A change to a file of the workspace after them: once its round is
+        // over, the two before it were seen, and neither was diagnosed.
+        File.WriteAllText(Workspace.PathOf(closed)!, "module App\n\nfn f() -> Int {\n    return 2\n}\n");
+        var since = client.Received;
+        await client.NotifyAsync("workspace/didChangeWatchedFiles", new { changes = new[] { new { uri = closed, type = 2 } } });
+        await client.DiagnosticsAsync(closed, static d => d.GetArrayLength() == 0, since);
+        Assert.DoesNotContain(client.Sent("textDocument/publishDiagnostics"), n => n.Get("params")?.GetString("uri") is { } uri && (uri == hidden || uri == output));
+        Assert.Equal(built + 1, client.Server.AnalysesBuilt);
+    }
+
+    [Fact]
     public async Task EachLoadOfThePackagesIsDiagnosed() {
         // A manifest changed: the packages are read again, and the round
         // after the reading starts at once, with no quiet to wait out. A

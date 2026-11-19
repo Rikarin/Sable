@@ -157,7 +157,7 @@ internal sealed class Workspace {
     public WorkspaceSnapshot Close(string uri, IReadOnlyList<string> folders) {
         var key = KeyOf(uri);
         var path = PathOf(uri);
-        if (path is not null && File.Exists(path) && folders.Any(f => IsUnder(path, f))) {
+        if (path is not null && File.Exists(path) && IsSource(path, folders)) {
             var text = File.ReadAllText(path);
             return Update(current => current.Documents.SetItem(key, new(uri, SyntaxTree.Parse(new SourceText(text, path), current.Layout.OptionsFor(path)), null, false)));
         }
@@ -178,19 +178,56 @@ internal sealed class Workspace {
                             && !remaining.Any(f => IsUnder(path, f)))
                 .Select(static d => d.Key)));
 
-    /// <summary>A file changed on disk: read it again, unless the editor has it open.</summary>
-    public WorkspaceSnapshot? Reload(string uri) {
+    /// <summary>
+    ///     A file changed on disk: read it again, unless the editor has it
+    ///     open. A file that is not one of the workspace's sources — outside
+    ///     every folder, or under one <see cref="SourceFilesUnder" /> skips,
+    ///     such as a hidden folder holding another checkout — is not taken
+    ///     in: the client watches every <c>*.sb</c>, and a git worktree under
+    ///     <c>.claude/</c> or a build's <c>target/</c> would otherwise add a
+    ///     copy of the whole repository, one change at a time. Null when
+    ///     nothing the workspace holds changed.
+    /// </summary>
+    public WorkspaceSnapshot? Reload(string uri, IReadOnlyList<string> folders) {
         var key = KeyOf(uri);
-        if (Current.Documents.TryGetValue(key, out var existing) && existing.IsOpen) {
+        Current.Documents.TryGetValue(key, out var existing);
+        if (existing is { IsOpen: true }) {
             return null;
         }
 
-        if (PathOf(uri) is not { } path || !File.Exists(path)) {
+        if (PathOf(uri) is not { } path || !File.Exists(path) || !IsSource(path, folders)) {
             return existing is null ? null : Update(current => current.Documents.Remove(key));
         }
 
         var text = File.ReadAllText(path);
         return Update(current => current.Documents.SetItem(key, new(uri, SyntaxTree.Parse(new SourceText(text, path), current.Layout.OptionsFor(path)), null, false)));
+    }
+
+    /// <summary>Whether a file is one <see cref="SourceFilesUnder" /> finds under one of the folders.</summary>
+    public static bool IsSource(string path, IReadOnlyList<string> folders) {
+        foreach (var folder in folders) {
+            if (!IsUnder(path, folder)) {
+                continue;
+            }
+
+            var root = Path.GetFullPath(folder).TrimEnd(Path.DirectorySeparatorChar);
+            var directory = Path.GetDirectoryName(Path.GetFullPath(path));
+            var skipped = false;
+            while (directory is not null && directory.Length > root.Length) {
+                if (IsSkipped(directory)) {
+                    skipped = true;
+                    break;
+                }
+
+                directory = Path.GetDirectoryName(directory);
+            }
+
+            if (!skipped) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public static bool IsUnder(string path, string root) {
@@ -199,7 +236,6 @@ internal sealed class Workspace {
         return full.StartsWith(folder, StringComparison.Ordinal);
     }
 
-    /// <summary>The source files under a folder, skipping build output, dependencies and hidden folders.</summary>
     /// <summary>
     ///     A generator snapshot case's <c>expected/</c> (docs/08 §8.8): what a
     ///     generator should write, kept to compare with, not compiled.
@@ -212,6 +248,14 @@ internal sealed class Workspace {
             && Path.GetFileName(Path.GetDirectoryName(tests)) == "generators";
     }
 
+    /// <summary>A folder whose files are not the workspace's: hidden, build output, or dependencies.</summary>
+    static bool IsSkipped(string directory) {
+        var name = Path.GetFileName(directory);
+        // vendor/ holds copies of dependencies, which their packages compile.
+        return name.StartsWith('.') || name is "bin" or "obj" or "target" or "vendor" or "node_modules" || IsGeneratorSnapshot(directory);
+    }
+
+    /// <summary>The source files under a folder, skipping build output, dependencies and hidden folders.</summary>
     public static IEnumerable<string> SourceFilesUnder(string root) {
         var pending = new Stack<string>();
         pending.Push(root);
@@ -230,9 +274,7 @@ internal sealed class Workspace {
             }
 
             foreach (var child in folders) {
-                var name = Path.GetFileName(child);
-                // vendor/ holds copies of dependencies, which their packages compile.
-                if (name.StartsWith('.') || name is "bin" or "obj" or "target" or "vendor" or "node_modules" || IsGeneratorSnapshot(child)) {
+                if (IsSkipped(child)) {
                     continue;
                 }
 

@@ -335,16 +335,19 @@ public sealed partial class LanguageServer {
 
             case "workspace/didChangeWatchedFiles": {
                 var packages = false;
+                var changed = false;
                 foreach (var change in parameters.Get("changes")?.EnumerateArray() ?? default) {
                     if (change.GetString("uri") is not { } uri) {
                         continue;
                     }
 
                     if (uri.EndsWith(".sb", StringComparison.Ordinal)) {
-                        _workspace.Reload(uri);
+                        changed |= _workspace.Reload(uri, _folders) is not null;
                     }
 
-                    packages |= IsPackageFile(uri);
+                    // Only a package's own files count: not a copy in a
+                    // hidden folder, a dependency's, or a build's output.
+                    packages |= IsPackageFile(uri) && Workspace.PathOf(uri) is { } path && Workspace.IsSource(path, _folders);
                 }
 
                 // A manifest or the lock changed: the packages may have too.
@@ -352,7 +355,12 @@ public sealed partial class LanguageServer {
                     Load([]);
                 }
 
-                Changed();
+                // A change to nothing the workspace holds — a file in another
+                // checkout under a hidden folder, say — starts no round.
+                if (changed || packages) {
+                    Changed();
+                }
+
                 return;
             }
 

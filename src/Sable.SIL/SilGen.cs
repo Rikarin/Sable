@@ -8017,11 +8017,37 @@ public sealed partial class SilGen {
                 return Missing(array, $"an array of type '{type.ToDisplayString()}'");
             }
 
-            var empty = Emit(new BuiltinInst("array_empty", arrayType));
             if (array.Elements.IsEmpty) {
-                return empty;
+                return Emit(new BuiltinInst("array_empty", arrayType));
             }
 
+            // Numbers, Bools and Chars, every one a literal: the array as a
+            // constant, which native code keeps in read-only memory, made
+            // once and never counted (#265).
+            if (IsConstantElement(arrayType.Element)) {
+                var values = new List<SilValue>(array.Elements.Length);
+                foreach (var element in array.Elements) {
+                    if (Expression(element) is not { } value) {
+                        return null;
+                    }
+
+                    values.Add(value);
+                }
+
+                if (values.TrueForAll(IsConstantLiteral)) {
+                    return Emit(new BuiltinInst("array_literal", arrayType, [..values]));
+                }
+
+                var built = NewSlot(arrayType);
+                Emit(new StoreInst(Emit(new BuiltinInst("array_empty", arrayType)), built, StoreKind.Assign));
+                foreach (var value in values) {
+                    Emit(new BuiltinInst("array_append", SilType.Unit, built, value));
+                }
+
+                return Emit(new LoadInst(built, LoadKind.Take));
+            }
+
+            var empty = Emit(new BuiltinInst("array_empty", arrayType));
             var slot = NewSlot(arrayType);
             Emit(new StoreInst(empty, slot, StoreKind.Assign));
             foreach (var element in array.Elements) {
@@ -8034,6 +8060,14 @@ public sealed partial class SilGen {
 
             return Emit(new LoadInst(slot, LoadKind.Take));
         }
+
+        /// <summary>An element an array of constants can hold: a number, a Bool or a Char, written as it is.</summary>
+        static bool IsConstantElement(SilType type) =>
+            type == SilType.Int || type == SilType.Bool || type == SilType.Char || type == SilType.F64 || type == SilType.F32
+            || SilType.IntegerInfo(type) is not null;
+
+        /// <summary>A value written as a literal, which an array of constants holds as it is.</summary>
+        static bool IsConstantLiteral(SilValue value) => value is IntegerLiteralInst or FloatLiteralInst;
 
         /// <summary>
         ///     A protocol's subscript, used on a T that stands for a known type

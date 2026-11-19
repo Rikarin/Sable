@@ -1505,6 +1505,15 @@ public static class SilBuiltins {
             return operands.Count == 0 && result is ArrayType or SliceType ? new([], result) : null;
         }
 
+        // '[0, 7, 14]': an array of its elements, each a literal of the
+        // element type — natively a constant, never counted, which copy on
+        // write copies before it is changed (#265).
+        if (name == "array_literal") {
+            return result is ArrayType literal && operands.Count > 0 && operands.All(o => o == literal.Element)
+                ? new([..operands], result)
+                : null;
+        }
+
         if (name.StartsWith("inline_", StringComparison.Ordinal)) {
             return InlineSignature(name, operands, result);
         }

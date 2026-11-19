@@ -1161,6 +1161,11 @@ public sealed partial class SilInterpreter(SilModule module, long stepLimit = 10
             case "array_empty":
                 return builtin.Type is SliceType ? SliceValue.Empty : null;
 
+            // A fresh array of the constants, room for them alone, as the
+            // native constant has.
+            case "array_literal":
+                return Allocate(new HeapArray((ArrayType)builtin.Type, new List<object?>(operands)));
+
             // The whole of an array, viewed: the buffer shared, not copied.
             case "slice_of": {
                 if (operands[0] is not HeapArray array || Alive(array).Elements.Count == 0) {

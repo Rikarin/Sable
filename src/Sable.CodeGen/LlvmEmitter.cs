@@ -35,6 +35,9 @@ public sealed partial class LlvmEmitter {
     readonly StringBuilder _globals = new();
     readonly StringBuilder _helpers = new();
     readonly Dictionary<string, string> _strings = new(StringComparer.Ordinal);
+
+    /// <summary>The arrays of constants written so far, by their type and elements: the same array shares one.</summary>
+    readonly Dictionary<string, string> _constantArrays = new(StringComparer.Ordinal);
     readonly HashSet<string> _emitted = new(StringComparer.Ordinal);
     readonly Dictionary<string, string> _trapMessages = new(StringComparer.Ordinal);
 
@@ -747,6 +750,33 @@ public sealed partial class LlvmEmitter {
             .Append(", i64 ").Append(scalars).Append(", [").Append(bytes.Length).Append(" x i8] c\"").Append(Escape(bytes))
             .Append("\" }, align 8\n");
         _strings[value] = name;
+        return name;
+    }
+
+    /// <summary>
+    ///     An array literal of constants (#265): an immortal array in
+    ///     read-only memory, as a string literal is — header, count, capacity,
+    ///     and its elements beside it. Its strong count is 2 and never
+    ///     changes, retains and releases passing an immortal object by, so
+    ///     copy on write always finds it shared: a change copies it first.
+    /// </summary>
+    string ArrayConstant(ArrayType type, IReadOnlyList<string> elements) {
+        var element = Type(type.Element);
+        var body = string.Join(", ", elements.Select(e => $"{element} {e}"));
+        var key = $"{type}|{body}";
+        if (_constantArrays.TryGetValue(key, out var name)) {
+            return name;
+        }
+
+        // Its metadata first, which may write globals of its own.
+        var metadata = ArrayMetadata(type);
+        name = $"@.array.{_constantArrays.Count}";
+        _globals.Append(name).Append(".elements = private unnamed_addr constant [").Append(elements.Count).Append(" x ").Append(element).Append("] [")
+            .Append(body).Append("], align ").Append(Align(type.Element)).Append('\n');
+        _globals.Append(name).Append(" = private unnamed_addr constant %SableArrayHeader { %SableObjectHeader { ptr ").Append(metadata)
+            .Append(", i32 2, i32 1 }, i64 ").Append(elements.Count).Append(", i64 ").Append(elements.Count).Append(", ptr ").Append(name)
+            .Append(".elements }, align 8\n");
+        _constantArrays[key] = name;
         return name;
     }
 
@@ -3018,6 +3048,25 @@ public sealed partial class LlvmEmitter {
                 case "array_empty":
                     _names[builtin] = builtin.Type is SliceType ? "zeroinitializer" : "null";
                     return;
+
+                // An array of constants: the immortal one in read-only memory.
+                case "array_literal" when builtin.Operands.All(static o => o is IntegerLiteralInst or FloatLiteralInst):
+                    _names[builtin] = module.ArrayConstant((ArrayType)builtin.Type, [..operands]);
+                    return;
+
+                // Elements that are no longer literals: appended, one by one.
+                case "array_literal": {
+                    var arrayType = (ArrayType)builtin.Type;
+                    var slot = Scratch("ptr");
+                    Line($"store ptr null, ptr {slot}");
+                    for (var i = 0; i < operands.Length; i++) {
+                        var element = AppendSlot(slot, arrayType);
+                        Line($"store {Type(arrayType.Element)} {operands[i]}, ptr {element}, !tbaa {TbaaElement}");
+                    }
+
+                    Line($"{Result()} = load ptr, ptr {slot}");
+                    return;
+                }
 
                 // The array header is { object header (16), count, capacity, elements }:
                 // the count and the elements are read in place, not through a

@@ -60,7 +60,18 @@ run, and each decision some of whose outcomes never happened
 records for lines, `BRDA`/`BRF`/`BRH` for branches, numbered by decision
 within a line — which genhtml and editors read. The counters go into the
 code before the optimiser, so `--release` counts the same, and the SIL
-interpreter counts as native code does.
+interpreter counts as native code does. Code that was never lowered — a
+generic function no test instantiates — has no code to count in, so its
+statements are reported as lines not run (their branches are not counted).
+
+`--cover <module>` counts in a standard library module instead of the
+package: `Sable.Collections`, `lib/Sable.Collections` or one file,
+`lib/Sable.Collections/Stack.sb`, named in the report and the LCOV as the
+library embeds them (`lib/<Module>/<File>.sb`). `--lcov <path>` writes the
+LCOV elsewhere, and a directory given in place of a file is every `.sb`
+file under it, built as one program — so the library's tests are run as
+`sable test --cover lib/Sable.Collections tests/lib/Sable.Collections/`
+(what `tools/stdlib-coverage.sh` does, CONTRIBUTING.md).
 
 `sable bindgen` writes Sable source, not `.sbi` (which waits on the
 interface file format of §5.4): a module of `@extern("c")` functions,

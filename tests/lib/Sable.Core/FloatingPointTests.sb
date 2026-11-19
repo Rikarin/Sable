@@ -307,6 +307,20 @@ fn scientificDigitsAreRoundedFromTheExactValue() {
 }
 
 @test
+fn generalDigitsAreFixedOrScientificAsCsPercentGIs() {
+    assertEqual((1234.5).toGeneralString(6), "1234.5")
+    assertEqual((0.0001).toGeneralString(3), "0.0001")
+    assertEqual((0.00001234).toGeneralString(3), "1.23e-05")
+    assertEqual((1.0e20).toGeneralString(6), "1e+20")
+    assertEqual((100.0).toGeneralString(1), "1e+02")
+    assertEqual((0.0).toGeneralString(3), "0")
+    assertEqual((-2.5).toGeneralString(1), "-2")
+    assertEqual((123456789.0).toGeneralString(4), "1.235e+08")
+    assertEqual((0.5).toGeneralString(0), "0.5")
+    assertEqual(F64.nan.toGeneralString(3), "nan")
+}
+
+@test
 fn aValueNotFiniteIsWrittenByName() {
     assertEqual(F64.nan.toFixedString(2), "nan")
     assertEqual(F64.infinity.toScientificString(2), "inf")

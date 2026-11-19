@@ -40,6 +40,35 @@ extension FloatingPoint {
         return self.wideValue.scientificText(digits)
     }
 
+    /// The value to that many significant digits (at least one), as C's
+    /// '%g' writes it: fixed where the power of ten is from -4 up to the
+    /// digits, scientific otherwise, and with no zeros at the end of the
+    /// fraction, nor a point with none after it.
+    ///
+    /// ```sable
+    /// assert((1234.5).toGeneralString(6) == "1234.5")
+    /// assert((0.00001234).toGeneralString(3) == "1.23e-05")
+    /// assert((100.0).toGeneralString(1) == "1e+02")
+    /// assert((0.0).toGeneralString(3) == "0")
+    /// ```
+    public fn toGeneralString(_ significantDigits: Int) -> String {
+        if !self.isFinite {
+            return self.toSpecialString()
+        }
+        let precision = significantDigits.max(other: 1)
+        let scientific = self.toScientificString(precision - 1)
+        // The power of ten, after the 'e', decides the form.
+        var at = scientific.count - 1
+        while scientific.at(index: at) != 'e' {
+            at = at - 1
+        }
+        let exponent = scientific.slice(from: at + 1, to: scientific.count).toInt() ?? 0
+        if exponent >= -4 && exponent < precision {
+            return withoutTrailingZeros(self.toFixedString(precision - 1 - exponent))
+        }
+        return withoutTrailingZeros(scientific.slice(from: 0, to: at)) + scientific.slice(from: at, to: scientific.count)
+    }
+
     /// The value in hexadecimal, exactly, as C's '%a' writes it: the
     /// significand after '0x1.' with no zeros at its end, then the power of
     /// two after 'p' (a subnormal F64 written normalised, as '0x1p-1074').
@@ -205,6 +234,23 @@ extension FloatingPoint {
         }
         return Self.rounding(wideMagnitude: rounded).scaled(byPowerOfTwo: power + dropped)
     }
+}
+
+/// Decimal digits with the zeros at the end of their fraction left off,
+/// and the point too where nothing is left after it: "1.500" is "1.5",
+/// "2.000" is "2", and "1200" stays as it is.
+fn withoutTrailingZeros(_ text: String) -> String {
+    if !text.contains(character: '.') {
+        return text
+    }
+    var end = text.count
+    while text.at(index: end - 1) == '0' {
+        end = end - 1
+    }
+    if text.at(index: end - 1) == '.' {
+        end = end - 1
+    }
+    return text.slice(from: 0, to: end)
 }
 
 /// The value of a hexadecimal digit, or none.

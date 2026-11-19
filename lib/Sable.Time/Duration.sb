@@ -1,0 +1,117 @@
+module Sable.Time
+
+// Durations, monotonic instants and UTC dates (docs/04 §4.3), written in
+// Sable over the runtime's clocks (Sable.Core's Runtime). Calendar arithmetic
+// is proleptic Gregorian, in UTC: time zones are not here yet.
+
+/// A span of time, to the nanosecond; negative when it runs backwards.
+public struct Duration: Comparable, Hashable {
+    public var totalNanoseconds: Int
+
+    public static fn nanoseconds(_ count: Int) -> Duration {
+        return Duration { totalNanoseconds: count }
+    }
+
+    public static fn microseconds(_ count: Int) -> Duration {
+        return Duration { totalNanoseconds: count * 1000 }
+    }
+
+    public static fn milliseconds(_ count: Int) -> Duration {
+        return Duration { totalNanoseconds: count * 1000000 }
+    }
+
+    public static fn seconds(_ count: Int) -> Duration {
+        return Duration { totalNanoseconds: count * 1000000000 }
+    }
+
+    public static fn minutes(_ count: Int) -> Duration {
+        return Duration { totalNanoseconds: count * 60000000000 }
+    }
+
+    public static fn hours(_ count: Int) -> Duration {
+        return Duration { totalNanoseconds: count * 3600000000000 }
+    }
+
+    public static fn zero() -> Duration {
+        return Duration { totalNanoseconds: 0 }
+    }
+
+    /// Whole milliseconds, rounded towards zero.
+    public var totalMilliseconds: Int => totalNanoseconds / 1000000
+
+    /// Whole seconds, rounded towards zero.
+    public var totalSeconds: Int => totalNanoseconds / 1000000000
+
+    /// Seconds, with the fraction.
+    public var inSeconds: F64 => F64(totalNanoseconds) / 1000000000.0
+
+    public fn times(_ factor: Int) -> Duration {
+        return Duration { totalNanoseconds: totalNanoseconds * factor }
+    }
+
+    public fn dividedBy(_ divisor: Int) -> Duration {
+        return Duration { totalNanoseconds: totalNanoseconds / divisor }
+    }
+
+    operator + (a: Duration, b: Duration) -> Duration {
+        return Duration { totalNanoseconds: a.totalNanoseconds + b.totalNanoseconds }
+    }
+
+    operator - (a: Duration, b: Duration) -> Duration {
+        return Duration { totalNanoseconds: a.totalNanoseconds - b.totalNanoseconds }
+    }
+
+    operator == (a: Duration, b: Duration) -> Bool {
+        return a.totalNanoseconds == b.totalNanoseconds
+    }
+
+    operator < (a: Duration, b: Duration) -> Bool {
+        return a.totalNanoseconds < b.totalNanoseconds
+    }
+
+    public fn hash() -> Int {
+        return totalNanoseconds.hash()
+    }
+
+    /// In the largest unit that keeps it at least one, to three decimals:
+    /// "1.500s", "12.000ms", "3.250µs", "17ns"; minutes and hours as "1h 2m 3.000s".
+    public fn toString() -> String {
+        var n = totalNanoseconds
+        var sign = ""
+        if n < 0 {
+            sign = "-"
+            n = 0 - n
+        }
+        if n < 1000 {
+            return sign + n.toString() + "ns"
+        }
+        if n < 1000000 {
+            return sign + decimal(n, 1000) + "µs"
+        }
+        if n < 1000000000 {
+            return sign + decimal(n, 1000000) + "ms"
+        }
+        if n < 60000000000 {
+            return sign + decimal(n, 1000000000) + "s"
+        }
+        let hours = n / 3600000000000
+        let minutes = n / 60000000000 % 60
+        let rest = n % 60000000000
+        var text = sign
+        if hours > 0 {
+            text = text + hours.toString() + "h "
+        }
+        return text + minutes.toString() + "m " + decimal(rest, 1000000000) + "s"
+    }
+}
+
+/// n / unit to three decimals.
+fn decimal(_ n: Int, _ unit: Int) -> String {
+    let whole = n / unit
+    let thousandths = n % unit / (unit / 1000)
+    var fraction = thousandths.toString()
+    while fraction.count < 3 {
+        fraction = "0" + fraction
+    }
+    return whole.toString() + "." + fraction
+}

@@ -1,0 +1,72 @@
+module Sable.Build
+
+/// How a build is compiled. Only what is given is set; the rest keeps the
+/// profile's defaults.
+public struct Profile {
+    var name: String
+    var optLevel: Int?
+    var debug: Bool?
+    var lto: Lto?
+    var codegenUnits: Int?
+    var panic: Panic?
+    var arcChecks: Bool?
+    var exclusivity: Exclusivity?
+    var overflowChecks: Bool?
+    var leakCheck: Bool?
+    var optSize: OptSize?
+    var strip: Strip?
+    var rpath: Bool?
+
+    /// `sable build --release`. `optSize` optimises for size, in place of
+    /// `optLevel`'s speed.
+    public static fn release(optLevel: Int? = none, debug: Bool? = none, lto: Lto? = none, codegenUnits: Int? = none, panic: Panic? = none,
+        arcChecks: Bool? = none, exclusivity: Exclusivity? = none, overflowChecks: Bool? = none,
+        leakCheck: Bool? = none, optSize: OptSize? = none, strip: Strip? = none, rpath: Bool? = none) -> Profile {
+        return Profile {
+            name: "release", optLevel: optLevel, debug: debug, lto: lto, codegenUnits: codegenUnits, panic: panic,
+            arcChecks: arcChecks, exclusivity: exclusivity, overflowChecks: overflowChecks, leakCheck: leakCheck,
+            optSize: optSize, strip: strip, rpath: rpath,
+        }
+    }
+
+    /// Every other build.
+    public static fn dev(optLevel: Int? = none, debug: Bool? = none, lto: Lto? = none, codegenUnits: Int? = none, panic: Panic? = none,
+        arcChecks: Bool? = none, exclusivity: Exclusivity? = none, overflowChecks: Bool? = none,
+        leakCheck: Bool? = none, optSize: OptSize? = none, strip: Strip? = none, rpath: Bool? = none) -> Profile {
+        return Profile {
+            name: "dev", optLevel: optLevel, debug: debug, lto: lto, codegenUnits: codegenUnits, panic: panic,
+            arcChecks: arcChecks, exclusivity: exclusivity, overflowChecks: overflowChecks, leakCheck: leakCheck,
+            optSize: optSize, strip: strip, rpath: rpath,
+        }
+    }
+}
+
+/// Optimising for size rather than speed: clang's `-Os`, or `-Oz`, which
+/// gives up more speed for less code.
+public enum OptSize {
+    size,
+    minSize
+}
+
+/// What the link leaves out of the executable; with none, nothing.
+public enum Strip {
+    debuginfo,
+    symbols
+}
+
+public enum Lto {
+    off,
+    thin,
+    fat
+}
+
+public enum Panic {
+    unwind,
+    abort
+}
+
+/// Whether overlapping access to a variable is checked at run time (docs/02 §2.3).
+public enum Exclusivity {
+    checked,
+    off
+}

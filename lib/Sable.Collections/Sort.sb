@@ -1,0 +1,105 @@
+module Sable.Collections
+
+/// Sorts the values in place, ascending: a stable merge sort.
+public fn sort<T: Comparable>(_ values: inout T[>..]) {
+    sort(&values, by: (a: T, b: T) => a < b)
+}
+
+/// Sorts the values in place by 'before', which says whether its first
+/// argument goes ahead of its second: a stable merge sort. Runs of 16 are
+/// put in order by insertion first; then runs are merged pairwise, back and
+/// forth between the values and one scratch array, until one run is left —
+/// a run already in order with the next is copied, not merged. The merge
+/// does not branch on 'before': it moves the element the comparison picks
+/// and steps both indices by it, taking from the left run on a tie.
+public fn sort<T>(_ values: inout T[>..], by before: (T, T) -> Bool) {
+    let n = values.count
+    if n < 2 {
+        return
+    }
+
+    let run = 16
+    var start = 0
+    while start < n {
+        let end = start + run < n ? start + run : n
+        var i = start + 1
+        while i < end {
+            let held = values[i]
+            var j = i
+            while j > start && before(held, values[j - 1]) {
+                values[j] = values[j - 1]
+                j = j - 1
+            }
+            if j != i {
+                values[j] = held
+            }
+            i = i + 1
+        }
+        start = end
+    }
+    if n <= run {
+        return
+    }
+
+    // The values moved out, so that the two arrays are the only owners of
+    // their buffers and each pass writes in place.
+    var source = values
+    values = []
+    var target = source
+    var width = run
+    while width < n {
+        var low = 0
+        while low < n {
+            let middle = low + width < n ? low + width : n
+            let high = middle + width < n ? middle + width : n
+            var k = low
+            if middle >= high || !before(source[middle], source[middle - 1]) {
+                while k < high {
+                    target[k] = source[k]
+                    k = k + 1
+                }
+            } else {
+                var x = low
+                var y = middle
+                while x < middle && y < high {
+                    let takeRight = before(source[y], source[x])
+                    target[k] = source[takeRight ? y : x]
+                    let step = takeRight ? 1 : 0
+                    y = y + step
+                    x = x + 1 - step
+                    k = k + 1
+                }
+                while x < middle {
+                    target[k] = source[x]
+                    x = x + 1
+                    k = k + 1
+                }
+                while y < high {
+                    target[k] = source[y]
+                    y = y + 1
+                    k = k + 1
+                }
+            }
+            low = high
+        }
+        let merged = target
+        target = source
+        source = merged
+        width = width * 2
+    }
+    values = source
+}
+
+/// The values in ascending order: a stable merge sort.
+public fn sorted<T: Comparable>(_ values: T[>..]) -> T[>..] {
+    var result = values
+    sort(&result)
+    return result
+}
+
+/// The values ordered by 'before': a stable merge sort.
+public fn sorted<T>(_ values: T[>..], by before: (T, T) -> Bool) -> T[>..] {
+    var result = values
+    sort(&result, by: before)
+    return result
+}

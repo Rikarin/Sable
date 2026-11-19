@@ -49,6 +49,8 @@ public static class TestHarness {
     ) => Compile([..sources.Select(SyntaxTree.Parse)], kind, out tests, docExamples, debugDirectory, checkExclusivity);
 
     /// <summary>The same, for files already parsed: a package's, each with its own package's features.</summary>
+    /// <param name="coverage">Which of the program's own files to count coverage in (never its tests').</param>
+    /// <param name="coverLibrary">Which of the standard library's files to count coverage in, by the names they are embedded with: <c>lib/Sable.Collections/Stack.sb</c>.</param>
     public static CompileResult Compile(
         IReadOnlyList<SyntaxTree> trees,
         TestKind kind,
@@ -56,12 +58,13 @@ public static class TestHarness {
         bool docExamples = false,
         string? debugDirectory = null,
         bool checkExclusivity = true,
-        Func<string, bool>? coverage = null
+        Func<string, bool>? coverage = null,
+        Func<string, bool>? coverLibrary = null
     ) {
         var warnings = new List<string>();
         CoverageMap? map = null;
         var result = Compile(trees, kind, out tests, docExamples, debugDirectory, checkExclusivity, warnings,
-            coverage is null ? null : (coverage, m => map = m));
+            coverage is null && coverLibrary is null ? null : (coverage ?? (static _ => false), coverLibrary, m => map = m));
         return result with { Warnings = warnings, Coverage = map };
     }
 
@@ -74,7 +77,7 @@ public static class TestHarness {
         string? debugDirectory,
         bool checkExclusivity,
         List<string> warnings,
-        (Func<string, bool> Measured, Action<CoverageMap> Made)? coverage = null
+        (Func<string, bool> Measured, Func<string, bool>? Library, Action<CoverageMap> Made)? coverage = null
     ) {
         tests = [];
         var program = trees.ToList();
@@ -113,10 +116,15 @@ public static class TestHarness {
         }
 
         // Counted where the program's own code is, before any pass: the
-        // tests' files are not measured, nor the library's.
-        if (coverage is var (wanted, made)) {
-            var measured = trees.Select(static t => t.Text.FileName).Where(f => wanted(f) && !IsTestFile(f)).ToHashSet(StringComparer.Ordinal);
-            made(Coverage.Instrument(module, measured.Contains));
+        // tests' files are not measured, nor the library's — unless the
+        // library's are what was asked for ('--cover'), by the names they
+        // are embedded with (lib/<Module>/<File>.sb).
+        if (coverage is var (wanted, library, made)) {
+            var own = trees.Select(static t => t.Text.FileName).ToHashSet(StringComparer.Ordinal);
+            var measured = own.Where(f => wanted(f) && !IsTestFile(f)).ToHashSet(StringComparer.Ordinal);
+            bool Measured(string f) => measured.Contains(f) || (library is not null && !own.Contains(f) && library(f));
+            var map = Coverage.Instrument(module, Measured);
+            made(map with { Counters = [..map.Counters, ..NeverLowered(compilation, Measured, map)] });
         }
 
         if (debugDirectory is null) {
@@ -129,6 +137,64 @@ public static class TestHarness {
 
         var ir = debugDirectory is null ? LlvmEmitter.Emit(module) : LlvmEmitter.EmitWithDebugInfo(module, debugDirectory);
         return new(module, ir, []);
+    }
+
+    /// <summary>
+    ///     Counters, never counted, for the code of measured files that was
+    ///     not lowered at all: a generic function is lowered only for the
+    ///     types it is used with, so a method of a generic type no test calls
+    ///     has no SIL to put a counter in. Without these its lines would be
+    ///     missing from the report rather than reported as not run. A
+    ///     function lowered has a counter on a line within it; one with none
+    ///     contributes the first line of each of its statements (or of its
+    ///     expression body), which is where lowering would have put them.
+    /// </summary>
+    static IEnumerable<CoverageCounter> NeverLowered(Compilation compilation, Func<string, bool> measured, CoverageMap map) {
+        var lowered = map.Counters.GroupBy(static c => c.File)
+            .ToDictionary(static g => g.Key, static g => g.SelectMany(static c => c.Lines).ToHashSet());
+        foreach (var tree in compilation.SyntaxTrees.Where(t => measured(t.Text.FileName))) {
+            var text = tree.Text;
+            int LineOf(SyntaxNode node) => text.GetLinePosition(node.Span.Start).Line;
+            var ran = lowered.GetValueOrDefault(text.FileName) ?? [];
+            foreach (var declaration in tree.Root.DescendantNodes()) {
+                SyntaxNode? body = declaration switch {
+                    FunctionDeclarationSyntax f => (SyntaxNode?)f.Body ?? f.ExpressionBody,
+                    InitDeclarationSyntax i => i.Body,
+                    DeinitDeclarationSyntax d => d.Body,
+                    OperatorDeclarationSyntax o => (SyntaxNode?)o.Body ?? o.ExpressionBody,
+                    AccessorSyntax a => (SyntaxNode?)a.Body ?? a.ExpressionBody,
+                    SubscriptDeclarationSyntax s => s.ExpressionBody,
+                    _ => null,
+                };
+
+                // A function inside another's body is that one's code.
+                if (body is null || InsideABody(declaration)) {
+                    continue;
+                }
+
+                var (first, last) = (LineOf(declaration), text.GetLinePosition(declaration.Span.End).Line);
+                if (ran.Any(l => l >= first && l <= last)) {
+                    continue;
+                }
+
+                List<int> lines = body is BlockSyntax block
+                    ? [..block.DescendantNodes().OfType<StatementSyntax>().Where(static s => s is not BlockSyntax).Select(LineOf).Distinct().Order()]
+                    : [LineOf(body)];
+                if (lines.Count > 0) {
+                    yield return new(text.FileName, lines);
+                }
+            }
+        }
+    }
+
+    static bool InsideABody(SyntaxNode node) {
+        for (var parent = node.Parent; parent is not null; parent = parent.Parent) {
+            if (parent is BlockSyntax) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>A file of a package's tests/ directory.</summary>

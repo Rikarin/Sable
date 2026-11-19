@@ -369,10 +369,15 @@ public sealed class TestRunnerTests {
             return;
         }
 
-        foreach (var name in new[] { "CollectionsTests.sb", "TextTests.sb" }) {
-            var path = Path.Combine(Root, "tests/lib", name);
-            var run = Native([new SourceText(File.ReadAllText(path), name)]);
-            Assert.True(run.ExitCode == 0, run.Stdout + run.Stderr);
+        // Each module's tests are one program, as tools/stdlib-coverage.sh
+        // builds them: tests/lib/<Module>/<Type>Tests.sb, every file of it.
+        var modules = Directory.GetDirectories(Path.Combine(Root, "tests/lib")).Order(StringComparer.Ordinal).ToList();
+        Assert.NotEmpty(modules);
+        Assert.Empty(Directory.GetFiles(Path.Combine(Root, "tests/lib"), "*.sb"));
+        foreach (var module in modules) {
+            var files = Directory.GetFiles(module, "*.sb", SearchOption.AllDirectories).Order(StringComparer.Ordinal).ToList();
+            var run = Native([..files.Select(f => new SourceText(File.ReadAllText(f), Path.GetRelativePath(Root, f).Replace('\\', '/')))]);
+            Assert.True(run.ExitCode == 0, module + "\n" + run.Stdout + run.Stderr);
             Assert.Matches(@"test result: ok\. \d+ passed; 0 failed; 0 filtered out", run.Stdout);
             Assert.Equal("", run.Stderr);
         }

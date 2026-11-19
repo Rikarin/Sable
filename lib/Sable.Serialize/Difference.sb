@@ -1,0 +1,136 @@
+module Sable.Serialize
+
+// Equal as JSON: numbers by value, strings by content, arrays in order, and
+// objects by their members whatever their order.
+public fn same(_ a: JsonValue, _ b: JsonValue) -> Bool {
+    match a {
+        case .Null => {
+            return isNull(b)
+        }
+        case .Bool(let x) => {
+            if let y = asBool(b) {
+                return x == y
+            }
+            return false
+        }
+        case .Number(let x) => {
+            if let y = asNumber(b) {
+                return x == y
+            }
+            return false
+        }
+        case .Text(let x) => {
+            if let y = asText(b) {
+                return x == y
+            }
+            return false
+        }
+        case .Array(let xs) => {
+            let ys = match b {
+                case .Array(let items) => items
+                default => {
+                    return false
+                }
+            }
+            if xs.count != ys.count {
+                return false
+            }
+            var i = 0
+            while i < xs.count {
+                if !same(xs[i], ys[i]) {
+                    return false
+                }
+                i = i + 1
+            }
+            return true
+        }
+        case .Object(let xs) => {
+            let ys = match b {
+                case .Object(let members) => members
+                default => {
+                    return false
+                }
+            }
+            if xs.count != ys.count {
+                return false
+            }
+            for m in xs {
+                guard let other = field(b, m.key) else {
+                    return false
+                }
+                if !same(m.value, other) {
+                    return false
+                }
+            }
+            return true
+        }
+    }
+}
+
+// The pointers at which two documents differ, in document order.
+public fn differences(_ a: JsonValue, _ b: JsonValue) -> String[>..] {
+    var found: String[>..] = []
+    collectDifferences(a, b, "", found)
+    return found
+}
+
+fn collectDifferences(_ a: JsonValue, _ b: JsonValue, _ at: String, _ found: inout String[>..]) {
+    if kindOf(a) != kindOf(b) {
+        found.append(at)
+        return
+    }
+
+    match a {
+        case .Array(let xs) => {
+            let ys = itemsOf(b)
+            let n = xs.count.max(ys.count)
+            var i = 0
+            while i < n {
+                let path = at + "/\(i)"
+                if i >= xs.count || i >= ys.count {
+                    found.append(path)
+                } else {
+                    collectDifferences(xs[i], ys[i], path, found)
+                }
+                i = i + 1
+            }
+        }
+        case .Object(let xs) => {
+            for m in xs {
+                let path = at + "/" + escapePointerToken(m.key)
+                if let other = field(b, m.key) {
+                    collectDifferences(m.value, other, path, found)
+                } else {
+                    found.append(path)
+                }
+            }
+            for m in membersOf(b) {
+                if field(a, m.key) == none {
+                    found.append(at + "/" + escapePointerToken(m.key))
+                }
+            }
+        }
+        default => {
+            if !same(a, b) {
+                found.append(at)
+            }
+        }
+    }
+}
+
+public fn escapePointerToken(_ token: String) -> String {
+    var builder = newBuilder()
+    var i = 0
+    while i < token.count {
+        let c = token.at(i)
+        if c == '~' {
+            builder.add("~0")
+        } else if c == '/' {
+            builder.add("~1")
+        } else {
+            builder.addChar(c)
+        }
+        i = i + 1
+    }
+    return builder.build()
+}

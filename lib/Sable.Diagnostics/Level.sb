@@ -1,0 +1,52 @@
+module Sable.Diagnostics
+
+import Sable.Time
+
+public union Level {
+    Trace
+    Debug
+    Info
+    Warning
+    Error
+}
+
+/// A level's rank, so that one can be compared with the logger's threshold.
+public fn rank(_ level: Level) -> Int {
+    return match level {
+        case .Trace   => 0
+        case .Debug   => 1
+        case .Info    => 2
+        case .Warning => 3
+        case .Error   => 4
+    }
+}
+
+public fn levelName(_ level: Level) -> String {
+    return match level {
+        case .Trace   => "TRACE"
+        case .Debug   => "DEBUG"
+        case .Info    => "INFO"
+        case .Warning => "WARN"
+        case .Error   => "ERROR"
+    }
+}
+
+public fn parseLevel(_ text: String) -> Level? {
+    let t = text.trimmed()
+    if t == "trace" || t == "TRACE" {
+        return Level.Trace
+    }
+    if t == "debug" || t == "DEBUG" {
+        return Level.Debug
+    }
+    if t == "info" || t == "INFO" {
+        return Level.Info
+    }
+    if t == "warn" || t == "warning" || t == "WARN" {
+        return Level.Warning
+    }
+    if t == "error" || t == "ERROR" {
+        return Level.Error
+    }
+    return none
+}

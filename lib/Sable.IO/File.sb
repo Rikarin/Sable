@@ -1,0 +1,68 @@
+module Sable.IO
+
+// Files, directories, paths and the standard streams (docs/04 §4.3), written
+// in Sable over the runtime's calls (Sable.Core's Runtime).
+
+/// Whole files, read and written at once.
+public struct File {
+    /// The file's contents.
+    public static fn read(_ path: String) throws(IoError) -> String {
+        if let text = Runtime.readFile(path) {
+            return text
+        }
+        if !Runtime.fileExists(path) {
+            throw IoError.NotFound(path: path)
+        }
+        throw IoError.Failed(path: path)
+    }
+
+    /// The file's lines, without their endings; a last empty line is not one.
+    public static fn readLines(_ path: String) throws(IoError) -> String[>..] {
+        let text = try File.read(path)
+        var lines: String[>..] = []
+        if text.count == 0 {
+            return lines
+        }
+        for line in text.split('\n') {
+            lines.append(withoutReturn(line))
+        }
+        if lines.count > 0 && lines[lines.count - 1].count == 0 {
+            lines.removeLast()
+        }
+        return lines
+    }
+
+    /// Replaces the file's contents, making it if it is not there.
+    public static fn write(_ path: String, _ text: String) throws(IoError) {
+        if !Runtime.writeFile(path, text, false) {
+            throw IoError.Failed(path: path)
+        }
+    }
+
+    /// Adds to the end of the file, making it if it is not there.
+    public static fn append(_ path: String, _ text: String) throws(IoError) {
+        if !Runtime.writeFile(path, text, true) {
+            throw IoError.Failed(path: path)
+        }
+    }
+
+    public static fn exists(_ path: String) -> Bool {
+        return Runtime.fileExists(path) && !Runtime.isDirectory(path)
+    }
+
+    public static fn remove(_ path: String) throws(IoError) {
+        if !File.exists(path) {
+            throw IoError.NotFound(path: path)
+        }
+        if !Runtime.removeFile(path) {
+            throw IoError.Failed(path: path)
+        }
+    }
+}
+
+fn withoutReturn(_ line: String) -> String {
+    if line.count > 0 && line.at(line.count - 1) == '\r' {
+        return line.slice(0, line.count - 1)
+    }
+    return line
+}

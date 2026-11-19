@@ -1,0 +1,8 @@
+module Sable.Generators
+
+/// A file a package lists for its generators.
+public struct InputFile {
+    /// Its path, relative to the package, with '/' between the parts.
+    public var path: String
+    public var text: String
+}

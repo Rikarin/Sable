@@ -1,0 +1,7 @@
+module Sable.Generators
+
+/// Where something a generator is given is in the source. A message
+/// reported `at:` it points there.
+public struct Location {
+    var id: String
+}

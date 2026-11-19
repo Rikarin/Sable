@@ -1,0 +1,225 @@
+module Sable.Time
+
+/// A moment in UTC: seconds since 1970-01-01T00:00:00Z, and the nanoseconds
+/// into that second.
+public struct DateTime: Comparable, Hashable {
+    public var secondsSinceEpoch: Int
+    public var nanosecond: Int
+
+    public static fn now() -> DateTime {
+        let n = Runtime.wallClockNanoseconds()
+        return DateTime { secondsSinceEpoch: floorDivide(n, 1000000000), nanosecond: floorModulo(n, 1000000000) }
+    }
+
+    public static fn fromUnix(_ seconds: Int) -> DateTime {
+        return DateTime { secondsSinceEpoch: seconds, nanosecond: 0 }
+    }
+
+    /// The moment the fields name; none when one is out of range (a 30th of February, an hour of 24).
+    public static fn of(year: Int, month: Int, day: Int, hour: Int, minute: Int, second: Int) -> DateTime? {
+        if month < 1 || month > 12 || day < 1 || day > daysInMonth(year, month) {
+            return none
+        }
+        if hour < 0 || hour > 23 || minute < 0 || minute > 59 || second < 0 || second > 59 {
+            return none
+        }
+        let days = daysFromCivil(year, month, day)
+        return DateTime { secondsSinceEpoch: days * 86400 + hour * 3600 + minute * 60 + second, nanosecond: 0 }
+    }
+
+    /// "YYYY-MM-DDTHH:MM:SSZ", or with a date alone, midnight.
+    public static fn parse(_ text: String) -> DateTime? {
+        if text.count != 10 && text.count != 20 {
+            return none
+        }
+        if text.at(4) != '-' || text.at(7) != '-' {
+            return none
+        }
+        let year = number(text, 0, 4) ?? -1
+        let month = number(text, 5, 7) ?? -1
+        let day = number(text, 8, 10) ?? -1
+        if year < 0 || month < 0 || day < 0 {
+            return none
+        }
+        if text.count == 10 {
+            return DateTime.of(year: year, month: month, day: day, hour: 0, minute: 0, second: 0)
+        }
+        if text.at(10) != 'T' || text.at(13) != ':' || text.at(16) != ':' || text.at(19) != 'Z' {
+            return none
+        }
+        let hour = number(text, 11, 13) ?? -1
+        let minute = number(text, 14, 16) ?? -1
+        let second = number(text, 17, 19) ?? -1
+        if hour < 0 || minute < 0 || second < 0 {
+            return none
+        }
+        return DateTime.of(year: year, month: month, day: day, hour: hour, minute: minute, second: second)
+    }
+
+    var days: Int => floorDivide(secondsSinceEpoch, 86400)
+    var secondOfDay: Int => floorModulo(secondsSinceEpoch, 86400)
+
+    public var year: Int => civilYear(days)
+    public var month: Int => civilMonth(days)
+    public var day: Int => civilDay(days)
+    public var hour: Int => secondOfDay / 3600
+    public var minute: Int => secondOfDay / 60 % 60
+    public var second: Int => secondOfDay % 60
+
+    /// ISO 8601's: 1 for Monday through 7 for Sunday.
+    public var weekday: Int => floorModulo(days + 3, 7) + 1
+
+    /// 1 for the first of January.
+    public var dayOfYear: Int => days - daysFromCivil(year, 1, 1) + 1
+
+    public fn adding(_ duration: Duration) -> DateTime {
+        let total = nanosecond + floorModulo(duration.totalNanoseconds, 1000000000)
+        return DateTime {
+            secondsSinceEpoch: secondsSinceEpoch + floorDivide(duration.totalNanoseconds, 1000000000) + total / 1000000000,
+            nanosecond: total % 1000000000,
+        }
+    }
+
+    public fn durationSince(_ earlier: DateTime) -> Duration {
+        return Duration {
+            totalNanoseconds: (secondsSinceEpoch - earlier.secondsSinceEpoch) * 1000000000 + nanosecond - earlier.nanosecond
+        }
+    }
+
+    /// "2026-11-17T09:05:03Z": to the second.
+    public fn iso8601() -> String {
+        return isoDate() + "T" + two(hour) + ":" + two(minute) + ":" + two(second) + "Z"
+    }
+
+    /// "2026-11-17".
+    public fn isoDate() -> String {
+        var y = year.toString()
+        while y.count < 4 {
+            y = "0" + y
+        }
+        return y + "-" + two(month) + "-" + two(day)
+    }
+
+    operator == (a: DateTime, b: DateTime) -> Bool {
+        return a.secondsSinceEpoch == b.secondsSinceEpoch && a.nanosecond == b.nanosecond
+    }
+
+    operator < (a: DateTime, b: DateTime) -> Bool {
+        if a.secondsSinceEpoch != b.secondsSinceEpoch {
+            return a.secondsSinceEpoch < b.secondsSinceEpoch
+        }
+        return a.nanosecond < b.nanosecond
+    }
+
+    public fn hash() -> Int {
+        return (secondsSinceEpoch * 31 + nanosecond).hash()
+    }
+}
+
+public fn isLeapYear(_ year: Int) -> Bool {
+    return year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
+}
+
+public fn daysInMonth(_ year: Int, _ month: Int) -> Int {
+    if month == 2 {
+        if isLeapYear(year) {
+            return 29
+        }
+        return 28
+    }
+    if month == 4 || month == 6 || month == 9 || month == 11 {
+        return 30
+    }
+    return 31
+}
+
+// Days since 1970-01-01 to a civil date and back: Howard Hinnant's
+// algorithms, over 400-year eras so that every year works.
+
+fn daysFromCivil(_ year: Int, _ month: Int, _ day: Int) -> Int {
+    var y = year
+    if month <= 2 {
+        y -= 1
+    }
+    let era = floorDivide(y, 400)
+    let yearOfEra = y - era * 400
+    var shifted = month - 3
+    if month <= 2 {
+        shifted = month + 9
+    }
+    let dayOfYear = (153 * shifted + 2) / 5 + day - 1
+    let dayOfEra = yearOfEra * 365 + yearOfEra / 4 - yearOfEra / 100 + dayOfYear
+    return era * 146097 + dayOfEra - 719468
+}
+
+fn civilDayOfEra(_ days: Int) -> Int {
+    return floorModulo(days + 719468, 146097)
+}
+
+fn civilYearOfEra(_ days: Int) -> Int {
+    let dayOfEra = civilDayOfEra(days)
+    return (dayOfEra - dayOfEra / 1460 + dayOfEra / 36524 - dayOfEra / 146096) / 365
+}
+
+fn civilShiftedDayOfYear(_ days: Int) -> Int {
+    let yearOfEra = civilYearOfEra(days)
+    return civilDayOfEra(days) - (365 * yearOfEra + yearOfEra / 4 - yearOfEra / 100)
+}
+
+fn civilShiftedMonth(_ days: Int) -> Int {
+    return (5 * civilShiftedDayOfYear(days) + 2) / 153
+}
+
+fn civilMonth(_ days: Int) -> Int {
+    let shifted = civilShiftedMonth(days)
+    if shifted < 10 {
+        return shifted + 3
+    }
+    return shifted - 9
+}
+
+fn civilDay(_ days: Int) -> Int {
+    return civilShiftedDayOfYear(days) - (153 * civilShiftedMonth(days) + 2) / 5 + 1
+}
+
+fn civilYear(_ days: Int) -> Int {
+    let year = civilYearOfEra(days) + floorDivide(days + 719468, 146097) * 400
+    if civilMonth(days) <= 2 {
+        return year + 1
+    }
+    return year
+}
+
+fn floorDivide(_ a: Int, _ b: Int) -> Int {
+    let q = a / b
+    if a % b != 0 && (a < 0) != (b < 0) {
+        return q - 1
+    }
+    return q
+}
+
+fn floorModulo(_ a: Int, _ b: Int) -> Int {
+    return a - floorDivide(a, b) * b
+}
+
+fn two(_ n: Int) -> String {
+    if n < 10 {
+        return "0" + n.toString()
+    }
+    return n.toString()
+}
+
+/// The digits between the two offsets as a number; none for anything but digits.
+fn number(_ text: String, _ from: Int, _ to: Int) -> Int? {
+    var value = 0
+    var i = from
+    while i < to {
+        let c = text.at(i)
+        if !c.isDigit {
+            return none
+        }
+        value = value * 10 + (c.codePoint - 48)
+        i += 1
+    }
+    return value
+}

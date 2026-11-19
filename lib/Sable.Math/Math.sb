@@ -117,31 +117,3 @@ public fn ceiling(_ x: F64) -> Int {
 public fn round(_ x: F64) -> Int {
     return x < 0.0 ? 0 - floor(0.5 - x) : floor(x + 0.5)
 }
-
-/// A seeded pseudo-random generator (xorshift-free, overflow-free: a
-/// multiplicative congruential generator mod 2^31 - 1). The same seed
-/// gives the same numbers, everywhere.
-public struct Random {
-    var state: Int
-
-    public init(seed: Int) {
-        let reduced = seed % 2147483647
-        state = reduced <= 0 ? reduced + 2147483646 : reduced
-    }
-
-    /// The next number in [0, 2^31 - 1).
-    public mutating fn next() -> Int {
-        state = state * 48271 % 2147483647
-        return state - 1
-    }
-
-    /// A number in [low, high).
-    public mutating fn next(from low: Int, to high: Int) -> Int {
-        return low + next() % (high - low)
-    }
-
-    /// A number in [0, 1).
-    public mutating fn nextUnit() -> F64 {
-        return F64(next()) / 2147483646.0
-    }
-}

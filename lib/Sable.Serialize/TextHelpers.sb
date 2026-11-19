@@ -1,0 +1,162 @@
+module Sable.Serialize
+
+// Strings are joined in a balanced tree, so that building a long text from
+// many small pieces costs n log n rather than n squared.
+struct TextBuilder {
+    var parts: String[>..]
+
+    public mutating fn add(_ piece: String) {
+        parts.append(piece)
+    }
+
+    public mutating fn addChar(_ c: Char) {
+        parts.append(String.fromChar(c))
+    }
+
+    public fn build() -> String {
+        return joinRange(parts, 0, parts.count)
+    }
+
+    public fn isEmpty() -> Bool {
+        return parts.count == 0
+    }
+}
+
+fn newBuilder() -> TextBuilder {
+    return TextBuilder { parts: [] }
+}
+
+fn joinRange(_ parts: String[>..], _ from: Int, _ to: Int) -> String {
+    let count = to - from
+    if count <= 0 {
+        return ""
+    }
+    if count == 1 {
+        return parts[from]
+    }
+    if count == 2 {
+        return parts[from] + parts[from + 1]
+    }
+    let middle = from + count / 2
+    return joinRange(parts, from, middle) + joinRange(parts, middle, to)
+}
+
+fn join(_ parts: String[>..], _ separator: String) -> String {
+    var builder = newBuilder()
+    var first = true
+    for part in parts {
+        if !first {
+            builder.add(separator)
+        }
+        builder.add(part)
+        first = false
+    }
+    return builder.build()
+}
+
+fn repeated(_ piece: String, _ times: Int) -> String {
+    var builder = newBuilder()
+    var i = 0
+    while i < times {
+        builder.add(piece)
+        i = i + 1
+    }
+    return builder.build()
+}
+
+fn hexDigit(_ value: Int) -> String {
+    let digits = "0123456789abcdef"
+    return String.fromChar(digits.at(value % 16))
+}
+
+fn hex4(_ value: Int) -> String {
+    return hexDigit(value / 4096) + hexDigit(value / 256 % 16) + hexDigit(value / 16 % 16) + hexDigit(value % 16)
+}
+
+fn hexValue(_ c: Char) -> Int? {
+    let code = c.codePoint
+    if code >= 48 && code <= 57 {
+        return code - 48
+    }
+    if code >= 97 && code <= 102 {
+        return code - 87
+    }
+    if code >= 65 && code <= 70 {
+        return code - 55
+    }
+    return none
+}
+
+fn charsOf(_ s: String) -> Char[>..] {
+    var result: Char[>..] = []
+    var i = 0
+    let n = s.count
+    while i < n {
+        result.append(s.at(i))
+        i = i + 1
+    }
+    return result
+}
+
+// Orders strings by Unicode scalar, as JSON's sorted-key output wants.
+fn compareText(_ a: String, _ b: String) -> Int {
+    let n = a.count.min(b.count)
+    var i = 0
+    while i < n {
+        let x = a.at(i).codePoint
+        let y = b.at(i).codePoint
+        if x != y {
+            return x < y ? -1 : 1
+        }
+        i = i + 1
+    }
+    if a.count == b.count {
+        return 0
+    }
+    return a.count < b.count ? -1 : 1
+}
+
+// A stable merge sort, for anything with an order.
+fn sorted<T>(_ items: T[>..], _ before: (T, T) -> Bool) -> T[>..] {
+    if items.count <= 1 {
+        return items
+    }
+    let middle = items.count / 2
+    var left: T[>..] = []
+    var right: T[>..] = []
+    var i = 0
+    for item in items {
+        if i < middle {
+            left.append(item)
+        } else {
+            right.append(item)
+        }
+        i = i + 1
+    }
+    return merge(sorted(left, before), sorted(right, before), before)
+}
+
+fn merge<T>(_ left: T[>..], _ right: T[>..], _ before: (T, T) -> Bool) -> T[>..] {
+    var result: T[>..] = []
+    var i = 0
+    var j = 0
+    while i < left.count && j < right.count {
+        // Taking from the left on ties keeps the sort stable.
+        if before(right[j], left[i]) {
+            result.append(right[j])
+            j = j + 1
+        } else {
+            result.append(left[i])
+            i = i + 1
+        }
+    }
+    while i < left.count {
+        result.append(left[i])
+        i = i + 1
+    }
+    while j < right.count {
+        result.append(right[j])
+        j = j + 1
+    }
+    return result
+}

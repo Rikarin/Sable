@@ -1,0 +1,31 @@
+module Sable.Collections
+
+// Collections beyond the array family (docs/04 §4.3), written in Sable.
+
+/// Last in, first out.
+public class Stack<Element> {
+    var items: Element[>..] = []
+
+    public init() { }
+
+    public var count: Int => items.count
+    public var isEmpty: Bool => items.count == 0
+
+    public fn push(_ item: Element) {
+        items.append(item)
+    }
+
+    public fn pop() -> Element? {
+        if items.count == 0 {
+            return none
+        }
+        return items.removeLast()
+    }
+
+    public fn peek() -> Element? {
+        if items.count == 0 {
+            return none
+        }
+        return items[items.count - 1]
+    }
+}

@@ -1,0 +1,29 @@
+module Sable.Collections
+
+/// First in, first out: two stacks, the second refilled from the first
+/// when it runs dry, so each element moves once.
+public class Queue<Element> {
+    var incoming: Element[>..] = []
+    var outgoing: Element[>..] = []
+
+    public init() { }
+
+    public var count: Int => incoming.count + outgoing.count
+    public var isEmpty: Bool => incoming.count + outgoing.count == 0
+
+    public fn enqueue(_ item: Element) {
+        incoming.append(item)
+    }
+
+    public fn dequeue() -> Element? {
+        if outgoing.count == 0 {
+            while incoming.count > 0 {
+                outgoing.append(incoming.removeLast())
+            }
+        }
+        if outgoing.count == 0 {
+            return none
+        }
+        return outgoing.removeLast()
+    }
+}

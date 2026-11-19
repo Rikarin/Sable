@@ -72,6 +72,46 @@ whole directories, not single files:
 New diagnostics get a code in `src/Sable.Syntax/Diagnostics.cs` and a page under
 `docs/diagnostics/`.
 
+## Standard library
+
+The library is Sable, in [lib/](lib/), one directory per module, embedded in
+the compiler (`Sable.Core` by Sable.Symbols, the rest by Sable.Driver, every
+`.sb` file of the directory). Its layout ([docs/06 §6.4](docs/06-runtime-and-stdlib.md)):
+
+- **One public type per file**, named after it: `lib/Sable.Collections/Stack.sb`.
+  A small helper type private to one type lives in its file; a family that is
+  one concept (`Iterator` with `Sequence`, `Channel` with `ChannelIterator`)
+  may share one; free functions go in a file named for what they do
+  (`Sort.sb`, `Math.sb`). A large extension of a type for one feature may
+  have its own file, `<Type>+<Feature>.sb` (`String+Sequence.sb`). Never
+  several unrelated public types in one file. `lib/Sable.Core/` is flat.
+- **Tests** are Sable, with `@test`: `tests/lib/<Module>/<Type>Tests.sb`, one
+  file per type, one behaviour per test, named as a sentence. Each module's
+  tests are built as one program; `TestRunnerTests` runs every module's.
+- **Doc comments** on every public declaration, with a ```` ```sable ````
+  example where useful (`sable test --doc` runs them).
+
+Every file of the library is held to a coverage threshold by its own tests:
+
+```bash
+tools/stdlib-coverage.sh                     # every module
+tools/stdlib-coverage.sh Sable.Collections   # some
+```
+
+For each module it runs `sable test --cover lib/<Module> tests/lib/<Module>/`,
+which counts lines and branches in the library's code rather than the
+tests', and prints each file's share of both. A file under its threshold in
+[tools/stdlib-coverage.thresholds](tools/stdlib-coverage.thresholds) fails
+it, as CI does: 85% of lines and 70% of branches by default, which every new
+file must meet. An override is a line naming the file with its own minimums
+and a `#` reason; those marked "raise me" are files that were under the
+default when the check began — raise them as their tests grow, never lower
+them. A module with no tests yet is measured as run by nothing. `SABLE=...`
+picks the `sable` to use (by default src/Sable.Driver is built), and each
+module's LCOV is left in `target/stdlib-coverage/`. To see one file's lines
+not run, run the command above yourself: `sable test --cover
+lib/Sable.Collections/Stack.sb tests/lib/Sable.Collections/`.
+
 ## The syntax tree
 
 Node classes are generated from [src/Sable.Syntax/Syntax.xml](src/Sable.Syntax/Syntax.xml).

@@ -1,0 +1,127 @@
+module Sable.Testing
+
+import Sable.Text
+import Sable.Math
+import Sable.Collections
+
+/// What a failed assertion throws, and 'try!' then traps on: no assertion
+/// can be caught by the test it is in.
+union TestFailure {
+    Failed
+}
+
+fn stopTest() throws(TestFailure) {
+    throw TestFailure.Failed
+}
+
+/// The marker a failed assertion's report starts with: the harness looks
+/// for it in a failed test's errors.
+let failureMarker = "assertion failed: "
+
+/// Ends the test, failed, saying why.
+public fn fail(_ message: String) {
+    Runtime.writeError(failureMarker + message + "\n")
+    try! stopTest()
+}
+
+/// Fails the test, saying why, unless the condition holds.
+public fn assert(_ condition: Bool, _ message: String) {
+    if !condition {
+        fail(message)
+    }
+}
+
+/// Fails the test unless the condition holds.
+public fn assert(_ condition: Bool) {
+    if !condition {
+        fail("the condition was false")
+    }
+}
+
+/// Fails the test unless the two are equal, showing both as source would
+/// write them and where they first differ.
+public fn assertEqual<T>(_ left: T, _ right: T) where T: Equatable, T: Debug {
+    if left == right {
+        return
+    }
+    fail(differenceReport(left.debugDescription(), right.debugDescription()))
+}
+
+/// Fails the test unless the two strings are equal: a line by line diff
+/// when either has more than one line, both quoted and the first
+/// difference marked otherwise.
+public fn assertEqualText(_ left: String, _ right: String) {
+    if left == right {
+        return
+    }
+    if !left.contains('\n') && !right.contains('\n') {
+        fail(differenceReport(left.debugDescription(), right.debugDescription()))
+        return
+    }
+    fail(lineDiff(lines(left), lines(right)))
+}
+
+/// Fails the test unless the two differ.
+public fn assertNotEqual<T>(_ left: T, _ right: T) where T: Equatable, T: Debug {
+    if left != right {
+        return
+    }
+    fail("both are \(left.debugDescription())")
+}
+
+/// The two descriptions, one above the other, with a caret under the first
+/// character where they differ.
+public fn differenceReport(_ left: String, _ right: String) -> String {
+    var at = 0
+    while at < left.count && at < right.count && left.at(at) == right.at(at) {
+        at = at + 1
+    }
+    return "the values differ\n   left: \(left)\n  right: \(right)\n         \(repeating(" ", at))^ first difference at character \(at)"
+}
+
+/// A diff of two lists of lines: '-' for the left's, '+' for the right's,
+/// ' ' for lines both have, by their longest common subsequence.
+public fn lineDiff(_ left: String[>..], _ right: String[>..]) -> String {
+    // lengths[i * (m + 1) + j]: the longest common subsequence of left[i...]
+    // and right[j...].
+    let n = left.count
+    let m = right.count
+    var lengths: Int[>..] = []
+    var k = 0
+    while k < (n + 1) * (m + 1) {
+        lengths.append(0)
+        k = k + 1
+    }
+    var i = n - 1
+    while i >= 0 {
+        var j = m - 1
+        while j >= 0 {
+            if left[i] == right[j] {
+                lengths[i * (m + 1) + j] = lengths[(i + 1) * (m + 1) + j + 1] + 1
+            } else {
+                lengths[i * (m + 1) + j] = max(lengths[(i + 1) * (m + 1) + j], lengths[i * (m + 1) + j + 1])
+            }
+            j = j - 1
+        }
+        i = i - 1
+    }
+
+    let report = TextBuilder()
+    report.append("the text differs (-left +right)")
+    i = 0
+    var j = 0
+    while i < n || j < m {
+        if i < n && j < m && left[i] == right[j] {
+            report.append("\n  " + left[i])
+            i = i + 1
+            j = j + 1
+        } else if i < n && (j == m || lengths[(i + 1) * (m + 1) + j] >= lengths[i * (m + 1) + j + 1]) {
+            report.append("\n- " + left[i])
+            i = i + 1
+        } else {
+            report.append("\n+ " + right[j])
+            j = j + 1
+        }
+    }
+    return report.build()
+}

@@ -1,0 +1,54 @@
+module Sable.Core
+
+/// One part of a value, as a mirror sees it.
+public struct MirrorField {
+    public let name: String
+    public let typeName: String
+    public let value: String
+}
+
+/// A read-only view of any value: its type, its case, and its parts.
+/// Cheap, and available on every type; nothing is emitted for a type no
+/// mirror is made of.
+public struct Mirror<Subject> {
+    public private(set) var typeName: String
+    public private(set) var kind: String
+    public private(set) var caseName: String?
+    public private(set) var fields: MirrorField[>..]
+    public private(set) var description: String
+
+    public init(of subject: Subject) {
+        typeName = Reflect.typeName(subject)
+        kind = Reflect.kind(subject)
+        let named = Reflect.caseName(subject)
+        if named.isEmpty {
+            caseName = none
+        } else {
+            caseName = named
+        }
+        let names = Reflect.fieldNames(subject)
+        let types = Reflect.fieldTypeNames(subject)
+        let values = Reflect.fieldValues(subject)
+        var made: MirrorField[>..] = []
+        var i = 0
+        while i < names.count {
+            made.append(MirrorField(name: names[i], typeName: types[i], value: values[i]))
+            i = i + 1
+        }
+        fields = made
+        description = Reflect.describe(subject)
+    }
+
+    /// How many parts the value has.
+    public var count: Int => fields.count
+
+    /// The part with this name, or none.
+    public fn field(named name: String) -> MirrorField? {
+        for field in fields {
+            if field.name == name {
+                return field
+            }
+        }
+        return none
+    }
+}

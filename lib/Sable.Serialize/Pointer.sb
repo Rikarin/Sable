@@ -1,0 +1,164 @@
+module Sable.Serialize
+
+// JSON Pointer (RFC 6901).
+
+public union PointerError {
+    Malformed(pointer: String)
+    NotFound(pointer: String, at: String)
+}
+
+public fn describePointerError(_ error: PointerError) -> String {
+    return match error {
+        case .Malformed(let pointer)        => "'\(pointer)' is not a JSON pointer"
+        case .NotFound(let pointer, let at) => "'\(pointer)' finds nothing at '\(at)'"
+    }
+}
+
+// "/a/b~1c/0" is ["a", "b/c", "0"]: '~1' stands for '/', and '~0' for '~'.
+public fn pointerTokens(_ pointer: String) throws(PointerError) -> String[>..] {
+    var tokens: String[>..] = []
+    if pointer.isEmpty {
+        return tokens
+    }
+    if pointer.at(0) != '/' {
+        throw PointerError.Malformed(pointer: pointer)
+    }
+
+    var current = newBuilder()
+    var i = 1
+    let n = pointer.count
+    while i < n {
+        let c = pointer.at(i)
+        if c == '/' {
+            tokens.append(current.build())
+            current = newBuilder()
+        } else if c == '~' {
+            if i + 1 >= n {
+                throw PointerError.Malformed(pointer: pointer)
+            }
+            let after = pointer.at(i + 1)
+            if after == '0' {
+                current.add("~")
+            } else if after == '1' {
+                current.add("/")
+            } else {
+                throw PointerError.Malformed(pointer: pointer)
+            }
+            i = i + 1
+        } else {
+            current.addChar(c)
+        }
+        i = i + 1
+    }
+    tokens.append(current.build())
+    return tokens
+}
+
+// An array index as a pointer writes it: digits, and no leading zero.
+public fn arrayIndex(_ token: String) -> Int? {
+    if token.isEmpty {
+        return none
+    }
+    if token.count > 1 && token.at(0) == '0' {
+        return none
+    }
+    var i = 0
+    while i < token.count {
+        if !token.at(i).isDigit {
+            return none
+        }
+        i = i + 1
+    }
+    return token.toInt()
+}
+
+public fn resolve(_ document: JsonValue, _ pointer: String) throws(PointerError) -> JsonValue {
+    let tokens = try pointerTokens(pointer)
+    var current = document
+    var walked = ""
+    for token in tokens {
+        walked = walked + "/" + token
+        let next = step(current, token)
+        guard let found = next else {
+            throw PointerError.NotFound(pointer: pointer, at: walked)
+        }
+        current = found
+    }
+    return current
+}
+
+fn step(_ value: JsonValue, _ token: String) -> JsonValue? {
+    return match value {
+        case .Object(_) => field(value, token)
+        case .Array(_)  => stepIndex(value, token)
+        default         => none
+    }
+}
+
+fn stepIndex(_ value: JsonValue, _ token: String) -> JsonValue? {
+    guard let index = arrayIndex(token) else {
+        return none
+    }
+    return element(value, index)
+}
+
+// A copy of the document with the value at the pointer replaced, or added
+// when the last step names a new key, or '-', the end of an array.
+public fn replacing(_ document: JsonValue, _ pointer: String, _ value: JsonValue) throws(PointerError) -> JsonValue {
+    let tokens = try pointerTokens(pointer)
+    return try replaceAt(document, tokens, 0, value, pointer)
+}
+
+fn replaceAt(_ current: JsonValue, _ tokens: String[>..], _ depth: Int, _ value: JsonValue, _ pointer: String) throws(PointerError) -> JsonValue {
+    if depth == tokens.count {
+        return value
+    }
+    let token = tokens[depth]
+    var walked = ""
+    var k = 0
+    while k <= depth {
+        walked = walked + "/" + escapePointerToken(tokens[k])
+        k = k + 1
+    }
+
+    match current {
+        case .Object(let members) => {
+            var result: Member[>..] = []
+            var found = false
+            for m in members {
+                if m.key == token && !found {
+                    result.append(Member { key: m.key, value: try replaceAt(m.value, tokens, depth + 1, value, pointer) })
+                    found = true
+                } else {
+                    result.append(m)
+                }
+            }
+            if !found {
+                if depth + 1 != tokens.count {
+                    throw PointerError.NotFound(pointer: pointer, at: walked)
+                }
+                result.append(Member { key: token, value: value })
+            }
+            return JsonValue.Object(members: result)
+        }
+        case .Array(let items) => {
+            if token == "-" && depth + 1 == tokens.count {
+                var appended = items
+                appended.append(value)
+                return JsonValue.Array(items: appended)
+            }
+            guard let index = arrayIndex(token) else {
+                throw PointerError.NotFound(pointer: pointer, at: walked)
+            }
+            if index >= items.count {
+                throw PointerError.NotFound(pointer: pointer, at: walked)
+            }
+            var changed = items
+            changed[index] = try replaceAt(items[index], tokens, depth + 1, value, pointer)
+            return JsonValue.Array(items: changed)
+        }
+        default => {
+            throw PointerError.NotFound(pointer: pointer, at: walked)
+        }
+    }
+}

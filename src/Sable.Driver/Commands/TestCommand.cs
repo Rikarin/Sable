@@ -13,10 +13,11 @@ public sealed class TestCommand : HarnessCommand {
     public override string Summary => "run the @test functions (and, with --doc, the doc examples)";
 
     public override string Usage => """
-        usage: sable test [<file.sb>...] [filter...] [--doc] [--bless] [--list] [--exact] [--show-output] [--release] [-g] [-- <harness options>]
+        usage: sable test [<file.sb>|<directory>...] [filter...] [--doc] [--bless] [--list] [--exact] [--show-output] [--release] [-g] [-- <harness options>]
 
         Without a file, tests the package in this directory or the nearest above it: its
-        library with the files under tests/, and its dependencies.
+        library with the files under tests/, and its dependencies. A directory stands for
+        every .sb file under it, built as one program.
 
           filter             run the tests whose names (Module.function) contain it
           --doc              also run the ```sable examples in doc comments, as tests
@@ -34,19 +35,30 @@ public sealed class TestCommand : HarnessCommand {
           --harness-out <p>  build the harness to p, with '-g' to debug it ('<p> --run-test <name>'), and run nothing
           --coverage         count the lines and branches of the package's code the tests run: a
                              summary per file, and target/coverage/lcov.info for a coverage viewer
+          --cover <module>   count coverage in a standard library module instead (implies --coverage):
+                             a name (Sable.Collections), its directory (lib/Sable.Collections) or one
+                             file of it (lib/Sable.Collections/Stack.sb); may be given more than once
+          --lcov <path>      write the LCOV file there instead
         """;
 
     int _jobs;
     TimeSpan? _timeout;
     bool _coverage;
+    List<string> _covered = [];
+    string? _lcov;
 
     protected override bool MeasureCoverage => _coverage;
+
+    protected override Func<string, bool>? CoveredLibrary =>
+        _covered.Count == 0 ? null : file => _covered.Any(c => file == c || (c.EndsWith('/') && file.StartsWith(c, StringComparison.Ordinal)));
 
     public override int Run(IReadOnlyList<string> arguments) {
         // The runner's own options; the rest are the harness's and the build's.
         _jobs = Environment.ProcessorCount;
         _timeout = null;
         _coverage = false;
+        _covered = [];
+        _lcov = null;
         var rest = new List<string>();
         for (var i = 0; i < arguments.Count; i++) {
             switch (arguments[i]) {
@@ -61,7 +73,18 @@ public sealed class TestCommand : HarnessCommand {
                 case "--coverage":
                     _coverage = true;
                     break;
-                case "-j" or "--jobs" or "--timeout":
+                case "--cover" when i + 1 < arguments.Count:
+                    if (LibraryFiles(arguments[++i]) is not { } covered) {
+                        return 2;
+                    }
+
+                    _covered.Add(covered);
+                    _coverage = true;
+                    break;
+                case "--lcov" when i + 1 < arguments.Count:
+                    _lcov = Path.GetFullPath(arguments[++i]);
+                    break;
+                case "-j" or "--jobs" or "--timeout" or "--cover" or "--lcov":
                     return BadUsage();
                 case "--":
                     rest.AddRange(arguments.Skip(i));
@@ -74,6 +97,29 @@ public sealed class TestCommand : HarnessCommand {
         }
 
         return base.Run(rest);
+    }
+
+    /// <summary>
+    ///     What '--cover' names, as the prefix of the names the library's
+    ///     files are embedded with: <c>lib/Sable.Collections/</c> for the
+    ///     module (by name or directory), or one file's whole name. Null,
+    ///     having said why, when it names no module of the library.
+    /// </summary>
+    static string? LibraryFiles(string named) {
+        var path = named.Replace('\\', '/').TrimEnd('/');
+        // A path is taken from its 'lib' directory on: lib/Sable.Collections,
+        // ./lib/Sable.Collections/Stack.sb, /checkout/lib/Sable.Collections.
+        var within = path.StartsWith("lib/", StringComparison.Ordinal) ? path["lib/".Length..]
+            : path.LastIndexOf("/lib/", StringComparison.Ordinal) is var at and >= 0 ? path[(at + "/lib/".Length)..]
+            : path;
+        var parts = within.Split('/');
+        var module = parts[0];
+        if ((module != Library.Core && !Library.ModuleNames.Contains(module)) || parts.Length > 2 || (parts.Length == 2 && !parts[1].EndsWith(".sb", StringComparison.Ordinal))) {
+            Console.Error.WriteLine($"sable: --cover: '{named}' is not a module of the standard library, or a file of one");
+            return null;
+        }
+
+        return parts.Length == 2 ? $"lib/{module}/{parts[1]}" : $"lib/{module}/";
     }
 
     /// <summary>
@@ -116,7 +162,7 @@ public sealed class TestCommand : HarnessCommand {
     void Report(CoverageMap counters, IReadOnlyDictionary<int, long> counts) {
         var files = counters.Lines(counts);
         var branches = counters.Branches(counts);
-        var lcov = Path.Combine(ProgramDirectory, "target", "coverage", "lcov.info");
+        var lcov = _lcov ?? Path.Combine(ProgramDirectory, "target", "coverage", "lcov.info");
         Directory.CreateDirectory(Path.GetDirectoryName(lcov)!);
         File.WriteAllText(lcov, Coverage.Lcov(files, branches));
 

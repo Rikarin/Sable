@@ -1,0 +1,84 @@
+module Sable.Concurrency
+
+import Sable.Time
+
+// Channels, task groups and waiting (docs/04 §4.3), written in Sable over the
+// core's Task. Tasks run one at a time and switch only where one awaits, so
+// none of this needs a lock: a task that must wait yields until it need not.
+// A task waiting on something no other task will ever provide yields for
+// ever; there is no deadlock detection yet.
+
+/// Values passed from task to task in the order sent; unbounded.
+public class Channel<Element>: AsyncSequence {
+    public alias Iter = ChannelIterator<Element>
+
+    var buffer: Element[>..] = []
+    var head: Int = 0
+    var closed: Bool = false
+
+    public init() { }
+
+    /// Adds the value for a receiver; a value sent after closing is dropped.
+    public fn send(_ value: Element) {
+        if !closed {
+            buffer.append(value)
+        }
+    }
+
+    /// No more values will come: receivers get none once the buffer is empty.
+    public fn close() {
+        closed = true
+    }
+
+    public var isClosed: Bool => closed
+
+    /// Values sent and not yet received.
+    public var pending: Int => buffer.count - head
+
+    /// The next value, waiting for one; none once closed and empty.
+    public fn receive() async -> Element? {
+        while head >= buffer.count {
+            if closed {
+                return none
+            }
+            await Task.yield()
+        }
+        return take()
+    }
+
+    /// Its values as they are received, for 'for await'.
+    public fn makeAsyncIterator() -> ChannelIterator<Element> {
+        return ChannelIterator<Element> { channel: self }
+    }
+
+    /// The next value if one is there now; none otherwise.
+    public fn tryReceive() -> Element? {
+        if head >= buffer.count {
+            return none
+        }
+        return take()
+    }
+
+    fn take() -> Element {
+        let value = buffer[head]
+        head += 1
+        // Emptied: start again, so a long-lived channel does not grow.
+        if head == buffer.count {
+            buffer = []
+            head = 0
+        }
+        return value
+    }
+}
+
+/// Receives a channel's values, one per 'next()': what 'for await value in
+/// channel' goes through, until the channel is closed and empty.
+public struct ChannelIterator<Value>: AsyncIterator {
+    public alias Element = Value
+
+    let channel: Channel<Value>
+
+    public mutating fn next() async -> Value? {
+        return await channel.receive()
+    }
+}

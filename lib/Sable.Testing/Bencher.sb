@@ -1,0 +1,323 @@
+module Sable.Testing
+
+import Sable.Text
+import Sable.Math
+import Sable.Collections
+
+/// One '@bench' function, as the compiler's entry point lists it: run with
+/// a Bencher, whose 'iterate' does the timing.
+public struct BenchCase {
+    public var name: String
+    public var location: String
+    public var run: (Bencher) -> Void
+}
+
+/// What one benchmark measured: nanoseconds per iteration.
+public struct BenchResult {
+    public var name: String
+    public var mean: F64
+    public var median: F64
+    public var deviation: F64
+    public var iterations: Int
+}
+
+/// Times a body: a '@bench' function that takes one calls 'iterate' with
+/// what to measure, set-up kept outside it.
+public class Bencher {
+    /// How many samples to take, and how long each should last at least.
+    var samples: Int
+    var sampleNanoseconds: Int
+    var warmUpNanoseconds: Int
+
+    /// What 'iterate' measured; none until it has.
+    var measured: BenchResult? = none
+    var name: String
+
+    public init(name: String, samples: Int, sampleNanoseconds: Int, warmUpNanoseconds: Int) {
+        self.name = name
+        self.samples = samples
+        self.sampleNanoseconds = sampleNanoseconds
+        self.warmUpNanoseconds = warmUpNanoseconds
+    }
+
+    /// Runs the body over and over: first to warm up, and to learn how many
+    /// iterations make a sample last long enough to time; then for each
+    /// sample, that many times.
+    public fn iterate(_ body: () -> Void) {
+        // Warm-up, doubling the batch until it takes long enough: what it
+        // took per iteration sets the sample's size.
+        var batch = 1
+        var spent = 0
+        var perIteration = 1.0
+        while true {
+            let begun = Runtime.monotonicNanoseconds()
+            var k = 0
+            while k < batch {
+                body()
+                k = k + 1
+            }
+            let took = Runtime.monotonicNanoseconds() - begun
+            spent = spent + took
+            perIteration = F64(took) / F64(batch)
+            if spent >= warmUpNanoseconds || batch >= 1073741824 {
+                break
+            }
+            batch = batch * 2
+        }
+        var iterations = Int(F64(sampleNanoseconds) / (perIteration > 1.0 ? perIteration : 1.0))
+        if iterations < 1 {
+            iterations = 1
+        }
+
+        var times: F64[>..] = []
+        var s = 0
+        while s < samples {
+            let begun = Runtime.monotonicNanoseconds()
+            var k = 0
+            while k < iterations {
+                body()
+                k = k + 1
+            }
+            let took = Runtime.monotonicNanoseconds() - begun
+            times.append(F64(took) / F64(iterations))
+            s = s + 1
+        }
+        measured = summarise(name, times, iterations)
+    }
+}
+
+/// The mean, median and standard deviation of the samples.
+public fn summarise(_ name: String, _ times: F64[>..], _ iterations: Int) -> BenchResult {
+    var total = 0.0
+    for t in times {
+        total = total + t
+    }
+    let mean = times.count == 0 ? 0.0 : total / F64(times.count)
+    var squares = 0.0
+    for t in times {
+        squares = squares + (t - mean) * (t - mean)
+    }
+    let deviation = times.count < 2 ? 0.0 : squareRoot(squares / F64(times.count - 1))
+    let ordered = sorted(times)
+    var median = 0.0
+    if ordered.count > 0 {
+        let middle = ordered.count / 2
+        median = ordered.count % 2 == 1 ? ordered[middle] : (ordered[middle - 1] + ordered[middle]) / 2.0
+    }
+    return BenchResult { name: name, mean: mean, median: median, deviation: deviation, iterations: iterations }
+}
+
+struct BenchOptions {
+    var filters: String[>..]
+    var list: Bool
+    var saveBaseline: String?
+    var baseline: String?
+    var directory: String
+    var samples: Int
+    var sampleNanoseconds: Int
+    var warmUpNanoseconds: Int
+}
+
+fn parseBenchOptions() -> BenchOptions? {
+    var options = BenchOptions {
+        filters: [], list: false, saveBaseline: none, baseline: none, directory: "target/bench",
+        samples: 20, sampleNanoseconds: 5000000, warmUpNanoseconds: 50000000
+    }
+    var i = 0
+    let count = Runtime.argumentCount()
+    while i < count {
+        let argument = Runtime.argument(i)
+        let hasValue = i + 1 < count
+        if argument == "--list" {
+            options.list = true
+        } else if argument == "--save-baseline" && hasValue {
+            options.saveBaseline = Runtime.argument(i + 1)
+            i = i + 1
+        } else if argument == "--baseline" && hasValue {
+            options.baseline = Runtime.argument(i + 1)
+            i = i + 1
+        } else if argument == "--baseline-dir" && hasValue {
+            options.directory = Runtime.argument(i + 1)
+            i = i + 1
+        } else if argument == "--quick" {
+            // A few short samples: to see that benchmarks run, not to time them.
+            options.samples = 3
+            options.sampleNanoseconds = 100000
+            options.warmUpNanoseconds = 100000
+        } else if argument == "--samples" && hasValue && Runtime.argument(i + 1).toInt() != none {
+            options.samples = max(Runtime.argument(i + 1).toInt()!, 1)
+            i = i + 1
+        } else if hasPrefix(argument, "--") {
+            Runtime.writeError("unknown option '\(argument)'\nusage: <harness> [filter...] [--list] [--quick] [--samples <n>] [--save-baseline <name>] [--baseline <name>] [--baseline-dir <path>]\n")
+            return none
+        } else {
+            options.filters.append(argument)
+        }
+        i = i + 1
+    }
+    return options
+}
+
+/// The entry point of a bench build: runs the benchmarks the arguments
+/// select and reports each one's time per iteration; with
+/// '--save-baseline <name>', keeps the results under that name, and with
+/// '--baseline <name>' (or when one called 'default' exists), compares
+/// with what was kept. Gives the exit code: 0, or 2 for arguments it does
+/// not understand or a baseline it cannot read or write.
+public fn runBenchmarks(_ benches: BenchCase[>..]) -> Int {
+    guard let options = parseBenchOptions() else {
+        return 2
+    }
+
+    var chosen: BenchCase[>..] = []
+    for bench in benches {
+        if selected(bench.name, options.filters, false) {
+            chosen.append(bench)
+        }
+    }
+
+    if options.list {
+        for bench in chosen {
+            print("\(bench.name): bench (\(bench.location))")
+        }
+        print("\(chosen.count) benchmark\(plural(chosen.count))")
+        return 0
+    }
+
+    // What to compare with: the baseline named, else the default one if
+    // there is one.
+    var against: BenchResult[>..] = []
+    var comparing = false
+    let baselineName = options.baseline ?? "default"
+    let baselinePath = options.directory + "/" + baselineName + ".txt"
+    if let text = Runtime.readFile(baselinePath) {
+        against = parseBaseline(text)
+        comparing = true
+    } else if options.baseline != none {
+        Runtime.writeError("no baseline '\(baselineName)' at \(baselinePath)\n")
+        return 2
+    }
+
+    print("running \(chosen.count) benchmark\(plural(chosen.count))\(comparing ? " against baseline '" + baselineName + "'" : "")")
+    var results: BenchResult[>..] = []
+    var regressions = 0
+    for bench in chosen {
+        let bencher = Bencher(name: bench.name, samples: options.samples, sampleNanoseconds: options.sampleNanoseconds, warmUpNanoseconds: options.warmUpNanoseconds)
+        bench.run(bencher)
+        guard let result = bencher.measured else {
+            print("bench \(bench.name) ... did not call 'iterate'")
+            continue
+        }
+        results.append(result)
+        var line = "bench \(bench.name) ... mean \(formatNanoseconds(result.mean)) / iter, median \(formatNanoseconds(result.median)), ± \(formatNanoseconds(result.deviation)) (\(options.samples) × \(result.iterations) iterations)"
+        if comparing {
+            if let old = findResult(against, bench.name) {
+                let (text, regressed) = comparison(old, result)
+                line = line + "; " + text
+                if regressed {
+                    regressions = regressions + 1
+                }
+            } else {
+                line = line + "; new"
+            }
+        }
+        print(line)
+    }
+
+    print("")
+    var summary = "bench result: \(results.count) measured"
+    if comparing {
+        summary = summary + "; \(regressions) regressed"
+    }
+    print(summary)
+
+    if let name = options.saveBaseline {
+        let path = options.directory + "/" + name + ".txt"
+        if !makeDirectories(options.directory) || !Runtime.writeFile(path, formatBaseline(results), false) {
+            Runtime.writeError("cannot write the baseline to \(path)\n")
+            return 2
+        }
+        print("saved baseline '\(name)' to \(path)")
+    }
+    return 0
+}
+
+/// How the new result compares with the old: the change in the mean, and
+/// whether it is a regression — slower by more than the noise, which is
+/// taken as twice the two runs' deviations together, and never under 5%.
+public fn comparison(_ old: BenchResult, _ new: BenchResult) -> (String, Bool) {
+    if old.mean <= 0.0 {
+        return ("no change measurable", false)
+    }
+    let change = (new.mean - old.mean) / old.mean * 100.0
+    let noise = max(5.0, 200.0 * (old.deviation + new.deviation) / old.mean)
+    let sign = change >= 0.0 ? "+" : ""
+    let text = "\(sign)\(formatted(change, decimals: 2))% vs baseline"
+    if change > noise {
+        return (text + " (REGRESSED)", true)
+    }
+    if change < 0.0 - noise {
+        return (text + " (improved)", false)
+    }
+    return (text + " (within noise)", false)
+}
+
+fn findResult(_ results: BenchResult[>..], _ name: String) -> BenchResult? {
+    for result in results {
+        if result.name == name {
+            return result
+        }
+    }
+    return none
+}
+
+/// A baseline, one line per benchmark: its name, then mean, median and
+/// deviation in picoseconds per iteration, then the iterations per sample,
+/// tab-separated.
+public fn formatBaseline(_ results: BenchResult[>..]) -> String {
+    let report = TextBuilder()
+    report.appendLine("# sable bench baseline: name, mean ps, median ps, deviation ps, iterations")
+    for result in results {
+        report.appendLine("\(result.name)\t\(Int(result.mean * 1000.0))\t\(Int(result.median * 1000.0))\t\(Int(result.deviation * 1000.0))\t\(result.iterations)")
+    }
+    return report.build()
+}
+
+public fn parseBaseline(_ text: String) -> BenchResult[>..] {
+    var results: BenchResult[>..] = []
+    for line in lines(text) {
+        if hasPrefix(line, "#") {
+            continue
+        }
+        let fields = line.split('\t')
+        if fields.count != 5 {
+            continue
+        }
+        if let mean = fields[1].toInt(), let median = fields[2].toInt(), let deviation = fields[3].toInt(), let iterations = fields[4].toInt() {
+            results.append(BenchResult {
+                name: fields[0], mean: F64(mean) / 1000.0, median: F64(median) / 1000.0,
+                deviation: F64(deviation) / 1000.0, iterations: iterations
+            })
+        }
+    }
+    return results
+}
+
+/// Makes the directory and those above it that are missing; whether it is there now.
+fn makeDirectories(_ path: String) -> Bool {
+    if Runtime.isDirectory(path) {
+        return true
+    }
+    let parts = path.split('/')
+    var built = hasPrefix(path, "/") ? "/" : ""
+    for part in parts {
+        if part.count == 0 {
+            continue
+        }
+        built = built.count == 0 || built == "/" ? built + part : built + "/" + part
+        if !Runtime.isDirectory(built) && !Runtime.makeDirectory(built) {
+            return false
+        }
+    }
+    return Runtime.isDirectory(path)
+}

@@ -1,0 +1,145 @@
+module Sable.Serialize
+
+// JSON (RFC 8259) for Sable programs (docs/04 §4.3), written in Sable: the
+// value model, a strict parser with opt-in relaxations and errors by line
+// and column, compact, pretty and canonical printing, JSON Pointer (RFC 6901),
+// Merge Patch (RFC 7386), comparing, measuring and transforming documents.
+//
+// It began as docs/04 §2.5's exit program (tests/programs/json.sb), whose
+// own suite runs against this module too. Its text helpers stay internal, so
+// that importing it alongside Sable.Text or Sable.Collections clashes with
+// neither.
+
+public union JsonValue {
+    Null
+    Bool(value: Bool)
+    Number(value: F64)
+    Text(value: String)
+    Array(items: JsonValue[>..])
+    Object(members: Member[>..])
+}
+
+// An object keeps its members in the order they were written; lookups take
+// the first with the key.
+public struct Member {
+    public var key: String
+    public var value: JsonValue
+}
+
+public fn kindOf(_ value: JsonValue) -> String {
+    return match value {
+        case .Null      => "null"
+        case .Bool(_)   => "boolean"
+        case .Number(_) => "number"
+        case .Text(_)   => "string"
+        case .Array(_)  => "array"
+        case .Object(_) => "object"
+    }
+}
+
+public fn null() -> JsonValue {
+    return JsonValue.Null
+}
+
+public fn boolean(_ value: Bool) -> JsonValue {
+    return JsonValue.Bool(value: value)
+}
+
+public fn number(_ value: F64) -> JsonValue {
+    return JsonValue.Number(value: value)
+}
+
+public fn integer(_ value: Int) -> JsonValue {
+    return JsonValue.Number(value: value as F64)
+}
+
+public fn text(_ value: String) -> JsonValue {
+    return JsonValue.Text(value: value)
+}
+
+public fn array(_ items: JsonValue[>..]) -> JsonValue {
+    return JsonValue.Array(items: items)
+}
+
+public fn member(_ key: String, _ value: JsonValue) -> Member {
+    return Member { key: key, value: value }
+}
+
+public fn object(_ members: Member[>..]) -> JsonValue {
+    return JsonValue.Object(members: members)
+}
+
+public fn asBool(_ value: JsonValue) -> Bool? {
+    return match value {
+        case .Bool(let b) => b
+        default           => none
+    }
+}
+
+public fn asNumber(_ value: JsonValue) -> F64? {
+    return match value {
+        case .Number(let n) => n
+        default             => none
+    }
+}
+
+public fn asText(_ value: JsonValue) -> String? {
+    return match value {
+        case .Text(let t) => t
+        default           => none
+    }
+}
+
+public fn isNull(_ value: JsonValue) -> Bool {
+    return match value {
+        case .Null => true
+        default    => false
+    }
+}
+
+public fn itemsOf(_ value: JsonValue) -> JsonValue[>..] {
+    return match value {
+        case .Array(let items) => items
+        default                => []
+    }
+}
+
+public fn membersOf(_ value: JsonValue) -> Member[>..] {
+    return match value {
+        case .Object(let members) => members
+        default                   => []
+    }
+}
+
+public fn field(_ value: JsonValue, _ key: String) -> JsonValue? {
+    for m in membersOf(value) {
+        if m.key == key {
+            return m.value
+        }
+    }
+    return none
+}
+
+public fn element(_ value: JsonValue, _ index: Int) -> JsonValue? {
+    let items = itemsOf(value)
+    if index < 0 || index >= items.count {
+        return none
+    }
+    return items[index]
+}
+
+public fn keysOf(_ value: JsonValue) -> String[>..] {
+    var keys: String[>..] = []
+    for m in membersOf(value) {
+        keys.append(m.key)
+    }
+    return keys
+}
+
+public fn countOf(_ value: JsonValue) -> Int {
+    return match value {
+        case .Array(let items)    => items.count
+        case .Object(let members) => members.count
+        default                   => 0
+    }
+}

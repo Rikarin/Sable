@@ -88,7 +88,7 @@ public sealed class CoreTypes {
     /// <summary><c>Bytes</c>: where <c>Bytes.of</c> lives (<c>InlineLayout.sb</c>).</summary>
     public NamedTypeSymbol? Bytes => Declared("Bytes", TypeKind.Struct);
 
-    /// <summary><c>Attribute</c>: what a user-defined attribute's struct conforms to (<c>Reflection.sb</c>).</summary>
+    /// <summary><c>Attribute</c>: what a user-defined attribute's struct conforms to (<c>Attribute.sb</c>).</summary>
     public NamedTypeSymbol? Attribute => Declared("Attribute", TypeKind.Protocol);
 
     /// <summary><c>InlineLayout</c>: what every <c>@inline_layout</c> struct conforms to (<c>InlineLayout.sb</c>).</summary>
@@ -130,7 +130,7 @@ public sealed class CoreTypes {
     /// <summary>
     ///     <c>Range&lt;Bound&gt;</c>, what <c>a..&lt;b</c> makes, and
     ///     <c>ClosedRange&lt;Bound&gt;</c>, what <c>a...b</c> makes: declared in
-    ///     <c>lib/Sable.Core/Range.sb</c>, so null only in a compilation that
+    ///     <c>lib/Sable.Core/Range.sb</c> and <c>ClosedRange.sb</c>, so null only in a compilation that
     ///     brings a Sable.Core of its own without them.
     /// </summary>
     public NamedTypeSymbol? Range => _range ??= DeclaredStruct("Range");

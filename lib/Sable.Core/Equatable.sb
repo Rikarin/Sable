@@ -1,0 +1,154 @@
+module Sable.Core
+
+// The protocols generic code compares with (docs/03 §3.4), and the
+// primitives' conformances to them — written in Sable, over the built-in
+// operators the extensions' bodies use.
+
+/// Values that can be told equal: '==', and '!=' with it.
+public protocol Equatable {
+    operator == (lhs: Self, rhs: Self) -> Bool
+}
+
+/// Values in an order: '<', and '>', '<=' and '>=' with it.
+public protocol Comparable: Equatable {
+    operator < (lhs: Self, rhs: Self) -> Bool
+}
+
+/// Values that can be hashed: equal values hash equal.
+public protocol Hashable: Equatable {
+    fn hash() -> Int
+}
+
+extension Int: Comparable, Hashable {
+    public operator == (lhs: Int, rhs: Int) -> Bool { return lhs == rhs }
+    public operator < (lhs: Int, rhs: Int) -> Bool { return lhs < rhs }
+    public fn hash() -> Int { return self }
+}
+
+extension I8: Comparable, Hashable {
+    public operator == (lhs: I8, rhs: I8) -> Bool { return lhs == rhs }
+    public operator < (lhs: I8, rhs: I8) -> Bool { return lhs < rhs }
+    public fn hash() -> Int { return Int(self) }
+}
+
+extension I16: Comparable, Hashable {
+    public operator == (lhs: I16, rhs: I16) -> Bool { return lhs == rhs }
+    public operator < (lhs: I16, rhs: I16) -> Bool { return lhs < rhs }
+    public fn hash() -> Int { return Int(self) }
+}
+
+extension I32: Comparable, Hashable {
+    public operator == (lhs: I32, rhs: I32) -> Bool { return lhs == rhs }
+    public operator < (lhs: I32, rhs: I32) -> Bool { return lhs < rhs }
+    public fn hash() -> Int { return Int(self) }
+}
+
+extension I64: Comparable, Hashable {
+    public operator == (lhs: I64, rhs: I64) -> Bool { return lhs == rhs }
+    public operator < (lhs: I64, rhs: I64) -> Bool { return lhs < rhs }
+    public fn hash() -> Int { return Int(self) }
+}
+
+extension U8: Comparable, Hashable {
+    public operator == (lhs: U8, rhs: U8) -> Bool { return lhs == rhs }
+    public operator < (lhs: U8, rhs: U8) -> Bool { return lhs < rhs }
+    public fn hash() -> Int { return Int(self) }
+}
+
+extension U16: Comparable, Hashable {
+    public operator == (lhs: U16, rhs: U16) -> Bool { return lhs == rhs }
+    public operator < (lhs: U16, rhs: U16) -> Bool { return lhs < rhs }
+    public fn hash() -> Int { return Int(self) }
+}
+
+extension U32: Comparable, Hashable {
+    public operator == (lhs: U32, rhs: U32) -> Bool { return lhs == rhs }
+    public operator < (lhs: U32, rhs: U32) -> Bool { return lhs < rhs }
+    public fn hash() -> Int { return Int(self) }
+}
+
+extension U64: Comparable, Hashable {
+    public operator == (lhs: U64, rhs: U64) -> Bool { return lhs == rhs }
+    public operator < (lhs: U64, rhs: U64) -> Bool { return lhs < rhs }
+    public fn hash() -> Int { return Int(self % 4611686018427387903) }
+}
+
+extension UInt: Comparable, Hashable {
+    public operator == (lhs: UInt, rhs: UInt) -> Bool { return lhs == rhs }
+    public operator < (lhs: UInt, rhs: UInt) -> Bool { return lhs < rhs }
+    public fn hash() -> Int { return Int(self % 4611686018427387903) }
+}
+
+extension I128: Comparable, Hashable {
+    public operator == (lhs: I128, rhs: I128) -> Bool { return lhs == rhs }
+    public operator < (lhs: I128, rhs: I128) -> Bool { return lhs < rhs }
+    public fn hash() -> Int { return Int(self % 4611686018427387903) }
+}
+
+extension U128: Comparable, Hashable {
+    public operator == (lhs: U128, rhs: U128) -> Bool { return lhs == rhs }
+    public operator < (lhs: U128, rhs: U128) -> Bool { return lhs < rhs }
+    public fn hash() -> Int { return Int(self % 4611686018427387903) }
+}
+
+extension F16: Comparable, Hashable {
+    public operator == (lhs: F16, rhs: F16) -> Bool { return lhs == rhs }
+    public operator < (lhs: F16, rhs: F16) -> Bool { return lhs < rhs }
+
+    /// Every F16 is an F64 exactly, so it hashes as one: equal values hash equal.
+    public fn hash() -> Int { return F64(self).hash() }
+}
+
+extension F32: Comparable, Hashable {
+    public operator == (lhs: F32, rhs: F32) -> Bool { return lhs == rhs }
+    public operator < (lhs: F32, rhs: F32) -> Bool { return lhs < rhs }
+    public fn hash() -> Int {
+        // The integer part and four digits of the rest: equal values hash equal.
+        let scaled = F64(self) * 10000.0
+        if scaled > 4.0e18 || scaled < -4.0e18 {
+            return 0
+        }
+        return Int(scaled)
+    }
+}
+
+extension F64: Comparable, Hashable {
+    public operator == (lhs: F64, rhs: F64) -> Bool { return lhs == rhs }
+    public operator < (lhs: F64, rhs: F64) -> Bool { return lhs < rhs }
+    public fn hash() -> Int {
+        // The integer part and four digits of the rest: equal values hash equal.
+        let scaled = F64(self) * 10000.0
+        if scaled > 4.0e18 || scaled < -4.0e18 {
+            return 0
+        }
+        return Int(scaled)
+    }
+}
+
+extension String: Comparable, Hashable {
+    public operator == (lhs: String, rhs: String) -> Bool { return lhs == rhs }
+
+    /// By Unicode scalar, the first that differs deciding; a prefix comes
+    /// first. UTF-8's byte order is the scalars' order, so the runtime
+    /// compares the bytes.
+    public operator < (lhs: String, rhs: String) -> Bool {
+        return Runtime.compareStrings(lhs, rhs) < 0
+    }
+
+    /// From the UTF-8 bytes, in the runtime: a scalar at a time, in Sable,
+    /// costs a call per scalar and overflows on long strings.
+    public fn hash() -> Int {
+        return Runtime.hashString(self)
+    }
+}
+
+extension Char: Comparable, Hashable {
+    public operator == (lhs: Char, rhs: Char) -> Bool { return lhs == rhs }
+    public operator < (lhs: Char, rhs: Char) -> Bool { return lhs < rhs }
+    public fn hash() -> Int { return self.codePoint }
+}
+
+extension Bool: Equatable, Hashable {
+    public operator == (lhs: Bool, rhs: Bool) -> Bool { return lhs == rhs }
+    public fn hash() -> Int { return self ? 1 : 0 }
+}

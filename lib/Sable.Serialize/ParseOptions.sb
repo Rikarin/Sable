@@ -1,0 +1,16 @@
+module Sable.Serialize
+
+public struct ParseOptions {
+    public var maxDepth: Int
+    public var allowComments: Bool
+    public var allowTrailingCommas: Bool
+    public var rejectDuplicateKeys: Bool
+}
+
+public fn strict() -> ParseOptions {
+    return ParseOptions { maxDepth: 512, allowComments: false, allowTrailingCommas: false, rejectDuplicateKeys: false }
+}
+
+public fn relaxed() -> ParseOptions {
+    return ParseOptions { maxDepth: 512, allowComments: true, allowTrailingCommas: true, rejectDuplicateKeys: false }
+}

@@ -1,0 +1,21 @@
+module Sable.Core
+
+/// What a variadic C function takes after its fixed parameters, as
+/// '_ args: CVarArg...' in an '@extern' (SYNTAX.md §24): the integers, the
+/// floats and Bool, each passed as C's default promotions pass it — an
+/// integer narrower than 32 bits and Bool as a C 'int', F32 as a 'double'.
+public protocol CVarArg { }
+
+extension Int: CVarArg { }
+extension I8: CVarArg { }
+extension I16: CVarArg { }
+extension I32: CVarArg { }
+extension I64: CVarArg { }
+extension U8: CVarArg { }
+extension U16: CVarArg { }
+extension U32: CVarArg { }
+extension U64: CVarArg { }
+extension UInt: CVarArg { }
+extension F32: CVarArg { }
+extension F64: CVarArg { }
+extension Bool: CVarArg { }

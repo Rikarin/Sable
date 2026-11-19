@@ -26,6 +26,13 @@ public abstract class HarnessCommand : Command {
     /// <summary>Whether the build counts the lines the program's code runs (<c>sable test --coverage</c>).</summary>
     protected virtual bool MeasureCoverage => false;
 
+    /// <summary>
+    ///     Which of the standard library's files to count coverage in, by the
+    ///     names they are embedded with (<c>sable test --cover</c>); null to
+    ///     count the program's own code.
+    /// </summary>
+    protected virtual Func<string, bool>? CoveredLibrary => null;
+
     /// <summary>The counters of the harness just built, when it measures coverage.</summary>
     protected CoverageMap? CoverageCounters { get; private set; }
 
@@ -89,6 +96,15 @@ public abstract class HarnessCommand : Command {
                         return null;
                     } else if (argument.EndsWith(".sb", StringComparison.Ordinal)) {
                         files.Add(argument);
+                    } else if (Directory.Exists(argument)) {
+                        // A directory stands for every source file under it, as one program.
+                        var under = Directory.GetFiles(argument, "*.sb", SearchOption.AllDirectories).Order(StringComparer.Ordinal).ToList();
+                        if (under.Count == 0) {
+                            Console.Error.WriteLine($"sable: no .sb files under '{argument}'");
+                            return null;
+                        }
+
+                        files.AddRange(under);
                     } else {
                         // Anything else selects tests by name.
                         harness.Add(argument);
@@ -239,7 +255,8 @@ public abstract class HarnessCommand : Command {
             options.DocExamples,
             options.Debug ? directory : null,
             options.Exclusivity ?? (options.Debug || !options.Optimise),
-            MeasureCoverage ? file => IsUnder(file, directory) : null
+            MeasureCoverage && CoveredLibrary is null ? file => IsUnder(file, directory) : null,
+            MeasureCoverage ? CoveredLibrary : null
         );
         CoverageCounters = result.Coverage;
         foreach (var warning in result.Warnings) {

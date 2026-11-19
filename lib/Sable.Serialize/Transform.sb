@@ -1,0 +1,85 @@
+module Sable.Serialize
+
+// The same document with every value a function of the old one, applied
+// leaves first.
+public fn transform(_ value: JsonValue, _ f: (JsonValue) -> JsonValue) -> JsonValue {
+    return match value {
+        case .Array(let items)    => f(JsonValue.Array(items: mapValues(items, f)))
+        case .Object(let members) => f(JsonValue.Object(members: mapMembers(members, f)))
+        default                   => f(value)
+    }
+}
+
+fn mapValues(_ items: JsonValue[>..], _ f: (JsonValue) -> JsonValue) -> JsonValue[>..] {
+    var result: JsonValue[>..] = []
+    for item in items {
+        result.append(transform(item, f))
+    }
+    return result
+}
+
+fn mapMembers(_ members: Member[>..], _ f: (JsonValue) -> JsonValue) -> Member[>..] {
+    var result: Member[>..] = []
+    for m in members {
+        result.append(Member { key: m.key, value: transform(m.value, f) })
+    }
+    return result
+}
+
+// Every member whose key passes the test, at every level.
+public fn filterKeys(_ value: JsonValue, _ keep: (String) -> Bool) -> JsonValue {
+    return match value {
+        case .Array(let items)    => JsonValue.Array(items: filterItems(items, keep))
+        case .Object(let members) => JsonValue.Object(members: filterMembers(members, keep))
+        default                   => value
+    }
+}
+
+fn filterItems(_ items: JsonValue[>..], _ keep: (String) -> Bool) -> JsonValue[>..] {
+    var result: JsonValue[>..] = []
+    for item in items {
+        result.append(filterKeys(item, keep))
+    }
+    return result
+}
+
+fn filterMembers(_ members: Member[>..], _ keep: (String) -> Bool) -> Member[>..] {
+    var result: Member[>..] = []
+    for m in members {
+        if keep(m.key) {
+            result.append(Member { key: m.key, value: filterKeys(m.value, keep) })
+        }
+    }
+    return result
+}
+
+// Every leaf with the pointer that reaches it, in document order.
+public fn flatten(_ value: JsonValue) -> String[>..] {
+    var lines: String[>..] = []
+    flattenInto(value, "", lines)
+    return lines
+}
+
+fn flattenInto(_ value: JsonValue, _ at: String, _ lines: inout String[>..]) {
+    match value {
+        case .Array(let items) => {
+            if items.count == 0 {
+                lines.append(at + " = []")
+            }
+            var i = 0
+            for item in items {
+                flattenInto(item, at + "/\(i)", lines)
+                i = i + 1
+            }
+        }
+        case .Object(let members) => {
+            if members.count == 0 {
+                lines.append(at + " = {}")
+            }
+            for m in members {
+                flattenInto(m.value, at + "/" + escapePointerToken(m.key), lines)
+            }
+        }
+        default => lines.append(at + " = " + render(value))
+    }
+}

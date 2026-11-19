@@ -1,0 +1,22 @@
+module Sable.Generators
+
+/// A union's case and its payload, or an enum's case and its raw value.
+public struct Case {
+    public var name: String
+    /// A union case's payload: each with its label, or "" for none.
+    public var payload: Field[>..] = []
+    /// An enum case's raw value, as written.
+    public var rawValue: String? = none
+    public var attributes: Attribute[>..] = []
+    public var location: Location = Location { id: "" }
+
+    /// The attribute named, if the case has it.
+    public fn attribute(named name: String) -> Attribute? {
+        for attribute in attributes {
+            if attribute.name == name {
+                return attribute
+            }
+        }
+        return none
+    }
+}

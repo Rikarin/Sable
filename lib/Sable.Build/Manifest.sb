@@ -1,0 +1,283 @@
+module Sable.Build
+
+/// The package as canonical TOML: what the toolchain reads and publishes.
+public fn renderManifest(_ p: Package) -> String {
+    var w = TomlWriter { lines: [] }
+    w.table("package")
+    w.string("name", p.name)
+    w.string("version", p.version)
+    w.string("edition", "\(p.edition)")
+    if !p.authors.isEmpty {
+        w.strings("authors", p.authors)
+    }
+    w.optionalString("license", p.license)
+    w.optionalString("description", p.description)
+    w.optionalString("repository", p.repository)
+
+    for target in p.targets {
+        match target.kind {
+            case .library => {
+                w.table("lib")
+                w.string("path", target.path)
+                if let native = target.native {
+                    w.string("kind", match native {
+                        case .staticLibrary  => "static"
+                        case .dynamicLibrary => "dynamic"
+                    })
+                }
+            }
+            case .executable => {
+                w.arrayTable("bin")
+                w.string("name", target.name)
+                w.string("path", target.path)
+            }
+        }
+    }
+
+    w.dependencies("dependencies", p.dependencies)
+    w.dependencies("dev-dependencies", p.devDependencies)
+    w.dependencies("build-dependencies", p.buildDependencies)
+
+    if !p.features.isEmpty {
+        w.table("features")
+        for (name, enables) in p.features {
+            w.strings(quoteKey(name), enables)
+        }
+    }
+
+    for profile in p.profiles {
+        w.profile(profile)
+    }
+
+    if !p.reflect.isEmpty {
+        w.table("reflect")
+        w.strings("include", p.reflect)
+    }
+
+    for settings in p.targetSettings {
+        w.table("targets." + quoteKey(settings.triple))
+        w.raw("reflection", settings.reflection ? "true" : "false")
+    }
+
+    if !p.generatorInputs.isEmpty {
+        w.table("generators")
+        w.strings("inputs", p.generatorInputs)
+    }
+
+    if !p.lints.isEmpty {
+        w.table("lints")
+        for (name, level) in p.lints {
+            w.string(quoteKey(name), level)
+        }
+    }
+
+    if let registry = p.registry {
+        w.table("registry")
+        w.string("path", registry)
+    }
+
+    if let build = p.build {
+        w.table("build")
+        w.string("script", build.path)
+        w.raw("allow-net", build.allowNet ? "true" : "false")
+        w.strings("allow-exec", build.allowExec)
+        w.strings("allow-read", build.allowRead)
+        w.strings("allow-write", build.allowWrite)
+    }
+
+    return w.text()
+}
+
+/// The workspace as canonical TOML.
+public fn renderManifest(_ workspace: Workspace) -> String {
+    var w = TomlWriter { lines: [] }
+    w.table("workspace")
+    w.strings("members", workspace.members)
+    if !workspace.exclude.isEmpty {
+        w.strings("exclude", workspace.exclude)
+    }
+    return w.text()
+}
+
+struct TomlWriter {
+    var lines: String[>..]
+
+    mutating fn table(_ name: String) {
+        if !lines.isEmpty {
+            lines.append("")
+        }
+        lines.append("[\(name)]")
+    }
+
+    mutating fn arrayTable(_ name: String) {
+        if !lines.isEmpty {
+            lines.append("")
+        }
+        lines.append("[[\(name)]]")
+    }
+
+    mutating fn raw(_ key: String, _ value: String) {
+        lines.append("\(key) = \(value)")
+    }
+
+    mutating fn string(_ key: String, _ value: String) {
+        raw(key, quote(value))
+    }
+
+    mutating fn optionalString(_ key: String, _ value: String?) {
+        if let present = value {
+            string(key, present)
+        }
+    }
+
+    mutating fn strings(_ key: String, _ values: String[>..]) {
+        raw(key, list(values))
+    }
+
+    mutating fn dependencies(_ section: String, _ all: Dependency[>..]) {
+        if all.isEmpty {
+            return
+        }
+
+        table(section)
+        for dependency in all {
+            var parts: String[>..] = []
+            if let version = dependency.version {
+                parts.append("version = \(quote(version))")
+            }
+            if let path = dependency.path {
+                parts.append("path = \(quote(path))")
+            }
+            if let git = dependency.git {
+                parts.append("git = \(quote(git))")
+            }
+            if let tag = dependency.tag {
+                parts.append("tag = \(quote(tag))")
+            }
+            if let branch = dependency.branch {
+                parts.append("branch = \(quote(branch))")
+            }
+            if let rev = dependency.rev {
+                parts.append("rev = \(quote(rev))")
+            }
+            if dependency.optional {
+                parts.append("optional = true")
+            }
+            if !dependency.defaultFeatures {
+                parts.append("default-features = false")
+            }
+            if !dependency.features.isEmpty {
+                parts.append("features = \(list(dependency.features))")
+            }
+            if let condition = dependency.condition {
+                parts.append("when = \(quote(condition.text))")
+            }
+            raw(quoteKey(dependency.name), "{ \(Runtime.joinStrings(parts, ", ")) }")
+        }
+    }
+
+    mutating fn profile(_ profile: Profile) {
+        table("profile.\(profile.name)")
+        if let size = profile.optSize {
+            match size {
+                case .size    => string("opt-level", "s")
+                case .minSize => string("opt-level", "z")
+            }
+        } else if let level = profile.optLevel {
+            raw("opt-level", "\(level)")
+        }
+        if let debug = profile.debug {
+            raw("debug", debug ? "true" : "false")
+        }
+        if let lto = profile.lto {
+            match lto {
+                case .off  => raw("lto", "false")
+                case .thin => string("lto", "thin")
+                case .fat  => string("lto", "fat")
+            }
+        }
+        if let units = profile.codegenUnits {
+            raw("codegen-units", "\(units)")
+        }
+        if let panic = profile.panic {
+            match panic {
+                case .unwind => string("panic", "unwind")
+                case .abort  => string("panic", "abort")
+            }
+        }
+        if let checks = profile.arcChecks {
+            raw("arc-checks", checks ? "true" : "false")
+        }
+        if let exclusivity = profile.exclusivity {
+            match exclusivity {
+                case .checked => string("exclusivity", "checked")
+                case .off     => string("exclusivity", "unchecked")
+            }
+        }
+        if let checks = profile.overflowChecks {
+            raw("overflow-checks", checks ? "true" : "false")
+        }
+        if let check = profile.leakCheck {
+            raw("leak-check", check ? "true" : "false")
+        }
+        if let strip = profile.strip {
+            match strip {
+                case .debuginfo => string("strip", "debuginfo")
+                case .symbols   => string("strip", "symbols")
+            }
+        }
+        if let rpath = profile.rpath {
+            raw("rpath", rpath ? "true" : "false")
+        }
+    }
+
+    fn text() -> String {
+        return Runtime.joinStrings(lines, "\n") + "\n"
+    }
+}
+
+fn list(_ values: String[>..]) -> String {
+    var quoted: String[>..] = []
+    for value in values {
+        quoted.append(quote(value))
+    }
+    return "[" + Runtime.joinStrings(quoted, ", ") + "]"
+}
+
+/// A key as TOML writes it: bare when it can be, quoted otherwise.
+fn quoteKey(_ key: String) -> String {
+    var bare = !key.isEmpty
+    var i = 0
+    while i < key.count {
+        let c = key.at(index: i)
+        if !(c.isLetter || c.isDigit || c == '-' || c == '_') {
+            bare = false
+        }
+        i = i + 1
+    }
+    return bare ? key : quote(key)
+}
+
+/// A TOML basic string.
+fn quote(_ text: String) -> String {
+    var parts: String[>..] = []
+    var i = 0
+    while i < text.count {
+        let c = text.at(index: i)
+        if c == '"' {
+            parts.append("\\\"")
+        } else if c == '\\' {
+            parts.append("\\\\")
+        } else if c == '\n' {
+            parts.append("\\n")
+        } else if c == '\t' {
+            parts.append("\\t")
+        } else if c == '\r' {
+            parts.append("\\r")
+        } else {
+            parts.append(String.fromChar(c))
+        }
+        i = i + 1
+    }
+    return "\"" + Runtime.joinStrings(parts, "") + "\""
+}

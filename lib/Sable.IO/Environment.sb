@@ -1,0 +1,20 @@
+module Sable.IO
+
+/// What the program was started with.
+public struct Environment {
+    /// The value of an environment variable, when it is set.
+    public static fn variable(_ name: String) -> String? {
+        return Runtime.environment(name)
+    }
+
+    /// The program's arguments, after its own name.
+    public static fn arguments() -> String[>..] {
+        var all: String[>..] = []
+        var i = 0
+        while i < Runtime.argumentCount() {
+            all.append(Runtime.argument(i))
+            i += 1
+        }
+        return all
+    }
+}

@@ -3,7 +3,7 @@ namespace Sable.Symbols.Tests;
 /// <summary>
 ///     Ranges: <c>a..&lt;b</c> is a <c>Range&lt;Bound&gt;</c> and <c>a...b</c> a
 ///     <c>ClosedRange&lt;Bound&gt;</c>, both declared in Sable, in
-///     <c>lib/Sable.Core/Range.sb</c>, and found there by the binder.
+///     <c>lib/Sable.Core/Range.sb</c> and <c>ClosedRange.sb</c>, and found there by the binder.
 /// </summary>
 public sealed class RangeTests {
     static IReadOnlyList<Diagnostic> ErrorsIn(string source) => [

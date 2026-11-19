@@ -1,0 +1,5 @@
+module Sable.Core
+
+/// What '@reflectable' gives a type: 'TypeInfo.of' accepts it. A type may
+/// also conform by hand.
+public protocol Reflectable { }

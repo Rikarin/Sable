@@ -1,5 +1,8 @@
+using Sable.Driver;
 using Sable.Driver.Commands;
 using Sable.SIL;
+using Sable.Symbols;
+using Sable.Syntax;
 using static Sable.CodeGen.Tests.Harnesses;
 
 namespace Sable.CodeGen.Tests;
@@ -100,6 +103,82 @@ public sealed class CoverageTests {
         Assert.Matches(@"  calc\.sb: [0-9.]+% \(\d+ of \d+\), not run: .*; branches 75% \(3 of 4\)", text);
         Assert.Contains($"    {negative}:5 'if' never: true\n", text, StringComparison.Ordinal);
         Assert.DoesNotContain($"    {zero}:5", text, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    ///     '--cover' counts the standard library's code the tests run instead
+    ///     of the program's: the lines of lib/Sable.Collections/Stack.sb, by
+    ///     the name it is embedded with, and of no other file. A method no
+    ///     test calls is there as not run, though a generic class's method
+    ///     nothing uses is never lowered.
+    /// </summary>
+    [Fact]
+    public void CoverCountsTheLibrarysCode() {
+        if (!CanBuild) {
+            return;
+        }
+
+        var directory = Directory.CreateTempSubdirectory("sable-cover-");
+        var saved = Console.Out;
+        string lcov;
+        try {
+            Directory.CreateDirectory(Path.Combine(directory.FullName, "tests"));
+            File.WriteAllText(Path.Combine(directory.FullName, "tests", "StackTests.sb"), """
+                module StackTests
+
+                import Sable.Collections
+                import Sable.Testing
+
+                @test
+                fn popsWhatWasPushed() {
+                    let stack = Stack<Int>()
+                    stack.push(1)
+                    assertEqual(stack.pop() ?? 0, 1)
+                }
+                """);
+            var path = Path.Combine(directory.FullName, "stack.info");
+            Console.SetOut(new StringWriter());
+            // A directory is its files, as one program.
+            Assert.Equal(0, Command.Find("test")!.Run([Path.Combine(directory.FullName, "tests"), "--cover", "lib/Sable.Collections/Stack.sb", "--lcov", path]));
+            lcov = File.ReadAllText(path);
+            Assert.Equal(2, Command.Find("test")!.Run([Path.Combine(directory.FullName, "tests"), "--cover", "Sable.NoSuchModule"]));
+        } finally {
+            Console.SetOut(saved);
+            directory.Delete(true);
+        }
+
+        Assert.Equal(["SF:lib/Sable.Collections/Stack.sb"], lcov.Split('\n').Where(static l => l.StartsWith("SF:", StringComparison.Ordinal)));
+        var source = File.ReadAllText(Path.Combine(Root, "lib/Sable.Collections/Stack.sb"));
+        int LibraryLine(string text) => source[..source.IndexOf(text, StringComparison.Ordinal)].Count(static c => c == '\n') + 1;
+        var lines = lcov.Split('\n')
+            .Where(static l => l.StartsWith("DA:", StringComparison.Ordinal))
+            .Select(static l => l[3..].Split(','))
+            .ToDictionary(static p => int.Parse(p[0], System.Globalization.CultureInfo.InvariantCulture), static p => long.Parse(p[1], System.Globalization.CultureInfo.InvariantCulture));
+        Assert.Equal(1, lines[LibraryLine("items.append(item)")]);
+        Assert.Equal(0, lines[LibraryLine("return items[items.count - 1]")]);
+        Assert.Equal(0, lines[LibraryLine("public var isEmpty")]);
+    }
+
+    /// <summary>A generic function nothing calls has no SIL, yet its lines are reported, as not run.</summary>
+    [Fact]
+    public void CodeNeverLoweredIsReportedAsNotRun() {
+        const string source = """
+            module Generic
+
+            import Sable.Testing
+
+            fn twice<T>(_ value: T) -> T[>..] {
+                let pair: T[>..] = [value, value]
+                return pair
+            }
+
+            @test
+            fn nothing() { }
+            """;
+        var result = TestHarness.Compile([SyntaxTree.Parse(new SourceText(source, "generic.sb"))], TestKind.Test, out _, coverage: static _ => true);
+        Assert.True(result.Succeeded, string.Join("\n", result.Errors));
+        var lines = result.Coverage!.Lines(new Dictionary<int, long>())["generic.sb"];
+        Assert.Equal([6, 7], lines.Keys);
     }
 
     [Fact]

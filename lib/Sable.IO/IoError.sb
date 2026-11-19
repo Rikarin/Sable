@@ -1,0 +1,7 @@
+module Sable.IO
+
+/// Why a file or directory could not be read, written or changed.
+public union IoError {
+    NotFound(path: String),
+    Failed(path: String),
+}

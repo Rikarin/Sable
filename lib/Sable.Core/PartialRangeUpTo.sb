@@ -1,0 +1,12 @@
+module Sable.Core
+
+/// The values below 'upperBound': what '..<b' makes.
+public struct PartialRangeUpTo<Bound: Comparable> {
+    /// The first value past the range.
+    public let upperBound: Bound
+
+    /// Whether the value is in the range.
+    public fn contains(_ value: Bound) -> Bool {
+        return value < upperBound
+    }
+}

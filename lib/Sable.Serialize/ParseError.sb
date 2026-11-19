@@ -1,0 +1,72 @@
+module Sable.Serialize
+
+public struct Position {
+    public var offset: Int
+    public var line: Int
+    public var column: Int
+}
+
+public fn describePosition(_ at: Position) -> String {
+    return "line \(at.line), column \(at.column)"
+}
+
+public union ParseError {
+    UnexpectedEnd(at: Position, expected: String)
+    UnexpectedCharacter(at: Position, found: Char, expected: String)
+    InvalidNumber(at: Position, reason: String)
+    InvalidEscape(at: Position, found: Char)
+    InvalidUnicode(at: Position, reason: String)
+    ControlCharacter(at: Position, code: Int)
+    TooDeep(at: Position, limit: Int)
+    TrailingText(at: Position)
+    DuplicateKey(at: Position, key: String)
+}
+
+public fn describeChar(_ c: Char) -> String {
+    let code = c.codePoint
+    if code < 32 || code == 127 {
+        return "U+" + hex4(code)
+    }
+    return "'" + String.fromChar(c) + "'"
+}
+
+public fn describeError(_ error: ParseError) -> String {
+    return match error {
+        case .UnexpectedEnd(let at, let expected) =>
+            "\(describePosition(at)): the text ends where \(expected) was expected"
+        case .UnexpectedCharacter(let at, let found, let expected) =>
+            "\(describePosition(at)): found \(describeChar(found)) where \(expected) was expected"
+        case .InvalidNumber(let at, let reason) =>
+            "\(describePosition(at)): invalid number: \(reason)"
+        case .InvalidEscape(let at, let found) =>
+            "\(describePosition(at)): \\\(String.fromChar(found)) is not an escape"
+        case .InvalidUnicode(let at, let reason) =>
+            "\(describePosition(at)): invalid \\u escape: \(reason)"
+        case .ControlCharacter(let at, let code) =>
+            "\(describePosition(at)): control character U+\(hex4(code)) must be escaped"
+        case .TooDeep(let at, let limit) =>
+            "\(describePosition(at)): nested more than \(limit) deep"
+        case .TrailingText(let at) =>
+            "\(describePosition(at)): text after the value"
+        case .DuplicateKey(let at, let key) =>
+            "\(describePosition(at)): the key \"\(key)\" appears twice"
+    }
+}
+
+public fn errorLine(_ error: ParseError) -> Int {
+    return positionOf(error).line
+}
+
+public fn positionOf(_ error: ParseError) -> Position {
+    return match error {
+        case .UnexpectedEnd(let at, _)          => at
+        case .UnexpectedCharacter(let at, _, _) => at
+        case .InvalidNumber(let at, _)          => at
+        case .InvalidEscape(let at, _)          => at
+        case .InvalidUnicode(let at, _)         => at
+        case .ControlCharacter(let at, _)       => at
+        case .TooDeep(let at, _)                => at
+        case .TrailingText(let at)              => at
+        case .DuplicateKey(let at, _)           => at
+    }
+}

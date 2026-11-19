@@ -813,7 +813,7 @@ depth limit does, and exits as a trap does.
 
 #### Reflection, as implemented
 
-A first slice, in `lib/Sable.Core/Reflection.sb` over `Reflect`, a struct
+A first slice, in `lib/Sable.Core` (`Reflect.sb`, `Mirror.sb`, `TypeInfo.sb`) over `Reflect`, a struct
 of `@intrinsic` members whose bodies the compiler writes, per type (unlike
 `@builtin`, which names one SIL builtin; see "Sable.Core in Sable")
 (`src/Sable.SIL/SilGen.Reflection.cs`; tests in
@@ -980,7 +980,8 @@ readers and writers, memory-mapped files), and the names the plan lists that are
 The primitive types (`Int`, `String`, `Char`, …) are the compiler's, since
 every layer knows them by sight; their members are now Sable, in
 `lib/Sable.Core` — `String.sb`, `Char.sb`, `Numbers.sb` and
-`Runtime.sb`, beside `Protocols.sb` and `Reflection.sb`. At the floor is
+`Runtime.sb`, beside the protocols (`Equatable.sb`, `Debug.sb`, …) and
+reflection (`Reflect.sb`, `Mirror.sb`, `TypeInfo.sb`). At the floor is
 `@builtin("name")` on a bodiless declaration, naming the SIL builtin it is:
 
 ```sable
@@ -1264,7 +1265,7 @@ to the state machine where many tasks wait at once.
       (`@intrinsic`, and `fromBytes` synthesised per `@inline_layout`
       struct as `@derive` synthesises `==`; see "Sable.Core in Sable").
       And `Range` and `ClosedRange` — what the binder
-      makes of `a..<b` and `a...b` — are Sable (`lib/Sable.Core/Range.sb`:
+      makes of `a..<b` and `a...b` — are Sable (`lib/Sable.Core/Range.sb` and `ClosedRange.sb`:
       `lowerBound`, `upperBound`, `isEmpty`, `contains`, over a `Comparable`
       bound, and `count` where the bound is an Int), as are the one-sided
       `PartialRangeUpTo`, `PartialRangeThrough` and `PartialRangeFrom`
@@ -1389,9 +1390,8 @@ Full design in [05-toolchain.md](05-toolchain.md).
   file's module, with that file's imports and Sable.Testing; the file has the
   original's name and the code its original line numbers, so an error in an
   example points into the doc comment.
-- **Proved on the library:** `tests/lib/CollectionsTests.sb` and
-  `tests/lib/TextTests.sb` test Sable.Collections and Sable.Text with
-  `@test`/`@bench`, and the test suite runs them.
+- **Proved on the library:** `tests/lib/<Module>/<Type>Tests.sb` test the
+  library's modules with `@test`/`@bench`, and the test suite runs them.
 - **Later (#205).** A test may be `async`: each test's closure is
   `async () -> String?` and the harness's entry point and `runTests` are
   async, awaiting it (a benchmark still may not be, S3104). What a test

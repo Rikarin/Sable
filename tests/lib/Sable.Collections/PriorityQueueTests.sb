@@ -1,0 +1,20 @@
+module PriorityQueueTests
+
+// PriorityQueue (Sable.Collections), tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Collections
+
+import Sable.Collections
+import Sable.Testing
+
+@test
+fn priorityQueuePopsSmallestFirst() {
+    let queue = PriorityQueue<Int>()
+    for v in [7, 2, 9, 4, 1] {
+        queue.push(v)
+    }
+    var order = ""
+    while let v = queue.pop() {
+        order = order + "\(v)"
+    }
+    assertEqual(order, "12479")
+}

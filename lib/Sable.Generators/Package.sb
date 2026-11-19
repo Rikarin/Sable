@@ -1,0 +1,20 @@
+module Sable.Generators
+
+/// What a package generator is given: the package, every declaration in it
+/// that carries the generator's attribute, and the files its manifest lists
+/// for its generators.
+public struct Package {
+    public var name: String
+    public var declarations: Declaration[>..] = []
+    public var inputs: InputFile[>..] = []
+
+    /// The input at the path, relative to the package, if it is listed.
+    public fn input(_ path: String) -> InputFile? {
+        for file in inputs {
+            if file.path == path {
+                return file
+            }
+        }
+        return none
+    }
+}

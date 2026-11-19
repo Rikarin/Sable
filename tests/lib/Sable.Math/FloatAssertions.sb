@@ -1,0 +1,69 @@
+module FloatAssertions
+
+// The assertions Sable.Math's tests make of floats: a value exactly as
+// expected (a NaN as a NaN, and a zero with its sign), or within some
+// units in the last place of a reference value — the distance between two
+// floats counted in the floats between them.
+
+import Sable.Testing
+
+/// +inf, as an F64.
+public let inf: F64 = F64.fromBits(0x7FF0_0000_0000_0000)
+
+/// A quiet NaN, as an F64.
+public let nan: F64 = F64.fromBits(0x7FF8_0000_0000_0000)
+
+/// +inf, as an F32.
+public let inf32: F32 = F32.fromBits(0x7F80_0000)
+
+/// A quiet NaN, as an F32.
+public let nan32: F32 = F32.fromBits(0x7FC0_0000)
+
+/// Fails unless the two are the same float: both NaN, or the same bits
+/// (so +0.0 and -0.0 differ).
+public fn assertSame(_ actual: F64, _ expected: F64) {
+    let same = actual != actual ? expected != expected : actual.bits == expected.bits
+    assert(same, "expected \(expected), got \(actual)")
+}
+
+/// Fails unless the two are the same float.
+public fn assertSame(_ actual: F32, _ expected: F32) {
+    let same = actual != actual ? expected != expected : actual.bits == expected.bits
+    assert(same, "expected \(expected), got \(actual)")
+}
+
+/// How many floats apart two finite floats are: 0 for the same one, 1 for
+/// neighbours, and so on across zero.
+public fn ulpDistance(_ a: F64, _ b: F64) -> I128 {
+    let d = ordered(a) - ordered(b)
+    return d < 0 ? -d : d
+}
+
+/// How many floats apart two finite floats are.
+public fn ulpDistance(_ a: F32, _ b: F32) -> I128 {
+    let d = ordered32(a) - ordered32(b)
+    return d < 0 ? -d : d
+}
+
+/// Fails unless the value is within so many units in the last place of the
+/// reference (a correctly rounded value, from a high-precision source).
+public fn assertWithin(_ actual: F64, _ expected: F64, ulps: Int) {
+    assert(ulpDistance(actual, expected) <= I128(ulps), "expected \(expected) within \(ulps) ulp, got \(actual)")
+}
+
+/// Fails unless the value is within so many units in the last place of the reference.
+public fn assertWithin(_ actual: F32, _ expected: F32, ulps: Int) {
+    assert(ulpDistance(actual, expected) <= I128(ulps), "expected \(expected) within \(ulps) ulp, got \(actual)")
+}
+
+// A float's place among all floats: its bits, read so that the order of
+// the integers is the order of the floats (the negative ones mirrored).
+fn ordered(_ x: F64) -> I128 {
+    let bits = x.bits
+    return bits >> 63 == 1 ? -I128(bits & 0x7FFF_FFFF_FFFF_FFFF) : I128(bits)
+}
+
+fn ordered32(_ x: F32) -> I128 {
+    let bits = x.bits
+    return bits >> 31 == 1 ? -I128(bits & 0x7FFF_FFFF) : I128(bits)
+}

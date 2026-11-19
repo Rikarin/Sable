@@ -1,0 +1,24 @@
+module Sable.Core
+
+/// Numbers that can be negative, and so negated: the signed integers and
+/// the floats.
+///
+/// ```sable
+/// fn opposite<T: SignedNumeric>(_ x: T) -> T {
+///     return -x
+/// }
+///
+/// assert(opposite(5) == -5)
+/// assert(opposite(-1.5) == 1.5)
+/// ```
+public protocol SignedNumeric: Numeric {
+    /// The value with its sign turned over. A signed integer's traps for
+    /// the type's least value, whose opposite does not fit.
+    prefix operator - (operand: Self) -> Self
+}
+
+extension SignedNumeric {
+    /// The built-in numbers' negation: the instruction, trapping on overflow.
+    @builtin("neg_Self")
+    public prefix operator - (operand: Self) -> Self
+}

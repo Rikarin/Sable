@@ -32,6 +32,86 @@ public sealed class GenericLoweringTests {
         return result;
     }
 
+    /// <summary>
+    ///     Where a protocol's extension overloads a requirement's name, the
+    ///     requirement's default is the overload with its labels, not the
+    ///     first of the name: 'make(seed:)', not the generic 'make(_:)'.
+    /// </summary>
+    [Fact]
+    public void ARequirementsDefaultIsTheOverloadWithItsLabels() {
+        var module = Lower(
+            """
+            protocol Seeded {
+                static var origin: Self { get }
+                static fn make(seed: Int) -> Self
+            }
+            extension Seeded {
+                static fn make<T: Seeded>(_ other: T) -> Self { return Self.origin }
+                static fn make(seed: Int) -> Self { return Self.origin }
+            }
+            struct Box: Seeded {
+                var n: Int
+                static var origin: Box => Box { n: 3 }
+            }
+            fn build<T: Seeded>(_ type: T.Type) -> T { return T.make(seed: 5) }
+            fn test() -> Int { return build(Box.self).n }
+            """
+        );
+        Assert.Equal(3L, Run(module, "test"));
+    }
+
+    /// <summary>
+    ///     A protocol extension's property read on a value of another
+    ///     conformer, inside an instance where Self is the first: the
+    ///     value's own type is its Self, not the instance's.
+    /// </summary>
+    [Fact]
+    public void AnExtensionsPropertyIsReadAsTheReceiversOwn() {
+        var module = Lower(
+            """
+            protocol Named {
+                static var name: String { get }
+            }
+            extension Named {
+                var label: String => Self.name
+                fn both(_ other: B) -> String { return self.label + other.label }
+            }
+            struct A: Named {
+                static var name: String => "A"
+            }
+            struct B: Named {
+                static var name: String => "B"
+            }
+            fn test() -> String { return A().both(B()) }
+            """
+        );
+        Assert.Equal("AB", Run(module, "test"));
+    }
+
+    /// <summary>
+    ///     A protocol extension's property is its getter, not a conformer's
+    ///     method that happens to be called 'get' (Outcome's 'get()').
+    /// </summary>
+    [Fact]
+    public void AnExtensionsPropertyIsNotAConformersGetMethod() {
+        var module = Lower(
+            """
+            protocol Sized {
+                fn size() -> Int
+            }
+            extension Sized {
+                var doubled: Int => self.size() * 2
+            }
+            struct Box: Sized {
+                fn size() -> Int { return 4 }
+                fn get() -> Int { return 100 }
+            }
+            fn test() -> Int { return Box().doubled }
+            """
+        );
+        Assert.Equal(8L, Run(module, "test"));
+    }
+
     [Fact]
     public void AGenericFunctionIsLoweredOncePerTypeArgument() {
         var module = Lower(

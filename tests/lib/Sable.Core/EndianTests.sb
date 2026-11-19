@@ -18,10 +18,10 @@ fn byteSwappedReversesTheBytesOfEachWidth() {
     let b: U32 = 0x1122_3344
     let c: U64 = 0x0102_0304_0506_0708
     let d: U128 = 0x01
-    assertEqual(a.byteSwapped(), 0x3412)
-    assertEqual(b.byteSwapped(), 0x4433_2211)
-    assertEqual(c.byteSwapped(), 0x0807_0605_0403_0201)
-    assert(d.byteSwapped() == U128(1) << 120, "a U128's low byte goes to the top")
+    assertEqual(a.byteSwapped, 0x3412)
+    assertEqual(b.byteSwapped, 0x4433_2211)
+    assertEqual(c.byteSwapped, 0x0807_0605_0403_0201)
+    assert(d.byteSwapped == U128(1) << 120, "a U128's low byte goes to the top")
 }
 
 @test
@@ -31,18 +31,18 @@ fn byteSwappedOfASignedIntegerReversesItsBitPattern() {
     let c: I64 = 1
     let d: Int = -1
     let e: I128 = 0x7F
-    assertEqual(a.byteSwapped(), -256)
-    assertEqual(b.byteSwapped(), -16_777_217)
-    assertEqual(c.byteSwapped(), I64(1) << 56)
-    assertEqual(d.byteSwapped(), -1)
-    assert(e.byteSwapped() == I128(0x7F) << 120, "an I128's low byte goes to the top")
+    assertEqual(a.byteSwapped, -256)
+    assertEqual(b.byteSwapped, -16_777_217)
+    assertEqual(c.byteSwapped, I64(1) << 56)
+    assertEqual(d.byteSwapped, -1)
+    assert(e.byteSwapped == I128(0x7F) << 120, "an I128's low byte goes to the top")
 }
 
 @test
 fn byteSwappingTwiceGivesTheNumberBack() {
     let a: U32 = 0xDEAD_BEEF
     let b: UInt = 0x0123_4567_89AB_CDEF
-    assertEqual(a.byteSwapped().byteSwapped(), a)
-    assertEqual(b.byteSwapped().byteSwapped(), b)
-    assertEqual(b.byteSwapped(), 0xEFCD_AB89_6745_2301)
+    assertEqual(a.byteSwapped.byteSwapped, a)
+    assertEqual(b.byteSwapped.byteSwapped, b)
+    assertEqual(b.byteSwapped, 0xEFCD_AB89_6745_2301)
 }

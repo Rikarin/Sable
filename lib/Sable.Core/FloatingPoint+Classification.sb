@@ -1,0 +1,110 @@
+module Sable.Core
+
+// What kind of value a float is — NaN, infinite, zero, subnormal, normal —
+// and its sign, told by comparisons alone, which every float has: once
+// monomorphised, LLVM makes each the instruction or two it is.
+
+extension FloatingPoint {
+    /// Whether the value is NaN: the one value not equal to itself.
+    ///
+    /// ```sable
+    /// assert(F64.nan.isNaN)
+    /// assert(!(1.0).isNaN)
+    /// ```
+    public var isNaN: Bool => self != self
+
+    /// Whether the value is +infinity or -infinity.
+    public var isInfinite: Bool => self.abs() == Self.infinity
+
+    /// Whether the value is neither infinite nor NaN.
+    public var isFinite: Bool => self.abs() < Self.infinity
+
+    /// Whether the value is +0 or -0.
+    public var isZero: Bool => self == Self.zero
+
+    /// Whether the value is finite, non-zero and not subnormal: it has all
+    /// the type's bits of precision.
+    public var isNormal: Bool {
+        get {
+            let magnitude = self.abs()
+            return magnitude >= Self.leastNormalMagnitude && magnitude < Self.infinity
+        }
+    }
+
+    /// Whether the value is non-zero and below the least normal value,
+    /// with fewer bits of precision than the type has.
+    public var isSubnormal: Bool {
+        get {
+            let magnitude = self.abs()
+            return magnitude > Self.zero && magnitude < Self.leastNormalMagnitude
+        }
+    }
+
+    /// Whether the sign bit is set: true for -0 and a negative NaN, which
+    /// '< 0' says nothing of.
+    ///
+    /// ```sable
+    /// assert((-0.0).isSignMinus)
+    /// assert(!(0.0).isSignMinus)
+    /// ```
+    public var isSignMinus: Bool => Self.one.copySign(self) < Self.zero
+
+    /// Whether the value is a whole number: finite, with nothing after the point.
+    ///
+    /// ```sable
+    /// assert((3.0).isInteger)
+    /// assert(!(3.5).isInteger)
+    /// assert(!F64.infinity.isInteger)
+    /// ```
+    public var isInteger: Bool => self.isFinite && self.truncated() == self
+
+    /// Which kind of value it is.
+    ///
+    /// ```sable
+    /// assert((1.0).classification == FloatingPointClassification.Normal)
+    /// assert(F64.leastNonzeroMagnitude.classification == FloatingPointClassification.Subnormal)
+    /// ```
+    public var classification: FloatingPointClassification {
+        get {
+            if self.isNaN {
+                return FloatingPointClassification.NaN
+            }
+            if self.isInfinite {
+                return FloatingPointClassification.Infinite
+            }
+            if self == Self.zero {
+                return FloatingPointClassification.Zero
+            }
+            return self.isSubnormal ? FloatingPointClassification.Subnormal : FloatingPointClassification.Normal
+        }
+    }
+
+    /// Whether the value comes no later than the other in IEEE 754's total
+    /// order, which orders every value, NaNs and zeros too: a negative NaN,
+    /// -infinity, the negative values, -0, +0, the positive values,
+    /// +infinity, a positive NaN. (Two NaNs of one sign are not told apart
+    /// by their payloads here.)
+    ///
+    /// ```sable
+    /// assert((-0.0).isTotallyOrdered(belowOrEqualTo: 0.0))
+    /// assert(!(0.0).isTotallyOrdered(belowOrEqualTo: -0.0))
+    /// assert((1.0).isTotallyOrdered(belowOrEqualTo: F64.nan))
+    /// ```
+    public fn isTotallyOrdered(belowOrEqualTo other: Self) -> Bool {
+        if self.isNaN || other.isNaN {
+            // A negative NaN comes first and a positive one last.
+            if self.isNaN && self.isSignMinus || other.isNaN && !other.isSignMinus {
+                return true
+            }
+            return false
+        }
+        if self < other {
+            return true
+        }
+        if other < self {
+            return false
+        }
+        // Equal: only the zeros differ, by sign.
+        return self.isSignMinus || !other.isSignMinus
+    }
+}

@@ -1,0 +1,26 @@
+module Sable.Core
+
+// Rounding to an integer by any of the rules, over the floor, ceiling,
+// truncation and the two roundings to the nearest the builtins give.
+
+extension FloatingPoint {
+    /// The value rounded to an integer by the rule; an infinity, NaN or a
+    /// zero is itself.
+    ///
+    /// ```sable
+    /// assert((2.5).rounded(RoundingRule.ToNearestOrEven) == 2.0)
+    /// assert((2.5).rounded(RoundingRule.ToNearestOrAwayFromZero) == 3.0)
+    /// assert((-2.1).rounded(RoundingRule.AwayFromZero) == -3.0)
+    /// assert((-2.9).rounded(RoundingRule.TowardZero) == -2.0)
+    /// ```
+    public fn rounded(_ rule: RoundingRule) -> Self {
+        return match rule {
+            case .ToNearestOrAwayFromZero => self.rounded()
+            case .ToNearestOrEven         => self.roundedToNearestOrEven()
+            case .Up                      => self.ceiling()
+            case .Down                    => self.floor()
+            case .TowardZero              => self.truncated()
+            case .AwayFromZero            => self < Self.zero ? self.floor() : self.ceiling()
+        }
+    }
+}

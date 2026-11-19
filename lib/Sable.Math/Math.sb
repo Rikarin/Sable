@@ -1,7 +1,8 @@
 module Sable.Math
 
-// Integer and floating-point arithmetic beyond the operators: written in
-// Sable, over the core's Comparable.
+// Integer and floating-point arithmetic beyond the operators: generic,
+// over the core's Comparable and numeric protocols (BinaryInteger,
+// FloatingPoint), and monomorphised for each type it is used with.
 
 /// The greater of two values.
 public fn max<T: Comparable>(_ a: T, _ b: T) -> T {
@@ -24,11 +25,17 @@ public fn clamp<T: Comparable>(_ value: T, _ low: T, _ high: T) -> T {
     return value
 }
 
-/// The greatest common divisor, never negative; gcd(0, 0) is 0.
-public fn gcd(_ a: Int, _ b: Int) -> Int {
-    var x = a < 0 ? 0 - a : a
-    var y = b < 0 ? 0 - b : b
-    while y != 0 {
+/// The greatest common divisor, never negative; gcd(0, 0) is 0. It traps
+/// where that does not fit, as a signed type's least value's does not.
+///
+/// ```sable
+/// assert(gcd(1071, 462) == 21)
+/// assert(gcd(-4 as I8, 6) == 2)
+/// ```
+public fn gcd<T: BinaryInteger>(_ a: T, _ b: T) -> T {
+    var x = a < T.zero ? T.zero - a : a
+    var y = b < T.zero ? T.zero - b : b
+    while y != T.zero {
         let t = x % y
         x = y
         y = t
@@ -36,18 +43,31 @@ public fn gcd(_ a: Int, _ b: Int) -> Int {
     return x
 }
 
-/// The least common multiple, never negative; lcm with 0 is 0.
-public fn lcm(_ a: Int, _ b: Int) -> Int {
-    if a == 0 || b == 0 {
-        return 0
+/// The least common multiple, never negative; lcm with 0 is 0. It traps
+/// where that does not fit the type.
+///
+/// ```sable
+/// assert(lcm(4, 6) == 12)
+/// assert(lcm(0 as U8, 9) == 0)
+/// ```
+public fn lcm<T: BinaryInteger>(_ a: T, _ b: T) -> T {
+    if a == T.zero || b == T.zero {
+        return T.zero
     }
     let product = a / gcd(a, b) * b
-    return product < 0 ? 0 - product : product
+    return product < T.zero ? T.zero - product : product
 }
 
-/// base to the power exponent, by squaring; traps on overflow, as '*' does.
-public fn power(_ base: Int, _ exponent: Int) -> Int {
-    var result = 1
+/// base to the power exponent, by squaring: any number, an integer's
+/// trapping on overflow as '*' does. A negative exponent gives 1, as no
+/// factor is taken.
+///
+/// ```sable
+/// assert(power(2, 40) == 1099511627776)
+/// assert(power(1.5, 2) == 2.25)
+/// ```
+public fn power<T: Numeric>(_ base: T, _ exponent: Int) -> T {
+    var result = T.one
     var b = base
     var e = exponent
     while e > 0 {
@@ -63,57 +83,52 @@ public fn power(_ base: Int, _ exponent: Int) -> Int {
 }
 
 /// Whether n is prime, by trial division.
-public fn isPrime(_ n: Int) -> Bool {
-    if n < 2 {
+///
+/// ```sable
+/// assert(isPrime(97))
+/// assert(!isPrime(91 as U8))
+/// ```
+public fn isPrime<T: BinaryInteger>(_ n: T) -> Bool {
+    let two = T.one + T.one
+    let three = two + T.one
+    if n < two {
         return false
     }
-    if n < 4 {
+    if n <= three {
         return true
     }
-    if n % 2 == 0 {
+    if n % two == T.zero {
         return false
     }
-    var d = 3
+    var d = three
     while d <= n / d {
-        if n % d == 0 {
+        if n % d == T.zero {
             return false
         }
-        d = d + 2
+        d = d + two
     }
     return true
 }
 
-/// The square root, by Newton's method; NaN-free: negative input gives 0.
-public fn squareRoot(_ x: F64) -> F64 {
-    if x <= 0.0 {
-        return 0.0
-    }
-    var guess = x > 1.0 ? x / 2.0 : 1.0
-    var i = 0
-    while i < 64 {
-        let next = 0.5 * (guess + x / guess)
-        if next == guess {
-            return next
-        }
-        guess = next
-        i = i + 1
-    }
-    return guess
+/// The square root, correctly rounded: NaN for a negative value. The same
+/// as 'x.squareRoot()'.
+public fn squareRoot<T: FloatingPoint>(_ x: T) -> T {
+    return x.squareRoot()
 }
 
-/// The largest integer not greater than x, as an Int.
-public fn floor(_ x: F64) -> Int {
-    let truncated = Int(x)
-    return F64(truncated) > x ? truncated - 1 : truncated
+/// The greatest integer not above x, as a float: 'x.floor()'. 'Int(…)'
+/// makes it an integer, trapping where it does not fit.
+public fn floor<T: FloatingPoint>(_ x: T) -> T {
+    return x.floor()
 }
 
-/// The smallest integer not less than x, as an Int.
-public fn ceiling(_ x: F64) -> Int {
-    let truncated = Int(x)
-    return F64(truncated) < x ? truncated + 1 : truncated
+/// The least integer not below x, as a float: 'x.ceiling()'.
+public fn ceiling<T: FloatingPoint>(_ x: T) -> T {
+    return x.ceiling()
 }
 
-/// x rounded to the nearest integer, halves away from zero.
-public fn round(_ x: F64) -> Int {
-    return x < 0.0 ? 0 - floor(0.5 - x) : floor(x + 0.5)
+/// x rounded to the nearest integer, halves away from zero, as a float:
+/// 'x.rounded()'.
+public fn round<T: FloatingPoint>(_ x: T) -> T {
+    return x.rounded()
 }

@@ -1,0 +1,55 @@
+module Sable.Core
+
+/// IEEE 754's binary16: 11 bits of precision, finite up to 65504. Its arithmetic is IEEE 754's, rounded to the nearest, ties to
+/// even; FloatingPoint gives it the rest of the standard's operations.
+extension F16: BinaryFloatingPoint {
+    /// 0.
+    public static var zero: F16 => 0.0
+
+    /// 1.
+    public static var one: F16 => 1.0
+
+    /// A quiet NaN. Bits 0x7E00.
+    public static var nan: F16 => F16.fromBits(0x7E00)
+
+    /// Positive infinity. Bits 0x7C00.
+    public static var infinity: F16 => F16.fromBits(0x7C00)
+
+    /// The greatest finite F16. Bits 0x7BFF.
+    public static var greatestFiniteMagnitude: F16 => F16.fromBits(0x7BFF)
+
+    /// The least positive normal F16. Bits 0x0400.
+    public static var leastNormalMagnitude: F16 => F16.fromBits(0x0400)
+
+    /// The least positive F16, a subnormal. Bits 0x0001.
+    public static var leastNonzeroMagnitude: F16 => F16.fromBits(0x0001)
+
+    /// The distance from 1 to the next F16 up. Bits 0x1400.
+    public static var epsilon: F16 => F16.fromBits(0x1400)
+
+    /// π, rounded to an F16. Bits 0x4248.
+    public static var pi: F16 => F16.fromBits(0x4248)
+
+    /// e, rounded to an F16. Bits 0x4170.
+    public static var e: F16 => F16.fromBits(0x4170)
+
+    /// The natural logarithm of 2, rounded to an F16. Bits 0x398C.
+    public static var ln2: F16 => F16.fromBits(0x398C)
+
+    /// The natural logarithm of 10, rounded to an F16. Bits 0x409B.
+    public static var ln10: F16 => F16.fromBits(0x409B)
+
+    /// The square root of 2, rounded to an F16. Bits 0x3DA8.
+    public static var sqrt2: F16 => F16.fromBits(0x3DA8)
+
+    /// 10: the bits of the significand after its leading one.
+    public static var significandBitCount: Int => 10
+
+    /// 5: the bits of the exponent.
+    public static var exponentBitCount: Int => 5
+
+    /// The number in decimal: the fewest digits that read back as the same
+    /// value.
+    @builtin("string_from_F16")
+    public fn toString() -> String
+}

@@ -1,0 +1,228 @@
+module Sable.Core
+
+/// Integers: whole numbers in binary, divided with a remainder and worked
+/// on bit by bit. Every built-in integer is one, through FixedWidthInteger.
+///
+/// ```sable
+/// fn digitSum<T: BinaryInteger>(_ n: T, base: T) -> T {
+///     var rest = n
+///     var sum = T.zero
+///     while rest != T.zero {
+///         sum = sum + rest % base
+///         rest = rest / base
+///     }
+///     return sum
+/// }
+///
+/// assert(digitSum(1234, base: 10) == 10)
+/// assert(digitSum(255 as U8, base: 16) == 30)
+/// ```
+public protocol BinaryInteger: Numeric, Comparable, Hashable {
+    /// The quotient, rounded toward zero. Dividing by zero traps, as does
+    /// a signed type's least value divided by -1, whose quotient does not fit.
+    operator / (lhs: Self, rhs: Self) -> Self
+
+    /// The remainder of '/', with the dividend's sign. By zero it traps.
+    operator % (lhs: Self, rhs: Self) -> Self
+
+    /// The bits set in both.
+    operator & (lhs: Self, rhs: Self) -> Self
+
+    /// The bits set in either.
+    operator | (lhs: Self, rhs: Self) -> Self
+
+    /// The bits set in one and not the other.
+    operator ^ (lhs: Self, rhs: Self) -> Self
+
+    /// The bits moved toward the high end, zeros coming in. A count
+    /// outside 0 up to the width traps.
+    operator << (lhs: Self, rhs: Self) -> Self
+
+    /// The bits moved toward the low end: the sign coming in for a signed
+    /// type, zeros for an unsigned one. A count outside 0 up to the width traps.
+    operator >> (lhs: Self, rhs: Self) -> Self
+
+    /// Every bit turned over.
+    prefix operator ~ (operand: Self) -> Self
+
+    /// How many zero bits come below the lowest set bit: the width, for zero.
+    var trailingZeroCount: Int { get }
+
+    /// The value's two's-complement bits at 128: a signed value's sign
+    /// carried up, an unsigned one's zeros. Conversions between integers
+    /// of any width go through it (see 'truncating', 'exactly', 'clamping').
+    var wideBitPattern: U128 { get }
+
+    /// The value whose bits are the low ones of the pattern: the other
+    /// half of 'wideBitPattern'.
+    static fn fromWideBitPattern(_ bits: U128) -> Self
+}
+
+extension BinaryInteger {
+    /// The built-in integers' quotient: the instruction, trapping as '/' does.
+    @builtin("div_Self")
+    public operator / (lhs: Self, rhs: Self) -> Self
+
+    /// The built-in integers' remainder: the instruction, trapping as '%' does.
+    @builtin("rem_Self")
+    public operator % (lhs: Self, rhs: Self) -> Self
+
+    /// The built-in integers' and: the instruction.
+    @builtin("and_Self")
+    public operator & (lhs: Self, rhs: Self) -> Self
+
+    /// The built-in integers' or: the instruction.
+    @builtin("or_Self")
+    public operator | (lhs: Self, rhs: Self) -> Self
+
+    /// The built-in integers' exclusive or: the instruction.
+    @builtin("xor_Self")
+    public operator ^ (lhs: Self, rhs: Self) -> Self
+
+    /// The built-in integers' shift left: the instruction, trapping as '<<' does.
+    @builtin("shl_Self")
+    public operator << (lhs: Self, rhs: Self) -> Self
+
+    /// The built-in integers' shift right: the instruction, trapping as '>>' does.
+    @builtin("shr_Self")
+    public operator >> (lhs: Self, rhs: Self) -> Self
+
+    /// The built-in integers' complement: the instruction.
+    @builtin("not_Self")
+    public prefix operator ~ (operand: Self) -> Self
+
+    /// The built-in integers' count: LLVM's 'cttz'.
+    @builtin("count_trailing_zeros_Self")
+    public var trailingZeroCount: Int { get }
+
+    /// The built-in integers' widening, as 'unchecked as U128' does it.
+    @builtin("wrap_Self_U128")
+    public var wideBitPattern: U128 { get }
+
+    /// The built-in integers' narrowing, as 'unchecked as' does it.
+    @builtin("wrap_U128_Self")
+    public static fn fromWideBitPattern(_ bits: U128) -> Self
+
+    /// Whether the type has negative values. Every bit set is -1 in one
+    /// that does, and its greatest value in one that does not.
+    ///
+    /// ```sable
+    /// assert(I8.isSigned)
+    /// assert(!UInt.isSigned)
+    /// ```
+    public static var isSigned: Bool => Self.fromWideBitPattern(U128.max) < Self.zero
+
+    /// -1, 0 or 1, as the value is negative, zero or positive.
+    public fn signum() -> Self {
+        if self < Self.zero {
+            return Self.zero - Self.one
+        }
+        return self == Self.zero ? Self.zero : Self.one
+    }
+
+    /// Whether the value is greater than zero.
+    public var isPositive: Bool => self > Self.zero
+
+    /// Whether the value is less than zero: never, for an unsigned type.
+    public var isNegative: Bool => self < Self.zero
+
+    /// Whether the value divides by the other with nothing left over. Only
+    /// zero is a multiple of zero.
+    ///
+    /// ```sable
+    /// assert(12.isMultiple(of: 4))
+    /// assert(!12.isMultiple(of: 5))
+    /// assert(0.isMultiple(of: 0))
+    /// ```
+    public fn isMultiple(of other: Self) -> Bool {
+        if other == Self.zero {
+            return self == Self.zero
+        }
+        // A signed type's least value over -1 traps in '%', though it
+        // divides exactly: anything is a multiple of -1.
+        if Self.isSigned && other == Self.zero - Self.one {
+            return true
+        }
+        return self % other == Self.zero
+    }
+
+    /// The quotient and the remainder of '/' and '%', at once.
+    ///
+    /// ```sable
+    /// let (quotient, remainder) = (-7).divRem(2)
+    /// assert(quotient == -3 && remainder == -1)
+    /// ```
+    public fn divRem(_ divisor: Self) -> (Self, Self) {
+        return (self / divisor, self % divisor)
+    }
+
+    /// The quotient rounded so that the remainder is never negative (Rust's
+    /// 'div_euclid'): 'divEuclid(d) * d + remEuclid(d) == self'.
+    ///
+    /// ```sable
+    /// assert((-7).divEuclid(2) == -4)
+    /// assert((-7).divEuclid(-2) == 4)
+    /// ```
+    public fn divEuclid(_ divisor: Self) -> Self {
+        let quotient = self / divisor
+        if self % divisor < Self.zero {
+            return divisor > Self.zero ? quotient - Self.one : quotient + Self.one
+        }
+        return quotient
+    }
+
+    /// The remainder that is never negative, from 0 up to the divisor's
+    /// magnitude (Rust's 'rem_euclid').
+    ///
+    /// ```sable
+    /// assert((-7).remEuclid(2) == 1)
+    /// assert(7.remEuclid(-2) == 1)
+    /// ```
+    public fn remEuclid(_ divisor: Self) -> Self {
+        let remainder = self % divisor
+        if remainder < Self.zero {
+            return divisor < Self.zero ? remainder - divisor : remainder + divisor
+        }
+        return remainder
+    }
+
+    /// The quotient rounded up, toward positive infinity.
+    ///
+    /// ```sable
+    /// assert(7.divCeil(2) == 4)
+    /// assert((-7).divCeil(2) == -3)
+    /// ```
+    public fn divCeil(_ divisor: Self) -> Self {
+        let quotient = self / divisor
+        let remainder = self % divisor
+        if remainder > Self.zero && divisor > Self.zero || remainder < Self.zero && divisor < Self.zero {
+            return quotient + Self.one
+        }
+        return quotient
+    }
+
+    /// The quotient rounded down, toward negative infinity.
+    ///
+    /// ```sable
+    /// assert(7.divFloor(2) == 3)
+    /// assert((-7).divFloor(2) == -4)
+    /// ```
+    public fn divFloor(_ divisor: Self) -> Self {
+        let quotient = self / divisor
+        let remainder = self % divisor
+        if remainder > Self.zero && divisor < Self.zero || remainder < Self.zero && divisor > Self.zero {
+            return quotient - Self.one
+        }
+        return quotient
+    }
+
+    /// The smaller of the two.
+    public fn min(other: Self) -> Self {
+        return other < self ? other : self
+    }
+
+    /// The larger of the two.
+    public fn max(other: Self) -> Self {
+        return self < other ? other : self
+    }
+}

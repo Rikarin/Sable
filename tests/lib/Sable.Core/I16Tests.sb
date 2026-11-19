@@ -1,0 +1,126 @@
+module I16Tests
+
+// I16 (Sable.Core): its limits, and the numeric protocols' operations at
+// its width, at the limits. Run with
+//     tools/stdlib-coverage.sh Sable.Core
+
+import Sable.Testing
+
+@test
+fn theLimitsAreTheWidthsBounds() {
+    assertEqual(I16.min, -32768)
+    assertEqual(I16.max, 32767)
+    assertEqual(I16.zero, 0)
+    assertEqual(I16.one, 1)
+    assertEqual(I16.bitWidth, 16)
+    assert(I16.isSigned, "I16 is signed")
+}
+
+@test
+fn theLimitsPrintInDecimal() {
+    assertEqual(I16.min.toString(), "-32768")
+    assertEqual(I16.max.toString(), "32767")
+}
+
+@test
+fn addingPastTheGreatestValueWrapsSaturatesOrReportsIt() {
+    assertEqual(I16.max.wrappingAdd(1), I16.min)
+    assertEqual(I16.max.saturatingAdd(1), I16.max)
+    assert(I16.max.checkedAdd(1) == none, "the sum does not fit")
+    let (sum, overflowed) = I16.max.overflowingAdd(1)
+    assertEqual(sum, I16.min)
+    assert(overflowed, "the sum overflowed")
+}
+
+@test
+fn subtractingPastTheLeastValueWrapsSaturatesOrReportsIt() {
+    assertEqual(I16.min.wrappingSub(1), I16.max)
+    assertEqual(I16.min.saturatingSub(1), I16.min)
+    assert(I16.min.checkedSub(1) == none, "the difference does not fit")
+    let (difference, overflowed) = I16.min.overflowingSub(1)
+    assertEqual(difference, I16.max)
+    assert(overflowed, "the difference overflowed")
+}
+
+@test
+fn multiplyingPastTheLimitsWrapsSaturatesOrReportsIt() {
+    assertEqual(I16.max.wrappingMul(2), -2)
+    assertEqual(I16.max.saturatingMul(2), I16.max)
+    assert(I16.max.checkedMul(2) == none, "the product does not fit")
+    let (product, overflowed) = I16.max.overflowingMul(2)
+    assertEqual(product, -2)
+    assert(overflowed, "the product overflowed")
+    let (high, low) = I16.max.multipliedFullWidth(by: I16.max)
+    assertEqual(high, 16383)
+    assertEqual(low, 1)
+}
+
+@test
+fn theBitCountsSeeEveryBit() {
+    assertEqual(I16.zero.leadingZeroCount, 16)
+    assertEqual(I16.zero.trailingZeroCount, 16)
+    assertEqual(I16.one.leadingZeroCount, 15)
+    assertEqual(I16.max.popCount, 15)
+    assertEqual(I16(-32768).trailingZeroCount, 15)
+    assertEqual(I16.max.leadingOneCount, 0)
+    assertEqual(I16.max.trailingOneCount, 15)
+}
+
+@test
+fn rotationsAndSwapsWorkAtTheWidth() {
+    assertEqual(I16.one.rotatedLeft(by: 16), 1)
+    assertEqual(I16.one.rotatedRight(by: 1), -32768)
+    assertEqual(I16.one.rotatedLeft(by: -1), -32768)
+    assertEqual(I16.one.bitReversed, -32768)
+    assertEqual(I16(258).byteSwapped, 513)
+    assertEqual(I16(258).bigEndianBytes().count, 2)
+    assertEqual(I16.fromBigEndianBytes(I16.max.bigEndianBytes()) ?? 0, I16.max)
+    assertEqual(I16.fromLittleEndianBytes(I16.min.littleEndianBytes()) ?? 1, I16.min)
+}
+
+@test
+fn conversionsStopAtTheLimits() {
+    assert(I16.exactly(U128.max) == none, "only a U128 holds U128's greatest value")
+    assert(I16.exactly(I128.min) == none, "only an I128 holds I128's least value")
+    assertEqual(I16.clamping(U128.max), I16.max)
+    assertEqual(I16.clamping(I128.min), I16.min)
+    assertEqual(I16.truncating(U128.max), -1)
+    assertEqual(I16.exactly(I16.max) ?? 0, I16.max)
+}
+
+@test
+fn theRemainderOfTheLeastValueByMinusOneIsZero() {
+    assertEqual(I16.min.wrappingDiv(-1), I16.min)
+    assertEqual(I16.min.wrappingRem(-1), 0)
+    assert(I16.min.checkedDiv(-1) == none, "the quotient does not fit")
+}
+
+@test(traps: "integer overflow")
+fn addingPastTheGreatestValueTraps() {
+    var x = I16.max
+    x = x + 1
+    assertEqual(x, 0)
+}
+
+@test(traps: "integer overflow")
+fn subtractingPastTheLeastValueTraps() {
+    var x = I16.min
+    x = x - 1
+    assertEqual(x, 0)
+}
+
+@test(traps: "integer overflow")
+fn theLeastValueHasNoAbsoluteValue() {
+    assertEqual(I16.min.abs(), 0)
+}
+
+@test
+fn theLeastValuesAbsoluteValueWrapsOrSaturates() {
+    assertEqual(I16.min.wrappingAbs(), I16.min)
+    assertEqual(I16.min.saturatingAbs(), I16.max)
+    assertEqual(I16.min.saturatingNeg(), I16.max)
+    assert(I16.min.checkedAbs() == none, "the least value has no absolute value")
+    let (magnitude, overflowed) = I16.min.overflowingAbs()
+    assertEqual(magnitude, I16.min)
+    assert(overflowed, "the absolute value overflowed")
+}

@@ -1,0 +1,45 @@
+module ArrayNumericTests
+
+// The sums and products of arrays of numbers (Sable.Core, Array+Numeric.sb).
+// Run with
+//     tools/stdlib-coverage.sh Sable.Core
+
+import Sable.Testing
+
+@test
+fn sumAddsTheElements() {
+    assertEqual([1, 2, 3].sum(), 6)
+    assertEqual([0.5, 0.25].sum(), 0.75)
+    let bytes: U8[>..] = [100, 100, 55]
+    assertEqual(bytes.sum(), 255)
+}
+
+@test
+fn theSumOfNoneIsZero() {
+    let empty: Int[>..] = []
+    assertEqual(empty.sum(), 0)
+}
+
+@test
+fn productMultipliesTheElements() {
+    assertEqual([2, 3, 4].product(), 24)
+    assertEqual([0.5, 4.0].product(), 2.0)
+}
+
+@test
+fn theProductOfNoneIsOne() {
+    let empty: U8[>..] = []
+    assertEqual(empty.product(), 1)
+}
+
+@test
+fn aSliceSumsItsRun() {
+    let values = [1, 2, 3, 4, 5]
+    assertEqual(values[1..<4].sum(), 9)
+}
+
+@test(traps: "integer overflow")
+fn anIntegerSumTrapsWhereItDoesNotFit() {
+    let bytes: U8[>..] = [200, 100]
+    assertEqual(bytes.sum(), 0)
+}

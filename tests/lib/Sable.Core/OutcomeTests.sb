@@ -136,21 +136,15 @@ fn successesOrderBeforeFailures() {
 
 @test
 fn equalOutcomesHashAlike() {
-    assertEqual(hashOf(half(4)), hashOf(half(4)))
-    assertEqual(hashOf(half(3)), hashOf(half(3)))
+    assertEqual(half(4).hashValue, half(4).hashValue)
+    assertEqual(half(3).hashValue, half(3).hashValue)
     let ok: Outcome<Int, Int> = .Ok(7)
     let err: Outcome<Int, Int> = .Err(7)
-    assertNotEqual(hashOf(ok), hashOf(err))
+    assertNotEqual(ok.hashValue, err.hashValue)
 }
 
 @test
 fn debugDescriptionIsWrittenAsSource() {
     assertEqual(half(4).debugDescription(), ".Ok(2)")
     assertEqual(half(3).debugDescription(), ".Err(\"3 is odd\")")
-}
-
-fn hashOf<T: Hashable>(_ value: T) -> Int {
-    var hasher = Hasher()
-    value.hash(into: &hasher)
-    return hasher.finalize()
 }

@@ -1,0 +1,126 @@
+module I128Tests
+
+// I128 (Sable.Core): its limits, and the numeric protocols' operations at
+// its width, at the limits. Run with
+//     tools/stdlib-coverage.sh Sable.Core
+
+import Sable.Testing
+
+@test
+fn theLimitsAreTheWidthsBounds() {
+    assertEqual(I128.min, -170141183460469231731687303715884105728)
+    assertEqual(I128.max, 170141183460469231731687303715884105727)
+    assertEqual(I128.zero, 0)
+    assertEqual(I128.one, 1)
+    assertEqual(I128.bitWidth, 128)
+    assert(I128.isSigned, "I128 is signed")
+}
+
+@test
+fn theLimitsPrintInDecimal() {
+    assertEqual(I128.min.toString(), "-170141183460469231731687303715884105728")
+    assertEqual(I128.max.toString(), "170141183460469231731687303715884105727")
+}
+
+@test
+fn addingPastTheGreatestValueWrapsSaturatesOrReportsIt() {
+    assertEqual(I128.max.wrappingAdd(1), I128.min)
+    assertEqual(I128.max.saturatingAdd(1), I128.max)
+    assert(I128.max.checkedAdd(1) == none, "the sum does not fit")
+    let (sum, overflowed) = I128.max.overflowingAdd(1)
+    assertEqual(sum, I128.min)
+    assert(overflowed, "the sum overflowed")
+}
+
+@test
+fn subtractingPastTheLeastValueWrapsSaturatesOrReportsIt() {
+    assertEqual(I128.min.wrappingSub(1), I128.max)
+    assertEqual(I128.min.saturatingSub(1), I128.min)
+    assert(I128.min.checkedSub(1) == none, "the difference does not fit")
+    let (difference, overflowed) = I128.min.overflowingSub(1)
+    assertEqual(difference, I128.max)
+    assert(overflowed, "the difference overflowed")
+}
+
+@test
+fn multiplyingPastTheLimitsWrapsSaturatesOrReportsIt() {
+    assertEqual(I128.max.wrappingMul(2), -2)
+    assertEqual(I128.max.saturatingMul(2), I128.max)
+    assert(I128.max.checkedMul(2) == none, "the product does not fit")
+    let (product, overflowed) = I128.max.overflowingMul(2)
+    assertEqual(product, -2)
+    assert(overflowed, "the product overflowed")
+    let (high, low) = I128.max.multipliedFullWidth(by: I128.max)
+    assertEqual(high, 85070591730234615865843651857942052863)
+    assertEqual(low, 1)
+}
+
+@test
+fn theBitCountsSeeEveryBit() {
+    assertEqual(I128.zero.leadingZeroCount, 128)
+    assertEqual(I128.zero.trailingZeroCount, 128)
+    assertEqual(I128.one.leadingZeroCount, 127)
+    assertEqual(I128.max.popCount, 127)
+    assertEqual(I128(-170141183460469231731687303715884105728).trailingZeroCount, 127)
+    assertEqual(I128.max.leadingOneCount, 0)
+    assertEqual(I128.max.trailingOneCount, 127)
+}
+
+@test
+fn rotationsAndSwapsWorkAtTheWidth() {
+    assertEqual(I128.one.rotatedLeft(by: 128), 1)
+    assertEqual(I128.one.rotatedRight(by: 1), -170141183460469231731687303715884105728)
+    assertEqual(I128.one.rotatedLeft(by: -1), -170141183460469231731687303715884105728)
+    assertEqual(I128.one.bitReversed, -170141183460469231731687303715884105728)
+    assertEqual(I128(1339673755198158349044581307228491536).byteSwapped, 21345817372864405881847059188222722561)
+    assertEqual(I128(1339673755198158349044581307228491536).bigEndianBytes().count, 16)
+    assertEqual(I128.fromBigEndianBytes(I128.max.bigEndianBytes()) ?? 0, I128.max)
+    assertEqual(I128.fromLittleEndianBytes(I128.min.littleEndianBytes()) ?? 1, I128.min)
+}
+
+@test
+fn conversionsStopAtTheLimits() {
+    assert(I128.exactly(U128.max) == none, "only a U128 holds U128's greatest value")
+    assert(I128.exactly(I128.min) == I128.min, "only an I128 holds I128's least value")
+    assertEqual(I128.clamping(U128.max), I128.max)
+    assertEqual(I128.clamping(I128.min), I128.min)
+    assertEqual(I128.truncating(U128.max), -1)
+    assertEqual(I128.exactly(I128.max) ?? 0, I128.max)
+}
+
+@test
+fn theRemainderOfTheLeastValueByMinusOneIsZero() {
+    assertEqual(I128.min.wrappingDiv(-1), I128.min)
+    assertEqual(I128.min.wrappingRem(-1), 0)
+    assert(I128.min.checkedDiv(-1) == none, "the quotient does not fit")
+}
+
+@test(traps: "integer overflow")
+fn addingPastTheGreatestValueTraps() {
+    var x = I128.max
+    x = x + 1
+    assertEqual(x, 0)
+}
+
+@test(traps: "integer overflow")
+fn subtractingPastTheLeastValueTraps() {
+    var x = I128.min
+    x = x - 1
+    assertEqual(x, 0)
+}
+
+@test(traps: "integer overflow")
+fn theLeastValueHasNoAbsoluteValue() {
+    assertEqual(I128.min.abs(), 0)
+}
+
+@test
+fn theLeastValuesAbsoluteValueWrapsOrSaturates() {
+    assertEqual(I128.min.wrappingAbs(), I128.min)
+    assertEqual(I128.min.saturatingAbs(), I128.max)
+    assertEqual(I128.min.saturatingNeg(), I128.max)
+    assert(I128.min.checkedAbs() == none, "the least value has no absolute value")
+    let (magnitude, overflowed) = I128.min.overflowingAbs()
+    assertEqual(magnitude, I128.min)
+    assert(overflowed, "the absolute value overflowed")
+}

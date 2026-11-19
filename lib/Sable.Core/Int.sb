@@ -1,0 +1,24 @@
+module Sable.Core
+
+/// The integer Sable uses unless told otherwise: 64 bits, signed, on every target. Its arithmetic traps on overflow; FixedWidthInteger gives it
+/// the forms that do not, and its bit operations.
+extension Int: FixedWidthInteger, SignedInteger {
+    /// The type of its distance from zero.
+    public alias Magnitude = UInt
+
+    /// 0.
+    public static var zero: Int => 0
+
+    /// 1.
+    public static var one: Int => 1
+
+    /// The least Int, -2⁶³.
+    public static var min: Int => -9223372036854775808
+
+    /// The greatest Int, 2⁶³ - 1.
+    public static var max: Int => 9223372036854775807
+
+    /// The number in decimal.
+    @builtin("string_from_Int")
+    public fn toString() -> String
+}

@@ -1,0 +1,39 @@
+module Sable.Core
+
+// Sums and products of an array of numbers, over the numeric protocols
+// (Numeric.sb), so that one declaration serves every element type.
+
+extension<Element: Numeric> Element[:] {
+    /// The elements added up: zero for none. An integer sum traps where it
+    /// does not fit the element type.
+    ///
+    /// ```sable
+    /// assert([1, 2, 3].sum() == 6)
+    /// assert([0.5, 0.25].sum() == 0.75)
+    /// let empty: Int[>..] = []
+    /// assert(empty.sum() == 0)
+    /// ```
+    public fn sum() -> Element {
+        var total = Element.zero
+        for element in self {
+            total = total + element
+        }
+        return total
+    }
+
+    /// The elements multiplied together: one for none. An integer product
+    /// traps where it does not fit the element type.
+    ///
+    /// ```sable
+    /// assert([2, 3, 4].product() == 24)
+    /// let empty: U8[>..] = []
+    /// assert(empty.product() == 1)
+    /// ```
+    public fn product() -> Element {
+        var total = Element.one
+        for element in self {
+            total = total * element
+        }
+        return total
+    }
+}

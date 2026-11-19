@@ -70,4 +70,63 @@ public sealed class BuiltinTests {
         );
         Assert.Contains(message, error.Message);
     }
+
+    /// <summary>
+    ///     A builtin family — a name with a 'Self' segment — belongs in a
+    ///     protocol's extension, where the conforming type fills the segment;
+    ///     and a builtin there must be one, as nothing else says whose it is.
+    /// </summary>
+    [Theory]
+    [InlineData("extension String {\n    @builtin(\"string_count_Self\")\n    public var n: Int { get }\n}", "only a protocol's extension")]
+    [InlineData("public protocol Sized {\n    var n: Int { get }\n}\nextension Sized {\n    @builtin(\"string_count\")\n    public var n: Int { get }\n}", "names a family")]
+    [InlineData("public protocol Summed {\n    operator + (lhs: Self, rhs: Self) -> Self\n}\nextension Summed {\n    @builtin(\"add\")\n    public operator + (lhs: Self, rhs: Self) -> Self\n}", "names a family")]
+    [InlineData("extension String {\n    @builtin(\"string_concat\")\n    public operator + (lhs: String, rhs: String) -> String { return lhs }\n}", "has no body")]
+    public void AFamilyBelongsInAProtocolsExtension(string core, string message) {
+        var error = Single(ErrorCode.ERR_MalformedBuiltin, $"module Sable.Core\n{core}", "module M");
+        Assert.Contains(message, error.Message);
+    }
+
+    /// <summary>
+    ///     An operator can be a builtin, and a family's member in a protocol's
+    ///     extension is the default for the requirement of the same name — a
+    ///     property's too, which is not a second declaration of it.
+    /// </summary>
+    [Fact]
+    public void AFamilyMeetsTheProtocolsRequirement() {
+        var compilation = Compilation.Create("module M\nfn f() { }");
+        Assert.DoesNotContain(compilation.GetAllDiagnostics(), static d => d.Severity == DiagnosticSeverity.Error);
+        var additive = compilation.Core.Module.GetMembers("AdditiveArithmetic").OfType<NamedTypeSymbol>().Single();
+        var plus = additive.GetMembers("+").OfType<FunctionSymbol>().Single(static f => f.Builtin is not null);
+        Assert.Equal("add_Self", plus.Builtin);
+        Assert.False(plus.IsAbstract);
+
+        var fixedWidth = compilation.Core.Module.GetMembers("FixedWidthInteger").OfType<NamedTypeSymbol>().Single();
+        var counts = fixedWidth.GetMembers("leadingZeroCount").OfType<FieldSymbol>().ToList();
+        Assert.Equal(2, counts.Count);
+        Assert.Contains(counts, static c => c.IsAbstract);
+        Assert.Contains(counts, static c => c.Builtin == "count_leading_zeros_Self");
+    }
+
+    /// <summary>
+    ///     A family is the default only the built-in types take: a type of
+    ///     the program's own that conforms meets the requirement itself.
+    /// </summary>
+    [Fact]
+    public void AFamilyIsNoDefaultForATypeOfTheProgramsOwn() {
+        var errors = ErrorsIn(
+            """
+            module M
+            struct Bits: Equatable {
+                var value: Int
+                operator == (lhs: Bits, rhs: Bits) -> Bool { return lhs.value == rhs.value }
+            }
+            extension Bits: AdditiveArithmetic {
+                static var zero: Bits => Bits { value: 0 }
+            }
+            extension Bits: FixedWidthInteger { }
+            """
+        );
+        Assert.Contains(errors, static e => e.Code == ErrorCode.ERR_DoesNotConform && e.Message.Contains("'leadingZeroCount", StringComparison.Ordinal));
+        Assert.DoesNotContain(errors, static e => e.Message.Contains("'zero", StringComparison.Ordinal));
+    }
 }

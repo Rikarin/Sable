@@ -1,0 +1,247 @@
+module Sable.Core
+
+// What a fixed-width integer's bits say about it — powers of two,
+// logarithms, square roots — and its bytes, in either order: Sable over the
+// bit-count builtins in FixedWidthInteger.sb.
+
+extension FixedWidthInteger {
+    /// Whether the value is a power of two: positive, with one bit set.
+    ///
+    /// ```sable
+    /// assert(64.isPowerOfTwo)
+    /// assert(!0.isPowerOfTwo)
+    /// assert(!(-8).isPowerOfTwo)
+    /// ```
+    public var isPowerOfTwo: Bool => self > Self.zero && self.popCount == 1
+
+    /// The least power of two not below the value, or none where it does
+    /// not fit. Anything up to 1 gives 1.
+    ///
+    /// ```sable
+    /// assert(5.checkedNextPowerOfTwo() == 8)
+    /// assert(8.checkedNextPowerOfTwo() == 8)
+    /// assert((200 as U8).checkedNextPowerOfTwo() == none)
+    /// ```
+    public fn checkedNextPowerOfTwo() -> Self? {
+        if self <= Self.one {
+            return Self.one
+        }
+        // The power has one bit more than the value below it.
+        let shift = Self.bitWidth - (self - Self.one).leadingZeroCount
+        // A signed type's top bit makes its least value, not a power.
+        guard let power = Self.one.checkedShl(shift), power > Self.zero else {
+            return none
+        }
+        return power
+    }
+
+    /// The least power of two not below the value. Anything up to 1 gives
+    /// 1; it traps where the power does not fit.
+    public fn nextPowerOfTwo() -> Self {
+        guard let power = self.checkedNextPowerOfTwo() else {
+            preconditionFailure("the next power of two does not fit the type")
+        }
+        return power
+    }
+
+    /// The base-2 logarithm, rounded down: the place of the highest set
+    /// bit. It traps for zero or a negative value, which have none (see
+    /// 'checkedLog2').
+    ///
+    /// ```sable
+    /// assert(1.log2() == 0)
+    /// assert(1000.log2() == 9)
+    /// ```
+    public fn log2() -> Int {
+        precondition(self > Self.zero, "the logarithm of a value not above zero")
+        return Self.bitWidth - 1 - self.leadingZeroCount
+    }
+
+    /// The base-2 logarithm, rounded down, or none for zero or a negative value.
+    ///
+    /// ```sable
+    /// assert(8.checkedLog2() == 3)
+    /// assert(0.checkedLog2() == none)
+    /// ```
+    public fn checkedLog2() -> Int? {
+        if self <= Self.zero {
+            return none
+        }
+        return self.log2()
+    }
+
+    /// The base-10 logarithm, rounded down: one less than the decimal
+    /// digits. It traps for zero or a negative value (see 'checkedLog10').
+    ///
+    /// ```sable
+    /// assert(999.log10() == 2)
+    /// assert(1000.log10() == 3)
+    /// ```
+    public fn log10() -> Int {
+        precondition(self > Self.zero, "the logarithm of a value not above zero")
+        let ten = Self.truncating(10)
+        var rest = self
+        var digits = 0
+        while rest >= ten {
+            rest = rest / ten
+            digits = digits + 1
+        }
+        return digits
+    }
+
+    /// The base-10 logarithm, rounded down, or none for zero or a negative value.
+    public fn checkedLog10() -> Int? {
+        if self <= Self.zero {
+            return none
+        }
+        return self.log10()
+    }
+
+    /// The square root, rounded down, or none for a negative value.
+    public fn checkedIsqrt() -> Self? {
+        if self < Self.zero {
+            return none
+        }
+        return self.isqrt()
+    }
+
+    /// The square root, rounded down. It traps for a negative value, which
+    /// has none (see 'checkedIsqrt').
+    ///
+    /// ```sable
+    /// assert(17.isqrt() == 4)
+    /// assert((255 as U8).isqrt() == 15)
+    /// ```
+    public fn isqrt() -> Self {
+        precondition(self >= Self.zero, "the square root of a negative value")
+        if self < Self.truncating(2) {
+            return self
+        }
+        // Newton's method from a power of two above the root: each step
+        // comes down toward it, and the first that does not is the root.
+        var root = Self.one << Self.truncating(self.log2() / 2 + 1)
+        while true {
+            let next = (root + self / root) >> Self.one
+            if next >= root {
+                return root
+            }
+            root = next
+        }
+    }
+
+    /// The distance between the two, as the unsigned type of the width,
+    /// which holds every such distance (Rust's 'abs_diff').
+    ///
+    /// ```sable
+    /// assert(3.absDiff(10) == 7)
+    /// assert(I8.min.absDiff(I8.max) == 255)
+    /// ```
+    public fn absDiff(_ other: Self) -> Magnitude {
+        // The difference's low bits are the distance's, which is less
+        // than 2^width, though the difference may not fit the type itself.
+        let difference = self < other ? other.wrappingSub(self) : self.wrappingSub(other)
+        return Magnitude.fromWideBitPattern(difference.wideBitPattern)
+    }
+
+    /// The value halfway between the two, rounded toward zero, as if
+    /// computed at a width where the sum cannot overflow.
+    ///
+    /// ```sable
+    /// assert(1.midpoint(4) == 2)
+    /// assert((-1).midpoint(-4) == -2)
+    /// assert((255 as U8).midpoint(253) == 254)
+    /// ```
+    public fn midpoint(_ other: Self) -> Self {
+        // The bits both have, and half of those only one has: the sum
+        // halved, rounded down, without the sum.
+        let floor = (self & other) + ((self ^ other) >> Self.one)
+        // Toward zero rather than down, for a negative sum that was odd.
+        if floor < Self.zero && ((self ^ other) & Self.one) == Self.one {
+            return floor + Self.one
+        }
+        return floor
+    }
+
+    // ---- bytes ----------------------------------------------------------
+    // Every target Sable builds for is little-endian, so the value's own
+    // order is little-endian and big-endian is its bytes swapped.
+
+    /// The value as its big-endian bytes would be read in place: byte-swapped.
+    public var bigEndian: Self => self.byteSwapped
+
+    /// The value as its little-endian bytes would be read in place: itself.
+    public var littleEndian: Self => self
+
+    /// The value whose big-endian representation is this one.
+    public static fn fromBigEndian(_ value: Self) -> Self {
+        return value.byteSwapped
+    }
+
+    /// The value whose little-endian representation is this one: itself.
+    public static fn fromLittleEndian(_ value: Self) -> Self {
+        return value
+    }
+
+    /// The value's bytes, most significant first.
+    ///
+    /// ```sable
+    /// assert((0x1234 as U16).bigEndianBytes() == [0x12, 0x34])
+    /// ```
+    public fn bigEndianBytes() -> U8[>..] {
+        var bytes: U8[>..] = []
+        var shift = Self.bitWidth - 8
+        while shift >= 0 {
+            bytes.append(U8.truncating(self >> Self.truncating(shift)))
+            shift = shift - 8
+        }
+        return bytes
+    }
+
+    /// The value's bytes, least significant first.
+    ///
+    /// ```sable
+    /// assert((0x1234 as U16).littleEndianBytes() == [0x34, 0x12])
+    /// ```
+    public fn littleEndianBytes() -> U8[>..] {
+        var bytes: U8[>..] = []
+        var shift = 0
+        while shift < Self.bitWidth {
+            bytes.append(U8.truncating(self >> Self.truncating(shift)))
+            shift = shift + 8
+        }
+        return bytes
+    }
+
+    /// The value of the bytes, most significant first; none unless there
+    /// are as many as the type has.
+    ///
+    /// ```sable
+    /// assert(U16.fromBigEndianBytes([0x12, 0x34]) == 0x1234)
+    /// assert(U16.fromBigEndianBytes([0x12]) == none)
+    /// ```
+    public static fn fromBigEndianBytes(_ bytes: U8[:]) -> Self? {
+        if bytes.count * 8 != Self.bitWidth {
+            return none
+        }
+        // Each byte shifted into its place, the first to the top: a shift
+        // of the whole value by 8 would trap in a one-byte type.
+        var value = Self.zero
+        for i in 0..<bytes.count {
+            value = value | Self.truncating(bytes[i]) << Self.truncating(Self.bitWidth - 8 * (i + 1))
+        }
+        return value
+    }
+
+    /// The value of the bytes, least significant first; none unless there
+    /// are as many as the type has.
+    public static fn fromLittleEndianBytes(_ bytes: U8[:]) -> Self? {
+        if bytes.count * 8 != Self.bitWidth {
+            return none
+        }
+        var value = Self.zero
+        for i in 0..<bytes.count {
+            value = value | Self.truncating(bytes[i]) << Self.truncating(8 * i)
+        }
+        return value
+    }
+}

@@ -1,0 +1,18 @@
+module Sable.Core
+
+/// The integers with negative values: Int, I8, I16, I32, I64 and I128.
+public protocol SignedInteger: BinaryInteger, SignedNumeric { }
+
+extension SignedInteger {
+    /// The value's distance from zero. It traps for the type's least
+    /// value, whose distance does not fit (see 'wrappingAbs' and
+    /// 'saturatingAbs', which do not).
+    ///
+    /// ```sable
+    /// assert((-5).abs() == 5)
+    /// assert(I8(-127).abs() == 127)
+    /// ```
+    public fn abs() -> Self {
+        return self < Self.zero ? -self : self
+    }
+}

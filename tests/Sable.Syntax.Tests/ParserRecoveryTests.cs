@@ -102,6 +102,7 @@ public sealed class ParserRecoveryTests {
     }
 
     [Fact]
+    [Trait("Category", "Fuzz")]
     public void RandomStatementSoupTerminatesAndRoundTrips() {
         string[] pieces = [
             "{", "}", "(", ")", "[", "]", "let", "var", "if", "else", "guard", "while",
@@ -124,6 +125,7 @@ public sealed class ParserRecoveryTests {
     }
 
     [Fact]
+    [Trait("Category", "Fuzz")]
     public void RandomFileSoupTerminatesAndRoundTrips() {
         string[] pieces = [
             "module", "import", "fn", "struct", "class", "protocol", "union", "enum",
@@ -375,6 +377,7 @@ public sealed class ParserRecoveryTests {
     }
 
     [Fact]
+    [Trait("Category", "Fuzz")]
     public void RandomTokenSoupTerminatesAndRoundTrips() {
         string[] pieces = [
             "a", "1", "\"s\"", "+", "-", "*", "(", ")", "[", "]", "{", "}", ",", ":",
@@ -408,6 +411,7 @@ public sealed class ParserRecoveryTests {
     ///     fixed-text token from those tables.
     /// </summary>
     [Fact]
+    [Trait("Category", "Fuzz")]
     public void WideSoupRoundTrips() {
         string[] pieces = [
             "fn", "struct", "let", "var", "if", "match", "case", "{", "}", "(", ")", "[", "]",

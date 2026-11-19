@@ -1,0 +1,24 @@
+module Sable.Core
+
+/// A 32-bit signed integer. Its arithmetic traps on overflow; FixedWidthInteger gives it
+/// the forms that do not, and its bit operations.
+extension I32: FixedWidthInteger, SignedInteger {
+    /// The type of its distance from zero.
+    public alias Magnitude = U32
+
+    /// 0.
+    public static var zero: I32 => 0
+
+    /// 1.
+    public static var one: I32 => 1
+
+    /// The least I32, -2³¹.
+    public static var min: I32 => -2147483648
+
+    /// The greatest I32, 2³¹ - 1.
+    public static var max: I32 => 2147483647
+
+    /// The number in decimal.
+    @builtin("string_from_I32")
+    public fn toString() -> String
+}

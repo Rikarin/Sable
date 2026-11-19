@@ -28,7 +28,7 @@ extension U8[:] {
     /// ```
     public fn readU16(at offset: Int, endian: Endian) -> U16 {
         let raw = self.loadU16(at: offset)
-        return endian == Endian.native ? raw : raw.byteSwapped()
+        return endian == Endian.native ? raw : raw.byteSwapped
     }
 
     /// The I16 in the two bytes from the offset, two's complement.
@@ -40,7 +40,7 @@ extension U8[:] {
     /// the bytes.
     public fn readU32(at offset: Int, endian: Endian) -> U32 {
         let raw = self.loadU32(at: offset)
-        return endian == Endian.native ? raw : raw.byteSwapped()
+        return endian == Endian.native ? raw : raw.byteSwapped
     }
 
     /// The I32 in the four bytes from the offset, two's complement.
@@ -52,7 +52,7 @@ extension U8[:] {
     /// the bytes.
     public fn readU64(at offset: Int, endian: Endian) -> U64 {
         let raw = self.loadU64(at: offset)
-        return endian == Endian.native ? raw : raw.byteSwapped()
+        return endian == Endian.native ? raw : raw.byteSwapped
     }
 
     /// The I64 in the eight bytes from the offset, two's complement.
@@ -90,7 +90,7 @@ extension U8[>..] {
     /// assert(bytes[1] == 0x12 && bytes[2] == 0x34)
     /// ```
     public mutating fn writeU16(_ value: U16, at offset: Int, endian: Endian) {
-        self.storeU16(at: offset, endian == Endian.native ? value : value.byteSwapped())
+        self.storeU16(at: offset, endian == Endian.native ? value : value.byteSwapped)
     }
 
     /// Writes the I16 over the two bytes from the offset, two's complement.
@@ -101,7 +101,7 @@ extension U8[>..] {
     /// Writes the U32 over the four bytes from the offset; traps unless all
     /// are in the array.
     public mutating fn writeU32(_ value: U32, at offset: Int, endian: Endian) {
-        self.storeU32(at: offset, endian == Endian.native ? value : value.byteSwapped())
+        self.storeU32(at: offset, endian == Endian.native ? value : value.byteSwapped)
     }
 
     /// Writes the I32 over the four bytes from the offset, two's complement.
@@ -112,7 +112,7 @@ extension U8[>..] {
     /// Writes the U64 over the eight bytes from the offset; traps unless all
     /// are in the array.
     public mutating fn writeU64(_ value: U64, at offset: Int, endian: Endian) {
-        self.storeU64(at: offset, endian == Endian.native ? value : value.byteSwapped())
+        self.storeU64(at: offset, endian == Endian.native ? value : value.byteSwapped)
     }
 
     /// Writes the I64 over the eight bytes from the offset, two's complement.

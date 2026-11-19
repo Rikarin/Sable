@@ -1,0 +1,58 @@
+module F16Tests
+
+// F16 (Sable.Core): its constants, rounded to the type, and its bits.
+// Run with
+//     tools/stdlib-coverage.sh Sable.Core
+
+import Sable.Testing
+
+@test
+fn zeroAndOneAreTheIdentities() {
+    assertEqual(F16.zero, 0.0)
+    assertEqual(F16.one, 1.0)
+    assertEqual((F16.one + F16.zero) * F16.one, 1.0)
+}
+
+@test
+fn theMathematicalConstantsAreRoundedToTheType() {
+    assertEqual(F16.pi.toString(), "3.14")
+    assertEqual(F16.e.toString(), "2.719")
+    assertEqual(F16.ln2.toString(), "0.6934")
+    assertEqual(F16.ln10.toString(), "2.303")
+    assertEqual(F16.sqrt2.toString(), "1.414")
+}
+
+@test
+fn theLimitsAreTheFormats() {
+    assertEqual(F16.greatestFiniteMagnitude.toString(), "65500.0")
+    assertEqual(F16.leastNormalMagnitude.toString(), "6.104e-05")
+    assertEqual(F16.leastNonzeroMagnitude.toString(), "6e-08")
+    assertEqual(F16.epsilon.toString(), "0.000977")
+    assertEqual(F16.greatestFiniteMagnitude.nextUp, F16.infinity)
+    assertEqual(F16.leastNonzeroMagnitude.nextDown, 0.0)
+    assertEqual((F16.one + F16.epsilon).nextDown, 1.0)
+}
+
+@test
+fn infinityAndNaNAreThemselves() {
+    assertEqual(F16.infinity.toString(), "inf")
+    assertEqual((-F16.infinity).toString(), "-inf")
+    assert(F16.nan.isNaN, "NaN is NaN")
+    assert(F16.nan != F16.nan, "NaN equals nothing")
+}
+
+@test
+fn theFormatHasItsBitCounts() {
+    assertEqual(F16.significandBitCount, 10)
+    assertEqual(F16.exponentBitCount, 5)
+    assertEqual(F16.bitWidth, 16)
+}
+
+@test
+fn theBitsRoundTrip() {
+    assertEqual((1.0 as F16).bits, 0x3C00)
+    assertEqual(F16.fromBits(0x3C00), 1.0)
+    assertEqual(F16.fromBits(F16.pi.bits), F16.pi)
+    assertEqual(F16.leastNonzeroMagnitude.bits, 1)
+    assert((-0.0 as F16).bits != (0.0 as F16).bits, "the zeros differ in their sign bit")
+}

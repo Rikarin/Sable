@@ -665,9 +665,11 @@ public sealed partial class Compilation {
 
         // A protocol carries 'Self' as a parameter, so that a member reached
         // through a conformer, a type parameter or an existential can be
-        // substituted like any other generic.
+        // substituted like any other generic. It is constrained to the
+        // protocol, so that in the protocol's extensions Self has what the
+        // protocol requires — 'Self.zero', 'self * self' — as a T: P does.
         if (typeKind == TypeKind.Protocol) {
-            type.SelfTypeParameter = new("Self", type, declaration, -1);
+            type.SelfTypeParameter = new("Self", type, declaration, -1) { ConstraintsResolver = () => [type] };
         }
 
         TypeBinder.BindTypeDeclaration(type, declaration);
@@ -767,7 +769,7 @@ public sealed partial class Compilation {
             IsFinal = declaration.Modifiers.Any(SyntaxKind.FinalKeyword),
             IsAbstract = declaration.Body is null && declaration.ExpressionBody is null,
             IsPolymorphic = declaration.Attributes.Any(static a => AttributeName(a) == "polymorphic"),
-            Builtin = BuiltinOf(declaration)
+            Builtin = BuiltinFamilyChecked(declaration.Attributes, BuiltinOf(declaration), container)
         };
 
         // A builtin's body is the builtin: the function is as concrete as one
@@ -1071,7 +1073,7 @@ public sealed partial class Compilation {
             return;
         }
 
-        if (FindExisting(container, name) is { } existing) {
+        if (FindExisting(container, name) is { } existing && !IsPropertyDefault(declaration, container, existing)) {
             ReportDuplicate(binding.Identifier, name, existing);
             return;
         }
@@ -1102,7 +1104,7 @@ public sealed partial class Compilation {
             IsAbstract = declaration.Accessors is { } accessors
                 && accessors.Accessors.All(static a => a.Body is null && a.ExpressionBody is null),
             HasInitializer = declaration.Declarator.Initializer is not null,
-            Builtin = BuiltinOf(declaration)
+            Builtin = BuiltinFamilyChecked(declaration.Attributes, BuiltinOf(declaration), container)
         };
 
         if (field.Builtin is not null) {
@@ -1494,7 +1496,8 @@ public sealed partial class Compilation {
                 SyntaxKind.PrefixKeyword => OperatorFixity.Prefix,
                 SyntaxKind.PostfixKeyword => OperatorFixity.Postfix,
                 _ => OperatorFixity.Infix,
-            }
+            },
+            Builtin = BuiltinFamilyChecked(declaration.Attributes, BuiltinOf(declaration), container)
         };
 
         function.Parameters = [
@@ -1863,6 +1866,25 @@ public sealed partial class Compilation {
         }
 
         return null;
+    }
+
+    /// <summary>
+    ///     A property of a protocol's extension with the name of one of the
+    ///     protocol's own requirements is the requirement's default, as a
+    ///     method of the same name is — one declared in the protocol, the
+    ///     other in its extension, whichever is read first — not a second
+    ///     declaration of it.
+    /// </summary>
+    static bool IsPropertyDefault(FieldDeclarationSyntax declaration, Symbol container, Symbol existing) {
+        if (existing is not FieldSymbol other) {
+            return false;
+        }
+
+        var declaresRequirement = container is NamedTypeSymbol { TypeKind: TypeKind.Protocol }
+            && declaration.Accessors is { } accessors && accessors.Accessors.All(static a => a.Body is null && a.ExpressionBody is null);
+        var declaresDefault = container is ExtensionSymbol { ExtendedType.TypeKind: TypeKind.Protocol };
+        return declaresDefault && other is { IsAbstract: true, ContainingSymbol: NamedTypeSymbol { TypeKind: TypeKind.Protocol } }
+            || declaresRequirement && other.ContainingSymbol is ExtensionSymbol;
     }
 
     void ReportDuplicate(SyntaxToken identifier, string name, Symbol existing) {

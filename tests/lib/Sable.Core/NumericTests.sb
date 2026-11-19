@@ -1,0 +1,67 @@
+module NumericTests
+
+// AdditiveArithmetic, Numeric and SignedNumeric (Sable.Core): generic code
+// over them, for integers and floats alike. Run with
+//     tools/stdlib-coverage.sh Sable.Core
+
+import Sable.Testing
+
+fn total<T: AdditiveArithmetic>(_ values: T[:]) -> T {
+    var sum = T.zero
+    for value in values {
+        sum = sum + value
+    }
+    return sum
+}
+
+fn difference<T: AdditiveArithmetic>(_ a: T, _ b: T) -> T {
+    return a - b
+}
+
+fn cube<T: Numeric>(_ x: T) -> T {
+    return x * x * x
+}
+
+fn opposite<T: SignedNumeric>(_ x: T) -> T {
+    return -x
+}
+
+@test
+fn additiveArithmeticSumsAnyNumber() {
+    assertEqual(total([1, 2, 3]), 6)
+    assertEqual(total([0.5, 0.25]), 0.75)
+    assertEqual(total([200 as U8, 55]), 255)
+    assertEqual(total([1 as I128, 2]), 3)
+}
+
+@test
+fn additiveArithmeticSubtracts() {
+    assertEqual(difference(10, 3), 7)
+    assertEqual(difference(1.0 as F32, 0.25), 0.75)
+}
+
+@test
+fn numericMultiplies() {
+    assertEqual(cube(3), 27)
+    assertEqual(cube(0.5), 0.125)
+    assertEqual(cube(2 as U16), 8)
+    assertEqual(I8.one * I8.one, 1)
+}
+
+@test
+fn signedNumericNegates() {
+    assertEqual(opposite(5), -5)
+    assertEqual(opposite(-1.5), 1.5)
+    assertEqual(opposite(7 as I8), -7)
+    assert(opposite(0.0).isSignMinus, "the opposite of +0 is -0")
+}
+
+@test(traps: "integer overflow")
+fn aGenericSumTrapsWhereItDoesNotFit() {
+    assertEqual(total([200 as U8, 56]), 0)
+}
+
+@test(traps: "integer overflow")
+fn negatingTheLeastValueGenericallyTraps() {
+    assertEqual(opposite(I8.min), 0)
+}

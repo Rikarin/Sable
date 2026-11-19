@@ -1,0 +1,20 @@
+module Sable.Core
+
+/// Which kind of value a float is ('FloatingPoint.classification'): Rust's
+/// 'FpCategory', .NET's 'IsNaN' and the rest as one answer.
+public enum FloatingPointClassification {
+    /// Not a number.
+    NaN
+
+    /// +infinity or -infinity.
+    Infinite
+
+    /// +0 or -0.
+    Zero
+
+    /// Non-zero and below the least normal value, with fewer bits of precision.
+    Subnormal
+
+    /// Finite and non-zero, with every bit of the type's precision.
+    Normal
+}

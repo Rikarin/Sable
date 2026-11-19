@@ -53,6 +53,7 @@ public sealed class CompilerFuzzTests(Xunit.Abstractions.ITestOutputHelper outpu
     }
 
     [Fact]
+    [Trait("Category", "Fuzz")]
     public void MutatedProgramsNeverCrashTheCompiler() {
         var random = new Random(Setting("SABLE_FUZZ_SEED") is { } night ? unchecked(20261121 * 31 + night) : 20261121);
         var cases = 24 * Math.Max(1, Setting("SABLE_FUZZ_SCALE") ?? 1);

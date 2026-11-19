@@ -1,0 +1,7 @@
+module Sable.Core
+
+extension Bool {
+    /// 'true' or 'false'.
+    @builtin("string_from_Bool")
+    public fn toString() -> String
+}

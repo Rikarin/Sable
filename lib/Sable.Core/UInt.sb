@@ -1,0 +1,24 @@
+module Sable.Core
+
+/// The unsigned integer of Int's width: 64 bits, on every target. Its arithmetic traps on overflow; FixedWidthInteger gives it
+/// the forms that do not, and its bit operations.
+extension UInt: FixedWidthInteger, UnsignedInteger {
+    /// The type of its distance from zero.
+    public alias Magnitude = UInt
+
+    /// 0.
+    public static var zero: UInt => 0
+
+    /// 1.
+    public static var one: UInt => 1
+
+    /// The least UInt, 0.
+    public static var min: UInt => 0
+
+    /// The greatest UInt, 2⁶⁴ - 1.
+    public static var max: UInt => 18446744073709551615
+
+    /// The number in decimal.
+    @builtin("string_from_UInt")
+    public fn toString() -> String
+}

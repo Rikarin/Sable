@@ -8,10 +8,6 @@ module Sable.Core
 // too.
 
 extension F32 {
-    /// The square root; NaN for a negative number, and -0.0 for -0.0.
-    @builtin("math_sqrt_F32")
-    public fn squareRoot() -> F32
-
     /// The cube root, negative for a negative number: (-8.0).cbrt() is -2.0.
     @builtin("math_cbrt_F32")
     public fn cbrt() -> F32

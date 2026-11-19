@@ -12,7 +12,7 @@ public sealed class LibraryTests {
     [Fact]
     public void MathIsWrittenInSable() =>
         Assert.Equal(
-            "7\na\n10\n21\n12\n1099511627776\ntrue\nfalse\n1.414213562373095\n-3 3 3 -3\n2027381 3 true\n",
+            "7\na\n10\n21\n12\n1099511627776\ntrue\nfalse\n1.4142135623730951\n-3.0 3.0 3.0 -3.0\n2027381 3 true\n",
             AssertAgree("""
 module P
 import Sable.Math

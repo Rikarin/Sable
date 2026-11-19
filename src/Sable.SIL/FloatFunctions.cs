@@ -33,7 +33,6 @@ public static class FloatFunctions {
     public sealed record Function(string Name, string C, int Arity, string? Intrinsic = null);
 
     public static readonly ImmutableArray<Function> All = [
-        new("sqrt", "sqrt", 1, "sqrt"),
         new("cbrt", "cbrt", 1),
         new("sin", "sin", 1, "sin"),
         new("cos", "cos", 1, "cos"),

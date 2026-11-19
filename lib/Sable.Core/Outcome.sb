@@ -133,15 +133,13 @@ extension Outcome: Hashable where T: Hashable, E: Hashable {
     /// Which case it is, then the value or the error: a success and a
     /// failure holding equal values do not hash alike.
     public fn hash(into hasher: inout Hasher) {
-        match self {
-            case .Ok(let value) => {
-                hasher.combine(0)
-                hasher.combine(value)
-            }
-            case .Err(let error) => {
-                hasher.combine(1)
-                hasher.combine(error)
-            }
+        if case .Ok(let value) = self {
+            hasher.write(0)
+            hasher.combine(value)
+        }
+        if case .Err(let error) = self {
+            hasher.write(1)
+            hasher.combine(error)
         }
     }
 }

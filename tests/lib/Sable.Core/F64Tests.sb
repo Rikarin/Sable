@@ -1,0 +1,102 @@
+module F64Tests
+
+// F64 (Sable.Core): its constants, rounded to the type, and its bits.
+// Run with
+//     tools/stdlib-coverage.sh Sable.Core
+
+import Sable.Testing
+
+@test
+fn zeroAndOneAreTheIdentities() {
+    assertEqual(F64.zero, 0.0)
+    assertEqual(F64.one, 1.0)
+    assertEqual((F64.one + F64.zero) * F64.one, 1.0)
+}
+
+@test
+fn theMathematicalConstantsAreRoundedToTheType() {
+    assertEqual(F64.pi.toString(), "3.141592653589793")
+    assertEqual(F64.e.toString(), "2.718281828459045")
+    assertEqual(F64.ln2.toString(), "0.6931471805599453")
+    assertEqual(F64.ln10.toString(), "2.302585092994046")
+    assertEqual(F64.sqrt2.toString(), "1.4142135623730951")
+}
+
+@test
+fn theLimitsAreTheFormats() {
+    assertEqual(F64.greatestFiniteMagnitude.toString(), "1.7976931348623157e+308")
+    assertEqual(F64.leastNormalMagnitude.toString(), "2.2250738585072014e-308")
+    assertEqual(F64.leastNonzeroMagnitude.toString(), "5e-324")
+    assertEqual(F64.epsilon.toString(), "2.220446049250313e-16")
+    assertEqual(F64.greatestFiniteMagnitude.nextUp, F64.infinity)
+    assertEqual(F64.leastNonzeroMagnitude.nextDown, 0.0)
+    assertEqual((F64.one + F64.epsilon).nextDown, 1.0)
+}
+
+@test
+fn infinityAndNaNAreThemselves() {
+    assertEqual(F64.infinity.toString(), "inf")
+    assertEqual((-F64.infinity).toString(), "-inf")
+    assert(F64.nan.isNaN, "NaN is NaN")
+    assert(F64.nan != F64.nan, "NaN equals nothing")
+}
+
+@test
+fn theFormatHasItsBitCounts() {
+    assertEqual(F64.significandBitCount, 52)
+    assertEqual(F64.exponentBitCount, 11)
+    assertEqual(F64.bitWidth, 64)
+}
+
+@test
+fn theBitsRoundTrip() {
+    assertEqual((1.0 as F64).bits, 0x3FF0000000000000)
+    assertEqual(F64.fromBits(0x3FF0000000000000), 1.0)
+    assertEqual(F64.fromBits(F64.pi.bits), F64.pi)
+    assertEqual(F64.leastNonzeroMagnitude.bits, 1)
+    assert((-0.0 as F64).bits != (0.0 as F64).bits, "the zeros differ in their sign bit")
+}
+
+/// The bits of the next pseudo-random F64, by xorshift: every pattern,
+/// NaNs and infinities among them, comes up as often as any other.
+fn nextBits(_ state: U64) -> U64 {
+    var x = state
+    x = x ^ (x << 13)
+    x = x ^ (x >> 7)
+    x = x ^ (x << 17)
+    return x
+}
+
+/// Whether the value, written in decimal, reads back as itself, bit for bit.
+fn roundTrips(_ value: F64) -> Bool {
+    guard let read = value.toString().toF64() else {
+        return false
+    }
+    return read.bits == value.bits
+}
+
+@test
+fn everyFiniteValueRoundTripsThroughItsShortestDecimal() {
+    var state: U64 = 0x9E3779B97F4A7C15
+    var checked = 0
+    while checked < 20000 {
+        state = nextBits(state)
+        let value = F64.fromBits(state)
+        if value.isFinite {
+            assert(roundTrips(value), "\(value) does not read back as itself")
+            checked = checked + 1
+        }
+    }
+}
+
+@test
+fn theEdgesOfTheFormatRoundTrip() {
+    let edges: F64[>..] = [
+        0.0, -0.0, F64.leastNonzeroMagnitude, -F64.leastNonzeroMagnitude, F64.leastNormalMagnitude,
+        F64.leastNormalMagnitude.nextDown, F64.greatestFiniteMagnitude, -F64.greatestFiniteMagnitude,
+        F64.epsilon, (1.0).nextUp, 0.1, 1.0e23, 9007199254740993.0,
+    ]
+    for value in edges {
+        assert(roundTrips(value), "\(value) does not read back as itself")
+    }
+}

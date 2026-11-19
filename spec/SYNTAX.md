@@ -264,6 +264,55 @@ fn outer() {
 }
 ```
 
+### Generators
+
+A function, method, computed property or closure whose result is
+`some Sequence<T>` or `some Iterator<T>` and whose body contains `yield` is a
+**generator**: each `yield` gives the next element, and `return` (with no
+value), or the end of the body, ends it.
+
+```sable
+fn evens(upTo n: Int) -> some Sequence<Int> {
+    var i = 0
+    while i <= n {
+        yield i
+        i += 2
+    }
+}
+
+for x in evens(upTo: 6) { print(x) }    // 0 2 4 6
+
+let squares: some Sequence<Int> = { () -> some Sequence<Int> in
+    for i in 0..<10 { yield i * i }
+}()
+```
+
+- **Lazy.** Calling it runs nothing: it captures its arguments (and `self`)
+  by value. The body runs a step at a time, as `next()` asks for each
+  element; each `makeIterator()` starts it afresh. An `inout` or `out`
+  parameter is an error (S3483) — the call has returned before the body runs.
+- **Throwing.** A `throws` generator's error comes out of `next()`.
+- **`defer`.** A `defer` runs as its scope is left, which may be when the
+  generator finishes or when its iterator is dropped before it does — C#'s
+  `finally` on `Dispose`. A `defer` body cannot `yield` (S3481).
+- **`async`.** An `async` generator's result is `some AsyncSequence<T>` (or
+  `some AsyncIterator<T>`); its body may `await`, and `for await` goes
+  through it.
+
+```sable
+async fn lines(_ f: File) -> some AsyncSequence<String> {
+    while let line = await f.readLine() {
+        yield line
+    }
+}
+```
+
+`yield` anywhere else is an error (S3480), as is a result that names no
+sequence of what it yields, and `return` with a value in a generator (S3482).
+The sequence and its iterator are structs the compiler writes: the iterator
+holds the arguments, the body's variables and where it stopped, so iterating
+one costs no allocation.
+
 ### Overloading
 
 Overloading on parameter types, counts and labels is allowed. Overloading on
@@ -440,6 +489,19 @@ fn allShapes() -> any Drawable[] { return [Circle(), Rect()] }  // heterogeneous
 
 fn draw(_ d: some Drawable) { }   // generic, monomorphised — same as <D: Drawable>
 fn draw(_ d: any Drawable) { }    // existential, one copy of the code, vtable call
+```
+
+A protocol's associated types may be given in angle brackets after a `some`,
+in the order the protocol declares them: `some Sequence<Int>` is a sequence
+whose `Element` is `Int`, which its users may rely on, and `some
+Iterator<String>` an iterator of strings.
+
+```sable
+fn total(_ values: some Sequence<Int>) -> Int {
+    var sum = 0
+    for v in values { sum += v }
+    return sum
+}
 ```
 
 ### Protocol composition

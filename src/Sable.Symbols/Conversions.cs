@@ -159,7 +159,7 @@ internal sealed class Conversions(CoreTypes core) {
         }
 
         if (target is OpaqueTypeSymbol opaque) {
-            return Satisfies(source, opaque.Constraint, Equivalence) ? ConversionKind.Existential : null;
+            return Satisfies(source, opaque.Constraint, Equivalence) && MeetsArguments(source, opaque, Equivalence) ? ConversionKind.Existential : null;
         }
 
         if (target is CompositionTypeSymbol && Satisfies(source, target, Equivalence)) {
@@ -181,6 +181,31 @@ internal sealed class Conversions(CoreTypes core) {
         }
 
         return null;
+    }
+
+    /// <summary>
+    ///     True when what <c>some Sequence&lt;Int&gt;</c> says of the protocol's
+    ///     associated types holds of a type: its Element is an Int.
+    /// </summary>
+    public static bool MeetsArguments(TypeSymbol source, OpaqueTypeSymbol opaque, TypeEquivalence context) {
+        if (opaque.Arguments.IsEmpty || opaque.Constraint is not NamedTypeSymbol { TypeKind: TypeKind.Protocol } protocol) {
+            return true;
+        }
+
+        var declared = protocol.OriginalDefinition.AssociatedTypes;
+        for (var i = 0; i < opaque.Arguments.Length && i < declared.Length; i++) {
+            var wanted = opaque.Arguments[i];
+            var given = context.Canonical(AssociatedTypes.Member(source, declared[i]));
+            if (wanted.IsError || given.IsError) {
+                continue;
+            }
+
+            if (!context.Canonical(wanted).Equals(given)) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /// <summary>True when a type meets a constraint: a protocol, a class, or several.</summary>

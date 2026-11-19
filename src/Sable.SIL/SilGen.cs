@@ -976,33 +976,21 @@ public sealed partial class SilGen {
     /// <summary>A type with these type arguments in force, a <c>some P</c> parameter's type among them.</summary>
     /// <remarks>A <c>some P</c> result or local is what it hides: code is generated for the concrete type.</remarks>
     internal static TypeSymbol Substitute(TypeSubstitution substitution, TypeSymbol type) {
-        if (type is OpaqueTypeSymbol { Origin: null } opaque) {
+        TypeSymbol? StandsFor(OpaqueTypeSymbol opaque) {
             foreach (var parameter in substitution.Parameters) {
                 if (s_opaqueOf.TryGetValue(parameter, out var standsFor) && standsFor.Equals(opaque)) {
                     return substitution.Lookup(parameter)!;
                 }
             }
+
+            return null;
         }
 
-        return Reveal(substitution.Apply(type));
-    }
-
-    /// <summary>
-    ///     The concrete type behind a <c>some P</c> result or local — itself
-    ///     perhaps another's result — or the type unchanged.
-    /// </summary>
-    /// <remarks>
-    ///     Functions that return only each other's results hide nothing
-    ///     concrete; the chain is followed until it repeats, and then the
-    ///     opaque type is left as it is, which nothing lowers.
-    /// </remarks>
-    static TypeSymbol Reveal(TypeSymbol type) {
-        var seen = new HashSet<Symbol>(ReferenceEqualityComparer.Instance);
-        while (type is OpaqueTypeSymbol { Origin: { } origin, HiddenType: { } hidden } && seen.Add(origin)) {
-            type = hidden;
+        if (type is OpaqueTypeSymbol { Origin: null } opaque && StandsFor(opaque) is { } argument) {
+            return argument;
         }
 
-        return type;
+        return TypeSubstitution.Reveal(substitution.Apply(type), StandsFor);
     }
 
     static bool IsGeneric(FunctionSymbol symbol) => TypeParametersOf(symbol).Any();
@@ -1628,7 +1616,7 @@ public sealed partial class SilGen {
         // A 'some P' result or local is laid out as what it hides; inside an
         // optional or an array, too.
         if (type is OpaqueTypeSymbol { Origin: not null } opaque) {
-            return Reveal(opaque) is var hidden && hidden is not OpaqueTypeSymbol ? Lower(hidden) : null;
+            return TypeSubstitution.Reveal(opaque) is var hidden && hidden is not OpaqueTypeSymbol ? Lower(hidden) : null;
         }
 
         if (type.Equals(Core.Int)) {

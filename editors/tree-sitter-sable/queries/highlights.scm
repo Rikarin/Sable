@@ -89,7 +89,7 @@
 ] @keyword.repeat
 
 [
-  "return" "throw" "try" "try?" "try!" "catch" "await" "defer" "do" "where"
+  "return" "throw" "yield" "try" "try?" "try!" "catch" "await" "defer" "do" "where"
 ] @keyword.control
 
 [

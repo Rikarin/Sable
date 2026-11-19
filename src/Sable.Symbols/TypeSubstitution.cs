@@ -14,7 +14,34 @@ namespace Sable.Symbols;
 public sealed class TypeSubstitution {
     public static readonly TypeSubstitution Empty = new([]);
 
+    /// <summary>Replaces every <c>some P</c> result or local with the type it hides, wherever it occurs.</summary>
+    static readonly TypeSubstitution Revealing = new([]) { _reveals = true };
+
     readonly Dictionary<TypeParameterSymbol, TypeSymbol> _map;
+    bool _reveals;
+
+    /// <summary>While revealing, what each <c>some P</c> parameter's type stands for, where known.</summary>
+    Func<OpaqueTypeSymbol, TypeSymbol?>? _parameters;
+
+    /// <summary>How many hidden types are being revealed, one inside another: a backstop for results that hide each other.</summary>
+    [ThreadStatic] static int s_revealing;
+
+    /// <summary>
+    ///     The type with each <c>some P</c> result or local replaced by the
+    ///     concrete type behind it, its associated types too: what code
+    ///     generation, and only it, may look at. One whose origin hides
+    ///     nothing concrete is left as it is.
+    /// </summary>
+    public static TypeSymbol Reveal(TypeSymbol type) => Revealing.Apply(type);
+
+    /// <summary>
+    ///     As <see cref="Reveal(TypeSymbol)" />, and with each <c>some P</c>
+    ///     parameter's type replaced by what <paramref name="parameters" />
+    ///     says it stands for: the element of a <c>some Sequence</c> parameter's
+    ///     iterator is its argument's.
+    /// </summary>
+    public static TypeSymbol Reveal(TypeSymbol type, Func<OpaqueTypeSymbol, TypeSymbol?> parameters) =>
+        new TypeSubstitution([]) { _reveals = true, _parameters = parameters }.Apply(type);
 
     public TypeSubstitution(Dictionary<TypeParameterSymbol, TypeSymbol> map) {
         _map = map;
@@ -46,7 +73,7 @@ public sealed class TypeSubstitution {
     }
 
     public TypeSymbol Apply(TypeSymbol type) {
-        if (_map.Count == 0) {
+        if (_map.Count == 0 && !_reveals) {
             return type;
         }
 
@@ -129,8 +156,27 @@ public sealed class TypeSubstitution {
 
             // A result's opaque type keeps its origin, and learns what the
             // origin's type parameters are here.
+            case OpaqueTypeSymbol { Origin: not null, HiddenType: { } hidden } when _reveals && s_revealing < 32:
+                s_revealing++;
+                try {
+                    return Apply(hidden);
+                } finally {
+                    s_revealing--;
+                }
+
+            case OpaqueTypeSymbol { Origin: null } parameter when _reveals && _parameters?.Invoke(parameter) is { } argument:
+                return argument;
+
+            case OpaqueTypeSymbol when _reveals:
+                return type;
+
             case OpaqueTypeSymbol opaque:
-                return new OpaqueTypeSymbol(Apply(opaque.Constraint), opaque.Origin, opaque.Origin is null ? null : Compose(opaque.Context));
+                return new OpaqueTypeSymbol(
+                    Apply(opaque.Constraint),
+                    opaque.Origin,
+                    opaque.Origin is null ? null : Compose(opaque.Context),
+                    [..opaque.Arguments.Select(Apply)]
+                );
 
             case DependentMemberTypeSymbol member: {
                 // 'C.Item' with C = WordBag is whatever WordBag says Item is;

@@ -934,12 +934,44 @@ public sealed class ExistentialTypeSymbol(TypeSymbol constraint) : TypeSymbol {
 ///     mention its type parameters, so the opaque type carries what they stand
 ///     for where it is used, in <see cref="Context" />.
 /// </remarks>
-public sealed class OpaqueTypeSymbol(TypeSymbol constraint, Symbol? origin = null, TypeSubstitution? context = null) : TypeSymbol {
+public sealed class OpaqueTypeSymbol(
+    TypeSymbol constraint,
+    Symbol? origin = null,
+    TypeSubstitution? context = null,
+    ImmutableArray<TypeSymbol> arguments = default
+) : TypeSymbol {
     public override SymbolKind Kind => SymbolKind.OpaqueType;
     public override string Name => string.Empty;
     public override TypeKind TypeKind => TypeKind.Struct;
 
     public TypeSymbol Constraint { get; } = constraint;
+
+    /// <summary>
+    ///     What <c>some Sequence&lt;Int&gt;</c> says of the protocol's associated
+    ///     types, in the order the protocol declares them: Element is Int.
+    ///     Empty for <c>some P</c> alone.
+    /// </summary>
+    public ImmutableArray<TypeSymbol> Arguments { get; } = arguments.IsDefault ? [] : arguments;
+
+    /// <summary>The same opaque type, of another origin: what its arguments say carries over.</summary>
+    public OpaqueTypeSymbol WithOrigin(Symbol? origin, TypeSubstitution? context = null) =>
+        new(Constraint, origin, context, Arguments);
+
+    /// <summary>What the arguments make an associated type of the constraint, or null where they say nothing.</summary>
+    public TypeSymbol? ArgumentFor(TypeParameterSymbol associated) {
+        if (Arguments.IsEmpty || Constraint is not NamedTypeSymbol { TypeKind: TypeKind.Protocol } protocol) {
+            return null;
+        }
+
+        var declared = protocol.OriginalDefinition.AssociatedTypes;
+        for (var i = 0; i < Arguments.Length && i < declared.Length; i++) {
+            if (ReferenceEquals(declared[i], associated)) {
+                return Arguments[i];
+            }
+        }
+
+        return null;
+    }
 
     /// <summary>The function whose result, or the local whose value, this is the type of; null for a parameter.</summary>
     public Symbol? Origin { get; } = origin;
@@ -955,17 +987,23 @@ public sealed class OpaqueTypeSymbol(TypeSymbol constraint, Symbol? origin = nul
         (Origin switch {
             FunctionSymbol function => function.HiddenResultType,
             LocalSymbol local => local.HiddenType,
+            FieldSymbol property => property.HiddenType,
             _ => null,
         }) is { } hidden
             ? Context.Apply(hidden)
             : null;
 
-    public override string ToDisplayString() => $"some {Constraint.ToDisplayString()}";
+    public override string ToDisplayString() =>
+        Arguments.IsEmpty
+            ? $"some {Constraint.ToDisplayString()}"
+            : $"some {Constraint.ToDisplayString()}<{string.Join(", ", Arguments.Select(static a => a.ToDisplayString()))}>";
 
     public override bool Equals(TypeSymbol? other) =>
         other is OpaqueTypeSymbol opaque
         && ReferenceEquals(opaque.Origin, Origin)
         && opaque.Constraint.Equals(Constraint)
+        && opaque.Arguments.Length == Arguments.Length
+        && opaque.Arguments.Zip(Arguments).All(static p => p.First.Equals(p.Second))
         && opaque.Context.SameAs(Context);
 
     public override int GetHashCode() =>

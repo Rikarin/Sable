@@ -410,6 +410,12 @@ public sealed class FieldSymbol(
     /// </summary>
     public FieldSymbol? BackingField { get; internal set; }
 
+    /// <summary>
+    ///     The concrete type a computed property's <c>some P</c> hides: what its
+    ///     getter returns. Null until the getter is bound, and for any other.
+    /// </summary>
+    public TypeSymbol? HiddenType { get; internal set; }
+
     /// <summary>For a backing field, the property it is the storage of.</summary>
     public FieldSymbol? BackedProperty { get; internal set; }
 

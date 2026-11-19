@@ -10,7 +10,7 @@ namespace Sable.CodeGen.Tests;
 /// </summary>
 public sealed class SequenceProtocolTests {
     const string Generic = """
-                           fn total<S: Sequence>(_ values: S) -> Int where S.Element == Int {
+                           fn total<S: Sequence>(_ values: S) -> Int where S.Element == Int, S.Failure == Never {
                                var sum = 0
                                for value in values {
                                    sum += value

@@ -308,14 +308,20 @@ public fn formatDuration(_ nanoseconds: Int) -> String {
 
 /// A time in nanoseconds, fractional, in the unit that reads best.
 public fn formatNanoseconds(_ ns: F64) -> String {
+    if ns < 10.0 {
+        return "\(ns:.2f) ns"
+    }
+    if ns < 100.0 {
+        return "\(ns:.1f) ns"
+    }
     if ns < 1000.0 {
-        return formatted(ns, decimals: ns < 10.0 ? 2 : (ns < 100.0 ? 1 : 0)) + " ns"
+        return "\(ns:.0f) ns"
     }
     if ns < 1000000.0 {
-        return formatted(ns / 1000.0, decimals: 2) + " µs"
+        return "\(ns / 1000.0:.2f) µs"
     }
     if ns < 1000000000.0 {
-        return formatted(ns / 1000000.0, decimals: 2) + " ms"
+        return "\(ns / 1000000.0:.2f) ms"
     }
-    return formatted(ns / 1000000000.0, decimals: 2) + " s"
+    return "\(ns / 1000000000.0:.2f) s"
 }

@@ -251,8 +251,7 @@ public fn comparison(_ old: BenchResult, _ new: BenchResult) -> (String, Bool) {
     }
     let change = (new.mean - old.mean) / old.mean * 100.0
     let noise = max(5.0, 200.0 * (old.deviation + new.deviation) / old.mean)
-    let sign = change >= 0.0 ? "+" : ""
-    let text = "\(sign)\(formatted(change, decimals: 2))% vs baseline"
+    let text = "\(change:+.2f)% vs baseline"
     if change > noise {
         return (text + " (REGRESSED)", true)
     }

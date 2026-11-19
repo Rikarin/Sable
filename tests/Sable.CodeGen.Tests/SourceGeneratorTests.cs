@@ -27,7 +27,7 @@ public sealed class SourceGeneratorTests {
                     parts.append("\(field.name): \\(self.\(field.name))")
                 }
             }
-            let all = joined(parts, separator: ", ")
+            let all = parts.joined(separator: ", ")
             text.appendLine("        return \"\(label) { \(all) }\"")
             text.appendLine("    }")
             text.appendLine("}")
@@ -92,15 +92,15 @@ public sealed class SourceGeneratorTests {
         fn echo(_ d: Declaration, into output: inout Output) {
             let t = TextBuilder()
             t.appendLine("// \(d.keyword) \(d.name) in \(d.moduleName) public=\(d.isPublic) from \(d.file)")
-            t.appendLine("// parameters [\(joined(d.typeParameters, separator: ","))]")
-            t.appendLine("// conformances [\(joined(d.conformances, separator: ","))]")
-            t.appendLine("// imports \(joined(d.imports, separator: ","))")
+            t.appendLine("// parameters [\(d.typeParameters.joined(separator: ","))]")
+            t.appendLine("// conformances [\(d.conformances.joined(separator: ","))]")
+            t.appendLine("// imports \(d.imports.joined(separator: ","))")
             for a in d.attributes {
                 var arguments: String[>..] = []
                 for argument in a.arguments {
                     arguments.append("\(argument.label)=\(argument.text)/\(argument.string ?? "-")")
                 }
-                t.appendLine("// attribute \(a.name)(\(joined(arguments, separator: ";")))")
+                t.appendLine("// attribute \(a.name)(\(arguments.joined(separator: ";")))")
             }
             for f in d.fields {
                 t.appendLine("// field \(f.name): \(f.type) var=\(f.isMutable) default=\(f.hasDefault) public=\(f.isPublic) attributes=\(f.attributes.count)")
@@ -110,7 +110,7 @@ public sealed class SourceGeneratorTests {
                 for p in c.payload {
                     payload.append("\(p.name):\(p.type)")
                 }
-                t.appendLine("// case \(c.name)(\(joined(payload, separator: ","))) raw=\(c.rawValue ?? "-") attributes=\(c.attributes.count)")
+                t.appendLine("// case \(c.name)(\(payload.joined(separator: ","))) raw=\(c.rawValue ?? "-") attributes=\(c.attributes.count)")
             }
             output.add(file: "\(d.name).echo.sb", t.build())
         }
@@ -479,7 +479,7 @@ public sealed class SourceGeneratorTests {
                 text = text + "@" + t.moduleName
             }
             if !arguments.isEmpty {
-                text = text + "<" + joined(arguments, separator: ",") + ">"
+                text = text + "<" + arguments.joined(separator: ",") + ">"
             }
             return text
         }
@@ -487,7 +487,7 @@ public sealed class SourceGeneratorTests {
         @generator("types")
         fn types(_ d: Declaration, into output: inout Output) {
             let t = TextBuilder()
-            t.appendLine("// \(d.keyword) \(d.qualifiedName) all=[\(joined(d.allConformances, separator: ","))] super=\(d.superclass ?? "-")")
+            t.appendLine("// \(d.keyword) \(d.qualifiedName) all=[\(d.allConformances.joined(separator: ","))] super=\(d.superclass ?? "-")")
             for f in d.fields {
                 t.appendLine("// field \(f.name) \(shape(f.resolved)) json=\(f.resolved.has(attribute: "types")) eq=\(f.resolved.conforms(to: "Equatable"))")
             }
@@ -502,7 +502,7 @@ public sealed class SourceGeneratorTests {
             if let r = d.returned {
                 t.appendLine("// returns \(d.returnType) \(shape(r)) async=\(d.isAsync) throws=\(d.isThrowing)")
             }
-            let file = joined(splitting(d.qualifiedName, by: "."), separator: "_")
+            let file = (d.qualifiedName.split(".")).joined(separator: "_")
             output.add(file: "\(file).types.sb", t.build())
         }
         """;
@@ -665,7 +665,7 @@ public sealed class SourceGeneratorTests {
             let t = TextBuilder()
             t.appendLine("// package \(pkg.name), \(pkg.declarations.count) declaration(s)")
             for input in pkg.inputs {
-                t.appendLine("public fn schema_\(joined(splitting(input.path, by: "/"), separator: "_"))() -> String => \"\(trimmedEnd(input.text))\"")
+                t.appendLine("public fn schema_\((input.path.split("/")).joined(separator: "_"))() -> String => \"\(input.text.trimmedEnd())\"")
             }
             output.add(file: "Schema.sb", t.build(), inModule: pkg.inputs.isEmpty ? "" : "App.Data")
         }

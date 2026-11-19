@@ -2255,19 +2255,20 @@ public sealed class ForStatementSyntax : StatementSyntax
         : base(green, parent, position) { }
 
     public SyntaxToken ForKeyword => GetToken(0);
-    public SyntaxToken AwaitKeyword => GetToken(1);
-    public PatternSyntax Pattern => GetRed(ref _pattern, 2);
-    public SyntaxToken InKeyword => GetToken(3);
-    public ExpressionSyntax Sequence => GetRed(ref _sequence, 4);
-    public ForWhereClauseSyntax? WhereClause => GetRedOptional(ref _whereClause, 5);
-    public BlockSyntax Body => GetRed(ref _body, 6);
+    public SyntaxToken TryKeyword => GetToken(1);
+    public SyntaxToken AwaitKeyword => GetToken(2);
+    public PatternSyntax Pattern => GetRed(ref _pattern, 3);
+    public SyntaxToken InKeyword => GetToken(4);
+    public ExpressionSyntax Sequence => GetRed(ref _sequence, 5);
+    public ForWhereClauseSyntax? WhereClause => GetRedOptional(ref _whereClause, 6);
+    public BlockSyntax Body => GetRed(ref _body, 7);
 
     internal override SyntaxNode? GetNodeSlot(int index) => index switch
     {
-        2 => Pattern,
-        4 => Sequence,
-        5 => WhereClause,
-        6 => Body,
+        3 => Pattern,
+        5 => Sequence,
+        6 => WhereClause,
+        7 => Body,
         _ => null,
     };
 

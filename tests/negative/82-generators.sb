@@ -49,10 +49,6 @@ fn changes(_ n: inout Int) -> some Sequence<Int> { //! S3483 takes its arguments
     yield n
 }
 
-fn failing() throws -> some Sequence<Int> { //! S3484 an Iterator's does not let out
-    yield 1
-}
-
 fn wrongElement() -> some Sequence<Int> {
     yield "one" //! S3004 expected 'Int' but found 'String'
 }

@@ -3,32 +3,13 @@ using static Sable.CodeGen.Tests.Programs;
 namespace Sable.CodeGen.Tests;
 
 /// <summary>
-///     Sable.Text's formatting, parsing, lines and escaping, written in Sable —
-///     natively and interpreted, which must agree to the digit.
+///     Text written and read in Sable — a float's decimals by a format spec,
+///     Sable.Text's parsing and escaping, String's search — natively and
+///     interpreted, which must agree to the digit.
 /// </summary>
 public sealed class TextLibraryTests {
     static string Run(string body) =>
         AssertAgree($"module P\nimport Sable.Text\n@main\nfn main() {{\n{body}\n}}\n").Stdout;
-
-    [Fact]
-    public void IntegersAreFormattedInARadix() =>
-        Assert.Equal(
-            "ff\n0000FF\n-000ff\n   42|\n-0042\n0\nzz\n101010\n"
-            + "-1000000000000000000000000000000000000000000000000000000000000000\n-9223372036854775808\n9223372036854775807\n",
-            Run("""
-                print(formatted(255, radix: 16))
-                print(formatted(255, radix: 16, width: 6, fill: '0', uppercase: true))
-                print(formatted(-255, radix: 16, width: 6, fill: '0'))
-                print(formatted(42, width: 5) + "|")
-                print(formatted(-42, width: 5, fill: '0'))
-                print(formatted(0, radix: 36))
-                print(formatted(1295, radix: 36))
-                print(formatted(42, radix: 2))
-                print(formatted(-9223372036854775807 - 1, radix: 2))
-                print(formatted(-9223372036854775807 - 1))
-                print(formatted(9223372036854775807))
-            """)
-        );
 
     [Fact]
     public void IntegersAreParsedInARadix() =>
@@ -53,7 +34,7 @@ public sealed class TextLibraryTests {
     ///     neither the platform's printf nor .NET's formatting is relied on.
     /// </summary>
     [Fact]
-    public void FloatsAreFormattedToFixedDecimals() =>
+    public void FloatsAreWrittenToFixedDecimals() =>
         Assert.Equal(
             """
             3.14
@@ -80,57 +61,28 @@ public sealed class TextLibraryTests {
 
             """,
             Run("""
-                print(formatted(3.14159, decimals: 2))
-                print(formatted(0.125, decimals: 2))
-                print(formatted(0.375, decimals: 2))
-                print(formatted(2.5, decimals: 0))
-                print(formatted(3.5, decimals: 0))
-                print(formatted(-0.001, decimals: 2))
+                print("\(3.14159:.2f)")
+                print("\(0.125:.2f)")
+                print("\(0.375:.2f)")
+                print("\(2.5:.0f)")
+                print("\(3.5:.0f)")
+                print("\(-0.001:.2f)")
                 let zero = 0.0
-                print(formatted(-zero, decimals: 3))
-                print(formatted(zero, decimals: 3))
-                print(formatted(1e22, decimals: 1))
-                print(formatted(1.7976931348623157e308, decimals: 0))
-                print(formatted(5e-324, decimals: 3))
-                print(formatted(0.1, decimals: 20))
-                print(formatted(123456.789, decimals: 4))
-                print(formatted(9.995, decimals: 2))
-                print(formatted(0.5, decimals: 0))
-                print(formatted(1.5, decimals: 0))
-                print(formatted(99.99, decimals: 1))
-                print(formatted(1.0 / 3.0, decimals: 17))
-                print(formatted(-1.5, decimals: 2))
-                print("\(1e300) \(formatted(1e-300, decimals: 1))")
-                print("\(formatted(zero / zero, decimals: 2)) \(formatted(1.0 / zero, decimals: 2)) \(formatted(-1.0 / zero, decimals: 2))")
-            """)
-        );
-
-    [Fact]
-    public void TemplatesAreFilledIn() =>
-        Assert.Equal(
-            "a is b; b a {x} {5} {\nno arguments: {}\n",
-            Run("""
-                print(format("{} is {}; {1} {0} {{x}} {5} {", ["a", "b"]))
-                print(format("no arguments: {}", []))
-            """)
-        );
-
-    [Fact]
-    public void LinesTrimmingAndSearching() =>
-        Assert.Equal(
-            "[a][b][][c]\n0\n[x  ][  x]\ntrue\n.mdfoo\n4 4 none\n2 0\n",
-            Run("""
-                var all = ""
-                for line in lines("a\r\nb\n\nc\n") {
-                    all = all + "[" + line + "]"
-                }
-                print(all)
-                print(lines("").count)
-                print("[" + trimmedStart("  x  ") + "][" + trimmedEnd("  x  ") + "]")
-                print(isBlank(" \t ") && !isBlank(" a") && isBlank(""))
-                print(removingPrefix("foo.md", "foo") + removingSuffix("foo.md", ".md"))
-                print("\(findLast("abcabc", "bc") ?? -1) \(find("abcabc", "bc", from: 2) ?? -1) \(find("abc", "c", from: 3) == none ? "none" : "some")")
-                print("\(occurrences(of: "aa", within: "aaaaa")) \(occurrences(of: "", within: "a"))")
+                print("\(-zero:.3f)")
+                print("\(zero:.3f)")
+                print("\(1e22:.1f)")
+                print("\(1.7976931348623157e308:.0f)")
+                print("\(5e-324:.3f)")
+                print("\(0.1:.20f)")
+                print("\(123456.789:.4f)")
+                print("\(9.995:.2f)")
+                print("\(0.5:.0f)")
+                print("\(1.5:.0f)")
+                print("\(99.99:.1f)")
+                print("\(1.0 / 3.0:.17f)")
+                print("\(-1.5:.2f)")
+                print("\(1e300) \(1e-300:.1f)")
+                print("\(zero / zero:.2f) \(1.0 / zero:.2f) \(-1.0 / zero:.2f)")
             """)
         );
 
@@ -165,27 +117,6 @@ public sealed class TextLibraryTests {
         );
 
     /// <summary>
-    ///     The helpers that build or search text, over text that is not ASCII:
-    ///     each collects pieces and joins them once, and compares in place.
-    /// </summary>
-    [Fact]
-    public void HelpersThatBuildTextKeepEveryScalar() =>
-        Assert.Equal(
-            "olléh\na--b--c--é\n2 3 3\na|éb||c\nhÉllo world ABCDé\nééé\n\"q\\\"é\\\\\\n\"\nsame\n",
-            Run("""
-                print(reversed("héllo"))
-                print(replacing("a-b-c-é", "-", with: "--"))
-                print("\(find("xxéyy", "éy") ?? -1) \(occurrences(of: "é", within: "éaéaé")) \(findLast("aéaéa", "éa") ?? -1)")
-                print(joined(splitting("a,éb,,c", by: ","), separator: "|"))
-                print(lowercased("HÉLLO World") + " " + uppercased("abcdé"))
-                print(repeating("é", 3))
-                print("q\"é\\\n".debugDescription())
-                let text = "untouched é"
-                print(replacing(text, "z", with: "y") == text && uppercased("ÉÉ") == "ÉÉ" ? "same" : "changed")
-            """)
-        );
-
-    /// <summary>
     ///     Indexing text that is not ASCII walks from the nearest place the
     ///     runtime knows: a loop over a string's scalars, forwards or back,
     ///     is linear. It was quadratic — 131,072 scalars took 11 s — so a
@@ -204,7 +135,7 @@ public sealed class TextLibraryTests {
 
             @main
             fn main() {
-                let text = repeating("aé😀", 333334)
+                let text = "aé😀".repeated(333334)
                 let start = Instant.now()
                 var forward = 0
                 var i = 0
@@ -219,7 +150,7 @@ public sealed class TextLibraryTests {
                     i = i - 1
                 }
                 // Hopping between two strings, and jumping about in one.
-                let other = repeating("ü", 1000)
+                let other = "ü".repeated(1000)
                 var mixed = 0
                 i = 0
                 while i < 1000 {
@@ -289,6 +220,19 @@ public sealed class TextLibraryTests {
             expected.Append($"{Find(from)} {count} {(partRunes.Count == 0 ? 1 : count + 1)}\n");
         }
 
-        Assert.Equal(expected.ToString(), Run(body.ToString()));
+        // Scalar positions, as the runtime's search takes them.
+        const string Helpers = """
+                                   fn find(_ text: String, _ part: String, from start: Int) -> Int? {
+                                       let at = Runtime.findString(text, part, start)
+                                       return at < 0 ? none : at
+                                   }
+                                   fn occurrences(of part: String, within text: String) -> Int {
+                                       return part.isEmpty ? 0 : text.count(of: part)
+                                   }
+                                   fn splitting(_ text: String, by separator: String) -> String[>..] {
+                                       return separator.isEmpty ? [text] : text.split(separator)
+                                   }
+                               """;
+        Assert.Equal(expected.ToString(), Run(Helpers + "\n" + body));
     }
 }

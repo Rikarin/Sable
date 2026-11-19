@@ -3393,6 +3393,7 @@ internal sealed class RepeatStatementGreen : GreenNode
 internal sealed class ForStatementGreen : GreenNode
 {
     private readonly GreenToken? _forKeyword;
+    private readonly GreenToken? _tryKeyword;
     private readonly GreenToken? _awaitKeyword;
     private readonly GreenNode? _pattern;
     private readonly GreenToken? _inKeyword;
@@ -3400,10 +3401,11 @@ internal sealed class ForStatementGreen : GreenNode
     private readonly GreenNode? _whereClause;
     private readonly GreenNode? _body;
 
-    public ForStatementGreen(GreenToken? forKeyword, GreenToken? awaitKeyword, GreenNode? pattern, GreenToken? inKeyword, GreenNode? sequence, GreenNode? whereClause, GreenNode? body)
+    public ForStatementGreen(GreenToken? forKeyword, GreenToken? tryKeyword, GreenToken? awaitKeyword, GreenNode? pattern, GreenToken? inKeyword, GreenNode? sequence, GreenNode? whereClause, GreenNode? body)
         : base(SyntaxKind.ForStatement, 0)
     {
         _forKeyword = forKeyword;
+        _tryKeyword = tryKeyword;
         _awaitKeyword = awaitKeyword;
         _pattern = pattern;
         _inKeyword = inKeyword;
@@ -3411,6 +3413,7 @@ internal sealed class ForStatementGreen : GreenNode
         _whereClause = whereClause;
         _body = body;
         FullWidth = (forKeyword?.FullWidth ?? 0)
+                    + (tryKeyword?.FullWidth ?? 0)
                     + (awaitKeyword?.FullWidth ?? 0)
                     + (pattern?.FullWidth ?? 0)
                     + (inKeyword?.FullWidth ?? 0)
@@ -3419,17 +3422,18 @@ internal sealed class ForStatementGreen : GreenNode
                     + (body?.FullWidth ?? 0);
     }
 
-    public override int SlotCount => 7;
+    public override int SlotCount => 8;
 
     public override GreenNode? GetSlot(int index) => index switch
     {
         0 => _forKeyword,
-        1 => _awaitKeyword,
-        2 => _pattern,
-        3 => _inKeyword,
-        4 => _sequence,
-        5 => _whereClause,
-        6 => _body,
+        1 => _tryKeyword,
+        2 => _awaitKeyword,
+        3 => _pattern,
+        4 => _inKeyword,
+        5 => _sequence,
+        6 => _whereClause,
+        7 => _body,
         _ => null,
     };
 

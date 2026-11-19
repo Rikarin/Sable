@@ -21,21 +21,21 @@ public struct LazyStrideIterator<Base: Iterator>: Iterator {
     /// The first element, then the one 'step' on from the last given; none
     /// once there is none there. A step that is not positive gives the
     /// first alone.
-    public mutating fn next() -> Base.Element? {
+    public mutating fn next() throws(Base.Failure) -> Base.Element? {
         if !started {
             started = true
-            return base.next()
+            return try base.next()
         }
         if step <= 0 {
             return none
         }
         var skipped = 1
         while skipped < step {
-            guard let _ = base.next() else {
+            guard let _ = try base.next() else {
                 return none
             }
             skipped += 1
         }
-        return base.next()
+        return try base.next()
     }
 }

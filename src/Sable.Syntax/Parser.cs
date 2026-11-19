@@ -1715,11 +1715,8 @@ internal sealed class Parser {
     }
 
     GreenNode? ParseThrowsSpecOrNull() {
-        if (At(SyntaxKind.RethrowsKeyword)) {
-            return new ThrowsSpecGreen(EatToken(), null, null, null);
-        }
-
-        if (!At(SyntaxKind.ThrowsKeyword)) {
+        // 'rethrows(E)': what the closures throw, and E as well.
+        if (!At(SyntaxKind.ThrowsKeyword) && !At(SyntaxKind.RethrowsKeyword)) {
             return null;
         }
 
@@ -2981,6 +2978,7 @@ internal sealed class Parser {
 
     GreenNode ParseForStatement() {
         var forKeyword = EatToken(SyntaxKind.ForKeyword);
+        var tryKeyword = TryEatToken(SyntaxKind.TryKeyword);
         var awaitKeyword = TryEatToken(SyntaxKind.AwaitKeyword);
         var pattern = WithBracesSuppressed(ParseBindingTarget);
         var inKeyword = EatToken(SyntaxKind.InKeyword);
@@ -2992,7 +2990,7 @@ internal sealed class Parser {
             whereClause = new ForWhereClauseGreen(whereKeyword, WithBracesSuppressed(ParseExpression));
         }
 
-        return new ForStatementGreen(forKeyword, awaitKeyword, pattern, inKeyword, sequence, whereClause, ParseBlock());
+        return new ForStatementGreen(forKeyword, tryKeyword, awaitKeyword, pattern, inKeyword, sequence, whereClause, ParseBlock());
     }
 
     GreenNode ParseSwitchStatement() {

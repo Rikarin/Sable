@@ -12,7 +12,8 @@ public struct LazyFlatMapSequence<Base: Sequence, Inner: Sequence>: LazySequence
     }
 }
 
-/// Gives the elements of the sequences a closure makes, one after another.
+/// Gives the elements of the sequences a closure makes, one after another;
+/// it throws what going through either throws.
 public struct LazyFlatMapIterator<Base: Iterator, Inner: Sequence>: Iterator {
     var base: Base
     let transform: (Base.Element) -> Inner
@@ -20,16 +21,16 @@ public struct LazyFlatMapIterator<Base: Iterator, Inner: Sequence>: Iterator {
 
     /// The next inner element, going on to the next outer one as each inner
     /// sequence runs out; none past the last.
-    public mutating fn next() -> Inner.Element? {
+    public mutating fn next() throws(Base.Failure | Inner.Failure) -> Inner.Element? {
         while true {
             if var current = inner {
-                if let element = current.next() {
+                if let element = try current.next() {
                     inner = current
                     return element
                 }
                 inner = none
             }
-            guard let outer = base.next() else {
+            guard let outer = try base.next() else {
                 return none
             }
             inner = transform(outer).makeIterator()

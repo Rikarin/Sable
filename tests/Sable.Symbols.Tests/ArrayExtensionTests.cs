@@ -270,7 +270,7 @@ public sealed class ArrayExtensionTests {
                 }
             }
             fn f(_ pairs: (String, Int)[>..], _ maybes: Int?[]) -> Int {
-                let ks: String[>..] = pairs.keys()
+                let ks: String[>..] = pairs.map({ entry in entry.0 })
                 return ks.count + maybes.present()
             }
             """

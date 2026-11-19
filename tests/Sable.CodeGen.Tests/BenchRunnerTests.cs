@@ -139,7 +139,7 @@ public sealed class BenchRunnerTests {
                 import Sable.Text
 
                 fn show(_ r: BenchResult) {
-                    print("mean \(formatted(r.mean, decimals: 2)) median \(formatted(r.median, decimals: 2)) deviation \(formatted(r.deviation, decimals: 2))")
+                    print("mean \(r.mean:.2f) median \(r.median:.2f) deviation \(r.deviation:.2f)")
                 }
 
                 fn result(_ mean: F64, _ deviation: F64) -> BenchResult {
@@ -160,13 +160,13 @@ public sealed class BenchRunnerTests {
 
                     let b = BenchResult { name: "Speed.b", mean: 1.5, median: 1.5, deviation: 0.0, iterations: 7 }
                     let text = formatBaseline([a, b])
-                    for line in lines(text) {
-                        if !hasPrefix(line, "#") {
-                            print(replacing(line, "\t", with: " "))
+                    for line in text.lines() {
+                        if !line.hasPrefix("#") {
+                            print(line.replacing("\t", with: " "))
                         }
                     }
                     let back = parseBaseline(text)
-                    print("\(back.count) \(back[1].name) \(formatted(back[1].mean, decimals: 2))")
+                    print("\(back.count) \(back[1].name) \(back[1].mean:.2f)")
 
                     print("\(formatDuration(850))|\(formatDuration(12400))|\(formatDuration(3050000))|\(formatDuration(1200000000))|\(formatNanoseconds(7.25))")
                 }

@@ -65,7 +65,7 @@ fn anEmptyDequeGivesNone() {
     assert(deque.last == none)
     assert(deque.removeFirst() == none)
     assert(deque.removeLast() == none)
-    assertEqual(deque.elements().count, 0)
+    assertEqual(deque.toArray().count, 0)
 }
 
 @test
@@ -73,10 +73,10 @@ fn aDequeOfValuesKeepsTheirOrder() {
     let deque = Deque<String>(["a", "b", "c"])
     assertEqual(deque.count, 3)
     assert(!deque.isEmpty)
-    assert(deque.elements() == ["a", "b", "c"])
+    assert(deque.toArray() == ["a", "b", "c"])
     assertEqual(deque.removeLast() ?? "", "c")
     assertEqual(deque.removeFirst() ?? "", "a")
-    assert(deque.elements() == ["b"])
+    assert(deque.toArray() == ["b"])
 }
 
 @test
@@ -93,7 +93,7 @@ fn removingFromBothEndsWrapsRoundTheSlots() {
     deque.append(7)
     deque.append(8)
     deque.prepend(1)
-    assert(deque.elements() == [1, 2, 3, 4, 5, 6, 7, 8])
+    assert(deque.toArray() == [1, 2, 3, 4, 5, 6, 7, 8])
     assertEqual(deque.removeLast() ?? -1, 8)
     assertEqual(deque.last ?? -1, 7)
     assertEqual(deque.at(6), 7)
@@ -104,7 +104,7 @@ fn setReplacesAnElementByPosition() {
     let deque = Deque<Int>([1, 2, 3])
     deque.prepend(0)
     deque.set(2, 20)
-    assert(deque.elements() == [0, 1, 20, 3])
+    assert(deque.toArray() == [0, 1, 20, 3])
 }
 
 @test(traps: "array index out of range")
@@ -125,5 +125,5 @@ fn removeAllEmptiesTheDeque() {
     deque.removeAll()
     assert(deque.isEmpty)
     deque.prepend(4)
-    assert(deque.elements() == [4])
+    assert(deque.toArray() == [4])
 }

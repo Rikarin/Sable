@@ -19,11 +19,11 @@ public struct LazyCycleIterator<Base: Sequence>: Iterator {
 
     /// The next element, from the start again past the last; none only
     /// when the sequence has none.
-    public mutating fn next() -> Base.Element? {
-        if let element = current.next() {
+    public mutating fn next() throws(Base.Failure) -> Base.Element? {
+        if let element = try current.next() {
             return element
         }
         current = base.makeIterator()
-        return current.next()
+        return try current.next()
     }
 }

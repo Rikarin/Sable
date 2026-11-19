@@ -13,7 +13,7 @@ fn text(_ values: Int[:]) -> String {
 
 // Through the protocol, so that the iterator is made and used, rather than
 // the compiler's own counting loop over an array or a range.
-fn elements<S: Sequence>(_ values: S) -> S.Element[>..] {
+fn elements<S: Sequence>(_ values: S) -> S.Element[>..] where S.Failure == Never {
     var result: S.Element[>..] = []
     var iterator = values.makeIterator()
     while let value = iterator.next() {

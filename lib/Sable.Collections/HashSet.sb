@@ -33,11 +33,6 @@ public class HashSet<Element: Hashable> {
         }
         return false
     }
-
-    /// The values, in the order they were first added.
-    public fn elements() -> Element[>..] {
-        return map.keys()
-    }
 }
 
 extension HashSet: Sequence {

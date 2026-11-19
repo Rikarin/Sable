@@ -18,8 +18,8 @@ public struct LazyFilterIterator<Base: Iterator>: Iterator {
     let isIncluded: (Base.Element) -> Bool
 
     /// The next element that passes, or none past the last.
-    public mutating fn next() -> Base.Element? {
-        while let element = base.next() {
+    public mutating fn next() throws(Base.Failure) -> Base.Element? {
+        while let element = try base.next() {
             if isIncluded(element) {
                 return element
             }

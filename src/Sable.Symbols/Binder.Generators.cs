@@ -48,7 +48,7 @@ public sealed partial class Binder {
     }
 
     /// <summary>True for a declared function whose body yields: its call runs nothing, so neither waits nor throws.</summary>
-    static bool IsGenerator(FunctionSymbol function) =>
+    internal static bool IsGenerator(FunctionSymbol function) =>
         function.DeclaringSyntax.FirstOrDefault() switch {
             FunctionDeclarationSyntax { Body: { } body } => Yields(body),
             AccessorSyntax { Body: { } body } => Yields(body),
@@ -101,18 +101,14 @@ public sealed partial class Binder {
             }
         }
 
-        // 'next()' is what would throw, and Iterator's does not: an error
-        // from the body has nowhere to go but the body's own 'catch'.
-        if (function.ThrownType is { } thrown && !thrown.Equals(Core.Never)) {
-            _diagnostics.Error(
-                ErrorCode.ERR_ThrowingGenerator,
-                function.DeclaringSyntax.FirstOrDefault() is FunctionDeclarationSyntax { ThrowsSpec: { } spec } ? spec.Span : body.Span,
-                $"{what} yields, so its errors would come out of its iterator's 'next()', which an Iterator's does not let out: "
-                + "catch them in the body, or yield what each step made of them ('Outcome<T, E>')"
-            );
-        }
-
-        var generator = _compilation.DeclareGenerator(function, kind, element);
+        // What its 'next()' throws is its sequence's Failure: a function's
+        // 'throws(E)' (its result's Failure, unless the result says
+        // otherwise); a closure's, what its result says.
+        var failure = result is OpaqueTypeSymbol { Constraint: NamedTypeSymbol { TypeKind: TypeKind.Protocol } protocol } opaque
+                      && TypeBinder.IndexOfFailure(protocol) is var at and >= 0 && at < opaque.Arguments.Length
+            ? opaque.Arguments[at]
+            : function.ThrownType;
+        var generator = _compilation.DeclareGenerator(function, kind, element, failure is null || failure.Equals(Core.Never) ? null : failure);
         function.HiddenResultType = generator.Result;
 
         // A computed property's 'some Sequence<T>' hides what its getter makes.
@@ -150,7 +146,7 @@ public sealed partial class Binder {
             );
         }
 
-        var value = Convert(BindExpression(statement.Expression, generator.Element), generator.Element, statement.Expression);
+        var value = Convert(BindExpression(statement.Expression, generator.BodyElement), generator.BodyElement, statement.Expression);
         return Record(statement, new BoundYield(statement, value));
     }
 }

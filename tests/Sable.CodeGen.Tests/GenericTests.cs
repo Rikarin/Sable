@@ -600,7 +600,7 @@ public sealed class GenericTests {
 
                     struct Bag<T> {
                         var items: T[>..] = []
-                        init<S: Sequence>(from s: S) where S.Element == T {
+                        init<S: Sequence>(from s: S) where S.Element == T, S.Failure == Never {
                             for x in s { items.append(x) }
                         }
                     }
@@ -622,7 +622,7 @@ public sealed class GenericTests {
                         print("\(b.items.count) \(s.items.count)")
                         let numbers: Int[>..] = [3, 2, 1]
                         let g = Groups(grouping: numbers[0..<3], by: { (n: Int) -> Int in n % 2 })
-                        print("\(g.table.count) \(g.table.keys()[1])")
+                        print("\(g.table.count) \(g.table.map({ entry in entry.0 })[1])")
                         print("\(g.table[1]!) \(g.table[0]!)")
                     """
                 )

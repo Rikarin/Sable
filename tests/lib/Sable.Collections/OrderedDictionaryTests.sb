@@ -25,8 +25,8 @@ fn keysKeepTheOrderTheyWereAdded() {
     dictionary.set("mango", 3)
     assertEqual(dictionary.count, 3)
     assert(!dictionary.isEmpty)
-    assert(dictionary.keys() == ["zebra", "apple", "mango"])
-    assert(dictionary.values() == [1, 2, 3])
+    assert(dictionary.map({ entry in entry.0 }) == ["zebra", "apple", "mango"])
+    assert(dictionary.map({ entry in entry.1 }) == [1, 2, 3])
 }
 
 @test
@@ -38,7 +38,7 @@ fn settingAKeyAgainKeepsItsPlace() {
     assertEqual(dictionary.count, 2)
     assertEqual(dictionary.get("a") ?? 0, 10)
     assertEqual(dictionary.index(of: "a") ?? -1, 0)
-    assert(dictionary.values() == [10, 2])
+    assert(dictionary.map({ entry in entry.1 }) == [10, 2])
 }
 
 @test
@@ -67,13 +67,13 @@ fn removingAKeyClosesUpTheOrder() {
     dictionary.set("c", 3)
     dictionary.set("d", 4)
     assertEqual(dictionary.remove("b") ?? 0, 2)
-    assert(dictionary.keys() == ["a", "c", "d"])
+    assert(dictionary.map({ entry in entry.0 }) == ["a", "c", "d"])
     assertEqual(dictionary.index(of: "c") ?? -1, 1)
     assertEqual(dictionary.index(of: "d") ?? -1, 2)
     assertEqual(dictionary.get("d") ?? 0, 4)
     assert(dictionary.remove("b") == none)
     assertEqual(dictionary.remove("d") ?? 0, 4)
-    assert(dictionary.keys() == ["a", "c"])
+    assert(dictionary.map({ entry in entry.0 }) == ["a", "c"])
 }
 
 @test
@@ -83,8 +83,8 @@ fn aRemovedKeyAddedAgainGoesAtTheEnd() {
     dictionary.set("b", 2)
     let _ = dictionary.remove("a")
     dictionary.set("a", 3)
-    assert(dictionary.keys() == ["b", "a"])
-    assert(dictionary.values() == [2, 3])
+    assert(dictionary.map({ entry in entry.0 }) == ["b", "a"])
+    assert(dictionary.map({ entry in entry.1 }) == [2, 3])
 }
 
 @test

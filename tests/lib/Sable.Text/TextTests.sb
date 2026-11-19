@@ -7,98 +7,15 @@ import Sable.Text
 import Sable.Testing
 
 @test
-fn repeatingAndJoining() {
-    assertEqual(repeating("ab", 3), "ababab")
-    assertEqual(repeating("x", 0), "")
-    assertEqual(joined(["a", "b", "c"], separator: ", "), "a, b, c")
-    assertEqual(joined([], separator: ","), "")
-}
-
-@test
-fn findingParts() {
-    assert(hasPrefix("sable test", "sable"))
-    assert(hasSuffix("sable test", "test"))
-    assert(!hasPrefix("sa", "sable"), "a prefix longer than the text")
-    assertEqual(find("hello world", "o") ?? -1, 4)
-    assertEqual(find("hello world", "o", from: 5) ?? -1, 7)
-    assertEqual(findLast("hello world", "o") ?? -1, 7)
-    assert(find("hello", "z") == none)
-    assertEqual(occurrences(of: "an", within: "banana"), 2)
-}
-
-@test
-fn replacingAndSplitting() {
-    assertEqual(replacing("a-b-c", "-", with: "+"), "a+b+c")
-    let parts = splitting("one::two::three", by: "::")
-    assertEqual(parts.count, 3)
-    assertEqual(parts[1], "two")
-}
-
-@test
-fn linesDropTheirEndings() {
-    let text = "first\r\nsecond\nthird\n"
-    let all = lines(text)
-    assertEqual(all.count, 3)
-    assertEqual(all[0], "first")
-    assertEqual(all[2], "third")
-}
-
-@test
-fn caseAndPadding() {
-    assertEqual(uppercased("Sable 1"), "SABLE 1")
-    assertEqual(lowercased("Sable 1"), "sable 1")
-    assertEqual(paddedLeft("7", to: 3, with: '0'), "007")
-    assertEqual(paddedRight("ab", to: 4, with: '.'), "ab..")
-}
-
-@test
-fn trimming() {
-    assertEqual(trimmedStart("  x  "), "x  ")
-    assertEqual(trimmedEnd("  x  "), "  x")
-    assert(isBlank(" \t\n"))
-    assertEqual(removingPrefix("v1.2", "v"), "1.2")
-    assertEqual(removingSuffix("file.sb", ".sb"), "file")
-}
-
-@test
-fn formattingNumbers() {
-    assertEqual(formatted(255, radix: 16), "ff")
-    assertEqual(formatted(255, radix: 16, width: 4, fill: '0', uppercase: true), "00FF")
-    assertEqual(formatted(3.14159, decimals: 2), "3.14")
+fn parsingIntegers() {
     assertEqual(parseInt("-42") ?? 0, -42)
     assertEqual(parseInt("ff", radix: 16) ?? 0, 255)
     assert(parseInt("4x") == none)
 }
 
 @test
-fn templates() {
-    assertEqual(format("{} + {} = {2}", ["1", "2", "3"]), "1 + 2 = 3")
-    assertEqual(format("{{literal}}", []), "{literal}")
-}
-
-@test
 fn escapingHtml() {
     assertEqual(escapedHtml("<a href=\"x\">&</a>"), "&lt;a href=&quot;x&quot;&gt;&amp;&lt;/a&gt;")
-}
-
-@test
-fn theDeprecatedHelpersKeepTheirEdgeCases() {
-    assertEqual(reversed("aé"), "éa")
-    assert(contains("haystack", "st") && !contains("haystack", "x"), "contains")
-    assertEqual(replacing("abc", "", with: "-"), "abc")
-    assertEqual(splitting("a,b", by: "").count, 1)
-    assertEqual(occurrences(of: "", within: "abc"), 0)
-    assert(find("hello", "l", from: 9) == none, "past the end")
-    assert(findLast("hello", "z") == none, "not there")
-}
-
-@test
-fn templatesLeaveWhatTheyCannotFill() {
-    assertEqual(format("{0}{1}{0}", ["a", "b"]), "aba")
-    assertEqual(format("{5} {} {x", ["a"]), "{5} a {x")
-    assertEqual(format("{}{}", ["a"]), "a{}")
-    assertEqual(format("{12", []), "{12")
-    assertEqual(format("}} {", []), "} {")
 }
 
 @test
@@ -111,11 +28,6 @@ fn escapingEachCharacter() {
 
 @test
 fn integersInEveryRadixAndSign() {
-    assertEqual(formatted(-255, radix: 16), "-ff")
-    assertEqual(formatted(10, radix: 1), "10")
-    assertEqual(formatted(10, radix: 37), "10")
-    assertEqual(formatted(0), "0")
-    assertEqual(formatted(-5, width: 4), "  -5")
     assertEqual(parseInt("+7") ?? 0, 7)
     assertEqual(parseInt("Zz", radix: 36) ?? 0, 1295)
     assertEqual(parseInt("10", radix: 99) ?? 0, 10)
@@ -124,22 +36,4 @@ fn integersInEveryRadixAndSign() {
     assertEqual(parseInt("-9223372036854775808") ?? 0, -9223372036854775807 - 1)
     assert(parseInt("99999999999999999999") == none, "far too big")
     assert(parseInt("1!") == none, "not a digit")
-}
-
-@test
-fn floatsToFixedDecimals() {
-    assertEqual(formatted(0.0 / 0.0, decimals: 2), "nan")
-    assertEqual(formatted(1.0 / 0.0, decimals: 2), "inf")
-    assertEqual(formatted(-1.0 / 0.0, decimals: 2), "-inf")
-    assertEqual(formatted(-0.0, decimals: 1), "-0.0")
-    assertEqual(formatted(2.5, decimals: -1), "2")
-    assertEqual(formatted(0.001, decimals: 1), "0.0")
-    assertEqual(formatted(1e22, decimals: 0), "10000000000000000000000")
-    assertEqual(formatted(0.125, decimals: 2), "0.12")
-    assertEqual(formatted(0.375, decimals: 2), "0.38")
-    assertEqual(formatted(9.995, decimals: 2), "9.99")
-    assertEqual(formatted(0.5, decimals: 0), "0")
-    assertEqual(formatted(1.5, decimals: 0), "2")
-    assertEqual(formatted(99.96, decimals: 1), "100.0")
-    assertEqual(formatted(1.0e-5, decimals: 7), "0.0000100")
 }

@@ -62,27 +62,27 @@ fn removeTakesOutAValue() {
     assert(!members.remove(130))
     assert(!members.remove(5))
     assertEqual(members.count, 1)
-    assert(members.elements() == [3])
+    assert(members.toArray() == [3])
 }
 
 @test
 fn elementsAreAscending() {
     let members = BitSet([200, 1, 64, 63, 0])
-    assert(members.elements() == [0, 1, 63, 64, 200])
+    assert(members.toArray() == [0, 1, 63, 64, 200])
     members.removeAll()
     assertEqual(members.count, 0)
-    assertEqual(members.elements().count, 0)
+    assertEqual(members.toArray().count, 0)
 }
 
 @test
 fn algebraWithSetsOfDifferentLengths() {
     let short = BitSet([1, 2])
     let long = BitSet([2, 300])
-    assert(short.union(long).elements() == [1, 2, 300])
-    assert(long.union(short).elements() == [1, 2, 300])
-    assert(short.intersection(long).elements() == [2])
-    assert(long.subtracting(short).elements() == [300])
-    assert(short.subtracting(long).elements() == [1])
+    assert(short.union(long).toArray() == [1, 2, 300])
+    assert(long.union(short).toArray() == [1, 2, 300])
+    assert(short.intersection(long).toArray() == [2])
+    assert(long.subtracting(short).toArray() == [300])
+    assert(short.subtracting(long).toArray() == [1])
     assert(!long.isSubset(of: short))
     assert(BitSet([2]).isSubset(of: long))
     assert(BitSet().isSubset(of: short))

@@ -19,8 +19,8 @@ public struct LazyDropWhileIterator<Base: Iterator>: Iterator {
     var dropping: Bool
 
     /// The next element kept, or none past the last.
-    public mutating fn next() -> Base.Element? {
-        while let element = base.next() {
+    public mutating fn next() throws(Base.Failure) -> Base.Element? {
+        while let element = try base.next() {
             if dropping && predicate(element) {
                 continue
             }

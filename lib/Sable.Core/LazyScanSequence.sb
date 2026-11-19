@@ -20,8 +20,8 @@ public struct LazyScanIterator<Base: Iterator, R>: Iterator {
     let combine: (R, Base.Element) -> R
 
     /// The result with the next element taken in, or none past the last.
-    public mutating fn next() -> R? {
-        guard let element = base.next() else {
+    public mutating fn next() throws(Base.Failure) -> R? {
+        guard let element = try base.next() else {
             return none
         }
         result = combine(result, element)

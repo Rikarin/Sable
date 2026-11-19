@@ -19,11 +19,11 @@ public struct LazyPrefixWhileIterator<Base: Iterator>: Iterator {
     var done: Bool
 
     /// The next element, or none from the first the closure is false for.
-    public mutating fn next() -> Base.Element? {
+    public mutating fn next() throws(Base.Failure) -> Base.Element? {
         if done {
             return none
         }
-        if let element = base.next() {
+        if let element = try base.next() {
             if predicate(element) {
                 return element
             }

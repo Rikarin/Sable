@@ -68,7 +68,7 @@ public sealed class RangeTests {
             AssertAgree(
                 Program(
                     """
-                    fn line<S: Sequence>(_ values: S) -> String where S.Iter.Element == Int {
+                    fn line<S: Sequence>(_ values: S) -> String where S.Iter.Element == Int, S.Failure == Never {
                         var text = ""
                         for v in values { text = text + "\(v) " }
                         return text.trimmed()

@@ -17,8 +17,8 @@ public struct EnumeratedIterator<Base: Iterator>: Iterator {
     var offset: Int
 
     /// The next element and its offset, or none past the last.
-    public mutating fn next() -> (offset: Int, element: Base.Element)? {
-        guard let element = base.next() else {
+    public mutating fn next() throws(Base.Failure) -> (offset: Int, element: Base.Element)? {
+        guard let element = try base.next() else {
             return none
         }
         let current = offset

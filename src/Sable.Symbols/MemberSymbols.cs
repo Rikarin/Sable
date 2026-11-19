@@ -181,6 +181,25 @@ public sealed class FunctionSymbol : Symbol {
     /// </summary>
     public bool IsRethrows { get; internal set; }
 
+    /// <summary>
+    ///     For <c>rethrows(E)</c>, E: what it throws of its own besides what its
+    ///     closures do — a Sequence algorithm's <c>rethrows(Failure)</c>, what
+    ///     the sequence it goes through throws. Null for plain <c>rethrows</c>.
+    /// </summary>
+    public TypeSymbol? RethrownAlso {
+        get {
+            if (RethrownAlsoResolver is { } resolve) {
+                RethrownAlsoResolver = null;
+                _rethrownAlso = resolve();
+            }
+
+            return _rethrownAlso;
+        }
+    }
+
+    TypeSymbol? _rethrownAlso;
+    internal Func<TypeSymbol?>? RethrownAlsoResolver { get; set; }
+
     /// <summary>The <c>where A == B</c> requirements on this function's parameters.</summary>
     public ImmutableArray<SameTypeRequirement> SameTypeRequirements { get; internal set; } = [];
 
@@ -265,6 +284,37 @@ public sealed class FunctionSymbol : Symbol {
             _thrownType = ThrownTypeResolver?.Invoke();
             _thrownResolved = true;
             return _thrownType;
+        }
+    }
+
+    ImmutableArray<TypeParameterSymbol> _opaqueTypeParameters;
+
+    /// <summary>
+    ///     A parameter of type <c>some P</c> is an anonymous generic parameter
+    ///     (docs/03 §3.1): the type parameter standing for each distinct one,
+    ///     which a call binds to its argument's type, so the function is
+    ///     monomorphised — and a generator's sequence made generic — as a
+    ///     generic one is. Two <c>some P</c> of the same P are one type, so
+    ///     they share one parameter. Each says what it stands for in
+    ///     <see cref="TypeParameterSymbol.OpaqueParameter" />.
+    /// </summary>
+    public ImmutableArray<TypeParameterSymbol> OpaqueTypeParameters {
+        get {
+            if (_opaqueTypeParameters.IsDefault) {
+                var opaques = new List<OpaqueTypeSymbol>();
+                foreach (var parameter in Parameters) {
+                    if (parameter.Type is OpaqueTypeSymbol { Origin: null } opaque && !opaques.Contains(opaque)) {
+                        opaques.Add(opaque);
+                    }
+                }
+
+                ImmutableArray<TypeParameterSymbol> made = [
+                    ..opaques.Select((opaque, i) => new TypeParameterSymbol(opaque.ToDisplayString(), this, null, -1 - i) { OpaqueParameter = opaque })
+                ];
+                ImmutableInterlocked.InterlockedInitialize(ref _opaqueTypeParameters, made);
+            }
+
+            return _opaqueTypeParameters;
         }
     }
 

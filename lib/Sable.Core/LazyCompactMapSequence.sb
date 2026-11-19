@@ -18,8 +18,8 @@ public struct LazyCompactMapIterator<Base: Iterator, T>: Iterator {
     let transform: (Base.Element) -> T?
 
     /// The next transformed element that is not none, or none past the last.
-    public mutating fn next() -> T? {
-        while let element = base.next() {
+    public mutating fn next() throws(Base.Failure) -> T? {
+        while let element = try base.next() {
             if let value = transform(element) {
                 return value
             }

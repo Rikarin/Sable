@@ -189,6 +189,25 @@ public sealed class StatementParserTests {
         var forStatement = Assert.IsType<ForStatementSyntax>(root);
         Assert.NotNull(forStatement.WhereClause);
         Assert.True(forStatement.AwaitKeyword.IsNone);
+        Assert.True(forStatement.TryKeyword.IsNone);
+    }
+
+    [Theory]
+    [InlineData("for try line in lines() { }", false)]
+    [InlineData("for try await t in ticks { }", true)]
+    public void ParsesForTry(string source, bool isAwait) {
+        var forStatement = Assert.IsType<ForStatementSyntax>(ParseRoot(source));
+        Assert.Equal(SyntaxKind.TryKeyword, forStatement.TryKeyword.Kind);
+        Assert.Equal(isAwait, !forStatement.AwaitKeyword.IsNone);
+    }
+
+    [Fact]
+    public void ParsesRethrowsWithAnErrorType() {
+        var tree = SyntaxTree.Parse("module M\nfn map<T>(_ f: (Int) throws -> T) rethrows(Failure) -> T[] { }");
+        Assert.False(tree.HasErrors, tree.FormatDiagnostics());
+        var function = tree.Root.DescendantNodes().OfType<FunctionDeclarationSyntax>().Single();
+        Assert.Equal(SyntaxKind.RethrowsKeyword, function.ThrowsSpec!.ThrowsKeyword.Kind);
+        Assert.Equal("Failure", function.ThrowsSpec.ErrorType!.ToString().Trim());
     }
 
     [Fact]

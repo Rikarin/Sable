@@ -324,7 +324,7 @@ Condition         = "let" BindingPattern [ ":" Type ] [ "=" Expression ]
 WhileStatement    = "while" ConditionList Block ;
 RepeatStatement   = "repeat" Block "while" Expression NL ;
 
-ForStatement      = "for" [ "await" ] BindingPattern "in" Expression
+ForStatement      = "for" [ "try" ] [ "await" ] BindingPattern "in" Expression
                     [ "where" Expression ] Block ;
 
 MatchStatement    = "match" Expression "{" { MatchCase } "}" ;

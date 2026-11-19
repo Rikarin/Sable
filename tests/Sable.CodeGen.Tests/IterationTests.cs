@@ -82,7 +82,7 @@ public sealed class IterationTests {
                     Countdown
                     + """
 
-                      fn total<S: Sequence>(_ items: S) -> Int where S.Iter.Element == Int {
+                      fn total<S: Sequence>(_ items: S) -> Int where S.Iter.Element == Int, S.Failure == Never {
                           var sum = 0
                           for x in items {
                               sum = sum + x
@@ -90,7 +90,7 @@ public sealed class IterationTests {
                           return sum
                       }
 
-                      fn count<S: Sequence>(_ items: S) -> Int {
+                      fn count<S: Sequence>(_ items: S) -> Int where S.Failure == Never {
                           var n = 0
                           for _ in items {
                               n = n + 1

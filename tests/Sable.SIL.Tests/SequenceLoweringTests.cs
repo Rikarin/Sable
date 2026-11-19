@@ -48,15 +48,25 @@ public sealed class SequenceLoweringTests {
                               }
                               return sum
                           }
-                          fn total<S: Sequence>(_ values: S) -> Int where S.Element == Int {
+                          fn total<S: Sequence>(_ values: S) -> Int where S.Element == Int, S.Failure == Never {
                               var sum = 0
                               for value in values {
                                   sum += value
                               }
                               return sum
                           }
+                          fn letOut<S: Sequence>(_ values: S) throws(S.Failure) -> Int where S.Element == Int {
+                              var sum = 0
+                              for try value in values {
+                                  sum += value
+                              }
+                              return sum
+                          }
                           fn generic(_ n: Int) -> Int {
                               return total(upTo(n)) + total(0..<n)
+                          }
+                          fn letOutOfWhatCannotFail(_ n: Int) -> Int {
+                              return letOut(upTo(n)) + letOut(stride(from: 0, to: n, by: 1)) + upTo(n).map { $0 }.count
                           }
                           fn counted(_ n: Int) -> Int {
                               return overArray(upTo(n)) + overRange(n)
@@ -95,5 +105,25 @@ public sealed class SequenceLoweringTests {
         }
 
         Assert.Equal(15L + 10L, new SilInterpreter(module).Run("M.generic", 5L));
+    }
+
+    [Fact]
+    public void GoingThroughWhatCannotFailHasNoErrorPath() {
+        var module = Lower(Source);
+
+        // 'throws(S.Failure)' and 'for try', specialised for an array and a
+        // stride, whose Failure is Never: the loop's 'next()' is a plain
+        // call, and nothing is thrown or handled, as for a loop that never
+        // said 'try'.
+        var instances = module.Functions.Where(static f => f.Name.StartsWith("M.letOut$of$", StringComparison.Ordinal)).ToList();
+        Assert.Equal(2, instances.Count);
+        foreach (var function in instances) {
+            var instructions = function.Blocks.SelectMany(static b => b.Instructions).ToList();
+            Assert.Empty(instructions.OfType<TryApplyInst>());
+            Assert.Empty(instructions.OfType<ThrowInst>());
+            Assert.Null(function.Type.Thrown);
+        }
+
+        Assert.Equal(15L + 10L + 5L, new SilInterpreter(module).Run("M.letOutOfWhatCannotFail", 5L));
     }
 }

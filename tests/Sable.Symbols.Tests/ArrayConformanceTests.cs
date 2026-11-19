@@ -25,7 +25,7 @@ public sealed class ArrayConformanceTests {
     public void EveryArrayIsASequenceOfItsElements() =>
         AssertClean(
             """
-            fn total<S: Sequence>(_ values: S) -> Int where S.Element == Int {
+            fn total<S: Sequence>(_ values: S) -> Int where S.Element == Int, S.Failure == Never {
                 var sum = 0
                 for value in values {
                     sum += value
@@ -146,7 +146,7 @@ public sealed class ArrayConformanceTests {
     public void AProtocolExtensionsMembersAreAnArrays() =>
         AssertClean(
             """
-            extension Sequence {
+            extension Sequence where Failure == Never {
                 fn doubledCount() -> Int {
                     var n = 0
                     for _ in self {

@@ -157,7 +157,7 @@ public sealed class GeneratorTests {
                         }
                     }
 
-                    extension Sequence {
+                    extension Sequence where Failure == Never {
                         fn everyOther() -> some Sequence<Element> {
                             var keep = true
                             for x in self {
@@ -204,6 +204,147 @@ public sealed class GeneratorTests {
                         }
                         for x in labelled([1, 2], lead: "n") {
                             print(x)
+                        }
+                    }
+                """
+            ).Stdout
+        );
+
+    [Fact]
+    public void AProtocolExtensionsOpaqueResultIsSpecialisedForEachConformer() =>
+        Assert.Equal(
+            "1\n3\n5\na\nc\n0\n4\n1\n3\ncaught E.Bad\n2\n16\n",
+            AssertAgree(
+                """
+                    module Test
+
+                    union E: Error { Bad }
+
+                    extension Sequence {
+                        fn everyOther() throws(Failure) -> some Sequence<Element> {
+                            var keep = true
+                            for try e in self {
+                                if keep {
+                                    yield e
+                                }
+                                keep = !keep
+                            }
+                        }
+                    }
+
+                    extension Sequence where Failure == Never {
+                        fn firstTwo() -> some Collection {
+                            return self.prefix(2)
+                        }
+                    }
+
+                    protocol Shape {
+                        fn area() -> Int
+                    }
+
+                    extension Shape {
+                        fn scaled() -> some Shape {
+                            return Square(side: self.area())
+                        }
+                    }
+
+                    struct Square: Shape {
+                        let side: Int
+                        fn area() -> Int {
+                            return side * side
+                        }
+                    }
+
+                    fn failing() throws(E) -> some Sequence<Int> {
+                        yield 1
+                        yield 2
+                        yield 3
+                        throw .Bad
+                    }
+
+                    fn main() {
+                        for x in [1, 2, 3, 4, 5].everyOther() {
+                            print(x)
+                        }
+                        for s in ["a", "b", "c"].everyOther() {
+                            print(s)
+                        }
+                        for x in (0..<6).everyOther().everyOther() {
+                            print(x)
+                        }
+                        do {
+                            for try x in failing().everyOther() {
+                                print(x)
+                            }
+                        } catch {
+                            print("caught \(error)")
+                        }
+                        print([7, 8, 9].firstTwo().count)
+                        print(Square(side: 2).scaled().area())
+                    }
+                """
+            ).Stdout
+        );
+
+    [Fact]
+    public void AGeneratorsSomeParameterIsAGenericOne() =>
+        Assert.Equal(
+            "2\n4\n6\n0\n2\n20\n1a\n1b\n2a\n2b\nx1\nx2\nfailed\n",
+            AssertAgree(
+                """
+                    module Test
+
+                    union E: Error { Bad }
+
+                    fn doubled(_ s: some Sequence<Int>) -> some Sequence<Int> {
+                        for x in s {
+                            yield x * 2
+                        }
+                    }
+
+                    fn pairs(_ a: some Sequence<Int>, _ b: some Sequence<String>) -> some Sequence<String> {
+                        for x in a {
+                            for y in b {
+                                yield "\(x)\(y)"
+                            }
+                        }
+                    }
+
+                    struct Prefixer {
+                        let lead: String
+
+                        fn prefixed(_ s: some Sequence<Int, E>) throws(E) -> some Sequence<String> {
+                            for try x in s {
+                                yield lead + "\(x)"
+                            }
+                        }
+                    }
+
+                    fn failing() throws(E) -> some Sequence<Int> {
+                        yield 1
+                        yield 2
+                        throw .Bad
+                    }
+
+                    fn main() {
+                        for x in doubled([1, 2, 3]) {
+                            print(x)
+                        }
+                        for x in doubled(0..<2) {
+                            print(x)
+                        }
+                        for x in doubled(doubled([5])) {
+                            print(x)
+                        }
+                        for p in pairs([1, 2], ["a", "b"]) {
+                            print(p)
+                        }
+                        do {
+                            for try s in Prefixer(lead: "x").prefixed(failing()) {
+                                print(s)
+                            }
+                        } catch {
+                            print("failed")
                         }
                     }
                 """

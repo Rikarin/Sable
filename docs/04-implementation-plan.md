@@ -912,7 +912,9 @@ Written so far (`tests/Sable.CodeGen.Tests/LibraryTests.cs`):
   interpreted agree to the last digit. Also `format("{} is {1}", args)`
   templates, `lines`, `trimmedStart`/`trimmedEnd`, `isBlank`,
   `removingPrefix`/`removingSuffix`, `findLast`, `occurrences` and
-  `escapedHtml`.
+  `escapedHtml`. (Since removed: the string functions are String's own
+  members, and `format`/`formatted` gave way to interpolation's format
+  specs, `"\(x:.2f)"`; `escapedHtml`, `parseInt` and `TextBuilder` stay.)
 - `Sable.Collections`: `Stack`, `Queue`, `HashSet` (a `[Element: Bool]`
   underneath, iterating in insertion order; the `HashMap` that was here
   became the built-in dictionary, docs/06 "Dictionaries and hashing"), `Deque` (a ring
@@ -1277,9 +1279,33 @@ a `defer` keeps its state in an object instead, whose deinit resumes the body
 to leave it from where it stopped — `return` there, running the pending
 defers — when the last iterator holding it goes. An async generator is the
 same with an async `next()`, which, as any async function, runs on its task's
-stack. Not yet: a generator that throws (`Iterator.next()` does not; S3484), a
-generator in a protocol's extension, and one with a `some P` parameter. This is
-the transform the stackless state machine of §2.2 item 4 would build on.
+stack. A generator that throws gives a sequence whose `Failure` is its error:
+the resume function throws, the iterator's `next()` passes the error on, and
+the throwing path stores the finished state, after the defers pending have
+run, as a return does; the generator's own call, which only captures, does
+not throw. A generator in a protocol's extension is generic over a `Self`
+of its sequence's and iterator's own, not the protocol's: a requirement
+called on the iterator (`makeIterator()`, `next()`) binds the protocol's
+Self to the iterator, and the body's Self, its associated types read through
+it, is the conformer the call names, so each call site's opaque result is
+specialised for its conformer. This is the transform the stackless state machine of §2.2 item 4
+would build on.
+
+### Throwing iteration, as implemented
+
+`Iterator.next()` is `throws(Failure)`, `Failure: Error = Never` an
+associated type of Iterator, Sequence and their async kinds, with
+`Iter.Failure == Failure`; Collection requires `Failure == Never`. A
+conformer's Failure is read off its `next()` (Never when it throws nothing),
+a sequence's off its iterator. The binder reads a call's thrown type through
+the requirements in force (`TypeEquivalence`), so `next()` over an array, or
+over S where `S.Failure == Never`, throws nothing and needs no `try`; for a
+loop through an iterator, `for try` marks `next()` as `try` would. Lowering
+is unchanged: specialised, a Never-failure `next()` is an ordinary function,
+and a throwing one a `try_apply` whose error leaves the loop. Sequence's
+algorithms are `rethrows(Failure)`: `rethrows(E)` throws what the closures
+do and E as well, read at each call, so they throw only where the sequence
+or a closure does; the lazy views' iterators throw their base's Failure.
 
 ### 4.4 Exit criteria
 

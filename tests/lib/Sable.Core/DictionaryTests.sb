@@ -66,7 +66,7 @@ fn aRepeatedKeyInALiteralKeepsTheLastValue() {
     let d: [String: Int] = ["a": 1, "b": 2, "a": 3]
     assertEqual(d.count, 2)
     assertEqual(d["a"] ?? -1, 3)
-    assert(d.keys() == ["a", "b"], "the key keeps its first place")
+    assert(d.map({ entry in entry.0 }) == ["a", "b"], "the key keeps its first place")
 }
 
 @test
@@ -127,7 +127,7 @@ fn settingAnExistingKeyChangesItsValueNotItsPlace() {
     d["a"] = 10
     assertEqual(d["a"] ?? -1, 10)
     assertEqual(d.count, 2)
-    assert(d.keys() == ["a", "b"])
+    assert(d.map({ entry in entry.0 }) == ["a", "b"])
 }
 
 @test
@@ -174,7 +174,7 @@ fn theDefaultSubscriptCounts() {
     assertEqual(counts["to"] ?? -1, 2)
     assertEqual(counts["not"] ?? -1, 1)
     assertEqual(counts["missing", default: 7], 7)
-    assert(counts.keys() == ["to", "be", "or", "not"])
+    assert(counts.map({ entry in entry.0 }) == ["to", "be", "or", "not"])
 }
 
 @test
@@ -242,7 +242,7 @@ fn removingHalfKeepsTheOtherHalfInOrder() {
         i = i + 2
     }
     assertEqual(d.count, 500)
-    let keys = d.keys()
+    let keys = d.map({ entry in entry.0 })
     assertEqual(keys[0], 1)
     assertEqual(keys[1], 3)
     assertEqual(keys[499], 999)
@@ -261,7 +261,7 @@ fn addingAndRemovingOneKeyOverAndOverStaysSmall() {
     }
     assertEqual(d.count, 3)
     assert(d.capacity <= 8, "what removed keys leave is dropped as the table is rebuilt")
-    assert(d.keys() == [0, 1, 2])
+    assert(d.map({ entry in entry.0 }) == [0, 1, 2])
 }
 
 @test
@@ -286,7 +286,7 @@ fn removedSlotsAreReusedAndDroppedOnGrowth() {
     assertEqual(d[1] ?? -1, 1)
     assert(d[2] == none)
     assertEqual(d[150] ?? -1, 150)
-    assertEqual(d.keys().count, 120)
+    assertEqual(d.map({ entry in entry.0 }).count, 120)
 }
 
 @test
@@ -294,8 +294,8 @@ fn aKeyAddedAfterRemovalsGoesLast() {
     var d: [String: Int] = ["a": 1, "b": 2, "c": 3]
     d["b"] = none
     d["b"] = 4
-    assert(d.keys() == ["a", "c", "b"])
-    assert(d.values() == [1, 3, 4])
+    assert(d.map({ entry in entry.0 }) == ["a", "c", "b"])
+    assert(d.map({ entry in entry.1 }) == [1, 3, 4])
 }
 
 // ---- Capacity -----------------------------------------------------------------
@@ -394,7 +394,7 @@ fn modifyChangesTheValueWhereItIs() {
     }
     assertEqual(tally["x"] ?? -1, 3)
     assertEqual(tally["y"] ?? -1, 1)
-    assert(tally.keys() == ["x", "y"])
+    assert(tally.map({ entry in entry.0 }) == ["x", "y"])
 }
 
 // ---- Merging and transforming -------------------------------------------------
@@ -403,7 +403,7 @@ fn modifyChangesTheValueWhereItIs() {
 fn groupingPutsEachValueUnderItsKeyInOrder() {
     let words: String[>..] = ["apple", "bean", "avocado", "beet", "cherry"]
     let byLength = Dictionary(grouping: words, by: { (word: String) -> Int in word.count })
-    assert(byLength.keys() == [5, 4, 7, 6])
+    assert(byLength.map({ entry in entry.0 }) == [5, 4, 7, 6])
     assert((byLength[4] ?? []) == ["bean", "beet"])
     assert((byLength[5] ?? []) == ["apple"])
     assert(byLength[3] == none)
@@ -431,7 +431,7 @@ fn mergeCombinesWhatBothHave() {
     assertEqual(a["x"] ?? -1, 1)
     assertEqual(a["y"] ?? -1, 12)
     assertEqual(a["z"] ?? -1, 20)
-    assert(a.keys() == ["x", "y", "z"])
+    assert(a.map({ entry in entry.0 }) == ["x", "y", "z"])
 }
 
 @test
@@ -454,7 +454,7 @@ fn mapValuesKeepsTheKeysAndTheirOrder() {
     assertEqual(text["a"] ?? "", "#1")
     assertEqual(text["c"] ?? "", "#3")
     assert(text["b"] == none)
-    assert(text.keys() == ["a", "c"])
+    assert(text.map({ entry in entry.0 }) == ["a", "c"])
 }
 
 @test
@@ -464,7 +464,7 @@ fn compactMapValuesDropsWhatMakesNothing() {
     assertEqual(numbers.count, 2)
     assertEqual(numbers["two"] ?? -1, 2)
     assert(numbers["many"] == none)
-    assert(numbers.keys() == ["one", "two"])
+    assert(numbers.map({ entry in entry.0 }) == ["one", "two"])
 }
 
 @test
@@ -480,7 +480,7 @@ fn filterKeepsWhatItSays() {
 fn retainRemovesTheRest() {
     var d = squares(10)
     d.retain(where: { (key: Int, value: Int) -> Bool in value > 20 })
-    assert(d.keys() == [5, 6, 7, 8, 9])
+    assert(d.map({ entry in entry.0 }) == [5, 6, 7, 8, 9])
     d.retain(where: { (key: Int, value: Int) -> Bool in true })
     assertEqual(d.count, 5)
     d[10] = 100
@@ -515,7 +515,7 @@ fn iterationPassesOverRemovedKeys() {
         keys.append(key)
     }
     assert(keys == [1, 2, 4])
-    assert(d.values() == [1, 4, 16])
+    assert(d.map({ entry in entry.1 }) == [1, 4, 16])
 }
 
 @test

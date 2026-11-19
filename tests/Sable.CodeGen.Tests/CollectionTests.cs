@@ -62,10 +62,10 @@ public sealed class CollectionTests {
                 let again = ages.remove("ada")
                 print("\(removed ?? -1) \(again == none ? "none" : "some") \(ages.count)")
                 var sum = 0
-                for v in ages.values() { sum = sum + v }
-                print("\(ages.keys().count) \(sum)")
+                for (_, v) in ages { sum = sum + v }
+                print("\(ages.map({ entry in entry.0 }).count) \(sum)")
                 var names = ""
-                for key in ages.keys() where key != "nobody" { names = names + key }
+                for (key, _) in ages where key != "nobody" { names = names + key }
                 print("\(total(ages) + 15) \(names.count == 9 ? "alangrace" : names)")
                 let scores: [String: Int] = ["a": 10, "b": 50, "c": 70]
                 var kept = 0
@@ -83,7 +83,7 @@ public sealed class CollectionTests {
                 print("\(ages.count) \(ages.isEmpty)")
                 var words: [String: String] = ["k": "v"]
                 let gone = words.remove("k")
-                print("\(words["k"] ?? gone ?? "none") \(words.values().count)")
+                print("\(words["k"] ?? gone ?? "none") \(words.map({ entry in entry.1 }).count)")
             """);
 
     [Fact]

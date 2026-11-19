@@ -957,41 +957,18 @@ public sealed partial class SilGen {
         return self.Concat(owner?.TypeParameters ?? []).Concat(symbol.TypeParameters).Concat(OpaqueParametersOf(symbol));
     }
 
-    /// <summary>The type parameter standing for each distinct <c>some P</c> a function's parameters have.</summary>
-    static readonly System.Runtime.CompilerServices.ConditionalWeakTable<FunctionSymbol, TypeParameterSymbol[]> s_opaqueParameters = new();
-
-    /// <summary>The <c>some P</c> each of those type parameters stands in for.</summary>
-    static readonly System.Runtime.CompilerServices.ConditionalWeakTable<TypeParameterSymbol, OpaqueTypeSymbol> s_opaqueOf = new();
-
     /// <summary>
-    ///     A parameter of type <c>some P</c> is an anonymous generic parameter
-    ///     (docs/03 §3.1): each distinct one has a type parameter here, which a
-    ///     call binds to its argument's type, so the function is monomorphised
-    ///     as a generic one is. The binder gives two <c>some P</c> of the same
-    ///     P one type, so they share one parameter.
+    ///     The type parameter standing for each distinct <c>some P</c> a
+    ///     function's parameters have (<see cref="FunctionSymbol.OpaqueTypeParameters" />).
     /// </summary>
-    static TypeParameterSymbol[] OpaqueParametersOf(FunctionSymbol symbol) =>
-        s_opaqueParameters.GetValue(symbol, static function => {
-            var opaques = new List<OpaqueTypeSymbol>();
-            foreach (var parameter in function.Parameters) {
-                if (parameter.Type is OpaqueTypeSymbol opaque && !opaques.Contains(opaque)) {
-                    opaques.Add(opaque);
-                }
-            }
-
-            return [..opaques.Select((opaque, i) => {
-                var parameter = new TypeParameterSymbol(opaque.ToDisplayString(), function, null, -1 - i);
-                s_opaqueOf.Add(parameter, opaque);
-                return parameter;
-            })];
-        });
+    static ImmutableArray<TypeParameterSymbol> OpaqueParametersOf(FunctionSymbol symbol) => symbol.OpaqueTypeParameters;
 
     /// <summary>A type with these type arguments in force, a <c>some P</c> parameter's type among them.</summary>
     /// <remarks>A <c>some P</c> result or local is what it hides: code is generated for the concrete type.</remarks>
     internal static TypeSymbol Substitute(TypeSubstitution substitution, TypeSymbol type) {
         TypeSymbol? StandsFor(OpaqueTypeSymbol opaque) {
             foreach (var parameter in substitution.Parameters) {
-                if (s_opaqueOf.TryGetValue(parameter, out var standsFor) && standsFor.Equals(opaque)) {
+                if (parameter.OpaqueParameter is { } standsFor && standsFor.Equals(opaque)) {
                     return substitution.Lookup(parameter)!;
                 }
             }
@@ -1553,8 +1530,10 @@ public sealed partial class SilGen {
         }
 
         // 'throws(E)' with E as Never cannot throw: it is an ordinary function.
+        // Nor does a generator's call, which only captures: its 'next()' throws.
         SilType? thrown = null;
-        if (symbol.ThrownType is { } thrownSymbol && !Substitute(substitution, thrownSymbol).Equals(Core.Never)) {
+        var isGeneratorCall = _compilation.GetGenerator(symbol) is { } yielding && ReferenceEquals(yielding.Function, symbol);
+        if (symbol.ThrownType is { } thrownSymbol && !isGeneratorCall && !Substitute(substitution, thrownSymbol).Equals(Core.Never)) {
             if (Lower(thrownSymbol) is not { } thrownType) {
                 return Unsupported<FunctionType>(at, $"'{symbol.Name}', which throws '{thrownSymbol.ToDisplayString()}'");
             }
@@ -3902,8 +3881,7 @@ public sealed partial class SilGen {
     }
 
     T? Unsupported<T>(SyntaxNode at, string what) where T : class {
-        _diagnostics.Error(ErrorCode.ERR_NotLoweredYet, at.Span, $"SIL lowering does not handle {what} yet");
-        return null;
+        _diagnostics.Error(ErrorCode.ERR_NotLoweredYet, at.Span, $"SIL lowering does not handle {what} yet");        return null;
     }
 
     // =======================================================================
@@ -5724,7 +5702,18 @@ public sealed partial class SilGen {
 
                 // 'if let x = e': matched when e holds a value, which x then is.
                 case BoundConditionBinding { Local: { } local } binding: {
-                    if (Expression(binding.Source) is not { } optional || SlotFor(local, binding.Syntax) is null) {
+                    // The slot ends with its scope before the source runs: in
+                    // 'while let x = try it.next()', an error from the second
+                    // 'next()' leaves with the first x still in the slot.
+                    if (SlotFor(local, binding.Syntax) is not { } bindingSlot) {
+                        return;
+                    }
+
+                    if (!_boxed.Contains(local)) {
+                        EndsWithScope(bindingSlot);
+                    }
+
+                    if (Expression(binding.Source) is not { } optional) {
                         return;
                     }
 
@@ -9233,14 +9222,27 @@ public sealed partial class SilGen {
             return thrown.Count > 0;
         }
 
+        /// <summary>True for an error type that, here, has no values: Never, or a union of nothing else.</summary>
+        bool ThrowsNothing(TypeSymbol thrown) =>
+            thrown.Equals(Core.Never) || thrown is StructuralUnionTypeSymbol union && union.Cases.All(c => c.Equals(Core.Never));
+
         void CollectThrown(BoundNode node, List<TypeSymbol> into) {
             switch (node) {
                 // A 'rethrows' callee throws what its arguments do, not all its signature allows.
+                // So does a 'rethrows(E)' one, and E as well.
                 case BoundCall { Function.IsRethrows: true } rethrowing:
                     if (RethrownBy(rethrowing) is { } rethrown) {
                         into.Add(Sub(rethrowing.Substitution.Apply(rethrown)));
                     }
 
+                    if (rethrowing.Function.RethrownAlso is { } also) {
+                        into.Add(Sub(rethrowing.Substitution.Apply(also)));
+                    }
+
+                    break;
+
+                // A generator's call captures; its 'next()' is what throws.
+                case BoundCall call when generator._compilation.GetGenerator(call.Function) is { } yielding && ReferenceEquals(yielding.Function, call.Function):
                     break;
 
                 case BoundCall { Function.ThrownType: { } thrown } call:
@@ -9627,7 +9629,10 @@ public sealed partial class SilGen {
                 : Emit(new FunctionRefInst(name, type));
             // A 'rethrows' callee given functions that throw nothing throws
             // nothing: the binder asked for no 'try', and nothing handles it.
-            return Invoke(code, type, arguments, borrows, call.Syntax, cannotThrow: callee.IsRethrows && RethrownBy(call) is null);
+            // Nor does a 'rethrows(E)' one whose E is Never here.
+            return Invoke(code, type, arguments, borrows, call.Syntax,
+                cannotThrow: callee.IsRethrows && RethrownBy(call) is null
+                             && (callee.RethrownAlso is not { } also || ThrowsNothing(Sub(call.Substitution.Apply(also)))));
         }
 
         /// <summary>
@@ -9760,7 +9765,7 @@ public sealed partial class SilGen {
 
             // A 'some P' parameter stands for the type of what is passed to it.
             foreach (var opaque in OpaqueParametersOf(callee)) {
-                var standsFor = s_opaqueOf.TryGetValue(opaque, out var found) ? found : null;
+                var standsFor = opaque.OpaqueParameter;
                 foreach (var (parameter, argument) in callee.Parameters.Zip(call.Arguments)) {
                     if (!parameter.Type.Equals(standsFor)) {
                         continue;

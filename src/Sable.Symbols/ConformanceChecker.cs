@@ -577,7 +577,11 @@ internal static class ConformanceChecker {
                             wanted.IsStatic == given.IsStatic
                             && wanted.Parameters.Length == given.Parameters.Length
                             && wanted.Parameters.Zip(given.Parameters).All(p => TypeSubstitution.Unify(p.First.Type, view.Apply(p.Second.Type), inferrable, map))
-                            && TypeSubstitution.Unify(wanted.ReturnType, view.Apply(given.ReturnType), inferrable, map),
+                            && TypeSubstitution.Unify(wanted.ReturnType, view.Apply(given.ReturnType), inferrable, map)
+                            // 'next() throws(IoError)' makes Failure an IoError;
+                            // one that throws nothing leaves it to its default, Never.
+                            && (wanted.ThrownType is null || given.ThrownType is null
+                                || TypeSubstitution.Unify(wanted.ThrownType, view.Apply(given.ThrownType), inferrable, map)),
                         (FieldSymbol { IsAbstract: true } wanted, FieldSymbol given) =>
                             TypeSubstitution.Unify(wanted.Type, view.Apply(given.Type), inferrable, map),
                         _ => false,

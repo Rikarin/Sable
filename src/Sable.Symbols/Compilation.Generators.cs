@@ -40,7 +40,10 @@ public sealed class GeneratorSymbols {
         FunctionSymbol function,
         GeneratorKind kind,
         TypeSymbol element,
+        TypeSymbol bodyElement,
+        TypeSymbol? bodyThrown,
         ImmutableArray<TypeParameterSymbol> typeParameters,
+        ImmutableArray<TypeParameterSymbol> bodyTypeParameters,
         NamedTypeSymbol? sequenceType,
         NamedTypeSymbol iteratorType,
         FunctionSymbol? makeIterator,
@@ -49,7 +52,10 @@ public sealed class GeneratorSymbols {
         Function = function;
         Kind = kind;
         Element = element;
+        BodyElement = bodyElement;
+        BodyThrown = bodyThrown;
         TypeParameters = typeParameters;
+        BodyTypeParameters = bodyTypeParameters;
         SequenceType = sequenceType;
         IteratorType = iteratorType;
         MakeIterator = makeIterator;
@@ -64,8 +70,34 @@ public sealed class GeneratorSymbols {
     /// <summary>What each <c>yield</c> gives, in terms of <see cref="TypeParameters" />.</summary>
     public TypeSymbol Element { get; }
 
+    /// <summary>What each <c>yield</c> gives, as the body names it: in terms of <see cref="BodyTypeParameters" />.</summary>
+    public TypeSymbol BodyElement { get; }
+
+    /// <summary>What the body may throw, as it names it: what <see cref="Next" /> throws, in terms of <see cref="BodyTypeParameters" />.</summary>
+    public TypeSymbol? BodyThrown { get; }
+
     /// <summary>Every type parameter the body may name: the sequence's and the iterator's own.</summary>
     public ImmutableArray<TypeParameterSymbol> TypeParameters { get; }
+
+    /// <summary>
+    ///     What the body names for each of <see cref="TypeParameters" />: the
+    ///     same, but for a protocol's <c>Self</c>, which the sequence and the
+    ///     iterator have a parameter of their own for. A call of a protocol's
+    ///     requirement on them binds the protocol's Self to them, and theirs
+    ///     is the conforming type their generator was called on.
+    /// </summary>
+    public ImmutableArray<TypeParameterSymbol> BodyTypeParameters { get; }
+
+    /// <summary>What <see cref="TypeParameters" /> stand for where the body is: <see cref="BodyTypeParameters" />, for a construction of its types.</summary>
+    public TypeSubstitution BodySubstitution(NamedTypeSymbol construction) {
+        var map = new Dictionary<TypeParameterSymbol, TypeSymbol>();
+        for (var i = 0; i < TypeParameters.Length && i < construction.TypeArguments.Length; i++) {
+            map[TypeParameters[i]] = construction.TypeArguments[i];
+            map[BodyTypeParameters[i]] = construction.TypeArguments[i];
+        }
+
+        return new(map);
+    }
 
     /// <summary>The sequence a call makes; null for an iterator generator, whose call makes the iterator.</summary>
     public NamedTypeSymbol? SequenceType { get; }
@@ -81,8 +113,12 @@ public sealed class GeneratorSymbols {
 
     public bool IsAsync => Kind is GeneratorKind.AsyncSequence or GeneratorKind.AsyncIterator;
 
-    /// <summary>What a call gives: the sequence, or the iterator, of the generator's own type parameters.</summary>
-    public NamedTypeSymbol Result => TypeBinder.OwnConstruction(SequenceType ?? IteratorType);
+    /// <summary>
+    ///     What a call gives: the sequence, or the iterator, of the type
+    ///     parameters the body names — for one in a protocol's extension, of
+    ///     the protocol's Self, which the call says is what it was called on.
+    /// </summary>
+    public NamedTypeSymbol Result => (SequenceType ?? IteratorType).Construct([..BodyTypeParameters.Cast<TypeSymbol>()]);
 }
 
 public sealed partial class Compilation {
@@ -118,19 +154,28 @@ public sealed partial class Compilation {
     }
 
     /// <summary>The generator a function's body makes it, made once: its types and their members.</summary>
-    internal GeneratorSymbols DeclareGenerator(FunctionSymbol function, GeneratorKind kind, TypeSymbol element) {
+    internal GeneratorSymbols DeclareGenerator(FunctionSymbol function, GeneratorKind kind, TypeSymbol element, TypeSymbol? thrown) {
         lock (_generatorLock) {
             if (_generators.TryGetValue(function, out var existing)) {
                 return existing;
             }
 
-            var typeParameters = GeneratorTypeParameters(function);
+            var bodyTypeParameters = GeneratorTypeParameters(function);
+            var bodyElement = element;
+            var bodyThrown = thrown;
+            var typeParameters = bodyTypeParameters;
 
             // In a protocol's extension the body names the protocol's
             // associated types bare; through the iterator they are Self's.
-            if (typeParameters is [{ ContainingSymbol: NamedTypeSymbol { TypeKind: TypeKind.Protocol } owner } self, ..]
+            // That Self is a parameter of the iterator's own, not the
+            // protocol's, which a requirement called on the iterator binds.
+            if (bodyTypeParameters is [{ ContainingSymbol: NamedTypeSymbol { TypeKind: TypeKind.Protocol } owner } self, ..]
                 && ReferenceEquals(owner.SelfTypeParameter, self)) {
-                element = AssociatedTypes.ThroughBase(owner, self).Apply(element);
+                var own = new TypeParameterSymbol("Self", function, null, 0) { Constraints = [owner, ..self.Constraints] };
+                typeParameters = typeParameters.SetItem(0, own);
+                var throughOwn = AssociatedTypes.ThroughBase(owner, own);
+                element = throughOwn.Apply(element);
+                thrown = thrown is null ? null : throughOwn.Apply(thrown);
             }
             var module = ModuleOf(function);
             var position = function.DeclaringSyntax.FirstOrDefault()?.Span.Start ?? _generatorList.Count;
@@ -150,7 +195,7 @@ public sealed partial class Compilation {
             };
             var optional = new OptionalTypeSymbol(element);
             next.ReturnTypeResolver = () => optional;
-            next.ThrownTypeResolver = () => function.ThrownType;
+            next.ThrownTypeResolver = () => thrown;
             iterator.AddMember(next);
 
             NamedTypeSymbol? sequence = null;
@@ -169,7 +214,7 @@ public sealed partial class Compilation {
                 sequence.AddMember(makeIterator);
             }
 
-            var generator = new GeneratorSymbols(function, kind, element, typeParameters, sequence, iterator, makeIterator, next);
+            var generator = new GeneratorSymbols(function, kind, element, bodyElement, bodyThrown, typeParameters, bodyTypeParameters, sequence, iterator, makeIterator, next);
             _generators[function] = generator;
             _generatorParts[iterator] = generator;
             _generatorParts[next] = generator;
@@ -233,8 +278,10 @@ public sealed partial class Compilation {
         var parameters = new List<TypeParameterSymbol>();
         for (var current = (Symbol?)function; current is not null; current = current.ContainingSymbol) {
             switch (current) {
+                // A 'some P' parameter is a generic one: the sequence holds
+                // what the call was given, of whatever type that is.
                 case FunctionSymbol enclosing:
-                    parameters.InsertRange(0, enclosing.TypeParameters);
+                    parameters.InsertRange(0, [..enclosing.TypeParameters, ..enclosing.OpaqueTypeParameters]);
                     continue;
 
                 case FieldSymbol:

@@ -29,7 +29,7 @@ public sealed class CollectionLibraryTests {
                     print("\(d.removeFirst() ?? "-") \(d.removeLast() ?? "-") \(d.count)")
                     d.set(0, "zero")
                     var line = ""
-                    for s in d.elements() { line = line + s + " " }
+                    for s in d { line = line + s + " " }
                     print(line)
                     d.removeAll()
                     print("\(d.count) \(d.removeFirst() ?? "none") \(d.last ?? "none") \(d.isEmpty)")
@@ -182,7 +182,7 @@ public sealed class CollectionLibraryTests {
                     print("\(o.remove("two") ?? 0) \(o.count) \(o.key(at: 1)) \(o.index(of: "three") ?? -1) \(o.get("one") ?? 0)")
                     o.set("four", 4)
                     var line = ""
-                    for k in o.keys() { line = line + k + " " }
+                    for (k, _) in o { line = line + k + " " }
                     print(line)
                     line = ""
                     var i = 0
@@ -213,7 +213,7 @@ public sealed class CollectionLibraryTests {
                     let n = b.intersection(c)
                     print("\(u.count) \(n.count) \(b.subtracting(c).count) \(n.isSubset(of: b)) \(b.isSubset(of: n))")
                     var line = ""
-                    for e in u.elements() { line = line + "\(e) " }
+                    for e in u { line = line + "\(e) " }
                     print(line)
                     print("\(b.remove(64)) \(b.count) \(b.contains(-1))")
                 }

@@ -78,8 +78,8 @@ extension MutableCollection {
 
 extension RangeReplaceableCollection {
     /// The sequence's elements, added at the end in order.
-    public mutating fn append<S: Sequence>(contentsOf elements: S) where S.Element == Element {
-        for element in elements {
+    public mutating fn append<S: Sequence>(contentsOf elements: S) throws(S.Failure) where S.Element == Element {
+        for try element in elements {
             self.append(element: element)
         }
     }

@@ -285,15 +285,27 @@ for x in evens(upTo: 6) { print(x) }    // 0 2 4 6
 let squares: some Sequence<Int> = { () -> some Sequence<Int> in
     for i in 0..<10 { yield i * i }
 }()
+
+extension Sequence {                     // for every sequence, each its own
+    fn everyOther() throws(Failure) -> some Sequence<Element> {
+        var keep = true
+        for try e in self {
+            if keep { yield e }
+            keep = !keep
+        }
+    }
+}
 ```
 
 - **Lazy.** Calling it runs nothing: it captures its arguments (and `self`)
   by value. The body runs a step at a time, as `next()` asks for each
   element; each `makeIterator()` starts it afresh. An `inout` or `out`
   parameter is an error (S3483) — the call has returned before the body runs.
-- **Throwing.** An error would come out of `next()`, and `Iterator`'s
-  `next()` does not throw, so a generator cannot be `throws` (S3484): its body
-  catches what it calls, or yields what each step made of it (`Outcome<T, E>`).
+- **Throwing.** A generator declared `throws(E)` (bare `throws`: `any
+  Error`) gives a sequence whose `Failure` is E: an error its body throws
+  comes out of `next()`, so going through it is `for try`. Its call only
+  captures, and throws nothing. Once it has thrown it is finished, its
+  pending defers run, and `next()` gives none.
 - **`defer`.** A `defer` runs as its scope is left, which may be when the
   generator finishes or when its iterator is dropped before it does — C#'s
   `finally` on `Dispose`. A `defer` body cannot `yield` (S3481).
@@ -883,6 +895,7 @@ for item in collection { }
 for (k, v) in dictionary { }
 for i in stride(from: 0, to: 100, by: 5) { }
 for item in collection where item.isActive { }
+for try line in file.lines() { }      // a sequence that may fail as it goes
 
 outer: for i in rows {
     for j in cols {
@@ -1256,7 +1269,47 @@ whose value replaces the failed expression, or an expression after `catch`.
   `any Error` reaches them (`error.description()`, `error.source`) and is an
   `any Debug`. Any type may still be thrown; one that is not an Error is
   described by what it is.
-- `rethrows` means "throws iff a closure parameter throws".
+- `rethrows` means "throws iff a closure parameter throws". `rethrows(E)`
+  throws E as well: a Sequence algorithm is `rethrows(Failure)`, throwing what
+  its closures throw and what going through the sequence throws, so over an
+  array with closures that cannot throw it needs no `try`.
+
+### Throwing iteration
+
+`Iterator` and `Sequence` (and their async kinds) have a `Failure`, what
+going through them may throw, Never unless an iterator's `next()` throws:
+`mutating fn next() throws(Failure) -> Element?`. A loop over a sequence
+whose Failure is not Never is `for try` (`for try await`), and leaves with
+the error as a `try` would; a missing `try` is an error (S3032), as on a
+call. Arrays, ranges, collections and generators that do not throw cost
+nothing and need none.
+
+```sable
+fn parse(_ path: String) throws(IoError) -> some Sequence<Record> {
+    for line in try read(path).split(separator: "\n") {
+        yield try Record(line)
+    }
+}
+
+for try record in parse("a.csv") { use(record) }
+let names = try parse("a.csv").map { $0.name }     // rethrows(Failure)
+
+fn total<S: Sequence>(_ s: S) throws(S.Failure) -> Int where S.Element == Int {
+    var sum = 0
+    for try x in s { sum += x }
+    return sum
+}
+fn quiet<S: Sequence>(_ s: S) -> Int where S.Element == Int, S.Failure == Never {
+    var sum = 0
+    for x in s { sum += x }
+    return sum
+}
+```
+
+`some Sequence<T>` says Failure is Never — an associated type with a default
+that a `some P<…>` leaves out is that default — and `some Sequence<T, E>`
+says it is E; in a generator's result, a Failure left out is what the
+generator throws. A `Collection` cannot fail.
 - Error conversion between types requires a `From` conformance, applied
   implicitly at the `try` site.
 - `defer` blocks run on the throwing path.
@@ -1316,7 +1369,8 @@ the enclosing scope.
 - `Sendable` is a protocol; crossing an isolation boundary requires it, checked
   at compile time.
 - `@MainActor` pins a declaration to the main executor.
-- `for await x in stream { }` iterates an `AsyncSequence`.
+- `for await x in stream { }` iterates an `AsyncSequence`; `for try await`
+  one whose Failure is not Never.
 
 ---
 

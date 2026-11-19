@@ -777,6 +777,7 @@
 
   <Node Name="ForStatementSyntax" Base="StatementSyntax" Kind="ForStatement">
     <Field Name="ForKeyword" Type="Token" />
+    <Field Name="TryKeyword" Type="Token" Optional="true" />
     <Field Name="AwaitKeyword" Type="Token" Optional="true" />
     <Field Name="Pattern" Type="PatternSyntax" />
     <Field Name="InKeyword" Type="Token" />

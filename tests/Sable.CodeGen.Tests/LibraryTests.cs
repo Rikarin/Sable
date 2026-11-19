@@ -94,16 +94,16 @@ module P
 import Sable.Text
 @main
 fn main() {
-    print(repeating("ab", 3))
-    print(joined(["a", "b", "c"], separator: ", "))
-    print(reversed("héllo"))
-    print("\(hasPrefix("swift", "sw")) \(hasSuffix("swift", "ft")) \(contains("haystack", "st"))")
-    print(find("banana", "nan") ?? -1)
-    print(replacing("a-b-c", "-", with: "+"))
-    print(joined(splitting("1,,2", by: ","), separator: "|"))
-    print(paddedLeft("7", to: 3, with: '0'))
-    print(paddedRight("ab", to: 4, with: '.') + "|")
-    print(uppercased("Hello, World") + " " + lowercased("ABC"))
+    print("ab".repeated(3))
+    print(["a", "b", "c"].joined(separator: ", "))
+    print("héllo".reversed())
+    print("\("swift".hasPrefix("sw")) \("swift".hasSuffix("ft")) \("haystack".contains("st"))")
+    print("banana".count(of: "an"))
+    print("a-b-c".replacing("-", with: "+"))
+    print(("1,,2".split(",")).joined(separator: "|"))
+    print("7".paddedStart(toWidth: 3, with: '0'))
+    print("ab".paddedEnd(toWidth: 4, with: '.') + "|")
+    print("Hello, World".asciiUppercased() + " " + "ABC".asciiLowercased())
     let b = TextBuilder()
     b.append("x")
     b.appendLine("y")
@@ -139,7 +139,7 @@ fn main() {
     print("\(m.count) \(m["to"] ?? 0) \(m["not"] ?? 0) \(m.contains("xyz"))")
     print(m.remove("or") != none)
     var keys = ""
-    for k in m.keys() {
+    for (k, _) in m {
         keys = keys + k + " "
     }
     print(keys)
@@ -543,7 +543,7 @@ fn main() {
                         print("error")
                     }
                     let words = Stack<String>()
-                    words.push(joined(["a", "b"], separator: "-"))
+                    words.push(["a", "b"].joined(separator: "-"))
                 }
                 """).Stdout
         );
@@ -689,14 +689,14 @@ fn main() {
                 @main
                 fn main() {
                     let empty: String[>..] = []
-                    print("[" + joined(empty, separator: "·") + "]")
-                    print("[" + joined(["a"], separator: "·") + "]")
-                    print("[" + joined(["a", "b", "é"], separator: "·") + "]")
+                    print("[" + empty.joined(separator: "·") + "]")
+                    print("[" + ["a"].joined(separator: "·") + "]")
+                    print("[" + ["a", "b", "é"].joined(separator: "·") + "]")
                     var many: String[>..] = []
                     for i in 0..<5000 {
                         many.append("abc")
                     }
-                    let all = joined(many, separator: "·")
+                    let all = many.joined(separator: "·")
                     print("\(all.count - 4999) \(all.count - 15000)")
                     let builder = TextBuilder()
                     builder.append("x")

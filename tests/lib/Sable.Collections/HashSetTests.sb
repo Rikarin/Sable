@@ -16,12 +16,39 @@ fn hashSetKeepsOneOfEach() {
 }
 
 @test
-fn anEmptySetContainsNothing() {
-    let members = HashSet<String>()
-    assert(members.isEmpty)
-    assertEqual(members.count, 0)
-    assert(!members.contains("a"))
-    assert(!members.remove("a"))
+fn anEmptySetHasNothing() {
+    let empty = HashSet<String>()
+    assert(empty.isEmpty)
+    assertEqual(empty.count, 0)
+    assert(!empty.contains("a"))
+    assert(!empty.remove("a"), "nothing is removed from an empty set")
+}
+
+@test
+fn aRemovedValueIsGoneAndCanComeBack() {
+    let words = HashSet<String>()
+    assert(words.insert("one"))
+    assert(words.insert("two"))
+    assert(words.contains("one"))
+    assert(words.remove("one"))
+    assert(!words.contains("one"), "a removed value is gone")
+    assert(!words.remove("one"), "a value is removed once")
+    assertEqual(words.count, 1)
+    assert(words.insert("one"), "a removed value can be added again")
+    assert(!words.isEmpty)
+}
+
+@test
+fn elementsComeInTheOrderTheyWereAdded() {
+    let seen = HashSet<Int>()
+    for n in [3, 1, 2, 1, 3] {
+        seen.insert(n)
+    }
+    let elements = seen.elements()
+    assertEqual(elements.count, 3)
+    assertEqual(elements[0], 3)
+    assertEqual(elements[1], 1)
+    assertEqual(elements[2], 2)
 }
 
 @test

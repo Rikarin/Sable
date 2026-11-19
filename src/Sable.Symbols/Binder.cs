@@ -626,7 +626,7 @@ public sealed partial class Binder {
     ///     constrained to the protocol: it has the protocol's operators and
     ///     static members, as a T constrained to it has.
     /// </summary>
-    static TypeSymbol SelfTypeOf(NamedTypeSymbol type) => type.ExtendedArray ?? type.SelfTypeParameter ?? (TypeSymbol)TypeBinder.OwnConstruction(type);
+    static TypeSymbol SelfTypeOf(NamedTypeSymbol type) => type.SelfTypeParameter ?? type.ExtendedSelf;
 
     NamedTypeSymbol? EnclosingType() {
         for (var symbol = _containingSymbol; symbol is not null; symbol = symbol.ContainingSymbol) {
@@ -2068,10 +2068,11 @@ public sealed partial class Binder {
 
     /// <summary>
     ///     A type 'for' goes through directly, with no iterator: an array, a
-    ///     dictionary, a range — and an error, already reported.
+    ///     range — and an error, already reported. A dictionary is a
+    ///     Sequence of its entries, like any other.
     /// </summary>
     bool IsKnownSequence(TypeSymbol type) =>
-        type.IsError || type is ArrayTypeSymbol || DictionaryTypes(type) is not null
+        type.IsError || type is ArrayTypeSymbol
         || type is NamedTypeSymbol named && Core.IsAnyRange(named);
 
     /// <summary>How a loop goes through a sequence by its iterator.</summary>
@@ -2170,18 +2171,6 @@ public sealed partial class Binder {
     }
 
     /// <summary>What a <c>for … in</c> yields, for the sequences understood so far.</summary>
-    /// <summary>
-    ///     A dictionary's key and value types: a <c>[Key: Value]</c>'s, or,
-    ///     inside <c>extension Dictionary</c>, where <c>self</c> is the type
-    ///     itself, its parameters.
-    /// </summary>
-    (TypeSymbol Key, TypeSymbol Value)? DictionaryTypes(TypeSymbol type) =>
-        type is NamedTypeSymbol named && named.OriginalDefinition.Equals(Core.Dictionary)
-            ? named.TypeArguments is [var key, var value] ? (key, value)
-            : named.TypeArguments.IsEmpty && named.TypeParameters is [var keyParameter, var valueParameter] ? (keyParameter, valueParameter)
-            : null
-            : null;
-
     TypeSymbol ElementTypeOf(TypeSymbol sequence, SyntaxNode syntax) {
         if (sequence.IsError) {
             return ErrorTypeSymbol.Instance;
@@ -2189,11 +2178,6 @@ public sealed partial class Binder {
 
         if (sequence is ArrayTypeSymbol array) {
             return array.ElementType;
-        }
-
-        // A dictionary yields its entries, each key with its value.
-        if (DictionaryTypes(sequence) is var (key, value)) {
-            return new TupleTypeSymbol([key, value], [null, null]);
         }
 
         if (sequence is NamedTypeSymbol named && Core.IsAnyRange(named)) {
@@ -3332,6 +3316,19 @@ public sealed partial class Binder {
         var optionalChain = false;
 
         if (receiverType is OptionalTypeSymbol optional) {
+            // The optional's own members, lib/Sable.Core/Optional.sb's, are
+            // reached with '.': 'p.map(f)' maps the optional, where 'p?.map'
+            // would map what it holds.
+            if (syntax.OperatorToken.Kind != SyntaxKind.QuestionDotToken
+                && LookupMember(optional, name) is { } own) {
+                var ownMembers = own.Members.Where(static m => !IsStaticMember(m)).ToList();
+                if (ownMembers.Count > 0) {
+                    return CheckAccessible(ownMembers[0], syntax.Name)
+                        ? BindMemberGroup(syntax, receiver, ownMembers, own.Owner, own.Substitution)
+                        : new BoundError(syntax, receiver);
+                }
+            }
+
             // Optionality is in the type system, so reaching through it is
             // written down: 'p?.x', not 'p.x'. docs/03 §3.7.
             if (syntax.OperatorToken.Kind != SyntaxKind.QuestionDotToken) {
@@ -3737,6 +3734,10 @@ public sealed partial class Binder {
                 }
 
                 return null;
+
+            // An optional's members are Optional's, its Wrapped what it holds.
+            case OptionalTypeSymbol optional:
+                return LookupMemberCore(Core.Optional.Construct([optional.UnderlyingType]), name, outer, visited, selfType);
 
             case OpaqueTypeSymbol opaque:
                 return LookupMemberCore(opaque.Constraint, name, outer, visited, selfType, wanted);
@@ -4570,6 +4571,12 @@ public sealed partial class Binder {
     ///     is visible there, not at the call. Its diagnostics were reported
     ///     once, with the declaration, so they are not reported again here.
     /// </summary>
+    /// <remarks>
+    ///     A default that is a place in the source alone — <c>#file</c>,
+    ///     <c>#line</c>, <c>#column</c>, <c>#function</c> — is the call's
+    ///     place instead, as Swift has it: that is how <c>precondition</c>
+    ///     and <c>fatalError</c> say where they were called from.
+    /// </remarks>
     BoundExpression? DefaultArgument(SyntaxNode call, ParameterSymbol parameter, TypeSubstitution substitution) {
         if (MemberwiseField(parameter) is { } field) {
             return FieldDefault(call, field, substitution.Apply(parameter.Type));
@@ -4579,6 +4586,11 @@ public sealed partial class Binder {
             || _compilation.FileScopeOf(syntax) is not { } scope
             || parameter.ContainingSymbol is not { } container) {
             return null;
+        }
+
+        if (clause.Value is BuiltinExpressionSyntax { NameToken.Text: var name } && name is "file" or "line" or "column" or "function") {
+            var type = name is "line" or "column" ? Core.Int : Core.String;
+            return Convert(new BoundBuiltin(call, type, name), substitution.Apply(parameter.Type), call);
         }
 
         if (AlreadyDefaulting(call, parameter.Name, syntax)) {
@@ -5232,11 +5244,6 @@ public sealed partial class Binder {
             return new BoundIndexAccess(syntax, array.ElementType, receiver, indices);
         }
 
-        if (DictionaryTypes(receiver.Type) is var (key, value)) {
-            indices = CheckIndices(indices, key, syntax);
-            return new BoundIndexAccess(syntax, new OptionalTypeSymbol(value), receiver, indices);
-        }
-
         // A type may declare its own indexing with 'subscript'.
         if (LookupMember(receiver.Type, "subscript") is { } found) {
             var group = new BoundFunctionGroup(syntax, receiver, [..found.Members.OfType<FunctionSymbol>()]) {
@@ -5562,7 +5569,7 @@ public sealed partial class Binder {
         var returnType =
             returnTypeSyntax is { } declaredReturn
                 ? _compilation.TypeBinder.BindType(declaredReturn, symbol, _scope)
-                : expected is not null && !IsOpen(expected.ReturnType)
+                : expected is not null && !MentionsOpen(expected.ReturnType)
                     ? expected.ReturnType
                     : null;
 
@@ -5924,6 +5931,22 @@ public sealed partial class Binder {
     /// <summary>True for a type inference has not settled yet.</summary>
     bool IsOpen(TypeSymbol type) => type is TypeParameterSymbol parameter && _openTypeParameters.Contains(parameter);
 
+    /// <summary>
+    ///     True for a type with one inference has not settled in it: a
+    ///     closure for <c>(T) -&gt; U?</c> gives what its body gives, from which
+    ///     U is inferred, as one for <c>(T) -&gt; U</c> does.
+    /// </summary>
+    bool MentionsOpen(TypeSymbol type) =>
+        type switch {
+            TypeParameterSymbol => IsOpen(type),
+            NamedTypeSymbol named => named.TypeArguments.Any(MentionsOpen),
+            OptionalTypeSymbol optional => MentionsOpen(optional.UnderlyingType),
+            ArrayTypeSymbol array => MentionsOpen(array.ElementType),
+            TupleTypeSymbol tuple => tuple.ElementTypes.Any(MentionsOpen),
+            FunctionTypeSymbol function => function.ParameterTypes.Any(MentionsOpen) || MentionsOpen(function.ReturnType),
+            _ => false,
+        };
+
     /// <summary>Looks through an alias or an optional for a function type.</summary>
     static TypeSymbol? Expand(TypeSymbol? type) =>
         type switch {
@@ -5953,9 +5976,9 @@ public sealed partial class Binder {
         TypeSymbol? expectedKey = null;
         TypeSymbol? expectedValue = null;
 
-        expectedType = TheCaseOf(expectedType, t => t is NamedTypeSymbol named && named.OriginalDefinition.Equals(Core.Dictionary));
+        expectedType = TheCaseOf(expectedType, Core.IsDictionary);
         if (expectedType is NamedTypeSymbol wanted
-            && wanted.OriginalDefinition.Equals(Core.Dictionary)
+            && Core.IsDictionary(wanted)
             && wanted.TypeArguments.Length == 2) {
             expectedKey = wanted.TypeArguments[0];
             expectedValue = wanted.TypeArguments[1];
@@ -5990,9 +6013,19 @@ public sealed partial class Binder {
             return new BoundError(syntax);
         }
 
+        if (Core.Dictionary is not { } dictionary) {
+            _diagnostics.Error(ErrorCode.ERR_NotAType, syntax.Span, "a dictionary needs Sable.Core's 'Dictionary', which is not here");
+            return new BoundError(syntax);
+        }
+
+        // Its key must be Hashable, as '[Key: Value]' written out asks: a
+        // key type the context gave was checked where it was written.
+        if (expectedKey is null) {
+            _compilation.TypeBinder.CheckTypeArguments(dictionary, [keyType, valueType], syntax.Span, _containingSymbol);
+        }
         return Record(
             syntax,
-            new BoundDictionary(syntax, Core.Dictionary.Construct([keyType, valueType]), entries.ToImmutable())
+            new BoundDictionary(syntax, dictionary.Construct([keyType, valueType]), entries.ToImmutable())
         );
     }
 

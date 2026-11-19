@@ -10,7 +10,9 @@ public fn describePosition(_ at: Position) -> String {
     return "line \(at.line), column \(at.column)"
 }
 
-public union ParseError {
+/// Why a JSON text could not be parsed, and where: an Error, so a bare
+/// 'throws' can throw it.
+public union ParseError: Error {
     UnexpectedEnd(at: Position, expected: String)
     UnexpectedCharacter(at: Position, found: Char, expected: String)
     InvalidNumber(at: Position, reason: String)

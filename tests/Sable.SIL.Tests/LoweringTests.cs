@@ -454,8 +454,9 @@ public sealed class LoweringTests {
         var compilation = Compilation.Create(
             """
             module M
+            @noncopy struct Token { var id: Int }
             fn label(_ n: Int) -> Int {
-                let table = [(n, n): n]
+                let tokens: Token[] = []
                 return n
             }
             """

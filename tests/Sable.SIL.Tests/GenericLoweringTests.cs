@@ -88,6 +88,30 @@ public sealed class GenericLoweringTests {
         Assert.Equal("AB", Run(module, "test"));
     }
 
+    /// <summary>
+    ///     A protocol extension's property is its getter, not a conformer's
+    ///     method that happens to be called 'get' (Outcome's 'get()').
+    /// </summary>
+    [Fact]
+    public void AnExtensionsPropertyIsNotAConformersGetMethod() {
+        var module = Lower(
+            """
+            protocol Sized {
+                fn size() -> Int
+            }
+            extension Sized {
+                var doubled: Int => self.size() * 2
+            }
+            struct Box: Sized {
+                fn size() -> Int { return 4 }
+                fn get() -> Int { return 100 }
+            }
+            fn test() -> Int { return Box().doubled }
+            """
+        );
+        Assert.Equal(8L, Run(module, "test"));
+    }
+
     [Fact]
     public void AGenericFunctionIsLoweredOncePerTypeArgument() {
         var module = Lower(

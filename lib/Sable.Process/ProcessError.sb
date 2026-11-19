@@ -1,6 +1,7 @@
 module Sable.Process
 
-public union ProcessError {
+/// Why a program could not be run: an Error, so a bare 'throws' can throw it.
+public union ProcessError: Error {
     /// Nothing by that name could be started: not a path, and not on PATH.
     NotFound(program: String),
 }

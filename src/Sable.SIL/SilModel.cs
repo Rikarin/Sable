@@ -1915,7 +1915,11 @@ public static class SilBuiltins {
         Add("string_cursor_next", SilType.Int, SilType.String, SilType.Int);
         Add("string_trimmed", SilType.String, SilType.String);
         Add("string_split", new ArrayType(SilType.String), SilType.String, SilType.Char);
-        Add("string_hash", SilType.Int, SilType.String);
+        // A string's bytes hashed under a key (folded multiplies), and the key every
+        // Hasher starts from: random per process unless fixed by
+        // SABLE_DETERMINISTIC_HASHING=1.
+        Add("string_hash", SilType.Int, SilType.String, SilType.Int);
+        Add("hash_seed", SilType.Int);
         Add("string_join", SilType.String, new ArrayType(SilType.String), SilType.String);
         Add("string_compare", SilType.Int, SilType.String, SilType.String);
         // Where a part next occurs in a text, at or after a scalar position: a scalar index, or -1.
@@ -1936,6 +1940,12 @@ public static class SilBuiltins {
         // value either way; 'io_succeeded' then says whether the last one did.
         Add("io_write", SilType.Unit, SilType.String);
         Add("io_write_error", SilType.Unit, SilType.String);
+
+        // Stopping the program with a message and the place it was stopped
+        // from, both made as it runs (fatalError, precondition); and the
+        // frames of the calls that led here, a line each.
+        Add("trap", SilType.Unit, SilType.String, SilType.String);
+        Add("backtrace_capture", new ArrayType(SilType.String));
         Add("io_read_line", SilType.String);
         Add("io_read_file", SilType.String, SilType.String);
         Add("io_write_file", SilType.Bool, SilType.String, SilType.String, SilType.Bool);

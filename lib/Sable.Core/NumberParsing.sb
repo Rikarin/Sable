@@ -54,9 +54,7 @@ fn isSeparator(_ c: Char, _ styles: NumberStyles, _ thousands: Bool) -> Bool {
 /// U128's greatest is reported, so a stray letter is the error a long
 /// number with one in it gets. A radix outside 2 to 36 is no radix: it traps.
 fn parseInteger(_ text: String, _ radix: Int, _ styles: NumberStyles) throws(ParseError) -> (Bool, U128) {
-    if radix < 2 || radix > 36 {
-        unreachable()
-    }
+    precondition(radix >= 2 && radix <= 36, "a radix must be 2 to 36, not \(radix)")
     let (start, end) = try numberBounds(text, styles)
     var i = start
     var negative = false

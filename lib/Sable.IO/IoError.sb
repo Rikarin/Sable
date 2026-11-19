@@ -1,7 +1,8 @@
 module Sable.IO
 
-/// Why a file or directory could not be read, written or changed.
-public union IoError {
+/// Why a file or directory could not be read, written or changed: an
+/// Error, so a bare 'throws' can throw it.
+public union IoError: Error {
     NotFound(path: String),
     Failed(path: String),
 }

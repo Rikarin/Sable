@@ -1,0 +1,122 @@
+module AssertionsTests
+
+// fatalError, precondition and the rest (Sable.Core), tested with '@test':
+// run with
+//     tools/stdlib-coverage.sh Sable.Core
+// Each trap's report names the caller's line, which the harness sees in
+// the message it matches: 'AssertionsTests.sb' is this file.
+
+import Sable.Testing
+
+fn sign(_ n: Int) -> Int {
+    if n > 0 {
+        return 1
+    }
+    if n < 0 {
+        return -1
+    }
+    if n == 0 {
+        return 0
+    }
+    fatalError("an Int is positive, negative or zero")
+}
+
+@test
+fn aFunctionEndingInFatalErrorReturnsOtherwise() {
+    assertEqual(sign(5), 1)
+    assertEqual(sign(-5), -1)
+    assertEqual(sign(0), 0)
+}
+
+@test(traps: "fatal error: the end")
+fn fatalErrorStopsWithItsMessage() {
+    fatalError("the end")
+}
+
+@test(traps: "fatal error: fatal error")
+fn fatalErrorWithoutAMessageSaysSo() {
+    fatalError()
+}
+
+@test(traps: "AssertionsTests.sb:43:5")
+fn fatalErrorNamesTheCallersLine() {
+    fatalError("here")
+}
+
+@test
+fn preconditionThatHoldsDoesNothing() {
+    precondition(1 < 2, "ordered")
+    precondition(true)
+}
+
+@test(traps: "precondition failed: values are ordered")
+fn preconditionThatFailsStopsWithItsMessage() {
+    precondition(2 < 1, "values are ordered")
+}
+
+@test(traps: "precondition failed")
+fn preconditionWithoutAMessage() {
+    precondition(false)
+}
+
+@test(traps: "precondition failed: unknown mode")
+fn preconditionFailureStops() {
+    preconditionFailure("unknown mode")
+}
+
+@test(traps: "precondition failed")
+fn preconditionFailureWithoutAMessage() {
+    preconditionFailure()
+}
+
+@test
+fn indexInBoundsPasses() {
+    precondition(index: 0, inBounds: 1)
+    precondition(index: 4, inBounds: 5)
+}
+
+@test(traps: "index 3 is out of range for count 3")
+fn indexAtTheCountIsOutOfBounds() {
+    precondition(index: 3, inBounds: 3)
+}
+
+@test(traps: "index -1 is out of range for count 3")
+fn negativeIndexIsOutOfBounds() {
+    precondition(index: -1, inBounds: 3)
+}
+
+@test
+fn nonNegativePasses() {
+    precondition(nonNegative: 0)
+    precondition(nonNegative: 12, "capacity")
+}
+
+@test(traps: "capacity must not be negative, but is -2")
+fn negativeIsNamed() {
+    precondition(nonNegative: -2, "capacity")
+}
+
+@test(traps: "value must not be negative, but is -1")
+fn negativeWithoutAName() {
+    precondition(nonNegative: -1)
+}
+
+@test(traps: "not yet implemented: parsing")
+fn todoSaysWhatIsMissing() {
+    todo("parsing")
+}
+
+@test(traps: "not yet implemented")
+fn todoWithoutAMessage() {
+    todo()
+}
+
+@test(traps: "not implemented: streams are read-only")
+fn unimplementedSaysWhatIsNotSupported() {
+    unimplemented("streams are read-only")
+}
+
+@test(traps: "not implemented")
+fn unimplementedWithoutAMessage() {
+    unimplemented()
+}

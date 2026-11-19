@@ -179,7 +179,7 @@ public sealed class ArrayExtensionTests {
             extension<T> T[:] where T: Hashable {
                 fn hashes() -> Int[>..] {
                     var all: Int[>..] = []
-                    for x in self { all.append(x.hash()) }
+                    for x in self { all.append(x.hashValue) }
                     return all
                 }
             }

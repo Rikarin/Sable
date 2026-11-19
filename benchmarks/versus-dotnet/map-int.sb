@@ -1,11 +1,9 @@
 module MapInt
 
-// HashMap<Int, Int> against .NET's Dictionary<long, long>: a million
+// [Int: Int] against .NET's Dictionary<long, long>: a million
 // pseudo-random keys inserted, looked up three times over, missed, half
 // removed and looked up again. ../dotnet/Program.cs does the same, step for
 // step, and prints the same line.
-
-import Sable.Collections
 
 @main
 fn main() {
@@ -19,10 +17,10 @@ fn main() {
         i = i + 1
     }
 
-    let map = HashMap<Int, Int>()
+    var map: [Int: Int] = [:]
     i = 0
     while i < n {
-        map.set(keys[i], i)
+        map[keys[i]] = i
         i = i + 1
     }
 
@@ -30,7 +28,7 @@ fn main() {
     var round = 0
     while round < 3 {
         for key in keys {
-            sum = sum + (map.get(key) ?? 0)
+            sum = sum + (map[key] ?? 0)
         }
         round = round + 1
     }

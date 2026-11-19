@@ -162,9 +162,14 @@ fn anyRadixFromTwoToThirtySix() {
     assertEqual(intError("g", radix: 16) ?? .Empty, .InvalidDigit(at: 0))
 }
 
-@test(traps: "unreachable")
+@test(traps: "precondition failed: a radix must be 2 to 36, not 37")
 fn aRadixOutsideTwoToThirtySixTraps() {
     let _ = try? Int.parse("1", radix: 37)
+}
+
+@test(traps: "precondition failed: a radix must be 2 to 36, not 1")
+fn aRadixBelowTwoTraps() {
+    let _ = try? Int.parse("1", radix: 1)
 }
 
 @test

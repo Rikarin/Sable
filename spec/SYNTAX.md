@@ -1184,6 +1184,11 @@ fn caller() throws(AppError) {
 whose value replaces the failed expression, or an expression after `catch`.
 
 - `throws` with no type means `throws(any Error)`.
+- `Error` is Sable.Core's `protocol Error: Debug, Sendable`, with `var source:
+  (any Error)? { get }` and `fn description() -> String`, each with a default.
+  `any Error` reaches them (`error.description()`, `error.source`) and is an
+  `any Debug`. Any type may still be thrown; one that is not an Error is
+  described by what it is.
 - `rethrows` means "throws iff a closure parameter throws".
 - Error conversion between types requires a `From` conformance, applied
   implicitly at the `try` site.

@@ -10,7 +10,7 @@ module Sable.Core
 ///     assert(error == .Overflow)
 /// }
 /// ```
-public union ParseError {
+public union ParseError: Error {
     /// The text is empty, or nothing but the white space the styles allowed.
     Empty
     /// A number has something other than a digit of its radix there, or ends
@@ -23,6 +23,17 @@ public union ParseError {
     Overflow
     /// The number is less than the type's least.
     Underflow
+
+    /// What is wrong with the text, and where.
+    public fn description() -> String {
+        return match self {
+            case .Empty                => "the text is empty"
+            case .InvalidDigit(let at) => "not a digit at \(at)"
+            case .Invalid(let at)      => "not a value at \(at)"
+            case .Overflow             => "the number is too large"
+            case .Underflow            => "the number is too small"
+        }
+    }
 }
 
 extension ParseError: Equatable {

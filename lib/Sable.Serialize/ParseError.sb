@@ -22,6 +22,11 @@ public union ParseError: Error {
     TooDeep(at: Position, limit: Int)
     TrailingText(at: Position)
     DuplicateKey(at: Position, key: String)
+
+    /// Where, and what was wrong there: 'describeError' of it.
+    public fn description() -> String {
+        return describeError(self)
+    }
 }
 
 public fn describeChar(_ c: Char) -> String {

@@ -5,4 +5,12 @@ module Sable.IO
 public union IoError: Error {
     NotFound(path: String),
     Failed(path: String),
+
+    /// What went wrong, and with which path.
+    public fn description() -> String {
+        return match self {
+            case .NotFound(let path) => "nothing is at '\(path)'"
+            case .Failed(let path)   => "'\(path)' could not be read, written or changed"
+        }
+    }
 }

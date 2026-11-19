@@ -1,0 +1,42 @@
+module Sable.Core
+
+/// What is thrown: an error says what went wrong, and what caused it, if
+/// another error did. Rust's `std::error::Error`, with Swift's `Error`'s
+/// place in the language: a bare `throws` is `throws(any Error)`.
+///
+/// A type conforms by saying so: every requirement has a default, its
+/// `debugDescription()` the value written out, its `description()` that,
+/// and its `source` none. Give `description()` a sentence of your own, and
+/// `source` the error underneath, where there is one.
+///
+/// ```sable
+/// let error: any Error = ParseError.Overflow
+/// assert(error.description() == "the number is too large")
+/// assert(error.source == none)
+/// assert(error.debugDescription() == "ParseError.Overflow")
+/// ```
+///
+/// (Any type may still be thrown, conforming or not; one that does not
+/// conform is described as an error by what it is.)
+public protocol Error: Debug, Sendable {
+    /// The error this one is because of, if any: the next in the chain.
+    var source: (any Error)? { get }
+
+    /// What went wrong, for a person to read.
+    fn description() -> String
+}
+
+extension Error {
+    /// None: an error is its own cause unless it says otherwise.
+    public var source: (any Error)? => none
+
+    /// The error as Debug writes it.
+    public fn description() -> String {
+        return debugDescription()
+    }
+
+    /// The error's value written out: its case, and what it carries.
+    public fn debugDescription() -> String {
+        return "\(self)"
+    }
+}

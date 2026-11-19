@@ -1994,10 +1994,19 @@ public sealed partial class SilGen {
 
         var anyError = _module.AddType(new ClassType("any$Error"));
         anyError.VTable.Add((ErrorDescribeSlot, ErrorDescriber(anyError, null, null)));
+        foreach (var (slot, _, type) in ErrorSlots(anyError)) {
+            anyError.VTable.Add((slot, ErrorSlotDefault(anyError, slot, type)));
+        }
+
         return anyError;
     }
 
     /// <summary>The subclass of <c>any Error</c>'s class that holds an error of one type.</summary>
+    /// <remarks>
+    ///     Its slots for Error's requirements are the error type's own, or
+    ///     its defaults, where the type conforms; one thrown that does not
+    ///     keeps the base class's, which describe it by what it is.
+    /// </remarks>
     internal ClassType ErrorBox(SilType error) {
         var name = $"any$Error$of${Sanitise(error.ToString())}";
         if (_module.FindType(name) is ClassType existing) {
@@ -2008,7 +2017,186 @@ public sealed partial class SilGen {
         var box = _module.AddType(new ClassType(name) { Superclass = anyError });
         box.Fields.Add(("value", error));
         box.VTable.Add((ErrorDescribeSlot, ErrorDescriber(anyError, box, error)));
+
+        var concrete = _types.FirstOrDefault(pair => error.Equals(pair.Value)).Key switch {
+            NamedTypeSymbol named => named,
+            OptionalTypeSymbol optional => Core.Optional.Construct([optional.UnderlyingType]),
+            _ => null,
+        };
+        var conforms = concrete is not null && concrete.Satisfies(Core.Error);
+        var inherited = anyError.VTable.Skip(1).ToList();
+        var slots = ErrorSlots(anyError);
+        for (var i = 0; i < slots.Count; i++) {
+            var own = conforms ? ErrorSlotWitness(anyError, box, concrete!, error, slots[i]) : null;
+            box.VTable.Add((slots[i].Slot, own ?? inherited[i].Function));
+        }
+
         return box;
+    }
+
+    List<(string Slot, Symbol Member, FunctionType Type)>? _errorSlots;
+
+    /// <summary>
+    ///     An existential's witness for an <c>any Error</c> it holds: the
+    ///     object out of the box, and the slot of its vtable by the same name.
+    ///     Null when Error has no such slot, or it is not called alike.
+    /// </summary>
+    internal (string Name, FunctionType Type)? ErrorWitness(ClassType anyError, ClassType box, string slot, ThickFunctionType thick) {
+        var name = $"$witness$any$Error${slot}";
+        var code = thick.Implementation;
+        if (_module.Find(name) is not null) {
+            return (name, code);
+        }
+
+        if (ErrorSlots(anyError).FirstOrDefault(s => s.Slot == slot) is not { Type: { } type }
+            || thick.Signature.Thrown is not null
+            || thick.Signature.Result != type.Result
+            || !thick.Signature.Parameters.Take(thick.Signature.Parameters.Length - 1).SequenceEqual(type.Parameters.Skip(1))
+            || thick.Signature.Parameters[^1] is AddressType) {
+            return null;
+        }
+
+        var function = new SilFunction(name, code);
+        _module.Add(function);
+        var s = new Synthesis(function);
+        var arguments = thick.Signature.Parameters.Take(thick.Signature.Parameters.Length - 1).Select(p => (SilValue)s.Block.AddArgument(p)).ToList();
+        var given = s.Block.AddArgument(thick.Signature.Parameters[^1]);
+        s.Block.AddArgument(SilType.Object);
+        var error = s.Emit(new LoadInst(s.Emit(new RefElementAddrInst(s.Emit(new UncheckedRefCastInst(given, box)), 0))));
+        var method = s.Emit(new ClassMethodInst(error, slot, type));
+        var result = s.Emit(new ApplyInst(method, type.Result, [error, ..arguments]));
+        s.Emit(new DestroyValueInst(error));
+        s.Emit(new ReturnInst(type.Result == SilType.Unit ? null : result));
+        return (name, code);
+    }
+
+    /// <summary>
+    ///     The requirements of Error, and of the protocols it refines, that
+    ///     <c>any Error</c> answers: each a slot of its class's vtable, called
+    ///     with the object first, as a method is.
+    /// </summary>
+    internal List<(string Slot, Symbol Member, FunctionType Type)> ErrorSlots(ClassType anyError) {
+        if (_errorSlots is not null) {
+            return _errorSlots;
+        }
+
+        _errorSlots = [];
+        var seen = new HashSet<string>();
+        var visited = new HashSet<NamedTypeSymbol>();
+        var slots = new List<(string, Symbol, FunctionType)>();
+
+        void Collect(NamedTypeSymbol protocol) {
+            if (!visited.Add(protocol.OriginalDefinition)) {
+                return;
+            }
+
+            var self = protocol.SelfTypeParameter;
+            foreach (var member in protocol.OriginalDefinition.Members) {
+                if (member.ContainingSymbol is not NamedTypeSymbol) {
+                    continue;
+                }
+
+                switch (member) {
+                    case FunctionSymbol { IsStatic: false, FunctionKind: FunctionKind.Ordinary, TypeParameters.IsEmpty: true, IsMutating: false, ThrownType: null } method
+                        when method.Parameters.All(p => p.Modifier == ParameterModifier.None && !p.Type.Equals(self)) && !method.ReturnType.Equals(self)
+                             && seen.Add(SlotName(method)): {
+                        var parameters = method.Parameters.Select(p => Lower(p.Type)).ToList();
+                        if (parameters.All(static p => p is not null) && Lower(method.ReturnType) is { } result) {
+                            slots.Add((SlotName(method), method, new FunctionType([anyError, ..parameters!], result)));
+                        }
+
+                        break;
+                    }
+
+                    case FieldSymbol { IsStatic: false } field when !field.Type.Equals(self) && seen.Add(GetterSlot(field)): {
+                        if (Lower(field.Type) is { } type) {
+                            slots.Add((GetterSlot(field), field, new FunctionType([anyError], type)));
+                        }
+
+                        break;
+                    }
+                }
+            }
+
+            foreach (var inherited in protocol.OriginalDefinition.BaseTypes.OfType<NamedTypeSymbol>().Where(static b => b.TypeKind == TypeKind.Protocol)) {
+                Collect(inherited);
+            }
+        }
+
+        Collect(Core.Error);
+        _errorSlots = slots;
+        return slots;
+    }
+
+    /// <summary>
+    ///     What a slot of <c>any Error</c> does for the base class, and for an
+    ///     error whose type does not conform: a description is the error
+    ///     written out, as the describe slot writes it; a source is none.
+    /// </summary>
+    string ErrorSlotDefault(ClassType anyError, string slot, FunctionType type) {
+        var name = $"$error.{slot}";
+        if (_module.Find(name) is not null) {
+            return name;
+        }
+
+        var function = new SilFunction(name, type);
+        _module.Add(function);
+        var s = new Synthesis(function);
+        var self = s.Block.AddArgument(anyError);
+        for (var i = 1; i < type.Parameters.Length; i++) {
+            s.Block.AddArgument(type.Parameters[i]);
+        }
+
+        if (type.Result == SilType.String) {
+            var describer = s.Emit(new ClassMethodInst(self, ErrorDescribeSlot, ErrorDescriberType(anyError)));
+            s.Emit(new ReturnInst(s.Emit(new ApplyInst(describer, SilType.String, self, s.Int(0)))));
+        } else if (type.Result is EnumType optional && optional.CaseIndex("None") is var none and >= 0) {
+            s.Emit(new ReturnInst(s.Emit(new EnumInst(optional, none, null))));
+        } else {
+            s.Emit(new CondFailInst(s.Emit(new IntegerLiteralInst(SilType.Bool, 1)), $"'{slot}' of an error that is not an Error"));
+            s.Emit(new UnreachableInst());
+        }
+
+        return name;
+    }
+
+    /// <summary>
+    ///     A slot of <c>any Error</c> for an error of a type that conforms:
+    ///     the witness an <c>any Error</c> existential would hold for the
+    ///     type, called with the object as its box. Null when there is none.
+    /// </summary>
+    string? ErrorSlotWitness(ClassType anyError, ClassType box, NamedTypeSymbol concrete, SilType value, (string Slot, Symbol Member, FunctionType Type) slot) {
+        var name = $"$error.{slot.Slot}${Sanitise(value.ToString())}";
+        if (_module.Find(name) is not null) {
+            return name;
+        }
+
+        if (Core.Error.DeclaringSyntax.FirstOrDefault() is not { } at) {
+            return null;
+        }
+
+        // Given the object as an existential's witness is given its box:
+        // last, and cast down to the box of this type.
+        var signature = new ThickFunctionType(new FunctionType([..slot.Type.Parameters.Skip(1), anyError], slot.Type.Result));
+        if (WitnessThunk(concrete, value, box, slot.Slot, slot.Member, signature, at) is not { } witness) {
+            return null;
+        }
+
+        var function = new SilFunction(name, slot.Type);
+        _module.Add(function);
+        var s = new Synthesis(function);
+        var self = s.Block.AddArgument(anyError);
+        var arguments = new List<SilValue>();
+        for (var i = 1; i < slot.Type.Parameters.Length; i++) {
+            arguments.Add(s.Block.AddArgument(slot.Type.Parameters[i]));
+        }
+
+        arguments.Add(self);
+        var thick = s.Emit(new PartialApplyInst(s.Emit(new FunctionRefInst(witness.Name, witness.Type)), null, signature));
+        var result = s.Emit(new ApplyInst(thick, slot.Type.Result, [..arguments]));
+        s.Emit(new DestroyValueInst(thick));
+        s.Emit(new ReturnInst(slot.Type.Result == SilType.Unit ? null : result));
+        return name;
     }
 
     /// <summary>The structural unions lowered so far: <c>A | B</c> is an enum with a case for each.</summary>
@@ -2887,14 +3075,97 @@ public sealed partial class SilGen {
         // the generic 'clamping(_:)').
         if (Owner(requirement) is { TypeKind: TypeKind.Protocol } protocol) {
             return protocol.OriginalDefinition.Members.OfType<FunctionSymbol>()
-                .Where(f =>
+                    .Where(f =>
+                        f.ContainingSymbol is ExtensionSymbol
+                        && f.Name == requirement.Name
+                        && f.IsStatic == requirement.IsStatic
+                        && f.Parameters.Length == requirement.Parameters.Length)
+                    .OrderBy(f => !SameLabels(f, requirement))
+                    .ThenBy(f => f.TypeParameters.Length != requirement.TypeParameters.Length)
+                    .FirstOrDefault()
+                ?? RefinedDefault(concrete, protocol.OriginalDefinition, requirement);
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    ///     A property an extension of the requirement's protocol gives by
+    ///     default — <c>extension Error { var source: (any Error)? =&gt; none }</c>
+    ///     — or of a protocol refining it that the type conforms to.
+    /// </summary>
+    static FieldSymbol? DefaultProperty(NamedTypeSymbol concrete, FieldSymbol requirement) {
+        static FieldSymbol? In(NamedTypeSymbol protocol, FieldSymbol requirement) =>
+            protocol.OriginalDefinition.Members.OfType<FieldSymbol>().FirstOrDefault(f =>
+                f.ContainingSymbol is ExtensionSymbol && f.Name == requirement.Name && f.IsStatic == requirement.IsStatic && f.IsComputed);
+
+        if (requirement.ContainingSymbol is not NamedTypeSymbol required) {
+            return null;
+        }
+
+        if (In(required, requirement) is { } own) {
+            return own;
+        }
+
+        var seen = new HashSet<NamedTypeSymbol>();
+        var pending = new Queue<NamedTypeSymbol>();
+        for (var type = (NamedTypeSymbol?)concrete.OriginalDefinition; type is not null; type = SuperclassOf(type)?.OriginalDefinition) {
+            foreach (var conformed in type.BaseTypes.OfType<NamedTypeSymbol>()) {
+                pending.Enqueue(conformed.OriginalDefinition);
+            }
+        }
+
+        while (pending.Count > 0) {
+            var protocol = pending.Dequeue();
+            if (protocol.TypeKind != TypeKind.Protocol || !seen.Add(protocol)) {
+                continue;
+            }
+
+            if (protocol.Satisfies(required.OriginalDefinition) && In(protocol, requirement) is { } refined) {
+                return refined;
+            }
+
+            foreach (var inherited in protocol.BaseTypes.OfType<NamedTypeSymbol>()) {
+                pending.Enqueue(inherited.OriginalDefinition);
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    ///     The default a protocol that refines the requirement's gives, among
+    ///     those the type conforms to: <c>extension Error { fn
+    ///     debugDescription() }</c> meets Debug's requirement for every Error.
+    /// </summary>
+    static FunctionSymbol? RefinedDefault(NamedTypeSymbol concrete, NamedTypeSymbol required, FunctionSymbol requirement) {
+        var seen = new HashSet<NamedTypeSymbol>();
+        var pending = new Queue<NamedTypeSymbol>();
+        for (var type = (NamedTypeSymbol?)concrete.OriginalDefinition; type is not null; type = SuperclassOf(type)?.OriginalDefinition) {
+            foreach (var conformed in type.BaseTypes.OfType<NamedTypeSymbol>()) {
+                pending.Enqueue(conformed.OriginalDefinition);
+            }
+        }
+
+        while (pending.Count > 0) {
+            var protocol = pending.Dequeue();
+            if (protocol.TypeKind != TypeKind.Protocol || !seen.Add(protocol)) {
+                continue;
+            }
+
+            if (!ReferenceEquals(protocol, required) && protocol.Satisfies(required)
+                && protocol.Members.OfType<FunctionSymbol>().FirstOrDefault(f =>
                     f.ContainingSymbol is ExtensionSymbol
                     && f.Name == requirement.Name
                     && f.IsStatic == requirement.IsStatic
-                    && f.Parameters.Length == requirement.Parameters.Length)
-                .OrderBy(f => !SameLabels(f, requirement))
-                .ThenBy(f => f.TypeParameters.Length != requirement.TypeParameters.Length)
-                .FirstOrDefault();
+                    && f.Parameters.Length == requirement.Parameters.Length
+                    && SameLabels(f, requirement)) is { } refined) {
+                return refined;
+            }
+
+            foreach (var inherited in protocol.BaseTypes.OfType<NamedTypeSymbol>()) {
+                pending.Enqueue(inherited.OriginalDefinition);
+            }
         }
 
         return null;
@@ -2963,6 +3234,12 @@ public sealed partial class SilGen {
                    && FindField(concrete, defaulted.Name) is null && GetterOf(defaulted) is { } defaultGetter) {
             // None of its own: the getter the protocol gives by default.
             requirement = defaultGetter;
+        } else if (requirement is FieldSymbol { ContainingSymbol: NamedTypeSymbol { TypeKind: TypeKind.Protocol } } required
+                   && FindField(concrete, required.Name) is null && DefaultProperty(concrete, required) is { } extensionDefault
+                   && GetterOf(extensionDefault) is { } extensionDefaultGetter) {
+            // None of its own, and the requirement no body: the getter an
+            // extension of its protocol, or of one refining it, gives.
+            requirement = extensionDefaultGetter;
         }
 
         if (requirement is FieldSymbol field) {
@@ -7059,7 +7336,10 @@ public sealed partial class SilGen {
 
             if (Core.Module.GetType("Debug") is { TypeKind: TypeKind.Protocol } debug
                 && debug.GetMembers("debugDescription").OfType<FunctionSymbol>().FirstOrDefault() is { } describe
-                && Sub(part.Type).Satisfies(debug)) {
+                && Sub(part.Type).Satisfies(debug)
+                // Not from inside the very 'debugDescription' it would call:
+                // Error's default writes '"\(self)"', the value written out.
+                && !(Nominal(Sub(part.Type)) is { } describedType && ReferenceEquals(Implementation(describedType, describe), symbol))) {
                 return Expression(new BoundCall(part.Syntax, part, describe, [], Core.String));
             }
 
@@ -8934,6 +9214,12 @@ public sealed partial class SilGen {
                 return Emit(new StructInst(structType, [..fields]));
             }
 
+            // A requirement of Error's, called on 'any Error': through the
+            // object's vtable, where its box put the error type's own.
+            if (OwnerOf(callee) is { TypeKind: TypeKind.Protocol } && call.Receiver is { } errorReceiver && IsAnyError(errorReceiver.Type)) {
+                return ErrorCall(errorReceiver, SlotName(callee), call.Arguments, call);
+            }
+
             // A protocol's requirement, called on an existential: through its slot.
             if (OwnerOf(callee) is { TypeKind: TypeKind.Protocol } && call.Receiver is { } existentialReceiver
                 && Sub(existentialReceiver.Type) is ExistentialTypeSymbol) {
@@ -9347,6 +9633,10 @@ public sealed partial class SilGen {
                 return Missing(conversion, $"the conversion to '{conversion.Type.ToDisplayString()}'");
             }
 
+            if (IsAnyError(conversion.Operand.Type)) {
+                return ErrorAsExistential(conversion, layout);
+            }
+
             if (Sub(conversion.Operand.Type) is ExistentialTypeSymbol) {
                 return Reexistential(conversion, layout);
             }
@@ -9434,6 +9724,72 @@ public sealed partial class SilGen {
         ///     method, a property's setter — is given the box where the
         ///     existential keeps it, to make its own before the change.
         /// </summary>
+        /// <summary>
+        ///     <c>any Error</c> as <c>any Debug</c>, or <c>any</c>: the object
+        ///     boxed as a value is, with witnesses that call its vtable's slots,
+        ///     where its box put the error type's own.
+        /// </summary>
+        SilValue? ErrorAsExistential(BoundConversion conversion, StructType layout) {
+            var anyError = generator.AnyErrorType();
+            if (Expression(conversion.Operand) is not { } error) {
+                return null;
+            }
+
+            var box = generator.ExistentialBox(anyError);
+            var boxed = Emit(new AllocRefInst(box));
+            Emit(new StoreInst(Owned(error), Emit(new RefElementAddrInst(boxed, 0)), StoreKind.Init));
+            var held = Emit(new CopyValueInst(Emit(new UpcastInst(boxed, generator.ExistentialBoxRoot()))));
+            Emit(new DestroyValueInst(boxed));
+
+            var fields = new List<SilValue> { held };
+            var slots = generator.ExistentialSlots(layout);
+            for (var i = 0; i < slots.Count; i++) {
+                var thick = (ThickFunctionType)layout.Fields[i + 1].Type;
+                if (generator.ErrorWitness(anyError, box, slots[i].Slot, thick) is not { } witness) {
+                    fields.ForEach(f => Emit(new DestroyValueInst(f)));
+                    return Missing(conversion, $"'{slots[i].Slot}' of 'any Error' through '{conversion.Type.ToDisplayString()}'");
+                }
+
+                fields.Add(Emit(new PartialApplyInst(Emit(new FunctionRefInst(witness.Name, witness.Type)), null, thick)));
+            }
+
+            return Emit(new StructInst(layout, [..fields]));
+        }
+
+        /// <summary><c>any Error</c>, which is an object of its own, not an existential's box and slots.</summary>
+        bool IsAnyError(TypeSymbol type) =>
+            Sub(type) is ExistentialTypeSymbol { Constraint: var constraint } && constraint.Equals(Core.Error);
+
+        /// <summary>
+        ///     A requirement of Error's called on <c>any Error</c>: the slot of
+        ///     the object's vtable its box filled, given the object and the
+        ///     arguments.
+        /// </summary>
+        SilValue? ErrorCall(BoundExpression receiver, string slot, IReadOnlyList<BoundExpression> argumentExpressions, BoundNode at) {
+            var anyError = generator.AnyErrorType();
+            if (generator.ErrorSlots(anyError).FirstOrDefault(s => s.Slot == slot) is not { Type: { } type }) {
+                return Missing(at, $"calling '{slot}' through 'any Error'");
+            }
+
+            if (Borrow(receiver) is not { } error) {
+                return null;
+            }
+
+            var arguments = new List<SilValue> { error };
+            var borrows = new List<SilValue> { error };
+            foreach (var argument in argumentExpressions) {
+                if (Borrow(argument) is not { } value) {
+                    return null;
+                }
+
+                arguments.Add(value);
+                borrows.Add(value);
+            }
+
+            var method = Emit(new ClassMethodInst(error, slot, type));
+            return Invoke(method, type, arguments, borrows, at.Syntax);
+        }
+
         SilValue? ExistentialCall(BoundExpression receiver, string slot, IReadOnlyList<BoundExpression> argumentExpressions, BoundNode at, bool changes = false) {
             var layout = LowerType(receiver.Type) as StructType;
             var index = layout?.FieldIndex(slot) ?? -1;
@@ -9899,6 +10255,10 @@ public sealed partial class SilGen {
 
         /// <summary>A property read through an existential or a getter.</summary>
         SilValue? ComputedProperty(BoundFieldAccess access, BoundExpression receiver) {
+            if (IsAnyError(receiver.Type)) {
+                return ErrorCall(receiver, GetterSlot(access.Field), [], access);
+            }
+
             if (Sub(receiver.Type) is ExistentialTypeSymbol) {
                 return ExistentialCall(receiver, GetterSlot(access.Field), [], access);
             }

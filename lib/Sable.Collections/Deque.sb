@@ -138,17 +138,6 @@ public class Deque<Element> {
         head = 0
         used = 0
     }
-
-    /// The elements, front to back, in an array.
-    public fn elements() -> Element[>..] {
-        var result: Element[>..] = []
-        var i = 0
-        while i < used {
-            result.append(slots[slot(i)]!)
-            i = i + 1
-        }
-        return result
-    }
 }
 
 extension Deque: Sequence {

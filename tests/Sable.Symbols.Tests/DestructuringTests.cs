@@ -189,8 +189,8 @@ public sealed class DestructuringTests {
             """
             var ages: [String: Int] = ["ada": 36]
             let removed: Int? = ages.remove("ada")
-            let keys: String[>..] = ages.keys()
-            let values: Int[>..] = ages.values()
+            let keys: String[>..] = ages.map({ entry in entry.0 })
+            let values: Int[>..] = ages.map({ entry in entry.1 })
             ages.removeAll()
             return ages.count + keys.count + values.count + (ages.contains("ada") || ages.isEmpty ? 1 : 0)
             """

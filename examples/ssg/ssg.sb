@@ -351,7 +351,7 @@ class Renderer {
         }
         let _ = ids.insert(id)
         headings += 1
-        html.appendLine(format("<h{0} id=\"{1}\">{2}</h{0}>", [level.toString(), id, renderInline(text)]))
+        html.appendLine("<h\(level) id=\"\(id)\">\(renderInline(text))</h\(level)>")
     }
 
     /// A fenced code block, from its opening fence to its closing one (or the
@@ -463,7 +463,8 @@ fn fill(_ template: String, _ site: Site, _ title: String, _ date: String, _ tag
 fn tagLinks(_ tags: String[>..]) -> String {
     var links: String[>..] = []
     for tag in tags {
-        links.append(format("<a href=\"tags.html#{0}\">{0}</a>", [escapedHtml(tag)]))
+        let escaped = escapedHtml(tag)
+        links.append("<a href=\"tags.html#\(escaped)\">\(escaped)</a>")
     }
     return links.joined(separator: ", ")
 }
@@ -497,7 +498,7 @@ fn size(_ characters: Int) -> String {
     if characters < 1024 {
         return characters.toString() + " B"
     }
-    return formatted(F64(characters) / 1024.0, decimals: 1) + " KB"
+    return "\(F64(characters) / 1024.0:.1f) KB"
 }
 
 /// Makes the directory if it is not there, and empties it of .html files if
@@ -542,23 +543,18 @@ fn build(_ root: String, _ output: String) throws(IoError) -> Int {
         let content = renderer.render(page.body)
         var nav: String[>..] = []
         if i > 0 {
-            nav.append(format("<a rel=\"prev\" href=\"{}.html\">&larr; {}</a>", [ordered[i - 1].slug, escapedHtml(ordered[i - 1].title)]))
+            nav.append("<a rel=\"prev\" href=\"\(ordered[i - 1].slug).html\">&larr; \(escapedHtml(ordered[i - 1].title))</a>")
         }
         nav.append("<a href=\"index.html\">Index</a>")
         if i + 1 < ordered.count {
-            nav.append(format("<a rel=\"next\" href=\"{}.html\">{} &rarr;</a>", [ordered[i + 1].slug, escapedHtml(ordered[i + 1].title)]))
+            nav.append("<a rel=\"next\" href=\"\(ordered[i + 1].slug).html\">\(escapedHtml(ordered[i + 1].title)) &rarr;</a>")
         }
         let html = fill(template, site, page.title, page.date, tagLinks(page.tags), content, nav.joined(separator: " | "))
         try File.write(Path.join(output, page.slug + ".html"), html)
         let words = wordCount(page.body)
         totalWords += words
-        print(format("  {} {} {} words, {} heading(s), {} code block(s)", [
-            (page.slug + ".html").paddedEnd(toWidth: 24),
-            size(html.count).paddedStart(toWidth: 8),
-            formatted(words, width: 5),
-            renderer.headings.toString(),
-            renderer.codeBlocks.toString()
-        ]))
+        let file = page.slug + ".html"
+        print("  \(file:<24) \(size(html.count):>8) \(words:5) words, \(renderer.headings) heading(s), \(renderer.codeBlocks) code block(s)")
         i += 1
     }
 
@@ -569,7 +565,7 @@ fn build(_ root: String, _ output: String) throws(IoError) -> Int {
     }
     index.appendLine("<ul class=\"pages\">")
     for page in ordered {
-        index.append(format("<li><a href=\"{}.html\">{}</a>", [page.slug, escapedHtml(page.title)]))
+        index.append("<li><a href=\"\(page.slug).html\">\(escapedHtml(page.title))</a>")
         if page.date.count > 0 {
             index.append(" <time>" + escapedHtml(page.date) + "</time>")
         }
@@ -581,7 +577,7 @@ fn build(_ root: String, _ output: String) throws(IoError) -> Int {
     index.appendLine("</ul>")
     let indexHtml = fill(template, site, site.name, "", "", index.build(), "<a href=\"tags.html\">Tags</a>")
     try File.write(Path.join(output, "index.html"), indexHtml)
-    print(format("  {} {}", ["index.html".paddedEnd(toWidth: 24), size(indexHtml.count).paddedStart(toWidth: 8)]))
+    print("  \("index.html":<24) \(size(indexHtml.count):>8)")
 
     // Tags: each, alphabetically, with its pages in the index's order.
     var byTag: [String: String[>..]] = [:]
@@ -589,19 +585,20 @@ fn build(_ root: String, _ output: String) throws(IoError) -> Int {
         for tag in page.tags {
             // Taken out, so that the append changes the only copy.
             var titles = byTag.remove(tag) ?? []
-            titles.append(format("<a href=\"{}.html\">{}</a>", [page.slug, escapedHtml(page.title)]))
+            titles.append("<a href=\"\(page.slug).html\">\(escapedHtml(page.title))</a>")
             byTag[tag] = titles
         }
     }
     let tagsHtml = TextBuilder()
-    for tag in sorted(byTag.keys()) {
+    for tag in sorted(byTag.map({ entry in entry.0 })) {
         let links = byTag[tag] ?? []
-        tagsHtml.appendLine(format("<h2 id=\"{0}\">{0} ({1})</h2>", [escapedHtml(tag), links.count.toString()]))
+        let escaped = escapedHtml(tag)
+        tagsHtml.appendLine("<h2 id=\"\(escaped)\">\(escaped) (\(links.count))</h2>")
         tagsHtml.appendLine("<ul><li>" + links.joined(separator: "</li><li>") + "</li></ul>")
     }
     let tagsPage = fill(template, site, "Tags", "", "", tagsHtml.build(), "<a href=\"index.html\">Index</a>")
     try File.write(Path.join(output, "tags.html"), tagsPage)
-    print(format("  {} {}", ["tags.html".paddedEnd(toWidth: 24), size(tagsPage.count).paddedStart(toWidth: 8)]))
+    print("  \("tags.html":<24) \(size(tagsPage.count):>8)")
 
     // Static files, as they are.
     let assets = Path.join(root, "static")
@@ -612,12 +609,7 @@ fn build(_ root: String, _ output: String) throws(IoError) -> Int {
         }
     }
 
-    print(format("{} pages, {} words, {} tags, written to {}", [
-        ordered.count.toString(),
-        totalWords.toString(),
-        byTag.count.toString(),
-        Path.fileName(output)
-    ]))
+    print("\(ordered.count) pages, \(totalWords) words, \(byTag.count) tags, written to \(Path.fileName(output))")
     return ordered.count
 }
 

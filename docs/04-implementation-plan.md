@@ -912,7 +912,9 @@ Written so far (`tests/Sable.CodeGen.Tests/LibraryTests.cs`):
   interpreted agree to the last digit. Also `format("{} is {1}", args)`
   templates, `lines`, `trimmedStart`/`trimmedEnd`, `isBlank`,
   `removingPrefix`/`removingSuffix`, `findLast`, `occurrences` and
-  `escapedHtml`.
+  `escapedHtml`. (Since removed: the string functions are String's own
+  members, and `format`/`formatted` gave way to interpolation's format
+  specs, `"\(x:.2f)"`; `escapedHtml`, `parseInt` and `TextBuilder` stay.)
 - `Sable.Collections`: `Stack`, `Queue`, `HashSet` (a `[Element: Bool]`
   underneath, iterating in insertion order; the `HashMap` that was here
   became the built-in dictionary, docs/06 "Dictionaries and hashing"), `Deque` (a ring

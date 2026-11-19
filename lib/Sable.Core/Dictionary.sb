@@ -25,7 +25,7 @@ struct DictionaryEntry<Key, Value> {
 /// ages["bob"] = 27
 /// ages["ann", default: 0] += 1
 /// assert(ages["ann"] == 32)
-/// assert(ages.keys() == ["ann", "bob"])
+/// assert(ages.map({ entry in entry.0 }) == ["ann", "bob"])
 /// ages["bob"] = none
 /// assert(ages.count == 1)
 /// ```
@@ -69,7 +69,7 @@ public struct Dictionary<Key: Hashable, Value>: Sequence {
     /// let words: String[>..] = ["fig", "pear", "kiwi", "plum", "apple"]
     /// let byLength = Dictionary(grouping: words, by: { $0.count })
     /// assert(byLength[4]! == ["pear", "kiwi", "plum"])
-    /// assert(byLength.keys() == [3, 4, 5])
+    /// assert(byLength.map({ entry in entry.0 }) == [3, 4, 5])
     /// ```
     public init<S: Sequence>(grouping values: S, by keyFor: (S.Element) -> Key) where Value == S.Element[>..], S.Failure == Never {
         for value in values {
@@ -366,28 +366,6 @@ public struct Dictionary<Key: Hashable, Value>: Sequence {
     }
 
     // ---- Iteration ------------------------------------------------------------
-
-    /// The keys, in the order they were first added.
-    public fn keys() -> Key[>..] {
-        var keys: Key[>..] = []
-        for entry in entries {
-            if let entry = entry {
-                keys.append(entry.key)
-            }
-        }
-        return keys
-    }
-
-    /// The values, in the order `keys()` gives their keys.
-    public fn values() -> Value[>..] {
-        var values: Value[>..] = []
-        for entry in entries {
-            if let entry = entry {
-                values.append(entry.value)
-            }
-        }
-        return values
-    }
 
     /// An iterator over each key with its value, in the order the keys were
     /// first added: what `for (key, value) in dictionary` goes through.

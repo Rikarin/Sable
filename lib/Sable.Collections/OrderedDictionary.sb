@@ -81,16 +81,6 @@ public class OrderedDictionary<Key: Hashable, Value> {
         return orderedValues[position]
     }
 
-    /// The keys, in order.
-    public fn keys() -> Key[>..] {
-        return orderedKeys
-    }
-
-    /// The values, in their keys' order.
-    public fn values() -> Value[>..] {
-        return orderedValues
-    }
-
     /// Removes every key.
     public fn removeAll() {
         orderedKeys = []

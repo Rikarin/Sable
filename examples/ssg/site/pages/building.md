@@ -26,8 +26,8 @@ sable run examples/ssg/ssg.sb -- examples/ssg/site out
 
 | it does not do tables, so this line is a paragraph |
 
-Every size it reports is formatted by `Sable.Text`, in Sable: 1.5 KB is
-`formatted(1536.0 / 1024.0, decimals: 1)`.
+Every size it reports is written by a format spec, in Sable: 1.5 KB is
+`"\(1536.0 / 1024.0:.1f) KB"`.
 
 ## Building
 

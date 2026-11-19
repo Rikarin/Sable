@@ -42,11 +42,11 @@ public sealed class DocExampleTests {
         /// Pads, with the file's imports in scope.
         ///
         /// ```sable
-        /// assertEqual(paddedLeft("7", to: 3, with: '0'), "007")
+        /// assertEqual("7".paddedStart(toWidth: 3, with: '0'), "007")
         /// ```
         @test
         fn padding() {
-            assertEqual(paddedLeft("7", to: 2, with: '0'), "07")
+            assertEqual("7".paddedStart(toWidth: 2, with: '0'), "07")
         }
         """;
 

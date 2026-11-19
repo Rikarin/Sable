@@ -371,7 +371,12 @@ public sealed class TestRunnerTests {
 
         // Each module's tests are one program, as tools/stdlib-coverage.sh
         // builds them: tests/lib/<Module>/<Type>Tests.sb, every file of it.
-        var modules = Directory.GetDirectories(Path.Combine(Root, "tests/lib")).Order(StringComparer.Ordinal).ToList();
+        // A directory with no Sable files in it, such as the target/ a local
+        // 'sable test --coverage' leaves, is not a module.
+        var modules = Directory.GetDirectories(Path.Combine(Root, "tests/lib"))
+            .Where(static d => Directory.EnumerateFiles(d, "*.sb", SearchOption.AllDirectories).Any())
+            .Order(StringComparer.Ordinal)
+            .ToList();
         Assert.NotEmpty(modules);
         Assert.Empty(Directory.GetFiles(Path.Combine(Root, "tests/lib"), "*.sb"));
         foreach (var module in modules) {

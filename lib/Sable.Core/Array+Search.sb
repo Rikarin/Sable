@@ -35,11 +35,6 @@ extension<Element> Element[:] {
         return none
     }
 
-    /// Whether any element passes the test.
-    public fn contains(where predicate: (Element) -> Bool) -> Bool {
-        return self.firstIndex(where: predicate) != none
-    }
-
     /// Whether each element goes ahead of, or alongside, the one after it,
     /// by 'before': whether no element is 'before' the one ahead of it.
     public fn isSorted(by before: (Element, Element) -> Bool) -> Bool {

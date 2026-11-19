@@ -27,13 +27,6 @@ fn lastIndexWhereFindsTheLastThatPasses() {
 }
 
 @test
-fn containsWhereSaysWhetherAnyPasses() {
-    let xs: Int[>..] = [3, 5]
-    assert(!xs.contains(where: isEven))
-    assert(xs.contains(where: (x: Int) => x == 5))
-}
-
-@test
 fn isSortedByComparesNeighbours() {
     let descending: Int[>..] = [9, 5, 5, 1]
     assert(descending.isSorted(by: (a: Int, b: Int) => b < a))

@@ -35,16 +35,19 @@ public sealed class ArrayExtensionTests {
         var model = compilation.GetSemanticModel(compilation.SyntaxTrees[0]);
         var members = model.GetMembersOf(new ArrayTypeSymbol(compilation.Core.Int, ArrayKind.Grow));
 
-        foreach (var name in (string[])["count", "isEmpty", "contains", "slice", "append", "removeLast", "clear"]) {
-            var member = Assert.Single(members, m => m.Name == name);
-            Assert.False(member.DeclaringSyntax.IsEmpty, $"'{name}' has no declaration");
-            var extension = Assert.IsType<ExtensionSymbol>(member.ContainingSymbol);
-            Assert.NotNull(extension.ExtendedType.ExtendedArray);
-            Assert.Same(compilation.Core.Module, extension.ExtendedType.ContainingSymbol);
+        foreach (var name in (string[])["count", "isEmpty", "contains", "slice", "append", "removeLast", "clear", "sort", "firstIndex"]) {
+            Assert.Contains(members, m => m.Name == name);
+            foreach (var member in members.Where(m => m.Name == name)) {
+                Assert.False(member.DeclaringSyntax.IsEmpty, $"'{name}' has no declaration");
+                var extension = Assert.IsType<ExtensionSymbol>(member.ContainingSymbol);
+                Assert.NotNull(extension.ExtendedType.ExtendedArray);
+                Assert.Same(compilation.Core.Module, extension.ExtendedType.ContainingSymbol);
+            }
         }
 
+        // 'append(element:)' is the builtin; 'append(contentsOf:)' is Sable over it.
         Assert.Equal("array_count", Assert.IsType<FieldSymbol>(members.Single(m => m.Name == "count")).Builtin);
-        Assert.Equal("array_append", Assert.IsType<FunctionSymbol>(members.Single(m => m.Name == "append")).Builtin);
+        Assert.Equal([null, "array_append"], members.Where(m => m.Name == "append").Select(static m => ((FunctionSymbol)m).Builtin).Order());
         Assert.Null(Assert.IsType<FunctionSymbol>(members.Single(m => m.Name == "contains")).Builtin);
     }
 
@@ -55,13 +58,26 @@ public sealed class ArrayExtensionTests {
         string[] Names(ArrayKind kind, TypeSymbol? element = null) =>
             [..model.GetMembersOf(new ArrayTypeSymbol(element ?? compilation.Core.Int, kind)).Select(static m => m.Name).Order(StringComparer.Ordinal)];
 
-        string[] everyArray = ["contains", "count", "isEmpty", "slice"];
-        string[] growing = ["append", "clear", "contains", "count", "isEmpty", "removeLast", "slice"];
-        Assert.Equal(everyArray, Names(ArrayKind.Slice));
+        // A slice's members are every kind's; the growable kinds add their
+        // own, and 'T[>..]' and 'T[>..<]' have the same (docs/03 §3.9).
+        var everyArray = Names(ArrayKind.Slice);
+        foreach (var name in (string[])["contains", "count", "isEmpty", "slice", "first", "firstIndex", "sort", "sorted", "swapAt", "chunks", "toArray"]) {
+            Assert.Contains(name, everyArray);
+        }
+
         Assert.Equal(everyArray, Names(ArrayKind.Fixed));
-        Assert.Equal(growing, Names(ArrayKind.Grow));
-        Assert.Equal(growing, Names(ArrayKind.GrowShrink));
-        Assert.Equal(growing, Names(ArrayKind.Inline));
+        Assert.Equal(Names(ArrayKind.Grow), Names(ArrayKind.GrowShrink));
+        Assert.Equal(
+            ["append", "append", "capacity", "clear", "removeLast", "reserveCapacity"],
+            Names(ArrayKind.Grow).Where(n => !everyArray.Contains(n))
+        );
+        foreach (var name in (string[])["append", "clear", "removeLast"]) {
+            Assert.Contains(name, Names(ArrayKind.Inline));
+        }
+
+        // Nothing inserts or removes in the middle of an array: that is List's.
+        Assert.DoesNotContain("insert", Names(ArrayKind.Grow));
+        Assert.DoesNotContain("remove", Names(ArrayKind.Grow));
 
         // Bytes read as text; and 'contains' is only where the element is Equatable.
         Assert.Contains("toString", Names(ArrayKind.Grow, compilation.Core.U8));

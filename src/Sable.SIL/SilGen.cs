@@ -4923,7 +4923,8 @@ public sealed partial class SilGen {
                 }
 
                 case BoundExpressionStatement expression:
-                    if (Expression(expression.Expression) is { } discarded) {
+                    // An assignment on its own: its value, which nothing reads, is not made.
+                    if ((expression.Expression is BoundAssignment assignment ? Assignment(assignment) : Expression(expression.Expression)) is { } discarded) {
                         Destroy(discarded);
                     }
 
@@ -6240,7 +6241,7 @@ public sealed partial class SilGen {
                     return CapturedSelf() ?? Missing(expression, "'self' here");
 
                 case BoundAssignment assignment:
-                    return Assignment(assignment);
+                    return AssignmentValue(assignment);
 
                 // 'task.value', Sable.Core's @intrinsic async getter.
                 case BoundFieldAccess { Field: { Name: "value", IsAsyncGetter: true, ContainingSymbol: var task } } taskValue
@@ -6559,6 +6560,44 @@ public sealed partial class SilGen {
         SilValue? Missing(BoundNode node, string what) {
             Fail(node.Syntax, what);
             return null;
+        }
+
+        /// <summary>
+        ///     An assignment used as a value — 'a = b = s', 'let c = a[0] = s'
+        ///     — is the value it stored. The value is made first and kept in a
+        ///     slot of its own; the store takes a copy of it, read through the
+        ///     slot as a local is, and the original is then taken out as the
+        ///     result. Most stores — a setter's, a subscript's, 'array_set', a
+        ///     non-trivial value's — give nothing back of their own.
+        /// </summary>
+        SilValue? AssignmentValue(BoundAssignment assignment) {
+            // 'a.next?.v = 9' stores only when there is a next, evaluating the
+            // value only then: its value is optional.
+            if (assignment.Target is BoundFieldAccess { Receiver: { } chainedFrom } chainedTarget
+                && IsChainedThrough(chainedFrom, chainedTarget.Field)) {
+                return ChainedAssignment(assignment, chainedTarget, chainedFrom, asValue: true);
+            }
+
+            if (LowerType(assignment.Value.Type) is not { } type) {
+                return Missing(assignment, $"an assignment of '{assignment.Value.Type.ToDisplayString()}' used as a value");
+            }
+
+            if (Expression(assignment.Value) is not { } value) {
+                return null;
+            }
+
+            var slot = NewSlot(type, "$assigned");
+            Emit(new StoreInst(Owned(value), slot, StoreKind.Init));
+            var temporary = new LocalSymbol("$assigned", Core.Module, null, false);
+            _slots[temporary] = slot;
+
+            var stored = new BoundAssignment(assignment.Syntax, assignment.Target, new BoundLocalAccess(assignment.Value.Syntax, temporary, assignment.Value.Type));
+            if (Assignment(stored) is not { } done) {
+                return null;
+            }
+
+            Destroy(done);
+            return Emit(new LoadInst(slot, type.IsTrivial ? LoadKind.Trivial : LoadKind.Take));
         }
 
         SilValue? Assignment(BoundAssignment assignment) {
@@ -8172,8 +8211,20 @@ public sealed partial class SilGen {
         ///     value evaluated only then; when there is none, nothing is. An
         ///     object is written where it is. A value is a copy once out of its
         ///     optional, so the copy is stored, then wrapped and written back.
+        ///     Used as a value, it is what was stored, wrapped, or none when
+        ///     nothing was — or, where the chain flattens, what was stored.
         /// </summary>
-        SilValue? ChainedAssignment(BoundAssignment assignment, BoundFieldAccess target, BoundExpression chainedFrom) {
+        SilValue? ChainedAssignment(BoundAssignment assignment, BoundFieldAccess target, BoundExpression chainedFrom, bool asValue = false) {
+            EnumType? resultType = null;
+            if (asValue) {
+                if (LowerType(assignment.Type) is not EnumType lowered) {
+                    return Missing(assignment, "the value of this store through '?.'");
+                }
+
+                resultType = lowered;
+            }
+
+            var flattens = target.FlattensChain;
             var unwrappedType = ((OptionalTypeSymbol)Sub(chainedFrom.Type)).UnderlyingType;
             var writesBack = !unwrappedType.IsReferenceType;
 
@@ -8196,6 +8247,7 @@ public sealed partial class SilGen {
             var payload = Payload(present, optional.Cases[some].Payload!);
             var absent = function.AddBlock();
             var after = function.AddBlock();
+            var result = resultType is null ? null : after.AddArgument(resultType);
             Jump(new SwitchEnumInst(value, [(some, present)], absent));
 
             _current = present;
@@ -8207,7 +8259,7 @@ public sealed partial class SilGen {
 
             var through = new BoundLocalAccess(chainedFrom.Syntax, temporary, unwrappedType);
             var store = new BoundAssignment(assignment.Syntax, new BoundFieldAccess(target.Syntax, through, target.Field, assignment.Value.Type), assignment.Value);
-            if (Expression(store) is null) {
+            if ((resultType is null ? Assignment(store) : AssignmentValue(store)) is not { } stored) {
                 return null;
             }
 
@@ -8216,15 +8268,24 @@ public sealed partial class SilGen {
                 Emit(new StoreInst(Emit(new EnumInst(optional, some, updated)), place!, StoreKind.Assign));
             }
 
-            Branch(after);
+            if (resultType is null) {
+                Destroy(stored);
+                Branch(after);
+            } else {
+                Branch(after, flattens ? Owned(stored) : Emit(new EnumInst(resultType, resultType.CaseIndex("Some"), Owned(stored))));
+            }
 
             _current = absent;
             Destroy(value);
-            Branch(after);
+            if (resultType is null) {
+                Branch(after);
+            } else {
+                Branch(after, Emit(new EnumInst(resultType, resultType.CaseIndex("None"), null)));
+            }
 
             _current = after;
             EndAll(borrows);
-            return UnitValue.Instance;
+            return (SilValue?)result ?? UnitValue.Instance;
         }
 
         /// <summary>'a ?? b': a's value when there is one; b, evaluated only then, when there is not.</summary>

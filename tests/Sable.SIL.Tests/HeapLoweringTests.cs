@@ -473,6 +473,84 @@ public sealed class HeapLoweringTests {
         Assert.Equal("free 1\nfree 2\nfree 3\n", output);
     }
 
+    // Found by the compiler fuzzer (SABLE_FUZZ_SEED=1842128005, a mutated
+    // Corpus.Game): an assignment is the value it stored, but a store of a
+    // String, or through a setter, subscript or array element, gave nothing
+    // back, so 'self.name = self.other = name' stored () to a String field.
+    [Fact]
+    public void AnAssignmentUsedAsAValueIsTheValueItStored() {
+        var module = Lower(
+            """
+            class Pair {
+                var name: String
+                var other: String
+
+                init(_ name: String) {
+                    self.other = ""
+                    self.name = self.other = name
+                }
+            }
+
+            struct Box {
+                var inner: String
+                var shown: String {
+                    get { return inner }
+                    set { inner = newValue }
+                }
+            }
+
+            fn test() -> String {
+                let pair = Pair("a")
+                var s = ""
+                var t = ""
+                var i = 0
+                while i < 2 {
+                    s = t = pair.name + pair.other
+                    i = i + 1
+                }
+                var list = ["x"]
+                let element = list[0] = "b"
+                var box = Box(inner: "")
+                let shown = box.shown = "c"
+                let grown = s += "d"
+                var n = 0
+                let counted = list[0].count + (n = 1)
+                return s + t + element + list[0] + shown + box.inner + grown + "\(counted)"
+            }
+            """
+        );
+
+        Assert.Equal("aadaabbccaad2", Run(module, "test").Result);
+    }
+
+    // Through '?.' an assignment stores only when there is something to store
+    // into, so its value is the stored value, wrapped, or none.
+    [Fact]
+    public void AnAssignmentThroughAnOptionalChainIsTheValueItStoredIfAny() {
+        var module = Lower(
+            """
+            class Link {
+                var next: Link?
+                var label: String
+
+                init(_ next: Link?) {
+                    self.next = next
+                    self.label = ""
+                }
+            }
+
+            fn test() -> String {
+                let head = Link(Link(none))
+                let stored = (head.next?.label = "e") ?? "-"
+                let skipped = (head.next?.next?.label = "f") ?? "-"
+                return stored + skipped + head.next!.label
+            }
+            """
+        );
+
+        Assert.Equal("e-e", Run(module, "test").Result);
+    }
+
     // ---- The verifier's ownership rule -------------------------------------
 
     [Fact]

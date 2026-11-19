@@ -1,0 +1,20 @@
+module StackTests
+
+// Stack (Sable.Collections), tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Collections
+
+import Sable.Collections
+import Sable.Testing
+
+@test
+fn stackIsLastInFirstOut() {
+    let stack = Stack<Int>()
+    stack.push(1)
+    stack.push(2)
+    stack.push(3)
+    assertEqual(stack.pop() ?? -1, 3)
+    assertEqual(stack.peek() ?? -1, 2)
+    assertEqual(stack.pop() ?? -1, 2)
+    assertEqual(stack.pop() ?? -1, 1)
+    assert(stack.pop() == none, "an empty stack pops none")
+}

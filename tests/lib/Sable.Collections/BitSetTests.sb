@@ -1,0 +1,19 @@
+module BitSetTests
+
+// BitSet (Sable.Collections), tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Collections
+
+import Sable.Collections
+import Sable.Testing
+
+@test
+fn bitSetAlgebra() {
+    let a = BitSet([1, 2, 3, 64, 200])
+    let b = BitSet([2, 3, 4])
+    assertEqual(a.count, 5)
+    assertEqual(a.union(b).count, 6)
+    assertEqual(a.intersection(b).count, 2)
+    assertEqual(a.subtracting(b).count, 3)
+    assert(BitSet([2, 3]).isSubset(of: a))
+    assert(!b.isSubset(of: a), "4 is not in a")
+}

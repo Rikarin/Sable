@@ -1390,9 +1390,8 @@ Full design in [05-toolchain.md](05-toolchain.md).
   file's module, with that file's imports and Sable.Testing; the file has the
   original's name and the code its original line numbers, so an error in an
   example points into the doc comment.
-- **Proved on the library:** `tests/lib/CollectionsTests.sb` and
-  `tests/lib/TextTests.sb` test Sable.Collections and Sable.Text with
-  `@test`/`@bench`, and the test suite runs them.
+- **Proved on the library:** `tests/lib/<Module>/<Type>Tests.sb` test the
+  library's modules with `@test`/`@bench`, and the test suite runs them.
 - **Later (#205).** A test may be `async`: each test's closure is
   `async () -> String?` and the harness's entry point and `runTests` are
   async, awaiting it (a benchmark still may not be, S3104). What a test

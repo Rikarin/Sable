@@ -1,0 +1,23 @@
+module DequeTests
+
+// Deque (Sable.Collections), tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Collections
+
+import Sable.Collections
+import Sable.Testing
+
+@test
+fn dequeGrowsAtBothEnds() {
+    let deque = Deque<Int>()
+    var i = 0
+    while i < 20 {
+        deque.append(i)
+        deque.prepend(0 - i)
+        i = i + 1
+    }
+    assertEqual(deque.count, 40)
+    assertEqual(deque.first ?? 0, -19)
+    assertEqual(deque.last ?? 0, 19)
+    assertEqual(deque.removeFirst() ?? 0, -19)
+    assertEqual(deque.at(0), -18)
+}

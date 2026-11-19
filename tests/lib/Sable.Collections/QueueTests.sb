@@ -1,0 +1,19 @@
+module QueueTests
+
+// Queue (Sable.Collections), tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Collections
+
+import Sable.Collections
+import Sable.Testing
+
+@test
+fn queueIsFirstInFirstOut() {
+    let queue = Queue<String>()
+    queue.enqueue("a")
+    queue.enqueue("b")
+    assertEqual(queue.dequeue() ?? "", "a")
+    queue.enqueue("c")
+    assertEqual(queue.dequeue() ?? "", "b")
+    assertEqual(queue.dequeue() ?? "", "c")
+    assert(queue.dequeue() == none)
+}

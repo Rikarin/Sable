@@ -1,0 +1,36 @@
+module HashMapTests
+
+// HashMap (Sable.Collections), tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Collections
+
+import Sable.Collections
+import Sable.Testing
+
+@test
+fn hashMapSetsGetsAndRemoves() {
+    let map = HashMap<String, Int>()
+    var i = 0
+    while i < 100 {
+        map.set("key\(i)", i * i)
+        i = i + 1
+    }
+    assertEqual(map.get("key7") ?? -1, 49)
+    assertEqual(map.get("key99") ?? -1, 9801)
+    assert(map.contains("key0"))
+    assert(map.remove("key0"))
+    assert(!map.contains("key0"), "a removed key is gone")
+    assert(!map.remove("key0"), "a key is removed once")
+    assertEqual(map.allKeys().count, 99)
+}
+
+@bench
+fn hashMapInserts(_ b: Bencher) {
+    b.iterate(() => {
+        let map = HashMap<Int, Int>()
+        var i = 0
+        while i < 64 {
+            map.set(i, i)
+            i = i + 1
+        }
+    })
+}

@@ -1,0 +1,36 @@
+module SortTests
+
+// 'sort' and 'sorted' (Sable.Collections), tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Collections
+
+import Sable.Collections
+import Sable.Testing
+
+@test
+fn sortOrdersInPlace() {
+    var values: Int[>..] = [5, 3, 9, 1, 4, 1]
+    sort(&values)
+    var text = ""
+    for v in values {
+        text = text + "\(v) "
+    }
+    assertEqual(text, "1 1 3 4 5 9 ")
+}
+
+@test
+fn sortedTakesAnOrder() {
+    let words = sorted(["pear", "fig", "banana"], by: (a: String, b: String) => a.count < b.count)
+    assertEqual(words[0], "fig")
+    assertEqual(words[2], "banana")
+}
+
+@bench
+fn sortSixtyFour() {
+    var values: Int[>..] = []
+    var i = 0
+    while i < 64 {
+        values.append((i * 7919) % 64)
+        i = i + 1
+    }
+    sort(&values)
+}

@@ -1,0 +1,28 @@
+module TextBuilderTests
+
+// TextBuilder (Sable.Text), tested with '@test': run with
+//     tools/stdlib-coverage.sh Sable.Text
+
+import Sable.Text
+import Sable.Testing
+
+@test
+fn multiLineTextComparesByLine() {
+    let builder = TextBuilder()
+    builder.appendLine("alpha")
+    builder.appendLine("beta")
+    assertEqualText(builder.build(), "alpha\nbeta\n")
+}
+
+@bench
+fn buildingText(_ b: Bencher) {
+    b.iterate(() => {
+        let builder = TextBuilder()
+        var i = 0
+        while i < 32 {
+            builder.append("piece")
+            i = i + 1
+        }
+        let built = builder.build()
+    })
+}

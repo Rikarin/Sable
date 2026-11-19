@@ -2492,7 +2492,7 @@ public sealed partial class Binder {
         }
 
         if (_inferringReturn) {
-            var inferred = BindExpression(statement.Expression);
+            var inferred = AsValue(BindExpression(statement.Expression));
             _returnType = inferred.Type;
             _inferringReturn = false;
             return Record(statement, new BoundReturn(statement, inferred));
@@ -6155,6 +6155,7 @@ public sealed partial class Binder {
             case ExpressionSyntax expression and not BraceClosureExpressionSyntax: {
                 var value = BindExpression(expression, inferring ? null : _returnType);
                 if (inferring) {
+                    value = AsValue(value);
                     _returnType = value.Type.Equals(Core.Never) ? Core.Void : value.Type;
                     _inferringReturn = false;
                 } else if (!_returnType.Equals(Core.Void)) {
@@ -6187,6 +6188,7 @@ public sealed partial class Binder {
                     var value = BindExpression(only.Expression, inferring ? null : _returnType);
 
                     if (inferring) {
+                        value = AsValue(value);
                         _returnType = value.Type.Equals(Core.Never) ? Core.Void : value.Type;
                         _inferringReturn = false;
                     } else if (!_returnType.Equals(Core.Void)) {
@@ -7257,7 +7259,7 @@ public sealed partial class Binder {
     }
 
     BoundExpression BindPostfixUnary(PostfixUnaryExpressionSyntax syntax) {
-        var operand = BindExpression(syntax.Operand);
+        var operand = AsValue(BindExpression(syntax.Operand));
 
         // The only postfix operator is '!', which unwraps an optional.
         if (operand.Type is OptionalTypeSymbol optional) {
@@ -7996,6 +7998,13 @@ public sealed partial class Binder {
         expression.Type is OptionalTypeSymbol { IsImplicitlyUnwrapped: true } optional
             ? new BoundConversion(expression.Syntax, optional.UnderlyingType, expression, ConversionKind.Explicit)
             : expression;
+
+    /// <summary>
+    ///     An expression used where nothing says what type it should be: a
+    ///     named function is the one function it names, as a value.
+    /// </summary>
+    BoundExpression AsValue(BoundExpression expression) =>
+        expression is BoundFunctionGroup group ? Record(group.Syntax, Materialize(group, null)) : expression;
 
     /// <summary>
     ///     Turns a named function into a value of function type.

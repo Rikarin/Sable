@@ -82,3 +82,15 @@ fn aTupleIsTakenApartWhereItIsUnwrapped(_ p: (Int, String)?) -> Int {
     }
     return b + c //! S2002 no symbol named 'c'
 }
+
+struct Words {
+    fn first(where test: (Int) -> Bool) -> Int? {
+        return none
+    }
+}
+
+fn aMethodTakenAsAValueIsNotOptional(_ w: Words) {
+    let a = w.first! //! S3011 is not optional
+    let f = [w].map { $0.first }
+    let n: Int? = f[0](where: { $0 > 0 })
+}

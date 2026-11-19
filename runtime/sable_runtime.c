@@ -34,6 +34,7 @@
 #include "leaks.c"
 #include "inline_layout.c"
 #include "validation.c"
+#include "frames.c"
 #include "tasks.c"
 #include "io.c"
 #include "process.c"

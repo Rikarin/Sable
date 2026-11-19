@@ -7,8 +7,6 @@
 // layer gives back is in memory the caller frees, and NULL where there is
 // none. Each layer also defines:
 //
-//   struct TaskCondition  what a task or a thread waits on, under the one
-//                         lock the running task holds (tasks.c)
 //   SABLE_AT_EXIT(f)    the start of the definition of 'static void f(void)',
 //                       which runs as the program exits
 
@@ -39,26 +37,6 @@ static void name_frame(void *frame, char *text, size_t size);
 // a shell, on every platform.
 _Noreturn static void stop_trapped(void);
 
-// Has a stack overflow on the calling thread reported as a trap, not as a
-// crash. Every thread that runs tasks calls it as it starts; the main
-// thread's is watched from the start.
-static void *watch_stack(void);
-
-// ---- Tasks' threads ------------------------------------------------------
-
-typedef struct TaskCondition TaskCondition;
-
-// The lock the running task holds; taken once by each thread as it starts
-// running tasks, and given up only while it waits on a condition.
-static void lock_tasks(void);
-static void condition_init(TaskCondition *condition);
-static void condition_destroy(TaskCondition *condition);
-static void condition_signal(TaskCondition *condition);
-static void condition_wait(TaskCondition *condition);
-
-// Starts a thread, detached, with a stack of 8 MiB, running body(argument).
-static bool start_thread(void (*body)(void *argument), void *argument);
-
 // ---- Memory --------------------------------------------------------------
 
 // 'size' bytes of zeroed memory straight from the system, starting at a
@@ -66,6 +44,10 @@ static bool start_thread(void (*body)(void *argument), void *argument);
 // there is none. unmap_slab gives it back to the system.
 static void *map_slab(size_t size);
 static void unmap_slab(void *slab, size_t size);
+
+// The most memory the process has held at once, in bytes, as the system
+// counts it (its peak resident set); 0 where the system does not say.
+static int64_t peak_memory(void);
 
 // ---- Time ----------------------------------------------------------------
 

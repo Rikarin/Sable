@@ -200,7 +200,7 @@ public sealed partial class SilGen {
             ..boxed ? [SilType.Bool] : Array.Empty<SilType>(),
             ..fields.Take(captured).Select(static f => f.Type),
         ];
-        var resume = new SilFunction(iterator.Name + "$resume", new FunctionType(parameters, result, thrown)) {
+        var resume = new SilFunction(iterator.Name + "$resume", new FunctionType(parameters, result, thrown, isAsync: generator.IsAsync)) {
             SourceFile = source.FileName,
             Line = source.GetLinePosition(syntax.Span.Start).Line,
         };

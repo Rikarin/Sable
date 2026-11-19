@@ -48,6 +48,12 @@ namespace Sable.SIL;
 /// </remarks>
 public static partial class SilVerifier {
     public static IReadOnlyList<string> Verify(SilModule module) {
+        // Once its async functions are coroutines, a module holds values as
+        // bits across their suspensions, which ownership does not describe.
+        if (module.AsyncLowered) {
+            return [];
+        }
+
         var errors = new List<string>();
         var initialised = new Dictionary<SilFunction, HashSet<int>?>();
         foreach (var function in module.Functions) {

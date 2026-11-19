@@ -168,6 +168,8 @@ static int64_t live_objects;
 static void object_born(SableObject *object);
 static void object_gone(SableObject *object);
 static void report_leaks(void);
+static void report_frames(void);
+static void report_tasks(void);
 static void forget_immortal_reach(void);
 static bool tracking;
 
@@ -220,5 +222,8 @@ SABLE_AT_EXIT(sable_report) {
             (long long)allocations, (long long)sable_retains, (long long)sable_releases);
         fprintf(stderr, "sable: slabs %lld held, %lld at most, %lld given back\n",
             (long long)slabs_held, (long long)slabs_most, (long long)slabs_returned);
+        report_tasks();
+        report_frames();
+        fprintf(stderr, "sable: peak memory %lld KiB\n", (long long)(peak_memory() / 1024));
     }
 }

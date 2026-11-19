@@ -27,7 +27,7 @@ fn isqrtIsExactWhereF64sSquareRootIsNot() {
     assertEqual(isqrt(9_223_372_036_854_775_807), 3_037_000_499)
 }
 
-@test(traps: "Int does not fit in UInt")
+@test(traps: "isqrt's argument must not be negative, but is -4")
 fn isqrtOfANegativeNumberTraps() {
     let _ = isqrt(-4)
 }
@@ -45,7 +45,7 @@ fn factorialPastTwentyTraps() {
     let _ = factorial(21)
 }
 
-@test(traps: "Int does not fit in UInt")
+@test(traps: "factorial's argument must not be negative, but is -1")
 fn factorialOfANegativeNumberTraps() {
     let _ = factorial(-1)
 }
@@ -89,12 +89,12 @@ fn powModReducesEveryProduct() {
     assertEqual(powMod(9_223_372_036_854_775_806, 2, 9_223_372_036_854_775_807), 1)
 }
 
-@test(traps: "division by zero")
+@test(traps: "the modulus must be positive, not 0")
 fn powModByZeroTraps() {
     let _ = powMod(2, 3, 0)
 }
 
-@test(traps: "Int does not fit in UInt")
+@test(traps: "the exponent must not be negative, but is -1")
 fn powModToANegativePowerTraps() {
     let _ = powMod(2, -1, 7)
 }
@@ -115,7 +115,17 @@ fn modInverseIsNoneWithACommonFactor() {
     assert(modInverse(21, 14) == none, "7 divides both")
 }
 
-@test(traps: "division by zero")
+@test(traps: "the modulus must be positive, not 0")
 fn modInverseModuloZeroTraps() {
     let _ = modInverse(3, 0)
+}
+
+@test(traps: "the modulus must be positive, not -7")
+fn powModByANegativeModulusTraps() {
+    let _ = powMod(2, 3, -7)
+}
+
+@test(traps: "the modulus must be positive, not -11")
+fn modInverseModuloANegativeNumberTraps() {
+    let _ = modInverse(3, -11)
 }

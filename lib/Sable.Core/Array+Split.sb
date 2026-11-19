@@ -41,10 +41,7 @@ extension<Element> Element[:] {
     /// assert(chunks[2] == [5])
     /// ```
     public fn chunks(of size: Int) -> Element[:][>..] {
-        if size < 1 {
-            // A precondition (#21) once there is one.
-            unreachable()
-        }
+        precondition(size >= 1, "a chunk's size must be at least 1, not \(size)")
         var runs: Element[:][>..] = []
         var start = 0
         while start < self.count {
@@ -66,10 +63,7 @@ extension<Element> Element[:] {
     /// assert(windows[1] == [2, 3, 4])
     /// ```
     public fn windows(of size: Int) -> Element[:][>..] {
-        if size < 1 {
-            // A precondition (#21) once there is one.
-            unreachable()
-        }
+        precondition(size >= 1, "a window's size must be at least 1, not \(size)")
         var runs: Element[:][>..] = []
         var start = 0
         while start + size <= self.count {

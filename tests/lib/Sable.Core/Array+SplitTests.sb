@@ -62,7 +62,7 @@ fn chunksOfAnExactMultipleAreAllFull() {
     assertEqual(empty.chunks(of: 3).count, 0)
 }
 
-@test(traps: "unreachable")
+@test(traps: "precondition failed: a chunk's size must be at least 1, not 0")
 fn chunksOfZeroTraps() {
     let xs: Int[>..] = [1, 2]
     let _ = xs.chunks(of: 0)
@@ -80,7 +80,7 @@ fn windowsAreEveryRunOfTheSize() {
     assertEqual(xs.windows(of: 5).count, 0)
 }
 
-@test(traps: "unreachable")
+@test(traps: "precondition failed: a window's size must be at least 1, not 0")
 fn windowsOfZeroTraps() {
     let xs: Int[>..] = [1, 2]
     let _ = xs.windows(of: 0)
